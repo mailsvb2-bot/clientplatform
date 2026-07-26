@@ -23,6 +23,13 @@ def _request(*, source: str, user_id: str, package_id: str, intent: str = "") ->
     return make_mocked_request("GET", f"/pay/yookassa?{urlencode(query)}")
 
 
+def _assert_sanitized_intent_error(response: web.Response, *, hidden_reason: str) -> None:
+    assert response.status == 403
+    assert "CHECKOUT_INTENT_INVALID" in response.text
+    assert hidden_reason not in response.text
+    assert "CheckoutIntentError" not in response.text
+
+
 @pytest.mark.asyncio
 async def test_valid_source_bound_checkout_reaches_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("APP_ENV", "dev")
@@ -80,8 +87,7 @@ async def test_query_source_cannot_override_signed_source(monkeypatch: pytest.Mo
         )
     )
 
-    assert response.status == 403
-    assert "source_mismatch" in response.text
+    _assert_sanitized_intent_error(response, hidden_reason="source_mismatch")
 
 
 @pytest.mark.asyncio
@@ -109,8 +115,7 @@ async def test_query_package_cannot_override_signed_package(monkeypatch: pytest.
         )
     )
 
-    assert response.status == 403
-    assert "package_id_mismatch" in response.text
+    _assert_sanitized_intent_error(response, hidden_reason="package_id_mismatch")
 
 
 @pytest.mark.asyncio
@@ -131,5 +136,4 @@ async def test_unsigned_checkout_is_rejected_in_production(monkeypatch: pytest.M
         _request(source="vk", user_id="123", package_id="practice_start_7")
     )
 
-    assert response.status == 403
-    assert "missing_checkout_intent" in response.text
+    _assert_sanitized_intent_error(response, hidden_reason="missing_checkout_intent")

@@ -185,9 +185,15 @@ def _checkout_intent_error_response(
             expected_gift_token=gift_token or None,
         )
     except CheckoutIntentError as exc:
+        log.warning(
+            "Checkout intent rejected: source=%s package_id=%s reason=%s",
+            source,
+            package_id,
+            exc,
+        )
         return web.Response(
             status=403,
-            text=f"Invalid or expired checkout intent: {exc}",
+            text="Invalid or expired checkout intent. Error code: CHECKOUT_INTENT_INVALID",
             content_type="text/plain",
         )
     return None
