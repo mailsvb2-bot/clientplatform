@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from urllib.parse import urlsplit
@@ -10,6 +11,7 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from runtime import privacy_export_http
 from services import privacy_export_links
+from services.db import db
 
 
 def test_privacy_export_ttl_has_safe_bounds(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -44,18 +46,38 @@ def test_privacy_export_requires_explicit_https_ingress_in_prod(
     assert privacy_export_links.privacy_export_http_enabled() is True
 
 
-def test_privacy_export_token_is_single_use(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_privacy_export_token_is_hashed_at_rest_and_single_use(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("PRIVACY_EXPORT_HTTP_ENABLED", "1")
     monkeypatch.setenv("PRIVACY_EXPORT_PUBLIC_BASE_URL", "https://example.test")
     url = privacy_export_links.issue_privacy_export_url(991001, platform="telegram")
     token = urlsplit(url).path.rsplit("/", 1)[-1]
+    expected_hash = hashlib.sha256(token.encode("ascii")).hexdigest()
+
+    with db() as conn:
+        row = conn.execute(
+            "SELECT token_hash, user_id FROM user_privacy_export_tokens WHERE user_id=?",
+            (991001,),
+        ).fetchone()
+    assert row is not None
+    assert str(row["token_hash"]) == expected_hash
+    assert token not in str(dict(row))
 
     grant = privacy_export_links.get_privacy_export_grant(token)
     assert grant is not None and grant.user_id == 991001
+    assert grant.token_hash == expected_hash
     claimed = privacy_export_links.claim_privacy_export_grant(token)
     assert claimed is not None and claimed.consumed_at is not None
     assert privacy_export_links.get_privacy_export_grant(token) is None
     assert privacy_export_links.claim_privacy_export_grant(token) is None
+
+
+def test_malformed_privacy_export_tokens_fail_closed() -> None:
+    assert privacy_export_links.get_privacy_export_grant("") is None
+    assert privacy_export_links.get_privacy_export_grant("short") is None
+    assert privacy_export_links.get_privacy_export_grant("!" * 5000) is None
+    assert privacy_export_links.claim_privacy_export_grant("../not-a-token") is None
 
 
 @pytest.mark.asyncio
@@ -77,8 +99,14 @@ async def test_preview_get_does_not_consume_and_post_streams_once(
 
     monkeypatch.setattr(privacy_export_http, "write_user_data_export_gzip", write_export)
     app = web.Application()
-    app.router.add_get(f"{privacy_export_links.PRIVACY_EXPORT_PREFIX}{{token}}", privacy_export_http.privacy_export_landing)
-    app.router.add_post(f"{privacy_export_links.PRIVACY_EXPORT_PREFIX}{{token}}", privacy_export_http.privacy_export_download)
+    app.router.add_get(
+        f"{privacy_export_links.PRIVACY_EXPORT_PREFIX}{{token}}",
+        privacy_export_http.privacy_export_landing,
+    )
+    app.router.add_post(
+        f"{privacy_export_links.PRIVACY_EXPORT_PREFIX}{{token}}",
+        privacy_export_http.privacy_export_download,
+    )
     client = TestClient(TestServer(app))
     await client.start_server()
     try:
@@ -91,6 +119,7 @@ async def test_preview_get_does_not_consume_and_post_streams_once(
         assert download.status == 200
         assert await download.read() == b"privacy-export"
         assert download.headers["Cache-Control"].startswith("private, no-store")
+        assert download.headers["Cross-Origin-Resource-Policy"] == "same-origin"
         assert privacy_export_links.get_privacy_export_grant(token) is None
 
         replay = await client.post(path)
@@ -115,7 +144,10 @@ async def test_generation_failure_does_not_consume_link(monkeypatch: pytest.Monk
 
     monkeypatch.setattr(privacy_export_http, "write_user_data_export_gzip", fail_export)
     app = web.Application()
-    app.router.add_post(f"{privacy_export_links.PRIVACY_EXPORT_PREFIX}{{token}}", privacy_export_http.privacy_export_download)
+    app.router.add_post(
+        f"{privacy_export_links.PRIVACY_EXPORT_PREFIX}{{token}}",
+        privacy_export_http.privacy_export_download,
+    )
     client = TestClient(TestServer(app))
     await client.start_server()
     try:
