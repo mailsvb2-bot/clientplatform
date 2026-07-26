@@ -12,6 +12,7 @@ from services.migrations.user_channel_routing_v1 import apply as _apply_channel_
 from services.migrations.user_channel_bridge_and_audio_progress_v1 import apply as _apply_channel_bridge_audio
 from services.migrations.account_identity_v1 import apply as _apply_account_identity_v1
 from services.migrations.user_audio_access_tokens_v1 import apply as _apply_audio_access_tokens
+from services.migrations.user_privacy_export_tokens_v1 import apply as _apply_privacy_export_tokens
 from services.migrations.user_audio_progress_state_v2 import apply as _apply_audio_progress_state_v2
 from services.migrations.user_messenger_runtime_v3 import apply as _apply_messenger_runtime_v3
 from services.migrations.messenger_delivery_outbox_v1 import apply as _apply_messenger_delivery_outbox_v1
@@ -55,6 +56,7 @@ def apply_all_migrations(conn: sqlite3.Connection) -> None:
     _apply_channel_bridge_audio(conn)
     _apply_account_identity_v1(conn)
     _apply_audio_access_tokens(conn)
+    _apply_privacy_export_tokens(conn)
     _apply_audio_progress_state_v2(conn)
     _apply_messenger_runtime_v3(conn)
     _apply_messenger_delivery_outbox_v1(conn)

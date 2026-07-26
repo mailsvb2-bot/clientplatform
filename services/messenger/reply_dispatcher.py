@@ -2,9 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import shutil
-import sqlite3
-import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -26,7 +23,7 @@ from services.messenger.package_payment_ui import package_payment_text
 from services.messenger.progress_charts import build_vk_mood_progress_chart_path
 from services.messenger.text_ui import MessengerReply
 from services.mood_text_flow import complete_pre_score_and_send, complete_post_score_and_send_next
-from services.privacy_controls import write_user_data_export_gzip
+from services.privacy_export_links import issue_privacy_export_url, privacy_export_ttl_minutes
 from services.weather import get_weather_text_async, set_city
 
 log = logging.getLogger(__name__)
@@ -260,15 +257,6 @@ def _reply_requests_replay(reply: MessengerReply) -> tuple[bool, int | None]:
     return requested, anchor
 
 
-def _privacy_export_paths(user_id: int) -> tuple[Path, Path]:
-    root = Path(tempfile.mkdtemp(prefix="metrotherapy_privacy_export_"))
-    return root, root / "metrotherapy-user-data.json.gz"
-
-
-def _remove_privacy_export_root(root: Path) -> None:
-    shutil.rmtree(root, ignore_errors=True)
-
-
 async def _send_privacy_export(
     *,
     platform: str,
@@ -276,50 +264,36 @@ async def _send_privacy_export(
     external_user_id: str,
     canonical_user_id: int,
 ) -> None:
-    root, export_path = await asyncio.to_thread(_privacy_export_paths, canonical_user_id)
     try:
-        try:
-            result = await asyncio.to_thread(
-                write_user_data_export_gzip,
-                canonical_user_id,
-                export_path,
-            )
-        except (sqlite3.Error, RuntimeError, OSError):
-            log.exception("%s privacy export generation failed", platform.upper())
-            await sender.send_text(
-                external_user_id,
-                "⚠️ Не удалось подготовить экспорт данных. Повторите позже или обратитесь в поддержку.",
-                **_vk_kwargs(platform, {}, canonical_user_id),
-            )
-            return
-        except (TypeError, ValueError):
-            log.exception("%s privacy export data rejected", platform.upper())
-            await sender.send_text(
-                external_user_id,
-                "⚠️ Не удалось подготовить экспорт данных. Повторите позже или обратитесь в поддержку.",
-                **_vk_kwargs(platform, {}, canonical_user_id),
-            )
-            return
-
-        send_document = getattr(sender, "send_document_file", None)
-        if not callable(send_document):
-            raise UnsupportedMessengerDelivery(
-                f"No document sender for privacy export on platform={platform}"
-            )
-        caption = (
-            "🔐 Сжатый JSON-экспорт данных, связанных с Вашим аккаунтом. "
-            f"Записей: {result.total_rows}. "
-            "Архив не зашифрован. Сохраните его только в защищённом месте и удалите сообщение, "
-            "когда файл больше не нужен в истории чата."
+        url = await asyncio.to_thread(
+            issue_privacy_export_url,
+            canonical_user_id,
+            platform=platform,
         )
-        await send_document(
+    except (RuntimeError, OSError, TypeError, ValueError):
+        log.exception("%s one-time privacy export link failed", platform.upper())
+        url = ""
+    if not url:
+        await sender.send_text(
             external_user_id,
-            result.path,
-            caption=caption,
+            "⚠️ Безопасная выдача экспорта сейчас недоступна. Повторите позже или обратитесь в поддержку.",
             **_vk_kwargs(platform, {}, canonical_user_id),
         )
-    finally:
-        await asyncio.to_thread(_remove_privacy_export_root, root)
+        return
+
+    ttl = privacy_export_ttl_minutes()
+    text = (
+        "🔐 Одноразовая ссылка на экспорт Ваших данных:\n"
+        f"{url}\n\n"
+        f"Ссылка действует не более {ttl} минут и позволяет скачать архив один раз. "
+        "Сначала откроется страница подтверждения; предпросмотр мессенджера не расходует ссылку. "
+        "Архив сжат, но не зашифрован — храните его в защищённом месте."
+    )
+    await sender.send_text(
+        external_user_id,
+        text,
+        **_vk_kwargs(platform, {}, canonical_user_id, text=text),
+    )
 
 
 async def send_reply_bundle(

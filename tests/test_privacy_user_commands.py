@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -14,25 +13,9 @@ class FakeMessage:
         self.chat = SimpleNamespace(type=chat_type)
         self.text = text
         self.answers: list[str] = []
-        self.documents: list[tuple[object, str | None]] = []
-        self.document_paths_during_send: list[Path] = []
 
     async def answer(self, text: str, **_kwargs) -> None:
         self.answers.append(text)
-
-    async def answer_document(self, document, *, caption: str | None = None, **_kwargs) -> None:
-        path = Path(document.path)
-        assert path.exists()
-        self.document_paths_during_send.append(path)
-        self.documents.append((document, caption))
-
-
-class FailingDocumentMessage(FakeMessage):
-    async def answer_document(self, document, *, caption: str | None = None, **_kwargs) -> None:
-        path = Path(document.path)
-        assert path.exists()
-        self.document_paths_during_send.append(path)
-        raise OSError("synthetic Telegram upload failure")
 
 
 def test_delete_confirmation_is_exact() -> None:
@@ -53,50 +36,33 @@ def test_export_confirmation_is_exact() -> None:
 
 
 @pytest.mark.asyncio
-async def test_export_uses_authenticated_user_and_removes_temp_file(monkeypatch) -> None:
-    seen: list[int] = []
-    generated_paths: list[Path] = []
+async def test_export_issues_authenticated_one_time_link(monkeypatch) -> None:
+    seen: list[tuple[int, str]] = []
 
-    def fake_export(user_id: int, output_path: str | Path):
-        seen.append(user_id)
-        path = Path(output_path)
-        path.write_bytes(b"synthetic-gzip")
-        generated_paths.append(path)
-        return SimpleNamespace(path=path, total_rows=7, compressed_size_bytes=14)
+    def issue(user_id: int, *, platform: str) -> str:
+        seen.append((user_id, platform))
+        return "https://example.test/privacy/export/random-token"
 
-    monkeypatch.setattr(info, "write_user_data_export_gzip", fake_export)
+    monkeypatch.setattr(info, "issue_privacy_export_url", issue)
+    monkeypatch.setattr(info, "privacy_export_ttl_minutes", lambda: 10)
     message = FakeMessage(91001, "/mydata CONFIRM")
 
     await info.cmd_my_data(message)
 
-    assert seen == [91001]
-    assert len(message.documents) == 1
-    document, caption = message.documents[0]
-    assert str(document.filename) == "metrotherapy-user-data.json.gz"
-    assert caption is not None and "Записей: 7" in caption
-    assert "не зашифрован" in caption
-    assert not message.answers
-    assert message.document_paths_during_send == generated_paths
-    assert all(not path.exists() for path in generated_paths)
+    assert seen == [(91001, "telegram")]
+    assert len(message.answers) == 1
+    assert "https://example.test/privacy/export/random-token" in message.answers[0]
+    assert "одноразовая" in message.answers[0].casefold()
+    assert "предпросмотр" in message.answers[0].casefold()
 
 
 @pytest.mark.asyncio
-async def test_export_temp_file_is_removed_when_upload_fails(monkeypatch) -> None:
-    generated_paths: list[Path] = []
-
-    def fake_export(user_id: int, output_path: str | Path):
-        path = Path(output_path)
-        path.write_bytes(f"user={user_id}".encode())
-        generated_paths.append(path)
-        return SimpleNamespace(path=path, total_rows=1, compressed_size_bytes=10)
-
-    monkeypatch.setattr(info, "write_user_data_export_gzip", fake_export)
-    message = FailingDocumentMessage(91004, "/mydata CONFIRM")
+async def test_export_fails_closed_without_secure_public_link(monkeypatch) -> None:
+    monkeypatch.setattr(info, "issue_privacy_export_url", lambda *_args, **_kwargs: "")
+    message = FakeMessage(91004, "/mydata CONFIRM")
 
     await info.cmd_my_data(message)
 
-    assert generated_paths
-    assert all(not path.exists() for path in generated_paths)
     assert message.answers
     assert "Не удалось подготовить экспорт" in message.answers[-1]
 
@@ -105,18 +71,18 @@ async def test_export_temp_file_is_removed_when_upload_fails(monkeypatch) -> Non
 async def test_export_requires_confirmation_and_private_chat(monkeypatch) -> None:
     called = False
 
-    def fake_export(*_args, **_kwargs):
+    def issue(*_args, **_kwargs):
         nonlocal called
         called = True
-        raise AssertionError("must not export without confirmation or from a group")
+        raise AssertionError("must not issue without confirmation or from a group")
 
-    monkeypatch.setattr(info, "write_user_data_export_gzip", fake_export)
+    monkeypatch.setattr(info, "issue_privacy_export_url", issue)
 
     unconfirmed = FakeMessage(91005, "/mydata")
     await info.cmd_my_data(unconfirmed)
     assert called is False
     assert "/mydata CONFIRM" in unconfirmed.answers[-1]
-    assert "не зашифрован" in unconfirmed.answers[-1]
+    assert "одноразовую HTTPS-ссылку" in unconfirmed.answers[-1]
 
     group = FakeMessage(91005, "/mydata CONFIRM", chat_type="group")
     await info.cmd_my_data(group)

@@ -19,6 +19,7 @@ from runtime.ingress_flags import (
 from runtime.messenger_ingress_reliability import max_webhook, vk_webhook
 from runtime.messenger_media_http import audio_access, audio_media
 from runtime.payment_http import payment_terms_web, pay_yookassa_web, yookassa_reconciliation_webhook
+from runtime.privacy_export_http import privacy_export_download, privacy_export_landing
 from runtime.payment_webhook_admission import ingress_body_limit, payment_webhook_admission_middleware
 from runtime.telegram_transport import telegram_transport
 from runtime.telegram_webhook_runtime import (
@@ -28,6 +29,7 @@ from runtime.telegram_webhook_runtime import (
     telegram_webhook_path,
 )
 from services.messenger.audio_links import AUDIO_ACCESS_PREFIX, AUDIO_MEDIA_PREFIX
+from services.privacy_export_links import PRIVACY_EXPORT_PREFIX, privacy_export_http_enabled
 from services.messenger.delivery_pool import start_delivery_worker, stop_delivery_worker
 
 if TYPE_CHECKING:
@@ -138,6 +140,11 @@ def _register_payment_routes(app: web.Application) -> None:
     app.router.add_post("/pay/yookassa/webhook", yookassa_reconciliation_webhook)
 
 
+def _register_privacy_export_routes(app: web.Application) -> None:
+    app.router.add_get(f"{PRIVACY_EXPORT_PREFIX}{{token}}", privacy_export_landing)
+    app.router.add_post(f"{PRIVACY_EXPORT_PREFIX}{{token}}", privacy_export_download)
+
+
 def _register_max_routes(app: web.Application) -> None:
     app.router.add_post("/webhooks/max", _max_webhook_with_official_secret)
 
@@ -191,6 +198,7 @@ async def start_messenger_webhook_runtime(
     dispatcher: "Dispatcher | None" = None,
 ) -> MessengerWebhookRuntime | None:
     payment_enabled = payment_http_enabled()
+    privacy_export_enabled = privacy_export_http_enabled()
     max_enabled = max_webhook_enabled()
     vk_enabled = vk_webhook_enabled()
     ingress_enabled = http_ingress_enabled()
@@ -206,6 +214,8 @@ async def start_messenger_webhook_runtime(
 
     if payment_enabled:
         _register_payment_routes(app)
+    if privacy_export_enabled:
+        _register_privacy_export_routes(app)
     if max_enabled:
         _register_max_routes(app)
     if vk_enabled:
@@ -251,10 +261,11 @@ async def start_messenger_webhook_runtime(
             )
 
         log.info(
-            "HTTP ingress started on %s:%s payment=%s max=%s vk=%s durable_delivery=%s",
+            "HTTP ingress started on %s:%s payment=%s privacy_export=%s max=%s vk=%s durable_delivery=%s",
             host,
             port,
             payment_enabled,
+            privacy_export_enabled,
             max_enabled,
             vk_enabled,
             delivery_worker_started,
