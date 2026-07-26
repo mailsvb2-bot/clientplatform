@@ -363,7 +363,6 @@ git checkout main
 OLD_SOURCE_SHA="$(git rev-parse HEAD)"
 run_bounded "$GIT_NETWORK_TIMEOUT_SECONDS" "fetch origin" git fetch --prune origin
 git merge --ff-only origin/main
-migrate_privacy_export_environment
 require_single_local_main_branch
 NEW_SHA="$(git rev-parse HEAD)"
 echo "=== immutable deploy source old=$OLD_SOURCE_SHA new=$NEW_SHA ==="
@@ -379,6 +378,7 @@ if [ -n "$TRIGGER_SHA" ]; then
   fi
 fi
 
+migrate_privacy_export_environment
 mkdir -p "$RUNTIME_ROOT" "$RELEASES_DIR" "$DEPLOY_STATE_DIR"
 
 BOOTSTRAP_CURRENT=0
