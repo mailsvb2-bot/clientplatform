@@ -28,8 +28,18 @@ def _privacy_action(text: str) -> tuple[str, bool] | None:
     normalized = raw.casefold().replace("ё", "е")
     if normalized in {"privacy", "/privacy", "конфиденциальность", "политика", "политика конфиденциальности"}:
         return "privacy", False
-    if normalized in {"mydata", "/mydata", "мои данные", "экспорт данных", "выгрузить данные"}:
-        return "export", False
+    export_aliases = (
+        "mydata",
+        "/mydata",
+        "мои данные",
+        "экспорт данных",
+        "выгрузить данные",
+    )
+    for alias in export_aliases:
+        if normalized == alias:
+            return "export", False
+        if normalized == f"{alias} confirm":
+            return "export", True
 
     delete_aliases = (
         "deletemydata",
@@ -50,11 +60,24 @@ def _privacy_info_reply() -> MessengerReply:
         text=(
             "🔐 Конфиденциальность и Ваши данные\n\n"
             f"Политика: {PRIVACY_POLICY_URL}\n\n"
-            "Получить сжатую копию данных: mydata или /mydata\n"
+            "Получить сжатую копию данных: mydata — затем mydata CONFIRM\n"
             "Удалить поведенческую историю: deletemydata\n\n"
-            "Удаление требует отдельного подтверждения словом CONFIRM. "
+            "Экспорт и удаление требуют отдельного подтверждения словом CONFIRM. "
             "Платежные, возвратные и обязательные технические записи сохраняются "
             "для исполнения оплаченного доступа, предотвращения повторных операций и требований учета."
+        )
+    )
+
+
+def _privacy_export_reply(*, confirmed: bool) -> MessengerReply:
+    if confirmed:
+        return MessengerReply(kind="privacy_export")
+    return MessengerReply(
+        text=(
+            "⚠️ Экспорт может содержать историю использования, оценки состояния и платёжные записи. "
+            "Архив сжат, но не зашифрован, и после отправки останется в истории этого чата.\n\n"
+            "Для подтверждения отправьте точно:\n"
+            "mydata CONFIRM"
         )
     )
 
@@ -338,7 +361,7 @@ def handle_incoming_text(
         if action_name == "privacy":
             return canonical_user_id, [_privacy_info_reply()]
         if action_name == "export":
-            return canonical_user_id, [MessengerReply(kind="privacy_export")]
+            return canonical_user_id, [_privacy_export_reply(confirmed=confirmed)]
         return canonical_user_id, [
             _privacy_delete_reply(
                 canonical_user_id,

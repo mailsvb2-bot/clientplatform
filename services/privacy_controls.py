@@ -205,6 +205,8 @@ def write_user_data_export_gzip(
     uid = int(user_id)
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    path.touch(mode=0o600, exist_ok=True)
+    path.chmod(0o600)
     exported_at = _utc_now_iso()
     row_counts: dict[str, int] = {}
     completed = False

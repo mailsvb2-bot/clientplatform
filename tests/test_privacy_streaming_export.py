@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import stat
 from types import SimpleNamespace
 
 import pytest
@@ -34,6 +35,7 @@ def test_streaming_export_writes_valid_gzip_json(tmp_path) -> None:
     assert result.path == output_path
     assert result.compressed_size_bytes == output_path.stat().st_size
     assert result.compressed_size_bytes > 0
+    assert stat.S_IMODE(output_path.stat().st_mode) == 0o600
     assert result.table_rows["users"] == 1
     assert result.table_rows["events"] == 5
     assert result.total_rows >= 6

@@ -262,7 +262,7 @@ def _reply_requests_replay(reply: MessengerReply) -> tuple[bool, int | None]:
 
 def _privacy_export_paths(user_id: int) -> tuple[Path, Path]:
     root = Path(tempfile.mkdtemp(prefix="metrotherapy_privacy_export_"))
-    return root, root / f"metrotherapy-user-data-{int(user_id)}.json.gz"
+    return root, root / "metrotherapy-user-data.json.gz"
 
 
 def _remove_privacy_export_root(root: Path) -> None:
@@ -309,7 +309,8 @@ async def _send_privacy_export(
         caption = (
             "🔐 Сжатый JSON-экспорт данных, связанных с Вашим аккаунтом. "
             f"Записей: {result.total_rows}. "
-            "Файл может содержать историю использования и платежные записи — храните его безопасно."
+            "Архив не зашифрован. Сохраните его только в защищённом месте и удалите сообщение, "
+            "когда файл больше не нужен в истории чата."
         )
         await send_document(
             external_user_id,
