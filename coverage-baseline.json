@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "total_percent": 70.04,
+  "total_percent": 70.07,
   "comparison_tolerance": 0.01,
   "require_update_on_improvement": true,
   "measurement": "combined line and branch coverage",
