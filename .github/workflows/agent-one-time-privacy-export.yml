@@ -6,6 +6,7 @@ on:
       - agent/one-time-privacy-export-links
     paths:
       - tools/agent_patch_one_time_privacy_export.py
+      - tools/agent_patch_one_time_privacy_export.trigger
 
 permissions:
   contents: write
