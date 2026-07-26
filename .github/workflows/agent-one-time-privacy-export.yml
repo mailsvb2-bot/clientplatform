@@ -33,7 +33,17 @@ jobs:
           python -m pip install --require-hashes -r requirements-dev.txt
 
       - name: Apply exact patch and focused tests
-        run: python tools/agent_patch_one_time_privacy_export.py
+        run: |
+          set -o pipefail
+          python tools/agent_patch_one_time_privacy_export.py 2>&1 | tee "$RUNNER_TEMP/privacy-export-patch.log"
+
+      - name: Upload patch log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: privacy-export-patch-log
+          path: ${{ runner.temp }}/privacy-export-patch.log
+          if-no-files-found: warn
 
       - name: Commit integration
         run: |
