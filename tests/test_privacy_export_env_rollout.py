@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import stat
 from pathlib import Path
 
@@ -10,6 +9,7 @@ from scripts import migrate_privacy_export_env as migration
 
 
 DEFAULT_URL = "https://metrotherapy-bot.metrotherapy.ru"
+SYNTHETIC_TOKEN = "not-a-live-telegram-token"
 
 
 def _assignments(path: Path) -> dict[str, tuple[int, str]]:
@@ -20,7 +20,7 @@ def test_migration_adds_only_managed_keys_and_keeps_exact_backup(tmp_path: Path)
     env_file = tmp_path / "metrotherapy.env"
     original = (
         "# production secrets\n"
-        "BOT_TOKEN=123456789:secret-value-that-must-stay-unchanged\n"
+        f"BOT_TOKEN={SYNTHETIC_TOKEN}\n"
         "DATABASE_URL='postgresql://db-user:db-pass@db/metrotherapy'\n"
         "TELEGRAM_TRANSPORT=polling\n"
     ).encode()
@@ -39,7 +39,7 @@ def test_migration_adds_only_managed_keys_and_keeps_exact_backup(tmp_path: Path)
     assert stat.S_IMODE(result.backup_path.stat().st_mode) == 0o640
     assert stat.S_IMODE(env_file.stat().st_mode) == 0o640
     updated = env_file.read_text(encoding="utf-8")
-    assert "BOT_TOKEN=123456789:secret-value-that-must-stay-unchanged" in updated
+    assert f"BOT_TOKEN={SYNTHETIC_TOKEN}" in updated
     assert "DATABASE_URL='postgresql://db-user:db-pass@db/metrotherapy'" in updated
     active = _assignments(env_file)
     assert active["PRIVACY_EXPORT_HTTP_ENABLED"][1] == "1"
@@ -125,7 +125,7 @@ def test_migration_rejects_duplicate_keys_without_touching_file(tmp_path: Path) 
 
 def test_migration_rejects_symlink_and_world_writable_env(tmp_path: Path) -> None:
     real_env = tmp_path / "real.env"
-    real_env.write_text("BOT_TOKEN=secret\n", encoding="utf-8")
+    real_env.write_text("BOT_TOKEN=synthetic\n", encoding="utf-8")
     linked_env = tmp_path / "linked.env"
     linked_env.symlink_to(real_env)
 
@@ -145,7 +145,7 @@ def test_migration_rejects_symlink_and_world_writable_env(tmp_path: Path) -> Non
 
 def test_migration_rejects_invalid_cli_fallbacks_before_writing(tmp_path: Path) -> None:
     env_file = tmp_path / "metrotherapy.env"
-    original = b"BOT_TOKEN=secret\n"
+    original = b"BOT_TOKEN=synthetic\n"
     env_file.write_bytes(original)
 
     with pytest.raises(migration.MigrationError, match="HTTPS"):
@@ -168,7 +168,7 @@ def test_post_write_verification_failure_restores_original(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     env_file = tmp_path / "metrotherapy.env"
-    original = b"BOT_TOKEN=secret\n"
+    original = b"BOT_TOKEN=synthetic\n"
     env_file.write_bytes(original)
     real_atomic_replace = migration._atomic_replace
     calls = 0
@@ -177,7 +177,13 @@ def test_post_write_verification_failure_restores_original(
         nonlocal calls
         calls += 1
         if calls == 1:
-            real_atomic_replace(path, b"BOT_TOKEN=secret\nPRIVACY_EXPORT_HTTP_ENABLED=0\n", mode=mode, uid=uid, gid=gid)
+            real_atomic_replace(
+                path,
+                b"BOT_TOKEN=synthetic\nPRIVACY_EXPORT_HTTP_ENABLED=0\n",
+                mode=mode,
+                uid=uid,
+                gid=gid,
+            )
             return
         real_atomic_replace(path, data, mode=mode, uid=uid, gid=gid)
 
@@ -195,7 +201,7 @@ def test_post_write_verification_failure_restores_original(
 
 def test_cli_output_never_prints_existing_secrets(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     env_file = tmp_path / "metrotherapy.env"
-    secret = "super-private-bot-token"
+    secret = "super-private-synthetic-token"
     env_file.write_text(f"BOT_TOKEN={secret}\n", encoding="utf-8")
 
     code = migration.main(
