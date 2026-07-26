@@ -39,6 +39,15 @@ def _payment_public_base_url() -> str:
     return _first_value("PAYMENT_PUBLIC_BASE_URL", "MESSENGER_PUBLIC_BASE_URL", "PUBLIC_BASE_URL").rstrip("/")
 
 
+def _privacy_export_public_base_url() -> str:
+    return _first_value(
+        "PRIVACY_EXPORT_PUBLIC_BASE_URL",
+        "MESSENGER_PUBLIC_BASE_URL",
+        "PAYMENT_PUBLIC_BASE_URL",
+        "PUBLIC_BASE_URL",
+    ).rstrip("/")
+
+
 def _resolved_db_engine() -> str:
     raw = _value("METRO_DB_ENGINE").lower()
     if raw in {"postgres", "postgresql", "pg"}:
@@ -75,11 +84,30 @@ def _positive_int(name: str, default: int, errors: list[str]) -> int:
     return value
 
 
+def _bounded_int(
+    name: str,
+    default: int,
+    *,
+    minimum: int,
+    maximum: int,
+    errors: list[str],
+) -> int:
+    value = _positive_int(name, default, errors)
+    if value < minimum or value > maximum:
+        errors.append(f"{name} must be between {minimum} and {maximum}, got {value}")
+    return value
+
+
 def _payment_enabled() -> bool:
     explicit = _optional_flag("PAYMENT_HTTP_ENABLED")
     if explicit is not None:
         return explicit
     return _truthy("MESSENGER_WEBHOOK_ENABLED")
+
+
+def _privacy_export_enabled() -> bool:
+    explicit = _optional_flag("PRIVACY_EXPORT_HTTP_ENABLED")
+    return bool(explicit) if explicit is not None else False
 
 
 def _max_enabled() -> bool:
@@ -97,7 +125,12 @@ def _vk_enabled() -> bool:
 
 
 def _http_ingress_enabled() -> bool:
-    return _payment_enabled() or _max_enabled() or _vk_enabled()
+    return (
+        _payment_enabled()
+        or _privacy_export_enabled()
+        or _max_enabled()
+        or _vk_enabled()
+    )
 
 
 def _valid_admin_ids() -> bool:
@@ -114,6 +147,7 @@ def run() -> tuple[list[str], list[str]]:
 
     app_env = (_value("APP_ENV") or "dev").lower()
     prod = app_env in {"prod", "production"}
+    secure_env = app_env in {"prod", "production", "stage", "staging"}
 
     transport = (_value("TELEGRAM_TRANSPORT") or _value("RUN_MODE") or "polling").lower()
     if transport != "polling":
@@ -161,14 +195,36 @@ def run() -> tuple[list[str], list[str]]:
             errors.append("LOG_PATH must be an absolute path outside the project tree in prod")
         if _truthy("HEALTHCHECK_ENABLED", "1") is False:
             errors.append("HEALTHCHECK_ENABLED must be 1 in prod")
+        if not _privacy_export_enabled():
+            errors.append("PRIVACY_EXPORT_HTTP_ENABLED must be 1 in prod")
 
     payment_enabled = _payment_enabled()
+    privacy_export_enabled = _privacy_export_enabled()
     max_enabled = _max_enabled()
     vk_enabled = _vk_enabled()
     ingress_enabled = _http_ingress_enabled()
 
     if payment_enabled and not _payment_public_base_url():
         errors.append("PAYMENT_PUBLIC_BASE_URL or MESSENGER_PUBLIC_BASE_URL is required when payment HTTP ingress is enabled")
+
+    if privacy_export_enabled:
+        privacy_base = _privacy_export_public_base_url()
+        if not privacy_base:
+            errors.append(
+                "PRIVACY_EXPORT_PUBLIC_BASE_URL or MESSENGER_PUBLIC_BASE_URL is required "
+                "when privacy export HTTP ingress is enabled"
+            )
+        elif not privacy_base.startswith(("https://", "http://")):
+            errors.append("privacy export public base URL must be a full http(s) URL")
+        elif secure_env and not privacy_base.startswith("https://"):
+            errors.append("privacy export public base URL must start with https:// in secure environments")
+        _bounded_int(
+            "PRIVACY_EXPORT_TOKEN_TTL_MINUTES",
+            10,
+            minimum=2,
+            maximum=30,
+            errors=errors,
+        )
 
     public_base = _value("MESSENGER_PUBLIC_BASE_URL")
     if max_enabled or vk_enabled:
@@ -204,7 +260,10 @@ def run() -> tuple[list[str], list[str]]:
         if same_host and ingress_port == health_port:
             errors.append(f"HTTP ingress port and health port collide on {ingress_host}:{ingress_port}")
     else:
-        warnings.append("HTTP ingress is disabled; YooKassa/MAX/VK web endpoints will not be served by this process")
+        warnings.append(
+            "HTTP ingress is disabled; YooKassa/privacy export/MAX/VK web endpoints "
+            "will not be served by this process"
+        )
 
     return errors, warnings
 

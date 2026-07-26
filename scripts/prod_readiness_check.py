@@ -44,6 +44,20 @@ def _int(name: str, default: int, errors: list[str]) -> int:
     return value
 
 
+def _bounded_int(
+    name: str,
+    default: int,
+    *,
+    minimum: int,
+    maximum: int,
+    errors: list[str],
+) -> int:
+    value = _int(name, default, errors)
+    if value < minimum or value > maximum:
+        errors.append(f"{name} must be between {minimum} and {maximum}, got {value}")
+    return value
+
+
 def _int_fallback(name: str, fallback_name: str, default: int, errors: list[str]) -> int:
     if (os.getenv(name) or "").strip():
         return _int(name, default, errors)
@@ -77,11 +91,25 @@ def _payment_public_base_url() -> str:
     return _first_env("PAYMENT_PUBLIC_BASE_URL", "MESSENGER_PUBLIC_BASE_URL", "PUBLIC_BASE_URL").rstrip("/")
 
 
+def _privacy_export_public_base_url() -> str:
+    return _first_env(
+        "PRIVACY_EXPORT_PUBLIC_BASE_URL",
+        "MESSENGER_PUBLIC_BASE_URL",
+        "PAYMENT_PUBLIC_BASE_URL",
+        "PUBLIC_BASE_URL",
+    ).rstrip("/")
+
+
 def _payment_http_enabled() -> bool:
     explicit = _optional_flag("PAYMENT_HTTP_ENABLED")
     if explicit is not None:
         return explicit
     return _truthy("MESSENGER_WEBHOOK_ENABLED")
+
+
+def _privacy_export_http_enabled() -> bool:
+    explicit = _optional_flag("PRIVACY_EXPORT_HTTP_ENABLED")
+    return bool(explicit) if explicit is not None else False
 
 
 def _max_webhook_enabled() -> bool:
@@ -99,7 +127,12 @@ def _vk_webhook_enabled() -> bool:
 
 
 def _http_ingress_enabled() -> bool:
-    return _payment_http_enabled() or _max_webhook_enabled() or _vk_webhook_enabled()
+    return (
+        _payment_http_enabled()
+        or _privacy_export_http_enabled()
+        or _max_webhook_enabled()
+        or _vk_webhook_enabled()
+    )
 
 
 def _validate_admin_ids(errors: list[str]) -> None:
@@ -177,12 +210,34 @@ def _validate_payment_runtime(prod: bool, errors: list[str]) -> None:
 
 def _validate_http_ingress(prod: bool, errors: list[str], warnings: list[str]) -> bool:
     payment_enabled = _payment_http_enabled()
+    privacy_export_enabled = _privacy_export_http_enabled()
     max_enabled = _max_webhook_enabled()
     vk_enabled = _vk_webhook_enabled()
-    ingress_enabled = payment_enabled or max_enabled or vk_enabled
+    ingress_enabled = payment_enabled or privacy_export_enabled or max_enabled or vk_enabled
 
     if payment_enabled and not _payment_public_base_url():
         errors.append("PAYMENT_PUBLIC_BASE_URL or MESSENGER_PUBLIC_BASE_URL is required when payment HTTP ingress is enabled")
+
+    if prod and not privacy_export_enabled:
+        errors.append("PRIVACY_EXPORT_HTTP_ENABLED must be 1 in prod")
+    if privacy_export_enabled:
+        privacy_base = _privacy_export_public_base_url()
+        if not privacy_base:
+            errors.append(
+                "PRIVACY_EXPORT_PUBLIC_BASE_URL or MESSENGER_PUBLIC_BASE_URL is required "
+                "when privacy export HTTP ingress is enabled"
+            )
+        elif not privacy_base.startswith(("https://", "http://")):
+            errors.append("privacy export public base URL must be a full http(s) URL")
+        elif prod and not privacy_base.startswith("https://"):
+            errors.append("privacy export public base URL must start with https:// in prod")
+        _bounded_int(
+            "PRIVACY_EXPORT_TOKEN_TTL_MINUTES",
+            10,
+            minimum=2,
+            maximum=30,
+            errors=errors,
+        )
 
     public_base = (os.getenv("MESSENGER_PUBLIC_BASE_URL") or "").strip().rstrip("/")
     if max_enabled or vk_enabled:
@@ -211,7 +266,10 @@ def _validate_http_ingress(prod: bool, errors: list[str], warnings: list[str]) -
             warnings.append("VK_SECRET is empty; VK webhook secret verification is not enforced")
 
     if not ingress_enabled:
-        warnings.append("HTTP ingress is disabled; YooKassa/MAX/VK web endpoints will not be served by this process")
+        warnings.append(
+            "HTTP ingress is disabled; YooKassa/privacy export/MAX/VK web endpoints "
+            "will not be served by this process"
+        )
     return ingress_enabled
 
 

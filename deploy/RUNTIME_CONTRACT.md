@@ -10,6 +10,9 @@ This deployment keeps Telegram on polling. Do not switch Telegram to webhook for
 - `HEALTHCHECK_ENABLED=1`
 - `HEALTHCHECK_HOST=127.0.0.1`
 - `HEALTHCHECK_PORT=8082`
+- `PRIVACY_EXPORT_HTTP_ENABLED=1`
+- `PRIVACY_EXPORT_PUBLIC_BASE_URL=https://<public-host>`
+- `PRIVACY_EXPORT_TOKEN_TTL_MINUTES=10` (accepted range: 2..30)
 
 ## Optional local ingress runtime
 
@@ -20,6 +23,7 @@ The aiohttp ingress runtime may still be enabled for non-Telegram surfaces:
 - YooKassa web/reconciliation endpoints
 - public payment terms (`/terms`)
 - audio media/access links
+- one-time privacy export confirmation/download links
 
 Use:
 
@@ -29,6 +33,10 @@ Use:
 - `MESSENGER_PUBLIC_BASE_URL=https://<public-host>`
 
 This does not imply Telegram webhook mode. Telegram remains polling.
+
+The live `/etc/metrotherapy/metrotherapy.env` file is authoritative and is not
+replaced by immutable deploys. Before rollout, add the privacy export variables
+above to that server-side file; otherwise production readiness must fail closed.
 
 ## Runtime state must live outside the repository
 
