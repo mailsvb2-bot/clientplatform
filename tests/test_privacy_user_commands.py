@@ -9,8 +9,9 @@ from handlers import info
 
 
 class FakeMessage:
-    def __init__(self, user_id: int, text: str = "") -> None:
+    def __init__(self, user_id: int, text: str = "", *, chat_type: str = "private") -> None:
         self.from_user = SimpleNamespace(id=user_id)
+        self.chat = SimpleNamespace(type=chat_type)
         self.text = text
         self.answers: list[str] = []
         self.documents: list[tuple[object, str | None]] = []
@@ -42,6 +43,15 @@ def test_delete_confirmation_is_exact() -> None:
     assert info._delete_confirmed("/deletemydata CONFIRM extra") is False
 
 
+def test_export_confirmation_is_exact() -> None:
+    assert info._export_confirmed("/mydata CONFIRM") is True
+    assert info._export_confirmed("/mydata@metrotherapybot confirm") is True
+    assert info._export_confirmed("/mydata") is False
+    assert info._export_confirmed("mydata CONFIRM") is False
+    assert info._export_confirmed("/mydata YES") is False
+    assert info._export_confirmed("/mydata CONFIRM extra") is False
+
+
 @pytest.mark.asyncio
 async def test_export_uses_authenticated_user_and_removes_temp_file(monkeypatch) -> None:
     seen: list[int] = []
@@ -55,15 +65,16 @@ async def test_export_uses_authenticated_user_and_removes_temp_file(monkeypatch)
         return SimpleNamespace(path=path, total_rows=7, compressed_size_bytes=14)
 
     monkeypatch.setattr(info, "write_user_data_export_gzip", fake_export)
-    message = FakeMessage(91001, "/mydata")
+    message = FakeMessage(91001, "/mydata CONFIRM")
 
     await info.cmd_my_data(message)
 
     assert seen == [91001]
     assert len(message.documents) == 1
     document, caption = message.documents[0]
-    assert str(document.filename).endswith(".json.gz")
+    assert str(document.filename) == "metrotherapy-user-data.json.gz"
     assert caption is not None and "Записей: 7" in caption
+    assert "не зашифрован" in caption
     assert not message.answers
     assert message.document_paths_during_send == generated_paths
     assert all(not path.exists() for path in generated_paths)
@@ -80,7 +91,7 @@ async def test_export_temp_file_is_removed_when_upload_fails(monkeypatch) -> Non
         return SimpleNamespace(path=path, total_rows=1, compressed_size_bytes=10)
 
     monkeypatch.setattr(info, "write_user_data_export_gzip", fake_export)
-    message = FailingDocumentMessage(91004, "/mydata")
+    message = FailingDocumentMessage(91004, "/mydata CONFIRM")
 
     await info.cmd_my_data(message)
 
@@ -88,6 +99,29 @@ async def test_export_temp_file_is_removed_when_upload_fails(monkeypatch) -> Non
     assert all(not path.exists() for path in generated_paths)
     assert message.answers
     assert "Не удалось подготовить экспорт" in message.answers[-1]
+
+
+@pytest.mark.asyncio
+async def test_export_requires_confirmation_and_private_chat(monkeypatch) -> None:
+    called = False
+
+    def fake_export(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("must not export without confirmation or from a group")
+
+    monkeypatch.setattr(info, "write_user_data_export_gzip", fake_export)
+
+    unconfirmed = FakeMessage(91005, "/mydata")
+    await info.cmd_my_data(unconfirmed)
+    assert called is False
+    assert "/mydata CONFIRM" in unconfirmed.answers[-1]
+    assert "не зашифрован" in unconfirmed.answers[-1]
+
+    group = FakeMessage(91005, "/mydata CONFIRM", chat_type="group")
+    await info.cmd_my_data(group)
+    assert called is False
+    assert "только в личном чате" in group.answers[-1]
 
 
 @pytest.mark.asyncio

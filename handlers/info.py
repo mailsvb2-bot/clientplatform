@@ -7,6 +7,7 @@ import tempfile
 from pathlib import Path
 
 from aiogram import Router
+from aiogram.enums import ChatType
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, FSInputFile, Message
 
@@ -42,9 +43,24 @@ def _delete_confirmed(text: str | None) -> bool:
     return len(parts) == 2 and parts[1].strip().upper() == "CONFIRM"
 
 
-def _new_export_path(user_id: int) -> Path:
+def _export_confirmed(text: str | None) -> bool:
+    parts = str(text or "").strip().split(maxsplit=1)
+    if len(parts) != 2 or parts[1].strip().upper() != "CONFIRM":
+        return False
+    command = parts[0].strip().casefold().split("@", maxsplit=1)[0]
+    return command == "/mydata"
+
+
+def _is_private_chat(message: Message) -> bool:
+    chat = getattr(message, "chat", None)
+    raw_type = getattr(chat, "type", None)
+    value = getattr(raw_type, "value", raw_type)
+    return str(value or "").strip().casefold() == ChatType.PRIVATE.value
+
+
+def _new_export_path() -> Path:
     handle = tempfile.NamedTemporaryFile(
-        prefix=f"metrotherapy-user-data-{int(user_id)}-",
+        prefix="metrotherapy-user-data-",
         suffix=".json.gz",
         delete=False,
     )
@@ -77,7 +93,7 @@ async def cb_policy(cb: CallbackQuery):
         return
     await message.answer(
         f"🔐 Политика конфиденциальности:\n{POLICY_URL}\n\n"
-        "Получить копию своих данных: /mydata\n"
+        "Получить копию своих данных: /mydata — затем /mydata CONFIRM\n"
         "Удалить поведенческие данные: /deletemydata",
         reply_markup=kb_back_main(),
     )
@@ -96,10 +112,24 @@ async def cmd_my_data(message: Message) -> None:
     user_id = _message_user_id(message)
     if user_id is None:
         return
+    if not _is_private_chat(message):
+        await message.answer(
+            "🔐 Экспорт данных доступен только в личном чате с ботом. "
+            "Откройте личный диалог и отправьте /mydata заново."
+        )
+        return
+    if not _export_confirmed(message.text):
+        await message.answer(
+            "⚠️ Экспорт может содержать историю использования, оценки состояния и платёжные записи. "
+            "Архив сжат, но не зашифрован, и после отправки останется в истории этого чата.\n\n"
+            "Для подтверждения отправьте точно:\n"
+            "/mydata CONFIRM"
+        )
+        return
 
     export_path: Path | None = None
     try:
-        export_path = _new_export_path(user_id)
+        export_path = _new_export_path()
         result = await asyncio.to_thread(
             write_user_data_export_gzip,
             user_id,
@@ -107,14 +137,15 @@ async def cmd_my_data(message: Message) -> None:
         )
         document = FSInputFile(
             result.path,
-            filename=f"metrotherapy-user-data-{user_id}.json.gz",
+            filename="metrotherapy-user-data.json.gz",
         )
         await message.answer_document(
             document,
             caption=(
                 "🔐 Это сжатый JSON-экспорт данных, связанных с Вашим аккаунтом. "
                 f"Записей: {result.total_rows}. "
-                "Файл может содержать историю использования и платёжные записи — храните его безопасно."
+                "Архив не зашифрован. Сохраните его только в защищённом месте и удалите это сообщение, "
+                "когда файл больше не нужен в истории чата."
             ),
         )
     except sqlite3.Error:

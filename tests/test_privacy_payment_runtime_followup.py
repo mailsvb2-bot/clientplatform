@@ -96,11 +96,20 @@ def test_cross_messenger_privacy_commands(monkeypatch: pytest.MonkeyPatch) -> No
     assert user_id == 77
     assert text_ui_router.PRIVACY_POLICY_URL in replies[0].text
 
-    _, replies = text_ui_router.handle_incoming_text(
+    _, warning = text_ui_router.handle_incoming_text(
         77,
         platform="max",
         external_user_id="max-77",
         text="mydata",
+    )
+    assert "mydata CONFIRM" in warning[0].text
+    assert "не зашифрован" in warning[0].text
+
+    _, replies = text_ui_router.handle_incoming_text(
+        77,
+        platform="max",
+        external_user_id="max-77",
+        text="mydata CONFIRM",
     )
     assert replies == [text_ui_router.MessengerReply(kind="privacy_export")]
 
@@ -168,7 +177,9 @@ async def test_privacy_export_is_sent_and_temp_files_are_removed(
 
     assert observed["external_user_id"] == "vk-77"
     assert observed["bytes"] == b"privacy-export"
+    assert observed["generated_path"].name == "metrotherapy-user-data.json.gz"
     assert "Записей: 4" in observed["caption"]
+    assert "не зашифрован" in observed["caption"]
     assert not observed["generated_path"].exists()
     assert not observed["generated_path"].parent.exists()
 
