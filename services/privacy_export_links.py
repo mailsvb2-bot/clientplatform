@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import os
+import re
 import secrets
 import urllib.parse
 from dataclasses import dataclass, replace
@@ -12,11 +14,12 @@ from core.time_utils import utc_now
 from services.db import db, tx
 
 PRIVACY_EXPORT_PREFIX = "/privacy/export/"
+_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_-]{32,128}")
 
 
 @dataclass(frozen=True)
 class PrivacyExportGrant:
-    token: str
+    token_hash: str
     user_id: int
     platform: str
     created_at: str
@@ -76,9 +79,16 @@ def _grant_expired(created_at: str, *, now: datetime | None = None) -> bool:
     return current >= created + timedelta(minutes=privacy_export_ttl_minutes())
 
 
+def _token_hash(token: str) -> str:
+    raw = str(token or "").strip()
+    if _TOKEN_PATTERN.fullmatch(raw) is None:
+        return ""
+    return hashlib.sha256(raw.encode("ascii")).hexdigest()
+
+
 def _row_to_grant(row: Any) -> PrivacyExportGrant:
     return PrivacyExportGrant(
-        token=str(row["token"]),
+        token_hash=str(row["token_hash"]),
         user_id=int(row["user_id"]),
         platform=str(row["platform"]),
         created_at=str(row["created_at"] or ""),
@@ -88,6 +98,9 @@ def _row_to_grant(row: Any) -> PrivacyExportGrant:
 
 def issue_privacy_export_token(user_id: int, *, platform: str) -> str:
     token = secrets.token_urlsafe(32)
+    token_hash = _token_hash(token)
+    if not token_hash:
+        raise RuntimeError("privacy_export_token_generation_failed")
     created_at = utc_now().replace(microsecond=0).isoformat()
     with db() as conn:
         with tx(conn):
@@ -97,10 +110,16 @@ def issue_privacy_export_token(user_id: int, *, platform: str) -> str:
             )
             conn.execute(
                 """
-                INSERT INTO user_privacy_export_tokens(token, user_id, platform, created_at, consumed_at)
-                VALUES(?,?,?,?,NULL)
+                INSERT INTO user_privacy_export_tokens(
+                    token_hash, user_id, platform, created_at, consumed_at
+                ) VALUES(?,?,?,?,NULL)
                 """.strip(),
-                (token, int(user_id), str(platform or "unknown").strip().lower(), created_at),
+                (
+                    token_hash,
+                    int(user_id),
+                    str(platform or "unknown").strip().lower(),
+                    created_at,
+                ),
             )
     return token
 
@@ -114,17 +133,17 @@ def issue_privacy_export_url(user_id: int, *, platform: str) -> str:
 
 
 def get_privacy_export_grant(token: str) -> PrivacyExportGrant | None:
-    raw = str(token or "").strip()
-    if not raw:
+    token_hash = _token_hash(token)
+    if not token_hash:
         return None
     with db() as conn:
         row = conn.execute(
             """
-            SELECT token, user_id, platform, created_at, consumed_at
+            SELECT token_hash, user_id, platform, created_at, consumed_at
             FROM user_privacy_export_tokens
-            WHERE token=?
+            WHERE token_hash=?
             """.strip(),
-            (raw,),
+            (token_hash,),
         ).fetchone()
     if not row:
         return None
@@ -135,6 +154,9 @@ def get_privacy_export_grant(token: str) -> PrivacyExportGrant | None:
 
 
 def claim_privacy_export_grant(token: str) -> PrivacyExportGrant | None:
+    token_hash = _token_hash(token)
+    if not token_hash:
+        return None
     grant = get_privacy_export_grant(token)
     if grant is None:
         return None
@@ -145,9 +167,9 @@ def claim_privacy_export_grant(token: str) -> PrivacyExportGrant | None:
                 """
                 UPDATE user_privacy_export_tokens
                 SET consumed_at=?
-                WHERE token=? AND consumed_at IS NULL
+                WHERE token_hash=? AND consumed_at IS NULL
                 """.strip(),
-                (consumed_at, grant.token),
+                (consumed_at, token_hash),
             )
             if int(getattr(cursor, "rowcount", 0) or 0) != 1:
                 return None
