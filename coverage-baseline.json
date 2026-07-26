@@ -1,9 +1,10 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "total_percent": 70.16,
+  "branch_percent": 61.65,
   "comparison_tolerance": 0.01,
   "require_update_on_improvement": true,
-  "measurement": "combined line and branch coverage",
+  "measurement": "combined coverage with an independent branch coverage ratchet",
   "source": [
     "services",
     "handlers",
