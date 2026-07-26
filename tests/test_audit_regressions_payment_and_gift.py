@@ -157,3 +157,33 @@ async def test_yookassa_checkout_error_does_not_expose_exception_class(
     assert "PAYMENT_CREATE_FAILED" in body
     assert "ValueError" not in body
     assert "provider details" not in body
+
+
+def test_checkout_intent_rejection_does_not_expose_verifier_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(payment_http, "checkout_intent_required", lambda: True)
+
+    def reject_intent(*_args: Any, **_kwargs: Any) -> None:
+        raise payment_http.CheckoutIntentError(
+            "signature mismatch: expected internal-signature-value"
+        )
+
+    monkeypatch.setattr(payment_http, "verify_checkout_intent", reject_intent)
+
+    response = payment_http._checkout_intent_error_response(
+        intent="attacker-controlled-intent",
+        user_id="7",
+        package_id="practice_start_7",
+        kind="tokens",
+        source="vk",
+        amount_minor=10000,
+        currency="RUB",
+        gift_token="",
+    )
+    assert response is not None
+    assert response.status == 403
+    assert "CHECKOUT_INTENT_INVALID" in response.text
+    assert "signature mismatch" not in response.text
+    assert "internal-signature-value" not in response.text
+    assert "CheckoutIntentError" not in response.text
