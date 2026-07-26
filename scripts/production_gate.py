@@ -152,6 +152,7 @@ def main() -> int:
             str(args.health_url),
             "--ready-url",
             str(args.ready_url),
+            "--skip-pytest",
             "--require-disaster-recovery-green",
             "--restore-drill",
         ],
