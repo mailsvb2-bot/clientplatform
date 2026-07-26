@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 
 from config.settings import settings
+from services.privacy_export_links import privacy_export_http_enabled
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 
@@ -53,4 +54,9 @@ def vk_webhook_enabled() -> bool:
 
 
 def http_ingress_enabled() -> bool:
-    return bool(payment_http_enabled() or max_webhook_enabled() or vk_webhook_enabled())
+    return bool(
+        payment_http_enabled()
+        or max_webhook_enabled()
+        or vk_webhook_enabled()
+        or privacy_export_http_enabled()
+    )

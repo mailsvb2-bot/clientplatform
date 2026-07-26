@@ -56,7 +56,13 @@ def privacy_export_public_base_url() -> str:
 
 
 def privacy_export_http_enabled() -> bool:
-    return bool(privacy_export_public_base_url())
+    raw = os.getenv("PRIVACY_EXPORT_HTTP_ENABLED")
+    enabled = str(raw or "").strip().lower() in {"1", "true", "yes", "on"}
+    if not enabled:
+        return False
+    if not privacy_export_public_base_url():
+        raise RuntimeError("PRIVACY_EXPORT_HTTP_ENABLED requires a valid public HTTPS base URL")
+    return True
 
 
 def _grant_expired(created_at: str, *, now: datetime | None = None) -> bool:
@@ -100,9 +106,9 @@ def issue_privacy_export_token(user_id: int, *, platform: str) -> str:
 
 
 def issue_privacy_export_url(user_id: int, *, platform: str) -> str:
-    base = privacy_export_public_base_url()
-    if not base:
+    if not privacy_export_http_enabled():
         return ""
+    base = privacy_export_public_base_url()
     token = issue_privacy_export_token(int(user_id), platform=platform)
     return f"{base}{PRIVACY_EXPORT_PREFIX}{urllib.parse.quote(token, safe='')}"
 

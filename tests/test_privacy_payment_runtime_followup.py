@@ -20,6 +20,8 @@ _PAYMENT_ENV_NAMES = (
     "MESSENGER_PUBLIC_BASE_URL",
     "PAYMENT_PUBLIC_BASE_URL",
     "PUBLIC_BASE_URL",
+    "PRIVACY_EXPORT_HTTP_ENABLED",
+    "PRIVACY_EXPORT_PUBLIC_BASE_URL",
     "MAX_WEBHOOK_ENABLED",
     "VK_WEBHOOK_ENABLED",
     "ALLOW_UNSIGNED_PAYMENT_CHECKOUT_IN_PROD",
@@ -103,7 +105,7 @@ def test_cross_messenger_privacy_commands(monkeypatch: pytest.MonkeyPatch) -> No
         text="mydata",
     )
     assert "mydata CONFIRM" in warning[0].text
-    assert "не зашифрован" in warning[0].text
+    assert "одноразовую HTTPS-ссылку" in warning[0].text
 
     _, replies = text_ui_router.handle_incoming_text(
         77,
@@ -140,34 +142,26 @@ def test_cross_messenger_privacy_commands(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 @pytest.mark.asyncio
-async def test_privacy_export_is_sent_and_temp_files_are_removed(
+async def test_privacy_export_is_sent_as_one_time_link(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     observed: dict[str, Any] = {}
 
-    def write_export(user_id: int, output_path: Path) -> Any:
-        output_path.write_bytes(b"privacy-export")
-        observed["generated_path"] = output_path
-        return SimpleNamespace(path=output_path, total_rows=4)
-
     class Sender:
-        async def send_document_file(
-            self,
-            external_user_id: str,
-            file_path: Path,
-            *,
-            caption: str,
-            **kwargs: Any,
-        ) -> None:
+        async def send_document_file(self, *_args: Any, **_kwargs: Any) -> None:
+            raise AssertionError("privacy export must not be uploaded into messenger history")
+
+        async def send_text(self, external_user_id: str, text: str, **kwargs: Any) -> None:
             observed["external_user_id"] = external_user_id
-            observed["bytes"] = file_path.read_bytes()
-            observed["caption"] = caption
+            observed["text"] = text
             observed["kwargs"] = kwargs
 
-        async def send_text(self, *_args: Any, **_kwargs: Any) -> None:
-            raise AssertionError("failure fallback must not be used")
-
-    monkeypatch.setattr(reply_dispatcher, "write_user_data_export_gzip", write_export)
+    monkeypatch.setattr(
+        reply_dispatcher,
+        "issue_privacy_export_url",
+        lambda user_id, *, platform: f"https://example.test/privacy/export/{platform}-{user_id}",
+    )
+    monkeypatch.setattr(reply_dispatcher, "privacy_export_ttl_minutes", lambda: 10)
     await reply_dispatcher._send_privacy_export(
         platform="vk",
         sender=Sender(),
@@ -176,12 +170,9 @@ async def test_privacy_export_is_sent_and_temp_files_are_removed(
     )
 
     assert observed["external_user_id"] == "vk-77"
-    assert observed["bytes"] == b"privacy-export"
-    assert observed["generated_path"].name == "metrotherapy-user-data.json.gz"
-    assert "Записей: 4" in observed["caption"]
-    assert "не зашифрован" in observed["caption"]
-    assert not observed["generated_path"].exists()
-    assert not observed["generated_path"].parent.exists()
+    assert "https://example.test/privacy/export/vk-77" in observed["text"]
+    assert "одноразовая" in observed["text"].casefold()
+    assert "предпросмотр" in observed["text"].casefold()
 
 
 @pytest.mark.asyncio

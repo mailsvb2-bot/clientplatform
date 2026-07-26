@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 Disposition = Literal["erase", "retain", "anonymize"]
-MANIFEST_VERSION = "2026-07-21.v4"
+MANIFEST_VERSION = "2026-07-26.v5"
 
 OWNERSHIP_COLUMN_CANDIDATES = frozenset(
     {
@@ -112,6 +112,7 @@ _BEHAVIORAL: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("user_audio_progress", ("user_id",), "legacy user audio progress"),
     ("user_audio_timeline", ("user_id",), "audio interaction timeline"),
     ("user_audio_access_tokens", ("user_id",), "expiring media access capability"),
+    ("user_privacy_export_tokens", ("user_id",), "one-time privacy export capability"),
     ("user_channel_links", ("user_id",), "legacy cross-channel relationship"),
     ("user_channel_preferences", ("user_id",), "legacy delivery preference"),
     ("user_delivery_preferences", ("user_id",), "delivery preferences"),

@@ -3,17 +3,16 @@ from __future__ import annotations
 import asyncio
 import logging
 import sqlite3
-import tempfile
-from pathlib import Path
 
 from aiogram import Router
 from aiogram.enums import ChatType
 from aiogram.filters import Command
-from aiogram.types import CallbackQuery, FSInputFile, Message
+from aiogram.types import CallbackQuery, Message
 
 from core.callback_utils import safe_answer_callback
 from keyboards.inline import kb_back_main
-from services.privacy_controls import erase_user_behavioral_data, write_user_data_export_gzip
+from services.privacy_controls import erase_user_behavioral_data
+from services.privacy_export_links import issue_privacy_export_url, privacy_export_ttl_minutes
 
 router = Router()
 log = logging.getLogger(__name__)
@@ -58,24 +57,6 @@ def _is_private_chat(message: Message) -> bool:
     return str(value or "").strip().casefold() == ChatType.PRIVATE.value
 
 
-def _new_export_path() -> Path:
-    handle = tempfile.NamedTemporaryFile(
-        prefix="metrotherapy-user-data-",
-        suffix=".json.gz",
-        delete=False,
-    )
-    path = Path(handle.name)
-    handle.close()
-    return path
-
-
-def _remove_export_path(path: Path) -> None:
-    try:
-        path.unlink(missing_ok=True)
-    except OSError:
-        log.exception("Temporary privacy export cleanup failed: path=%s", path)
-
-
 @router.callback_query(lambda c: (c.data or "") == "info:support")
 async def cb_support(cb: CallbackQuery):
     await safe_answer_callback(cb)
@@ -99,8 +80,7 @@ async def cb_policy(cb: CallbackQuery):
     )
 
 
-async def _answer_export_failure(message: Message, user_id: int) -> None:
-    log.exception("User data export failed: user_id=%s", user_id)
+async def _answer_export_failure(message: Message) -> None:
     await message.answer(
         "Не удалось подготовить экспорт данных. Повторите позже или напишите в поддержку: "
         "@metrotherapysupportbot"
@@ -121,46 +101,35 @@ async def cmd_my_data(message: Message) -> None:
     if not _export_confirmed(message.text):
         await message.answer(
             "⚠️ Экспорт может содержать историю использования, оценки состояния и платёжные записи. "
-            "Архив сжат, но не зашифрован, и после отправки останется в истории этого чата.\n\n"
+            "После подтверждения бот создаст одноразовую HTTPS-ссылку; предпросмотр ссылки не запускает скачивание.\n\n"
             "Для подтверждения отправьте точно:\n"
             "/mydata CONFIRM"
         )
         return
 
-    export_path: Path | None = None
     try:
-        export_path = _new_export_path()
-        result = await asyncio.to_thread(
-            write_user_data_export_gzip,
+        url = await asyncio.to_thread(
+            issue_privacy_export_url,
             user_id,
-            export_path,
+            platform="telegram",
         )
-        document = FSInputFile(
-            result.path,
-            filename="metrotherapy-user-data.json.gz",
-        )
-        await message.answer_document(
-            document,
-            caption=(
-                "🔐 Это сжатый JSON-экспорт данных, связанных с Вашим аккаунтом. "
-                f"Записей: {result.total_rows}. "
-                "Архив не зашифрован. Сохраните его только в защищённом месте и удалите это сообщение, "
-                "когда файл больше не нужен в истории чата."
-            ),
-        )
-    except sqlite3.Error:
-        await _answer_export_failure(message, user_id)
-    except RuntimeError:
-        await _answer_export_failure(message, user_id)
-    except OSError:
-        await _answer_export_failure(message, user_id)
-    except ValueError:
-        await _answer_export_failure(message, user_id)
-    except TypeError:
-        await _answer_export_failure(message, user_id)
-    finally:
-        if export_path is not None:
-            await asyncio.to_thread(_remove_export_path, export_path)
+    except (sqlite3.Error, RuntimeError, OSError, ValueError, TypeError):
+        log.exception("One-time user data export link failed: user_id=%s", user_id)
+        await _answer_export_failure(message)
+        return
+    if not url:
+        log.error("One-time user data export link is unavailable: user_id=%s", user_id)
+        await _answer_export_failure(message)
+        return
+
+    ttl = privacy_export_ttl_minutes()
+    await message.answer(
+        "🔐 Одноразовая ссылка на экспорт Ваших данных:\n"
+        f"{url}\n\n"
+        f"Ссылка действует не более {ttl} минут и позволяет скачать архив один раз. "
+        "Сначала откроется страница подтверждения; предпросмотр мессенджера не расходует ссылку. "
+        "Архив сжат, но не зашифрован — храните его в защищённом месте."
+    )
 
 
 async def _answer_erasure_failure(message: Message, user_id: int) -> None:
