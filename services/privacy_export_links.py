@@ -1,0 +1,148 @@
+from __future__ import annotations
+
+import os
+import secrets
+import urllib.parse
+from dataclasses import dataclass, replace
+from datetime import datetime, timedelta
+from typing import Any
+
+from config.settings import settings
+from core.time_utils import utc_now
+from services.db import db, tx
+
+PRIVACY_EXPORT_PREFIX = "/privacy/export/"
+
+
+@dataclass(frozen=True)
+class PrivacyExportGrant:
+    token: str
+    user_id: int
+    platform: str
+    created_at: str
+    consumed_at: str | None
+
+
+def privacy_export_ttl_minutes() -> int:
+    raw = (os.getenv("PRIVACY_EXPORT_TOKEN_TTL_MINUTES") or "10").strip()
+    try:
+        parsed = int(raw)
+    except (TypeError, ValueError):
+        return 10
+    return max(2, min(parsed, 30))
+
+
+def _app_env() -> str:
+    return (os.getenv("APP_ENV") or getattr(settings, "APP_ENV", "") or "dev").strip().lower()
+
+
+def privacy_export_public_base_url() -> str:
+    raw = (
+        os.getenv("PRIVACY_EXPORT_PUBLIC_BASE_URL", "").strip()
+        or os.getenv("MESSENGER_PUBLIC_BASE_URL", "").strip()
+        or os.getenv("PAYMENT_PUBLIC_BASE_URL", "").strip()
+        or os.getenv("PUBLIC_BASE_URL", "").strip()
+        or str(getattr(settings, "MESSENGER_PUBLIC_BASE_URL", "") or "").strip()
+        or str(getattr(settings, "TELEGRAM_WEBHOOK_PUBLIC_BASE_URL", "") or "").strip()
+    ).rstrip("/")
+    if not raw:
+        return ""
+    parsed = urllib.parse.urlsplit(raw)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return ""
+    if _app_env() in {"prod", "production", "stage", "staging"} and parsed.scheme != "https":
+        return ""
+    return raw
+
+
+def privacy_export_http_enabled() -> bool:
+    return bool(privacy_export_public_base_url())
+
+
+def _grant_expired(created_at: str, *, now: datetime | None = None) -> bool:
+    try:
+        created = datetime.fromisoformat(str(created_at))
+    except (TypeError, ValueError):
+        return True
+    current = now or utc_now()
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=current.tzinfo)
+    return current >= created + timedelta(minutes=privacy_export_ttl_minutes())
+
+
+def _row_to_grant(row: Any) -> PrivacyExportGrant:
+    return PrivacyExportGrant(
+        token=str(row["token"]),
+        user_id=int(row["user_id"]),
+        platform=str(row["platform"]),
+        created_at=str(row["created_at"] or ""),
+        consumed_at=str(row["consumed_at"]) if row["consumed_at"] is not None else None,
+    )
+
+
+def issue_privacy_export_token(user_id: int, *, platform: str) -> str:
+    token = secrets.token_urlsafe(32)
+    created_at = utc_now().replace(microsecond=0).isoformat()
+    with db() as conn:
+        with tx(conn):
+            conn.execute(
+                "DELETE FROM user_privacy_export_tokens WHERE user_id=? AND consumed_at IS NULL",
+                (int(user_id),),
+            )
+            conn.execute(
+                """
+                INSERT INTO user_privacy_export_tokens(token, user_id, platform, created_at, consumed_at)
+                VALUES(?,?,?,?,NULL)
+                """.strip(),
+                (token, int(user_id), str(platform or "unknown").strip().lower(), created_at),
+            )
+    return token
+
+
+def issue_privacy_export_url(user_id: int, *, platform: str) -> str:
+    base = privacy_export_public_base_url()
+    if not base:
+        return ""
+    token = issue_privacy_export_token(int(user_id), platform=platform)
+    return f"{base}{PRIVACY_EXPORT_PREFIX}{urllib.parse.quote(token, safe='')}"
+
+
+def get_privacy_export_grant(token: str) -> PrivacyExportGrant | None:
+    raw = str(token or "").strip()
+    if not raw:
+        return None
+    with db() as conn:
+        row = conn.execute(
+            """
+            SELECT token, user_id, platform, created_at, consumed_at
+            FROM user_privacy_export_tokens
+            WHERE token=?
+            """.strip(),
+            (raw,),
+        ).fetchone()
+    if not row:
+        return None
+    grant = _row_to_grant(row)
+    if grant.consumed_at is not None or _grant_expired(grant.created_at):
+        return None
+    return grant
+
+
+def claim_privacy_export_grant(token: str) -> PrivacyExportGrant | None:
+    grant = get_privacy_export_grant(token)
+    if grant is None:
+        return None
+    consumed_at = utc_now().replace(microsecond=0).isoformat()
+    with db() as conn:
+        with tx(conn):
+            cursor = conn.execute(
+                """
+                UPDATE user_privacy_export_tokens
+                SET consumed_at=?
+                WHERE token=? AND consumed_at IS NULL
+                """.strip(),
+                (consumed_at, grant.token),
+            )
+            if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+                return None
+    return replace(grant, consumed_at=consumed_at)
