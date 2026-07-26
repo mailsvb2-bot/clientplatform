@@ -27,6 +27,7 @@ _NO_STORE_HEADERS = {
     "Pragma": "no-cache",
     "Referrer-Policy": "no-referrer",
     "X-Content-Type-Options": "nosniff",
+    "Cross-Origin-Resource-Policy": "same-origin",
 }
 
 
@@ -72,7 +73,7 @@ async def privacy_export_landing(request: web.Request) -> web.Response:
     if grant is None:
         raise web.HTTPNotFound(headers=_NO_STORE_HEADERS)
     return web.Response(
-        text=_landing_html(grant.token),
+        text=_landing_html(token),
         content_type="text/html",
         charset="utf-8",
         headers={
