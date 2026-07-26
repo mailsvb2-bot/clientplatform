@@ -32,6 +32,10 @@ DEPLOYMENT_PROOF_FILE="${DEPLOYMENT_PROOF_FILE:-$DEPLOY_STATE_DIR/deployment-pro
 SYSTEMD_OVERRIDE="${METRO_IMMUTABLE_SYSTEMD_OVERRIDE:-/etc/systemd/system/$SERVICE_NAME.d/zz-immutable-release.conf}"
 RELEASE_MANAGER="$SOURCE_DIR/scripts/immutable_release.py"
 RELEASE_BUILDER="$SOURCE_DIR/scripts/build_immutable_release.sh"
+ENV_MIGRATOR="$SOURCE_DIR/scripts/migrate_privacy_export_env.py"
+RUNTIME_CONTRACT="$SOURCE_DIR/scripts/runtime_contract.py"
+PRIVACY_EXPORT_DEFAULT_PUBLIC_BASE_URL="${PRIVACY_EXPORT_DEFAULT_PUBLIC_BASE_URL:-https://metrotherapy-bot.metrotherapy.ru}"
+PRIVACY_EXPORT_DEFAULT_TTL_MINUTES="${PRIVACY_EXPORT_DEFAULT_TTL_MINUTES:-10}"
 LOCAL_HEALTH_URL="${LOCAL_HEALTH_URL:-http://127.0.0.1:8082/healthz}"
 LOCAL_READY_URL="${LOCAL_READY_URL:-http://127.0.0.1:8082/readyz}"
 PUBLIC_HEALTH_URL="${PUBLIC_HEALTH_URL:-https://metrotherapy-bot.metrotherapy.ru/healthz}"
@@ -106,6 +110,31 @@ run_bounded() {
   fi
   echo "IMMUTABLE_DEPLOY_FAILED command=$label code=$code" >&2
   return "$code"
+}
+
+reload_authoritative_environment() {
+  [ -f "$ENV_FILE" ] || {
+    echo "IMMUTABLE_DEPLOY_FAILED authoritative env file not found: $ENV_FILE" >&2
+    return 1
+  }
+  set -a
+  # shellcheck disable=SC1090
+  . "$ENV_FILE"
+  set +a
+}
+
+migrate_privacy_export_environment() {
+  [ -f "$ENV_MIGRATOR" ] || {
+    echo "IMMUTABLE_DEPLOY_FAILED privacy export env migrator is missing" >&2
+    return 1
+  }
+  [ -f "$RUNTIME_CONTRACT" ] || {
+    echo "IMMUTABLE_DEPLOY_FAILED runtime contract checker is missing" >&2
+    return 1
+  }
+  run_bounded "$VALIDATOR_TIMEOUT_SECONDS"     "migrate authoritative privacy export environment"     "$SYSTEM_PYTHON" "$ENV_MIGRATOR"       --env-file "$ENV_FILE"       --public-base-url "$PRIVACY_EXPORT_DEFAULT_PUBLIC_BASE_URL"       --ttl-minutes "$PRIVACY_EXPORT_DEFAULT_TTL_MINUTES"
+  reload_authoritative_environment
+  run_bounded "$VALIDATOR_TIMEOUT_SECONDS"     "validate production runtime contract after env migration"     env PYTHONDONTWRITEBYTECODE=1 "$SYSTEM_PYTHON" "$RUNTIME_CONTRACT"
 }
 
 wait_for_health() {
@@ -349,6 +378,7 @@ if [ -n "$TRIGGER_SHA" ]; then
   fi
 fi
 
+migrate_privacy_export_environment
 mkdir -p "$RUNTIME_ROOT" "$RELEASES_DIR" "$DEPLOY_STATE_DIR"
 
 BOOTSTRAP_CURRENT=0

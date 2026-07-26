@@ -35,8 +35,22 @@ Use:
 This does not imply Telegram webhook mode. Telegram remains polling.
 
 The live `/etc/metrotherapy/metrotherapy.env` file is authoritative and is not
-replaced by immutable deploys. Before rollout, add the privacy export variables
-above to that server-side file; otherwise production readiness must fail closed.
+replaced by immutable deploys. Prepare the first rollout without manually editing
+secrets:
+
+```bash
+cd /root/metrotherapy
+git fetch --prune origin
+git checkout main
+git merge --ff-only origin/main
+sudo bash scripts/prepare_privacy_export_rollout.sh
+```
+
+The helper takes an exclusive lock, preserves all unrelated bytes, writes a
+timestamped backup, atomically updates only the three privacy-export keys, and
+runs `runtime_contract.py` without restarting the service. Later immutable
+deploys repeat this idempotent migration automatically after the fast-forward and
+before candidate build or runtime switching.
 
 ## Runtime state must live outside the repository
 
