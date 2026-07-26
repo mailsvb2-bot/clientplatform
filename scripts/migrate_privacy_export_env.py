@@ -265,6 +265,9 @@ def migrate_env_file(
         current_metadata = path.stat()
         if not stat.S_ISREG(current_metadata.st_mode):
             raise MigrationError("environment file is no longer regular")
+        current_mode = stat.S_IMODE(current_metadata.st_mode)
+        if current_mode & stat.S_IWOTH:
+            raise MigrationError("environment file became world-writable")
         original = path.read_bytes()
         try:
             text = original.decode("utf-8")
@@ -291,24 +294,41 @@ def migrate_env_file(
         _write_exclusive_file(
             backup,
             original,
-            mode=mode,
+            mode=current_mode,
             uid=current_metadata.st_uid,
             gid=current_metadata.st_gid,
         )
-        _atomic_replace(
-            path,
-            updated,
-            mode=mode,
-            uid=current_metadata.st_uid,
-            gid=current_metadata.st_gid,
-        )
+        try:
+            _atomic_replace(
+                path,
+                updated,
+                mode=current_mode,
+                uid=current_metadata.st_uid,
+                gid=current_metadata.st_gid,
+            )
 
-        verified_text = path.read_text(encoding="utf-8")
-        verified_assignments = _active_assignments(verified_text.splitlines(keepends=True))
-        for key, expected in targets.items():
-            actual = verified_assignments.get(key, (-1, ""))[1]
-            if actual != expected:
-                raise MigrationError(f"post-write verification failed for {key}")
+            verified_text = path.read_text(encoding="utf-8")
+            verified_assignments = _active_assignments(verified_text.splitlines(keepends=True))
+            for key, expected in targets.items():
+                actual = verified_assignments.get(key, (-1, ""))[1]
+                if actual != expected:
+                    raise MigrationError(f"post-write verification failed for {key}")
+        except (MigrationError, OSError, UnicodeError) as exc:
+            try:
+                _atomic_replace(
+                    path,
+                    original,
+                    mode=current_mode,
+                    uid=current_metadata.st_uid,
+                    gid=current_metadata.st_gid,
+                )
+            except OSError as rollback_exc:
+                raise MigrationError(
+                    "environment migration failed and automatic rollback also failed"
+                ) from rollback_exc
+            if isinstance(exc, MigrationError):
+                raise
+            raise MigrationError("post-write verification failed") from exc
         return MigrationResult(
             changed=True,
             backup_path=backup,

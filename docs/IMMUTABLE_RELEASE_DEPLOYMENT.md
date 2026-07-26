@@ -96,6 +96,28 @@ The real deployment still requires:
 
 The restore script refuses the production URL, the same database name, system databases, and targets without a drill/test marker.
 
+### First privacy-export rollout
+
+The authoritative env file is migrated with:
+
+```bash
+cd /root/metrotherapy
+git fetch --prune origin
+git checkout main
+git merge --ff-only origin/main
+sudo bash scripts/prepare_privacy_export_rollout.sh
+```
+
+This command does not restart the service. It creates a timestamped backup,
+atomically adds or repairs only `PRIVACY_EXPORT_HTTP_ENABLED`,
+`PRIVACY_EXPORT_PUBLIC_BASE_URL`, and `PRIVACY_EXPORT_TOKEN_TTL_MINUTES`, then
+runs the offline production runtime contract. Existing valid custom URL and TTL
+values are retained. Duplicate managed keys, symlinks, world-writable env files,
+and invalid HTTPS/TTL fallbacks fail closed before deployment.
+
+After the first preparation, `scripts/immutable_deploy.sh` repeats the migration
+idempotently after every fast-forward and before building or switching a release.
+
 ## Evidence
 
 A successful deployment writes:
