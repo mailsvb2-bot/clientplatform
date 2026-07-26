@@ -87,6 +87,11 @@ async def _answer_export_failure(message: Message) -> None:
     )
 
 
+async def _handle_export_link_error(message: Message, user_id: int) -> None:
+    log.exception("One-time user data export link failed: user_id=%s", user_id)
+    await _answer_export_failure(message)
+
+
 @router.message(Command("mydata"))
 async def cmd_my_data(message: Message) -> None:
     user_id = _message_user_id(message)
@@ -113,9 +118,20 @@ async def cmd_my_data(message: Message) -> None:
             user_id,
             platform="telegram",
         )
-    except (sqlite3.Error, RuntimeError, OSError, ValueError, TypeError):
-        log.exception("One-time user data export link failed: user_id=%s", user_id)
-        await _answer_export_failure(message)
+    except sqlite3.Error:
+        await _handle_export_link_error(message, user_id)
+        return
+    except RuntimeError:
+        await _handle_export_link_error(message, user_id)
+        return
+    except OSError:
+        await _handle_export_link_error(message, user_id)
+        return
+    except ValueError:
+        await _handle_export_link_error(message, user_id)
+        return
+    except TypeError:
+        await _handle_export_link_error(message, user_id)
         return
     if not url:
         log.error("One-time user data export link is unavailable: user_id=%s", user_id)
