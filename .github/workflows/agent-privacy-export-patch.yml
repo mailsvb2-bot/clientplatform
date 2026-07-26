@@ -1,0 +1,37 @@
+name: One-shot privacy export hardening
+
+on:
+  push:
+    branches:
+      - agent/harden-user-data-export
+    paths:
+      - tools/agent_patch_privacy_export.py
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: agent/harden-user-data-export
+          fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install hash-locked dependencies
+        run: python -m pip install --require-hashes -r requirements.txt
+      - name: Apply exact patch and focused tests
+        run: python tools/agent_patch_privacy_export.py
+      - name: Commit patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add handlers/info.py services/privacy_controls.py services/messenger/text_ui_router.py services/messenger/reply_dispatcher.py tests/test_privacy_user_commands.py tests/test_privacy_payment_runtime_followup.py tests/test_privacy_streaming_export.py
+          git diff --cached --check
+          git commit -m "Harden user data export confirmation and file handling"
+          git push origin HEAD:agent/harden-user-data-export
