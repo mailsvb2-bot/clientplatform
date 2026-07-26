@@ -15,6 +15,7 @@ from aiohttp import web
 from services.privacy_controls import write_user_data_export_gzip
 from services.privacy_export_links import (
     PRIVACY_EXPORT_PREFIX,
+    PrivacyExportGrant,
     claim_privacy_export_grant,
     get_privacy_export_grant,
     privacy_export_ttl_minutes,
@@ -67,6 +68,16 @@ def _landing_html(token: str) -> str:
 </html>"""
 
 
+def _generation_failure_response(grant: PrivacyExportGrant) -> web.Response:
+    log.exception("One-time privacy export generation failed: user_id=%s", grant.user_id)
+    return web.Response(
+        status=500,
+        text="Не удалось подготовить экспорт данных. Повторите попытку позже.",
+        content_type="text/plain",
+        headers=_NO_STORE_HEADERS,
+    )
+
+
 async def privacy_export_landing(request: web.Request) -> web.Response:
     token = request.match_info.get("token", "")
     grant = await asyncio.to_thread(get_privacy_export_grant, token)
@@ -98,14 +109,16 @@ async def privacy_export_download(request: web.Request) -> web.StreamResponse:
                 int(grant.user_id),
                 export_path,
             )
-        except (sqlite3.Error, RuntimeError, OSError, TypeError, ValueError):
-            log.exception("One-time privacy export generation failed: user_id=%s", grant.user_id)
-            return web.Response(
-                status=500,
-                text="Не удалось подготовить экспорт данных. Повторите попытку позже.",
-                content_type="text/plain",
-                headers=_NO_STORE_HEADERS,
-            )
+        except sqlite3.Error:
+            return _generation_failure_response(grant)
+        except RuntimeError:
+            return _generation_failure_response(grant)
+        except OSError:
+            return _generation_failure_response(grant)
+        except TypeError:
+            return _generation_failure_response(grant)
+        except ValueError:
+            return _generation_failure_response(grant)
 
         claimed = await asyncio.to_thread(claim_privacy_export_grant, token)
         if claimed is None:
