@@ -6,6 +6,7 @@ on:
       - agent/harden-user-data-export
     paths:
       - tools/agent_patch_privacy_export.py
+      - .github/workflows/agent-privacy-export-patch.yml
 
 permissions:
   contents: write
