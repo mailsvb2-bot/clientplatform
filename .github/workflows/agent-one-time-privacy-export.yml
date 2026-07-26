@@ -35,6 +35,16 @@ jobs:
       - name: Apply exact patch and focused tests
         run: |
           set -o pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path = Path("tests/test_privacy_payment_runtime_followup.py")
+          source = path.read_text(encoding="utf-8")
+          old = '    assert "не зашифрован" in warning[0].text\n'
+          new = '    assert "одноразовую HTTPS-ссылку" in warning[0].text\n'
+          if source.count(old) != 1:
+              raise SystemExit("legacy privacy warning assertion anchor mismatch")
+          path.write_text(source.replace(old, new, 1), encoding="utf-8")
+          PY
           python tools/agent_patch_one_time_privacy_export.py 2>&1 | tee "$RUNNER_TEMP/privacy-export-patch.log"
 
       - name: Upload patch log
