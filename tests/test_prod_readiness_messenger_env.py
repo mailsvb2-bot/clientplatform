@@ -17,6 +17,9 @@ def _run(monkeypatch, **env):
         "MESSENGER_PUBLIC_BASE_URL",
         "PAYMENT_HTTP_ENABLED",
         "PAYMENT_PUBLIC_BASE_URL",
+        "PRIVACY_EXPORT_HTTP_ENABLED",
+        "PRIVACY_EXPORT_PUBLIC_BASE_URL",
+        "PRIVACY_EXPORT_TOKEN_TTL_MINUTES",
         "MAX_WEBHOOK_ENABLED",
         "VK_WEBHOOK_ENABLED",
         "MAX_BOT_TOKEN",
@@ -118,3 +121,43 @@ def test_legacy_messenger_flag_keeps_payment_compat_without_enabling_empty_chann
 
     assert not any("VK or MAX" in error for error in errors)
     assert not any("VK_" in error or "MAX_" in error for error in errors)
+
+
+def test_readiness_requires_privacy_export_in_prod(monkeypatch):
+    errors, warnings = _run(
+        monkeypatch,
+        APP_ENV="prod",
+        HEALTHCHECK_ENABLED="1",
+        PRIVACY_EXPORT_HTTP_ENABLED="0",
+    )
+
+    assert any("PRIVACY_EXPORT_HTTP_ENABLED" in error for error in errors)
+
+
+def test_readiness_accepts_privacy_export_as_only_http_ingress(monkeypatch):
+    errors, warnings = _run(
+        monkeypatch,
+        **_base_dev_env(),
+        PAYMENT_HTTP_ENABLED="0",
+        PRIVACY_EXPORT_HTTP_ENABLED="1",
+        PRIVACY_EXPORT_PUBLIC_BASE_URL="https://metrotherapy.ru",
+        PRIVACY_EXPORT_TOKEN_TTL_MINUTES="10",
+        MAX_WEBHOOK_ENABLED="0",
+        VK_WEBHOOK_ENABLED="0",
+    )
+
+    assert not any("PRIVACY_EXPORT" in error or "privacy export" in error for error in errors)
+    assert not any("HTTP ingress is disabled" in warning for warning in warnings)
+
+
+def test_readiness_rejects_invalid_privacy_export_contract(monkeypatch):
+    errors, warnings = _run(
+        monkeypatch,
+        **_base_dev_env(),
+        PRIVACY_EXPORT_HTTP_ENABLED="1",
+        PRIVACY_EXPORT_PUBLIC_BASE_URL="ftp://metrotherapy.ru",
+        PRIVACY_EXPORT_TOKEN_TTL_MINUTES="1",
+    )
+
+    assert any("full http(s) URL" in error for error in errors)
+    assert any("PRIVACY_EXPORT_TOKEN_TTL_MINUTES" in error for error in errors)

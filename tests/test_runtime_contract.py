@@ -15,6 +15,11 @@ def _run(monkeypatch, **env):
         "MESSENGER_WEBHOOK_HOST",
         "MESSENGER_WEBHOOK_PORT",
         "MESSENGER_PUBLIC_BASE_URL",
+        "PAYMENT_HTTP_ENABLED",
+        "PAYMENT_PUBLIC_BASE_URL",
+        "PRIVACY_EXPORT_HTTP_ENABLED",
+        "PRIVACY_EXPORT_PUBLIC_BASE_URL",
+        "PRIVACY_EXPORT_TOKEN_TTL_MINUTES",
         "PUBLIC_BASE_URL",
         "HEALTHCHECK_ENABLED",
         "HEALTHCHECK_HOST",
@@ -112,3 +117,48 @@ def test_runtime_contract_detects_messenger_health_port_collision(monkeypatch):
     )
 
     assert any("collide" in error for error in errors)
+
+
+def test_runtime_contract_requires_privacy_export_in_prod(monkeypatch):
+    errors, warnings = _run(
+        monkeypatch,
+        APP_ENV="prod",
+        TELEGRAM_TRANSPORT="polling",
+        TELEGRAM_WEBHOOK_ENABLED="0",
+        PRIVACY_EXPORT_HTTP_ENABLED="0",
+        METRO_DB_ENGINE="postgres",
+        DATABASE_URL="postgresql:///metrotherapy_test",
+        LOG_PATH="/tmp/metrotherapy.log",
+        HEALTHCHECK_ENABLED="1",
+    )
+
+    assert any("PRIVACY_EXPORT_HTTP_ENABLED" in error for error in errors)
+
+
+def test_runtime_contract_accepts_privacy_export_as_http_ingress(monkeypatch):
+    errors, warnings = _run(
+        monkeypatch,
+        APP_ENV="dev",
+        PAYMENT_HTTP_ENABLED="0",
+        PRIVACY_EXPORT_HTTP_ENABLED="1",
+        PRIVACY_EXPORT_PUBLIC_BASE_URL="https://example.invalid",
+        PRIVACY_EXPORT_TOKEN_TTL_MINUTES="10",
+        MAX_WEBHOOK_ENABLED="0",
+        VK_WEBHOOK_ENABLED="0",
+    )
+
+    assert not any("PRIVACY_EXPORT" in error or "privacy export" in error for error in errors)
+    assert not any("HTTP ingress is disabled" in warning for warning in warnings)
+
+
+def test_runtime_contract_rejects_insecure_privacy_url_and_bad_ttl(monkeypatch):
+    errors, warnings = _run(
+        monkeypatch,
+        APP_ENV="stage",
+        PRIVACY_EXPORT_HTTP_ENABLED="1",
+        PRIVACY_EXPORT_PUBLIC_BASE_URL="http://example.invalid",
+        PRIVACY_EXPORT_TOKEN_TTL_MINUTES="31",
+    )
+
+    assert any("https://" in error for error in errors)
+    assert any("PRIVACY_EXPORT_TOKEN_TTL_MINUTES" in error for error in errors)
