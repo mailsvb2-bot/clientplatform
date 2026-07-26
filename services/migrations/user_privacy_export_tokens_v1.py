@@ -16,7 +16,7 @@ def apply(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS user_privacy_export_tokens(
-            token TEXT PRIMARY KEY,
+            token_hash TEXT PRIMARY KEY,
             user_id INTEGER NOT NULL,
             platform TEXT NOT NULL,
             created_at TEXT NOT NULL,
