@@ -34,6 +34,7 @@ RELEASE_MANAGER="$SOURCE_DIR/scripts/immutable_release.py"
 RELEASE_BUILDER="$SOURCE_DIR/scripts/build_immutable_release.sh"
 ENV_MIGRATOR="$SOURCE_DIR/scripts/migrate_privacy_export_env.py"
 RUNTIME_CONTRACT="$SOURCE_DIR/scripts/runtime_contract.py"
+RUNTIME_WRITE_GUARD="$SOURCE_DIR/scripts/install_runtime_write_guard.sh"
 PRIVACY_EXPORT_DEFAULT_PUBLIC_BASE_URL="${PRIVACY_EXPORT_DEFAULT_PUBLIC_BASE_URL:-https://metrotherapy-bot.metrotherapy.ru}"
 PRIVACY_EXPORT_DEFAULT_TTL_MINUTES="${PRIVACY_EXPORT_DEFAULT_TTL_MINUTES:-10}"
 LOCAL_HEALTH_URL="${LOCAL_HEALTH_URL:-http://127.0.0.1:8082/healthz}"
@@ -318,13 +319,23 @@ rollback() {
   echo "=== immutable deploy failed code=$code at $(date -Is) ===" >&2
   if [ "$SWITCHED" -eq 1 ]; then
     echo "=== atomically roll current back to previous release ===" >&2
-    "$SYSTEM_PYTHON" "$RELEASE_MANAGER" rollback \
+    local rollback_release_dir=""
+    if "$SYSTEM_PYTHON" "$RELEASE_MANAGER" rollback \
       --current-link "$CURRENT_LINK" \
-      --previous-link "$PREVIOUS_LINK" || true
-    "$TIMEOUT_BIN" --signal=TERM --kill-after=15s \
-      "$SERVICE_RESTART_TIMEOUT_SECONDS" \
-      systemctl restart "$SERVICE_NAME" || true
-    wait_for_health "$LOCAL_HEALTH_URL" "$HEALTH_WAIT_SECONDS" || true
+      --previous-link "$PREVIOUS_LINK"; then
+      rollback_release_dir="$(release_path_from_link "$CURRENT_LINK" 2>/dev/null || true)"
+      if [ -n "$rollback_release_dir" ] && [ -f "$RUNTIME_WRITE_GUARD" ] && \
+        bash "$RUNTIME_WRITE_GUARD" for-release "$rollback_release_dir"; then
+        "$TIMEOUT_BIN" --signal=TERM --kill-after=15s \
+          "$SERVICE_RESTART_TIMEOUT_SECONDS" \
+          systemctl restart "$SERVICE_NAME" || true
+        wait_for_health "$LOCAL_HEALTH_URL" "$HEALTH_WAIT_SECONDS" || true
+      else
+        echo "IMMUTABLE_DEPLOY_ROLLBACK_FAILED compatible runtime guard was not installed" >&2
+      fi
+    else
+      echo "IMMUTABLE_DEPLOY_ROLLBACK_FAILED atomic release switch failed" >&2
+    fi
     "$SYSTEM_PYTHON" "$RELEASE_MANAGER" inspect "$CURRENT_LINK" --required || true
   fi
   systemctl status "$SERVICE_NAME" --no-pager -l | sed -n '1,80p' || true
