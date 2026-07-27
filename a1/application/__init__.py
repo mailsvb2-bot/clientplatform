@@ -6,6 +6,18 @@ from a1.application.customers import (
     get_customer,
     list_customers,
 )
+from a1.application.programs import (
+    add_program_lesson,
+    complete_program_lesson,
+    create_program,
+    enroll_customer_in_program,
+    get_program,
+    get_program_enrollment,
+    list_programs,
+    mark_lesson_delivery_failed,
+    mark_lesson_delivery_sent,
+    publish_program,
+)
 from a1.application.tenancy import (
     create_business,
     grant_business_member,
@@ -16,15 +28,25 @@ from a1.application.tenancy import (
 )
 
 __all__ = [
+    "add_program_lesson",
     "archive_customer",
     "attach_customer_identity",
+    "complete_program_lesson",
     "create_business",
     "create_customer",
+    "create_program",
+    "enroll_customer_in_program",
     "find_customer_by_identity",
     "get_customer",
+    "get_program",
+    "get_program_enrollment",
     "grant_business_member",
     "list_accessible_businesses",
     "list_customers",
+    "list_programs",
+    "mark_lesson_delivery_failed",
+    "mark_lesson_delivery_sent",
+    "publish_program",
     "rename_business",
     "resolve_tenant_context",
     "revoke_business_member",

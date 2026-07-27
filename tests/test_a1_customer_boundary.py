@@ -14,7 +14,7 @@ from a1.domain.tenancy import PlatformRole, TenantPermissionDenied
 from a1.infrastructure import TenancyRepository
 from a1.infrastructure.customer_repository import CustomerRepository
 from a1.privacy_manifest import validate_a1_privacy_manifest
-from services.db.schema import a1_customers, a1_tenancy
+from services.db.schema import a1_customers, a1_programs, a1_tenancy
 
 
 class A1CustomerBoundaryTests(unittest.TestCase):
@@ -24,6 +24,7 @@ class A1CustomerBoundaryTests(unittest.TestCase):
         self.conn.execute("PRAGMA foreign_keys=ON")
         a1_tenancy.ensure(self.conn)
         a1_customers.ensure(self.conn)
+        a1_programs.ensure(self.conn)
         self.tenancy = TenancyRepository(self.conn)
         self.customers = CustomerRepository(self.conn)
         self.business_a = self.tenancy.create_business(
@@ -228,7 +229,16 @@ class A1CustomerBoundaryTests(unittest.TestCase):
         self.assertTrue(report.ok)
         self.assertEqual(
             set(report.discovered_business_tables),
-            {"business_members", "customers", "customer_identities"},
+            {
+                "business_members",
+                "customers",
+                "customer_identities",
+                "programs",
+                "lessons",
+                "enrollments",
+                "lesson_deliveries",
+                "lesson_progress",
+            },
         )
         self.conn.execute(
             "CREATE TABLE unknown_tenant_data(id TEXT PRIMARY KEY, business_id TEXT NOT NULL)"
