@@ -86,10 +86,21 @@ async def safe_edit(message: Message, text: str, reply_markup=None, parse_mode=N
         raise
 
 
+def _is_admin(uid: int) -> bool:
+    """Backward-compatible immutable superadmin helper."""
+    try:
+        return int(uid) in set(settings.admin_id_list)
+    except (TypeError, ValueError):
+        logging.getLogger(__name__).exception("Unhandled exception")
+        return False
+
+
 def _main_menu_keyboard(user_id: int):
     """Return an isolated menu and expose the panel to every delegated staff role."""
 
     markup = copy.deepcopy(kb_main(user_id=int(user_id)))
+    if not hasattr(markup, "inline_keyboard"):
+        return markup
     has_panel = any(
         getattr(button, "callback_data", None) == "admin:menu"
         for row in markup.inline_keyboard
