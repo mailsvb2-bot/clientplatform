@@ -52,6 +52,12 @@ def ensure(c: sqlite3.Connection) -> None:
     )
     c.execute(
         """
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_business_members_id_business
+        ON business_members(id, business_id)
+        """
+    )
+    c.execute(
+        """
         CREATE INDEX IF NOT EXISTS idx_business_members_user_status
         ON business_members(user_id, status)
         """

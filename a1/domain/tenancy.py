@@ -66,6 +66,15 @@ _ADMIN_ASSIGNABLE_ROLES = frozenset(
     }
 )
 
+_CUSTOMER_RECORD_ROLES = frozenset(
+    {
+        PlatformRole.OWNER,
+        PlatformRole.ADMINISTRATOR,
+        PlatformRole.MANAGER,
+        PlatformRole.SUPPORT,
+    }
+)
+
 
 def normalize_user_id(value: int) -> int:
     if isinstance(value, bool):
@@ -138,11 +147,7 @@ class BusinessAccess:
 
 @dataclass(frozen=True, slots=True)
 class TenantContext:
-    """Server-resolved, immutable tenant context.
-
-    A context is valid only for one business and one active membership. It is
-    deliberately explicit and must be passed to every business-scoped use case.
-    """
+    """Server-resolved, immutable tenant context for one active membership."""
 
     business_id: str
     user_id: int
@@ -150,13 +155,24 @@ class TenantContext:
     role: PlatformRole
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "business_id", normalize_uuid(self.business_id, field_name="business_id"))
-        object.__setattr__(self, "membership_id", normalize_uuid(self.membership_id, field_name="membership_id"))
+        object.__setattr__(
+            self,
+            "business_id",
+            normalize_uuid(self.business_id, field_name="business_id"),
+        )
+        object.__setattr__(
+            self,
+            "membership_id",
+            normalize_uuid(self.membership_id, field_name="membership_id"),
+        )
         object.__setattr__(self, "user_id", normalize_user_id(self.user_id))
         object.__setattr__(self, "role", parse_business_member_role(self.role))
 
     def assert_business(self, object_business_id: str) -> None:
-        normalized = normalize_uuid(object_business_id, field_name="object_business_id")
+        normalized = normalize_uuid(
+            object_business_id,
+            field_name="object_business_id",
+        )
         if normalized != self.business_id:
             raise TenantAccessDenied("object belongs to another business")
 
@@ -170,4 +186,15 @@ class TenantContext:
 
     def assert_can_manage_business(self) -> None:
         if self.role not in {PlatformRole.OWNER, PlatformRole.ADMINISTRATOR}:
-            raise TenantPermissionDenied("business management requires owner or administrator role")
+            raise TenantPermissionDenied(
+                "business management requires owner or administrator role"
+            )
+
+    def assert_can_view_customer_records(self) -> None:
+        if self.role not in _CUSTOMER_RECORD_ROLES:
+            raise TenantPermissionDenied(
+                "customer records require owner, administrator, manager or support role"
+            )
+
+    def assert_can_manage_customer_records(self) -> None:
+        self.assert_can_view_customer_records()
