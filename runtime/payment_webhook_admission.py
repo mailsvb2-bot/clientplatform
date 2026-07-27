@@ -74,7 +74,10 @@ def _proxy_headers_allowed(request: web.Request) -> bool:
     networks = _trusted_proxy_networks()
     if networks:
         return any(remote in network for network in networks if remote.version == network.version)
-    return _trust_proxy_headers()
+    # A global trust flag without an address allowlist lets any public peer spoof
+    # X-Forwarded-For and rotate around the webhook rate limit. Loopback remains
+    # trusted for the common local reverse-proxy deployment.
+    return False
 
 
 def _forwarded_client_address(request: web.Request) -> str:
