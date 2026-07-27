@@ -19,12 +19,21 @@ def _value(row: Any, key: str, position: int) -> Any:
 
 
 class TenancyRepository(_BaseTenancyRepository):
-    """Canonical A1 tenancy repository with invariant guards.
+    """Canonical A1 tenancy repository with transactional invariant guards."""
 
-    The imported additive repository remains the storage implementation. This
-    canonical façade closes invariants that require comparing the current and
-    requested roles before delegating the mutation.
-    """
+    def _lock_business_membership_boundary(self, business_id: str) -> None:
+        # Updating the shared business row obtains a transaction-scoped row lock
+        # in PostgreSQL. Concurrent owner demotion/revocation operations for the
+        # same business therefore serialize before counting active owners.
+        # SQLite already serializes writes and accepts the same statement.
+        self._conn.execute(
+            """
+            UPDATE businesses
+            SET updated_at=updated_at
+            WHERE id=? AND status='active'
+            """,
+            (business_id,),
+        )
 
     def grant_member(
         self,
@@ -37,6 +46,7 @@ class TenancyRepository(_BaseTenancyRepository):
         current_actor = self.resolve_context(user_id=actor.user_id, business_id=actor.business_id)
         target_user_id = normalize_user_id(user_id)
         target_role = current_actor.assert_can_manage_members(role)
+        self._lock_business_membership_boundary(current_actor.business_id)
         existing = self._conn.execute(
             """
             SELECT role, status
@@ -71,5 +81,20 @@ class TenancyRepository(_BaseTenancyRepository):
             actor=current_actor,
             user_id=target_user_id,
             role=target_role,
+            now=now,
+        )
+
+    def revoke_member(
+        self,
+        *,
+        actor: TenantContext,
+        user_id: int,
+        now: str | None = None,
+    ) -> BusinessMember:
+        current_actor = self.resolve_context(user_id=actor.user_id, business_id=actor.business_id)
+        self._lock_business_membership_boundary(current_actor.business_id)
+        return super().revoke_member(
+            actor=current_actor,
+            user_id=normalize_user_id(user_id),
             now=now,
         )
