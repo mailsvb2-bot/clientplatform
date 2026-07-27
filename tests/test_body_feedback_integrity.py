@@ -3,6 +3,8 @@ from __future__ import annotations
 import sqlite3
 from contextlib import contextmanager
 
+import pytest
+
 from services import body
 from services.db.schema._parts import part_04
 
@@ -68,12 +70,7 @@ def test_schema_collapses_legacy_duplicates_before_unique_index() -> None:
 
     rows = conn.execute("SELECT area FROM body_feedback").fetchall()
     assert rows == [("new",)]
-    with sqlite3.IntegrityError:
-        pass
-    try:
+    with pytest.raises(sqlite3.IntegrityError):
         conn.execute(
             "INSERT INTO body_feedback(session_id,user_id,kind,area,created_at_utc) VALUES(1,2,'x','duplicate','3')"
         )
-    except sqlite3.IntegrityError:
-        return
-    raise AssertionError("body feedback unique index was not enforced")
