@@ -1,0 +1,119 @@
+from __future__ import annotations
+
+import sqlite3
+import unittest
+
+from a1.domain.tenancy import (
+    MembershipStatus,
+    PlatformRole,
+    TenantAccessDenied,
+    TenantInvariantViolation,
+    TenantPermissionDenied,
+)
+from a1.infrastructure.tenancy_repository import TenancyRepository
+from services.db.schema import a1_tenancy
+
+
+class A1TenancyFoundationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.row_factory = sqlite3.Row
+        self.conn.execute("PRAGMA foreign_keys=ON")
+        a1_tenancy.ensure(self.conn)
+        self.repo = TenancyRepository(self.conn)
+
+    def tearDown(self) -> None:
+        self.conn.close()
+
+    def test_schema_has_explicit_business_scope(self) -> None:
+        business_columns = {
+            row[1] for row in self.conn.execute("PRAGMA table_info(businesses)").fetchall()
+        }
+        member_columns = {
+            row[1] for row in self.conn.execute("PRAGMA table_info(business_members)").fetchall()
+        }
+        self.assertIn("id", business_columns)
+        self.assertIn("business_id", member_columns)
+        self.assertIn("user_id", member_columns)
+        self.assertIn("role", member_columns)
+        self.assertIn("status", member_columns)
+
+    def test_create_business_atomically_creates_owner_membership(self) -> None:
+        access = self.repo.create_business(owner_user_id=101, name="  Мария   Практика  ")
+        self.assertEqual(access.business.name, "Мария Практика")
+        self.assertEqual(access.membership.user_id, 101)
+        self.assertEqual(access.membership.role, PlatformRole.OWNER)
+        self.assertEqual(access.membership.status, MembershipStatus.ACTIVE)
+        context = self.repo.resolve_context(user_id=101, business_id=access.business.id)
+        self.assertEqual(context.business_id, access.business.id)
+
+    def test_same_user_can_have_multiple_explicit_business_contexts(self) -> None:
+        first = self.repo.create_business(owner_user_id=101, name="Практика")
+        second = self.repo.create_business(owner_user_id=101, name="Школа")
+        contexts = [
+            self.repo.resolve_context(user_id=101, business_id=first.business.id),
+            self.repo.resolve_context(user_id=101, business_id=second.business.id),
+        ]
+        self.assertNotEqual(contexts[0].business_id, contexts[1].business_id)
+        with self.assertRaises(TenantAccessDenied):
+            contexts[0].assert_business(second.business.id)
+        accesses = self.repo.list_accessible_businesses(user_id=101)
+        self.assertEqual({item.business.name for item in accesses}, {"Практика", "Школа"})
+
+    def test_cross_business_membership_is_never_inferred_from_user_id(self) -> None:
+        business_a = self.repo.create_business(owner_user_id=101, name="Бизнес А")
+        business_b = self.repo.create_business(owner_user_id=202, name="Бизнес Б")
+        owner_a = self.repo.resolve_context(user_id=101, business_id=business_a.business.id)
+        self.repo.grant_member(actor=owner_a, user_id=303, role=PlatformRole.MANAGER)
+
+        allowed = self.repo.resolve_context(user_id=303, business_id=business_a.business.id)
+        self.assertEqual(allowed.role, PlatformRole.MANAGER)
+        with self.assertRaises(TenantAccessDenied):
+            self.repo.resolve_context(user_id=303, business_id=business_b.business.id)
+
+    def test_revocation_invalidates_access_immediately(self) -> None:
+        access = self.repo.create_business(owner_user_id=101, name="Практика")
+        owner = self.repo.resolve_context(user_id=101, business_id=access.business.id)
+        self.repo.grant_member(actor=owner, user_id=202, role=PlatformRole.SUPPORT)
+        support = self.repo.resolve_context(user_id=202, business_id=access.business.id)
+        self.assertEqual(support.role, PlatformRole.SUPPORT)
+
+        revoked = self.repo.revoke_member(actor=owner, user_id=202)
+        self.assertEqual(revoked.status, MembershipStatus.REVOKED)
+        with self.assertRaises(TenantAccessDenied):
+            self.repo.resolve_context(user_id=202, business_id=access.business.id)
+
+    def test_administrator_cannot_escalate_or_modify_owner(self) -> None:
+        access = self.repo.create_business(owner_user_id=101, name="Практика")
+        owner = self.repo.resolve_context(user_id=101, business_id=access.business.id)
+        self.repo.grant_member(actor=owner, user_id=202, role=PlatformRole.ADMINISTRATOR)
+        administrator = self.repo.resolve_context(user_id=202, business_id=access.business.id)
+
+        analyst = self.repo.grant_member(
+            actor=administrator,
+            user_id=303,
+            role=PlatformRole.ANALYST,
+        )
+        self.assertEqual(analyst.role, PlatformRole.ANALYST)
+        with self.assertRaises(TenantPermissionDenied):
+            self.repo.grant_member(actor=administrator, user_id=404, role=PlatformRole.OWNER)
+        with self.assertRaises(TenantPermissionDenied):
+            self.repo.revoke_member(actor=administrator, user_id=101)
+
+    def test_customer_cannot_be_stored_as_business_member(self) -> None:
+        access = self.repo.create_business(owner_user_id=101, name="Практика")
+        owner = self.repo.resolve_context(user_id=101, business_id=access.business.id)
+        with self.assertRaises(ValueError):
+            self.repo.grant_member(actor=owner, user_id=202, role=PlatformRole.CUSTOMER)
+
+    def test_last_active_owner_cannot_be_revoked(self) -> None:
+        access = self.repo.create_business(owner_user_id=101, name="Практика")
+        owner = self.repo.resolve_context(user_id=101, business_id=access.business.id)
+        with self.assertRaises(TenantInvariantViolation):
+            self.repo.revoke_member(actor=owner, user_id=101)
+        still_owner = self.repo.resolve_context(user_id=101, business_id=access.business.id)
+        self.assertEqual(still_owner.role, PlatformRole.OWNER)
+
+
+if __name__ == "__main__":
+    unittest.main()
