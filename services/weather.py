@@ -303,8 +303,11 @@ def _build_forecast(lat: float, lon: float) -> ForecastPack:
         today_date = now_dt.date()
         t_idx = None
         for i, ds in enumerate(d_time):
+            ds_text = str(ds or "").strip()
+            if not ds_text:
+                continue
             try:
-                d = datetime.fromisoformat(ds).date()
+                d = datetime.fromisoformat(ds_text).date()
             except (ValueError, TypeError):
                 logging.getLogger(__name__).debug("Bad daily date format", exc_info=True)
                 continue
