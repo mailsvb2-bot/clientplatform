@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import os
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import urllib.error
 import urllib.request
 import uuid
@@ -145,9 +146,15 @@ def _legacy_amount_description(kind: str) -> tuple[str, str]:
         os.environ.get("GIFT_PAYMENT_AMOUNT_RUB") if is_gift else os.environ.get("PAYMENT_AMOUNT_RUB")
     ) or os.environ.get("PAYMENT_AMOUNT_RUB") or "990"
     try:
-        amount_value = f"{float(str(amount_raw).replace(',', '.')):.2f}"
-    except ValueError as exc:
+        amount = Decimal(str(amount_raw).replace(",", ".")).quantize(
+            Decimal("0.01"),
+            rounding=ROUND_HALF_UP,
+        )
+    except (InvalidOperation, ValueError) as exc:
         raise YooKassaCheckoutError(f"Invalid payment amount: {amount_raw!r}") from exc
+    if not amount.is_finite() or amount <= 0:
+        raise YooKassaCheckoutError(f"Invalid payment amount: {amount_raw!r}")
+    amount_value = format(amount, ".2f")
     description = (
         os.environ.get("GIFT_PAYMENT_DESCRIPTION") if is_gift else os.environ.get("PAYMENT_DESCRIPTION")
     ) or ("Metrotherapy gift" if is_gift else "Metrotherapy access")

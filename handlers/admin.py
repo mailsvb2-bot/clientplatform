@@ -6,7 +6,7 @@ from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import Message
 
-from services.admin import is_platform_admin
+from services.admin import is_platform_admin, is_staff
 from services.db import db
 
 router = Router()
@@ -25,21 +25,23 @@ def _users_count() -> int:
 @router.message(Command("admin"))
 async def admin_cmd(message: Message):
     uid = _message_user_id(message)
-    if not is_platform_admin(uid):
+    if uid is None or not is_staff(uid):
         try:
             await message.answer("Недоступно.")
         except TelegramAPIError:
             logging.getLogger(__name__).exception("admin: failed to send deny message")
         return
 
+    from handlers.admin_inline import _load_admin_ctx
+
+    ctx = await asyncio.to_thread(_load_admin_ctx, int(uid))
+    if ctx is None:
+        await message.answer("Недоступно.")
+        return
+
     await message.answer(
-        "🛠 Админ\n\n"
-        "Команды:\n"
-        "• /release — единый release/control-plane статус\n"
-        "• /stats — базовая статистика\n"
-        "• /users — количество пользователей\n"
-        "• /state_last — последние состояния (лог)\n\n"
-        "Подсказка: удобнее пользоваться кнопкой \"🛠 Панель\" в главном меню."
+        "🛠 Админ-панель\n\nВыберите доступный раздел:",
+        reply_markup=ctx.staff_kb,
     )
 
 

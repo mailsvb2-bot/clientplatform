@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import sqlite3
 
 from aiogram import Router
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
@@ -24,6 +25,7 @@ from handlers.admin_inline_states import AdminManageState
 from handlers.admin_inline_users import handle as handle_users
 from keyboards.inline import kb_staff_menu
 from services.admin import is_admin
+from services.admin_permissions import admin_callback_allowed
 from services.roles import ROLE_ADMIN, ROLE_MARKETING
 
 router = Router()
@@ -115,6 +117,25 @@ async def admin_gate(cb: CallbackQuery, state: FSMContext):
     data = cb.data or ""
 
     if await admin_nav_back(cb, state):
+        return
+
+    if not admin_callback_allowed(
+        callback_data=data,
+        roles=roles,
+        is_superadmin=ctx.is_superadmin,
+        allowed_perms=ctx.allowed_perms,
+    ):
+        logging.getLogger(__name__).warning(
+            "Blocked unauthorized or stale admin callback: uid=%s callback=%s roles=%s",
+            uid,
+            data,
+            sorted(roles),
+        )
+        await safe_answer_callback(
+            cb,
+            "Доступ к этому разделу отозван или не назначен.",
+            show_alert=True,
+        )
         return
 
     tariffs_ctx = admin_inline_tariffs.TariffsCtx(
@@ -265,16 +286,28 @@ async def admin_add_admin_input(msg: Message, state: FSMContext):
         )
         return
 
+    assigned_roles: set[str] = set()
     try:
         await asyncio.to_thread(_grant_admin_role_sync, int(target_id))
+        assigned_roles = await asyncio.to_thread(get_staff_roles, int(target_id))
     except RuntimeError:
         logging.getLogger(__name__).exception("Failed to add admin")
     except OSError:
         logging.getLogger(__name__).exception("Failed to add admin")
+    except sqlite3.Error:
+        logging.getLogger(__name__).exception("Failed to add admin")
     except (ValueError, TypeError):
         logging.getLogger(__name__).exception("Failed to add admin")
+
+    if ROLE_ADMIN not in assigned_roles:
+        if assigned_roles:
+            logging.getLogger(__name__).error(
+                "Admin role was not persisted: target_id=%s roles=%s",
+                target_id,
+                sorted(assigned_roles),
+            )
         await msg.answer(
-            "Не удалось добавить администратора (ошибка).",
+            "Не удалось добавить администратора. Изменения не подтверждены — попробуйте ещё раз.",
             reply_markup=ReplyKeyboardRemove(),
         )
         await state.clear()

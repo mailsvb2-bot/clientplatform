@@ -11,6 +11,117 @@ SALES_DESK_PERMISSION = "admin:sales"
 SALES_WRITE_PERMISSION = "admin:sales:write"
 SALES_MESSAGE_PERMISSION = "admin:sales:message"
 
+SUPPORT_ROLE = "support"
+MARKETING_ROLE = "marketing"
+ADMIN_ROLE = "admin"
+
+_ALWAYS_ALLOWED_CALLBACKS = {"admin:menu", "admin:back"}
+_SUPERADMIN_ONLY_PREFIXES = ("admin:add_admin", "admin:roles:", "admin:perms")
+
+_SUPPORT_PERMISSIONS = {
+    "admin:demo:brief",
+    "admin:demo:full",
+    "admin:users:today",
+    "admin:user:card",
+    "admin:behavior",
+    "admin:messenger:overview",
+    "admin:payment:problems",
+}
+_MARKETING_PERMISSIONS = {
+    "admin:growth:autopilot",
+    GROWTH_APPLY_REVIEW_PERMISSION,
+    SALES_DESK_PERMISSION,
+    SALES_WRITE_PERMISSION,
+    SALES_MESSAGE_PERMISSION,
+    "admin:adlinks",
+    "admin:funnel",
+    "admin:money:today",
+    "admin:conversion",
+    "admin:segments",
+    "admin:ab",
+    "admin:copy:menu",
+    "admin:ai:prices",
+}
+_ADMIN_PERMISSIONS = {
+    "admin:release:gate",
+    "admin:giftshare",
+    "admin:funnel2",
+    "admin:retention",
+    "admin:state:last",
+    "admin:system:checks",
+    ADMIN_TARIFFS,
+}
+
+
+def required_permission_for_callback(callback_data: str) -> str | None:
+    """Return the canonical permission protecting an admin callback.
+
+    Nested callbacks inherit the permission of the screen that issued them.
+    Unknown callbacks return ``None`` and are denied by ``admin_callback_allowed``.
+    """
+
+    data = str(callback_data or "").strip()
+    if not data or data in _ALWAYS_ALLOWED_CALLBACKS:
+        return None
+    if data.startswith(_SUPERADMIN_ONLY_PREFIXES):
+        return None
+    if data.startswith("admin:money:payment:") or data.startswith("admin:money:"):
+        return "admin:money:today"
+    if data.startswith("admin:adlinks:create:"):
+        return "admin:adlinks"
+    if data.startswith("admin:growth:autopilot:"):
+        return "admin:growth:autopilot"
+    if data.startswith("admin:sales:"):
+        return SALES_DESK_PERMISSION
+    if data.startswith("admin:user:"):
+        return "admin:user:card"
+    if data.startswith("admin:copy:"):
+        return "admin:copy:menu"
+    if data.startswith("admin:tariffs:"):
+        return ADMIN_TARIFFS
+
+    known = _SUPPORT_PERMISSIONS | _MARKETING_PERMISSIONS | _ADMIN_PERMISSIONS
+    return data if data in known else None
+
+
+def admin_callback_allowed(
+    *,
+    callback_data: str,
+    roles: set[str],
+    is_superadmin: bool,
+    allowed_perms: set[str] | None,
+) -> bool:
+    """Authorize an admin callback server-side, including stale inline buttons."""
+
+    if is_superadmin:
+        return True
+
+    data = str(callback_data or "").strip()
+    normalized_roles = {str(role).strip().lower() for role in roles if str(role).strip()}
+    if not data or data in _ALWAYS_ALLOWED_CALLBACKS:
+        return bool(normalized_roles)
+    if data.startswith(_SUPERADMIN_ONLY_PREFIXES):
+        return False
+
+    permission = required_permission_for_callback(data)
+    if permission is None:
+        return False
+
+    if ADMIN_ROLE in normalized_roles:
+        role_allowed = True
+    elif permission in _SUPPORT_PERMISSIONS:
+        role_allowed = SUPPORT_ROLE in normalized_roles
+    elif permission in _MARKETING_PERMISSIONS:
+        role_allowed = MARKETING_ROLE in normalized_roles
+    else:
+        role_allowed = False
+
+    if not role_allowed:
+        return False
+    if allowed_perms is None:
+        return True
+    return permission in allowed_perms
+
 
 # Права храним как строки. Чтобы не усложнять UX —
 # используем callback_data как идентификатор права.
@@ -119,7 +230,10 @@ PERMS: list[PermItem] = [
     PermItem("admin:users:today", "👥 Пользователи сегодня"),
     PermItem("admin:user:card", "🔎 Карточка пользователя"),
     PermItem("admin:behavior", "🧠 Поведение"),
+    PermItem("admin:messenger:overview", "💬 Мессенджеры"),
+    PermItem("admin:payment:problems", "⚠️ Проверить оплаты"),
     PermItem("admin:growth:autopilot", "🤖 Growth Autopilot"),
+    PermItem("admin:adlinks", "📣 Рекламные ссылки"),
     PermItem(GROWTH_APPLY_REVIEW_PERMISSION, "🛡 Review Growth Apply"),
     PermItem(SALES_DESK_PERMISSION, "🧑‍💼 Sales Desk (просмотр)"),
     PermItem(SALES_WRITE_PERMISSION, "✍️ Sales Desk (изменение)"),
@@ -135,6 +249,8 @@ PERMS: list[PermItem] = [
     PermItem("admin:funnel2", "🧲 Воронка 2.0"),
     PermItem("admin:retention", "🧩 Удержание"),
     PermItem("admin:state:last", "🧾 Мои состояния (10)"),
+    PermItem("admin:release:gate", "🚦 Release gate"),
+    PermItem("admin:system:checks", "🧪 Системные проверки"),
     # Тарифы — обычно только супер-админ, но если вдруг нужно делегировать.
     PermItem(ADMIN_TARIFFS, "💳 Тарифы"),
 ]
