@@ -34,6 +34,21 @@ def ensure(c: sqlite3.Connection) -> None:
                 'telegram_business', 'telegram_channel',
                 'vk_community', 'max_shared_bot', 'max_personal_bot'
             )),
+            CHECK(
+                (platform='telegram' AND connection_type IN (
+                    'telegram_shared_bot', 'telegram_managed_bot',
+                    'telegram_business', 'telegram_channel'
+                ))
+                OR (platform='vk' AND connection_type='vk_community')
+                OR (platform='max' AND connection_type IN (
+                    'max_shared_bot', 'max_personal_bot'
+                ))
+            ),
+            CHECK(
+                credential_reference LIKE 'secret://%'
+                OR credential_reference LIKE 'kms://%'
+                OR credential_reference LIKE 'vault://%'
+            ),
             CHECK(status IN ('pending', 'active', 'attention', 'disabled', 'revoked'))
         )
         """
@@ -59,6 +74,11 @@ def ensure(c: sqlite3.Connection) -> None:
             FOREIGN KEY(connection_id, business_id, platform)
                 REFERENCES connections(id, business_id, platform) ON DELETE CASCADE,
             CHECK(platform IN ('telegram', 'max')),
+            CHECK(
+                webhook_secret_reference LIKE 'secret://%'
+                OR webhook_secret_reference LIKE 'kms://%'
+                OR webhook_secret_reference LIKE 'vault://%'
+            ),
             CHECK(status IN ('active', 'disabled', 'revoked'))
         )
         """
