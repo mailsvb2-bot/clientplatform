@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 TenantDisposition = Literal["erase", "retain", "anonymize"]
-A1_PRIVACY_MANIFEST_VERSION = "2026-07-28.v2"
+A1_PRIVACY_MANIFEST_VERSION = "2026-07-28.v3"
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,6 +71,24 @@ _POLICIES = (
         table="lesson_progress",
         disposition="anonymize",
         reason="customer lesson progress state",
+        required=True,
+    ),
+    TenantPrivacyPolicy(
+        table="connections",
+        disposition="retain",
+        reason="business integration ownership, permissions and secret references",
+        required=True,
+    ),
+    TenantPrivacyPolicy(
+        table="managed_bots",
+        disposition="retain",
+        reason="business-owned bot identity and webhook secret reference",
+        required=True,
+    ),
+    TenantPrivacyPolicy(
+        table="delivery_dispatch_outbox",
+        disposition="erase",
+        reason="provider routing, payload snapshot and customer delivery attempts",
         required=True,
     ),
 )
