@@ -12,7 +12,7 @@ from aiogram.types import CallbackQuery, Message, InlineKeyboardButton, ReplyKey
 from keyboards.inline import kb_main
 from services.gift_store import set_target, get_target, clear_target
 from services.payments.ui import kb, kb_back, kb_gift_tariffs, pick_user_keyboard
-from services.pending import set_pending, peek_pending, pop_pending
+from services.pending import consume_pending, set_pending, peek_pending, pop_pending
 from services.events import log_event
 from services.promo_texts import get_gift_template
 from services.messenger.links import build_gift_share_targets
@@ -93,18 +93,15 @@ async def gift_pick_target(cb: CallbackQuery) -> None:
 
 
 async def gift_pick_cancel(message: Message) -> None:
-    """Cancel only the active gift scenario and delegate every other cancel."""
+    """Atomically cancel only the gift flow that owns this generic message."""
     uid = _message_user_id(message)
     if uid is None:
-        # A malformed Telegram update has no user-scoped scenario to delegate.
         return
-    pending = peek_pending(uid)
-    if pending is None or pending.kind not in {"gift_target", "gift_universal"}:
+    if consume_pending(uid, {"gift_target", "gift_universal"}) is None:
         # The payments router is registered before share and other routers. Explicitly
         # delegate so a generic reply-keyboard label cannot swallow another flow.
         raise SkipHandler
 
-    pop_pending(uid)
     clear_target(uid)
     await message.answer(
         "✅ Хорошо. Выбор подарка отменён.",
