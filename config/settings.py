@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import ipaddress
 import os
 
 # ВАЖНО (prod-safe): НЕ подхватываем .env автоматически в продакшене.
@@ -272,6 +273,34 @@ def _external_checkout_enabled(*, max_enabled: bool, vk_enabled: bool) -> bool:
     return bool(payment_enabled or max_enabled or vk_enabled)
 
 
+def _validate_trusted_proxy_env() -> None:
+    """Reject spoofable proxy trust configuration before production starts."""
+
+    if not _truthy_env("TRUST_PROXY_HEADERS"):
+        return
+    raw = (os.getenv("PAYMENT_WEBHOOK_TRUSTED_PROXY_CIDRS") or "").strip()
+    if not raw:
+        raise SystemExit(
+            "TRUST_PROXY_HEADERS=1 requires PAYMENT_WEBHOOK_TRUSTED_PROXY_CIDRS in prod"
+        )
+    invalid: list[str] = []
+    valid_count = 0
+    for item in raw.split(","):
+        candidate = item.strip()
+        if not candidate:
+            continue
+        try:
+            ipaddress.ip_network(candidate, strict=False)
+            valid_count += 1
+        except ValueError:
+            invalid.append(candidate)
+    if invalid or valid_count == 0:
+        detail = ", ".join(invalid) if invalid else "<empty>"
+        raise SystemExit(
+            "PAYMENT_WEBHOOK_TRUSTED_PROXY_CIDRS contains invalid networks: " + detail
+        )
+
+
 def _fail_fast_prod_config() -> None:
     """Fail fast in prod if critical env vars are missing or inconsistent.
 
@@ -281,6 +310,8 @@ def _fail_fast_prod_config() -> None:
     """
     if APP_ENV not in {"prod", "production"}:
         return
+
+    _validate_trusted_proxy_env()
 
     missing: list[str] = []
     if not (settings.BOT_TOKEN or '').strip():
