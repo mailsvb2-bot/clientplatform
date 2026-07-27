@@ -163,7 +163,7 @@ switch_to_recovery_target() {
 }
 
 repair_current() {
-  local current_path sha recorded_sha="" previous_path=""
+  local current_path sha recorded_sha="" previous_path="" previous_sha=""
 
   if [ ! -L "$CURRENT_LINK" ]; then
     echo "CURRENT_RELEASE_RECOVERY_SKIPPED reason=current_link_missing"
@@ -191,20 +191,23 @@ repair_current() {
     IFS= read -r recorded_sha < "$DEPLOYED_SHA_FILE" || true
   fi
 
-  # A valid current release is authoritative for availability. The deployed SHA
-  # is proof of the last completed production gate, not an unconditional command
-  # to downgrade a healthy emergency-recovered runtime.
+  # The deployed SHA is proof of the last completed production gate, not an
+  # unconditional downgrade command. A current release is retained only when
+  # both its sealed tree and its real startup/schema contract are healthy.
   if validate_release "$current_path"; then
-    if is_valid_sha "$recorded_sha" && [ "$recorded_sha" != "$sha" ]; then
-      echo "CURRENT_RELEASE_MARKER_STALE current=$sha recorded=$recorded_sha"
+    if runtime_compatible_release "$current_path"; then
+      if is_valid_sha "$recorded_sha" && [ "$recorded_sha" != "$sha" ]; then
+        echo "CURRENT_RELEASE_MARKER_STALE current=$sha recorded=$recorded_sha"
+      fi
+      echo "CURRENT_RELEASE_INTEGRITY_OK path=$current_path"
+      return 0
     fi
-    echo "CURRENT_RELEASE_INTEGRITY_OK path=$current_path"
-    return 0
+    echo "CURRENT_RELEASE_RUNTIME_INCOMPATIBLE current=$sha path=$current_path" >&2
   fi
 
-  # Prefer rebuilding the current SHA. This preserves the newest known working
-  # code after runtime contamination and still requires startup/schema proof.
-  if build_clean_recovery_release "$sha" "contaminated-current"; then
+  # Prefer a clean rebuild of the current SHA. It is accepted only if it can
+  # start against the already-expanded production schema.
+  if build_clean_recovery_release "$sha" "contaminated-or-incompatible-current"; then
     if switch_to_recovery_target \
       "$sha" \
       "$current_path" \
@@ -214,25 +217,29 @@ repair_current() {
     fi
   fi
 
-  # Only an invalid current may fall back to the last successfully recorded SHA,
-  # and that fallback must itself pass the live schema/privacy startup contract.
-  if is_valid_sha "$recorded_sha" && [ "$recorded_sha" != "$sha" ]; then
-    previous_path="$(readlink -f "$PREVIOUS_LINK" 2>/dev/null || true)"
-    if [ -n "$previous_path" ] \
-      && [ -d "$previous_path" ] \
-      && is_safe_release_path "$previous_path" \
-      && [ "$(basename "$previous_path")" = "$recorded_sha" ] \
-      && validate_release "$previous_path"; then
-      if switch_to_recovery_target \
-        "$sha" \
-        "$current_path" \
-        "$previous_path" \
-        "CURRENT_RELEASE_ROLLBACK_RESCUED deployed=$recorded_sha" \
-        0; then
-        return 0
-      fi
+  # Atomic rollback swaps current and previous. If the selected current cannot
+  # start on the live schema, the previous link may contain the newer compatible
+  # candidate. Rescue it before consulting a possibly stale deployed marker.
+  previous_path="$(readlink -f "$PREVIOUS_LINK" 2>/dev/null || true)"
+  if [ -n "$previous_path" ] \
+    && [ -d "$previous_path" ] \
+    && [ "$previous_path" != "$current_path" ] \
+    && is_safe_release_path "$previous_path" \
+    && validate_release "$previous_path"; then
+    previous_sha="$(basename "$previous_path")"
+    if switch_to_recovery_target \
+      "$sha" \
+      "$current_path" \
+      "$previous_path" \
+      "CURRENT_RELEASE_PREVIOUS_RESCUED previous=$previous_sha" \
+      0; then
+      return 0
     fi
+  fi
 
+  # Reconstruct the last fully proven SHA only as the final fallback, and never
+  # switch to it without the same live startup/privacy compatibility proof.
+  if is_valid_sha "$recorded_sha" && [ "$recorded_sha" != "$sha" ]; then
     if build_clean_recovery_release "$recorded_sha" "recorded-deployed-sha"; then
       if switch_to_recovery_target \
         "$sha" \
