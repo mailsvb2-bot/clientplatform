@@ -7,7 +7,7 @@ from aiogram.dispatcher.event.bases import SkipHandler
 
 from handlers.flow import settings_core
 from handlers import weather as weather_handler
-from services.payments.gift import gift_pick_cancel
+from services.payments.gift import GiftCancelPendingFilter, gift_pick_cancel
 from services.pending import clear_pending, peek_pending, set_pending
 
 
@@ -29,8 +29,9 @@ async def test_gift_cancel_skips_when_another_flow_owns_the_message() -> None:
     clear_pending(user_id)
     set_pending(user_id, "share", {})
 
-    with pytest.raises(SkipHandler):
-        await gift_pick_cancel(_Message(user_id, "❌ Отмена"))
+    matched = await GiftCancelPendingFilter()(_Message(user_id, "❌ Отмена"))
+    assert matched is False
+    await gift_pick_cancel(_Message(user_id, "❌ Отмена"))
 
     assert peek_pending(user_id) is not None
     assert peek_pending(user_id).kind == "share"

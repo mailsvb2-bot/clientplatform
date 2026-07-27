@@ -27,7 +27,7 @@ from services.subscription import has_access
 from services.events import log_event
 # (ленивый импорт графиков внутри хендлеров)
 from services.bonuses import compute_bonus_stats, paid_referrals_count, gift_grants_count, gift_days_granted
-from services.pending import consume_pending, set_pending, peek_pending
+from services.pending import consume_pending, set_pending, peek_pending, pop_pending
 from services.messenger.links import build_messenger_targets
 from services.messenger.platforms import platform_title
 from services.messenger.preferences import get_channel_snapshot, set_preferred_platform

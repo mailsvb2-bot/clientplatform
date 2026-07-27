@@ -19,6 +19,7 @@ from aiogram.types import CallbackQuery, Message, PreCheckoutQuery
 
 from services.payments.common import is_user_share_message, safe_answer_callback
 from services.payments.gift import (
+    GiftCancelPendingFilter,
     deliver_gift_message,
     gift_menu,
     gift_pick_cancel,
@@ -327,9 +328,9 @@ async def _answer_stars_manual_recovery(message: Message) -> None:
     )
 
 
-@router.message(F.text == "❌ Отмена")
-async def _gift_pick_cancel(message: Message):
-    await gift_pick_cancel(message)
+@router.message(F.text == "❌ Отмена", GiftCancelPendingFilter())
+async def _gift_pick_cancel(message: Message, gift_cancel_pending=None):
+    await gift_pick_cancel(message, gift_cancel_pending=gift_cancel_pending)
 
 
 @router.message(Command("subscribe"))

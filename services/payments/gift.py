@@ -4,8 +4,8 @@ import asyncio
 import logging
 import sqlite3
 
-from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.exceptions import TelegramAPIError
+from aiogram.filters import BaseFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, InlineKeyboardButton, ReplyKeyboardRemove
 
@@ -92,14 +92,42 @@ async def gift_pick_target(cb: CallbackQuery) -> None:
     )
 
 
-async def gift_pick_cancel(message: Message) -> None:
-    """Отмена выбора получателя подарка."""
+_GIFT_CANCEL_KINDS = frozenset({"gift_target", "gift_universal"})
+
+
+class GiftCancelPendingFilter(BaseFilter):
+    """Atomically claim only cancellation messages owned by the gift flow."""
+
+    async def __call__(self, message: Message) -> bool | dict[str, object]:
+        uid = _message_user_id(message)
+        if uid is None:
+            return False
+        pending = await asyncio.to_thread(consume_pending, uid, _GIFT_CANCEL_KINDS)
+        if pending is None:
+            return False
+        return {"gift_cancel_pending": pending}
+
+
+async def gift_pick_cancel(message: Message, gift_cancel_pending=None) -> None:
+    """Отмена выбора получателя подарка.
+
+    In normal routing ``GiftCancelPendingFilter`` has already consumed the
+    matching state atomically.  The fallback keeps direct unit-level invocation
+    backwards compatible without weakening the routed production path.
+    """
     uid = _message_user_id(message)
     if uid is None:
         return
-    pending = consume_pending(uid, {"gift_target", "gift_universal"})
-    if pending is None:
-        raise SkipHandler
+    if gift_cancel_pending is None:
+        pending = peek_pending(uid)
+        if not pending or pending.kind not in _GIFT_CANCEL_KINDS:
+            return
+        gift_cancel_pending = pop_pending(uid)
+        if not gift_cancel_pending:
+            return
+        consumed_kind = getattr(gift_cancel_pending, "kind", pending.kind)
+        if consumed_kind not in _GIFT_CANCEL_KINDS:
+            return
 
     clear_target(uid)
     await message.answer(

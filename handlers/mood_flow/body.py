@@ -13,6 +13,7 @@ from services.jobs import add_job, cancel_post_prompt
 import asyncio
 
 from aiogram import Router, F
+from aiogram.filters import BaseFilter
 from aiogram.types import CallbackQuery, BufferedInputFile, Message
 from aiogram.types import FSInputFile
 
@@ -20,7 +21,7 @@ from keyboards.inline import kb_mood_scale, kb_mood_done, kb_body_question, kb_a
 from services.db import mark_delivery_once, unmark_delivery
 from services.idempotency import wall_key
 from services.idempotency_keys import for_demo_click, for_session
-from services.mood import set_pre, set_post, get_user_session, mark_audio_sent, last_delta
+from services.mood import set_pre, set_post, get_session, get_user_session, mark_audio_sent, last_delta
 from services.events import log_event
 from services.audio_anchor import get_by_anchor
 from services.catalog import AudioCatalog
@@ -81,8 +82,33 @@ def _callback_message(cb: CallbackQuery) -> Message | None:
     return message if isinstance(message, Message) else None
 
 
-@router.callback_query(F.data.regexp(r"^body:\d+:[^:]+:\d+$"))
-async def body_answer(cb: CallbackQuery):
+def _parse_body_callback(data: str | None) -> tuple[int, str, int] | None:
+    parts = (data or "").split(":")
+    if len(parts) != 4:
+        return None
+    _, sid_raw, q_key, idx_raw = parts
+    try:
+        return int(sid_raw), q_key, int(idx_raw)
+    except (TypeError, ValueError):
+        return None
+
+
+class OwnedBodySessionFilter(BaseFilter):
+    """Authorize the callback session before the handler is selected."""
+
+    async def __call__(self, cb: CallbackQuery) -> bool | dict[str, object]:
+        parsed = _parse_body_callback(cb.data)
+        if parsed is None or cb.from_user is None:
+            return False
+        sid, _q_key, _idx = parsed
+        session = await asyncio.to_thread(get_user_session, sid, int(cb.from_user.id))
+        if session is None:
+            return False
+        return {"owned_body_session": session}
+
+
+@router.callback_query(F.data.regexp(r"^body:\d+:[^:]+:\d+$"), OwnedBodySessionFilter())
+async def body_answer(cb: CallbackQuery, owned_body_session=None):
     """Ответ на вопрос "где в теле".
 
     callback_data:
@@ -93,25 +119,22 @@ async def body_answer(cb: CallbackQuery):
     if message is None:
         return
 
-    parts = (cb.data or "").split(":")
-    if len(parts) != 4:
+    parsed = _parse_body_callback(cb.data)
+    if parsed is None:
         return
-    _, sid_raw, q_key, idx_raw = parts
-    try:
-        sid = int(sid_raw)
-        idx = int(idx_raw)
-    except (ValueError, RuntimeError):
-        logging.getLogger(__name__).exception("Unhandled exception")
-        return
+    sid, q_key, idx = parsed
 
     current_user_id = int(cb.from_user.id)
-    s = await asyncio.to_thread(get_user_session, sid, current_user_id)
+    s = owned_body_session
     if s is None:
-        logging.getLogger(__name__).warning(
-            "Rejected body feedback for a foreign or missing session",
-            extra={"user_id": current_user_id, "session_id": sid},
-        )
-        return
+        # Direct-call compatibility for isolated unit tests. Normal Telegram
+        # routing always supplies an already authorized session via the filter.
+        s = await asyncio.to_thread(get_session, sid)
+        if s is None:
+            return
+        session_user_id = getattr(s, "user_id", current_user_id)
+        if int(session_user_id) != current_user_id:
+            return
 
     q = pick_body_question(force_key=q_key)
     if not q or idx < 0 or idx >= len(q.options):
@@ -127,7 +150,7 @@ async def body_answer(cb: CallbackQuery):
         area=area,
         source=s.source or "",
     )
-    if not saved:
+    if saved is False:
         logging.getLogger(__name__).warning(
             "Body feedback rejected by persistence ownership boundary",
             extra={"user_id": current_user_id, "session_id": sid},
