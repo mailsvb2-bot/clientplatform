@@ -11,6 +11,10 @@ RUNTIME_ROOT="${METRO_RUNTIME_ROOT:-/var/lib/metrotherapy/runtime}"
 CURRENT_LINK="${METRO_CURRENT_RELEASE_LINK:-$RUNTIME_ROOT/current}"
 STATE_ROOT="${METRO_WRITABLE_ROOT:-$(dirname "$RUNTIME_ROOT")/state}"
 SERVICE_NAME="${SERVICE_NAME:-metrotherapy.service}"
+LOCK_FILE="${LOCK_FILE:-$SOURCE_DIR/data/deploy/metrotherapy_deploy.lock}"
+FLOCK_BIN="${FLOCK_BIN:-/usr/bin/flock}"
+LOCK_WAIT_SECONDS="${DEPLOY_LOCK_WAIT_SECONDS:-900}"
+DEPLOY_LOCK_HELD="${DEPLOY_LOCK_HELD:-0}"
 
 if [ ! -f "$ENV_FILE" ]; then
   echo "IMMUTABLE_DEPLOY_FAILED production env file is missing: $ENV_FILE" >&2
@@ -28,6 +32,16 @@ if [ ! -f "$WRITE_GUARD_SCRIPT" ]; then
   echo "IMMUTABLE_DEPLOY_FAILED runtime write guard is missing: $WRITE_GUARD_SCRIPT" >&2
   exit 7
 fi
+if [ ! -x "$FLOCK_BIN" ]; then
+  echo "IMMUTABLE_DEPLOY_FAILED flock is unavailable: $FLOCK_BIN" >&2
+  exit 8
+fi
+case "$LOCK_WAIT_SECONDS" in
+  ''|*[!0-9]*)
+    echo "IMMUTABLE_DEPLOY_FAILED DEPLOY_LOCK_WAIT_SECONDS must be a non-negative integer" >&2
+    exit 9
+    ;;
+esac
 
 mkdir -p \
   "$STATE_ROOT/python-cache" \
@@ -41,6 +55,37 @@ export XDG_CACHE_HOME="$STATE_ROOT/xdg-cache"
 export MPLCONFIGDIR="$STATE_ROOT/matplotlib"
 export TMPDIR="$STATE_ROOT/tmp"
 export GIT_TERMINAL_PROMPT=0
+
+acquire_deploy_lock() {
+  local parent_lock=""
+  local canonical_lock=""
+
+  if [ "$DEPLOY_LOCK_HELD" = "1" ]; then
+    return 0
+  fi
+
+  mkdir -p "$(dirname "$LOCK_FILE")"
+  touch "$LOCK_FILE"
+  canonical_lock="$(readlink -f "$LOCK_FILE")"
+  parent_lock="$(readlink -f "/proc/$PPID/fd/9" 2>/dev/null || true)"
+
+  # run_deploy_worker.sh already owns FD 9. Its synchronous child inherits the
+  # protection through the parent lifetime and must not deadlock by reopening it.
+  if [ -n "$parent_lock" ] && [ "$parent_lock" = "$canonical_lock" ]; then
+    export DEPLOY_LOCK_HELD=1
+    echo "=== deploy lock inherited from worker parent=$PPID ==="
+    return 0
+  fi
+
+  exec 8<>"$LOCK_FILE"
+  echo "=== deploy waiting for entrypoint lock timeout=${LOCK_WAIT_SECONDS}s ==="
+  if ! "$FLOCK_BIN" -w "$LOCK_WAIT_SECONDS" 8; then
+    echo "IMMUTABLE_DEPLOY_FAILED deploy lock wait timed out after ${LOCK_WAIT_SECONDS}s" >&2
+    return 1
+  fi
+  export DEPLOY_LOCK_HELD=1
+  echo "=== deploy entrypoint lock acquired pid=$$ ==="
+}
 
 restore_runtime_after_failure() {
   local recovered_release=""
@@ -60,6 +105,7 @@ restore_runtime_after_failure() {
   /usr/bin/systemctl restart "$SERVICE_NAME"
 }
 
+acquire_deploy_lock
 bash "$SOURCE_DIR/scripts/check_remote_main_topology.sh" "$SOURCE_DIR"
 
 git -C "$SOURCE_DIR" checkout main
@@ -76,6 +122,7 @@ if [ "$BEFORE_SHA" != "$AFTER_SHA" ]; then
   echo "=== deploy wrapper updated old=$BEFORE_SHA new=$AFTER_SHA; re-exec updated wrapper ==="
   exec env \
     DEPLOY_BOOTSTRAPPED_SHA="$AFTER_SHA" \
+    DEPLOY_LOCK_HELD=1 \
     METROTHERAPY_ENV_FILE="$ENV_FILE" \
     METRO_RUNTIME_ROOT="$RUNTIME_ROOT" \
     METRO_CURRENT_RELEASE_LINK="$CURRENT_LINK" \

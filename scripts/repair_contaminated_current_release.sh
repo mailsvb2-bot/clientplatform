@@ -14,8 +14,12 @@ RECOVERY_STATE_DIR="${METRO_RECOVERY_STATE_DIR:-$DEPLOY_STATE_DIR/contaminated-r
 SYSTEM_PYTHON="${SYSTEM_PYTHON:-/usr/bin/python3}"
 RELEASE_MANAGER="${RELEASE_MANAGER:-$SOURCE_DIR/scripts/immutable_release.py}"
 RELEASE_BUILDER="${RELEASE_BUILDER:-$SOURCE_DIR/scripts/build_immutable_release.sh}"
+COMPATIBILITY_CHECKER="${RELEASE_RUNTIME_COMPATIBILITY_CHECKER:-$SOURCE_DIR/scripts/check_release_runtime_compatibility.sh}"
+ENV_FILE="${METROTHERAPY_ENV_FILE:-/etc/metrotherapy/metrotherapy.env}"
+STATE_ROOT="${METRO_WRITABLE_ROOT:-$(dirname "$RUNTIME_ROOT")/state}"
 TIMEOUT_BIN="${TIMEOUT_BIN:-/usr/bin/timeout}"
 RELEASE_BUILD_TIMEOUT_SECONDS="${RELEASE_BUILD_TIMEOUT_SECONDS:-1200}"
+RELEASE_COMPAT_TIMEOUT_SECONDS="${RELEASE_COMPAT_TIMEOUT_SECONDS:-600}"
 ZERO_SHA="0000000000000000000000000000000000000000"
 BUILT_GENERATION_DIR=""
 BUILT_RECOVERY_DIR=""
@@ -36,6 +40,16 @@ is_positive_integer() {
 
 validate_release() {
   "$SYSTEM_PYTHON" "$RELEASE_MANAGER" validate "$1" >/dev/null 2>&1
+}
+
+runtime_compatible_release() {
+  local release="$1"
+  "$TIMEOUT_BIN" --signal=TERM --kill-after=30s "$RELEASE_COMPAT_TIMEOUT_SECONDS" \
+    env \
+      METROTHERAPY_ENV_FILE="$ENV_FILE" \
+      METRO_RUNTIME_ROOT="$RUNTIME_ROOT" \
+      METRO_WRITABLE_ROOT="$STATE_ROOT" \
+      bash "$COMPATIBILITY_CHECKER" "$release" >/dev/null 2>&1
 }
 
 is_safe_release_path() {
@@ -115,14 +129,32 @@ switch_to_recovery_target() {
   local failed_path="$2"
   local recovery_path="$3"
   local success_marker="$4"
+  local remove_generation_on_failure="${5:-1}"
   local state_file
+
+  if ! runtime_compatible_release "$recovery_path"; then
+    if [ "$remove_generation_on_failure" = "1" ]; then
+      rm -rf --one-file-system "$(dirname "$recovery_path")"
+    fi
+    echo "CURRENT_RELEASE_RECOVERY_FAILED runtime-incompatible target: $recovery_path" >&2
+    return 1
+  fi
+  if ! validate_release "$recovery_path"; then
+    if [ "$remove_generation_on_failure" = "1" ]; then
+      rm -rf --one-file-system "$(dirname "$recovery_path")"
+    fi
+    echo "CURRENT_RELEASE_RECOVERY_FAILED compatibility check changed release tree: $recovery_path" >&2
+    return 1
+  fi
 
   state_file="$(record_contaminated_path "$failed_sha" "$failed_path")"
   atomic_point_current_to "$recovery_path"
   if ! "$SYSTEM_PYTHON" "$RELEASE_MANAGER" inspect "$CURRENT_LINK" --required >/dev/null 2>&1; then
     atomic_point_current_to "$failed_path" || true
     rm -f "$state_file"
-    rm -rf --one-file-system "$(dirname "$recovery_path")"
+    if [ "$remove_generation_on_failure" = "1" ]; then
+      rm -rf --one-file-system "$(dirname "$recovery_path")"
+    fi
     echo "CURRENT_RELEASE_RECOVERY_FAILED repaired current link did not validate" >&2
     return 1
   fi
@@ -131,7 +163,7 @@ switch_to_recovery_target() {
 }
 
 repair_current() {
-  local current_path sha recorded_sha="" previous_path=""
+  local current_path sha recorded_sha="" previous_path="" previous_sha=""
 
   if [ ! -L "$CURRENT_LINK" ]; then
     echo "CURRENT_RELEASE_RECOVERY_SKIPPED reason=current_link_missing"
@@ -159,52 +191,68 @@ repair_current() {
     IFS= read -r recorded_sha < "$DEPLOYED_SHA_FILE" || true
   fi
 
-  if is_valid_sha "$recorded_sha" && [ "$recorded_sha" != "$sha" ]; then
-    previous_path="$(readlink -f "$PREVIOUS_LINK" 2>/dev/null || true)"
-    if [ -n "$previous_path" ] \
-      && [ -d "$previous_path" ] \
-      && is_safe_release_path "$previous_path" \
-      && [ "$(basename "$previous_path")" = "$recorded_sha" ] \
-      && validate_release "$previous_path"; then
-      atomic_point_current_to "$previous_path"
-      if ! "$SYSTEM_PYTHON" "$RELEASE_MANAGER" inspect "$CURRENT_LINK" --required >/dev/null 2>&1; then
-        atomic_point_current_to "$current_path" || true
-        echo "CURRENT_RELEASE_RECOVERY_FAILED deployed rollback target did not validate" >&2
-        return 26
+  # The deployed SHA is proof of the last completed production gate, not an
+  # unconditional downgrade command. A current release is retained only when
+  # both its sealed tree and its real startup/schema contract are healthy.
+  if validate_release "$current_path"; then
+    if runtime_compatible_release "$current_path"; then
+      if is_valid_sha "$recorded_sha" && [ "$recorded_sha" != "$sha" ]; then
+        echo "CURRENT_RELEASE_MARKER_STALE current=$sha recorded=$recorded_sha"
       fi
-      echo "CURRENT_RELEASE_ROLLBACK_RESCUED failed_current=$sha deployed=$recorded_sha target=$previous_path"
+      echo "CURRENT_RELEASE_INTEGRITY_OK path=$current_path"
       return 0
     fi
+    echo "CURRENT_RELEASE_RUNTIME_INCOMPATIBLE current=$sha path=$current_path" >&2
+  fi
 
-    if ! build_clean_recovery_release "$recorded_sha" "recorded-deployed-sha"; then
-      echo "CURRENT_RELEASE_RECOVERY_FAILED unable to reconstruct deployed rollback target current=$sha recorded=$recorded_sha" >&2
-      return 23
-    fi
-    if ! switch_to_recovery_target \
+  # Prefer a clean rebuild of the current SHA. It is accepted only if it can
+  # start against the already-expanded production schema.
+  if build_clean_recovery_release "$sha" "contaminated-or-incompatible-current"; then
+    if switch_to_recovery_target \
       "$sha" \
       "$current_path" \
       "$BUILT_RECOVERY_DIR" \
-      "CURRENT_RELEASE_ROLLBACK_REBUILT deployed=$recorded_sha"; then
-      return 27
+      "CURRENT_RELEASE_RECOVERY_READY sha=$sha original=$current_path"; then
+      return 0
     fi
-    return 0
   fi
 
-  if validate_release "$current_path"; then
-    echo "CURRENT_RELEASE_INTEGRITY_OK path=$current_path"
-    return 0
+  # Atomic rollback swaps current and previous. If the selected current cannot
+  # start on the live schema, the previous link may contain the newer compatible
+  # candidate. Rescue it before consulting a possibly stale deployed marker.
+  previous_path="$(readlink -f "$PREVIOUS_LINK" 2>/dev/null || true)"
+  if [ -n "$previous_path" ] \
+    && [ -d "$previous_path" ] \
+    && [ "$previous_path" != "$current_path" ] \
+    && is_safe_release_path "$previous_path" \
+    && validate_release "$previous_path"; then
+    previous_sha="$(basename "$previous_path")"
+    if switch_to_recovery_target \
+      "$sha" \
+      "$current_path" \
+      "$previous_path" \
+      "CURRENT_RELEASE_PREVIOUS_RESCUED previous=$previous_sha" \
+      0; then
+      return 0
+    fi
   fi
 
-  if ! build_clean_recovery_release "$sha" "contaminated-current"; then
-    return 24
+  # Reconstruct the last fully proven SHA only as the final fallback, and never
+  # switch to it without the same live startup/privacy compatibility proof.
+  if is_valid_sha "$recorded_sha" && [ "$recorded_sha" != "$sha" ]; then
+    if build_clean_recovery_release "$recorded_sha" "recorded-deployed-sha"; then
+      if switch_to_recovery_target \
+        "$sha" \
+        "$current_path" \
+        "$BUILT_RECOVERY_DIR" \
+        "CURRENT_RELEASE_ROLLBACK_REBUILT deployed=$recorded_sha"; then
+        return 0
+      fi
+    fi
   fi
-  if ! switch_to_recovery_target \
-    "$sha" \
-    "$current_path" \
-    "$BUILT_RECOVERY_DIR" \
-    "CURRENT_RELEASE_RECOVERY_READY sha=$sha original=$current_path"; then
-    return 25
-  fi
+
+  echo "CURRENT_RELEASE_RECOVERY_FAILED no runtime-compatible recovery target current=$sha recorded=${recorded_sha:-none}" >&2
+  return 24
 }
 
 cleanup_state_records() {
@@ -265,12 +313,12 @@ if [ ! -x "$SYSTEM_PYTHON" ] || [ ! -x "$TIMEOUT_BIN" ]; then
   echo "CURRENT_RELEASE_RECOVERY_FAILED required executable is unavailable" >&2
   exit 10
 fi
-if [ ! -f "$RELEASE_MANAGER" ] || [ ! -f "$RELEASE_BUILDER" ]; then
+if [ ! -f "$RELEASE_MANAGER" ] || [ ! -f "$RELEASE_BUILDER" ] || [ ! -f "$COMPATIBILITY_CHECKER" ]; then
   echo "CURRENT_RELEASE_RECOVERY_FAILED release tooling is unavailable" >&2
   exit 11
 fi
-if ! is_positive_integer "$RELEASE_BUILD_TIMEOUT_SECONDS"; then
-  echo "CURRENT_RELEASE_RECOVERY_FAILED invalid build timeout" >&2
+if ! is_positive_integer "$RELEASE_BUILD_TIMEOUT_SECONDS" || ! is_positive_integer "$RELEASE_COMPAT_TIMEOUT_SECONDS"; then
+  echo "CURRENT_RELEASE_RECOVERY_FAILED invalid timeout" >&2
   exit 12
 fi
 

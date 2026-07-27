@@ -144,7 +144,7 @@ def test_mood_schedule_duplicate_marker_skips_enqueue(
     assert enqueued == []
 
 
-def test_failed_switch_is_rescued_to_recorded_previous_release(tmp_path: Path) -> None:
+def test_failed_switch_is_rescued_to_runtime_compatible_previous_release(tmp_path: Path) -> None:
     bash = shutil.which("bash")
     timeout = shutil.which("timeout")
     git = shutil.which("git")
@@ -203,6 +203,11 @@ raise SystemExit(2)
     )
     builder = tmp_path / "builder.sh"
     builder.write_text("#!/usr/bin/env bash\nexit 99\n", encoding="utf-8")
+    compatibility = tmp_path / "compatibility.sh"
+    compatibility.write_text(
+        "#!/usr/bin/env bash\nset -Eeuo pipefail\ntest -f \"$1/.valid\"\n",
+        encoding="utf-8",
+    )
 
     env = os.environ.copy()
     env.update(
@@ -218,12 +223,15 @@ raise SystemExit(2)
             "SYSTEM_PYTHON": sys.executable,
             "RELEASE_MANAGER": str(manager),
             "RELEASE_BUILDER": str(builder),
+            "RELEASE_RUNTIME_COMPATIBILITY_CHECKER": str(compatibility),
             "TIMEOUT_BIN": timeout,
+            "RELEASE_BUILD_TIMEOUT_SECONDS": "30",
+            "RELEASE_COMPAT_TIMEOUT_SECONDS": "30",
         }
     )
 
     completed = _run(bash, str(RECOVERY), "repair", str(repo), cwd=ROOT, env=env)
     assert completed.returncode == 0, completed.stderr
-    assert "CURRENT_RELEASE_ROLLBACK_RESCUED" in completed.stdout
+    assert "CURRENT_RELEASE_PREVIOUS_RESCUED" in completed.stdout
     assert current.resolve(strict=True) == recorded_release.resolve(strict=True)
     assert previous.resolve(strict=True) == recorded_release.resolve(strict=True)
