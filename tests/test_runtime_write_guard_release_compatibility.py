@@ -120,7 +120,7 @@ def test_failed_deploy_selects_guard_for_recovered_release_before_restart() -> N
     source = DEPLOY.read_text(encoding="utf-8")
     function_start = source.index("restore_runtime_after_failure()")
     function_end = source.index(
-        '\n}\n\nbash "$SOURCE_DIR/scripts/check_remote_main_topology.sh"',
+        "\n}\n\nacquire_deploy_lock",
         function_start,
     )
     recovery_body = source[function_start:function_end]
