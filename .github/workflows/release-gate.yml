@@ -46,7 +46,7 @@ jobs:
       - name: Critical type contracts
         run: |
           set -o pipefail
-          python -m mypy --follow-imports=skip --check-untyped-defs \
+          python -m mypy --cache-dir "$RUNNER_TEMP/mypy-cache" --follow-imports=skip --check-untyped-defs \
             core/environment.py \
             core/shutdown.py \
             services/pending.py \
