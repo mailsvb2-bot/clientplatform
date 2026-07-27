@@ -39,7 +39,11 @@ class CustomerPlatform(StrEnum):
     INTERNAL = "internal"
 
 
-def normalize_optional_person_name(value: str | None, *, field_name: str) -> str | None:
+def normalize_optional_person_name(
+    value: str | None,
+    *,
+    field_name: str,
+) -> str | None:
     if value is None:
         return None
     raw = str(value).replace("\x00", " ")
@@ -51,9 +55,24 @@ def normalize_optional_person_name(value: str | None, *, field_name: str) -> str
     return normalized
 
 
+def normalize_optional_handle(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    if not normalized:
+        return None
+    if len(normalized) > 200:
+        raise ValueError("username must be at most 200 characters")
+    if any(ord(char) < 32 for char in normalized):
+        raise ValueError("username contains control characters")
+    return normalized
+
+
 def normalize_platform(value: CustomerPlatform | str) -> CustomerPlatform:
     try:
-        return value if isinstance(value, CustomerPlatform) else CustomerPlatform(str(value).strip().lower())
+        if isinstance(value, CustomerPlatform):
+            return value
+        return CustomerPlatform(str(value).strip().lower())
     except ValueError as exc:
         raise ValueError(f"unsupported customer platform: {value!r}") from exc
 
@@ -69,6 +88,22 @@ def normalize_external_subject(value: str) -> str:
     return normalized
 
 
+def normalize_identity_subject(
+    platform: CustomerPlatform | str,
+    value: str,
+) -> tuple[CustomerPlatform, str]:
+    normalized_platform = normalize_platform(platform)
+    normalized_subject = normalize_external_subject(value)
+    if normalized_platform == CustomerPlatform.EMAIL:
+        normalized_subject = normalized_subject.casefold()
+    elif normalized_platform == CustomerPlatform.PHONE:
+        digits = "".join(char for char in normalized_subject if char.isdigit())
+        if not 7 <= len(digits) <= 15:
+            raise ValueError("phone identity must contain 7 to 15 digits")
+        normalized_subject = digits
+    return normalized_platform, normalized_subject
+
+
 @dataclass(frozen=True, slots=True)
 class Customer:
     id: str
@@ -81,7 +116,11 @@ class Customer:
     archived_at: str | None = None
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "id", normalize_uuid(self.id, field_name="customer_id"))
+        object.__setattr__(
+            self,
+            "id",
+            normalize_uuid(self.id, field_name="customer_id"),
+        )
         object.__setattr__(
             self,
             "business_id",
@@ -90,7 +129,10 @@ class Customer:
         object.__setattr__(
             self,
             "created_by_member_id",
-            normalize_uuid(self.created_by_member_id, field_name="created_by_member_id"),
+            normalize_uuid(
+                self.created_by_member_id,
+                field_name="created_by_member_id",
+            ),
         )
 
 
@@ -109,7 +151,11 @@ class CustomerIdentity:
     revoked_at: str | None = None
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "id", normalize_uuid(self.id, field_name="identity_id"))
+        object.__setattr__(
+            self,
+            "id",
+            normalize_uuid(self.id, field_name="identity_id"),
+        )
         object.__setattr__(
             self,
             "business_id",
@@ -120,12 +166,12 @@ class CustomerIdentity:
             "customer_id",
             normalize_uuid(self.customer_id, field_name="customer_id"),
         )
-        object.__setattr__(self, "platform", normalize_platform(self.platform))
-        object.__setattr__(
-            self,
-            "external_subject",
-            normalize_external_subject(self.external_subject),
+        platform, subject = normalize_identity_subject(
+            self.platform,
+            self.external_subject,
         )
+        object.__setattr__(self, "platform", platform)
+        object.__setattr__(self, "external_subject", subject)
 
 
 @dataclass(frozen=True, slots=True)
