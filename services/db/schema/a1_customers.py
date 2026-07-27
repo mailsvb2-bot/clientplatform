@@ -18,7 +18,8 @@ def ensure(c: sqlite3.Connection) -> None:
             archived_at TEXT,
             UNIQUE(id, business_id),
             FOREIGN KEY(business_id) REFERENCES businesses(id) ON DELETE CASCADE,
-            FOREIGN KEY(created_by_member_id) REFERENCES business_members(id),
+            FOREIGN KEY(created_by_member_id, business_id)
+                REFERENCES business_members(id, business_id),
             CHECK(status IN ('active', 'archived'))
         )
         """
