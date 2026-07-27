@@ -132,16 +132,28 @@ def validate_a1_privacy_manifest(
     conn: Any,
     *,
     strict: bool = True,
+    require_complete: bool = False,
 ) -> TenantPrivacyManifestReport:
+    """Validate tenant-table policies.
+
+    Unknown discovered tables always fail closed. ``require_complete`` is used
+    by application startup after schema initialization; isolated schema tests
+    may validate only the modules they intentionally created.
+    """
+
     existing = _table_names(conn)
     discovered = discovered_business_scoped_tables(conn)
     unknown = tuple(sorted(set(discovered) - set(TENANT_POLICIES)))
-    missing_required = tuple(
-        sorted(
-            policy.table
-            for policy in TENANT_POLICIES.values()
-            if policy.required and policy.table not in existing
+    missing_required = (
+        tuple(
+            sorted(
+                policy.table
+                for policy in TENANT_POLICIES.values()
+                if policy.required and policy.table not in existing
+            )
         )
+        if require_complete
+        else ()
     )
     report = TenantPrivacyManifestReport(
         ok=not unknown and not missing_required,
