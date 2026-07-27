@@ -4,6 +4,7 @@ import asyncio
 import logging
 import sqlite3
 
+from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.exceptions import TelegramAPIError
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, InlineKeyboardButton, ReplyKeyboardRemove
@@ -92,20 +93,23 @@ async def gift_pick_target(cb: CallbackQuery) -> None:
 
 
 async def gift_pick_cancel(message: Message) -> None:
-    """Отмена выбора получателя подарка."""
+    """Cancel only the active gift scenario and delegate every other cancel."""
     uid = _message_user_id(message)
     if uid is None:
-        return
-    peek = peek_pending(uid)
-    if peek and peek.kind in {"gift_target", "gift_universal"}:
-        pop_pending(uid)
-        clear_target(uid)
+        raise SkipHandler
+    pending = peek_pending(uid)
+    if pending is None or pending.kind not in {"gift_target", "gift_universal"}:
+        # The payments router is registered before share and other routers. Explicitly
+        # delegate so a generic reply-keyboard label cannot swallow another flow.
+        raise SkipHandler
 
-        await message.answer(
-            "✅ Хорошо. Выбор подарка отменён.",
-            reply_markup=ReplyKeyboardRemove(),
-        )
-        await message.answer('Главное меню:', reply_markup=kb_main(user_id=uid))
+    pop_pending(uid)
+    clear_target(uid)
+    await message.answer(
+        "✅ Хорошо. Выбор подарка отменён.",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+    await message.answer('Главное меню:', reply_markup=kb_main(user_id=uid))
 
 
 async def gift_users_shared(message: Message, state: FSMContext) -> None:
