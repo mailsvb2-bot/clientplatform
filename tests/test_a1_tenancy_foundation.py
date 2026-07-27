@@ -10,7 +10,7 @@ from a1.domain.tenancy import (
     TenantInvariantViolation,
     TenantPermissionDenied,
 )
-from a1.infrastructure.tenancy_repository import TenancyRepository
+from a1.infrastructure import TenancyRepository
 from services.db.schema import a1_tenancy
 
 
@@ -113,6 +113,23 @@ class A1TenancyFoundationTests(unittest.TestCase):
             self.repo.revoke_member(actor=owner, user_id=101)
         still_owner = self.repo.resolve_context(user_id=101, business_id=access.business.id)
         self.assertEqual(still_owner.role, PlatformRole.OWNER)
+
+    def test_last_active_owner_cannot_be_demoted_through_role_update(self) -> None:
+        access = self.repo.create_business(owner_user_id=101, name="Практика")
+        owner = self.repo.resolve_context(user_id=101, business_id=access.business.id)
+        with self.assertRaises(TenantInvariantViolation):
+            self.repo.grant_member(actor=owner, user_id=101, role=PlatformRole.MANAGER)
+        still_owner = self.repo.resolve_context(user_id=101, business_id=access.business.id)
+        self.assertEqual(still_owner.role, PlatformRole.OWNER)
+
+    def test_owner_can_be_demoted_after_second_owner_is_active(self) -> None:
+        access = self.repo.create_business(owner_user_id=101, name="Практика")
+        owner = self.repo.resolve_context(user_id=101, business_id=access.business.id)
+        self.repo.grant_member(actor=owner, user_id=202, role=PlatformRole.OWNER)
+        demoted = self.repo.grant_member(actor=owner, user_id=101, role=PlatformRole.MANAGER)
+        self.assertEqual(demoted.role, PlatformRole.MANAGER)
+        remaining_owner = self.repo.resolve_context(user_id=202, business_id=access.business.id)
+        self.assertEqual(remaining_owner.role, PlatformRole.OWNER)
 
 
 if __name__ == "__main__":
