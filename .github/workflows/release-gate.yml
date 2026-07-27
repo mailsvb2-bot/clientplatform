@@ -103,7 +103,7 @@ jobs:
             2>&1 | tee "$RUNNER_TEMP/release-pip-audit.log"
 
       - name: Release hygiene after checks
-        run: python scripts/check_release_hygiene.py
+        run: python scripts/check_release_hygiene.py --clean-generated
 
       - name: Upload release gate logs
         if: always()
