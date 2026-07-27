@@ -4,6 +4,7 @@ import sqlite3
 
 from . import (
     a1_customers,
+    a1_programs,
     a1_tenancy,
     analytics,
     funnel,
@@ -15,13 +16,14 @@ from . import (
     users,
 )
 
-# Execution order matters: legacy users first, then the A1 tenant boundary and
-# its dependent customer model, then dependent legacy tables. Additive A1
+# Execution order matters: legacy users first, then A1 tenant, customer and
+# program-delivery boundaries, then dependent legacy tables. Additive A1
 # schemas do not mutate imported Metrotherapy tables.
 PARTS = [
     users,
     a1_tenancy,
     a1_customers,
+    a1_programs,
     plans,
     payments,
     gifts,
