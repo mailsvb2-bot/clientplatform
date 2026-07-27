@@ -96,7 +96,8 @@ async def gift_pick_cancel(message: Message) -> None:
     """Cancel only the active gift scenario and delegate every other cancel."""
     uid = _message_user_id(message)
     if uid is None:
-        raise SkipHandler
+        # A malformed Telegram update has no user-scoped scenario to delegate.
+        return
     pending = peek_pending(uid)
     if pending is None or pending.kind not in {"gift_target", "gift_universal"}:
         # The payments router is registered before share and other routers. Explicitly
