@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import sqlite3
 
-from . import analytics, funnel, gifts, jobs, payments, plans, settings, users
+from . import a1_tenancy, analytics, funnel, gifts, jobs, payments, plans, settings, users
 
-# Execution order matters: base entities first, then dependent tables.
+# Execution order matters: legacy users first, then the new A1 tenant boundary,
+# then dependent legacy tables. The additive tenancy schema does not mutate the
+# imported Metrotherapy tables.
 PARTS = [
     users,
+    a1_tenancy,
     plans,
     payments,
     gifts,

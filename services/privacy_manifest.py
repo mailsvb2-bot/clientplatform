@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 Disposition = Literal["erase", "retain", "anonymize"]
-MANIFEST_VERSION = "2026-07-26.v5"
+MANIFEST_VERSION = "2026-07-28.v6"
 
 OWNERSHIP_COLUMN_CANDIDATES = frozenset(
     {
@@ -20,6 +20,7 @@ OWNERSHIP_COLUMN_CANDIDATES = frozenset(
         "beneficiary_user_id",
         "requested_by",
         "created_by",
+        "created_by_user_id",
         "changed_by",
         "updated_by",
         "admin_id",
@@ -233,6 +234,20 @@ _POLICIES = (
         ("admin_id",),
         "retain",
         "administrative confirmation security audit",
+    ),
+    _policy(
+        "businesses",
+        ("created_by_user_id",),
+        "retain",
+        "tenant ownership and creation provenance",
+        required=True,
+    ),
+    _policy(
+        "business_members",
+        ("user_id",),
+        "retain",
+        "tenant authorization assignment and revocation audit",
+        required=True,
     ),
     *(_policy(table, columns, "erase", reason) for table, columns, reason in _BEHAVIORAL),
     *(
