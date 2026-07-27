@@ -330,6 +330,11 @@ async def _answer_stars_manual_recovery(message: Message) -> None:
 
 @router.message(F.text == "❌ Отмена", GiftCancelPendingFilter())
 async def _gift_pick_cancel(message: Message, gift_cancel_pending=None):
+    if gift_cancel_pending is None:
+        # Direct-call compatibility for isolated unit tests. Normal routing
+        # always injects the state atomically claimed by the filter.
+        await gift_pick_cancel(message)
+        return
     await gift_pick_cancel(message, gift_cancel_pending=gift_cancel_pending)
 
 
