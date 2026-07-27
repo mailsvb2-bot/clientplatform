@@ -286,13 +286,24 @@ async def admin_add_admin_input(msg: Message, state: FSMContext):
         )
         return
 
+    assigned_roles: set[str] = set()
     try:
         await asyncio.to_thread(_grant_admin_role_sync, int(target_id))
         assigned_roles = await asyncio.to_thread(get_staff_roles, int(target_id))
-        if ROLE_ADMIN not in assigned_roles:
-            raise RuntimeError("admin_role_not_persisted")
-    except (RuntimeError, OSError, sqlite3.Error, ValueError, TypeError):
+    except (RuntimeError, OSError):
         logging.getLogger(__name__).exception("Failed to add admin")
+    except sqlite3.Error:
+        logging.getLogger(__name__).exception("Failed to add admin")
+    except (ValueError, TypeError):
+        logging.getLogger(__name__).exception("Failed to add admin")
+
+    if ROLE_ADMIN not in assigned_roles:
+        if assigned_roles:
+            logging.getLogger(__name__).error(
+                "Admin role was not persisted: target_id=%s roles=%s",
+                target_id,
+                sorted(assigned_roles),
+            )
         await msg.answer(
             "Не удалось добавить администратора. Изменения не подтверждены — попробуйте ещё раз.",
             reply_markup=ReplyKeyboardRemove(),
