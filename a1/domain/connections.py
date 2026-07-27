@@ -225,8 +225,18 @@ class Connection:
         object.__setattr__(self, "connection_type", connection_type)
         object.__setattr__(
             self,
+            "external_account_id",
+            normalize_external_account_id(self.external_account_id),
+        )
+        object.__setattr__(
+            self,
             "credential_reference",
             normalize_credential_reference(self.credential_reference),
+        )
+        object.__setattr__(
+            self,
+            "permissions",
+            normalize_permissions(self.permissions),
         )
 
 
@@ -244,6 +254,34 @@ class ManagedBot:
     created_at: str
     updated_at: str
     revoked_at: str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "id", normalize_uuid(self.id, field_name="managed_bot_id"))
+        object.__setattr__(
+            self,
+            "business_id",
+            normalize_uuid(self.business_id, field_name="business_id"),
+        )
+        object.__setattr__(
+            self,
+            "connection_id",
+            normalize_uuid(self.connection_id, field_name="connection_id"),
+        )
+        object.__setattr__(
+            self,
+            "platform",
+            normalize_connection_platform(self.platform),
+        )
+        object.__setattr__(
+            self,
+            "external_bot_id",
+            normalize_external_account_id(self.external_bot_id),
+        )
+        object.__setattr__(
+            self,
+            "webhook_secret_reference",
+            normalize_credential_reference(self.webhook_secret_reference),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -269,6 +307,51 @@ class Dispatch:
     sent_at: str | None = None
     dead_at: str | None = None
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "id", normalize_uuid(self.id, field_name="dispatch_id"))
+        object.__setattr__(
+            self,
+            "business_id",
+            normalize_uuid(self.business_id, field_name="business_id"),
+        )
+        object.__setattr__(
+            self,
+            "logical_delivery_id",
+            normalize_uuid(self.logical_delivery_id, field_name="logical_delivery_id"),
+        )
+        object.__setattr__(
+            self,
+            "connection_id",
+            normalize_uuid(self.connection_id, field_name="connection_id"),
+        )
+        object.__setattr__(
+            self,
+            "customer_identity_id",
+            normalize_uuid(
+                self.customer_identity_id,
+                field_name="customer_identity_id",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "platform",
+            normalize_connection_platform(self.platform),
+        )
+        object.__setattr__(
+            self,
+            "payload_kind",
+            normalize_content_kind(self.payload_kind),
+        )
+        object.__setattr__(
+            self,
+            "payload_ref",
+            normalize_content_ref(self.payload_ref),
+        )
+        if self.attempts < 0:
+            raise ValueError("dispatch attempts must be non-negative")
+        if not str(self.idempotency_key or "").strip():
+            raise ValueError("dispatch idempotency_key must not be empty")
+
 
 @dataclass(frozen=True, slots=True)
 class ClaimedDispatch:
@@ -286,14 +369,4 @@ class ClaimedDispatch:
             self,
             "external_subject",
             normalize_external_account_id(self.external_subject),
-        )
-        object.__setattr__(
-            self.dispatch,
-            "payload_kind",
-            normalize_content_kind(self.dispatch.payload_kind),
-        )
-        object.__setattr__(
-            self.dispatch,
-            "payload_ref",
-            normalize_content_ref(self.dispatch.payload_ref),
         )
