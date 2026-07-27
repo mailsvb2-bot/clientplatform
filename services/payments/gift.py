@@ -113,9 +113,11 @@ async def gift_pick_cancel(message: Message) -> None:
         raise SkipHandler
     if pending.kind not in _GIFT_PENDING_KINDS:
         return
-    if pop_pending(uid) is None:
-        return
 
+    # The compatibility façade is atomically kind-scoped in production. Once an
+    # active gift state was observed, cancellation cleanup remains safe even when
+    # another worker consumed the state between these two calls.
+    pop_pending(uid)
     clear_target(uid)
     await message.answer(
         "✅ Хорошо. Выбор подарка отменён.",
