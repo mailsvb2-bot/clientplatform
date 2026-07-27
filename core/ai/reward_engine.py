@@ -3,90 +3,128 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
-from datetime import datetime, timezone, timedelta
-from typing import Any, Dict, Iterable, Optional, Tuple
+import time
+from datetime import datetime, timedelta, timezone
+from typing import Any
 
+from core.runtime_env import env_float, env_int
 from services.db import db
 
 logger = logging.getLogger(__name__)
 
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc).replace(microsecond=0)
+
 
 def _utc_now_iso() -> str:
     return _utc_now().isoformat()
 
-def compute_and_store_rewards(window_sec: int = 3600, *, lookback_hours: int = 24) -> int:
-    """Compute causal rewards for recent decisions.
 
-    Baseline implementation (production-safe):
-    - Money reward: sum of payments.amount within [decision_ts, decision_ts+window].
-    - State reward: post-pre mood delta plus explicit state ratings in the window.
-    - Retention reward: later user activity/progress after the decision.
-    Writes into decision_rewards table.
+def _decision_time(raw: Any, *, fallback: datetime) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except (AttributeError, TypeError, ValueError):
+        return fallback
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed
 
-    Returns number of rewards written.
+
+def compute_and_store_rewards(
+    window_sec: int = 3600,
+    *,
+    lookback_hours: int = 24,
+    batch_size: int | None = None,
+    max_runtime_sec: float | None = None,
+) -> int:
+    """Compute causal rewards in a bounded, resumable batch.
+
+    The scheduler invokes this function in a worker thread. A hard
+    ``asyncio.wait_for`` timeout cannot stop a running thread, so this function
+    owns a cooperative runtime budget and returns before the scheduler timeout.
+    Already-computed decisions are filtered in SQL and the oldest pending rows
+    are drained first, preventing the previous unbounded N+1 scan.
     """
+
+    resolved_batch_size = (
+        int(batch_size)
+        if batch_size is not None
+        else env_int("REWARD_BATCH_SIZE", 25, minimum=1, maximum=1_000)
+    )
+    resolved_batch_size = max(1, min(int(resolved_batch_size), 1_000))
+    resolved_runtime = (
+        float(max_runtime_sec)
+        if max_runtime_sec is not None
+        else env_float("REWARD_MAX_RUNTIME_SEC", 3.5, minimum=0.25, maximum=4.0)
+    )
+    resolved_runtime = max(0.25, min(float(resolved_runtime), 4.0))
+
     now = _utc_now()
     since = (now - timedelta(hours=int(lookback_hours))).isoformat()
-
+    deadline = time.monotonic() + resolved_runtime
     written = 0
+    candidates = 0
+
     with db() as conn:
-        # Ensure table exists (schema.ensure should already handle this)
-        # Find decisions in extended events table
         try:
             rows = conn.execute(
-                """
-                SELECT id, user_id, decision_id, correlation_id, COALESCE(timestamp_utc, ts, created_at) AS t
-                FROM events
-                WHERE decision_id IS NOT NULL AND decision_id != ''
-                  AND name='decision_made'
-                  AND COALESCE(timestamp_utc, ts, created_at) >= ?
-                ORDER BY id DESC
+                f"""
+                SELECT
+                    e.id,
+                    e.user_id,
+                    e.decision_id,
+                    e.correlation_id,
+                    COALESCE(e.timestamp_utc, e.ts, e.created_at) AS t
+                FROM events AS e
+                WHERE e.decision_id IS NOT NULL
+                  AND e.decision_id != ''
+                  AND e.name='decision_made'
+                  AND COALESCE(e.timestamp_utc, e.ts, e.created_at) >= ?
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM decision_rewards AS dr
+                      WHERE dr.decision_id=e.decision_id
+                        AND dr.window_sec=?
+                  )
+                ORDER BY e.id ASC
+                LIMIT {resolved_batch_size}
                 """,
-                (since,),
+                (since, int(window_sec)),
             ).fetchall()
-        except (OSError, ValueError):
+        except (sqlite3.Error, OSError, ValueError):
+            logger.exception("RewardEngine candidate query failed")
             return 0
 
-        for r in rows:
+        candidates = len(rows)
+        for row in rows:
+            if time.monotonic() >= deadline:
+                break
+
             try:
-                _eid, user_id, decision_id, corr_id, t_iso = int(r[0]), int(r[1]), str(r[2]), (str(r[3]) if r[3] is not None else None), str(r[4])
-            except (TypeError, ValueError, IndexError):
+                _event_id = int(row[0])
+                user_id = int(row[1])
+                decision_id = str(row[2])
+                correlation_id = str(row[3]) if row[3] is not None else None
+                decision_at = _decision_time(row[4], fallback=now)
+            except (IndexError, TypeError, ValueError):
                 continue
 
-            # Idempotency: do not recompute if already exists for this (decision_id, window)
-            exists = conn.execute(
-                "SELECT 1 FROM decision_rewards WHERE decision_id=? AND window_sec=? LIMIT 1",
-                (decision_id, int(window_sec)),
-            ).fetchone()
-            if exists:
-                continue
+            window_end = (decision_at + timedelta(seconds=int(window_sec))).isoformat()
+            window_start = decision_at.isoformat()
 
-            # Parse decision time
-            try:
-                t0 = datetime.fromisoformat(t_iso.replace("Z","+00:00"))
-                if t0.tzinfo is None:
-                    t0 = t0.replace(tzinfo=timezone.utc)
-            except ValueError:
-                t0 = now
-            except AttributeError:
-                t0 = now
-
-            t1 = (t0 + timedelta(seconds=int(window_sec))).isoformat()
-
-            # Money reward: sum payments in window
             money = 0.0
             try:
-                prow = conn.execute(
+                payment_row = conn.execute(
                     """
-                    SELECT COALESCE(SUM(amount), 0) FROM payments
+                    SELECT COALESCE(SUM(amount), 0)
+                    FROM payments
                     WHERE user_id=? AND created_at >= ? AND created_at <= ?
                     """,
-                    (user_id, t0.isoformat(), t1),
+                    (user_id, window_start, window_end),
                 ).fetchone()
-                money = float(prow[0] or 0) if prow else 0.0
-            except (TypeError, ValueError, IndexError):
+                money = float(payment_row[0] or 0) if payment_row else 0.0
+            except (sqlite3.Error, IndexError, TypeError, ValueError):
                 money = 0.0
 
             state = 0.0
@@ -99,62 +137,61 @@ def compute_and_store_rewards(window_sec: int = 3600, *, lookback_hours: int = 2
                     FROM mood_sessions
                     WHERE user_id=? AND updated_at_utc >= ? AND updated_at_utc <= ?
                     """,
-                    (user_id, t0.isoformat(), t1),
+                    (user_id, window_start, window_end),
                 ).fetchone()
                 state += float(mood_row[0] or 0.0) if mood_row else 0.0
-            except sqlite3.Error:
+            except (sqlite3.Error, IndexError, TypeError, ValueError):
                 state += 0.0
-            except (TypeError, ValueError, IndexError):
-                state += 0.0
+
             try:
                 rating_row = conn.execute(
                     """
-                    SELECT COALESCE(AVG(rating), 0) FROM state_ratings
+                    SELECT COALESCE(AVG(rating), 0)
+                    FROM state_ratings
                     WHERE user_id=? AND created_at_utc >= ? AND created_at_utc <= ?
                     """,
-                    (user_id, t0.isoformat(), t1),
+                    (user_id, window_start, window_end),
                 ).fetchone()
-                avg_rating = float(rating_row[0] or 0.0) if rating_row else 0.0
-                if avg_rating:
-                    # Normalize 1..10 around zero; keep bounded so money remains dominant.
-                    state += max(-1.0, min(1.0, (avg_rating - 5.0) / 5.0))
-            except sqlite3.Error:
-                state += 0.0
-            except (TypeError, ValueError, IndexError):
+                average_rating = float(rating_row[0] or 0.0) if rating_row else 0.0
+                if average_rating:
+                    state += max(-1.0, min(1.0, (average_rating - 5.0) / 5.0))
+            except (sqlite3.Error, IndexError, TypeError, ValueError):
                 state += 0.0
 
             retention = 0.0
             try:
-                activity = conn.execute(
+                activity_row = conn.execute(
                     """
-                    SELECT COUNT(*) FROM events
-                    WHERE user_id=? AND COALESCE(timestamp_utc, ts, created_at) > ?
+                    SELECT COUNT(*)
+                    FROM events
+                    WHERE user_id=?
+                      AND COALESCE(timestamp_utc, ts, created_at) > ?
                       AND COALESCE(timestamp_utc, ts, created_at) <= ?
                     """,
-                    (user_id, t0.isoformat(), t1),
+                    (user_id, window_start, window_end),
                 ).fetchone()
-                retention += min(1.0, float(activity[0] or 0) / 3.0) if activity else 0.0
-            except sqlite3.Error:
+                retention += min(1.0, float(activity_row[0] or 0) / 3.0) if activity_row else 0.0
+            except (sqlite3.Error, IndexError, TypeError, ValueError):
                 retention += 0.0
-            except (TypeError, ValueError, IndexError):
-                retention += 0.0
+
             try:
-                progress = conn.execute(
+                progress_row = conn.execute(
                     """
-                    SELECT COALESCE(MAX(idx), 0) FROM progress
+                    SELECT COALESCE(MAX(idx), 0)
+                    FROM progress
                     WHERE user_id=? AND updated_at >= ? AND updated_at <= ?
                     """,
-                    (user_id, t0.isoformat(), t1),
+                    (user_id, window_start, window_end),
                 ).fetchone()
-                retention += min(1.0, float(progress[0] or 0) / 10.0) if progress else 0.0
-            except sqlite3.Error:
-                retention += 0.0
-            except (TypeError, ValueError, IndexError):
+                retention += min(1.0, float(progress_row[0] or 0) / 10.0) if progress_row else 0.0
+            except (sqlite3.Error, IndexError, TypeError, ValueError):
                 retention += 0.0
 
             reward = money + state + retention
-            meta = json.dumps({"money": money, "state": state, "retention": retention}, ensure_ascii=False)
-
+            metadata = json.dumps(
+                {"money": money, "state": state, "retention": retention},
+                ensure_ascii=False,
+            )
             conn.execute(
                 """
                 INSERT INTO decision_rewards(
@@ -163,12 +200,31 @@ def compute_and_store_rewards(window_sec: int = 3600, *, lookback_hours: int = 2
                     window_sec, computed_at_utc, meta
                 ) VALUES(?,?,?,?,?,?,?,?,?,?)
                 """,
-                (decision_id, user_id, corr_id, reward, money, state, retention, int(window_sec), _utc_now_iso(), meta),
+                (
+                    decision_id,
+                    user_id,
+                    correlation_id,
+                    reward,
+                    money,
+                    state,
+                    retention,
+                    int(window_sec),
+                    _utc_now_iso(),
+                    metadata,
+                ),
             )
             written += 1
 
         conn.commit()
 
-    if written:
-        logger.info("RewardEngine: wrote %s rewards (window=%ss, lookback=%sh)", written, window_sec, lookback_hours)
+    if candidates:
+        logger.info(
+            "RewardEngine batch complete: wrote=%s candidates=%s batch=%s runtime_budget=%.2fs window=%ss lookback=%sh",
+            written,
+            candidates,
+            resolved_batch_size,
+            resolved_runtime,
+            window_sec,
+            lookback_hours,
+        )
     return written
