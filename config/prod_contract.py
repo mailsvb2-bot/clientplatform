@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 
+from core.environment import is_production_env
+
 
 class ProductionContractError(RuntimeError):
     pass
@@ -25,8 +27,7 @@ def _db_engine() -> str:
 
 
 def validate_production_contract() -> None:
-    app_env = (_env("APP_ENV") or "dev").lower()
-    if app_env not in {"prod", "production"}:
+    if not is_production_env():
         return
 
     problems: list[str] = []
