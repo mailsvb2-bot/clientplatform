@@ -104,6 +104,17 @@ async def body_answer(cb: CallbackQuery):
     s = await asyncio.to_thread(get_session, sid)
     if not s:
         return
+    callback_user_id = int(cb.from_user.id)
+    if int(s.user_id) != callback_user_id:
+        logging.getLogger(__name__).warning(
+            "Rejected body feedback for foreign session",
+            extra={
+                "session_id": sid,
+                "session_user_id": int(s.user_id),
+                "callback_user_id": callback_user_id,
+            },
+        )
+        return
 
     q = pick_body_question(force_key=q_key)
     if not q or idx < 0 or idx >= len(q.options):
@@ -113,7 +124,7 @@ async def body_answer(cb: CallbackQuery):
     # Sync persistence is isolated from the aiogram event loop.
     await asyncio.to_thread(
         _record_body_answer_sync,
-        user_id=int(cb.from_user.id),
+        user_id=callback_user_id,
         session_id=sid,
         kind=s.kind or "",
         area=area,

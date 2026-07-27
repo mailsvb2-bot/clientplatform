@@ -79,8 +79,9 @@ async def test_invalid_timezone_quiet_and_time_inputs(monkeypatch: pytest.Monkey
     monkeypatch.setattr(sc, "_message_user_id", lambda _message: 42)
 
     pending: list[Pending] = [Pending("set_timezone")]
+    consumed: list[tuple[int, str | None]] = []
     monkeypatch.setattr(sc, "peek_pending", lambda _uid: pending[0])
-    monkeypatch.setattr(sc, "pop_pending", lambda _uid: pending.pop(0))
+    monkeypatch.setattr(sc, "consume_pending", lambda uid, kind=None: consumed.append((uid, kind)))
     monkeypatch.setattr(sc, "set_user_timezone", lambda *_args: (_ for _ in ()).throw(ValueError("bad")))
     msg = Message("Mars/Olympus")
     await sc.settings_time_input(msg)
@@ -101,6 +102,7 @@ async def test_invalid_timezone_quiet_and_time_inputs(monkeypatch: pytest.Monkey
     msg = Message("not-time")
     await sc.settings_time_input(msg)
     assert "формате HH:MM" in msg.answers[-1][0]
+    assert consumed == []
 
     monkeypatch.setattr(sc, "peek_pending", lambda _uid: Pending("other"))
     with pytest.raises(SkipHandler):

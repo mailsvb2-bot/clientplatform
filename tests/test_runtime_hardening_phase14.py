@@ -124,7 +124,7 @@ async def test_body_handler_offloads_sync_persistence(
         data="body:7:neck:0",
         from_user=SimpleNamespace(id=42),
     )
-    session = SimpleNamespace(kind="work", source="demo")
+    session = SimpleNamespace(user_id=42, kind="work", source="demo")
     recorded: list[dict[str, Any]] = []
 
     monkeypatch.setattr(body, "safe_answer_callback", answer_callback)

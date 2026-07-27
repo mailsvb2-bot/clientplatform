@@ -4,6 +4,7 @@ import asyncio
 import logging
 import sqlite3
 
+from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.exceptions import TelegramAPIError
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, InlineKeyboardButton, ReplyKeyboardRemove
@@ -11,13 +12,19 @@ from aiogram.types import CallbackQuery, Message, InlineKeyboardButton, ReplyKey
 from keyboards.inline import kb_main
 from services.gift_store import set_target, get_target, clear_target
 from services.payments.ui import kb, kb_back, kb_gift_tariffs, pick_user_keyboard
-from services.pending import set_pending, peek_pending, pop_pending
+from services.pending import consume_pending, set_pending, peek_pending
 from services.events import log_event
 from services.promo_texts import get_gift_template
 from services.messenger.links import build_gift_share_targets
 
 
 logger = logging.getLogger(__name__)
+_GIFT_PENDING_KINDS = frozenset({"gift_target", "gift_universal"})
+
+
+def pop_pending(user_id: int):
+    """Compatibility façade backed by the atomic, kind-scoped pending API."""
+    return consume_pending(user_id, _GIFT_PENDING_KINDS)
 
 
 def _callback_message(cb: CallbackQuery) -> Message | None:
@@ -92,20 +99,31 @@ async def gift_pick_target(cb: CallbackQuery) -> None:
 
 
 async def gift_pick_cancel(message: Message) -> None:
-    """Отмена выбора получателя подарка."""
+    """Cancel only the gift state; delegate the competing share cancel route."""
     uid = _message_user_id(message)
     if uid is None:
         return
-    peek = peek_pending(uid)
-    if peek and peek.kind in {"gift_target", "gift_universal"}:
-        pop_pending(uid)
-        clear_target(uid)
 
-        await message.answer(
-            "✅ Хорошо. Выбор подарка отменён.",
-            reply_markup=ReplyKeyboardRemove(),
-        )
-        await message.answer('Главное меню:', reply_markup=kb_main(user_id=uid))
+    pending = peek_pending(uid)
+    if pending is None:
+        return
+    if pending.kind == "share":
+        # Payments is registered before share; explicit delegation is required for
+        # the shared reply-keyboard label used by both flows.
+        raise SkipHandler
+    if pending.kind not in _GIFT_PENDING_KINDS:
+        return
+
+    # The compatibility façade is atomically kind-scoped in production. Once an
+    # active gift state was observed, cancellation cleanup remains safe even when
+    # another worker consumed the state between these two calls.
+    pop_pending(uid)
+    clear_target(uid)
+    await message.answer(
+        "✅ Хорошо. Выбор подарка отменён.",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+    await message.answer('Главное меню:', reply_markup=kb_main(user_id=uid))
 
 
 async def gift_users_shared(message: Message, state: FSMContext) -> None:

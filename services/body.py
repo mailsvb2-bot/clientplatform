@@ -60,7 +60,14 @@ def pick_body_question(force_key: str | None = None) -> BodyQuestion:
 def save_body_feedback(user_id: int, session_id: int, kind: str, area: str) -> None:
     with db() as conn:
         conn.execute(
-            "INSERT INTO body_feedback(session_id, user_id, kind, area, created_at_utc) VALUES(?,?,?,?,?)",
+            """
+            INSERT INTO body_feedback(session_id, user_id, kind, area, created_at_utc)
+            VALUES(?,?,?,?,?)
+            ON CONFLICT(session_id, user_id) DO UPDATE SET
+                kind=excluded.kind,
+                area=excluded.area,
+                created_at_utc=excluded.created_at_utc
+            """,
             (int(session_id), int(user_id), str(kind), str(area), utcnow_iso()),
         )
 

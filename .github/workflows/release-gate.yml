@@ -2,9 +2,17 @@ name: Pre-deploy Release Gate
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
 
 permissions:
   contents: read
+
+concurrency:
+  group: pre-deploy-release-gate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   release-gate:
@@ -40,6 +48,10 @@ jobs:
         run: |
           set -o pipefail
           python -m mypy --follow-imports=skip --check-untyped-defs \
+            core/environment.py \
+            core/shutdown.py \
+            services/pending.py \
+            services/weather.py \
             services/accounts/identity.py \
             services/messenger/text_ui.py \
             services/messenger/delivery_outbox.py \
@@ -63,6 +75,10 @@ jobs:
         run: |
           set -o pipefail
           python -m bandit -q -r -c pyproject.toml \
+            core/environment.py \
+            core/shutdown.py \
+            services/pending.py \
+            services/weather.py \
             services/payments \
             services/accounts/identity.py \
             services/messenger/text_ui.py \
@@ -87,7 +103,7 @@ jobs:
             2>&1 | tee "$RUNNER_TEMP/release-pip-audit.log"
 
       - name: Release hygiene after checks
-        run: python scripts/check_release_hygiene.py
+        run: python scripts/check_release_hygiene.py --clean-generated
 
       - name: Upload release gate logs
         if: always()

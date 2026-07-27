@@ -35,7 +35,7 @@ from keyboards.inline import kb_main
 from services.bg import tm
 from services.events import log_event
 from services.messenger.links import build_share_targets
-from services.pending import peek_pending, pop_pending, set_pending
+from services.pending import consume_pending, peek_pending, pop_pending, set_pending
 from services.promo_texts import get_share_template
 
 router = Router()
@@ -96,7 +96,6 @@ async def share_menu(cb: CallbackQuery) -> None:
         return
 
     uid, _from_name, share_text = identity
-    # Platform share uses inline URL buttons and must not open a stale user-pick mode.
     log_event(uid, "share_menu", {"mode": "platform_choice"})
     await msg.answer(
         "📣 Куда хотите посоветовать «Метротерапию»?\n\n"
@@ -107,8 +106,6 @@ async def share_menu(cb: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "share:pick")
 async def share_pick(cb: CallbackQuery) -> None:
-    # Backward-compatible Telegram-only direct delivery. Kept for old callback contracts,
-    # but the main UX now routes through share:menu platform choice.
     await safe_answer_callback(cb)
 
     msg = _callback_message(cb)
@@ -209,7 +206,8 @@ async def cancel(message: Message) -> None:
     if uid is None:
         return
 
-    pop_pending(uid)
+    if consume_pending(uid, "share") is None:
+        return
     await message.answer("Ок.", reply_markup=ReplyKeyboardRemove())
     await message.answer(
         "Главное меню:",

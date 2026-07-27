@@ -27,7 +27,7 @@ from services.subscription import has_access
 from services.events import log_event
 # (ленивый импорт графиков внутри хендлеров)
 from services.bonuses import compute_bonus_stats, paid_referrals_count, gift_grants_count, gift_days_granted
-from services.pending import set_pending, peek_pending, pop_pending
+from services.pending import consume_pending, set_pending, peek_pending
 from services.messenger.links import build_messenger_targets
 from services.messenger.platforms import platform_title
 from services.messenger.preferences import get_channel_snapshot, set_preferred_platform
@@ -372,15 +372,12 @@ async def settings_time_input(message: Message):
     p = await _to_thread(peek_pending, uid)
     if not p or p.kind not in {"set_time", "set_timezone", "set_quiet_hours"}:
         raise SkipHandler
-    p = await _to_thread(pop_pending, uid)
-    if not p:
-        return
-
     if p.kind == "set_timezone":
         try:
             tz_name = await _to_thread(set_user_timezone, uid, (message.text or "").strip())
         except (ValueError, KeyError):
             return await message.answer("Пожалуйста, укажите корректный timezone, например Europe/Amsterdam.", reply_markup=kb_back_main())
+        await _to_thread(consume_pending, uid, "set_timezone")
         await _to_thread(log_event, uid, "settings_timezone_set", {"timezone": tz_name})
         prefs_text = await _to_thread(describe_delivery_preferences, uid)
         return await message.answer(f"✅ Часовой пояс сохранён: {tz_name}.\n\n{prefs_text}", reply_markup=kb_back_main())
@@ -389,6 +386,7 @@ async def settings_time_input(message: Message):
         raw = (message.text or "").strip().lower()
         if raw in {"off", "none", "disable", "выкл", "отключить"}:
             await _to_thread(clear_quiet_hours, uid)
+            await _to_thread(consume_pending, uid, "set_quiet_hours")
             await _to_thread(log_event, uid, "settings_quiet_hours_cleared", {})
             prefs_text = await _to_thread(describe_delivery_preferences, uid)
             return await message.answer(f"✅ Тихие часы выключены.\n\n{prefs_text}", reply_markup=kb_back_main())
@@ -399,18 +397,21 @@ async def settings_time_input(message: Message):
             start_hhmm, end_hhmm = await _to_thread(set_quiet_hours, uid, start_hhmm, end_hhmm)
         except (ValueError, KeyError):
             return await message.answer("Не смог распознать quiet hours. Пример: 22:00-08:00.", reply_markup=kb_back_main())
+        await _to_thread(consume_pending, uid, "set_quiet_hours")
         await _to_thread(log_event, uid, "settings_quiet_hours_set", {"start": start_hhmm, "end": end_hhmm})
         prefs_text = await _to_thread(describe_delivery_preferences, uid)
         return await message.answer(f"✅ Тихие часы сохранены: {start_hhmm}-{end_hhmm}.\n\n{prefs_text}", reply_markup=kb_back_main())
 
     slot = str((p.data or {}).get("slot") or "")
     if slot not in {"work", "home"}:
+        await _to_thread(consume_pending, uid, "set_time")
         return await message.answer("Не смог распознать, какое время нужно сохранить.", reply_markup=kb_back_main())
     hhmm = _parse_hhmm(message.text or "")
     if not hhmm:
         return await message.answer("Пожалуйста, время в формате HH:MM (например, 08:30).", reply_markup=kb_back_main())
 
     await _to_thread(_persist_user_time, uid, slot, hhmm)
+    await _to_thread(consume_pending, uid, "set_time")
 
     await _to_thread(log_event, uid, "settings_time_set", {"slot": slot, "time": hhmm})
     # Быстрый UX: сразу предложить настроить второе время, чтобы не возвращаться в меню.
