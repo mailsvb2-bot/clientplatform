@@ -76,7 +76,7 @@ async def handle(cb: CallbackQuery, state: FSMContext, data: str, ctx: AdminCtx)
         rows: list[list[InlineKeyboardButton]] = []
         for uid in admin_ids:
             rows.append([InlineKeyboardButton(text=str(uid), callback_data=f"admin:perms:user:{uid}")])
-        rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:perms")])
+        rows.append([InlineKeyboardButton(text="⬅️ Админ-меню", callback_data="admin:menu")])
         kb = InlineKeyboardMarkup(inline_keyboard=rows)
         await safe_edit_admin(cb, state, "🔐 Выберите администратора:", reply_markup=kb)
         return True
