@@ -19,7 +19,7 @@ REQUIRED_CANON_FRAGMENTS = (
     "Первый обязательный вертикальный сценарий",
     "Regression Wall",
     "Критерии готовности MVP",
-    "не подключать ClientPlatform к production-инфраструктуре Метротерапии",
+    "Не подключать ClientPlatform к production-инфраструктуре Метротерапии",
 )
 
 REQUIRED_PROVENANCE_FRAGMENTS = (
@@ -48,7 +48,8 @@ def _read_required(path: Path) -> str:
 
 
 def _require_fragments(label: str, text: str, fragments: tuple[str, ...]) -> None:
-    missing = [fragment for fragment in fragments if fragment not in text]
+    normalized = text.casefold()
+    missing = [fragment for fragment in fragments if fragment.casefold() not in normalized]
     if missing:
         rendered = "\n".join(f"- {fragment}" for fragment in missing)
         raise SystemExit(f"A1 canon gate failed: {label} lost required contracts:\n{rendered}")
@@ -66,7 +67,7 @@ def main() -> None:
     _require_fragments("docs/BASELINE_PROVENANCE.md", provenance, REQUIRED_PROVENANCE_FRAGMENTS)
     _require_fragments("README.md", readme, REQUIRED_README_FRAGMENTS)
 
-    if "Репозиторий остаётся публичным" not in readme:
+    if "репозиторий остаётся публичным" not in readme.casefold():
         raise SystemExit("A1 canon gate failed: public-repository safety notice is missing")
 
     print("A1_CANON_GATE_OK")
