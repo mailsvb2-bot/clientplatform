@@ -27,8 +27,8 @@ jobs:
       - name: Verify A1 canon and provenance
         run: python scripts/check_a1_canon.py
 
-      - name: Verify A1 tenant isolation foundation
-        run: python -m unittest discover -s tests -p 'test_a1_tenancy_foundation.py' -v
+      - name: Verify A1 tenant and customer boundaries
+        run: python -m unittest discover -s tests -p 'test_a1_*.py' -v
 
       - name: Reject tracked raw secrets
         shell: bash
