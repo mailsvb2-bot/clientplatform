@@ -269,7 +269,12 @@ def _build_forecast(lat: float, lon: float) -> ForecastPack:
     h_wind = hourly.get("wind_speed_10m") or []
     h_pop = hourly.get("precipitation_probability") or []
 
-    now_dt = datetime.fromisoformat(current.get("time")) if current.get("time") else datetime.now()
+    current_time = str(current.get("time") or "").strip()
+    try:
+        now_dt = datetime.fromisoformat(current_time) if current_time else datetime.now()
+    except (ValueError, TypeError):
+        logging.getLogger(__name__).debug("Bad current weather time format", exc_info=True)
+        now_dt = datetime.now()
     morning_dt = now_dt.replace(hour=9, minute=0, second=0, microsecond=0)
     evening_dt = now_dt.replace(hour=19, minute=0, second=0, microsecond=0)
     idx_m = _pick_nearest_hour_index(h_times, morning_dt) if h_times else 0
