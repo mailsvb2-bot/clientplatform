@@ -124,7 +124,9 @@ def compute_and_store_rewards(
                     (user_id, window_start, window_end),
                 ).fetchone()
                 money = float(payment_row[0] or 0) if payment_row else 0.0
-            except (sqlite3.Error, IndexError, TypeError, ValueError):
+            except sqlite3.Error:
+                money = 0.0
+            except (IndexError, TypeError, ValueError):
                 money = 0.0
 
             state = 0.0
@@ -140,7 +142,9 @@ def compute_and_store_rewards(
                     (user_id, window_start, window_end),
                 ).fetchone()
                 state += float(mood_row[0] or 0.0) if mood_row else 0.0
-            except (sqlite3.Error, IndexError, TypeError, ValueError):
+            except sqlite3.Error:
+                state += 0.0
+            except (IndexError, TypeError, ValueError):
                 state += 0.0
 
             try:
@@ -155,7 +159,9 @@ def compute_and_store_rewards(
                 average_rating = float(rating_row[0] or 0.0) if rating_row else 0.0
                 if average_rating:
                     state += max(-1.0, min(1.0, (average_rating - 5.0) / 5.0))
-            except (sqlite3.Error, IndexError, TypeError, ValueError):
+            except sqlite3.Error:
+                state += 0.0
+            except (IndexError, TypeError, ValueError):
                 state += 0.0
 
             retention = 0.0
@@ -171,7 +177,9 @@ def compute_and_store_rewards(
                     (user_id, window_start, window_end),
                 ).fetchone()
                 retention += min(1.0, float(activity_row[0] or 0) / 3.0) if activity_row else 0.0
-            except (sqlite3.Error, IndexError, TypeError, ValueError):
+            except sqlite3.Error:
+                retention += 0.0
+            except (IndexError, TypeError, ValueError):
                 retention += 0.0
 
             try:
@@ -184,7 +192,9 @@ def compute_and_store_rewards(
                     (user_id, window_start, window_end),
                 ).fetchone()
                 retention += min(1.0, float(progress_row[0] or 0) / 10.0) if progress_row else 0.0
-            except (sqlite3.Error, IndexError, TypeError, ValueError):
+            except sqlite3.Error:
+                retention += 0.0
+            except (IndexError, TypeError, ValueError):
                 retention += 0.0
 
             reward = money + state + retention
