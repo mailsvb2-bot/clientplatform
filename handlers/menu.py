@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
 import sqlite3
 from datetime import datetime, timedelta
@@ -10,7 +11,7 @@ from zoneinfo import ZoneInfo
 from aiogram import Router
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, Message
 
 from config.settings import settings
 from core.callback_utils import safe_answer_callback
@@ -19,6 +20,7 @@ from services.db import db
 from services.events import log_event
 from services.jobs import add_job, cancel_jobs
 from services.personalization import get_preface, set_funnel_stage
+from services.admin import is_staff
 
 router = Router()
 
@@ -84,13 +86,20 @@ async def safe_edit(message: Message, text: str, reply_markup=None, parse_mode=N
         raise
 
 
-def _is_admin(uid: int) -> bool:
-    """Кнопка «Панель» видна только администраторам."""
-    try:
-        return int(uid) in set(settings.admin_id_list)
-    except (TypeError, ValueError):
-        logging.getLogger(__name__).exception("Unhandled exception")
-        return False
+def _main_menu_keyboard(user_id: int):
+    """Return an isolated menu and expose the panel to every delegated staff role."""
+
+    markup = copy.deepcopy(kb_main(user_id=int(user_id)))
+    has_panel = any(
+        getattr(button, "callback_data", None) == "admin:menu"
+        for row in markup.inline_keyboard
+        for button in row
+    )
+    if not has_panel and is_staff(int(user_id)):
+        markup.inline_keyboard.append(
+            [InlineKeyboardButton(text="🛠 Панель", callback_data="admin:menu")]
+        )
+    return markup
 
 
 async def send_main_menu(target: CallbackQuery | Message):
@@ -128,11 +137,11 @@ async def send_main_menu(target: CallbackQuery | Message):
         await safe_edit(
             message,
             text,
-            reply_markup=kb_main(user_id=user_id),
+            reply_markup=_main_menu_keyboard(user_id),
             parse_mode=None,
         )
     else:
-        await target.answer(text, reply_markup=kb_main(user_id=user_id))
+        await target.answer(text, reply_markup=_main_menu_keyboard(user_id))
 
 
 @router.callback_query(lambda c: c.data == "menu_main")
