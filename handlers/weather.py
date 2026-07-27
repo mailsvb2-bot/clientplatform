@@ -12,7 +12,7 @@ import asyncio
 
 from keyboards.inline import kb_back_main, kb_main, kb_weather
 from services.weather import get_weather_text_async, set_location, set_city
-from services.pending import set_pending, pop_pending, peek_pending
+from services.pending import consume_pending, set_pending, peek_pending
 from services.events import log_event
 from config.settings import settings
 
@@ -40,7 +40,10 @@ async def weather_show(cb: CallbackQuery):
     if message is None:
         return
 
-    txt = await get_weather_text_async(int(cb.from_user.id))
+    user_id = int(cb.from_user.id)
+    # Location updates are accepted only while the weather flow is active.
+    await _to_thread(set_pending, user_id, "weather_place", {}, ttl_sec=600)
+    txt = await get_weather_text_async(user_id)
     await message.edit_text(
         txt + "\n\nВы можете отправить геолокацию или указать город вручную.",
         reply_markup=kb_weather(),
@@ -53,8 +56,6 @@ async def weather_city(cb: CallbackQuery, state: FSMContext):
     if message is None:
         return
 
-    # Если пользователь был в другом сценарии со state (например, ввод времени),
-    # сбрасываем state, чтобы ввод города не перехватился чужим обработчиком.
     try:
         await state.clear()
     except (TelegramAPIError, TelegramBadRequest):
@@ -73,10 +74,18 @@ async def weather_location(message: Message):
     if uid is None:
         return
 
+    pending = await _to_thread(peek_pending, uid)
+    if not pending or pending.kind not in {"weather_place", "weather_city"}:
+        raise SkipHandler
+
     loc = message.location
     if not loc:
         return
-    await _to_thread(set_location, uid, float(loc.latitude), float(loc.longitude))
+    ok, info = await _to_thread(set_location, uid, float(loc.latitude), float(loc.longitude))
+    if not ok:
+        await message.answer("❌ " + str(info), reply_markup=kb_back_main())
+        return
+    await _to_thread(consume_pending, uid, {"weather_place", "weather_city"})
     await message.answer(
         "✅ Спасибо! Я сохранил Вашу локацию. Теперь погода будет точнее.\n\n"
         + (await get_weather_text_async(uid)),
@@ -86,11 +95,7 @@ async def weather_location(message: Message):
 
 @router.message(F.text)
 async def weather_city_input(message: Message):
-    """Приём текста города после команды/кнопки погоды.
-
-    Без FSM: используем pending-хранилище (детерминированно и компактно).
-    """
-    # Диагностика конфликтов ввода HH:MM
+    """Accept a city only while a weather place flow is active."""
     try:
         from services.time_trace import mark as _mark_time
         _mark_time("handlers.weather:weather_city_input")
@@ -101,12 +106,9 @@ async def weather_city_input(message: Message):
     if uid is None:
         return
 
-    p = await _to_thread(peek_pending, uid)
-    if not p or p.kind != "weather_city":
+    pending = await _to_thread(peek_pending, uid)
+    if not pending or pending.kind not in {"weather_place", "weather_city"}:
         raise SkipHandler
-
-    # фиксируем ввод, даже если дальше будет ошибка поиска
-    await _to_thread(pop_pending, uid)
 
     city_raw = (message.text or "").strip()
     if not city_raw:
@@ -116,6 +118,7 @@ async def weather_city_input(message: Message):
     if not ok:
         return await message.answer("❌ " + str(info), reply_markup=kb_back_main())
 
+    await _to_thread(consume_pending, uid, {"weather_place", "weather_city"})
     await _to_thread(log_event, uid, "weather_city_set", {"city": str(info)})
     txt = await get_weather_text_async(uid, timeout_sec=1.5)
     await message.answer(
