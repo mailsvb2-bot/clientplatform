@@ -31,10 +31,14 @@ def test_recovery_script_is_fail_closed_and_does_not_restart_the_live_service() 
 
     assert "CURRENT_RELEASE_RECOVERY_READY" in script
     assert "CURRENT_RELEASE_ROLLBACK_REBUILT" in script
+    assert "CURRENT_RELEASE_PREVIOUS_RESCUED" in script
+    assert "CURRENT_RELEASE_MARKER_STALE" in script
+    assert "CURRENT_RELEASE_RUNTIME_INCOMPATIBLE" in script
     assert "CONTAMINATED_RELEASE_REMOVED" in script
     assert 'git -C "$SOURCE_DIR" cat-file -e "$sha^{commit}"' in script
     assert "build_clean_recovery_release" in script
     assert "switch_to_recovery_target" in script
+    assert "runtime_compatible_release" in script
     assert 'validate_release "$recovery_dir"' in script
     assert 'atomic_point_current_to "$recovery_path"' in script
     assert 'atomic_point_current_to "$failed_path" || true' in script
@@ -97,6 +101,14 @@ printf 'valid\n' > "$RELEASES_DIR/$sha/VALID"
 """,
         encoding="utf-8",
     )
+    compatibility = scripts / "fake_compatibility.sh"
+    compatibility.write_text(
+        """#!/usr/bin/env bash
+set -Eeuo pipefail
+test -f "$1/VALID"
+""",
+        encoding="utf-8",
+    )
 
     runtime = tmp_path / "runtime"
     releases = runtime / "releases"
@@ -123,8 +135,10 @@ printf 'valid\n' > "$RELEASES_DIR/$sha/VALID"
             "SYSTEM_PYTHON": sys.executable,
             "RELEASE_MANAGER": str(manager),
             "RELEASE_BUILDER": str(builder),
+            "RELEASE_RUNTIME_COMPATIBILITY_CHECKER": str(compatibility),
             "TIMEOUT_BIN": shutil.which("timeout") or "/usr/bin/timeout",
             "RELEASE_BUILD_TIMEOUT_SECONDS": "30",
+            "RELEASE_COMPAT_TIMEOUT_SECONDS": "30",
             "SHARED_AUDIO_DIR": str(tmp_path / "audio"),
         }
     )
