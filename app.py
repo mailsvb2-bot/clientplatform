@@ -17,6 +17,7 @@ logging.getLogger('matplotlib').setLevel(logging.WARNING)
 logging.getLogger('matplotlib.font_manager').setLevel(logging.WARNING)
 logging.getLogger('matplotlib.category').setLevel(logging.WARNING)
 
+from core.shutdown import ShutdownStep, run_shutdown_steps
 from core.task_manager import TaskManager
 from core.telegram_bot import build_bot
 
@@ -234,20 +235,50 @@ async def create_application():
             raise
 
     async def _on_shutdown(bot: Bot):
+        del bot
         nonlocal webhook_runtime, health_runtime, scheduler_started, db_writer_started
-        if webhook_runtime is not None:
-            await webhook_runtime.stop()
-            webhook_runtime = None
-        if health_runtime is not None:
-            await health_runtime.stop()
-            health_runtime = None
-        if scheduler_started:
-            await stop_scheduler()
-            scheduler_started = False
-        if db_writer_started:
-            await stop_db_writer(drain=True)
-            db_writer_started = False
-        await tm.shutdown()
+
+        async def stop_webhook_runtime() -> None:
+            nonlocal webhook_runtime
+            try:
+                if webhook_runtime is not None:
+                    await webhook_runtime.stop()
+            finally:
+                webhook_runtime = None
+
+        async def stop_health_runtime() -> None:
+            nonlocal health_runtime
+            try:
+                if health_runtime is not None:
+                    await health_runtime.stop()
+            finally:
+                health_runtime = None
+
+        async def stop_scheduler_runtime() -> None:
+            nonlocal scheduler_started
+            try:
+                if scheduler_started:
+                    await stop_scheduler()
+            finally:
+                scheduler_started = False
+
+        async def stop_db_writer_runtime() -> None:
+            nonlocal db_writer_started
+            try:
+                if db_writer_started:
+                    await stop_db_writer(drain=True)
+            finally:
+                db_writer_started = False
+
+        await run_shutdown_steps(
+            (
+                ShutdownStep("messenger webhook runtime", stop_webhook_runtime),
+                ShutdownStep("health runtime", stop_health_runtime),
+                ShutdownStep("scheduler", stop_scheduler_runtime),
+                ShutdownStep("database writer", stop_db_writer_runtime),
+                ShutdownStep("task manager", tm.shutdown),
+            )
+        )
 
     token = (settings.BOT_TOKEN or "").strip()
     if not token:
@@ -382,7 +413,8 @@ async def create_application():
                     log.debug('bot.session.close failed', exc_info=True)
                 if attempt >= max_retries:
                     raise SystemExit(
-                        f'Не удалось подключиться к Telegram после {attempt} попыток. '                         f'Проверь сеть/DNS/прокси или увеличь STARTUP_NETWORK_RETRIES.'
+                        f'Не удалось подключиться к Telegram после {attempt} попыток. '
+                        f'Проверь сеть/DNS/прокси или увеличь STARTUP_NETWORK_RETRIES.'
                     ) from e
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 60)

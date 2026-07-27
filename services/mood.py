@@ -146,6 +146,20 @@ def get_session(session_id: int) -> MoodSession | None:
     )
 
 
+def get_user_session(session_id: int, user_id: int) -> MoodSession | None:
+    """Return a mood session only when it belongs to the requesting user.
+
+    Session ids appear in callback payloads and therefore are untrusted input.
+    Centralizing the ownership check keeps every Telegram/messenger handler on
+    the same fail-closed authorization boundary.
+    """
+
+    session = get_session(int(session_id))
+    if session is None or int(session.user_id) != int(user_id):
+        return None
+    return session
+
+
 def series(user_id: int, *, kind: str | None = None, limit: int = 120) -> list[dict[str, Any]]:
     """Return the newest bounded mood history in chronological order.
 

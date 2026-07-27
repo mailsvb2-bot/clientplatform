@@ -4,6 +4,7 @@ import asyncio
 import logging
 import sqlite3
 
+from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.exceptions import TelegramAPIError
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, InlineKeyboardButton, ReplyKeyboardRemove
@@ -11,7 +12,7 @@ from aiogram.types import CallbackQuery, Message, InlineKeyboardButton, ReplyKey
 from keyboards.inline import kb_main
 from services.gift_store import set_target, get_target, clear_target
 from services.payments.ui import kb, kb_back, kb_gift_tariffs, pick_user_keyboard
-from services.pending import set_pending, peek_pending, pop_pending
+from services.pending import consume_pending, set_pending, peek_pending, pop_pending
 from services.events import log_event
 from services.promo_texts import get_gift_template
 from services.messenger.links import build_gift_share_targets
@@ -96,16 +97,16 @@ async def gift_pick_cancel(message: Message) -> None:
     uid = _message_user_id(message)
     if uid is None:
         return
-    peek = peek_pending(uid)
-    if peek and peek.kind in {"gift_target", "gift_universal"}:
-        pop_pending(uid)
-        clear_target(uid)
+    pending = consume_pending(uid, {"gift_target", "gift_universal"})
+    if pending is None:
+        raise SkipHandler
 
-        await message.answer(
-            "✅ Хорошо. Выбор подарка отменён.",
-            reply_markup=ReplyKeyboardRemove(),
-        )
-        await message.answer('Главное меню:', reply_markup=kb_main(user_id=uid))
+    clear_target(uid)
+    await message.answer(
+        "✅ Хорошо. Выбор подарка отменён.",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+    await message.answer('Главное меню:', reply_markup=kb_main(user_id=uid))
 
 
 async def gift_users_shared(message: Message, state: FSMContext) -> None:

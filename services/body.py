@@ -57,12 +57,34 @@ def pick_body_question(force_key: str | None = None) -> BodyQuestion:
     return BodyQuestion(key=str(row['key']), question=str(row['question']), options=[str(x) for x in (opts or [])])
 
 
-def save_body_feedback(user_id: int, session_id: int, kind: str, area: str) -> None:
+def save_body_feedback(user_id: int, session_id: int, kind: str, area: str) -> bool:
+    """Persist one answer only for a session owned by ``user_id``.
+
+    The session kind is sourced from ``mood_sessions`` rather than trusted from
+    callback input. The unique key makes repeated Telegram deliveries an
+    idempotent update instead of duplicate analytics rows.
+    """
+
+    del kind  # Backward-compatible parameter; canonical kind comes from the owned session.
     with db() as conn:
         conn.execute(
-            "INSERT INTO body_feedback(session_id, user_id, kind, area, created_at_utc) VALUES(?,?,?,?,?)",
-            (int(session_id), int(user_id), str(kind), str(area), utcnow_iso()),
+            """
+            INSERT INTO body_feedback(session_id, user_id, kind, area, created_at_utc)
+            SELECT id, user_id, kind, ?, ?
+            FROM mood_sessions
+            WHERE id=? AND user_id=?
+            ON CONFLICT(session_id, user_id) DO UPDATE SET
+                kind=excluded.kind,
+                area=excluded.area,
+                created_at_utc=excluded.created_at_utc
+            """,
+            (str(area), utcnow_iso(), int(session_id), int(user_id)),
         )
+        row = conn.execute(
+            "SELECT 1 FROM body_feedback WHERE session_id=? AND user_id=? LIMIT 1",
+            (int(session_id), int(user_id)),
+        ).fetchone()
+    return row is not None
 
 
 def quick_technique(area: str) -> str:

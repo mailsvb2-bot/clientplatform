@@ -2,9 +2,16 @@ name: Pre-deploy Release Gate
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: read
+
+concurrency:
+  group: release-gate-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   release-gate:
@@ -40,6 +47,9 @@ jobs:
         run: |
           set -o pipefail
           python -m mypy --follow-imports=skip --check-untyped-defs \
+            core/environment.py \
+            core/shutdown.py \
+            services/pending.py \
             services/accounts/identity.py \
             services/messenger/text_ui.py \
             services/messenger/delivery_outbox.py \
@@ -63,6 +73,9 @@ jobs:
         run: |
           set -o pipefail
           python -m bandit -q -r -c pyproject.toml \
+            core/environment.py \
+            core/shutdown.py \
+            services/pending.py \
             services/payments \
             services/accounts/identity.py \
             services/messenger/text_ui.py \

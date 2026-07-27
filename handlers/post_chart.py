@@ -8,9 +8,10 @@ from aiogram.exceptions import TelegramAPIError
 from aiogram.types import BufferedInputFile, CallbackQuery, Message
 
 from core.callback_utils import safe_answer_callback
-from keyboards.inline import kb_menu_only
+from keyboards.inline import kb_body_question, kb_menu_only
 from services.messenger.progress_charts import build_vk_mood_progress_chart_path
-from services.mood import get_session
+from services.body import pick_body_question
+from services.mood import get_user_session
 
 router = Router()
 log = logging.getLogger(__name__)
@@ -47,12 +48,16 @@ async def post_score_chart(cb: CallbackQuery) -> None:
     except (TypeError, ValueError, IndexError):
         return
 
-    session = await asyncio.to_thread(get_session, session_id)
+    user_id = int(cb.from_user.id)
+    session = await asyncio.to_thread(get_user_session, session_id, user_id)
     if session is None:
+        log.warning(
+            "Rejected post chart for a foreign or missing session",
+            extra={"user_id": user_id, "session_id": session_id},
+        )
         await message.answer("⚠️ Не нашёл сессию для построения графика.", reply_markup=kb_menu_only())
         return
 
-    user_id = int(cb.from_user.id)
     chart_path = await asyncio.to_thread(build_vk_mood_progress_chart_path, user_id)
     if chart_path is None:
         await message.answer(
@@ -69,6 +74,15 @@ async def post_score_chart(cb: CallbackQuery) -> None:
             reply_markup=kb_menu_only(),
         )
         log.info("Telegram post-score chart sent: user_id=%s session_id=%s path=%s", user_id, session_id, chart_path)
+
+        question = await asyncio.to_thread(pick_body_question)
+        text, markup = kb_body_question(
+            session_id,
+            question.key,
+            "В каком месте тела заметнее напряжение?",
+            question.options,
+        )
+        await message.answer(text, reply_markup=markup)
     except TelegramAPIError:
         log.exception("Telegram post-score chart send failed")
         await message.answer("⚠️ Не удалось построить или отправить график. Попробуйте позже.", reply_markup=kb_menu_only())

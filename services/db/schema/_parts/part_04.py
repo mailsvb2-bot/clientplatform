@@ -71,6 +71,20 @@ def ensure(c: sqlite3.Connection) -> None:
         """
     )
     c.execute("CREATE INDEX IF NOT EXISTS idx_body_user_ts ON body_feedback(user_id, created_at_utc)")
+    # Older builds allowed repeated callback writes. Keep the newest answer before
+    # installing the database-level idempotency contract.
+    c.execute(
+        """
+        DELETE FROM body_feedback
+        WHERE id NOT IN (
+            SELECT MAX(id) FROM body_feedback GROUP BY session_id, user_id
+        )
+        """
+    )
+    c.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_body_feedback_session_user "
+        "ON body_feedback(session_id, user_id)"
+    )
 
     # Gift bonuses idempotency log (bonus for gifting paid gifts)
     c.execute(
@@ -83,4 +97,3 @@ def ensure(c: sqlite3.Connection) -> None:
         )
         """
     )
-

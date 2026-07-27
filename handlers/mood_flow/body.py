@@ -20,7 +20,7 @@ from keyboards.inline import kb_mood_scale, kb_mood_done, kb_body_question, kb_a
 from services.db import mark_delivery_once, unmark_delivery
 from services.idempotency import wall_key
 from services.idempotency_keys import for_demo_click, for_session
-from services.mood import set_pre, set_post, get_session, mark_audio_sent, last_delta
+from services.mood import set_pre, set_post, get_user_session, mark_audio_sent, last_delta
 from services.events import log_event
 from services.audio_anchor import get_by_anchor
 from services.catalog import AudioCatalog
@@ -37,13 +37,16 @@ from core.callback_utils import safe_answer_callback
 router = Router()
 
 
-def _record_body_answer_sync(*, user_id: int, session_id: int, kind: str, area: str, source: str) -> None:
-    save_body_feedback(int(user_id), int(session_id), kind=str(kind or ""), area=str(area))
+def _record_body_answer_sync(*, user_id: int, session_id: int, kind: str, area: str, source: str) -> bool:
+    saved = save_body_feedback(int(user_id), int(session_id), kind=str(kind or ""), area=str(area))
+    if not saved:
+        return False
     log_event(
         int(user_id),
         "body_area",
         {"area": str(area), "kind": str(kind or ""), "source": str(source or "")},
     )
+    return True
 
 
 def _persist_post_schedule_sync(
@@ -101,8 +104,13 @@ async def body_answer(cb: CallbackQuery):
         logging.getLogger(__name__).exception("Unhandled exception")
         return
 
-    s = await asyncio.to_thread(get_session, sid)
-    if not s:
+    current_user_id = int(cb.from_user.id)
+    s = await asyncio.to_thread(get_user_session, sid, current_user_id)
+    if s is None:
+        logging.getLogger(__name__).warning(
+            "Rejected body feedback for a foreign or missing session",
+            extra={"user_id": current_user_id, "session_id": sid},
+        )
         return
 
     q = pick_body_question(force_key=q_key)
@@ -111,14 +119,20 @@ async def body_answer(cb: CallbackQuery):
 
     area = str(q.options[idx])
     # Sync persistence is isolated from the aiogram event loop.
-    await asyncio.to_thread(
+    saved = await asyncio.to_thread(
         _record_body_answer_sync,
-        user_id=int(cb.from_user.id),
+        user_id=current_user_id,
         session_id=sid,
         kind=s.kind or "",
         area=area,
         source=s.source or "",
     )
+    if not saved:
+        logging.getLogger(__name__).warning(
+            "Body feedback rejected by persistence ownership boundary",
+            extra={"user_id": current_user_id, "session_id": sid},
+        )
+        return
 
     # AI-техника (быстро, сейчас)
     try:

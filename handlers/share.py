@@ -35,7 +35,7 @@ from keyboards.inline import kb_main
 from services.bg import tm
 from services.events import log_event
 from services.messenger.links import build_share_targets
-from services.pending import peek_pending, pop_pending, set_pending
+from services.pending import consume_pending, peek_pending, pop_pending, set_pending
 from services.promo_texts import get_share_template
 
 router = Router()
@@ -209,7 +209,8 @@ async def cancel(message: Message) -> None:
     if uid is None:
         return
 
-    pop_pending(uid)
+    if consume_pending(uid, "share") is None:
+        return
     await message.answer("Ок.", reply_markup=ReplyKeyboardRemove())
     await message.answer(
         "Главное меню:",
