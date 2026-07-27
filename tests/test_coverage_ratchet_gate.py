@@ -121,11 +121,20 @@ def test_coverage_configuration_and_ci_contract() -> None:
     assert coverage_run["branch"] is True
     assert coverage_run["source"] == ["services", "handlers", "core", "runtime", "config"]
 
-    baseline = json.loads((ROOT / "coverage-baseline.json").read_text(encoding="utf-8"))
-    assert baseline["schema_version"] == 2
-    assert baseline["measurement"] == "combined coverage with an independent branch coverage ratchet"
-    assert baseline["total_percent"] == 70.34
-    assert baseline["branch_percent"] == 61.88
+    baseline_payload = json.loads((ROOT / "coverage-baseline.json").read_text(encoding="utf-8"))
+    baseline = _load_baseline_payload(baseline_payload, require_branch=True)
+    assert baseline_payload["schema_version"] == 2
+    assert baseline_payload["measurement"] == "combined coverage with an independent branch coverage ratchet"
+    assert baseline_payload["source"] == coverage_run["source"]
+    assert baseline.require_update_on_improvement is True
+    assert baseline.comparison_tolerance == pytest.approx(0.01)
+    assert 0.0 < baseline.total_percent <= 100.0
+    assert baseline.branch_percent is not None
+    assert 0.0 < baseline.branch_percent <= 100.0
+    # Baselines are release evidence, not duplicated constants in tests. Keep
+    # them canonical and human-reviewable while allowing the ratchet to advance.
+    assert baseline.total_percent == round(baseline.total_percent, 2)
+    assert baseline.branch_percent == round(baseline.branch_percent, 2)
 
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     assert "python scripts/coverage_gate.py" in workflow
