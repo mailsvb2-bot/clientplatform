@@ -156,7 +156,7 @@ def main() -> int:
         start, menu, text_input, payments, demo, audio,
         admin, admin_release, admin_stats, admin_inline, share, weather,
         info, micro, settings as settings_router, mood,
-        post_chart, diagnostics, gift_flow, kb_debug, messenger_audio,
+        diagnostics, gift_flow, kb_debug, messenger_audio,
     )
 
     dp.include_router(start.router)
@@ -175,7 +175,6 @@ def main() -> int:
     dp.include_router(micro.router)
     dp.include_router(settings_router.router)
     dp.include_router(mood.router)
-    dp.include_router(post_chart.router)
     dp.include_router(diagnostics.router)
     dp.include_router(gift_flow.router)
     dp.include_router(kb_debug.router)
