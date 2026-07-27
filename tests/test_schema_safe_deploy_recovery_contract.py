@@ -16,8 +16,8 @@ def test_every_deploy_entrypoint_uses_the_worker_lock() -> None:
     wrapper = _text("deploy.sh")
 
     acquire = wrapper.index("acquire_deploy_lock\n")
-    topology = wrapper.index('bash "$SOURCE_DIR/scripts/check_remote_main_topology.sh"')
-    repair = wrapper.index('bash "$RECOVERY_SCRIPT" repair "$SOURCE_DIR"')
+    topology = wrapper.index('bash "$SOURCE_DIR/scripts/check_remote_main_topology.sh"', acquire)
+    repair = wrapper.index('bash "$RECOVERY_SCRIPT" repair "$SOURCE_DIR"', topology)
 
     assert 'LOCK_FILE="${LOCK_FILE:-$SOURCE_DIR/data/deploy/metrotherapy_deploy.lock}"' in wrapper
     assert 'FLOCK_BIN="${FLOCK_BIN:-/usr/bin/flock}"' in wrapper
