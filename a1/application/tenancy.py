@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from a1.domain.tenancy import Business, BusinessAccess, BusinessMember, PlatformRole, TenantContext
-from a1.infrastructure.tenancy_repository import TenancyRepository
+from a1.infrastructure import TenancyRepository
 from services.db import get_db, get_db_ro
 
 
