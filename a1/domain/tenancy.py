@@ -75,6 +75,15 @@ _CUSTOMER_RECORD_ROLES = frozenset(
     }
 )
 
+_PROGRAM_MANAGEMENT_ROLES = frozenset(
+    {
+        PlatformRole.OWNER,
+        PlatformRole.ADMINISTRATOR,
+        PlatformRole.MANAGER,
+        PlatformRole.CONTENT_MANAGER,
+    }
+)
+
 
 def normalize_user_id(value: int) -> int:
     if isinstance(value, bool):
@@ -198,3 +207,16 @@ class TenantContext:
 
     def assert_can_manage_customer_records(self) -> None:
         self.assert_can_view_customer_records()
+
+    def assert_can_view_programs(self) -> None:
+        if self.role not in BUSINESS_MEMBER_ROLES:
+            raise TenantPermissionDenied("program access requires an active staff role")
+
+    def assert_can_manage_programs(self) -> None:
+        if self.role not in _PROGRAM_MANAGEMENT_ROLES:
+            raise TenantPermissionDenied(
+                "program management requires owner, administrator, manager or content manager role"
+            )
+
+    def assert_can_manage_deliveries(self) -> None:
+        self.assert_can_manage_customer_records()
