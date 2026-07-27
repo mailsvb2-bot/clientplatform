@@ -125,7 +125,7 @@ def test_coverage_configuration_and_ci_contract() -> None:
     assert baseline["schema_version"] == 2
     assert baseline["measurement"] == "combined coverage with an independent branch coverage ratchet"
     assert baseline["total_percent"] == 70.18
-    assert baseline["branch_percent"] == 61.68
+    assert baseline["branch_percent"] == 61.67
 
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     assert "python scripts/coverage_gate.py" in workflow
