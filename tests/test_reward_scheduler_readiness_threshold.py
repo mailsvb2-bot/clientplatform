@@ -5,6 +5,7 @@ import asyncio
 import pytest
 
 from services import scheduler
+from services.payments import retry_queue
 
 
 def _reset_scheduler_errors(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -91,6 +92,11 @@ def test_scheduler_snapshot_exposes_reward_timeout_degradation(
     monkeypatch.setenv("REWARD_READY_TIMEOUT_FAILURE_THRESHOLD", "4")
     monkeypatch.setattr(scheduler, "_reward_timeout_streak", 2)
     monkeypatch.setattr(scheduler, "_reward_timeout_total", 7)
+    monkeypatch.setattr(
+        retry_queue,
+        "payment_retry_health_snapshot",
+        lambda: {"payment_retry_active": 0, "payment_retry_dead": 0},
+    )
 
     snapshot = scheduler.scheduler_health_snapshot()
 
