@@ -1,0 +1,47 @@
+name: A1 Canon
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - "agent/**"
+
+permissions:
+  contents: read
+
+jobs:
+  canon:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify A1 canon and provenance
+        run: python scripts/check_a1_canon.py
+
+      - name: Reject tracked raw secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          forbidden="$(git ls-files | grep -E '(^|/)\.env$|(^|/)id_rsa$|\.(pem|p12|pfx|key)$' || true)"
+          if [ -n "$forbidden" ]; then
+            echo "Forbidden secret-like files are tracked:"
+            echo "$forbidden"
+            exit 1
+          fi
+
+      - name: Verify imported baseline remains documented
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fq 'b4ac43c2961fb581078aedc25efeffd2ab4ecb34' docs/BASELINE_PROVENANCE.md
+          grep -Fq 'mailsvb2-bot/metrotherapy-bot-telegram' docs/BASELINE_PROVENANCE.md
+          grep -Fq 'mailsvb2-bot/clientplatform' docs/BASELINE_PROVENANCE.md
