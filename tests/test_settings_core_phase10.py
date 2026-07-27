@@ -148,7 +148,7 @@ async def test_settings_input_timezone_quiet_and_time(monkeypatch: pytest.Monkey
 
     pending: list[Pending | None] = [Pending("set_timezone")]
     monkeypatch.setattr(sc, "peek_pending", lambda _uid: pending[0])
-    monkeypatch.setattr(sc, "pop_pending", lambda _uid: pending.pop(0))
+    monkeypatch.setattr(sc, "consume_pending", lambda _uid, _kind=None: pending.pop(0))
     monkeypatch.setattr(sc, "set_user_timezone", lambda _uid, value: value if value == "Europe/Amsterdam" else (_ for _ in ()).throw(ValueError("bad")))
     msg = FakeMessage(text="Europe/Amsterdam")
     await sc.settings_time_input(msg)
@@ -188,7 +188,7 @@ async def test_settings_input_skip_and_invalid_paths(monkeypatch: pytest.MonkeyP
         await sc.settings_time_input(FakeMessage(text="08:00"))
 
     monkeypatch.setattr(sc, "peek_pending", lambda _uid: Pending("set_time", {"slot": "bad"}))
-    monkeypatch.setattr(sc, "pop_pending", lambda _uid: Pending("set_time", {"slot": "bad"}))
+    monkeypatch.setattr(sc, "consume_pending", lambda _uid, _kind=None: Pending("set_time", {"slot": "bad"}))
     msg = FakeMessage(text="08:00")
     await sc.settings_time_input(msg)
     assert "какое время" in msg.answers[-1][0]
