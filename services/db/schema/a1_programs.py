@@ -40,6 +40,7 @@ def ensure(c: sqlite3.Connection) -> None:
             updated_at TEXT NOT NULL,
             archived_at TEXT,
             UNIQUE(id, business_id),
+            UNIQUE(id, business_id, program_id),
             UNIQUE(business_id, program_id, position),
             FOREIGN KEY(program_id, business_id)
                 REFERENCES programs(id, business_id) ON DELETE CASCADE,
@@ -66,6 +67,7 @@ def ensure(c: sqlite3.Connection) -> None:
             paused_at TEXT,
             cancelled_at TEXT,
             UNIQUE(id, business_id),
+            UNIQUE(id, business_id, program_id),
             UNIQUE(business_id, program_id, customer_id),
             FOREIGN KEY(program_id, business_id)
                 REFERENCES programs(id, business_id),
@@ -80,6 +82,7 @@ def ensure(c: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS lesson_deliveries(
             id TEXT PRIMARY KEY,
             business_id TEXT NOT NULL,
+            program_id TEXT NOT NULL,
             enrollment_id TEXT NOT NULL,
             lesson_id TEXT NOT NULL,
             idempotency_key TEXT NOT NULL,
@@ -94,10 +97,10 @@ def ensure(c: sqlite3.Connection) -> None:
             UNIQUE(id, business_id),
             UNIQUE(business_id, enrollment_id, lesson_id),
             UNIQUE(business_id, idempotency_key),
-            FOREIGN KEY(enrollment_id, business_id)
-                REFERENCES enrollments(id, business_id) ON DELETE CASCADE,
-            FOREIGN KEY(lesson_id, business_id)
-                REFERENCES lessons(id, business_id),
+            FOREIGN KEY(enrollment_id, business_id, program_id)
+                REFERENCES enrollments(id, business_id, program_id) ON DELETE CASCADE,
+            FOREIGN KEY(lesson_id, business_id, program_id)
+                REFERENCES lessons(id, business_id, program_id),
             CHECK(attempts >= 0),
             CHECK(status IN ('pending', 'sent', 'failed', 'cancelled'))
         )
@@ -108,6 +111,7 @@ def ensure(c: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS lesson_progress(
             id TEXT PRIMARY KEY,
             business_id TEXT NOT NULL,
+            program_id TEXT NOT NULL,
             enrollment_id TEXT NOT NULL,
             lesson_id TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'pending',
@@ -117,10 +121,10 @@ def ensure(c: sqlite3.Connection) -> None:
             updated_at TEXT NOT NULL,
             UNIQUE(id, business_id),
             UNIQUE(business_id, enrollment_id, lesson_id),
-            FOREIGN KEY(enrollment_id, business_id)
-                REFERENCES enrollments(id, business_id) ON DELETE CASCADE,
-            FOREIGN KEY(lesson_id, business_id)
-                REFERENCES lessons(id, business_id),
+            FOREIGN KEY(enrollment_id, business_id, program_id)
+                REFERENCES enrollments(id, business_id, program_id) ON DELETE CASCADE,
+            FOREIGN KEY(lesson_id, business_id, program_id)
+                REFERENCES lessons(id, business_id, program_id),
             CHECK(status IN ('pending', 'delivered', 'opened', 'completed', 'skipped'))
         )
         """
