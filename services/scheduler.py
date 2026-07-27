@@ -43,8 +43,9 @@ def _tm_create(coro: Coroutine[Any, Any, None]) -> asyncio.Task[None]:
                 log.error("Background task callback failed task=%s", _coro_name(coro))
                 return
             if exc is not None:
-                _record_scheduler_error(_coro_name(coro), exc)
-                log.error(
+                recorded = _record_scheduler_error(_coro_name(coro), exc)
+                log_method = log.error if recorded else log.warning
+                log_method(
                     "Background task crashed task=%s error_type=%s",
                     _coro_name(coro),
                     type(exc).__name__,
@@ -152,15 +153,49 @@ _bg_error_count: int = 0
 _bg_last_error: str = ""
 _bg_last_error_at_monotonic: float = 0.0
 _bg_last_tick_at_monotonic: float = 0.0
+_reward_timeout_streak: int = 0
+_reward_timeout_total: int = 0
 _owner_tasks: dict[str, asyncio.Task[None]] = {}
 _owner_started_at: dict[str, float] = {}
 
 
-def _record_scheduler_error(source: str, exc: BaseException) -> None:
+def _reward_timeout_failure_threshold() -> int:
+    return env_int(
+        "REWARD_READY_TIMEOUT_FAILURE_THRESHOLD",
+        3,
+        minimum=1,
+        maximum=100,
+    )
+
+
+def _record_scheduler_success(source: str) -> None:
+    global _reward_timeout_streak
+    if source == "RewardEngine.tick":
+        _reward_timeout_streak = 0
+
+
+def _record_scheduler_error(source: str, exc: BaseException) -> bool:
     global _bg_error_count, _bg_last_error, _bg_last_error_at_monotonic
+    global _reward_timeout_streak, _reward_timeout_total
+
+    if source == "RewardEngine.tick" and isinstance(exc, asyncio.TimeoutError):
+        _reward_timeout_streak += 1
+        _reward_timeout_total += 1
+        threshold = _reward_timeout_failure_threshold()
+        if _reward_timeout_streak < threshold:
+            log.warning(
+                "RewardEngine timeout tolerated streak=%s threshold=%s",
+                _reward_timeout_streak,
+                threshold,
+            )
+            return False
+    elif source == "RewardEngine.tick":
+        _reward_timeout_streak = 0
+
     _bg_error_count += 1
     _bg_last_error = f"{source}:{type(exc).__name__}"[:180]
     _bg_last_error_at_monotonic = time.monotonic()
+    return True
 
 
 async def _run_protected_tick(
@@ -169,12 +204,14 @@ async def _run_protected_tick(
 ) -> bool:
     try:
         await factory()
+        _record_scheduler_success(name)
         return True
     except asyncio.CancelledError:
         raise
     except Exception as exc:  # validator: allow-wide-except
-        _record_scheduler_error(name, exc)
-        log.error("Scheduler protected tick failed: %s error_type=%s", name, type(exc).__name__)
+        recorded = _record_scheduler_error(name, exc)
+        log_method = log.error if recorded else log.warning
+        log_method("Scheduler protected tick failed: %s error_type=%s", name, type(exc).__name__)
         return False
 
 
@@ -200,8 +237,9 @@ def _start_owner_tick(
                 timeout=timeout_sec,
             )
         except asyncio.TimeoutError as exc:
-            _record_scheduler_error(name, exc)
-            log.error("Scheduler owner timed out: %s", name)
+            recorded = _record_scheduler_error(name, exc)
+            log_method = log.error if recorded else log.warning
+            log_method("Scheduler owner timed out: %s", name)
 
     task = _tm_create(_runner())
     _owner_tasks[name] = task
@@ -262,6 +300,9 @@ def scheduler_health_snapshot() -> dict[str, bool | int | float | str]:
         ),
         "scheduler_owner_tasks_running": len(active_owner_tasks),
         "scheduler_owner_oldest_age_sec": int(oldest_owner_age),
+        "reward_engine_timeout_streak": int(_reward_timeout_streak),
+        "reward_engine_timeout_total": int(_reward_timeout_total),
+        "reward_engine_timeout_threshold": int(_reward_timeout_failure_threshold()),
         **payment_retry,
     }
 
@@ -457,6 +498,7 @@ def start_scheduler(bot: "Bot") -> None:
 
 async def stop_scheduler() -> None:
     global _bg_task, _bg_started_at_monotonic
+    global _reward_timeout_streak
 
     if _bg_task and not _bg_task.done():
         _bg_task.cancel()
@@ -476,6 +518,7 @@ async def stop_scheduler() -> None:
 
     _bg_task = None
     _bg_started_at_monotonic = 0.0
+    _reward_timeout_streak = 0
     await get_precise_scheduler().stop()
 
 
