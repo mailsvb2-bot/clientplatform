@@ -1,49 +1,48 @@
 # ClientPlatform: production isolation runbook
 
-## Purpose
+## Production boundary
 
-This runbook creates a production boundary that is separate from the imported Metrotherapy deployment. ClientPlatform must have its own Telegram bot, PostgreSQL database and role, private S3-compatible bucket, domain, webhook secret, service account, runtime directories, backups and staging/production secrets.
+ClientPlatform production is separate from the imported Metrotherapy deployment. It requires its own Telegram bot, PostgreSQL database and roles, private S3-compatible bucket, HTTPS domain, webhook secret, Linux service account, state directories, backups, and staging/production secrets.
 
-The repository never creates or stores provider secrets. Operators provision them in the production secret store or `/etc/clientplatform/clientplatform.env` with mode `0600`.
+Fixed paths:
 
-## Fixed boundaries
+- immutable releases: `/var/lib/clientplatform/runtime/releases/<sha>`;
+- writable state: `/var/lib/clientplatform/state`;
+- logs: `/var/log/clientplatform`;
+- app environment: `/etc/clientplatform/clientplatform.env` with mode `0600`;
+- PostgreSQL backups: `/var/backups/clientplatform/postgres`.
 
-- Linux user/group: `clientplatform`.
-- Immutable runtime releases: `/var/lib/clientplatform/runtime/releases/<sha>`.
-- Writable state: `/var/lib/clientplatform/state`.
-- Configuration: `/etc/clientplatform/clientplatform.env`.
-- Logs: `/var/log/clientplatform`.
-- PostgreSQL database: a dedicated name beginning with `clientplatform`.
-- PostgreSQL application role: no `CREATEDB`, no superuser. A separate operator-only role is used for restore drills.
-- S3 bucket: one production bucket beginning with `clientplatform-`; staging uses another bucket and credentials.
-- Public domain: a dedicated HTTPS host.
-- Public routes: Telegram webhook and signed media only. Health/readiness stay loopback-only.
-- Current production mode: one dedicated ClientPlatform bot through a protected webhook. Managed Client Bots require the next Bot Gateway PR and must not be emulated by adding polling processes.
+The application role must be `NOSUPERUSER NOCREATEDB NOCREATEROLE`. Restore drills use a different operator-only administrative DSN. Managed Client Bots are not enabled in this PR; they require the next Bot Gateway boundary.
 
-## Provision external resources
+## External provisioning
 
-1. Create a production Telegram bot that is not used by staging or another product.
-2. Create a PostgreSQL database and least-privilege application role. The role must own or have only the privileges required inside the ClientPlatform database. Create a separate administrative role for disposable restore drills.
-3. Create a private S3-compatible bucket, enable versioning, lifecycle retention and backup replication to a separate failure domain.
-4. Configure DNS for the dedicated domain.
-5. Generate independent secrets for Telegram webhook verification, health diagnostics, media URL signing and S3 access.
-6. Copy `deploy/clientplatform/clientplatform.production.env.example` to the protected application environment and replace every blank/placeholder.
+Provision outside the repository:
 
-Run the offline contract before any process starts:
+1. A production Telegram bot not used by staging or another product.
+2. A dedicated PostgreSQL database plus least-privilege application role.
+3. A separate restore-administrator role used only during drills.
+4. A private S3-compatible production bucket with versioning, lifecycle retention, and replication to a separate failure domain.
+5. A dedicated DNS name and TLS termination.
+6. Independent webhook, diagnostics, media-signing, and S3 secrets.
+
+Copy and fill the application environment:
 
 ```bash
+sudo install -d -o root -g clientplatform -m 0750 /etc/clientplatform
+sudo install -o root -g clientplatform -m 0600 \
+  deploy/clientplatform/clientplatform.production.env.example \
+  /etc/clientplatform/clientplatform.env
 python scripts/clientplatform_production_preflight.py \
   --env-file /etc/clientplatform/clientplatform.env
 ```
 
-A production rollout is blocked until this prints `CLIENTPLATFORM_PRODUCTION_PREFLIGHT_OK`.
+Deployment is blocked until the last command prints `CLIENTPLATFORM_PRODUCTION_PREFLIGHT_OK`.
 
 ## Systemd deployment
 
 ```bash
 sudo useradd --system --home /var/lib/clientplatform --shell /usr/sbin/nologin clientplatform || true
 sudo install -d -o root -g clientplatform -m 0750 \
-  /var/lib/clientplatform/runtime \
   /var/lib/clientplatform/runtime/releases
 sudo install -d -o clientplatform -g clientplatform -m 0750 \
   /var/lib/clientplatform/state \
@@ -51,13 +50,9 @@ sudo install -d -o clientplatform -g clientplatform -m 0750 \
   /var/log/clientplatform
 sudo install -d -o clientplatform -g clientplatform -m 0700 \
   /var/backups/clientplatform/postgres
-sudo install -d -o root -g clientplatform -m 0750 /etc/clientplatform
-sudo install -o root -g clientplatform -m 0600 \
-  deploy/clientplatform/clientplatform.production.env.example \
-  /etc/clientplatform/clientplatform.env
 ```
 
-Build each release in a content-addressed directory. Runtime-created files must remain under `/var/lib/clientplatform/state`, never inside `current` or under `/var/lib/metrotherapy`.
+Build an immutable release:
 
 ```bash
 RELEASE=/var/lib/clientplatform/runtime/releases/$(git rev-parse HEAD)
@@ -72,7 +67,7 @@ sudo -u clientplatform "$RELEASE/.venv/bin/python" \
   --env-file /etc/clientplatform/clientplatform.env
 ```
 
-Install units and reverse proxy configuration:
+Install the units and reverse proxy configuration:
 
 ```bash
 sudo install -m 0644 deploy/clientplatform/clientplatform.service /etc/systemd/system/
@@ -82,9 +77,9 @@ sudo install -m 0644 deploy/clientplatform/Caddyfile /etc/caddy/Caddyfile.d/clie
 sudo systemctl daemon-reload
 ```
 
-## Migration and atomic release switch
+## Migration and atomic switch
 
-Before every migration:
+Load only the protected application environment, create a backup, then initialize the candidate release:
 
 ```bash
 set -a
@@ -93,11 +88,6 @@ set +a
 sudo -u clientplatform --preserve-env=DATABASE_URL,CLIENTPLATFORM_BACKUP_DIR,CLIENTPLATFORM_BACKUP_RETENTION_DAYS \
   /var/lib/clientplatform/runtime/current/.venv/bin/python \
   /var/lib/clientplatform/runtime/current/scripts/clientplatform_postgres_backup.py backup
-```
-
-Initialize/upgrade the candidate against PostgreSQL before switching the symlink:
-
-```bash
 cd "$RELEASE"
 sudo -u clientplatform --preserve-env=DATABASE_URL,METRO_DB_ENGINE \
   .venv/bin/python -c 'from services.schema import init_db; init_db()'
@@ -108,36 +98,30 @@ sudo mv -Tf /var/lib/clientplatform/runtime/current.next /var/lib/clientplatform
 sudo systemctl restart clientplatform
 ```
 
-The schema policy is expand/contract: a release may add compatible structures, but destructive contract migrations require a separate reviewed migration with explicit data export and restore evidence. Never roll application code backward across a destructive migration.
+Schema changes follow expand/contract. Destructive contract migrations require a separate reviewed migration, explicit export, and verified restore evidence. Never roll application code backward across a destructive migration.
 
-## Post-deploy proof
+## Post-deploy evidence
 
 ```bash
 python scripts/clientplatform_http_probe.py synthetic \
   --health-base-url http://127.0.0.1:8182 \
   --public-base-url "https://$CLIENTPLATFORM_DOMAIN"
-
 python scripts/clientplatform_http_probe.py load-smoke \
   --health-base-url http://127.0.0.1:8182 \
   --requests 200 --concurrency 8 --max-p95-ms 500
-```
-
-A replay fixture must contain sanitized Telegram updates with synthetic IDs and no real message text, usernames, phones or tokens:
-
-```bash
 python scripts/clientplatform_http_probe.py replay /secure/evidence/webhook-replay.jsonl \
   --public-base-url "https://$CLIENTPLATFORM_DOMAIN" \
   --webhook-secret "$TELEGRAM_WEBHOOK_SECRET_TOKEN" \
   --repetitions 2
 ```
 
-After the HTTP replay, verify database/outbox counters and absence of duplicate domain effects. HTTP `200` alone proves transport replay tolerance, not business idempotency.
+Replay fixtures contain only sanitized Telegram updates with synthetic IDs. After replay, inspect database/outbox counters and prove the absence of duplicate domain effects; HTTP `200` alone is insufficient.
 
-## Backup and restore proof
+## Backup and disposable restore drill
 
-The daily timer creates a PostgreSQL custom-format dump, SHA-256 checksum and metadata with mode `0600`. The backup filesystem or remote target must provide encryption at rest; plaintext credentials and dumps must never be copied to repository artifacts.
+The timer creates a PostgreSQL custom-format dump, SHA-256 checksum, and metadata with mode `0600`. The backup filesystem or remote target must provide encryption at rest.
 
-The application environment deliberately does not contain restore-administrator credentials. Inject `CLIENTPLATFORM_RESTORE_ADMIN_DATABASE_URL` only into the operator shell or a short-lived root-only environment during a drill. It must identify a separate role capable of creating and dropping the disposable restore database.
+The application environment deliberately does not contain the restore administrator. Inject `CLIENTPLATFORM_RESTORE_ADMIN_DATABASE_URL` only for the drill:
 
 ```bash
 sudo systemctl enable --now clientplatform-backup.timer
@@ -156,43 +140,46 @@ sudo -u clientplatform --preserve-env=DATABASE_URL,CLIENTPLATFORM_RESTORE_ADMIN_
 unset CLIENTPLATFORM_RESTORE_ADMIN_DATABASE_URL
 ```
 
-A successful drill restores into a disposable database, checks canonical ClientPlatform tables, writes sanitized evidence and drops the disposable database. Run it at least monthly and before a risky migration.
+The drill verifies the checksum, creates a disposable database, restores the dump, checks canonical ClientPlatform tables, writes sanitized evidence, and drops the disposable database.
 
 ## Rollback
 
-1. Stop incoming traffic at the reverse proxy or disable the Telegram webhook.
+1. Stop public traffic or disable the Telegram webhook.
 2. Stop `clientplatform.service`.
-3. If the migration was additive, atomically repoint `current` to the previous release and start the service.
-4. If data restoration is required, preserve the failed database, create a new database from the verified dump, run schema/readiness checks, then switch the application DSN. Do not overwrite the only copy of the failed state.
-5. Run synthetic, replay and bounded load probes again.
-6. Record release SHA, backup checksum, restore evidence path, incident cause and final decision.
+3. For additive migrations, atomically repoint `current` to the previous release.
+4. For data restoration, preserve the failed database and restore the verified dump into a new database. Never overwrite the only failed-state copy.
+5. Run preflight, health/readiness, synthetic, replay, and load smoke again.
+6. Record release SHA, backup checksum, restore evidence, incident cause, and decision owner.
 
 ## Docker Compose alternative
+
+`.dockerignore` excludes `clientplatform.env`, generic `.env*`, databases, backups, and private-key formats from the image context.
 
 ```bash
 cd deploy/clientplatform
 cp clientplatform.production.env.example clientplatform.env
 chmod 0600 clientplatform.env
-export CLIENTPLATFORM_POSTGRES_PASSWORD='from-secret-store'
+export CLIENTPLATFORM_POSTGRES_ADMIN_PASSWORD='from-admin-secret-store'
+export CLIENTPLATFORM_POSTGRES_APP_PASSWORD='from-app-secret-store'
 export CLIENTPLATFORM_DOMAIN='clientplatform.your-domain.ru'
 docker compose -f compose.production.yml config
 docker compose -f compose.production.yml up -d --build
 ```
 
-The Compose network allows container listeners on `0.0.0.0`, but only Caddy publishes ports. The app sets `CLIENTPLATFORM_DEPLOYMENT_MODE=container` and `CLIENTPLATFORM_CONTAINER_NETWORK_ISOLATED=1`; the preflight rejects wildcard binds outside that explicit container boundary. `.dockerignore` excludes the local `clientplatform.env`, generic `.env*` files, databases, backups and private-key formats from image context.
+The PostgreSQL container creates `clientplatform_app` as `NOSUPERUSER NOCREATEDB NOCREATEROLE`. Only Caddy publishes ports. The application container runs the production preflight before `main.py` and may write only to mounted ClientPlatform state/log/backup volumes.
 
 ## Go-live gate
 
-Production traffic remains blocked until all are true:
+Production traffic remains blocked until:
 
-- offline production preflight passes;
-- PostgreSQL schema initialization passes on the dedicated database;
-- application role has no `CREATEDB` or superuser privilege;
-- backup exists and a disposable restore drill passes using a separate operator-only DSN;
+- offline preflight passes;
+- the dedicated application role has no superuser, `CREATEDB`, or `CREATEROLE` privileges;
+- schema initialization passes as the application role;
+- backup and disposable restore drill pass with separate roles;
 - health and readiness are green;
-- invalid webhook secret is rejected;
-- sanitized webhook replay has no duplicate domain effects;
+- invalid webhook secrets are rejected;
+- sanitized replay has no duplicate domain effects;
 - bounded load smoke meets the recorded threshold;
-- staging uses different bot, database, bucket, domain and secrets;
-- rollback owner and commands are recorded;
-- Managed Client Bots are not enabled before Bot Gateway replay protection, bot routing, rate limits, queueing and failure isolation exist.
+- staging uses different bot, database, bucket, domain, and secrets;
+- rollback commands and owner are recorded;
+- Managed Client Bots remain disabled until Bot Gateway adds bot routing, replay protection, tenant rate limits, queueing, fleet health, and failure isolation.
