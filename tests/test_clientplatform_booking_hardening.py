@@ -25,10 +25,6 @@ def _managed_connection(path: Path):
     conn = _connection(path)
     try:
         yield conn
-    except Exception:
-        conn.rollback()
-        raise
-    else:
         conn.commit()
     finally:
         conn.close()
