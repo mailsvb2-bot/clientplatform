@@ -24,7 +24,7 @@ private filesystem или S3-compatible object storage
 
 В outbox остаётся только исходный `s3://bucket/key`. Готовая HTTPS-ссылка и signing secret существуют только в памяти одного отправления.
 
-## 2. Обязательные параметры
+## 2. Обязательные production-параметры
 
 ```bash
 A1_MEDIA_GATEWAY_ENABLED=1
@@ -120,47 +120,85 @@ Gateway самостоятельно возвращает:
 - `Accept-Ranges: bytes`;
 - `X-Content-Type-Options: nosniff`.
 
-## 7. GitHub Environment для реального Telegram staging
+## 7. Самодостаточный реальный Telegram staging
 
-Создать Environment с точным именем:
+Ручной workflow `A1 Telegram Staging` больше не требует заранее развёрнутого сервера, домена, S3 bucket, media object, signing key или GitHub Variables.
+
+Он внутри одного GitHub Actions job:
+
+1. создаёт небольшой валидный MP3 с проверяемым SHA-256;
+2. генерирует одноразовый signing key и маскирует его;
+3. запускает A1 Media Gateway только на `127.0.0.1`;
+4. скачивает официальный `cloudflared` версии `2026.7.3`;
+5. проверяет бинарник по закреплённому SHA-256;
+6. создаёт временный `trycloudflare.com` HTTPS tunnel;
+7. формирует подписанный URL и проверяет byte-range;
+8. выполняет настоящий Telegram `sendAudio`;
+9. останавливает tunnel и gateway;
+10. сохраняет только безопасные диагностические логи.
+
+Cloudflare Quick Tunnel используется исключительно как временная staging-граница. У него нет SLA, поэтому он запрещён для production и не является заменой постоянному gateway deployment.
+
+### Единственный обязательный secret
+
+Создать GitHub Environment с точным именем:
 
 ```text
 a1-staging
 ```
 
-Secrets:
+Добавить Environment secret:
 
 ```text
 A1_STAGING_TELEGRAM_BOT_TOKEN
+```
+
+Это должен быть токен отдельного тестового бота A1. Нельзя использовать бота Метротерапии или другого production-проекта.
+
+### Подготовка Telegram
+
+1. Создать отдельного бота через официальный `@BotFather`.
+2. Открыть созданного бота со своего тестового Telegram-аккаунта.
+3. Отправить ему `/start`.
+4. Убедиться, что у staging-бота не настроен webhook.
+
+Workflow вызовет `getWebhookInfo`, затем `getUpdates` и разрешит chat ID только когда найден ровно один приватный `/start`.
+
+Опциональный Environment secret:
+
+```text
 A1_STAGING_TELEGRAM_CHAT_ID
-A1_MEDIA_SIGNING_KEY
 ```
 
-Variables:
+Он нужен только если staging-боту отправили `/start` несколько разных аккаунтов. При явном chat ID автоматический `getUpdates` не выполняется.
 
-```text
-A1_MEDIA_GATEWAY_BASE_URL
-A1_STAGING_MEDIA_REFERENCE
-A1_TELEGRAM_API_BASE_URL   # optional, обычно не задаётся
-```
-
-`A1_STAGING_MEDIA_REFERENCE` должен быть подготовленным private object, например:
-
-```text
-s3://a1-private-media/staging/telegram-smoke.mp3
-```
-
-Workflow запускается вручную:
+### Запуск
 
 ```text
 Actions -> A1 Telegram Staging -> Run workflow
 ```
 
-Он сначала делает byte-range probe gateway, затем выполняет реальный `sendAudio`. При отсутствии любого обязательного secret/variable workflow завершается ошибкой.
+Успешный прогон заканчивается сообщением:
 
-## 8. Проверка после запуска
+```text
+A1 Telegram staging smoke passed; message_id=<id>
+```
 
-Операторский diagnostics payload должен показывать:
+Если `/start` не найден, workflow завершится с:
+
+```text
+staging_chat_not_discovered_send_start
+```
+
+Если у бота активен webhook:
+
+```text
+staging_telegram_bot_webhook_active
+```
+
+## 8. Проверка постоянного deployment
+
+Операторский diagnostics payload постоянного gateway должен показывать:
 
 ```text
 a1_media_gateway_configured=true
@@ -173,9 +211,11 @@ a1_media_gateway_running=true
 ## 9. Запрещено
 
 - хранить raw bot token, S3 keys или signing key в repository;
+- передавать bot token через `workflow_dispatch` input;
 - помещать signed HTTPS URL в outbox;
 - включать public-read bucket ACL ради Telegram;
 - добавлять bucket без allowlist;
 - использовать HTTP для public gateway или S3 endpoint;
+- использовать Cloudflare Quick Tunnel как production endpoint;
 - логировать Authorization header, token-bearing Telegram URL или signed query;
 - направлять A1 на инфраструктуру исходной Метротерапии.
