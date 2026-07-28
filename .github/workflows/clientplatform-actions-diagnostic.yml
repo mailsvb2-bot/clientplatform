@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - agent/fix-red-staging
+  pull_request:
+    branches:
+      - main
 
 permissions:
   actions: read
@@ -27,7 +30,6 @@ jobs:
           import json
           import os
           import urllib.request
-          from datetime import datetime, timezone
           from pathlib import Path
 
           repository = os.environ["GH_REPOSITORY"]
