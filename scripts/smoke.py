@@ -153,12 +153,14 @@ def main() -> int:
     # Keep this list in parity with app.create_application(); otherwise smoke can
     # pass while a production router is broken or missing.
     from handlers import (
+        clientplatform_control,
         start, menu, text_input, payments, demo, audio,
         admin, admin_release, admin_stats, admin_inline, share, weather,
         info, micro, settings as settings_router, mood,
         diagnostics, gift_flow, kb_debug, messenger_audio,
     )
 
+    dp.include_router(clientplatform_control.router)
     dp.include_router(start.router)
     dp.include_router(menu.router)
     dp.include_router(text_input.router)

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 TenantDisposition = Literal["erase", "retain", "anonymize"]
-CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-07-28.v3"
+CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-07-28.v4"
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,6 +41,30 @@ _POLICIES = (
         table="customer_identities",
         disposition="erase",
         reason="external routing identity and contact metadata",
+        required=True,
+    ),
+    TenantPrivacyPolicy(
+        table="business_profiles",
+        disposition="retain",
+        reason="business-owned activity description and onboarding state",
+        required=True,
+    ),
+    TenantPrivacyPolicy(
+        table="business_capabilities",
+        disposition="retain",
+        reason="business-owned enabled activity connectors",
+        required=True,
+    ),
+    TenantPrivacyPolicy(
+        table="business_offerings",
+        disposition="retain",
+        reason="business-owned consultation, service and custom offerings",
+        required=True,
+    ),
+    TenantPrivacyPolicy(
+        table="customer_invites",
+        disposition="erase",
+        reason="expiring customer connection capability and claim routing",
         required=True,
     ),
     TenantPrivacyPolicy(

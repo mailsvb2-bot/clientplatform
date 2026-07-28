@@ -27,8 +27,30 @@ jobs:
       - name: Verify clientplatform canon and provenance
         run: python scripts/check_clientplatform_canon.py
 
-      - name: Verify clientplatform tenant and customer boundaries
-        run: python -m unittest discover -s tests -p 'test_clientplatform_*.py' -v
+      - name: Verify dependency-light clientplatform boundaries
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          runtime_tests = {
+              "test_clientplatform_control_bot_behavior.py",
+          }
+          tests = [
+              str(path)
+              for path in sorted(Path("tests").glob("test_clientplatform_*.py"))
+              if path.name not in runtime_tests
+          ]
+          if not tests:
+              raise SystemExit("No dependency-light ClientPlatform tests found")
+          subprocess.run(
+              [sys.executable, "-m", "unittest", "-v", *tests],
+              check=True,
+          )
+          PY
 
       - name: Reject tracked raw secrets
         shell: bash

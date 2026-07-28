@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 
+from . import clientplatform_activity
 from . import clientplatform_connections
 from . import clientplatform_customers
 from . import clientplatform_programs
@@ -22,6 +23,7 @@ PARTS = [
     users,
     clientplatform_tenancy,
     clientplatform_customers,
+    clientplatform_activity,
     clientplatform_programs,
     clientplatform_connections,
     plans,
