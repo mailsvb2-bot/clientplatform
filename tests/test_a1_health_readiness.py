@@ -41,7 +41,8 @@ class A1DispatchReadinessTests(unittest.TestCase):
         self.assertTrue(ready)
         self.assertEqual(errors, [])
         self.assertTrue(flags['a1_dispatch_ready'])
-        self.assertFalse(flags['a1_dispatch_degraded'])
+        self.assertFalse(flags['a1_dispatch_runtime_degraded'])
+        self.assertFalse(flags['a1_dispatch_outbox_degraded'])
 
     def test_enabled_runtime_fails_closed_when_health_is_unavailable(self) -> None:
         ready, errors, flags = health.a1_dispatch_readiness(
@@ -53,7 +54,8 @@ class A1DispatchReadinessTests(unittest.TestCase):
 
         self.assertFalse(ready)
         self.assertEqual(errors, ['a1_dispatch:health_unavailable'])
-        self.assertTrue(flags['a1_dispatch_degraded'])
+        self.assertTrue(flags['a1_dispatch_runtime_degraded'])
+        self.assertFalse(flags['a1_dispatch_outbox_degraded'])
 
     def test_enabled_runtime_requires_composed_owner(self) -> None:
         ready, errors, _flags = health.a1_dispatch_readiness(
