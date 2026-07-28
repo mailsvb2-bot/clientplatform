@@ -99,8 +99,6 @@ jobs:
           PY
 
       - name: Validate focused regressions
-        id: focused
-        continue-on-error: true
         run: |
           set -o pipefail
           python -m pip install --require-hashes -r requirements.txt
@@ -118,10 +116,6 @@ jobs:
           name: clientplatform-focused-regression-log
           path: ${{ runner.temp }}/clientplatform-focused-regressions.log
           if-no-files-found: error
-
-      - name: Fail when focused regressions remain
-        if: steps.focused.outcome != 'success'
-        run: exit 1
 
       - name: Commit regression fixes
         run: |
