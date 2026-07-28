@@ -22,6 +22,18 @@ class TelegramBotApiError(RuntimeError):
         self.retryable = bool(retryable)
 
 
+def _media_reference(value: str) -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        raise TelegramBotApiError("telegram_media_reference_empty", retryable=False)
+    if "://" in normalized and not normalized.startswith(("https://", "http://")):
+        raise TelegramBotApiError(
+            "telegram_media_reference_unresolved",
+            retryable=False,
+        )
+    return normalized
+
+
 async def _aiohttp_post_json(
     url: str,
     payload: JsonPayload,
@@ -41,13 +53,12 @@ async def _aiohttp_post_json(
                 except (aiohttp.ContentTypeError, ValueError):
                     body = None
                 return status, body
-    except asyncio.TimeoutError as exc:
+    except asyncio.TimeoutError:
         raise TelegramBotApiError(
             "telegram_http_timeout",
             retryable=True,
         ) from None
-    except aiohttp.ClientError as exc:
-        del exc
+    except aiohttp.ClientError:
         raise TelegramBotApiError(
             "telegram_http_transport_failure",
             retryable=True,
@@ -133,26 +144,26 @@ class AiohttpTelegramBotClient:
         return await self._call(
             token=token,
             method="sendAudio",
-            payload={"chat_id": str(chat_id), "audio": str(audio)},
+            payload={"chat_id": str(chat_id), "audio": _media_reference(audio)},
         )
 
     async def send_video(self, *, token: str, chat_id: str, video: str) -> str:
         return await self._call(
             token=token,
             method="sendVideo",
-            payload={"chat_id": str(chat_id), "video": str(video)},
+            payload={"chat_id": str(chat_id), "video": _media_reference(video)},
         )
 
     async def send_document(self, *, token: str, chat_id: str, document: str) -> str:
         return await self._call(
             token=token,
             method="sendDocument",
-            payload={"chat_id": str(chat_id), "document": str(document)},
+            payload={"chat_id": str(chat_id), "document": _media_reference(document)},
         )
 
     async def send_photo(self, *, token: str, chat_id: str, photo: str) -> str:
         return await self._call(
             token=token,
             method="sendPhoto",
-            payload={"chat_id": str(chat_id), "photo": str(photo)},
+            payload={"chat_id": str(chat_id), "photo": _media_reference(photo)},
         )
