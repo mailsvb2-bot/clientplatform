@@ -39,10 +39,18 @@ jobs:
           python -m unittest -v tests.test_a1_connections_dispatch_outbox \
             2>&1 | tee "$RUNNER_TEMP/a1-connections-dispatch.log"
 
-      - name: Upload A1 boundary diagnostic log
+      - name: Signed media and runtime lifecycle
+        run: |
+          set -o pipefail
+          python -m unittest -v tests.test_a1_signed_media_runtime_composition \
+            2>&1 | tee "$RUNNER_TEMP/a1-signed-media-runtime.log"
+
+      - name: Upload A1 boundary diagnostic logs
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: a1-boundary-diagnostic-log
-          path: ${{ runner.temp }}/a1-connections-dispatch.log
+          path: |
+            ${{ runner.temp }}/a1-connections-dispatch.log
+            ${{ runner.temp }}/a1-signed-media-runtime.log
           if-no-files-found: warn
