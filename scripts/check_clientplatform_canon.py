@@ -11,8 +11,8 @@ BASELINE_SHA = "b4ac43c2961fb581078aedc25efeffd2ab4ecb34"
 
 
 REQUIRED_CANON_FRAGMENTS = (
-    "единственный нормативный документ продукта А1",
-    "Центральный управляющий бот А1",
+    "единственный нормативный документ продукта ClientPlatform",
+    "Центральный управляющий бот ClientPlatform",
     "Персональные клиентские боты",
     "Мультитенантность и изоляция данных",
     "Публичный репозиторий",
@@ -30,7 +30,7 @@ REQUIRED_PROVENANCE_FRAGMENTS = (
 )
 
 REQUIRED_README_FRAGMENTS = (
-    "ClientPlatform / А1",
+    "ClientPlatform / ClientPlatform",
     "docs/CLIENTPLATFORM_CANON_TZ.md",
     "docs/BASELINE_PROVENANCE.md",
     BASELINE_SHA,
