@@ -24,6 +24,7 @@ def _env_bool(name: str, default: bool = False) -> bool:
 class DispatchRuntimeConfig:
     enabled: bool
     interval_seconds: float
+    tick_timeout_seconds: float
     batch_size: int
     max_attempts: int
     lock_ttl_seconds: int
@@ -45,6 +46,12 @@ def dispatch_runtime_config() -> DispatchRuntimeConfig:
             5.0,
             minimum=1.0,
             maximum=300.0,
+        ),
+        tick_timeout_seconds=env_float(
+            "A1_DISPATCH_TICK_TIMEOUT_SEC",
+            120.0,
+            minimum=5.0,
+            maximum=1800.0,
         ),
         batch_size=env_int(
             "A1_DISPATCH_BATCH_SIZE",
