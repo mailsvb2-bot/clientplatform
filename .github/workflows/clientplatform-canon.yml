@@ -1,0 +1,50 @@
+name: clientplatform Canon
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - "agent/**"
+
+permissions:
+  contents: read
+
+jobs:
+  canon:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+
+      - name: Verify clientplatform canon and provenance
+        run: python scripts/check_clientplatform_canon.py
+
+      - name: Verify clientplatform tenant and customer boundaries
+        run: python -m unittest discover -s tests -p 'test_clientplatform_*.py' -v
+
+      - name: Reject tracked raw secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          forbidden="$(git ls-files | grep -E '(^|/)\.env$|(^|/)id_rsa$|\.(pem|p12|pfx|key)$' || true)"
+          if [ -n "$forbidden" ]; then
+            echo "Forbidden secret-like files are tracked:"
+            echo "$forbidden"
+            exit 1
+          fi
+
+      - name: Verify imported baseline remains documented
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fq 'b4ac43c2961fb581078aedc25efeffd2ab4ecb34' docs/BASELINE_PROVENANCE.md
+          grep -Fq 'mailsvb2-bot/metrotherapy-bot-telegram' docs/BASELINE_PROVENANCE.md
+          grep -Fq 'mailsvb2-bot/clientplatform' docs/BASELINE_PROVENANCE.md
