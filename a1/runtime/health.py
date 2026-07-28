@@ -34,26 +34,32 @@ def a1_runtime_snapshot() -> dict[str, Any]:
         'a1_dispatch_last_error': '',
         'a1_dispatch_last_tick_age_seconds': 0,
     }
+    runtime = fallback
     try:
         from a1.runtime.lifecycle import a1_runtime_health_snapshot
 
         snapshot = dict(a1_runtime_health_snapshot())
     except ImportError:
-        return fallback
+        pass
     except AttributeError:
-        return fallback
+        pass
     except OSError:
-        return fallback
+        pass
     except RuntimeError:
-        return fallback
+        pass
     except TypeError:
-        return fallback
+        pass
     except ValueError:
-        return fallback
+        pass
+    else:
+        runtime = {
+            **fallback,
+            'a1_runtime_health_available': True,
+            **snapshot,
+        }
     return {
-        **fallback,
-        'a1_runtime_health_available': True,
-        **snapshot,
+        **runtime,
+        **a1_outbox_snapshot(configured=configured),
     }
 
 
@@ -174,52 +180,6 @@ def _a1_dispatch_stale(snapshot: dict[str, Any]) -> bool:
     return age_sec > max_age_sec
 
 
-def a1_dispatch_readiness(
-    snapshot: dict[str, Any],
-) -> tuple[bool, list[str], dict[str, bool]]:
-    configured = bool(snapshot.get('a1_dispatch_configured'))
-    health_available = bool(snapshot.get('a1_runtime_health_available'))
-    composed = bool(snapshot.get('a1_runtime_composed'))
-    runtime_enabled = bool(snapshot.get('a1_dispatch_enabled'))
-    running = bool(snapshot.get('a1_dispatch_running'))
-    last_error = str(snapshot.get('a1_dispatch_last_error') or '').strip()
-    try:
-        error_count = int(snapshot.get('a1_dispatch_errors') or 0)
-    except (TypeError, ValueError):
-        error_count = 0
-    recent_error = bool(error_count > 0 and last_error)
-    stale = _a1_dispatch_stale(snapshot)
-
-    errors: list[str] = []
-    if configured:
-        if not health_available:
-            errors.append('a1_dispatch:health_unavailable')
-        elif not composed:
-            errors.append('a1_dispatch:not_composed')
-        else:
-            if not runtime_enabled:
-                errors.append('a1_dispatch:not_enabled')
-            if not running:
-                errors.append('a1_dispatch:not_running')
-            if recent_error:
-                errors.append('a1_dispatch:recent_tick_error')
-            if stale:
-                errors.append('a1_dispatch:stale_tick')
-
-    degraded = bool(errors)
-    ready = bool(not configured or not degraded)
-    return (
-        ready,
-        errors,
-        {
-            'a1_dispatch_runtime_ready': ready,
-            'a1_dispatch_recent_error': recent_error,
-            'a1_dispatch_stale': stale,
-            'a1_dispatch_runtime_degraded': degraded,
-        },
-    )
-
-
 def _metric(snapshot: dict[str, Any], key: str) -> int:
     try:
         return max(0, int(snapshot.get(key) or 0))
@@ -301,5 +261,59 @@ def a1_outbox_readiness(
             'a1_dispatch_outbox_stale_leases': stale_sending,
             'a1_dispatch_outbox_recent_dead_exceeded': recent_dead,
             'a1_dispatch_outbox_degraded': degraded,
+        },
+    )
+
+
+def a1_dispatch_readiness(
+    snapshot: dict[str, Any],
+) -> tuple[bool, list[str], dict[str, bool]]:
+    configured = bool(snapshot.get('a1_dispatch_configured'))
+    health_available = bool(snapshot.get('a1_runtime_health_available'))
+    composed = bool(snapshot.get('a1_runtime_composed'))
+    runtime_enabled = bool(snapshot.get('a1_dispatch_enabled'))
+    running = bool(snapshot.get('a1_dispatch_running'))
+    last_error = str(snapshot.get('a1_dispatch_last_error') or '').strip()
+    try:
+        error_count = int(snapshot.get('a1_dispatch_errors') or 0)
+    except (TypeError, ValueError):
+        error_count = 0
+    recent_error = bool(error_count > 0 and last_error)
+    stale = _a1_dispatch_stale(snapshot)
+
+    runtime_errors: list[str] = []
+    if configured:
+        if not health_available:
+            runtime_errors.append('a1_dispatch:health_unavailable')
+        elif not composed:
+            runtime_errors.append('a1_dispatch:not_composed')
+        else:
+            if not runtime_enabled:
+                runtime_errors.append('a1_dispatch:not_enabled')
+            if not running:
+                runtime_errors.append('a1_dispatch:not_running')
+            if recent_error:
+                runtime_errors.append('a1_dispatch:recent_tick_error')
+            if stale:
+                runtime_errors.append('a1_dispatch:stale_tick')
+
+    runtime_degraded = bool(runtime_errors)
+    runtime_ready = bool(not configured or not runtime_degraded)
+    outbox_ready, outbox_errors, outbox_flags = a1_outbox_readiness(
+        snapshot,
+        configured=configured,
+    )
+    errors = [*runtime_errors, *outbox_errors]
+    ready = bool(runtime_ready and outbox_ready)
+    return (
+        ready,
+        errors,
+        {
+            'a1_dispatch_ready': ready,
+            'a1_dispatch_runtime_ready': runtime_ready,
+            'a1_dispatch_recent_error': recent_error,
+            'a1_dispatch_stale': stale,
+            'a1_dispatch_runtime_degraded': runtime_degraded,
+            **outbox_flags,
         },
     )
