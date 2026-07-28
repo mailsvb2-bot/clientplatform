@@ -2,6 +2,9 @@ name: clientplatform Telegram Staging
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - agent/fix-red-staging
 
 permissions:
   contents: read
@@ -43,7 +46,7 @@ jobs:
           set -Eeuo pipefail
           MEDIA_ROOT="$RUNNER_TEMP/clientplatform-staging-media"
           FIXTURE="$MEDIA_ROOT/clientplatform-staging/fixture.mp3"
-          python scripts/clientplatform_staging_fixture.py "$FIXTURE"
+          python -m scripts.clientplatform_staging_fixture "$FIXTURE"
 
           SIGNING_KEY="$(python -c 'import secrets; print(secrets.token_hex(32))')"
           echo "::add-mask::$SIGNING_KEY"
@@ -58,18 +61,31 @@ jobs:
       - name: Start loopback media gateway
         run: |
           set -Eeuo pipefail
-          nohup python scripts/clientplatform_ephemeral_media_gateway.py \
+          nohup python -m scripts.clientplatform_ephemeral_media_gateway \
             > "$RUNNER_TEMP/clientplatform-gateway.log" 2>&1 &
-          echo "$!" > "$RUNNER_TEMP/clientplatform-gateway.pid"
+          GATEWAY_PID="$!"
+          echo "$GATEWAY_PID" > "$RUNNER_TEMP/clientplatform-gateway.pid"
+          export CLIENTPLATFORM_GATEWAY_PID="$GATEWAY_PID"
 
           python - <<'PY'
           import os
           import socket
           import time
+          from pathlib import Path
 
           port = int(os.environ["CLIENTPLATFORM_MEDIA_GATEWAY_PORT"])
+          pid = int(os.environ["CLIENTPLATFORM_GATEWAY_PID"])
+          log_path = Path(os.environ["RUNNER_TEMP"]) / "clientplatform-gateway.log"
           deadline = time.monotonic() + 30
           while time.monotonic() < deadline:
+              try:
+                  os.kill(pid, 0)
+              except ProcessLookupError:
+                  detail = log_path.read_text(errors="replace") if log_path.exists() else ""
+                  raise SystemExit(
+                      "clientplatform loopback gateway process exited before readiness\n"
+                      + detail
+                  )
               try:
                   with socket.create_connection(("127.0.0.1", port), timeout=1):
                       print(f"clientplatform loopback gateway is accepting connections on {port}")
@@ -77,7 +93,10 @@ jobs:
               except OSError:
                   time.sleep(0.25)
           else:
-              raise SystemExit("clientplatform loopback gateway did not start")
+              detail = log_path.read_text(errors="replace") if log_path.exists() else ""
+              raise SystemExit(
+                  "clientplatform loopback gateway did not start\n" + detail
+              )
           PY
 
       - name: Install pinned Cloudflare tunnel client
@@ -140,7 +159,7 @@ jobs:
         env:
           CLIENTPLATFORM_SECRET_STAGING_TELEGRAM_BOT_TOKEN: ${{ secrets.CLIENTPLATFORM_STAGING_TELEGRAM_BOT_TOKEN }}
           CLIENTPLATFORM_STAGING_TELEGRAM_CHAT_ID: ${{ secrets.CLIENTPLATFORM_STAGING_TELEGRAM_CHAT_ID }}
-        run: python scripts/clientplatform_telegram_staging_smoke.py
+        run: python -m scripts.clientplatform_telegram_staging_smoke
 
       - name: Stop ephemeral processes
         if: always()
