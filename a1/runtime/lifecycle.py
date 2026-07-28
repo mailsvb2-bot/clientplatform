@@ -40,11 +40,50 @@ async def stop_a1_runtime() -> None:
         await scheduler.stop()
 
 
+def _media_gateway_snapshot() -> dict[str, Any]:
+    fallback: dict[str, Any] = {
+        "a1_media_gateway_configured": False,
+        "a1_media_gateway_health_available": False,
+        "a1_media_gateway_running": False,
+        "a1_media_gateway_requests": 0,
+        "a1_media_gateway_denied": 0,
+        "a1_media_gateway_not_found": 0,
+        "a1_media_gateway_upstream_errors": 0,
+        "a1_media_gateway_bytes_streamed": 0,
+        "a1_media_gateway_last_error": "",
+    }
+    try:
+        from a1.runtime.media_gateway import media_gateway_health_snapshot
+
+        return {**fallback, **dict(media_gateway_health_snapshot())}
+    except ImportError:
+        return fallback
+    except AttributeError:
+        return fallback
+    except OSError:
+        return fallback
+    except RuntimeError:
+        return fallback
+    except TypeError:
+        return fallback
+    except ValueError:
+        return fallback
+
+
 def a1_runtime_health_snapshot() -> dict[str, Any]:
+    gateway = _media_gateway_snapshot()
+    gateway_configured = bool(gateway.get("a1_media_gateway_configured"))
+    gateway_available = bool(gateway.get("a1_media_gateway_health_available"))
+    gateway_running = bool(gateway.get("a1_media_gateway_running"))
+    runtime_health_available = bool(
+        not gateway_configured or (gateway_available and gateway_running)
+    )
+
     with _lifecycle_lock:
         scheduler = _dispatch_scheduler
     if scheduler is None:
         return {
+            "a1_runtime_health_available": runtime_health_available,
             "a1_runtime_composed": False,
             "a1_dispatch_enabled": False,
             "a1_dispatch_running": False,
@@ -56,9 +95,11 @@ def a1_runtime_health_snapshot() -> dict[str, Any]:
             "a1_dispatch_errors": 0,
             "a1_dispatch_last_error": "",
             "a1_dispatch_last_tick_age_seconds": 0,
+            **gateway,
         }
     raw = asdict(scheduler.health_snapshot())
     return {
+        "a1_runtime_health_available": runtime_health_available,
         "a1_runtime_composed": True,
         "a1_dispatch_enabled": bool(raw["enabled"]),
         "a1_dispatch_running": bool(raw["running"]),
@@ -70,4 +111,5 @@ def a1_runtime_health_snapshot() -> dict[str, Any]:
         "a1_dispatch_errors": int(raw["errors"]),
         "a1_dispatch_last_error": str(raw["last_error"]),
         "a1_dispatch_last_tick_age_seconds": int(raw["last_tick_age_seconds"]),
+        **gateway,
     }

@@ -138,21 +138,43 @@ class A1RuntimeOwnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(snapshot["a1_runtime_composed"])
         self.assertFalse(snapshot["a1_dispatch_enabled"])
 
+    async def test_configured_stopped_gateway_makes_runtime_health_unavailable(self) -> None:
+        gateway = {
+            "a1_media_gateway_configured": True,
+            "a1_media_gateway_health_available": True,
+            "a1_media_gateway_running": False,
+        }
+        with patch(
+            "a1.runtime.media_gateway.media_gateway_health_snapshot",
+            return_value=gateway,
+        ):
+            snapshot = lifecycle.a1_runtime_health_snapshot()
+        self.assertFalse(snapshot["a1_runtime_health_available"])
+        self.assertTrue(snapshot["a1_media_gateway_configured"])
+        self.assertFalse(snapshot["a1_media_gateway_running"])
+
 
 class CanonicalTaskManagerBindingTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self._previous_tm = bg._tm
         self._previous_owner_task = bg._a1_owner_task
+        self._previous_gateway_task = bg._a1_media_gateway_task
         bg._tm = None
         bg._a1_owner_task = None
+        bg._a1_media_gateway_task = None
 
     async def asyncTearDown(self) -> None:
-        task = bg._a1_owner_task
-        if task is not None and not task.done():
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
+        tasks = [bg._a1_owner_task, bg._a1_media_gateway_task]
+        for task in tasks:
+            if task is not None and not task.done():
+                task.cancel()
+        await asyncio.gather(
+            *(task for task in tasks if task is not None),
+            return_exceptions=True,
+        )
         bg._tm = self._previous_tm
         bg._a1_owner_task = self._previous_owner_task
+        bg._a1_media_gateway_task = self._previous_gateway_task
 
     async def test_binding_owns_a1_runtime_with_the_same_task_manager(self) -> None:
         started = asyncio.Event()
@@ -171,12 +193,49 @@ class CanonicalTaskManagerBindingTests(unittest.IsolatedAsyncioTestCase):
                 "a1.runtime.dispatch_runtime.dispatch_runtime_config",
                 return_value=SimpleNamespace(enabled=True),
             ),
+            patch(
+                "a1.runtime.media_gateway.media_gateway_config",
+                return_value=SimpleNamespace(enabled=False),
+            ),
             patch("a1.runtime.owner.run_a1_runtime_owner", new=fake_owner),
         ):
             self.assertIs(bg.bind_task_manager(task_manager), task_manager)
             await asyncio.wait_for(started.wait(), timeout=1.0)
             self.assertIsNotNone(bg._a1_owner_task)
             self.assertIn(bg._a1_owner_task, task_manager.tasks)
+            await task_manager.shutdown()
+            await asyncio.wait_for(stopped.wait(), timeout=1.0)
+
+    async def test_binding_owns_media_gateway_with_the_same_task_manager(self) -> None:
+        started = asyncio.Event()
+        stopped = asyncio.Event()
+
+        async def fake_gateway_owner() -> None:
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                stopped.set()
+
+        task_manager = TaskManager()
+        with (
+            patch(
+                "a1.runtime.dispatch_runtime.dispatch_runtime_config",
+                return_value=SimpleNamespace(enabled=False),
+            ),
+            patch(
+                "a1.runtime.media_gateway.media_gateway_config",
+                return_value=SimpleNamespace(enabled=True),
+            ),
+            patch(
+                "a1.runtime.media_gateway.run_media_gateway_owner",
+                new=fake_gateway_owner,
+            ),
+        ):
+            self.assertIs(bg.bind_task_manager(task_manager), task_manager)
+            await asyncio.wait_for(started.wait(), timeout=1.0)
+            self.assertIsNotNone(bg._a1_media_gateway_task)
+            self.assertIn(bg._a1_media_gateway_task, task_manager.tasks)
             await task_manager.shutdown()
             await asyncio.wait_for(stopped.wait(), timeout=1.0)
 

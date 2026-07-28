@@ -41,11 +41,12 @@ jobs:
             tests.test_a1_dispatch_observability \
             2>&1 | tee "$RUNNER_TEMP/a1-connections-dispatch.log"
 
-      - name: Runtime ownership and readiness
+      - name: Runtime ownership, gateway and readiness
         run: |
           set -o pipefail
           python -m unittest -v \
             tests.test_a1_signed_media_runtime_composition \
+            tests.test_a1_media_gateway_contract \
             tests.test_a1_runtime_application_owner \
             tests.test_a1_health_readiness \
             2>&1 | tee "$RUNNER_TEMP/a1-runtime-readiness.log"
