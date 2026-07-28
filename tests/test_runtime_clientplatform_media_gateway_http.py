@@ -61,7 +61,8 @@ class ClientPlatformMediaGatewayHttpTests(unittest.IsolatedAsyncioTestCase):
         self.root = Path(self.temp.name)
         target = self.root / "private-bucket" / "program" / "audio.mp3"
         target.parent.mkdir(parents=True)
-        target.write_bytes(b"clientplatform-AUDIO-CONTENT")
+        self.media_content = b"clientplatform-AUDIO-CONTENT"
+        target.write_bytes(self.media_content)
         self.secret = "media-gateway-test-secret"
         self.provider = EnvironmentCredentialProvider(
             {
@@ -133,18 +134,23 @@ class ClientPlatformMediaGatewayHttpTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(response.status, 200)
                 self.assertEqual(response.headers["Accept-Ranges"], "bytes")
                 self.assertEqual(response.headers["Cache-Control"], "private, no-store")
-                self.assertEqual(await response.read(), b"clientplatform-AUDIO-CONTENT")
+                self.assertEqual(await response.read(), self.media_content)
             async with session.head(self._local_url(signed)) as response:
                 self.assertEqual(response.status, 200)
-                self.assertEqual(int(response.headers["Content-Length"]), 16)
+                self.assertEqual(
+                    int(response.headers["Content-Length"]), len(self.media_content)
+                )
                 self.assertEqual(await response.read(), b"")
             async with session.get(
                 self._local_url(signed),
                 headers={"Range": "bytes=3-7"},
             ) as response:
                 self.assertEqual(response.status, 206)
-                self.assertEqual(response.headers["Content-Range"], "bytes 3-7/16")
-                self.assertEqual(await response.read(), b"AUDIO")
+                self.assertEqual(
+                    response.headers["Content-Range"],
+                    f"bytes 3-7/{len(self.media_content)}",
+                )
+                self.assertEqual(await response.read(), self.media_content[3:8])
 
     async def test_bad_expired_and_disallowed_requests_fail_closed(self) -> None:
         signed = await self.resolver.resolve(
@@ -193,7 +199,7 @@ class ClientPlatformMediaGatewayHttpTests(unittest.IsolatedAsyncioTestCase):
         message_id = await adapter.send(_claimed(), "telegram-test-token")
 
         self.assertEqual(message_id, "9001")
-        self.assertEqual(fetched, [b"clientplatform-AUDIO-CONTENT"])
+        self.assertEqual(fetched, [self.media_content])
         self.assertEqual(provider_payloads[0]["chat_id"], "700001")
         self.assertTrue(provider_payloads[0]["audio"].startswith("https://media.example.test/clientplatform/media/"))
         self.assertNotIn(self.secret, repr(provider_payloads))
