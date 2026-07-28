@@ -1,10 +1,23 @@
 from __future__ import annotations
 
 import os
+import sys
 import unittest
 from contextlib import ExitStack
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
+
+try:
+    import aiohttp  # noqa: F401
+except ModuleNotFoundError:
+    aiohttp = ModuleType('aiohttp')
+    aiohttp.web = SimpleNamespace(
+        AppRunner=object,
+        TCPSite=object,
+        Request=object,
+        Response=object,
+    )
+    sys.modules['aiohttp'] = aiohttp
 
 from runtime import health_server
 
