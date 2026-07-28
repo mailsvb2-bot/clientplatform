@@ -1,3 +1,12 @@
+from a1.application.connections import (
+    activate_connection,
+    create_connection,
+    disable_connection,
+    get_dispatch,
+    list_connections,
+    prepare_lesson_dispatch,
+    register_managed_bot,
+)
 from a1.application.customers import (
     archive_customer,
     attach_customer_identity,
@@ -6,6 +15,7 @@ from a1.application.customers import (
     get_customer,
     list_customers,
 )
+from a1.application.dispatch_worker import DispatchBatchResult, run_dispatch_batch
 from a1.application.programs import (
     add_program_lesson,
     complete_program_lesson,
@@ -28,26 +38,35 @@ from a1.application.tenancy import (
 )
 
 __all__ = [
+    "DispatchBatchResult",
+    "activate_connection",
     "add_program_lesson",
     "archive_customer",
     "attach_customer_identity",
     "complete_program_lesson",
     "create_business",
+    "create_connection",
     "create_customer",
     "create_program",
+    "disable_connection",
     "enroll_customer_in_program",
     "find_customer_by_identity",
     "get_customer",
+    "get_dispatch",
     "get_program",
     "get_program_enrollment",
     "grant_business_member",
     "list_accessible_businesses",
+    "list_connections",
     "list_customers",
     "list_programs",
     "mark_lesson_delivery_failed",
     "mark_lesson_delivery_sent",
+    "prepare_lesson_dispatch",
     "publish_program",
+    "register_managed_bot",
     "rename_business",
     "resolve_tenant_context",
     "revoke_business_member",
+    "run_dispatch_batch",
 ]

@@ -14,7 +14,12 @@ from a1.domain.tenancy import PlatformRole, TenantPermissionDenied
 from a1.infrastructure import TenancyRepository
 from a1.infrastructure.customer_repository import CustomerRepository
 from a1.privacy_manifest import validate_a1_privacy_manifest
-from services.db.schema import a1_customers, a1_programs, a1_tenancy
+from services.db.schema import (
+    a1_connections,
+    a1_customers,
+    a1_programs,
+    a1_tenancy,
+)
 
 
 class A1CustomerBoundaryTests(unittest.TestCase):
@@ -25,6 +30,7 @@ class A1CustomerBoundaryTests(unittest.TestCase):
         a1_tenancy.ensure(self.conn)
         a1_customers.ensure(self.conn)
         a1_programs.ensure(self.conn)
+        a1_connections.ensure(self.conn)
         self.tenancy = TenancyRepository(self.conn)
         self.customers = CustomerRepository(self.conn)
         self.business_a = self.tenancy.create_business(
@@ -231,13 +237,16 @@ class A1CustomerBoundaryTests(unittest.TestCase):
             set(report.discovered_business_tables),
             {
                 "business_members",
-                "customers",
+                "connections",
                 "customer_identities",
-                "programs",
-                "lessons",
+                "customers",
+                "delivery_dispatch_outbox",
                 "enrollments",
                 "lesson_deliveries",
                 "lesson_progress",
+                "lessons",
+                "managed_bots",
+                "programs",
             },
         )
         self.conn.execute(

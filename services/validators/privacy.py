@@ -26,7 +26,11 @@ def validate_privacy_schema(strict: bool = True) -> None:
         try:
             legacy_report = validate_privacy_manifest(conn, strict=True)
             a1_report = (
-                validate_a1_privacy_manifest(conn, strict=True)
+                validate_a1_privacy_manifest(
+                    conn,
+                    strict=True,
+                    require_complete=True,
+                )
                 if _a1_schema_present(conn)
                 else None
             )

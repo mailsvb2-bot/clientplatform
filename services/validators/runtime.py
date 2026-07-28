@@ -218,6 +218,8 @@ def validate_wide_except_policy(*, strict: bool = True) -> None:
     allow_functions = {
         "runtime/messenger_ingress.py": {"_process_and_persist", "vk_webhook", "max_webhook"},
         "services/messenger/delivery_outbox.py": {"_worker_loop"},
+        "a1/application/dispatch_worker.py": {"_release_claims", "run_dispatch_batch"},
+        "tests/test_a1_connections_dispatch_outbox.py": {"managed"},
     }
     suppression_markers = {
         "# validator: allow-wide-except",
