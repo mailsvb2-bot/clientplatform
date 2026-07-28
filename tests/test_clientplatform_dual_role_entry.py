@@ -45,15 +45,23 @@ class ClientPlatformDualRoleEntryContractTests(unittest.TestCase):
         self.assertIn("if not accesses:", businesses or "")
         self.assertIn("if not links:", customers or "")
 
-    def test_package_composes_entry_router_before_control_router(self) -> None:
-        source = Path("handlers/__init__.py").read_text(encoding="utf-8")
-        tree = ast.parse(source)
-        self.assertIn("entry.router.include_router(original_router)", source)
-        self.assertIn("control.router = entry.router", source)
+    def test_entry_module_owns_idempotent_router_composition(self) -> None:
+        entry_source = Path("handlers/clientplatform_entry.py").read_text(encoding="utf-8")
+        package_source = Path("handlers/__init__.py").read_text(encoding="utf-8")
+        package_tree = ast.parse(package_source)
+
+        self.assertIn(
+            'control = importlib.import_module(".clientplatform_control", __package__)',
+            entry_source,
+        )
+        self.assertIn("router.include_router(original_router)", entry_source)
+        self.assertIn("control.router = router", entry_source)
+        self.assertIn("_dual_role_entry_composed", entry_source)
+        self.assertIn('importlib.import_module(".clientplatform_entry", __name__)', package_source)
         self.assertTrue(
             any(
                 isinstance(node, ast.FunctionDef) and node.name == "__getattr__"
-                for node in tree.body
+                for node in package_tree.body
             )
         )
 
