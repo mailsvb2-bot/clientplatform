@@ -13,6 +13,7 @@ from clientplatform.application.control import (
 from clientplatform.domain.activity import (
     ACTIVITY_CONNECTORS,
     ActivityInvariantViolation,
+    ActivityNotFound,
     CapabilityKind,
     CapabilityStatus,
 )
@@ -155,9 +156,8 @@ class ClientPlatformActivityOnboardingTests(unittest.TestCase):
             actor=self.owner_a,
             connector_key="consultations",
         )
-        with self.assertRaises(Exception) as captured:
+        with self.assertRaises(ActivityNotFound):
             self.activity.get_capability(actor=self.owner_b, capability_id=capability.id)
-        self.assertEqual(type(captured.exception).__name__, "ActivityNotFound")
 
     def test_invite_persists_only_hash_and_claims_one_telegram_customer(self) -> None:
         issued = self.activity.issue_customer_invite(
@@ -203,7 +203,6 @@ class ClientPlatformActivityOnboardingTests(unittest.TestCase):
             external_subject="700001",
         )
         self.assertEqual(customer.customer.id, claim.customer_id)
-
 
     def test_control_orchestration_creates_program_and_real_dispatch(self) -> None:
         customers = CustomerRepository(self.conn)
