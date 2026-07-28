@@ -39,10 +39,12 @@ jobs:
           python -m unittest -v tests.test_a1_connections_dispatch_outbox \
             2>&1 | tee "$RUNNER_TEMP/a1-connections-dispatch.log"
 
-      - name: Signed media and runtime lifecycle
+      - name: Signed media and application runtime ownership
         run: |
           set -o pipefail
-          python -m unittest -v tests.test_a1_signed_media_runtime_composition \
+          python -m unittest -v \
+            tests.test_a1_signed_media_runtime_composition \
+            tests.test_a1_runtime_application_owner \
             2>&1 | tee "$RUNNER_TEMP/a1-signed-media-runtime.log"
 
       - name: Upload A1 boundary diagnostic logs
