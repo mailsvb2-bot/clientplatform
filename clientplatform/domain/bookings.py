@@ -49,6 +49,24 @@ def normalize_utc_datetime(value: str, *, field_name: str) -> str:
     return parsed.astimezone(timezone.utc).isoformat(timespec="seconds")
 
 
+def _valid_local_occurrences(local: datetime, zone: ZoneInfo) -> list[datetime]:
+    """Return real UTC-resolvable occurrences for one local wall-clock value.
+
+    ``datetime.replace(tzinfo=ZoneInfo(...))`` does not validate DST gaps and
+    silently chooses ``fold=0`` for repeated autumn times. Round-tripping both
+    folds through UTC gives a strict, dependency-free validity test.
+    """
+
+    occurrences: list[datetime] = []
+    for fold in (0, 1):
+        candidate = local.replace(tzinfo=zone, fold=fold)
+        round_trip = candidate.astimezone(timezone.utc).astimezone(zone)
+        if round_trip.replace(tzinfo=None) != local or round_trip.fold != fold:
+            continue
+        occurrences.append(candidate)
+    return occurrences
+
+
 def parse_local_booking_start(value: str, *, timezone_name: str) -> str:
     raw = " ".join(str(value or "").split())
     try:
@@ -59,7 +77,19 @@ def parse_local_booking_start(value: str, *, timezone_name: str) -> str:
         zone = ZoneInfo(str(timezone_name or "").strip())
     except ZoneInfoNotFoundError as exc:
         raise ValueError("неизвестный часовой пояс бизнеса") from exc
-    return local.replace(tzinfo=zone).astimezone(timezone.utc).isoformat(timespec="seconds")
+
+    occurrences = _valid_local_occurrences(local, zone)
+    if not occurrences:
+        raise ValueError(
+            "такого местного времени не существует из-за перехода на летнее время; "
+            "выберите реальное время"
+        )
+    if len(occurrences) > 1:
+        raise ValueError(
+            "это местное время повторяется при переходе на зимнее время; "
+            "выберите другое однозначное время"
+        )
+    return occurrences[0].astimezone(timezone.utc).isoformat(timespec="seconds")
 
 
 def booking_end(starts_at: str, duration_minutes: int) -> str:
