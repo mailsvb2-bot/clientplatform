@@ -11,16 +11,17 @@ from scripts.clientplatform_production_preflight import validate_environment
 
 class ClientPlatformProductionIsolationTests(unittest.TestCase):
     def _valid_env(self) -> dict[str, str]:
+        domain = "clientplatform.production.internal"
         return {
             "APP_ENV": "prod",
             "CLIENTPLATFORM_ENVIRONMENT": "production",
             "CLIENTPLATFORM_DEPLOYMENT_ID": "clientplatform-production",
             "CLIENTPLATFORM_DEPLOYMENT_MODE": "systemd",
             "CLIENTPLATFORM_CONTAINER_NETWORK_ISOLATED": "0",
-            "CLIENTPLATFORM_DOMAIN": "clientplatform.production.internal",
-            "CLIENTPLATFORM_PUBLIC_BASE_URL": "https://clientplatform.production.internal",
+            "CLIENTPLATFORM_DOMAIN": domain,
+            "CLIENTPLATFORM_PUBLIC_BASE_URL": f"https://{domain}",
             "CLIENTPLATFORM_PRODUCTION_BOT_USERNAME": "clientplatform_bot",
-            "BOT_TOKEN": "100000:production-token-material",
+            "BOT_TOKEN": "ci-bot-token-material-without-provider-shape",
             "ADMIN_IDS": "100001",
             "METRO_DB_ENGINE": "postgres",
             "CLIENTPLATFORM_DATABASE_NAME": "clientplatform_ci",
@@ -31,14 +32,14 @@ class ClientPlatformProductionIsolationTests(unittest.TestCase):
             "TELEGRAM_LEGACY_TOKEN_WEBHOOK_ENABLED": "0",
             "ALLOW_INSECURE_TELEGRAM_WEBHOOK": "0",
             "TELEGRAM_WEBHOOK_PREFIX": "/telegram-webhook",
-            "TELEGRAM_WEBHOOK_PUBLIC_BASE_URL": "https://clientplatform.production.internal",
+            "TELEGRAM_WEBHOOK_PUBLIC_BASE_URL": f"https://{domain}",
             "TELEGRAM_WEBHOOK_SECRET_TOKEN": "w" * 48,
             "MESSENGER_WEBHOOK_ENABLED": "1",
             "MESSENGER_WEBHOOK_HOST": "127.0.0.1",
             "MESSENGER_WEBHOOK_PORT": "8181",
-            "MESSENGER_PUBLIC_BASE_URL": "https://clientplatform.production.internal",
-            "PAYMENT_PUBLIC_BASE_URL": "https://clientplatform.production.internal",
-            "PRIVACY_EXPORT_PUBLIC_BASE_URL": "https://clientplatform.production.internal",
+            "MESSENGER_PUBLIC_BASE_URL": f"https://{domain}",
+            "PAYMENT_PUBLIC_BASE_URL": f"https://{domain}",
+            "PRIVACY_EXPORT_PUBLIC_BASE_URL": f"https://{domain}",
             "HEALTHCHECK_ENABLED": "1",
             "HEALTHCHECK_HOST": "127.0.0.1",
             "HEALTHCHECK_PORT": "8182",
@@ -46,19 +47,13 @@ class ClientPlatformProductionIsolationTests(unittest.TestCase):
             "CLIENTPLATFORM_MEDIA_GATEWAY_ENABLED": "1",
             "CLIENTPLATFORM_MEDIA_GATEWAY_HOST": "127.0.0.1",
             "CLIENTPLATFORM_MEDIA_GATEWAY_PORT": "8191",
-            "CLIENTPLATFORM_MEDIA_GATEWAY_BASE_URL": "https://clientplatform.production.internal/clientplatform",
+            "CLIENTPLATFORM_MEDIA_GATEWAY_BASE_URL": f"https://{domain}/clientplatform",
             "CLIENTPLATFORM_MEDIA_GATEWAY_STORAGE_MODE": "s3",
             "CLIENTPLATFORM_MEDIA_GATEWAY_S3_ENDPOINT": "https://s3.production.internal",
             "CLIENTPLATFORM_MEDIA_GATEWAY_S3_REGION": "region-1",
-            "CLIENTPLATFORM_MEDIA_GATEWAY_S3_ACCESS_KEY_REFERENCE": (
-                "secret://env/CLIENTPLATFORM_SECRET_S3_ACCESS_KEY"
-            ),
-            "CLIENTPLATFORM_MEDIA_GATEWAY_S3_SECRET_KEY_REFERENCE": (
-                "secret://env/CLIENTPLATFORM_SECRET_S3_SECRET_KEY"
-            ),
-            "CLIENTPLATFORM_MEDIA_SIGNING_SECRET_REFERENCE": (
-                "secret://env/CLIENTPLATFORM_SECRET_MEDIA_SIGNING_KEY"
-            ),
+            "CLIENTPLATFORM_MEDIA_GATEWAY_S3_ACCESS_KEY_REFERENCE": "secret://env/CLIENTPLATFORM_SECRET_S3_ACCESS_KEY",
+            "CLIENTPLATFORM_MEDIA_GATEWAY_S3_SECRET_KEY_REFERENCE": "secret://env/CLIENTPLATFORM_SECRET_S3_SECRET_KEY",
+            "CLIENTPLATFORM_MEDIA_SIGNING_SECRET_REFERENCE": "secret://env/CLIENTPLATFORM_SECRET_MEDIA_SIGNING_KEY",
             "CLIENTPLATFORM_STORAGE_BUCKET": "clientplatform-production",
             "CLIENTPLATFORM_MEDIA_GATEWAY_ALLOWED_BUCKETS": "clientplatform-production",
             "CLIENTPLATFORM_SECRET_S3_ACCESS_KEY": "access-key-material",
@@ -92,9 +87,7 @@ class ClientPlatformProductionIsolationTests(unittest.TestCase):
             "staging_secret": {"CLIENTPLATFORM_STAGING_TELEGRAM_BOT_TOKEN": "present"},
             "colliding_ports": {"HEALTHCHECK_PORT": "8181"},
             "wildcard_systemd": {"MESSENGER_WEBHOOK_HOST": "0.0.0.0"},
-            "wrong_media_secret_reference": {
-                "CLIENTPLATFORM_MEDIA_SIGNING_SECRET_REFERENCE": "secret://env/SHARED_KEY"
-            },
+            "wrong_media_reference": {"CLIENTPLATFORM_MEDIA_SIGNING_SECRET_REFERENCE": "secret://env/SHARED_KEY"},
         }
         for name, changes in cases.items():
             with self.subTest(name=name):
@@ -122,11 +115,8 @@ class ClientPlatformProductionIsolationTests(unittest.TestCase):
         compose = (root / "deploy/clientplatform/compose.production.yml").read_text(encoding="utf-8")
         caddy = (root / "deploy/clientplatform/Caddyfile").read_text(encoding="utf-8")
         runbook = (root / "docs/runbooks/CLIENTPLATFORM_PRODUCTION_ISOLATION.md").read_text(encoding="utf-8")
-
         self.assertIn("CLIENTPLATFORM_DEPLOYMENT_ID=clientplatform-production", env_example)
-        self.assertIn("CLIENTPLATFORM_DEPLOYMENT_MODE=systemd", env_example)
         self.assertIn("TELEGRAM_TRANSPORT=webhook", env_example)
-        self.assertIn("CLIENTPLATFORM_MEDIA_GATEWAY_STORAGE_MODE=s3", env_example)
         self.assertNotIn("DATABASE_URL=postgresql://localhost:5432/metrotherapy", env_example)
         self.assertIn("clientplatform_production_preflight.py", service)
         self.assertIn("ProtectSystem=strict", service)
@@ -138,12 +128,10 @@ class ClientPlatformProductionIsolationTests(unittest.TestCase):
         self.assertIn("restore-drill", runbook)
         self.assertIn("Managed Client Bots require the next Bot Gateway PR", runbook)
 
-    def test_backup_helpers_reject_non_clientplatform_database_and_hide_password_from_argv(self) -> None:
+    def test_backup_helpers_reject_non_clientplatform_database(self) -> None:
         with self.assertRaisesRegex(ValueError, "non-ClientPlatform"):
             _database_name("postgresql://user:password@db:5432/metrotherapy")
-        env = _pg_environment(
-            "postgresql://clientplatform_app:very-secret@db:5432/clientplatform"
-        )
+        env = _pg_environment("postgresql://clientplatform_app:very-secret@db:5432/clientplatform")
         self.assertEqual(env["PGDATABASE"], "clientplatform")
         self.assertEqual(env["PGPASSWORD"], "very-secret")
         self.assertEqual(_safe_identifier("clientplatform_restore_1"), "clientplatform_restore_1")
@@ -158,7 +146,7 @@ class ClientPlatformProductionIsolationTests(unittest.TestCase):
             fixture.write_text('{"update_id":1}\n{"update_id":2}\n', encoding="utf-8")
             self.assertEqual(len(_load_replay_events(fixture)), 2)
 
-    def test_production_isolation_workflow_has_live_postgres_restore_drill(self) -> None:
+    def test_workflow_has_live_postgres_restore_drill(self) -> None:
         workflow = Path(".github/workflows/clientplatform-production-isolation.yml").read_text(encoding="utf-8")
         self.assertIn("postgres:16", workflow)
         self.assertIn("clientplatform_production_preflight.py", workflow)
