@@ -24,8 +24,8 @@ jobs:
         run: |
           set -Eeuo pipefail
           mapfile -t chunks < <(find scripts -maxdepth 1 -type f -name '.clientplatform-booking-bundle-*' | sort)
-          if [ "${#chunks[@]}" -ne 12 ]; then
-            echo "Booking bundle is not complete yet (${#chunks[@]}/12)"
+          if [ "${#chunks[@]}" -ne 13 ]; then
+            echo "Booking bundle is not complete yet (${#chunks[@]}/13)"
             exit 0
           fi
 
