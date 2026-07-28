@@ -257,6 +257,9 @@ class CustomerProgressRepository:
                 provider_message_id, last_error, created_at, updated_at, sent_at, dead_at
             ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, NULL, NULL,
                      NULL, NULL, ?, ?, NULL, NULL)
+            ON CONFLICT(
+                business_id, logical_delivery_id, connection_id, customer_identity_id
+            ) DO NOTHING
             """,
             (str(uuid4()), business_id, platform, logical_delivery_id, connection_id,
              identity_id, content_kind, content_ref,
