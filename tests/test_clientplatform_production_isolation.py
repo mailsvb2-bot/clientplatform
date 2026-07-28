@@ -123,7 +123,8 @@ class ClientPlatformProductionIsolationTests(unittest.TestCase):
         compose = (root / "deploy/clientplatform/compose.production.yml").read_text(encoding="utf-8")
         caddy = (root / "deploy/clientplatform/Caddyfile").read_text(encoding="utf-8")
         runbook = (root / "docs/runbooks/CLIENTPLATFORM_PRODUCTION_ISOLATION.md").read_text(encoding="utf-8")
-        dockerignore = (root / ".dockerignore").read_text(encoding="utf-8")
+        dockerignore_path = root / "deploy/clientplatform/Dockerfile.dockerignore"
+        dockerignore = dockerignore_path.read_text(encoding="utf-8")
         self.assertIn("CLIENTPLATFORM_DEPLOYMENT_ID=clientplatform-production", env_example)
         self.assertIn("METRO_WRITABLE_ROOT=/var/lib/clientplatform/state", env_example)
         self.assertIn("TELEGRAM_TRANSPORT=webhook", env_example)
@@ -138,6 +139,8 @@ class ClientPlatformProductionIsolationTests(unittest.TestCase):
         self.assertIn("restore-drill", runbook)
         self.assertIn("CLIENTPLATFORM_RESTORE_ADMIN_DATABASE_URL", runbook)
         self.assertIn("Managed Client Bots require the next Bot Gateway PR", runbook)
+        self.assertTrue(dockerignore_path.is_file())
+        self.assertFalse((root / ".dockerignore").exists())
         self.assertIn("deploy/clientplatform/clientplatform.env", dockerignore)
         self.assertIn(".env.*", dockerignore)
 
@@ -172,6 +175,7 @@ class ClientPlatformProductionIsolationTests(unittest.TestCase):
         self.assertIn("clientplatform_postgres_backup.py backup", workflow)
         self.assertIn("clientplatform_postgres_backup.py restore-drill", workflow)
         self.assertIn("CLIENTPLATFORM_RESTORE_ADMIN_DATABASE_URL", workflow)
+        self.assertIn("docker build", workflow)
         self.assertIn("docker compose", workflow)
         self.assertNotIn("@v4", workflow)
         self.assertNotIn("@v5", workflow)
