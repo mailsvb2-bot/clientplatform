@@ -4,7 +4,10 @@ import os
 import re
 from collections.abc import Mapping
 
-from a1.domain.connections import normalize_credential_reference
+from a1.domain.connections import (
+    ConnectionInvariantViolation,
+    normalize_credential_reference,
+)
 
 
 class SecretReferenceError(RuntimeError):
@@ -35,7 +38,10 @@ class EnvironmentCredentialProvider:
             raise ValueError("allowed secret environment prefix is invalid")
 
     def resolve(self, reference: str) -> str:
-        normalized = normalize_credential_reference(reference)
+        try:
+            normalized = normalize_credential_reference(reference)
+        except (ValueError, ConnectionInvariantViolation):
+            raise SecretReferenceError("secret reference is invalid") from None
         if not normalized.startswith(_ENV_REFERENCE_PREFIX):
             raise SecretReferenceError("secret reference provider is not configured")
 
