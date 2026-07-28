@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import os
+import sqlite3
+from collections.abc import Callable
 from typing import Any
 
 from core.runtime_env import env_int
 
 
 _TRUE_VALUES = frozenset({'1', 'true', 'yes', 'on'})
+OutboxProbe = Callable[..., dict[str, Any]]
 
 
 def a1_dispatch_configured() -> bool:
@@ -31,25 +34,124 @@ def a1_runtime_snapshot() -> dict[str, Any]:
         'a1_dispatch_last_error': '',
         'a1_dispatch_last_tick_age_seconds': 0,
     }
+    runtime = fallback
     try:
         from a1.runtime.lifecycle import a1_runtime_health_snapshot
 
         snapshot = dict(a1_runtime_health_snapshot())
     except ImportError:
-        return fallback
+        pass
     except AttributeError:
-        return fallback
+        pass
     except OSError:
-        return fallback
+        pass
     except RuntimeError:
-        return fallback
+        pass
     except TypeError:
-        return fallback
+        pass
     except ValueError:
+        pass
+    else:
+        runtime = {
+            **fallback,
+            'a1_runtime_health_available': True,
+            **snapshot,
+        }
+    return {
+        **runtime,
+        **a1_outbox_snapshot(configured=configured),
+    }
+
+
+def a1_outbox_snapshot(
+    *,
+    configured: bool | None = None,
+    probe: OutboxProbe | None = None,
+) -> dict[str, Any]:
+    selected = a1_dispatch_configured() if configured is None else bool(configured)
+    fallback: dict[str, Any] = {
+        'a1_dispatch_outbox_checked': False,
+        'a1_dispatch_outbox_available': False,
+        'a1_dispatch_outbox_pending': 0,
+        'a1_dispatch_outbox_retry': 0,
+        'a1_dispatch_outbox_sending': 0,
+        'a1_dispatch_outbox_sent': 0,
+        'a1_dispatch_outbox_dead': 0,
+        'a1_dispatch_outbox_cancelled': 0,
+        'a1_dispatch_outbox_due': 0,
+        'a1_dispatch_outbox_stale_sending': 0,
+        'a1_dispatch_outbox_recent_dead': 0,
+        'a1_dispatch_outbox_oldest_due_age_seconds': 0,
+        'a1_dispatch_outbox_error': '',
+    }
+    if not selected:
         return fallback
+
+    if probe is None:
+        try:
+            from a1.infrastructure.dispatch_observability import (
+                load_dispatch_outbox_snapshot,
+            )
+        except ImportError:
+            return {
+                **fallback,
+                'a1_dispatch_outbox_checked': True,
+                'a1_dispatch_outbox_error': 'ImportError',
+            }
+        probe = load_dispatch_outbox_snapshot
+
+    lock_ttl_seconds = env_int(
+        'A1_DISPATCH_LOCK_TTL_SEC',
+        900,
+        minimum=30,
+        maximum=86_400,
+    )
+    dead_window_seconds = env_int(
+        'A1_DISPATCH_READY_DEAD_WINDOW_SEC',
+        900,
+        minimum=60,
+        maximum=86_400,
+    )
+    try:
+        snapshot = dict(
+            probe(
+                stale_lock_seconds=lock_ttl_seconds,
+                dead_window_seconds=dead_window_seconds,
+            )
+        )
+    except sqlite3.Error as exc:
+        return {
+            **fallback,
+            'a1_dispatch_outbox_checked': True,
+            'a1_dispatch_outbox_error': type(exc).__name__,
+        }
+    except OSError as exc:
+        return {
+            **fallback,
+            'a1_dispatch_outbox_checked': True,
+            'a1_dispatch_outbox_error': type(exc).__name__,
+        }
+    except RuntimeError as exc:
+        return {
+            **fallback,
+            'a1_dispatch_outbox_checked': True,
+            'a1_dispatch_outbox_error': type(exc).__name__,
+        }
+    except TypeError as exc:
+        return {
+            **fallback,
+            'a1_dispatch_outbox_checked': True,
+            'a1_dispatch_outbox_error': type(exc).__name__,
+        }
+    except ValueError as exc:
+        return {
+            **fallback,
+            'a1_dispatch_outbox_checked': True,
+            'a1_dispatch_outbox_error': type(exc).__name__,
+        }
     return {
         **fallback,
-        'a1_runtime_health_available': True,
+        'a1_dispatch_outbox_checked': True,
         **snapshot,
     }
 
@@ -78,6 +180,91 @@ def _a1_dispatch_stale(snapshot: dict[str, Any]) -> bool:
     return age_sec > max_age_sec
 
 
+def _metric(snapshot: dict[str, Any], key: str) -> int:
+    try:
+        return max(0, int(snapshot.get(key) or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def a1_outbox_readiness(
+    snapshot: dict[str, Any],
+    *,
+    configured: bool,
+) -> tuple[bool, list[str], dict[str, bool]]:
+    available = bool(snapshot.get('a1_dispatch_outbox_available'))
+    due_count = _metric(snapshot, 'a1_dispatch_outbox_due')
+    stale_sending_count = _metric(snapshot, 'a1_dispatch_outbox_stale_sending')
+    recent_dead_count = _metric(snapshot, 'a1_dispatch_outbox_recent_dead')
+    oldest_due_age_seconds = _metric(
+        snapshot,
+        'a1_dispatch_outbox_oldest_due_age_seconds',
+    )
+
+    max_due = env_int(
+        'A1_DISPATCH_READY_MAX_DUE',
+        1000,
+        minimum=0,
+        maximum=1_000_000,
+    )
+    max_stale_sending = env_int(
+        'A1_DISPATCH_READY_MAX_STALE_SENDING',
+        0,
+        minimum=0,
+        maximum=100_000,
+    )
+    max_recent_dead = env_int(
+        'A1_DISPATCH_READY_MAX_RECENT_DEAD',
+        100,
+        minimum=0,
+        maximum=100_000,
+    )
+    max_oldest_due_age = env_int(
+        'A1_DISPATCH_READY_MAX_OLDEST_DUE_AGE_SEC',
+        900,
+        minimum=0,
+        maximum=604_800,
+    )
+
+    due_backlog = due_count > max_due
+    stale_sending = stale_sending_count > max_stale_sending
+    recent_dead = recent_dead_count > max_recent_dead
+    oldest_due = bool(
+        due_count > 0
+        and max_oldest_due_age > 0
+        and oldest_due_age_seconds > max_oldest_due_age
+    )
+
+    errors: list[str] = []
+    if configured:
+        if not available:
+            errors.append('a1_dispatch_outbox:unavailable')
+        else:
+            if due_backlog:
+                errors.append('a1_dispatch_outbox:due_backlog')
+            if oldest_due:
+                errors.append('a1_dispatch_outbox:oldest_due')
+            if stale_sending:
+                errors.append('a1_dispatch_outbox:stale_sending')
+            if recent_dead:
+                errors.append('a1_dispatch_outbox:recent_dead')
+
+    degraded = bool(errors)
+    ready = bool(not configured or not degraded)
+    return (
+        ready,
+        errors,
+        {
+            'a1_dispatch_outbox_ready': ready,
+            'a1_dispatch_outbox_due_backlog': due_backlog,
+            'a1_dispatch_outbox_oldest_due': oldest_due,
+            'a1_dispatch_outbox_stale_leases': stale_sending,
+            'a1_dispatch_outbox_recent_dead_exceeded': recent_dead,
+            'a1_dispatch_outbox_degraded': degraded,
+        },
+    )
+
+
 def a1_dispatch_readiness(
     snapshot: dict[str, Any],
 ) -> tuple[bool, list[str], dict[str, bool]]:
@@ -94,31 +281,39 @@ def a1_dispatch_readiness(
     recent_error = bool(error_count > 0 and last_error)
     stale = _a1_dispatch_stale(snapshot)
 
-    errors: list[str] = []
+    runtime_errors: list[str] = []
     if configured:
         if not health_available:
-            errors.append('a1_dispatch:health_unavailable')
+            runtime_errors.append('a1_dispatch:health_unavailable')
         elif not composed:
-            errors.append('a1_dispatch:not_composed')
+            runtime_errors.append('a1_dispatch:not_composed')
         else:
             if not runtime_enabled:
-                errors.append('a1_dispatch:not_enabled')
+                runtime_errors.append('a1_dispatch:not_enabled')
             if not running:
-                errors.append('a1_dispatch:not_running')
+                runtime_errors.append('a1_dispatch:not_running')
             if recent_error:
-                errors.append('a1_dispatch:recent_tick_error')
+                runtime_errors.append('a1_dispatch:recent_tick_error')
             if stale:
-                errors.append('a1_dispatch:stale_tick')
+                runtime_errors.append('a1_dispatch:stale_tick')
 
-    degraded = bool(errors)
-    ready = bool(not configured or not degraded)
+    runtime_degraded = bool(runtime_errors)
+    runtime_ready = bool(not configured or not runtime_degraded)
+    outbox_ready, outbox_errors, outbox_flags = a1_outbox_readiness(
+        snapshot,
+        configured=configured,
+    )
+    errors = [*runtime_errors, *outbox_errors]
+    ready = bool(runtime_ready and outbox_ready)
     return (
         ready,
         errors,
         {
             'a1_dispatch_ready': ready,
+            'a1_dispatch_runtime_ready': runtime_ready,
             'a1_dispatch_recent_error': recent_error,
             'a1_dispatch_stale': stale,
-            'a1_dispatch_degraded': degraded,
+            'a1_dispatch_runtime_degraded': runtime_degraded,
+            **outbox_flags,
         },
     )

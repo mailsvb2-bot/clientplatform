@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from a1.runtime import health
 
@@ -22,6 +23,12 @@ def _snapshot(**overrides):
         'a1_dispatch_errors': 0,
         'a1_dispatch_last_error': '',
         'a1_dispatch_last_tick_age_seconds': 0,
+        'a1_dispatch_outbox_checked': True,
+        'a1_dispatch_outbox_available': True,
+        'a1_dispatch_outbox_due': 0,
+        'a1_dispatch_outbox_stale_sending': 0,
+        'a1_dispatch_outbox_recent_dead': 0,
+        'a1_dispatch_outbox_oldest_due_age_seconds': 0,
     }
     value.update(overrides)
     return value
@@ -34,7 +41,8 @@ class A1DispatchReadinessTests(unittest.TestCase):
         self.assertTrue(ready)
         self.assertEqual(errors, [])
         self.assertTrue(flags['a1_dispatch_ready'])
-        self.assertFalse(flags['a1_dispatch_degraded'])
+        self.assertFalse(flags['a1_dispatch_runtime_degraded'])
+        self.assertFalse(flags['a1_dispatch_outbox_degraded'])
 
     def test_enabled_runtime_fails_closed_when_health_is_unavailable(self) -> None:
         ready, errors, flags = health.a1_dispatch_readiness(
@@ -46,7 +54,8 @@ class A1DispatchReadinessTests(unittest.TestCase):
 
         self.assertFalse(ready)
         self.assertEqual(errors, ['a1_dispatch:health_unavailable'])
-        self.assertTrue(flags['a1_dispatch_degraded'])
+        self.assertTrue(flags['a1_dispatch_runtime_degraded'])
+        self.assertFalse(flags['a1_dispatch_outbox_degraded'])
 
     def test_enabled_runtime_requires_composed_owner(self) -> None:
         ready, errors, _flags = health.a1_dispatch_readiness(
@@ -110,6 +119,112 @@ class A1DispatchReadinessTests(unittest.TestCase):
         self.assertFalse(ready)
         self.assertIn('a1_dispatch:stale_tick', errors)
         self.assertTrue(flags['a1_dispatch_stale'])
+
+
+class A1OutboxSnapshotTests(unittest.TestCase):
+    def test_disabled_runtime_does_not_query_outbox(self) -> None:
+        probe = Mock(side_effect=AssertionError('disabled A1 must not query outbox'))
+
+        snapshot = health.a1_outbox_snapshot(configured=False, probe=probe)
+
+        probe.assert_not_called()
+        self.assertFalse(snapshot['a1_dispatch_outbox_checked'])
+        self.assertFalse(snapshot['a1_dispatch_outbox_available'])
+
+    def test_enabled_runtime_exposes_aggregate_probe(self) -> None:
+        probe = Mock(
+            return_value={
+                'a1_dispatch_outbox_available': True,
+                'a1_dispatch_outbox_due': 7,
+                'a1_dispatch_outbox_recent_dead': 2,
+            }
+        )
+
+        snapshot = health.a1_outbox_snapshot(configured=True, probe=probe)
+
+        self.assertTrue(snapshot['a1_dispatch_outbox_checked'])
+        self.assertTrue(snapshot['a1_dispatch_outbox_available'])
+        self.assertEqual(snapshot['a1_dispatch_outbox_due'], 7)
+        probe.assert_called_once_with(
+            stale_lock_seconds=900,
+            dead_window_seconds=900,
+        )
+
+    def test_database_error_is_redacted_to_error_type(self) -> None:
+        def failing_probe(**_kwargs):
+            raise sqlite3.OperationalError('secret database details')
+
+        snapshot = health.a1_outbox_snapshot(configured=True, probe=failing_probe)
+
+        self.assertTrue(snapshot['a1_dispatch_outbox_checked'])
+        self.assertFalse(snapshot['a1_dispatch_outbox_available'])
+        self.assertEqual(snapshot['a1_dispatch_outbox_error'], 'OperationalError')
+        self.assertNotIn('secret', str(snapshot))
+
+
+class A1OutboxReadinessTests(unittest.TestCase):
+    def _healthy_runtime(self, **overrides):
+        return _snapshot(
+            a1_dispatch_configured=True,
+            a1_runtime_composed=True,
+            a1_dispatch_enabled=True,
+            a1_dispatch_running=True,
+            a1_dispatch_iterations=1,
+            **overrides,
+        )
+
+    def test_unavailable_enabled_outbox_fails_closed(self) -> None:
+        ready, errors, flags = health.a1_dispatch_readiness(
+            self._healthy_runtime(a1_dispatch_outbox_available=False)
+        )
+
+        self.assertFalse(ready)
+        self.assertIn('a1_dispatch_outbox:unavailable', errors)
+        self.assertTrue(flags['a1_dispatch_outbox_degraded'])
+
+    def test_due_backlog_and_oldest_due_are_bounded(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                'A1_DISPATCH_READY_MAX_DUE': '5',
+                'A1_DISPATCH_READY_MAX_OLDEST_DUE_AGE_SEC': '60',
+            },
+            clear=False,
+        ):
+            ready, errors, flags = health.a1_dispatch_readiness(
+                self._healthy_runtime(
+                    a1_dispatch_outbox_due=6,
+                    a1_dispatch_outbox_oldest_due_age_seconds=61,
+                )
+            )
+
+        self.assertFalse(ready)
+        self.assertIn('a1_dispatch_outbox:due_backlog', errors)
+        self.assertIn('a1_dispatch_outbox:oldest_due', errors)
+        self.assertTrue(flags['a1_dispatch_outbox_due_backlog'])
+        self.assertTrue(flags['a1_dispatch_outbox_oldest_due'])
+
+    def test_stale_leases_and_recent_dead_burst_are_bounded(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                'A1_DISPATCH_READY_MAX_STALE_SENDING': '0',
+                'A1_DISPATCH_READY_MAX_RECENT_DEAD': '2',
+            },
+            clear=False,
+        ):
+            ready, errors, flags = health.a1_dispatch_readiness(
+                self._healthy_runtime(
+                    a1_dispatch_outbox_stale_sending=1,
+                    a1_dispatch_outbox_recent_dead=3,
+                )
+            )
+
+        self.assertFalse(ready)
+        self.assertIn('a1_dispatch_outbox:stale_sending', errors)
+        self.assertIn('a1_dispatch_outbox:recent_dead', errors)
+        self.assertTrue(flags['a1_dispatch_outbox_stale_leases'])
+        self.assertTrue(flags['a1_dispatch_outbox_recent_dead_exceeded'])
 
 
 if __name__ == '__main__':

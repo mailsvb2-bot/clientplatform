@@ -36,7 +36,9 @@ jobs:
       - name: Connections and dispatch outbox
         run: |
           set -o pipefail
-          python -m unittest -v tests.test_a1_connections_dispatch_outbox \
+          python -m unittest -v \
+            tests.test_a1_connections_dispatch_outbox \
+            tests.test_a1_dispatch_observability \
             2>&1 | tee "$RUNNER_TEMP/a1-connections-dispatch.log"
 
       - name: Runtime ownership and readiness
