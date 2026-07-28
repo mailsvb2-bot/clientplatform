@@ -13,6 +13,7 @@ from clientplatform.transport.media import (
 )
 from clientplatform.transport.telegram_http import AiohttpTelegramBotClient
 from core.runtime_env import env_float, env_int
+from clientplatform.runtime.control_bot import control_bot_enabled
 
 
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
@@ -48,7 +49,7 @@ class DispatchRuntime:
 
 def dispatch_runtime_config() -> DispatchRuntimeConfig:
     return DispatchRuntimeConfig(
-        enabled=_env_bool("CLIENTPLATFORM_DISPATCH_RUNTIME_ENABLED", False),
+        enabled=_env_bool("CLIENTPLATFORM_DISPATCH_RUNTIME_ENABLED", control_bot_enabled()),
         interval_seconds=env_float(
             "CLIENTPLATFORM_DISPATCH_INTERVAL_SEC",
             5.0,

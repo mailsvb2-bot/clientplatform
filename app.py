@@ -126,6 +126,7 @@ from runtime.messenger_webhooks import start_messenger_webhook_runtime
 from runtime.telegram_transport import telegram_transport
 from runtime.health_server import start_health_runtime
 from services.messenger.setup import build_setup_status
+from clientplatform.runtime.control_bot import bind_control_bot_secret
 
 from core.startup_checks import run_startup_checks
 
@@ -140,6 +141,7 @@ from core.middlewares import (
 
 # Важно: не называем модуль handlers.settings как `settings`, чтобы не затереть config.settings.settings
 from handlers import (
+    clientplatform_control,
     start,
     menu,
     text_input,
@@ -285,6 +287,8 @@ async def create_application():
     if not token:
         raise SystemExit("BOT_TOKEN is empty. Put it into .env (see .env.example)")
 
+    bind_control_bot_secret(token)
+
     tm = TaskManager()
     bind_task_manager(tm)
 
@@ -335,6 +339,7 @@ async def create_application():
     dp.update.middleware(StateLogMiddleware())
     dp.update.middleware(InteractionAnalyticsMiddleware())
 
+    dp.include_router(clientplatform_control.router)
     dp.include_router(start.router)
     dp.include_router(menu.router)
     dp.include_router(text_input.router)
