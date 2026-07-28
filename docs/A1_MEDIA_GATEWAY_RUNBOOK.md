@@ -141,10 +141,10 @@ Cloudflare Quick Tunnel используется исключительно ка
 
 ### Единственный обязательный secret
 
-Создать GitHub Environment с точным именем:
+Используется GitHub Environment с точным именем:
 
 ```text
-a1-staging
+clientplatform_bot
 ```
 
 Добавить Environment secret:
