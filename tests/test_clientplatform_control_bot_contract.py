@@ -65,6 +65,14 @@ class ClientPlatformControlBotContractTests(unittest.TestCase):
             self.assertIn("CLIENTPLATFORM_DISPATCH_RUNTIME_ENABLED=1", source)
         self.assertIn("emergency rollback", env_example)
 
+        control_default = service.index("Environment=CLIENTPLATFORM_CONTROL_BOT_ENABLED=1")
+        dispatch_default = service.index("Environment=CLIENTPLATFORM_DISPATCH_RUNTIME_ENABLED=1")
+        first_override_file = service.index("EnvironmentFile=-/etc/metrotherapy/metrotherapy.env")
+        second_override_file = service.index("EnvironmentFile=-/etc/default/metrotherapy")
+        self.assertLess(control_default, first_override_file)
+        self.assertLess(dispatch_default, first_override_file)
+        self.assertLess(first_override_file, second_override_file)
+
     def test_legacy_start_handler_is_unchanged_and_still_registered(self) -> None:
         source = Path("handlers/start.py").read_text(encoding="utf-8")
         self.assertIn("@router.message(CommandStart())", source)
