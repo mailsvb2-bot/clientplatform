@@ -1,8 +1,8 @@
 # ADR-0005: Telegram HTTP runtime and bounded dispatch owner
 
-- Status: accepted for additive A1 runtime
+- Status: accepted for additive clientplatform runtime
 - Date: 2026-07-28
-- Scope: A1 outbound Telegram delivery
+- Scope: clientplatform outbound Telegram delivery
 
 ## Context
 
@@ -12,7 +12,7 @@ must resolve credentials at send time, call the Telegram Bot API without
 leaking the token, and own repeated dispatch work without overlapping batches.
 
 The imported Metrotherapy runtime already has a process-wide TaskManager and a
-large scheduler. A1 must not silently join that production loop before its own
+large scheduler. clientplatform must not silently join that production loop before its own
 runtime is independently testable and explicitly enabled.
 
 ## Decision
@@ -21,7 +21,7 @@ runtime is independently testable and explicitly enabled.
 
 The first provider supports only references shaped as:
 
-`secret://env/A1_SECRET_*`
+`secret://env/CLIENTPLATFORM_SECRET_*`
 
 The environment variable namespace is restricted. Raw credentials, arbitrary
 environment variables and unresolved vault/KMS references are rejected with
@@ -34,7 +34,7 @@ implementations.
 
 ### Telegram Bot API client
 
-A1 uses a small `aiohttp` client behind the existing `TelegramBotClient`
+clientplatform uses a small `aiohttp` client behind the existing `TelegramBotClient`
 protocol. It:
 
 - uses HTTPS for the Bot API base URL;
@@ -54,14 +54,14 @@ before network I/O; a signed media resolver will be a separate boundary.
 
 The runtime is disabled by default:
 
-`A1_DISPATCH_RUNTIME_ENABLED=0`
+`CLIENTPLATFORM_DISPATCH_RUNTIME_ENABLED=0`
 
 Batch size, interval, tick timeout, per-request timeout, retry count and lease
 TTL are independently bounded by configuration.
 
 ### Scheduler ownership
 
-`A1DispatchScheduler` is a single-owner serial loop:
+`ClientPlatformDispatchScheduler` is a single-owner serial loop:
 
 - `start()` is idempotent;
 - a second overlapping owner is refused;

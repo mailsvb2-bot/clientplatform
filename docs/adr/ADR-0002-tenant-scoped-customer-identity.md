@@ -27,7 +27,7 @@
 9. `marketer`, `content_manager` и `analyst` не получают сырые клиентские карточки; для них позже создаются агрегированные/псевдонимизированные представления.
 10. Все операции принимают server-resolved `TenantContext` и повторно проверяют активное членство.
 11. Автор карточки защищён составным FK `(created_by_member_id, business_id)`.
-12. A1 privacy manifest автоматически обнаруживает любую новую таблицу с `business_id` и fail-closed требует явную policy.
+12. clientplatform privacy manifest автоматически обнаруживает любую новую таблицу с `business_id` и fail-closed требует явную policy.
 
 ## Нормализация идентичностей
 

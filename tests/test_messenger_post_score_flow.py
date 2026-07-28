@@ -19,7 +19,7 @@ def test_done_with_pending_post_requests_post_score_in_text_channels():
     sid = create_session(account_id, kind='work', source='auto', day='2026-04-16', slot='morning', anchor_id=11)
     assert set_pre(sid, 3)
     mark_audio_sent(sid)
-    item = AudioProgressItem(ordinal=1, anchor=11, title='A11', path=Path('audio/full/a11.opus'))
+    item = AudioProgressItem(ordinal=1, anchor=11, title='A11', path=Path('audio/full/clientplatform1.opus'))
     mark_pending_audio_delivery(account_id, item=item, platform='max', token=None)
 
     canonical_user_id, replies = handle_incoming_text(raw_user_id, platform='max', external_user_id=str(raw_user_id), text='done')

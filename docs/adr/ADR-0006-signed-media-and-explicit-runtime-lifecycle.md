@@ -1,6 +1,6 @@
-# ADR-0006: Signed media gateway and explicit A1 runtime lifecycle
+# ADR-0006: Signed media gateway and explicit clientplatform runtime lifecycle
 
-- Status: accepted for additive A1 runtime
+- Status: accepted for additive clientplatform runtime
 - Date: 2026-07-28
 - Scope: private lesson media and process lifecycle
 
@@ -65,13 +65,13 @@ Provider and media errors may expose a `retryable` attribute.
 
 ### Explicit lifecycle
 
-A1 exposes:
+clientplatform exposes:
 
-- `start_a1_runtime()`;
-- `stop_a1_runtime()`;
-- `a1_runtime_health_snapshot()`.
+- `start_clientplatform_runtime()`;
+- `stop_clientplatform_runtime()`;
+- `clientplatform_runtime_health_snapshot()`.
 
-The lifecycle owns at most one `A1DispatchScheduler`, awaits shutdown and is
+The lifecycle owns at most one `ClientPlatformDispatchScheduler`, awaits shutdown and is
 safe across separate event loops. It is not called automatically by imported
 Metrotherapy startup in this change.
 

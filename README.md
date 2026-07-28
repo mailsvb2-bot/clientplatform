@@ -8,13 +8,13 @@
 
 Единственный нормативный документ продукта:
 
-- [`docs/A1_CANON_TZ.md`](docs/A1_CANON_TZ.md)
+- [`docs/CLIENTPLATFORM_CANON_TZ.md`](docs/CLIENTPLATFORM_CANON_TZ.md)
 
 Происхождение импортированной кодовой базы:
 
 - [`docs/BASELINE_PROVENANCE.md`](docs/BASELINE_PROVENANCE.md)
 
-Если старый код, комментарий или исторический документ противоречит канону А1, приоритет имеет `docs/A1_CANON_TZ.md`.
+Если старый код, комментарий или исторический документ противоречит канону А1, приоритет имеет `docs/CLIENTPLATFORM_CANON_TZ.md`.
 
 ## Текущее состояние
 
@@ -58,7 +58,7 @@ b4ac43c2961fb581078aedc25efeffd2ab4ecb34
 ## Проверка канона
 
 ```bash
-python scripts/check_a1_canon.py
+python scripts/check_clientplatform_canon.py
 ```
 
 ## Работа с GitHub

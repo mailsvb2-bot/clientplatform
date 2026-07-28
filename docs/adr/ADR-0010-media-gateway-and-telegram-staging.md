@@ -1,4 +1,4 @@
-# ADR-0010: A1 media gateway и защищённый Telegram staging
+# ADR-0010: clientplatform media gateway и защищённый Telegram staging
 
 ## Статус
 
@@ -6,19 +6,19 @@
 
 ## Контекст
 
-A1 уже преобразует приватный `s3://bucket/key` в короткоживущую HMAC-ссылку и передаёт её Telegram. До этого этапа серверная сторона ссылки отсутствовала: подписанный URL не проверялся и приватный объект не стримился. Поэтому реальная media-доставка оставалась недоказанной end-to-end.
+clientplatform уже преобразует приватный `s3://bucket/key` в короткоживущую HMAC-ссылку и передаёт её Telegram. До этого этапа серверная сторона ссылки отсутствовала: подписанный URL не проверялся и приватный объект не стримился. Поэтому реальная media-доставка оставалась недоказанной end-to-end.
 
 Прямая публикация bucket, public ACL или сохранение готового signed URL в outbox запрещены. Gateway должен быть optional, иметь одного владельца процесса, работать только с разрешёнными bucket и не раскрывать storage credentials, tenant identifiers, payload или signing key.
 
 ## Решение
 
-Добавлен отдельный `a1/runtime/media_gateway.py`.
+Добавлен отдельный `clientplatform/runtime/media_gateway.py`.
 
 Gateway:
 
 1. выключен по умолчанию;
-2. запускается только при `A1_MEDIA_GATEWAY_ENABLED=1`;
-3. принадлежит тому же process-wide `TaskManager`, что A1 dispatch;
+2. запускается только при `CLIENTPLATFORM_MEDIA_GATEWAY_ENABLED=1`;
+3. принадлежит тому же process-wide `TaskManager`, что clientplatform dispatch;
 4. проверяет точный raw path, expiry и HMAC через общий signing contract;
 5. принимает только `expires` и `sig`, без дополнительных query-параметров;
 6. повторно валидирует bucket/key и проверяет bucket allowlist;
@@ -47,22 +47,22 @@ Gateway выполняет приватный path-style `GET` по HTTPS и п�
 
 Обязательные параметры при включении:
 
-- `A1_MEDIA_GATEWAY_BASE_URL` — публичный HTTPS base URL;
-- `A1_MEDIA_GATEWAY_ALLOWED_BUCKETS` — явный allowlist;
-- `A1_MEDIA_GATEWAY_STORAGE_MODE=filesystem|s3`;
-- `A1_MEDIA_SIGNING_SECRET_REFERENCE`;
+- `CLIENTPLATFORM_MEDIA_GATEWAY_BASE_URL` — публичный HTTPS base URL;
+- `CLIENTPLATFORM_MEDIA_GATEWAY_ALLOWED_BUCKETS` — явный allowlist;
+- `CLIENTPLATFORM_MEDIA_GATEWAY_STORAGE_MODE=filesystem|s3`;
+- `CLIENTPLATFORM_MEDIA_SIGNING_SECRET_REFERENCE`;
 - filesystem root либо S3 endpoint/region/credential references.
 
 Основные bounds:
 
-- `A1_MEDIA_GATEWAY_MAX_OBJECT_BYTES`;
-- `A1_MEDIA_GATEWAY_UPSTREAM_TIMEOUT_SEC`;
-- `A1_MEDIA_GATEWAY_CHUNK_SIZE`;
+- `CLIENTPLATFORM_MEDIA_GATEWAY_MAX_OBJECT_BYTES`;
+- `CLIENTPLATFORM_MEDIA_GATEWAY_UPSTREAM_TIMEOUT_SEC`;
+- `CLIENTPLATFORM_MEDIA_GATEWAY_CHUNK_SIZE`;
 - signed URL TTL остаётся 60–900 секунд.
 
 ## Telegram staging
 
-Добавлен ручной workflow `A1 Telegram Staging`, защищённый GitHub Environment `a1-staging`.
+Добавлен ручной workflow `clientplatform Telegram Staging`, защищённый GitHub Environment `clientplatform-staging`.
 
 Workflow:
 
@@ -77,7 +77,7 @@ Workflow:
 
 ## Regression wall
 
-Dependency-light A1 tests проверяют:
+Dependency-light clientplatform tests проверяют:
 
 - deterministic HMAC и привязку к exact path/expiry;
 - expired/future/tampered URL rejection;

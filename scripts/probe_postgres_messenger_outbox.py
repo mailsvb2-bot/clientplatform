@@ -55,7 +55,7 @@ def main() -> int:
     init_db()
     platform = "vk"
     prefix = f"postgres-ci-{uuid.uuid4().hex}"
-    event_keys = [f"{prefix}-a1", f"{prefix}-a2", f"{prefix}-b1"]
+    event_keys = [f"{prefix}-clientplatform", f"{prefix}-a2", f"{prefix}-b1"]
     user_a = 9_200_001_311
     user_b = 9_200_001_312
     try:

@@ -11,7 +11,7 @@ def setup_module(module):
 
 
 def test_done_command_confirms_pending_and_requests_next_audio():
-    item = AudioProgressItem(ordinal=1, anchor=11, title="A11", path=Path("audio/full/a11.opus"))
+    item = AudioProgressItem(ordinal=1, anchor=11, title="A11", path=Path("audio/full/clientplatform1.opus"))
     mark_pending_audio_delivery(910001, item=item, platform='telegram', token=None)
 
     canonical_user_id, replies = handle_incoming_text(910001, platform='telegram', external_user_id='910001', text='done')
@@ -32,7 +32,7 @@ def test_done_command_without_pending_returns_hint():
 
 
 def test_vk_done_command_returns_post_score_scale_keyboard():
-    item = AudioProgressItem(ordinal=1, anchor=12, title="A12", path=Path("audio/full/a12.opus"))
+    item = AudioProgressItem(ordinal=1, anchor=12, title="A12", path=Path("audio/full/clientplatform2.opus"))
     handle_incoming_text(910003, platform='vk', external_user_id='910003', text='menu')
     account_id = resolve_account_for_identity('vk', '910003', allow_create=False)
     assert account_id is not None

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sqlite3
 import uuid
 from dataclasses import dataclass
@@ -414,9 +415,14 @@ def reschedule(job: ClaimedJob, retry_at_utc: str, *, last_error: str | None = N
     - updates job_key to a new attempt suffix so retries are not blocked by idempotency
     """
     retry_at_utc = normalize_utc_iso(retry_at_utc)
-    base = str(job.job_key or "").split(":a", 1)[0]
+    raw_key = str(job.job_key or "")
+    base = re.sub(r":(?:a|attempt)\d+$", "", raw_key)
     new_retries = int(job.retries) + 1
-    new_key = f"{base}:a{new_retries}" if base else f"retry:{job.id}:a{new_retries}"
+    new_key = (
+        f"{base}:attempt{new_retries}"
+        if base
+        else f"retry:{job.id}:attempt{new_retries}"
+    )
 
     with db() as conn:
         with tx(conn):

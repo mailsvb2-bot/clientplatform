@@ -274,8 +274,8 @@ def test_lock_mark_done_and_reschedule(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(jobs, "db", lambda: DbContext(reschedule_conn))
     claimed = jobs.ClaimedJob(1, 7, "kind", "old", "{}", "base:a2", 2, "token")
     assert jobs.reschedule(claimed, "later", last_error="safe") is True
-    assert reschedule_conn.calls[0][1] == ("norm:later", 3, "base:a3", "safe", 1, "token")
+    assert reschedule_conn.calls[0][1] == ("norm:later", 3, "base:attempt3", "safe", 1, "token")
 
     retry = jobs.ClaimedJob(2, 7, "kind", "old", "{}", "", 0, "token")
     assert jobs.reschedule(retry, "later") is True
-    assert reschedule_conn.calls[1][1][2] == "retry:2:a1"
+    assert reschedule_conn.calls[1][1][2] == "retry:2:attempt1"

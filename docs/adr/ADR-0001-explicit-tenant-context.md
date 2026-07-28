@@ -19,7 +19,7 @@
 
 ### C. Создать новую tenant boundary рядом с legacy-моделью
 
-Выбрано. Новые `Business`, `BusinessMember` и `TenantContext` вводятся аддитивно. Legacy-поведение не меняется, а новые A1 use cases с первого дня обязаны принимать серверно разрешённый контекст.
+Выбрано. Новые `Business`, `BusinessMember` и `TenantContext` вводятся аддитивно. Legacy-поведение не меняется, а новые clientplatform use cases с первого дня обязаны принимать серверно разрешённый контекст.
 
 ## Решение
 
@@ -48,14 +48,14 @@
 
 ### Отрицательные
 
-- некоторое время существуют legacy- и A1-модели параллельно;
+- некоторое время существуют legacy- и clientplatform-модели параллельно;
 - новые функции нельзя строить напрямую на старых `users/events/jobs`;
 - потребуется последовательная миграция каждого вертикального сценария;
 - membership mutation выполняет дополнительную блокирующую запись в строку бизнеса.
 
 ## Риски
 
-- разработчик может обойти канонический A1 repository и обратиться к legacy-таблице;
+- разработчик может обойти канонический clientplatform repository и обратиться к legacy-таблице;
 - stale context может существовать в памяти;
 - новые бизнес-объекты могут случайно получить lookup только по ID;
 - длительная транзакция изменения сотрудников может задерживать другую mutation того же бизнеса.
@@ -63,7 +63,7 @@
 ## Снижение рисков
 
 - мутации повторно разрешают actor membership;
-- application layer импортирует repository только через `a1.infrastructure`;
+- application layer импортирует repository только через `clientplatform.infrastructure`;
 - `TenantContext.assert_business()` блокирует чужой объект;
 - CI запускает cross-tenant regression tests;
 - последующие repository обязаны принимать `TenantContext`, а не произвольный `business_id`;

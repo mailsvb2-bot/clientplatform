@@ -18,13 +18,13 @@ That dependency set was disproportionate for a staging smoke and made the most i
 
 ## Decision
 
-The manual `A1 Telegram Staging` workflow is self-contained except for one dedicated staging bot token.
+The manual `clientplatform Telegram Staging` workflow is self-contained except for one dedicated staging bot token.
 
 During one bounded GitHub Actions job it:
 
 1. creates a deterministic valid MP3 fixture;
 2. generates an ephemeral HMAC signing key;
-3. starts the real A1 filesystem media gateway on loopback;
+3. starts the real clientplatform filesystem media gateway on loopback;
 4. downloads one pinned official `cloudflared` binary and verifies SHA-256;
 5. exposes the loopback gateway through a temporary Cloudflare Quick Tunnel;
 6. discovers a unique private Telegram `/start` through `getWebhookInfo` and `getUpdates` when chat ID is not explicitly configured;
@@ -35,10 +35,10 @@ During one bounded GitHub Actions job it:
 The required GitHub Environment secret is only:
 
 ```text
-A1_STAGING_TELEGRAM_BOT_TOKEN
+CLIENTPLATFORM_STAGING_TELEGRAM_BOT_TOKEN
 ```
 
-`A1_STAGING_TELEGRAM_CHAT_ID` is optional and resolves ambiguity when more than one private account has sent `/start`.
+`CLIENTPLATFORM_STAGING_TELEGRAM_CHAT_ID` is optional and resolves ambiguity when more than one private account has sent `/start`.
 
 ## Security properties
 
@@ -57,7 +57,7 @@ A1_STAGING_TELEGRAM_BOT_TOKEN
 ### Positive
 
 - A real external Telegram delivery no longer depends on a separately deployed server, domain, object store or signing secret.
-- The workflow proves that Telegram can fetch bytes from the actual A1 gateway implementation.
+- The workflow proves that Telegram can fetch bytes from the actual clientplatform gateway implementation.
 - The remaining manual prerequisite is explicit and irreducible: create a dedicated staging bot, store its token, and send `/start`.
 - The same workflow can be rerun without permanent staging infrastructure or cleanup debt.
 
@@ -72,7 +72,7 @@ A1_STAGING_TELEGRAM_BOT_TOKEN
 
 ### Reuse an existing Metrotherapy bot token
 
-Rejected because it violates A1 isolation and could send staging content to production users.
+Rejected because it violates clientplatform isolation and could send staging content to production users.
 
 ### Pass the token as a workflow input
 

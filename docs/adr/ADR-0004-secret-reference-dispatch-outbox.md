@@ -140,7 +140,7 @@ Transport-neutral worker выбирает adapter по платформе. Teleg
 
 - `connections` и `managed_bots` — retain как бизнес-интеграции и audit references;
 - `delivery_dispatch_outbox` — erase, поскольку содержит recipient routing и payload snapshot;
-- startup требует полную зарегистрированную A1-схему;
+- startup требует полную зарегистрированную clientplatform-схему;
 - модульные schema-тесты могут проверять только созданный слой, но неизвестная таблица с `business_id` всегда fail-closed.
 
 ## Проверки
