@@ -213,15 +213,28 @@ class CustomerProgressRepository:
                 if row is None:
                     raise
                 delivery_id = str(_value(row, "id", 0))
-        self._conn.execute(
-            """
-            INSERT OR IGNORE INTO lesson_progress(
-                id, business_id, program_id, enrollment_id, lesson_id,
-                status, delivered_at, opened_at, completed_at, updated_at
-            ) VALUES(?, ?, ?, ?, ?, 'pending', NULL, NULL, NULL, ?)
-            """,
-            (str(uuid4()), business_id, program_id, enrollment_id, lesson_id, now),
-        )
+        progress = self._conn.execute(
+            "SELECT id FROM lesson_progress WHERE business_id=? AND enrollment_id=? AND lesson_id=? LIMIT 1",
+            (business_id, enrollment_id, lesson_id),
+        ).fetchone()
+        if progress is None:
+            try:
+                self._conn.execute(
+                    """
+                    INSERT INTO lesson_progress(
+                        id, business_id, program_id, enrollment_id, lesson_id,
+                        status, delivered_at, opened_at, completed_at, updated_at
+                    ) VALUES(?, ?, ?, ?, ?, 'pending', NULL, NULL, NULL, ?)
+                    """,
+                    (str(uuid4()), business_id, program_id, enrollment_id, lesson_id, now),
+                )
+            except sqlite3.IntegrityError:
+                concurrent = self._conn.execute(
+                    "SELECT id FROM lesson_progress WHERE business_id=? AND enrollment_id=? AND lesson_id=? LIMIT 1",
+                    (business_id, enrollment_id, lesson_id),
+                ).fetchone()
+                if concurrent is None:
+                    raise
         return delivery_id
 
     def _ensure_dispatch(self, *, business_id: str, logical_delivery_id: str, connection_id: str, identity_id: str, platform: str, content_kind: str, content_ref: str, now: str) -> None:
