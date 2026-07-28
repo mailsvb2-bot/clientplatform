@@ -193,7 +193,7 @@ class A1PersistedMediaDeliveryRestartE2E(unittest.IsolatedAsyncioTestCase):
             try:
                 yield conn
                 conn.commit()
-            except BaseException:
+            except Exception:
                 conn.rollback()
                 raise
             finally:
