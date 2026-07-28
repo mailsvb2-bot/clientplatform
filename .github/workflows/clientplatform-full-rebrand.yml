@@ -1,0 +1,45 @@
+name: clientplatform Full Rebrand
+
+on:
+  push:
+    branches:
+      - agent/full-clientplatform-rebrand
+
+permissions:
+  contents: write
+
+concurrency:
+  group: clientplatform-full-rebrand
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout full branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+
+      - name: Apply repository-wide clientplatform rebrand
+        run: python scripts/clientplatform_rebrand.py
+
+      - name: Enforce zero legacy brand references
+        run: python scripts/clientplatform_rebrand.py --check
+
+      - name: Commit complete migration
+        run: |
+          set -Eeuo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No rebrand changes were produced"
+            exit 1
+          fi
+          git diff --cached --stat
+          git commit -m "Rebrand repository as clientplatform"
+          git push origin HEAD:agent/full-clientplatform-rebrand
