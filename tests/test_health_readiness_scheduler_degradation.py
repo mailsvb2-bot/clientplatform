@@ -6,6 +6,11 @@ from runtime import health_server
 def _healthy_base(monkeypatch, scheduler: dict):
     monkeypatch.setattr(health_server, '_db_ready', lambda: (True, None))
     monkeypatch.setattr(health_server, '_schema_ready', lambda: (True, None))
+    monkeypatch.setattr(
+        health_server,
+        'clientplatform_dispatch_readiness',
+        lambda _snapshot: (True, [], {'clientplatform_dispatch_degraded': False}),
+    )
     monkeypatch.setattr(health_server, '_scheduler_snapshot', lambda: scheduler)
     monkeypatch.setattr(health_server, '_messenger_webhook_configured', lambda: False)
     monkeypatch.setattr(health_server, '_telegram_transport', lambda: 'polling')
