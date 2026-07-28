@@ -14,7 +14,7 @@ jobs:
   media-delivery-smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 12
-    environment: a1-staging
+    environment: clientplatform_bot
 
     steps:
       - name: Checkout
@@ -34,7 +34,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           if [ -z "$A1_SECRET_STAGING_TELEGRAM_BOT_TOKEN" ]; then
-            echo "::error::Add A1_STAGING_TELEGRAM_BOT_TOKEN to the a1-staging environment."
+            echo "::error::Add A1_STAGING_TELEGRAM_BOT_TOKEN to the clientplatform_bot environment."
             exit 1
           fi
 
