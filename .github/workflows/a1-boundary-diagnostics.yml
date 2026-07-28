@@ -39,13 +39,14 @@ jobs:
           python -m unittest -v tests.test_a1_connections_dispatch_outbox \
             2>&1 | tee "$RUNNER_TEMP/a1-connections-dispatch.log"
 
-      - name: Signed media and application runtime ownership
+      - name: Runtime ownership and readiness
         run: |
           set -o pipefail
           python -m unittest -v \
             tests.test_a1_signed_media_runtime_composition \
             tests.test_a1_runtime_application_owner \
-            2>&1 | tee "$RUNNER_TEMP/a1-signed-media-runtime.log"
+            tests.test_a1_health_readiness \
+            2>&1 | tee "$RUNNER_TEMP/a1-runtime-readiness.log"
 
       - name: Upload A1 boundary diagnostic logs
         if: always()
@@ -54,5 +55,5 @@ jobs:
           name: a1-boundary-diagnostic-log
           path: |
             ${{ runner.temp }}/a1-connections-dispatch.log
-            ${{ runner.temp }}/a1-signed-media-runtime.log
+            ${{ runner.temp }}/a1-runtime-readiness.log
           if-no-files-found: warn
