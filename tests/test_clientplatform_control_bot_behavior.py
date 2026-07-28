@@ -157,7 +157,9 @@ def test_keyboard_builders_and_content_detection() -> None:
     )
     assert client_choice.inline_keyboard[0][0].callback_data.startswith("cp:client:")
     client_portal = handlers._client_portal_keyboard(business_id)
-    assert client_portal.inline_keyboard[0][0].text == "Посмотреть доступную запись"
+    assert client_portal.inline_keyboard[0][0].text == "Мои программы"
+    assert client_portal.inline_keyboard[0][0].callback_data.startswith("cp:cprograms:")
+    assert client_portal.inline_keyboard[1][0].text == "Посмотреть доступную запись"
 
     setup = handlers._capability_setup_keyboard(business_id, {"programs", "services"})
     labels = [row[0].text for row in setup.inline_keyboard]
@@ -847,12 +849,26 @@ async def test_send_program_results_and_error_handler(monkeypatch: pytest.Monkey
             dispatch_attention=5,
         ),
     )
+    monkeypatch.setattr(
+        handlers,
+        "list_business_program_progress",
+        lambda **_kwargs: [
+            SimpleNamespace(
+                customer_display_name="Анна",
+                program_title="Спокойный сон",
+                completed_lessons=1,
+                total_lessons=2,
+                percent_complete=50,
+            )
+        ],
+    )
     results = FakeCallback(f"cp:results:{business_token}")
     await handlers.show_results(results)
     text = results.message.answers[-1][0]
     assert "Клиенты: 2" in text
     assert "Успешно отправлено: 4" in text
     assert "Требуют внимания: 5" in text
+    assert "Анна: Спокойный сон — 1/2 (50%)" in text
 
     assert (
         await handlers.clientplatform_control_error(
