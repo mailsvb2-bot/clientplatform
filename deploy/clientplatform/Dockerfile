@@ -5,11 +5,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1
 
 RUN apt-get update \
-    && apt-get install --yes --no-install-recommends ca-certificates curl gnupg \
+    && apt-get install --yes --no-install-recommends ca-certificates curl \
     && install -d -m 0755 /usr/share/postgresql-common/pgdg \
-    && curl --fail --silent --show-error https://www.postgresql.org/media/keys/ACCC4CF8.asc \
-       | gpg --dearmor -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg \
-    && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg] https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" \
+    && curl --fail --silent --show-error \
+       --output /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+       https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+    && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" \
        > /etc/apt/sources.list.d/pgdg.list \
     && apt-get update \
     && apt-get install --yes --no-install-recommends postgresql-client-16 \
