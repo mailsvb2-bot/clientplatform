@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import hashlib
 import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from scripts.clientplatform_ephemeral_media_gateway import ephemeral_gateway_config
+from scripts.clientplatform_rebrand import transform_text
 from scripts.clientplatform_staging_fixture import fixture_bytes, write_fixture
 from scripts.clientplatform_telegram_staging_smoke import (
     _extract_start_chat_ids,
@@ -50,6 +53,31 @@ class ClientPlatformEphemeralGatewayConfigTests(unittest.TestCase):
         self.assertEqual(config.allowed_buckets, frozenset({"clientplatform-staging"}))
         self.assertEqual(config.route_prefix, "/clientplatform")
         self.assertFalse(config.s3_endpoint)
+
+    def test_gateway_module_entrypoint_resolves_repository_package(self) -> None:
+        env = os.environ.copy()
+        for name in (
+            "CLIENTPLATFORM_MEDIA_GATEWAY_FILESYSTEM_ROOT",
+            "CLIENTPLATFORM_MEDIA_GATEWAY_ALLOWED_BUCKETS",
+            "CLIENTPLATFORM_MEDIA_GATEWAY_PORT",
+        ):
+            env.pop(name, None)
+        completed = subprocess.run(
+            [sys.executable, "-m", "scripts.clientplatform_ephemeral_media_gateway"],
+            cwd=Path(__file__).resolve().parents[1],
+            env=env,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        output = completed.stdout + completed.stderr
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn(
+            "staging_configuration_missing:CLIENTPLATFORM_MEDIA_GATEWAY_FILESYSTEM_ROOT",
+            output,
+        )
+        self.assertNotIn("ModuleNotFoundError", output)
 
 
 class ClientPlatformTelegramChatDiscoveryTests(unittest.IsolatedAsyncioTestCase):
@@ -166,6 +194,15 @@ class ClientPlatformTelegramChatDiscoveryTests(unittest.IsolatedAsyncioTestCase)
             )
 
 
+class ClientPlatformBrandGateTests(unittest.TestCase):
+    def test_cyrillic_legacy_spelling_is_normalized(self) -> None:
+        legacy = "\u0410" + "1"
+        self.assertEqual(
+            transform_text(f"{legacy} — старое временное имя"),
+            "ClientPlatform — старое временное имя",
+        )
+
+
 class ClientPlatformStagingWorkflowContractTests(unittest.TestCase):
     def test_workflow_has_pinned_ephemeral_tunnel_and_one_required_secret(self) -> None:
         workflow = Path(".github/workflows/clientplatform-telegram-staging.yml").read_text(
@@ -177,8 +214,17 @@ class ClientPlatformStagingWorkflowContractTests(unittest.TestCase):
             workflow,
         )
         self.assertIn(r"trycloudflare\.com", workflow)
-        self.assertIn("scripts/clientplatform_ephemeral_media_gateway.py", workflow)
-        self.assertIn("scripts/clientplatform_staging_fixture.py", workflow)
+        self.assertIn(
+            "python -m scripts.clientplatform_ephemeral_media_gateway",
+            workflow,
+        )
+        self.assertIn("python -m scripts.clientplatform_staging_fixture", workflow)
+        self.assertIn(
+            "python -m scripts.clientplatform_telegram_staging_smoke",
+            workflow,
+        )
+        self.assertNotIn("python scripts/clientplatform_ephemeral_media_gateway.py", workflow)
+        self.assertNotIn("python scripts/clientplatform_telegram_staging_smoke.py", workflow)
         self.assertIn("secrets.CLIENTPLATFORM_STAGING_TELEGRAM_BOT_TOKEN", workflow)
         self.assertNotIn("secrets.CLIENTPLATFORM_MEDIA_SIGNING_KEY", workflow)
         self.assertNotIn("vars.CLIENTPLATFORM_MEDIA_GATEWAY_BASE_URL", workflow)
