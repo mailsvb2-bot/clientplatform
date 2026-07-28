@@ -4,7 +4,7 @@ from typing import Protocol
 
 from a1.domain.connections import ClaimedDispatch, ConnectionPlatform
 from a1.domain.programs import ContentKind
-from a1.transport.media import MediaReferenceResolver, SafeMediaReferenceResolver
+from a1.transport.media import MediaReferenceResolver
 
 
 class TelegramBotClient(Protocol):
@@ -75,7 +75,7 @@ class TelegramDispatchAdapter:
         media_resolver: MediaReferenceResolver | None = None,
     ) -> None:
         self._client = client
-        self._media_resolver = media_resolver or SafeMediaReferenceResolver()
+        self._media_resolver = media_resolver
 
     async def send(self, item: ClaimedDispatch, credential: str) -> str:
         token = str(credential or "").strip()
@@ -85,7 +85,7 @@ class TelegramDispatchAdapter:
         chat_id = item.external_subject
         kind = item.dispatch.payload_kind
         payload = item.dispatch.payload_ref
-        if kind in _MEDIA_KINDS:
+        if kind in _MEDIA_KINDS and self._media_resolver is not None:
             payload = await self._media_resolver.resolve(payload, kind)
 
         if kind == ContentKind.AUDIO:
