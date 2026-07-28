@@ -1,135 +1,23 @@
-name: clientplatform Rebrand Regression Fix
+name: clientplatform Brand Gate
 
 on:
+  pull_request:
   push:
     branches:
-      - agent/full-clientplatform-rebrand
-  pull_request:
-    branches:
       - main
-    types:
-      - opened
-      - synchronize
-      - reopened
+      - "agent/**"
 
 permissions:
-  contents: write
-
-concurrency:
-  group: clientplatform-rebrand-regression-fix
-  cancel-in-progress: false
+  contents: read
 
 jobs:
-  fix:
-    if: github.actor != 'github-actions[bot]'
+  brand-gate:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 5
 
     steps:
-      - name: Checkout rebrand branch
+      - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          ref: agent/full-clientplatform-rebrand
-          fetch-depth: 1
 
-      - name: Set up Python
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
-        with:
-          python-version: "3.12"
-
-      - name: Patch retry and media contracts
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          jobs_path = Path("services/jobs.py")
-          jobs_text = jobs_path.read_text(encoding="utf-8")
-          jobs_text = jobs_text.replace(
-              "import logging\nimport sqlite3",
-              "import logging\nimport re\nimport sqlite3",
-              1,
-          )
-          old_retry = '''    retry_at_utc = normalize_utc_iso(retry_at_utc)\n    base = str(job.job_key or "").split(":a", 1)[0]\n    new_retries = int(job.retries) + 1\n    new_key = f"{base}:a{new_retries}" if base else f"retry:{job.id}:a{new_retries}"\n'''
-          new_retry = '''    retry_at_utc = normalize_utc_iso(retry_at_utc)\n    raw_key = str(job.job_key or "")\n    base = re.sub(r":(?:a|attempt)\\d+$", "", raw_key)\n    new_retries = int(job.retries) + 1\n    new_key = (\n        f"{base}:attempt{new_retries}"\n        if base\n        else f"retry:{job.id}:attempt{new_retries}"\n    )\n'''
-          if old_retry not in jobs_text:
-              raise SystemExit("jobs retry contract pattern not found")
-          jobs_path.write_text(jobs_text.replace(old_retry, new_retry, 1), encoding="utf-8")
-
-          jobs_test_path = Path("tests/test_jobs_persistence_critical_paths_phase2.py")
-          jobs_test = jobs_test_path.read_text(encoding="utf-8")
-          jobs_test = jobs_test.replace(
-              '("norm:later", 3, "base:a3", "safe", 1, "token")',
-              '("norm:later", 3, "base:attempt3", "safe", 1, "token")',
-              1,
-          )
-          jobs_test = jobs_test.replace(
-              '== "retry:2:clientplatform"',
-              '== "retry:2:attempt1"',
-              1,
-          )
-          jobs_test_path.write_text(jobs_test, encoding="utf-8")
-
-          media_test_path = Path("tests/test_runtime_clientplatform_media_gateway_http.py")
-          media_test = media_test_path.read_text(encoding="utf-8")
-          media_test = media_test.replace(
-              '        target.write_bytes(b"clientplatform-AUDIO-CONTENT")',
-              '        self.media_content = b"clientplatform-AUDIO-CONTENT"\n        target.write_bytes(self.media_content)',
-              1,
-          )
-          media_test = media_test.replace(
-              'self.assertEqual(await response.read(), b"clientplatform-AUDIO-CONTENT")',
-              'self.assertEqual(await response.read(), self.media_content)',
-          )
-          media_test = media_test.replace(
-              'self.assertEqual(int(response.headers["Content-Length"]), 16)',
-              'self.assertEqual(\n                    int(response.headers["Content-Length"]), len(self.media_content)\n                )',
-              1,
-          )
-          media_test = media_test.replace(
-              'self.assertEqual(response.headers["Content-Range"], "bytes 3-7/16")',
-              'self.assertEqual(\n                    response.headers["Content-Range"],\n                    f"bytes 3-7/{len(self.media_content)}",\n                )',
-              1,
-          )
-          media_test = media_test.replace(
-              'self.assertEqual(await response.read(), b"AUDIO")',
-              'self.assertEqual(await response.read(), self.media_content[3:8])',
-              1,
-          )
-          media_test = media_test.replace(
-              'self.assertEqual(fetched, [b"clientplatform-AUDIO-CONTENT"])',
-              'self.assertEqual(fetched, [self.media_content])',
-              1,
-          )
-          media_test_path.write_text(media_test, encoding="utf-8")
-          PY
-
-      - name: Validate focused regressions
-        run: |
-          set -o pipefail
-          python -m pip install --disable-pip-version-check pip==26.1.2
-          python -m pip install --require-hashes -r requirements-dev.txt
-          python -m pytest -vv \
-            tests/test_jobs_persistence_critical_paths_phase2.py \
-            tests/test_runtime_clientplatform_media_gateway_http.py \
-            2>&1 | tee "$RUNNER_TEMP/clientplatform-focused-regressions.log"
-          python scripts/clientplatform_rebrand.py --include-workflows --check \
-            2>&1 | tee -a "$RUNNER_TEMP/clientplatform-focused-regressions.log"
-
-      - name: Upload focused regression log
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: clientplatform-focused-regression-log
-          path: ${{ runner.temp }}/clientplatform-focused-regressions.log
-          if-no-files-found: error
-
-      - name: Commit regression fixes
-        run: |
-          set -Eeuo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add services/jobs.py \
-            tests/test_jobs_persistence_critical_paths_phase2.py \
-            tests/test_runtime_clientplatform_media_gateway_http.py
-          git commit -m "Fix clientplatform rebrand regressions"
-          git push origin HEAD:agent/full-clientplatform-rebrand
+      - name: Enforce clientplatform naming across tracked files
+        run: python scripts/clientplatform_rebrand.py --include-workflows --check
