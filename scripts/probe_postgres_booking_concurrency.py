@@ -55,6 +55,23 @@ def _run_pair(worker: Callable[[int], str]) -> list[str]:
         return list(executor.map(worker, (0, 1)))
 
 
+def _cleanup_business(business_id: str) -> None:
+    """Delete probe-owned rows in FK-safe order for reusable staging databases."""
+
+    with get_db() as conn:
+        for table in (
+            "booking_slots",
+            "customer_invites",
+            "business_offerings",
+            "business_capabilities",
+            "business_profiles",
+            "customer_identities",
+            "customers",
+        ):
+            conn.execute(f"DELETE FROM {table} WHERE business_id=?", (business_id,))
+        conn.execute("DELETE FROM businesses WHERE id=?", (business_id,))
+
+
 def main() -> int:
     if not CONFIG.uses_postgres:
         raise SystemExit("POSTGRES_BOOKING_CONCURRENCY_FAILED: METRO_DB_ENGINE=postgres is required")
@@ -236,8 +253,7 @@ def main() -> int:
         return 0
     finally:
         if business_id:
-            with get_db() as conn:
-                conn.execute("DELETE FROM businesses WHERE id=?", (business_id,))
+            _cleanup_business(business_id)
 
 
 if __name__ == "__main__":
