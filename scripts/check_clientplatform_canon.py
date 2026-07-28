@@ -30,7 +30,8 @@ REQUIRED_PROVENANCE_FRAGMENTS = (
 )
 
 REQUIRED_README_FRAGMENTS = (
-    "ClientPlatform / ClientPlatform",
+    "# ClientPlatform",
+    "ClientPlatform — мультитенантная платформа",
     "docs/CLIENTPLATFORM_CANON_TZ.md",
     "docs/BASELINE_PROVENANCE.md",
     BASELINE_SHA,
