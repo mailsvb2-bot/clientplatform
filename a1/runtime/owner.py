@@ -40,6 +40,10 @@ Sleep = Callable[[float], Awaitable[None]]
 Monotonic = Callable[[], float]
 
 
+def _schema_error(exc: BaseException) -> tuple[bool, str]:
+    return False, f"a1_schema:{type(exc).__name__}"
+
+
 def _a1_schema_readiness() -> tuple[bool, str | None]:
     """Verify the complete additive A1 dispatch schema before starting workers."""
 
@@ -71,8 +75,18 @@ def _a1_schema_readiness() -> tuple[bool, str | None]:
         if missing:
             return False, "a1_schema_missing:" + ",".join(missing)
         return True, None
-    except (sqlite3.Error, OSError, RuntimeError, TypeError, ValueError, AttributeError) as exc:
-        return False, f"a1_schema:{type(exc).__name__}"
+    except sqlite3.Error as exc:
+        return _schema_error(exc)
+    except OSError as exc:
+        return _schema_error(exc)
+    except RuntimeError as exc:
+        return _schema_error(exc)
+    except TypeError as exc:
+        return _schema_error(exc)
+    except ValueError as exc:
+        return _schema_error(exc)
+    except AttributeError as exc:
+        return _schema_error(exc)
 
 
 def _schema_wait_timeout_seconds() -> float:
