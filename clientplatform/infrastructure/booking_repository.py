@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import sqlite3
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
@@ -22,6 +24,7 @@ from clientplatform.domain.bookings import (
 from clientplatform.domain.tenancy import TenantContext, normalize_uuid
 from clientplatform.infrastructure.activity_repository import ActivityRepository
 from clientplatform.infrastructure.tenancy_repository import TenancyRepository
+from services.db.core import PostgresCompatConnection
 
 
 def _utc_now() -> str:
@@ -32,6 +35,38 @@ def _value(row: Any, key: str, position: int) -> Any:
     if hasattr(row, "keys"):
         return row[key]
     return row[position]
+
+
+def _booking_lock_key(*parts: str) -> int:
+    payload = "\x1f".join(str(part) for part in parts).encode("utf-8")
+    digest = hashlib.blake2b(
+        payload,
+        digest_size=8,
+        person=b"cp-booking-v1",
+    ).digest()
+    return int.from_bytes(digest, byteorder="big", signed=True)
+
+
+def _serialize_booking_write(
+    conn: Any,
+    *,
+    namespace: str,
+    business_id: str,
+    subject_id: str,
+) -> None:
+    """Serialize one overlap invariant for the lifetime of the transaction.
+
+    PostgreSQL gets a transaction-scoped advisory lock, so the lock is released
+    automatically on commit or rollback. SQLite has no advisory locks; its local
+    development fallback obtains the write reservation before the overlap check.
+    """
+
+    if isinstance(conn, PostgresCompatConnection):
+        lock_key = _booking_lock_key(namespace, business_id, subject_id)
+        conn.execute("SELECT pg_advisory_xact_lock(?)", (lock_key,)).fetchone()
+        return
+    if isinstance(conn, sqlite3.Connection) and not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
 
 
 def _slot_from_row(row: Any) -> BookingSlot:
@@ -113,6 +148,12 @@ class BookingRepository:
         timestamp = normalize_utc_datetime(str(now or _utc_now()), field_name="now")
         if datetime.fromisoformat(starts_at) <= datetime.fromisoformat(timestamp):
             raise BookingInvariantViolation("время записи должно быть в будущем")
+        _serialize_booking_write(
+            self._conn,
+            namespace="offering-slot-overlap",
+            business_id=current.business_id,
+            subject_id=offering.id,
+        )
         overlap = self._conn.execute(
             """
             SELECT id FROM booking_slots
@@ -252,6 +293,12 @@ class BookingRepository:
         link = self._customer_link(telegram_user_id=telegram_user_id, business_id=business_id)
         normalized_slot = normalize_uuid(slot_id, field_name="booking_slot_id")
         timestamp = normalize_utc_datetime(str(now or _utc_now()), field_name="now")
+        _serialize_booking_write(
+            self._conn,
+            namespace="customer-booking-overlap",
+            business_id=link.business_id,
+            subject_id=link.customer_id,
+        )
         row = self._conn.execute(
             _SLOT_SELECT + " WHERE bs.id=? AND bs.business_id=? LIMIT 1",
             (normalized_slot, link.business_id),

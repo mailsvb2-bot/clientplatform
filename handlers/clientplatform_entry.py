@@ -1,0 +1,142 @@
+from __future__ import annotations
+
+import asyncio
+from typing import Any
+
+from aiogram import F, Router
+from aiogram.filters import CommandStart
+from aiogram.fsm.context import FSMContext
+from aiogram.types import CallbackQuery, Message
+
+from clientplatform.application.activity import claim_customer_invite
+from clientplatform.application.bookings import list_customer_businesses
+from clientplatform.application.tenancy import list_accessible_businesses
+from handlers import clientplatform_control as control
+
+router = Router(name="clientplatform_entry")
+router.message.filter(control.ClientPlatformControlEnabled())
+router.callback_query.filter(control.ClientPlatformControlEnabled())
+
+
+def _entry_keyboard():
+    return control._keyboard(
+        [
+            [("Мои бизнесы", "cp:entry:businesses")],
+            [("Мои специалисты и программы", "cp:entry:clients")],
+        ]
+    )
+
+
+async def _send_business_choice(
+    message: Message,
+    *,
+    user_id: int,
+    accesses: list[Any],
+    state: FSMContext,
+) -> None:
+    if len(accesses) > 1:
+        await state.clear()
+        await message.answer(
+            "Выберите бизнес, с которым хотите работать:",
+            reply_markup=control._business_choice_keyboard(accesses),
+        )
+        return
+    await control._resume_business(
+        message,
+        user_id=user_id,
+        business_id=accesses[0].business.id,
+        state=state,
+    )
+
+
+@router.message(CommandStart())
+async def clientplatform_entry_start(message: Message, state: FSMContext) -> None:
+    user_id = control._user_id(message)
+    payload = control._start_payload(message)
+    if payload.startswith("cpj_"):
+        token = payload.removeprefix("cpj_")
+        user = message.from_user
+        claim = await asyncio.to_thread(
+            claim_customer_invite,
+            token=token,
+            telegram_user_id=user_id,
+            username=None if user is None else user.username,
+            display_name=None if user is None else user.full_name,
+        )
+        await state.clear()
+        detail = "Вы уже были подключены." if claim.already_connected else "Подключение завершено."
+        await message.answer(
+            f"Вы подключены к «{claim.business_name}». {detail}\n"
+            "Материалы и сообщения этого специалиста будут приходить сюда.",
+            reply_markup=control._client_portal_keyboard(claim.business_id),
+        )
+        return
+
+    accesses, links = await asyncio.gather(
+        asyncio.to_thread(list_accessible_businesses, user_id=user_id),
+        asyncio.to_thread(list_customer_businesses, telegram_user_id=user_id),
+    )
+    if accesses and links:
+        await state.clear()
+        await message.answer(
+            "У Вас есть два рабочих пространства. Выберите, куда перейти:",
+            reply_markup=_entry_keyboard(),
+        )
+        return
+    if accesses:
+        await _send_business_choice(
+            message,
+            user_id=user_id,
+            accesses=accesses,
+            state=state,
+        )
+        return
+    if links:
+        await state.clear()
+        await control._send_client_portal(message, links=links)
+        return
+
+    await state.set_state(control.ClientPlatformControlState.business_name)
+    await message.answer(
+        "Добро пожаловать в ClientPlatform.\n\n"
+        "Сначала напишите название Вашего дела, проекта или практики."
+    )
+
+
+@router.callback_query(F.data == "cp:entry:businesses")
+async def open_business_workspace(callback: CallbackQuery, state: FSMContext) -> None:
+    user_id = int(callback.from_user.id)
+    accesses = await asyncio.to_thread(list_accessible_businesses, user_id=user_id)
+    await callback.answer()
+    if not accesses:
+        await control._callback_message(callback).answer(
+            "Активных бизнесов больше нет. Нажмите /start, чтобы обновить меню."
+        )
+        return
+    await _send_business_choice(
+        control._callback_message(callback),
+        user_id=user_id,
+        accesses=accesses,
+        state=state,
+    )
+
+
+@router.callback_query(F.data == "cp:entry:clients")
+async def open_customer_workspace(callback: CallbackQuery, state: FSMContext) -> None:
+    links = await asyncio.to_thread(
+        list_customer_businesses,
+        telegram_user_id=int(callback.from_user.id),
+    )
+    await callback.answer()
+    if not links:
+        await control._callback_message(callback).answer(
+            "Активных подключений к специалистам больше нет. Нажмите /start, чтобы обновить меню."
+        )
+        return
+    await state.clear()
+    await control._send_client_portal(control._callback_message(callback), links=links)
+
+
+@router.errors()
+async def clientplatform_entry_error(event: object) -> bool:
+    return await control.clientplatform_control_error(event)
