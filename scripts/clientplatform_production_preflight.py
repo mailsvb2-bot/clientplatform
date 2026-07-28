@@ -2,9 +2,9 @@ from __future__ import annotations
 
 """Fail-closed production-isolation contract for ClientPlatform.
 
-The checker is intentionally dependency-light and does not contact Telegram,
-PostgreSQL or object storage. Live probes are separate commands so this file can
-run before secrets are exposed to the application process.
+The checker is dependency-light and does not contact Telegram, PostgreSQL or
+object storage. Live probes are separate commands so this can run before the
+application process receives production credentials.
 """
 
 import argparse
@@ -26,9 +26,20 @@ def _truthy(env: Mapping[str, str], name: str) -> bool:
     return _value(env, name).lower() in _TRUE
 
 
+def _looks_placeholder(value: str) -> bool:
+    normalized = value.strip()
+    lowered = normalized.lower()
+    return (
+        lowered in _PLACEHOLDERS
+        or normalized.upper().startswith(("PASTE_", "CHANGE_"))
+        or "your-domain" in lowered
+        or lowered.endswith(".example.com")
+    )
+
+
 def _require(env: Mapping[str, str], name: str, errors: list[str]) -> str:
     value = _value(env, name)
-    if value.lower() in _PLACEHOLDERS or value.upper().startswith("PASTE_"):
+    if _looks_placeholder(value):
         errors.append(f"{name} is missing or placeholder")
     return value
 
@@ -71,6 +82,13 @@ def _absolute_path(env: Mapping[str, str], name: str, errors: list[str]) -> str:
     return value
 
 
+def _validate_admin_ids(env: Mapping[str, str], errors: list[str]) -> None:
+    raw = _require(env, "ADMIN_IDS", errors)
+    values = [part.strip() for part in raw.split(",") if part.strip()]
+    if not values or any(not value.isdigit() or int(value) <= 0 for value in values):
+        errors.append("ADMIN_IDS must contain positive numeric Telegram IDs")
+
+
 def _validate_database(env: Mapping[str, str], errors: list[str]) -> None:
     if _value(env, "METRO_DB_ENGINE").lower() not in {"postgres", "postgresql", "pg"}:
         errors.append("METRO_DB_ENGINE must be postgres")
@@ -93,6 +111,30 @@ def _validate_database(env: Mapping[str, str], errors: list[str]) -> None:
         errors.append("ALLOW_SQLITE_IN_PROD is forbidden")
 
 
+def _validate_bind_hosts(env: Mapping[str, str], errors: list[str]) -> None:
+    mode = _require(env, "CLIENTPLATFORM_DEPLOYMENT_MODE", errors).lower()
+    if mode not in {"systemd", "container"}:
+        errors.append("CLIENTPLATFORM_DEPLOYMENT_MODE must be systemd or container")
+        return
+    hosts = {
+        "MESSENGER_WEBHOOK_HOST": _value(env, "MESSENGER_WEBHOOK_HOST"),
+        "HEALTHCHECK_HOST": _value(env, "HEALTHCHECK_HOST"),
+        "CLIENTPLATFORM_MEDIA_GATEWAY_HOST": _value(env, "CLIENTPLATFORM_MEDIA_GATEWAY_HOST"),
+    }
+    if mode == "systemd":
+        for name, host in hosts.items():
+            if host not in {"127.0.0.1", "::1"}:
+                errors.append(f"{name} must bind to loopback in systemd mode")
+        if _truthy(env, "CLIENTPLATFORM_CONTAINER_NETWORK_ISOLATED"):
+            errors.append("container isolation evidence is invalid in systemd mode")
+        return
+    if not _truthy(env, "CLIENTPLATFORM_CONTAINER_NETWORK_ISOLATED"):
+        errors.append("container mode requires CLIENTPLATFORM_CONTAINER_NETWORK_ISOLATED=1")
+    for name, host in hosts.items():
+        if host not in {"0.0.0.0", "::"}:
+            errors.append(f"{name} must bind inside the container network in container mode")
+
+
 def _validate_public_ingress(env: Mapping[str, str], errors: list[str]) -> None:
     domain = _require(env, "CLIENTPLATFORM_DOMAIN", errors).lower()
     if domain in {"example.com", "localhost"} or domain.endswith((".example.com", ".invalid")):
@@ -106,6 +148,7 @@ def _validate_public_ingress(env: Mapping[str, str], errors: list[str]) -> None:
         "PAYMENT_PUBLIC_BASE_URL",
         "PRIVACY_EXPORT_PUBLIC_BASE_URL",
         "TELEGRAM_WEBHOOK_PUBLIC_BASE_URL",
+        "CLIENTPLATFORM_MEDIA_GATEWAY_BASE_URL",
     ):
         value = _https_url(env, name, errors)
         if public_base and value and urlsplit(value).hostname != urlsplit(public_base).hostname:
@@ -125,21 +168,14 @@ def _validate_public_ingress(env: Mapping[str, str], errors: list[str]) -> None:
     webhook_secret = _require(env, "TELEGRAM_WEBHOOK_SECRET_TOKEN", errors)
     if webhook_secret and len(webhook_secret) < 32:
         errors.append("TELEGRAM_WEBHOOK_SECRET_TOKEN must contain at least 32 characters")
+    diagnostics_secret = _require(env, "HEALTHCHECK_DIAGNOSTICS_TOKEN", errors)
+    if diagnostics_secret and len(diagnostics_secret) < 32:
+        errors.append("HEALTHCHECK_DIAGNOSTICS_TOKEN must contain at least 32 characters")
     prefix = _value(env, "TELEGRAM_WEBHOOK_PREFIX")
     if not prefix.startswith("/") or "token" in prefix.lower():
         errors.append("TELEGRAM_WEBHOOK_PREFIX must be a non-token path beginning with /")
 
-    ingress_host = _value(env, "MESSENGER_WEBHOOK_HOST")
-    health_host = _value(env, "HEALTHCHECK_HOST")
-    media_host = _value(env, "CLIENTPLATFORM_MEDIA_GATEWAY_HOST")
-    for name, host in (
-        ("MESSENGER_WEBHOOK_HOST", ingress_host),
-        ("HEALTHCHECK_HOST", health_host),
-        ("CLIENTPLATFORM_MEDIA_GATEWAY_HOST", media_host),
-    ):
-        if host not in {"127.0.0.1", "::1"}:
-            errors.append(f"{name} must bind to loopback behind the owned reverse proxy")
-
+    _validate_bind_hosts(env, errors)
     ingress_port = _positive_int(
         env, "MESSENGER_WEBHOOK_PORT", minimum=1024, maximum=65535, errors=errors
     )
@@ -176,6 +212,20 @@ def _validate_storage(env: Mapping[str, str], errors: list[str]) -> None:
     if "metrotherapy" in bucket:
         errors.append("ClientPlatform must not reuse imported product object storage")
 
+    expected_references = {
+        "CLIENTPLATFORM_MEDIA_GATEWAY_S3_ACCESS_KEY_REFERENCE": (
+            "secret://env/CLIENTPLATFORM_SECRET_S3_ACCESS_KEY"
+        ),
+        "CLIENTPLATFORM_MEDIA_GATEWAY_S3_SECRET_KEY_REFERENCE": (
+            "secret://env/CLIENTPLATFORM_SECRET_S3_SECRET_KEY"
+        ),
+        "CLIENTPLATFORM_MEDIA_SIGNING_SECRET_REFERENCE": (
+            "secret://env/CLIENTPLATFORM_SECRET_MEDIA_SIGNING_KEY"
+        ),
+    }
+    for name, expected in expected_references.items():
+        if _value(env, name) != expected:
+            errors.append(f"{name} must use the dedicated ClientPlatform secret reference")
     for name in (
         "CLIENTPLATFORM_SECRET_S3_ACCESS_KEY",
         "CLIENTPLATFORM_SECRET_S3_SECRET_KEY",
@@ -195,12 +245,11 @@ def _validate_identity_and_secrets(env: Mapping[str, str], errors: list[str]) ->
         errors.append("CLIENTPLATFORM_ENVIRONMENT must equal production")
     if _value(env, "APP_ENV").lower() not in {"prod", "production"}:
         errors.append("APP_ENV must be prod")
-
     _require(env, "BOT_TOKEN", errors)
+    _validate_admin_ids(env, errors)
     username = _require(env, "CLIENTPLATFORM_PRODUCTION_BOT_USERNAME", errors).lower().lstrip("@")
     if any(marker in username for marker in ("staging", "stage", "test")):
         errors.append("production bot username must not identify a staging/test bot")
-
     forbidden = sorted(
         name
         for name, value in env.items()
@@ -254,7 +303,6 @@ def main() -> int:
     parser.add_argument("--env-file", type=Path)
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
-
     env = dict(os.environ)
     if args.env_file is not None:
         env.update(_read_env_file(args.env_file))
