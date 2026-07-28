@@ -44,6 +44,8 @@ async def direct_to_thread(
 
 @pytest.fixture(autouse=True)
 def direct_application_calls(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(handlers, "Message", FakeMessage)
+    monkeypatch.setattr(handlers, "CallbackQuery", FakeCallback)
     monkeypatch.setattr(handlers.asyncio, "to_thread", direct_to_thread)
 
 
