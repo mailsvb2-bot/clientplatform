@@ -99,12 +99,29 @@ jobs:
           PY
 
       - name: Validate focused regressions
+        id: focused
+        continue-on-error: true
         run: |
+          set -o pipefail
           python -m pip install --require-hashes -r requirements.txt
-          python -m pytest -q \
+          python -m pytest -vv \
             tests/test_jobs_persistence_critical_paths_phase2.py \
-            tests/test_runtime_clientplatform_media_gateway_http.py
-          python scripts/clientplatform_rebrand.py --include-workflows --check
+            tests/test_runtime_clientplatform_media_gateway_http.py \
+            2>&1 | tee "$RUNNER_TEMP/clientplatform-focused-regressions.log"
+          python scripts/clientplatform_rebrand.py --include-workflows --check \
+            2>&1 | tee -a "$RUNNER_TEMP/clientplatform-focused-regressions.log"
+
+      - name: Upload focused regression log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: clientplatform-focused-regression-log
+          path: ${{ runner.temp }}/clientplatform-focused-regressions.log
+          if-no-files-found: error
+
+      - name: Fail when focused regressions remain
+        if: steps.focused.outcome != 'success'
+        run: exit 1
 
       - name: Commit regression fixes
         run: |
