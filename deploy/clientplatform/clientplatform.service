@@ -1,0 +1,46 @@
+[Unit]
+Description=ClientPlatform production application
+After=network-online.target postgresql.service
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=clientplatform
+Group=clientplatform
+WorkingDirectory=/var/lib/clientplatform/runtime/current
+EnvironmentFile=/etc/clientplatform/clientplatform.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStartPre=/var/lib/clientplatform/runtime/current/.venv/bin/python scripts/clientplatform_production_preflight.py --env-file /etc/clientplatform/clientplatform.env
+ExecStart=/var/lib/clientplatform/runtime/current/.venv/bin/python main.py
+Restart=on-failure
+RestartSec=3
+TimeoutStartSec=60
+TimeoutStopSec=45
+KillSignal=SIGINT
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictRealtime=true
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+SystemCallArchitectures=native
+UMask=0077
+StateDirectory=clientplatform
+LogsDirectory=clientplatform
+ReadWritePaths=/var/lib/clientplatform /var/log/clientplatform
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

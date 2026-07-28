@@ -1,0 +1,110 @@
+name: clientplatform-production
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: clientplatform
+      POSTGRES_USER: clientplatform_admin
+      POSTGRES_PASSWORD: ${CLIENTPLATFORM_POSTGRES_ADMIN_PASSWORD:?set CLIENTPLATFORM_POSTGRES_ADMIN_PASSWORD}
+      CLIENTPLATFORM_POSTGRES_APP_PASSWORD: ${CLIENTPLATFORM_POSTGRES_APP_PASSWORD:?set CLIENTPLATFORM_POSTGRES_APP_PASSWORD}
+    volumes:
+      - clientplatform-postgres:/var/lib/postgresql/data
+      - ./postgres-init.sh:/docker-entrypoint-initdb.d/10-clientplatform-app-role.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U clientplatform_admin -d clientplatform"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [backend]
+
+  app:
+    build:
+      context: ../..
+      dockerfile: deploy/clientplatform/Dockerfile
+    restart: unless-stopped
+    env_file: ./clientplatform.env
+    environment:
+      DATABASE_URL: postgresql://clientplatform_app:${CLIENTPLATFORM_POSTGRES_APP_PASSWORD}@postgres:5432/clientplatform
+      CLIENTPLATFORM_DATABASE_NAME: clientplatform
+      CLIENTPLATFORM_DEPLOYMENT_MODE: container
+      CLIENTPLATFORM_CONTAINER_NETWORK_ISOLATED: "1"
+      MESSENGER_WEBHOOK_HOST: 0.0.0.0
+      HEALTHCHECK_HOST: 0.0.0.0
+      CLIENTPLATFORM_MEDIA_GATEWAY_HOST: 0.0.0.0
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - >-
+        python scripts/clientplatform_production_preflight.py
+        && exec python main.py
+    depends_on:
+      postgres:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    volumes:
+      - clientplatform-state:/var/lib/clientplatform
+      - clientplatform-logs:/var/log/clientplatform
+      - clientplatform-backups:/var/backups/clientplatform
+    expose: ["8181", "8182", "8191"]
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    networks: [backend]
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    environment:
+      CLIENTPLATFORM_DOMAIN: ${CLIENTPLATFORM_DOMAIN:?set CLIENTPLATFORM_DOMAIN}
+      CLIENTPLATFORM_INGRESS_UPSTREAM: app:8181
+      CLIENTPLATFORM_MEDIA_UPSTREAM: app:8191
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - clientplatform-caddy-data:/data
+      - clientplatform-caddy-config:/config
+      - clientplatform-logs:/var/log/clientplatform
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    depends_on: [app]
+    cap_drop: ["ALL"]
+    cap_add: ["NET_BIND_SERVICE"]
+    security_opt: ["no-new-privileges:true"]
+    networks: [backend]
+
+  backup:
+    profiles: ["operations"]
+    build:
+      context: ../..
+      dockerfile: deploy/clientplatform/Dockerfile
+    env_file: ./clientplatform.env
+    environment:
+      DATABASE_URL: postgresql://clientplatform_app:${CLIENTPLATFORM_POSTGRES_APP_PASSWORD}@postgres:5432/clientplatform
+      CLIENTPLATFORM_DATABASE_NAME: clientplatform
+    entrypoint: ["python", "scripts/clientplatform_postgres_backup.py", "backup"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    read_only: true
+    tmpfs: ["/tmp:size=64m,mode=1777"]
+    volumes:
+      - clientplatform-backups:/var/backups/clientplatform
+      - clientplatform-state:/var/lib/clientplatform
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    networks: [backend]
+
+networks:
+  backend:
+    internal: false
+
+volumes:
+  clientplatform-postgres:
+  clientplatform-state:
+  clientplatform-logs:
+  clientplatform-backups:
+  clientplatform-caddy-data:
+  clientplatform-caddy-config:
