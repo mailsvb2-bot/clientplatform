@@ -12,7 +12,7 @@ Fixed paths:
 - app environment: `/etc/clientplatform/clientplatform.env` with mode `0600`;
 - PostgreSQL backups: `/var/backups/clientplatform/postgres`.
 
-The application role must be `NOSUPERUSER NOCREATEDB NOCREATEROLE`. Restore drills use a different operator-only administrative DSN. Managed Client Bots are not enabled in this PR; they require the next Bot Gateway boundary.
+The application role must be `NOSUPERUSER NOCREATEDB NOCREATEROLE`. Restore drills use a different operator-only administrative DSN. Managed Client Bots require the next Bot Gateway PR and are not enabled in this production-isolation PR.
 
 ## External provisioning
 
