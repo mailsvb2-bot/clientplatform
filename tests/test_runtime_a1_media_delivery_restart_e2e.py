@@ -191,11 +191,8 @@ class A1PersistedMediaDeliveryRestartE2E(unittest.IsolatedAsyncioTestCase):
             conn.row_factory = sqlite3.Row
             conn.execute("PRAGMA foreign_keys=ON")
             try:
-                yield conn
-                conn.commit()
-            except Exception:
-                conn.rollback()
-                raise
+                with conn:
+                    yield conn
             finally:
                 conn.close()
 
