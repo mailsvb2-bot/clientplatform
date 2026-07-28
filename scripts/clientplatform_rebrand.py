@@ -11,6 +11,7 @@ LEGACY_LOWER = "a" + "1"
 BRAND = "clientplatform"
 BRAND_CLASS = "ClientPlatform"
 BRAND_ENV = "CLIENTPLATFORM"
+WORKFLOW_ROOT = Path(".github/workflows")
 
 
 def _run(*args: str) -> str:
@@ -31,6 +32,14 @@ def tracked_paths() -> list[Path]:
         stderr=subprocess.PIPE,
     ).stdout
     return [Path(item.decode("utf-8")) for item in raw.split(b"\0") if item]
+
+
+def is_workflow_path(path: Path) -> bool:
+    try:
+        path.relative_to(WORKFLOW_ROOT)
+    except ValueError:
+        return False
+    return True
 
 
 def transform_name(value: str) -> str:
@@ -84,9 +93,11 @@ def _read_text(path: Path) -> str | None:
         return None
 
 
-def apply_content_changes(paths: list[Path]) -> int:
+def apply_content_changes(paths: list[Path], *, include_workflows: bool) -> int:
     changed = 0
     for path in paths:
+        if not include_workflows and is_workflow_path(path):
+            continue
         if not path.is_file():
             continue
         text = _read_text(path)
@@ -100,10 +111,12 @@ def apply_content_changes(paths: list[Path]) -> int:
     return changed
 
 
-def apply_path_changes(paths: list[Path]) -> int:
+def apply_path_changes(paths: list[Path], *, include_workflows: bool) -> int:
     moves: list[tuple[Path, Path]] = []
     targets: set[Path] = set()
     for source in paths:
+        if not include_workflows and is_workflow_path(source):
+            continue
         target = transform_path(source)
         if source == target:
             continue
@@ -122,9 +135,11 @@ def apply_path_changes(paths: list[Path]) -> int:
     return len(moves)
 
 
-def remaining_legacy() -> list[str]:
+def remaining_legacy(*, include_workflows: bool) -> list[str]:
     failures: list[str] = []
     for path in tracked_paths():
+        if not include_workflows and is_workflow_path(path):
+            continue
         expected_path = transform_path(path)
         if expected_path != path:
             failures.append(f"path:{path}->{expected_path}")
@@ -138,13 +153,33 @@ def remaining_legacy() -> list[str]:
     return failures
 
 
+def workflow_migration_report() -> list[str]:
+    report: list[str] = []
+    for path in tracked_paths():
+        if not is_workflow_path(path):
+            continue
+        expected_path = transform_path(path)
+        text = _read_text(path) if path.is_file() else None
+        content_changes = text is not None and transform_text(text) != text
+        if expected_path != path or content_changes:
+            report.append(f"{path} -> {expected_path}")
+    return report
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true")
+    parser.add_argument("--include-workflows", action="store_true")
+    parser.add_argument("--report-workflows", action="store_true")
     args = parser.parse_args()
 
+    if args.report_workflows:
+        for item in workflow_migration_report():
+            print(item)
+        return 0
+
     if args.check:
-        failures = remaining_legacy()
+        failures = remaining_legacy(include_workflows=args.include_workflows)
         if failures:
             print("Legacy brand references remain:")
             for failure in failures:
@@ -154,8 +189,14 @@ def main() -> int:
         return 0
 
     paths = tracked_paths()
-    content_changes = apply_content_changes(paths)
-    path_changes = apply_path_changes(paths)
+    content_changes = apply_content_changes(
+        paths,
+        include_workflows=args.include_workflows,
+    )
+    path_changes = apply_path_changes(
+        paths,
+        include_workflows=args.include_workflows,
+    )
     print(
         f"clientplatform rebrand applied: content_files={content_changes}, "
         f"renamed_paths={path_changes}"
