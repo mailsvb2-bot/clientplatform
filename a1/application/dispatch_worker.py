@@ -27,6 +27,13 @@ def _sanitize_error(exc: BaseException, *, credential: str = "") -> str:
     return f"{exc.__class__.__name__}: {message}"[:1000]
 
 
+def _effective_max_attempts(exc: BaseException, configured: int) -> int:
+    """Terminal transport/media failures must not consume the retry budget."""
+
+    retryable = getattr(exc, "retryable", True)
+    return max(1, int(configured)) if retryable is not False else 1
+
+
 def _release_claims(
     items: list[ClaimedDispatch],
     *,
@@ -103,7 +110,7 @@ async def run_dispatch_batch(
                 updated = DispatchOutboxRepository(conn).reschedule(
                     item,
                     error=error,
-                    max_attempts=max_attempts,
+                    max_attempts=_effective_max_attempts(exc, max_attempts),
                 )
             if updated.status == DispatchStatus.DEAD:
                 dead += 1
