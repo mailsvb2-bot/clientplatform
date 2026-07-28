@@ -278,4 +278,4 @@ def test_lock_mark_done_and_reschedule(monkeypatch: pytest.MonkeyPatch) -> None:
 
     retry = jobs.ClaimedJob(2, 7, "kind", "old", "{}", "", 0, "token")
     assert jobs.reschedule(retry, "later") is True
-    assert reschedule_conn.calls[1][1][2] == "retry:2:a1"
+    assert reschedule_conn.calls[1][1][2] == "retry:2:clientplatform"

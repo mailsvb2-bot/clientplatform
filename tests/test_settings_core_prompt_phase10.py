@@ -164,7 +164,7 @@ async def test_prompt_after_time_set_success_and_early_returns(monkeypatch: pyte
     await sc._prompt_after_time_set(message, "home")
     assert message.answers == []
 
-    anchor.pick_for_slot = lambda *_args: SimpleNamespace(anchor="a1")
+    anchor.pick_for_slot = lambda *_args: SimpleNamespace(anchor="clientplatform")
     monkeypatch.setattr(db_module, "mark_delivery_once", lambda *_args: False)
     await sc._prompt_after_time_set(message, "work")
     assert message.answers == []

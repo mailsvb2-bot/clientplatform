@@ -33,7 +33,7 @@ async def test_auto_audio_releases_lock_after_transport_os_error(
     events: list[tuple[str, dict]] = []
 
     monkeypatch.setattr(auto_audio, "get_index", lambda *_args: 0)
-    monkeypatch.setattr(auto_audio, "pick_for_slot", lambda *_args: SimpleNamespace(anchor="a1"))
+    monkeypatch.setattr(auto_audio, "pick_for_slot", lambda *_args: SimpleNamespace(anchor="clientplatform"))
     monkeypatch.setattr(auto_audio, "was_delivered", lambda *_args: False)
     monkeypatch.setattr(
         auto_audio,
@@ -76,7 +76,7 @@ async def test_auto_audio_releases_lock_and_propagates_cancellation(
     released: list[int] = []
 
     monkeypatch.setattr(auto_audio, "get_index", lambda *_args: 0)
-    monkeypatch.setattr(auto_audio, "pick_for_slot", lambda *_args: SimpleNamespace(anchor="a1"))
+    monkeypatch.setattr(auto_audio, "pick_for_slot", lambda *_args: SimpleNamespace(anchor="clientplatform"))
     monkeypatch.setattr(auto_audio, "was_delivered", lambda *_args: False)
     monkeypatch.setattr(
         auto_audio,

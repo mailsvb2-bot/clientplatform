@@ -10,7 +10,7 @@ from typing import Any
 
 from aiohttp import web
 
-from a1.runtime.health import a1_dispatch_readiness, a1_runtime_snapshot
+from clientplatform.runtime.health import clientplatform_dispatch_readiness, clientplatform_runtime_snapshot
 from config.settings import settings
 from core.paths import DB_PATH, ROOT
 from runtime.ingress_flags import (
@@ -294,7 +294,7 @@ def _ingress_health_fields() -> dict[str, bool]:
 
 def build_health_payload() -> tuple[dict[str, Any], int]:
     scheduler = _scheduler_snapshot()
-    a1_runtime = a1_runtime_snapshot()
+    clientplatform_runtime = clientplatform_runtime_snapshot()
     telegram_transport_value = _telegram_transport()
     messenger_webhook_enabled = _messenger_webhook_configured()
     telegram_webhook_enabled = telegram_transport_value == 'webhook'
@@ -316,7 +316,7 @@ def build_health_payload() -> tuple[dict[str, Any], int]:
         **messenger_preflight_fields,
         **ai_policy_snapshot(),
         **scheduler,
-        **a1_runtime,
+        **clientplatform_runtime,
     }
     return details, 200
 
@@ -325,14 +325,14 @@ def build_readiness_payload() -> tuple[dict[str, Any], int]:
     db_ok, db_error = _db_ready()
     schema_ok, schema_error = _schema_ready()
     scheduler = _scheduler_snapshot()
-    a1_runtime = a1_runtime_snapshot()
+    clientplatform_runtime = clientplatform_runtime_snapshot()
     telegram_transport_value = _telegram_transport()
     messenger_webhook_enabled = _messenger_webhook_configured()
     telegram_webhook_enabled = telegram_transport_value == 'webhook'
     webhook_runtime_enabled = _webhook_configured()
     app_env = (os.getenv('APP_ENV', 'dev') or 'dev').strip().lower()
     scheduler_ok, scheduler_errors, scheduler_flags = _scheduler_readiness(scheduler)
-    a1_ok, a1_errors, a1_flags = a1_dispatch_readiness(a1_runtime)
+    clientplatform_ok, clientplatform_errors, clientplatform_flags = clientplatform_dispatch_readiness(clientplatform_runtime)
     ingress_ok, ingress_errors, ingress_fields = _messenger_preflight_readiness()
     audio_ok, audio_error = _audio_ready(app_env)
     webhook_ok = True
@@ -346,7 +346,7 @@ def build_readiness_payload() -> tuple[dict[str, Any], int]:
     if audio_error is not None:
         errors.append(audio_error)
     errors.extend(scheduler_errors)
-    errors.extend(a1_errors)
+    errors.extend(clientplatform_errors)
     errors.extend(ingress_errors)
     if not webhook_ok:
         errors.append('webhook:not_ready')
@@ -354,7 +354,7 @@ def build_readiness_payload() -> tuple[dict[str, Any], int]:
         db_ok
         and schema_ok
         and scheduler_ok
-        and a1_ok
+        and clientplatform_ok
         and ingress_ok
         and audio_ok
         and webhook_ok
@@ -367,7 +367,7 @@ def build_readiness_payload() -> tuple[dict[str, Any], int]:
         'schema_ready': schema_ok,
         'audio_ready': audio_ok,
         'scheduler_ready': scheduler_ok,
-        'a1_dispatch_ready': a1_ok,
+        'clientplatform_dispatch_ready': clientplatform_ok,
         'messenger_ready': ingress_ok,
         'ingress_ready': ingress_ok,
         'webhook_ready': webhook_ok,
@@ -381,12 +381,12 @@ def build_readiness_payload() -> tuple[dict[str, Any], int]:
         'app_env': app_env,
         **_ingress_health_fields(),
         **scheduler_flags,
-        **a1_flags,
+        **clientplatform_flags,
         **_storage_health_fields(),
         **ingress_fields,
         **ai_policy_snapshot(),
         **scheduler,
-        **a1_runtime,
+        **clientplatform_runtime,
     }
     if errors:
         details['error'] = ';'.join(errors)

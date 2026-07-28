@@ -10,7 +10,7 @@ def setup_module(module):
 
 
 def test_reuses_pending_token_before_and_after_url_access():
-    item = AudioProgressItem(ordinal=1, anchor=10, title="A10", path=Path("audio/full/a10.opus"))
+    item = AudioProgressItem(ordinal=1, anchor=10, title="A10", path=Path("audio/full/clientplatform0.opus"))
     token1 = issue_or_reuse_audio_access_token(8111, item=item, platform="vk")
     token2 = issue_or_reuse_audio_access_token(8111, item=item, platform="vk")
     assert token1 == token2
@@ -27,7 +27,7 @@ def test_reuses_pending_token_before_and_after_url_access():
 
 
 def test_url_access_never_confirms_progress():
-    item = AudioProgressItem(ordinal=1, anchor=11, title="A11", path=Path("audio/full/a11.opus"))
+    item = AudioProgressItem(ordinal=1, anchor=11, title="A11", path=Path("audio/full/clientplatform1.opus"))
     token = issue_or_reuse_audio_access_token(8112, item=item, platform="max")
     grant1 = register_audio_access(token)
     grant2 = register_audio_access(token)
