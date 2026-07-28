@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import asyncio
+import threading
 from dataclasses import asdict
 from typing import Any
 
@@ -9,14 +9,7 @@ from a1.runtime.scheduler import A1DispatchScheduler
 
 
 _dispatch_scheduler: A1DispatchScheduler | None = None
-_lifecycle_lock: asyncio.Lock | None = None
-
-
-def _lock() -> asyncio.Lock:
-    global _lifecycle_lock
-    if _lifecycle_lock is None:
-        _lifecycle_lock = asyncio.Lock()
-    return _lifecycle_lock
+_lifecycle_lock = threading.Lock()
 
 
 async def start_a1_runtime(
@@ -25,7 +18,7 @@ async def start_a1_runtime(
     """Start the additive A1 runtime once when explicitly composed by the app."""
 
     global _dispatch_scheduler
-    async with _lock():
+    with _lifecycle_lock:
         if _dispatch_scheduler is not None:
             snapshot = _dispatch_scheduler.health_snapshot()
             if snapshot.running:
@@ -38,7 +31,7 @@ async def start_a1_runtime(
 
 async def stop_a1_runtime() -> None:
     global _dispatch_scheduler
-    async with _lock():
+    with _lifecycle_lock:
         scheduler = _dispatch_scheduler
         _dispatch_scheduler = None
     if scheduler is not None:
@@ -46,7 +39,8 @@ async def stop_a1_runtime() -> None:
 
 
 def a1_runtime_health_snapshot() -> dict[str, Any]:
-    scheduler = _dispatch_scheduler
+    with _lifecycle_lock:
+        scheduler = _dispatch_scheduler
     if scheduler is None:
         return {
             "a1_runtime_composed": False,
