@@ -1,0 +1,40 @@
+{$CLIENTPLATFORM_DOMAIN} {
+    encode zstd gzip
+
+    @telegram path /telegram-webhook*
+    handle @telegram {
+        reverse_proxy {$CLIENTPLATFORM_INGRESS_UPSTREAM:127.0.0.1:8181}
+    }
+
+    @media path /clientplatform/*
+    handle @media {
+        reverse_proxy {$CLIENTPLATFORM_MEDIA_UPSTREAM:127.0.0.1:8191}
+    }
+
+    handle /healthz {
+        respond "not public" 404
+    }
+
+    handle /readyz {
+        respond "not public" 404
+    }
+
+    handle {
+        respond "ClientPlatform" 200
+    }
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "no-referrer"
+        -Server
+    }
+
+    log {
+        output file /var/log/clientplatform/caddy-access.log {
+            roll_size 50MiB
+            roll_keep 10
+        }
+        format json
+    }
+}

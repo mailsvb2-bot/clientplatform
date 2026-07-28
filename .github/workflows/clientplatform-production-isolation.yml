@@ -1,0 +1,169 @@
+name: ClientPlatform Production Isolation
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: clientplatform-production-isolation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  production-isolation:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: clientplatform_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d clientplatform_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      APP_ENV: test
+      LOAD_DOTENV: "0"
+      METRO_DB_ENGINE: postgres
+      CLIENTPLATFORM_DATABASE_NAME: clientplatform_ci
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/clientplatform_ci
+      POSTGRES_REUSE_CONNECTIONS: "0"
+      BOT_TOKEN: "000000:CI"
+      TELEGRAM_TRANSPORT: polling
+      TELEGRAM_WEBHOOK_ENABLED: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install hash-locked dependencies and PostgreSQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes postgresql-client
+          python -m pip install --disable-pip-version-check pip==26.1.2
+          python -m pip install --require-hashes -r requirements-dev.txt
+
+      - name: Production isolation contract tests
+        run: |
+          set -o pipefail
+          python -m unittest -v tests/test_clientplatform_production_isolation.py \
+            2>&1 | tee "$RUNNER_TEMP/clientplatform-production-isolation-tests.log"
+
+      - name: Validate systemd production preflight
+        run: |
+          cat > "$RUNNER_TEMP/clientplatform-production.env" <<'EOF'
+          APP_ENV=prod
+          CLIENTPLATFORM_ENVIRONMENT=production
+          CLIENTPLATFORM_DEPLOYMENT_ID=clientplatform-production
+          CLIENTPLATFORM_DEPLOYMENT_MODE=systemd
+          CLIENTPLATFORM_CONTAINER_NETWORK_ISOLATED=0
+          CLIENTPLATFORM_DOMAIN=clientplatform.production.internal
+          CLIENTPLATFORM_PUBLIC_BASE_URL=https://clientplatform.production.internal
+          CLIENTPLATFORM_PRODUCTION_BOT_USERNAME=clientplatform_bot
+          BOT_TOKEN=100000:production-token-material
+          METRO_DB_ENGINE=postgres
+          CLIENTPLATFORM_DATABASE_NAME=clientplatform_ci
+          DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/clientplatform_ci
+          ALLOW_SQLITE_IN_PROD=0
+          TELEGRAM_TRANSPORT=webhook
+          TELEGRAM_WEBHOOK_ENABLED=1
+          TELEGRAM_LEGACY_TOKEN_WEBHOOK_ENABLED=0
+          ALLOW_INSECURE_TELEGRAM_WEBHOOK=0
+          TELEGRAM_WEBHOOK_PREFIX=/telegram-webhook
+          TELEGRAM_WEBHOOK_PUBLIC_BASE_URL=https://clientplatform.production.internal
+          TELEGRAM_WEBHOOK_SECRET_TOKEN=wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww
+          MESSENGER_WEBHOOK_ENABLED=1
+          MESSENGER_WEBHOOK_HOST=127.0.0.1
+          MESSENGER_WEBHOOK_PORT=8181
+          MESSENGER_PUBLIC_BASE_URL=https://clientplatform.production.internal
+          PAYMENT_PUBLIC_BASE_URL=https://clientplatform.production.internal
+          PRIVACY_EXPORT_PUBLIC_BASE_URL=https://clientplatform.production.internal
+          HEALTHCHECK_ENABLED=1
+          HEALTHCHECK_HOST=127.0.0.1
+          HEALTHCHECK_PORT=8182
+          CLIENTPLATFORM_MEDIA_GATEWAY_ENABLED=1
+          CLIENTPLATFORM_MEDIA_GATEWAY_HOST=127.0.0.1
+          CLIENTPLATFORM_MEDIA_GATEWAY_PORT=8191
+          CLIENTPLATFORM_MEDIA_GATEWAY_STORAGE_MODE=s3
+          CLIENTPLATFORM_MEDIA_GATEWAY_S3_ENDPOINT=https://s3.production.internal
+          CLIENTPLATFORM_MEDIA_GATEWAY_S3_REGION=region-1
+          CLIENTPLATFORM_STORAGE_BUCKET=clientplatform-production
+          CLIENTPLATFORM_MEDIA_GATEWAY_ALLOWED_BUCKETS=clientplatform-production
+          CLIENTPLATFORM_SECRET_S3_ACCESS_KEY=access-key-material
+          CLIENTPLATFORM_SECRET_S3_SECRET_KEY=secret-key-material
+          CLIENTPLATFORM_SECRET_MEDIA_SIGNING_KEY=mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm
+          CLIENTPLATFORM_S3_VERSIONING_ENABLED=1
+          CLIENTPLATFORM_S3_BACKUP_REPLICATION_ENABLED=1
+          CLIENTPLATFORM_BACKUP_DIR=/tmp/clientplatform-backups
+          CLIENTPLATFORM_RESTORE_EVIDENCE_DIR=/tmp/clientplatform-restore-evidence
+          CLIENTPLATFORM_BACKUP_RETENTION_DAYS=30
+          CLIENTPLATFORM_BACKUP_ENCRYPTION_REQUIRED=1
+          CLIENTPLATFORM_RESTORE_DRILL_REQUIRED=1
+          EOF
+          set -o pipefail
+          python scripts/clientplatform_production_preflight.py \
+            --env-file "$RUNNER_TEMP/clientplatform-production.env" \
+            2>&1 | tee "$RUNNER_TEMP/clientplatform-production-preflight.log"
+
+      - name: Validate Docker Compose topology
+        env:
+          CLIENTPLATFORM_POSTGRES_PASSWORD: ci-postgres-password
+          CLIENTPLATFORM_DOMAIN: clientplatform.production.internal
+        run: |
+          cp deploy/clientplatform/clientplatform.production.env.example \
+            deploy/clientplatform/clientplatform.env
+          docker compose -f deploy/clientplatform/compose.production.yml config \
+            > "$RUNNER_TEMP/clientplatform-compose-config.yml"
+          rm -f deploy/clientplatform/clientplatform.env
+
+      - name: Initialize live PostgreSQL schema
+        run: |
+          python - <<'PY'
+          from services.schema import init_db
+          init_db()
+          print("CLIENTPLATFORM_POSTGRES_SCHEMA_OK")
+          PY
+
+      - name: Create backup and prove disposable restore
+        env:
+          CLIENTPLATFORM_BACKUP_DIR: ${{ runner.temp }}/clientplatform-backups
+          CLIENTPLATFORM_RESTORE_EVIDENCE_DIR: ${{ runner.temp }}/clientplatform-restore-evidence
+          CLIENTPLATFORM_BACKUP_RETENTION_DAYS: "30"
+        run: |
+          set -o pipefail
+          python scripts/clientplatform_postgres_backup.py backup \
+            2>&1 | tee "$RUNNER_TEMP/clientplatform-backup.log"
+          DUMP="$(find "$CLIENTPLATFORM_BACKUP_DIR" -name 'clientplatform-*.dump' -type f | head -1)"
+          test -n "$DUMP"
+          python scripts/clientplatform_postgres_backup.py restore-drill "$DUMP" \
+            2>&1 | tee "$RUNNER_TEMP/clientplatform-restore-drill.log"
+
+      - name: Upload production isolation evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: clientplatform-production-isolation-evidence
+          path: |
+            ${{ runner.temp }}/clientplatform-production-isolation-tests.log
+            ${{ runner.temp }}/clientplatform-production-preflight.log
+            ${{ runner.temp }}/clientplatform-compose-config.yml
+            ${{ runner.temp }}/clientplatform-backup.log
+            ${{ runner.temp }}/clientplatform-restore-drill.log
+            ${{ runner.temp }}/clientplatform-backups/*.sha256
+            ${{ runner.temp }}/clientplatform-backups/*.json
+            ${{ runner.temp }}/clientplatform-restore-evidence/*.json
+          if-no-files-found: warn

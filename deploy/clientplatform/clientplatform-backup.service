@@ -1,0 +1,17 @@
+[Unit]
+Description=Create ClientPlatform PostgreSQL backup
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=clientplatform
+Group=clientplatform
+WorkingDirectory=/var/lib/clientplatform/runtime/current
+EnvironmentFile=/etc/clientplatform/clientplatform.env
+ExecStart=/var/lib/clientplatform/runtime/current/.venv/bin/python scripts/clientplatform_postgres_backup.py backup
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/backups/clientplatform /var/lib/clientplatform/restore-evidence
+UMask=0077

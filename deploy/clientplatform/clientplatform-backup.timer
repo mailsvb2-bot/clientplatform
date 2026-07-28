@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily ClientPlatform PostgreSQL backup timer
+
+[Timer]
+OnCalendar=*-*-* 02:15:00
+RandomizedDelaySec=900
+Persistent=true
+Unit=clientplatform-backup.service
+
+[Install]
+WantedBy=timers.target
