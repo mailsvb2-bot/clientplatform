@@ -12,10 +12,14 @@ class ClientPlatformControlBotContractTests(unittest.TestCase):
         value = "12345678-1234-5678-1234-567812345678"
         token = uuid_token(value)
         self.assertEqual(token_uuid(token), value)
-        callback = f"cp:sendp:{token}:{token}"
-        booking_callback = f"cp:slotadd:{token}:{token}"
-        self.assertLessEqual(len(callback.encode("utf-8")), 64)
-        self.assertLessEqual(len(booking_callback.encode("utf-8")), 64)
+        callbacks = (
+            f"cp:sendp:{token}:{token}",
+            f"cp:slotadd:{token}:{token}",
+            f"cp:cprog:{token}:{token}",
+            f"cp:done:{token}:{token}:999",
+        )
+        for callback in callbacks:
+            self.assertLessEqual(len(callback.encode("utf-8")), 64, callback)
 
     def test_material_handler_accepts_telegram_media_and_text(self) -> None:
         handler = Path("handlers/clientplatform_control.py").read_text(encoding="utf-8")
@@ -56,6 +60,15 @@ class ClientPlatformControlBotContractTests(unittest.TestCase):
         self.assertIn("cp:slotadd:", handler)
         self.assertIn("cp:book:", handler)
         self.assertIn("list_customer_businesses", handler)
+
+    def test_customer_program_progress_is_wired_into_both_portals(self) -> None:
+        handler = Path("handlers/clientplatform_control.py").read_text(encoding="utf-8")
+        for callback_prefix in ("cp:cprograms:", "cp:cprog:", "cp:done:"):
+            self.assertIn(callback_prefix, handler)
+        self.assertIn("Мои программы", handler)
+        self.assertIn("complete_customer_lesson", handler)
+        self.assertIn("list_business_program_progress", handler)
+        self.assertIn("Прогресс клиентов", handler)
 
     def test_production_templates_enable_clientplatform_with_opt_out(self) -> None:
         env_example = Path("deploy/metrotherapy.env.example").read_text(encoding="utf-8")

@@ -2,15 +2,18 @@
 
 ## Назначение
 
-Этот режим превращает существующего Telegram-бота в центральную админку специалиста. Он не активируется автоматически и не меняет унаследованный интерфейс, пока оператор явно не включит флаг.
+Центральный Telegram-бот ClientPlatform является основной персональной админкой специалиста и одновременно ранним общим клиентским порталом с tenant-scoped deep links. Он включён по умолчанию и не требует от пользователя знания токенов, webhook или внутренней архитектуры.
 
-## Включение
+## Включение и аварийное отключение
+
+При обычном запуске control bot и dispatch runtime активны автоматически. Единственный поддерживаемый аварийный rollback — явные значения:
 
 ```env
-CLIENTPLATFORM_CONTROL_BOT_ENABLED=1
+CLIENTPLATFORM_CONTROL_BOT_ENABLED=0
+CLIENTPLATFORM_DISPATCH_RUNTIME_ENABLED=0
 ```
 
-Используется обычный `BOT_TOKEN`, уже необходимый приложению. При включении ClientPlatform безопасно предоставляет его dispatch runtime через внутреннюю ссылку:
+Используется обычный `BOT_TOKEN`, уже необходимый приложению. ClientPlatform безопасно предоставляет его dispatch runtime через внутреннюю ссылку:
 
 ```text
 secret://env/CLIENTPLATFORM_SECRET_CONTROL_TELEGRAM_BOT_TOKEN
@@ -18,13 +21,7 @@ secret://env/CLIENTPLATFORM_SECRET_CONTROL_TELEGRAM_BOT_TOKEN
 
 Отдельно копировать токен в БД или передавать его пользователям не требуется.
 
-Если не задано иное, control mode включает ClientPlatform dispatch worker. Явное значение имеет приоритет:
-
-```env
-CLIENTPLATFORM_DISPATCH_RUNTIME_ENABLED=0
-```
-
-## Пользовательский маршрут
+## Пользовательский маршрут специалиста
 
 1. Владелец отправляет `/start`.
 2. Пишет название бизнеса.
@@ -34,31 +31,30 @@ CLIENTPLATFORM_DISPATCH_RUNTIME_ENABLED=0
    - консультации;
    - услуги;
    - собственный формат.
-5. Для консультаций, услуг и собственного формата добавляет предложения.
+5. Для консультаций, услуг и собственного формата добавляет предложения и свободное время.
 6. Для программы отправляет название, название первого урока и Telegram-аудио, видео, документ, изображение или текст.
 7. Создаёт одноразовую ссылку клиента.
 8. Клиент открывает ссылку и становится tenant-scoped Customer с Telegram identity.
 9. Владелец выбирает программу и клиента.
 10. ClientPlatform создаёт Enrollment, logical Delivery и dispatch outbox; worker отправляет материал и сохраняет результат.
+11. В разделе «Результаты» владелец видит не только доставку, но и прогресс каждого клиента по конкретной программе.
+
+## Пользовательский маршрут клиента
+
+1. Подключённый клиент отправляет `/start` и попадает в собственный клиентский портал, а не в создание бизнеса.
+2. В разделе «Мои программы» он видит выданные программы, количество пройденных уроков и процент выполнения.
+3. Клиент может отметить выполненным только материал со статусом `delivered` или `opened`.
+4. Повторное нажатие безопасно и не создаёт дублей.
+5. После завершения урока следующий материал создаётся и ставится в dispatch outbox атомарно и идемпотентно.
+6. После последнего урока Enrollment получает статус `completed`.
+7. Telegram identity не может прочитать или изменить программу другого клиента либо другого бизнеса.
+
+## Запись на консультации и услуги
+
+Консультации, услуги и собственные предложения поддерживают tenant-safe свободные слоты. Подключённый клиент выбирает время в своём портале, а атомарное бронирование не позволяет двум клиентам занять один слот.
 
 ## Граница MVP
 
-Первая версия намеренно использует общий Telegram-бот с deep links. Managed Client Bots, расписание консультаций, платежи, Mini App и дополнительные каналы подключаются следующими connector-модулями, не меняя основную модель бизнеса.
+Текущая версия намеренно использует общий Telegram-бот с deep links. Отдельные Managed Client Bots, платежи клиентов специалисту, Mini App, автопостинг, воронки и дополнительные каналы остаются следующими connector-модулями и не меняют основную модель бизнеса, клиента, программы, прогресса и tenant isolation.
 
-Production deployment этим документом не разрешается и должен выполняться отдельным решением владельца.
-
-
-## Canonical rollout
-
-ClientPlatform control bot and its dispatch runtime are enabled by default.
-The only supported emergency rollback is explicit:
-
-```text
-CLIENTPLATFORM_CONTROL_BOT_ENABLED=0
-CLIENTPLATFORM_DISPATCH_RUNTIME_ENABLED=0
-```
-
-An absent flag never silently returns users to the imported legacy interface.
-Consultations, services and custom offerings can publish tenant-safe booking
-slots; connected Telegram customers can open their client portal and reserve an
-available slot atomically.
+Production deployment этим документом не разрешается и выполняется только по отдельному прямому решению владельца.
