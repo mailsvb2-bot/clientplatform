@@ -34,6 +34,25 @@ def _snapshot(**overrides):
     return value
 
 
+class ClientPlatformDispatchConfigurationTests(unittest.TestCase):
+    def test_dispatch_is_configured_by_default_with_explicit_opt_out(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertTrue(health.clientplatform_dispatch_configured())
+        with patch.dict(
+            os.environ,
+            {'CLIENTPLATFORM_DISPATCH_RUNTIME_ENABLED': '0'},
+            clear=True,
+        ):
+            self.assertFalse(health.clientplatform_dispatch_configured())
+        with patch.dict(
+            os.environ,
+            {'CLIENTPLATFORM_DISPATCH_RUNTIME_ENABLED': 'invalid'},
+            clear=True,
+        ):
+            with self.assertRaisesRegex(RuntimeError, 'enabled_invalid'):
+                health.clientplatform_dispatch_configured()
+
+
 class ClientPlatformDispatchReadinessTests(unittest.TestCase):
     def test_disabled_clientplatform_runtime_is_neutral_for_legacy_readiness(self) -> None:
         ready, errors, flags = health.clientplatform_dispatch_readiness(_snapshot())

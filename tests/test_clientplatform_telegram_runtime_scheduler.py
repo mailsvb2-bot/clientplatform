@@ -72,11 +72,18 @@ class ClientPlatformSecretProviderTests(unittest.TestCase):
                     provider.resolve(reference)
                 self.assertNotIn(secret, str(raised.exception))
 
-    def test_runtime_is_disabled_by_default_and_bounds_environment(self) -> None:
+    def test_runtime_is_enabled_by_default_and_bounds_environment(self) -> None:
         with patch.dict("os.environ", {}, clear=True):
             config = dispatch_runtime_config()
-        self.assertFalse(config.enabled)
+        self.assertTrue(config.enabled)
         self.assertEqual(config.batch_size, 10)
+
+        with patch.dict(
+            "os.environ",
+            {"CLIENTPLATFORM_DISPATCH_RUNTIME_ENABLED": "0"},
+            clear=True,
+        ):
+            self.assertFalse(dispatch_runtime_config().enabled)
 
         with patch.dict(
             "os.environ",

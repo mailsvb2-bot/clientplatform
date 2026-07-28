@@ -78,3 +78,17 @@ python -m pytest -q
 ```
 
 `runtime_contract.py` is the explicit guard for this policy: polling-only Telegram, no Telegram webhook flag, non-colliding health/messenger ports, and out-of-tree runtime state in prod.
+
+
+## ClientPlatform canonical interface
+
+The Telegram control bot and dispatch runtime are enabled by default:
+
+```text
+CLIENTPLATFORM_CONTROL_BOT_ENABLED=1
+CLIENTPLATFORM_DISPATCH_RUNTIME_ENABLED=1
+```
+
+Set both values to `0` only for an explicit emergency rollback. Missing values do
+not return the application to the imported legacy interface. Runtime readiness
+requires the complete ClientPlatform schema, including `booking_slots`.

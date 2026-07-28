@@ -46,3 +46,19 @@ CLIENTPLATFORM_DISPATCH_RUNTIME_ENABLED=0
 Первая версия намеренно использует общий Telegram-бот с deep links. Managed Client Bots, расписание консультаций, платежи, Mini App и дополнительные каналы подключаются следующими connector-модулями, не меняя основную модель бизнеса.
 
 Production deployment этим документом не разрешается и должен выполняться отдельным решением владельца.
+
+
+## Canonical rollout
+
+ClientPlatform control bot and its dispatch runtime are enabled by default.
+The only supported emergency rollback is explicit:
+
+```text
+CLIENTPLATFORM_CONTROL_BOT_ENABLED=0
+CLIENTPLATFORM_DISPATCH_RUNTIME_ENABLED=0
+```
+
+An absent flag never silently returns users to the imported legacy interface.
+Consultations, services and custom offerings can publish tenant-safe booking
+slots; connected Telegram customers can open their client portal and reserve an
+available slot atomically.

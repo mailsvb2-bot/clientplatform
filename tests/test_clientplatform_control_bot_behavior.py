@@ -11,6 +11,7 @@ from clientplatform.domain.activity import (
     ActivityNotFound,
     CapabilityStatus,
 )
+from clientplatform.domain.bookings import BookingInvariantViolation, BookingSlotStatus
 from clientplatform.domain.programs import ContentKind
 from handlers import clientplatform_control as handlers
 
@@ -151,6 +152,13 @@ def test_keyboard_builders_and_content_detection() -> None:
     assert choice.inline_keyboard[0][0].text == "Моя практика"
     assert choice.inline_keyboard[0][0].callback_data.startswith("cp:business:")
 
+    client_choice = handlers._client_business_keyboard(
+        [SimpleNamespace(business_id=business_id, business_name="Моя практика")]
+    )
+    assert client_choice.inline_keyboard[0][0].callback_data.startswith("cp:client:")
+    client_portal = handlers._client_portal_keyboard(business_id)
+    assert client_portal.inline_keyboard[0][0].text == "Посмотреть доступную запись"
+
     setup = handlers._capability_setup_keyboard(business_id, {"programs", "services"})
     labels = [row[0].text for row in setup.inline_keyboard]
     assert labels[0].startswith("✅")
@@ -262,6 +270,7 @@ async def test_start_invite_new_multi_and_single_business(monkeypatch: pytest.Mo
         handlers,
         "claim_customer_invite",
         lambda **_kwargs: SimpleNamespace(
+            business_id=business_id,
             business_name="Практика",
             already_connected=False,
         ),
@@ -275,6 +284,7 @@ async def test_start_invite_new_multi_and_single_business(monkeypatch: pytest.Mo
         handlers,
         "claim_customer_invite",
         lambda **_kwargs: SimpleNamespace(
+            business_id=business_id,
             business_name="Практика",
             already_connected=True,
         ),
@@ -284,11 +294,29 @@ async def test_start_invite_new_multi_and_single_business(monkeypatch: pytest.Mo
     assert "уже были подключены" in repeated.answers[-1][0]
 
     monkeypatch.setattr(handlers, "list_accessible_businesses", lambda **_kwargs: [])
+    monkeypatch.setattr(handlers, "list_customer_businesses", lambda **_kwargs: [])
     new_owner = FakeMessage(text="/start")
     new_state = FakeState()
     await handlers.clientplatform_start(new_owner, new_state)
     assert new_state.states[-1] == handlers.ClientPlatformControlState.business_name
     assert "название Вашего дела" in new_owner.answers[-1][0]
+
+    monkeypatch.setattr(
+        handlers,
+        "list_customer_businesses",
+        lambda **_kwargs: [
+            SimpleNamespace(
+                business_id=business_id,
+                business_name="Практика",
+                customer_id=str(uuid4()),
+            )
+        ],
+    )
+    client = FakeMessage(text="/start")
+    client_state = FakeState({"old": True})
+    await handlers.clientplatform_start(client, client_state)
+    assert client_state.clear_count == 1
+    assert "Вы подключены" in client.answers[-1][0]
 
     accesses = [business_access(str(uuid4()), "Первый"), business_access(str(uuid4()), "Второй")]
     monkeypatch.setattr(handlers, "list_accessible_businesses", lambda **_kwargs: accesses)
@@ -501,8 +529,11 @@ async def test_open_capability_program_and_generic(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(
         handlers,
         "list_business_offerings",
-        lambda **_kwargs: [SimpleNamespace(title="Разбор", description="60 минут")],
+        lambda **_kwargs: [
+            SimpleNamespace(id=str(uuid4()), title="Разбор", description="60 минут")
+        ],
     )
+    monkeypatch.setattr(handlers, "list_booking_slots", lambda **_kwargs: [])
     generic = FakeCallback(f"cp:cap:{business_token}:consultations")
     await handlers.open_capability(generic, FakeState())
     assert "Разбор — 60 минут" in generic.message.answers[-1][0]
@@ -668,6 +699,111 @@ async def test_clients_invites_and_delivery_selection(monkeypatch: pytest.Monkey
         customers.message.answers[-1][1]["reply_markup"].inline_keyboard[0][0].text
         == "Клиент"
     )
+
+
+
+@pytest.mark.asyncio
+async def test_booking_owner_and_client_journeys(monkeypatch: pytest.MonkeyPatch) -> None:
+    business_id = str(uuid4())
+    offering_id = str(uuid4())
+    slot_id = str(uuid4())
+    business_token = handlers._uuid_token(business_id)
+    offering_token = handlers._uuid_token(offering_id)
+    slot_token = handlers._uuid_token(slot_id)
+
+    state = FakeState()
+    start = FakeCallback(f"cp:slotadd:{business_token}:{offering_token}")
+    await handlers.start_booking_slot(start, state)
+    assert state.states[-1] == handlers.ClientPlatformControlState.booking_start
+    assert state.data == {"business_id": business_id, "offering_id": offering_id}
+    assert "ДД.ММ.ГГГГ" in start.message.answers[-1][0]
+
+    await handlers.receive_booking_start(FakeMessage(text="31.07.2026 15:00"), state)
+    assert state.data["booking_start"] == "31.07.2026 15:00"
+    assert state.states[-1] == handlers.ClientPlatformControlState.booking_duration
+
+    async def fake_actor(_uid: int, _bid: str) -> object:
+        return object()
+
+    monkeypatch.setattr(handlers, "_actor", fake_actor)
+    slot = SimpleNamespace(
+        slot=SimpleNamespace(
+            id=slot_id,
+            offering_id=offering_id,
+            duration_minutes=60,
+            status=BookingSlotStatus.OPEN,
+        ),
+        offering_title="Первая консультация",
+        business_name="Практика",
+        local_start="31.07.2026 15:00",
+    )
+    monkeypatch.setattr(handlers, "create_booking_slot", lambda **_kwargs: slot)
+    dashboard_calls: list[str] = []
+
+    async def fake_dashboard(_message: Any, **kwargs: Any) -> None:
+        dashboard_calls.append(kwargs["business_id"])
+
+    monkeypatch.setattr(handlers, "_send_dashboard", fake_dashboard)
+    duration = FakeMessage(text="60")
+    await handlers.receive_booking_duration(duration, state)
+    assert "Время опубликовано" in duration.answers[-1][0]
+    assert state.clear_count == 1
+    assert dashboard_calls == [business_id]
+
+    monkeypatch.setattr(handlers, "list_customer_booking_slots", lambda **_kwargs: [])
+    no_slots = FakeCallback(f"cp:client:{business_token}", user_id=700001)
+    await handlers.open_client_booking(no_slots)
+    assert "свободного времени нет" in no_slots.message.answers[-1][0]
+
+    monkeypatch.setattr(handlers, "list_customer_booking_slots", lambda **_kwargs: [slot])
+    available = FakeCallback(f"cp:client:{business_token}", user_id=700001)
+    await handlers.open_client_booking(available)
+    assert "Первая консультация" in available.message.answers[-1][0]
+    button = available.message.answers[-1][1]["reply_markup"].inline_keyboard[0][0]
+    assert button.callback_data == f"cp:book:{business_token}:{slot_token}"
+
+    monkeypatch.setattr(
+        handlers,
+        "book_customer_slot",
+        lambda **_kwargs: SimpleNamespace(slot=slot),
+    )
+    booked = FakeCallback(f"cp:book:{business_token}:{slot_token}", user_id=700001)
+    await handlers.book_client_slot(booked)
+    assert "Вы записаны" in booked.message.answers[-1][0]
+    assert booked.answers[-1][0] == ("Запись подтверждена",)
+
+
+@pytest.mark.asyncio
+async def test_client_portal_multiple_connections() -> None:
+    links = [
+        SimpleNamespace(
+            business_id=str(uuid4()),
+            business_name="Первая практика",
+            customer_id=str(uuid4()),
+        ),
+        SimpleNamespace(
+            business_id=str(uuid4()),
+            business_name="Вторая практика",
+            customer_id=str(uuid4()),
+        ),
+    ]
+    message = FakeMessage(user_id=700001)
+    await handlers._send_client_portal(message, links=links)
+    assert "Выберите специалиста" in message.answers[-1][0]
+    assert len(message.answers[-1][1]["reply_markup"].inline_keyboard) == 2
+
+
+@pytest.mark.asyncio
+async def test_booking_error_is_handled(monkeypatch: pytest.MonkeyPatch) -> None:
+    callback = FakeCallback("x")
+    handled = await handlers.clientplatform_control_error(
+        SimpleNamespace(
+            exception=BookingInvariantViolation("время занято"),
+            update=SimpleNamespace(message=None, callback_query=callback),
+        )
+    )
+    assert handled is True
+    assert callback.answers[-1][1]["show_alert"] is True
 
 
 @pytest.mark.asyncio
