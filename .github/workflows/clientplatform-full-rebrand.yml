@@ -50,4 +50,33 @@ jobs:
           fi
           git diff --cached --stat
           git commit -m "Rebrand repository as clientplatform"
-          git push origin HEAD:agent/full-clientplatform-rebrand
+          git format-patch -1 --stdout > "$RUNNER_TEMP/clientplatform-rebrand.patch"
+          git rev-parse HEAD^{tree} > "$RUNNER_TEMP/clientplatform-rebrand-tree.txt"
+          git diff-tree --no-commit-id --name-status -r HEAD \
+            > "$RUNNER_TEMP/clientplatform-rebrand-files.txt"
+
+      - name: Push migration commit
+        id: push
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          git push origin HEAD:agent/full-clientplatform-rebrand \
+            > "$RUNNER_TEMP/clientplatform-rebrand-push.log" 2>&1
+
+      - name: Upload rebrand diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: clientplatform-rebrand-diagnostics
+          path: |
+            ${{ runner.temp }}/clientplatform-rebrand.patch
+            ${{ runner.temp }}/clientplatform-rebrand-tree.txt
+            ${{ runner.temp }}/clientplatform-rebrand-files.txt
+            ${{ runner.temp }}/clientplatform-rebrand-push.log
+          if-no-files-found: error
+
+      - name: Fail when branch update was rejected
+        if: steps.push.outcome != 'success'
+        run: |
+          cat "$RUNNER_TEMP/clientplatform-rebrand-push.log"
+          exit 1
