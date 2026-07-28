@@ -136,7 +136,10 @@ class HmacMediaGatewayResolver:
         ttl = int(ttl_seconds)
         if ttl < 60 or ttl > 900:
             raise ValueError("media gateway TTL must be between 60 and 900 seconds")
-        self._base_url = urlunsplit((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", ""))
+        self._base_path = parsed.path.rstrip("/")
+        self._base_url = urlunsplit(
+            (parsed.scheme, parsed.netloc, self._base_path, "", "")
+        )
         self._credential_provider = credential_provider
         self._signing_secret_reference = str(signing_secret_reference or "").strip()
         if not self._signing_secret_reference:
@@ -164,6 +167,11 @@ class HmacMediaGatewayResolver:
         expires = int(self._clock()) + self._ttl_seconds
         encoded_bucket = quote(bucket, safe="")
         encoded_key = quote(key, safe="/-_.~")
-        path = f"/media/{encoded_bucket}/{encoded_key}"
-        signature = media_gateway_signature(secret=secret, path=path, expires=expires)
-        return f"{self._base_url}{path}?expires={expires}&sig={signature}"
+        relative_path = f"/media/{encoded_bucket}/{encoded_key}"
+        signed_path = f"{self._base_path}{relative_path}"
+        signature = media_gateway_signature(
+            secret=secret,
+            path=signed_path,
+            expires=expires,
+        )
+        return f"{self._base_url}{relative_path}?expires={expires}&sig={signature}"
