@@ -4,6 +4,13 @@ on:
   push:
     branches:
       - agent/full-clientplatform-rebrand
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
 
 permissions:
   contents: write
@@ -19,10 +26,11 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - name: Checkout full branch
+      - name: Checkout full rebrand branch
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           fetch-depth: 0
+          ref: agent/full-clientplatform-rebrand
 
       - name: Apply repository-wide clientplatform rebrand
         run: python scripts/clientplatform_rebrand.py
