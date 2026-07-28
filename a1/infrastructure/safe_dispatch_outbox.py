@@ -9,6 +9,7 @@ from a1.domain.connections import (
     DispatchLeaseLost,
     DispatchStatus,
 )
+from a1.domain.tenancy import TenantContext
 from a1.infrastructure.dispatch_outbox import (
     DispatchOutboxRepository as _BaseDispatchOutboxRepository,
 )
@@ -19,10 +20,58 @@ def _utc_now() -> datetime:
 
 
 class DispatchOutboxRepository(_BaseDispatchOutboxRepository):
-    """Canonical outbox policy: transient failures remain retryable."""
+    """Canonical outbox policy for immediate materialization and safe retries."""
 
     def __init__(self, conn: Any):
         super().__init__(conn)
+
+    def materialize(
+        self,
+        *,
+        actor: TenantContext,
+        logical_delivery_id: str,
+        connection_id: str,
+        customer_identity_id: str,
+        now: str | None = None,
+    ) -> Dispatch:
+        """Create an immediately due dispatch.
+
+        ``now`` is an injectable audit timestamp. It must not silently become a
+        scheduling API: future delivery will use an explicit schedule field.
+        This also makes a clock-skewed producer unable to stall fresh work.
+        """
+
+        dispatch = super().materialize(
+            actor=actor,
+            logical_delivery_id=logical_delivery_id,
+            connection_id=connection_id,
+            customer_identity_id=customer_identity_id,
+            now=now,
+        )
+        wall_clock = _utc_now().isoformat()
+        if (
+            dispatch.status == DispatchStatus.PENDING
+            and dispatch.available_at > wall_clock
+        ):
+            self._conn.execute(
+                """
+                UPDATE delivery_dispatch_outbox
+                SET available_at=?
+                WHERE id=? AND business_id=? AND status='pending'
+                  AND available_at>?
+                """,
+                (
+                    wall_clock,
+                    dispatch.id,
+                    dispatch.business_id,
+                    wall_clock,
+                ),
+            )
+            return self._get_dispatch_system(
+                business_id=dispatch.business_id,
+                dispatch_id=dispatch.id,
+            )
+        return dispatch
 
     def reschedule(
         self,
