@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import subprocess
+import sys
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable
 from unittest.mock import AsyncMock, patch
@@ -74,6 +77,26 @@ class ClientPlatformDualRoleEntryTests(unittest.IsolatedAsyncioTestCase):
         self.thread_patch.start()
         self.addCleanup(self.message_type_patch.stop)
         self.addCleanup(self.thread_patch.stop)
+
+    def test_direct_entry_module_import_is_safe(self) -> None:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import importlib; "
+                    "entry = importlib.import_module('handlers.clientplatform_entry'); "
+                    "control = importlib.import_module('handlers.clientplatform_control'); "
+                    "assert control.router is entry.router; "
+                    "assert getattr(control, '_dual_role_entry_composed', False)"
+                ),
+            ],
+            cwd=Path(__file__).resolve().parents[1],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
 
     async def test_dual_role_start_shows_explicit_workspace_choice(self) -> None:
         with (
