@@ -6,6 +6,11 @@ from dataclasses import dataclass
 from a1.application.dispatch_worker import DispatchBatchResult, run_dispatch_batch
 from a1.runtime.secrets import EnvironmentCredentialProvider
 from a1.transport import AdapterRegistry, TelegramDispatchAdapter
+from a1.transport.media import (
+    HmacMediaGatewayResolver,
+    MediaReferenceResolver,
+    SafeMediaReferenceResolver,
+)
 from a1.transport.telegram_http import AiohttpTelegramBotClient
 from core.runtime_env import env_float, env_int
 
@@ -29,6 +34,9 @@ class DispatchRuntimeConfig:
     max_attempts: int
     lock_ttl_seconds: int
     http_timeout_seconds: float
+    media_gateway_base_url: str = ""
+    media_signing_secret_reference: str = "secret://env/A1_SECRET_MEDIA_SIGNING_KEY"
+    media_url_ttl_seconds: int = 300
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,6 +85,33 @@ def dispatch_runtime_config() -> DispatchRuntimeConfig:
             minimum=1.0,
             maximum=120.0,
         ),
+        media_gateway_base_url=str(
+            os.getenv("A1_MEDIA_GATEWAY_BASE_URL") or ""
+        ).strip(),
+        media_signing_secret_reference=str(
+            os.getenv("A1_MEDIA_SIGNING_SECRET_REFERENCE")
+            or "secret://env/A1_SECRET_MEDIA_SIGNING_KEY"
+        ).strip(),
+        media_url_ttl_seconds=env_int(
+            "A1_MEDIA_URL_TTL_SEC",
+            300,
+            minimum=60,
+            maximum=900,
+        ),
+    )
+
+
+def _build_media_resolver(
+    config: DispatchRuntimeConfig,
+    credential_provider: EnvironmentCredentialProvider,
+) -> MediaReferenceResolver:
+    if not config.media_gateway_base_url:
+        return SafeMediaReferenceResolver()
+    return HmacMediaGatewayResolver(
+        base_url=config.media_gateway_base_url,
+        credential_provider=credential_provider,
+        signing_secret_reference=config.media_signing_secret_reference,
+        ttl_seconds=config.media_url_ttl_seconds,
     )
 
 
@@ -88,7 +123,15 @@ def build_dispatch_runtime(
     telegram_client = AiohttpTelegramBotClient(
         timeout_seconds=selected.http_timeout_seconds,
     )
-    adapters = AdapterRegistry([TelegramDispatchAdapter(telegram_client)])
+    media_resolver = _build_media_resolver(selected, credential_provider)
+    adapters = AdapterRegistry(
+        [
+            TelegramDispatchAdapter(
+                telegram_client,
+                media_resolver=media_resolver,
+            )
+        ]
+    )
     return DispatchRuntime(
         config=selected,
         credential_provider=credential_provider,
