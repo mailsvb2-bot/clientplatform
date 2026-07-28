@@ -21,6 +21,7 @@ class ClientPlatformProductionIsolationTests(unittest.TestCase):
             "CLIENTPLATFORM_PUBLIC_BASE_URL": "https://clientplatform.production.internal",
             "CLIENTPLATFORM_PRODUCTION_BOT_USERNAME": "clientplatform_bot",
             "BOT_TOKEN": "100000:production-token-material",
+            "ADMIN_IDS": "100001",
             "METRO_DB_ENGINE": "postgres",
             "CLIENTPLATFORM_DATABASE_NAME": "clientplatform_ci",
             "DATABASE_URL": "postgresql://clientplatform_app:password@127.0.0.1:5433/clientplatform_ci",
@@ -41,12 +42,23 @@ class ClientPlatformProductionIsolationTests(unittest.TestCase):
             "HEALTHCHECK_ENABLED": "1",
             "HEALTHCHECK_HOST": "127.0.0.1",
             "HEALTHCHECK_PORT": "8182",
+            "HEALTHCHECK_DIAGNOSTICS_TOKEN": "d" * 48,
             "CLIENTPLATFORM_MEDIA_GATEWAY_ENABLED": "1",
             "CLIENTPLATFORM_MEDIA_GATEWAY_HOST": "127.0.0.1",
             "CLIENTPLATFORM_MEDIA_GATEWAY_PORT": "8191",
+            "CLIENTPLATFORM_MEDIA_GATEWAY_BASE_URL": "https://clientplatform.production.internal/clientplatform",
             "CLIENTPLATFORM_MEDIA_GATEWAY_STORAGE_MODE": "s3",
             "CLIENTPLATFORM_MEDIA_GATEWAY_S3_ENDPOINT": "https://s3.production.internal",
             "CLIENTPLATFORM_MEDIA_GATEWAY_S3_REGION": "region-1",
+            "CLIENTPLATFORM_MEDIA_GATEWAY_S3_ACCESS_KEY_REFERENCE": (
+                "secret://env/CLIENTPLATFORM_SECRET_S3_ACCESS_KEY"
+            ),
+            "CLIENTPLATFORM_MEDIA_GATEWAY_S3_SECRET_KEY_REFERENCE": (
+                "secret://env/CLIENTPLATFORM_SECRET_S3_SECRET_KEY"
+            ),
+            "CLIENTPLATFORM_MEDIA_SIGNING_SECRET_REFERENCE": (
+                "secret://env/CLIENTPLATFORM_SECRET_MEDIA_SIGNING_KEY"
+            ),
             "CLIENTPLATFORM_STORAGE_BUCKET": "clientplatform-production",
             "CLIENTPLATFORM_MEDIA_GATEWAY_ALLOWED_BUCKETS": "clientplatform-production",
             "CLIENTPLATFORM_SECRET_S3_ACCESS_KEY": "access-key-material",
@@ -75,10 +87,14 @@ class ClientPlatformProductionIsolationTests(unittest.TestCase):
                 "CLIENTPLATFORM_STORAGE_BUCKET": "metrotherapy-media",
                 "CLIENTPLATFORM_MEDIA_GATEWAY_ALLOWED_BUCKETS": "metrotherapy-media",
             },
-            "weak_secret": {"TELEGRAM_WEBHOOK_SECRET_TOKEN": "short"},
+            "weak_webhook_secret": {"TELEGRAM_WEBHOOK_SECRET_TOKEN": "short"},
+            "weak_diagnostics_secret": {"HEALTHCHECK_DIAGNOSTICS_TOKEN": "short"},
             "staging_secret": {"CLIENTPLATFORM_STAGING_TELEGRAM_BOT_TOKEN": "present"},
             "colliding_ports": {"HEALTHCHECK_PORT": "8181"},
             "wildcard_systemd": {"MESSENGER_WEBHOOK_HOST": "0.0.0.0"},
+            "wrong_media_secret_reference": {
+                "CLIENTPLATFORM_MEDIA_SIGNING_SECRET_REFERENCE": "secret://env/SHARED_KEY"
+            },
         }
         for name, changes in cases.items():
             with self.subTest(name=name):
@@ -108,12 +124,14 @@ class ClientPlatformProductionIsolationTests(unittest.TestCase):
         runbook = (root / "docs/runbooks/CLIENTPLATFORM_PRODUCTION_ISOLATION.md").read_text(encoding="utf-8")
 
         self.assertIn("CLIENTPLATFORM_DEPLOYMENT_ID=clientplatform-production", env_example)
+        self.assertIn("CLIENTPLATFORM_DEPLOYMENT_MODE=systemd", env_example)
         self.assertIn("TELEGRAM_TRANSPORT=webhook", env_example)
         self.assertIn("CLIENTPLATFORM_MEDIA_GATEWAY_STORAGE_MODE=s3", env_example)
         self.assertNotIn("DATABASE_URL=postgresql://localhost:5432/metrotherapy", env_example)
         self.assertIn("clientplatform_production_preflight.py", service)
         self.assertIn("ProtectSystem=strict", service)
         self.assertIn("clientplatform-postgres", compose)
+        self.assertIn("CLIENTPLATFORM_CONTAINER_NETWORK_ISOLATED", compose)
         self.assertIn("no-new-privileges:true", compose)
         self.assertIn("/telegram-webhook", caddy)
         self.assertIn("/clientplatform/*", caddy)
