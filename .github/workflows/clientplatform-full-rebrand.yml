@@ -86,6 +86,11 @@ jobs:
               1,
           )
           media_test = media_test.replace(
+              'self.assertEqual(await response.read(), b"AUDIO")',
+              'self.assertEqual(await response.read(), self.media_content[3:8])',
+              1,
+          )
+          media_test = media_test.replace(
               'self.assertEqual(fetched, [b"clientplatform-AUDIO-CONTENT"])',
               'self.assertEqual(fetched, [self.media_content])',
               1,
