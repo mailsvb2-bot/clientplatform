@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 from typing import Any
 
 from aiogram import F, Router
@@ -11,7 +12,8 @@ from aiogram.types import CallbackQuery, Message
 from clientplatform.application.activity import claim_customer_invite
 from clientplatform.application.bookings import list_customer_businesses
 from clientplatform.application.tenancy import list_accessible_businesses
-from handlers import clientplatform_control as control
+
+control = importlib.import_module(".clientplatform_control", __package__)
 
 router = Router(name="clientplatform_entry")
 router.message.filter(control.ClientPlatformControlEnabled())
@@ -140,3 +142,10 @@ async def open_customer_workspace(callback: CallbackQuery, state: FSMContext) ->
 @router.errors()
 async def clientplatform_entry_error(event: object) -> bool:
     return await control.clientplatform_control_error(event)
+
+
+if not bool(getattr(control, "_dual_role_entry_composed", False)):
+    original_router = control.router
+    router.include_router(original_router)
+    control.router = router
+    control._dual_role_entry_composed = True
