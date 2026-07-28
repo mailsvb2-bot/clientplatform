@@ -75,11 +75,15 @@ def _positive_int(
     return parsed
 
 
-def _absolute_path(env: Mapping[str, str], name: str, errors: list[str]) -> str:
+def _absolute_path(env: Mapping[str, str], name: str, errors: list[str]) -> Path | None:
     value = _require(env, name, errors)
-    if value and not Path(value).expanduser().is_absolute():
+    if not value:
+        return None
+    path = Path(value).expanduser()
+    if not path.is_absolute():
         errors.append(f"{name} must be an absolute path")
-    return value
+        return None
+    return path.resolve()
 
 
 def _validate_admin_ids(env: Mapping[str, str], errors: list[str]) -> None:
@@ -238,6 +242,38 @@ def _validate_storage(env: Mapping[str, str], errors: list[str]) -> None:
         errors.append("CLIENTPLATFORM_S3_BACKUP_REPLICATION_ENABLED evidence must be 1")
 
 
+def _validate_runtime_paths(env: Mapping[str, str], errors: list[str]) -> None:
+    runtime_root = _absolute_path(env, "METRO_RUNTIME_ROOT", errors)
+    writable_root = _absolute_path(env, "METRO_WRITABLE_ROOT", errors)
+    data_dir = _absolute_path(env, "METRO_DATA_DIR", errors)
+    logs_dir = _absolute_path(env, "METRO_LOGS_DIR", errors)
+    mpl_dir = _absolute_path(env, "MPLCONFIGDIR", errors)
+    marker = _absolute_path(env, "PREWARM_MARKER_PATH", errors)
+    values = {
+        "METRO_RUNTIME_ROOT": runtime_root,
+        "METRO_WRITABLE_ROOT": writable_root,
+        "METRO_DATA_DIR": data_dir,
+        "METRO_LOGS_DIR": logs_dir,
+        "MPLCONFIGDIR": mpl_dir,
+        "PREWARM_MARKER_PATH": marker,
+    }
+    for name, path in values.items():
+        if path is not None and "metrotherapy" in str(path).lower():
+            errors.append(f"{name} must not point into the imported product runtime")
+    expected_runtime = Path("/var/lib/clientplatform/runtime")
+    expected_state = Path("/var/lib/clientplatform/state")
+    expected_logs = Path("/var/log/clientplatform")
+    if runtime_root is not None and runtime_root != expected_runtime:
+        errors.append("METRO_RUNTIME_ROOT must equal /var/lib/clientplatform/runtime")
+    if writable_root is not None and writable_root != expected_state:
+        errors.append("METRO_WRITABLE_ROOT must equal /var/lib/clientplatform/state")
+    if logs_dir is not None and logs_dir != expected_logs:
+        errors.append("METRO_LOGS_DIR must equal /var/log/clientplatform")
+    for name, path in (("METRO_DATA_DIR", data_dir), ("MPLCONFIGDIR", mpl_dir), ("PREWARM_MARKER_PATH", marker)):
+        if path is not None and not path.is_relative_to(expected_state):
+            errors.append(f"{name} must stay under /var/lib/clientplatform/state")
+
+
 def _validate_identity_and_secrets(env: Mapping[str, str], errors: list[str]) -> None:
     if _value(env, "CLIENTPLATFORM_DEPLOYMENT_ID") != "clientplatform-production":
         errors.append("CLIENTPLATFORM_DEPLOYMENT_ID must equal clientplatform-production")
@@ -281,6 +317,7 @@ def validate_environment(env: Mapping[str, str]) -> list[str]:
     _validate_database(env, errors)
     _validate_public_ingress(env, errors)
     _validate_storage(env, errors)
+    _validate_runtime_paths(env, errors)
     _validate_backup_contract(env, errors)
     return errors
 

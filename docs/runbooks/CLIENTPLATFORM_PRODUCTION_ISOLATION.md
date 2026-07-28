@@ -9,10 +9,12 @@ The repository never creates or stores provider secrets. Operators provision the
 ## Fixed boundaries
 
 - Linux user/group: `clientplatform`.
-- Runtime: `/var/lib/clientplatform/runtime/current`.
+- Immutable runtime releases: `/var/lib/clientplatform/runtime/releases/<sha>`.
+- Writable state: `/var/lib/clientplatform/state`.
 - Configuration: `/etc/clientplatform/clientplatform.env`.
 - Logs: `/var/log/clientplatform`.
 - PostgreSQL database: a dedicated name beginning with `clientplatform`.
+- PostgreSQL application role: no `CREATEDB`, no superuser. A separate operator-only role is used for restore drills.
 - S3 bucket: one production bucket beginning with `clientplatform-`; staging uses another bucket and credentials.
 - Public domain: a dedicated HTTPS host.
 - Public routes: Telegram webhook and signed media only. Health/readiness stay loopback-only.
@@ -21,16 +23,11 @@ The repository never creates or stores provider secrets. Operators provision the
 ## Provision external resources
 
 1. Create a production Telegram bot that is not used by staging or another product.
-2. Create a PostgreSQL database and least-privilege application role. The role must own only the ClientPlatform database. Use a separate administrative role for restore drills.
+2. Create a PostgreSQL database and least-privilege application role. The role must own or have only the privileges required inside the ClientPlatform database. Create a separate administrative role for disposable restore drills.
 3. Create a private S3-compatible bucket, enable versioning, lifecycle retention and backup replication to a separate failure domain.
 4. Configure DNS for the dedicated domain.
-5. Generate independent secrets for:
-   - Telegram webhook verification;
-   - health diagnostics;
-   - media URL signing;
-   - S3 access;
-   - future payment providers.
-6. Copy `deploy/clientplatform/clientplatform.production.env.example` to the protected environment file and replace every blank/placeholder.
+5. Generate independent secrets for Telegram webhook verification, health diagnostics, media URL signing and S3 access.
+6. Copy `deploy/clientplatform/clientplatform.production.env.example` to the protected application environment and replace every blank/placeholder.
 
 Run the offline contract before any process starts:
 
@@ -45,8 +42,11 @@ A production rollout is blocked until this prints `CLIENTPLATFORM_PRODUCTION_PRE
 
 ```bash
 sudo useradd --system --home /var/lib/clientplatform --shell /usr/sbin/nologin clientplatform || true
-sudo install -d -o clientplatform -g clientplatform -m 0750 \
+sudo install -d -o root -g clientplatform -m 0750 \
   /var/lib/clientplatform/runtime \
+  /var/lib/clientplatform/runtime/releases
+sudo install -d -o clientplatform -g clientplatform -m 0750 \
+  /var/lib/clientplatform/state \
   /var/lib/clientplatform/restore-evidence \
   /var/log/clientplatform
 sudo install -d -o clientplatform -g clientplatform -m 0700 \
@@ -57,14 +57,16 @@ sudo install -o root -g clientplatform -m 0600 \
   /etc/clientplatform/clientplatform.env
 ```
 
-Build each release in a content-addressed directory. Never install dependencies or write caches inside `current` after switching it live.
+Build each release in a content-addressed directory. Runtime-created files must remain under `/var/lib/clientplatform/state`, never inside `current` or under `/var/lib/metrotherapy`.
 
 ```bash
 RELEASE=/var/lib/clientplatform/runtime/releases/$(git rev-parse HEAD)
-sudo -u clientplatform mkdir -p "$RELEASE"
-git archive HEAD | sudo -u clientplatform tar -x -C "$RELEASE"
-sudo -u clientplatform python3.12 -m venv "$RELEASE/.venv"
-sudo -u clientplatform "$RELEASE/.venv/bin/pip" install --require-hashes -r "$RELEASE/requirements.txt"
+sudo install -d -o root -g clientplatform -m 0750 "$RELEASE"
+git archive HEAD | sudo tar -x -C "$RELEASE"
+sudo python3.12 -m venv "$RELEASE/.venv"
+sudo "$RELEASE/.venv/bin/pip" install --require-hashes -r "$RELEASE/requirements.txt"
+sudo chown -R root:clientplatform "$RELEASE"
+sudo chmod -R u=rwX,g=rX,o= "$RELEASE"
 sudo -u clientplatform "$RELEASE/.venv/bin/python" \
   "$RELEASE/scripts/clientplatform_production_preflight.py" \
   --env-file /etc/clientplatform/clientplatform.env
@@ -85,20 +87,21 @@ sudo systemctl daemon-reload
 Before every migration:
 
 ```bash
-sudo -u clientplatform --preserve-env=DATABASE_URL \
+set -a
+. /etc/clientplatform/clientplatform.env
+set +a
+sudo -u clientplatform --preserve-env=DATABASE_URL,CLIENTPLATFORM_BACKUP_DIR,CLIENTPLATFORM_BACKUP_RETENTION_DAYS \
   /var/lib/clientplatform/runtime/current/.venv/bin/python \
-  scripts/clientplatform_postgres_backup.py backup
+  /var/lib/clientplatform/runtime/current/scripts/clientplatform_postgres_backup.py backup
 ```
 
 Initialize/upgrade the candidate against PostgreSQL before switching the symlink:
 
 ```bash
-set -a
-. /etc/clientplatform/clientplatform.env
-set +a
 cd "$RELEASE"
-.venv/bin/python -c 'from services.schema import init_db; init_db()'
-.venv/bin/python scripts/clientplatform_production_preflight.py \
+sudo -u clientplatform --preserve-env=DATABASE_URL,METRO_DB_ENGINE \
+  .venv/bin/python -c 'from services.schema import init_db; init_db()'
+sudo -u clientplatform .venv/bin/python scripts/clientplatform_production_preflight.py \
   --env-file /etc/clientplatform/clientplatform.env
 sudo ln -sfn "$RELEASE" /var/lib/clientplatform/runtime/current.next
 sudo mv -Tf /var/lib/clientplatform/runtime/current.next /var/lib/clientplatform/runtime/current
@@ -134,14 +137,23 @@ After the HTTP replay, verify database/outbox counters and absence of duplicate 
 
 The daily timer creates a PostgreSQL custom-format dump, SHA-256 checksum and metadata with mode `0600`. The backup filesystem or remote target must provide encryption at rest; plaintext credentials and dumps must never be copied to repository artifacts.
 
+The application environment deliberately does not contain restore-administrator credentials. Inject `CLIENTPLATFORM_RESTORE_ADMIN_DATABASE_URL` only into the operator shell or a short-lived root-only environment during a drill. It must identify a separate role capable of creating and dropping the disposable restore database.
+
 ```bash
 sudo systemctl enable --now clientplatform-backup.timer
 sudo systemctl start clientplatform-backup.service
 LATEST=$(find /var/backups/clientplatform/postgres -name 'clientplatform-*.dump' -printf '%T@ %p\n' \
   | sort -nr | head -1 | cut -d' ' -f2-)
-sudo -u clientplatform /var/lib/clientplatform/runtime/current/.venv/bin/python \
+read -r -s -p 'Restore administrator DSN: ' CLIENTPLATFORM_RESTORE_ADMIN_DATABASE_URL
+export CLIENTPLATFORM_RESTORE_ADMIN_DATABASE_URL
+set -a
+. /etc/clientplatform/clientplatform.env
+set +a
+sudo -u clientplatform --preserve-env=DATABASE_URL,CLIENTPLATFORM_RESTORE_ADMIN_DATABASE_URL,CLIENTPLATFORM_RESTORE_EVIDENCE_DIR \
+  /var/lib/clientplatform/runtime/current/.venv/bin/python \
   /var/lib/clientplatform/runtime/current/scripts/clientplatform_postgres_backup.py \
   restore-drill "$LATEST"
+unset CLIENTPLATFORM_RESTORE_ADMIN_DATABASE_URL
 ```
 
 A successful drill restores into a disposable database, checks canonical ClientPlatform tables, writes sanitized evidence and drops the disposable database. Run it at least monthly and before a risky migration.
@@ -167,7 +179,7 @@ docker compose -f compose.production.yml config
 docker compose -f compose.production.yml up -d --build
 ```
 
-The Compose network allows container listeners on `0.0.0.0`, but only Caddy publishes ports. Set `CLIENTPLATFORM_DEPLOYMENT_MODE=container` and `CLIENTPLATFORM_CONTAINER_NETWORK_ISOLATED=1`; the preflight rejects wildcard binds outside that explicit container boundary.
+The Compose network allows container listeners on `0.0.0.0`, but only Caddy publishes ports. The app sets `CLIENTPLATFORM_DEPLOYMENT_MODE=container` and `CLIENTPLATFORM_CONTAINER_NETWORK_ISOLATED=1`; the preflight rejects wildcard binds outside that explicit container boundary. `.dockerignore` excludes the local `clientplatform.env`, generic `.env*` files, databases, backups and private-key formats from image context.
 
 ## Go-live gate
 
@@ -175,7 +187,8 @@ Production traffic remains blocked until all are true:
 
 - offline production preflight passes;
 - PostgreSQL schema initialization passes on the dedicated database;
-- backup exists and a disposable restore drill passes;
+- application role has no `CREATEDB` or superuser privilege;
+- backup exists and a disposable restore drill passes using a separate operator-only DSN;
 - health and readiness are green;
 - invalid webhook secret is rejected;
 - sanitized webhook replay has no duplicate domain effects;

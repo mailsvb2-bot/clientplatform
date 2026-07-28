@@ -27,6 +27,12 @@ class ClientPlatformProductionIsolationTests(unittest.TestCase):
             "CLIENTPLATFORM_DATABASE_NAME": "clientplatform_ci",
             "DATABASE_URL": "postgresql://clientplatform_app:password@127.0.0.1:5433/clientplatform_ci",
             "ALLOW_SQLITE_IN_PROD": "0",
+            "METRO_RUNTIME_ROOT": "/var/lib/clientplatform/runtime",
+            "METRO_WRITABLE_ROOT": "/var/lib/clientplatform/state",
+            "METRO_DATA_DIR": "/var/lib/clientplatform/state/data",
+            "METRO_LOGS_DIR": "/var/log/clientplatform",
+            "MPLCONFIGDIR": "/var/lib/clientplatform/state/matplotlib",
+            "PREWARM_MARKER_PATH": "/var/lib/clientplatform/state/prewarm/audio.done",
             "TELEGRAM_TRANSPORT": "webhook",
             "TELEGRAM_WEBHOOK_ENABLED": "1",
             "TELEGRAM_LEGACY_TOKEN_WEBHOOK_ENABLED": "0",
@@ -82,6 +88,8 @@ class ClientPlatformProductionIsolationTests(unittest.TestCase):
                 "CLIENTPLATFORM_STORAGE_BUCKET": "metrotherapy-media",
                 "CLIENTPLATFORM_MEDIA_GATEWAY_ALLOWED_BUCKETS": "metrotherapy-media",
             },
+            "shared_runtime": {"METRO_WRITABLE_ROOT": "/var/lib/metrotherapy/state"},
+            "project_data": {"METRO_DATA_DIR": "/app/data"},
             "weak_webhook_secret": {"TELEGRAM_WEBHOOK_SECRET_TOKEN": "short"},
             "weak_diagnostics_secret": {"HEALTHCHECK_DIAGNOSTICS_TOKEN": "short"},
             "staging_secret": {"CLIENTPLATFORM_STAGING_TELEGRAM_BOT_TOKEN": "present"},
@@ -115,7 +123,9 @@ class ClientPlatformProductionIsolationTests(unittest.TestCase):
         compose = (root / "deploy/clientplatform/compose.production.yml").read_text(encoding="utf-8")
         caddy = (root / "deploy/clientplatform/Caddyfile").read_text(encoding="utf-8")
         runbook = (root / "docs/runbooks/CLIENTPLATFORM_PRODUCTION_ISOLATION.md").read_text(encoding="utf-8")
+        dockerignore = (root / ".dockerignore").read_text(encoding="utf-8")
         self.assertIn("CLIENTPLATFORM_DEPLOYMENT_ID=clientplatform-production", env_example)
+        self.assertIn("METRO_WRITABLE_ROOT=/var/lib/clientplatform/state", env_example)
         self.assertIn("TELEGRAM_TRANSPORT=webhook", env_example)
         self.assertNotIn("DATABASE_URL=postgresql://localhost:5432/metrotherapy", env_example)
         self.assertIn("clientplatform_production_preflight.py", service)
@@ -126,7 +136,10 @@ class ClientPlatformProductionIsolationTests(unittest.TestCase):
         self.assertIn("/telegram-webhook", caddy)
         self.assertIn("/clientplatform/*", caddy)
         self.assertIn("restore-drill", runbook)
+        self.assertIn("CLIENTPLATFORM_RESTORE_ADMIN_DATABASE_URL", runbook)
         self.assertIn("Managed Client Bots require the next Bot Gateway PR", runbook)
+        self.assertIn("deploy/clientplatform/clientplatform.env", dockerignore)
+        self.assertIn(".env.*", dockerignore)
 
     def test_backup_helpers_reject_non_clientplatform_database(self) -> None:
         with self.assertRaisesRegex(ValueError, "non-ClientPlatform"):
@@ -134,6 +147,12 @@ class ClientPlatformProductionIsolationTests(unittest.TestCase):
         env = _pg_environment("postgresql://clientplatform_app:very-secret@db:5432/clientplatform")
         self.assertEqual(env["PGDATABASE"], "clientplatform")
         self.assertEqual(env["PGPASSWORD"], "very-secret")
+        admin = _pg_environment(
+            "postgresql://restore_admin:admin-secret@db:5432/postgres",
+            clientplatform_only=False,
+        )
+        self.assertEqual(admin["PGDATABASE"], "postgres")
+        self.assertEqual(admin["PGUSER"], "restore_admin")
         self.assertEqual(_safe_identifier("clientplatform_restore_1"), "clientplatform_restore_1")
         with self.assertRaisesRegex(ValueError, "unsafe"):
             _safe_identifier("clientplatform;drop")
@@ -152,6 +171,7 @@ class ClientPlatformProductionIsolationTests(unittest.TestCase):
         self.assertIn("clientplatform_production_preflight.py", workflow)
         self.assertIn("clientplatform_postgres_backup.py backup", workflow)
         self.assertIn("clientplatform_postgres_backup.py restore-drill", workflow)
+        self.assertIn("CLIENTPLATFORM_RESTORE_ADMIN_DATABASE_URL", workflow)
         self.assertIn("docker compose", workflow)
         self.assertNotIn("@v4", workflow)
         self.assertNotIn("@v5", workflow)

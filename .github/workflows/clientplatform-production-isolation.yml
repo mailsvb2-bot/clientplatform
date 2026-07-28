@@ -15,7 +15,7 @@ concurrency:
 jobs:
   production-isolation:
     runs-on: ubuntu-22.04
-    timeout-minutes: 25
+    timeout-minutes: 35
     services:
       postgres:
         image: postgres:16
@@ -85,8 +85,14 @@ jobs:
           ADMIN_IDS=100001
           METRO_DB_ENGINE=postgres
           CLIENTPLATFORM_DATABASE_NAME=clientplatform_ci
-          DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/clientplatform_ci
+          DATABASE_URL=postgresql://clientplatform_app:ci-app-password@127.0.0.1:5432/clientplatform_ci
           ALLOW_SQLITE_IN_PROD=0
+          METRO_RUNTIME_ROOT=/var/lib/clientplatform/runtime
+          METRO_WRITABLE_ROOT=/var/lib/clientplatform/state
+          METRO_DATA_DIR=/var/lib/clientplatform/state/data
+          METRO_LOGS_DIR=/var/log/clientplatform
+          MPLCONFIGDIR=/var/lib/clientplatform/state/matplotlib
+          PREWARM_MARKER_PATH=/var/lib/clientplatform/state/prewarm/audio.done
           TELEGRAM_TRANSPORT=webhook
           TELEGRAM_WEBHOOK_ENABLED=1
           TELEGRAM_LEGACY_TOKEN_WEBHOOK_ENABLED=0
@@ -132,18 +138,39 @@ jobs:
             --env-file "$RUNNER_TEMP/clientplatform-production.env" \
             2>&1 | tee "$RUNNER_TEMP/clientplatform-production-preflight.log"
 
-      - name: Validate Docker Compose topology
+      - name: Validate Docker build and Compose topology
         env:
-          CLIENTPLATFORM_POSTGRES_PASSWORD: ci-postgres-password
+          CLIENTPLATFORM_POSTGRES_ADMIN_PASSWORD: ci-admin-password
+          CLIENTPLATFORM_POSTGRES_APP_PASSWORD: ci-app-password
           CLIENTPLATFORM_DOMAIN: clientplatform.production.internal
         run: |
           cp deploy/clientplatform/clientplatform.production.env.example \
             deploy/clientplatform/clientplatform.env
           docker compose -f deploy/clientplatform/compose.production.yml config \
             > "$RUNNER_TEMP/clientplatform-compose-config.yml"
+          docker build --file deploy/clientplatform/Dockerfile \
+            --tag clientplatform-production:ci .
           rm -f deploy/clientplatform/clientplatform.env
 
-      - name: Initialize live PostgreSQL schema
+      - name: Provision least-privilege application role
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql --host 127.0.0.1 --username postgres --dbname clientplatform_ci \
+            --set ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE clientplatform_app
+            LOGIN PASSWORD 'ci-app-password'
+            NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION;
+          GRANT CONNECT ON DATABASE clientplatform_ci TO clientplatform_app;
+          GRANT USAGE, CREATE ON SCHEMA public TO clientplatform_app;
+          SQL
+          test "$(psql --host 127.0.0.1 --username postgres --dbname clientplatform_ci \
+            --tuples-only --no-align --command \
+            "SELECT (NOT rolsuper AND NOT rolcreatedb AND NOT rolcreaterole)::text FROM pg_roles WHERE rolname='clientplatform_app'")" = "true"
+
+      - name: Initialize live PostgreSQL schema as application role
+        env:
+          DATABASE_URL: postgresql://clientplatform_app:ci-app-password@127.0.0.1:5432/clientplatform_ci
         run: |
           python - <<'PY'
           from services.schema import init_db
@@ -151,11 +178,13 @@ jobs:
           print("CLIENTPLATFORM_POSTGRES_SCHEMA_OK")
           PY
 
-      - name: Create backup and prove disposable restore
+      - name: Create backup as application role and prove admin-only restore
         env:
+          DATABASE_URL: postgresql://clientplatform_app:ci-app-password@127.0.0.1:5432/clientplatform_ci
           CLIENTPLATFORM_BACKUP_DIR: ${{ runner.temp }}/clientplatform-backups
           CLIENTPLATFORM_RESTORE_EVIDENCE_DIR: ${{ runner.temp }}/clientplatform-restore-evidence
           CLIENTPLATFORM_BACKUP_RETENTION_DAYS: "30"
+          CLIENTPLATFORM_RESTORE_ADMIN_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
         run: |
           set -o pipefail
           python scripts/clientplatform_postgres_backup.py backup \

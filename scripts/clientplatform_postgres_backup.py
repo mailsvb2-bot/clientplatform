@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-"""Encrypted-at-rest PostgreSQL backup boundary and disposable restore drill.
+"""PostgreSQL backup boundary and disposable restore drill.
 
-This tool never accepts a DSN on the command line. Credentials are parsed from
-process environment and passed to PostgreSQL tools through PG* environment
-variables, keeping passwords out of command arguments and generated evidence.
+The application DSN is used only for pg_dump. Restore drills require a separate
+operator-supplied administrative DSN, so the runtime application role never
+needs CREATEDB or superuser privileges. Credentials are passed through PG*
+environment variables and never written to command arguments or evidence.
 """
 
 import argparse
@@ -27,19 +28,31 @@ _REQUIRED_TABLES = (
 )
 
 
-def _database_name(database_url: str) -> str:
+def _postgres_database_name(database_url: str, *, clientplatform_only: bool) -> str:
     parsed = urlsplit(database_url)
     name = parsed.path.lstrip("/")
     if parsed.scheme not in {"postgres", "postgresql"} or not parsed.hostname or not name:
-        raise ValueError("DATABASE_URL must be a PostgreSQL URL with database name")
-    if not name.startswith("clientplatform"):
+        raise ValueError("PostgreSQL URL must contain an explicit host and database name")
+    if clientplatform_only and not name.startswith("clientplatform"):
         raise ValueError("refusing to operate on a non-ClientPlatform database")
     return name
 
 
-def _pg_environment(database_url: str, *, database: str | None = None) -> dict[str, str]:
+def _database_name(database_url: str) -> str:
+    return _postgres_database_name(database_url, clientplatform_only=True)
+
+
+def _pg_environment(
+    database_url: str,
+    *,
+    database: str | None = None,
+    clientplatform_only: bool = True,
+) -> dict[str, str]:
     parsed = urlsplit(database_url)
-    source_name = _database_name(database_url)
+    source_name = _postgres_database_name(
+        database_url,
+        clientplatform_only=clientplatform_only,
+    )
     env = os.environ.copy()
     env.update(
         {
@@ -52,12 +65,12 @@ def _pg_environment(database_url: str, *, database: str | None = None) -> dict[s
         }
     )
     if not env["PGUSER"]:
-        raise ValueError("DATABASE_URL must contain a dedicated PostgreSQL role")
+        raise ValueError("PostgreSQL URL must contain a role")
     return env
 
 
 def _run(command: list[str], *, env: dict[str, str], capture: bool = False) -> str:
-    completed = subprocess.run(
+    completed = subprocess.run(  # nosec B603 - fixed PostgreSQL client commands only
         command,
         env=env,
         check=False,
@@ -157,11 +170,13 @@ def create_backup(
 def verify_restore(
     *,
     database_url: str,
+    admin_database_url: str,
     dump_path: Path,
     evidence_dir: Path,
     now: float | None = None,
 ) -> Path:
     source_database = _database_name(database_url)
+    _postgres_database_name(admin_database_url, clientplatform_only=False)
     expected_checksum_path = dump_path.with_suffix(dump_path.suffix + ".sha256")
     expected_checksum = expected_checksum_path.read_text(encoding="utf-8").split()[0]
     actual_checksum = _sha256(dump_path)
@@ -170,10 +185,28 @@ def verify_restore(
 
     suffix = datetime.fromtimestamp(now or time.time(), tz=timezone.utc).strftime("%Y%m%d%H%M%S")
     restore_database = _safe_identifier(f"clientplatform_restore_{suffix}_{os.getpid()}")
-    admin_env = _pg_environment(database_url, database="postgres")
-    restore_env = _pg_environment(database_url, database=restore_database)
+    admin_env = _pg_environment(
+        admin_database_url,
+        database="postgres",
+        clientplatform_only=False,
+    )
+    restore_env = _pg_environment(
+        admin_database_url,
+        database=restore_database,
+        clientplatform_only=False,
+    )
     quoted = _quoted_identifier(restore_database)
-    _run(["psql", "--no-psqlrc", "--set", "ON_ERROR_STOP=1", "--command", f"CREATE DATABASE {quoted}"], env=admin_env)
+    _run(
+        [
+            "psql",
+            "--no-psqlrc",
+            "--set",
+            "ON_ERROR_STOP=1",
+            "--command",
+            f"CREATE DATABASE {quoted}",
+        ],
+        env=admin_env,
+    )
     try:
         _run(
             [
@@ -267,8 +300,17 @@ def main() -> int:
         print(f"CLIENTPLATFORM_BACKUP_OK:{target}")
         return 0
 
+    admin_database_url = str(
+        os.getenv("CLIENTPLATFORM_RESTORE_ADMIN_DATABASE_URL") or ""
+    ).strip()
+    if not admin_database_url:
+        raise SystemExit(
+            "CLIENTPLATFORM_RESTORE_DRILL_FAILED: "
+            "CLIENTPLATFORM_RESTORE_ADMIN_DATABASE_URL is required"
+        )
     evidence = verify_restore(
         database_url=database_url,
+        admin_database_url=admin_database_url,
         dump_path=args.dump,
         evidence_dir=args.evidence_dir
         or Path(os.environ["CLIENTPLATFORM_RESTORE_EVIDENCE_DIR"]),
