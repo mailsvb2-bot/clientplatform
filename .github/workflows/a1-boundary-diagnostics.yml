@@ -34,4 +34,15 @@ jobs:
         run: python -m unittest -v tests.test_a1_program_delivery_vertical
 
       - name: Connections and dispatch outbox
-        run: python -m unittest -v tests.test_a1_connections_dispatch_outbox
+        run: |
+          set -o pipefail
+          python -m unittest -v tests.test_a1_connections_dispatch_outbox \
+            2>&1 | tee "$RUNNER_TEMP/a1-connections-dispatch.log"
+
+      - name: Upload A1 boundary diagnostic log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: a1-boundary-diagnostic-log
+          path: ${{ runner.temp }}/a1-connections-dispatch.log
+          if-no-files-found: warn
