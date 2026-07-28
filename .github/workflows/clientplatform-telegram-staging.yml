@@ -2,9 +2,6 @@ name: clientplatform Telegram Staging
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - agent/fix-red-staging
 
 permissions:
   contents: read
