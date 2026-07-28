@@ -27,10 +27,14 @@ os.environ.setdefault("BOT_TOKEN", "000000:TEST")
 os.environ.setdefault("PAY_PROVIDER_TOKEN", "000000:TEST")
 os.environ.setdefault("PUBLIC_BASE_URL", "https" + "://" + "metrotherapy.ru")
 
-# Messenger/webhook defaults for deterministic unit tests.
+# Messenger/webhook/runtime defaults for deterministic unit tests. Dedicated
+# ClientPlatform default-on tests clear these variables explicitly before asserting
+# production defaults, while unrelated tests never start real background workers.
 os.environ["TELEGRAM_TRANSPORT"] = "polling"
 os.environ["TELEGRAM_WEBHOOK_ENABLED"] = "0"
 os.environ["MESSENGER_WEBHOOK_ENABLED"] = "0"
+os.environ["CLIENTPLATFORM_CONTROL_BOT_ENABLED"] = "0"
+os.environ["CLIENTPLATFORM_DISPATCH_RUNTIME_ENABLED"] = "0"
 
 # Prevent real server integrations leaking into tests.
 for name in (
