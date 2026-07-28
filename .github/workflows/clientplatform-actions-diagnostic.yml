@@ -1,0 +1,120 @@
+name: clientplatform Actions Diagnostic
+
+on:
+  push:
+    branches:
+      - agent/fix-red-staging
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Collect recent failed Actions runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -Eeuo pipefail
+          python - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          import urllib.request
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          repository = os.environ["GH_REPOSITORY"]
+          token = os.environ["GH_TOKEN"]
+          output = Path(os.environ["RUNNER_TEMP"]) / "clientplatform-actions-diagnostic"
+          output.mkdir(parents=True, exist_ok=True)
+
+          def api(path: str) -> bytes:
+              request = urllib.request.Request(
+                  f"https://api.github.com{path}",
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {token}",
+                      "User-Agent": "clientplatform-actions-diagnostic",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  return response.read()
+
+          runs_payload = json.loads(
+              api(f"/repos/{repository}/actions/runs?per_page=50").decode("utf-8")
+          )
+          runs = runs_payload.get("workflow_runs", [])
+          current_run_id = int(os.environ["GITHUB_RUN_ID"])
+          failures = [
+              run
+              for run in runs
+              if run.get("conclusion") == "failure"
+              and int(run.get("id", 0)) != current_run_id
+          ][:10]
+
+          summary = []
+          for run in failures:
+              run_id = int(run["id"])
+              jobs_payload = json.loads(
+                  api(f"/repos/{repository}/actions/runs/{run_id}/jobs?per_page=100").decode("utf-8")
+              )
+              jobs = jobs_payload.get("jobs", [])
+              failed_jobs = []
+              for job in jobs:
+                  if job.get("conclusion") != "failure":
+                      continue
+                  failed_steps = [
+                      step.get("name")
+                      for step in job.get("steps", [])
+                      if step.get("conclusion") == "failure"
+                  ]
+                  failed_jobs.append(
+                      {
+                          "id": job.get("id"),
+                          "name": job.get("name"),
+                          "failed_steps": failed_steps,
+                      }
+                  )
+                  try:
+                      logs = api(f"/repos/{repository}/actions/jobs/{job['id']}/logs")
+                  except Exception as exc:
+                      logs = f"Unable to fetch logs: {type(exc).__name__}: {exc}\n".encode()
+                  (output / f"run-{run_id}-job-{job['id']}.log").write_bytes(logs)
+
+              summary.append(
+                  {
+                      "run_id": run_id,
+                      "name": run.get("name"),
+                      "display_title": run.get("display_title"),
+                      "event": run.get("event"),
+                      "head_branch": run.get("head_branch"),
+                      "head_sha": run.get("head_sha"),
+                      "created_at": run.get("created_at"),
+                      "updated_at": run.get("updated_at"),
+                      "html_url": run.get("html_url"),
+                      "failed_jobs": failed_jobs,
+                  }
+              )
+
+          (output / "summary.json").write_text(
+              json.dumps(summary, ensure_ascii=False, indent=2),
+              encoding="utf-8",
+          )
+          print(json.dumps(summary, ensure_ascii=False, indent=2))
+          PY
+
+      - name: Upload Actions diagnostic
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: clientplatform-actions-diagnostic
+          path: ${{ runner.temp }}/clientplatform-actions-diagnostic
+          if-no-files-found: error
