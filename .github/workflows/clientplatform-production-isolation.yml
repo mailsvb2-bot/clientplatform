@@ -37,7 +37,7 @@ jobs:
       CLIENTPLATFORM_DATABASE_NAME: clientplatform_ci
       DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/clientplatform_ci
       POSTGRES_REUSE_CONNECTIONS: "0"
-      BOT_TOKEN: "000000:CI"
+      BOT_TOKEN: ci-bot-token-material
       TELEGRAM_TRANSPORT: polling
       TELEGRAM_WEBHOOK_ENABLED: "0"
     steps:
@@ -50,10 +50,16 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - name: Install hash-locked dependencies and PostgreSQL client
+      - name: Install hash-locked dependencies and PostgreSQL 16 client
         run: |
+          sudo install -d -m 0755 /usr/share/postgresql-common/pgdg
+          curl --fail --silent --show-error https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            | sudo gpg --dearmor -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
           sudo apt-get update
-          sudo apt-get install --yes postgresql-client
+          sudo apt-get install --yes postgresql-client-16
+          pg_dump --version
           python -m pip install --disable-pip-version-check pip==26.1.2
           python -m pip install --require-hashes -r requirements-dev.txt
 
@@ -74,7 +80,7 @@ jobs:
           CLIENTPLATFORM_DOMAIN=clientplatform.production.internal
           CLIENTPLATFORM_PUBLIC_BASE_URL=https://clientplatform.production.internal
           CLIENTPLATFORM_PRODUCTION_BOT_USERNAME=clientplatform_bot
-          BOT_TOKEN=100000:production-token-material
+          BOT_TOKEN=ci-bot-token-material-without-provider-shape
           ADMIN_IDS=100001
           METRO_DB_ENGINE=postgres
           CLIENTPLATFORM_DATABASE_NAME=clientplatform_ci
