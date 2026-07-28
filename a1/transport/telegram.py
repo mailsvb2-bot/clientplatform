@@ -4,6 +4,7 @@ from typing import Protocol
 
 from a1.domain.connections import ClaimedDispatch, ConnectionPlatform
 from a1.domain.programs import ContentKind
+from a1.transport.media import MediaReferenceResolver, SafeMediaReferenceResolver
 
 
 class TelegramBotClient(Protocol):
@@ -54,11 +55,27 @@ class TelegramBotClient(Protocol):
     ) -> str: ...
 
 
+_MEDIA_KINDS = frozenset(
+    {
+        ContentKind.AUDIO,
+        ContentKind.VIDEO,
+        ContentKind.DOCUMENT,
+        ContentKind.IMAGE,
+    }
+)
+
+
 class TelegramDispatchAdapter:
     platform = ConnectionPlatform.TELEGRAM
 
-    def __init__(self, client: TelegramBotClient):
+    def __init__(
+        self,
+        client: TelegramBotClient,
+        *,
+        media_resolver: MediaReferenceResolver | None = None,
+    ) -> None:
         self._client = client
+        self._media_resolver = media_resolver or SafeMediaReferenceResolver()
 
     async def send(self, item: ClaimedDispatch, credential: str) -> str:
         token = str(credential or "").strip()
@@ -66,8 +83,10 @@ class TelegramDispatchAdapter:
             raise ValueError("resolved Telegram credential must not be empty")
 
         chat_id = item.external_subject
-        payload = item.dispatch.payload_ref
         kind = item.dispatch.payload_kind
+        payload = item.dispatch.payload_ref
+        if kind in _MEDIA_KINDS:
+            payload = await self._media_resolver.resolve(payload, kind)
 
         if kind == ContentKind.AUDIO:
             result = await self._client.send_audio(
