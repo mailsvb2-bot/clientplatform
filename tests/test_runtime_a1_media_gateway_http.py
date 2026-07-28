@@ -144,7 +144,7 @@ class A1MediaGatewayHttpTests(unittest.IsolatedAsyncioTestCase):
             ) as response:
                 self.assertEqual(response.status, 206)
                 self.assertEqual(response.headers["Content-Range"], "bytes 3-7/16")
-                self.assertEqual(await response.read(), b"A-AUD")
+                self.assertEqual(await response.read(), b"AUDIO")
 
     async def test_bad_expired_and_disallowed_requests_fail_closed(self) -> None:
         signed = await self.resolver.resolve(
