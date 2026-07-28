@@ -8,6 +8,8 @@ from pathlib import Path
 
 LEGACY_UPPER = "A" + "1"
 LEGACY_LOWER = "a" + "1"
+LEGACY_CYRILLIC_UPPER = "\u0410" + "1"
+LEGACY_CYRILLIC_LOWER = "\u0430" + "1"
 BRAND = "clientplatform"
 BRAND_CLASS = "ClientPlatform"
 BRAND_ENV = "CLIENTPLATFORM"
@@ -48,6 +50,8 @@ def transform_name(value: str) -> str:
     result = result.replace(f"{LEGACY_LOWER}_", f"{BRAND}_")
     result = result.replace(f"{LEGACY_UPPER}-", f"{BRAND}-")
     result = result.replace(f"{LEGACY_LOWER}-", f"{BRAND}-")
+    result = result.replace(LEGACY_CYRILLIC_UPPER, BRAND)
+    result = result.replace(LEGACY_CYRILLIC_LOWER, BRAND)
     if result == LEGACY_UPPER or result == LEGACY_LOWER:
         return BRAND
     return result
@@ -77,9 +81,16 @@ def transform_text(text: str) -> str:
     lower_token = re.compile(
         rf"(?<![A-Za-z0-9]){re.escape(LEGACY_LOWER)}(?=$|[^A-Za-z0-9])"
     )
+    cyrillic_token = re.compile(
+        rf"(?<![A-Za-zА-Яа-яЁё0-9])(?:"
+        rf"{re.escape(LEGACY_CYRILLIC_UPPER)}|"
+        rf"{re.escape(LEGACY_CYRILLIC_LOWER)})"
+        rf"(?=$|[^A-Za-zА-Яа-яЁё0-9])"
+    )
     result = upper_camel.sub(BRAND_CLASS, result)
     result = upper_standalone.sub(BRAND, result)
     result = lower_token.sub(BRAND, result)
+    result = cyrillic_token.sub(BRAND_CLASS, result)
     return result
 
 
