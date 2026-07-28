@@ -33,6 +33,7 @@ log = logging.getLogger(__name__)
 
 _DIAGNOSTICS_HEADER = 'X-Metrotherapy-Diagnostics-Token'
 _DIAGNOSTICS_ENV = 'HEALTHCHECK_DIAGNOSTICS_TOKEN'
+_TRUE_VALUES = frozenset({'1', 'true', 'yes', 'on'})
 
 
 def _diagnostics_token() -> str:
@@ -88,6 +89,49 @@ def _scheduler_snapshot() -> dict[str, Any]:
             'scheduler_loop_last_error_age_sec': 0,
             'scheduler_loop_last_tick_age_sec': 0,
         }
+
+
+def _a1_dispatch_configured() -> bool:
+    raw = str(os.getenv('A1_DISPATCH_RUNTIME_ENABLED') or '').strip().lower()
+    return raw in _TRUE_VALUES
+
+
+def _a1_runtime_snapshot() -> dict[str, Any]:
+    configured = _a1_dispatch_configured()
+    fallback: dict[str, Any] = {
+        'a1_dispatch_configured': configured,
+        'a1_runtime_health_available': False,
+        'a1_runtime_composed': False,
+        'a1_dispatch_enabled': False,
+        'a1_dispatch_running': False,
+        'a1_dispatch_iterations': 0,
+        'a1_dispatch_claimed': 0,
+        'a1_dispatch_sent': 0,
+        'a1_dispatch_retried': 0,
+        'a1_dispatch_dead': 0,
+        'a1_dispatch_errors': 0,
+        'a1_dispatch_last_error': '',
+        'a1_dispatch_last_tick_age_seconds': 0,
+    }
+    try:
+        from a1.runtime.lifecycle import a1_runtime_health_snapshot
+
+        snapshot = dict(a1_runtime_health_snapshot())
+    except ImportError:
+        return fallback
+    except AttributeError:
+        return fallback
+    except RuntimeError:
+        return fallback
+    except TypeError:
+        return fallback
+    except ValueError:
+        return fallback
+    return {
+        **fallback,
+        'a1_runtime_health_available': True,
+        **snapshot,
+    }
 
 
 def _int_env(name: str, default: int) -> int:
@@ -196,6 +240,71 @@ def _scheduler_readiness(scheduler: dict[str, Any]) -> tuple[bool, list[str], di
     )
 
 
+def _a1_dispatch_stale(snapshot: dict[str, Any]) -> bool:
+    if not bool(snapshot.get('a1_dispatch_running')):
+        return False
+    try:
+        iterations = int(snapshot.get('a1_dispatch_iterations') or 0)
+    except (TypeError, ValueError):
+        iterations = 0
+    if iterations <= 0:
+        return False
+    max_age_sec = _int_env('A1_DISPATCH_READY_MAX_LAST_TICK_AGE_SEC', 180)
+    if max_age_sec <= 0:
+        return False
+    try:
+        age_sec = int(snapshot.get('a1_dispatch_last_tick_age_seconds') or 0)
+    except (TypeError, ValueError):
+        age_sec = max_age_sec + 1
+    return age_sec > max_age_sec
+
+
+def _a1_dispatch_readiness(
+    snapshot: dict[str, Any],
+) -> tuple[bool, list[str], dict[str, bool]]:
+    configured = bool(snapshot.get('a1_dispatch_configured'))
+    health_available = bool(snapshot.get('a1_runtime_health_available'))
+    composed = bool(snapshot.get('a1_runtime_composed'))
+    runtime_enabled = bool(snapshot.get('a1_dispatch_enabled'))
+    running = bool(snapshot.get('a1_dispatch_running'))
+    last_error = str(snapshot.get('a1_dispatch_last_error') or '').strip()
+    try:
+        error_count = int(snapshot.get('a1_dispatch_errors') or 0)
+    except (TypeError, ValueError):
+        error_count = 0
+    recent_error = bool(error_count > 0 and last_error)
+    stale = _a1_dispatch_stale(snapshot)
+
+    errors: list[str] = []
+    if configured:
+        if not health_available:
+            errors.append('a1_dispatch:health_unavailable')
+        elif not composed:
+            errors.append('a1_dispatch:not_composed')
+        else:
+            if not runtime_enabled:
+                errors.append('a1_dispatch:not_enabled')
+            if not running:
+                errors.append('a1_dispatch:not_running')
+            if recent_error:
+                errors.append('a1_dispatch:recent_tick_error')
+            if stale:
+                errors.append('a1_dispatch:stale_tick')
+
+    degraded = bool(errors)
+    ready = bool(not configured or not degraded)
+    return (
+        ready,
+        errors,
+        {
+            'a1_dispatch_ready': ready,
+            'a1_dispatch_recent_error': recent_error,
+            'a1_dispatch_stale': stale,
+            'a1_dispatch_degraded': degraded,
+        },
+    )
+
+
 def _messenger_webhook_configured() -> bool:
     """Legacy diagnostic field retained for operator/dashboard compatibility."""
     try:
@@ -293,6 +402,7 @@ def _ingress_health_fields() -> dict[str, bool]:
 
 def build_health_payload() -> tuple[dict[str, Any], int]:
     scheduler = _scheduler_snapshot()
+    a1_runtime = _a1_runtime_snapshot()
     telegram_transport_value = _telegram_transport()
     messenger_webhook_enabled = _messenger_webhook_configured()
     telegram_webhook_enabled = telegram_transport_value == 'webhook'
@@ -314,6 +424,7 @@ def build_health_payload() -> tuple[dict[str, Any], int]:
         **messenger_preflight_fields,
         **ai_policy_snapshot(),
         **scheduler,
+        **a1_runtime,
     }
     return details, 200
 
@@ -322,12 +433,14 @@ def build_readiness_payload() -> tuple[dict[str, Any], int]:
     db_ok, db_error = _db_ready()
     schema_ok, schema_error = _schema_ready()
     scheduler = _scheduler_snapshot()
+    a1_runtime = _a1_runtime_snapshot()
     telegram_transport_value = _telegram_transport()
     messenger_webhook_enabled = _messenger_webhook_configured()
     telegram_webhook_enabled = telegram_transport_value == 'webhook'
     webhook_runtime_enabled = _webhook_configured()
     app_env = (os.getenv('APP_ENV', 'dev') or 'dev').strip().lower()
     scheduler_ok, scheduler_errors, scheduler_flags = _scheduler_readiness(scheduler)
+    a1_ok, a1_errors, a1_flags = _a1_dispatch_readiness(a1_runtime)
     ingress_ok, ingress_errors, ingress_fields = _messenger_preflight_readiness()
     audio_ok, audio_error = _audio_ready(app_env)
     webhook_ok = True
@@ -341,10 +454,19 @@ def build_readiness_payload() -> tuple[dict[str, Any], int]:
     if audio_error is not None:
         errors.append(audio_error)
     errors.extend(scheduler_errors)
+    errors.extend(a1_errors)
     errors.extend(ingress_errors)
     if not webhook_ok:
         errors.append('webhook:not_ready')
-    ready = bool(db_ok and schema_ok and scheduler_ok and ingress_ok and audio_ok and webhook_ok)
+    ready = bool(
+        db_ok
+        and schema_ok
+        and scheduler_ok
+        and a1_ok
+        and ingress_ok
+        and audio_ok
+        and webhook_ok
+    )
     details: dict[str, Any] = {
         'ok': ready,
         'service': 'metrotherapy',
@@ -353,6 +475,7 @@ def build_readiness_payload() -> tuple[dict[str, Any], int]:
         'schema_ready': schema_ok,
         'audio_ready': audio_ok,
         'scheduler_ready': scheduler_ok,
+        'a1_dispatch_ready': a1_ok,
         'messenger_ready': ingress_ok,
         'ingress_ready': ingress_ok,
         'webhook_ready': webhook_ok,
@@ -366,10 +489,12 @@ def build_readiness_payload() -> tuple[dict[str, Any], int]:
         'app_env': app_env,
         **_ingress_health_fields(),
         **scheduler_flags,
+        **a1_flags,
         **_storage_health_fields(),
         **ingress_fields,
         **ai_policy_snapshot(),
         **scheduler,
+        **a1_runtime,
     }
     if errors:
         details['error'] = ';'.join(errors)
