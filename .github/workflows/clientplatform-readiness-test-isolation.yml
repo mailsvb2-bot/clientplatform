@@ -1,0 +1,51 @@
+name: clientplatform Readiness Test Isolation
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout implementation branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: agent/enable-control-booking
+          fetch-depth: 1
+
+      - name: Isolate generic readiness test from ClientPlatform dispatch
+        run: |
+          set -Eeuo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('tests/test_health_runtime_readiness_phase2.py')
+          source = path.read_text(encoding='utf-8')
+          anchor = '''    monkeypatch.setattr(health_server, "_scheduler_snapshot", lambda: scheduler_snapshot(extra="value"))
+'''
+          replacement = anchor + '''    monkeypatch.setattr(
+        health_server,
+        "clientplatform_dispatch_readiness",
+        lambda _snapshot: (True, [], {"clientplatform_dispatch_degraded": False}),
+    )
+'''
+          if source.count(anchor) != 1:
+              raise SystemExit('readiness test isolation anchor mismatch')
+          path.write_text(source.replace(anchor, replacement), encoding='utf-8')
+          PY
+
+          rm -f .github/workflows/clientplatform-readiness-test-isolation.yml
+          python -m compileall -q tests/test_health_runtime_readiness_phase2.py
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Isolate readiness tests from default-on dispatch"
+          git push origin HEAD:agent/enable-control-booking
