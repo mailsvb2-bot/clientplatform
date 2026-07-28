@@ -45,9 +45,9 @@ def ensure(c: sqlite3.Connection) -> None:
                 ))
             ),
             CHECK(
-                credential_reference LIKE 'secret://%'
-                OR credential_reference LIKE 'kms://%'
-                OR credential_reference LIKE 'vault://%'
+                substr(credential_reference, 1, 9)='secret://'
+                OR substr(credential_reference, 1, 6)='kms://'
+                OR substr(credential_reference, 1, 8)='vault://'
             ),
             CHECK(status IN ('pending', 'active', 'attention', 'disabled', 'revoked'))
         )
@@ -75,9 +75,9 @@ def ensure(c: sqlite3.Connection) -> None:
                 REFERENCES connections(id, business_id, platform) ON DELETE CASCADE,
             CHECK(platform IN ('telegram', 'max')),
             CHECK(
-                webhook_secret_reference LIKE 'secret://%'
-                OR webhook_secret_reference LIKE 'kms://%'
-                OR webhook_secret_reference LIKE 'vault://%'
+                substr(webhook_secret_reference, 1, 9)='secret://'
+                OR substr(webhook_secret_reference, 1, 6)='kms://'
+                OR substr(webhook_secret_reference, 1, 8)='vault://'
             ),
             CHECK(status IN ('active', 'disabled', 'revoked'))
         )
