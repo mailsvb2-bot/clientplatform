@@ -176,7 +176,7 @@ class A1StagingWorkflowContractTests(unittest.TestCase):
             "9d71c677db00134c1bd4144b7783486b654ad281b1ea62b4972098d19f770f17",
             workflow,
         )
-        self.assertIn("trycloudflare.com", workflow)
+        self.assertIn(r"trycloudflare\.com", workflow)
         self.assertIn("scripts/a1_ephemeral_media_gateway.py", workflow)
         self.assertIn("scripts/a1_staging_fixture.py", workflow)
         self.assertIn("secrets.A1_STAGING_TELEGRAM_BOT_TOKEN", workflow)
