@@ -1,86 +1,23 @@
-name: clientplatform Full Rebrand
+name: clientplatform Brand Gate
 
 on:
+  pull_request:
   push:
     branches:
-      - agent/full-clientplatform-rebrand
-  pull_request:
-    branches:
       - main
-    types:
-      - opened
-      - synchronize
-      - reopened
+      - "agent/**"
 
 permissions:
-  contents: write
-
-concurrency:
-  group: clientplatform-full-rebrand
-  cancel-in-progress: false
+  contents: read
 
 jobs:
-  migrate:
-    if: github.actor != 'github-actions[bot]'
+  brand-gate:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
 
     steps:
-      - name: Checkout full rebrand branch
+      - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          fetch-depth: 1
-          show-progress: false
-          ref: agent/full-clientplatform-rebrand
 
-      - name: Apply repository-wide clientplatform rebrand
-        run: python scripts/clientplatform_rebrand.py
-
-      - name: Enforce zero legacy brand references outside workflows
-        run: python scripts/clientplatform_rebrand.py --check
-
-      - name: Report workflow files requiring API migration
-        run: |
-          python scripts/clientplatform_rebrand.py --report-workflows \
-            | tee "$RUNNER_TEMP/clientplatform-workflow-rebrand-report.txt"
-
-      - name: Commit complete migration
-        id: commit
-        run: |
-          set -Eeuo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          if git diff --cached --quiet; then
-            echo "created=false" >> "$GITHUB_OUTPUT"
-            echo "Repository-wide non-workflow migration is already committed"
-            exit 0
-          fi
-          git diff --cached --stat
-          git commit -m "Rebrand repository as clientplatform"
-          echo "created=true" >> "$GITHUB_OUTPUT"
-
-      - name: Push migration commit
-        id: push
-        if: steps.commit.outputs.created == 'true'
-        continue-on-error: true
-        run: |
-          set -o pipefail
-          git push origin HEAD:agent/full-clientplatform-rebrand \
-            > "$RUNNER_TEMP/clientplatform-rebrand-push.log" 2>&1
-
-      - name: Upload rebrand diagnostics
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: clientplatform-rebrand-diagnostics
-          path: |
-            ${{ runner.temp }}/clientplatform-workflow-rebrand-report.txt
-            ${{ runner.temp }}/clientplatform-rebrand-push.log
-          if-no-files-found: warn
-
-      - name: Fail when branch update was rejected
-        if: steps.push.outcome == 'failure'
-        run: |
-          cat "$RUNNER_TEMP/clientplatform-rebrand-push.log"
-          exit 1
+      - name: Enforce clientplatform naming across tracked files
+        run: python scripts/clientplatform_rebrand.py --include-workflows --check
