@@ -1,0 +1,37 @@
+name: clientplatform Source Snapshot
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Create safe source archive
+        run: |
+          set -Eeuo pipefail
+          tar \
+            --exclude=.git \
+            --exclude='.env*' \
+            --exclude='*.db' \
+            --exclude='*.sqlite*' \
+            --exclude='__pycache__' \
+            --exclude='.pytest_cache' \
+            -czf "$RUNNER_TEMP/clientplatform-source.tar.gz" .
+
+      - name: Upload source snapshot
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: clientplatform-source-snapshot
+          path: ${{ runner.temp }}/clientplatform-source.tar.gz
+          if-no-files-found: error
+          retention-days: 1
