@@ -146,7 +146,7 @@ class ClientPlatformProductionIsolationTests(unittest.TestCase):
             fixture.write_text('{"update_id":1}\n{"update_id":2}\n', encoding="utf-8")
             self.assertEqual(len(_load_replay_events(fixture)), 2)
 
-    def test_workflow_has_live_postgres_restore_drill(self) -> None:
+    def test_workflow_has_postgres_restore_drill(self) -> None:
         workflow = Path(".github/workflows/clientplatform-production-isolation.yml").read_text(encoding="utf-8")
         self.assertIn("postgres:16", workflow)
         self.assertIn("clientplatform_production_preflight.py", workflow)
