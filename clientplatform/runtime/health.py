@@ -5,16 +5,25 @@ import sqlite3
 from collections.abc import Callable
 from typing import Any
 
+from clientplatform.runtime.control_bot import control_bot_enabled
 from core.runtime_env import env_int
 
 
 _TRUE_VALUES = frozenset({'1', 'true', 'yes', 'on'})
+_FALSE_VALUES = frozenset({'0', 'false', 'no', 'off'})
 OutboxProbe = Callable[..., dict[str, Any]]
 
 
 def clientplatform_dispatch_configured() -> bool:
-    raw = str(os.getenv('CLIENTPLATFORM_DISPATCH_RUNTIME_ENABLED') or '').strip().lower()
-    return raw in _TRUE_VALUES
+    raw = os.getenv('CLIENTPLATFORM_DISPATCH_RUNTIME_ENABLED')
+    if raw is None or not str(raw).strip():
+        return control_bot_enabled()
+    normalized = str(raw).strip().lower()
+    if normalized in _TRUE_VALUES:
+        return True
+    if normalized in _FALSE_VALUES:
+        return False
+    raise RuntimeError('clientplatform_dispatch_runtime_enabled_invalid')
 
 
 def clientplatform_runtime_snapshot() -> dict[str, Any]:

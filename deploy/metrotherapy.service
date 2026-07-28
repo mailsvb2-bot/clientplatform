@@ -10,6 +10,10 @@ Type=simple
 User=metrotherapy
 Group=metrotherapy
 WorkingDirectory=/var/lib/metrotherapy/runtime/current
+# Canonical product defaults. Environment files are loaded afterwards and may
+# set either value to 0 for an explicit emergency rollback.
+Environment=CLIENTPLATFORM_CONTROL_BOT_ENABLED=1
+Environment=CLIENTPLATFORM_DISPATCH_RUNTIME_ENABLED=1
 EnvironmentFile=-/etc/metrotherapy/metrotherapy.env
 EnvironmentFile=-/etc/default/metrotherapy
 Environment=APP_ENV=prod

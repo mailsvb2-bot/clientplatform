@@ -1,5 +1,7 @@
 # ADR-0012: свободный паспорт деятельности и подключаемые рабочие модули
 
+> Default-off rollout statements are superseded by ADR-0013; the connector model remains active.
+
 **Статус:** принято
 
 ## Контекст

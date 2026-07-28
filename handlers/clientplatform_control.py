@@ -18,6 +18,13 @@ from clientplatform.application.activity import (
     list_business_offerings,
     save_business_profile,
 )
+from clientplatform.application.bookings import (
+    book_customer_slot,
+    create_booking_slot,
+    list_booking_slots,
+    list_customer_booking_slots,
+    list_customer_businesses,
+)
 from clientplatform.application.control import (
     business_delivery_summary,
     create_single_lesson_program,
@@ -37,6 +44,7 @@ from clientplatform.domain.activity import (
     ActivityNotFound,
     CapabilityStatus,
 )
+from clientplatform.domain.bookings import BookingError, BookingSlotStatus
 from clientplatform.domain.programs import ContentKind, ProgramError
 from clientplatform.domain.tenancy import TenancyError
 from clientplatform.runtime.control_bot import control_bot_enabled
@@ -63,6 +71,8 @@ class ClientPlatformControlState(StatesGroup):
     program_title = State()
     lesson_title = State()
     lesson_content = State()
+    booking_start = State()
+    booking_duration = State()
 
 
 def _keyboard(rows: list[list[tuple[str, str]]]) -> InlineKeyboardMarkup:
@@ -122,6 +132,26 @@ def _capability_setup_keyboard(business_id: str, active_keys: set[str]) -> Inlin
     return _keyboard(rows)
 
 
+def _client_business_keyboard(links: list[object]) -> InlineKeyboardMarkup:
+    return _keyboard(
+        [
+            [
+                (
+                    link.business_name,
+                    f"cp:client:{_uuid_token(link.business_id)}",
+                )
+            ]
+            for link in links
+        ]
+    )
+
+
+def _client_portal_keyboard(business_id: str) -> InlineKeyboardMarkup:
+    return _keyboard(
+        [[("Посмотреть доступную запись", f"cp:client:{_uuid_token(business_id)}")]]
+    )
+
+
 def _dashboard_keyboard(business_id: str, capabilities: list[object]) -> InlineKeyboardMarkup:
     token = _uuid_token(business_id)
     rows = [
@@ -162,6 +192,21 @@ async def _send_capability_setup(message: Message, *, user_id: int, business_id:
         "Что Вы делаете для клиентов? Можно выбрать несколько вариантов. "
         "Новые форматы можно будет подключить позже.",
         reply_markup=_capability_setup_keyboard(business_id, active),
+    )
+
+
+async def _send_client_portal(message: Message, *, links: list[object]) -> None:
+    if len(links) == 1:
+        link = links[0]
+        await message.answer(
+            f"Вы подключены к «{link.business_name}».\n\n"
+            "Здесь можно выбрать доступное время консультации или услуги.",
+            reply_markup=_client_portal_keyboard(link.business_id),
+        )
+        return
+    await message.answer(
+        "Выберите специалиста или бизнес:",
+        reply_markup=_client_business_keyboard(links),
     )
 
 
@@ -219,12 +264,18 @@ async def clientplatform_start(message: Message, state: FSMContext) -> None:
         detail = "Вы уже были подключены." if claim.already_connected else "Подключение завершено."
         await message.answer(
             f"Вы подключены к «{claim.business_name}». {detail}\n"
-            "Материалы и сообщения этого специалиста будут приходить сюда."
+            "Материалы и сообщения этого специалиста будут приходить сюда.",
+            reply_markup=_client_portal_keyboard(claim.business_id),
         )
         return
 
     accesses = await asyncio.to_thread(list_accessible_businesses, user_id=user_id)
     if not accesses:
+        links = await asyncio.to_thread(list_customer_businesses, telegram_user_id=user_id)
+        if links:
+            await state.clear()
+            await _send_client_portal(message, links=links)
+            return
         await state.set_state(ClientPlatformControlState.business_name)
         await message.answer(
             "Добро пожаловать в ClientPlatform.\n\n"
@@ -404,14 +455,31 @@ async def open_capability(callback: CallbackQuery, state: FSMContext) -> None:
         actor=actor,
         capability_id=capability.id,
     )
+    slots = await asyncio.to_thread(list_booking_slots, actor=actor)
+    open_counts: dict[str, int] = {}
+    for slot in slots:
+        if slot.slot.status == BookingSlotStatus.OPEN:
+            open_counts[slot.slot.offering_id] = open_counts.get(slot.slot.offering_id, 0) + 1
     lines = "\n".join(
-        f"• {offering.title} — {offering.description}" for offering in offerings
+        f"• {offering.title} — {offering.description} "
+        f"(свободных времён: {open_counts.get(offering.id, 0)})"
+        for offering in offerings
     ) or "Пока нет добавленных предложений."
+    rows = [
+        [
+            (
+                f"Добавить время · {offering.title[:24]}",
+                f"cp:slotadd:{business_token}:{_uuid_token(offering.id)}",
+            )
+        ]
+        for offering in offerings
+    ]
+    rows.append(
+        [("Добавить предложение", f"cp:offeradd:{business_token}:{_uuid_token(capability.id)}")]
+    )
     await message.answer(
         f"{capability.title}\n\n{lines}",
-        reply_markup=_keyboard(
-            [[("Добавить", f"cp:offeradd:{business_token}:{_uuid_token(capability.id)}")]]
-        ),
+        reply_markup=_keyboard(rows),
     )
 
 
@@ -449,6 +517,99 @@ async def receive_offering_description(message: Message, state: FSMContext) -> N
     await state.clear()
     await message.answer(f"Добавлено: {offering.title}")
     await _send_dashboard(message, user_id=_user_id(message), business_id=business_id)
+
+
+@router.callback_query(F.data.startswith("cp:slotadd:"))
+async def start_booking_slot(callback: CallbackQuery, state: FSMContext) -> None:
+    _, _, business_token, offering_token = str(callback.data).split(":", 3)
+    await state.set_state(ClientPlatformControlState.booking_start)
+    await state.update_data(
+        business_id=_token_uuid(business_token),
+        offering_id=_token_uuid(offering_token),
+    )
+    await callback.answer()
+    await _callback_message(callback).answer(
+        "Напишите дату и время по местному времени бизнеса в формате "
+        "ДД.ММ.ГГГГ ЧЧ:ММ. Например: 31.07.2026 15:00"
+    )
+
+
+@router.message(ClientPlatformControlState.booking_start)
+async def receive_booking_start(message: Message, state: FSMContext) -> None:
+    await state.update_data(booking_start=str(message.text or ""))
+    await state.set_state(ClientPlatformControlState.booking_duration)
+    await message.answer("Сколько минут длится встреча или услуга? Например: 60")
+
+
+@router.message(ClientPlatformControlState.booking_duration)
+async def receive_booking_duration(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    business_id = str(data["business_id"])
+    actor = await _actor(_user_id(message), business_id)
+    slot = await asyncio.to_thread(
+        create_booking_slot,
+        actor=actor,
+        offering_id=str(data["offering_id"]),
+        local_start=str(data["booking_start"]),
+        duration_minutes=int(str(message.text or "").strip()),
+    )
+    await state.clear()
+    await message.answer(
+        f"Время опубликовано: {slot.offering_title} — {slot.local_start}, "
+        f"{slot.slot.duration_minutes} мин."
+    )
+    await _send_dashboard(message, user_id=_user_id(message), business_id=business_id)
+
+
+@router.callback_query(F.data.startswith("cp:client:"))
+async def open_client_booking(callback: CallbackQuery) -> None:
+    business_token = str(callback.data).split(":", 2)[2]
+    business_id = _token_uuid(business_token)
+    slots = await asyncio.to_thread(
+        list_customer_booking_slots,
+        telegram_user_id=int(callback.from_user.id),
+        business_id=business_id,
+    )
+    await callback.answer()
+    message = _callback_message(callback)
+    if not slots:
+        await message.answer("Сейчас свободного времени нет. Специалист сможет добавить его позже.")
+        return
+    lines = "\n".join(
+        f"• {slot.offering_title} — {slot.local_start}, {slot.slot.duration_minutes} мин."
+        for slot in slots
+    )
+    await message.answer(
+        f"Доступная запись\n\n{lines}\n\nВыберите удобное время:",
+        reply_markup=_keyboard(
+            [
+                [
+                    (
+                        f"{slot.local_start} · {slot.offering_title[:20]}",
+                        f"cp:book:{business_token}:{_uuid_token(slot.slot.id)}",
+                    )
+                ]
+                for slot in slots
+            ]
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("cp:book:"))
+async def book_client_slot(callback: CallbackQuery) -> None:
+    _, _, business_token, slot_token = str(callback.data).split(":", 3)
+    claim = await asyncio.to_thread(
+        book_customer_slot,
+        telegram_user_id=int(callback.from_user.id),
+        business_id=_token_uuid(business_token),
+        slot_id=_token_uuid(slot_token),
+    )
+    await callback.answer("Запись подтверждена")
+    await _callback_message(callback).answer(
+        f"Вы записаны: {claim.slot.offering_title} — {claim.slot.local_start}, "
+        f"{claim.slot.slot.duration_minutes} мин.\n"
+        f"Бизнес: {claim.slot.business_name}."
+    )
 
 
 @router.callback_query(F.data.startswith("cp:progadd:"))
@@ -641,7 +802,10 @@ async def show_results(callback: CallbackQuery) -> None:
 async def clientplatform_control_error(event: object) -> bool:
     exception = getattr(event, "exception", None)
     update = getattr(event, "update", None)
-    if not isinstance(exception, (ValueError, ActivityError, TenancyError, ProgramError)):
+    if not isinstance(
+        exception,
+        (ValueError, ActivityError, BookingError, TenancyError, ProgramError),
+    ):
         return False
     message = getattr(update, "message", None)
     callback = getattr(update, "callback_query", None)
