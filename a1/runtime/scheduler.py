@@ -83,6 +83,11 @@ class A1DispatchScheduler:
             pass
         self._task = None
 
+    def _record_tick_error(self, code: str) -> None:
+        self._errors += 1
+        self._last_error = str(code or "dispatch_tick_failed")[:180]
+        self._last_tick_monotonic = time.monotonic()
+
     async def _run(self) -> None:
         while self._running:
             try:
@@ -100,13 +105,15 @@ class A1DispatchScheduler:
             except asyncio.CancelledError:
                 raise
             except asyncio.TimeoutError:
-                self._errors += 1
-                self._last_error = "dispatch_tick_timeout"
-                self._last_tick_monotonic = time.monotonic()
-            except (sqlite3.Error, RuntimeError, OSError, ValueError, TypeError) as exc:
-                self._errors += 1
-                self._last_error = f"{type(exc).__name__}:dispatch_tick_failed"[:180]
-                self._last_tick_monotonic = time.monotonic()
+                self._record_tick_error("dispatch_tick_timeout")
+            except sqlite3.Error as exc:
+                self._record_tick_error(f"{type(exc).__name__}:dispatch_tick_failed")
+            except RuntimeError as exc:
+                self._record_tick_error(f"{type(exc).__name__}:dispatch_tick_failed")
+            except OSError as exc:
+                self._record_tick_error(f"{type(exc).__name__}:dispatch_tick_failed")
+            except (ValueError, TypeError) as exc:
+                self._record_tick_error(f"{type(exc).__name__}:dispatch_tick_failed")
             if self._running:
                 await self._sleep(self._runtime.config.interval_seconds)
 
