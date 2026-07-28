@@ -26,9 +26,16 @@ services:
     environment:
       DATABASE_URL: postgresql://clientplatform_app:${CLIENTPLATFORM_POSTGRES_PASSWORD}@postgres:5432/clientplatform
       CLIENTPLATFORM_DATABASE_NAME: clientplatform
+      CLIENTPLATFORM_DEPLOYMENT_MODE: container
+      CLIENTPLATFORM_CONTAINER_NETWORK_ISOLATED: "1"
       MESSENGER_WEBHOOK_HOST: 0.0.0.0
       HEALTHCHECK_HOST: 0.0.0.0
       CLIENTPLATFORM_MEDIA_GATEWAY_HOST: 0.0.0.0
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - >-
+        python scripts/clientplatform_production_preflight.py
+        && exec python main.py
     depends_on:
       postgres:
         condition: service_healthy
