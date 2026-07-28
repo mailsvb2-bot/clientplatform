@@ -5,8 +5,6 @@ from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 from urllib.parse import quote
 
-import aiohttp
-
 
 JsonPayload = Mapping[str, str]
 PostJson = Callable[[str, JsonPayload, float], Awaitable[tuple[int, Any]]]
@@ -39,6 +37,14 @@ async def _aiohttp_post_json(
     payload: JsonPayload,
     timeout_seconds: float,
 ) -> tuple[int, Any]:
+    try:
+        import aiohttp
+    except ImportError:
+        raise TelegramBotApiError(
+            "telegram_http_dependency_missing",
+            retryable=False,
+        ) from None
+
     timeout = aiohttp.ClientTimeout(total=float(timeout_seconds))
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
