@@ -25,8 +25,10 @@ async def start_a1_runtime(
                 return False
         scheduler = A1DispatchScheduler(runtime or build_dispatch_runtime())
         started = scheduler.start()
+        if not started:
+            return False
         _dispatch_scheduler = scheduler
-        return started
+        return True
 
 
 async def stop_a1_runtime() -> None:
