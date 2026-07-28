@@ -90,17 +90,19 @@ class A1RuntimeOwnerTests(unittest.IsolatedAsyncioTestCase):
         runtime = object()
         start = AsyncMock(return_value=True)
         stop = AsyncMock(return_value=None)
+        task_manager = TaskManager()
 
         with (
             patch.object(owner, "build_dispatch_runtime", return_value=runtime),
             patch.object(owner, "start_a1_runtime", start),
             patch.object(owner, "stop_a1_runtime", stop),
         ):
-            task = asyncio.create_task(
+            task = task_manager.create(
                 owner.run_a1_runtime_owner(
                     config=_config(enabled=True),
                     schema_probe=lambda: (True, None),
-                )
+                ),
+                name="test-a1-runtime-owner",
             )
             for _ in range(20):
                 await asyncio.sleep(0)
@@ -111,6 +113,7 @@ class A1RuntimeOwnerTests(unittest.IsolatedAsyncioTestCase):
             task.cancel()
             with self.assertRaises(asyncio.CancelledError):
                 await task
+            await task_manager.shutdown()
 
         stop.assert_awaited_once_with()
 
