@@ -74,6 +74,7 @@ class _FakeCallback:
     async def answer(
         self,
         text: str | None = None,
+        *,
         show_alert: bool = False,
     ) -> None:
         self.answers.append((text, show_alert))
@@ -140,11 +141,18 @@ class ClientPlatformManagedBotLifecycleUiTests(unittest.IsolatedAsyncioTestCase)
         business_token, bot_token = lifecycle._tokens(_BUSINESS_ID, _BOT_ID)
         callback = _FakeCallback(f"cpbl:rc:{business_token}:{bot_token}")
         state = _FakeState()
-        with patch.object(
-            lifecycle,
-            "revoke_managed_bot_for_owner",
-            new=AsyncMock(),
-        ) as revoke:
+        with (
+            patch.object(
+                lifecycle.control,
+                "_callback_message",
+                return_value=callback.message,
+            ),
+            patch.object(
+                lifecycle,
+                "revoke_managed_bot_for_owner",
+                new=AsyncMock(),
+            ) as revoke,
+        ):
             await lifecycle.confirm_revoke(callback, state)
         revoke.assert_not_awaited()
         self.assertEqual(state.cleared, 1)
@@ -171,6 +179,11 @@ class ClientPlatformManagedBotLifecycleUiTests(unittest.IsolatedAsyncioTestCase)
                 lifecycle,
                 "_actor",
                 new=AsyncMock(return_value=SimpleNamespace()),
+            ),
+            patch.object(
+                lifecycle.control,
+                "_callback_message",
+                return_value=callback.message,
             ),
             patch.object(
                 lifecycle,
@@ -203,6 +216,11 @@ class ClientPlatformManagedBotLifecycleUiTests(unittest.IsolatedAsyncioTestCase)
                 lifecycle,
                 "_actor",
                 new=AsyncMock(return_value=SimpleNamespace()),
+            ),
+            patch.object(
+                lifecycle.control,
+                "_callback_message",
+                return_value=callback.message,
             ),
             patch.object(
                 lifecycle,
