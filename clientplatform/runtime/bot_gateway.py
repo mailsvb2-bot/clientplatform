@@ -281,7 +281,7 @@ class ManagedBotGatewayRuntime:
             self._database_snapshot = await asyncio.to_thread(
                 bot_gateway_health_snapshot
             )
-        except (OSError, RuntimeError, ValueError, TypeError, AttributeError, KeyError):
+        except Exception:  # validator: allow-wide-except
             self._last_error = "gateway_health_snapshot_failed"
             log.exception("Managed bot gateway health snapshot failed")
         return len(claimed)
