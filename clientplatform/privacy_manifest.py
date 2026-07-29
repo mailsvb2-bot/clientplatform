@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 TenantDisposition = Literal["erase", "retain", "anonymize"]
-CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-07-29.v6"
+CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-07-29.v7"
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,6 +113,15 @@ _POLICIES = (
         table="managed_bots",
         disposition="retain",
         reason="business-owned bot identity and webhook secret reference",
+        required=True,
+    ),
+    TenantPrivacyPolicy(
+        table="managed_bot_provisioning_requests",
+        disposition="erase",
+        reason=(
+            "operator provisioning workflow, secret references and verification state; "
+            "cancel removes references and tenant erasure removes the request"
+        ),
         required=True,
     ),
     TenantPrivacyPolicy(
