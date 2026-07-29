@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any
 
 from clientplatform.domain.connections import (
+    ConnectionInvariantViolation,
     ConnectionNotFound,
     ManagedBot,
     ManagedBotStatus,
@@ -85,6 +85,23 @@ class ConnectionRepository(_BaseConnectionRepository):
             raise ConnectionNotFound("revoked managed bot cannot be activated")
         if bot.status == ManagedBotStatus.ACTIVE:
             return bot
+        conflict = self._conn.execute(
+            """
+            SELECT id
+            FROM managed_bots
+            WHERE business_id=? AND platform=? AND status='active' AND id!=?
+            LIMIT 1
+            """,
+            (
+                current.business_id,
+                bot.platform.value,
+                normalized_id,
+            ),
+        ).fetchone()
+        if conflict is not None:
+            raise ConnectionInvariantViolation(
+                "business already has another active managed bot for this platform"
+            )
         timestamp = str(now or _utc_now())
         cursor = self._conn.execute(
             """
