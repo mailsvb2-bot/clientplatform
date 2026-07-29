@@ -60,6 +60,33 @@ def _serialize_registration(
 class ConnectionRepository(_BaseConnectionRepository):
     """Canonical connection repository with managed-bot lifecycle transitions."""
 
+    def _locked_managed_bot(
+        self,
+        *,
+        actor: TenantContext,
+        managed_bot_id: str,
+    ) -> tuple[TenantContext, str, ManagedBot]:
+        current = self._resolve_actor(actor)
+        normalized_id = normalize_uuid(
+            managed_bot_id,
+            field_name="managed_bot_id",
+        )
+        observed = self._get_managed_bot(
+            business_id=current.business_id,
+            managed_bot_id=normalized_id,
+        )
+        _serialize_registration(
+            self._conn,
+            business_id=current.business_id,
+            platform=observed.platform.value,
+            external_bot_id=observed.external_bot_id,
+        )
+        current_bot = self._get_managed_bot(
+            business_id=current.business_id,
+            managed_bot_id=normalized_id,
+        )
+        return current, normalized_id, current_bot
+
     def register_managed_bot(
         self,
         *,
@@ -170,14 +197,9 @@ class ConnectionRepository(_BaseConnectionRepository):
         managed_bot_id: str,
         now: str | None = None,
     ) -> ManagedBot:
-        current = self._resolve_actor(actor)
-        normalized_id = normalize_uuid(
-            managed_bot_id,
-            field_name="managed_bot_id",
-        )
-        bot = self._get_managed_bot(
-            business_id=current.business_id,
-            managed_bot_id=normalized_id,
+        current, normalized_id, bot = self._locked_managed_bot(
+            actor=actor,
+            managed_bot_id=managed_bot_id,
         )
         if bot.status == ManagedBotStatus.REVOKED:
             raise ConnectionNotFound("revoked managed bot cannot be disabled")
@@ -220,14 +242,9 @@ class ConnectionRepository(_BaseConnectionRepository):
         managed_bot_id: str,
         now: str | None = None,
     ) -> ManagedBot:
-        current = self._resolve_actor(actor)
-        normalized_id = normalize_uuid(
-            managed_bot_id,
-            field_name="managed_bot_id",
-        )
-        bot = self._get_managed_bot(
-            business_id=current.business_id,
-            managed_bot_id=normalized_id,
+        current, normalized_id, bot = self._locked_managed_bot(
+            actor=actor,
+            managed_bot_id=managed_bot_id,
         )
         if bot.status == ManagedBotStatus.REVOKED:
             raise ConnectionNotFound("revoked managed bot cannot be activated")
@@ -289,14 +306,9 @@ class ConnectionRepository(_BaseConnectionRepository):
         managed_bot_id: str,
         now: str | None = None,
     ) -> ManagedBot:
-        current = self._resolve_actor(actor)
-        normalized_id = normalize_uuid(
-            managed_bot_id,
-            field_name="managed_bot_id",
-        )
-        bot = self._get_managed_bot(
-            business_id=current.business_id,
-            managed_bot_id=normalized_id,
+        current, normalized_id, bot = self._locked_managed_bot(
+            actor=actor,
+            managed_bot_id=managed_bot_id,
         )
         if bot.status == ManagedBotStatus.REVOKED:
             return bot
