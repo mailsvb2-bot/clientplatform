@@ -34,6 +34,7 @@ class ClientPlatformPollingEntryTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(telegram_transport(), "polling")
 
     def test_main_normalization_changes_only_telegram_transport_flags(self) -> None:
+        main = importlib.import_module("main")
         with patch.dict(
             os.environ,
             {
@@ -45,9 +46,8 @@ class ClientPlatformPollingEntryTests(unittest.IsolatedAsyncioTestCase):
             },
             clear=False,
         ):
-            main = importlib.import_module("main")
-            main = importlib.reload(main)
-            self.assertTrue(main._TELEGRAM_WEBHOOK_OVERRIDE_IGNORED)
+            requested = main._enforce_telegram_polling_env()
+            self.assertTrue(requested)
             self.assertEqual(os.environ["TELEGRAM_TRANSPORT"], "polling")
             self.assertEqual(os.environ["RUN_MODE"], "polling")
             self.assertEqual(os.environ["TELEGRAM_WEBHOOK_ENABLED"], "0")
