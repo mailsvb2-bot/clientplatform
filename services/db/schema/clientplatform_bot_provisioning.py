@@ -23,6 +23,7 @@ def ensure(c: sqlite3.Connection) -> None:
             connection_id TEXT,
             managed_bot_id TEXT,
             attempts INTEGER NOT NULL DEFAULT 0,
+            verification_token TEXT,
             verification_started_at TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
@@ -65,6 +66,13 @@ def ensure(c: sqlite3.Connection) -> None:
                 )
             ),
             CHECK(
+                status!='verifying'
+                OR (
+                    verification_token IS NOT NULL
+                    AND verification_started_at IS NOT NULL
+                )
+            ),
+            CHECK(
                 status!='completed'
                 OR (
                     external_bot_id IS NOT NULL
@@ -72,6 +80,7 @@ def ensure(c: sqlite3.Connection) -> None:
                     AND connection_id IS NOT NULL
                     AND managed_bot_id IS NOT NULL
                     AND completed_at IS NOT NULL
+                    AND verification_token IS NULL
                 )
             )
         )
