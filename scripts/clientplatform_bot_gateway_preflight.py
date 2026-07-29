@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Fail-closed environment contract for the Managed Bot Gateway."""
+"""Fail-closed environment contract for managed Telegram bot polling."""
 
 import argparse
 import json
@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 from typing import Mapping
 
-_TRUE = frozenset({"1", "true", "yes", "on"})
+_TRUE = frozenset({"1", "true", "yes", "on", "webhook"})
 
 
 def _value(env: Mapping[str, str], name: str) -> str:
@@ -63,17 +63,14 @@ def validate_environment(env: Mapping[str, str]) -> list[str]:
     enabled = _truthy(env, "CLIENTPLATFORM_BOT_GATEWAY_ENABLED")
     if deployed and not enabled:
         errors.append("CLIENTPLATFORM_BOT_GATEWAY_ENABLED must be 1 in deployed environments")
-    if enabled and not _truthy(env, "MESSENGER_WEBHOOK_ENABLED"):
-        errors.append("Managed Bot Gateway requires MESSENGER_WEBHOOK_ENABLED=1")
 
-    prefix = _value(env, "CLIENTPLATFORM_BOT_GATEWAY_PATH_PREFIX")
-    if not prefix.startswith("/") or prefix.endswith("/"):
-        errors.append("CLIENTPLATFORM_BOT_GATEWAY_PATH_PREFIX must be a normalized absolute path")
-    lowered = prefix.lower()
-    if any(marker in lowered for marker in ("token", "secret", "credential")):
-        errors.append("Managed Bot Gateway path must not contain secret material")
-    if "{" in prefix or "}" in prefix or "?" in prefix or "#" in prefix:
-        errors.append("Managed Bot Gateway path prefix must be static")
+    telegram_transport = (_value(env, "TELEGRAM_TRANSPORT") or "polling").lower()
+    if telegram_transport != "polling":
+        errors.append("TELEGRAM_TRANSPORT must be polling")
+    if _truthy(env, "TELEGRAM_WEBHOOK_ENABLED"):
+        errors.append("TELEGRAM_WEBHOOK_ENABLED must be 0 for polling-only Telegram")
+    if _truthy(env, "TELEGRAM_LEGACY_TOKEN_WEBHOOK_ENABLED"):
+        errors.append("token-bearing legacy Telegram webhook paths are forbidden")
 
     _bounded_int(
         env,
@@ -89,7 +86,7 @@ def validate_environment(env: Mapping[str, str]) -> list[str]:
         maximum=60.0,
         errors=errors,
     )
-    _bounded_float(
+    tick_timeout = _bounded_float(
         env,
         "CLIENTPLATFORM_BOT_GATEWAY_TICK_TIMEOUT_SEC",
         minimum=1.0,
@@ -102,13 +99,6 @@ def validate_environment(env: Mapping[str, str]) -> list[str]:
         minimum=30,
         maximum=3600,
         errors=errors,
-    )
-    tick_timeout = _bounded_float(
-        env,
-        "CLIENTPLATFORM_BOT_GATEWAY_TICK_TIMEOUT_SEC",
-        minimum=1.0,
-        maximum=300.0,
-        errors=[],
     )
     if lock_ttl <= tick_timeout:
         errors.append("Managed Bot Gateway lock TTL must exceed tick timeout")
@@ -133,24 +123,27 @@ def validate_environment(env: Mapping[str, str]) -> list[str]:
         maximum=100_000,
         errors=errors,
     )
-    payload_limit = _bounded_int(
+    _bounded_int(
         env,
         "CLIENTPLATFORM_BOT_GATEWAY_MAX_PAYLOAD_BYTES",
         minimum=1024,
         maximum=1_048_576,
         errors=errors,
     )
-    ingress_limit = _bounded_int(
+    _bounded_int(
         env,
-        "HTTP_INGRESS_MAX_BODY_BYTES",
-        minimum=1024,
-        maximum=16_777_216,
+        "CLIENTPLATFORM_BOT_GATEWAY_POLL_TIMEOUT_SEC",
+        minimum=1,
+        maximum=50,
         errors=errors,
     )
-    if ingress_limit < payload_limit:
-        errors.append("HTTP ingress body limit must cover the Managed Bot Gateway payload limit")
-    if _truthy(env, "TELEGRAM_LEGACY_TOKEN_WEBHOOK_ENABLED"):
-        errors.append("token-bearing legacy Telegram webhook paths are forbidden")
+    _bounded_float(
+        env,
+        "CLIENTPLATFORM_BOT_GATEWAY_RECONCILE_INTERVAL_SEC",
+        minimum=0.1,
+        maximum=300.0,
+        errors=errors,
+    )
     return errors
 
 
