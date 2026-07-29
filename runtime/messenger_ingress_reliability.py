@@ -162,7 +162,7 @@ async def vk_webhook(request: web.Request) -> web.Response:
             extracted=extracted,
             text=entry_text,
         )
-    except (RuntimeError, OSError, ValueError, TypeError, KeyError):
+    except Exception:  # validator: allow-wide-except
         log.exception("VK ClientPlatform entry processing failed")
         return web.Response(status=503, text="retry")
     if not processed:
@@ -221,7 +221,7 @@ async def max_webhook(request: web.Request) -> web.Response:
             extracted=extracted,
             text=entry_text,
         )
-    except (RuntimeError, OSError, ValueError, TypeError, KeyError):
+    except Exception:  # validator: allow-wide-except
         log.exception("MAX ClientPlatform entry processing failed")
         return web.json_response({"ok": False, "error": "retry"}, status=503)
     if not processed:
