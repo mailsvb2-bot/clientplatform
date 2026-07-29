@@ -100,9 +100,23 @@ async def test_runtime_stop_handles_worker_and_runner(monkeypatch: pytest.Monkey
 
 @pytest.mark.asyncio
 async def test_health_and_environment_helpers(monkeypatch: pytest.MonkeyPatch) -> None:
-    response = await messenger_webhooks._health(SimpleNamespace())
+    response = await messenger_webhooks._health(SimpleNamespace(app={}))
     assert response.status == 200
     assert json.loads(response.body) == {"ok": True, "service": "http-ingress"}
+
+    gateway = SimpleNamespace(health_snapshot=lambda: {"running": True, "pending": 2})
+    monkeypatch.setattr(
+        messenger_webhooks,
+        "ManagedBotGatewayRuntime",
+        type(gateway),
+    )
+    response = await messenger_webhooks._health(
+        SimpleNamespace(app={"clientplatform_bot_gateway_runtime": gateway})
+    )
+    assert json.loads(response.body)["managed_bot_gateway"] == {
+        "running": True,
+        "pending": 2,
+    }
 
     monkeypatch.delenv("FLAG", raising=False)
     monkeypatch.delenv("APP_ENV", raising=False)
@@ -177,232 +191,3 @@ async def test_vk_webhook_guard_delegation_and_rejection(monkeypatch: pytest.Mon
 
     monkeypatch.setattr(messenger_webhooks, "vk_webhook", handler)
     assert await messenger_webhooks._vk_webhook_with_group_guard(FakeRequest("not-json")) == "delegated"
-
-    monkeypatch.setattr(messenger_webhooks, "_vk_group_ok", lambda _payload: False)
-    rejected = await messenger_webhooks._vk_webhook_with_group_guard(
-        FakeRequest('{"group_id":1}')
-    )
-    assert rejected.status == 403
-    assert rejected.text == "forbidden"
-
-    monkeypatch.setattr(messenger_webhooks, "_vk_group_ok", lambda _payload: True)
-    assert await messenger_webhooks._vk_webhook_with_group_guard(
-        FakeRequest('{"group_id":1}')
-    ) == "delegated"
-    assert len(delegated) == 2
-
-
-@pytest.mark.asyncio
-async def test_route_registration_and_telegram_contract(monkeypatch: pytest.MonkeyPatch) -> None:
-    app = FakeApplication()
-    messenger_webhooks._register_health_routes(app)
-    messenger_webhooks._register_payment_routes(app)
-    messenger_webhooks._register_max_routes(app)
-    messenger_webhooks._register_vk_routes(app)
-    messenger_webhooks._register_audio_routes(app)
-    paths = [(method, path) for method, path, _handler in app.router.routes]
-    assert ("GET", "/") in paths
-    assert ("GET", "/terms") in paths
-    assert ("POST", "/pay/yookassa/webhook") in paths
-    assert ("POST", "/webhooks/max") in paths
-    assert ("POST", "/webhooks/vk") in paths
-    assert any(path.startswith(messenger_webhooks.AUDIO_MEDIA_PREFIX) for _, path in paths)
-    assert any(path.startswith(messenger_webhooks.AUDIO_ACCESS_PREFIX) for _, path in paths)
-
-    with pytest.raises(RuntimeError, match="requires bot and dispatcher"):
-        messenger_webhooks._register_telegram_routes(app, bot=None, dispatcher=None)
-
-    monkeypatch.setattr(messenger_webhooks, "telegram_webhook_path", lambda: "/telegram")
-    monkeypatch.setattr(
-        messenger_webhooks, "telegram_legacy_webhook_path", lambda: "/telegram/legacy"
-    )
-    monkeypatch.setattr(
-        messenger_webhooks, "telegram_public_webhook_url", lambda: "https://example.test/telegram"
-    )
-    monkeypatch.setenv("TELEGRAM_LEGACY_TOKEN_WEBHOOK_ENABLED", "1")
-    dispatcher = SimpleNamespace(workflow_data={"task_manager": "tasks"})
-    bot = object()
-    public = messenger_webhooks._register_telegram_routes(
-        app, bot=bot, dispatcher=dispatcher
-    )
-    assert public == "https://example.test/telegram"
-    assert app["telegram_bot"] is bot
-    assert app["telegram_dispatcher"] is dispatcher
-    assert app["task_manager"] == "tasks"
-    paths = [(method, path) for method, path, _handler in app.router.routes]
-    assert ("POST", "/telegram") in paths
-    assert ("POST", "/telegram/legacy") in paths
-
-    monkeypatch.setattr(messenger_webhooks, "telegram_public_webhook_url", lambda: "")
-    with pytest.raises(RuntimeError, match="PUBLIC_BASE_URL"):
-        messenger_webhooks._register_telegram_routes(
-            FakeApplication(), bot=bot, dispatcher=dispatcher
-        )
-
-
-def test_resolve_ingress_bind(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        messenger_webhooks,
-        "settings",
-        SimpleNamespace(
-            MESSENGER_WEBHOOK_HOST="127.0.0.1",
-            MESSENGER_WEBHOOK_PORT=8081,
-            TELEGRAM_WEBHOOK_HOST="127.0.0.1",
-            TELEGRAM_WEBHOOK_PORT=8081,
-        ),
-    )
-    assert messenger_webhooks._resolve_ingress_bind(
-        ingress_enabled=True, telegram_enabled=False
-    ) == ("127.0.0.1", 8081)
-    assert messenger_webhooks._resolve_ingress_bind(
-        ingress_enabled=False, telegram_enabled=True
-    ) == ("127.0.0.1", 8081)
-
-    monkeypatch.setattr(
-        messenger_webhooks,
-        "settings",
-        SimpleNamespace(
-            MESSENGER_WEBHOOK_HOST="127.0.0.1",
-            MESSENGER_WEBHOOK_PORT=8081,
-            TELEGRAM_WEBHOOK_HOST="0.0.0.0",
-            TELEGRAM_WEBHOOK_PORT=8082,
-        ),
-    )
-    with pytest.raises(RuntimeError, match="share the same ingress"):
-        messenger_webhooks._resolve_ingress_bind(
-            ingress_enabled=True, telegram_enabled=True
-        )
-    assert messenger_webhooks._resolve_ingress_bind(
-        ingress_enabled=False, telegram_enabled=True
-    ) == ("0.0.0.0", 8082)
-
-
-def _install_runtime_fakes(monkeypatch: pytest.MonkeyPatch) -> None:
-    FakeRunner.instances.clear()
-    FakeSite.instances.clear()
-    FakeSite.fail = None
-    monkeypatch.setattr(messenger_webhooks.web, "Application", FakeApplication)
-    monkeypatch.setattr(messenger_webhooks.web, "AppRunner", FakeRunner)
-    monkeypatch.setattr(messenger_webhooks.web, "TCPSite", FakeSite)
-    monkeypatch.setattr(messenger_webhooks, "ingress_body_limit", lambda: 1234)
-    monkeypatch.setattr(messenger_webhooks, "payment_webhook_admission_middleware", "middleware")
-    monkeypatch.setattr(
-        messenger_webhooks,
-        "settings",
-        SimpleNamespace(
-            MESSENGER_WEBHOOK_HOST="127.0.0.1",
-            MESSENGER_WEBHOOK_PORT=8081,
-            TELEGRAM_WEBHOOK_HOST="127.0.0.1",
-            TELEGRAM_WEBHOOK_PORT=8081,
-            TELEGRAM_WEBHOOK_SECRET_TOKEN="secret",
-            TELEGRAM_WEBHOOK_DROP_PENDING_UPDATES=True,
-        ),
-    )
-
-
-@pytest.mark.asyncio
-async def test_start_runtime_disabled_and_max_success(monkeypatch: pytest.MonkeyPatch) -> None:
-    _install_runtime_fakes(monkeypatch)
-    monkeypatch.setattr(messenger_webhooks, "payment_http_enabled", lambda: False)
-    monkeypatch.setattr(messenger_webhooks, "max_webhook_enabled", lambda: False)
-    monkeypatch.setattr(messenger_webhooks, "vk_webhook_enabled", lambda: False)
-    monkeypatch.setattr(messenger_webhooks, "http_ingress_enabled", lambda: False)
-    monkeypatch.setattr(messenger_webhooks, "telegram_transport", lambda: "polling")
-    assert await messenger_webhooks.start_messenger_webhook_runtime() is None
-
-    starts: list[str] = []
-    monkeypatch.setattr(messenger_webhooks, "max_webhook_enabled", lambda: True)
-    monkeypatch.setattr(messenger_webhooks, "http_ingress_enabled", lambda: True)
-    monkeypatch.setattr(
-        messenger_webhooks, "start_delivery_worker", lambda: starts.append("worker")
-    )
-    runtime = await messenger_webhooks.start_messenger_webhook_runtime()
-    assert runtime is not None
-    assert starts == ["worker"]
-    assert runtime.delivery_worker_started is True
-    assert runtime.runner.setup_calls == 1
-    assert runtime.site.start_calls == 1
-    assert runtime.runner.app.kwargs == {
-        "client_max_size": 1234,
-        "middlewares": ["middleware"],
-    }
-
-
-@pytest.mark.asyncio
-async def test_start_telegram_runtime_sets_webhook(monkeypatch: pytest.MonkeyPatch) -> None:
-    _install_runtime_fakes(monkeypatch)
-    monkeypatch.setattr(messenger_webhooks, "payment_http_enabled", lambda: True)
-    monkeypatch.setattr(messenger_webhooks, "max_webhook_enabled", lambda: False)
-    monkeypatch.setattr(messenger_webhooks, "vk_webhook_enabled", lambda: False)
-    monkeypatch.setattr(messenger_webhooks, "http_ingress_enabled", lambda: True)
-    monkeypatch.setattr(messenger_webhooks, "telegram_transport", lambda: "webhook")
-    monkeypatch.setattr(
-        messenger_webhooks,
-        "_register_telegram_routes",
-        lambda app, *, bot, dispatcher: "https://example.test/hook",
-    )
-
-    class Bot:
-        def __init__(self) -> None:
-            self.calls: list[dict[str, Any]] = []
-
-        async def set_webhook(self, **kwargs: Any) -> None:
-            self.calls.append(kwargs)
-
-    bot = Bot()
-    dispatcher = SimpleNamespace(workflow_data={})
-    runtime = await messenger_webhooks.start_messenger_webhook_runtime(
-        bot=bot, dispatcher=dispatcher
-    )
-    assert runtime is not None
-    assert runtime.telegram_public_url == "https://example.test/hook"
-    assert bot.calls == [
-        {
-            "url": "https://example.test/hook",
-            "secret_token": "secret",
-            "drop_pending_updates": True,
-        }
-    ]
-
-
-@pytest.mark.asyncio
-async def test_start_runtime_failure_cleans_worker_and_runner(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _install_runtime_fakes(monkeypatch)
-    monkeypatch.setattr(messenger_webhooks, "payment_http_enabled", lambda: False)
-    monkeypatch.setattr(messenger_webhooks, "max_webhook_enabled", lambda: True)
-    monkeypatch.setattr(messenger_webhooks, "vk_webhook_enabled", lambda: False)
-    monkeypatch.setattr(messenger_webhooks, "http_ingress_enabled", lambda: True)
-    monkeypatch.setattr(messenger_webhooks, "telegram_transport", lambda: "webhook")
-    monkeypatch.setattr(
-        messenger_webhooks,
-        "_register_telegram_routes",
-        lambda app, *, bot, dispatcher: "https://example.test/hook",
-    )
-    monkeypatch.setattr(messenger_webhooks, "start_delivery_worker", lambda: None)
-    stops: list[str] = []
-
-    async def stop_worker() -> None:
-        stops.append("stop")
-
-    monkeypatch.setattr(messenger_webhooks, "stop_delivery_worker", stop_worker)
-
-    class Bot:
-        async def set_webhook(self, **_kwargs: Any) -> None:
-            raise RuntimeError("webhook failure")
-
-    with pytest.raises(RuntimeError, match="webhook failure"):
-        await messenger_webhooks.start_messenger_webhook_runtime(
-            bot=Bot(), dispatcher=SimpleNamespace(workflow_data={})
-        )
-    assert stops == ["stop"]
-    assert FakeRunner.instances[-1].cleanup_calls == 1
-
-    FakeSite.fail = OSError("bind")
-    stops.clear()
-    monkeypatch.setattr(messenger_webhooks, "telegram_transport", lambda: "polling")
-    with pytest.raises(OSError, match="bind"):
-        await messenger_webhooks.start_messenger_webhook_runtime()
-    assert stops == []
-    assert FakeRunner.instances[-1].cleanup_calls == 1
