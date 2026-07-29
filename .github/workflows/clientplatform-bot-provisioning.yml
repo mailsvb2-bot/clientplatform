@@ -63,7 +63,7 @@ jobs:
             tests/test_clientplatform_bot_provisioning.py \
             tests/test_runtime_clientplatform_bot_provisioning.py \
             tests/test_application_clientplatform_bot_provisioning.py \
-            tests/test_clientplatform_bot_setup_ui.py \
+            tests/test_runtime_clientplatform_bot_setup_ui.py \
             2>&1 | tee "$RUNNER_TEMP/clientplatform-bot-provisioning-tests.log"
 
       - name: Two-connection PostgreSQL provisioning matrix
