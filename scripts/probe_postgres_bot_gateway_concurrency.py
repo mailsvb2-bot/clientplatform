@@ -247,8 +247,13 @@ def main() -> int:
         conflict_results = _run_pair(admit_conflict)
         assert sorted(conflict_results) == ["conflict", "created"], conflict_results
 
+        # The claim race must contain exactly one due event. Terminalize the replay
+        # fixtures first; otherwise two workers correctly claim two different rows.
         with get_db() as conn:
-            BotGatewayRepository(conn).admit_telegram_update(
+            gateway = BotGatewayRepository(conn)
+            for previous in gateway.claim_due(limit=100):
+                gateway.mark_processed(previous)
+            gateway.admit_telegram_update(
                 route=route,
                 provider_update_id=102,
                 payload=_payload(102, "claim"),
@@ -277,6 +282,7 @@ def main() -> int:
             ).fetchall()
         status_counts = {str(row["status"]): int(row["c"]) for row in counts}
         assert status_counts.get("processing") == 1, status_counts
+        assert status_counts.get("processed") == 2, status_counts
         assert sum(status_counts.values()) == 3, status_counts
 
         print(
