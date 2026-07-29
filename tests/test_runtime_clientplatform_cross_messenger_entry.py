@@ -182,7 +182,7 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
         kwargs = process.call_args.kwargs
         self.assertEqual(kwargs["platform"], "vk")
         self.assertEqual(kwargs["event_type"], "message_new")
-        self.assertEqual(kwargs["text"], "/start")
+        self.assertEqual(kwargs["text"], "start")
         self.assertEqual(kwargs["extracted"]["external_user_id"], "501")
 
     async def test_max_native_bot_started_reaches_entry_without_text(self) -> None:
