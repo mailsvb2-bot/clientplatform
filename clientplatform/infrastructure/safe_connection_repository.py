@@ -21,6 +21,31 @@ def _utc_now() -> str:
 class ConnectionRepository(_BaseConnectionRepository):
     """Canonical connection repository with managed-bot lifecycle transitions."""
 
+    def _terminate_managed_bot_ingress(
+        self,
+        *,
+        managed_bot_id: str,
+        business_id: str,
+        timestamp: str,
+        reason: str,
+    ) -> None:
+        self._conn.execute(
+            """
+            UPDATE bot_gateway_ingress_events
+            SET status='dead', payload_json=NULL, updated_at=?, dead_at=?,
+                locked_at=NULL, lock_token=NULL, last_error_code=?
+            WHERE managed_bot_id=? AND business_id=?
+              AND status IN ('pending','processing','retry')
+            """,
+            (
+                timestamp,
+                timestamp,
+                reason,
+                managed_bot_id,
+                business_id,
+            ),
+        )
+
     def disable_managed_bot(
         self,
         *,
@@ -59,6 +84,12 @@ class ConnectionRepository(_BaseConnectionRepository):
             WHERE id=? AND business_id=? AND status!='revoked'
             """,
             (timestamp, bot.connection_id, current.business_id),
+        )
+        self._terminate_managed_bot_ingress(
+            managed_bot_id=normalized_id,
+            business_id=current.business_id,
+            timestamp=timestamp,
+            reason="managed_bot_disabled",
         )
         return self._get_managed_bot(
             business_id=current.business_id,
@@ -175,6 +206,12 @@ class ConnectionRepository(_BaseConnectionRepository):
             WHERE id=? AND business_id=?
             """,
             (timestamp, bot.connection_id, current.business_id),
+        )
+        self._terminate_managed_bot_ingress(
+            managed_bot_id=normalized_id,
+            business_id=current.business_id,
+            timestamp=timestamp,
+            reason="managed_bot_revoked",
         )
         return self._get_managed_bot(
             business_id=current.business_id,
