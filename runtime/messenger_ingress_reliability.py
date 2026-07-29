@@ -10,7 +10,18 @@ from aiohttp import web
 
 from runtime import messenger_ingress as legacy
 from runtime.messenger_payloads import extract_max_message, extract_vk_message, max_event_key
-from services.messenger.webhook_dedupe import InboundFailureResult, record_inbound_failure
+from services.events import log_event
+from services.messenger.clientplatform_entry import (
+    handle_clientplatform_entry,
+    parse_clientplatform_entry_command,
+)
+from services.messenger.delivery_outbox import persist_reply_bundle
+from services.messenger.webhook_dedupe import (
+    InboundFailureResult,
+    claim_inbound_event,
+    fail_inbound_event,
+    record_inbound_failure,
+)
 
 log = logging.getLogger(__name__)
 
@@ -63,8 +74,52 @@ def _payload_from_body(body: str) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
+def _process_clientplatform_entry_and_persist(
+    *,
+    platform: str,
+    event_key: str,
+    event_type: str,
+    payload: dict[str, Any],
+    extracted: dict[str, Any],
+    text: str,
+) -> bool:
+    if not claim_inbound_event(platform, event_key, payload):
+        return False
+    try:
+        command = parse_clientplatform_entry_command(text, event_type=event_type)
+        if command is None:
+            raise ValueError("ClientPlatform entry command disappeared during processing")
+        canonical_user_id, replies = handle_clientplatform_entry(
+            extracted["user_id"],
+            platform=platform,
+            external_user_id=extracted["external_user_id"],
+            text=text,
+            event_type=event_type,
+            username=extracted["username"],
+            display_name=extracted["display_name"],
+            first_name=extracted["first_name"],
+        )
+        persist_reply_bundle(
+            platform=platform,
+            external_user_id=extracted["external_user_id"],
+            canonical_user_id=int(canonical_user_id),
+            event_key=event_key,
+            replies=list(replies),
+            action=f"clientplatform_{command.action}",
+        )
+        log_event(
+            int(canonical_user_id),
+            f"{platform}_clientplatform_entry",
+            {"action": command.action, "text_len": len(text)},
+        )
+        return True
+    except Exception as exc:  # validator: allow-wide-except
+        fail_inbound_event(platform, event_key, payload, type(exc).__name__)
+        raise
+
+
 async def vk_webhook(request: web.Request) -> web.Response:
-    """Add finite extraction retries before delegating valid VK events."""
+    """Add finite extraction retries and ClientPlatform entry routing for VK."""
 
     payload = _payload_from_body(await request.text())
     if payload is None or not legacy._vk_secret_ok(payload):
@@ -75,25 +130,48 @@ async def vk_webhook(request: web.Request) -> web.Response:
         return await legacy.vk_webhook(request)
 
     extracted = extract_vk_message(payload)
-    if extracted is not None:
+    if extracted is None:
+        if event_type == "message_event":
+            await legacy._ack_vk_message_event(payload)
+        event_key = legacy._vk_dedupe_key(payload)
+        result = await _record_extraction_failure(
+            platform="vk",
+            event_key=event_key,
+            payload=payload,
+            reason=f"extraction_failed:event_type={event_type or 'unknown'}",
+        )
+        if result.retryable:
+            return web.Response(status=503, text="retry")
+        return web.Response(text="ok")
+
+    entry_text = legacy._entry_start_text(str(extracted.get("text") or ""))
+    command = parse_clientplatform_entry_command(entry_text, event_type=event_type)
+    if command is None:
         return await legacy.vk_webhook(request)
 
     if event_type == "message_event":
         await legacy._ack_vk_message_event(payload)
     event_key = legacy._vk_dedupe_key(payload)
-    result = await _record_extraction_failure(
-        platform="vk",
-        event_key=event_key,
-        payload=payload,
-        reason=f"extraction_failed:event_type={event_type or 'unknown'}",
-    )
-    if result.retryable:
+    try:
+        processed = await asyncio.to_thread(
+            _process_clientplatform_entry_and_persist,
+            platform="vk",
+            event_key=event_key,
+            event_type=event_type,
+            payload=payload,
+            extracted=extracted,
+            text=entry_text,
+        )
+    except (RuntimeError, OSError, ValueError, TypeError, KeyError):
+        log.exception("VK ClientPlatform entry processing failed")
         return web.Response(status=503, text="retry")
+    if not processed:
+        log.info("VK ClientPlatform entry duplicate skipped")
     return web.Response(text="ok")
 
 
 async def max_webhook(request: web.Request) -> web.Response:
-    """Add finite extraction retries before delegating valid MAX updates."""
+    """Add finite extraction retries and ClientPlatform entry routing for MAX."""
 
     payload = _payload_from_body(await request.text())
     if payload is None or not legacy._max_secret_ok(request, payload):
@@ -110,24 +188,45 @@ async def max_webhook(request: web.Request) -> web.Response:
         return await legacy.max_webhook(request)
 
     extracted = extract_max_message(payload)
-    if extracted is not None:
+    if extracted is None:
+        event_key = max_event_key(payload)
+        result = await _record_extraction_failure(
+            platform="max",
+            event_key=event_key,
+            payload=payload,
+            reason=f"extraction_failed:update_type={update_type or 'unknown'}",
+        )
+        if result.retryable:
+            return web.json_response(
+                {"ok": False, "error": "retry", "attempts": result.attempts, "dead_lettered": False},
+                status=503,
+            )
+        return web.json_response(
+            {"ok": True, "attempts": result.attempts, "dead_lettered": result.dead_lettered}
+        )
+
+    entry_text = legacy._entry_start_text(str(extracted.get("text") or ""))
+    command = parse_clientplatform_entry_command(entry_text, event_type=update_type)
+    if command is None:
         return await legacy.max_webhook(request)
 
     event_key = max_event_key(payload)
-    result = await _record_extraction_failure(
-        platform="max",
-        event_key=event_key,
-        payload=payload,
-        reason=f"extraction_failed:update_type={update_type or 'unknown'}",
-    )
-    if result.retryable:
-        return web.json_response(
-            {"ok": False, "error": "retry", "attempts": result.attempts, "dead_lettered": False},
-            status=503,
+    try:
+        processed = await asyncio.to_thread(
+            _process_clientplatform_entry_and_persist,
+            platform="max",
+            event_key=event_key,
+            event_type=update_type,
+            payload=payload,
+            extracted=extracted,
+            text=entry_text,
         )
-    return web.json_response(
-        {"ok": True, "attempts": result.attempts, "dead_lettered": result.dead_lettered}
-    )
+    except (RuntimeError, OSError, ValueError, TypeError, KeyError):
+        log.exception("MAX ClientPlatform entry processing failed")
+        return web.json_response({"ok": False, "error": "retry"}, status=503)
+    if not processed:
+        log.info("MAX ClientPlatform entry duplicate skipped")
+    return web.json_response({"ok": True})
 
 
 __all__ = ["extraction_max_attempts", "max_webhook", "vk_webhook"]
