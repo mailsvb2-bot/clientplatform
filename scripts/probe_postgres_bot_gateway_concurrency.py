@@ -14,6 +14,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from clientplatform.domain.bot_gateway import BotGatewayReplayConflict
+from clientplatform.domain.connections import ConnectionInvariantViolation
 from clientplatform.infrastructure import ConnectionRepository, TenancyRepository
 from clientplatform.infrastructure.safe_bot_gateway_repository import BotGatewayRepository
 from services.db import get_connection, get_db
@@ -26,9 +27,14 @@ class _AdmissionConnection(PostgresCompatConnection):
     def __init__(self, delegate: Any, *, gate: threading.Barrier) -> None:
         self._delegate = delegate
         self._gate = gate
+        self._waiting = True
 
     def execute(self, sql: str, params: Any = ()) -> Any:
-        if "pg_advisory_xact_lock" in " ".join(str(sql).lower().split()):
+        if (
+            self._waiting
+            and "pg_advisory_xact_lock" in " ".join(str(sql).lower().split())
+        ):
+            self._waiting = False
             self._gate.wait(timeout=15)
         return self._delegate.execute(sql, params)
 
@@ -51,6 +57,29 @@ def _payload(update_id: int, text: str) -> dict[str, object]:
     }
 
 
+def _create_active_connection(
+    conn: Any,
+    *,
+    owner: Any,
+    external_bot_id: str,
+    suffix: str,
+):
+    connections = ConnectionRepository(conn)
+    connection = connections.create_connection(
+        actor=owner,
+        platform="telegram",
+        connection_type="telegram_managed_bot",
+        external_account_id=external_bot_id,
+        credential_reference=(
+            f"secret://env/CLIENTPLATFORM_SECRET_TELEGRAM_GATEWAY_{suffix}"
+        ),
+    )
+    return connections.activate_connection(
+        actor=owner,
+        connection_id=connection.id,
+    )
+
+
 def main() -> int:
     if not CONFIG.uses_postgres:
         raise SystemExit("POSTGRES_BOT_GATEWAY_FAILED: METRO_DB_ENGINE=postgres is required")
@@ -64,44 +93,126 @@ def main() -> int:
     init_db()
     suffix = uuid.uuid4().hex[:12]
     owner_user_id = 9_500_000_000 + int(suffix[:6], 16)
-    business_id = ""
+    business_ids: list[str] = []
     try:
         with get_db() as conn:
             tenancy = TenancyRepository(conn)
-            connections = ConnectionRepository(conn)
             access = tenancy.create_business(
                 owner_user_id=owner_user_id,
                 name=f"Bot Gateway {suffix}",
             )
-            business_id = access.business.id
+            business_ids.append(access.business.id)
             owner = tenancy.resolve_context(
                 user_id=owner_user_id,
-                business_id=business_id,
+                business_id=access.business.id,
             )
-            connection = connections.create_connection(
-                actor=owner,
-                platform="telegram",
-                connection_type="telegram_managed_bot",
-                external_account_id=str(owner_user_id + 1000),
-                credential_reference=(
-                    "secret://env/CLIENTPLATFORM_SECRET_TELEGRAM_GATEWAY_PROBE"
-                ),
+            connection = _create_active_connection(
+                conn,
+                owner=owner,
+                external_bot_id=str(owner_user_id + 1000),
+                suffix="PRIMARY",
             )
-            connection = connections.activate_connection(
-                actor=owner,
-                connection_id=connection.id,
-            )
-            managed = connections.register_managed_bot(
+            managed = ConnectionRepository(conn).register_managed_bot(
                 actor=owner,
                 connection_id=connection.id,
                 external_bot_id=str(owner_user_id + 1000),
                 webhook_secret_reference=(
-                    "secret://env/CLIENTPLATFORM_SECRET_WEBHOOK_GATEWAY_PROBE"
+                    "secret://env/CLIENTPLATFORM_SECRET_WEBHOOK_GATEWAY_PRIMARY"
                 ),
             )
             route = BotGatewayRepository(conn).resolve_telegram_route(
                 external_bot_id=managed.external_bot_id
             )
+
+            retry_access = tenancy.create_business(
+                owner_user_id=owner_user_id + 1,
+                name=f"Bot Retry {suffix}",
+            )
+            business_ids.append(retry_access.business.id)
+            retry_owner = tenancy.resolve_context(
+                user_id=owner_user_id + 1,
+                business_id=retry_access.business.id,
+            )
+            retry_connection = _create_active_connection(
+                conn,
+                owner=retry_owner,
+                external_bot_id=str(owner_user_id + 2000),
+                suffix="RETRY",
+            )
+
+            conflict_access = tenancy.create_business(
+                owner_user_id=owner_user_id + 2,
+                name=f"Bot Conflict {suffix}",
+            )
+            business_ids.append(conflict_access.business.id)
+            conflict_owner = tenancy.resolve_context(
+                user_id=owner_user_id + 2,
+                business_id=conflict_access.business.id,
+            )
+            conflict_connections = (
+                _create_active_connection(
+                    conn,
+                    owner=conflict_owner,
+                    external_bot_id=str(owner_user_id + 3000),
+                    suffix="CONFLICT_A",
+                ),
+                _create_active_connection(
+                    conn,
+                    owner=conflict_owner,
+                    external_bot_id=str(owner_user_id + 3001),
+                    suffix="CONFLICT_B",
+                ),
+            )
+
+        registration_gate = threading.Barrier(2)
+
+        def register_same(_index: int) -> str:
+            with get_connection() as raw:
+                conn = _AdmissionConnection(raw, gate=registration_gate)
+                bot = ConnectionRepository(conn).register_managed_bot(
+                    actor=retry_owner,
+                    connection_id=retry_connection.id,
+                    external_bot_id=retry_connection.external_account_id,
+                    webhook_secret_reference=(
+                        "secret://env/CLIENTPLATFORM_SECRET_WEBHOOK_GATEWAY_RETRY"
+                    ),
+                )
+                return bot.id
+
+        registration_results = _run_pair(register_same)
+        assert len(set(registration_results)) == 1, registration_results
+        with get_db() as conn:
+            registration_count = conn.execute(
+                """
+                SELECT COUNT(*) AS c
+                FROM managed_bots
+                WHERE business_id=? AND platform='telegram'
+                """,
+                (retry_owner.business_id,),
+            ).fetchone()
+        assert int(registration_count["c"]) == 1, registration_count
+
+        business_gate = threading.Barrier(2)
+
+        def register_different(index: int) -> str:
+            selected = conflict_connections[index]
+            with get_connection() as raw:
+                conn = _AdmissionConnection(raw, gate=business_gate)
+                try:
+                    ConnectionRepository(conn).register_managed_bot(
+                        actor=conflict_owner,
+                        connection_id=selected.id,
+                        external_bot_id=selected.external_account_id,
+                        webhook_secret_reference=(
+                            f"secret://env/CLIENTPLATFORM_SECRET_WEBHOOK_GATEWAY_CONFLICT_{index}"
+                        ),
+                    )
+                except ConnectionInvariantViolation:
+                    return "conflict"
+                return "created"
+
+        business_results = _run_pair(register_different)
+        assert sorted(business_results) == ["conflict", "created"], business_results
 
         same_gate = threading.Barrier(2)
 
@@ -162,7 +273,7 @@ def main() -> int:
                 WHERE business_id=?
                 GROUP BY status
                 """,
-                (business_id,),
+                (owner.business_id,),
             ).fetchall()
         status_counts = {str(row["status"]): int(row["c"]) for row in counts}
         assert status_counts.get("processing") == 1, status_counts
@@ -174,6 +285,8 @@ def main() -> int:
                     "ok": True,
                     "probe": "clientplatform_postgres_bot_gateway_concurrency",
                     "connections_per_race": 2,
+                    "same_registration": registration_results,
+                    "competing_registration": business_results,
                     "same_replay": same_results,
                     "conflicting_replay": conflict_results,
                     "claim": claim_results,
@@ -185,7 +298,7 @@ def main() -> int:
         print("POSTGRES_BOT_GATEWAY_CONCURRENCY_OK")
         return 0
     finally:
-        if business_id:
+        for business_id in reversed(business_ids):
             with get_db() as conn:
                 conn.execute("DELETE FROM businesses WHERE id=?", (business_id,))
 
