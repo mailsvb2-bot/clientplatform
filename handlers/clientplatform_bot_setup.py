@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import re
 from types import ModuleType
 from uuid import uuid4
@@ -29,13 +30,10 @@ from clientplatform.domain.bot_provisioning import (
     ManagedBotProvisioningRequest,
     normalize_requested_username,
 )
-from clientplatform.domain.connections import (
-    ConnectionError,
-    ConnectionInvariantViolation,
-)
+from clientplatform.domain.connections import ConnectionError, ConnectionInvariantViolation
 from clientplatform.domain.tenancy import TenancyError
-from clientplatform.runtime.control_bot import control_bot_enabled
-from handlers import clientplatform_control as control
+
+control = importlib.import_module(".clientplatform_control", __package__)
 
 router = Router(name="clientplatform_bot_setup")
 router.message.filter(control.ClientPlatformControlEnabled())
@@ -66,7 +64,7 @@ _ERROR_LABELS = {
     "telegram_verification_failed": "Telegram не подтвердил бота или webhook.",
     "telegram_identity_mismatch": "Имя подтверждённого бота не совпало с ожидаемым.",
     "provisioner_failed": "Проверка Telegram завершилась технической ошибкой.",
-    "provisioning_commit_failed": "Webhook был отменён: маршрут не удалось сохранить.",
+    "provisioning_commit_failed": "Webhook отменён: маршрут не удалось сохранить.",
     "verification_cancelled": "Проверка была прервана.",
     "commit_cancelled": "Сохранение подключения было прервано.",
     "verification_lease_expired": "Предыдущая проверка прервалась и может быть повторена.",
@@ -109,16 +107,15 @@ def _status_text(request: ManagedBotProvisioningRequest | None) -> str:
     if request is None:
         return (
             "Мой Telegram-бот\n\n"
-            "Персональный бот ещё не подключён. Клиенты смогут получать программы "
-            "и сообщения от имени Вашего бота после безопасной проверки.\n\n"
+            "Персональный бот ещё не подключён. После безопасной проверки клиенты "
+            "смогут получать программы и сообщения от имени Вашего бота.\n\n"
             "Токен нельзя отправлять в чат. Мастер принимает только имя переменной "
             "секрет-хранилища вида CLIENTPLATFORM_SECRET_... ."
         )
-    label = _STATUS_LABELS[request.status]
     lines = [
         "Мой Telegram-бот",
         "",
-        f"Статус: {label}.",
+        f"Статус: {_STATUS_LABELS[request.status]}.",
         f"Ожидаемое имя: @{request.requested_username or 'не указано'}.",
         f"Попыток проверки: {request.attempts}.",
     ]
@@ -134,7 +131,7 @@ def _status_text(request: ManagedBotProvisioningRequest | None) -> str:
         lines.append(
             _ERROR_LABELS.get(
                 request.last_error_code,
-                "Проверка не завершена. Исправьте ссылки на секреты и повторите.",
+                "Проверка не завершена. Исправьте ссылки и повторите.",
             )
         )
     if request.status in {
@@ -191,7 +188,7 @@ def _status_keyboard(
 
 
 def install_dashboard_button(control_module: ModuleType) -> None:
-    """Add the managed-bot entry point without rewriting the legacy control file."""
+    """Add the entry point without rewriting the legacy control handler."""
     if bool(getattr(control_module, "_managed_bot_dashboard_installed", False)):
         return
     original = control_module._dashboard_keyboard
@@ -202,9 +199,7 @@ def install_dashboard_button(control_module: ModuleType) -> None:
             text="Мой Telegram-бот",
             callback_data=f"cpb:o:{_business_token(business_id)}",
         )
-        return InlineKeyboardMarkup(
-            inline_keyboard=[*markup.inline_keyboard, [button]],
-        )
+        return InlineKeyboardMarkup(inline_keyboard=[*markup.inline_keyboard, [button]])
 
     control_module._dashboard_keyboard = dashboard_with_bot
     control_module._managed_bot_dashboard_installed = True
@@ -253,22 +248,13 @@ async def open_my_bot_command(message: Message, state: FSMContext) -> None:
         await message.answer("Сначала создайте бизнес через /start.")
         return
     if len(accesses) == 1:
-        await _send_status(
-            message,
-            user_id=user_id,
-            business_id=accesses[0].business.id,
-        )
+        await _send_status(message, user_id=user_id, business_id=accesses[0].business.id)
         return
     await message.answer(
         "Для какого бизнеса открыть настройки Telegram-бота?",
         reply_markup=control._keyboard(
             [
-                [
-                    (
-                        access.business.name,
-                        f"cpb:o:{_business_token(access.business.id)}",
-                    )
-                ]
+                [(access.business.name, f"cpb:o:{_business_token(access.business.id)}")]
                 for access in accesses
             ]
         ),
@@ -324,9 +310,7 @@ async def receive_bot_username(message: Message, state: FSMContext) -> None:
     try:
         username = normalize_requested_username(str(message.text or ""))
     except ValueError:
-        await message.answer(
-            "Не похоже на username Telegram-бота. Пример: @my_practice_bot."
-        )
+        await message.answer("Не похоже на username Telegram-бота. Пример: @my_practice_bot.")
         return
     if username is None:
         await message.answer("Username бота обязателен.")
@@ -344,7 +328,7 @@ async def receive_bot_username(message: Message, state: FSMContext) -> None:
     await state.update_data(request_id=request.id)
     await state.set_state(ManagedBotSetupState.token_reference)
     await message.answer(
-        "Шаг 2 из 3. Сначала сохраните токен BotFather прямо в секрет-хранилище.\n\n"
+        "Шаг 2 из 3. Сохраните токен BotFather прямо в секрет-хранилище.\n\n"
         "Затем напишите только имя переменной, например:\n"
         "CLIENTPLATFORM_SECRET_TELEGRAM_MY_PRACTICE\n\n"
         "Не вставляйте значение токена."
@@ -354,8 +338,7 @@ async def receive_bot_username(message: Message, state: FSMContext) -> None:
 @router.callback_query(F.data.startswith("cpb:r:"))
 async def begin_secret_reference_edit(callback: CallbackQuery, state: FSMContext) -> None:
     _, _, business_token, request_token = _callback_ids(
-        str(callback.data),
-        expected_parts=4,
+        str(callback.data), expected_parts=4
     )
     business_id = control._token_uuid(business_token)
     request_id = control._token_uuid(request_token)
@@ -426,9 +409,7 @@ async def receive_webhook_reference(message: Message, state: FSMContext) -> None
     data = await state.get_data()
     token_reference = str(data["token_reference"])
     if webhook_reference == token_reference:
-        await message.answer(
-            "Для webhook нужен отдельный секрет и другая переменная."
-        )
+        await message.answer("Для webhook нужен отдельный секрет и другая переменная.")
         return
     business_id = str(data["business_id"])
     request_id = str(data["request_id"])
@@ -450,8 +431,7 @@ async def receive_webhook_reference(message: Message, state: FSMContext) -> None
 @router.callback_query(F.data.startswith("cpb:v:"))
 async def verify_and_connect_bot(callback: CallbackQuery, state: FSMContext) -> None:
     _, _, business_token, request_token = _callback_ids(
-        str(callback.data),
-        expected_parts=4,
+        str(callback.data), expected_parts=4
     )
     business_id = control._token_uuid(business_token)
     request_id = control._token_uuid(request_token)
@@ -495,8 +475,7 @@ async def verify_and_connect_bot(callback: CallbackQuery, state: FSMContext) -> 
 @router.callback_query(F.data.startswith("cpb:c:"))
 async def cancel_bot_setup(callback: CallbackQuery, state: FSMContext) -> None:
     _, _, business_token, request_token = _callback_ids(
-        str(callback.data),
-        expected_parts=4,
+        str(callback.data), expected_parts=4
     )
     business_id = control._token_uuid(business_token)
     request_id = control._token_uuid(request_token)
@@ -508,7 +487,10 @@ async def cancel_bot_setup(callback: CallbackQuery, state: FSMContext) -> None:
             request_id=request_id,
         )
     except BotProvisioningInvariantViolation:
-        await callback.answer("Активную проверку или готового бота отменить нельзя.", show_alert=True)
+        await callback.answer(
+            "Активную проверку или готового бота отменить нельзя.",
+            show_alert=True,
+        )
         return
     await callback.answer("Подключение отменено")
     await state.clear()
