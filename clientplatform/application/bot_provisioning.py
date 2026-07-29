@@ -9,8 +9,8 @@ from clientplatform.domain.bot_provisioning import (
     VerifiedTelegramBot,
 )
 from clientplatform.domain.tenancy import TenantContext
+from clientplatform.infrastructure import BotProvisioningRepository
 from clientplatform.infrastructure.bot_provisioning_repository import (
-    BotProvisioningRepository,
     ProvisioningVerificationLease,
 )
 from clientplatform.runtime.bot_provisioning import (
