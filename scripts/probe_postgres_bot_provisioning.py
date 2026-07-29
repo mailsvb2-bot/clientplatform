@@ -83,7 +83,7 @@ def main() -> int:
                 conn = _BarrierConnection(
                     raw,
                     gate=create_gate,
-                    marker="INSERT INTO managed_bot_provisioning_requests",
+                    marker="pg_advisory_xact_lock",
                 )
                 request = BotProvisioningRepository(conn).create_request(
                     actor=owner,
