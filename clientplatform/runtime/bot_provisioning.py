@@ -129,7 +129,7 @@ class BotFatherTelegramProvisioner:
             webhook_url = urljoin(
                 self._public_base_url,
                 (
-                    f"{self._gateway_path_prefix.lstrip('/')}/telegram/"
+                    f"/{self._gateway_path_prefix.lstrip('/')}/telegram/"
                     f"{verified.external_bot_id}"
                 ),
             )
