@@ -21,6 +21,7 @@ from clientplatform.domain.bot_provisioning import (
 from clientplatform.domain.connections import (
     ConnectionInvariantViolation,
     ConnectionNotFound,
+    ConnectionStatus,
     ManagedBotStatus,
 )
 from clientplatform.domain.managed_bot_owner import (
@@ -41,6 +42,13 @@ _STATUS_LABELS = {
     ManagedBotStatus.ACTIVE: "активен",
     ManagedBotStatus.DISABLED: "временно отключён",
     ManagedBotStatus.REVOKED: "отозван навсегда",
+}
+_CONNECTION_STATUS_LABELS = {
+    ConnectionStatus.PENDING: "ожидает проверки",
+    ConnectionStatus.ACTIVE: "активно",
+    ConnectionStatus.ATTENTION: "требует внимания",
+    ConnectionStatus.DISABLED: "отключено",
+    ConnectionStatus.REVOKED: "отозвано",
 }
 
 
@@ -71,9 +79,12 @@ def _snapshot_text(snapshot: ManagedBotOwnerSnapshot) -> str:
         "",
         f"Бот: {identity}.",
         f"Статус: {_STATUS_LABELS[snapshot.bot_status]}.",
-        f"Состояние подключения: {snapshot.connection_status.value}.",
+        (
+            "Состояние подключения: "
+            f"{_CONNECTION_STATUS_LABELS[snapshot.connection_status]}."
+        ),
         "",
-        "Очередь этого бизнеса:",
+        "Очередь этого бота:",
         f"• ожидают: {snapshot.pending_events};",
         f"• обрабатываются: {snapshot.processing_events};",
         f"• ожидают повторной попытки: {snapshot.retry_events};",
@@ -208,6 +219,28 @@ async def _send_snapshot(
     return snapshot
 
 
+async def _safe_send_snapshot(
+    message: Message,
+    *,
+    user_id: int,
+    business_id: str,
+    managed_bot_id: str,
+) -> bool:
+    try:
+        await _send_snapshot(
+            message,
+            user_id=user_id,
+            business_id=business_id,
+            managed_bot_id=managed_bot_id,
+        )
+    except (ConnectionNotFound, TenancyError):
+        await message.answer(
+            "Подключение больше недоступно в этом бизнесе. Обновите карточку бота."
+        )
+        return False
+    return True
+
+
 async def _report_result(message: Message, result: ManagedBotOwnerLifecycleResult) -> None:
     if result.warning_code == "webhook_detach_failed":
         await message.answer(
@@ -221,7 +254,7 @@ async def open_lifecycle_status(callback: CallbackQuery, state: FSMContext) -> N
     business_id, managed_bot_id = _ids(str(callback.data))
     await callback.answer()
     await state.clear()
-    await _send_snapshot(
+    await _safe_send_snapshot(
         control._callback_message(callback),
         user_id=int(callback.from_user.id),
         business_id=business_id,
@@ -249,17 +282,28 @@ async def confirm_disable(callback: CallbackQuery, state: FSMContext) -> None:
 @router.callback_query(F.data.startswith("cpbl:dx:"))
 async def execute_disable(callback: CallbackQuery, state: FSMContext) -> None:
     business_id, managed_bot_id = _ids(str(callback.data))
-    actor = await _actor(int(callback.from_user.id), business_id)
     await callback.answer("Отключаю")
     message = control._callback_message(callback)
-    result = await disable_managed_bot_for_owner(
-        actor=actor,
-        managed_bot_id=managed_bot_id,
-    )
+    try:
+        actor = await _actor(int(callback.from_user.id), business_id)
+        result = await disable_managed_bot_for_owner(
+            actor=actor,
+            managed_bot_id=managed_bot_id,
+        )
+    except ConnectionInvariantViolation:
+        await message.answer(
+            "Состояние подключения уже изменилось. Обновите карточку бота."
+        )
+        await state.clear()
+        return
+    except (ConnectionNotFound, TenancyError):
+        await message.answer("Подключение недоступно в этом бизнесе.")
+        await state.clear()
+        return
     await state.clear()
     await message.answer("Бот временно отключён.")
     await _report_result(message, result)
-    await _send_snapshot(
+    await _safe_send_snapshot(
         message,
         user_id=int(callback.from_user.id),
         business_id=business_id,
@@ -270,10 +314,10 @@ async def execute_disable(callback: CallbackQuery, state: FSMContext) -> None:
 @router.callback_query(F.data.startswith("cpbl:ax:"))
 async def execute_activate(callback: CallbackQuery, state: FSMContext) -> None:
     business_id, managed_bot_id = _ids(str(callback.data))
-    actor = await _actor(int(callback.from_user.id), business_id)
     await callback.answer("Проверяю и включаю")
     message = control._callback_message(callback)
     try:
+        actor = await _actor(int(callback.from_user.id), business_id)
         await activate_managed_bot_for_owner(
             actor=actor,
             managed_bot_id=managed_bot_id,
@@ -291,14 +335,13 @@ async def execute_activate(callback: CallbackQuery, state: FSMContext) -> None:
         await message.answer("Подключение недоступно в этом бизнесе.")
     else:
         await message.answer("Бот снова включён и webhook подтверждён Telegram.")
-    finally:
-        await state.clear()
-        await _send_snapshot(
-            message,
-            user_id=int(callback.from_user.id),
-            business_id=business_id,
-            managed_bot_id=managed_bot_id,
-        )
+    await state.clear()
+    await _safe_send_snapshot(
+        message,
+        user_id=int(callback.from_user.id),
+        business_id=business_id,
+        managed_bot_id=managed_bot_id,
+    )
 
 
 @router.callback_query(F.data.startswith("cpbl:rc:"))
@@ -321,17 +364,28 @@ async def confirm_revoke(callback: CallbackQuery, state: FSMContext) -> None:
 @router.callback_query(F.data.startswith("cpbl:rx:"))
 async def execute_revoke(callback: CallbackQuery, state: FSMContext) -> None:
     business_id, managed_bot_id = _ids(str(callback.data))
-    actor = await _actor(int(callback.from_user.id), business_id)
     await callback.answer("Отзываю подключение")
     message = control._callback_message(callback)
-    result = await revoke_managed_bot_for_owner(
-        actor=actor,
-        managed_bot_id=managed_bot_id,
-    )
+    try:
+        actor = await _actor(int(callback.from_user.id), business_id)
+        result = await revoke_managed_bot_for_owner(
+            actor=actor,
+            managed_bot_id=managed_bot_id,
+        )
+    except ConnectionInvariantViolation:
+        await message.answer(
+            "Состояние подключения уже изменилось. Обновите карточку бота."
+        )
+        await state.clear()
+        return
+    except (ConnectionNotFound, TenancyError):
+        await message.answer("Подключение недоступно в этом бизнесе.")
+        await state.clear()
+        return
     await state.clear()
     await message.answer("Подключение отозвано навсегда.")
     await _report_result(message, result)
-    await _send_snapshot(
+    await _safe_send_snapshot(
         message,
         user_id=int(callback.from_user.id),
         business_id=business_id,
