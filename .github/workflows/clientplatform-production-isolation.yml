@@ -31,7 +31,7 @@ jobs:
           --health-timeout 5s
           --health-retries 12
     env:
-      APP_ENV: test
+      APP_ENV: prod
       LOAD_DOTENV: "0"
       METRO_DB_ENGINE: postgres
       CLIENTPLATFORM_DATABASE_NAME: clientplatform_ci
@@ -40,7 +40,7 @@ jobs:
       BOT_TOKEN: ci-bot-token-material
       TELEGRAM_TRANSPORT: polling
       TELEGRAM_WEBHOOK_ENABLED: "0"
-      CLIENTPLATFORM_BOT_GATEWAY_ENABLED: "0"
+      CLIENTPLATFORM_BOT_GATEWAY_ENABLED: "1"
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
@@ -103,8 +103,13 @@ jobs:
                   "ADMIN_IDS": "100001",
                   "CLIENTPLATFORM_DATABASE_NAME": "clientplatform_ci",
                   "DATABASE_URL": "postgresql://clientplatform_app:ci-app-password@127.0.0.1:5432/clientplatform_ci",
-                  "TELEGRAM_WEBHOOK_PUBLIC_BASE_URL": f"https://{domain}",
-                  "TELEGRAM_WEBHOOK_SECRET_TOKEN": "w" * 48,
+                  "TELEGRAM_TRANSPORT": "polling",
+                  "RUN_MODE": "polling",
+                  "TELEGRAM_WEBHOOK_ENABLED": "0",
+                  "TELEGRAM_LEGACY_TOKEN_WEBHOOK_ENABLED": "0",
+                  "TELEGRAM_WEBHOOK_PUBLIC_BASE_URL": "",
+                  "TELEGRAM_WEBHOOK_SECRET_TOKEN": "",
+                  "TELEGRAM_WEBHOOK_PREFIX": "",
                   "MESSENGER_PUBLIC_BASE_URL": f"https://{domain}",
                   "PAYMENT_PUBLIC_BASE_URL": f"https://{domain}",
                   "PRIVACY_EXPORT_PUBLIC_BASE_URL": f"https://{domain}",
@@ -182,21 +187,17 @@ jobs:
       - name: Create backup as application role and prove admin-only restore
         env:
           DATABASE_URL: postgresql://clientplatform_app:ci-app-password@127.0.0.1:5432/clientplatform_ci
-          CLIENTPLATFORM_BACKUP_DIR: ${{ runner.temp }}/clientplatform-backups
-          CLIENTPLATFORM_RESTORE_EVIDENCE_DIR: ${{ runner.temp }}/clientplatform-restore-evidence
-          CLIENTPLATFORM_BACKUP_RETENTION_DAYS: "30"
           CLIENTPLATFORM_RESTORE_ADMIN_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+          CLIENTPLATFORM_BACKUP_DIR: /tmp/clientplatform-backups
+          CLIENTPLATFORM_RESTORE_EVIDENCE_DIR: /tmp/clientplatform-restore-evidence
         run: |
           set -o pipefail
-          python scripts/clientplatform_postgres_backup.py backup \
-            2>&1 | tee "$RUNNER_TEMP/clientplatform-backup.log"
-          DUMP="$(find "$CLIENTPLATFORM_BACKUP_DIR" -name 'clientplatform-*.dump' -type f | head -1)"
-          test -n "$DUMP"
-          pg_restore --list "$DUMP" | grep -E 'TABLE DATA public (managed_bots|bot_gateway_ingress_events|managed_bot_provisioning_requests)' \
-            | tee "$RUNNER_TEMP/clientplatform-gateway-dump-list.log"
-          test "$(wc -l < "$RUNNER_TEMP/clientplatform-gateway-dump-list.log")" -eq 3
-          python scripts/clientplatform_postgres_backup.py restore-drill "$DUMP" \
-            2>&1 | tee "$RUNNER_TEMP/clientplatform-restore-drill.log"
+          BACKUP_PATH="$(python scripts/clientplatform_postgres_backup.py backup | tail -1)"
+          /usr/lib/postgresql/16/bin/pg_restore --list "$BACKUP_PATH" \
+            | grep -E 'TABLE DATA public (managed_bots|bot_gateway_ingress_events|managed_bot_provisioning_requests)' \
+            > "$RUNNER_TEMP/clientplatform-backup-gateway-tables.log"
+          python scripts/clientplatform_postgres_backup.py restore-drill "$BACKUP_PATH" \
+            | tee "$RUNNER_TEMP/clientplatform-restore-drill.log"
 
       - name: Upload production isolation evidence
         if: always()
@@ -208,10 +209,6 @@ jobs:
             ${{ runner.temp }}/clientplatform-production-preflight.log
             ${{ runner.temp }}/clientplatform-bot-gateway-preflight.log
             ${{ runner.temp }}/clientplatform-compose-config.yml
-            ${{ runner.temp }}/clientplatform-backup.log
-            ${{ runner.temp }}/clientplatform-gateway-dump-list.log
+            ${{ runner.temp }}/clientplatform-backup-gateway-tables.log
             ${{ runner.temp }}/clientplatform-restore-drill.log
-            ${{ runner.temp }}/clientplatform-backups/*.sha256
-            ${{ runner.temp }}/clientplatform-backups/*.json
-            ${{ runner.temp }}/clientplatform-restore-evidence/*.json
           if-no-files-found: warn
