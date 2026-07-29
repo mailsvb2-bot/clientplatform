@@ -10,11 +10,10 @@ class ClientPlatformBotGatewayPreflightTests(unittest.TestCase):
     def valid_env() -> dict[str, str]:
         return {
             "APP_ENV": "prod",
-            "MESSENGER_WEBHOOK_ENABLED": "1",
+            "TELEGRAM_TRANSPORT": "polling",
+            "TELEGRAM_WEBHOOK_ENABLED": "0",
             "TELEGRAM_LEGACY_TOKEN_WEBHOOK_ENABLED": "0",
-            "HTTP_INGRESS_MAX_BODY_BYTES": "1048576",
             "CLIENTPLATFORM_BOT_GATEWAY_ENABLED": "1",
-            "CLIENTPLATFORM_BOT_GATEWAY_PATH_PREFIX": "/clientplatform/managed-bots",
             "CLIENTPLATFORM_BOT_GATEWAY_BATCH_SIZE": "10",
             "CLIENTPLATFORM_BOT_GATEWAY_INTERVAL_SEC": "0.5",
             "CLIENTPLATFORM_BOT_GATEWAY_TICK_TIMEOUT_SEC": "30",
@@ -23,6 +22,8 @@ class ClientPlatformBotGatewayPreflightTests(unittest.TestCase):
             "CLIENTPLATFORM_BOT_GATEWAY_PER_BOT_PER_MINUTE": "120",
             "CLIENTPLATFORM_BOT_GATEWAY_PER_BOT_QUEUE_LIMIT": "1000",
             "CLIENTPLATFORM_BOT_GATEWAY_MAX_PAYLOAD_BYTES": "262144",
+            "CLIENTPLATFORM_BOT_GATEWAY_POLL_TIMEOUT_SEC": "20",
+            "CLIENTPLATFORM_BOT_GATEWAY_RECONCILE_INTERVAL_SEC": "2",
         }
 
     def test_valid_production_gateway_environment_passes(self) -> None:
@@ -36,25 +37,33 @@ class ClientPlatformBotGatewayPreflightTests(unittest.TestCase):
             validate_environment(env),
         )
 
-    def test_path_cannot_expose_token_or_secret(self) -> None:
-        for path in ("/bots/token/{id}", "/bots/secret", "relative"):
-            with self.subTest(path=path):
-                env = self.valid_env()
-                env["CLIENTPLATFORM_BOT_GATEWAY_PATH_PREFIX"] = path
-                self.assertTrue(validate_environment(env))
+    def test_telegram_webhook_configuration_is_rejected(self) -> None:
+        env = self.valid_env()
+        env["TELEGRAM_TRANSPORT"] = "webhook"
+        env["TELEGRAM_WEBHOOK_ENABLED"] = "1"
+        errors = validate_environment(env)
+        self.assertIn("TELEGRAM_TRANSPORT must be polling", errors)
+        self.assertIn(
+            "TELEGRAM_WEBHOOK_ENABLED must be 0 for polling-only Telegram",
+            errors,
+        )
 
-    def test_limits_are_bounded_and_ingress_must_cover_payload(self) -> None:
+    def test_managed_polling_does_not_require_messenger_webhook_server(self) -> None:
+        env = self.valid_env()
+        env["MESSENGER_WEBHOOK_ENABLED"] = "0"
+        self.assertEqual(validate_environment(env), [])
+
+    def test_limits_are_bounded(self) -> None:
         env = self.valid_env()
         env["CLIENTPLATFORM_BOT_GATEWAY_LOCK_TTL_SEC"] = "20"
-        env["CLIENTPLATFORM_BOT_GATEWAY_MAX_PAYLOAD_BYTES"] = "1048576"
-        env["HTTP_INGRESS_MAX_BODY_BYTES"] = "262144"
+        env["CLIENTPLATFORM_BOT_GATEWAY_POLL_TIMEOUT_SEC"] = "60"
         errors = validate_environment(env)
         self.assertIn(
             "CLIENTPLATFORM_BOT_GATEWAY_LOCK_TTL_SEC must be between 30 and 3600",
             errors,
         )
         self.assertIn(
-            "HTTP ingress body limit must cover the Managed Bot Gateway payload limit",
+            "CLIENTPLATFORM_BOT_GATEWAY_POLL_TIMEOUT_SEC must be between 1 and 50",
             errors,
         )
 
