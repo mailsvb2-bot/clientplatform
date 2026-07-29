@@ -145,9 +145,13 @@ class BotFatherTelegramProvisioner:
             return verified
         except BotProvisioningVerificationFailed:
             raise
-        except (TelegramAPIError, ValueError, TypeError, AttributeError):
+        except TelegramAPIError:
             raise BotProvisioningVerificationFailed(
                 "Telegram bot verification or webhook configuration failed"
+            ) from None
+        except (ValueError, TypeError, AttributeError):
+            raise BotProvisioningVerificationFailed(
+                "Telegram bot identity is invalid"
             ) from None
         finally:
             await bot.session.close()
