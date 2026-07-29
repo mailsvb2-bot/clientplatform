@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import unittest
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from clientplatform.domain.bot_provisioning import (
+    BotProvisioningInvariantViolation,
     BotProvisioningStatus,
+    BotProvisioningVerificationFailed,
     ManagedBotProvisioningRequest,
 )
 from handlers import clientplatform_bot_setup as setup
@@ -101,6 +104,22 @@ class _FakeMessage:
         self.answers.append((text, reply_markup))
 
 
+class _FakeCallback:
+    def __init__(self, data: str) -> None:
+        self.data = data
+        self.from_user = SimpleNamespace(id=101)
+        self.message = _FakeMessage("")
+        self.answers: list[tuple[str | None, bool]] = []
+
+    async def answer(
+        self,
+        text: str | None = None,
+        *,
+        show_alert: bool = False,
+    ) -> None:
+        self.answers.append((text, show_alert))
+
+
 class ClientPlatformBotSetupUiTests(unittest.IsolatedAsyncioTestCase):
     def test_secret_reference_input_accepts_only_reviewed_environment_names(self) -> None:
         self.assertEqual(
@@ -188,6 +207,200 @@ class ClientPlatformBotSetupUiTests(unittest.IsolatedAsyncioTestCase):
         await setup.receive_webhook_reference(message, state)
         self.assertEqual(state.cleared, 0)
         self.assertIn("отдельный секрет", message.answers[-1][0])
+
+    async def test_mybot_command_without_business_prompts_onboarding(self) -> None:
+        message = _FakeMessage("/mybot")
+        state = _FakeState()
+        with (
+            patch.object(setup.control, "_user_id", return_value=101),
+            patch.object(setup, "list_accessible_businesses", return_value=[]),
+        ):
+            await setup.open_my_bot_command(message, state)
+        self.assertEqual(state.cleared, 1)
+        self.assertIn("Сначала создайте бизнес", message.answers[-1][0])
+
+    async def test_mybot_command_with_multiple_businesses_builds_selector(self) -> None:
+        second_business_id = "00000000-0000-0000-0000-000000000106"
+        accesses = [
+            SimpleNamespace(
+                business=SimpleNamespace(id=_BUSINESS_ID, name="Практика один")
+            ),
+            SimpleNamespace(
+                business=SimpleNamespace(id=second_business_id, name="Практика два")
+            ),
+        ]
+        message = _FakeMessage("/mybot")
+        state = _FakeState()
+        with (
+            patch.object(setup.control, "_user_id", return_value=101),
+            patch.object(setup, "list_accessible_businesses", return_value=accesses),
+        ):
+            await setup.open_my_bot_command(message, state)
+        markup = message.answers[-1][1]
+        labels = [button.text for row in markup.inline_keyboard for button in row]
+        self.assertEqual(labels, ["Практика один", "Практика два"])
+
+    async def test_begin_setup_starts_username_state(self) -> None:
+        callback = _FakeCallback(f"cpb:n:{setup._business_token(_BUSINESS_ID)}")
+        state = _FakeState()
+        with (
+            patch.object(setup, "_actor", new=AsyncMock(return_value=object())),
+            patch.object(
+                setup.control,
+                "_callback_message",
+                return_value=callback.message,
+            ),
+        ):
+            await setup.begin_bot_setup(callback, state)
+        self.assertEqual(state.states[-1], setup.ManagedBotSetupState.username)
+        self.assertEqual(state.data["business_id"], _BUSINESS_ID)
+        self.assertTrue(str(state.data["idempotency_key"]).startswith("owner-ui-"))
+        self.assertIn("Шаг 1 из 3", callback.message.answers[-1][0])
+
+    async def test_valid_username_creates_request_and_advances(self) -> None:
+        message = _FakeMessage("@practice_helper_bot")
+        state = _FakeState(
+            {
+                "business_id": _BUSINESS_ID,
+                "idempotency_key": "owner-ui-test-001",
+            }
+        )
+        with (
+            patch.object(setup.control, "_user_id", return_value=101),
+            patch.object(setup, "_actor", new=AsyncMock(return_value=object())),
+            patch.object(
+                setup,
+                "create_botfather_provisioning",
+                return_value=_request(BotProvisioningStatus.AWAITING_SECRET),
+            ) as create_request,
+        ):
+            await setup.receive_bot_username(message, state)
+        create_request.assert_called_once()
+        self.assertEqual(state.data["request_id"], _REQUEST_ID)
+        self.assertEqual(state.states[-1], setup.ManagedBotSetupState.token_reference)
+        self.assertIn("Шаг 2 из 3", message.answers[-1][0])
+
+    async def test_distinct_webhook_reference_is_submitted_and_clears_state(self) -> None:
+        message = _FakeMessage("CLIENTPLATFORM_SECRET_WEBHOOK_PRACTICE")
+        state = _FakeState(
+            {
+                "business_id": _BUSINESS_ID,
+                "request_id": _REQUEST_ID,
+                "token_reference": _TOKEN_REF,
+            }
+        )
+        with (
+            patch.object(setup.control, "_user_id", return_value=101),
+            patch.object(setup, "_actor", new=AsyncMock(return_value=object())),
+            patch.object(
+                setup,
+                "submit_botfather_secret_references",
+                return_value=_request(BotProvisioningStatus.READY),
+            ) as submit,
+        ):
+            await setup.receive_webhook_reference(message, state)
+        submit.assert_called_once()
+        self.assertEqual(state.cleared, 1)
+        self.assertIn("Ссылки сохранены", message.answers[-1][0])
+        self.assertIsNotNone(message.answers[-1][1])
+
+    async def test_verify_success_reports_completion_and_refreshes_status(self) -> None:
+        callback = _FakeCallback(
+            f"cpb:v:{setup._business_token(_BUSINESS_ID)}:"
+            f"{setup._request_token(_REQUEST_ID)}"
+        )
+        state = _FakeState()
+        refresh = AsyncMock()
+        with (
+            patch.object(setup, "_actor", new=AsyncMock(return_value=object())),
+            patch.object(
+                setup.control,
+                "_callback_message",
+                return_value=callback.message,
+            ),
+            patch.object(
+                setup,
+                "finalize_botfather_provisioning",
+                new=AsyncMock(return_value=_request(BotProvisioningStatus.COMPLETED)),
+            ),
+            patch.object(setup, "_send_status", new=refresh),
+        ):
+            await setup.verify_and_connect_bot(callback, state)
+        answers = " ".join(text for text, _ in callback.message.answers)
+        self.assertIn("Готово", answers)
+        self.assertEqual(state.cleared, 1)
+        refresh.assert_awaited_once()
+
+    async def test_verify_failure_is_safe_and_refreshes_status(self) -> None:
+        callback = _FakeCallback(
+            f"cpb:v:{setup._business_token(_BUSINESS_ID)}:"
+            f"{setup._request_token(_REQUEST_ID)}"
+        )
+        state = _FakeState()
+        refresh = AsyncMock()
+        with (
+            patch.object(setup, "_actor", new=AsyncMock(return_value=object())),
+            patch.object(
+                setup.control,
+                "_callback_message",
+                return_value=callback.message,
+            ),
+            patch.object(
+                setup,
+                "finalize_botfather_provisioning",
+                new=AsyncMock(
+                    side_effect=BotProvisioningVerificationFailed("provider failure")
+                ),
+            ),
+            patch.object(setup, "_send_status", new=refresh),
+        ):
+            await setup.verify_and_connect_bot(callback, state)
+        answers = " ".join(text for text, _ in callback.message.answers)
+        self.assertIn("Telegram не подтвердил", answers)
+        self.assertNotIn(_TOKEN_REF, answers)
+        self.assertEqual(state.cleared, 1)
+        refresh.assert_awaited_once()
+
+    async def test_cancel_success_and_active_verification_guard(self) -> None:
+        callback_data = (
+            f"cpb:c:{setup._business_token(_BUSINESS_ID)}:"
+            f"{setup._request_token(_REQUEST_ID)}"
+        )
+        successful = _FakeCallback(callback_data)
+        state = _FakeState()
+        refresh = AsyncMock()
+        with (
+            patch.object(setup, "_actor", new=AsyncMock(return_value=object())),
+            patch.object(
+                setup.control,
+                "_callback_message",
+                return_value=successful.message,
+            ),
+            patch.object(
+                setup,
+                "cancel_botfather_provisioning",
+                return_value=_request(BotProvisioningStatus.CANCELLED),
+            ),
+            patch.object(setup, "_send_status", new=refresh),
+        ):
+            await setup.cancel_bot_setup(successful, state)
+        self.assertEqual(successful.answers[-1][0], "Подключение отменено")
+        self.assertEqual(state.cleared, 1)
+        refresh.assert_awaited_once()
+
+        blocked = _FakeCallback(callback_data)
+        blocked_state = _FakeState()
+        with (
+            patch.object(setup, "_actor", new=AsyncMock(return_value=object())),
+            patch.object(
+                setup,
+                "cancel_botfather_provisioning",
+                side_effect=BotProvisioningInvariantViolation("verifying"),
+            ),
+        ):
+            await setup.cancel_bot_setup(blocked, blocked_state)
+        self.assertTrue(blocked.answers[-1][1])
+        self.assertEqual(blocked_state.cleared, 0)
 
     def test_lazy_handler_composition_contains_owner_wizard_once(self) -> None:
         import handlers
