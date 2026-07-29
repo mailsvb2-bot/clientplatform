@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 TenantDisposition = Literal["erase", "retain", "anonymize"]
-CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-07-28.v5"
+CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-07-29.v6"
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,6 +113,15 @@ _POLICIES = (
         table="managed_bots",
         disposition="retain",
         reason="business-owned bot identity and webhook secret reference",
+        required=True,
+    ),
+    TenantPrivacyPolicy(
+        table="bot_gateway_ingress_events",
+        disposition="erase",
+        reason=(
+            "short-lived Telegram update payload, tenant route and replay evidence; "
+            "payload_json is removed after processed or dead terminal state"
+        ),
         required=True,
     ),
     TenantPrivacyPolicy(

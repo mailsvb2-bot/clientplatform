@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from clientplatform.domain.connections import (
     Connection,
@@ -79,6 +80,57 @@ def _shared_telegram_connection(
     return selected
 
 
+def _managed_telegram_connection(
+    *,
+    actor: TenantContext,
+    repository: ConnectionRepository,
+    conn: Any,
+) -> Connection | None:
+    rows = conn.execute(
+        """
+        SELECT c.id
+        FROM managed_bots mb
+        JOIN connections c
+          ON c.id=mb.connection_id AND c.business_id=mb.business_id
+         AND c.platform=mb.platform AND c.status='active'
+        WHERE mb.business_id=? AND mb.platform='telegram' AND mb.status='active'
+        ORDER BY mb.created_at, mb.id
+        LIMIT 2
+        """,
+        (actor.business_id,),
+    ).fetchall()
+    if not rows:
+        return None
+    if len(rows) != 1:
+        raise ValueError("business must have exactly one active managed Telegram bot")
+    connection_id = str(rows[0]["id"] if hasattr(rows[0], "keys") else rows[0][0])
+    for connection in repository.list_connections(actor=actor):
+        if connection.id == connection_id:
+            return connection
+    raise ValueError("active managed Telegram bot connection was not found")
+
+
+def _preferred_telegram_connection(
+    *,
+    actor: TenantContext,
+    bot_id: int,
+    repository: ConnectionRepository,
+    conn: Any,
+) -> Connection:
+    managed = _managed_telegram_connection(
+        actor=actor,
+        repository=repository,
+        conn=conn,
+    )
+    if managed is not None:
+        return managed
+    return _shared_telegram_connection(
+        actor=actor,
+        bot_id=bot_id,
+        repository=repository,
+    )
+
+
 def prepare_program_delivery(
     *,
     actor: TenantContext,
@@ -116,10 +168,11 @@ def prepare_program_delivery(
         ]
         if not pending:
             raise ValueError("program enrollment has no dispatchable lesson")
-        connection = _shared_telegram_connection(
+        connection = _preferred_telegram_connection(
             actor=actor,
             bot_id=bot_id,
             repository=connections,
+            conn=conn,
         )
         dispatch = outbox.materialize(
             actor=actor,
@@ -132,6 +185,7 @@ def prepare_program_delivery(
             connection=connection,
             dispatch=dispatch,
         )
+
 
 @dataclass(frozen=True, slots=True)
 class BusinessDeliverySummary:

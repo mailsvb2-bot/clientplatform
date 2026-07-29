@@ -52,8 +52,30 @@ async def _send_business_choice(
 
 
 @router.message(CommandStart())
-async def clientplatform_entry_start(message: Message, state: FSMContext) -> None:
+async def clientplatform_entry_start(
+    message: Message,
+    state: FSMContext,
+    managed_bot_business_id: str | None = None,
+) -> None:
     user_id = control._user_id(message)
+    if managed_bot_business_id is not None:
+        links = await asyncio.to_thread(
+            list_customer_businesses,
+            telegram_user_id=user_id,
+        )
+        managed_links = [
+            link for link in links if link.business_id == managed_bot_business_id
+        ]
+        await state.clear()
+        if not managed_links:
+            await message.answer(
+                "Не удалось открыть кабинет этого специалиста. "
+                "Попробуйте ещё раз через несколько секунд."
+            )
+            return
+        await control._send_client_portal(message, links=managed_links)
+        return
+
     payload = control._start_payload(message)
     if payload.startswith("cpj_"):
         token = payload.removeprefix("cpj_")

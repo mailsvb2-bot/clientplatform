@@ -9,6 +9,10 @@ from typing import TYPE_CHECKING, Any
 from aiogram.exceptions import TelegramAPIError
 from aiohttp import web
 
+from clientplatform.runtime.bot_gateway import (
+    ManagedBotGatewayRuntime,
+    bot_gateway_runtime_config,
+)
 from config.settings import settings
 from runtime.ingress_flags import (
     http_ingress_enabled,
@@ -18,9 +22,16 @@ from runtime.ingress_flags import (
 )
 from runtime.messenger_ingress_reliability import max_webhook, vk_webhook
 from runtime.messenger_media_http import audio_access, audio_media
-from runtime.payment_http import payment_terms_web, pay_yookassa_web, yookassa_reconciliation_webhook
+from runtime.payment_http import (
+    payment_terms_web,
+    pay_yookassa_web,
+    yookassa_reconciliation_webhook,
+)
 from runtime.privacy_export_http import privacy_export_download, privacy_export_landing
-from runtime.payment_webhook_admission import ingress_body_limit, payment_webhook_admission_middleware
+from runtime.payment_webhook_admission import (
+    ingress_body_limit,
+    payment_webhook_admission_middleware,
+)
 from runtime.telegram_transport import telegram_transport
 from runtime.telegram_webhook_runtime import (
     telegram_legacy_webhook_path,
@@ -44,9 +55,18 @@ class MessengerWebhookRuntime:
     site: web.TCPSite
     telegram_public_url: str = ""
     delivery_worker_started: bool = False
+    bot_gateway_runtime: ManagedBotGatewayRuntime | None = None
 
     async def stop(self) -> None:
         errors: list[BaseException] = []
+        if self.bot_gateway_runtime is not None:
+            try:
+                await self.bot_gateway_runtime.stop()
+            except BaseException as exc:  # validator: allow-wide-except
+                log.exception("Managed bot gateway shutdown failed")
+                errors.append(exc)
+            finally:
+                self.bot_gateway_runtime = None
         if self.delivery_worker_started:
             try:
                 await stop_delivery_worker()
@@ -65,7 +85,11 @@ class MessengerWebhookRuntime:
 
 
 async def _health(request: web.Request) -> web.Response:
-    return web.json_response({"ok": True, "service": "http-ingress"})
+    gateway = request.app.get("clientplatform_bot_gateway_runtime")
+    payload: dict[str, Any] = {"ok": True, "service": "http-ingress"}
+    if isinstance(gateway, ManagedBotGatewayRuntime):
+        payload["managed_bot_gateway"] = gateway.health_snapshot()
+    return web.json_response(payload)
 
 
 def _truthy_env(name: str) -> bool:
@@ -73,7 +97,9 @@ def _truthy_env(name: str) -> bool:
 
 
 def _deployed_env() -> bool:
-    return (os.getenv("APP_ENV") or getattr(settings, "APP_ENV", "") or "dev").strip().lower() in {
+    return (
+        os.getenv("APP_ENV") or getattr(settings, "APP_ENV", "") or "dev"
+    ).strip().lower() in {
         "prod",
         "production",
         "stage",
@@ -174,7 +200,9 @@ def _register_telegram_routes(
         app.router.add_post(telegram_legacy_webhook_path(), telegram_webhook)
     public_url = telegram_public_webhook_url()
     if not public_url:
-        raise RuntimeError("TELEGRAM_WEBHOOK_PUBLIC_BASE_URL is required for telegram webhook transport")
+        raise RuntimeError(
+            "TELEGRAM_WEBHOOK_PUBLIC_BASE_URL is required for telegram webhook transport"
+        )
     return public_url
 
 
@@ -185,9 +213,12 @@ def _resolve_ingress_bind(*, ingress_enabled: bool, telegram_enabled: bool) -> t
     telegram_port = int(getattr(settings, "TELEGRAM_WEBHOOK_PORT", ingress_port))
 
     if ingress_enabled and telegram_enabled and (
-        str(ingress_host) != str(telegram_host) or int(ingress_port) != int(telegram_port)
+        str(ingress_host) != str(telegram_host)
+        or int(ingress_port) != int(telegram_port)
     ):
-        raise RuntimeError("Telegram and HTTP ingress runtimes must share the same ingress host/port")
+        raise RuntimeError(
+            "Telegram and HTTP ingress runtimes must share the same ingress host/port"
+        )
     if telegram_enabled:
         return str(telegram_host), int(telegram_port)
     return str(ingress_host), int(ingress_port)
@@ -201,7 +232,9 @@ async def start_messenger_webhook_runtime(
     privacy_export_enabled = privacy_export_http_enabled()
     max_enabled = max_webhook_enabled()
     vk_enabled = vk_webhook_enabled()
-    ingress_enabled = http_ingress_enabled()
+    gateway_config = bot_gateway_runtime_config()
+    gateway_enabled = gateway_config.enabled
+    ingress_enabled = http_ingress_enabled() or gateway_enabled
     telegram_enabled = telegram_transport() == "webhook"
     if not ingress_enabled and not telegram_enabled:
         return None
@@ -223,9 +256,23 @@ async def start_messenger_webhook_runtime(
     if max_enabled or vk_enabled:
         _register_audio_routes(app)
 
+    bot_gateway_runtime: ManagedBotGatewayRuntime | None = None
+    if gateway_enabled:
+        if dispatcher is None:
+            raise RuntimeError("Managed bot gateway requires dispatcher")
+        bot_gateway_runtime = ManagedBotGatewayRuntime(
+            dispatcher=dispatcher,
+            config=gateway_config,
+        )
+        bot_gateway_runtime.register_route(app)
+
     telegram_public_url = ""
     if telegram_enabled:
-        telegram_public_url = _register_telegram_routes(app, bot=bot, dispatcher=dispatcher)
+        telegram_public_url = _register_telegram_routes(
+            app,
+            bot=bot,
+            dispatcher=dispatcher,
+        )
 
     host, port = _resolve_ingress_bind(
         ingress_enabled=ingress_enabled,
@@ -235,6 +282,7 @@ async def start_messenger_webhook_runtime(
     runner = web.AppRunner(app)
     await runner.setup()
     delivery_worker_started = False
+    gateway_started = False
     try:
         site = web.TCPSite(runner, host=host, port=port)
         await site.start()
@@ -242,15 +290,25 @@ async def start_messenger_webhook_runtime(
         if max_enabled or vk_enabled:
             start_delivery_worker()
             delivery_worker_started = True
+        if bot_gateway_runtime is not None:
+            gateway_started = bot_gateway_runtime.start()
+            if not gateway_started:
+                raise RuntimeError("Managed bot gateway failed to start")
 
         if telegram_enabled:
             if bot is None:
-                raise RuntimeError("Telegram webhook bot disappeared after route registration")
+                raise RuntimeError(
+                    "Telegram webhook bot disappeared after route registration"
+                )
             await bot.set_webhook(
                 url=telegram_public_url,
-                secret_token=(getattr(settings, "TELEGRAM_WEBHOOK_SECRET_TOKEN", "") or "") or None,
+                secret_token=(
+                    getattr(settings, "TELEGRAM_WEBHOOK_SECRET_TOKEN", "") or ""
+                )
+                or None,
                 drop_pending_updates=bool(
-                    getattr(settings, "TELEGRAM_WEBHOOK_DROP_PENDING_UPDATES", False) or False
+                    getattr(settings, "TELEGRAM_WEBHOOK_DROP_PENDING_UPDATES", False)
+                    or False
                 ),
             )
             log.info(
@@ -261,7 +319,8 @@ async def start_messenger_webhook_runtime(
             )
 
         log.info(
-            "HTTP ingress started on %s:%s payment=%s privacy_export=%s max=%s vk=%s durable_delivery=%s",
+            "HTTP ingress started on %s:%s payment=%s privacy_export=%s "
+            "max=%s vk=%s durable_delivery=%s managed_bot_gateway=%s",
             host,
             port,
             payment_enabled,
@@ -269,14 +328,28 @@ async def start_messenger_webhook_runtime(
             max_enabled,
             vk_enabled,
             delivery_worker_started,
+            gateway_started,
         )
         return MessengerWebhookRuntime(
             runner=runner,
             site=site,
             telegram_public_url=telegram_public_url,
             delivery_worker_started=delivery_worker_started,
+            bot_gateway_runtime=bot_gateway_runtime,
         )
-    except (OSError, RuntimeError, ValueError, TypeError, AttributeError, TelegramAPIError):
+    except (
+        OSError,
+        RuntimeError,
+        ValueError,
+        TypeError,
+        AttributeError,
+        TelegramAPIError,
+    ):
+        if gateway_started and bot_gateway_runtime is not None:
+            try:
+                await bot_gateway_runtime.stop()
+            except BaseException:  # validator: allow-wide-except
+                log.exception("Managed bot gateway startup rollback failed")
         if delivery_worker_started:
             try:
                 await stop_delivery_worker()
