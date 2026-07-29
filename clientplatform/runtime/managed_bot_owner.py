@@ -6,6 +6,7 @@ from urllib.parse import urljoin
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
 
+from clientplatform.domain.bot_provisioning import BotProvisioningVerificationFailed
 from clientplatform.domain.managed_bot_owner import (
     ManagedBotWebhookMaterial,
     ManagedBotWebhookOperationFailed,
@@ -39,8 +40,8 @@ class TelegramManagedBotWebhookController:
         self._credential_provider = (
             credential_provider or EnvironmentCredentialProvider()
         )
-        self._public_base_url = _public_base_url(public_base_url)
-        self._gateway_path_prefix = _gateway_path_prefix(gateway_path_prefix)
+        self._public_base_url_value = public_base_url
+        self._gateway_path_prefix_value = gateway_path_prefix
 
     def _resolve_token(self, material: ManagedBotWebhookMaterial) -> str:
         try:
@@ -61,10 +62,19 @@ class TelegramManagedBotWebhookController:
             ) from None
 
     def _webhook_url(self, material: ManagedBotWebhookMaterial) -> str:
+        try:
+            public_base_url = _public_base_url(self._public_base_url_value)
+            gateway_path_prefix = _gateway_path_prefix(
+                self._gateway_path_prefix_value
+            )
+        except BotProvisioningVerificationFailed:
+            raise ManagedBotWebhookOperationFailed(
+                "managed bot webhook route is not configured safely"
+            ) from None
         return urljoin(
-            self._public_base_url,
+            public_base_url,
             (
-                f"/{self._gateway_path_prefix.lstrip('/')}/telegram/"
+                f"/{gateway_path_prefix.lstrip('/')}/telegram/"
                 f"{material.external_bot_id}"
             ),
         )
@@ -72,6 +82,7 @@ class TelegramManagedBotWebhookController:
     async def attach(self, material: ManagedBotWebhookMaterial) -> None:
         token = self._resolve_token(material)
         webhook_secret = self._resolve_webhook_secret(material)
+        webhook_url = self._webhook_url(material)
         bot = Bot(token=token)
         try:
             identity = await bot.get_me()
@@ -86,7 +97,7 @@ class TelegramManagedBotWebhookController:
                     "Telegram bot username no longer matches the managed route"
                 )
             configured = await bot.set_webhook(
-                url=self._webhook_url(material),
+                url=webhook_url,
                 secret_token=webhook_secret,
                 drop_pending_updates=False,
             )
