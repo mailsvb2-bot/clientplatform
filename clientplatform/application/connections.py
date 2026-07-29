@@ -76,6 +76,42 @@ def register_managed_bot(
         )
 
 
+def disable_managed_bot(
+    *,
+    actor: TenantContext,
+    managed_bot_id: str,
+) -> ManagedBot:
+    with get_db() as conn:
+        return ConnectionRepository(conn).disable_managed_bot(
+            actor=actor,
+            managed_bot_id=managed_bot_id,
+        )
+
+
+def activate_managed_bot(
+    *,
+    actor: TenantContext,
+    managed_bot_id: str,
+) -> ManagedBot:
+    with get_db() as conn:
+        return ConnectionRepository(conn).activate_managed_bot(
+            actor=actor,
+            managed_bot_id=managed_bot_id,
+        )
+
+
+def revoke_managed_bot(
+    *,
+    actor: TenantContext,
+    managed_bot_id: str,
+) -> ManagedBot:
+    with get_db() as conn:
+        return ConnectionRepository(conn).revoke_managed_bot(
+            actor=actor,
+            managed_bot_id=managed_bot_id,
+        )
+
+
 def list_connections(*, actor: TenantContext) -> list[Connection]:
     with get_db_ro() as conn:
         return ConnectionRepository(conn).list_connections(actor=actor)
