@@ -56,13 +56,14 @@ jobs:
           python -m pip install --disable-pip-version-check pip==26.1.2
           python -m pip install --require-hashes -r requirements-dev.txt
 
-      - name: Provisioning unit and orchestration wall
+      - name: Provisioning and owner wizard regression wall
         run: |
           set -o pipefail
           python -m unittest -v \
             tests/test_clientplatform_bot_provisioning.py \
             tests/test_runtime_clientplatform_bot_provisioning.py \
             tests/test_application_clientplatform_bot_provisioning.py \
+            tests/test_clientplatform_bot_setup_ui.py \
             2>&1 | tee "$RUNNER_TEMP/clientplatform-bot-provisioning-tests.log"
 
       - name: Two-connection PostgreSQL provisioning matrix
