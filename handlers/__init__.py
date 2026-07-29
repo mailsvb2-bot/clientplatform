@@ -17,6 +17,10 @@ def _load_clientplatform_modules() -> tuple[ModuleType, ModuleType]:
     globals()["clientplatform_entry"] = entry
     globals()["clientplatform_control"] = control
 
+    if not bool(getattr(entry, "_telegram_commands_startup_composed", False)):
+        entry.router.startup.register(entry.register_clientplatform_bot_commands)
+        entry._telegram_commands_startup_composed = True
+
     bot_setup = importlib.import_module(".clientplatform_bot_setup", __name__)
     globals()["clientplatform_bot_setup"] = bot_setup
     bot_setup.install_dashboard_button(control)
