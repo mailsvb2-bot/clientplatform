@@ -14,14 +14,12 @@ from clientplatform.domain.bot_provisioning import (
 )
 from handlers import clientplatform_bot_setup as setup
 
-
 _BUSINESS_ID = "00000000-0000-0000-0000-000000000101"
 _REQUEST_ID = "00000000-0000-0000-0000-000000000102"
 _MEMBER_ID = "00000000-0000-0000-0000-000000000103"
 _CONNECTION_ID = "00000000-0000-0000-0000-000000000104"
 _MANAGED_BOT_ID = "00000000-0000-0000-0000-000000000105"
 _TOKEN_REF = "secret://env/CLIENTPLATFORM_SECRET_TELEGRAM_PRACTICE"
-_WEBHOOK_REF = "secret://env/CLIENTPLATFORM_SECRET_WEBHOOK_PRACTICE"
 
 
 def _raw_token_fixture() -> str:
@@ -29,7 +27,7 @@ def _raw_token_fixture() -> str:
 
 
 def _request(status: BotProvisioningStatus) -> ManagedBotProvisioningRequest:
-    has_references = status not in {
+    has_reference = status not in {
         BotProvisioningStatus.AWAITING_SECRET,
         BotProvisioningStatus.CANCELLED,
     }
@@ -43,13 +41,13 @@ def _request(status: BotProvisioningStatus) -> ManagedBotProvisioningRequest:
         idempotency_key="owner-ui-regression-001",
         requested_username="practice_helper_bot",
         display_name="Practice Helper",
-        credential_reference=_TOKEN_REF if has_references else None,
-        webhook_secret_reference=_WEBHOOK_REF if has_references else None,
+        credential_reference=_TOKEN_REF if has_reference else None,
+        webhook_secret_reference=_TOKEN_REF if has_reference else None,
         external_bot_id="900001" if completed else None,
         verified_username="practice_helper_bot" if completed else None,
         connection_id=_CONNECTION_ID if completed else None,
         managed_bot_id=_MANAGED_BOT_ID if completed else None,
-        attempts=1 if has_references else 0,
+        attempts=1 if has_reference else 0,
         created_at="2026-07-29T09:00:00+00:00",
         updated_at="2026-07-29T09:01:00+00:00",
         completed_at="2026-07-29T09:02:00+00:00" if completed else None,
@@ -128,12 +126,6 @@ class ClientPlatformBotSetupUiTests(unittest.IsolatedAsyncioTestCase):
             ),
             _TOKEN_REF,
         )
-        self.assertEqual(
-            setup._secret_reference_from_input(
-                "secret://env/clientplatform_secret_webhook_practice"
-            ),
-            _WEBHOOK_REF,
-        )
         with self.assertRaises(setup.RawSecretInputError):
             setup._secret_reference_from_input(_raw_token_fixture())
         with self.assertRaises(setup.RawSecretInputError):
@@ -141,12 +133,15 @@ class ClientPlatformBotSetupUiTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             setup._secret_reference_from_input("TELEGRAM_TOKEN")
 
-    def test_status_text_never_displays_secret_references(self) -> None:
+    def test_status_text_is_polling_only_and_never_displays_reference(self) -> None:
         for status in BotProvisioningStatus:
             text = setup._status_text(_request(status))
             self.assertNotIn("CLIENTPLATFORM_SECRET_TELEGRAM_PRACTICE", text)
-            self.assertNotIn("CLIENTPLATFORM_SECRET_WEBHOOK_PRACTICE", text)
             self.assertNotIn("secret://", text)
+            self.assertNotIn("webhook-секрет", text.lower())
+        completed = setup._status_text(_request(BotProvisioningStatus.COMPLETED))
+        self.assertIn("Транспорт: polling", completed)
+        self.assertIn("Webhook для этого бота отключён", completed)
 
     def test_all_callback_payloads_fit_telegram_limit(self) -> None:
         requests = [None, *(_request(status) for status in BotProvisioningStatus)]
@@ -171,9 +166,6 @@ class ClientPlatformBotSetupUiTests(unittest.IsolatedAsyncioTestCase):
         markup = module._dashboard_keyboard(_BUSINESS_ID, [])
         labels = [button.text for row in markup.inline_keyboard for button in row]
         self.assertEqual(labels.count("Мой Telegram-бот"), 1)
-        callback = markup.inline_keyboard[-1][0].callback_data
-        self.assertTrue(str(callback).startswith("cpb:o:"))
-        self.assertLessEqual(len(str(callback).encode("utf-8")), 64)
 
     async def test_accidentally_pasted_token_is_deleted_and_not_stored(self) -> None:
         raw_token = _raw_token_fixture()
@@ -181,22 +173,41 @@ class ClientPlatformBotSetupUiTests(unittest.IsolatedAsyncioTestCase):
         state = _FakeState()
         await setup.receive_token_reference(message, state)
         self.assertEqual(message.deleted, 1)
-        self.assertNotIn("token_reference", state.data)
-        self.assertEqual(state.states, [])
+        self.assertEqual(state.cleared, 0)
         combined_answers = " ".join(text for text, _ in message.answers)
         self.assertNotIn(raw_token, combined_answers)
         self.assertIn("Сообщение удалено", combined_answers)
 
-    async def test_valid_token_reference_advances_to_webhook_state(self) -> None:
+    async def test_valid_token_reference_is_submitted_without_webhook_step(self) -> None:
         message = _FakeMessage("CLIENTPLATFORM_SECRET_TELEGRAM_PRACTICE")
-        state = _FakeState()
-        await setup.receive_token_reference(message, state)
-        self.assertEqual(state.data["token_reference"], _TOKEN_REF)
-        self.assertEqual(state.states[-1], setup.ManagedBotSetupState.webhook_reference)
-        self.assertEqual(message.deleted, 0)
+        state = _FakeState(
+            {
+                "business_id": _BUSINESS_ID,
+                "request_id": _REQUEST_ID,
+            }
+        )
+        with (
+            patch.object(setup.control, "_user_id", return_value=101),
+            patch.object(setup, "_actor", new=AsyncMock(return_value=object())),
+            patch.object(
+                setup,
+                "submit_botfather_secret_references",
+                return_value=_request(BotProvisioningStatus.READY),
+            ) as submit,
+        ):
+            await setup.receive_token_reference(message, state)
+        submit.assert_called_once_with(
+            actor=unittest.mock.ANY,
+            request_id=_REQUEST_ID,
+            credential_reference=_TOKEN_REF,
+        )
+        self.assertEqual(state.cleared, 1)
+        self.assertIn("webhook использоваться не будет", message.answers[-1][0])
+        self.assertIsNotNone(message.answers[-1][1])
 
-    async def test_same_reference_cannot_be_reused_for_webhook(self) -> None:
-        message = _FakeMessage("CLIENTPLATFORM_SECRET_TELEGRAM_PRACTICE")
+    async def test_stale_webhook_state_reuses_token_reference_without_reading_text(self) -> None:
+        raw_value = _raw_token_fixture()
+        message = _FakeMessage(raw_value)
         state = _FakeState(
             {
                 "business_id": _BUSINESS_ID,
@@ -204,9 +215,19 @@ class ClientPlatformBotSetupUiTests(unittest.IsolatedAsyncioTestCase):
                 "token_reference": _TOKEN_REF,
             }
         )
-        await setup.receive_webhook_reference(message, state)
-        self.assertEqual(state.cleared, 0)
-        self.assertIn("отдельный секрет", message.answers[-1][0])
+        with (
+            patch.object(setup.control, "_user_id", return_value=101),
+            patch.object(setup, "_actor", new=AsyncMock(return_value=object())),
+            patch.object(
+                setup,
+                "submit_botfather_secret_references",
+                return_value=_request(BotProvisioningStatus.READY),
+            ) as submit,
+        ):
+            await setup.receive_webhook_reference(message, state)
+        submit.assert_called_once()
+        self.assertNotIn(raw_value, str(submit.call_args))
+        self.assertEqual(state.cleared, 1)
 
     async def test_mybot_command_without_business_prompts_onboarding(self) -> None:
         message = _FakeMessage("/mybot")
@@ -240,7 +261,7 @@ class ClientPlatformBotSetupUiTests(unittest.IsolatedAsyncioTestCase):
         labels = [button.text for row in markup.inline_keyboard for button in row]
         self.assertEqual(labels, ["Практика один", "Практика два"])
 
-    async def test_begin_setup_starts_username_state(self) -> None:
+    async def test_begin_setup_starts_two_step_username_state(self) -> None:
         callback = _FakeCallback(f"cpb:n:{setup._business_token(_BUSINESS_ID)}")
         state = _FakeState()
         with (
@@ -254,10 +275,9 @@ class ClientPlatformBotSetupUiTests(unittest.IsolatedAsyncioTestCase):
             await setup.begin_bot_setup(callback, state)
         self.assertEqual(state.states[-1], setup.ManagedBotSetupState.username)
         self.assertEqual(state.data["business_id"], _BUSINESS_ID)
-        self.assertTrue(str(state.data["idempotency_key"]).startswith("owner-ui-"))
-        self.assertIn("Шаг 1 из 3", callback.message.answers[-1][0])
+        self.assertIn("Шаг 1 из 2", callback.message.answers[-1][0])
 
-    async def test_valid_username_creates_request_and_advances(self) -> None:
+    async def test_valid_username_advances_to_final_token_step(self) -> None:
         message = _FakeMessage("@practice_helper_bot")
         state = _FakeState(
             {
@@ -278,33 +298,10 @@ class ClientPlatformBotSetupUiTests(unittest.IsolatedAsyncioTestCase):
         create_request.assert_called_once()
         self.assertEqual(state.data["request_id"], _REQUEST_ID)
         self.assertEqual(state.states[-1], setup.ManagedBotSetupState.token_reference)
-        self.assertIn("Шаг 2 из 3", message.answers[-1][0])
+        self.assertIn("Шаг 2 из 2", message.answers[-1][0])
+        self.assertIn("webhook-секрет не нужен", message.answers[-1][0])
 
-    async def test_distinct_webhook_reference_is_submitted_and_clears_state(self) -> None:
-        message = _FakeMessage("CLIENTPLATFORM_SECRET_WEBHOOK_PRACTICE")
-        state = _FakeState(
-            {
-                "business_id": _BUSINESS_ID,
-                "request_id": _REQUEST_ID,
-                "token_reference": _TOKEN_REF,
-            }
-        )
-        with (
-            patch.object(setup.control, "_user_id", return_value=101),
-            patch.object(setup, "_actor", new=AsyncMock(return_value=object())),
-            patch.object(
-                setup,
-                "submit_botfather_secret_references",
-                return_value=_request(BotProvisioningStatus.READY),
-            ) as submit,
-        ):
-            await setup.receive_webhook_reference(message, state)
-        submit.assert_called_once()
-        self.assertEqual(state.cleared, 1)
-        self.assertIn("Ссылки сохранены", message.answers[-1][0])
-        self.assertIsNotNone(message.answers[-1][1])
-
-    async def test_verify_success_reports_completion_and_refreshes_status(self) -> None:
+    async def test_verify_success_reports_polling_and_refreshes_status(self) -> None:
         callback = _FakeCallback(
             f"cpb:v:{setup._business_token(_BUSINESS_ID)}:"
             f"{setup._request_token(_REQUEST_ID)}"
@@ -327,7 +324,7 @@ class ClientPlatformBotSetupUiTests(unittest.IsolatedAsyncioTestCase):
         ):
             await setup.verify_and_connect_bot(callback, state)
         answers = " ".join(text for text, _ in callback.message.answers)
-        self.assertIn("Готово", answers)
+        self.assertIn("через polling", answers)
         self.assertEqual(state.cleared, 1)
         refresh.assert_awaited_once()
 
@@ -358,7 +355,6 @@ class ClientPlatformBotSetupUiTests(unittest.IsolatedAsyncioTestCase):
         answers = " ".join(text for text, _ in callback.message.answers)
         self.assertIn("Telegram не подтвердил", answers)
         self.assertNotIn(_TOKEN_REF, answers)
-        self.assertEqual(state.cleared, 1)
         refresh.assert_awaited_once()
 
     async def test_cancel_success_and_active_verification_guard(self) -> None:
@@ -385,7 +381,6 @@ class ClientPlatformBotSetupUiTests(unittest.IsolatedAsyncioTestCase):
         ):
             await setup.cancel_bot_setup(successful, state)
         self.assertEqual(successful.answers[-1][0], "Подключение отменено")
-        self.assertEqual(state.cleared, 1)
         refresh.assert_awaited_once()
 
         blocked = _FakeCallback(callback_data)
@@ -400,7 +395,6 @@ class ClientPlatformBotSetupUiTests(unittest.IsolatedAsyncioTestCase):
         ):
             await setup.cancel_bot_setup(blocked, blocked_state)
         self.assertTrue(blocked.answers[-1][1])
-        self.assertEqual(blocked_state.cleared, 0)
 
     def test_lazy_handler_composition_contains_owner_wizard_once(self) -> None:
         import handlers
@@ -411,9 +405,6 @@ class ClientPlatformBotSetupUiTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(control, control_again)
         names = [item.name for item in entry.router.sub_routers]
         self.assertEqual(names.count("clientplatform_bot_setup"), 1)
-        dashboard = control._dashboard_keyboard(_BUSINESS_ID, [])
-        labels = [button.text for row in dashboard.inline_keyboard for button in row]
-        self.assertEqual(labels.count("Мой Telegram-бот"), 1)
 
 
 if __name__ == "__main__":

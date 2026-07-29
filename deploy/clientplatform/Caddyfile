@@ -1,13 +1,14 @@
 {$CLIENTPLATFORM_DOMAIN} {
     encode zstd gzip
 
-    @managed_bots path /clientplatform/managed-bots/*
-    handle @managed_bots {
+    # Telegram is polling-only. Only webhook-native providers use HTTP ingress.
+    @messenger_webhooks path /webhooks/*
+    handle @messenger_webhooks {
         reverse_proxy {$CLIENTPLATFORM_INGRESS_UPSTREAM:127.0.0.1:8181}
     }
 
-    @telegram path /telegram-webhook*
-    handle @telegram {
+    @payment_http path /terms /pay/*
+    handle @payment_http {
         reverse_proxy {$CLIENTPLATFORM_INGRESS_UPSTREAM:127.0.0.1:8181}
     }
 

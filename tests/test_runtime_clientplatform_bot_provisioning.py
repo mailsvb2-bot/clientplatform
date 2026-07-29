@@ -29,31 +29,26 @@ class _FakeBot:
         first_name="Помощник",
         last_name="Практики",
     )
-    set_webhook_result = True
+    delete_result = True
 
     def __init__(self, *, token: str) -> None:
         self.token = token
         self.session = _FakeSession()
-        self.webhooks: list[dict[str, object]] = []
         self.delete_calls: list[bool] = []
         self.instances.append(self)
 
     async def get_me(self):
         return self.identity
 
-    async def set_webhook(self, **kwargs):
-        self.webhooks.append(dict(kwargs))
-        return self.set_webhook_result
-
     async def delete_webhook(self, *, drop_pending_updates: bool):
         self.delete_calls.append(drop_pending_updates)
-        return True
+        return self.delete_result
 
 
 class ClientPlatformBotProvisioningRuntimeTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         _FakeBot.instances.clear()
-        _FakeBot.set_webhook_result = True
+        _FakeBot.delete_result = True
         _FakeBot.identity = SimpleNamespace(
             id=900001,
             username="practice_helper_bot",
@@ -62,7 +57,6 @@ class ClientPlatformBotProvisioningRuntimeTests(unittest.IsolatedAsyncioTestCase
         )
         self.environment = {
             "CLIENTPLATFORM_SECRET_TELEGRAM_PRIMARY": "telegram-token-value",
-            "CLIENTPLATFORM_SECRET_WEBHOOK_PRIMARY": "webhook-secret-value",
         }
         self.request = ManagedBotProvisioningRequest(
             id="00000000-0000-0000-0000-000000000101",
@@ -77,7 +71,7 @@ class ClientPlatformBotProvisioningRuntimeTests(unittest.IsolatedAsyncioTestCase
                 "secret://env/CLIENTPLATFORM_SECRET_TELEGRAM_PRIMARY"
             ),
             webhook_secret_reference=(
-                "secret://env/CLIENTPLATFORM_SECRET_WEBHOOK_PRIMARY"
+                "secret://env/CLIENTPLATFORM_SECRET_TELEGRAM_PRIMARY"
             ),
             external_bot_id=None,
             verified_username=None,
@@ -91,29 +85,22 @@ class ClientPlatformBotProvisioningRuntimeTests(unittest.IsolatedAsyncioTestCase
     def _provisioner(self) -> BotFatherTelegramProvisioner:
         return BotFatherTelegramProvisioner(
             credential_provider=EnvironmentCredentialProvider(self.environment),
-            public_base_url="https://cp.example.test/base/",
-            gateway_path_prefix="/clientplatform/managed-bots",
+            public_base_url="http://ignored.invalid",
+            gateway_path_prefix="/ignored",
         )
 
-    async def test_verifies_identity_and_configures_tokenless_route(self) -> None:
+    async def test_verifies_identity_and_removes_webhook_for_polling(self) -> None:
         with patch("clientplatform.runtime.bot_provisioning.Bot", _FakeBot):
             verified = await self._provisioner().provision(self.request)
         self.assertEqual(verified.external_bot_id, "900001")
         self.assertEqual(verified.username, "practice_helper_bot")
         bot = _FakeBot.instances[-1]
         self.assertEqual(bot.token, "telegram-token-value")
+        self.assertEqual(bot.delete_calls, [False])
         self.assertEqual(bot.session.closed, 1)
-        self.assertEqual(len(bot.webhooks), 1)
-        webhook = bot.webhooks[0]
-        self.assertEqual(
-            webhook["url"],
-            "https://cp.example.test/clientplatform/managed-bots/telegram/900001",
-        )
-        self.assertEqual(webhook["secret_token"], "webhook-secret-value")
-        self.assertNotIn("telegram-token-value", str(webhook["url"]))
-        self.assertNotIn("webhook-secret-value", str(webhook["url"]))
+        self.assertFalse(hasattr(bot, "set_webhook"))
 
-    async def test_rollback_deletes_webhook_without_dropping_updates(self) -> None:
+    async def test_rollback_keeps_webhook_disabled_without_dropping_updates(self) -> None:
         with patch("clientplatform.runtime.bot_provisioning.Bot", _FakeBot):
             await self._provisioner().rollback(self.request)
         bot = _FakeBot.instances[-1]
@@ -123,26 +110,24 @@ class ClientPlatformBotProvisioningRuntimeTests(unittest.IsolatedAsyncioTestCase
     async def test_missing_secret_reference_fails_without_creating_bot(self) -> None:
         provisioner = BotFatherTelegramProvisioner(
             credential_provider=EnvironmentCredentialProvider({}),
-            public_base_url="https://cp.example.test",
         )
         with patch("clientplatform.runtime.bot_provisioning.Bot", _FakeBot):
             with self.assertRaises(BotProvisioningVerificationFailed):
                 await provisioner.provision(self.request)
         self.assertEqual(_FakeBot.instances, [])
 
-    async def test_webhook_rejection_is_fail_closed_and_session_is_closed(self) -> None:
-        _FakeBot.set_webhook_result = False
+    async def test_delete_webhook_rejection_is_fail_closed(self) -> None:
+        _FakeBot.delete_result = False
         with patch("clientplatform.runtime.bot_provisioning.Bot", _FakeBot):
             with self.assertRaises(BotProvisioningVerificationFailed):
                 await self._provisioner().provision(self.request)
         self.assertEqual(_FakeBot.instances[-1].session.closed, 1)
 
-    def test_requires_https_public_base_url(self) -> None:
-        with self.assertRaises(BotProvisioningVerificationFailed):
-            BotFatherTelegramProvisioner(
-                credential_provider=EnvironmentCredentialProvider(self.environment),
-                public_base_url="http://cp.example.test",
-            )
+    def test_public_url_is_not_required_for_polling(self) -> None:
+        BotFatherTelegramProvisioner(
+            credential_provider=EnvironmentCredentialProvider(self.environment),
+            public_base_url="",
+        )
 
 
 if __name__ == "__main__":

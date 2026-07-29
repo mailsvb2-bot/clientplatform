@@ -6,9 +6,13 @@ from typing import Any, Mapping
 from clientplatform.domain.bookings import CustomerBusinessLink
 from clientplatform.domain.bot_gateway import (
     AdmittedIngressEvent,
+    BotGatewayAdmissionRejected,
     ClaimedIngressEvent,
     IngressEvent,
     ManagedBotRoute,
+)
+from clientplatform.infrastructure.managed_bot_polling_repository import (
+    ManagedBotPollingRepository,
 )
 from clientplatform.infrastructure.safe_bot_gateway_repository import BotGatewayRepository
 from services.db import get_db, get_db_ro
@@ -21,6 +25,11 @@ def resolve_telegram_route(*, external_bot_id: int | str) -> ManagedBotRoute:
         )
 
 
+def list_active_telegram_routes(*, limit: int = 10_000) -> list[ManagedBotRoute]:
+    with get_db_ro() as conn:
+        return ManagedBotPollingRepository(conn).list_active_routes(limit=limit)
+
+
 def admit_telegram_update(
     *,
     route: ManagedBotRoute,
@@ -30,9 +39,24 @@ def admit_telegram_update(
     queue_limit: int,
     max_payload_bytes: int,
 ) -> AdmittedIngressEvent:
+    """Admit only while the polled route is still active.
+
+    Disable/revoke may race with a long-running getUpdates request. Re-resolving
+    inside the write transaction prevents a stale poller from inserting new work
+    after the local route has been closed.
+    """
+
     with get_db() as conn:
-        return BotGatewayRepository(conn).admit_telegram_update(
-            route=route,
+        repository = BotGatewayRepository(conn)
+        current = repository.resolve_telegram_route(
+            external_bot_id=route.external_bot_id
+        )
+        if current.managed_bot_id != route.managed_bot_id:
+            raise BotGatewayAdmissionRejected(
+                "managed Telegram bot polling route changed before admission"
+            )
+        return repository.admit_telegram_update(
+            route=current,
             provider_update_id=provider_update_id,
             payload=payload,
             per_minute_limit=per_minute_limit,

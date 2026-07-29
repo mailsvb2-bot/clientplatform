@@ -1,8 +1,8 @@
-# ClientPlatform: production isolation and Managed Bot Gateway runbook
+# ClientPlatform: production isolation and polling gateway runbook
 
 ## Production boundary
 
-ClientPlatform production is separate from the imported Metrotherapy deployment. It requires its own control Telegram bot, PostgreSQL database and roles, private S3-compatible bucket, HTTPS domain, webhook secret, Linux service account, state directories, backups, and staging/production secrets.
+ClientPlatform production is separate from the imported Metrotherapy deployment. It requires its own control Telegram bot, PostgreSQL database and roles, private S3-compatible bucket, HTTPS domain, Linux service account, state directories, backups, and staging/production secrets.
 
 Fixed paths:
 
@@ -14,6 +14,8 @@ Fixed paths:
 
 The application role must be `NOSUPERUSER NOCREATEDB NOCREATEROLE`. Restore drills use a different operator-only administrative DSN. Managed Client Bots share the same application process and database, but every active bot route is globally unique, business-scoped, secret-reference-only and admitted through the durable Bot Gateway.
 
+Telegram is polling-only for both the central control bot and all managed Telegram bots. VK and MAX use the separate messenger webhook server.
+
 ## External provisioning
 
 Provision outside the repository:
@@ -22,11 +24,12 @@ Provision outside the repository:
 2. A dedicated PostgreSQL database plus least-privilege application role.
 3. A separate restore-administrator role used only during drills.
 4. A private S3-compatible production bucket with versioning, lifecycle retention, and replication to a separate failure domain.
-5. A dedicated DNS name and TLS termination.
-6. Independent control-webhook, diagnostics, media-signing, and S3 secrets.
-7. For every personal Telegram bot: an existing bot account, token secret and independent webhook secret stored under the `CLIENTPLATFORM_SECRET_*` namespace. Database records contain only their `secret://env/...` references.
+5. A dedicated DNS name and TLS termination for VK/MAX, media, privacy and payment HTTP surfaces.
+6. Independent diagnostics, media-signing and S3 secrets.
+7. For every personal Telegram bot: an existing bot account and token stored under the `CLIENTPLATFORM_SECRET_TELEGRAM_*` namespace. Database records contain only `secret://env/...` references.
+8. For every enabled VK/MAX provider: its own webhook verification secret and sender credentials.
 
-Telegram's ordinary Bot API does not create new bot accounts. Automatic account creation requires a separately reviewed provider adapter. BotFather fallback must place the token directly into the secret store; it must never send raw token material through ClientPlatform forms, callbacks, logs or database rows.
+Telegram's ordinary Bot API does not create bot accounts. BotFather fallback must place the token directly into the secret store; it must never send raw token material through ClientPlatform forms, callbacks, logs or database payloads.
 
 Copy and fill the application environment:
 
@@ -42,6 +45,22 @@ python scripts/clientplatform_bot_gateway_preflight.py \
 ```
 
 Deployment is blocked until both commands print their corresponding `*_PREFLIGHT_OK` marker.
+
+## Canonical transport settings
+
+The production environment must contain:
+
+```text
+TELEGRAM_TRANSPORT=polling
+RUN_MODE=polling
+TELEGRAM_WEBHOOK_ENABLED=0
+TELEGRAM_LEGACY_TOKEN_WEBHOOK_ENABLED=0
+CLIENTPLATFORM_BOT_GATEWAY_ENABLED=1
+```
+
+`TELEGRAM_WEBHOOK_PUBLIC_BASE_URL`, `TELEGRAM_WEBHOOK_SECRET_TOKEN` and `TELEGRAM_WEBHOOK_PREFIX` must be empty or absent. Production preflight rejects them.
+
+`MESSENGER_WEBHOOK_ENABLED=1` remains independent. Enable `VK_WEBHOOK_ENABLED` and `MAX_WEBHOOK_ENABLED` only for configured providers. Caddy publishes `/webhooks/*`; it does not publish a Telegram route.
 
 ## Systemd deployment
 
@@ -75,7 +94,7 @@ sudo -u clientplatform "$RELEASE/.venv/bin/python" \
   --env-file /etc/clientplatform/clientplatform.env
 ```
 
-Install the units and reverse proxy configuration:
+Install units and reverse proxy configuration:
 
 ```bash
 sudo install -m 0644 deploy/clientplatform/clientplatform.service /etc/systemd/system/
@@ -85,7 +104,7 @@ sudo install -m 0644 deploy/clientplatform/Caddyfile /etc/caddy/Caddyfile.d/clie
 sudo systemctl daemon-reload
 ```
 
-Caddy sends `/clientplatform/managed-bots/<telegram-bot-id>` to the shared ingress. The numeric bot ID is not a credential. Authentication is the bot-specific `X-Telegram-Bot-Api-Secret-Token` header. Token-bearing paths are forbidden.
+The service starts one central Telegram polling owner and one managed-bot polling task per active managed route. Caddy only forwards webhook-native providers and other reviewed HTTP surfaces.
 
 ## Migration and atomic switch
 
@@ -112,16 +131,17 @@ sudo systemctl restart clientplatform
 
 Schema changes follow expand/contract. Destructive contract migrations require a separate reviewed migration, explicit export, and verified restore evidence. Never roll application code backward across a destructive migration.
 
-## Registering a personal bot route
+## Registering a personal Telegram bot
 
 Before activation, prove all of the following:
 
 - the Telegram bot ID is not already registered anywhere in production;
 - the business has no other active managed Telegram bot;
-- token and webhook-secret references resolve from the production secret provider;
+- the token reference resolves from the production secret provider;
 - the connection and managed-bot rows belong to the same business and platform;
-- the webhook points to `https://$CLIENTPLATFORM_DOMAIN/clientplatform/managed-bots/<bot-id>`;
-- a valid secret is accepted, an invalid secret is rejected, and replaying one update has no duplicate domain effect;
+- `getMe` returns the expected immutable bot ID and username;
+- `deleteWebhook(drop_pending_updates=False)` succeeds;
+- gateway health reports `transport=polling` and an active poller;
 - a `/start` update opens only that business's customer portal;
 - a test program's first and next materials are both sent through that managed connection.
 
@@ -129,20 +149,29 @@ Disable or revoke the old route before replacing a business bot. Never temporari
 
 ## Post-deploy evidence
 
+Check the central process and health endpoints:
+
 ```bash
+systemctl is-active clientplatform
+journalctl -u clientplatform --since '-10 minutes' --no-pager
 python scripts/clientplatform_http_probe.py synthetic \
   --health-base-url http://127.0.0.1:8182 \
   --public-base-url "https://$CLIENTPLATFORM_DOMAIN"
 python scripts/clientplatform_http_probe.py load-smoke \
   --health-base-url http://127.0.0.1:8182 \
   --requests 200 --concurrency 8 --max-p95-ms 500
-python scripts/clientplatform_http_probe.py replay /secure/evidence/webhook-replay.jsonl \
-  --public-base-url "https://$CLIENTPLATFORM_DOMAIN" \
-  --webhook-secret "$TELEGRAM_WEBHOOK_SECRET_TOKEN" \
-  --repetitions 2
 ```
 
-Replay fixtures contain only sanitized Telegram updates with synthetic IDs. After replay, inspect database/outbox counters and prove the absence of duplicate domain effects; HTTP `200` alone is insufficient. For the managed-bot fleet, also inspect `pending`, `processing`, `retry`, `processed`, `dead` and `active_bots` counters. One failing route must not stop successful processing for another route.
+Then perform provider-specific probes:
+
+1. Call Telegram `getWebhookInfo` for the central bot and every managed bot; `url` must be empty.
+2. Send `/start` to the central bot and prove ClientPlatform responds.
+3. Send `/start` to every managed test bot and prove only its linked business portal opens.
+4. Inspect gateway counters: `active_pollers`, `pending`, `processing`, `retry`, `processed`, `dead`, `polling_conflicts`.
+5. Replay sanitized VK/MAX webhook fixtures twice and prove the second event does not repeat tenant or outbox side effects.
+6. Prove a failure in one managed polling task does not stop another bot.
+
+An HTTP `200` from VK/MAX alone is insufficient; inspect dedupe and delivery-outbox state.
 
 ## Backup and disposable restore drill
 
@@ -168,17 +197,19 @@ sudo -u clientplatform --preserve-env=DATABASE_URL,CLIENTPLATFORM_RESTORE_ADMIN_
 unset CLIENTPLATFORM_RESTORE_ADMIN_DATABASE_URL
 ```
 
-The drill verifies the checksum, creates a disposable database, restores the dump, checks canonical ClientPlatform tables, writes sanitized evidence, and drops the disposable database. The archive-list check additionally proves that managed-bot registry and durable ingress tables are present in the tested dump.
+The drill verifies the checksum, creates a disposable database, restores the dump, checks canonical ClientPlatform tables, writes sanitized evidence, and drops the disposable database. The archive-list check proves that managed-bot registry and durable ingress tables are present in the tested dump.
 
 ## Rollback
 
-1. Stop public traffic or disable the affected Telegram webhook.
-2. To isolate one failing personal bot, disable only its managed-bot route or connection; do not stop the fleet.
+1. To isolate one failing personal bot, disable only its managed-bot route; the reconciler stops its polling task.
+2. If a duplicate polling owner exists, stop the duplicate process before restarting the canonical service.
 3. For application rollback, stop `clientplatform.service`.
 4. For additive migrations, atomically repoint `current` to the previous release.
 5. For data restoration, preserve the failed database and restore the verified dump into a new database. Never overwrite the only failed-state copy.
-6. Run both preflights, health/readiness, synthetic, replay, fleet-isolation and load smoke again.
+6. Run both preflights, health/readiness, Telegram `/start`, VK/MAX entry, fleet isolation and load smoke again.
 7. Record release SHA, bot/business route, backup checksum, restore evidence, incident cause, and decision owner.
+
+Do not enable Telegram webhook as a rollback measure.
 
 ## Docker Compose alternative
 
@@ -202,15 +233,18 @@ The PostgreSQL container creates `clientplatform_app` as `NOSUPERUSER NOCREATEDB
 Production traffic remains blocked until:
 
 - both offline preflights pass;
+- central and managed Telegram webhook URLs are empty;
+- exactly one polling owner consumes each Telegram token;
+- `/start` works in the central bot and managed test bot;
+- `/start` and provider-native start events work through enabled VK/MAX webhook adapters;
 - the dedicated application role has no superuser, `CREATEDB`, or `CREATEROLE` privileges;
 - schema initialization passes as the application role;
 - backup and disposable restore drill pass with separate roles and the dump contains gateway tables;
 - health, readiness and fleet counters are green;
-- invalid control and managed-bot webhook secrets are rejected;
-- identical managed-bot replay is idempotent and conflicting replay is rejected;
+- identical managed-bot admission and VK/MAX webhook replay are idempotent;
 - PostgreSQL two-connection admission and claim matrices pass;
 - bounded load smoke meets the recorded threshold;
-- staging uses different control bot, managed-bot secrets, database, bucket, domain, and secrets;
+- staging uses different control bot, managed-bot tokens, database, bucket, domain, and secrets;
 - a failure in one bot is proven not to stop another bot;
 - rollback commands and owner are recorded;
 - external automatic bot provisioning remains disabled until its provider adapter and token-to-secret-store transfer are separately reviewed.

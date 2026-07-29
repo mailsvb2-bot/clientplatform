@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock
 
 import pytest
 
@@ -82,17 +81,6 @@ class FakeRequest:
         return clone
 
 
-class FakeBot:
-    def __init__(self, *, set_webhook_error: BaseException | None = None) -> None:
-        self.set_webhook_error = set_webhook_error
-        self.webhook_calls: list[dict[str, Any]] = []
-
-    async def set_webhook(self, **kwargs: Any) -> None:
-        self.webhook_calls.append(dict(kwargs))
-        if self.set_webhook_error is not None:
-            raise self.set_webhook_error
-
-
 class FakeGatewayRuntime:
     instances: list["FakeGatewayRuntime"] = []
     start_result = True
@@ -109,10 +97,6 @@ class FakeGatewayRuntime:
     def register_route(self, app: Any) -> None:
         self.registered_apps.append(app)
         app["clientplatform_bot_gateway_runtime"] = self
-        app.router.add_post(
-            "/clientplatform/managed-bots/telegram/{external_bot_id}",
-            object(),
-        )
 
     def start(self) -> bool:
         self.start_calls += 1
@@ -124,7 +108,7 @@ class FakeGatewayRuntime:
             raise self.stop_error
 
     def health_snapshot(self) -> dict[str, Any]:
-        return {"running": True, "active_bots": 2}
+        return {"running": True, "transport": "polling", "active_pollers": 2}
 
 
 def _reset_fakes() -> None:
@@ -147,27 +131,33 @@ def _patch_runtime_surface(
     vk_enabled: bool = False,
     ingress: bool = True,
     gateway: bool = False,
-    telegram_transport: str = "polling",
 ) -> None:
     _reset_fakes()
     monkeypatch.setattr(messenger_webhooks.web, "Application", FakeApplication)
     monkeypatch.setattr(messenger_webhooks.web, "AppRunner", FakeRunner)
     monkeypatch.setattr(messenger_webhooks.web, "TCPSite", FakeSite)
-    monkeypatch.setattr(messenger_webhooks, "ManagedBotGatewayRuntime", FakeGatewayRuntime)
+    monkeypatch.setattr(
+        messenger_webhooks,
+        "ManagedBotGatewayRuntime",
+        FakeGatewayRuntime,
+    )
     monkeypatch.setattr(messenger_webhooks, "payment_http_enabled", lambda: payment)
     monkeypatch.setattr(
         messenger_webhooks,
         "privacy_export_http_enabled",
         lambda: privacy,
     )
-    monkeypatch.setattr(messenger_webhooks, "max_webhook_enabled", lambda: max_enabled)
-    monkeypatch.setattr(messenger_webhooks, "vk_webhook_enabled", lambda: vk_enabled)
-    monkeypatch.setattr(messenger_webhooks, "http_ingress_enabled", lambda: ingress)
     monkeypatch.setattr(
         messenger_webhooks,
-        "telegram_transport",
-        lambda: telegram_transport,
+        "max_webhook_enabled",
+        lambda: max_enabled,
     )
+    monkeypatch.setattr(
+        messenger_webhooks,
+        "vk_webhook_enabled",
+        lambda: vk_enabled,
+    )
+    monkeypatch.setattr(messenger_webhooks, "http_ingress_enabled", lambda: ingress)
     monkeypatch.setattr(
         messenger_webhooks,
         "bot_gateway_runtime_config",
@@ -182,10 +172,6 @@ def _patch_runtime_surface(
             VK_GROUP_ID="10",
             MESSENGER_WEBHOOK_HOST="127.0.0.1",
             MESSENGER_WEBHOOK_PORT=8181,
-            TELEGRAM_WEBHOOK_HOST="127.0.0.1",
-            TELEGRAM_WEBHOOK_PORT=8181,
-            TELEGRAM_WEBHOOK_SECRET_TOKEN="secret-header",
-            TELEGRAM_WEBHOOK_DROP_PENDING_UPDATES=True,
         ),
     )
 
@@ -259,7 +245,13 @@ async def test_health_and_environment_helpers(monkeypatch: pytest.MonkeyPatch) -
     assert response.status == 200
     assert json.loads(response.body) == {"ok": True, "service": "http-ingress"}
 
-    gateway = SimpleNamespace(health_snapshot=lambda: {"running": True, "pending": 2})
+    gateway = SimpleNamespace(
+        health_snapshot=lambda: {
+            "running": True,
+            "transport": "polling",
+            "active_pollers": 2,
+        }
+    )
     monkeypatch.setattr(
         messenger_webhooks,
         "ManagedBotGatewayRuntime",
@@ -268,14 +260,15 @@ async def test_health_and_environment_helpers(monkeypatch: pytest.MonkeyPatch) -
     response = await messenger_webhooks._health(
         SimpleNamespace(app={"clientplatform_bot_gateway_runtime": gateway})
     )
-    assert json.loads(response.body)["managed_bot_gateway"] == {
-        "running": True,
-        "pending": 2,
-    }
+    assert json.loads(response.body)["managed_bot_gateway"]["transport"] == "polling"
 
     monkeypatch.delenv("FLAG", raising=False)
     monkeypatch.delenv("APP_ENV", raising=False)
-    monkeypatch.setattr(messenger_webhooks, "settings", SimpleNamespace(APP_ENV="dev"))
+    monkeypatch.setattr(
+        messenger_webhooks,
+        "settings",
+        SimpleNamespace(APP_ENV="dev"),
+    )
     assert messenger_webhooks._truthy_env("FLAG") is False
     assert messenger_webhooks._deployed_env() is False
     monkeypatch.setenv("FLAG", " YES ")
@@ -330,7 +323,11 @@ def test_vk_group_guard_matrix(
     allow: bool,
     result: bool,
 ) -> None:
-    monkeypatch.setattr(messenger_webhooks, "settings", SimpleNamespace(VK_GROUP_ID=expected))
+    monkeypatch.setattr(
+        messenger_webhooks,
+        "settings",
+        SimpleNamespace(VK_GROUP_ID=expected),
+    )
     monkeypatch.setattr(messenger_webhooks, "_deployed_env", lambda: deployed)
     monkeypatch.setattr(messenger_webhooks, "_truthy_env", lambda _name: allow)
     assert messenger_webhooks._vk_group_ok(payload) is result
@@ -364,7 +361,7 @@ async def test_vk_webhook_guard_delegation_and_rejection(
     assert delegated == ["not-json", valid]
 
 
-def test_route_registration_helpers() -> None:
+def test_route_registration_helpers_have_no_telegram_route() -> None:
     app = FakeApplication()
     messenger_webhooks._register_health_routes(app)
     messenger_webhooks._register_payment_routes(app)
@@ -380,111 +377,32 @@ def test_route_registration_helpers() -> None:
     assert ("POST", "/pay/yookassa/webhook") in routes
     assert ("POST", "/webhooks/max") in routes
     assert ("POST", "/webhooks/vk") in routes
+    assert all("telegram" not in path for _method, path in routes)
     assert any(path.endswith("{filename}") for _method, path in routes)
     assert any(path.endswith("{token}") for _method, path in routes)
 
 
-def test_register_telegram_routes_and_legacy_path(
+def test_resolve_ingress_bind_uses_only_messenger_http_settings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    app = FakeApplication()
-    dispatcher = SimpleNamespace(workflow_data={"task_manager": "manager"})
-    bot = object()
-    monkeypatch.setattr(messenger_webhooks, "telegram_webhook_path", lambda: "/tg")
-    monkeypatch.setattr(
-        messenger_webhooks,
-        "telegram_legacy_webhook_path",
-        lambda: "/tg/{bot_token}",
-    )
-    monkeypatch.setattr(
-        messenger_webhooks,
-        "telegram_public_webhook_url",
-        lambda: "https://host/tg",
-    )
-    monkeypatch.setattr(messenger_webhooks, "_truthy_env", lambda _name: True)
-    assert (
-        messenger_webhooks._register_telegram_routes(
-            app,
-            bot=bot,
-            dispatcher=dispatcher,
-        )
-        == "https://host/tg"
-    )
-    assert app["telegram_bot"] is bot
-    assert app["telegram_dispatcher"] is dispatcher
-    assert app["task_manager"] == "manager"
-    assert {(method, path) for method, path, _ in app.router.routes} == {
-        ("POST", "/tg"),
-        ("POST", "/tg/{bot_token}"),
-    }
-
-    with pytest.raises(RuntimeError, match="requires bot and dispatcher"):
-        messenger_webhooks._register_telegram_routes(
-            FakeApplication(),
-            bot=None,
-            dispatcher=dispatcher,
-        )
-    monkeypatch.setattr(messenger_webhooks, "_truthy_env", lambda _name: False)
-    monkeypatch.setattr(messenger_webhooks, "telegram_public_webhook_url", lambda: "")
-    with pytest.raises(RuntimeError, match="PUBLIC_BASE_URL"):
-        messenger_webhooks._register_telegram_routes(
-            FakeApplication(),
-            bot=bot,
-            dispatcher=dispatcher,
-        )
-
-
-def test_resolve_ingress_bind_matrix(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         messenger_webhooks,
         "settings",
         SimpleNamespace(
             MESSENGER_WEBHOOK_HOST="127.0.0.1",
             MESSENGER_WEBHOOK_PORT=8181,
-            TELEGRAM_WEBHOOK_HOST="127.0.0.1",
-            TELEGRAM_WEBHOOK_PORT=8181,
+            TELEGRAM_WEBHOOK_HOST="0.0.0.0",
+            TELEGRAM_WEBHOOK_PORT=9999,
         ),
     )
-    assert messenger_webhooks._resolve_ingress_bind(
-        ingress_enabled=True,
-        telegram_enabled=False,
-    ) == ("127.0.0.1", 8181)
-    assert messenger_webhooks._resolve_ingress_bind(
-        ingress_enabled=True,
-        telegram_enabled=True,
-    ) == ("127.0.0.1", 8181)
-
-    monkeypatch.setattr(
-        messenger_webhooks,
-        "settings",
-        SimpleNamespace(
-            MESSENGER_WEBHOOK_HOST="127.0.0.1",
-            MESSENGER_WEBHOOK_PORT=8181,
-            TELEGRAM_WEBHOOK_HOST="127.0.0.1",
-            TELEGRAM_WEBHOOK_PORT=8282,
-        ),
-    )
-    assert messenger_webhooks._resolve_ingress_bind(
-        ingress_enabled=False,
-        telegram_enabled=True,
-    ) == ("127.0.0.1", 8282)
-    with pytest.raises(RuntimeError, match="must share"):
-        messenger_webhooks._resolve_ingress_bind(
-            ingress_enabled=True,
-            telegram_enabled=True,
-        )
+    assert messenger_webhooks._resolve_ingress_bind() == ("127.0.0.1", 8181)
 
 
 @pytest.mark.asyncio
 async def test_start_runtime_returns_none_when_every_ingress_is_disabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _patch_runtime_surface(
-        monkeypatch,
-        ingress=False,
-        gateway=False,
-        telegram_transport="polling",
-    )
+    _patch_runtime_surface(monkeypatch, ingress=False, gateway=False)
     assert await messenger_webhooks.start_messenger_webhook_runtime() is None
     assert FakeApplication.instances == []
 
@@ -504,7 +422,7 @@ async def test_start_runtime_requires_dispatcher_for_gateway(
 
 
 @pytest.mark.asyncio
-async def test_full_shared_ingress_start_and_stop(
+async def test_full_webhook_native_ingress_and_polling_gateway_start_and_stop(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_runtime_surface(
@@ -514,27 +432,6 @@ async def test_full_shared_ingress_start_and_stop(
         max_enabled=True,
         vk_enabled=True,
         gateway=True,
-        telegram_transport="webhook",
-    )
-    monkeypatch.setattr(
-        messenger_webhooks,
-        "telegram_webhook_path",
-        lambda: "/telegram-webhook",
-    )
-    monkeypatch.setattr(
-        messenger_webhooks,
-        "telegram_public_webhook_url",
-        lambda: "https://host/telegram-webhook",
-    )
-    monkeypatch.setattr(
-        messenger_webhooks,
-        "_truthy_env",
-        lambda name: name == "TELEGRAM_LEGACY_TOKEN_WEBHOOK_ENABLED",
-    )
-    monkeypatch.setattr(
-        messenger_webhooks,
-        "telegram_legacy_webhook_path",
-        lambda: "/telegram-webhook/{bot_token}",
     )
     worker_starts: list[str] = []
     worker_stops: list[str] = []
@@ -548,13 +445,14 @@ async def test_full_shared_ingress_start_and_stop(
         worker_stops.append("stop")
 
     monkeypatch.setattr(messenger_webhooks, "stop_delivery_worker", stop_worker)
-    bot = FakeBot()
     dispatcher = SimpleNamespace(workflow_data={"task_manager": object()})
+    ignored_bot = object()
     runtime = await messenger_webhooks.start_messenger_webhook_runtime(
-        bot=bot,
+        bot=ignored_bot,
         dispatcher=dispatcher,
     )
     assert runtime is not None
+    assert runtime.telegram_public_url == ""
     assert runtime.delivery_worker_started is True
     assert runtime.bot_gateway_runtime is FakeGatewayRuntime.instances[-1]
     assert worker_starts == ["start"]
@@ -562,22 +460,16 @@ async def test_full_shared_ingress_start_and_stop(
     assert FakeSite.instances[-1].start_calls == 1
     assert FakeSite.instances[-1].host == "127.0.0.1"
     assert FakeSite.instances[-1].port == 8181
-    assert bot.webhook_calls == [
-        {
-            "url": "https://host/telegram-webhook",
-            "secret_token": "secret-header",
-            "drop_pending_updates": True,
-        }
-    ]
     routes = {
         (method, path)
         for method, path, _handler in FakeApplication.instances[-1].router.routes
     }
-    assert ("POST", "/clientplatform/managed-bots/telegram/{external_bot_id}") in routes
-    assert ("POST", "/telegram-webhook") in routes
-    assert ("POST", "/telegram-webhook/{bot_token}") in routes
     assert ("POST", "/webhooks/max") in routes
     assert ("POST", "/webhooks/vk") in routes
+    assert all("telegram" not in path for _method, path in routes)
+    assert FakeGatewayRuntime.instances[-1].registered_apps == [
+        FakeApplication.instances[-1]
+    ]
     await runtime.stop()
     assert FakeGatewayRuntime.instances[-1].stop_calls == 1
     assert worker_stops == ["stop"]
@@ -585,11 +477,18 @@ async def test_full_shared_ingress_start_and_stop(
 
 
 @pytest.mark.asyncio
-async def test_gateway_start_failure_rolls_back_runner(
+async def test_gateway_start_failure_rolls_back_worker_and_runner(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _patch_runtime_surface(monkeypatch, gateway=True)
+    _patch_runtime_surface(monkeypatch, max_enabled=True, gateway=True)
     FakeGatewayRuntime.start_result = False
+    worker_stops: list[str] = []
+    monkeypatch.setattr(messenger_webhooks, "start_delivery_worker", lambda: None)
+
+    async def stop_worker() -> None:
+        worker_stops.append("stop")
+
+    monkeypatch.setattr(messenger_webhooks, "stop_delivery_worker", stop_worker)
     dispatcher = SimpleNamespace(workflow_data={"task_manager": object()})
     with pytest.raises(RuntimeError, match="failed to start"):
         await messenger_webhooks.start_messenger_webhook_runtime(
@@ -597,95 +496,39 @@ async def test_gateway_start_failure_rolls_back_runner(
         )
     assert FakeGatewayRuntime.instances[-1].start_calls == 1
     assert FakeGatewayRuntime.instances[-1].stop_calls == 0
-    assert FakeRunner.instances[-1].cleanup_calls == 1
-
-
-@pytest.mark.asyncio
-async def test_partial_start_failure_runs_all_rollback_steps(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _patch_runtime_surface(
-        monkeypatch,
-        max_enabled=True,
-        gateway=True,
-        telegram_transport="webhook",
-    )
-    monkeypatch.setattr(
-        messenger_webhooks,
-        "telegram_webhook_path",
-        lambda: "/telegram-webhook",
-    )
-    monkeypatch.setattr(
-        messenger_webhooks,
-        "telegram_public_webhook_url",
-        lambda: "https://host/telegram-webhook",
-    )
-    monkeypatch.setattr(messenger_webhooks, "_truthy_env", lambda _name: False)
-    worker_starts: list[str] = []
-    worker_stops: list[str] = []
-    monkeypatch.setattr(
-        messenger_webhooks,
-        "start_delivery_worker",
-        lambda: worker_starts.append("start"),
-    )
-
-    async def stop_worker() -> None:
-        worker_stops.append("stop")
-
-    monkeypatch.setattr(messenger_webhooks, "stop_delivery_worker", stop_worker)
-    bot = FakeBot(set_webhook_error=AttributeError("set-webhook-failed"))
-    dispatcher = SimpleNamespace(workflow_data={"task_manager": object()})
-    with pytest.raises(AttributeError, match="set-webhook-failed"):
-        await messenger_webhooks.start_messenger_webhook_runtime(
-            bot=bot,
-            dispatcher=dispatcher,
-        )
-    assert worker_starts == ["start"]
     assert worker_stops == ["stop"]
-    assert FakeGatewayRuntime.instances[-1].start_calls == 1
-    assert FakeGatewayRuntime.instances[-1].stop_calls == 1
     assert FakeRunner.instances[-1].cleanup_calls == 1
 
 
 @pytest.mark.asyncio
-async def test_partial_start_rollback_logs_secondary_cleanup_failures(
+async def test_site_start_failure_rolls_back_runner_without_workers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _patch_runtime_surface(
-        monkeypatch,
-        max_enabled=True,
-        gateway=True,
-        telegram_transport="webhook",
-    )
-    monkeypatch.setattr(
-        messenger_webhooks,
-        "telegram_webhook_path",
-        lambda: "/telegram-webhook",
-    )
-    monkeypatch.setattr(
-        messenger_webhooks,
-        "telegram_public_webhook_url",
-        lambda: "https://host/telegram-webhook",
-    )
-    monkeypatch.setattr(messenger_webhooks, "_truthy_env", lambda _name: False)
-    monkeypatch.setattr(messenger_webhooks, "start_delivery_worker", lambda: None)
-
-    async def broken_stop_worker() -> None:
-        raise RuntimeError("worker-stop")
-
-    monkeypatch.setattr(
-        messenger_webhooks,
-        "stop_delivery_worker",
-        broken_stop_worker,
-    )
-    FakeGatewayRuntime.stop_error = RuntimeError("gateway-stop")
-    FakeRunner.cleanup_fail = RuntimeError("runner-cleanup")
-    bot = FakeBot(set_webhook_error=AttributeError("original-start-failure"))
+    _patch_runtime_surface(monkeypatch, max_enabled=True, gateway=True)
+    FakeSite.fail = OSError("bind-failed")
     dispatcher = SimpleNamespace(workflow_data={"task_manager": object()})
-    with pytest.raises(AttributeError, match="original-start-failure"):
+    with pytest.raises(OSError, match="bind-failed"):
         await messenger_webhooks.start_messenger_webhook_runtime(
-            bot=bot,
             dispatcher=dispatcher,
         )
-    assert FakeGatewayRuntime.instances[-1].stop_calls == 1
+    assert FakeGatewayRuntime.instances[-1].start_calls == 0
+    assert FakeRunner.instances[-1].cleanup_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_delivery_worker_start_failure_cleans_runner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_runtime_surface(monkeypatch, max_enabled=True, gateway=True)
+
+    def broken_start() -> None:
+        raise RuntimeError("worker-start")
+
+    monkeypatch.setattr(messenger_webhooks, "start_delivery_worker", broken_start)
+    dispatcher = SimpleNamespace(workflow_data={"task_manager": object()})
+    with pytest.raises(RuntimeError, match="worker-start"):
+        await messenger_webhooks.start_messenger_webhook_runtime(
+            dispatcher=dispatcher,
+        )
+    assert FakeGatewayRuntime.instances[-1].start_calls == 0
     assert FakeRunner.instances[-1].cleanup_calls == 1

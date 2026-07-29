@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import logging
 from typing import Any
 
-from aiogram import F, Router
+from aiogram import F, Bot, Router
+from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import BotCommand, CallbackQuery, Message
 
 from clientplatform.application.activity import claim_customer_invite
 from clientplatform.application.bookings import list_customer_businesses
@@ -18,6 +20,29 @@ control = importlib.import_module(".clientplatform_control", __package__)
 router = Router(name="clientplatform_entry")
 router.message.filter(control.ClientPlatformControlEnabled())
 router.callback_query.filter(control.ClientPlatformControlEnabled())
+
+log = logging.getLogger(__name__)
+
+
+async def register_clientplatform_bot_commands(bot: Bot) -> bool:
+    """Expose the canonical entry commands in Telegram's command menu.
+
+    Telegram itself controls the large first-run START button. Registering
+    commands makes `/start` visible after that first run as well. A temporary
+    Bot API failure must not prevent the polling process from starting.
+    """
+
+    try:
+        confirmed = await bot.set_my_commands(
+            [
+                BotCommand(command="start", description="Открыть ClientPlatform"),
+                BotCommand(command="mybot", description="Управление моим Telegram-ботом"),
+            ]
+        )
+    except TelegramAPIError:
+        log.warning("Failed to register ClientPlatform Telegram commands", exc_info=True)
+        return False
+    return confirmed is True
 
 
 def _entry_keyboard():

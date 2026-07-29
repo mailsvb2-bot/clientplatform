@@ -83,6 +83,7 @@ def _snapshot_text(snapshot: ManagedBotOwnerSnapshot) -> str:
             "Состояние подключения: "
             f"{_CONNECTION_STATUS_LABELS[snapshot.connection_status]}."
         ),
+        "Транспорт: polling. Telegram webhook не используется.",
         "",
         "Очередь этого бота:",
         f"• ожидают: {snapshot.pending_events};",
@@ -100,7 +101,7 @@ def _snapshot_text(snapshot: ManagedBotOwnerSnapshot) -> str:
             [
                 "",
                 "Новые сообщения сейчас не принимаются. Включение повторно проверит "
-                "Telegram и восстановит webhook.",
+                "бота, удалит возможный старый webhook и вернёт polling.",
             ]
         )
     elif snapshot.bot_status == ManagedBotStatus.REVOKED:
@@ -131,7 +132,7 @@ def _snapshot_keyboard(snapshot: ManagedBotOwnerSnapshot) -> InlineKeyboardMarku
         )
     elif snapshot.bot_status == ManagedBotStatus.DISABLED:
         rows.append(
-            [("Включить снова", f"cpbl:ax:{business_token}:{bot_token}")]
+            [("Включить polling снова", f"cpbl:ax:{business_token}:{bot_token}")]
         )
     if snapshot.bot_status != ManagedBotStatus.REVOKED:
         rows.append(
@@ -164,6 +165,7 @@ def _confirmation_keyboard(
 
 def install_lifecycle_controls(setup_module: ModuleType) -> None:
     """Add lifecycle entry point without exposing secrets to the UI layer."""
+
     if bool(getattr(setup_module, "_managed_bot_lifecycle_installed", False)):
         return
     original = setup_module._status_keyboard
@@ -244,8 +246,9 @@ async def _safe_send_snapshot(
 async def _report_result(message: Message, result: ManagedBotOwnerLifecycleResult) -> None:
     if result.warning_code == "webhook_detach_failed":
         await message.answer(
-            "Локальный маршрут уже закрыт, очередь очищена. Telegram не подтвердил "
-            "удаление webhook; оператору нужно проверить его отдельно."
+            "Локальный polling-маршрут уже закрыт, очередь очищена. Telegram не "
+            "подтвердил удаление webhook; оператору нужно проверить отсутствие "
+            "старого webhook отдельно."
         )
 
 
@@ -268,8 +271,9 @@ async def confirm_disable(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     await state.clear()
     await control._callback_message(callback).answer(
-        "Временно отключить бота? Новые сообщения перестанут приниматься, а "
-        "незавершённые события будут закрыты без сохранения payload.",
+        "Временно отключить бота? Polling этого бота остановится, новые сообщения "
+        "перестанут приниматься, а незавершённые события будут закрыты без "
+        "сохранения payload.",
         reply_markup=_confirmation_keyboard(
             business_id=business_id,
             managed_bot_id=managed_bot_id,
@@ -301,7 +305,7 @@ async def execute_disable(callback: CallbackQuery, state: FSMContext) -> None:
         await state.clear()
         return
     await state.clear()
-    await message.answer("Бот временно отключён.")
+    await message.answer("Бот временно отключён, его polling остановлен.")
     await _report_result(message, result)
     await _safe_send_snapshot(
         message,
@@ -324,7 +328,8 @@ async def execute_activate(callback: CallbackQuery, state: FSMContext) -> None:
         )
     except ManagedBotWebhookOperationFailed:
         await message.answer(
-            "Telegram не подтвердил бота или webhook. Локальный маршрут не включён."
+            "Telegram не подтвердил бота или отключение старого webhook. "
+            "Локальный polling-маршрут не включён."
         )
     except ConnectionInvariantViolation:
         await message.answer(
@@ -334,7 +339,10 @@ async def execute_activate(callback: CallbackQuery, state: FSMContext) -> None:
     except (ConnectionNotFound, TenancyError):
         await message.answer("Подключение недоступно в этом бизнесе.")
     else:
-        await message.answer("Бот снова включён и webhook подтверждён Telegram.")
+        await message.answer(
+            "Бот снова включён. Telegram webhook отключён, polling будет "
+            "подхвачен gateway-процессом."
+        )
     await state.clear()
     await _safe_send_snapshot(
         message,
@@ -350,8 +358,9 @@ async def confirm_revoke(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     await state.clear()
     await control._callback_message(callback).answer(
-        "Отозвать подключение навсегда? Это необратимо: текущий маршрут нельзя "
-        "будет включить снова. Для повторной работы понадобится новое подключение.",
+        "Отозвать подключение навсегда? Это необратимо: текущий polling-маршрут "
+        "нельзя будет включить снова. Для повторной работы понадобится новое "
+        "подключение.",
         reply_markup=_confirmation_keyboard(
             business_id=business_id,
             managed_bot_id=managed_bot_id,
@@ -383,7 +392,7 @@ async def execute_revoke(callback: CallbackQuery, state: FSMContext) -> None:
         await state.clear()
         return
     await state.clear()
-    await message.answer("Подключение отозвано навсегда.")
+    await message.answer("Подключение отозвано навсегда, polling остановлен.")
     await _report_result(message, result)
     await _safe_send_snapshot(
         message,

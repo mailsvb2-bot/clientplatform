@@ -42,14 +42,22 @@ def submit_botfather_secret_references(
     actor: TenantContext,
     request_id: str,
     credential_reference: str,
-    webhook_secret_reference: str,
+    webhook_secret_reference: str | None = None,
 ) -> ManagedBotProvisioningRequest:
+    """Store the BotFather token reference for polling-only Telegram ingress.
+
+    The schema retains the historical webhook-reference column for backward
+    compatibility. New polling connections mirror the reviewed credential
+    reference into that unused column and never resolve it as a webhook secret.
+    """
+
+    compatibility_reference = webhook_secret_reference or credential_reference
     with get_db() as conn:
         return BotProvisioningRepository(conn).submit_secret_references(
             actor=actor,
             request_id=request_id,
             credential_reference=credential_reference,
-            webhook_secret_reference=webhook_secret_reference,
+            webhook_secret_reference=compatibility_reference,
         )
 
 
@@ -135,11 +143,12 @@ async def finalize_botfather_provisioning(
     request_id: str,
     provisioner: ManagedBotProvisioner | None = None,
 ) -> ManagedBotProvisioningRequest:
-    """Verify BotFather credentials, configure webhook and commit the route.
+    """Verify BotFather credentials, remove any webhook and commit polling.
 
     Telegram network work happens outside the database transaction. The final
     connection and managed-bot rows are committed atomically. If that commit
-    fails, the configured webhook is removed as a compensating action.
+    fails, the compensating action again removes any webhook, preserving the
+    polling-only boundary.
     """
 
     current = await asyncio.to_thread(

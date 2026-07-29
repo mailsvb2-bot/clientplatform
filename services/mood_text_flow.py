@@ -25,6 +25,35 @@ _ORIGINAL_FACADE_HOOKS = {name: globals().get(name) for name in _HOOK_NAMES}
 _ORIGINAL_CORE_HOOKS = {name: getattr(_core, name, None) for name in _HOOK_NAMES}
 
 
+def _missing_mood_sessions_table(exc: sqlite3.OperationalError) -> bool:
+    message = str(exc).casefold()
+    return "mood_sessions" in message and (
+        "does not exist" in message or "no such table" in message
+    )
+
+
+def find_pending_pre_session_id(user_id: int) -> int | None:
+    """Treat an absent imported mood schema as no pending legacy session."""
+
+    try:
+        return _core.find_pending_pre_session_id(int(user_id))
+    except sqlite3.OperationalError as exc:
+        if _missing_mood_sessions_table(exc):
+            return None
+        raise
+
+
+def find_pending_post_session_id(user_id: int) -> int | None:
+    """Treat an absent imported mood schema as no pending legacy session."""
+
+    try:
+        return _core.find_pending_post_session_id(int(user_id))
+    except sqlite3.OperationalError as exc:
+        if _missing_mood_sessions_table(exc):
+            return None
+        raise
+
+
 def _sync_core_hooks() -> None:
     """Keep dependency injection attached to the stable public boundary.
 
@@ -108,7 +137,6 @@ async def complete_pre_score_and_send(
     )
     if resolved_session_id is None:
         return MoodTextFlowResult(False, "Сейчас нет активного ожидания оценки перед аудио.")
-
     session = _core.get_session(int(resolved_session_id))
     if session is None:
         return MoodTextFlowResult(False, "Не нашёл активную сессию оценки.")
@@ -128,7 +156,6 @@ async def complete_pre_score_and_send(
             delivered_platform=platform,
             transport="already_sent",
         )
-
     audio_lock = await asyncio.to_thread(
         acquire_delivery_lock,
         int(user_id),
@@ -166,7 +193,6 @@ async def complete_pre_score_and_send(
                 delivered_platform=platform,
                 transport="already_sent",
             )
-
         result = await _core.complete_pre_score_and_send(
             int(user_id),
             platform=platform,

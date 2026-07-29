@@ -52,7 +52,7 @@ jobs:
           python -m pip install --disable-pip-version-check pip==26.1.2
           python -m pip install --require-hashes -r requirements-dev.txt
 
-      - name: Gateway unit and runtime regression wall
+      - name: Polling gateway unit and runtime regression wall
         run: |
           set -o pipefail
           python -m pytest -q \
@@ -62,6 +62,7 @@ jobs:
             tests/test_runtime_clientplatform_managed_bot_gateway.py \
             tests/test_runtime_clientplatform_managed_bot_gateway_http.py \
             tests/test_handlers_clientplatform_managed_bot_entry.py \
+            tests/test_runtime_clientplatform_polling_entry.py \
             2>&1 | tee "$RUNNER_TEMP/clientplatform-bot-gateway-unit.log"
 
       - name: Two-connection PostgreSQL gateway matrix

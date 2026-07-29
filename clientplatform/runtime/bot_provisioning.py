@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 import os
 from typing import Protocol
-from urllib.parse import urljoin
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
@@ -31,23 +30,19 @@ class ManagedBotProvisioner(Protocol):
 
 
 def _public_base_url(value: str | None = None) -> str:
+    """Deprecated compatibility parser; Telegram no longer consumes this URL."""
+
     raw = str(
         value
         if value is not None
         else os.getenv("TELEGRAM_WEBHOOK_PUBLIC_BASE_URL", "")
     ).strip()
-    if not raw:
-        raise BotProvisioningVerificationFailed(
-            "telegram webhook public base URL is not configured"
-        )
-    if not raw.startswith("https://"):
-        raise BotProvisioningVerificationFailed(
-            "telegram webhook public base URL must use HTTPS"
-        )
-    return raw.rstrip("/") + "/"
+    return raw.rstrip("/") + "/" if raw else ""
 
 
 def _gateway_path_prefix(value: str | None = None) -> str:
+    """Deprecated compatibility parser for old records and runbooks."""
+
     raw = str(
         value
         if value is not None
@@ -58,16 +53,11 @@ def _gateway_path_prefix(value: str | None = None) -> str:
     ).strip()
     if not raw.startswith("/"):
         raw = "/" + raw
-    raw = raw.rstrip("/")
-    if not raw or "token" in raw.lower() or "secret" in raw.lower():
-        raise BotProvisioningVerificationFailed(
-            "managed bot gateway path prefix is unsafe"
-        )
-    return raw
+    return raw.rstrip("/") or "/clientplatform/managed-bots"
 
 
 class BotFatherTelegramProvisioner:
-    """Verify an existing BotFather bot and configure its tokenless gateway URL."""
+    """Verify an existing BotFather bot and prepare it for long polling."""
 
     def __init__(
         self,
@@ -79,8 +69,10 @@ class BotFatherTelegramProvisioner:
         self._credential_provider = (
             credential_provider or EnvironmentCredentialProvider()
         )
-        self._public_base_url = _public_base_url(public_base_url)
-        self._gateway_path_prefix = _gateway_path_prefix(gateway_path_prefix)
+        # Accepted only so old composition code and tests do not break during the
+        # transport migration. Neither value participates in Telegram ingress.
+        self._public_base_url_value = public_base_url
+        self._gateway_path_prefix_value = gateway_path_prefix
 
     async def provision(
         self,
@@ -90,18 +82,11 @@ class BotFatherTelegramProvisioner:
             raise BotProvisioningVerificationFailed(
                 "telegram bot credential reference is unavailable"
             )
-        if request.webhook_secret_reference is None:
-            raise BotProvisioningVerificationFailed(
-                "telegram webhook secret reference is unavailable"
-            )
         try:
             token = self._credential_provider.resolve(request.credential_reference)
-            webhook_secret = self._credential_provider.resolve(
-                request.webhook_secret_reference
-            )
         except SecretReferenceError:
             raise BotProvisioningVerificationFailed(
-                "managed bot secret reference cannot be resolved"
+                "managed bot credential reference cannot be resolved"
             ) from None
 
         bot = Bot(token=token)
@@ -126,28 +111,17 @@ class BotFatherTelegramProvisioner:
                 )
                 or request.display_name,
             )
-            webhook_url = urljoin(
-                self._public_base_url,
-                (
-                    f"/{self._gateway_path_prefix.lstrip('/')}/telegram/"
-                    f"{verified.external_bot_id}"
-                ),
-            )
-            configured = await bot.set_webhook(
-                url=webhook_url,
-                secret_token=webhook_secret,
-                drop_pending_updates=False,
-            )
-            if configured is not True:
+            removed = await bot.delete_webhook(drop_pending_updates=False)
+            if removed is not True:
                 raise BotProvisioningVerificationFailed(
-                    "Telegram did not confirm webhook configuration"
+                    "Telegram did not confirm webhook removal before polling"
                 )
             return verified
         except BotProvisioningVerificationFailed:
             raise
         except TelegramAPIError:
             raise BotProvisioningVerificationFailed(
-                "Telegram bot verification or webhook configuration failed"
+                "Telegram bot verification or polling preparation failed"
             ) from None
         except (ValueError, TypeError, AttributeError):
             raise BotProvisioningVerificationFailed(
@@ -157,13 +131,19 @@ class BotFatherTelegramProvisioner:
             await bot.session.close()
 
     async def rollback(self, request: ManagedBotProvisioningRequest) -> None:
+        """Keep webhook disabled when a database commit fails.
+
+        Polling itself has no remote registration to roll back. Deleting any
+        stale webhook is idempotent and preserves the polling-only invariant.
+        """
+
         if request.credential_reference is None:
             return
         try:
             token = self._credential_provider.resolve(request.credential_reference)
         except SecretReferenceError:
             log.exception(
-                "Managed bot provisioning rollback could not resolve credential reference",
+                "Managed bot polling rollback could not resolve credential reference",
                 extra={"provisioning_request_id": request.id},
             )
             return
@@ -172,7 +152,7 @@ class BotFatherTelegramProvisioner:
             await bot.delete_webhook(drop_pending_updates=False)
         except TelegramAPIError:
             log.exception(
-                "Managed bot provisioning webhook rollback failed",
+                "Managed bot polling rollback could not confirm webhook removal",
                 extra={"provisioning_request_id": request.id},
             )
         finally:

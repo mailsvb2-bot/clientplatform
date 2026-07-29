@@ -1,19 +1,13 @@
 from __future__ import annotations
 
 from typing import Protocol
-from urllib.parse import urljoin
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
 
-from clientplatform.domain.bot_provisioning import BotProvisioningVerificationFailed
 from clientplatform.domain.managed_bot_owner import (
     ManagedBotWebhookMaterial,
     ManagedBotWebhookOperationFailed,
-)
-from clientplatform.runtime.bot_provisioning import (
-    _gateway_path_prefix,
-    _public_base_url,
 )
 from clientplatform.runtime.secrets import (
     EnvironmentCredentialProvider,
@@ -22,13 +16,20 @@ from clientplatform.runtime.secrets import (
 
 
 class ManagedBotWebhookController(Protocol):
+    """Compatibility protocol for the managed bot remote transport boundary."""
+
     async def attach(self, material: ManagedBotWebhookMaterial) -> None: ...
 
     async def detach(self, material: ManagedBotWebhookMaterial) -> None: ...
 
 
 class TelegramManagedBotWebhookController:
-    """Synchronize a verified managed bot with the tokenless gateway URL."""
+    """Prepare or stop a verified managed Telegram bot for long polling.
+
+    The historical class name remains to avoid a broad API break. Both lifecycle
+    operations enforce that no Telegram webhook exists; the polling gateway owns
+    update consumption according to the local active/disabled/revoked state.
+    """
 
     def __init__(
         self,
@@ -51,38 +52,26 @@ class TelegramManagedBotWebhookController:
                 "managed bot credential reference cannot be resolved"
             ) from None
 
-    def _resolve_webhook_secret(self, material: ManagedBotWebhookMaterial) -> str:
+    async def _remove_webhook(self, material: ManagedBotWebhookMaterial) -> None:
+        token = self._resolve_token(material)
+        bot = Bot(token=token)
         try:
-            return self._credential_provider.resolve(
-                material.webhook_secret_reference
-            )
-        except SecretReferenceError:
+            removed = await bot.delete_webhook(drop_pending_updates=False)
+            if removed is not True:
+                raise ManagedBotWebhookOperationFailed(
+                    "Telegram did not confirm webhook removal for polling"
+                )
+        except ManagedBotWebhookOperationFailed:
+            raise
+        except TelegramAPIError:
             raise ManagedBotWebhookOperationFailed(
-                "managed bot webhook reference cannot be resolved"
+                "Telegram polling preparation failed"
             ) from None
-
-    def _webhook_url(self, material: ManagedBotWebhookMaterial) -> str:
-        try:
-            public_base_url = _public_base_url(self._public_base_url_value)
-            gateway_path_prefix = _gateway_path_prefix(
-                self._gateway_path_prefix_value
-            )
-        except BotProvisioningVerificationFailed:
-            raise ManagedBotWebhookOperationFailed(
-                "managed bot webhook route is not configured safely"
-            ) from None
-        return urljoin(
-            public_base_url,
-            (
-                f"/{gateway_path_prefix.lstrip('/')}/telegram/"
-                f"{material.external_bot_id}"
-            ),
-        )
+        finally:
+            await bot.session.close()
 
     async def attach(self, material: ManagedBotWebhookMaterial) -> None:
         token = self._resolve_token(material)
-        webhook_secret = self._resolve_webhook_secret(material)
-        webhook_url = self._webhook_url(material)
         bot = Bot(token=token)
         try:
             identity = await bot.get_me()
@@ -96,20 +85,16 @@ class TelegramManagedBotWebhookController:
                 raise ManagedBotWebhookOperationFailed(
                     "Telegram bot username no longer matches the managed route"
                 )
-            configured = await bot.set_webhook(
-                url=webhook_url,
-                secret_token=webhook_secret,
-                drop_pending_updates=False,
-            )
-            if configured is not True:
+            removed = await bot.delete_webhook(drop_pending_updates=False)
+            if removed is not True:
                 raise ManagedBotWebhookOperationFailed(
-                    "Telegram did not confirm webhook configuration"
+                    "Telegram did not confirm webhook removal for polling"
                 )
         except ManagedBotWebhookOperationFailed:
             raise
         except TelegramAPIError:
             raise ManagedBotWebhookOperationFailed(
-                "Telegram webhook configuration failed"
+                "Telegram polling activation failed"
             ) from None
         except (ValueError, TypeError, AttributeError):
             raise ManagedBotWebhookOperationFailed(
@@ -119,19 +104,4 @@ class TelegramManagedBotWebhookController:
             await bot.session.close()
 
     async def detach(self, material: ManagedBotWebhookMaterial) -> None:
-        token = self._resolve_token(material)
-        bot = Bot(token=token)
-        try:
-            removed = await bot.delete_webhook(drop_pending_updates=False)
-            if removed is not True:
-                raise ManagedBotWebhookOperationFailed(
-                    "Telegram did not confirm webhook removal"
-                )
-        except ManagedBotWebhookOperationFailed:
-            raise
-        except TelegramAPIError:
-            raise ManagedBotWebhookOperationFailed(
-                "Telegram webhook removal failed"
-            ) from None
-        finally:
-            await bot.session.close()
+        await self._remove_webhook(material)

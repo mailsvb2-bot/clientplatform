@@ -6,10 +6,12 @@ import hmac
 import json
 import logging
 import os
+import time
 from dataclasses import dataclass
 from typing import Any, Mapping
 
 from aiogram import Bot, Dispatcher
+from aiogram.exceptions import TelegramAPIError, TelegramConflictError
 from aiogram.types import Update
 from aiohttp import web
 
@@ -18,18 +20,16 @@ from clientplatform.application.bot_gateway import (
     bot_gateway_health_snapshot,
     claim_due_ingress_events,
     ensure_telegram_customer_link,
+    list_active_telegram_routes,
     mark_ingress_event_processed,
     reschedule_ingress_event,
-    resolve_telegram_route,
 )
 from clientplatform.domain.bot_gateway import (
     BotGatewayAdmissionRejected,
     BotGatewayError,
     BotGatewayLeaseLost,
-    BotGatewayReplayConflict,
     ClaimedIngressEvent,
     ManagedBotRoute,
-    ManagedBotRouteNotFound,
 )
 from clientplatform.runtime.secrets import (
     EnvironmentCredentialProvider,
@@ -53,20 +53,22 @@ def _env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
         value = int(raw)
     except ValueError:
         return default
-    if value < minimum or value > maximum:
-        return default
-    return value
+    return value if minimum <= value <= maximum else default
 
 
-def _env_float(name: str, default: float, *, minimum: float, maximum: float) -> float:
+def _env_float(
+    name: str,
+    default: float,
+    *,
+    minimum: float,
+    maximum: float,
+) -> float:
     raw = (os.getenv(name) or str(default)).strip()
     try:
         value = float(raw)
     except ValueError:
         return default
-    if value < minimum or value > maximum:
-        return default
-    return value
+    return value if minimum <= value <= maximum else default
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,9 +83,17 @@ class BotGatewayRuntimeConfig:
     per_minute_limit: int
     queue_limit: int
     max_payload_bytes: int
+    poll_timeout_seconds: int = 20
+    reconcile_interval_seconds: float = 2.0
+
+    @property
+    def transport(self) -> str:
+        return "polling"
 
     @property
     def telegram_route_path(self) -> str:
+        """Compatibility-only path; no Telegram HTTP route is registered."""
+
         return f"{self.path_prefix}/telegram/{{external_bot_id}}"
 
 
@@ -148,11 +158,23 @@ def bot_gateway_runtime_config() -> BotGatewayRuntimeConfig:
             minimum=1024,
             maximum=1_048_576,
         ),
+        poll_timeout_seconds=_env_int(
+            "CLIENTPLATFORM_BOT_GATEWAY_POLL_TIMEOUT_SEC",
+            20,
+            minimum=1,
+            maximum=50,
+        ),
+        reconcile_interval_seconds=_env_float(
+            "CLIENTPLATFORM_BOT_GATEWAY_RECONCILE_INTERVAL_SEC",
+            2.0,
+            minimum=0.1,
+            maximum=300.0,
+        ),
     )
 
 
 class ManagedBotGatewayRuntime:
-    """One durable ingress owner for the whole managed Telegram bot fleet."""
+    """Durable long-polling owner for the managed Telegram bot fleet."""
 
     def __init__(
         self,
@@ -164,7 +186,9 @@ class ManagedBotGatewayRuntime:
     ) -> None:
         self.config = config or bot_gateway_runtime_config()
         self._dispatcher = dispatcher
-        self._credential_provider = credential_provider or EnvironmentCredentialProvider()
+        self._credential_provider = (
+            credential_provider or EnvironmentCredentialProvider()
+        )
         workflow_manager = dispatcher.workflow_data.get("task_manager")
         self._task_manager = (
             task_manager
@@ -174,28 +198,38 @@ class ManagedBotGatewayRuntime:
             else None
         )
         self._task: asyncio.Task[None] | None = None
-        self._running = False
+        self._pollers: dict[str, asyncio.Task[None]] = {}
+        self._routes: dict[str, ManagedBotRoute] = {}
         self._bots: dict[str, tuple[str, Bot]] = {}
+        self._running = False
         self._database_snapshot: dict[str, int] = {}
         self._iterations = 0
+        self._polled = 0
+        self._admitted = 0
+        self._duplicates = 0
         self._processed = 0
         self._retried = 0
         self._dead = 0
+        self._polling_conflicts = 0
         self._last_error: str | None = None
+        self._last_reconcile = 0.0
 
     def register_route(self, app: web.Application) -> None:
+        """Expose health state only; Telegram POST routes are absent."""
+
         app["clientplatform_bot_gateway_runtime"] = self
-        app.router.add_post(self.config.telegram_route_path, managed_bot_telegram_webhook)
 
     def start(self) -> bool:
         if not self.config.enabled or self._running:
             return False
         if self._task_manager is None:
-            raise RuntimeError("Managed Bot Gateway requires the canonical TaskManager")
+            raise RuntimeError(
+                "Managed Bot Gateway requires the canonical TaskManager"
+            )
         self._running = True
         self._task = self._task_manager.create(
             self._run(),
-            name="clientplatform-managed-bot-gateway",
+            name="clientplatform-managed-bot-polling-gateway",
         )
         return True
 
@@ -209,55 +243,150 @@ class ManagedBotGatewayRuntime:
                 await task
             except asyncio.CancelledError:
                 pass
-        bots = list(self._bots.values())
-        self._bots.clear()
-        for _, bot in bots:
-            await bot.session.close()
+        for managed_bot_id in list(self._pollers):
+            await self._stop_poller(managed_bot_id)
+        self._routes.clear()
 
-    async def handle_webhook(self, request: web.Request) -> web.Response:
-        external_bot_id = (request.match_info.get("external_bot_id") or "").strip()
-        try:
-            route = await asyncio.to_thread(
-                resolve_telegram_route,
-                external_bot_id=external_bot_id,
-            )
-            expected_secret = self._credential_provider.resolve(
-                route.webhook_secret_reference
-            )
-        except (ManagedBotRouteNotFound, SecretReferenceError):
-            raise web.HTTPNotFound(text="managed bot route not found") from None
+    async def handle_webhook(self, _request: web.Request) -> web.Response:
+        raise web.HTTPNotFound(
+            text="Telegram webhook ingress is disabled; use polling"
+        )
 
-        actual_secret = (
-            request.headers.get("X-Telegram-Bot-Api-Secret-Token") or ""
-        ).strip()
-        if not actual_secret or not hmac.compare_digest(actual_secret, expected_secret):
-            raise web.HTTPNotFound(text="managed bot route not found")
-        try:
-            payload = await request.json()
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            raise web.HTTPBadRequest(text="invalid Telegram JSON") from None
-        if not isinstance(payload, Mapping):
-            raise web.HTTPBadRequest(text="Telegram update must be an object")
-        update_id = payload.get("update_id")
-        if isinstance(update_id, bool) or not isinstance(update_id, int):
-            raise web.HTTPBadRequest(text="Telegram update_id is required")
-        try:
-            admitted = await asyncio.to_thread(
-                admit_telegram_update,
-                route=route,
-                provider_update_id=update_id,
-                payload=payload,
-                per_minute_limit=self.config.per_minute_limit,
-                queue_limit=self.config.queue_limit,
-                max_payload_bytes=self.config.max_payload_bytes,
+    async def _stop_poller(self, managed_bot_id: str) -> None:
+        task = self._pollers.pop(managed_bot_id, None)
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception:  # validator: allow-wide-except
+                log.exception(
+                    "Managed Telegram bot poller stopped after failure",
+                    extra={"managed_bot_id": managed_bot_id},
+                )
+        cached = self._bots.pop(managed_bot_id, None)
+        if cached is not None:
+            await cached[1].session.close()
+        self._routes.pop(managed_bot_id, None)
+
+    async def _reconcile_pollers(self) -> None:
+        routes = await asyncio.to_thread(list_active_telegram_routes)
+        active = {route.managed_bot_id: route for route in routes}
+
+        for managed_bot_id, task in list(self._pollers.items()):
+            route = active.get(managed_bot_id)
+            known = self._routes.get(managed_bot_id)
+            changed = route is not None and known is not None and route != known
+            if route is None or task.done() or changed:
+                await self._stop_poller(managed_bot_id)
+
+        if not self._running:
+            return
+        if self._task_manager is None:
+            raise RuntimeError("Managed Bot Gateway lost the canonical TaskManager")
+        for managed_bot_id, route in active.items():
+            if managed_bot_id in self._pollers:
+                continue
+            self._routes[managed_bot_id] = route
+            self._pollers[managed_bot_id] = self._task_manager.create(
+                self._poll_route(route),
+                name=f"clientplatform-managed-bot-poll-{managed_bot_id}",
             )
-        except BotGatewayReplayConflict:
-            raise web.HTTPConflict(text="conflicting Telegram replay") from None
-        except BotGatewayAdmissionRejected:
-            raise web.HTTPTooManyRequests(text="managed bot ingress unavailable") from None
-        return web.json_response({"ok": True, "duplicate": admitted.duplicate})
+
+    async def _poll_route(self, route: ManagedBotRoute) -> None:
+        bot = await self._bot_for(route)
+        backoff = 1.0
+        offset: int | None = None
+        try:
+            await self._prepare_polling_bot(bot, route)
+            while self._running and self._routes.get(route.managed_bot_id) == route:
+                try:
+                    updates = await bot.get_updates(
+                        offset=offset,
+                        limit=100,
+                        timeout=self.config.poll_timeout_seconds,
+                        allowed_updates=[],
+                    )
+                    backoff = 1.0
+                    for update in updates:
+                        payload = _update_payload(update)
+                        update_id = int(payload["update_id"])
+                        admitted = await asyncio.to_thread(
+                            admit_telegram_update,
+                            route=route,
+                            provider_update_id=update_id,
+                            payload=payload,
+                            per_minute_limit=self.config.per_minute_limit,
+                            queue_limit=self.config.queue_limit,
+                            max_payload_bytes=self.config.max_payload_bytes,
+                        )
+                        offset = update_id + 1
+                        self._polled += 1
+                        if admitted.duplicate:
+                            self._duplicates += 1
+                        else:
+                            self._admitted += 1
+                except BotGatewayAdmissionRejected:
+                    self._last_error = "polling_admission_rejected"
+                    log.warning(
+                        "Managed Telegram polling admission rejected",
+                        extra={"managed_bot_id": route.managed_bot_id},
+                    )
+                    await asyncio.sleep(min(backoff, 10.0))
+                    backoff = min(backoff * 2, 30.0)
+                except TelegramConflictError:
+                    self._polling_conflicts += 1
+                    self._last_error = "polling_conflict"
+                    log.error(
+                        "Managed Telegram polling conflict: another process consumes this bot",
+                        extra={"managed_bot_id": route.managed_bot_id},
+                    )
+                    await asyncio.sleep(min(backoff, 30.0))
+                    backoff = min(backoff * 2, 60.0)
+                except TelegramAPIError:
+                    self._last_error = "polling_provider_error"
+                    log.warning(
+                        "Managed Telegram polling provider error",
+                        extra={"managed_bot_id": route.managed_bot_id},
+                        exc_info=True,
+                    )
+                    await asyncio.sleep(min(backoff, 30.0))
+                    backoff = min(backoff * 2, 60.0)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # validator: allow-wide-except
+            self._last_error = "poller_start_failed"
+            log.exception(
+                "Managed Telegram bot poller failed to start",
+                extra={"managed_bot_id": route.managed_bot_id},
+            )
+
+    @staticmethod
+    async def _prepare_polling_bot(bot: Bot, route: ManagedBotRoute) -> None:
+        removed = await bot.delete_webhook(drop_pending_updates=False)
+        if removed is not True:
+            raise RuntimeError(
+                "Telegram did not confirm webhook removal before polling"
+            )
+        identity = await bot.get_me()
+        if str(identity.id) != route.external_bot_id:
+            raise RuntimeError(
+                "Telegram polling identity does not match managed route"
+            )
+        expected = str(route.username or "").strip().lower()
+        observed = str(identity.username or "").strip().lower()
+        if expected and observed != expected:
+            raise RuntimeError(
+                "Telegram polling username does not match managed route"
+            )
 
     async def run_tick(self) -> int:
+        now = time.monotonic()
+        if now - self._last_reconcile >= self.config.reconcile_interval_seconds:
+            await self._reconcile_pollers()
+            self._last_reconcile = now
+
         claimed = await asyncio.to_thread(
             claim_due_ingress_events,
             limit=self.config.batch_size,
@@ -293,7 +422,7 @@ class ManagedBotGatewayRuntime:
                     self.run_tick(),
                     timeout=self.config.tick_timeout_seconds,
                 )
-                if self._last_error != "gateway_health_snapshot_failed":
+                if self._last_error == "gateway_health_snapshot_failed":
                     self._last_error = None
             except asyncio.TimeoutError:
                 self._last_error = "gateway_tick_timeout"
@@ -309,7 +438,9 @@ class ManagedBotGatewayRuntime:
                 raise ValueError("managed bot ingress payload is unavailable")
             payload = json.loads(item.event.payload_json)
             if not isinstance(payload, dict):
-                raise ValueError("managed bot ingress payload must be an object")
+                raise ValueError(
+                    "managed bot ingress payload must be an object"
+                )
             actor = _telegram_actor(payload)
             if actor is not None:
                 await asyncio.to_thread(
@@ -321,7 +452,10 @@ class ManagedBotGatewayRuntime:
                 )
             bot = await self._bot_for(item.route)
             try:
-                update = Update.model_validate(payload, context={"bot": bot})
+                update = Update.model_validate(
+                    payload,
+                    context={"bot": bot},
+                )
             except AttributeError:
                 update = Update(**payload)
             await self._dispatcher.feed_webhook_update(
@@ -357,39 +491,68 @@ class ManagedBotGatewayRuntime:
 
     async def _bot_for(self, route: ManagedBotRoute) -> Bot:
         token = self._credential_provider.resolve(route.credential_reference)
-        token_digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
         cached = self._bots.get(route.managed_bot_id)
-        if cached is not None and hmac.compare_digest(cached[0], token_digest):
+        if cached is not None and hmac.compare_digest(cached[0], digest):
             return cached[1]
         if cached is not None:
             await cached[1].session.close()
         bot = Bot(token=token)
-        self._bots[route.managed_bot_id] = (token_digest, bot)
+        self._bots[route.managed_bot_id] = (digest, bot)
         return bot
 
     def health_snapshot(self) -> dict[str, Any]:
         return {
             "enabled": self.config.enabled,
             "running": self._running,
+            "transport": "polling",
+            "active_pollers": sum(
+                1 for task in self._pollers.values() if not task.done()
+            ),
             "iterations": self._iterations,
+            "polled": self._polled,
+            "admitted": self._admitted,
+            "duplicates": self._duplicates,
             "processed": self._processed,
             "retried": self._retried,
             "dead": self._dead,
+            "polling_conflicts": self._polling_conflicts,
             "last_error": self._last_error,
             **self._database_snapshot,
         }
 
 
-async def managed_bot_telegram_webhook(request: web.Request) -> web.Response:
-    runtime = request.app.get("clientplatform_bot_gateway_runtime")
-    if not isinstance(runtime, ManagedBotGatewayRuntime):
-        raise web.HTTPServiceUnavailable(text="managed bot gateway is unavailable")
-    return await runtime.handle_webhook(request)
+async def managed_bot_telegram_webhook(
+    _request: web.Request,
+) -> web.Response:
+    raise web.HTTPNotFound(
+        text="Telegram webhook ingress is disabled; use polling"
+    )
 
 
-def _telegram_actor(payload: Mapping[str, Any]) -> tuple[int, str | None, str | None] | None:
+def _update_payload(update: Any) -> dict[str, Any]:
+    if isinstance(update, Mapping):
+        payload = dict(update)
+    elif hasattr(update, "model_dump"):
+        payload = update.model_dump(mode="json", exclude_none=True)
+    else:
+        raise TypeError("Telegram polling update cannot be serialized")
+    update_id = payload.get("update_id")
+    if isinstance(update_id, bool) or not isinstance(update_id, int):
+        raise ValueError("Telegram polling update_id is required")
+    return payload
+
+
+def _telegram_actor(
+    payload: Mapping[str, Any],
+) -> tuple[int, str | None, str | None] | None:
     actor: Any = None
-    for key in ("message", "edited_message", "channel_post", "edited_channel_post"):
+    for key in (
+        "message",
+        "edited_message",
+        "channel_post",
+        "edited_channel_post",
+    ):
         candidate = payload.get(key)
         if isinstance(candidate, Mapping):
             actor = candidate.get("from")
@@ -407,7 +570,9 @@ def _telegram_actor(payload: Mapping[str, Any]) -> tuple[int, str | None, str | 
     username = actor.get("username")
     first_name = str(actor.get("first_name") or "").strip()
     last_name = str(actor.get("last_name") or "").strip()
-    display_name = " ".join(part for part in (first_name, last_name) if part) or None
+    display_name = " ".join(
+        part for part in (first_name, last_name) if part
+    ) or None
     return raw_id, None if username is None else str(username), display_name
 
 
