@@ -6,6 +6,7 @@ from clientplatform.domain.bot_provisioning import (
     BotProvisioningStatus,
     BotProvisioningVerificationFailed,
     ManagedBotProvisioningRequest,
+    VerifiedTelegramBot,
 )
 from clientplatform.domain.tenancy import TenantContext
 from clientplatform.infrastructure.bot_provisioning_repository import (
@@ -104,7 +105,7 @@ def _complete_verification(
     *,
     actor: TenantContext,
     lease: ProvisioningVerificationLease,
-    verified_bot: object,
+    verified_bot: VerifiedTelegramBot,
 ) -> ManagedBotProvisioningRequest:
     with get_db() as conn:
         return BotProvisioningRepository(conn).complete_verified(
