@@ -61,6 +61,7 @@ jobs:
             tests/test_clientplatform_bot_gateway_preflight.py \
             tests/test_runtime_clientplatform_managed_bot_gateway.py \
             tests/test_runtime_clientplatform_managed_bot_gateway_http.py \
+            tests/test_handlers_clientplatform_managed_bot_entry.py \
             2>&1 | tee "$RUNNER_TEMP/clientplatform-bot-gateway-unit.log"
 
       - name: Two-connection PostgreSQL gateway matrix
