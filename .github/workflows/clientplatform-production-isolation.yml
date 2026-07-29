@@ -40,6 +40,7 @@ jobs:
       BOT_TOKEN: ci-bot-token-material
       TELEGRAM_TRANSPORT: polling
       TELEGRAM_WEBHOOK_ENABLED: "0"
+      CLIENTPLATFORM_BOT_GATEWAY_ENABLED: "0"
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
@@ -67,10 +68,12 @@ jobs:
       - name: Production isolation contract tests
         run: |
           set -o pipefail
-          python -m unittest -v tests/test_clientplatform_production_isolation.py \
+          python -m unittest -v \
+            tests/test_clientplatform_production_isolation.py \
+            tests/test_clientplatform_bot_gateway_preflight.py \
             2>&1 | tee "$RUNNER_TEMP/clientplatform-production-isolation-tests.log"
 
-      - name: Validate systemd production preflight
+      - name: Validate systemd production preflights
         run: |
           cat > "$RUNNER_TEMP/clientplatform-production.env" <<'EOF'
           APP_ENV=prod
@@ -106,6 +109,17 @@ jobs:
           MESSENGER_PUBLIC_BASE_URL=https://clientplatform.production.internal
           PAYMENT_PUBLIC_BASE_URL=https://clientplatform.production.internal
           PRIVACY_EXPORT_PUBLIC_BASE_URL=https://clientplatform.production.internal
+          HTTP_INGRESS_MAX_BODY_BYTES=1048576
+          CLIENTPLATFORM_BOT_GATEWAY_ENABLED=1
+          CLIENTPLATFORM_BOT_GATEWAY_PATH_PREFIX=/clientplatform/managed-bots
+          CLIENTPLATFORM_BOT_GATEWAY_BATCH_SIZE=10
+          CLIENTPLATFORM_BOT_GATEWAY_INTERVAL_SEC=0.5
+          CLIENTPLATFORM_BOT_GATEWAY_TICK_TIMEOUT_SEC=30
+          CLIENTPLATFORM_BOT_GATEWAY_LOCK_TTL_SEC=300
+          CLIENTPLATFORM_BOT_GATEWAY_MAX_ATTEMPTS=5
+          CLIENTPLATFORM_BOT_GATEWAY_PER_BOT_PER_MINUTE=120
+          CLIENTPLATFORM_BOT_GATEWAY_PER_BOT_QUEUE_LIMIT=1000
+          CLIENTPLATFORM_BOT_GATEWAY_MAX_PAYLOAD_BYTES=262144
           HEALTHCHECK_ENABLED=1
           HEALTHCHECK_HOST=127.0.0.1
           HEALTHCHECK_PORT=8182
@@ -137,6 +151,9 @@ jobs:
           python scripts/clientplatform_production_preflight.py \
             --env-file "$RUNNER_TEMP/clientplatform-production.env" \
             2>&1 | tee "$RUNNER_TEMP/clientplatform-production-preflight.log"
+          python scripts/clientplatform_bot_gateway_preflight.py \
+            --env-file "$RUNNER_TEMP/clientplatform-production.env" \
+            2>&1 | tee "$RUNNER_TEMP/clientplatform-bot-gateway-preflight.log"
 
       - name: Validate Docker build and Compose topology
         env:
@@ -177,6 +194,11 @@ jobs:
           init_db()
           print("CLIENTPLATFORM_POSTGRES_SCHEMA_OK")
           PY
+          PGPASSWORD=ci-app-password psql \
+            --host 127.0.0.1 --username clientplatform_app --dbname clientplatform_ci \
+            --tuples-only --no-align --set ON_ERROR_STOP=1 \
+            --command "SELECT to_regclass('public.managed_bots') IS NOT NULL AND to_regclass('public.bot_gateway_ingress_events') IS NOT NULL" \
+            | grep -Fx true
 
       - name: Create backup as application role and prove admin-only restore
         env:
@@ -191,6 +213,9 @@ jobs:
             2>&1 | tee "$RUNNER_TEMP/clientplatform-backup.log"
           DUMP="$(find "$CLIENTPLATFORM_BACKUP_DIR" -name 'clientplatform-*.dump' -type f | head -1)"
           test -n "$DUMP"
+          pg_restore --list "$DUMP" | grep -E 'TABLE DATA public (managed_bots|bot_gateway_ingress_events)' \
+            | tee "$RUNNER_TEMP/clientplatform-gateway-dump-list.log"
+          test "$(wc -l < "$RUNNER_TEMP/clientplatform-gateway-dump-list.log")" -eq 2
           python scripts/clientplatform_postgres_backup.py restore-drill "$DUMP" \
             2>&1 | tee "$RUNNER_TEMP/clientplatform-restore-drill.log"
 
@@ -202,8 +227,10 @@ jobs:
           path: |
             ${{ runner.temp }}/clientplatform-production-isolation-tests.log
             ${{ runner.temp }}/clientplatform-production-preflight.log
+            ${{ runner.temp }}/clientplatform-bot-gateway-preflight.log
             ${{ runner.temp }}/clientplatform-compose-config.yml
             ${{ runner.temp }}/clientplatform-backup.log
+            ${{ runner.temp }}/clientplatform-gateway-dump-list.log
             ${{ runner.temp }}/clientplatform-restore-drill.log
             ${{ runner.temp }}/clientplatform-backups/*.sha256
             ${{ runner.temp }}/clientplatform-backups/*.json
