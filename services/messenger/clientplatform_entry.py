@@ -103,6 +103,19 @@ def _entry_text(*, platform: str, accesses: list[object]) -> str:
     )
 
 
+def _normalized_business_name(value: object) -> str:
+    return " ".join(str(value or "").strip().casefold().replace("ё", "е").split())
+
+
+def _existing_business(accesses: list[object], name: str) -> object | None:
+    expected = _normalized_business_name(name)
+    for access in accesses:
+        business = getattr(access, "business", None)
+        if _normalized_business_name(getattr(business, "name", "")) == expected:
+            return access
+    return None
+
+
 def handle_clientplatform_entry(
     user_id: int,
     *,
@@ -131,6 +144,7 @@ def handle_clientplatform_entry(
     )
     canonical_user_id = int(entry.user_id)
 
+    accesses = list(list_accessible_businesses(user_id=canonical_user_id))
     if command.action == "create_business":
         if not command.value:
             return canonical_user_id, [
@@ -138,6 +152,17 @@ def handle_clientplatform_entry(
                     text=(
                         "Напишите название после слова «бизнес».\n\n"
                         "Например: бизнес Автосервис Север"
+                    )
+                )
+            ]
+        existing = _existing_business(accesses, command.value)
+        if existing is not None:
+            existing_name = str(existing.business.name)
+            return canonical_user_id, [
+                MessengerReply(
+                    text=(
+                        f"Рабочее пространство «{existing_name}» уже существует.\n\n"
+                        "Отправьте start, чтобы открыть вход ClientPlatform."
                     )
                 )
             ]
@@ -164,9 +189,8 @@ def handle_clientplatform_entry(
             )
         ]
 
-    accesses = list_accessible_businesses(user_id=canonical_user_id)
     return canonical_user_id, [
-        MessengerReply(text=_entry_text(platform=platform, accesses=list(accesses)))
+        MessengerReply(text=_entry_text(platform=platform, accesses=accesses))
     ]
 
 
