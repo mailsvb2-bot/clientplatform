@@ -68,6 +68,19 @@ class ClientPlatformManagedBotLifecycleTests(unittest.TestCase):
             ),
         )
 
+    @staticmethod
+    def _payload(update_id: int) -> dict[str, object]:
+        return {
+            "update_id": update_id,
+            "message": {
+                "message_id": update_id,
+                "date": 1_700_000_000,
+                "chat": {"id": 5001, "type": "private"},
+                "from": {"id": 5001, "is_bot": False, "first_name": "Иван"},
+                "text": "/start",
+            },
+        }
+
     def test_disable_allows_replacement_and_blocks_old_reactivation(self) -> None:
         disabled = self.connections.disable_managed_bot(
             actor=self.owner,
@@ -89,6 +102,34 @@ class ClientPlatformManagedBotLifecycleTests(unittest.TestCase):
                 actor=self.owner,
                 managed_bot_id=self.first.id,
             )
+
+    def test_disable_terminates_queued_events_and_clears_payload(self) -> None:
+        route = self.gateway.resolve_telegram_route(
+            external_bot_id=self.first.external_bot_id
+        )
+        admitted = self.gateway.admit_telegram_update(
+            route=route,
+            provider_update_id=1,
+            payload=self._payload(1),
+        )
+        self.assertIsNotNone(admitted.event.payload_json)
+        self.connections.disable_managed_bot(
+            actor=self.owner,
+            managed_bot_id=self.first.id,
+        )
+        event = self.conn.execute(
+            """
+            SELECT status, payload_json, lock_token, last_error_code, dead_at
+            FROM bot_gateway_ingress_events
+            WHERE id=?
+            """,
+            (admitted.event.id,),
+        ).fetchone()
+        self.assertEqual(event["status"], "dead")
+        self.assertIsNone(event["payload_json"])
+        self.assertIsNone(event["lock_token"])
+        self.assertEqual(event["last_error_code"], "managed_bot_disabled")
+        self.assertIsNotNone(event["dead_at"])
 
     def test_disabled_bot_can_be_reactivated_when_no_replacement_exists(self) -> None:
         self.connections.disable_managed_bot(
