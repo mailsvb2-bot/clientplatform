@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import hmac
 import json
 import logging
@@ -24,6 +25,7 @@ from clientplatform.application.bot_gateway import (
 from clientplatform.domain.bot_gateway import (
     BotGatewayAdmissionRejected,
     BotGatewayError,
+    BotGatewayLeaseLost,
     BotGatewayReplayConflict,
     ClaimedIngressEvent,
     ManagedBotRoute,
@@ -33,6 +35,7 @@ from clientplatform.runtime.secrets import (
     EnvironmentCredentialProvider,
     SecretReferenceError,
 )
+from core.task_manager import TaskManager
 
 log = logging.getLogger(__name__)
 
@@ -157,13 +160,23 @@ class ManagedBotGatewayRuntime:
         dispatcher: Dispatcher,
         config: BotGatewayRuntimeConfig | None = None,
         credential_provider: EnvironmentCredentialProvider | None = None,
+        task_manager: TaskManager | None = None,
     ) -> None:
         self.config = config or bot_gateway_runtime_config()
         self._dispatcher = dispatcher
         self._credential_provider = credential_provider or EnvironmentCredentialProvider()
+        workflow_manager = dispatcher.workflow_data.get("task_manager")
+        self._task_manager = (
+            task_manager
+            if task_manager is not None
+            else workflow_manager
+            if isinstance(workflow_manager, TaskManager)
+            else None
+        )
         self._task: asyncio.Task[None] | None = None
         self._running = False
         self._bots: dict[str, tuple[str, Bot]] = {}
+        self._database_snapshot: dict[str, int] = {}
         self._iterations = 0
         self._processed = 0
         self._retried = 0
@@ -177,8 +190,10 @@ class ManagedBotGatewayRuntime:
     def start(self) -> bool:
         if not self.config.enabled or self._running:
             return False
+        if self._task_manager is None:
+            raise RuntimeError("Managed Bot Gateway requires the canonical TaskManager")
         self._running = True
-        self._task = asyncio.create_task(
+        self._task = self._task_manager.create(
             self._run(),
             name="clientplatform-managed-bot-gateway",
         )
@@ -216,7 +231,7 @@ class ManagedBotGatewayRuntime:
             request.headers.get("X-Telegram-Bot-Api-Secret-Token") or ""
         ).strip()
         if not actual_secret or not hmac.compare_digest(actual_secret, expected_secret):
-            raise web.HTTPForbidden(text="bad managed bot secret")
+            raise web.HTTPNotFound(text="managed bot route not found")
         try:
             payload = await request.json()
         except (json.JSONDecodeError, UnicodeDecodeError):
@@ -238,15 +253,9 @@ class ManagedBotGatewayRuntime:
             )
         except BotGatewayReplayConflict:
             raise web.HTTPConflict(text="conflicting Telegram replay") from None
-        except BotGatewayAdmissionRejected as exc:
-            raise web.HTTPTooManyRequests(text=str(exc)) from None
-        return web.json_response(
-            {
-                "ok": True,
-                "duplicate": admitted.duplicate,
-                "event_id": admitted.event.id,
-            }
-        )
+        except BotGatewayAdmissionRejected:
+            raise web.HTTPTooManyRequests(text="managed bot ingress unavailable") from None
+        return web.json_response({"ok": True, "duplicate": admitted.duplicate})
 
     async def run_tick(self) -> int:
         claimed = await asyncio.to_thread(
@@ -255,8 +264,26 @@ class ManagedBotGatewayRuntime:
             lock_ttl_seconds=self.config.lock_ttl_seconds,
         )
         for item in claimed:
-            await self._process_item(item)
+            try:
+                await self._process_item(item)
+            except BotGatewayLeaseLost:
+                log.warning(
+                    "Managed bot ingress lease was lost",
+                    extra={"event_id": item.event.id},
+                )
+            except Exception:  # validator: allow-wide-except
+                log.exception(
+                    "Managed bot ingress item failed outside retry transition",
+                    extra={"event_id": item.event.id},
+                )
         self._iterations += 1
+        try:
+            self._database_snapshot = await asyncio.to_thread(
+                bot_gateway_health_snapshot
+            )
+        except (OSError, RuntimeError, ValueError, TypeError, AttributeError, KeyError):
+            self._last_error = "gateway_health_snapshot_failed"
+            log.exception("Managed bot gateway health snapshot failed")
         return len(claimed)
 
     async def _run(self) -> None:
@@ -266,7 +293,8 @@ class ManagedBotGatewayRuntime:
                     self.run_tick(),
                     timeout=self.config.tick_timeout_seconds,
                 )
-                self._last_error = None
+                if self._last_error != "gateway_health_snapshot_failed":
+                    self._last_error = None
             except asyncio.TimeoutError:
                 self._last_error = "gateway_tick_timeout"
                 log.error("Managed bot gateway tick timed out")
@@ -329,17 +357,17 @@ class ManagedBotGatewayRuntime:
 
     async def _bot_for(self, route: ManagedBotRoute) -> Bot:
         token = self._credential_provider.resolve(route.credential_reference)
+        token_digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
         cached = self._bots.get(route.managed_bot_id)
-        if cached is not None and hmac.compare_digest(cached[0], token):
+        if cached is not None and hmac.compare_digest(cached[0], token_digest):
             return cached[1]
         if cached is not None:
             await cached[1].session.close()
         bot = Bot(token=token)
-        self._bots[route.managed_bot_id] = (token, bot)
+        self._bots[route.managed_bot_id] = (token_digest, bot)
         return bot
 
     def health_snapshot(self) -> dict[str, Any]:
-        database = bot_gateway_health_snapshot() if self.config.enabled else {}
         return {
             "enabled": self.config.enabled,
             "running": self._running,
@@ -348,7 +376,7 @@ class ManagedBotGatewayRuntime:
             "retried": self._retried,
             "dead": self._dead,
             "last_error": self._last_error,
-            **database,
+            **self._database_snapshot,
         }
 
 
