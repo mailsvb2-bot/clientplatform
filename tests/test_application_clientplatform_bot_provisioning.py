@@ -11,6 +11,7 @@ from clientplatform.domain.bot_provisioning import (
     BotProvisioningVerificationFailed,
     VerifiedTelegramBot,
 )
+from clientplatform.domain.connections import ConnectionInvariantViolation
 from clientplatform.infrastructure.safe_connection_repository import ConnectionRepository
 from clientplatform.infrastructure.safe_tenancy_repository import TenancyRepository
 from services.db.schema import (
@@ -27,7 +28,7 @@ class _FakeProvisioner:
         self,
         *,
         verified: VerifiedTelegramBot | None = None,
-        error: BaseException | None = None,
+        error: Exception | None = None,
     ) -> None:
         self.verified = verified or VerifiedTelegramBot(
             external_bot_id="900001",
@@ -76,7 +77,7 @@ class ClientPlatformBotProvisioningApplicationTests(
         try:
             yield self.conn
             self.conn.commit()
-        except BaseException:
+        except Exception:
             self.conn.rollback()
             raise
 
@@ -189,7 +190,7 @@ class ClientPlatformBotProvisioningApplicationTests(
                     username="practice_helper_bot",
                 )
             )
-            with self.assertRaises(Exception):
+            with self.assertRaises(ConnectionInvariantViolation):
                 await application.finalize_botfather_provisioning(
                     actor=self.owner,
                     request_id=request.id,
