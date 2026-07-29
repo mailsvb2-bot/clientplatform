@@ -93,6 +93,33 @@ def _validate_admin_ids(env: Mapping[str, str], errors: list[str]) -> None:
         errors.append("ADMIN_IDS must contain positive numeric Telegram IDs")
 
 
+def _validate_identity_and_secrets(env: Mapping[str, str], errors: list[str]) -> None:
+    if _value(env, "CLIENTPLATFORM_DEPLOYMENT_ID") != "clientplatform-production":
+        errors.append("CLIENTPLATFORM_DEPLOYMENT_ID must equal clientplatform-production")
+    if _value(env, "CLIENTPLATFORM_ENVIRONMENT").lower() != "production":
+        errors.append("CLIENTPLATFORM_ENVIRONMENT must equal production")
+    if _value(env, "APP_ENV").lower() not in {"prod", "production"}:
+        errors.append("APP_ENV must be prod")
+    _require(env, "BOT_TOKEN", errors)
+    _validate_admin_ids(env, errors)
+    username = _require(
+        env, "CLIENTPLATFORM_PRODUCTION_BOT_USERNAME", errors
+    ).lower().lstrip("@")
+    if any(marker in username for marker in ("staging", "stage", "test")):
+        errors.append("production bot username must not identify a staging/test bot")
+    forbidden = sorted(
+        name
+        for name, value in env.items()
+        if value
+        and (
+            name.startswith("CLIENTPLATFORM_STAGING_")
+            or name.endswith("_STAGING_TOKEN")
+        )
+    )
+    if forbidden:
+        errors.append("staging-only secrets/configuration are present in production environment")
+
+
 def _validate_database(env: Mapping[str, str], errors: list[str]) -> None:
     if _value(env, "METRO_DB_ENGINE").lower() not in {"postgres", "postgresql", "pg"}:
         errors.append("METRO_DB_ENGINE must be postgres")
@@ -123,7 +150,9 @@ def _validate_bind_hosts(env: Mapping[str, str], errors: list[str]) -> None:
     hosts = {
         "MESSENGER_WEBHOOK_HOST": _value(env, "MESSENGER_WEBHOOK_HOST"),
         "HEALTHCHECK_HOST": _value(env, "HEALTHCHECK_HOST"),
-        "CLIENTPLATFORM_MEDIA_GATEWAY_HOST": _value(env, "CLIENTPLATFORM_MEDIA_GATEWAY_HOST"),
+        "CLIENTPLATFORM_MEDIA_GATEWAY_HOST": _value(
+            env, "CLIENTPLATFORM_MEDIA_GATEWAY_HOST"
+        ),
     }
     if mode == "systemd":
         for name, host in hosts.items():
@@ -139,9 +168,36 @@ def _validate_bind_hosts(env: Mapping[str, str], errors: list[str]) -> None:
             errors.append(f"{name} must bind inside the container network in container mode")
 
 
+def _validate_telegram_polling(env: Mapping[str, str], errors: list[str]) -> None:
+    if _value(env, "TELEGRAM_TRANSPORT").lower() != "polling":
+        errors.append("TELEGRAM_TRANSPORT must be polling")
+    run_mode = _value(env, "RUN_MODE").lower()
+    if run_mode and run_mode != "polling":
+        errors.append("RUN_MODE must be polling when configured")
+    if _truthy(env, "TELEGRAM_WEBHOOK_ENABLED"):
+        errors.append("TELEGRAM_WEBHOOK_ENABLED must be 0")
+    if _truthy(env, "TELEGRAM_LEGACY_TOKEN_WEBHOOK_ENABLED"):
+        errors.append("token-bearing Telegram webhook paths are forbidden")
+    if _truthy(env, "ALLOW_INSECURE_TELEGRAM_WEBHOOK"):
+        errors.append("ALLOW_INSECURE_TELEGRAM_WEBHOOK is forbidden")
+    forbidden_values = {
+        name: _value(env, name)
+        for name in (
+            "TELEGRAM_WEBHOOK_PUBLIC_BASE_URL",
+            "TELEGRAM_WEBHOOK_SECRET_TOKEN",
+            "TELEGRAM_WEBHOOK_PREFIX",
+        )
+    }
+    for name, value in forbidden_values.items():
+        if value:
+            errors.append(f"{name} must be empty for polling-only Telegram")
+
+
 def _validate_public_ingress(env: Mapping[str, str], errors: list[str]) -> None:
     domain = _require(env, "CLIENTPLATFORM_DOMAIN", errors).lower()
-    if domain in {"example.com", "localhost"} or domain.endswith((".example.com", ".invalid")):
+    if domain in {"example.com", "localhost"} or domain.endswith(
+        (".example.com", ".invalid")
+    ):
         errors.append("CLIENTPLATFORM_DOMAIN must be a real dedicated production domain")
     public_base = _https_url(env, "CLIENTPLATFORM_PUBLIC_BASE_URL", errors)
     if public_base and urlsplit(public_base).hostname != domain:
@@ -151,33 +207,23 @@ def _validate_public_ingress(env: Mapping[str, str], errors: list[str]) -> None:
         "MESSENGER_PUBLIC_BASE_URL",
         "PAYMENT_PUBLIC_BASE_URL",
         "PRIVACY_EXPORT_PUBLIC_BASE_URL",
-        "TELEGRAM_WEBHOOK_PUBLIC_BASE_URL",
         "CLIENTPLATFORM_MEDIA_GATEWAY_BASE_URL",
     ):
         value = _https_url(env, name, errors)
-        if public_base and value and urlsplit(value).hostname != urlsplit(public_base).hostname:
+        if (
+            public_base
+            and value
+            and urlsplit(value).hostname != urlsplit(public_base).hostname
+        ):
             errors.append(f"{name} must use the dedicated ClientPlatform domain")
 
-    if _value(env, "TELEGRAM_TRANSPORT").lower() != "webhook":
-        errors.append("TELEGRAM_TRANSPORT must be webhook for isolated production")
-    if not _truthy(env, "TELEGRAM_WEBHOOK_ENABLED"):
-        errors.append("TELEGRAM_WEBHOOK_ENABLED must be 1")
-    if _truthy(env, "TELEGRAM_LEGACY_TOKEN_WEBHOOK_ENABLED"):
-        errors.append("token-bearing Telegram webhook paths are forbidden")
-    if _truthy(env, "ALLOW_INSECURE_TELEGRAM_WEBHOOK"):
-        errors.append("ALLOW_INSECURE_TELEGRAM_WEBHOOK is forbidden")
+    _validate_telegram_polling(env, errors)
     if not _truthy(env, "MESSENGER_WEBHOOK_ENABLED"):
         errors.append("MESSENGER_WEBHOOK_ENABLED must be 1")
 
-    webhook_secret = _require(env, "TELEGRAM_WEBHOOK_SECRET_TOKEN", errors)
-    if webhook_secret and len(webhook_secret) < 32:
-        errors.append("TELEGRAM_WEBHOOK_SECRET_TOKEN must contain at least 32 characters")
     diagnostics_secret = _require(env, "HEALTHCHECK_DIAGNOSTICS_TOKEN", errors)
     if diagnostics_secret and len(diagnostics_secret) < 32:
         errors.append("HEALTHCHECK_DIAGNOSTICS_TOKEN must contain at least 32 characters")
-    prefix = _value(env, "TELEGRAM_WEBHOOK_PREFIX")
-    if not prefix.startswith("/") or "token" in prefix.lower():
-        errors.append("TELEGRAM_WEBHOOK_PREFIX must be a non-token path beginning with /")
 
     _validate_bind_hosts(env, errors)
     ingress_port = _positive_int(
@@ -187,7 +233,11 @@ def _validate_public_ingress(env: Mapping[str, str], errors: list[str]) -> None:
         env, "HEALTHCHECK_PORT", minimum=1024, maximum=65535, errors=errors
     )
     media_port = _positive_int(
-        env, "CLIENTPLATFORM_MEDIA_GATEWAY_PORT", minimum=1024, maximum=65535, errors=errors
+        env,
+        "CLIENTPLATFORM_MEDIA_GATEWAY_PORT",
+        minimum=1024,
+        maximum=65535,
+        errors=errors,
     )
     if len({ingress_port, health_port, media_port}) != 3:
         errors.append("ingress, health and media gateway ports must be distinct")
@@ -269,30 +319,13 @@ def _validate_runtime_paths(env: Mapping[str, str], errors: list[str]) -> None:
         errors.append("METRO_WRITABLE_ROOT must equal /var/lib/clientplatform/state")
     if logs_dir is not None and logs_dir != expected_logs:
         errors.append("METRO_LOGS_DIR must equal /var/log/clientplatform")
-    for name, path in (("METRO_DATA_DIR", data_dir), ("MPLCONFIGDIR", mpl_dir), ("PREWARM_MARKER_PATH", marker)):
+    for name, path in (
+        ("METRO_DATA_DIR", data_dir),
+        ("MPLCONFIGDIR", mpl_dir),
+        ("PREWARM_MARKER_PATH", marker),
+    ):
         if path is not None and not path.is_relative_to(expected_state):
             errors.append(f"{name} must stay under /var/lib/clientplatform/state")
-
-
-def _validate_identity_and_secrets(env: Mapping[str, str], errors: list[str]) -> None:
-    if _value(env, "CLIENTPLATFORM_DEPLOYMENT_ID") != "clientplatform-production":
-        errors.append("CLIENTPLATFORM_DEPLOYMENT_ID must equal clientplatform-production")
-    if _value(env, "CLIENTPLATFORM_ENVIRONMENT").lower() != "production":
-        errors.append("CLIENTPLATFORM_ENVIRONMENT must equal production")
-    if _value(env, "APP_ENV").lower() not in {"prod", "production"}:
-        errors.append("APP_ENV must be prod")
-    _require(env, "BOT_TOKEN", errors)
-    _validate_admin_ids(env, errors)
-    username = _require(env, "CLIENTPLATFORM_PRODUCTION_BOT_USERNAME", errors).lower().lstrip("@")
-    if any(marker in username for marker in ("staging", "stage", "test")):
-        errors.append("production bot username must not identify a staging/test bot")
-    forbidden = sorted(
-        name
-        for name, value in env.items()
-        if value and (name.startswith("CLIENTPLATFORM_STAGING_") or name.endswith("_STAGING_TOKEN"))
-    )
-    if forbidden:
-        errors.append("staging-only secrets/configuration are present in production environment")
 
 
 def _validate_backup_contract(env: Mapping[str, str], errors: list[str]) -> None:
@@ -324,7 +357,9 @@ def validate_environment(env: Mapping[str, str]) -> list[str]:
 
 def _read_env_file(path: Path) -> dict[str, str]:
     values: dict[str, str] = {}
-    for line_number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+    for line_number, raw in enumerate(
+        path.read_text(encoding="utf-8").splitlines(), start=1
+    ):
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
