@@ -57,6 +57,7 @@ jobs:
           set -o pipefail
           python -m pytest -q \
             tests/test_clientplatform_bot_gateway.py \
+            tests/test_clientplatform_managed_bot_lifecycle.py \
             tests/test_clientplatform_bot_gateway_preflight.py \
             tests/test_runtime_clientplatform_managed_bot_gateway.py \
             tests/test_runtime_clientplatform_managed_bot_gateway_http.py \
