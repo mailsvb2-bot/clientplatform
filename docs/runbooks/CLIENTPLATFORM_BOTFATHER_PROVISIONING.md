@@ -29,6 +29,22 @@ After both references are saved, press **«Проверить и подключ�
 
 The status screen supports refresh, correction of references, retry after a failed verification, safe cancellation before verification and return to the business dashboard. Callback payloads contain only compact UUID tokens and stay below Telegram's 64-byte limit.
 
+## Owner lifecycle controls
+
+A completed bot card contains **«Управление и состояние»**. This screen is tenant-scoped and never returns credential references, webhook-secret references, payload bodies or fleet-wide statistics. It shows only the public bot identity, local bot/connection status, safe queue counters and bounded timestamps for that business.
+
+The available actions depend on the durable lifecycle state:
+
+- `active`: **«Временно отключить»** and **«Отозвать навсегда»**;
+- `disabled`: **«Включить снова»** and **«Отозвать навсегда»**;
+- `revoked`: read-only status; the connection cannot be reactivated.
+
+Temporary disable requires a confirmation click. ClientPlatform atomically disables both the managed-bot route and its connection, marks queued `pending`, `processing` and `retry` ingress events as `dead`, deletes their payloads and then asks Telegram to remove the webhook. If Telegram does not confirm removal, the local route remains closed and the owner sees a safe operator warning.
+
+Reactivation first resolves the existing secret references, verifies `getMe`, checks the immutable bot ID and expected username and restores the tokenless webhook. Only after Telegram confirms the webhook does ClientPlatform atomically reactivate the local route. If another active bot now exists or the database transition fails, ClientPlatform removes the newly configured webhook as a compensating action and leaves the route disabled.
+
+Permanent revoke uses a separate, explicit confirmation screen. ClientPlatform first commits the irreversible local revoke and payload cleanup, then requests webhook removal. A webhook-removal failure cannot reverse the local revoke; it produces a warning for operator follow-up. A revoked route can never be activated again and requires a new provisioning request.
+
 ## Operator sequence
 
 1. Create the Telegram bot through BotFather and record the expected `@username`.
@@ -54,12 +70,19 @@ If a process dies during `verifying`, a new verifier may atomically recover the 
 
 If Telegram webhook setup succeeds but database finalization fails, ClientPlatform calls `deleteWebhook` as a compensating action and records `provisioning_commit_failed`. The wizard displays a safe retry message without exposing provider details or secret references.
 
+For lifecycle operations, distinguish local state from provider synchronization:
+
+- disable/revoke may complete locally while returning `webhook_detach_failed`; the route is already closed, but the operator must inspect Telegram webhook state;
+- activation never reports success unless both Telegram webhook configuration and the local atomic transition succeed;
+- a failed activation must leave the previous disabled route unavailable and must attempt webhook rollback;
+- tenant or route lookup failures must not reveal whether another business owns the bot.
+
 ## Go-live evidence
 
 Before enabling traffic, prove:
 
 - the dashboard contains exactly one **«Мой Telegram-бот»** button and `/mybot` resolves the same tenant-scoped status;
-- every wizard callback is at most 64 UTF-8 bytes;
+- every wizard and lifecycle callback is at most 64 UTF-8 bytes;
 - raw token material is absent from database rows, logs, status text, webhook URLs and evidence artifacts;
 - an accidentally pasted token is deleted, not echoed and not persisted;
 - `getMe` returns the expected bot ID and username;
@@ -70,7 +93,12 @@ Before enabling traffic, prove:
 - only one verifier can recover a stale lease;
 - the provisioning table is present in the PostgreSQL dump and disposable restore;
 - cancellation clears the stored secret references;
-- database conflict triggers webhook rollback and leaves no extra connection or managed-bot row.
+- database conflict triggers webhook rollback and leaves no extra connection or managed-bot row;
+- owner health is tenant-scoped and contains no secret reference or payload;
+- disable and revoke clear queued payloads and make route resolution fail closed;
+- reactivation verifies the same Telegram identity before enabling the local route;
+- a competing active bot prevents reactivation and triggers webhook compensation;
+- revoke cannot be executed without its separate confirmation callback and cannot be reversed.
 
 ## Rotation and replacement
 
