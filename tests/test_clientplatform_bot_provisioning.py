@@ -10,9 +10,7 @@ from clientplatform.domain.bot_provisioning import (
     VerifiedTelegramBot,
 )
 from clientplatform.domain.connections import ConnectionInvariantViolation
-from clientplatform.infrastructure.bot_provisioning_repository import (
-    BotProvisioningRepository,
-)
+from clientplatform.infrastructure import BotProvisioningRepository
 from clientplatform.infrastructure.safe_tenancy_repository import TenancyRepository
 from services.db.schema import (
     clientplatform_bot_gateway,
@@ -115,6 +113,7 @@ class ClientPlatformBotProvisioningTests(unittest.TestCase):
             self.repo.begin_verification(
                 actor=self.owner,
                 request_id=ready.id,
+                now="2026-07-29T09:03:00+00:00",
             )
         completed = self.repo.complete_verified(
             actor=self.owner,
@@ -150,6 +149,30 @@ class ClientPlatformBotProvisioningTests(unittest.TestCase):
             ),
         )
         self.assertEqual(repeated.id, completed.id)
+
+    def test_stale_verification_lease_is_atomically_recovered(self) -> None:
+        ready = self._ready()
+        first = self.repo.begin_verification(
+            actor=self.owner,
+            request_id=ready.id,
+            now="2026-07-29T09:02:00+00:00",
+            stale_after_seconds=300,
+        )
+        recovered = self.repo.begin_verification(
+            actor=self.owner,
+            request_id=ready.id,
+            now="2026-07-29T09:08:00+00:00",
+            stale_after_seconds=300,
+        )
+        self.assertNotEqual(first.verification_token, recovered.verification_token)
+        self.assertEqual(recovered.request.status, BotProvisioningStatus.VERIFYING)
+        self.assertEqual(recovered.request.attempts, 2)
+        with self.assertRaises(BotProvisioningInvariantViolation):
+            self.repo.fail_verification(
+                actor=self.owner,
+                lease=first,
+                error_code="stale_worker_must_not_win",
+            )
 
     def test_failed_verification_can_be_rearmed_with_new_references(self) -> None:
         ready = self._ready()
