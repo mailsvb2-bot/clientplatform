@@ -1,17 +1,60 @@
 from __future__ import annotations
 
+import hashlib
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from clientplatform.domain.bot_provisioning import (
     BotProvisioningInvariantViolation,
+    BotProvisioningProvider,
     BotProvisioningStatus,
+    ManagedBotProvisioningRequest,
+    normalize_provisioning_idempotency_key,
+    normalize_provisioning_provider,
 )
 from clientplatform.domain.tenancy import TenantContext
 from clientplatform.infrastructure.bot_provisioning_repository import (
+    _REQUEST_COLUMNS,
+    _request_from_row,
     BotProvisioningRepository as _BaseBotProvisioningRepository,
     ProvisioningVerificationLease,
 )
+from services.db.core import PostgresCompatConnection
+
+_SELECT_BY_IDEMPOTENCY = (
+    "SELECT "
+    + _REQUEST_COLUMNS
+    + " FROM managed_bot_provisioning_requests "
+    "WHERE business_id=? AND provider=? AND idempotency_key=? LIMIT 1"
+)
+
+
+def _provisioning_lock_key(subject: str) -> int:
+    digest = hashlib.blake2b(
+        str(subject).encode("utf-8"),
+        digest_size=8,
+        person=b"cp-botprov-v1",
+    ).digest()
+    return int.from_bytes(digest, byteorder="big", signed=True)
+
+
+def _serialize_request(
+    conn: object,
+    *,
+    business_id: str,
+    provider: str,
+    idempotency_key: str,
+) -> None:
+    if isinstance(conn, PostgresCompatConnection):
+        subject = f"{business_id}:{provider}:{idempotency_key}"
+        conn.execute(
+            "SELECT pg_advisory_xact_lock(?)",
+            (_provisioning_lock_key(subject),),
+        ).fetchone()
+        return
+    if isinstance(conn, sqlite3.Connection) and not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
 
 
 def _verification_clock(value: str | None) -> datetime:
@@ -28,7 +71,45 @@ def _verification_clock(value: str | None) -> datetime:
 
 
 class BotProvisioningRepository(_BaseBotProvisioningRepository):
-    """Canonical provisioning repository with recoverable verification leases."""
+    """Canonical provisioning repository with serialization and lease recovery."""
+
+    def create_request(
+        self,
+        *,
+        actor: TenantContext,
+        idempotency_key: str,
+        provider: BotProvisioningProvider | str = BotProvisioningProvider.BOTFATHER,
+        requested_username: str | None = None,
+        display_name: str | None = None,
+        now: str | None = None,
+    ) -> ManagedBotProvisioningRequest:
+        current = self._resolve_actor(actor)
+        normalized_provider = normalize_provisioning_provider(provider)
+        normalized_key = normalize_provisioning_idempotency_key(idempotency_key)
+        _serialize_request(
+            self._conn,
+            business_id=current.business_id,
+            provider=normalized_provider.value,
+            idempotency_key=normalized_key,
+        )
+        row = self._conn.execute(
+            _SELECT_BY_IDEMPOTENCY,
+            (
+                current.business_id,
+                normalized_provider.value,
+                normalized_key,
+            ),
+        ).fetchone()
+        if row is not None:
+            return _request_from_row(row)
+        return super().create_request(
+            actor=current,
+            idempotency_key=normalized_key,
+            provider=normalized_provider,
+            requested_username=requested_username,
+            display_name=display_name,
+            now=now,
+        )
 
     def begin_verification(
         self,
