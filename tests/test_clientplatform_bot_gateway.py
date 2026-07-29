@@ -9,6 +9,7 @@ from clientplatform.domain.bot_gateway import (
     BotGatewayReplayConflict,
     IngressEventStatus,
 )
+from clientplatform.domain.connections import ConnectionInvariantViolation
 from clientplatform.infrastructure import ConnectionRepository, TenancyRepository
 from clientplatform.infrastructure.safe_bot_gateway_repository import BotGatewayRepository
 from services.db.schema import (
@@ -124,7 +125,7 @@ class ClientPlatformBotGatewayTests(unittest.TestCase):
             credential_reference="secret://env/CLIENTPLATFORM_SECRET_TELEGRAM_SCHOOL",
         )
         self.connections.activate_connection(actor=owner, connection_id=connection.id)
-        with self.assertRaises(sqlite3.IntegrityError):
+        with self.assertRaises(ConnectionInvariantViolation):
             self.connections.register_managed_bot(
                 actor=owner,
                 connection_id=connection.id,
@@ -146,7 +147,7 @@ class ClientPlatformBotGatewayTests(unittest.TestCase):
             actor=self.owner,
             connection_id=connection.id,
         )
-        with self.assertRaises(sqlite3.IntegrityError):
+        with self.assertRaises(ConnectionInvariantViolation):
             self.connections.register_managed_bot(
                 actor=self.owner,
                 connection_id=connection.id,
