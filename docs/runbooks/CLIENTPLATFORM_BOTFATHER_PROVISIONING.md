@@ -13,36 +13,55 @@ secret://env/CLIENTPLATFORM_SECRET_WEBHOOK_<BOT>
 
 The webhook secret must be independent from the Telegram bot token, control-bot secret and every other managed bot.
 
+## Owner wizard
+
+Open the target business dashboard and press **«Мой Telegram-бот»**. The same screen is available through `/mybot`; when the owner has several businesses, the bot asks which one to use.
+
+The wizard has three steps:
+
+1. Enter the expected BotFather `@username`. It must end with `bot`.
+2. Enter only the environment-variable name that contains the BotFather token, for example `CLIENTPLATFORM_SECRET_TELEGRAM_MY_PRACTICE`.
+3. Enter a different environment-variable name containing the independent webhook secret, for example `CLIENTPLATFORM_SECRET_WEBHOOK_MY_PRACTICE`.
+
+The wizard accepts only reviewed `CLIENTPLATFORM_SECRET_*` names and converts them to `secret://env/...` references. It never asks for the secret values. If text resembles a raw Telegram token or another secret value, the bot attempts to delete that message immediately, does not echo the value and does not write it to the provisioning request.
+
+After both references are saved, press **«Проверить и подключить»**. ClientPlatform resolves the references server-side, verifies the bot through Telegram `getMe`, compares the username, configures the tokenless webhook and commits the connection atomically.
+
+The status screen supports refresh, correction of references, retry after a failed verification, safe cancellation before verification and return to the business dashboard. Callback payloads contain only compact UUID tokens and stay below Telegram's 64-byte limit.
+
 ## Operator sequence
 
 1. Create the Telegram bot through BotFather and record the expected `@username`.
 2. Generate an independent webhook secret.
 3. Store both values under the `CLIENTPLATFORM_SECRET_*` namespace with restricted read permissions.
-4. Create one provisioning request for the target business with a stable idempotency key and the expected username.
-5. Submit only the two secret references.
-6. Finalize provisioning once. ClientPlatform resolves the references, calls Telegram `getMe`, verifies the username, configures the tokenless gateway webhook and atomically creates the connection and managed-bot route.
+4. Ask the owner to open **«Мой Telegram-бот»**, or perform the wizard together with the owner.
+5. Enter only the two secret-variable names; never enter their values.
+6. Finalize provisioning once. ClientPlatform calls Telegram outside the database transaction and atomically creates the connection, managed-bot route and completed request.
 7. Confirm the request is `completed`, the connection and bot are `active`, and no second active Telegram bot exists for the business.
 8. Send a synthetic `/start` update and prove it opens only the target business customer portal.
 9. Prove initial and follow-up program delivery use the new managed connection.
 
 ## Failure handling
 
-- `awaiting_secret`: secret references have not been submitted.
-- `ready`: safe to finalize.
-- `verifying`: one verifier owns the lease. Do not start another attempt until the lease expires.
-- `failed`: inspect the stable error code, repair the secret/provider issue, resubmit references and retry.
-- `cancelled`: references were removed from the request; create or rearm a request deliberately.
+- `awaiting_secret`: open the status screen and choose **«Указать ссылки на секреты»**.
+- `ready`: choose **«Проверить и подключить»**.
+- `verifying`: one verifier owns the lease. Refresh the status; do not start another attempt until the lease expires.
+- `failed`: inspect the safe user-facing reason, repair the secret/provider issue and choose **«Повторить проверку»** or **«Исправить ссылки»**.
+- `cancelled`: references were removed from the request; start a new connection deliberately.
 - `completed`: finalization is idempotent and must not call Telegram again.
 
 If a process dies during `verifying`, a new verifier may atomically recover the request after the bounded lease timeout. The previous lease token becomes invalid and cannot complete or fail the request.
 
-If Telegram webhook setup succeeds but database finalization fails, ClientPlatform calls `deleteWebhook` as a compensating action and records `provisioning_commit_failed`. Verify the rollback before retrying.
+If Telegram webhook setup succeeds but database finalization fails, ClientPlatform calls `deleteWebhook` as a compensating action and records `provisioning_commit_failed`. The wizard displays a safe retry message without exposing provider details or secret references.
 
 ## Go-live evidence
 
 Before enabling traffic, prove:
 
-- raw token material is absent from database rows, logs, webhook URLs and evidence artifacts;
+- the dashboard contains exactly one **«Мой Telegram-бот»** button and `/mybot` resolves the same tenant-scoped status;
+- every wizard callback is at most 64 UTF-8 bytes;
+- raw token material is absent from database rows, logs, status text, webhook URLs and evidence artifacts;
+- an accidentally pasted token is deleted, not echoed and not persisted;
 - `getMe` returns the expected bot ID and username;
 - the webhook URL is `https://<domain>/clientplatform/managed-bots/telegram/<bot-id>`;
 - an invalid webhook secret is rejected indistinguishably from an unknown bot route;
