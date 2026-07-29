@@ -10,7 +10,7 @@ from clientplatform.domain.bot_gateway import (
     IngressEvent,
     ManagedBotRoute,
 )
-from clientplatform.infrastructure.bot_gateway_repository import BotGatewayRepository
+from clientplatform.infrastructure.safe_bot_gateway_repository import BotGatewayRepository
 from services.db import get_db, get_db_ro
 
 
