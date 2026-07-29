@@ -74,12 +74,8 @@ class ClientPlatformBotProvisioningApplicationTests(
 
     @contextmanager
     def _db(self):
-        try:
+        with self.conn:
             yield self.conn
-            self.conn.commit()
-        except Exception:
-            self.conn.rollback()
-            raise
 
     def _patch_db(self):
         return (
