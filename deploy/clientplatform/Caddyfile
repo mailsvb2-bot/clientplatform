@@ -1,6 +1,11 @@
 {$CLIENTPLATFORM_DOMAIN} {
     encode zstd gzip
 
+    @managed_bots path /clientplatform/managed-bots/*
+    handle @managed_bots {
+        reverse_proxy {$CLIENTPLATFORM_INGRESS_UPSTREAM:127.0.0.1:8181}
+    }
+
     @telegram path /telegram-webhook*
     handle @telegram {
         reverse_proxy {$CLIENTPLATFORM_INGRESS_UPSTREAM:127.0.0.1:8181}
