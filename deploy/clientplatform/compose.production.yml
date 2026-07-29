@@ -37,6 +37,7 @@ services:
     command:
       - >-
         python scripts/clientplatform_production_preflight.py
+        && python scripts/clientplatform_bot_gateway_preflight.py
         && exec python main.py
     depends_on:
       postgres:
