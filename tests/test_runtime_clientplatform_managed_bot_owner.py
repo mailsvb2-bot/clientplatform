@@ -25,22 +25,16 @@ class _FakeSession:
 class _FakeBot:
     instances: list["_FakeBot"] = []
     identity = SimpleNamespace(id=700001, username="practice_helper_bot")
-    set_result = True
     delete_result = True
 
     def __init__(self, *, token: str) -> None:
         self.token = token
         self.session = _FakeSession()
-        self.webhooks: list[dict[str, object]] = []
         self.delete_calls: list[bool] = []
         self.instances.append(self)
 
     async def get_me(self):
         return self.identity
-
-    async def set_webhook(self, **kwargs):
-        self.webhooks.append(dict(kwargs))
-        return self.set_result
 
     async def delete_webhook(self, *, drop_pending_updates: bool):
         self.delete_calls.append(drop_pending_updates)
@@ -54,11 +48,9 @@ class ClientPlatformManagedBotOwnerRuntimeTests(unittest.IsolatedAsyncioTestCase
             id=700001,
             username="practice_helper_bot",
         )
-        _FakeBot.set_result = True
         _FakeBot.delete_result = True
         self.environment = {
             "CLIENTPLATFORM_SECRET_TELEGRAM_OWNER_LIFECYCLE": "telegram-token-value",
-            "CLIENTPLATFORM_SECRET_WEBHOOK_OWNER_LIFECYCLE": "webhook-secret-value",
         }
         self.material = ManagedBotWebhookMaterial(
             managed_bot_id="00000000-0000-0000-0000-000000000203",
@@ -70,32 +62,24 @@ class ClientPlatformManagedBotOwnerRuntimeTests(unittest.IsolatedAsyncioTestCase
                 "secret://env/CLIENTPLATFORM_SECRET_TELEGRAM_OWNER_LIFECYCLE"
             ),
             webhook_secret_reference=(
-                "secret://env/CLIENTPLATFORM_SECRET_WEBHOOK_OWNER_LIFECYCLE"
+                "secret://env/CLIENTPLATFORM_SECRET_TELEGRAM_OWNER_LIFECYCLE"
             ),
         )
 
     def _controller(self) -> TelegramManagedBotWebhookController:
         return TelegramManagedBotWebhookController(
             credential_provider=EnvironmentCredentialProvider(self.environment),
-            public_base_url="https://cp.example.test/base/",
-            gateway_path_prefix="/clientplatform/managed-bots",
+            public_base_url="http://ignored.invalid",
         )
 
-    async def test_attach_verifies_identity_and_sets_tokenless_route(self) -> None:
+    async def test_attach_verifies_identity_and_removes_webhook_for_polling(self) -> None:
         with patch("clientplatform.runtime.managed_bot_owner.Bot", _FakeBot):
             await self._controller().attach(self.material)
         bot = _FakeBot.instances[-1]
         self.assertEqual(bot.token, "telegram-token-value")
+        self.assertEqual(bot.delete_calls, [False])
         self.assertEqual(bot.session.closed, 1)
-        self.assertEqual(len(bot.webhooks), 1)
-        webhook = bot.webhooks[0]
-        self.assertEqual(
-            webhook["url"],
-            "https://cp.example.test/clientplatform/managed-bots/telegram/700001",
-        )
-        self.assertEqual(webhook["secret_token"], "webhook-secret-value")
-        self.assertNotIn("telegram-token-value", str(webhook["url"]))
-        self.assertNotIn("webhook-secret-value", str(webhook["url"]))
+        self.assertFalse(hasattr(bot, "set_webhook"))
 
     async def test_identity_mismatch_is_fail_closed(self) -> None:
         _FakeBot.identity = SimpleNamespace(
@@ -105,9 +89,8 @@ class ClientPlatformManagedBotOwnerRuntimeTests(unittest.IsolatedAsyncioTestCase
         with patch("clientplatform.runtime.managed_bot_owner.Bot", _FakeBot):
             with self.assertRaises(ManagedBotWebhookOperationFailed):
                 await self._controller().attach(self.material)
-        bot = _FakeBot.instances[-1]
-        self.assertEqual(bot.webhooks, [])
-        self.assertEqual(bot.session.closed, 1)
+        self.assertEqual(_FakeBot.instances[-1].delete_calls, [])
+        self.assertEqual(_FakeBot.instances[-1].session.closed, 1)
 
     async def test_username_mismatch_is_fail_closed(self) -> None:
         _FakeBot.identity = SimpleNamespace(
@@ -117,44 +100,26 @@ class ClientPlatformManagedBotOwnerRuntimeTests(unittest.IsolatedAsyncioTestCase
         with patch("clientplatform.runtime.managed_bot_owner.Bot", _FakeBot):
             with self.assertRaises(ManagedBotWebhookOperationFailed):
                 await self._controller().attach(self.material)
-        self.assertEqual(_FakeBot.instances[-1].webhooks, [])
+        self.assertEqual(_FakeBot.instances[-1].delete_calls, [])
 
-    async def test_detach_does_not_drop_pending_telegram_updates(self) -> None:
+    async def test_detach_keeps_webhook_disabled(self) -> None:
         with patch("clientplatform.runtime.managed_bot_owner.Bot", _FakeBot):
             await self._controller().detach(self.material)
         bot = _FakeBot.instances[-1]
         self.assertEqual(bot.delete_calls, [False])
         self.assertEqual(bot.session.closed, 1)
 
-    async def test_detach_does_not_require_public_webhook_url(self) -> None:
-        controller = TelegramManagedBotWebhookController(
-            credential_provider=EnvironmentCredentialProvider(self.environment),
-        )
-        with patch("clientplatform.runtime.managed_bot_owner.Bot", _FakeBot):
-            await controller.detach(self.material)
-        self.assertEqual(_FakeBot.instances[-1].delete_calls, [False])
-
-    async def test_attach_without_public_url_fails_before_bot_creation(self) -> None:
-        controller = TelegramManagedBotWebhookController(
-            credential_provider=EnvironmentCredentialProvider(self.environment),
-        )
-        with patch("clientplatform.runtime.managed_bot_owner.Bot", _FakeBot):
-            with self.assertRaises(ManagedBotWebhookOperationFailed):
-                await controller.attach(self.material)
-        self.assertEqual(_FakeBot.instances, [])
-
     async def test_missing_secret_fails_before_bot_creation(self) -> None:
         controller = TelegramManagedBotWebhookController(
             credential_provider=EnvironmentCredentialProvider({}),
-            public_base_url="https://cp.example.test",
         )
         with patch("clientplatform.runtime.managed_bot_owner.Bot", _FakeBot):
             with self.assertRaises(ManagedBotWebhookOperationFailed):
                 await controller.attach(self.material)
         self.assertEqual(_FakeBot.instances, [])
 
-    async def test_telegram_rejection_is_reported_and_session_closed(self) -> None:
-        _FakeBot.set_result = False
+    async def test_delete_rejection_is_reported_and_session_closed(self) -> None:
+        _FakeBot.delete_result = False
         with patch("clientplatform.runtime.managed_bot_owner.Bot", _FakeBot):
             with self.assertRaises(ManagedBotWebhookOperationFailed):
                 await self._controller().attach(self.material)
