@@ -2,7 +2,16 @@
 
 ## Status
 
-Proposed — 2026-07-29. Accept only after the exact-head provisioning, PostgreSQL, release, security, production-isolation and coverage workflows are green.
+Accepted — 2026-07-29.
+
+Acceptance evidence was recorded on exact implementation head `d876c865270982a8f20613507c6e54ae45fbf463`:
+
+- all twelve repository workflows completed successfully;
+- the dedicated Bot Provisioning workflow passed its unit and orchestration wall;
+- PostgreSQL 16 passed two-connection races for idempotent request creation, exclusive fresh-lease acquisition and exclusive stale-lease recovery;
+- Production Isolation created the provisioning schema with the least-privilege application role, included the table in the custom-format dump and completed the disposable PostgreSQL 16 restore drill;
+- Release Gate passed regression, critical type contracts, Bandit, dependency audit and release hygiene;
+- CI passed regression, PostgreSQL, static/security and both coverage ratchets.
 
 ## Context
 
