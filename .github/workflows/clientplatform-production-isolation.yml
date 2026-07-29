@@ -197,7 +197,17 @@ jobs:
           CLIENTPLATFORM_RESTORE_EVIDENCE_DIR: /tmp/clientplatform-restore-evidence
         run: |
           set -o pipefail
-          BACKUP_PATH="$(python scripts/clientplatform_postgres_backup.py backup | tail -1)"
+          BACKUP_MARKER="$(python scripts/clientplatform_postgres_backup.py backup | tail -1)"
+          case "$BACKUP_MARKER" in
+            CLIENTPLATFORM_BACKUP_OK:*)
+              BACKUP_PATH="${BACKUP_MARKER#CLIENTPLATFORM_BACKUP_OK:}"
+              ;;
+            *)
+              echo "Unexpected backup marker: $BACKUP_MARKER" >&2
+              exit 1
+              ;;
+          esac
+          test -f "$BACKUP_PATH"
           /usr/lib/postgresql/16/bin/pg_restore --list "$BACKUP_PATH" \
             | grep -E 'TABLE DATA public (managed_bots|bot_gateway_ingress_events|managed_bot_provisioning_requests)' \
             > "$RUNNER_TEMP/clientplatform-backup-gateway-tables.log"
