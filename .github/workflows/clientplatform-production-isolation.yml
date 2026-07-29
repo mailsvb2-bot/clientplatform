@@ -73,86 +73,60 @@ jobs:
             tests/test_clientplatform_bot_gateway_preflight.py \
             2>&1 | tee "$RUNNER_TEMP/clientplatform-production-isolation-tests.log"
 
+      - name: Build isolated production environment fixture
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          source = Path("deploy/clientplatform/clientplatform.production.env.example")
+          values = {}
+          for raw in source.read_text(encoding="utf-8").splitlines():
+              line = raw.strip()
+              if not line or line.startswith("#"):
+                  continue
+              name, separator, value = line.partition("=")
+              if not separator:
+                  raise SystemExit(f"invalid env line: {line}")
+              values[name] = value
+          domain = "clientplatform.production.internal"
+          values.update(
+              {
+                  "APP_ENV": "prod",
+                  "CLIENTPLATFORM_DOMAIN": domain,
+                  "CLIENTPLATFORM_PUBLIC_BASE_URL": f"https://{domain}",
+                  "BOT_TOKEN": "ci-bot-token-material-without-provider-shape",
+                  "ADMIN_IDS": "100001",
+                  "CLIENTPLATFORM_DATABASE_NAME": "clientplatform_ci",
+                  "DATABASE_URL": "postgresql://clientplatform_app:ci-app-password@127.0.0.1:5432/clientplatform_ci",
+                  "TELEGRAM_WEBHOOK_PUBLIC_BASE_URL": f"https://{domain}",
+                  "TELEGRAM_WEBHOOK_SECRET_TOKEN": "w" * 48,
+                  "MESSENGER_PUBLIC_BASE_URL": f"https://{domain}",
+                  "PAYMENT_PUBLIC_BASE_URL": f"https://{domain}",
+                  "PRIVACY_EXPORT_PUBLIC_BASE_URL": f"https://{domain}",
+                  "HEALTHCHECK_DIAGNOSTICS_TOKEN": "d" * 48,
+                  "CLIENTPLATFORM_MEDIA_GATEWAY_BASE_URL": f"https://{domain}/clientplatform",
+                  "CLIENTPLATFORM_MEDIA_GATEWAY_S3_ENDPOINT": "https://s3.production.internal",
+                  "CLIENTPLATFORM_MEDIA_GATEWAY_S3_REGION": "region-1",
+                  "CLIENTPLATFORM_SECRET_S3_ACCESS_KEY": "access-key-material",
+                  "CLIENTPLATFORM_SECRET_S3_SECRET_KEY": "secret-key-material",
+                  "CLIENTPLATFORM_SECRET_MEDIA_SIGNING_KEY": "m" * 48,
+              }
+          )
+          target = Path("/tmp/clientplatform-production.env")
+          target.write_text(
+              "".join(f"{name}={value}\n" for name, value in sorted(values.items())),
+              encoding="utf-8",
+          )
+          PY
+
       - name: Validate systemd production preflights
         run: |
-          cat > "$RUNNER_TEMP/clientplatform-production.env" <<'EOF'
-          APP_ENV=prod
-          CLIENTPLATFORM_ENVIRONMENT=production
-          CLIENTPLATFORM_DEPLOYMENT_ID=clientplatform-production
-          CLIENTPLATFORM_DEPLOYMENT_MODE=systemd
-          CLIENTPLATFORM_CONTAINER_NETWORK_ISOLATED=0
-          CLIENTPLATFORM_DOMAIN=clientplatform.production.internal
-          CLIENTPLATFORM_PUBLIC_BASE_URL=https://clientplatform.production.internal
-          CLIENTPLATFORM_PRODUCTION_BOT_USERNAME=clientplatform_bot
-          BOT_TOKEN=ci-bot-token-material-without-provider-shape
-          ADMIN_IDS=100001
-          METRO_DB_ENGINE=postgres
-          CLIENTPLATFORM_DATABASE_NAME=clientplatform_ci
-          DATABASE_URL=postgresql://clientplatform_app:ci-app-password@127.0.0.1:5432/clientplatform_ci
-          ALLOW_SQLITE_IN_PROD=0
-          METRO_RUNTIME_ROOT=/var/lib/clientplatform/runtime
-          METRO_WRITABLE_ROOT=/var/lib/clientplatform/state
-          METRO_DATA_DIR=/var/lib/clientplatform/state/data
-          METRO_LOGS_DIR=/var/log/clientplatform
-          MPLCONFIGDIR=/var/lib/clientplatform/state/matplotlib
-          PREWARM_MARKER_PATH=/var/lib/clientplatform/state/prewarm/audio.done
-          TELEGRAM_TRANSPORT=webhook
-          TELEGRAM_WEBHOOK_ENABLED=1
-          TELEGRAM_LEGACY_TOKEN_WEBHOOK_ENABLED=0
-          ALLOW_INSECURE_TELEGRAM_WEBHOOK=0
-          TELEGRAM_WEBHOOK_PREFIX=/telegram-webhook
-          TELEGRAM_WEBHOOK_PUBLIC_BASE_URL=https://clientplatform.production.internal
-          TELEGRAM_WEBHOOK_SECRET_TOKEN=wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww
-          MESSENGER_WEBHOOK_ENABLED=1
-          MESSENGER_WEBHOOK_HOST=127.0.0.1
-          MESSENGER_WEBHOOK_PORT=8181
-          MESSENGER_PUBLIC_BASE_URL=https://clientplatform.production.internal
-          PAYMENT_PUBLIC_BASE_URL=https://clientplatform.production.internal
-          PRIVACY_EXPORT_PUBLIC_BASE_URL=https://clientplatform.production.internal
-          HTTP_INGRESS_MAX_BODY_BYTES=1048576
-          CLIENTPLATFORM_BOT_GATEWAY_ENABLED=1
-          CLIENTPLATFORM_BOT_GATEWAY_PATH_PREFIX=/clientplatform/managed-bots
-          CLIENTPLATFORM_BOT_GATEWAY_BATCH_SIZE=10
-          CLIENTPLATFORM_BOT_GATEWAY_INTERVAL_SEC=0.5
-          CLIENTPLATFORM_BOT_GATEWAY_TICK_TIMEOUT_SEC=30
-          CLIENTPLATFORM_BOT_GATEWAY_LOCK_TTL_SEC=300
-          CLIENTPLATFORM_BOT_GATEWAY_MAX_ATTEMPTS=5
-          CLIENTPLATFORM_BOT_GATEWAY_PER_BOT_PER_MINUTE=120
-          CLIENTPLATFORM_BOT_GATEWAY_PER_BOT_QUEUE_LIMIT=1000
-          CLIENTPLATFORM_BOT_GATEWAY_MAX_PAYLOAD_BYTES=262144
-          HEALTHCHECK_ENABLED=1
-          HEALTHCHECK_HOST=127.0.0.1
-          HEALTHCHECK_PORT=8182
-          HEALTHCHECK_DIAGNOSTICS_TOKEN=dddddddddddddddddddddddddddddddddddddddddddddddd
-          CLIENTPLATFORM_MEDIA_GATEWAY_ENABLED=1
-          CLIENTPLATFORM_MEDIA_GATEWAY_HOST=127.0.0.1
-          CLIENTPLATFORM_MEDIA_GATEWAY_PORT=8191
-          CLIENTPLATFORM_MEDIA_GATEWAY_BASE_URL=https://clientplatform.production.internal/clientplatform
-          CLIENTPLATFORM_MEDIA_GATEWAY_STORAGE_MODE=s3
-          CLIENTPLATFORM_MEDIA_GATEWAY_S3_ENDPOINT=https://s3.production.internal
-          CLIENTPLATFORM_MEDIA_GATEWAY_S3_REGION=region-1
-          CLIENTPLATFORM_MEDIA_GATEWAY_S3_ACCESS_KEY_REFERENCE=secret://env/CLIENTPLATFORM_SECRET_S3_ACCESS_KEY
-          CLIENTPLATFORM_MEDIA_GATEWAY_S3_SECRET_KEY_REFERENCE=secret://env/CLIENTPLATFORM_SECRET_S3_SECRET_KEY
-          CLIENTPLATFORM_MEDIA_SIGNING_SECRET_REFERENCE=secret://env/CLIENTPLATFORM_SECRET_MEDIA_SIGNING_KEY
-          CLIENTPLATFORM_STORAGE_BUCKET=clientplatform-production
-          CLIENTPLATFORM_MEDIA_GATEWAY_ALLOWED_BUCKETS=clientplatform-production
-          CLIENTPLATFORM_SECRET_S3_ACCESS_KEY=access-key-material
-          CLIENTPLATFORM_SECRET_S3_SECRET_KEY=secret-key-material
-          CLIENTPLATFORM_SECRET_MEDIA_SIGNING_KEY=mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm
-          CLIENTPLATFORM_S3_VERSIONING_ENABLED=1
-          CLIENTPLATFORM_S3_BACKUP_REPLICATION_ENABLED=1
-          CLIENTPLATFORM_BACKUP_DIR=/tmp/clientplatform-backups
-          CLIENTPLATFORM_RESTORE_EVIDENCE_DIR=/tmp/clientplatform-restore-evidence
-          CLIENTPLATFORM_BACKUP_RETENTION_DAYS=30
-          CLIENTPLATFORM_BACKUP_ENCRYPTION_REQUIRED=1
-          CLIENTPLATFORM_RESTORE_DRILL_REQUIRED=1
-          EOF
           set -o pipefail
           python scripts/clientplatform_production_preflight.py \
-            --env-file "$RUNNER_TEMP/clientplatform-production.env" \
+            --env-file /tmp/clientplatform-production.env \
             2>&1 | tee "$RUNNER_TEMP/clientplatform-production-preflight.log"
           python scripts/clientplatform_bot_gateway_preflight.py \
-            --env-file "$RUNNER_TEMP/clientplatform-production.env" \
+            --env-file /tmp/clientplatform-production.env \
             2>&1 | tee "$RUNNER_TEMP/clientplatform-bot-gateway-preflight.log"
 
       - name: Validate Docker build and Compose topology
@@ -198,7 +172,7 @@ jobs:
             --host 127.0.0.1 --username clientplatform_app --dbname clientplatform_ci \
             --tuples-only --no-align --set ON_ERROR_STOP=1 \
             --command "SELECT to_regclass('public.managed_bots') IS NOT NULL AND to_regclass('public.bot_gateway_ingress_events') IS NOT NULL" \
-            | grep -Fx true
+            | grep -Fx t
 
       - name: Create backup as application role and prove admin-only restore
         env:
