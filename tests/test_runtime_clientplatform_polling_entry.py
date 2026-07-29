@@ -46,8 +46,8 @@ class ClientPlatformPollingEntryTests(unittest.IsolatedAsyncioTestCase):
             clear=False,
         ):
             main = importlib.import_module("main")
-            requested = main._enforce_telegram_polling_env()
-            self.assertTrue(requested)
+            main = importlib.reload(main)
+            self.assertTrue(main._TELEGRAM_WEBHOOK_OVERRIDE_IGNORED)
             self.assertEqual(os.environ["TELEGRAM_TRANSPORT"], "polling")
             self.assertEqual(os.environ["RUN_MODE"], "polling")
             self.assertEqual(os.environ["TELEGRAM_WEBHOOK_ENABLED"], "0")
