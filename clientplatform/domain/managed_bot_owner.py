@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from clientplatform.domain.connections import ConnectionStatus, ManagedBotStatus
+from clientplatform.domain.connections import (
+    ConnectionStatus,
+    ManagedBotStatus,
+    normalize_credential_reference,
+)
 from clientplatform.domain.tenancy import normalize_uuid
 
 
@@ -19,6 +23,48 @@ def _non_negative(value: int, *, field_name: str) -> int:
     if normalized < 0:
         raise ValueError(f"{field_name} must not be negative")
     return normalized
+
+
+@dataclass(frozen=True, slots=True)
+class ManagedBotWebhookMaterial:
+    managed_bot_id: str
+    business_id: str
+    connection_id: str
+    external_bot_id: str
+    username: str | None
+    credential_reference: str
+    webhook_secret_reference: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "managed_bot_id",
+            normalize_uuid(self.managed_bot_id, field_name="managed_bot_id"),
+        )
+        object.__setattr__(
+            self,
+            "business_id",
+            normalize_uuid(self.business_id, field_name="business_id"),
+        )
+        object.__setattr__(
+            self,
+            "connection_id",
+            normalize_uuid(self.connection_id, field_name="connection_id"),
+        )
+        external_bot_id = str(self.external_bot_id or "").strip()
+        if not external_bot_id.isdigit() or int(external_bot_id) <= 0:
+            raise ValueError("external_bot_id must be a positive Telegram bot id")
+        object.__setattr__(self, "external_bot_id", external_bot_id)
+        object.__setattr__(
+            self,
+            "credential_reference",
+            normalize_credential_reference(self.credential_reference),
+        )
+        object.__setattr__(
+            self,
+            "webhook_secret_reference",
+            normalize_credential_reference(self.webhook_secret_reference),
+        )
 
 
 @dataclass(frozen=True, slots=True)
