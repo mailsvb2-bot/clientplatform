@@ -7,7 +7,11 @@ from unittest.mock import AsyncMock, patch
 from aiogram.types import InlineKeyboardMarkup
 
 from clientplatform.domain.bot_provisioning import BotProvisioningStatus
-from clientplatform.domain.connections import ConnectionStatus, ManagedBotStatus
+from clientplatform.domain.connections import (
+    ConnectionNotFound,
+    ConnectionStatus,
+    ManagedBotStatus,
+)
 from clientplatform.domain.managed_bot_owner import (
     ManagedBotOwnerLifecycleResult,
     ManagedBotOwnerSnapshot,
@@ -84,6 +88,8 @@ class ClientPlatformManagedBotLifecycleUiTests(unittest.IsolatedAsyncioTestCase)
     def test_snapshot_text_contains_no_secret_material(self) -> None:
         text = lifecycle._snapshot_text(_snapshot(ManagedBotStatus.ACTIVE))
         self.assertIn("@practice_helper_bot", text)
+        self.assertIn("Очередь этого бота", text)
+        self.assertIn("Состояние подключения: активно", text)
         self.assertIn("ожидают: 1", text)
         self.assertIn("обрабатываются: 2", text)
         self.assertNotIn("secret://", text)
@@ -136,6 +142,23 @@ class ClientPlatformManagedBotLifecycleUiTests(unittest.IsolatedAsyncioTestCase)
         setup = handlers.clientplatform_bot_setup
         names = [item.name for item in setup.router.sub_routers]
         self.assertEqual(names.count("clientplatform_bot_lifecycle"), 1)
+
+    async def test_stale_snapshot_callback_returns_generic_unavailable_message(self) -> None:
+        message = _FakeMessage()
+        with patch.object(
+            lifecycle,
+            "_send_snapshot",
+            new=AsyncMock(side_effect=ConnectionNotFound("foreign route")),
+        ):
+            sent = await lifecycle._safe_send_snapshot(
+                message,
+                user_id=101,
+                business_id=_BUSINESS_ID,
+                managed_bot_id=_BOT_ID,
+            )
+        self.assertFalse(sent)
+        self.assertIn("больше недоступно", message.answers[-1][0])
+        self.assertNotIn("foreign route", message.answers[-1][0])
 
     async def test_revoke_requires_separate_confirmation_callback(self) -> None:
         business_token, bot_token = lifecycle._tokens(_BUSINESS_ID, _BOT_ID)
@@ -192,8 +215,8 @@ class ClientPlatformManagedBotLifecycleUiTests(unittest.IsolatedAsyncioTestCase)
             ) as revoke,
             patch.object(
                 lifecycle,
-                "_send_snapshot",
-                new=AsyncMock(return_value=result.snapshot),
+                "_safe_send_snapshot",
+                new=AsyncMock(return_value=True),
             ) as refresh,
         ):
             await lifecycle.execute_revoke(callback, state)
@@ -229,8 +252,8 @@ class ClientPlatformManagedBotLifecycleUiTests(unittest.IsolatedAsyncioTestCase)
             ),
             patch.object(
                 lifecycle,
-                "_send_snapshot",
-                new=AsyncMock(return_value=result.snapshot),
+                "_safe_send_snapshot",
+                new=AsyncMock(return_value=True),
             ),
         ):
             await lifecycle.execute_disable(callback, state)
