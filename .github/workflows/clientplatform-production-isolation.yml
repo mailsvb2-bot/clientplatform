@@ -73,6 +73,9 @@ jobs:
           python -m unittest -v \
             tests/test_clientplatform_production_isolation.py \
             tests/test_clientplatform_bot_gateway_preflight.py \
+            tests/test_clientplatform_bot_provisioning.py \
+            tests/test_runtime_clientplatform_bot_provisioning.py \
+            tests/test_application_clientplatform_bot_provisioning.py \
             2>&1 | tee "$RUNNER_TEMP/clientplatform-production-isolation-tests.log"
 
       - name: Build isolated production environment fixture
@@ -173,7 +176,7 @@ jobs:
           PGPASSWORD=ci-app-password psql \
             --host 127.0.0.1 --username clientplatform_app --dbname clientplatform_ci \
             --tuples-only --no-align --set ON_ERROR_STOP=1 \
-            --command "SELECT to_regclass('public.managed_bots') IS NOT NULL AND to_regclass('public.bot_gateway_ingress_events') IS NOT NULL" \
+            --command "SELECT to_regclass('public.managed_bots') IS NOT NULL AND to_regclass('public.bot_gateway_ingress_events') IS NOT NULL AND to_regclass('public.managed_bot_provisioning_requests') IS NOT NULL" \
             | grep -Fx t
 
       - name: Create backup as application role and prove admin-only restore
@@ -189,9 +192,9 @@ jobs:
             2>&1 | tee "$RUNNER_TEMP/clientplatform-backup.log"
           DUMP="$(find "$CLIENTPLATFORM_BACKUP_DIR" -name 'clientplatform-*.dump' -type f | head -1)"
           test -n "$DUMP"
-          pg_restore --list "$DUMP" | grep -E 'TABLE DATA public (managed_bots|bot_gateway_ingress_events)' \
+          pg_restore --list "$DUMP" | grep -E 'TABLE DATA public (managed_bots|bot_gateway_ingress_events|managed_bot_provisioning_requests)' \
             | tee "$RUNNER_TEMP/clientplatform-gateway-dump-list.log"
-          test "$(wc -l < "$RUNNER_TEMP/clientplatform-gateway-dump-list.log")" -eq 2
+          test "$(wc -l < "$RUNNER_TEMP/clientplatform-gateway-dump-list.log")" -eq 3
           python scripts/clientplatform_postgres_backup.py restore-drill "$DUMP" \
             2>&1 | tee "$RUNNER_TEMP/clientplatform-restore-drill.log"
 
