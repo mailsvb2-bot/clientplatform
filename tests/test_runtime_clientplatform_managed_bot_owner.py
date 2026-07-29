@@ -126,6 +126,23 @@ class ClientPlatformManagedBotOwnerRuntimeTests(unittest.IsolatedAsyncioTestCase
         self.assertEqual(bot.delete_calls, [False])
         self.assertEqual(bot.session.closed, 1)
 
+    async def test_detach_does_not_require_public_webhook_url(self) -> None:
+        controller = TelegramManagedBotWebhookController(
+            credential_provider=EnvironmentCredentialProvider(self.environment),
+        )
+        with patch("clientplatform.runtime.managed_bot_owner.Bot", _FakeBot):
+            await controller.detach(self.material)
+        self.assertEqual(_FakeBot.instances[-1].delete_calls, [False])
+
+    async def test_attach_without_public_url_fails_before_bot_creation(self) -> None:
+        controller = TelegramManagedBotWebhookController(
+            credential_provider=EnvironmentCredentialProvider(self.environment),
+        )
+        with patch("clientplatform.runtime.managed_bot_owner.Bot", _FakeBot):
+            with self.assertRaises(ManagedBotWebhookOperationFailed):
+                await controller.attach(self.material)
+        self.assertEqual(_FakeBot.instances, [])
+
     async def test_missing_secret_fails_before_bot_creation(self) -> None:
         controller = TelegramManagedBotWebhookController(
             credential_provider=EnvironmentCredentialProvider({}),
