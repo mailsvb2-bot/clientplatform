@@ -64,6 +64,49 @@ def _parse_completed_at(value: object) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
+def _inspect_evidence(
+    env: Mapping[str, str],
+    *,
+    now: float,
+    payload: dict[str, object],
+    errors: list[str],
+) -> None:
+    max_age = _max_age_seconds(env)
+    evidence = _evidence_path(env)
+    payload["max_age_seconds"] = max_age
+    payload["evidence_file"] = str(evidence)
+    if evidence.is_symlink() or not evidence.is_file():
+        errors.append("offsite backup evidence latest.json is missing or not a regular file")
+        return
+
+    mode = stat.S_IMODE(evidence.stat().st_mode)
+    if mode & 0o077:
+        errors.append("offsite backup evidence must not be group/world accessible")
+    document = json.loads(evidence.read_text(encoding="utf-8"))
+    if not isinstance(document, dict):
+        errors.append("offsite backup evidence must be a JSON object")
+        return
+    if document.get("ok") is not True:
+        errors.append("offsite backup evidence is not successful")
+    if document.get("operation") != "postgres_backup_s3_upload":
+        errors.append("offsite backup evidence operation is invalid")
+    if document.get("encryption") != "age-x25519":
+        errors.append("offsite backup evidence is not age encrypted")
+    objects = document.get("objects")
+    if not isinstance(objects, list) or len(objects) != 3:
+        errors.append("offsite backup evidence must contain three bundle objects")
+
+    completed_at = _parse_completed_at(document.get("completed_at"))
+    current = datetime.fromtimestamp(now, tz=timezone.utc)
+    age_seconds = (current - completed_at).total_seconds()
+    payload["completed_at"] = completed_at.isoformat().replace("+00:00", "Z")
+    payload["age_seconds"] = round(age_seconds, 3)
+    if age_seconds < -_CLOCK_SKEW_SECONDS:
+        errors.append("offsite backup evidence timestamp is in the future")
+    elif age_seconds > max_age:
+        errors.append("offsite PostgreSQL backup is stale")
+
+
 def evaluate_freshness(
     env: Mapping[str, str] | None = None,
     *,
@@ -90,45 +133,14 @@ def evaluate_freshness(
         payload["errors"] = errors
         return payload
 
+    current_time = time.time() if now is None else now
     try:
-        max_age = _max_age_seconds(values)
-        evidence = _evidence_path(values)
-        payload["max_age_seconds"] = max_age
-        payload["evidence_file"] = str(evidence)
-        if evidence.is_symlink() or not evidence.is_file():
-            errors.append("offsite backup evidence latest.json is missing or not a regular file")
-        else:
-            mode = stat.S_IMODE(evidence.stat().st_mode)
-            if mode & 0o077:
-                errors.append("offsite backup evidence must not be group/world accessible")
-            document = json.loads(evidence.read_text(encoding="utf-8"))
-            if not isinstance(document, dict):
-                errors.append("offsite backup evidence must be a JSON object")
-            else:
-                if document.get("ok") is not True:
-                    errors.append("offsite backup evidence is not successful")
-                if document.get("operation") != "postgres_backup_s3_upload":
-                    errors.append("offsite backup evidence operation is invalid")
-                if document.get("encryption") != "age-x25519":
-                    errors.append("offsite backup evidence is not age encrypted")
-                objects = document.get("objects")
-                if not isinstance(objects, list) or len(objects) != 3:
-                    errors.append("offsite backup evidence must contain three bundle objects")
-                completed_at = _parse_completed_at(document.get("completed_at"))
-                current = datetime.fromtimestamp(
-                    time.time() if now is None else now,
-                    tz=timezone.utc,
-                )
-                age_seconds = (current - completed_at).total_seconds()
-                payload["completed_at"] = completed_at.isoformat().replace(
-                    "+00:00", "Z"
-                )
-                payload["age_seconds"] = round(age_seconds, 3)
-                if age_seconds < -_CLOCK_SKEW_SECONDS:
-                    errors.append("offsite backup evidence timestamp is in the future")
-                elif age_seconds > max_age:
-                    errors.append("offsite PostgreSQL backup is stale")
-    except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        _inspect_evidence(values, now=current_time, payload=payload, errors=errors)
+    except OSError as exc:
+        errors.append(str(exc))
+    except ValueError as exc:
+        errors.append(str(exc))
+    except TypeError as exc:
         errors.append(str(exc))
 
     payload["ok"] = not errors
