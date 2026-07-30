@@ -74,8 +74,12 @@ def is_private_program_media_reference(reference: str) -> bool:
     return unwrap_program_media_reference(normalized).startswith("s3://")
 
 
+def _cleanup_enabled() -> bool:
+    return program_media_store_config().enabled
+
+
 def delete_uncommitted_program_media(*, media_reference: str) -> bool:
-    if not is_private_program_media_reference(media_reference):
+    if not _cleanup_enabled() or not is_private_program_media_reference(media_reference):
         return False
     return delete_program_media_reference(media_reference)
 
@@ -87,7 +91,7 @@ def stage_program_media_cleanup(
     reason: str,
     delay_seconds: int = 600,
 ) -> bool:
-    if not is_private_program_media_reference(media_reference):
+    if not _cleanup_enabled() or not is_private_program_media_reference(media_reference):
         return False
     with get_db() as conn:
         ProgramMediaCleanupRepository(conn).enqueue(
@@ -100,7 +104,7 @@ def stage_program_media_cleanup(
 
 
 def cancel_program_media_cleanup(*, media_reference: str) -> bool:
-    if not is_private_program_media_reference(media_reference):
+    if not _cleanup_enabled() or not is_private_program_media_reference(media_reference):
         return False
     with get_db() as conn:
         return ProgramMediaCleanupRepository(conn).discard(
@@ -114,7 +118,7 @@ def queue_program_media_cleanup(
     media_reference: str,
     reason: str,
 ) -> bool:
-    if not is_private_program_media_reference(media_reference):
+    if not _cleanup_enabled() or not is_private_program_media_reference(media_reference):
         return False
     with get_db() as conn:
         repository = ProgramMediaCleanupRepository(conn)
@@ -134,6 +138,14 @@ def run_program_media_cleanup_batch(
     max_attempts: int = 8,
     lock_ttl_seconds: int = 900,
 ) -> ProgramMediaCleanupBatchResult:
+    if not _cleanup_enabled():
+        return ProgramMediaCleanupBatchResult(
+            claimed=0,
+            deleted=0,
+            retained=0,
+            retried=0,
+            dead=0,
+        )
     with get_db() as conn:
         jobs = ProgramMediaCleanupRepository(conn).claim_due(
             limit=limit,
