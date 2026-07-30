@@ -74,6 +74,12 @@ def is_private_program_media_reference(reference: str) -> bool:
     return unwrap_program_media_reference(normalized).startswith("s3://")
 
 
+def delete_uncommitted_program_media(*, media_reference: str) -> bool:
+    if not is_private_program_media_reference(media_reference):
+        return False
+    return delete_program_media_reference(media_reference)
+
+
 def stage_program_media_cleanup(
     *,
     business_id: str,
@@ -180,6 +186,7 @@ __all__ = [
     "ProgramMediaStoreError",
     "StoredProgramMedia",
     "cancel_program_media_cleanup",
+    "delete_uncommitted_program_media",
     "is_private_program_media_reference",
     "program_media_ingest_policy",
     "queue_program_media_cleanup",
