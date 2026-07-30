@@ -8,6 +8,7 @@ from uuid import uuid4
 
 import pytest
 
+from clientplatform.application.program_media import ProgramMediaIngestPolicy
 from clientplatform.domain.programs import ContentKind
 from clientplatform.infrastructure.program_media_store import (
     ProgramMediaStore,
@@ -48,21 +49,23 @@ class RecordingOpener:
         if request.get_method() == "PUT":
             self.upload_headers = headers
             uploaded = b"".join(iter(request.data))
-            assert hashlib.sha256(uploaded).hexdigest() == headers["x-amz-content-sha256"]
+            assert hashlib.sha256(uploaded).hexdigest() == headers[
+                "x-amz-content-sha256"
+            ]
             return FakeResponse(status=200)
         assert request.get_method() == "HEAD"
         return FakeResponse(
             status=200,
             headers={
-                "Content-Length": self.upload_headers["Content-length"],
+                "Content-Length": self.upload_headers["content-length"],
                 "X-Amz-Meta-Clientplatform-Sha256": self.upload_headers[
-                    "X-amz-meta-clientplatform-sha256"
+                    "x-amz-meta-clientplatform-sha256"
                 ],
                 "X-Amz-Meta-Clientplatform-Size": self.upload_headers[
-                    "X-amz-meta-clientplatform-size"
+                    "x-amz-meta-clientplatform-size"
                 ],
                 "X-Amz-Meta-Clientplatform-Kind": self.upload_headers[
-                    "X-amz-meta-clientplatform-kind"
+                    "x-amz-meta-clientplatform-kind"
                 ],
             },
         )
@@ -123,6 +126,14 @@ def enabled_env() -> dict[str, str]:
     }
 
 
+def enabled_policy() -> ProgramMediaIngestPolicy:
+    return ProgramMediaIngestPolicy(
+        enabled=True,
+        max_bytes=20_000_000,
+        timeout_seconds=30.0,
+    )
+
+
 def test_config_is_fail_closed_and_bounded() -> None:
     assert program_media_store_config({}).enabled is False
     with pytest.raises(ProgramMediaStoreError, match="size_limit_invalid"):
@@ -178,8 +189,7 @@ def test_private_store_streams_and_verifies_without_identifying_key(tmp_path: Pa
 
 
 @pytest.mark.asyncio
-async def test_text_does_not_require_storage(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("CLIENTPLATFORM_PROGRAM_MEDIA_INGEST_ENABLED", raising=False)
+async def test_text_does_not_require_storage() -> None:
     kind, reference = await materialize_program_content(
         FakeMessage(text="  Текст урока  "),
         business_id=str(uuid4()),
@@ -189,11 +199,7 @@ async def test_text_does_not_require_storage(monkeypatch: pytest.MonkeyPatch) ->
 
 
 @pytest.mark.asyncio
-async def test_media_is_externalized_and_temporary_file_is_removed(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    for name, value in enabled_env().items():
-        monkeypatch.setenv(name, value)
+async def test_media_is_externalized_and_temporary_file_is_removed() -> None:
     store = FakeStore()
     message = FakeMessage(
         voice=SimpleNamespace(
@@ -206,7 +212,8 @@ async def test_media_is_externalized_and_temporary_file_is_removed(
     kind, reference = await materialize_program_content(
         message,
         business_id=str(uuid4()),
-        store=store,  # type: ignore[arg-type]
+        policy=enabled_policy(),
+        store_media=store.put_file,
     )
 
     assert kind == ContentKind.AUDIO
@@ -217,11 +224,7 @@ async def test_media_is_externalized_and_temporary_file_is_removed(
 
 
 @pytest.mark.asyncio
-async def test_media_is_rejected_before_download_when_reported_too_large(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    for name, value in enabled_env().items():
-        monkeypatch.setenv(name, value)
+async def test_media_is_rejected_before_download_when_reported_too_large() -> None:
     message = FakeMessage(
         voice=SimpleNamespace(
             file_id="control-bot-file-id",
@@ -233,5 +236,28 @@ async def test_media_is_rejected_before_download_when_reported_too_large(
         await materialize_program_content(
             message,
             business_id=str(uuid4()),
-            store=FakeStore(),  # type: ignore[arg-type]
+            policy=enabled_policy(),
+            store_media=FakeStore().put_file,
+        )
+
+
+@pytest.mark.asyncio
+async def test_disabled_ingest_never_downloads_or_persists_media() -> None:
+    message = FakeMessage(
+        voice=SimpleNamespace(
+            file_id="control-bot-file-id",
+            file_size=13,
+            mime_type="audio/ogg",
+        )
+    )
+    with pytest.raises(ProgramMediaIngestError, match="program_media_ingest_disabled"):
+        await materialize_program_content(
+            message,
+            business_id=str(uuid4()),
+            policy=ProgramMediaIngestPolicy(
+                enabled=False,
+                max_bytes=20_000_000,
+                timeout_seconds=30.0,
+            ),
+            store_media=FakeStore().put_file,
         )
