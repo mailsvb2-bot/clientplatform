@@ -6,10 +6,10 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
-from config.settings import CONFIG
 from clientplatform.domain.program_media import unwrap_program_media_reference
 from clientplatform.domain.programs import normalize_content_ref
 from clientplatform.domain.tenancy import normalize_uuid
+from services.db.runtime import is_postgres_enabled
 
 
 def _utc_now() -> datetime:
@@ -168,7 +168,7 @@ class ProgramMediaCleanupRepository:
         batch_limit = max(1, min(int(limit), 100))
         lock_token = uuid.uuid4().hex
 
-        if CONFIG.uses_postgres:
+        if is_postgres_enabled():
             rows = self._conn.execute(
                 """
                 WITH due AS (
