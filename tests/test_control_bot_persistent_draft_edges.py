@@ -133,7 +133,11 @@ def test_helpers_cover_empty_and_capacity_branches() -> None:
         for row in builder._draft_keyboard(full).inline_keyboard
         for button in row
     ]
-    assert full_labels == ["Опубликовать программу", "Удалить черновик"]
+    assert full_labels == [
+        "Редактировать уроки",
+        "Опубликовать программу",
+        "Удалить черновик",
+    ]
 
 
 @pytest.mark.asyncio
