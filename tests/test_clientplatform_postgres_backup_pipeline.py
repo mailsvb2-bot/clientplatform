@@ -110,6 +110,20 @@ class ClientPlatformPostgresBackupPipelineTests(unittest.TestCase):
             self.assertEqual(selected_evidence, evidence)
             self.assertEqual(upload.call_args.kwargs["ciphertext_path"], ciphertext)
 
+    def test_compose_runs_pipeline_as_importable_module(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        compose = (root / "deploy/clientplatform/compose.production.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            'entrypoint: ["python", "-m", "scripts.clientplatform_postgres_backup_pipeline"]',
+            compose,
+        )
+        self.assertNotIn(
+            'entrypoint: ["python", "scripts/clientplatform_postgres_backup_pipeline.py"]',
+            compose,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
