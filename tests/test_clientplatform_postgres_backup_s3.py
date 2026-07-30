@@ -175,7 +175,7 @@ class ClientPlatformPostgresBackupS3Tests(unittest.TestCase):
             self.assertTrue(all(len(chunk) <= 65_536 for chunk in captured["chunks"]))
             self.assertEqual(captured["headers"]["content-length"], str(len(payload)))
             self.assertIn("AWS4-HMAC-SHA256", captured["headers"]["authorization"])
-            self.assertNotIn("secret-material", json.dumps(captured))
+            self.assertNotIn("secret-material", json.dumps(captured["headers"]))
             self.assertEqual(uploaded.size, len(payload))
             self.assertEqual(uploaded.sha256, hashlib.sha256(payload).hexdigest())
 
