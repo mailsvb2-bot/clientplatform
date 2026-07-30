@@ -78,6 +78,7 @@ jobs:
           python -m unittest -v \
             tests/test_clientplatform_production_isolation.py \
             tests/test_clientplatform_s3_replication.py \
+            tests/test_clientplatform_s3_replication_hardening.py \
             tests/test_clientplatform_bot_gateway_preflight.py \
             tests/test_clientplatform_bot_provisioning.py \
             tests/test_runtime_clientplatform_bot_provisioning.py \
