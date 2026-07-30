@@ -1,0 +1,39 @@
+[Unit]
+Description=Create and upload an encrypted ClientPlatform PostgreSQL backup
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+ConditionPathExists=/opt/clientplatform/deploy/clientplatform/compose.production.yml
+ConditionPathExists=/opt/clientplatform/deploy/clientplatform/clientplatform.env
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/opt/clientplatform/deploy/clientplatform
+Environment=CLIENTPLATFORM_COMPOSE_DIR=/opt/clientplatform/deploy/clientplatform
+Environment=DOCKER_CONFIG=/run/clientplatform-postgres-backup/docker
+RuntimeDirectory=clientplatform-postgres-backup
+RuntimeDirectoryMode=0700
+ExecStart=/usr/bin/flock --wait 60 /run/lock/clientplatform-postgres-backup.lock /bin/bash /opt/clientplatform/deploy/clientplatform/run-postgres-backup-operation.sh backup
+TimeoutStartSec=45min
+Nice=10
+CPUWeight=20
+IOWeight=20
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictRealtime=true
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX
+ReadWritePaths=/run/clientplatform-postgres-backup /run/lock
+UMask=0077
