@@ -98,6 +98,21 @@ services:
     security_opt: ["no-new-privileges:true"]
     networks: [backend]
 
+  s3-replication:
+    profiles: ["operations"]
+    build:
+      context: ../..
+      dockerfile: deploy/clientplatform/Dockerfile
+    env_file: ./clientplatform.env
+    entrypoint: ["python", "scripts/clientplatform_s3_replication.py", "sync"]
+    read_only: true
+    tmpfs: ["/tmp:size=64m,mode=1777"]
+    volumes:
+      - clientplatform-state:/var/lib/clientplatform
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    networks: [backend]
+
 networks:
   backend:
     internal: false
