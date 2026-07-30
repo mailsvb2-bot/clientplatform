@@ -81,6 +81,7 @@ class ProgramMediaCleanupRepository:
         business_id: str,
         media_reference: str,
         reason: str,
+        delay_seconds: int = 0,
         now: datetime | None = None,
     ) -> ProgramMediaCleanupJob:
         normalized_business_id = normalize_uuid(business_id, field_name="business_id")
@@ -89,7 +90,10 @@ class ProgramMediaCleanupRepository:
         if not storage_reference.startswith("s3://"):
             raise ValueError("program media cleanup requires an S3 reference")
         normalized_reason = " ".join(str(reason or "cleanup").split())[:160] or "cleanup"
-        timestamp = (now or _utc_now()).replace(microsecond=0).isoformat()
+        created = (now or _utc_now()).replace(microsecond=0)
+        available = created + timedelta(seconds=max(0, min(int(delay_seconds), 86_400)))
+        created_iso = created.isoformat()
+        available_iso = available.isoformat()
         cleanup_id = str(uuid4())
         self._conn.execute(
             """
@@ -105,9 +109,9 @@ class ProgramMediaCleanupRepository:
                 normalized_business_id,
                 normalized_reference,
                 normalized_reason,
-                timestamp,
-                timestamp,
-                timestamp,
+                available_iso,
+                created_iso,
+                created_iso,
             ),
         )
         self._conn.execute(
@@ -119,8 +123,8 @@ class ProgramMediaCleanupRepository:
             WHERE media_reference=? AND status='dead'
             """,
             (
-                timestamp,
-                timestamp,
+                available_iso,
+                created_iso,
                 normalized_reason,
                 normalized_business_id,
                 normalized_reference,
