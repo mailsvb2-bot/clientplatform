@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import importlib
+import unittest
 from types import SimpleNamespace
 from typing import Any, Callable
+from unittest.mock import patch
 from uuid import uuid4
-
-import pytest
 
 from clientplatform.domain.programs import ContentKind
 from handlers.clientplatform_program_media import ProgramMediaIngestError
@@ -55,163 +55,185 @@ async def direct_to_thread(
     return func(*args, **kwargs)
 
 
-@pytest.fixture(autouse=True)
-def direct_thread_calls(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(media_router.asyncio, "to_thread", direct_to_thread)
+class ProgramMediaRouterTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        self.to_thread_patch = patch.object(
+            media_router.asyncio,
+            "to_thread",
+            direct_to_thread,
+        )
+        self.to_thread_patch.start()
+
+    async def asyncTearDown(self) -> None:
+        self.to_thread_patch.stop()
+
+    async def test_builder_persists_only_externalized_reference(self) -> None:
+        business_id = str(uuid4())
+        program_id = str(uuid4())
+        actor = object()
+        initial = SimpleNamespace(lessons=())
+        updated = SimpleNamespace(lessons=(SimpleNamespace(id=str(uuid4())),))
+        writes: list[dict[str, Any]] = []
+        reviews: list[Any] = []
+
+        async def materialize(_message: Any, *, business_id: str) -> tuple[Any, str]:
+            if not business_id:
+                raise AssertionError("business id is required")
+            return (
+                ContentKind.AUDIO,
+                "s3://clientplatform-production/program-media/audio.ogg",
+            )
+
+        async def load_draft(**_kwargs: Any) -> Any:
+            return initial
+
+        async def resolve_actor(_user_id: int, selected_business_id: str) -> object:
+            self.assertEqual(selected_business_id, business_id)
+            return actor
+
+        def add_lesson(**kwargs: Any) -> None:
+            writes.append(kwargs)
+
+        def get_draft(**_kwargs: Any) -> Any:
+            return updated
+
+        async def send_review(_message: Any, record: Any) -> None:
+            reviews.append(record)
+
+        with (
+            patch.object(media_router, "materialize_program_content", materialize),
+            patch.object(media_router.builder, "_load_draft", load_draft),
+            patch.object(media_router.control, "_actor", resolve_actor),
+            patch.object(media_router.builder, "add_program_lesson", add_lesson),
+            patch.object(media_router.builder, "get_program_draft", get_draft),
+            patch.object(media_router.builder, "_send_draft_review", send_review),
+        ):
+            state = FakeState(
+                {
+                    "business_id": business_id,
+                    "program_id": program_id,
+                    "lesson_title": "Аудиоурок",
+                }
+            )
+            await media_router.capture_persistent_lesson_content(FakeMessage(), state)
+
+        self.assertEqual(len(writes), 1)
+        self.assertIs(writes[0]["actor"], actor)
+        self.assertEqual(writes[0]["content_kind"], ContentKind.AUDIO)
+        self.assertTrue(writes[0]["content_ref"].startswith("s3://"))
+        self.assertNotIn("control-bot", writes[0]["content_ref"])
+        self.assertEqual(reviews, [updated])
+        self.assertEqual(state.data["lesson_title"], "")
+
+    async def test_ingest_failure_never_mutates_builder_draft(self) -> None:
+        business_id = str(uuid4())
+        program_id = str(uuid4())
+        writes: list[dict[str, Any]] = []
+
+        async def fail_ingest(_message: Any, *, business_id: str) -> tuple[Any, str]:
+            if not business_id:
+                raise AssertionError("business id is required")
+            raise ProgramMediaIngestError(
+                "program_media_upload_transport_failure",
+                retryable=True,
+            )
+
+        async def load_draft(**_kwargs: Any) -> Any:
+            return SimpleNamespace(lessons=())
+
+        with (
+            patch.object(media_router, "materialize_program_content", fail_ingest),
+            patch.object(media_router.builder, "_load_draft", load_draft),
+            patch.object(
+                media_router.builder,
+                "add_program_lesson",
+                lambda **kwargs: writes.append(kwargs),
+            ),
+        ):
+            message = FakeMessage()
+            state = FakeState(
+                {
+                    "business_id": business_id,
+                    "program_id": program_id,
+                    "lesson_title": "Документ",
+                }
+            )
+            await media_router.capture_persistent_lesson_content(message, state)
+
+        self.assertEqual(writes, [])
+        self.assertEqual(state.data["lesson_title"], "Документ")
+        self.assertIn("Попробуйте отправить его ещё раз", message.answers[-1][0])
+
+    async def test_editor_replaces_material_only_after_externalization(self) -> None:
+        business_id = str(uuid4())
+        lesson_id = str(uuid4())
+        actor = object()
+        writes: list[dict[str, Any]] = []
+        detail_calls: list[tuple[Any, Any]] = []
+        record = SimpleNamespace(program=SimpleNamespace(title="Черновик"), lessons=())
+        lesson = SimpleNamespace(id=lesson_id)
+
+        async def materialize(_message: Any, *, business_id: str) -> tuple[Any, str]:
+            if not business_id:
+                raise AssertionError("business id is required")
+            return (
+                ContentKind.DOCUMENT,
+                "s3://clientplatform-production/program-media/file.pdf",
+            )
+
+        async def resolve_actor(_user_id: int, selected_business_id: str) -> object:
+            self.assertEqual(selected_business_id, business_id)
+            return actor
+
+        def replace(**kwargs: Any) -> tuple[Any, Any]:
+            writes.append(kwargs)
+            return record, lesson
+
+        async def send_detail(_message: Any, *, record: Any, lesson: Any) -> None:
+            detail_calls.append((record, lesson))
+
+        with (
+            patch.object(media_router, "materialize_program_content", materialize),
+            patch.object(media_router.control, "_actor", resolve_actor),
+            patch.object(
+                media_router.editor,
+                "replace_program_draft_lesson_content",
+                replace,
+            ),
+            patch.object(media_router.editor, "_send_lesson_detail", send_detail),
+        ):
+            state = FakeState(
+                {
+                    "editor_business_id": business_id,
+                    "editor_lesson_id": lesson_id,
+                }
+            )
+            await media_router.replace_persistent_lesson_content(FakeMessage(), state)
+
+        self.assertTrue(writes[0]["content_ref"].startswith("s3://"))
+        self.assertEqual(writes[0]["lesson_id"], lesson_id)
+        self.assertEqual(state.clear_count, 1)
+        self.assertEqual(detail_calls, [(record, lesson)])
 
 
-@pytest.mark.asyncio
-async def test_builder_persists_only_externalized_reference(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    business_id = str(uuid4())
-    program_id = str(uuid4())
-    actor = object()
-    initial = SimpleNamespace(lessons=())
-    updated = SimpleNamespace(lessons=(SimpleNamespace(id=str(uuid4())),))
-    writes: list[dict[str, Any]] = []
-    reviews: list[Any] = []
-
-    async def materialize(_message: Any, *, business_id: str) -> tuple[Any, str]:
-        assert business_id
-        return ContentKind.AUDIO, "s3://clientplatform-production/program-media/audio.ogg"
-
-    async def load_draft(**_kwargs: Any) -> Any:
-        return initial
-
-    async def resolve_actor(_user_id: int, selected_business_id: str) -> object:
-        assert selected_business_id == business_id
-        return actor
-
-    def add_lesson(**kwargs: Any) -> None:
-        writes.append(kwargs)
-
-    def get_draft(**_kwargs: Any) -> Any:
-        return updated
-
-    async def send_review(_message: Any, record: Any) -> None:
-        reviews.append(record)
-
-    monkeypatch.setattr(media_router, "materialize_program_content", materialize)
-    monkeypatch.setattr(media_router.builder, "_load_draft", load_draft)
-    monkeypatch.setattr(media_router.control, "_actor", resolve_actor)
-    monkeypatch.setattr(media_router.builder, "add_program_lesson", add_lesson)
-    monkeypatch.setattr(media_router.builder, "get_program_draft", get_draft)
-    monkeypatch.setattr(media_router.builder, "_send_draft_review", send_review)
-
-    state = FakeState(
-        {
-            "business_id": business_id,
-            "program_id": program_id,
-            "lesson_title": "Аудиоурок",
-        }
-    )
-    await media_router.capture_persistent_lesson_content(FakeMessage(), state)
-
-    assert len(writes) == 1
-    assert writes[0]["actor"] is actor
-    assert writes[0]["content_kind"] == ContentKind.AUDIO
-    assert writes[0]["content_ref"].startswith("s3://")
-    assert "control-bot" not in writes[0]["content_ref"]
-    assert reviews == [updated]
-    assert state.data["lesson_title"] == ""
-
-
-@pytest.mark.asyncio
-async def test_ingest_failure_never_mutates_builder_draft(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    business_id = str(uuid4())
-    program_id = str(uuid4())
-    writes: list[dict[str, Any]] = []
-
-    async def fail_ingest(_message: Any, *, business_id: str) -> tuple[Any, str]:
-        assert business_id
-        raise ProgramMediaIngestError(
-            "program_media_upload_transport_failure",
-            retryable=True,
+class ProgramMediaRouterCompositionTests(unittest.TestCase):
+    def test_media_router_is_composed_before_all_program_handlers(self) -> None:
+        handlers = importlib.import_module("handlers")
+        control = handlers.clientplatform_control
+        self.assertEqual(control.router.name, "clientplatform_entry")
+        self.assertEqual(
+            control.router.sub_routers[0].name,
+            "clientplatform_program_media_router",
+        )
+        self.assertEqual(
+            control.router.sub_routers[1].name,
+            "clientplatform_program_lesson_editor",
+        )
+        self.assertEqual(
+            control.router.sub_routers[2].name,
+            "clientplatform_program_builder",
         )
 
-    async def load_draft(**_kwargs: Any) -> Any:
-        return SimpleNamespace(lessons=())
 
-    monkeypatch.setattr(media_router, "materialize_program_content", fail_ingest)
-    monkeypatch.setattr(media_router.builder, "_load_draft", load_draft)
-    monkeypatch.setattr(
-        media_router.builder,
-        "add_program_lesson",
-        lambda **kwargs: writes.append(kwargs),
-    )
-
-    message = FakeMessage()
-    state = FakeState(
-        {
-            "business_id": business_id,
-            "program_id": program_id,
-            "lesson_title": "Документ",
-        }
-    )
-    await media_router.capture_persistent_lesson_content(message, state)
-
-    assert writes == []
-    assert state.data["lesson_title"] == "Документ"
-    assert "Попробуйте отправить его ещё раз" in message.answers[-1][0]
-
-
-@pytest.mark.asyncio
-async def test_editor_replaces_material_only_after_externalization(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    business_id = str(uuid4())
-    lesson_id = str(uuid4())
-    actor = object()
-    writes: list[dict[str, Any]] = []
-    detail_calls: list[tuple[Any, Any]] = []
-    record = SimpleNamespace(program=SimpleNamespace(title="Черновик"), lessons=())
-    lesson = SimpleNamespace(id=lesson_id)
-
-    async def materialize(_message: Any, *, business_id: str) -> tuple[Any, str]:
-        assert business_id
-        return ContentKind.DOCUMENT, "s3://clientplatform-production/program-media/file.pdf"
-
-    async def resolve_actor(_user_id: int, selected_business_id: str) -> object:
-        assert selected_business_id == business_id
-        return actor
-
-    def replace(**kwargs: Any) -> tuple[Any, Any]:
-        writes.append(kwargs)
-        return record, lesson
-
-    async def send_detail(_message: Any, *, record: Any, lesson: Any) -> None:
-        detail_calls.append((record, lesson))
-
-    monkeypatch.setattr(media_router, "materialize_program_content", materialize)
-    monkeypatch.setattr(media_router.control, "_actor", resolve_actor)
-    monkeypatch.setattr(
-        media_router.editor,
-        "replace_program_draft_lesson_content",
-        replace,
-    )
-    monkeypatch.setattr(media_router.editor, "_send_lesson_detail", send_detail)
-
-    state = FakeState(
-        {
-            "editor_business_id": business_id,
-            "editor_lesson_id": lesson_id,
-        }
-    )
-    await media_router.replace_persistent_lesson_content(FakeMessage(), state)
-
-    assert writes[0]["content_ref"].startswith("s3://")
-    assert writes[0]["lesson_id"] == lesson_id
-    assert state.clear_count == 1
-    assert detail_calls == [(record, lesson)]
-
-
-def test_media_router_is_composed_before_all_program_handlers() -> None:
-    handlers = importlib.import_module("handlers")
-    control = handlers.clientplatform_control
-    assert control.router.name == "clientplatform_entry"
-    assert control.router.sub_routers[0].name == "clientplatform_program_media_router"
-    assert control.router.sub_routers[1].name == "clientplatform_program_lesson_editor"
-    assert control.router.sub_routers[2].name == "clientplatform_program_builder"
+if __name__ == "__main__":
+    unittest.main()
