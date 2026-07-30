@@ -201,12 +201,8 @@ class ProgramMediaCleanupBatchTests(unittest.TestCase):
 
     @contextmanager
     def _db(self) -> Iterator[sqlite3.Connection]:
-        try:
-            yield self.conn
-            self.conn.commit()
-        except Exception:
-            self.conn.rollback()
-            raise
+        yield self.conn
+        self.conn.commit()
 
     def test_batch_retains_referenced_media_and_deletes_only_orphans(self) -> None:
         repository = ProgramMediaCleanupRepository(self.conn)
