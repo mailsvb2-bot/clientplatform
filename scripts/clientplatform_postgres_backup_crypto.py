@@ -13,7 +13,6 @@ import json
 import os
 import re
 import subprocess
-import tempfile
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -136,6 +135,7 @@ def encrypt_backup_bundle(
     checksum = ciphertext.with_suffix(ciphertext.suffix + ".sha256")
     metadata = ciphertext.with_suffix(ciphertext.suffix + ".json")
     partial.unlink(missing_ok=True)
+    completed = False
     try:
         run_command(
             (
@@ -183,12 +183,13 @@ def encrypt_backup_bundle(
             encoding="utf-8",
         )
         metadata.chmod(0o600)
-    except (OSError, RuntimeError, ValueError, TypeError):
-        partial.unlink(missing_ok=True)
-        ciphertext.unlink(missing_ok=True)
-        checksum.unlink(missing_ok=True)
-        metadata.unlink(missing_ok=True)
-        raise
+        completed = True
+    finally:
+        if not completed:
+            partial.unlink(missing_ok=True)
+            ciphertext.unlink(missing_ok=True)
+            checksum.unlink(missing_ok=True)
+            metadata.unlink(missing_ok=True)
 
     if remove_plaintext:
         dump.unlink(missing_ok=True)
@@ -220,6 +221,7 @@ def decrypt_backup_bundle(
     output.parent.mkdir(parents=True, exist_ok=True)
     partial = output.with_suffix(output.suffix + ".partial")
     partial.unlink(missing_ok=True)
+    completed = False
     try:
         run_command(
             (
@@ -239,11 +241,12 @@ def decrypt_backup_bundle(
         partial.chmod(0o600)
         partial.replace(output)
         output.chmod(0o600)
-        return output
-    except (OSError, RuntimeError, ValueError, TypeError):
-        partial.unlink(missing_ok=True)
-        output.unlink(missing_ok=True)
-        raise
+        completed = True
+    finally:
+        if not completed:
+            partial.unlink(missing_ok=True)
+            output.unlink(missing_ok=True)
+    return output
 
 
 def main() -> int:
