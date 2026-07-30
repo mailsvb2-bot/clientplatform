@@ -65,7 +65,7 @@ class ProductionEnvironmentPreparationTests(unittest.TestCase):
             self.assertGreater(len(signing_lines[0].split("=", 1)[1]), 40)
             self.assertNotIn("8493913", signing_lines[0])
 
-    def test_prepare_rejects_world_readable_or_symlinked_env(self) -> None:
+    def test_prepare_rejects_world_readable_symlinked_or_mismatched_env(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             directory = Path(raw)
             path = directory / "clientplatform.env"
@@ -85,6 +85,17 @@ class ProductionEnvironmentPreparationTests(unittest.TestCase):
                 "regular_file",
             ):
                 prepare_env.prepare(link)
+
+            path.write_text(
+                _REQUIRED_ENV + "CLIENTPLATFORM_PUBLIC_BASE_URL=https://wrong.test\n",
+                encoding="utf-8",
+            )
+            os.chmod(path, 0o600)
+            with self.assertRaisesRegex(
+                prepare_env.EnvironmentPreparationError,
+                "mismatched_clientplatform_public_base_url",
+            ):
+                prepare_env.prepare(path)
 
 
 class ProductionDeploymentContractTests(unittest.TestCase):
@@ -110,7 +121,7 @@ class ProductionDeploymentContractTests(unittest.TestCase):
         self.assertIn("CLIENTPLATFORM_PRODUCTION_DEPLOY_OK", source)
         self.assertNotIn("shell=True", source)
 
-    def test_source_updater_preserves_untracked_env_and_fetches_exact_head(self) -> None:
+    def test_source_updater_preserves_env_and_requires_expected_sha_when_set(self) -> None:
         updater = (
             Path(production_deploy.ROOT)
             / "deploy"
@@ -119,6 +130,8 @@ class ProductionDeploymentContractTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn('git fetch --no-tags --prune --depth 1 origin "$TARGET_REF"', updater)
         self.assertIn('TARGET_SHA=$(git rev-parse FETCH_HEAD)', updater)
+        self.assertIn('EXPECTED_SHA=${CLIENTPLATFORM_EXPECTED_SHA:-}', updater)
+        self.assertIn('"$TARGET_SHA" != "$EXPECTED_SHA"', updater)
         self.assertIn('git reset --hard "$TARGET_SHA"', updater)
         self.assertNotIn("git clean", updater)
         self.assertIn("clientplatform.env", updater)
