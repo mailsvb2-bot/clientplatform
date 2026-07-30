@@ -4,7 +4,7 @@ import sqlite3
 
 
 def ensure(c: sqlite3.Connection) -> None:
-    """Create the first complete clientplatform program, enrollment and delivery contour."""
+    """Create the complete ClientPlatform program and delivery contour."""
     c.execute(
         """
         CREATE TABLE IF NOT EXISTS programs(

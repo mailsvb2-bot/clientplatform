@@ -85,10 +85,12 @@ class SignedMediaResolverTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(secret, first)
         self.assertNotIn("s3://", first)
 
-    async def test_file_id_and_https_pass_without_secret_resolution(self) -> None:
+    async def test_bot_local_id_fails_but_https_passes_without_secret_resolution(
+        self,
+    ) -> None:
         class ExplodingProvider:
             def resolve(self, _reference: str) -> str:
-                raise AssertionError("passthrough reference must not resolve a secret")
+                raise AssertionError("public HTTPS must not resolve a secret")
 
         resolver = HmacMediaGatewayResolver(
             base_url="https://media.example.test",
@@ -96,10 +98,11 @@ class SignedMediaResolverTests(unittest.IsolatedAsyncioTestCase):
             signing_secret_reference="secret://env/CLIENTPLATFORM_SECRET_MEDIA_SIGNING_KEY",
             ttl_seconds=120,
         )
-        self.assertEqual(
-            await resolver.resolve("telegram-file-id", ContentKind.VIDEO),
-            "telegram-file-id",
-        )
+        with self.assertRaisesRegex(
+            MediaReferenceError,
+            "media_bot_local_reference_not_portable",
+        ):
+            await resolver.resolve("telegram-file-id", ContentKind.VIDEO)
         self.assertEqual(
             await resolver.resolve(
                 "https://cdn.example.test/video.mp4",
@@ -260,15 +263,17 @@ class RuntimeLifecycleTests(unittest.IsolatedAsyncioTestCase):
                     last_tick_age_seconds=1,
                 )
 
-        runtime = SimpleNamespace(config=DispatchRuntimeConfig(
-            enabled=True,
-            interval_seconds=5.0,
-            tick_timeout_seconds=120.0,
-            batch_size=10,
-            max_attempts=8,
-            lock_ttl_seconds=900,
-            http_timeout_seconds=20.0,
-        ))
+        runtime = SimpleNamespace(
+            config=DispatchRuntimeConfig(
+                enabled=True,
+                interval_seconds=5.0,
+                tick_timeout_seconds=120.0,
+                batch_size=10,
+                max_attempts=8,
+                lock_ttl_seconds=900,
+                http_timeout_seconds=20.0,
+            )
+        )
         with patch.object(lifecycle, "ClientPlatformDispatchScheduler", FakeScheduler):
             self.assertTrue(await lifecycle.start_clientplatform_runtime(runtime))
             self.assertFalse(await lifecycle.start_clientplatform_runtime(runtime))
@@ -278,7 +283,11 @@ class RuntimeLifecycleTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(snapshot["clientplatform_dispatch_sent"], 2)
             await lifecycle.stop_clientplatform_runtime()
         self.assertTrue(FakeScheduler.instances[0].stopped)
-        self.assertFalse(lifecycle.clientplatform_runtime_health_snapshot()["clientplatform_runtime_composed"])
+        self.assertFalse(
+            lifecycle.clientplatform_runtime_health_snapshot()[
+                "clientplatform_runtime_composed"
+            ]
+        )
 
 
 if __name__ == "__main__":

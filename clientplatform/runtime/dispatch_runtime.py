@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 import os
 from dataclasses import dataclass
 
 from clientplatform.application.dispatch_worker import DispatchBatchResult, run_dispatch_batch
+from clientplatform.application.program_media import run_program_media_cleanup_batch
+from clientplatform.runtime.control_bot import control_bot_enabled
 from clientplatform.runtime.secrets import EnvironmentCredentialProvider
 from clientplatform.transport import AdapterRegistry, TelegramDispatchAdapter
 from clientplatform.transport.media import (
@@ -13,10 +17,10 @@ from clientplatform.transport.media import (
 )
 from clientplatform.transport.telegram_http import AiohttpTelegramBotClient
 from core.runtime_env import env_float, env_int
-from clientplatform.runtime.control_bot import control_bot_enabled
 
 
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
+log = logging.getLogger(__name__)
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -38,6 +42,10 @@ class DispatchRuntimeConfig:
     media_gateway_base_url: str = ""
     media_signing_secret_reference: str = "secret://env/CLIENTPLATFORM_SECRET_MEDIA_SIGNING_KEY"
     media_url_ttl_seconds: int = 300
+    media_multipart_max_bytes: int = 20_000_000
+    media_cleanup_batch_size: int = 10
+    media_cleanup_max_attempts: int = 12
+    media_cleanup_lock_ttl_seconds: int = 900
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,6 +107,30 @@ def dispatch_runtime_config() -> DispatchRuntimeConfig:
             minimum=60,
             maximum=900,
         ),
+        media_multipart_max_bytes=env_int(
+            "CLIENTPLATFORM_PROGRAM_MEDIA_MAX_BYTES",
+            20_000_000,
+            minimum=1,
+            maximum=20_000_000,
+        ),
+        media_cleanup_batch_size=env_int(
+            "CLIENTPLATFORM_PROGRAM_MEDIA_CLEANUP_BATCH_SIZE",
+            10,
+            minimum=1,
+            maximum=100,
+        ),
+        media_cleanup_max_attempts=env_int(
+            "CLIENTPLATFORM_PROGRAM_MEDIA_CLEANUP_MAX_ATTEMPTS",
+            12,
+            minimum=1,
+            maximum=100,
+        ),
+        media_cleanup_lock_ttl_seconds=env_int(
+            "CLIENTPLATFORM_PROGRAM_MEDIA_CLEANUP_LOCK_TTL_SEC",
+            900,
+            minimum=30,
+            maximum=86_400,
+        ),
     )
 
 
@@ -123,6 +155,8 @@ def build_dispatch_runtime(
     credential_provider = EnvironmentCredentialProvider()
     telegram_client = AiohttpTelegramBotClient(
         timeout_seconds=selected.http_timeout_seconds,
+        multipart_media_base_url=selected.media_gateway_base_url,
+        multipart_max_bytes=selected.media_multipart_max_bytes,
     )
     media_resolver = _build_media_resolver(selected, credential_provider)
     adapters = AdapterRegistry(
@@ -146,6 +180,15 @@ async def run_configured_dispatch_tick(
     selected = runtime or build_dispatch_runtime()
     if not selected.config.enabled:
         return DispatchBatchResult(claimed=0, sent=0, retried=0, dead=0)
+    try:
+        await asyncio.to_thread(
+            run_program_media_cleanup_batch,
+            limit=selected.config.media_cleanup_batch_size,
+            max_attempts=selected.config.media_cleanup_max_attempts,
+            lock_ttl_seconds=selected.config.media_cleanup_lock_ttl_seconds,
+        )
+    except Exception:  # validator: allow-wide-except - cleanup must not block customer delivery
+        log.exception("Program media cleanup tick failed")
     return await run_dispatch_batch(
         credential_provider=selected.credential_provider,
         adapters=selected.adapters,
