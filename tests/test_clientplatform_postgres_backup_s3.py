@@ -36,28 +36,34 @@ def _config(evidence_dir: Path) -> ReplicationConfig:
     )
 
 
-def _bundle(directory: Path, payload: bytes = b"postgres-backup") -> Path:
-    dump = directory / "clientplatform-20260730T090218Z.dump"
-    dump.write_bytes(payload)
+def _encrypted_bundle(directory: Path, payload: bytes = b"age-encrypted-postgres-backup") -> Path:
+    ciphertext = directory / "clientplatform-20260730T090218Z.dump.age"
+    ciphertext.write_bytes(payload)
     digest = hashlib.sha256(payload).hexdigest()
-    dump.with_suffix(".dump.sha256").write_text(
-        f"{digest}  {dump.name}\n",
+    ciphertext.with_suffix(".age.sha256").write_text(
+        f"{digest}  {ciphertext.name}\n",
         encoding="utf-8",
     )
-    dump.with_suffix(".dump.json").write_text(
+    ciphertext.with_suffix(".age.json").write_text(
         json.dumps(
             {
-                "schema_version": 1,
-                "created_at": "20260730T090218Z",
+                "schema_version": 2,
+                "created_at": "2026-07-30T09:02:18+00:00",
                 "source_database": "clientplatform",
-                "dump_file": dump.name,
-                "sha256": digest,
+                "encrypted_file": ciphertext.name,
+                "ciphertext_sha256": digest,
+                "plaintext_dump_file": "clientplatform-20260730T090218Z.dump",
+                "plaintext_sha256": "a" * 64,
+                "encryption": {
+                    "format": "age-x25519",
+                    "recipient_fingerprint": "b" * 64,
+                },
             }
         )
         + "\n",
         encoding="utf-8",
     )
-    return dump
+    return ciphertext
 
 
 class FakeUploader:
@@ -115,7 +121,7 @@ class FakeControlClient:
 class ClientPlatformPostgresBackupS3Tests(unittest.TestCase):
     def test_file_chunk_body_is_bounded_and_reopenable(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            path = Path(temp) / "large.dump"
+            path = Path(temp) / "large.dump.age"
             payload = b"a" * 200_000
             path.write_bytes(payload)
             body = FileChunkBody(path, chunk_bytes=65_536)
@@ -127,7 +133,7 @@ class ClientPlatformPostgresBackupS3Tests(unittest.TestCase):
 
     def test_streaming_put_uses_iterable_body_and_verifies_remote_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            path = Path(temp) / "clientplatform.dump"
+            path = Path(temp) / "clientplatform.dump.age"
             payload = b"stream-me" * 20_000
             path.write_bytes(payload)
             control = FakeControlClient()
@@ -158,10 +164,10 @@ class ClientPlatformPostgresBackupS3Tests(unittest.TestCase):
             )
             uploaded = uploader.put_file(
                 "clientplatform-backup-8493913",
-                "postgres/2026/07/30/clientplatform.dump",
+                "postgres/2026/07/30/clientplatform.dump.age",
                 path,
                 content_type="application/octet-stream",
-                metadata={"clientplatform-bundle-role": "dump"},
+                metadata={"clientplatform-bundle-role": "ciphertext"},
             )
 
             self.assertIs(captured["body_type"], FileChunkBody)
@@ -173,15 +179,15 @@ class ClientPlatformPostgresBackupS3Tests(unittest.TestCase):
             self.assertEqual(uploaded.size, len(payload))
             self.assertEqual(uploaded.sha256, hashlib.sha256(payload).hexdigest())
 
-    def test_bundle_uploads_dump_checksum_then_metadata_commit_marker(self) -> None:
+    def test_bundle_uploads_ciphertext_checksum_then_metadata_commit_marker(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            dump = _bundle(root)
+            ciphertext = _encrypted_bundle(root)
             uploader = FakeUploader()
             evidence = upload_backup_bundle(
                 uploader,
                 _config(root),
-                dump_path=dump,
+                ciphertext_path=ciphertext,
                 prefix="postgres",
                 evidence_dir=root / "evidence",
                 now=datetime(2026, 7, 30, 9, 5, tzinfo=timezone.utc),
@@ -191,29 +197,48 @@ class ClientPlatformPostgresBackupS3Tests(unittest.TestCase):
             self.assertEqual(
                 keys,
                 [
-                    "postgres/2026/07/30/clientplatform-20260730T090218Z.dump",
-                    "postgres/2026/07/30/clientplatform-20260730T090218Z.dump.sha256",
-                    "postgres/2026/07/30/clientplatform-20260730T090218Z.dump.json",
+                    "postgres/2026/07/30/clientplatform-20260730T090218Z.dump.age",
+                    "postgres/2026/07/30/clientplatform-20260730T090218Z.dump.age.sha256",
+                    "postgres/2026/07/30/clientplatform-20260730T090218Z.dump.age.json",
                 ],
             )
             self.assertEqual(uploader.calls[-1][4]["clientplatform-bundle-role"], "metadata")
+            self.assertTrue(
+                all(call[4]["clientplatform-encryption"] == "age-x25519" for call in uploader.calls)
+            )
             self.assertEqual(os.stat(evidence).st_mode & 0o777, 0o600)
             payload = json.loads(evidence.read_text(encoding="utf-8"))
             self.assertTrue(payload["ok"])
-            self.assertEqual(payload["backup_bucket"], "clientplatform-backup-8493913")
+            self.assertEqual(payload["encryption"], "age-x25519")
             self.assertEqual(len(payload["objects"]), 3)
 
-    def test_checksum_mismatch_fails_before_any_remote_write(self) -> None:
+    def test_plaintext_dump_is_rejected_before_any_remote_write(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            dump = _bundle(root)
-            dump.write_bytes(b"tampered")
+            plaintext = root / "clientplatform-20260730T090218Z.dump"
+            plaintext.write_bytes(b"plaintext-must-not-leave-server")
+            uploader = FakeUploader()
+            with self.assertRaisesRegex(ValueError, "encrypted"):
+                upload_backup_bundle(
+                    uploader,
+                    _config(root),
+                    ciphertext_path=plaintext,
+                    prefix="postgres",
+                    evidence_dir=root / "evidence",
+                )
+            self.assertEqual(uploader.calls, [])
+
+    def test_ciphertext_mismatch_fails_before_any_remote_write(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            ciphertext = _encrypted_bundle(root)
+            ciphertext.write_bytes(b"tampered")
             uploader = FakeUploader()
             with self.assertRaisesRegex(ValueError, "checksum mismatch"):
                 upload_backup_bundle(
                     uploader,
                     _config(root),
-                    dump_path=dump,
+                    ciphertext_path=ciphertext,
                     prefix="postgres",
                     evidence_dir=root / "evidence",
                 )
@@ -231,7 +256,7 @@ class ClientPlatformPostgresBackupS3Tests(unittest.TestCase):
                 upload_backup_bundle(
                     uploader,
                     _config(root),
-                    dump_path=_bundle(root),
+                    ciphertext_path=_encrypted_bundle(root),
                     prefix="postgres",
                     evidence_dir=root / "evidence",
                 )
