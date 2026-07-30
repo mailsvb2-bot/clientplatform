@@ -36,11 +36,10 @@
         -Server
     }
 
+    # Keep access logs on stdout so the non-root Caddy container does not need
+    # write access to the shared application log volume.
     log {
-        output file /var/log/clientplatform/caddy-access.log {
-            roll_size 50MiB
-            roll_keep 10
-        }
+        output stdout
         format json
     }
 }
