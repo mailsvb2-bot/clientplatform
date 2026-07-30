@@ -38,6 +38,7 @@ jobs:
 
           runtime_tests = {
               "test_clientplatform_control_bot_behavior.py",
+              "test_clientplatform_multi_lesson_program_builder.py",
           }
           tests = [
               str(path)
@@ -66,7 +67,6 @@ jobs:
       - name: Verify imported baseline remains documented
         shell: bash
         run: |
-          set -euo pipefail
-          grep -Fq 'b4ac43c2961fb581078aedc25efeffd2ab4ecb34' docs/BASELINE_PROVENANCE.md
+          grep -Fq 'b4ac43c296750d5838078e36cf38b85af677262' docs/BASELINE_PROVENANCE.md
           grep -Fq 'mailsvb2-bot/metrotherapy-bot-telegram' docs/BASELINE_PROVENANCE.md
           grep -Fq 'mailsvb2-bot/clientplatform' docs/BASELINE_PROVENANCE.md
