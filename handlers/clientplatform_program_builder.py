@@ -15,6 +15,7 @@ from clientplatform.application.program_builder import (
 )
 from clientplatform.domain.programs import (
     ContentKind,
+    normalize_content_ref,
     normalize_lesson_title,
     normalize_program_title,
 )
@@ -167,7 +168,7 @@ async def capture_lesson_content(message: Message, state: FSMContext) -> None:
         await message.answer("Конструктор был закрыт. Откройте раздел программ заново.")
         return
 
-    business_id, program_title, lessons = session
+    _business_id, program_title, lessons = session
     if len(lessons) >= _MAX_LESSONS_PER_PROGRAM:
         await state.set_state(ClientPlatformProgramBuilderState.review)
         await message.answer(
@@ -184,12 +185,20 @@ async def capture_lesson_content(message: Message, state: FSMContext) -> None:
             "изображение или документ."
         )
         return
+    try:
+        normalized_ref = normalize_content_ref(content_ref)
+    except ValueError:
+        await message.answer(
+            "Материал урока слишком длинный. Отправьте не более 2048 символов "
+            "или приложите материал отдельным файлом."
+        )
+        return
 
     lessons.append(
         {
             "title": lesson_title,
             "content_kind": content_kind.value,
-            "content_ref": content_ref,
+            "content_ref": normalized_ref,
         }
     )
     await state.update_data(lessons=lessons, lesson_title="")
