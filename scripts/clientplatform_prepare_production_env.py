@@ -36,9 +36,18 @@ def _required(values: dict[str, str], name: str) -> str:
     return value
 
 
+def _exact_or_missing(values: dict[str, str], name: str, expected: str) -> None:
+    observed = str(values.get(name, "") or "").strip()
+    if observed and observed != expected:
+        raise EnvironmentPreparationError(f"mismatched_{name.lower()}")
+
+
 def prepare(path: Path) -> tuple[str, ...]:
-    resolved = path.expanduser().resolve()
-    if not resolved.is_file() or resolved.is_symlink():
+    expanded = path.expanduser()
+    if expanded.is_symlink():
+        raise EnvironmentPreparationError("production_env_must_be_regular_file")
+    resolved = expanded.resolve()
+    if not resolved.is_file():
         raise EnvironmentPreparationError("production_env_must_be_regular_file")
     mode = resolved.stat().st_mode & 0o777
     if mode & 0o077:
@@ -52,10 +61,17 @@ def prepare(path: Path) -> tuple[str, ...]:
     _required(values, "CLIENTPLATFORM_SECRET_S3_ACCESS_KEY")
     _required(values, "CLIENTPLATFORM_SECRET_S3_SECRET_KEY")
 
+    expected_public = f"https://{domain}"
+    expected_media = f"https://{domain}/clientplatform"
+    _exact_or_missing(values, "CLIENTPLATFORM_PUBLIC_BASE_URL", expected_public)
+    _exact_or_missing(values, "CLIENTPLATFORM_MEDIA_GATEWAY_BASE_URL", expected_media)
+    _exact_or_missing(values, "CLIENTPLATFORM_MEDIA_GATEWAY_ALLOWED_BUCKETS", bucket)
+    _exact_or_missing(values, "CLIENTPLATFORM_MEDIA_GATEWAY_STORAGE_MODE", "s3")
+
     defaults = {
-        "CLIENTPLATFORM_PUBLIC_BASE_URL": f"https://{domain}",
+        "CLIENTPLATFORM_PUBLIC_BASE_URL": expected_public,
         "CLIENTPLATFORM_MEDIA_GATEWAY_ENABLED": "1",
-        "CLIENTPLATFORM_MEDIA_GATEWAY_BASE_URL": f"https://{domain}/clientplatform",
+        "CLIENTPLATFORM_MEDIA_GATEWAY_BASE_URL": expected_media,
         "CLIENTPLATFORM_MEDIA_GATEWAY_STORAGE_MODE": "s3",
         "CLIENTPLATFORM_MEDIA_GATEWAY_ALLOWED_BUCKETS": bucket,
         "CLIENTPLATFORM_MEDIA_GATEWAY_S3_ACCESS_KEY_REFERENCE": (
