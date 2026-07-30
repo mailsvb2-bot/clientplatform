@@ -9,10 +9,7 @@ import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
-
-from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
-from aiogram.types import Message
+from typing import TYPE_CHECKING, Any
 
 from clientplatform.application.program_media import (
     ProgramMediaIngestPolicy,
@@ -22,8 +19,29 @@ from clientplatform.application.program_media import (
 )
 from clientplatform.domain.programs import ContentKind, normalize_content_ref
 
+if TYPE_CHECKING:
+    from aiogram.types import Message
+else:
+    Message = Any
+
 _EXTENSION_RE = re.compile(r"^[a-z0-9]{1,10}$")
 StoreMedia = Callable[..., Any]
+
+
+class _UnavailableTelegramBadRequest(Exception):
+    pass
+
+
+class _UnavailableTelegramNetworkError(Exception):
+    pass
+
+
+def _telegram_error_types() -> tuple[type[BaseException], type[BaseException]]:
+    try:
+        from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
+    except ImportError:
+        return _UnavailableTelegramBadRequest, _UnavailableTelegramNetworkError
+    return TelegramBadRequest, TelegramNetworkError
 
 
 class ProgramMediaIngestError(RuntimeError):
@@ -145,6 +163,7 @@ async def materialize_program_content(
     ):
         raise ProgramMediaIngestError("program_media_too_large")
 
+    telegram_bad_request, telegram_network_error = _telegram_error_types()
     temporary = _new_private_tempfile(media.extension)
     try:
         try:
@@ -160,12 +179,12 @@ async def materialize_program_content(
                 destination=temporary,
                 timeout=selected_policy.timeout_seconds,
             )
-        except (TelegramNetworkError, asyncio.TimeoutError):
+        except (telegram_network_error, asyncio.TimeoutError):
             raise ProgramMediaIngestError(
                 "program_media_telegram_transport_failure",
                 retryable=True,
             ) from None
-        except TelegramBadRequest:
+        except telegram_bad_request:
             raise ProgramMediaIngestError(
                 "program_media_telegram_file_unavailable"
             ) from None
