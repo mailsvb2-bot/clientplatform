@@ -1,0 +1,12 @@
+[Unit]
+Description=Create an encrypted ClientPlatform PostgreSQL backup every hour
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=5min
+AccuracySec=1min
+Persistent=true
+Unit=clientplatform-postgres-backup.service
+
+[Install]
+WantedBy=timers.target
