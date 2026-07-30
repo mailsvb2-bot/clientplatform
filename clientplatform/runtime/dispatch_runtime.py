@@ -187,7 +187,7 @@ async def run_configured_dispatch_tick(
             max_attempts=selected.config.media_cleanup_max_attempts,
             lock_ttl_seconds=selected.config.media_cleanup_lock_ttl_seconds,
         )
-    except Exception:
+    except Exception:  # validator: allow-wide-except - cleanup must not block customer delivery
         log.exception("Program media cleanup tick failed")
     return await run_dispatch_batch(
         credential_provider=selected.credential_provider,
