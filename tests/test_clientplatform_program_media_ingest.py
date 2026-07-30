@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import tempfile
 import unittest
@@ -18,6 +19,9 @@ from clientplatform.infrastructure.program_media_store import (
 )
 from handlers.clientplatform_program_media import (
     ProgramMediaIngestError,
+    _reported_size,
+    _safe_extension,
+    _select_media,
     materialize_program_content,
 )
 
@@ -75,13 +79,16 @@ class RecordingOpener:
 
 
 class FakeStore:
-    def __init__(self) -> None:
+    def __init__(self, error: ProgramMediaStoreError | None = None) -> None:
         self.paths: list[Path] = []
         self.calls: list[dict[str, Any]] = []
+        self.error = error
 
     def put_file(self, path: Path, **kwargs: Any) -> Any:
         self.paths.append(path)
         self.calls.append(kwargs)
+        if self.error is not None:
+            raise self.error
         if path.read_bytes() != b"program-media":
             raise AssertionError("downloaded payload mismatch")
         return SimpleNamespace(
@@ -90,10 +97,32 @@ class FakeStore:
 
 
 class FakeBot:
+    def __init__(
+        self,
+        *,
+        remote_path: str = "voice/file.ogg",
+        remote_size: Any = 13,
+        payload: bytes = b"program-media",
+        download_error: BaseException | None = None,
+    ) -> None:
+        self.remote_path = remote_path
+        self.remote_size = remote_size
+        self.payload = payload
+        self.download_error = download_error
+
     async def get_file(self, file_id: str) -> Any:
-        if file_id != "control-bot-file-id":
+        if file_id not in {
+            "control-bot-file-id",
+            "audio-id",
+            "video-id",
+            "document-id",
+            "photo-large-id",
+        }:
             raise AssertionError("unexpected Telegram file id")
-        return SimpleNamespace(file_path="voice/file.ogg", file_size=13)
+        return SimpleNamespace(
+            file_path=self.remote_path,
+            file_size=self.remote_size,
+        )
 
     async def download_file(
         self,
@@ -102,20 +131,32 @@ class FakeBot:
         destination: Path,
         timeout: float,
     ) -> None:
-        if file_path != "voice/file.ogg" or timeout != 30.0:
+        if file_path != self.remote_path or timeout != 30.0:
             raise AssertionError("unexpected Telegram download request")
-        destination.write_bytes(b"program-media")
+        if self.download_error is not None:
+            raise self.download_error
+        destination.write_bytes(self.payload)
 
 
 class FakeMessage:
-    def __init__(self, *, text: str | None = None, voice: Any = None) -> None:
+    def __init__(
+        self,
+        *,
+        text: str | None = None,
+        audio: Any = None,
+        voice: Any = None,
+        video: Any = None,
+        document: Any = None,
+        photo: list[Any] | None = None,
+        bot: FakeBot | None = None,
+    ) -> None:
         self.text = text
-        self.audio = None
+        self.audio = audio
         self.voice = voice
-        self.video = None
-        self.document = None
-        self.photo: list[Any] = []
-        self.bot = FakeBot()
+        self.video = video
+        self.document = document
+        self.photo = list(photo or [])
+        self.bot = bot or FakeBot()
 
 
 def enabled_env() -> dict[str, str]:
@@ -203,6 +244,84 @@ class ProgramMediaStoreTests(unittest.TestCase):
         self.assertEqual(stored.size, len(b"program-media"))
 
 
+class ProgramMediaSelectionTests(unittest.TestCase):
+    def test_all_supported_media_kinds_are_normalized(self) -> None:
+        cases = (
+            (
+                FakeMessage(
+                    audio=SimpleNamespace(
+                        file_id="audio-id",
+                        file_size="13",
+                        mime_type=None,
+                        file_name="track.MP3",
+                    )
+                ),
+                ContentKind.AUDIO,
+                "audio-id",
+                "audio/mpeg",
+                "mp3",
+            ),
+            (
+                FakeMessage(
+                    video=SimpleNamespace(
+                        file_id="video-id",
+                        file_size=None,
+                        mime_type=None,
+                        file_name="movie.bad extension",
+                    )
+                ),
+                ContentKind.VIDEO,
+                "video-id",
+                "video/mp4",
+                "mp4",
+            ),
+            (
+                FakeMessage(
+                    document=SimpleNamespace(
+                        file_id="document-id",
+                        file_size="invalid",
+                        mime_type=None,
+                        file_name=None,
+                    )
+                ),
+                ContentKind.DOCUMENT,
+                "document-id",
+                "application/octet-stream",
+                "bin",
+            ),
+            (
+                FakeMessage(
+                    photo=[
+                        SimpleNamespace(file_id="photo-small-id", file_size=5),
+                        SimpleNamespace(file_id="photo-large-id", file_size=13),
+                    ]
+                ),
+                ContentKind.IMAGE,
+                "photo-large-id",
+                "image/jpeg",
+                "jpg",
+            ),
+        )
+        for message, kind, file_id, content_type, extension in cases:
+            with self.subTest(kind=kind):
+                selected = _select_media(message)
+                self.assertIsNotNone(selected)
+                assert selected is not None
+                self.assertEqual(selected.content_kind, kind)
+                self.assertEqual(selected.file_id, file_id)
+                self.assertEqual(selected.content_type, content_type)
+                self.assertEqual(selected.extension, extension)
+
+    def test_extension_and_reported_size_fail_closed(self) -> None:
+        self.assertEqual(_safe_extension("folder/file.PDF", "bin"), "pdf")
+        self.assertEqual(_safe_extension("folder/no-extension", "bin"), "bin")
+        self.assertEqual(_safe_extension("unsafe.bad extension", "bin"), "bin")
+        self.assertIsNone(_reported_size(SimpleNamespace()))
+        self.assertIsNone(_reported_size(SimpleNamespace(file_size="invalid")))
+        self.assertIsNone(_reported_size(SimpleNamespace(file_size=-1)))
+        self.assertEqual(_reported_size(SimpleNamespace(file_size="15")), 15)
+
+
 class ProgramMediaIngestTests(unittest.IsolatedAsyncioTestCase):
     async def test_text_does_not_require_storage(self) -> None:
         kind, reference = await materialize_program_content(
@@ -211,6 +330,13 @@ class ProgramMediaIngestTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(kind, ContentKind.TEXT)
         self.assertEqual(reference, "Текст урока")
+
+    async def test_empty_message_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "поддерживаются"):
+            await materialize_program_content(
+                FakeMessage(),
+                business_id=str(uuid4()),
+            )
 
     async def test_media_is_externalized_and_temporary_file_is_removed(self) -> None:
         store = FakeStore()
@@ -275,6 +401,64 @@ class ProgramMediaIngestTests(unittest.IsolatedAsyncioTestCase):
                 ),
                 store_media=FakeStore().put_file,
             )
+
+    async def test_download_and_storage_failures_leave_no_temporary_file(self) -> None:
+        cases = (
+            (
+                FakeBot(remote_path=""),
+                FakeStore(),
+                "program_media_telegram_path_missing",
+            ),
+            (
+                FakeBot(remote_size=20_000_001),
+                FakeStore(),
+                "program_media_too_large",
+            ),
+            (
+                FakeBot(payload=b""),
+                FakeStore(),
+                "program_media_download_empty",
+            ),
+            (
+                FakeBot(payload=b"different"),
+                FakeStore(),
+                "program_media_download_size_mismatch",
+            ),
+            (
+                FakeBot(download_error=asyncio.TimeoutError()),
+                FakeStore(),
+                "program_media_telegram_transport_failure",
+            ),
+            (
+                FakeBot(),
+                FakeStore(
+                    ProgramMediaStoreError(
+                        "program_media_upload_transport_failure",
+                        retryable=True,
+                    )
+                ),
+                "program_media_upload_transport_failure",
+            ),
+        )
+        for bot, store, code in cases:
+            with self.subTest(code=code):
+                message = FakeMessage(
+                    voice=SimpleNamespace(
+                        file_id="control-bot-file-id",
+                        file_size=13,
+                        mime_type="audio/ogg",
+                    ),
+                    bot=bot,
+                )
+                with self.assertRaisesRegex(ProgramMediaIngestError, code):
+                    await materialize_program_content(
+                        message,
+                        business_id=str(uuid4()),
+                        policy=enabled_policy(),
+                        store_media=store.put_file,
+                    )
+                for path in store.paths:
+                    self.assertFalse(path.exists())
 
 
 if __name__ == "__main__":
