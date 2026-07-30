@@ -362,10 +362,9 @@ class S3Client:
             now=self._clock(),
         )
         signed.update(selected_headers)
-        url = f"{self._config.endpoint}{path[len(self._config.endpoint_path):]}"
         canonical_query = _canonical_query(selected_query)
-        if canonical_query:
-            url = f"{url}?{canonical_query}"
+        encoded_path = quote(path, safe="/-_.~%")
+        url = urlunsplit(("https", self._config.endpoint_host, encoded_path, canonical_query, ""))
         request = Request(
             url,
             data=payload if method.upper() in {"PUT", "POST"} else None,
@@ -526,6 +525,20 @@ class S3Client:
             raise ReplicationError("copy_object_failed")
 
 
+def _source_matches(headers: Mapping[str, str] | None, entry: ObjectEntry) -> bool:
+    if headers is None:
+        return False
+    selected = _headers_lower(headers)
+    try:
+        content_length = int(selected.get("content-length", "-1"))
+    except ValueError:
+        return False
+    return (
+        content_length == entry.size
+        and _normalize_etag(selected.get("etag", "")) == entry.etag
+    )
+
+
 def _destination_matches(headers: Mapping[str, str] | None, entry: ObjectEntry) -> bool:
     if headers is None:
         return False
@@ -560,7 +573,8 @@ def _base_evidence(
         "completed_at": "",
         "source_versioning": "unknown",
         "backup_versioning": "unknown",
-        "prefix": "",
+        "prefix_applied": False,
+        "prefix_sha256": "",
         "scanned": 0,
         "copied": 0,
         "skipped": 0,
@@ -591,7 +605,8 @@ def sync_objects(
 ) -> dict[str, object]:
     started_at = started or _utc_now()
     evidence = _base_evidence(config, "sync", started_at)
-    evidence["prefix"] = prefix
+    evidence["prefix_applied"] = bool(prefix)
+    evidence["prefix_sha256"] = hashlib.sha256(prefix.encode("utf-8")).hexdigest() if prefix else ""
     source_versioning, backup_versioning = _require_versioning(client, config)
     evidence["source_versioning"] = source_versioning
     evidence["backup_versioning"] = backup_versioning
@@ -612,6 +627,8 @@ def sync_objects(
             source_headers = client.head_object(config.source_bucket, entry.key)
             if source_headers is None:
                 raise ReplicationError("source_object_disappeared_during_sync")
+            if not _source_matches(source_headers, entry):
+                raise ReplicationError("source_object_changed_during_sync")
             client.copy_object(
                 source_bucket=config.source_bucket,
                 backup_bucket=config.backup_bucket,
