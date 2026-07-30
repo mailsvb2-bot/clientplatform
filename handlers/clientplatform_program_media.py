@@ -17,6 +17,7 @@ from clientplatform.application.program_media import (
     program_media_ingest_policy,
     store_program_media,
 )
+from clientplatform.domain.program_media import mark_voice_media_reference
 from clientplatform.domain.programs import ContentKind, normalize_content_ref
 
 if TYPE_CHECKING:
@@ -61,6 +62,7 @@ class TelegramMediaInput:
     reported_size: int | None
     content_type: str
     extension: str
+    voice: bool = False
 
 
 def _safe_extension(value: str | None, fallback: str) -> str:
@@ -98,6 +100,7 @@ def _select_media(message: Message) -> TelegramMediaInput | None:
             reported_size=_reported_size(message.voice),
             content_type=str(message.voice.mime_type or "audio/ogg"),
             extension="ogg",
+            voice=True,
         )
     if message.video is not None:
         return TelegramMediaInput(
@@ -214,7 +217,10 @@ async def materialize_program_content(
                 exc.code,
                 retryable=exc.retryable,
             ) from None
-        return media.content_kind, normalize_content_ref(stored.reference)
+        reference = normalize_content_ref(stored.reference)
+        if media.voice:
+            reference = mark_voice_media_reference(reference)
+        return media.content_kind, reference
     finally:
         try:
             temporary.unlink(missing_ok=True)
