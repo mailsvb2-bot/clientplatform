@@ -102,13 +102,10 @@ python scripts/clientplatform_postgres_backup_crypto.py decrypt \
   --output /tmp/clientplatform-restore.dump
 ```
 
-Канонический restore-drill дополнительно требует checksum-манифест рядом с временным dump:
+Команда проверяет plaintext SHA-256 из зашифрованных метаданных и автоматически создаёт рядом owner-only манифест:
 
-```bash
-(
-  cd /tmp
-  sha256sum clientplatform-restore.dump > clientplatform-restore.dump.sha256
-)
+```text
+/tmp/clientplatform-restore.dump.sha256
 ```
 
 Затем административный DSN передаётся только на время drill:
