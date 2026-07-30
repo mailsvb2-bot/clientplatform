@@ -35,6 +35,10 @@ jobs:
       LOAD_DOTENV: "0"
       METRO_DB_ENGINE: postgres
       DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/clientplatform_backup_ci
+      CLIENTPLATFORM_POSTGRES_CLIENT_MAJOR: "16"
+      CLIENTPLATFORM_PG_DUMP_PATH: /usr/lib/postgresql/16/bin/pg_dump
+      CLIENTPLATFORM_PG_RESTORE_PATH: /usr/lib/postgresql/16/bin/pg_restore
+      CLIENTPLATFORM_PSQL_PATH: /usr/lib/postgresql/16/bin/psql
       CLIENTPLATFORM_BACKUP_DIR: /tmp/clientplatform-encrypted-backups
       CLIENTPLATFORM_BACKUP_RETENTION_DAYS: "30"
       CLIENTPLATFORM_BACKUP_ENCRYPTION_REQUIRED: "1"
@@ -62,8 +66,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes age postgresql-client-16
           age --version
-          pg_dump --version
-          pg_restore --version
+          "$CLIENTPLATFORM_PG_DUMP_PATH" --version
+          "$CLIENTPLATFORM_PG_RESTORE_PATH" --version
+          "$CLIENTPLATFORM_PSQL_PATH" --version
           python -m pip install --disable-pip-version-check pip==26.1.2
           python -m pip install --require-hashes -r requirements-dev.txt
 
@@ -73,6 +78,7 @@ jobs:
             tests/test_clientplatform_postgres_backup_crypto.py \
             tests/test_clientplatform_postgres_backup_pipeline.py \
             tests/test_clientplatform_postgres_backup_s3.py \
+            tests/test_clientplatform_postgres_backup_tools.py \
             2>&1 | tee "$RUNNER_TEMP/clientplatform-encrypted-backup-tests.log"
 
       - name: Initialize live PostgreSQL schema
@@ -121,7 +127,8 @@ jobs:
             --output "$RUNNER_TEMP/clientplatform-restore.dump" \
             | tee "$RUNNER_TEMP/clientplatform-backup-decrypt.log"
           test -f "$RUNNER_TEMP/clientplatform-restore.dump.sha256"
-          pg_restore --list "$RUNNER_TEMP/clientplatform-restore.dump" \
+          "$CLIENTPLATFORM_PG_RESTORE_PATH" --list \
+            "$RUNNER_TEMP/clientplatform-restore.dump" \
             | grep -E 'TABLE DATA public (businesses|managed_bots|delivery_dispatch_outbox)' \
             > "$RUNNER_TEMP/clientplatform-encrypted-backup-tables.log"
           python -m scripts.clientplatform_postgres_backup restore-drill \
@@ -131,11 +138,15 @@ jobs:
             "$RUNNER_TEMP/clientplatform-restore.dump" \
             "$RUNNER_TEMP/clientplatform-restore.dump.sha256"
 
-      - name: Verify production image contains age
+      - name: Verify production image contains age and PostgreSQL 16 clients
         run: |
           docker build --file deploy/clientplatform/Dockerfile \
             --tag clientplatform-encrypted-backup:ci .
           docker run --rm --entrypoint age clientplatform-encrypted-backup:ci --version
+          docker run --rm --entrypoint /usr/lib/postgresql/16/bin/pg_dump \
+            clientplatform-encrypted-backup:ci --version
+          docker run --rm --entrypoint /usr/lib/postgresql/16/bin/pg_restore \
+            clientplatform-encrypted-backup:ci --version
 
       - name: Upload encrypted backup evidence
         if: always()
