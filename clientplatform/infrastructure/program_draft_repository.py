@@ -6,6 +6,7 @@ from typing import Any
 from clientplatform.domain.programs import (
     ContentKind,
     Lesson,
+    LessonStatus,
     Program,
     ProgramInvariantViolation,
     ProgramNotFound,
@@ -40,6 +41,17 @@ class ProgramDraftRepository:
         self._conn = conn
         self._tenancy = TenancyRepository(conn)
         self._programs = ProgramRepository(conn)
+
+    @staticmethod
+    def _active_record(record: ProgramRecord) -> ProgramRecord:
+        return ProgramRecord(
+            program=record.program,
+            lessons=tuple(
+                lesson
+                for lesson in record.lessons
+                if lesson.status == LessonStatus.ACTIVE
+            ),
+        )
 
     def _resolve_manager(self, actor: TenantContext) -> TenantContext:
         current = self._tenancy.resolve_context(
@@ -77,7 +89,7 @@ class ProgramDraftRepository:
         )
         if record.program.status != ProgramStatus.DRAFT:
             raise ProgramInvariantViolation("only a draft program can be edited")
-        return record
+        return self._active_record(record)
 
     def _lesson_program_id(
         self,
@@ -191,7 +203,7 @@ class ProgramDraftRepository:
         )
         if record.program.status != ProgramStatus.DRAFT:
             raise ProgramInvariantViolation("only a draft program can be edited")
-        return record
+        return self._active_record(record)
 
     def get_lesson_draft(
         self,
