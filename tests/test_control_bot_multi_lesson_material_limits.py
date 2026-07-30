@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import importlib
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
+
+from clientplatform.domain.programs import ContentKind
 
 builder = importlib.import_module("handlers.clientplatform_program_builder")
 
@@ -44,25 +47,44 @@ class FakeState:
 
 
 @pytest.mark.asyncio
-async def test_oversized_text_is_rejected_without_losing_session_lessons() -> None:
-    existing = {
-        "title": "Первый урок",
-        "content_kind": "text",
-        "content_ref": "Короткий материал",
-    }
+async def test_oversized_text_is_rejected_without_mutating_saved_draft(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    existing = SimpleNamespace(
+        position=1,
+        title="Первый урок",
+        content_kind=ContentKind.TEXT,
+        content_ref="Короткий материал",
+    )
+    record = SimpleNamespace(
+        program=SimpleNamespace(title="Программа"),
+        lessons=[existing],
+    )
+
+    async def fake_load_draft(**_kwargs: Any) -> Any:
+        return record
+
+    monkeypatch.setattr(builder, "_load_draft", fake_load_draft)
+    monkeypatch.setattr(
+        builder,
+        "add_program_lesson",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("oversized material must not be persisted")
+        ),
+    )
+
     state = FakeState(
         {
             "business_id": "1cd84a1e-626b-4eb9-bb9f-9dd7da118769",
-            "program_title": "Программа",
+            "program_id": "4f669f28-1880-4607-b67d-d86f19fca28b",
             "lesson_title": "Длинный урок",
-            "lessons": [existing],
         }
     )
     message = FakeMessage("x" * 2049)
 
     await builder.capture_lesson_content(message, state)
 
-    assert state.data["lessons"] == [existing]
+    assert record.lessons == [existing]
     assert state.data["lesson_title"] == "Длинный урок"
     assert state.clear_count == 0
     assert state.states == []
