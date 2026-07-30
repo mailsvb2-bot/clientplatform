@@ -62,6 +62,7 @@ def run_backup_pipeline(env: Mapping[str, str] | None = None) -> tuple[Encrypted
         retention_days=retention_days,
         now=now,
     )
+    encrypted: EncryptedBackupBundle | None = None
     try:
         encrypted = encrypt_backup_bundle(
             dump,
@@ -69,9 +70,11 @@ def run_backup_pipeline(env: Mapping[str, str] | None = None) -> tuple[Encrypted
             remove_plaintext=True,
             now=now,
         )
-    except (OSError, RuntimeError, ValueError, TypeError):
-        _clean_plaintext_bundle(dump)
-        raise
+    finally:
+        if encrypted is None:
+            _clean_plaintext_bundle(dump)
+    if encrypted is None:
+        raise RuntimeError("PostgreSQL backup encryption did not produce a bundle")
 
     _prune_encrypted(backup_dir, retention_days=retention_days, now=now)
     upload_evidence: Path | None = None
