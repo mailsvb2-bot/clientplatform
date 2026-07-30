@@ -31,7 +31,7 @@ jobs:
           --health-timeout 5s
           --health-retries 12
     env:
-      APP_ENV: prod
+      APP_ENV: dev
       LOAD_DOTENV: "0"
       METRO_DB_ENGINE: postgres
       DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/clientplatform_backup_ci
