@@ -72,13 +72,16 @@ jobs:
           python -m pip install --disable-pip-version-check pip==26.1.2
           python -m pip install --require-hashes -r requirements-dev.txt
 
-      - name: Encrypted backup unit contracts
+      - name: Encrypted backup and schedule unit contracts
         run: |
+          bash -n deploy/clientplatform/run-postgres-backup-operation.sh
           python -m unittest -v \
             tests/test_clientplatform_postgres_backup_crypto.py \
             tests/test_clientplatform_postgres_backup_pipeline.py \
             tests/test_clientplatform_postgres_backup_s3.py \
             tests/test_clientplatform_postgres_backup_tools.py \
+            tests/test_clientplatform_postgres_backup_freshness.py \
+            tests/test_clientplatform_postgres_backup_schedule.py \
             2>&1 | tee "$RUNNER_TEMP/clientplatform-encrypted-backup-tests.log"
 
       - name: Initialize live PostgreSQL schema
@@ -138,6 +141,50 @@ jobs:
             "$RUNNER_TEMP/clientplatform-restore.dump" \
             "$RUNNER_TEMP/clientplatform-restore.dump.sha256"
 
+      - name: Prove offsite freshness CLI against committed evidence
+        env:
+          CLIENTPLATFORM_POSTGRES_BACKUP_S3_ENABLED: "1"
+          CLIENTPLATFORM_POSTGRES_BACKUP_FRESHNESS_REQUIRED: "1"
+          CLIENTPLATFORM_POSTGRES_BACKUP_MAX_AGE_SECONDS: "10800"
+          CLIENTPLATFORM_POSTGRES_BACKUP_S3_EVIDENCE_DIR: /tmp/clientplatform-postgres-backup-s3-evidence
+        run: |
+          umask 077
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          root = Path(os.environ["CLIENTPLATFORM_POSTGRES_BACKUP_S3_EVIDENCE_DIR"])
+          root.mkdir(parents=True, exist_ok=True)
+          keys = [
+              "postgres/ci/clientplatform-ci.dump.age",
+              "postgres/ci/clientplatform-ci.dump.age.sha256",
+              "postgres/ci/clientplatform-ci.dump.age.json",
+          ]
+          payload = {
+              "schema_version": 1,
+              "ok": True,
+              "operation": "postgres_backup_s3_upload",
+              "encryption": "age-x25519",
+              "completed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+              "objects": [
+                  {
+                      "key": key,
+                      "size": index + 1,
+                      "sha256": hashlib.sha256(key.encode("utf-8")).hexdigest(),
+                  }
+                  for index, key in enumerate(keys)
+              ],
+          }
+          evidence = root / "latest.json"
+          evidence.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+          evidence.chmod(0o600)
+          PY
+          python -m scripts.clientplatform_postgres_backup_freshness \
+            | tee "$RUNNER_TEMP/clientplatform-postgres-backup-freshness.log"
+
       - name: Verify production image contains age and PostgreSQL 16 clients
         run: |
           docker build --file deploy/clientplatform/Dockerfile \
@@ -160,4 +207,5 @@ jobs:
             ${{ runner.temp }}/clientplatform-backup-decrypt.log
             ${{ runner.temp }}/clientplatform-encrypted-backup-tables.log
             ${{ runner.temp }}/clientplatform-encrypted-restore-drill.log
+            ${{ runner.temp }}/clientplatform-postgres-backup-freshness.log
           if-no-files-found: warn
