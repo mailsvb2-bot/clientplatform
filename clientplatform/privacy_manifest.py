@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 TenantDisposition = Literal["erase", "retain", "anonymize"]
-CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-07-29.v7"
+CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-07-30.v8"
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,6 +83,15 @@ _POLICIES = (
         table="lessons",
         disposition="retain",
         reason="business-owned lesson definition and content reference",
+        required=True,
+    ),
+    TenantPrivacyPolicy(
+        table="program_media_cleanup_queue",
+        disposition="erase",
+        reason=(
+            "temporary tenant-owned object-storage cleanup reference and retry state; "
+            "erasure removes the object reference and pending cleanup metadata"
+        ),
         required=True,
     ),
     TenantPrivacyPolicy(
