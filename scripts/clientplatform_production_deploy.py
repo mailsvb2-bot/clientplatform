@@ -11,7 +11,7 @@ import subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, BinaryIO, Sequence
 
 from scripts.clientplatform_prepare_production_env import prepare
 
@@ -97,6 +97,13 @@ def _container_image(container: str) -> str:
     return image
 
 
+def _sha256_stream(handle: BinaryIO) -> str:
+    digest = hashlib.sha256()
+    while chunk := handle.read(1024 * 1024):
+        digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _local_backup(target_sha: str) -> Path:
     LOCAL_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     os.chmod(LOCAL_BACKUP_DIR, 0o700)
@@ -126,7 +133,8 @@ def _local_backup(target_sha: str) -> Path:
         target.unlink(missing_ok=True)
         raise DeploymentError("local_predeploy_backup_failed")
     os.chmod(target, 0o600)
-    digest = hashlib.sha256(target.read_bytes()).hexdigest()
+    with target.open("rb") as handle:
+        digest = _sha256_stream(handle)
     checksum = target.with_suffix(target.suffix + ".sha256")
     checksum.write_text(f"{digest}  {target.name}\n", encoding="ascii")
     os.chmod(checksum, 0o600)
@@ -270,7 +278,7 @@ def deploy(*, allow_local_backup: bool, timeout_seconds: int) -> Path:
         _run([*compose, "up", "-d", "--force-recreate", "app", "caddy"])
         _wait_for_readiness(timeout_seconds)
         _external_https(domain)
-    except Exception:
+    except Exception:  # validator: allow-wide-except - rollback must cover every failed gate
         if changed:
             _run(["docker", "image", "tag", rollback_tag, f"{APP_IMAGE}:latest"], check=False)
             _run(
