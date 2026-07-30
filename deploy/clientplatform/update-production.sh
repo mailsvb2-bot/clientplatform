@@ -38,4 +38,4 @@ fi
 chmod 600 deploy/clientplatform/clientplatform.env
 [ ! -f deploy/clientplatform/.env ] || chmod 600 deploy/clientplatform/.env
 
-exec python3 scripts/clientplatform_production_deploy.py "$@"
+exec python3 -m scripts.clientplatform_production_deploy "$@"
