@@ -108,12 +108,18 @@ def queue_program_media_cleanup(
     media_reference: str,
     reason: str,
 ) -> bool:
-    return stage_program_media_cleanup(
-        business_id=business_id,
-        media_reference=media_reference,
-        reason=reason,
-        delay_seconds=0,
-    )
+    if not is_private_program_media_reference(media_reference):
+        return False
+    with get_db() as conn:
+        repository = ProgramMediaCleanupRepository(conn)
+        repository.discard(media_reference=media_reference)
+        repository.enqueue(
+            business_id=business_id,
+            media_reference=media_reference,
+            reason=reason,
+            delay_seconds=0,
+        )
+    return True
 
 
 def run_program_media_cleanup_batch(
