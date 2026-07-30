@@ -92,7 +92,7 @@ class ClientPlatformPostgresBackupCryptoTests(unittest.TestCase):
             self.assertTrue(dump.with_suffix(".dump.json").is_file())
             self.assertFalse(dump.with_suffix(".dump.age").exists())
 
-    def test_decrypt_verifies_identity_permissions_and_plaintext_checksum(self) -> None:
+    def test_decrypt_creates_owner_only_restore_and_checksum(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             payload = b"restore-me"
@@ -122,8 +122,12 @@ class ClientPlatformPostgresBackupCryptoTests(unittest.TestCase):
                 output_path=root / "restore.dump",
                 run_command=fake_decrypt,
             )
+            checksum = restored.with_suffix(".dump.sha256")
+            expected_sha = hashlib.sha256(payload).hexdigest()
             self.assertEqual(restored.read_bytes(), payload)
+            self.assertEqual(checksum.read_text(encoding="utf-8"), f"{expected_sha}  restore.dump\n")
             self.assertEqual(os.stat(restored).st_mode & 0o777, 0o600)
+            self.assertEqual(os.stat(checksum).st_mode & 0o777, 0o600)
 
             identity.chmod(0o644)
             with self.assertRaisesRegex(ValueError, "must not be accessible"):
@@ -133,6 +137,8 @@ class ClientPlatformPostgresBackupCryptoTests(unittest.TestCase):
                     output_path=root / "second.dump",
                     run_command=fake_decrypt,
                 )
+            self.assertFalse((root / "second.dump").exists())
+            self.assertFalse((root / "second.dump.sha256").exists())
 
     def test_recipient_is_required_and_restricted_to_x25519_age_format(self) -> None:
         self.assertEqual(
