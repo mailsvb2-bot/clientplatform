@@ -88,8 +88,10 @@ DEEP_ENV = {
 }
 
 CLIENTPLATFORM_SCENARIO_TESTS = (
-    # Canonical first vertical: control-bot media -> private storage -> program ->
-    # managed business bot -> customer progress -> restart/replay -> tenant isolation.
+    # Canonical first vertical: durable ingress replay -> control-bot media ->
+    # private storage -> program -> managed bot delivery -> retry/restart ->
+    # customer progress -> tenant isolation.
+    "tests/test_clientplatform_first_vertical_ingress_replay.py",
     "tests/test_clientplatform_first_vertical_e2e.py",
     # Public entry and the most important vertical boundaries remain visible by name.
     "tests/test_handlers_clientplatform_managed_bot_entry.py",
