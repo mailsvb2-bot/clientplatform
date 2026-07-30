@@ -104,7 +104,7 @@ def verify_media_gateway_signature(
 
 
 class SafeMediaReferenceResolver:
-    """Allow Telegram file IDs and HTTPS URLs, reject private storage schemes."""
+    """Allow Telegram file IDs and HTTPS URLs for explicit local/dev use."""
 
     async def resolve(self, reference: str, kind: ContentKind) -> str:
         del kind
@@ -114,9 +114,9 @@ class SafeMediaReferenceResolver:
 class HmacMediaGatewayResolver:
     """Convert private ``s3://`` references into short-lived gateway URLs.
 
-    The signing secret is resolved for each send and never persisted. The
-    gateway validates the same canonical string and streams the private object
-    only until the expiry timestamp.
+    Gateway mode is bot-independent: raw Telegram ``file_id`` values are
+    rejected because they belong to the bot that received the original file and
+    cannot be reused by another business bot.
     """
 
     def __init__(
@@ -151,6 +151,8 @@ class HmacMediaGatewayResolver:
         del kind
         normalized = str(reference or "").strip()
         if not normalized.startswith("s3://"):
+            if "://" not in normalized:
+                raise MediaReferenceError("media_bot_local_reference_not_portable")
             return _provider_safe_reference(normalized)
 
         bucket, key = parse_s3_reference(normalized)
