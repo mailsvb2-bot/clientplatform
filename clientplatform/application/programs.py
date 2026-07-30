@@ -10,6 +10,7 @@ from clientplatform.domain.programs import (
 )
 from clientplatform.domain.tenancy import TenantContext
 from clientplatform.infrastructure.delivery_repository import DeliveryRepository
+from clientplatform.infrastructure.program_draft_repository import ProgramDraftRepository
 from clientplatform.infrastructure.program_repository import ProgramRepository
 from services.db import get_db, get_db_ro
 
@@ -58,6 +59,18 @@ def publish_program(
         )
 
 
+def archive_program_draft(
+    *,
+    actor: TenantContext,
+    program_id: str,
+) -> Program:
+    with get_db() as conn:
+        return ProgramDraftRepository(conn).archive_draft(
+            actor=actor,
+            program_id=program_id,
+        )
+
+
 def get_program(
     *,
     actor: TenantContext,
@@ -65,6 +78,18 @@ def get_program(
 ) -> ProgramRecord:
     with get_db_ro() as conn:
         return ProgramRepository(conn).get_program(
+            actor=actor,
+            program_id=program_id,
+        )
+
+
+def get_program_draft(
+    *,
+    actor: TenantContext,
+    program_id: str,
+) -> ProgramRecord:
+    with get_db_ro() as conn:
+        return ProgramDraftRepository(conn).get_draft(
             actor=actor,
             program_id=program_id,
         )
@@ -80,6 +105,14 @@ def list_programs(
             actor=actor,
             include_archived=include_archived,
         )
+
+
+def list_program_drafts(
+    *,
+    actor: TenantContext,
+) -> list[Program]:
+    with get_db_ro() as conn:
+        return ProgramDraftRepository(conn).list_drafts(actor=actor)
 
 
 def enroll_customer_in_program(
