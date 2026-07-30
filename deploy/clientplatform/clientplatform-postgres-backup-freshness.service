@@ -1,0 +1,39 @@
+[Unit]
+Description=Verify the latest offsite ClientPlatform PostgreSQL backup is fresh
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+ConditionPathExists=/opt/clientplatform/deploy/clientplatform/compose.production.yml
+ConditionPathExists=/opt/clientplatform/deploy/clientplatform/clientplatform.env
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/opt/clientplatform/deploy/clientplatform
+Environment=CLIENTPLATFORM_COMPOSE_DIR=/opt/clientplatform/deploy/clientplatform
+Environment=DOCKER_CONFIG=/run/clientplatform-postgres-backup-freshness/docker
+RuntimeDirectory=clientplatform-postgres-backup-freshness
+RuntimeDirectoryMode=0700
+ExecStart=/usr/bin/flock --wait 600 /run/lock/clientplatform-postgres-backup.lock /bin/bash /opt/clientplatform/deploy/clientplatform/run-postgres-backup-operation.sh freshness
+TimeoutStartSec=15min
+Nice=10
+CPUWeight=10
+IOWeight=10
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictRealtime=true
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX
+ReadWritePaths=/run/clientplatform-postgres-backup-freshness /run/lock
+UMask=0077
