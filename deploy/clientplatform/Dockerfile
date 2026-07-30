@@ -1,20 +1,43 @@
-FROM python:3.12-slim-bookworm
+FROM python:3.12-slim-bookworm AS python-runtime
+
+FROM postgres:16-bookworm
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    PATH=/usr/lib/postgresql/16/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
 
-RUN apt-get update \
-    && apt-get install --yes --no-install-recommends age ca-certificates curl \
-    && install -d -m 0755 /usr/share/postgresql-common/pgdg \
-    && curl --fail --silent --show-error \
-       --output /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
-       https://www.postgresql.org/media/keys/ACCC4CF8.asc \
-    && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" \
-       > /etc/apt/sources.list.d/pgdg.list \
-    && apt-get update \
-    && apt-get install --yes --no-install-recommends postgresql-client-16 \
+# Reuse the official Python 3.12 runtime and the PostgreSQL 16 toolchain from
+# their immutable upstream images. Only Debian's standard repository is needed
+# at build time; no external PostgreSQL package repository or signing key is used.
+COPY --from=python-runtime /usr/local /usr/local
+
+RUN apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=60 update \
+    && apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=60 install \
+       --yes --no-install-recommends \
+       age \
+       ca-certificates \
+       libbz2-1.0 \
+       libexpat1 \
+       libffi8 \
+       libgdbm-compat4 \
+       libgdbm6 \
+       liblzma5 \
+       libncursesw6 \
+       libreadline8 \
+       libsqlite3-0 \
+       libssl3 \
+       libuuid1 \
+       netbase \
+       tzdata \
+       zlib1g \
     && rm -rf /var/lib/apt/lists/* \
+    && python --version \
+    && python -c "import bz2, ctypes, lzma, readline, sqlite3, ssl, uuid, zlib" \
+    && test "$(pg_dump --version | awk '{print $3}' | cut -d. -f1)" = "16" \
+    && test "$(pg_restore --version | awk '{print $3}' | cut -d. -f1)" = "16" \
+    && test "$(psql --version | awk '{print $3}' | cut -d. -f1)" = "16" \
+    && age --version \
     && groupadd --system --gid 10001 clientplatform \
     && useradd --system --uid 10001 --gid clientplatform --home /var/lib/clientplatform clientplatform \
     && mkdir -p /app /var/lib/clientplatform /var/log/clientplatform /var/backups/clientplatform \
@@ -29,3 +52,4 @@ USER clientplatform
 EXPOSE 8181 8182 8191
 
 ENTRYPOINT ["python", "main.py"]
+CMD []

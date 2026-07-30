@@ -5,7 +5,9 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
+from config import settings as runtime_settings
 from scripts import clientplatform_prepare_production_env as prepare_env
 from scripts import clientplatform_production_deploy as production_deploy
 
@@ -97,6 +99,17 @@ class ProductionEnvironmentPreparationTests(unittest.TestCase):
             ):
                 prepare_env.prepare(path)
 
+    def test_trusted_proxy_parser_ignores_empty_csv_segments(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {
+                "TRUST_PROXY_HEADERS": "1",
+                "PAYMENT_WEBHOOK_TRUSTED_PROXY_CIDRS": ",172.18.0.0/16,,",
+            },
+            clear=False,
+        ):
+            runtime_settings._validate_trusted_proxy_env()
+
 
 class ProductionDeploymentContractTests(unittest.TestCase):
     def test_backup_checksum_is_streamed(self) -> None:
@@ -135,7 +148,27 @@ class ProductionDeploymentContractTests(unittest.TestCase):
         self.assertIn('git reset --hard "$TARGET_SHA"', updater)
         self.assertNotIn("git clean", updater)
         self.assertIn("clientplatform.env", updater)
-        self.assertIn("clientplatform_production_deploy.py", updater)
+        self.assertIn(
+            'exec python3 -m scripts.clientplatform_production_deploy "$@"',
+            updater,
+        )
+        self.assertNotIn("python3 scripts/clientplatform_production_deploy.py", updater)
+
+    def test_production_image_uses_official_postgres_toolchain_without_pgdg_fetch(self) -> None:
+        dockerfile = (
+            Path(production_deploy.ROOT) / "deploy/clientplatform/Dockerfile"
+        ).read_text(encoding="utf-8")
+        self.assertIn("FROM python:3.12-slim-bookworm AS python-runtime", dockerfile)
+        self.assertIn("FROM postgres:16-bookworm", dockerfile)
+        self.assertIn("COPY --from=python-runtime /usr/local /usr/local", dockerfile)
+        self.assertIn("pg_dump --version", dockerfile)
+        self.assertIn("pg_restore --version", dockerfile)
+        self.assertIn("psql --version", dockerfile)
+        self.assertIn("Acquire::Retries=5", dockerfile)
+        self.assertNotIn("apt.postgresql.org", dockerfile)
+        self.assertNotIn("www.postgresql.org", dockerfile)
+        self.assertNotIn("ACCC4CF8", dockerfile)
+        self.assertNotIn("postgresql-client-16", dockerfile)
 
 
 if __name__ == "__main__":
