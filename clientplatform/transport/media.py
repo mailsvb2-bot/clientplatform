@@ -10,6 +10,7 @@ from collections.abc import Callable
 from typing import Protocol
 from urllib.parse import quote, urlsplit, urlunsplit
 
+from clientplatform.domain.program_media import unwrap_program_media_reference
 from clientplatform.domain.programs import ContentKind
 from clientplatform.transport.base import CredentialProvider
 
@@ -112,11 +113,12 @@ class SafeMediaReferenceResolver:
 
 
 class HmacMediaGatewayResolver:
-    """Convert private ``s3://`` references into short-lived gateway URLs.
+    """Convert private S3 references into short-lived gateway URLs.
 
     Gateway mode is bot-independent: raw Telegram ``file_id`` values are
     rejected because they belong to the bot that received the original file and
-    cannot be reused by another business bot.
+    cannot be reused by another business bot. ``voice+s3://`` keeps Telegram
+    voice delivery semantics while resolving the same private object boundary.
     """
 
     def __init__(
@@ -150,12 +152,13 @@ class HmacMediaGatewayResolver:
     async def resolve(self, reference: str, kind: ContentKind) -> str:
         del kind
         normalized = str(reference or "").strip()
-        if not normalized.startswith("s3://"):
+        storage_reference = unwrap_program_media_reference(normalized)
+        if not storage_reference.startswith("s3://"):
             if "://" not in normalized:
                 raise MediaReferenceError("media_bot_local_reference_not_portable")
             return _provider_safe_reference(normalized)
 
-        bucket, key = parse_s3_reference(normalized)
+        bucket, key = parse_s3_reference(storage_reference)
         secret = str(
             await asyncio.to_thread(
                 self._credential_provider.resolve,
