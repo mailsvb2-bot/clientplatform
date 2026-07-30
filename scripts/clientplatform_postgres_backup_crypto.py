@@ -220,7 +220,9 @@ def decrypt_backup_bundle(
     output = output_path.expanduser().resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
     partial = output.with_suffix(output.suffix + ".partial")
+    checksum = output.with_suffix(output.suffix + ".sha256")
     partial.unlink(missing_ok=True)
+    checksum.unlink(missing_ok=True)
     completed = False
     try:
         run_command(
@@ -236,16 +238,20 @@ def decrypt_backup_bundle(
         )
         if not partial.is_file() or partial.stat().st_size <= 0:
             raise RuntimeError("age did not create decrypted backup output")
-        if _sha256_file(partial) != metadata.get("plaintext_sha256"):
+        plaintext_sha = str(metadata.get("plaintext_sha256") or "")
+        if _sha256_file(partial) != plaintext_sha:
             raise ValueError("decrypted PostgreSQL backup checksum mismatch")
         partial.chmod(0o600)
         partial.replace(output)
         output.chmod(0o600)
+        checksum.write_text(f"{plaintext_sha}  {output.name}\n", encoding="utf-8")
+        checksum.chmod(0o600)
         completed = True
     finally:
         if not completed:
             partial.unlink(missing_ok=True)
             output.unlink(missing_ok=True)
+            checksum.unlink(missing_ok=True)
     return output
 
 
