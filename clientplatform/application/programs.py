@@ -95,6 +95,74 @@ def get_program_draft(
         )
 
 
+def get_program_draft_lesson(
+    *,
+    actor: TenantContext,
+    lesson_id: str,
+) -> tuple[ProgramRecord, Lesson]:
+    with get_db_ro() as conn:
+        return ProgramDraftRepository(conn).get_lesson_draft(
+            actor=actor,
+            lesson_id=lesson_id,
+        )
+
+
+def update_program_draft_lesson_title(
+    *,
+    actor: TenantContext,
+    lesson_id: str,
+    title: str,
+) -> tuple[ProgramRecord, Lesson]:
+    with get_db() as conn:
+        return ProgramDraftRepository(conn).update_lesson_title(
+            actor=actor,
+            lesson_id=lesson_id,
+            title=title,
+        )
+
+
+def replace_program_draft_lesson_content(
+    *,
+    actor: TenantContext,
+    lesson_id: str,
+    content_kind: ContentKind | str,
+    content_ref: str,
+) -> tuple[ProgramRecord, Lesson]:
+    with get_db() as conn:
+        return ProgramDraftRepository(conn).replace_lesson_content(
+            actor=actor,
+            lesson_id=lesson_id,
+            content_kind=content_kind,
+            content_ref=content_ref,
+        )
+
+
+def move_program_draft_lesson(
+    *,
+    actor: TenantContext,
+    lesson_id: str,
+    direction: str,
+) -> ProgramRecord:
+    with get_db() as conn:
+        return ProgramDraftRepository(conn).move_lesson(
+            actor=actor,
+            lesson_id=lesson_id,
+            direction=direction,
+        )
+
+
+def archive_program_draft_lesson(
+    *,
+    actor: TenantContext,
+    lesson_id: str,
+) -> ProgramRecord:
+    with get_db() as conn:
+        return ProgramDraftRepository(conn).archive_lesson(
+            actor=actor,
+            lesson_id=lesson_id,
+        )
+
+
 def list_programs(
     *,
     actor: TenantContext,
