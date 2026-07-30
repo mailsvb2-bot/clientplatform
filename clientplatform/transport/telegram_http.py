@@ -216,7 +216,7 @@ class AiohttpTelegramBotClient:
     """Minimal Bot API client used by the ClientPlatform dispatch adapter.
 
     Private gateway objects are downloaded into a bounded spooled file and
-    uploaded as multipart data through the selected business bot.  Arbitrary
+    uploaded as multipart data through the selected business bot. Arbitrary
     public HTTPS references keep the normal Telegram URL-send behavior.
     """
 
@@ -332,6 +332,15 @@ class AiohttpTelegramBotClient:
             field_name="audio",
             chat_id=chat_id,
             reference=audio,
+        )
+
+    async def send_voice(self, *, token: str, chat_id: str, voice: str) -> str:
+        return await self._call_media(
+            token=token,
+            method="sendVoice",
+            field_name="voice",
+            chat_id=chat_id,
+            reference=voice,
         )
 
     async def send_video(self, *, token: str, chat_id: str, video: str) -> str:
