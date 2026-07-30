@@ -4,7 +4,6 @@ import sqlite3
 import unittest
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
 from typing import Any, Iterator
 from unittest.mock import patch
 from uuid import uuid4
@@ -133,8 +132,8 @@ class ProgramMediaCleanupRepositoryTests(unittest.TestCase):
         self.business_id = str(uuid4())
         self.config_patch = patch.object(
             repository_module,
-            "CONFIG",
-            SimpleNamespace(uses_postgres=False),
+            "is_postgres_enabled",
+            return_value=False,
         )
         self.config_patch.start()
 
@@ -191,8 +190,8 @@ class ProgramMediaCleanupBatchTests(unittest.TestCase):
         self.business_id = str(uuid4())
         self.config_patch = patch.object(
             repository_module,
-            "CONFIG",
-            SimpleNamespace(uses_postgres=False),
+            "is_postgres_enabled",
+            return_value=False,
         )
         self.config_patch.start()
 
