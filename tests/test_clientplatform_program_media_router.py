@@ -211,7 +211,7 @@ async def test_editor_replaces_material_only_after_externalization(
 def test_media_router_is_composed_before_all_program_handlers() -> None:
     handlers = importlib.import_module("handlers")
     control = handlers.clientplatform_control
-    assert control.router.name == "clientplatform_media_entry"
+    assert control.router.name == "clientplatform_entry"
     assert control.router.sub_routers[0].name == "clientplatform_program_media_router"
-    legacy_entry = control.router.sub_routers[1]
-    assert legacy_entry.name == "clientplatform_entry"
+    assert control.router.sub_routers[1].name == "clientplatform_program_lesson_editor"
+    assert control.router.sub_routers[2].name == "clientplatform_program_builder"
