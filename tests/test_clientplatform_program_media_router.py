@@ -136,6 +136,7 @@ class ProgramMediaRouterTests(unittest.IsolatedAsyncioTestCase):
     async def test_ingest_failure_never_mutates_builder_draft(self) -> None:
         business_id = str(uuid4())
         program_id = str(uuid4())
+        actor = object()
         writes: list[dict[str, Any]] = []
 
         async def fail_ingest(_message: Any, *, business_id: str) -> tuple[Any, str]:
@@ -148,9 +149,14 @@ class ProgramMediaRouterTests(unittest.IsolatedAsyncioTestCase):
         async def load_draft(**_kwargs: Any) -> Any:
             return SimpleNamespace(lessons=())
 
+        async def resolve_actor(_user_id: int, selected_business_id: str) -> object:
+            self.assertEqual(selected_business_id, business_id)
+            return actor
+
         with (
             patch.object(media_router, "materialize_program_content", fail_ingest),
             patch.object(media_router.builder, "_load_draft", load_draft),
+            patch.object(media_router.control, "_actor", resolve_actor),
             patch.object(
                 media_router.builder,
                 "add_program_lesson",
