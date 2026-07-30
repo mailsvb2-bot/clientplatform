@@ -3,16 +3,13 @@ from __future__ import annotations
 from typing import Protocol
 
 from clientplatform.domain.connections import ClaimedDispatch, ConnectionPlatform
+from clientplatform.domain.program_media import is_voice_media_reference
 from clientplatform.domain.programs import ContentKind
 from clientplatform.transport.media import MediaReferenceResolver
 
 
 class TelegramBotClient(Protocol):
-    """Minimal Telegram sending surface injected into clientplatform.
-
-    The client owns HTTP/Bot API details. The adapter only selects the correct
-    operation and never stores the credential.
-    """
+    """Minimal Telegram sending surface injected into ClientPlatform."""
 
     async def send_message(
         self,
@@ -28,6 +25,14 @@ class TelegramBotClient(Protocol):
         token: str,
         chat_id: str,
         audio: str,
+    ) -> str: ...
+
+    async def send_voice(
+        self,
+        *,
+        token: str,
+        chat_id: str,
+        voice: str,
     ) -> str: ...
 
     async def send_video(
@@ -84,11 +89,19 @@ class TelegramDispatchAdapter:
 
         chat_id = item.external_subject
         kind = item.dispatch.payload_kind
-        payload = item.dispatch.payload_ref
+        original_payload = item.dispatch.payload_ref
+        voice = kind == ContentKind.AUDIO and is_voice_media_reference(original_payload)
+        payload = original_payload
         if kind in _MEDIA_KINDS and self._media_resolver is not None:
             payload = await self._media_resolver.resolve(payload, kind)
 
-        if kind == ContentKind.AUDIO:
+        if voice:
+            result = await self._client.send_voice(
+                token=token,
+                chat_id=chat_id,
+                voice=payload,
+            )
+        elif kind == ContentKind.AUDIO:
             result = await self._client.send_audio(
                 token=token,
                 chat_id=chat_id,
