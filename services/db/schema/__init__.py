@@ -8,6 +8,7 @@ from . import clientplatform_bot_gateway
 from . import clientplatform_bot_provisioning
 from . import clientplatform_connections
 from . import clientplatform_customers
+from . import clientplatform_program_media
 from . import clientplatform_programs
 from . import clientplatform_tenancy
 from . import analytics
@@ -20,9 +21,9 @@ from . import settings
 from . import users
 
 # Execution order matters: legacy users first, then clientplatform tenant, customer,
-# program-delivery, connection/outbox, managed-bot gateway and provisioning boundaries,
-# then legacy tables. Additive clientplatform schemas do not mutate imported
-# Metrotherapy tables.
+# program-delivery, program-media cleanup, connection/outbox, managed-bot gateway and
+# provisioning boundaries, then legacy tables. Additive clientplatform schemas do not
+# mutate imported Metrotherapy tables.
 PARTS = [
     users,
     clientplatform_tenancy,
@@ -30,6 +31,7 @@ PARTS = [
     clientplatform_activity,
     clientplatform_bookings,
     clientplatform_programs,
+    clientplatform_program_media,
     clientplatform_connections,
     clientplatform_bot_gateway,
     clientplatform_bot_provisioning,
