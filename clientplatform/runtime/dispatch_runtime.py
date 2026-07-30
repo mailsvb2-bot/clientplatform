@@ -4,6 +4,7 @@ import os
 from dataclasses import dataclass
 
 from clientplatform.application.dispatch_worker import DispatchBatchResult, run_dispatch_batch
+from clientplatform.runtime.control_bot import control_bot_enabled
 from clientplatform.runtime.secrets import EnvironmentCredentialProvider
 from clientplatform.transport import AdapterRegistry, TelegramDispatchAdapter
 from clientplatform.transport.media import (
@@ -13,7 +14,6 @@ from clientplatform.transport.media import (
 )
 from clientplatform.transport.telegram_http import AiohttpTelegramBotClient
 from core.runtime_env import env_float, env_int
-from clientplatform.runtime.control_bot import control_bot_enabled
 
 
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
@@ -38,6 +38,7 @@ class DispatchRuntimeConfig:
     media_gateway_base_url: str = ""
     media_signing_secret_reference: str = "secret://env/CLIENTPLATFORM_SECRET_MEDIA_SIGNING_KEY"
     media_url_ttl_seconds: int = 300
+    media_multipart_max_bytes: int = 20_000_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,6 +100,12 @@ def dispatch_runtime_config() -> DispatchRuntimeConfig:
             minimum=60,
             maximum=900,
         ),
+        media_multipart_max_bytes=env_int(
+            "CLIENTPLATFORM_PROGRAM_MEDIA_MAX_BYTES",
+            20_000_000,
+            minimum=1,
+            maximum=20_000_000,
+        ),
     )
 
 
@@ -123,6 +130,8 @@ def build_dispatch_runtime(
     credential_provider = EnvironmentCredentialProvider()
     telegram_client = AiohttpTelegramBotClient(
         timeout_seconds=selected.http_timeout_seconds,
+        multipart_media_base_url=selected.media_gateway_base_url,
+        multipart_max_bytes=selected.media_multipart_max_bytes,
     )
     media_resolver = _build_media_resolver(selected, credential_provider)
     adapters = AdapterRegistry(
