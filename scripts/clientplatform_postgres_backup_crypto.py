@@ -183,7 +183,7 @@ def encrypt_backup_bundle(
             encoding="utf-8",
         )
         metadata.chmod(0o600)
-    except BaseException:
+    except (OSError, RuntimeError, ValueError, TypeError):
         partial.unlink(missing_ok=True)
         ciphertext.unlink(missing_ok=True)
         checksum.unlink(missing_ok=True)
@@ -240,7 +240,7 @@ def decrypt_backup_bundle(
         partial.replace(output)
         output.chmod(0o600)
         return output
-    except BaseException:
+    except (OSError, RuntimeError, ValueError, TypeError):
         partial.unlink(missing_ok=True)
         output.unlink(missing_ok=True)
         raise
