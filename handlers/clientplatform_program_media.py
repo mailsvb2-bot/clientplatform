@@ -6,6 +6,7 @@ import asyncio
 import os
 import re
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -13,14 +14,16 @@ from typing import Any
 from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
 from aiogram.types import Message
 
-from clientplatform.domain.programs import ContentKind, normalize_content_ref
-from clientplatform.infrastructure.program_media_store import (
-    ProgramMediaStore,
+from clientplatform.application.program_media import (
+    ProgramMediaIngestPolicy,
     ProgramMediaStoreError,
-    program_media_store_config,
+    program_media_ingest_policy,
+    store_program_media,
 )
+from clientplatform.domain.programs import ContentKind, normalize_content_ref
 
 _EXTENSION_RE = re.compile(r"^[a-z0-9]{1,10}$")
+StoreMedia = Callable[..., Any]
 
 
 class ProgramMediaIngestError(RuntimeError):
@@ -121,7 +124,8 @@ async def materialize_program_content(
     message: Message,
     *,
     business_id: str,
-    store: ProgramMediaStore | None = None,
+    policy: ProgramMediaIngestPolicy | None = None,
+    store_media: StoreMedia = store_program_media,
 ) -> tuple[ContentKind, str]:
     text = str(message.text or "").strip()
     media = _select_media(message)
@@ -132,11 +136,13 @@ async def materialize_program_content(
             "поддерживаются аудио, видео, документ, изображение или текст"
         )
 
-    config = program_media_store_config()
-    selected_store = store or ProgramMediaStore(config)
-    if not config.enabled:
+    selected_policy = policy or program_media_ingest_policy()
+    if not selected_policy.enabled:
         raise ProgramMediaIngestError("program_media_ingest_disabled")
-    if media.reported_size is not None and media.reported_size > config.max_bytes:
+    if (
+        media.reported_size is not None
+        and media.reported_size > selected_policy.max_bytes
+    ):
         raise ProgramMediaIngestError("program_media_too_large")
 
     temporary = _new_private_tempfile(media.extension)
@@ -147,12 +153,12 @@ async def materialize_program_content(
             remote_size = _reported_size(telegram_file)
             if not file_path:
                 raise ProgramMediaIngestError("program_media_telegram_path_missing")
-            if remote_size is not None and remote_size > config.max_bytes:
+            if remote_size is not None and remote_size > selected_policy.max_bytes:
                 raise ProgramMediaIngestError("program_media_too_large")
             await message.bot.download_file(
                 file_path,
                 destination=temporary,
-                timeout=config.timeout_seconds,
+                timeout=selected_policy.timeout_seconds,
             )
         except (TelegramNetworkError, asyncio.TimeoutError):
             raise ProgramMediaIngestError(
@@ -170,14 +176,14 @@ async def materialize_program_content(
             raise ProgramMediaIngestError("program_media_download_missing") from None
         if downloaded_size <= 0:
             raise ProgramMediaIngestError("program_media_download_empty")
-        if downloaded_size > config.max_bytes:
+        if downloaded_size > selected_policy.max_bytes:
             raise ProgramMediaIngestError("program_media_too_large")
         if media.reported_size not in {None, 0} and downloaded_size != media.reported_size:
             raise ProgramMediaIngestError("program_media_download_size_mismatch")
 
         try:
             stored = await asyncio.to_thread(
-                selected_store.put_file,
+                store_media,
                 temporary,
                 business_id=business_id,
                 content_kind=media.content_kind,
