@@ -28,6 +28,7 @@ from clientplatform.infrastructure.safe_bot_gateway_repository import (
     BotGatewayRepository,
 )
 from clientplatform.transport.telegram import TelegramDispatchAdapter
+from clientplatform.transport.telegram_http import TelegramBotApiError
 from handlers.clientplatform_program_media import materialize_program_content
 from services.db.schema import (
     clientplatform_bot_gateway,
@@ -106,8 +107,9 @@ class _MediaResolver:
 
 
 class _TelegramClient:
-    def __init__(self) -> None:
+    def __init__(self, *, transient_audio_failures: int = 0) -> None:
         self.calls: list[tuple[str, str, str]] = []
+        self.transient_audio_failures = max(0, int(transient_audio_failures))
 
     async def send_audio(
         self,
@@ -119,6 +121,9 @@ class _TelegramClient:
         self.calls.append(("audio", chat_id, audio))
         if token != "managed-bot-token":
             raise AssertionError("unexpected credential")
+        if self.transient_audio_failures:
+            self.transient_audio_failures -= 1
+            raise TelegramBotApiError("telegram_api_503", retryable=True)
         return "provider-audio-1"
 
     async def send_message(
@@ -189,7 +194,7 @@ class ClientPlatformFirstVerticalE2E(unittest.IsolatedAsyncioTestCase):
         )
         return connection, route
 
-    async def test_first_vertical_survives_restart_replay_and_second_business(
+    async def test_first_vertical_survives_retry_restart_replay_and_second_business(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory(prefix="clientplatform-first-vertical-") as raw:
@@ -327,27 +332,88 @@ class ClientPlatformFirstVerticalE2E(unittest.IsolatedAsyncioTestCase):
             conn.commit()
 
             resolver = _MediaResolver()
-            telegram = _TelegramClient()
+            telegram = _TelegramClient(transient_audio_failures=1)
             adapter = TelegramDispatchAdapter(
                 telegram,
                 media_resolver=resolver,
             )
-            claimed = outbox.claim_due(limit=10)
+            first_attempt_at = datetime(2026, 7, 30, 12, 3, 2, tzinfo=timezone.utc)
+            claimed = outbox.claim_due(limit=10, now=first_attempt_at)
             self.assertEqual(len(claimed), 1)
-            provider_id = await adapter.send(claimed[0], "managed-bot-token")
-            outbox.mark_sent(
+            with self.assertRaises(TelegramBotApiError) as failure:
+                await adapter.send(claimed[0], "managed-bot-token")
+            self.assertTrue(failure.exception.retryable)
+            self.assertEqual(failure.exception.code, "telegram_api_503")
+            retry = outbox.reschedule(
                 claimed[0],
-                provider_message_id=provider_id,
+                error=failure.exception.code,
+                max_attempts=3,
+                now=first_attempt_at,
             )
+            self.assertEqual(retry.status.value, "retry")
             conn.commit()
-            self.assertEqual(telegram.calls[0][0], "audio")
-            self.assertEqual(telegram.calls[0][1], "5001")
-            self.assertEqual(resolver.calls, [(content_ref, ContentKind.AUDIO)])
+
+            retry_row = conn.execute(
+                """
+                SELECT status,attempts,lock_token,last_error
+                FROM delivery_dispatch_outbox
+                WHERE id=?
+                """,
+                (claimed[0].dispatch.id,),
+            ).fetchone()
+            self.assertEqual(
+                tuple(retry_row),
+                ("retry", 1, None, "telegram_api_503"),
+            )
+            connection_row = conn.execute(
+                "SELECT status FROM connections WHERE id=?",
+                (connection_a.id,),
+            ).fetchone()
+            self.assertEqual(connection_row["status"], "active")
 
             conn.close()
             conn = self._open(database)
             outbox = DispatchOutboxRepository(conn)
-            self.assertEqual(outbox.claim_due(limit=10), [])
+            self.assertEqual(
+                outbox.claim_due(
+                    limit=10,
+                    now=datetime(2026, 7, 30, 12, 3, 6, tzinfo=timezone.utc),
+                ),
+                [],
+            )
+            retry_claim = outbox.claim_due(
+                limit=10,
+                now=datetime(2026, 7, 30, 12, 3, 8, tzinfo=timezone.utc),
+            )
+            self.assertEqual(len(retry_claim), 1)
+            self.assertEqual(
+                retry_claim[0].dispatch.id,
+                claimed[0].dispatch.id,
+            )
+            provider_id = await adapter.send(retry_claim[0], "managed-bot-token")
+            outbox.mark_sent(
+                retry_claim[0],
+                provider_message_id=provider_id,
+                now=datetime(2026, 7, 30, 12, 3, 9, tzinfo=timezone.utc),
+            )
+            conn.commit()
+            self.assertEqual([call[0] for call in telegram.calls], ["audio", "audio"])
+            self.assertEqual(telegram.calls[0], telegram.calls[1])
+            self.assertEqual(telegram.calls[1][1], "5001")
+            self.assertEqual(
+                resolver.calls,
+                [
+                    (content_ref, ContentKind.AUDIO),
+                    (content_ref, ContentKind.AUDIO),
+                ],
+            )
+            self.assertEqual(
+                outbox.claim_due(
+                    limit=10,
+                    now=datetime(2026, 7, 30, 12, 3, 10, tzinfo=timezone.utc),
+                ),
+                [],
+            )
 
             progress = CustomerProgressRepository(conn)
             first_completion = progress.complete_lesson(
@@ -410,8 +476,8 @@ class ClientPlatformFirstVerticalE2E(unittest.IsolatedAsyncioTestCase):
                 final.program.summary.enrollment_status,
                 EnrollmentStatus.COMPLETED,
             )
-            self.assertEqual(telegram.calls[1][0], "text")
-            self.assertEqual(telegram.calls[1][2], "Отметьте завершение программы")
+            self.assertEqual(telegram.calls[2][0], "text")
+            self.assertEqual(telegram.calls[2][2], "Отметьте завершение программы")
 
             progress_read = ProgramProgressRepository(conn)
             owner_a_view = progress_read.list_business_progress(actor=owner_a)
