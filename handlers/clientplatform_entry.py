@@ -193,6 +193,12 @@ async def clientplatform_entry_error(event: object) -> bool:
 
 if not bool(getattr(control, "_dual_role_entry_composed", False)):
     original_router = control.router
+    program_builder = importlib.import_module(
+        ".clientplatform_program_builder",
+        __package__,
+    )
+    router.include_router(program_builder.router)
     router.include_router(original_router)
     control.router = router
+    control._multi_lesson_program_builder_composed = True
     control._dual_role_entry_composed = True
