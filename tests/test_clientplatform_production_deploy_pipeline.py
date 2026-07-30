@@ -135,7 +135,11 @@ class ProductionDeploymentContractTests(unittest.TestCase):
         self.assertIn('git reset --hard "$TARGET_SHA"', updater)
         self.assertNotIn("git clean", updater)
         self.assertIn("clientplatform.env", updater)
-        self.assertIn("clientplatform_production_deploy.py", updater)
+        self.assertIn(
+            'exec python3 -m scripts.clientplatform_production_deploy "$@"',
+            updater,
+        )
+        self.assertNotIn("python3 scripts/clientplatform_production_deploy.py", updater)
 
 
 if __name__ == "__main__":
