@@ -36,6 +36,8 @@ class ClientPlatformMultiLessonBuilderContractTests(unittest.TestCase):
         self.assertIsNotNone(publish)
         self.assertIsNotNone(cancel)
         self.assertNotIn("create_multi_lesson_program", capture or "")
+        self.assertIn("normalize_content_ref", capture or "")
+        self.assertIn("2048", capture or "")
         self.assertIn("create_multi_lesson_program", publish or "")
         self.assertIn("state.clear", cancel or "")
         self.assertIn("В базе ничего не создавалось", cancel or "")
