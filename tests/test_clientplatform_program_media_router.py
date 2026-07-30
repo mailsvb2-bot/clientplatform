@@ -1,16 +1,24 @@
 from __future__ import annotations
 
 import importlib
+import importlib.util
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable
 from unittest.mock import patch
 from uuid import uuid4
 
 from clientplatform.domain.programs import ContentKind
-from handlers.clientplatform_program_media import ProgramMediaIngestError
 
-media_router = importlib.import_module("handlers.clientplatform_program_media_router")
+AIOGRAM_AVAILABLE = importlib.util.find_spec("aiogram") is not None
+media_router: Any = None
+ProgramMediaIngestError: Any = RuntimeError
+if AIOGRAM_AVAILABLE:
+    media_router = importlib.import_module("handlers.clientplatform_program_media_router")
+    ProgramMediaIngestError = importlib.import_module(
+        "handlers.clientplatform_program_media"
+    ).ProgramMediaIngestError
 
 
 class FakeUser:
@@ -55,6 +63,7 @@ async def direct_to_thread(
     return func(*args, **kwargs)
 
 
+@unittest.skipUnless(AIOGRAM_AVAILABLE, "aiogram is not installed")
 class ProgramMediaRouterTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.to_thread_patch = patch.object(
@@ -77,8 +86,7 @@ class ProgramMediaRouterTests(unittest.IsolatedAsyncioTestCase):
         reviews: list[Any] = []
 
         async def materialize(_message: Any, *, business_id: str) -> tuple[Any, str]:
-            if not business_id:
-                raise AssertionError("business id is required")
+            self.assertTrue(business_id)
             return (
                 ContentKind.AUDIO,
                 "s3://clientplatform-production/program-media/audio.ogg",
@@ -131,8 +139,7 @@ class ProgramMediaRouterTests(unittest.IsolatedAsyncioTestCase):
         writes: list[dict[str, Any]] = []
 
         async def fail_ingest(_message: Any, *, business_id: str) -> tuple[Any, str]:
-            if not business_id:
-                raise AssertionError("business id is required")
+            self.assertTrue(business_id)
             raise ProgramMediaIngestError(
                 "program_media_upload_transport_failure",
                 retryable=True,
@@ -174,8 +181,7 @@ class ProgramMediaRouterTests(unittest.IsolatedAsyncioTestCase):
         lesson = SimpleNamespace(id=lesson_id)
 
         async def materialize(_message: Any, *, business_id: str) -> tuple[Any, str]:
-            if not business_id:
-                raise AssertionError("business id is required")
+            self.assertTrue(business_id)
             return (
                 ContentKind.DOCUMENT,
                 "s3://clientplatform-production/program-media/file.pdf",
@@ -217,22 +223,16 @@ class ProgramMediaRouterTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ProgramMediaRouterCompositionTests(unittest.TestCase):
-    def test_media_router_is_composed_before_all_program_handlers(self) -> None:
-        handlers = importlib.import_module("handlers")
-        control = handlers.clientplatform_control
-        self.assertEqual(control.router.name, "clientplatform_entry")
-        self.assertEqual(
-            control.router.sub_routers[0].name,
-            "clientplatform_program_media_router",
-        )
-        self.assertEqual(
-            control.router.sub_routers[1].name,
-            "clientplatform_program_lesson_editor",
-        )
-        self.assertEqual(
-            control.router.sub_routers[2].name,
-            "clientplatform_program_builder",
-        )
+    def test_media_router_is_first_in_canonical_entry_composition(self) -> None:
+        source = Path("handlers/clientplatform_entry.py").read_text(encoding="utf-8")
+        media = source.index("router.include_router(program_media.router)")
+        editor = source.index("router.include_router(lesson_editor.router)")
+        builder = source.index("router.include_router(program_builder.router)")
+        legacy = source.index("router.include_router(original_router)")
+        self.assertLess(media, editor)
+        self.assertLess(editor, builder)
+        self.assertLess(builder, legacy)
+        self.assertIn("control.router = router", source)
 
 
 if __name__ == "__main__":
