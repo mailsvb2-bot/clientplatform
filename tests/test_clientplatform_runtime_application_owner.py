@@ -117,19 +117,38 @@ class ClientPlatformRuntimeOwnerTests(unittest.IsolatedAsyncioTestCase):
 
         stop.assert_awaited_once_with()
 
-    async def test_owner_fails_closed_when_schema_never_becomes_ready(self) -> None:
+    async def test_owner_recovers_when_schema_appears_after_warning_deadline(self) -> None:
+        runtime = object()
+        start = AsyncMock(return_value=False)
+        sleep = AsyncMock(return_value=None)
+        probe_results = iter(
+            (
+                (False, "clientplatform_schema_missing:connections"),
+                (True, None),
+            )
+        )
         monotonic_values = iter((0.0, 2.0))
+
         with (
             patch.object(owner, "_schema_wait_timeout_seconds", return_value=1.0),
             patch.object(owner, "_schema_poll_interval_seconds", return_value=0.05),
+            patch.object(owner, "build_dispatch_runtime", return_value=runtime),
+            patch.object(owner, "start_clientplatform_runtime", start),
+            self.assertLogs(owner.log, level="WARNING") as captured,
         ):
-            with self.assertRaisesRegex(RuntimeError, "clientplatform_runtime_schema_timeout"):
-                await owner.run_clientplatform_runtime_owner(
-                    config=_config(enabled=True),
-                    schema_probe=lambda: (False, "clientplatform_schema_missing:connections"),
-                    sleep=AsyncMock(return_value=None),
-                    monotonic=lambda: next(monotonic_values),
-                )
+            await owner.run_clientplatform_runtime_owner(
+                config=_config(enabled=True),
+                schema_probe=lambda: next(probe_results),
+                sleep=sleep,
+                monotonic=lambda: next(monotonic_values),
+            )
+
+        sleep.assert_awaited_once_with(0.05)
+        start.assert_awaited_once_with(runtime)
+        self.assertIn(
+            "continuing without dropping lifecycle ownership",
+            "\n".join(captured.output),
+        )
 
     async def test_disabled_scheduler_does_not_claim_lifecycle_composition(self) -> None:
         runtime = SimpleNamespace(config=SimpleNamespace(enabled=False))
