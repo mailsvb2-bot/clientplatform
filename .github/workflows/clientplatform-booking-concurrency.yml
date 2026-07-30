@@ -66,6 +66,12 @@ jobs:
           python scripts/probe_postgres_booking_concurrency.py \
             2>&1 | tee "$RUNNER_TEMP/clientplatform-booking-postgres.log"
 
+      - name: Two-connection PostgreSQL draft lesson editing
+        run: |
+          set -o pipefail
+          python scripts/probe_postgres_program_draft_lesson_concurrency.py \
+            2>&1 | tee "$RUNNER_TEMP/clientplatform-draft-lesson-postgres.log"
+
       - name: Upload booking concurrency logs
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -74,4 +80,5 @@ jobs:
           path: |
             ${{ runner.temp }}/clientplatform-booking-unit.log
             ${{ runner.temp }}/clientplatform-booking-postgres.log
+            ${{ runner.temp }}/clientplatform-draft-lesson-postgres.log
           if-no-files-found: warn
