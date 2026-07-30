@@ -2,10 +2,10 @@ from __future__ import annotations
 
 """Run the explicit hermetic matrix of critical public user scenarios.
 
-This gate complements the full regression suite with a named, auditable set of
-end-to-end and integration journeys across Telegram, VK, MAX, payments, gifts,
-account linking, privacy and durable delivery. It never calls live providers and
-never inherits configured application storage or provider credentials.
+This gate complements the full regression suite with named, auditable end-to-end
+and integration journeys across ClientPlatform, Telegram, VK, MAX, payments,
+gifts, account linking, privacy and durable delivery. It never calls live
+providers and never inherits configured application storage or credentials.
 """
 
 import os
@@ -44,7 +44,20 @@ _SAFE_PARENT_ENV_KEYS = (
 
 
 def _smoke_bot_token() -> str:
-    return "".join(("1234", "56789", ":", "ABCDE", "FGHIJ", "KLMNO", "PQRST", "UVWXY", "Zabcd", "efghi"))
+    return "".join(
+        (
+            "1234",
+            "56789",
+            ":",
+            "ABCDE",
+            "FGHIJ",
+            "KLMNO",
+            "PQRST",
+            "UVWXY",
+            "Zabcd",
+            "efghi",
+        )
+    )
 
 
 BASE_ENV = {
@@ -73,6 +86,17 @@ BASE_ENV = {
 DEEP_ENV = {
     "DEMO_DIR": "tests/fixtures/audio/demo",
 }
+
+CLIENTPLATFORM_SCENARIO_TESTS = (
+    # Canonical first vertical: control-bot media -> private storage -> program ->
+    # managed business bot -> customer progress -> restart/replay -> tenant isolation.
+    "tests/test_clientplatform_first_vertical_e2e.py",
+    # Public entry and the most important vertical boundaries remain visible by name.
+    "tests/test_handlers_clientplatform_managed_bot_entry.py",
+    "tests/test_clientplatform_program_media_ingest.py",
+    "tests/test_clientplatform_voice_media_delivery.py",
+    "tests/test_clientplatform_program_progress_portal.py",
+)
 
 SCENARIO_TESTS = (
     # Entry, menu, settings, weather, score and completion state machines.
@@ -118,6 +142,18 @@ SCENARIO_TESTS = (
 
 STEPS = (
     ScenarioStep(
+        "ClientPlatform canonical first vertical",
+        (
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            *CLIENTPLATFORM_SCENARIO_TESTS,
+        ),
+    ),
+    ScenarioStep(
         "synthetic purchase-to-practice journey",
         (sys.executable, "scripts/user_scenario_gate.py", "--mode", "hermetic", "--json"),
     ),
@@ -151,7 +187,7 @@ def _step_env(step: ScenarioStep, db_path: Path) -> dict[str, str]:
 
 
 def _run(step: ScenarioStep) -> int:
-    temp_dir = Path(tempfile.mkdtemp(prefix="metro_all_user_scenarios_"))
+    temp_dir = Path(tempfile.mkdtemp(prefix="clientplatform_all_user_scenarios_"))
     db_path = temp_dir / "scenario.db"
     env = _step_env(step, db_path)
     print(f"==> {step.name}", flush=True)
@@ -166,7 +202,11 @@ def _run(step: ScenarioStep) -> int:
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
     if completed.returncode != 0:
-        print(f"ALL_USER_SCENARIOS_FAILED step={step.name!r} code={completed.returncode}", flush=True)
+        print(
+            f"ALL_USER_SCENARIOS_FAILED step={step.name!r} "
+            f"code={completed.returncode}",
+            flush=True,
+        )
     return int(completed.returncode)
 
 
@@ -175,8 +215,9 @@ def main() -> int:
         code = _run(step)
         if code:
             return code
+    total_files = len(CLIENTPLATFORM_SCENARIO_TESTS) + len(SCENARIO_TESTS)
     print(
-        f"ALL_USER_SCENARIOS_OK groups={len(STEPS)} test_files={len(SCENARIO_TESTS)}",
+        f"ALL_USER_SCENARIOS_OK groups={len(STEPS)} test_files={total_files}",
         flush=True,
     )
     return 0
