@@ -86,7 +86,7 @@ services:
     environment:
       DATABASE_URL: postgresql://clientplatform_app:${CLIENTPLATFORM_POSTGRES_APP_PASSWORD}@postgres:5432/clientplatform
       CLIENTPLATFORM_DATABASE_NAME: clientplatform
-    entrypoint: ["python", "scripts/clientplatform_postgres_backup.py", "backup"]
+    entrypoint: ["python", "-m", "scripts.clientplatform_postgres_backup_pipeline"]
     depends_on:
       postgres:
         condition: service_healthy

@@ -1,0 +1,163 @@
+name: ClientPlatform Encrypted Backup
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: clientplatform-encrypted-backup-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  encrypted-backup:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: clientplatform_backup_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d clientplatform_backup_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      APP_ENV: dev
+      LOAD_DOTENV: "0"
+      METRO_DB_ENGINE: postgres
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/clientplatform_backup_ci
+      CLIENTPLATFORM_POSTGRES_CLIENT_MAJOR: "16"
+      CLIENTPLATFORM_PG_DUMP_PATH: /usr/lib/postgresql/16/bin/pg_dump
+      CLIENTPLATFORM_PG_RESTORE_PATH: /usr/lib/postgresql/16/bin/pg_restore
+      CLIENTPLATFORM_PSQL_PATH: /usr/lib/postgresql/16/bin/psql
+      CLIENTPLATFORM_BACKUP_DIR: /tmp/clientplatform-encrypted-backups
+      CLIENTPLATFORM_BACKUP_RETENTION_DAYS: "30"
+      CLIENTPLATFORM_BACKUP_ENCRYPTION_REQUIRED: "1"
+      CLIENTPLATFORM_POSTGRES_BACKUP_S3_ENABLED: "0"
+      CLIENTPLATFORM_RESTORE_ADMIN_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+      CLIENTPLATFORM_RESTORE_EVIDENCE_DIR: /tmp/clientplatform-encrypted-restore-evidence
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install hash-locked dependencies, age, and PostgreSQL 16 client
+        run: |
+          sudo install -d -m 0755 /usr/share/postgresql-common/pgdg
+          sudo curl --fail --silent --show-error \
+            --output /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+          sudo apt-get update
+          sudo apt-get install --yes age postgresql-client-16
+          age --version
+          "$CLIENTPLATFORM_PG_DUMP_PATH" --version
+          "$CLIENTPLATFORM_PG_RESTORE_PATH" --version
+          "$CLIENTPLATFORM_PSQL_PATH" --version
+          python -m pip install --disable-pip-version-check pip==26.1.2
+          python -m pip install --require-hashes -r requirements-dev.txt
+
+      - name: Encrypted backup unit contracts
+        run: |
+          python -m unittest -v \
+            tests/test_clientplatform_postgres_backup_crypto.py \
+            tests/test_clientplatform_postgres_backup_pipeline.py \
+            tests/test_clientplatform_postgres_backup_s3.py \
+            tests/test_clientplatform_postgres_backup_tools.py \
+            2>&1 | tee "$RUNNER_TEMP/clientplatform-encrypted-backup-tests.log"
+
+      - name: Initialize live PostgreSQL schema
+        run: |
+          python - <<'PY'
+          from services.schema import init_db
+          init_db()
+          print("CLIENTPLATFORM_ENCRYPTED_BACKUP_SCHEMA_OK")
+          PY
+
+      - name: Generate ephemeral recovery identity
+        run: |
+          umask 077
+          age-keygen -o "$RUNNER_TEMP/clientplatform-age-identity.txt" \
+            2> "$RUNNER_TEMP/clientplatform-age-keygen.log"
+          chmod 600 "$RUNNER_TEMP/clientplatform-age-identity.txt"
+          RECIPIENT="$(age-keygen -y "$RUNNER_TEMP/clientplatform-age-identity.txt")"
+          case "$RECIPIENT" in
+            age1*) ;;
+            *) echo "Unexpected age recipient" >&2; exit 1 ;;
+          esac
+          echo "CLIENTPLATFORM_BACKUP_AGE_RECIPIENT=$RECIPIENT" >> "$GITHUB_ENV"
+
+      - name: Create encrypted backup and prove plaintext removal
+        run: |
+          set -o pipefail
+          MARKER="$(python -m scripts.clientplatform_postgres_backup_pipeline | tee "$RUNNER_TEMP/clientplatform-encrypted-backup.log" | tail -1)"
+          case "$MARKER" in
+            CLIENTPLATFORM_ENCRYPTED_BACKUP_OK:*)
+              CIPHERTEXT="${MARKER#CLIENTPLATFORM_ENCRYPTED_BACKUP_OK:}"
+              ;;
+            *) echo "Unexpected encrypted backup marker: $MARKER" >&2; exit 1 ;;
+          esac
+          test -f "$CIPHERTEXT"
+          test -f "$CIPHERTEXT.sha256"
+          test -f "$CIPHERTEXT.json"
+          test -z "$(find "$CLIENTPLATFORM_BACKUP_DIR" -maxdepth 1 -type f -name '*.dump' -print -quit)"
+          echo "CLIENTPLATFORM_CIPHERTEXT=$CIPHERTEXT" >> "$GITHUB_ENV"
+
+      - name: Decrypt and prove disposable restore
+        run: |
+          set -o pipefail
+          python -m scripts.clientplatform_postgres_backup_crypto decrypt \
+            "$CLIENTPLATFORM_CIPHERTEXT" \
+            --identity "$RUNNER_TEMP/clientplatform-age-identity.txt" \
+            --output "$RUNNER_TEMP/clientplatform-restore.dump" \
+            | tee "$RUNNER_TEMP/clientplatform-backup-decrypt.log"
+          test -f "$RUNNER_TEMP/clientplatform-restore.dump.sha256"
+          "$CLIENTPLATFORM_PG_RESTORE_PATH" --list \
+            "$RUNNER_TEMP/clientplatform-restore.dump" \
+            | grep -E 'TABLE DATA public (businesses|managed_bots|delivery_dispatch_outbox)' \
+            > "$RUNNER_TEMP/clientplatform-encrypted-backup-tables.log"
+          python -m scripts.clientplatform_postgres_backup restore-drill \
+            "$RUNNER_TEMP/clientplatform-restore.dump" \
+            | tee "$RUNNER_TEMP/clientplatform-encrypted-restore-drill.log"
+          rm -f \
+            "$RUNNER_TEMP/clientplatform-restore.dump" \
+            "$RUNNER_TEMP/clientplatform-restore.dump.sha256"
+
+      - name: Verify production image contains age and PostgreSQL 16 clients
+        run: |
+          docker build --file deploy/clientplatform/Dockerfile \
+            --tag clientplatform-encrypted-backup:ci .
+          docker run --rm --entrypoint age clientplatform-encrypted-backup:ci --version
+          docker run --rm --entrypoint /usr/lib/postgresql/16/bin/pg_dump \
+            clientplatform-encrypted-backup:ci --version
+          docker run --rm --entrypoint /usr/lib/postgresql/16/bin/pg_restore \
+            clientplatform-encrypted-backup:ci --version
+
+      - name: Upload encrypted backup evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: clientplatform-encrypted-backup-evidence
+          path: |
+            ${{ runner.temp }}/clientplatform-encrypted-backup-tests.log
+            ${{ runner.temp }}/clientplatform-age-keygen.log
+            ${{ runner.temp }}/clientplatform-encrypted-backup.log
+            ${{ runner.temp }}/clientplatform-backup-decrypt.log
+            ${{ runner.temp }}/clientplatform-encrypted-backup-tables.log
+            ${{ runner.temp }}/clientplatform-encrypted-restore-drill.log
+          if-no-files-found: warn
