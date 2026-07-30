@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import stat
 import time
 from datetime import datetime, timezone
@@ -14,6 +15,12 @@ from typing import Mapping
 _TRUE = frozenset({"1", "true", "yes", "on"})
 _DEFAULT_MAX_AGE_SECONDS = 3 * 60 * 60
 _CLOCK_SKEW_SECONDS = 5 * 60
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_REQUIRED_SUFFIXES = (
+    ".dump.age",
+    ".dump.age.sha256",
+    ".dump.age.json",
+)
 
 
 def _value(env: Mapping[str, str], name: str) -> str:
@@ -64,6 +71,37 @@ def _parse_completed_at(value: object) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
+def _validate_objects(value: object, errors: list[str]) -> None:
+    if not isinstance(value, list) or len(value) != len(_REQUIRED_SUFFIXES):
+        errors.append("offsite backup evidence must contain three bundle objects")
+        return
+
+    keys: list[str] = []
+    for item in value:
+        if not isinstance(item, dict):
+            errors.append("offsite backup evidence contains an invalid object record")
+            continue
+        key = str(item.get("key") or "")
+        size = item.get("size")
+        sha256 = str(item.get("sha256") or "").lower()
+        if not key or "\x00" in key:
+            errors.append("offsite backup evidence contains an invalid object key")
+        else:
+            keys.append(key)
+        if not isinstance(size, int) or isinstance(size, bool) or size <= 0:
+            errors.append("offsite backup evidence contains an invalid object size")
+        if _SHA256_RE.fullmatch(sha256) is None:
+            errors.append("offsite backup evidence contains an invalid object SHA-256")
+
+    if len(keys) == len(_REQUIRED_SUFFIXES):
+        for suffix in _REQUIRED_SUFFIXES:
+            if sum(key.endswith(suffix) for key in keys) != 1:
+                errors.append(
+                    "offsite backup evidence must contain one ciphertext, checksum, and metadata object"
+                )
+                break
+
+
 def _inspect_evidence(
     env: Mapping[str, str],
     *,
@@ -92,9 +130,7 @@ def _inspect_evidence(
         errors.append("offsite backup evidence operation is invalid")
     if document.get("encryption") != "age-x25519":
         errors.append("offsite backup evidence is not age encrypted")
-    objects = document.get("objects")
-    if not isinstance(objects, list) or len(objects) != 3:
-        errors.append("offsite backup evidence must contain three bundle objects")
+    _validate_objects(document.get("objects"), errors)
 
     completed_at = _parse_completed_at(document.get("completed_at"))
     current = datetime.fromtimestamp(now, tz=timezone.utc)
