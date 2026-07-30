@@ -6,16 +6,23 @@ The application DSN is used only for pg_dump. Restore drills require a separate
 operator-supplied administrative DSN, so the runtime application role never
 needs CREATEDB or superuser privileges. Credentials are passed through PG*
 environment variables and never written to command arguments or evidence.
+
+All PostgreSQL client tools are resolved to one explicit major release. This
+prevents a dump produced by a newer pg_dump from being handed to an older
+pg_restore selected accidentally through the host PATH.
 """
 
 import argparse
 import hashlib
 import json
 import os
+import re
+import shutil
 import subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Mapping
 from urllib.parse import unquote, urlsplit
 
 _REQUIRED_TABLES = (
@@ -26,6 +33,13 @@ _REQUIRED_TABLES = (
     "booking_slots",
     "delivery_dispatch_outbox",
 )
+_TOOL_ENV = {
+    "pg_dump": "CLIENTPLATFORM_PG_DUMP_PATH",
+    "pg_restore": "CLIENTPLATFORM_PG_RESTORE_PATH",
+    "psql": "CLIENTPLATFORM_PSQL_PATH",
+}
+_VERSION_RE = re.compile(r"PostgreSQL\)\s+(\d+)(?:\.\d+)?")
+_DEFAULT_CLIENT_MAJOR = 16
 
 
 def _postgres_database_name(database_url: str, *, clientplatform_only: bool) -> str:
@@ -69,6 +83,77 @@ def _pg_environment(
     return env
 
 
+def _configured_client_major(env: Mapping[str, str] | None = None) -> int:
+    values = os.environ if env is None else env
+    raw = str(values.get("CLIENTPLATFORM_POSTGRES_CLIENT_MAJOR") or _DEFAULT_CLIENT_MAJOR)
+    try:
+        major = int(raw)
+    except ValueError:
+        raise ValueError("CLIENTPLATFORM_POSTGRES_CLIENT_MAJOR must be an integer") from None
+    if major < 12 or major > 20:
+        raise ValueError("CLIENTPLATFORM_POSTGRES_CLIENT_MAJOR must be between 12 and 20")
+    return major
+
+
+def _postgres_tool_major(path: Path) -> int:
+    completed = subprocess.run(  # nosec B603 - resolved fixed PostgreSQL executable
+        [str(path), "--version"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    rendered = f"{completed.stdout}\n{completed.stderr}"
+    match = _VERSION_RE.search(rendered)
+    if completed.returncode != 0 or match is None:
+        raise RuntimeError(f"unable to verify PostgreSQL client tool: {path.name}")
+    return int(match.group(1))
+
+
+def _resolve_postgres_tool(
+    name: str,
+    *,
+    env: Mapping[str, str] | None = None,
+) -> str:
+    if name not in _TOOL_ENV:
+        raise ValueError("unsupported PostgreSQL client tool")
+    values = os.environ if env is None else env
+    required_major = _configured_client_major(values)
+    override = str(values.get(_TOOL_ENV[name]) or "").strip()
+    candidates: list[Path] = []
+    if override:
+        selected_override = Path(override).expanduser()
+        if not selected_override.is_absolute():
+            raise ValueError(f"{_TOOL_ENV[name]} must be an absolute path")
+        candidates.append(selected_override)
+    else:
+        candidates.append(Path(f"/usr/lib/postgresql/{required_major}/bin/{name}"))
+        discovered = shutil.which(name)
+        if discovered:
+            discovered_path = Path(discovered)
+            if discovered_path not in candidates:
+                candidates.append(discovered_path)
+
+    selected = next(
+        (
+            path.resolve()
+            for path in candidates
+            if path.is_file() and os.access(path, os.X_OK) and path.name == name
+        ),
+        None,
+    )
+    if selected is None:
+        raise RuntimeError(
+            f"PostgreSQL {required_major} client tool is unavailable: {name}"
+        )
+    actual_major = _postgres_tool_major(selected)
+    if actual_major != required_major:
+        raise RuntimeError(
+            f"PostgreSQL client major mismatch for {name}: "
+            f"required {required_major}, found {actual_major}"
+        )
+    return str(selected)
+
+
 def _run(command: list[str], *, env: dict[str, str], capture: bool = False) -> str:
     completed = subprocess.run(  # nosec B603 - fixed PostgreSQL client commands only
         command,
@@ -78,7 +163,7 @@ def _run(command: list[str], *, env: dict[str, str], capture: bool = False) -> s
         text=capture,
     )
     if completed.returncode != 0:
-        raise RuntimeError(f"{command[0]} failed with exit code {completed.returncode}")
+        raise RuntimeError(f"{Path(command[0]).name} failed with exit code {completed.returncode}")
     return completed.stdout.strip() if capture else ""
 
 
@@ -128,9 +213,10 @@ def create_backup(
     target = backup_dir / f"clientplatform-{timestamp}.dump"
     partial = target.with_suffix(".dump.partial")
     env = _pg_environment(database_url)
+    pg_dump = _resolve_postgres_tool("pg_dump")
     _run(
         [
-            "pg_dump",
+            pg_dump,
             "--format=custom",
             "--compress=9",
             "--no-owner",
@@ -155,6 +241,7 @@ def create_backup(
                 "source_database": source_database,
                 "dump_file": target.name,
                 "sha256": checksum,
+                "postgres_client_major": _configured_client_major(),
             },
             sort_keys=True,
             indent=2,
@@ -183,6 +270,8 @@ def verify_restore(
     if actual_checksum != expected_checksum:
         raise ValueError("backup checksum mismatch")
 
+    psql = _resolve_postgres_tool("psql")
+    pg_restore = _resolve_postgres_tool("pg_restore")
     suffix = datetime.fromtimestamp(now or time.time(), tz=timezone.utc).strftime("%Y%m%d%H%M%S")
     restore_database = _safe_identifier(f"clientplatform_restore_{suffix}_{os.getpid()}")
     admin_env = _pg_environment(
@@ -198,7 +287,7 @@ def verify_restore(
     quoted = _quoted_identifier(restore_database)
     _run(
         [
-            "psql",
+            psql,
             "--no-psqlrc",
             "--set",
             "ON_ERROR_STOP=1",
@@ -210,7 +299,7 @@ def verify_restore(
     try:
         _run(
             [
-                "pg_restore",
+                pg_restore,
                 "--exit-on-error",
                 "--no-owner",
                 "--no-acl",
@@ -223,7 +312,7 @@ def verify_restore(
         for table in _REQUIRED_TABLES:
             result = _run(
                 [
-                    "psql",
+                    psql,
                     "--no-psqlrc",
                     "--tuples-only",
                     "--no-align",
@@ -250,6 +339,7 @@ def verify_restore(
                     "restore_database": restore_database,
                     "dump_file": dump_path.name,
                     "sha256": actual_checksum,
+                    "postgres_client_major": _configured_client_major(),
                     "required_tables": list(_REQUIRED_TABLES),
                     "ok": True,
                 },
@@ -264,7 +354,7 @@ def verify_restore(
     finally:
         _run(
             [
-                "psql",
+                psql,
                 "--no-psqlrc",
                 "--set",
                 "ON_ERROR_STOP=1",
