@@ -120,13 +120,19 @@ jobs:
             --identity "$RUNNER_TEMP/clientplatform-age-identity.txt" \
             --output "$RUNNER_TEMP/clientplatform-restore.dump" \
             | tee "$RUNNER_TEMP/clientplatform-backup-decrypt.log"
+          (
+            cd "$RUNNER_TEMP"
+            sha256sum clientplatform-restore.dump > clientplatform-restore.dump.sha256
+          )
           pg_restore --list "$RUNNER_TEMP/clientplatform-restore.dump" \
             | grep -E 'TABLE DATA public (businesses|managed_bots|delivery_dispatch_outbox)' \
             > "$RUNNER_TEMP/clientplatform-encrypted-backup-tables.log"
           python scripts/clientplatform_postgres_backup.py restore-drill \
             "$RUNNER_TEMP/clientplatform-restore.dump" \
             | tee "$RUNNER_TEMP/clientplatform-encrypted-restore-drill.log"
-          rm -f "$RUNNER_TEMP/clientplatform-restore.dump"
+          rm -f \
+            "$RUNNER_TEMP/clientplatform-restore.dump" \
+            "$RUNNER_TEMP/clientplatform-restore.dump.sha256"
 
       - name: Verify production image contains age
         run: |
