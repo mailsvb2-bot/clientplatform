@@ -209,6 +209,7 @@ async def test_persistent_journey_resumes_after_fsm_restart(
     ]
     assert [text for text, _data in buttons] == [
         "Добавить ещё урок",
+        "Редактировать уроки",
         "Опубликовать программу",
         "Удалить черновик",
     ]

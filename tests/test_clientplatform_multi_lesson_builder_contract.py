@@ -84,7 +84,7 @@ class ClientPlatformMultiLessonBuilderContractTests(unittest.TestCase):
         self.assertIn("assert_can_manage_programs", source)
         self.assertIn("SET updated_at=updated_at", source)
         self.assertIn("status!='archived'", source)
-        self.assertIn("only a draft program can be archived", source)
+        self.assertIn("only a draft program can be edited", source)
         self.assertIn("UPDATE lessons", source)
         self.assertIn("UPDATE programs", source)
 
