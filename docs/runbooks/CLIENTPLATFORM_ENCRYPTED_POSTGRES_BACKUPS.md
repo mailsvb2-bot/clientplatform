@@ -102,13 +102,24 @@ python scripts/clientplatform_postgres_backup_crypto.py decrypt \
   --output /tmp/clientplatform-restore.dump
 ```
 
+Канонический restore-drill дополнительно требует checksum-манифест рядом с временным dump:
+
+```bash
+(
+  cd /tmp
+  sha256sum clientplatform-restore.dump > clientplatform-restore.dump.sha256
+)
+```
+
 Затем административный DSN передаётся только на время drill:
 
 ```bash
 CLIENTPLATFORM_RESTORE_ADMIN_DATABASE_URL='postgresql://...' \
 python scripts/clientplatform_postgres_backup.py restore-drill \
   /tmp/clientplatform-restore.dump
-rm -f /tmp/clientplatform-restore.dump
+rm -f \
+  /tmp/clientplatform-restore.dump \
+  /tmp/clientplatform-restore.dump.sha256
 ```
 
 Успех подтверждается маркером:
@@ -117,7 +128,7 @@ rm -f /tmp/clientplatform-restore.dump
 CLIENTPLATFORM_RESTORE_DRILL_OK:/var/lib/clientplatform/restore-evidence/restore-....json
 ```
 
-Restore drill создаёт одноразовую базу, проверяет обязательные таблицы и всегда удаляет временную базу.
+Restore drill создаёт одноразовую базу, проверяет обязательные таблицы и всегда удаляет временную базу. Временный расшифрованный dump и его checksum после проверки также удаляются оператором.
 
 ## Fail-closed свойства
 
