@@ -38,6 +38,7 @@ services:
       - >-
         python scripts/clientplatform_production_preflight.py
         && python scripts/clientplatform_monetization_preflight.py
+        && python scripts/clientplatform_program_media_preflight.py
         && python scripts/clientplatform_bot_gateway_preflight.py
         && exec python main.py
     depends_on:
