@@ -36,9 +36,12 @@ def store_program_media(
     content_type: str,
     extension: str,
 ) -> StoredProgramMedia:
+    candidate = path.expanduser()
+    if candidate.is_symlink():
+        raise ProgramMediaStoreError("program_media_source_invalid")
     config = program_media_store_config()
     return ProgramMediaStore(config).put_file(
-        path,
+        candidate,
         business_id=business_id,
         content_kind=content_kind,
         content_type=content_type,
