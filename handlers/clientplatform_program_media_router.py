@@ -13,6 +13,7 @@ from aiogram.types import Message
 from clientplatform.application.program_media import (
     cancel_program_media_cleanup,
     delete_uncommitted_program_media,
+    program_media_ingest_policy,
     queue_program_media_cleanup,
     stage_program_media_cleanup,
 )
@@ -208,11 +209,15 @@ async def replace_persistent_lesson_content(
         await message.answer("Редактор был закрыт. Откройте черновик заново.")
         return
     business_id, lesson_id = session
-    actor, _previous_record, previous_lesson = await editor._load_lesson(
-        user_id=int(message.from_user.id),
-        business_id=business_id,
-        lesson_id=lesson_id,
-    )
+    actor = await control._actor(int(message.from_user.id), business_id)
+    previous_lesson = None
+    cleanup_policy = await asyncio.to_thread(program_media_ingest_policy)
+    if cleanup_policy.enabled:
+        actor, _previous_record, previous_lesson = await editor._load_lesson(
+            user_id=int(message.from_user.id),
+            business_id=business_id,
+            lesson_id=lesson_id,
+        )
     material = await _materialize(message, business_id=business_id)
     if material is None:
         return
@@ -240,7 +245,7 @@ async def replace_persistent_lesson_content(
         raise
     if staged:
         await _cancel_cleanup_safely(media_reference=content_ref)
-    if previous_lesson.content_ref != content_ref:
+    if previous_lesson is not None and previous_lesson.content_ref != content_ref:
         await _queue_cleanup_safely(
             business_id=business_id,
             media_reference=previous_lesson.content_ref,
