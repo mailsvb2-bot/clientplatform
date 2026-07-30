@@ -69,7 +69,7 @@ def run_backup_pipeline(env: Mapping[str, str] | None = None) -> tuple[Encrypted
             remove_plaintext=True,
             now=now,
         )
-    except BaseException:
+    except (OSError, RuntimeError, ValueError, TypeError):
         _clean_plaintext_bundle(dump)
         raise
 
