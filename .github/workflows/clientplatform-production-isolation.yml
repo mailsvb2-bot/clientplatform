@@ -77,6 +77,8 @@ jobs:
           set -o pipefail
           python -m unittest -v \
             tests/test_clientplatform_production_isolation.py \
+            tests/test_clientplatform_s3_replication.py \
+            tests/test_clientplatform_s3_replication_hardening.py \
             tests/test_clientplatform_bot_gateway_preflight.py \
             tests/test_clientplatform_bot_provisioning.py \
             tests/test_runtime_clientplatform_bot_provisioning.py \
@@ -125,6 +127,7 @@ jobs:
                   "CLIENTPLATFORM_SECRET_S3_ACCESS_KEY": "access-key-material",
                   "CLIENTPLATFORM_SECRET_S3_SECRET_KEY": "secret-key-material",
                   "CLIENTPLATFORM_SECRET_MEDIA_SIGNING_KEY": "m" * 48,
+                  "CLIENTPLATFORM_S3_BACKUP_REPLICATION_ENABLED": "1",
               }
           )
           target = Path("/tmp/clientplatform-production.env")

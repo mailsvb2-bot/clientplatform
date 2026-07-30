@@ -1,0 +1,26 @@
+[Unit]
+Description=Replicate ClientPlatform S3 objects to the backup bucket
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=/etc/clientplatform/clientplatform.env
+
+[Service]
+Type=oneshot
+User=clientplatform
+Group=clientplatform
+WorkingDirectory=/var/lib/clientplatform/runtime/current
+EnvironmentFile=/etc/clientplatform/clientplatform.env
+ExecStart=/var/lib/clientplatform/runtime/current/.venv/bin/python scripts/clientplatform_s3_replication.py sync
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/clientplatform/s3-replication-evidence
+UMask=0077
