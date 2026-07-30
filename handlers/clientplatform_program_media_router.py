@@ -95,13 +95,13 @@ async def _stage_cleanup(
             media_reference=media_reference,
             reason=reason,
         )
-    except Exception:
+    except Exception:  # validator: allow-wide-except - compensate every staging failure
         try:
             await asyncio.to_thread(
                 delete_uncommitted_program_media,
                 media_reference=media_reference,
             )
-        except Exception:
+        except Exception:  # validator: allow-wide-except - best-effort last-resort cleanup
             log.exception("Failed to compensate uncommitted program media")
         raise
 
@@ -112,7 +112,7 @@ async def _cancel_cleanup_safely(*, media_reference: str) -> None:
             cancel_program_media_cleanup,
             media_reference=media_reference,
         )
-    except Exception:
+    except Exception:  # validator: allow-wide-except - stale intent is reference-guarded
         log.exception("Failed to cancel a referenced program media cleanup intent")
 
 
@@ -129,7 +129,7 @@ async def _queue_cleanup_safely(
             media_reference=media_reference,
             reason=reason,
         )
-    except Exception:
+    except Exception:  # validator: allow-wide-except - preserve primary mutation failure
         log.exception("Failed to expedite a program media cleanup intent")
 
 
@@ -183,7 +183,7 @@ async def capture_persistent_lesson_content(
             actor=actor,
             program_id=program_id,
         )
-    except Exception:
+    except Exception:  # validator: allow-wide-except - compensate any DB/domain mutation failure
         if staged:
             await _queue_cleanup_safely(
                 business_id=business_id,
@@ -235,7 +235,7 @@ async def replace_persistent_lesson_content(
             content_kind=content_kind,
             content_ref=content_ref,
         )
-    except Exception:
+    except Exception:  # validator: allow-wide-except - compensate any DB/domain mutation failure
         if staged:
             await _queue_cleanup_safely(
                 business_id=business_id,
@@ -288,7 +288,7 @@ async def capture_legacy_lesson_content(
             content_kind=content_kind,
             content_ref=content_ref,
         )
-    except Exception:
+    except Exception:  # validator: allow-wide-except - compensate any DB/domain mutation failure
         if staged:
             await _queue_cleanup_safely(
                 business_id=business_id,
