@@ -246,7 +246,6 @@ class ClientPlatformCustomerBoundaryTests(unittest.TestCase):
                 "lesson_progress",
                 "lessons",
                 "managed_bots",
-                "program_media_cleanup_queue",
                 "programs",
             },
         )
