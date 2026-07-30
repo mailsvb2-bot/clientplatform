@@ -9,7 +9,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 # Reuse the official Python 3.12 runtime and the PostgreSQL 16 toolchain from
 # their immutable upstream images. Only Debian's standard repository is needed
-# at build time; no PGDG signing-key or apt.postgresql.org request is required.
+# at build time; no external PostgreSQL package repository or signing key is used.
 COPY --from=python-runtime /usr/local /usr/local
 
 RUN apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=60 update \
