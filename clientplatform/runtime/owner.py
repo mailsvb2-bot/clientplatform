@@ -119,28 +119,37 @@ async def run_clientplatform_runtime_owner(
     sleep: Sleep = asyncio.sleep,
     monotonic: Monotonic = time.monotonic,
 ) -> None:
-    """Own the optional clientplatform dispatch runtime for the lifetime of the application.
+    """Own the optional clientplatform dispatch runtime for the application lifetime.
 
     The owner is created by the canonical ``TaskManager``. It remains completely
-    dormant unless clientplatform dispatch is explicitly enabled, waits for all additive clientplatform
-    tables, starts exactly one scheduler and guarantees a matching stop on task
-    cancellation during graceful shutdown or self-heal restart.
+    dormant unless clientplatform dispatch is explicitly enabled, waits for all
+    additive clientplatform tables, periodically reports schema-readiness delays,
+    starts exactly one scheduler and guarantees a matching stop on cancellation
+    during graceful shutdown or self-heal restart.
     """
 
     selected = config or dispatch_runtime_config()
     if not selected.enabled:
         return
 
-    deadline = monotonic() + _schema_wait_timeout_seconds()
+    warning_interval = _schema_wait_timeout_seconds()
+    deadline = monotonic() + warning_interval
+    poll_interval = _schema_poll_interval_seconds()
     last_error = "clientplatform_schema_not_ready"
     while True:
         ready, error = await asyncio.to_thread(schema_probe)
         if ready:
             break
         last_error = str(error or last_error)
-        if monotonic() >= deadline:
-            raise RuntimeError(f"clientplatform_runtime_schema_timeout:{last_error}")
-        await sleep(_schema_poll_interval_seconds())
+        now = monotonic()
+        if now >= deadline:
+            log.warning(
+                "clientplatform dispatch runtime is still waiting for schema; "
+                "continuing without dropping lifecycle ownership: %s",
+                last_error,
+            )
+            deadline = now + warning_interval
+        await sleep(poll_interval)
 
     runtime = build_dispatch_runtime(selected)
     started = await start_clientplatform_runtime(runtime)
