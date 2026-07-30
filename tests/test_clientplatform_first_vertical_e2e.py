@@ -364,13 +364,28 @@ class ClientPlatformFirstVerticalE2E(unittest.IsolatedAsyncioTestCase):
                 now="2026-07-30T12:04:01+00:00",
             )
             self.assertTrue(first_completion.next_material_queued)
-            self.assertFalse(repeated_completion.next_material_queued)
+            self.assertTrue(repeated_completion.next_material_queued)
+
+            second_delivery = conn.execute(
+                """
+                SELECT id FROM lesson_deliveries
+                WHERE business_id=? AND enrollment_id=? AND lesson_id=?
+                LIMIT 1
+                """,
+                (
+                    owner_a.business_id,
+                    enrollment.enrollment.id,
+                    lessons[1].id,
+                ),
+            ).fetchone()
+            self.assertIsNotNone(second_delivery)
+            assert second_delivery is not None
 
             second_claim = outbox.claim_due(limit=10)
             self.assertEqual(len(second_claim), 1)
             self.assertEqual(
                 second_claim[0].dispatch.logical_delivery_id,
-                first_completion.program.lessons[1].delivery_id,
+                str(second_delivery["id"]),
             )
             second_provider_id = await adapter.send(
                 second_claim[0],
@@ -414,10 +429,7 @@ class ClientPlatformFirstVerticalE2E(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(
                 {lesson.id for lesson in lessons},
-                {
-                    item.lesson_id
-                    for item in final.program.lessons
-                },
+                {item.lesson_id for item in final.program.lessons},
             )
             conn.close()
 
