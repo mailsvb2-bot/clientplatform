@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -232,21 +233,21 @@ class ClientPlatformFirstVerticalE2E(unittest.IsolatedAsyncioTestCase):
                 telegram_user_id=5001,
                 username="client",
                 display_name="Анна Клиент",
-                now="2026-07-30T12:01:00+00:00",
+                now=datetime(2026, 7, 30, 12, 1, tzinfo=timezone.utc),
             )
             replay_a = gateway.ensure_telegram_customer_link(
                 route=route_a,
                 telegram_user_id=5001,
                 username="client",
                 display_name="Анна Клиент",
-                now="2026-07-30T12:01:01+00:00",
+                now=datetime(2026, 7, 30, 12, 1, 1, tzinfo=timezone.utc),
             )
             customer_b = gateway.ensure_telegram_customer_link(
                 route=route_b,
                 telegram_user_id=5001,
                 username="client",
                 display_name="Анна Клиент",
-                now="2026-07-30T12:01:02+00:00",
+                now=datetime(2026, 7, 30, 12, 1, 2, tzinfo=timezone.utc),
             )
             self.assertEqual(customer_a.customer_id, replay_a.customer_id)
             self.assertNotEqual(customer_a.customer_id, customer_b.customer_id)
