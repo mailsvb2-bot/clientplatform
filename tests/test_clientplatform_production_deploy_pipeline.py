@@ -5,7 +5,9 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
+from config import settings as runtime_settings
 from scripts import clientplatform_prepare_production_env as prepare_env
 from scripts import clientplatform_production_deploy as production_deploy
 
@@ -96,6 +98,17 @@ class ProductionEnvironmentPreparationTests(unittest.TestCase):
                 "mismatched_clientplatform_public_base_url",
             ):
                 prepare_env.prepare(path)
+
+    def test_trusted_proxy_parser_ignores_empty_csv_segments(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {
+                "TRUST_PROXY_HEADERS": "1",
+                "PAYMENT_WEBHOOK_TRUSTED_PROXY_CIDRS": ",172.18.0.0/16,,",
+            },
+            clear=False,
+        ):
+            runtime_settings._validate_trusted_proxy_env()
 
 
 class ProductionDeploymentContractTests(unittest.TestCase):
