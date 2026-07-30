@@ -38,6 +38,7 @@ jobs:
 
           runtime_tests = {
               "test_clientplatform_control_bot_behavior.py",
+              "test_clientplatform_multi_lesson_program_builder.py",
           }
           tests = [
               str(path)
