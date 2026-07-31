@@ -3,6 +3,7 @@ from __future__ import annotations
 """Seal legacy local audio inside the read-only ClientPlatform container image."""
 
 import argparse
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -20,11 +21,36 @@ class ContainerAudioAssetError(RuntimeError):
     """Sanitized build-time failure for container audio publication."""
 
 
+def _assign_runtime_ownership(
+    *,
+    destination: Path,
+    audio_link: Path,
+    pointer: Path,
+    owner_uid: int | None,
+    owner_gid: int | None,
+) -> None:
+    if owner_uid is None and owner_gid is None:
+        return
+    if owner_uid is None or owner_gid is None or owner_uid < 0 or owner_gid < 0:
+        raise ContainerAudioAssetError("container_audio_owner_invalid")
+
+    try:
+        paths = [destination, *sorted(destination.rglob("*"))]
+        for path in paths:
+            os.chown(path, owner_uid, owner_gid, follow_symlinks=False)
+        os.chown(audio_link, owner_uid, owner_gid, follow_symlinks=False)
+        os.chown(pointer, owner_uid, owner_gid, follow_symlinks=False)
+    except OSError as exc:
+        raise ContainerAudioAssetError("container_audio_owner_assignment_failed") from exc
+
+
 def prepare_container_audio_assets(
     *,
     root: Path,
     asset_root: Path,
     require: bool,
+    owner_uid: int | None = None,
+    owner_gid: int | None = None,
 ) -> AudioAssetInfo | None:
     release_root = root.expanduser().resolve(strict=True)
     source = release_root / "audio"
@@ -32,10 +58,21 @@ def prepare_container_audio_assets(
 
     if source.is_symlink():
         try:
-            return validate_release_assets(
+            verified = validate_release_assets(
                 release_root,
                 require_versioned=require or pointer.exists(),
             )
+            if verified is not None:
+                _assign_runtime_ownership(
+                    destination=Path(verified.asset_dir),
+                    audio_link=source,
+                    pointer=pointer,
+                    owner_uid=owner_uid,
+                    owner_gid=owner_gid,
+                )
+            return verified
+        except ContainerAudioAssetError:
+            raise
         except (OSError, ValueError) as exc:
             raise ContainerAudioAssetError(
                 "container_audio_existing_release_invalid"
@@ -75,6 +112,13 @@ def prepare_container_audio_assets(
             source.replace(destination)
         source.symlink_to(destination, target_is_directory=True)
         published = write_release_pointer(release_root, destination)
+        _assign_runtime_ownership(
+            destination=destination,
+            audio_link=source,
+            pointer=pointer,
+            owner_uid=owner_uid,
+            owner_gid=owner_gid,
+        )
         verified = validate_release_assets(release_root, require_versioned=True)
     except ContainerAudioAssetError:
         raise
@@ -95,6 +139,8 @@ def main() -> int:
         default=Path("/opt/clientplatform/audio-assets"),
     )
     parser.add_argument("--require", action="store_true")
+    parser.add_argument("--owner-uid", type=int)
+    parser.add_argument("--owner-gid", type=int)
     args = parser.parse_args()
 
     try:
@@ -102,6 +148,8 @@ def main() -> int:
             root=args.root,
             asset_root=args.asset_root,
             require=bool(args.require),
+            owner_uid=args.owner_uid,
+            owner_gid=args.owner_gid,
         )
     except ContainerAudioAssetError as exc:
         print(f"CLIENTPLATFORM_CONTAINER_AUDIO_ASSETS_FAILED:{exc}", file=sys.stderr)
