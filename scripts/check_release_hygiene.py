@@ -58,6 +58,7 @@ FORBIDDEN_LOG_GLOBS = ["*.log"]
 
 ALLOWED_ROOT_FILES = {
     ".audio-assets.json",
+    ".dockerignore",
     ".env.example",
     ".gitignore",
     ".pre-commit-config.yaml",
