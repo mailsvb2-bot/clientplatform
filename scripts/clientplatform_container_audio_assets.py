@@ -6,6 +6,7 @@ import argparse
 import os
 import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 from services.audio_asset_integrity import (
@@ -42,6 +43,63 @@ def _assign_runtime_ownership(
         os.chown(pointer, owner_uid, owner_gid, follow_symlinks=False)
     except OSError as exc:
         raise ContainerAudioAssetError("container_audio_owner_assignment_failed") from exc
+
+
+def _publish_asset_tree(
+    *,
+    source: Path,
+    destination_root: Path,
+    source_info: AudioAssetInfo,
+) -> Path:
+    """Copy across Docker/OverlayFS boundaries, then atomically publish in-place."""
+
+    destination = destination_root / source_info.asset_sha256
+    if destination.exists():
+        if not destination.is_dir() or destination.is_symlink():
+            raise ContainerAudioAssetError("container_audio_digest_target_invalid")
+        validate_asset_dir(
+            destination,
+            expected_sha256=source_info.asset_sha256,
+            expected_file_count=source_info.file_count,
+        )
+        shutil.rmtree(source)
+        return destination
+
+    staging_parent = Path(
+        tempfile.mkdtemp(
+            prefix=f".{source_info.asset_sha256}.",
+            dir=destination_root,
+        )
+    )
+    staging = staging_parent / source_info.asset_sha256
+    try:
+        shutil.copytree(
+            source,
+            staging,
+            symlinks=False,
+            copy_function=shutil.copy2,
+        )
+        validate_asset_dir(
+            staging,
+            expected_sha256=source_info.asset_sha256,
+            expected_file_count=source_info.file_count,
+        )
+        if destination.exists():
+            if not destination.is_dir() or destination.is_symlink():
+                raise ContainerAudioAssetError(
+                    "container_audio_digest_target_invalid"
+                )
+            validate_asset_dir(
+                destination,
+                expected_sha256=source_info.asset_sha256,
+                expected_file_count=source_info.file_count,
+            )
+        else:
+            staging.replace(destination)
+        shutil.rmtree(source)
+        return destination
+    finally:
+        shutil.rmtree(staging_parent, ignore_errors=True)
 
 
 def prepare_container_audio_assets(
@@ -95,21 +153,12 @@ def prepare_container_audio_assets(
     except (OSError, ValueError) as exc:
         raise ContainerAudioAssetError("container_audio_seal_failed") from exc
 
-    destination = destination_root / source_info.asset_sha256
     try:
-        if destination.exists():
-            if not destination.is_dir() or destination.is_symlink():
-                raise ContainerAudioAssetError(
-                    "container_audio_digest_target_invalid"
-                )
-            validate_asset_dir(
-                destination,
-                expected_sha256=source_info.asset_sha256,
-                expected_file_count=source_info.file_count,
-            )
-            shutil.rmtree(source)
-        else:
-            source.replace(destination)
+        destination = _publish_asset_tree(
+            source=source,
+            destination_root=destination_root,
+            source_info=source_info,
+        )
         source.symlink_to(destination, target_is_directory=True)
         published = write_release_pointer(release_root, destination)
         _assign_runtime_ownership(
