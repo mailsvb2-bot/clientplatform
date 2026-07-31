@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import io
 import os
+import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr
 from pathlib import Path
 from unittest import mock
 
@@ -119,11 +121,21 @@ class ProductionDeploymentContractTests(unittest.TestCase):
             __import__("hashlib").sha256(payload).hexdigest(),
         )
 
-    def test_rollback_retags_recreates_and_rechecks_all_gates(self) -> None:
+    def test_startup_gate_checks_availability_without_requiring_full_readiness(self) -> None:
+        with (
+            mock.patch.object(production_deploy, "_container_running", return_value=True),
+            mock.patch.object(production_deploy, "_healthy", return_value=True),
+            mock.patch.object(production_deploy, "_runtime_markers", return_value=True),
+            mock.patch.object(production_deploy, "_ready", return_value=False) as ready,
+        ):
+            production_deploy._wait_for_startup(60)
+        ready.assert_not_called()
+
+    def test_rollback_retags_recreates_and_rechecks_availability(self) -> None:
         compose = ["docker", "compose", "--env-file", ".env"]
         with (
             mock.patch.object(production_deploy, "_run") as run,
-            mock.patch.object(production_deploy, "_wait_for_readiness") as wait,
+            mock.patch.object(production_deploy, "_wait_for_startup") as wait,
             mock.patch.object(production_deploy, "_external_https") as external,
         ):
             production_deploy._rollback(
@@ -161,19 +173,19 @@ class ProductionDeploymentContractTests(unittest.TestCase):
         wait.assert_called_once_with(120)
         external.assert_called_once_with("clientplatform.example.test")
 
-    def test_rollback_fails_closed_when_recovered_image_is_not_ready(self) -> None:
+    def test_rollback_fails_closed_when_recovered_image_is_unavailable(self) -> None:
         with (
             mock.patch.object(production_deploy, "_run"),
             mock.patch.object(
                 production_deploy,
-                "_wait_for_readiness",
-                side_effect=production_deploy.DeploymentError("not-ready"),
+                "_wait_for_startup",
+                side_effect=production_deploy.DeploymentError("not-started"),
             ),
             mock.patch.object(production_deploy, "_external_https") as external,
         ):
             with self.assertRaisesRegex(
                 production_deploy.DeploymentError,
-                "rollback_not_ready",
+                "rollback_not_available",
             ):
                 production_deploy._rollback(
                     compose=["docker", "compose"],
@@ -183,8 +195,64 @@ class ProductionDeploymentContractTests(unittest.TestCase):
                 )
         external.assert_not_called()
 
-    def test_deploy_contract_orders_backup_before_recreate_and_keeps_rollback(self) -> None:
+    def test_existing_unready_production_aborts_before_any_container_change(self) -> None:
+        compose = ["docker", "compose", "--env-file", "clientplatform.env"]
+        with (
+            mock.patch.object(production_deploy, "prepare"),
+            mock.patch.object(
+                production_deploy,
+                "_env_values",
+                return_value={"CLIENTPLATFORM_DOMAIN": "clientplatform.example.test"},
+            ),
+            mock.patch.object(production_deploy, "_git_sha", return_value="a" * 40),
+            mock.patch.object(production_deploy, "_compose", return_value=compose),
+            mock.patch.object(production_deploy, "_run") as run,
+            mock.patch.object(production_deploy, "_container_exists", return_value=True),
+            mock.patch.object(
+                production_deploy,
+                "_wait_for_readiness",
+                side_effect=production_deploy.DeploymentError("red-baseline"),
+            ),
+            mock.patch.object(production_deploy, "_external_https") as external,
+        ):
+            with self.assertRaisesRegex(
+                production_deploy.DeploymentError,
+                "production_not_ready_before_deploy",
+            ):
+                production_deploy.deploy(allow_local_backup=True, timeout_seconds=240)
+
+        self.assertEqual(run.call_args_list, [mock.call([*compose, "config", "--quiet"])])
+        external.assert_not_called()
+
+    def test_main_reports_expected_failure_without_traceback(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            stderr = io.StringIO()
+            with (
+                mock.patch.object(
+                    production_deploy,
+                    "LOCK_PATH",
+                    Path(raw) / "clientplatform-production-deploy.lock",
+                ),
+                mock.patch.object(
+                    production_deploy,
+                    "deploy",
+                    side_effect=production_deploy.DeploymentError("operator-safe-proof"),
+                ),
+                mock.patch.object(sys, "argv", ["clientplatform_production_deploy"]),
+                redirect_stderr(stderr),
+            ):
+                result = production_deploy.main()
+
+        self.assertEqual(result, 1)
+        self.assertEqual(
+            stderr.getvalue().strip(),
+            "CLIENTPLATFORM_PRODUCTION_DEPLOY_FAILED:operator-safe-proof",
+        )
+        self.assertNotIn("Traceback", stderr.getvalue())
+
+    def test_deploy_contract_orders_baseline_backup_build_and_recreate(self) -> None:
         source = Path(production_deploy.__file__).read_text(encoding="utf-8")
+        baseline_index = source.index("production_not_ready_before_deploy")
         backup_index = source.index("backup_reference =")
         build_index = source.index('_run([*compose, "build", "app", "backup"])')
         recreate_index = source.index(
@@ -192,13 +260,16 @@ class ProductionDeploymentContractTests(unittest.TestCase):
             build_index,
         )
 
+        self.assertLess(baseline_index, backup_index)
         self.assertLess(backup_index, build_index)
         self.assertLess(build_index, recreate_index)
         self.assertIn("production_readiness_timeout", source)
+        self.assertIn("production_startup_timeout", source)
         self.assertIn("external_https_proof_failed", source)
         self.assertIn("rollback_tag", source)
         self.assertIn('"--no-build", "--force-recreate"', source)
         self.assertIn("CLIENTPLATFORM_PRODUCTION_ROLLBACK_OK", source)
+        self.assertIn("CLIENTPLATFORM_PRODUCTION_DEPLOY_FAILED", source)
         self.assertIn("deployment_failed_and_rollback_failed", source)
         self.assertIn("CLIENTPLATFORM_PRODUCTION_DEPLOY_OK", source)
         self.assertNotIn("shell=True", source)
