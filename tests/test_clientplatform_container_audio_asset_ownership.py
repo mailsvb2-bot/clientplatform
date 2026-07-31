@@ -37,10 +37,10 @@ class ContainerAudioAssetOwnershipTests(unittest.TestCase):
 
             self.assertIsNotNone(info)
             assert info is not None
-            calls = {
+            calls = [
                 (Path(call.args[0]), call.args[1], call.args[2], call.kwargs)
                 for call in chown.call_args_list
-            }
+            ]
             expected_paths = {
                 assets / info.asset_sha256,
                 assets / info.asset_sha256 / ".asset-manifest.json",
