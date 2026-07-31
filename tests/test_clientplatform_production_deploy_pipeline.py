@@ -187,7 +187,10 @@ class ProductionDeploymentContractTests(unittest.TestCase):
         source = Path(production_deploy.__file__).read_text(encoding="utf-8")
         backup_index = source.index("backup_reference =")
         build_index = source.index('_run([*compose, "build", "app", "backup"])')
-        recreate_index = source.index('"--force-recreate", "app", "caddy"')
+        recreate_index = source.index(
+            '"--force-recreate", "app", "caddy"',
+            build_index,
+        )
 
         self.assertLess(backup_index, build_index)
         self.assertLess(build_index, recreate_index)
