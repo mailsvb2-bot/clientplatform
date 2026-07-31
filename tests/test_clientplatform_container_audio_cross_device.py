@@ -7,9 +7,7 @@ from pathlib import Path
 from unittest import mock
 
 from clientplatform.domain.programs import ContentKind
-from scripts.clientplatform_container_audio_assets import (
-    prepare_container_audio_assets,
-)
+from scripts.clientplatform_container_audio_assets import prepare_container_audio_assets
 from services.audio_asset_integrity import validate_release_assets
 
 
