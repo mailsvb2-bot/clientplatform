@@ -119,11 +119,78 @@ class ProductionDeploymentContractTests(unittest.TestCase):
             __import__("hashlib").sha256(payload).hexdigest(),
         )
 
+    def test_rollback_retags_recreates_and_rechecks_all_gates(self) -> None:
+        compose = ["docker", "compose", "--env-file", ".env"]
+        with (
+            mock.patch.object(production_deploy, "_run") as run,
+            mock.patch.object(production_deploy, "_wait_for_readiness") as wait,
+            mock.patch.object(production_deploy, "_external_https") as external,
+        ):
+            production_deploy._rollback(
+                compose=compose,
+                rollback_tag="clientplatform-production-app:rollback-proof",
+                domain="clientplatform.example.test",
+                timeout_seconds=120,
+            )
+
+        self.assertEqual(
+            run.call_args_list,
+            [
+                mock.call(
+                    [
+                        "docker",
+                        "image",
+                        "tag",
+                        "clientplatform-production-app:rollback-proof",
+                        "clientplatform-production-app:latest",
+                    ]
+                ),
+                mock.call(
+                    [
+                        *compose,
+                        "up",
+                        "-d",
+                        "--no-build",
+                        "--force-recreate",
+                        "app",
+                        "caddy",
+                    ]
+                ),
+            ],
+        )
+        wait.assert_called_once_with(120)
+        external.assert_called_once_with("clientplatform.example.test")
+
+    def test_rollback_fails_closed_when_recovered_image_is_not_ready(self) -> None:
+        with (
+            mock.patch.object(production_deploy, "_run"),
+            mock.patch.object(
+                production_deploy,
+                "_wait_for_readiness",
+                side_effect=production_deploy.DeploymentError("not-ready"),
+            ),
+            mock.patch.object(production_deploy, "_external_https") as external,
+        ):
+            with self.assertRaisesRegex(
+                production_deploy.DeploymentError,
+                "rollback_not_ready",
+            ):
+                production_deploy._rollback(
+                    compose=["docker", "compose"],
+                    rollback_tag="clientplatform-production-app:rollback-proof",
+                    domain="clientplatform.example.test",
+                    timeout_seconds=60,
+                )
+        external.assert_not_called()
+
     def test_deploy_contract_orders_backup_before_recreate_and_keeps_rollback(self) -> None:
         source = Path(production_deploy.__file__).read_text(encoding="utf-8")
         backup_index = source.index("backup_reference =")
         build_index = source.index('_run([*compose, "build", "app", "backup"])')
-        recreate_index = source.index('"--force-recreate", "app", "caddy"')
+        recreate_index = source.index(
+            '"--force-recreate", "app", "caddy"',
+            build_index,
+        )
 
         self.assertLess(backup_index, build_index)
         self.assertLess(build_index, recreate_index)
@@ -131,6 +198,8 @@ class ProductionDeploymentContractTests(unittest.TestCase):
         self.assertIn("external_https_proof_failed", source)
         self.assertIn("rollback_tag", source)
         self.assertIn('"--no-build", "--force-recreate"', source)
+        self.assertIn("CLIENTPLATFORM_PRODUCTION_ROLLBACK_OK", source)
+        self.assertIn("deployment_failed_and_rollback_failed", source)
         self.assertIn("CLIENTPLATFORM_PRODUCTION_DEPLOY_OK", source)
         self.assertNotIn("shell=True", source)
 
@@ -169,6 +238,37 @@ class ProductionDeploymentContractTests(unittest.TestCase):
         self.assertNotIn("www.postgresql.org", dockerfile)
         self.assertNotIn("ACCC4CF8", dockerfile)
         self.assertNotIn("postgresql-client-16", dockerfile)
+
+    def test_app_image_owns_preflights_and_compose_does_not_override_startup(self) -> None:
+        root = Path(production_deploy.ROOT)
+        dockerfile = (root / "deploy/clientplatform/Dockerfile").read_text(
+            encoding="utf-8"
+        )
+        compose = (root / "deploy/clientplatform/compose.production.yml").read_text(
+            encoding="utf-8"
+        )
+        entrypoint = (
+            root / "deploy/clientplatform/container-entrypoint.sh"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            'ENTRYPOINT ["/app/deploy/clientplatform/container-entrypoint.sh"]',
+            dockerfile,
+        )
+        for module in (
+            "clientplatform_production_preflight",
+            "clientplatform_monetization_preflight",
+            "clientplatform_program_media_preflight",
+            "clientplatform_bot_gateway_preflight",
+        ):
+            self.assertIn(f"python -m scripts.{module}", entrypoint)
+            self.assertIn(f"/app/scripts/{module}.py", dockerfile)
+        self.assertIn("exec python main.py", entrypoint)
+        self.assertNotIn('entrypoint: ["/bin/sh", "-ec"]', compose)
+        self.assertNotIn("python scripts/clientplatform_production_preflight.py", compose)
+        self.assertNotIn("python scripts/clientplatform_monetization_preflight.py", compose)
+        self.assertNotIn("python scripts/clientplatform_program_media_preflight.py", compose)
+        self.assertNotIn("python scripts/clientplatform_bot_gateway_preflight.py", compose)
 
 
 if __name__ == "__main__":

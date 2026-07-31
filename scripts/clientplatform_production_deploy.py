@@ -78,6 +78,10 @@ def _utc_stamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
+def _completed_at() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
 def _git_sha() -> str:
     completed = _run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture=True)
     sha = completed.stdout.strip().lower()
@@ -243,6 +247,22 @@ def _write_evidence(payload: dict[str, Any]) -> Path:
     return target
 
 
+def _rollback(
+    *,
+    compose: Sequence[str],
+    rollback_tag: str,
+    domain: str,
+    timeout_seconds: int,
+) -> None:
+    _run(["docker", "image", "tag", rollback_tag, f"{APP_IMAGE}:latest"])
+    _run([*compose, "up", "-d", "--no-build", "--force-recreate", "app", "caddy"])
+    try:
+        _wait_for_readiness(timeout_seconds)
+        _external_https(domain)
+    except Exception as exc:  # validator: allow-wide-except - every rollback gate is mandatory
+        raise DeploymentError("rollback_not_ready") from exc
+
+
 def deploy(*, allow_local_backup: bool, timeout_seconds: int) -> Path:
     if os.name != "posix" or not hasattr(os, "geteuid") or os.geteuid() != 0:
         raise DeploymentError("production_deploy_requires_root")
@@ -278,13 +298,32 @@ def deploy(*, allow_local_backup: bool, timeout_seconds: int) -> Path:
         _run([*compose, "up", "-d", "--force-recreate", "app", "caddy"])
         _wait_for_readiness(timeout_seconds)
         _external_https(domain)
-    except Exception:  # validator: allow-wide-except - rollback must cover every failed gate
+    except Exception as deployment_error:  # validator: allow-wide-except - rollback must cover every failed gate
         if changed:
-            _run(["docker", "image", "tag", rollback_tag, f"{APP_IMAGE}:latest"], check=False)
-            _run(
-                [*compose, "up", "-d", "--no-build", "--force-recreate", "app", "caddy"],
-                check=False,
+            try:
+                _rollback(
+                    compose=compose,
+                    rollback_tag=rollback_tag,
+                    domain=domain,
+                    timeout_seconds=timeout_seconds,
+                )
+            except Exception as rollback_error:  # validator: allow-wide-except - surface failed recovery distinctly
+                raise DeploymentError("deployment_failed_and_rollback_failed") from rollback_error
+            rollback_evidence = _write_evidence(
+                {
+                    "ok": False,
+                    "operation": "production_deploy_rollback",
+                    "target_sha": target_sha,
+                    "previous_image": previous_image,
+                    "rollback_tag": rollback_tag,
+                    "backup_mode": backup_mode,
+                    "backup_reference": backup_reference,
+                    "domain": domain,
+                    "failure_class": type(deployment_error).__name__,
+                    "completed_at": _completed_at(),
+                }
             )
+            print(f"CLIENTPLATFORM_PRODUCTION_ROLLBACK_OK:{rollback_evidence}")
         raise
 
     evidence = _write_evidence(
@@ -297,7 +336,7 @@ def deploy(*, allow_local_backup: bool, timeout_seconds: int) -> Path:
             "backup_mode": backup_mode,
             "backup_reference": backup_reference,
             "domain": domain,
-            "completed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "completed_at": _completed_at(),
         }
     )
     print(f"CLIENTPLATFORM_PRODUCTION_DEPLOY_OK:{evidence}")

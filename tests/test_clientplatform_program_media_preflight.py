@@ -83,6 +83,9 @@ def test_deployment_contract_runs_media_preflight_before_application() -> None:
     compose = (ROOT / "deploy/clientplatform/compose.production.yml").read_text(
         encoding="utf-8"
     )
+    image_entrypoint = (
+        ROOT / "deploy/clientplatform/container-entrypoint.sh"
+    ).read_text(encoding="utf-8")
     service = (ROOT / "deploy/clientplatform/clientplatform.service").read_text(
         encoding="utf-8"
     )
@@ -90,7 +93,11 @@ def test_deployment_contract_runs_media_preflight_before_application() -> None:
         ROOT / "deploy/clientplatform/clientplatform.production.env.example"
     ).read_text(encoding="utf-8")
 
-    assert "python scripts/clientplatform_program_media_preflight.py" in compose
+    media_preflight = "python -m scripts.clientplatform_program_media_preflight"
+    application = "exec python main.py"
+    assert media_preflight in image_entrypoint
+    assert image_entrypoint.index(media_preflight) < image_entrypoint.index(application)
+    assert "clientplatform_program_media_preflight.py" not in compose
     assert (
         "scripts/clientplatform_program_media_preflight.py --env-file "
         "/etc/clientplatform/clientplatform.env"

@@ -182,6 +182,9 @@ class ClientPlatformProductionIsolationTests(unittest.TestCase):
         compose = (
             root / "deploy/clientplatform/compose.production.yml"
         ).read_text(encoding="utf-8")
+        image_entrypoint = (
+            root / "deploy/clientplatform/container-entrypoint.sh"
+        ).read_text(encoding="utf-8")
         caddy = (root / "deploy/clientplatform/Caddyfile").read_text(
             encoding="utf-8"
         )
@@ -209,7 +212,25 @@ class ClientPlatformProductionIsolationTests(unittest.TestCase):
         self.assertIn("ProtectSystem=strict", service)
         self.assertIn("clientplatform-postgres", compose)
         self.assertIn("CLIENTPLATFORM_CONTAINER_NETWORK_ISOLATED", compose)
-        self.assertIn("clientplatform_bot_gateway_preflight.py", compose)
+        self.assertNotIn('entrypoint: ["/bin/sh", "-ec"]', compose)
+        self.assertNotIn("clientplatform_bot_gateway_preflight.py", compose)
+        self.assertIn(
+            "python -m scripts.clientplatform_production_preflight",
+            image_entrypoint,
+        )
+        self.assertIn(
+            "python -m scripts.clientplatform_monetization_preflight",
+            image_entrypoint,
+        )
+        self.assertIn(
+            "python -m scripts.clientplatform_program_media_preflight",
+            image_entrypoint,
+        )
+        self.assertIn(
+            "python -m scripts.clientplatform_bot_gateway_preflight",
+            image_entrypoint,
+        )
+        self.assertIn("exec python main.py", image_entrypoint)
         self.assertIn("no-new-privileges:true", compose)
         self.assertIn("/webhooks/*", caddy)
         self.assertNotIn("/telegram-webhook", caddy)
