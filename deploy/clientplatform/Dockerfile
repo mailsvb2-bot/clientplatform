@@ -66,10 +66,13 @@ RUN set -eu; \
     python -m scripts.clientplatform_container_audio_assets \
       --root /app \
       --asset-root /opt/clientplatform/audio-assets \
+      --owner-uid 10001 \
+      --owner-gid 10001 \
       $audio_args; \
     if [ "$CLIENTPLATFORM_REQUIRE_AUDIO_ASSETS" = "1" ]; then \
       test -L /app/audio; \
       test -r /app/.audio-assets.json; \
+      python -c "import os; os.setgroups([]); os.setgid(10001); os.setuid(10001); from services.audio_asset_integrity import validate_release_assets; validate_release_assets('/app', require_versioned=True)"; \
     fi; \
     test -r /app/scripts/clientplatform_production_preflight.py; \
     test -r /app/scripts/clientplatform_monetization_preflight.py; \
