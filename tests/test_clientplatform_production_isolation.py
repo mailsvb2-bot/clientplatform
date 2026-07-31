@@ -192,7 +192,9 @@ class ClientPlatformProductionIsolationTests(unittest.TestCase):
             root / "docs/runbooks/CLIENTPLATFORM_PRODUCTION_ISOLATION.md"
         ).read_text(encoding="utf-8")
         dockerignore_path = root / "deploy/clientplatform/Dockerfile.dockerignore"
+        root_dockerignore_path = root / ".dockerignore"
         dockerignore = dockerignore_path.read_text(encoding="utf-8")
+        root_dockerignore = root_dockerignore_path.read_text(encoding="utf-8")
         self.assertIn(
             "CLIENTPLATFORM_DEPLOYMENT_ID=clientplatform-production", env_example
         )
@@ -248,9 +250,16 @@ class ClientPlatformProductionIsolationTests(unittest.TestCase):
             ).read_text(encoding="utf-8"),
         )
         self.assertTrue(dockerignore_path.is_file())
-        self.assertFalse((root / ".dockerignore").exists())
-        self.assertIn("deploy/clientplatform/clientplatform.env", dockerignore)
-        self.assertIn(".env.*", dockerignore)
+        self.assertTrue(root_dockerignore_path.is_file())
+        for ignore in (dockerignore, root_dockerignore):
+            self.assertIn("deploy/clientplatform/clientplatform.env", ignore)
+            self.assertIn("**/.env", ignore)
+            self.assertIn("**/.env.*", ignore)
+            self.assertIn("**/*.env", ignore)
+            self.assertIn("!**/*.env.example", ignore)
+            self.assertIn("deploy/clientplatform/Dockerfile.server", ignore)
+            self.assertIn("deploy/clientplatform/*.before-*", ignore)
+            self.assertIn("deploy/clientplatform/*.failed", ignore)
 
     def test_backup_helpers_reject_non_clientplatform_database(self) -> None:
         with self.assertRaisesRegex(ValueError, "non-ClientPlatform"):
