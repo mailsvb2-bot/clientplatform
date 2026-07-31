@@ -228,6 +228,17 @@ def _wait_for_startup(timeout_seconds: int) -> None:
     raise DeploymentError("production_startup_timeout")
 
 
+def _wait_for_baseline_readiness(timeout_seconds: int) -> None:
+    """Check persistent state only; startup log markers intentionally age out."""
+
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if _container_running() and _ready():
+            return
+        time.sleep(3)
+    raise DeploymentError("production_baseline_readiness_timeout")
+
+
 def _wait_for_readiness(timeout_seconds: int) -> None:
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
@@ -293,7 +304,12 @@ def _rollback(
         raise DeploymentError("rollback_not_available") from exc
 
 
-def deploy(*, allow_local_backup: bool, timeout_seconds: int) -> Path:
+def deploy(
+    *,
+    allow_local_backup: bool,
+    timeout_seconds: int,
+    recover_unavailable_baseline: bool = False,
+) -> Path:
     if os.name != "posix" or not hasattr(os, "geteuid") or os.geteuid() != 0:
         raise DeploymentError("production_deploy_requires_root")
     env_file = DEPLOY_DIR / "clientplatform.env"
@@ -307,12 +323,16 @@ def deploy(*, allow_local_backup: bool, timeout_seconds: int) -> Path:
     compose = _compose()
     _run([*compose, "config", "--quiet"])
 
-    if _container_exists(APP_CONTAINER):
+    app_exists = _container_exists(APP_CONTAINER)
+    baseline_ready = False
+    if app_exists:
         try:
-            _wait_for_readiness(min(timeout_seconds, 60))
+            _wait_for_baseline_readiness(min(timeout_seconds, 60))
             _external_https(domain)
-        except Exception as exc:  # validator: allow-wide-except - baseline must fail closed
-            raise DeploymentError("production_not_ready_before_deploy") from exc
+            baseline_ready = True
+        except Exception as exc:  # validator: allow-wide-except - baseline must fail closed by default
+            if not recover_unavailable_baseline:
+                raise DeploymentError("production_not_ready_before_deploy") from exc
 
     _run([*compose, "up", "-d", "postgres"])
 
@@ -326,9 +346,11 @@ def deploy(*, allow_local_backup: bool, timeout_seconds: int) -> Path:
     else:
         raise DeploymentError("age_recipient_missing_use_explicit_local_backup_override")
 
-    previous_image = _container_image(APP_CONTAINER)
-    rollback_tag = f"{APP_IMAGE}:rollback-{_utc_stamp()}"
-    _run(["docker", "image", "tag", previous_image, rollback_tag])
+    previous_image = _container_image(APP_CONTAINER) if app_exists else ""
+    rollback_tag = f"{APP_IMAGE}:rollback-{_utc_stamp()}" if previous_image else ""
+    if previous_image:
+        _run(["docker", "image", "tag", previous_image, rollback_tag])
+
     changed = False
     try:
         _run([*compose, "build", "app", "backup"])
@@ -337,7 +359,7 @@ def deploy(*, allow_local_backup: bool, timeout_seconds: int) -> Path:
         _wait_for_readiness(timeout_seconds)
         _external_https(domain)
     except Exception as deployment_error:  # validator: allow-wide-except - rollback must cover every failed gate
-        if changed:
+        if changed and baseline_ready and rollback_tag:
             try:
                 _rollback(
                     compose=compose,
@@ -363,6 +385,28 @@ def deploy(*, allow_local_backup: bool, timeout_seconds: int) -> Path:
                 }
             )
             print(f"CLIENTPLATFORM_PRODUCTION_ROLLBACK_OK:{rollback_evidence}")
+        elif changed and recover_unavailable_baseline and not baseline_ready:
+            recovery_evidence = _write_evidence(
+                {
+                    "ok": False,
+                    "operation": "production_recovery_failed",
+                    "target_sha": target_sha,
+                    "previous_image": previous_image,
+                    "rollback_tag": rollback_tag,
+                    "backup_mode": backup_mode,
+                    "backup_reference": backup_reference,
+                    "domain": domain,
+                    "failure_class": type(deployment_error).__name__,
+                    "baseline_ready": False,
+                    "rollback_skipped": True,
+                    "completed_at": _completed_at(),
+                }
+            )
+            print(
+                f"CLIENTPLATFORM_PRODUCTION_RECOVERY_FAILED:{recovery_evidence}",
+                file=sys.stderr,
+            )
+            raise DeploymentError("production_recovery_failed") from deployment_error
         raise
 
     evidence = _write_evidence(
@@ -375,6 +419,8 @@ def deploy(*, allow_local_backup: bool, timeout_seconds: int) -> Path:
             "backup_mode": backup_mode,
             "backup_reference": backup_reference,
             "domain": domain,
+            "baseline_ready": baseline_ready,
+            "recovery_mode": bool(app_exists and not baseline_ready),
             "completed_at": _completed_at(),
         }
     )
@@ -385,6 +431,7 @@ def deploy(*, allow_local_backup: bool, timeout_seconds: int) -> Path:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--allow-local-backup", action="store_true")
+    parser.add_argument("--recover-unavailable-baseline", action="store_true")
     parser.add_argument("--timeout-seconds", type=int, default=240)
     args = parser.parse_args()
     timeout_seconds = max(60, min(int(args.timeout_seconds), 900))
@@ -395,6 +442,7 @@ def main() -> int:
             deploy(
                 allow_local_backup=bool(args.allow_local_backup),
                 timeout_seconds=timeout_seconds,
+                recover_unavailable_baseline=bool(args.recover_unavailable_baseline),
             )
     except BlockingIOError:
         print(
