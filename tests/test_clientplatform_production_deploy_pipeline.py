@@ -198,6 +198,7 @@ class ProductionDeploymentContractTests(unittest.TestCase):
     def test_existing_unready_production_aborts_before_any_container_change(self) -> None:
         compose = ["docker", "compose", "--env-file", "clientplatform.env"]
         with (
+            mock.patch.object(production_deploy.os, "geteuid", return_value=0),
             mock.patch.object(production_deploy, "prepare"),
             mock.patch.object(
                 production_deploy,
