@@ -48,8 +48,20 @@ COPY requirements.txt /app/requirements.txt
 RUN python -m pip install --disable-pip-version-check --require-hashes -r /app/requirements.txt
 COPY --chown=clientplatform:clientplatform . /app
 
+RUN test -r /app/scripts/clientplatform_production_preflight.py \
+    && test -r /app/scripts/clientplatform_monetization_preflight.py \
+    && test -r /app/scripts/clientplatform_program_media_preflight.py \
+    && test -r /app/scripts/clientplatform_bot_gateway_preflight.py \
+    && test -r /app/deploy/clientplatform/container-entrypoint.sh \
+    && python -m py_compile \
+       /app/scripts/clientplatform_production_preflight.py \
+       /app/scripts/clientplatform_monetization_preflight.py \
+       /app/scripts/clientplatform_program_media_preflight.py \
+       /app/scripts/clientplatform_bot_gateway_preflight.py \
+    && chmod 0555 /app/deploy/clientplatform/container-entrypoint.sh
+
 USER clientplatform
 EXPOSE 8181 8182 8191
 
-ENTRYPOINT ["python", "main.py"]
+ENTRYPOINT ["/app/deploy/clientplatform/container-entrypoint.sh"]
 CMD []
