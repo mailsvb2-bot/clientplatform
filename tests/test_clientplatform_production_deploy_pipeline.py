@@ -170,6 +170,37 @@ class ProductionDeploymentContractTests(unittest.TestCase):
         self.assertNotIn("ACCC4CF8", dockerfile)
         self.assertNotIn("postgresql-client-16", dockerfile)
 
+    def test_app_image_owns_preflights_and_compose_does_not_override_startup(self) -> None:
+        root = Path(production_deploy.ROOT)
+        dockerfile = (root / "deploy/clientplatform/Dockerfile").read_text(
+            encoding="utf-8"
+        )
+        compose = (root / "deploy/clientplatform/compose.production.yml").read_text(
+            encoding="utf-8"
+        )
+        entrypoint = (
+            root / "deploy/clientplatform/container-entrypoint.sh"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            'ENTRYPOINT ["/app/deploy/clientplatform/container-entrypoint.sh"]',
+            dockerfile,
+        )
+        for module in (
+            "clientplatform_production_preflight",
+            "clientplatform_monetization_preflight",
+            "clientplatform_program_media_preflight",
+            "clientplatform_bot_gateway_preflight",
+        ):
+            self.assertIn(f"python -m scripts.{module}", entrypoint)
+            self.assertIn(f"/app/scripts/{module}.py", dockerfile)
+        self.assertIn("exec python main.py", entrypoint)
+        self.assertNotIn('entrypoint: ["/bin/sh", "-ec"]', compose)
+        self.assertNotIn("python scripts/clientplatform_production_preflight.py", compose)
+        self.assertNotIn("python scripts/clientplatform_monetization_preflight.py", compose)
+        self.assertNotIn("python scripts/clientplatform_program_media_preflight.py", compose)
+        self.assertNotIn("python scripts/clientplatform_bot_gateway_preflight.py", compose)
+
 
 if __name__ == "__main__":
     unittest.main()
