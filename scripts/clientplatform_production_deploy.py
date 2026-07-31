@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import subprocess
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -90,6 +91,24 @@ def _git_sha() -> str:
     return sha
 
 
+def _container_exists(container: str) -> bool:
+    completed = _run(
+        ["docker", "inspect", "--format", "{{.Id}}", container],
+        capture=True,
+        check=False,
+    )
+    return completed.returncode == 0 and bool(completed.stdout.strip())
+
+
+def _container_running() -> bool:
+    completed = _run(
+        ["docker", "inspect", "--format", "{{.State.Status}}", APP_CONTAINER],
+        capture=True,
+        check=False,
+    )
+    return completed.returncode == 0 and completed.stdout.strip() == "running"
+
+
 def _container_image(container: str) -> str:
     completed = _run(
         ["docker", "inspect", "--format", "{{.Image}}", container],
@@ -158,7 +177,7 @@ def _encrypted_backup(compose: Sequence[str]) -> str:
     raise DeploymentError("encrypted_predeploy_backup_marker_missing")
 
 
-def _ready() -> bool:
+def _http_probe(path: str) -> bool:
     completed = _run(
         [
             "docker",
@@ -168,7 +187,7 @@ def _ready() -> bool:
             "-c",
             (
                 "import json,urllib.request;"
-                "d=json.load(urllib.request.urlopen('http://127.0.0.1:8182/readyz',timeout=3));"
+                f"d=json.load(urllib.request.urlopen('http://127.0.0.1:8182{path}',timeout=3));"
                 "print('1' if d.get('ok') is True else '0')"
             ),
         ],
@@ -176,6 +195,14 @@ def _ready() -> bool:
         check=False,
     )
     return completed.returncode == 0 and completed.stdout.strip() == "1"
+
+
+def _healthy() -> bool:
+    return _http_probe("/healthz")
+
+
+def _ready() -> bool:
+    return _http_probe("/readyz")
 
 
 def _runtime_markers() -> bool:
@@ -192,17 +219,20 @@ def _runtime_markers() -> bool:
     )
 
 
+def _wait_for_startup(timeout_seconds: int) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if _container_running() and _healthy() and _runtime_markers():
+            return
+        time.sleep(3)
+    raise DeploymentError("production_startup_timeout")
+
+
 def _wait_for_readiness(timeout_seconds: int) -> None:
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
-        state = _run(
-            ["docker", "inspect", "--format", "{{.State.Status}}", APP_CONTAINER],
-            capture=True,
-            check=False,
-        )
-        if state.returncode == 0 and state.stdout.strip() == "running":
-            if _ready() and _runtime_markers():
-                return
+        if _container_running() and _ready() and _runtime_markers():
+            return
         time.sleep(3)
     raise DeploymentError("production_readiness_timeout")
 
@@ -257,10 +287,10 @@ def _rollback(
     _run(["docker", "image", "tag", rollback_tag, f"{APP_IMAGE}:latest"])
     _run([*compose, "up", "-d", "--no-build", "--force-recreate", "app", "caddy"])
     try:
-        _wait_for_readiness(timeout_seconds)
+        _wait_for_startup(timeout_seconds)
         _external_https(domain)
     except Exception as exc:  # validator: allow-wide-except - every rollback gate is mandatory
-        raise DeploymentError("rollback_not_ready") from exc
+        raise DeploymentError("rollback_not_available") from exc
 
 
 def deploy(*, allow_local_backup: bool, timeout_seconds: int) -> Path:
@@ -276,6 +306,14 @@ def deploy(*, allow_local_backup: bool, timeout_seconds: int) -> Path:
     target_sha = _git_sha()
     compose = _compose()
     _run([*compose, "config", "--quiet"])
+
+    if _container_exists(APP_CONTAINER):
+        try:
+            _wait_for_readiness(min(timeout_seconds, 60))
+            _external_https(domain)
+        except Exception as exc:  # validator: allow-wide-except - baseline must fail closed
+            raise DeploymentError("production_not_ready_before_deploy") from exc
+
     _run([*compose, "up", "-d", "postgres"])
 
     age_recipient = str(values.get("CLIENTPLATFORM_BACKUP_AGE_RECIPIENT", "") or "").strip()
@@ -320,6 +358,7 @@ def deploy(*, allow_local_backup: bool, timeout_seconds: int) -> Path:
                     "backup_reference": backup_reference,
                     "domain": domain,
                     "failure_class": type(deployment_error).__name__,
+                    "rollback_full_readiness": _ready(),
                     "completed_at": _completed_at(),
                 }
             )
@@ -349,13 +388,23 @@ def main() -> int:
     parser.add_argument("--timeout-seconds", type=int, default=240)
     args = parser.parse_args()
     timeout_seconds = max(60, min(int(args.timeout_seconds), 900))
-    LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with LOCK_PATH.open("a+") as lock_handle:
-        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        deploy(
-            allow_local_backup=bool(args.allow_local_backup),
-            timeout_seconds=timeout_seconds,
+    try:
+        LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with LOCK_PATH.open("a+") as lock_handle:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            deploy(
+                allow_local_backup=bool(args.allow_local_backup),
+                timeout_seconds=timeout_seconds,
+            )
+    except BlockingIOError:
+        print(
+            "CLIENTPLATFORM_PRODUCTION_DEPLOY_FAILED:production_deploy_already_running",
+            file=sys.stderr,
         )
+        return 1
+    except DeploymentError as exc:
+        print(f"CLIENTPLATFORM_PRODUCTION_DEPLOY_FAILED:{exc}", file=sys.stderr)
+        return 1
     return 0
 
 
