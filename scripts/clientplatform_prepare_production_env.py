@@ -67,6 +67,7 @@ def prepare(path: Path) -> tuple[str, ...]:
     _exact_or_missing(values, "CLIENTPLATFORM_MEDIA_GATEWAY_BASE_URL", expected_media)
     _exact_or_missing(values, "CLIENTPLATFORM_MEDIA_GATEWAY_ALLOWED_BUCKETS", bucket)
     _exact_or_missing(values, "CLIENTPLATFORM_MEDIA_GATEWAY_STORAGE_MODE", "s3")
+    _exact_or_missing(values, "CLIENTPLATFORM_REQUIRE_AUDIO_ASSETS", "1")
 
     defaults = {
         "CLIENTPLATFORM_PUBLIC_BASE_URL": expected_public,
@@ -86,6 +87,7 @@ def prepare(path: Path) -> tuple[str, ...]:
         "CLIENTPLATFORM_PROGRAM_MEDIA_INGEST_ENABLED": "1",
         "CLIENTPLATFORM_PROGRAM_MEDIA_MAX_BYTES": "20000000",
         "CLIENTPLATFORM_PROGRAM_MEDIA_TIMEOUT_SEC": "30",
+        "CLIENTPLATFORM_REQUIRE_AUDIO_ASSETS": "1",
         "CLIENTPLATFORM_POSTGRES_CLIENT_MAJOR": "16",
         "CLIENTPLATFORM_BACKUP_DIR": "/var/backups/clientplatform/postgres",
         "CLIENTPLATFORM_BACKUP_RETENTION_DAYS": "30",
