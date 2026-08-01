@@ -104,9 +104,6 @@ services:
       args:
         CLIENTPLATFORM_REQUIRE_AUDIO_ASSETS: "0"
     env_file: ./clientplatform.env
-    environment:
-      DATABASE_URL: postgresql://clientplatform_app:${CLIENTPLATFORM_POSTGRES_APP_PASSWORD}@postgres:5432/clientplatform
-      CLIENTPLATFORM_DATABASE_NAME: clientplatform
     entrypoint: ["python", "scripts/clientplatform_s3_replication.py", "sync"]
     read_only: true
     tmpfs: ["/tmp:size=64m,mode=1777"]
