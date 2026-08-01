@@ -188,11 +188,44 @@ async def open_customer_workspace(callback: CallbackQuery, state: FSMContext) ->
 
 @router.errors()
 async def clientplatform_entry_error(event: object) -> bool:
-    return await control.clientplatform_control_error(event)
+    if await control.clientplatform_control_error(event):
+        return True
+
+    exception = getattr(event, "exception", None)
+    update = getattr(event, "update", None)
+    if not isinstance(exception, Exception):
+        return False
+
+    log.error(
+        "Unhandled ClientPlatform interaction failure",
+        exc_info=(type(exception), exception, exception.__traceback__),
+    )
+    message = getattr(update, "message", None)
+    callback = getattr(update, "callback_query", None)
+    try:
+        if isinstance(message, Message):
+            await message.answer(
+                "Не удалось продолжить настройку ClientPlatform. "
+                "Отправьте /start — сохранённые данные не потеряны."
+            )
+            return True
+        if isinstance(callback, CallbackQuery):
+            await callback.answer(
+                "Не удалось выполнить действие. Откройте ClientPlatform через /start.",
+                show_alert=True,
+            )
+            return True
+    except TelegramAPIError:
+        log.warning("Failed to report ClientPlatform interaction failure", exc_info=True)
+    return False
 
 
 if not bool(getattr(control, "_dual_role_entry_composed", False)):
     original_router = control.router
+    onboarding_recovery = importlib.import_module(
+        ".clientplatform_onboarding_recovery",
+        __package__,
+    )
     program_media = importlib.import_module(
         ".clientplatform_program_media_router",
         __package__,
@@ -205,11 +238,13 @@ if not bool(getattr(control, "_dual_role_entry_composed", False)):
         ".clientplatform_program_lesson_editor_composition",
         __package__,
     )
+    router.include_router(onboarding_recovery.router)
     router.include_router(program_media.router)
     router.include_router(lesson_editor.router)
     router.include_router(program_builder.router)
     router.include_router(original_router)
     control.router = router
+    control._onboarding_recovery_router_composed = True
     control._program_media_router_composed = True
     control._program_lesson_editor_composed = True
     control._multi_lesson_program_builder_composed = True
