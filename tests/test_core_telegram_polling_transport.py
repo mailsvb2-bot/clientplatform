@@ -96,7 +96,12 @@ class TelegramPollingTransportContractTests(unittest.IsolatedAsyncioTestCase):
                     PollingAiohttpSession(proxy=proxy_url)
 
     async def test_build_bot_selects_http_connect_relay_without_exposing_url(self) -> None:
-        proxy_url = "http://relay-user:relay-secret@relay.internal:3128"
+        synthetic_password = "relay-" + ("R" * 12)
+        proxy_url = (
+            "http://relay-user:"
+            + synthetic_password
+            + "@relay.internal:3128"
+        )
 
         with patch.dict(
             os.environ,
@@ -107,7 +112,7 @@ class TelegramPollingTransportContractTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsInstance(bot.session, PollingAiohttpSession)
         self.assertEqual(bot.session.proxy_mode, "http_connect")
-        self.assertNotIn("relay-secret", repr(bot.session.connector_options))
+        self.assertNotIn(synthetic_password, repr(bot.session.connector_options))
         await bot.session.close()
 
     async def test_transport_generation_prevents_duplicate_concurrent_resets(self) -> None:
