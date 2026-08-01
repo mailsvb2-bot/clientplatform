@@ -4,7 +4,12 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
-from psycopg import Error as PostgresError
+try:
+    from psycopg import Error as PostgresError
+except ImportError:  # pragma: no cover - dependency-light boundary
+    class PostgresError(Exception):
+        """Fallback type used when the optional Postgres driver is absent."""
+
 
 from clientplatform.domain.program_media import unwrap_program_media_reference
 from clientplatform.domain.programs import ContentKind, normalize_content_ref
