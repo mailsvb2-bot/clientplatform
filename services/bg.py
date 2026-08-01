@@ -65,20 +65,27 @@ def _bind_clientplatform_media_gateway_owner(task_manager: TaskManager) -> None:
     )
 
 
-def bind_task_manager(task_manager: TaskManager) -> TaskManager:
-    """Bind the process-wide canonical TaskManager.
-
-    Runtime owners such as DB writer, legacy scheduler, clientplatform dispatch and the
-    optional clientplatform media gateway use the same lifecycle manager. This prevents
-    split task ownership and guarantees cancellation during application
-    shutdown or a self-heal restart.
-    """
+def register_task_manager(task_manager: TaskManager) -> TaskManager:
+    """Set the canonical manager without starting optional runtime owners."""
 
     global _tm
     _tm = task_manager
-    _bind_clientplatform_runtime_owner(_tm)
-    _bind_clientplatform_media_gateway_owner(_tm)
     return _tm
+
+
+def bind_task_manager(task_manager: TaskManager) -> TaskManager:
+    """Bind optional runtime owners to the process-wide canonical TaskManager.
+
+    DB writer and scheduler call :func:`tm` during startup, so callers register
+    the canonical manager before starting those services. The optional
+    ClientPlatform owners are then bound after fatal startup steps succeed and
+    can be rebound after a dispatcher shutdown cancels their previous tasks.
+    """
+
+    canonical = register_task_manager(task_manager)
+    _bind_clientplatform_runtime_owner(canonical)
+    _bind_clientplatform_media_gateway_owner(canonical)
+    return canonical
 
 
 def tm() -> TaskManager:
