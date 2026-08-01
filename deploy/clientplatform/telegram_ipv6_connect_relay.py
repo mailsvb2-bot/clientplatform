@@ -92,11 +92,24 @@ async def _pipe(
             await writer.drain()
     except (ConnectionError, OSError):
         pass
-    finally:
-        try:
-            writer.write_eof()
-        except (AttributeError, OSError, RuntimeError):
-            pass
+
+
+async def _bridge(
+    client_reader: asyncio.StreamReader,
+    client_writer: asyncio.StreamWriter,
+    upstream_reader: asyncio.StreamReader,
+    upstream_writer: asyncio.StreamWriter,
+) -> None:
+    tasks = {
+        asyncio.create_task(_pipe(client_reader, upstream_writer)),
+        asyncio.create_task(_pipe(upstream_reader, client_writer)),
+    }
+    done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    for task in pending:
+        task.cancel()
+    await asyncio.gather(*pending, return_exceptions=True)
+    for task in done:
+        task.result()
 
 
 async def _handle_client(
@@ -133,11 +146,8 @@ async def _handle_client(
         upstream_reader, upstream_writer = await _open_ipv6_target()
         writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
         await writer.drain()
-
-        async with asyncio.TaskGroup() as group:
-            group.create_task(_pipe(reader, upstream_writer))
-            group.create_task(_pipe(upstream_reader, writer))
-    except (OSError, ConnectionError, ExceptionGroup) as exc:
+        await _bridge(reader, writer, upstream_reader, upstream_writer)
+    except (OSError, ConnectionError) as exc:
         log.warning("Telegram IPv6 relay connection failed: %s", type(exc).__name__)
         if not writer.is_closing():
             try:
