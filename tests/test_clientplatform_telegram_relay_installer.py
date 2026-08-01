@@ -1,80 +1,110 @@
 from __future__ import annotations
 
+import importlib.util
+import ipaddress
 from pathlib import Path
+from types import ModuleType
 
 
 ROOT = Path(__file__).resolve().parents[1]
 DEPLOY = ROOT / "deploy" / "clientplatform"
-INSTALLER = DEPLOY / "install-telegram-http-relay.sh"
-ACTIVATOR = DEPLOY / "activate-telegram-http-relay.sh"
+RELAY = DEPLOY / "telegram_ipv6_connect_relay.py"
+ACTIVATOR = DEPLOY / "activate-local-ipv6-telegram-egress.sh"
+COMPOSE = DEPLOY / "compose.production.yml"
 
 
-def test_relay_installer_is_fail_closed_and_telegram_only() -> None:
-    text = INSTALLER.read_text(encoding="utf-8")
-
-    assert "CLIENTPLATFORM_SOURCE_IP" in text
-    assert "acl clientplatform_source src ${SOURCE_IP}/32" in text
-    assert "acl telegram_api dstdomain api.telegram.org" in text
-    assert "acl telegram_tls_port port 443" in text
-    assert "acl CONNECT method CONNECT" in text
-    assert (
-        "http_access allow clientplatform_source telegram_api "
-        "telegram_tls_port CONNECT"
-    ) in text
-    assert "http_access deny all" in text
-    assert "http_access allow all" not in text
-    assert "cache deny all" in text
+def _load_relay() -> ModuleType:
+    spec = importlib.util.spec_from_file_location("telegram_ipv6_connect_relay", RELAY)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
-def test_relay_installer_proves_telegram_before_success_marker() -> None:
-    text = INSTALLER.read_text(encoding="utf-8")
+def test_local_relay_accepts_only_exact_telegram_connect_target() -> None:
+    relay = _load_relay()
 
-    probe = text.index("https://api.telegram.org/")
-    marker = text.index("CLIENTPLATFORM_TELEGRAM_RELAY_OK")
-
-    assert probe < marker
-    assert "/usr/sbin/squid -k parse" in text
-    assert "systemctl is-active --quiet squid" in text
-    assert "listen_socket_missing" in text
-
-
-def test_relay_installer_does_not_embed_bot_or_proxy_secrets() -> None:
-    text = INSTALLER.read_text(encoding="utf-8")
-
-    assert "BOT_TOKEN" not in text
-    assert "TELEGRAM_PROXY_URL" not in text
-    assert "Proxy-Authorization" not in text
-    assert "password" not in text.lower()
+    assert relay._valid_connect_request(
+        b"CONNECT api.telegram.org:443 HTTP/1.1\r\nHost: api.telegram.org:443\r\n\r\n"
+    )
+    assert not relay._valid_connect_request(
+        b"CONNECT example.com:443 HTTP/1.1\r\n\r\n"
+    )
+    assert not relay._valid_connect_request(
+        b"CONNECT api.telegram.org:80 HTTP/1.1\r\n\r\n"
+    )
+    assert not relay._valid_connect_request(
+        b"GET https://api.telegram.org/ HTTP/1.1\r\n\r\n"
+    )
 
 
-def test_relay_activator_proves_route_before_mutating_production_env() -> None:
+def test_local_relay_rejects_public_clients() -> None:
+    relay = _load_relay()
+    networks = tuple(
+        ipaddress.ip_network(value) for value in relay.DEFAULT_ALLOWED_SUBNETS
+    )
+
+    assert relay._allowed_peer("127.0.0.1", networks)
+    assert relay._allowed_peer("172.20.0.5", networks)
+    assert not relay._allowed_peer("185.104.114.163", networks)
+    assert not relay._allowed_peer("203.0.113.10", networks)
+
+
+def test_local_relay_forces_ipv6_for_telegram_upstream() -> None:
+    text = RELAY.read_text(encoding="utf-8")
+
+    assert 'TARGET_HOST = "api.telegram.org"' in text
+    assert "TARGET_PORT = 443" in text
+    assert "family=socket.AF_INET6" in text
+    assert "asyncio.open_connection" in text
+    assert "0.0.0.0" in text
+    assert "HTTP/1.1 403 Forbidden" in text
+
+
+def test_activation_fails_before_changes_when_host_ipv6_is_unavailable() -> None:
     text = ACTIVATOR.read_text(encoding="utf-8")
 
-    route_probe = text.index("https://api.telegram.org/")
-    env_update = text.index('"TELEGRAM_PROXY_URL": relay_url')
-    deploy = text.index("update-production.sh")
+    direct_probe = text.index("curl -6")
+    direct_failure = text.index('fail "direct_telegram_ipv6_unavailable"')
+    git_reset = text.index('git reset --hard "$TARGET_SHA"')
+    env_update = text.index('"TELEGRAM_PROXY_URL": f"http://host.docker.internal:{port}"')
+    deploy = text.index("scripts.clientplatform_production_deploy")
     get_me = text.index("me = await bot.get_me()")
-    success = text.index("CLIENTPLATFORM_TELEGRAM_RELAY_ACTIVATION_OK")
+    success = text.index("CLIENTPLATFORM_LOCAL_IPV6_EGRESS_OK")
 
-    assert route_probe < env_update < deploy < get_me < success
+    assert direct_probe < direct_failure < git_reset < env_update < deploy < get_me < success
+    assert 'fail "wrong_server"' in text
     assert "--recover-unavailable-baseline" in text
-    assert "CLIENTPLATFORM_EXPECTED_SHA" in text
     assert '"TELEGRAM_TRANSPORT": "polling"' in text
     assert '"TELEGRAM_WEBHOOK_ENABLED": "0"' in text
 
 
-def test_relay_activator_rejects_credentials_and_uses_exact_sha() -> None:
+def test_activation_removes_only_the_accidental_squid_configuration() -> None:
     text = ACTIVATOR.read_text(encoding="utf-8")
 
-    assert "parsed.username is not None" in text
-    assert "parsed.password is not None" in text
-    assert 're.fullmatch(r"[0-9a-f]{40}", expected_sha)' in text
-    assert 'test "$(git -C "$ROOT" rev-parse HEAD)" = "$EXPECTED_SHA"' in text
-    assert 'proxy_mode != "http_connect"' in text
-    assert "webhook.url" in text
+    assert "visible_hostname clientplatform-telegram-relay" in text
+    assert 'fail "unrelated_squid_conflict"' in text
+    assert "ACCIDENTAL_SQUID_REMOVED" in text
+    assert "clientplatform-telegram-ipv6-relay.service" in text
+    assert "DynamicUser=yes" in text
+    assert "NoNewPrivileges=yes" in text
+    assert "RestrictAddressFamilies=AF_INET AF_INET6" in text
 
 
-def test_relay_scripts_are_bash_syntax_checked_by_release_gate_contract() -> None:
-    for path in (INSTALLER, ACTIVATOR):
-        text = path.read_text(encoding="utf-8")
-        assert text.startswith("#!/usr/bin/env bash\nset -Eeuo pipefail\n")
+def test_compose_exposes_only_the_docker_host_gateway_name() -> None:
+    text = COMPOSE.read_text(encoding="utf-8")
+
+    assert '"host.docker.internal:host-gateway"' in text
+    assert "network_mode: host" not in text
+    assert "privileged: true" not in text
+
+
+def test_invalid_external_relay_scripts_are_removed() -> None:
+    assert not (DEPLOY / "install-telegram-http-relay.sh").exists()
+    assert not (DEPLOY / "activate-telegram-http-relay.sh").exists()
+
+
+def test_activation_script_has_strict_shell_contract() -> None:
+    text = ACTIVATOR.read_text(encoding="utf-8")
+    assert text.startswith("#!/usr/bin/env bash\nset -Eeuo pipefail\n")
