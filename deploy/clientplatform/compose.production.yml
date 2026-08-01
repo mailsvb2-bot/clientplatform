@@ -103,7 +103,7 @@ services:
       dockerfile: deploy/clientplatform/Dockerfile
       args:
         CLIENTPLATFORM_REQUIRE_AUDIO_ASSETS: "0"
-    env_file: ./clientplatform/clientplatform.env
+    env_file: ./clientplatform.env
     environment:
       DATABASE_URL: postgresql://clientplatform_app:${CLIENTPLATFORM_POSTGRES_APP_PASSWORD}@postgres:5432/clientplatform
       CLIENTPLATFORM_DATABASE_NAME: clientplatform
