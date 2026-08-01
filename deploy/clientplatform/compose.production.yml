@@ -35,8 +35,6 @@ services:
       MESSENGER_WEBHOOK_HOST: 0.0.0.0
       HEALTHCHECK_HOST: 0.0.0.0
       CLIENTPLATFORM_MEDIA_GATEWAY_HOST: 0.0.0.0
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     depends_on:
       postgres:
         condition: service_healthy
@@ -105,7 +103,10 @@ services:
       dockerfile: deploy/clientplatform/Dockerfile
       args:
         CLIENTPLATFORM_REQUIRE_AUDIO_ASSETS: "0"
-    env_file: ./clientplatform.env
+    env_file: ./clientplatform/clientplatform.env
+    environment:
+      DATABASE_URL: postgresql://clientplatform_app:${CLIENTPLATFORM_POSTGRES_APP_PASSWORD}@postgres:5432/clientplatform
+      CLIENTPLATFORM_DATABASE_NAME: clientplatform
     entrypoint: ["python", "scripts/clientplatform_s3_replication.py", "sync"]
     read_only: true
     tmpfs: ["/tmp:size=64m,mode=1777"]
