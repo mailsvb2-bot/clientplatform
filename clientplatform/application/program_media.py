@@ -57,13 +57,36 @@ def store_program_media(
     if candidate.is_symlink():
         raise ProgramMediaStoreError("program_media_source_invalid")
     config = program_media_store_config()
-    return ProgramMediaStore(config).put_file(
-        candidate,
-        business_id=business_id,
-        content_kind=content_kind,
-        content_type=content_type,
-        extension=extension,
-    )
+    try:
+        return ProgramMediaStore(config).put_file(
+            candidate,
+            business_id=business_id,
+            content_kind=content_kind,
+            content_type=content_type,
+            extension=extension,
+        )
+    except ProgramMediaStoreError as exc:
+        cleanup_reference = exc.cleanup_reference
+        if cleanup_reference:
+            try:
+                scheduled = queue_program_media_cleanup(
+                    business_id=business_id,
+                    media_reference=cleanup_reference,
+                    reason="failed_program_media_ingest",
+                )
+            except Exception:
+                raise ProgramMediaStoreError(
+                    "program_media_cleanup_enqueue_failed",
+                    retryable=True,
+                    cleanup_reference=cleanup_reference,
+                ) from None
+            if not scheduled:
+                raise ProgramMediaStoreError(
+                    "program_media_cleanup_enqueue_failed",
+                    retryable=True,
+                    cleanup_reference=cleanup_reference,
+                ) from None
+        raise
 
 
 def is_private_program_media_reference(reference: str) -> bool:
