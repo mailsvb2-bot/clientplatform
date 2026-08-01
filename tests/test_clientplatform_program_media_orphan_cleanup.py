@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import sqlite3
 import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -79,6 +81,12 @@ def enabled_config() -> ProgramMediaStoreConfig:
         timeout_seconds=12.0,
         max_bytes=20_000_000,
     )
+
+
+@contextmanager
+def broken_database() -> Iterator[None]:
+    raise sqlite3.OperationalError("postgresql://secret@database")
+    yield None  # pragma: no cover
 
 
 class ProgramMediaOrphanReferenceTests(unittest.TestCase):
@@ -181,7 +189,7 @@ class ProgramMediaOrphanReferenceTests(unittest.TestCase):
                 patch.object(
                     program_media_app,
                     "queue_program_media_cleanup",
-                    side_effect=RuntimeError("postgresql://secret@database"),
+                    side_effect=program_media_app.ProgramMediaCleanupQueueError(),
                 ),
             ):
                 store_type.return_value.put_file.side_effect = original
@@ -200,6 +208,33 @@ class ProgramMediaOrphanReferenceTests(unittest.TestCase):
         )
         self.assertTrue(raised.exception.retryable)
         self.assertEqual(raised.exception.cleanup_reference, cleanup_reference)
+        self.assertNotIn("secret", str(raised.exception))
+
+    def test_database_failure_is_normalized_by_cleanup_queue_boundary(self) -> None:
+        cleanup_reference = (
+            "s3://clientplatform-production/program-media/scope/document/dd/orphan.pdf"
+        )
+        with (
+            patch.object(
+                program_media_app,
+                "program_media_store_config",
+                return_value=enabled_config(),
+            ),
+            patch.object(program_media_app, "get_db", broken_database),
+        ):
+            with self.assertRaises(
+                program_media_app.ProgramMediaCleanupQueueError
+            ) as raised:
+                program_media_app.queue_program_media_cleanup(
+                    business_id=str(uuid4()),
+                    media_reference=cleanup_reference,
+                    reason="failed_program_media_ingest",
+                )
+
+        self.assertEqual(
+            str(raised.exception),
+            "program_media_cleanup_enqueue_failed",
+        )
         self.assertNotIn("secret", str(raised.exception))
 
     def test_disabled_cleanup_queue_fails_closed(self) -> None:
