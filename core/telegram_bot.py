@@ -109,6 +109,12 @@ def _native_http_proxy(proxy: Any) -> str | None:
 class PollingAiohttpSession(AiohttpSession):
     """Aiohttp transport hardened for long-running Telegram polling."""
 
+    # Aiogram 3.29.1 creates these fields dynamically in its concrete session
+    # class. State their pinned compatibility types explicitly so strict mypy can
+    # validate our override without weakening checks or reaching into Any.
+    _session: ClientSession | None
+    _should_reset_connector: bool
+
     def __init__(
         self,
         *,
