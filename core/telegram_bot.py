@@ -168,7 +168,11 @@ class ResilientBot(Bot):
                 await reset_transport(observed_generation=observed_generation)
             else:
                 await session.close()
-        except (RuntimeError, OSError, AttributeError):
+        except RuntimeError:
+            log.warning("Telegram transport reset failed", exc_info=True)
+        except OSError:
+            log.warning("Telegram transport reset failed", exc_info=True)
+        except AttributeError:
             log.warning("Telegram transport reset failed", exc_info=True)
 
     async def __call__(self, method: Any, request_timeout: Any = None) -> Any:
