@@ -59,8 +59,8 @@ def test_relay_activator_proves_route_before_mutating_production_env() -> None:
     assert route_probe < env_update < deploy < get_me < success
     assert "--recover-unavailable-baseline" in text
     assert "CLIENTPLATFORM_EXPECTED_SHA" in text
-    assert "TELEGRAM_TRANSPORT\": \"polling" in text
-    assert "TELEGRAM_WEBHOOK_ENABLED\": \"0" in text
+    assert '"TELEGRAM_TRANSPORT": "polling"' in text
+    assert '"TELEGRAM_WEBHOOK_ENABLED": "0"' in text
 
 
 def test_relay_activator_rejects_credentials_and_uses_exact_sha() -> None:
@@ -70,7 +70,7 @@ def test_relay_activator_rejects_credentials_and_uses_exact_sha() -> None:
     assert "parsed.password is not None" in text
     assert 're.fullmatch(r"[0-9a-f]{40}", expected_sha)' in text
     assert 'test "$(git -C "$ROOT" rev-parse HEAD)" = "$EXPECTED_SHA"' in text
-    assert "proxy_mode != \"http_connect\"" in text
+    assert 'proxy_mode != "http_connect"' in text
     assert "webhook.url" in text
 
 
