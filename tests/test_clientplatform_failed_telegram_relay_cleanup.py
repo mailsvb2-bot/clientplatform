@@ -45,3 +45,20 @@ def test_compose_has_no_host_relay_escape_hatch() -> None:
     assert "host.docker.internal:host-gateway" not in text
     assert "network_mode: host" not in text
     assert "privileged: true" not in text
+
+
+def test_compose_persists_reachable_telegram_route_only_for_app() -> None:
+    text = COMPOSE.read_text(encoding="utf-8")
+    app = text.split("\n  app:\n", 1)[1].split("\n  caddy:\n", 1)[0]
+    postgres = text.split("\n  postgres:\n", 1)[1].split("\n  app:\n", 1)[0]
+    caddy_and_operations = text.split("\n  caddy:\n", 1)[1]
+    route = (
+        '"api.telegram.org:'
+        '${CLIENTPLATFORM_TELEGRAM_API_IPV4:-149.154.167.220}"'
+    )
+
+    assert "extra_hosts:" in app
+    assert route in app
+    assert route not in postgres
+    assert route not in caddy_and_operations
+    assert "149.154.166.110" not in text
