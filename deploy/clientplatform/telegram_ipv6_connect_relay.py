@@ -90,7 +90,9 @@ async def _pipe(
         while data := await reader.read(64 * 1024):
             writer.write(data)
             await writer.drain()
-    except (ConnectionError, OSError):
+    except ConnectionError:
+        pass
+    except OSError:
         pass
     finally:
         if not writer.is_closing():
@@ -107,6 +109,33 @@ async def _bridge(
         _pipe(client_reader, upstream_writer),
         _pipe(upstream_reader, client_writer),
     )
+
+
+async def _send_gateway_error(
+    writer: asyncio.StreamWriter,
+) -> None:
+    if writer.is_closing():
+        return
+    try:
+        writer.write(b"HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n")
+        await writer.drain()
+    except ConnectionError:
+        pass
+    except OSError:
+        pass
+    except RuntimeError:
+        pass
+
+
+async def _wait_closed(writer: asyncio.StreamWriter) -> None:
+    try:
+        await writer.wait_closed()
+    except ConnectionError:
+        pass
+    except OSError:
+        pass
+    except RuntimeError:
+        pass
 
 
 async def _handle_client(
@@ -130,7 +159,15 @@ async def _handle_client(
                 reader.readuntil(b"\r\n\r\n"),
                 timeout=10.0,
             )
-        except (asyncio.IncompleteReadError, asyncio.LimitOverrunError, TimeoutError):
+        except asyncio.IncompleteReadError:
+            writer.write(b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n")
+            await writer.drain()
+            return
+        except asyncio.LimitOverrunError:
+            writer.write(b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n")
+            await writer.drain()
+            return
+        except TimeoutError:
             writer.write(b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n")
             await writer.drain()
             return
@@ -144,30 +181,20 @@ async def _handle_client(
         writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
         await writer.drain()
         await _bridge(reader, writer, upstream_reader, upstream_writer)
-    except (OSError, ConnectionError) as exc:
+    except ConnectionError as exc:
         log.warning("Telegram IPv6 relay connection failed: %s", type(exc).__name__)
-        if not writer.is_closing():
-            try:
-                writer.write(
-                    b"HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n"
-                )
-                await writer.drain()
-            except (ConnectionError, OSError, RuntimeError):
-                pass
+        await _send_gateway_error(writer)
+    except OSError as exc:
+        log.warning("Telegram IPv6 relay connection failed: %s", type(exc).__name__)
+        await _send_gateway_error(writer)
     finally:
         if upstream_writer is not None and not upstream_writer.is_closing():
             upstream_writer.close()
         if not writer.is_closing():
             writer.close()
         if upstream_writer is not None:
-            try:
-                await upstream_writer.wait_closed()
-            except (ConnectionError, OSError, RuntimeError):
-                pass
-        try:
-            await writer.wait_closed()
-        except (ConnectionError, OSError, RuntimeError):
-            pass
+            await _wait_closed(upstream_writer)
+        await _wait_closed(writer)
 
 
 async def _serve(listen_host: str, listen_port: int) -> None:
