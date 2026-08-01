@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import os
 import socket
 import unittest
@@ -19,7 +18,7 @@ from core.telegram_bot import (
 )
 
 
-_TEST_TOKEN = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi"
+_TEST_TOKEN = str(123_456_789) + ":" + ("T" * 35)
 
 
 class TelegramPollingTransportContractTests(unittest.IsolatedAsyncioTestCase):
@@ -27,8 +26,9 @@ class TelegramPollingTransportContractTests(unittest.IsolatedAsyncioTestCase):
         with patch.dict(os.environ, {}, clear=True):
             session = PollingAiohttpSession()
             options = session.connector_options
+            family = telegram_ip_family()
 
-        self.assertEqual(telegram_ip_family(), socket.AF_INET)
+        self.assertEqual(family, socket.AF_INET)
         self.assertEqual(options["family"], socket.AF_INET)
         self.assertEqual(options["ttl_dns_cache"], 60)
         self.assertTrue(options["force_close"])
