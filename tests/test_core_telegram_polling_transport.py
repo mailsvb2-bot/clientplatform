@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import socket
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramNetworkError
@@ -32,6 +32,7 @@ class TelegramPollingTransportContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(options["family"], socket.AF_INET)
         self.assertEqual(options["ttl_dns_cache"], 60)
         self.assertTrue(options["force_close"])
+        self.assertEqual(session.proxy_mode, "direct")
         await session.close()
 
     async def test_connector_policy_remains_explicitly_configurable(self) -> None:
@@ -57,6 +58,57 @@ class TelegramPollingTransportContractTests(unittest.IsolatedAsyncioTestCase):
             clear=True,
         ):
             self.assertEqual(telegram_ip_family(), socket.AF_INET)
+
+    async def test_native_http_connect_proxy_does_not_require_socks_dependency(self) -> None:
+        proxy_url = "http://relay.internal:3128"
+        fake_client = MagicMock()
+        fake_client.closed = False
+        fake_client.close = AsyncMock()
+        connector = object()
+
+        session = PollingAiohttpSession(proxy=proxy_url)
+        session._connector_type = MagicMock(return_value=connector)
+
+        with patch("core.telegram_bot.ClientSession", return_value=fake_client) as factory:
+            created = await session.create_session()
+
+        self.assertIs(created, fake_client)
+        self.assertEqual(session.proxy_mode, "http_connect")
+        self.assertIsNone(session.proxy)
+        self.assertEqual(factory.call_args.kwargs["proxy"], proxy_url)
+        self.assertIs(factory.call_args.kwargs["connector"], connector)
+        await session.close()
+
+    async def test_http_connect_proxy_validation_rejects_ambiguous_urls(self) -> None:
+        invalid_urls = (
+            "http://relay.internal",
+            "http://relay.internal:3128/path",
+            "http://relay.internal:3128?secret=value",
+            "http://relay.internal:3128#fragment",
+        )
+
+        for proxy_url in invalid_urls:
+            with self.subTest(proxy_url=proxy_url):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "invalid_telegram_http_proxy_url",
+                ):
+                    PollingAiohttpSession(proxy=proxy_url)
+
+    async def test_build_bot_selects_http_connect_relay_without_exposing_url(self) -> None:
+        proxy_url = "http://relay-user:relay-secret@relay.internal:3128"
+
+        with patch.dict(
+            os.environ,
+            {"TELEGRAM_PROXY_URL": proxy_url},
+            clear=True,
+        ):
+            bot = build_bot(_TEST_TOKEN)
+
+        self.assertIsInstance(bot.session, PollingAiohttpSession)
+        self.assertEqual(bot.session.proxy_mode, "http_connect")
+        self.assertNotIn("relay-secret", repr(bot.session.connector_options))
+        await bot.session.close()
 
     async def test_transport_generation_prevents_duplicate_concurrent_resets(self) -> None:
         session = PollingAiohttpSession()
