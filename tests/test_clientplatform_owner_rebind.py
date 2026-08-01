@@ -15,17 +15,7 @@ def _named_call(node: ast.AST, name: str) -> bool:
     )
 
 
-def _attribute_call(node: ast.AST, owner: str, name: str) -> bool:
-    return (
-        isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and isinstance(node.func.value, ast.Name)
-        and node.func.value.id == owner
-        and node.func.attr == name
-    )
-
-
-def test_app_rebinds_clientplatform_owners_on_every_dispatcher_startup() -> None:
+def test_app_registers_canonical_manager_before_services_and_rebinds_owners() -> None:
     tree = ast.parse(Path("app.py").read_text(encoding="utf-8"))
     create_application = next(
         node
@@ -43,8 +33,12 @@ def test_app_rebinds_clientplatform_owners_on_every_dispatcher_startup() -> None
         if isinstance(node, ast.AsyncFunctionDef) and node.name == "_on_shutdown"
     )
 
-    all_bind_calls = [node for node in ast.walk(create_application) if _named_call(node, "bind_task_manager")]
+    register_calls = [node for node in ast.walk(create_application) if _named_call(node, "register_task_manager")]
+    bind_calls = [node for node in ast.walk(create_application) if _named_call(node, "bind_task_manager")]
+    startup_register_calls = [node for node in ast.walk(startup) if _named_call(node, "register_task_manager")]
     startup_bind_calls = [node for node in ast.walk(startup) if _named_call(node, "bind_task_manager")]
+    db_writer_calls = [node for node in ast.walk(startup) if _named_call(node, "start_db_writer")]
+    scheduler_calls = [node for node in ast.walk(startup) if _named_call(node, "start_scheduler")]
     shutdown_refs = [
         node
         for node in ast.walk(shutdown)
@@ -54,9 +48,29 @@ def test_app_rebinds_clientplatform_owners_on_every_dispatcher_startup() -> None
         and node.attr == "shutdown"
     ]
 
-    assert len(all_bind_calls) == 1
-    assert startup_bind_calls == all_bind_calls
+    assert len(register_calls) == 1
+    assert startup_register_calls == register_calls
+    assert len(bind_calls) == 1
+    assert startup_bind_calls == bind_calls
+    assert len(db_writer_calls) == 1
+    assert len(scheduler_calls) == 1
+    assert register_calls[0].lineno < db_writer_calls[0].lineno < scheduler_calls[0].lineno < bind_calls[0].lineno
     assert len(shutdown_refs) == 1
+
+
+def test_register_task_manager_does_not_start_optional_owners(monkeypatch) -> None:
+    import services.bg as bg
+    from core.task_manager import TaskManager
+
+    monkeypatch.setattr(bg, "_tm", None)
+    monkeypatch.setattr(bg, "_clientplatform_owner_task", None)
+    monkeypatch.setattr(bg, "_clientplatform_media_gateway_task", None)
+
+    task_manager = TaskManager()
+    assert bg.register_task_manager(task_manager) is task_manager
+    assert bg.tm() is task_manager
+    assert bg._clientplatform_owner_task is None
+    assert bg._clientplatform_media_gateway_task is None
 
 
 def test_bind_task_manager_recreates_cancelled_clientplatform_owners(monkeypatch) -> None:
