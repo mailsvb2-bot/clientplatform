@@ -143,13 +143,13 @@ class ResilientBot(Bot):
         self._request_timeout = request_timeout
         self._network_retries = env_int(
             "TELEGRAM_NETWORK_RETRIES",
-            3,
+            2,
             minimum=0,
             maximum=10,
         )
         self._network_retry_delay = env_float(
             "TELEGRAM_NETWORK_RETRY_DELAY_SEC",
-            1.0,
+            0.75,
             minimum=0.0,
             maximum=30.0,
         )
