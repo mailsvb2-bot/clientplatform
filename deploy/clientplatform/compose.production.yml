@@ -35,6 +35,11 @@ services:
       MESSENGER_WEBHOOK_HOST: 0.0.0.0
       HEALTHCHECK_HOST: 0.0.0.0
       CLIENTPLATFORM_MEDIA_GATEWAY_HOST: 0.0.0.0
+    # Keep this Telegram route override scoped to the ClientPlatform app
+    # container. Operators can replace the address through clientplatform.env
+    # without changing application code, the host, or another deployed project.
+    extra_hosts:
+      - "api.telegram.org:${CLIENTPLATFORM_TELEGRAM_API_IPV4:-149.154.167.220}"
     depends_on:
       postgres:
         condition: service_healthy
