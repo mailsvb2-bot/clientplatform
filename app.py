@@ -224,6 +224,11 @@ async def create_application():
                 await prewarm_matplotlib_cache()
             except (OSError, RuntimeError, ValueError, TypeError, AttributeError, KeyError):  # validator: allow-wide-except
                 log.exception("Prewarm matplotlib cache failed")
+
+            # Aiogram can run startup again after a polling transport failure.
+            # Rebind process-owned ClientPlatform tasks on every successful startup
+            # because the matching shutdown cancels them through the TaskManager.
+            bind_task_manager(tm)
         except BaseException:  # validator: allow-wide-except
             await _rollback_partial_startup(
                 webhook_runtime=webhook_runtime,
@@ -290,7 +295,6 @@ async def create_application():
     bind_control_bot_secret(token)
 
     tm = TaskManager()
-    bind_task_manager(tm)
 
     # Sovereignty (optional): initialize DecisionCore singleton (SelfHealingEngine.tick runs via services.scheduler)
     sovereign_enabled = os.getenv('SOVEREIGN_ENABLED', '0').strip() in {'1','true','yes','on'}
