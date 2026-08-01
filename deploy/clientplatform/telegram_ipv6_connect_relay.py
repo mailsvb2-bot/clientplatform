@@ -92,6 +92,9 @@ async def _pipe(
             await writer.drain()
     except (ConnectionError, OSError):
         pass
+    finally:
+        if not writer.is_closing():
+            writer.close()
 
 
 async def _bridge(
@@ -100,16 +103,10 @@ async def _bridge(
     upstream_reader: asyncio.StreamReader,
     upstream_writer: asyncio.StreamWriter,
 ) -> None:
-    tasks = {
-        asyncio.create_task(_pipe(client_reader, upstream_writer)),
-        asyncio.create_task(_pipe(upstream_reader, client_writer)),
-    }
-    done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-    for task in pending:
-        task.cancel()
-    await asyncio.gather(*pending, return_exceptions=True)
-    for task in done:
-        task.result()
+    await asyncio.gather(
+        _pipe(client_reader, upstream_writer),
+        _pipe(upstream_reader, client_writer),
+    )
 
 
 async def _handle_client(
@@ -158,13 +155,15 @@ async def _handle_client(
             except (ConnectionError, OSError, RuntimeError):
                 pass
     finally:
-        if upstream_writer is not None:
+        if upstream_writer is not None and not upstream_writer.is_closing():
             upstream_writer.close()
+        if not writer.is_closing():
+            writer.close()
+        if upstream_writer is not None:
             try:
                 await upstream_writer.wait_closed()
             except (ConnectionError, OSError, RuntimeError):
                 pass
-        writer.close()
         try:
             await writer.wait_closed()
         except (ConnectionError, OSError, RuntimeError):
