@@ -35,10 +35,9 @@ services:
       MESSENGER_WEBHOOK_HOST: 0.0.0.0
       HEALTHCHECK_HOST: 0.0.0.0
       CLIENTPLATFORM_MEDIA_GATEWAY_HOST: 0.0.0.0
-    # Keep this override scoped to the ClientPlatform app container. On the
-    # current Timeweb route, DNS-selected 149.154.166.110 drops TCP/443 while
-    # 149.154.167.220 completes Telegram TLS successfully. Operators can replace
-    # the address through clientplatform.env without changing code or the host.
+    # Keep this Telegram route override scoped to the ClientPlatform app
+    # container. Operators can replace the address through clientplatform.env
+    # without changing application code, the host, or another deployed project.
     extra_hosts:
       - "api.telegram.org:${CLIENTPLATFORM_TELEGRAM_API_IPV4:-149.154.167.220}"
     depends_on:
