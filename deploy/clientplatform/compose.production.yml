@@ -35,8 +35,6 @@ services:
       MESSENGER_WEBHOOK_HOST: 0.0.0.0
       HEALTHCHECK_HOST: 0.0.0.0
       CLIENTPLATFORM_MEDIA_GATEWAY_HOST: 0.0.0.0
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     depends_on:
       postgres:
         condition: service_healthy
