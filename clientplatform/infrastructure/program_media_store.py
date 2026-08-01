@@ -358,28 +358,24 @@ class ProgramMediaStore:
             headers=signed,
             method="PUT",
         )
-        upload_confirmed = False
         try:
             with self._opener(request, timeout=self.config.timeout_seconds) as response:
                 status = int(response.status)
                 if status not in {200, 201}:
-                    retryable = status >= 500
                     raise ProgramMediaStoreError(
                         "program_media_upload_status_invalid",
-                        retryable=retryable,
-                        cleanup_reference=(cleanup_reference if retryable else ""),
+                        retryable=status >= 500,
+                        cleanup_reference=cleanup_reference,
                     )
-                upload_confirmed = True
                 response.read(65_536)
         except ProgramMediaStoreError:
             raise
         except HTTPError as exc:
             exc.read(65_536)
-            retryable = exc.code >= 500 or exc.code == 429
             raise ProgramMediaStoreError(
                 "program_media_upload_http_failure",
-                retryable=retryable,
-                cleanup_reference=(cleanup_reference if retryable else ""),
+                retryable=exc.code >= 500 or exc.code == 429,
+                cleanup_reference=cleanup_reference,
             ) from None
         except (URLError, TimeoutError, OSError):
             raise ProgramMediaStoreError(
