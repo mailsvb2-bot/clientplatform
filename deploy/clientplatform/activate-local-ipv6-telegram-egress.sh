@@ -64,6 +64,7 @@ printf 'telegram_ipv6=%s host_source_ipv6=%s\n' "$TELEGRAM_IPV6" "$HOST_IPV6"
 
 DIRECT_IPV6_HTTP="$(
     curl -6 \
+        --noproxy '*' \
         --silent \
         --show-error \
         --connect-timeout 12 \
@@ -158,6 +159,7 @@ ss -ltn | grep -Eq ":${RELAY_PORT}([[:space:]]|$)" \
 
 PROXY_HTTP="$(
     curl -4 \
+        --noproxy '' \
         --proxy "http://127.0.0.1:${RELAY_PORT}" \
         --silent \
         --show-error \
