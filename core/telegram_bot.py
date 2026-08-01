@@ -5,8 +5,13 @@ import logging
 import os
 import socket
 from typing import Any
+from urllib.parse import urlsplit
 
+from aiohttp import ClientSession
+from aiohttp.hdrs import USER_AGENT
+from aiohttp.http import SERVER_SOFTWARE
 from aiogram import Bot
+from aiogram.__meta__ import __version__
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.exceptions import TelegramNetworkError
 
@@ -72,6 +77,35 @@ def telegram_connector_options() -> dict[str, Any]:
     }
 
 
+def _native_http_proxy(proxy: Any) -> str | None:
+    """Validate a native aiohttp HTTP CONNECT proxy without exposing credentials.
+
+    Aiogram normally routes every proxy scheme through the optional
+    ``aiohttp-socks`` package. A plain ``http://`` CONNECT relay is already
+    supported natively by aiohttp 3.14, so production can use a narrowly scoped
+    relay without adding another transport dependency to the locked runtime.
+    """
+
+    if proxy in (None, ""):
+        return None
+    if not isinstance(proxy, str):
+        return None
+
+    try:
+        parsed = urlsplit(proxy)
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("invalid_telegram_http_proxy_url") from exc
+
+    if parsed.scheme.lower() != "http":
+        return None
+    if not parsed.hostname or port is None:
+        raise ValueError("invalid_telegram_http_proxy_url")
+    if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
+        raise ValueError("invalid_telegram_http_proxy_url")
+    return proxy
+
+
 class PollingAiohttpSession(AiohttpSession):
     """Aiohttp transport hardened for long-running Telegram polling."""
 
@@ -82,10 +116,16 @@ class PollingAiohttpSession(AiohttpSession):
         limit: int = 100,
         **kwargs: Any,
     ) -> None:
-        super().__init__(proxy=proxy, limit=limit, **kwargs)
+        native_http_proxy = _native_http_proxy(proxy)
+        super().__init__(
+            proxy=None if native_http_proxy is not None else proxy,
+            limit=limit,
+            **kwargs,
+        )
         # aiogram 3.29.1 stores the exact TCPConnector kwargs here. The project
         # pins that version, and regression tests lock this compatibility seam.
         self._connector_init.update(telegram_connector_options())
+        self._native_http_proxy = native_http_proxy
         self._transport_generation = 0
         self._transport_reset_lock = asyncio.Lock()
 
@@ -98,6 +138,35 @@ class PollingAiohttpSession(AiohttpSession):
         """Expose a read-only snapshot for health checks and contract tests."""
 
         return dict(self._connector_init)
+
+    @property
+    def proxy_mode(self) -> str:
+        """Expose only the transport kind, never the relay URL or credentials."""
+
+        if self._native_http_proxy is not None:
+            return "http_connect"
+        if self.proxy is not None:
+            return "connector_proxy"
+        return "direct"
+
+    async def create_session(self) -> ClientSession:
+        """Create an aiohttp session with a native HTTP CONNECT relay when set."""
+
+        if self._native_http_proxy is None:
+            return await super().create_session()
+
+        if self._should_reset_connector:
+            await self.close()
+        if self._session is None or self._session.closed:
+            self._session = ClientSession(
+                connector=self._connector_type(**self._connector_init),
+                headers={
+                    USER_AGENT: f"{SERVER_SOFTWARE} aiogram/{__version__}",
+                },
+                proxy=self._native_http_proxy,
+            )
+            self._should_reset_connector = False
+        return self._session
 
     async def reset_transport(
         self,
