@@ -1,7 +1,15 @@
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
+
+try:
+    from psycopg import Error as PostgresError
+except ImportError:  # pragma: no cover - dependency-light boundary
+    class PostgresError(Exception):
+        """Fallback type used when the optional Postgres driver is absent."""
+
 
 from clientplatform.domain.program_media import unwrap_program_media_reference
 from clientplatform.domain.programs import ContentKind, normalize_content_ref
@@ -18,6 +26,15 @@ from clientplatform.infrastructure.program_media_store import (
     program_media_store_config,
 )
 from services.db import get_db
+
+
+class ProgramMediaCleanupQueueError(RuntimeError):
+    """Sanitized failure to durably schedule an uncertain media object."""
+
+    def __init__(self, code: str = "program_media_cleanup_enqueue_failed") -> None:
+        normalized = str(code or "program_media_cleanup_enqueue_failed").strip()[:120]
+        super().__init__(normalized)
+        self.code = normalized
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,13 +74,36 @@ def store_program_media(
     if candidate.is_symlink():
         raise ProgramMediaStoreError("program_media_source_invalid")
     config = program_media_store_config()
-    return ProgramMediaStore(config).put_file(
-        candidate,
-        business_id=business_id,
-        content_kind=content_kind,
-        content_type=content_type,
-        extension=extension,
-    )
+    try:
+        return ProgramMediaStore(config).put_file(
+            candidate,
+            business_id=business_id,
+            content_kind=content_kind,
+            content_type=content_type,
+            extension=extension,
+        )
+    except ProgramMediaStoreError as exc:
+        cleanup_reference = exc.cleanup_reference
+        if cleanup_reference:
+            try:
+                scheduled = queue_program_media_cleanup(
+                    business_id=business_id,
+                    media_reference=cleanup_reference,
+                    reason="failed_program_media_ingest",
+                )
+            except ProgramMediaCleanupQueueError:
+                raise ProgramMediaStoreError(
+                    "program_media_cleanup_enqueue_failed",
+                    retryable=True,
+                    cleanup_reference=cleanup_reference,
+                ) from None
+            if not scheduled:
+                raise ProgramMediaStoreError(
+                    "program_media_cleanup_enqueue_failed",
+                    retryable=True,
+                    cleanup_reference=cleanup_reference,
+                ) from None
+        raise
 
 
 def is_private_program_media_reference(reference: str) -> bool:
@@ -118,17 +158,30 @@ def queue_program_media_cleanup(
     media_reference: str,
     reason: str,
 ) -> bool:
-    if not _cleanup_enabled() or not is_private_program_media_reference(media_reference):
+    try:
+        enabled = _cleanup_enabled()
+    except ProgramMediaStoreError:
+        raise ProgramMediaCleanupQueueError() from None
+    if not enabled or not is_private_program_media_reference(media_reference):
         return False
-    with get_db() as conn:
-        repository = ProgramMediaCleanupRepository(conn)
-        repository.discard(media_reference=media_reference)
-        repository.enqueue(
-            business_id=business_id,
-            media_reference=media_reference,
-            reason=reason,
-            delay_seconds=0,
-        )
+    try:
+        with get_db() as conn:
+            repository = ProgramMediaCleanupRepository(conn)
+            repository.discard(media_reference=media_reference)
+            repository.enqueue(
+                business_id=business_id,
+                media_reference=media_reference,
+                reason=reason,
+                delay_seconds=0,
+            )
+    except sqlite3.Error:
+        raise ProgramMediaCleanupQueueError() from None
+    except PostgresError:
+        raise ProgramMediaCleanupQueueError() from None
+    except OSError:
+        raise ProgramMediaCleanupQueueError() from None
+    except RuntimeError:
+        raise ProgramMediaCleanupQueueError() from None
     return True
 
 
@@ -194,6 +247,7 @@ def run_program_media_cleanup_batch(
 
 __all__ = [
     "ProgramMediaCleanupBatchResult",
+    "ProgramMediaCleanupQueueError",
     "ProgramMediaIngestPolicy",
     "ProgramMediaStoreError",
     "StoredProgramMedia",

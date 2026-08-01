@@ -36,11 +36,18 @@ _EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
 class ProgramMediaStoreError(RuntimeError):
     """Sanitized media-storage failure safe for user-facing handlers and logs."""
 
-    def __init__(self, code: str, *, retryable: bool = False) -> None:
+    def __init__(
+        self,
+        code: str,
+        *,
+        retryable: bool = False,
+        cleanup_reference: str = "",
+    ) -> None:
         normalized = str(code or "program_media_store_failure").strip()[:120]
         super().__init__(normalized)
         self.code = normalized
         self.retryable = bool(retryable)
+        self.cleanup_reference = str(cleanup_reference or "").strip()
 
 
 @dataclass(frozen=True, slots=True)
@@ -320,6 +327,7 @@ class ProgramMediaStore:
             f"program-media/{business_scope}/{content_kind.value}/"
             f"{sha256[:2]}/{sha256}-{uuid4().hex[:12]}.{_safe_extension(extension)}"
         )
+        cleanup_reference = f"s3://{self.config.bucket}/{object_key}"
         normalized_type = str(content_type or "application/octet-stream").strip()
         if not normalized_type or "\r" in normalized_type or "\n" in normalized_type:
             normalized_type = "application/octet-stream"
@@ -357,18 +365,23 @@ class ProgramMediaStore:
                     raise ProgramMediaStoreError(
                         "program_media_upload_status_invalid",
                         retryable=status >= 500,
+                        cleanup_reference=cleanup_reference,
                     )
                 response.read(65_536)
+        except ProgramMediaStoreError:
+            raise
         except HTTPError as exc:
             exc.read(65_536)
             raise ProgramMediaStoreError(
                 "program_media_upload_http_failure",
                 retryable=exc.code >= 500 or exc.code == 429,
+                cleanup_reference=cleanup_reference,
             ) from None
         except (URLError, TimeoutError, OSError):
             raise ProgramMediaStoreError(
                 "program_media_upload_transport_failure",
                 retryable=True,
+                cleanup_reference=cleanup_reference,
             ) from None
 
         head_headers = {
@@ -398,17 +411,22 @@ class ProgramMediaStore:
                     raise ProgramMediaStoreError(
                         "program_media_verify_status_invalid",
                         retryable=status >= 500,
+                        cleanup_reference=cleanup_reference,
                     )
+        except ProgramMediaStoreError:
+            raise
         except HTTPError as exc:
             exc.read(65_536)
             raise ProgramMediaStoreError(
                 "program_media_verify_http_failure",
                 retryable=exc.code >= 500 or exc.code == 429,
+                cleanup_reference=cleanup_reference,
             ) from None
         except (URLError, TimeoutError, OSError):
             raise ProgramMediaStoreError(
                 "program_media_verify_transport_failure",
                 retryable=True,
+                cleanup_reference=cleanup_reference,
             ) from None
 
         if (
@@ -417,9 +435,12 @@ class ProgramMediaStore:
             or returned.get("x-amz-meta-clientplatform-size") != str(size)
             or returned.get("x-amz-meta-clientplatform-kind") != content_kind.value
         ):
-            raise ProgramMediaStoreError("program_media_upload_verification_failed")
+            raise ProgramMediaStoreError(
+                "program_media_upload_verification_failed",
+                cleanup_reference=cleanup_reference,
+            )
         return StoredProgramMedia(
-            reference=f"s3://{self.config.bucket}/{object_key}",
+            reference=cleanup_reference,
             object_key=object_key,
             size=size,
             sha256=sha256,
