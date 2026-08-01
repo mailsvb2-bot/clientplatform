@@ -121,7 +121,7 @@ from services.scheduler import start_scheduler
 from services.prewarm import prewarm_audio_cache, prewarm_matplotlib_cache
 from services.scheduler import stop_scheduler
 from services.db_writer import start_db_writer, stop_db_writer
-from services.bg import bind_task_manager
+from services.bg import bind_task_manager, register_task_manager
 from runtime.messenger_webhooks import start_messenger_webhook_runtime
 from runtime.telegram_transport import telegram_transport
 from runtime.health_server import start_health_runtime
@@ -192,6 +192,9 @@ async def create_application():
         if messenger_setup.warnings:
             log.warning('Messenger setup warnings: %s', ' | '.join(messenger_setup.warnings))
         try:
+            # Register the canonical manager before DB writer and scheduler call services.bg.tm().
+            # ClientPlatform owners are started separately after all fatal startup steps succeed.
+            register_task_manager(tm)
             start_db_writer()
             db_writer_started = True
             start_scheduler(bot)
