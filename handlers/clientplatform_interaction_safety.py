@@ -302,7 +302,12 @@ def install_interaction_safety(root_router: Router, control_module: ModuleType) 
             for capability in capabilities
             if capability.status == CapabilityStatus.ACTIVE
         ]
-        if profile.status != BusinessProfileStatus.READY or not active:
+        profile_status = getattr(
+            profile,
+            "status",
+            BusinessProfileStatus.READY,
+        )
+        if profile_status != BusinessProfileStatus.READY or not active:
             await control_module._send_capability_setup(
                 message,
                 user_id=user_id,
