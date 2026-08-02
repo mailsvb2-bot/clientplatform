@@ -8,7 +8,7 @@ from clientplatform.domain.activity import (
     IssuedCustomerInvite,
 )
 from clientplatform.domain.tenancy import TenantContext
-from clientplatform.infrastructure.activity_repository import ActivityRepository
+from clientplatform.infrastructure.postgres_safe_activity_repository import ActivityRepository
 from services.db import get_db, get_db_ro
 
 
