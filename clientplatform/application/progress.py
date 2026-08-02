@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from clientplatform.application.customer_role_guard import assert_external_customer
 from clientplatform.domain.program_progress import (
     CustomerLessonCompletion,
     CustomerProgramView,
@@ -17,6 +18,11 @@ def list_customer_programs(
     business_id: str,
 ) -> list[ProgramProgressSummary]:
     with get_db_ro() as conn:
+        assert_external_customer(
+            conn,
+            telegram_user_id=telegram_user_id,
+            business_id=business_id,
+        )
         return ProgramProgressRepository(conn).list_customer_programs(
             telegram_user_id=telegram_user_id,
             business_id=business_id,
@@ -30,6 +36,11 @@ def get_customer_program(
     enrollment_id: str,
 ) -> CustomerProgramView:
     with get_db_ro() as conn:
+        assert_external_customer(
+            conn,
+            telegram_user_id=telegram_user_id,
+            business_id=business_id,
+        )
         return ProgramProgressRepository(conn).get_customer_program(
             telegram_user_id=telegram_user_id,
             business_id=business_id,
@@ -45,6 +56,11 @@ def complete_customer_lesson(
     lesson_position: int,
 ) -> CustomerLessonCompletion:
     with get_db() as conn:
+        assert_external_customer(
+            conn,
+            telegram_user_id=telegram_user_id,
+            business_id=business_id,
+        )
         return CustomerProgressRepository(conn).complete_lesson(
             telegram_user_id=telegram_user_id,
             business_id=business_id,

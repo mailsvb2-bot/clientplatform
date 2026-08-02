@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from clientplatform.application.customer_role_guard import (
+    active_member_business_ids,
+    assert_external_customer,
+)
 from clientplatform.domain.bookings import (
     BookingClaim,
     BookingSlotView,
@@ -42,9 +46,14 @@ def list_booking_slots(
 
 def list_customer_businesses(*, telegram_user_id: int) -> list[CustomerBusinessLink]:
     with get_db_ro() as conn:
-        return BookingRepository(conn).list_customer_businesses(
+        member_businesses = active_member_business_ids(
+            conn,
             telegram_user_id=telegram_user_id,
         )
+        links = BookingRepository(conn).list_customer_businesses(
+            telegram_user_id=telegram_user_id,
+        )
+        return [link for link in links if link.business_id not in member_businesses]
 
 
 def list_customer_booking_slots(
@@ -53,6 +62,11 @@ def list_customer_booking_slots(
     business_id: str,
 ) -> list[BookingSlotView]:
     with get_db_ro() as conn:
+        assert_external_customer(
+            conn,
+            telegram_user_id=telegram_user_id,
+            business_id=business_id,
+        )
         return BookingRepository(conn).list_open_slots_for_customer(
             telegram_user_id=telegram_user_id,
             business_id=business_id,
@@ -66,6 +80,11 @@ def book_customer_slot(
     slot_id: str,
 ) -> BookingClaim:
     with get_db() as conn:
+        assert_external_customer(
+            conn,
+            telegram_user_id=telegram_user_id,
+            business_id=business_id,
+        )
         return BookingRepository(conn).book_slot(
             telegram_user_id=telegram_user_id,
             business_id=business_id,

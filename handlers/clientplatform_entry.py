@@ -7,13 +7,14 @@ from typing import Any
 
 from aiogram import F, Bot, Router
 from aiogram.exceptions import TelegramAPIError
-from aiogram.filters import CommandStart
+from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import BotCommand, CallbackQuery, Message
 
 from clientplatform.application.activity import claim_customer_invite
 from clientplatform.application.bookings import list_customer_businesses
 from clientplatform.application.tenancy import list_accessible_businesses
+from clientplatform.domain.activity import ActivityInvariantViolation
 
 control = importlib.import_module(".clientplatform_control", __package__)
 
@@ -38,6 +39,7 @@ async def register_clientplatform_bot_commands(bot: Bot) -> bool:
             [
                 BotCommand(command="start", description="Открыть ClientPlatform"),
                 BotCommand(command="mybot", description="Управление моим Telegram-ботом"),
+                BotCommand(command="cancel", description="Отменить текущий шаг"),
             ]
         )
     except TelegramAPIError:
@@ -124,13 +126,18 @@ async def _dispatch_clientplatform_start(
     if payload.startswith("cpj_"):
         token = payload.removeprefix("cpj_")
         user = message.from_user
-        claim = await asyncio.to_thread(
-            claim_customer_invite,
-            token=token,
-            telegram_user_id=user_id,
-            username=None if user is None else user.username,
-            display_name=None if user is None else user.full_name,
-        )
+        try:
+            claim = await asyncio.to_thread(
+                claim_customer_invite,
+                token=token,
+                telegram_user_id=user_id,
+                username=None if user is None else user.username,
+                display_name=None if user is None else user.full_name,
+            )
+        except ActivityInvariantViolation as exc:
+            await state.clear()
+            await message.answer(str(exc))
+            return
         await state.clear()
         detail = "Вы уже были подключены." if claim.already_connected else "Подключение завершено."
         await message.answer(
@@ -215,6 +222,34 @@ async def clientplatform_entry_start(
     await _safe_delete_start_status(status_message)
 
 
+@router.message(Command("mybot"))
+async def clientplatform_mybot_command(message: Message, state: FSMContext) -> None:
+    """Route `/mybot` before generic FSM text handlers can persist it as data."""
+
+    bot_setup = importlib.import_module(".clientplatform_bot_setup", __package__)
+    await bot_setup.open_my_bot_command(message, state)
+
+
+@router.message(Command("cancel"))
+async def clientplatform_cancel_command(message: Message, state: FSMContext) -> None:
+    current_state = await state.get_state()
+    await state.clear()
+    if current_state:
+        await message.answer("Текущий шаг отменён. Нажмите /start, чтобы открыть кабинет.")
+        return
+    await message.answer("Сейчас нет незавершённого шага. Нажмите /start.")
+
+
+@router.message(F.text.startswith("/"))
+async def clientplatform_unknown_command(message: Message, state: FSMContext) -> None:
+    """Never allow a Telegram command to become a business/user field value."""
+
+    await state.clear()
+    await message.answer(
+        "Команда не была сохранена как данные. Доступны /start, /mybot и /cancel."
+    )
+
+
 @router.callback_query(F.data == "cp:entry:businesses")
 async def open_business_workspace(callback: CallbackQuery, state: FSMContext) -> None:
     user_id = int(callback.from_user.id)
@@ -285,6 +320,11 @@ async def clientplatform_entry_error(event: object) -> bool:
 
 if not bool(getattr(control, "_dual_role_entry_composed", False)):
     original_router = control.router
+    interaction_safety = importlib.import_module(
+        ".clientplatform_interaction_safety",
+        __package__,
+    )
+    interaction_safety.install_interaction_safety(router, control)
     onboarding_recovery = importlib.import_module(
         ".clientplatform_onboarding_recovery",
         __package__,
@@ -301,12 +341,14 @@ if not bool(getattr(control, "_dual_role_entry_composed", False)):
         ".clientplatform_program_lesson_editor_composition",
         __package__,
     )
+    router.include_router(interaction_safety.router)
     router.include_router(onboarding_recovery.router)
     router.include_router(program_media.router)
     router.include_router(lesson_editor.router)
     router.include_router(program_builder.router)
     router.include_router(original_router)
     control.router = router
+    control._interaction_safety_router_composed = True
     control._onboarding_recovery_router_composed = True
     control._program_media_router_composed = True
     control._program_lesson_editor_composed = True

@@ -1,14 +1,20 @@
 from __future__ import annotations
 
-"""Cross-database activity repository fixes for boolean list filters.
+"""Cross-database activity repository fixes and customer-role safety.
 
 SQLite accepts integers directly in boolean expressions. PostgreSQL does not:
 `0 OR status='active'` raises a datatype mismatch. Comparing the compatibility
 flag with `1` keeps the existing integer parameters valid on both databases.
 """
 
-from clientplatform.domain.activity import BusinessCapability, BusinessOffering
-from clientplatform.domain.tenancy import TenantContext
+from clientplatform.domain.activity import (
+    ActivityInvariantViolation,
+    BusinessCapability,
+    BusinessOffering,
+    InviteClaim,
+    invite_token_hash,
+)
+from clientplatform.domain.tenancy import TenantContext, normalize_user_id
 from clientplatform.infrastructure.activity_repository import (
     ActivityRepository as BaseActivityRepository,
     _capability_from_row,
@@ -18,6 +24,53 @@ from clientplatform.infrastructure.activity_repository import (
 
 class ActivityRepository(BaseActivityRepository):
     """Production-safe ActivityRepository for both SQLite and PostgreSQL."""
+
+    def _assert_invite_claim_is_external(
+        self,
+        *,
+        token: str,
+        telegram_user_id: int,
+    ) -> None:
+        principal_id = normalize_user_id(telegram_user_id)
+        row = self._conn.execute(
+            """
+            SELECT 1
+            FROM customer_invites ci
+            JOIN business_members bm
+              ON bm.business_id=ci.business_id
+             AND bm.user_id=?
+             AND bm.status='active'
+            WHERE ci.token_hash=?
+            LIMIT 1
+            """,
+            (principal_id, invite_token_hash(token)),
+        ).fetchone()
+        if row is not None:
+            raise ActivityInvariantViolation(
+                "Эту ссылку нельзя использовать владельцу или сотруднику "
+                "собственного бизнеса. Отправьте её другому клиенту."
+            )
+
+    def claim_customer_invite(
+        self,
+        *,
+        token: str,
+        telegram_user_id: int,
+        username: str | None,
+        display_name: str | None,
+        now: str | None = None,
+    ) -> InviteClaim:
+        self._assert_invite_claim_is_external(
+            token=token,
+            telegram_user_id=telegram_user_id,
+        )
+        return super().claim_customer_invite(
+            token=token,
+            telegram_user_id=telegram_user_id,
+            username=username,
+            display_name=display_name,
+            now=now,
+        )
 
     def list_capabilities(
         self,
