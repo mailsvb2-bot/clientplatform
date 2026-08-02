@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import os
 import time
 from pathlib import Path
 from typing import Iterable
@@ -17,6 +18,10 @@ from services.audio_cache import get_cached_file_id, save_cached_file_id
 from services.catalog import AudioCatalog
 
 log = logging.getLogger(__name__)
+
+_audio_prewarm_task: asyncio.Task[None] | None = None
+_matplotlib_prewarm_task: asyncio.Task[None] | None = None
+_TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 
 
 def _marker_path() -> Path:
@@ -85,13 +90,16 @@ def _admin_chat_id() -> int | None:
     return None
 
 
-async def prewarm_audio_cache(bot: Bot) -> None:
-    """Pre-upload audio to Telegram and cache stable file IDs.
+def _defer_during_clientplatform_startup() -> bool:
+    """Keep optional cache warming out of the Telegram polling critical path."""
 
-    The completion marker is outside the immutable release and stores a fingerprint
-    of the current media set. New or replaced audio therefore triggers another
-    sweep, while restarts with unchanged content remain instant.
-    """
+    explicit = (os.getenv("CLIENTPLATFORM_DEFER_PREWARM") or "").strip().lower()
+    if explicit:
+        return explicit in _TRUE_VALUES
+    return (os.getenv("CLIENTPLATFORM_DEPLOYMENT_MODE") or "").strip().lower() == "container"
+
+
+async def _prewarm_audio_cache_worker(bot: Bot) -> None:
     if not getattr(settings, "PREWARM_ENABLED", False):
         return
     chat_id = _admin_chat_id()
@@ -172,8 +180,32 @@ async def prewarm_audio_cache(bot: Bot) -> None:
         _mark_done(fingerprint)
 
 
-async def prewarm_matplotlib_cache() -> None:
-    """Warm Matplotlib font cache outside the immutable release tree."""
+async def prewarm_audio_cache(bot: Bot) -> None:
+    """Pre-upload audio without delaying ClientPlatform Telegram polling.
+
+    Non-ClientPlatform callers retain the original await-until-complete contract.
+    The production ClientPlatform container delegates the optional work to the
+    canonical TaskManager, so startup and buttons are never blocked by uploads.
+    """
+
+    global _audio_prewarm_task
+
+    if not _defer_during_clientplatform_startup():
+        await _prewarm_audio_cache_worker(bot)
+        return
+    if _audio_prewarm_task is not None and not _audio_prewarm_task.done():
+        return
+
+    from services.bg import tm
+
+    _audio_prewarm_task = tm().create(
+        _prewarm_audio_cache_worker(bot),
+        name="clientplatform-audio-prewarm",
+    )
+    await asyncio.sleep(0)
+
+
+async def _prewarm_matplotlib_cache_worker() -> None:
     try:
         from services.charts import _ensure_mpl
     except (ImportError, OSError):
@@ -184,3 +216,23 @@ async def prewarm_matplotlib_cache() -> None:
         log.info("matplotlib cache prewarmed")
     except OSError:
         logging.getLogger(__name__).exception("prewarm_matplotlib_cache failed")
+
+
+async def prewarm_matplotlib_cache() -> None:
+    """Warm Matplotlib without keeping ClientPlatform polling offline."""
+
+    global _matplotlib_prewarm_task
+
+    if not _defer_during_clientplatform_startup():
+        await _prewarm_matplotlib_cache_worker()
+        return
+    if _matplotlib_prewarm_task is not None and not _matplotlib_prewarm_task.done():
+        return
+
+    from services.bg import tm
+
+    _matplotlib_prewarm_task = tm().create(
+        _prewarm_matplotlib_cache_worker(),
+        name="clientplatform-matplotlib-prewarm",
+    )
+    await asyncio.sleep(0)
