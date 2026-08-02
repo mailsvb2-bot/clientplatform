@@ -1,0 +1,26 @@
+name: Materialize ClientPlatform Admin Patch
+
+on:
+  push:
+    branches:
+      - agent/metrotherapy-parity-business-admin
+    paths:
+      - .admin_patch_payload.b64.gz
+      - scripts/materialize_clientplatform_admin.py
+      - .github/workflows/materialize-clientplatform-admin.yml
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python scripts/materialize_clientplatform_admin.py
