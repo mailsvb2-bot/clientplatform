@@ -22,6 +22,7 @@ router.message.filter(control.ClientPlatformControlEnabled())
 router.callback_query.filter(control.ClientPlatformControlEnabled())
 
 log = logging.getLogger(__name__)
+_START_TIMEOUT_SECONDS = 12.0
 
 
 async def register_clientplatform_bot_commands(bot: Bot) -> bool:
@@ -76,13 +77,31 @@ async def _send_business_choice(
     )
 
 
-@router.message(CommandStart())
-async def clientplatform_entry_start(
+async def _safe_edit_start_status(status_message: Message | None, text: str) -> None:
+    if status_message is None:
+        return
+    try:
+        await status_message.edit_text(text)
+    except TelegramAPIError:
+        log.warning("Failed to edit ClientPlatform /start status", exc_info=True)
+
+
+async def _safe_delete_start_status(status_message: Message | None) -> None:
+    if status_message is None:
+        return
+    try:
+        await status_message.delete()
+    except TelegramAPIError:
+        log.debug("Failed to delete ClientPlatform /start status", exc_info=True)
+
+
+async def _dispatch_clientplatform_start(
     message: Message,
     state: FSMContext,
-    managed_bot_business_id: str | None = None,
+    *,
+    user_id: int,
+    managed_bot_business_id: str | None,
 ) -> None:
-    user_id = control._user_id(message)
     if managed_bot_business_id is not None:
         links = await asyncio.to_thread(
             list_customer_businesses,
@@ -150,6 +169,50 @@ async def clientplatform_entry_start(
         "Добро пожаловать в ClientPlatform.\n\n"
         "Сначала напишите название Вашего дела, проекта или практики."
     )
+
+
+@router.message(CommandStart())
+async def clientplatform_entry_start(
+    message: Message,
+    state: FSMContext,
+    managed_bot_business_id: str | None = None,
+) -> None:
+    """Acknowledge `/start` before storage work and fail visibly on stalls."""
+
+    user_id = control._user_id(message)
+    status_message = await message.answer("Открываю…")
+    try:
+        await asyncio.wait_for(
+            _dispatch_clientplatform_start(
+                message,
+                state,
+                user_id=user_id,
+                managed_bot_business_id=managed_bot_business_id,
+            ),
+            timeout=_START_TIMEOUT_SECONDS,
+        )
+    except TimeoutError:
+        log.error(
+            "ClientPlatform /start timed out user_id=%s timeout_seconds=%s",
+            user_id,
+            _START_TIMEOUT_SECONDS,
+        )
+        await _safe_edit_start_status(
+            status_message,
+            "ClientPlatform отвечает дольше обычного. "
+            "Нажмите «Старт» ещё раз через несколько секунд.",
+        )
+        return
+    except Exception:  # validator: allow-wide-except
+        log.exception("ClientPlatform /start failed user_id=%s", user_id)
+        await _safe_edit_start_status(
+            status_message,
+            "Не удалось открыть ClientPlatform. "
+            "Нажмите «Старт» ещё раз — сохранённые данные не потеряны.",
+        )
+        return
+
+    await _safe_delete_start_status(status_message)
 
 
 @router.callback_query(F.data == "cp:entry:businesses")
