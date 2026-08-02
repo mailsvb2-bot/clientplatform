@@ -27,17 +27,13 @@ _START_TIMEOUT_SECONDS = 12.0
 
 
 async def register_clientplatform_bot_commands(bot: Bot) -> bool:
-    """Expose the canonical entry commands in Telegram's command menu.
-
-    Telegram itself controls the large first-run START button. Registering
-    commands makes `/start` visible after that first run as well. A temporary
-    Bot API failure must not prevent the polling process from starting.
-    """
+    """Expose the canonical entry commands in Telegram's command menu."""
 
     try:
         confirmed = await bot.set_my_commands(
             [
                 BotCommand(command="start", description="Открыть ClientPlatform"),
+                BotCommand(command="admin", description="Открыть админку бизнеса"),
                 BotCommand(command="mybot", description="Управление моим Telegram-ботом"),
                 BotCommand(command="cancel", description="Отменить текущий шаг"),
             ]
@@ -222,6 +218,14 @@ async def clientplatform_entry_start(
     await _safe_delete_start_status(status_message)
 
 
+@router.message(Command("admin"))
+async def clientplatform_admin_command(message: Message, state: FSMContext) -> None:
+    """Open the owner administration panel before generic FSM handlers."""
+
+    admin = importlib.import_module(".clientplatform_admin", __package__)
+    await admin.open_admin_command(message, state)
+
+
 @router.message(Command("mybot"))
 async def clientplatform_mybot_command(message: Message, state: FSMContext) -> None:
     """Route `/mybot` before generic FSM text handlers can persist it as data."""
@@ -246,7 +250,8 @@ async def clientplatform_unknown_command(message: Message, state: FSMContext) ->
 
     await state.clear()
     await message.answer(
-        "Команда не была сохранена как данные. Доступны /start, /mybot и /cancel."
+        "Команда не была сохранена как данные. "
+        "Доступны /start, /admin, /mybot и /cancel."
     )
 
 
@@ -254,7 +259,6 @@ async def clientplatform_unknown_command(message: Message, state: FSMContext) ->
 async def open_business_workspace(callback: CallbackQuery, state: FSMContext) -> None:
     user_id = int(callback.from_user.id)
     accesses = await asyncio.to_thread(list_accessible_businesses, user_id=user_id)
-    await callback.answer()
     if not accesses:
         await control._callback_message(callback).answer(
             "Активных бизнесов больше нет. Нажмите /start, чтобы обновить меню."
@@ -274,7 +278,6 @@ async def open_customer_workspace(callback: CallbackQuery, state: FSMContext) ->
         list_customer_businesses,
         telegram_user_id=int(callback.from_user.id),
     )
-    await callback.answer()
     if not links:
         await control._callback_message(callback).answer(
             "Активных подключений к специалистам больше нет. Нажмите /start, чтобы обновить меню."
@@ -325,6 +328,11 @@ if not bool(getattr(control, "_dual_role_entry_composed", False)):
         __package__,
     )
     interaction_safety.install_interaction_safety(router, control)
+    admin = importlib.import_module(
+        ".clientplatform_admin",
+        __package__,
+    )
+    admin.install_admin_dashboard_button(control)
     onboarding_recovery = importlib.import_module(
         ".clientplatform_onboarding_recovery",
         __package__,
@@ -341,6 +349,7 @@ if not bool(getattr(control, "_dual_role_entry_composed", False)):
         ".clientplatform_program_lesson_editor_composition",
         __package__,
     )
+    router.include_router(admin.router)
     router.include_router(interaction_safety.router)
     router.include_router(onboarding_recovery.router)
     router.include_router(program_media.router)
@@ -348,6 +357,7 @@ if not bool(getattr(control, "_dual_role_entry_composed", False)):
     router.include_router(program_builder.router)
     router.include_router(original_router)
     control.router = router
+    control._admin_router_composed = True
     control._interaction_safety_router_composed = True
     control._onboarding_recovery_router_composed = True
     control._program_media_router_composed = True
