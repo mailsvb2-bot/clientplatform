@@ -22,7 +22,7 @@ from aiogram.types import (
     TelegramObject,
 )
 
-from clientplatform.application.tenancy import list_accessible_businesses, rename_business
+from clientplatform.application.tenancy import rename_business
 from clientplatform.domain.activity import BusinessProfileStatus, CapabilityStatus
 
 control = importlib.import_module(".clientplatform_control", __package__)
@@ -68,6 +68,12 @@ _ONE_SHOT_PREFIXES = (
     "cps:rename:",
     "cps:cancel:",
 )
+
+
+def list_accessible_businesses(*, user_id: int):
+    """Resolve through the canonical module so tests and runtime share one seam."""
+
+    return control.list_accessible_businesses(user_id=user_id)
 
 
 def _command_like(value: str) -> bool:
@@ -189,7 +195,6 @@ class ClientPlatformInteractionSafetyMiddleware(BaseMiddleware):
                 )
                 return None
 
-            # Stop the spinner before waiting for another action or PostgreSQL.
             await _answer_callback(event)
             async with lock:
                 current_state = (
