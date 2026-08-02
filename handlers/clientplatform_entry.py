@@ -333,6 +333,11 @@ if not bool(getattr(control, "_dual_role_entry_composed", False)):
         __package__,
     )
     admin.install_admin_dashboard_button(control)
+    dashboard_dispatch = importlib.import_module(
+        ".clientplatform_dashboard_dispatch",
+        __package__,
+    )
+    dashboard_dispatch.install_dynamic_dashboard_dispatch(control)
     onboarding_recovery = importlib.import_module(
         ".clientplatform_onboarding_recovery",
         __package__,
