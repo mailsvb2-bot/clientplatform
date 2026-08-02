@@ -24,7 +24,7 @@ class ClientPlatformAdminContractTests(unittest.TestCase):
         self.assertLess(text.index(admin), text.index(original))
         self.assertIn("control._admin_router_composed = True", text)
 
-    def test_admin_module_exposes_real_owner_operations(self) -> None:
+    def test_admin_is_a_tenant_safe_metrotherapy_style_panel(self) -> None:
         text = ADMIN.read_text(encoding="utf-8")
         tree = ast.parse(text)
         functions = {
@@ -33,29 +33,89 @@ class ClientPlatformAdminContractTests(unittest.TestCase):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
         }
 
-        self.assertIn("send_admin_panel", functions)
-        self.assertIn("open_admin_command", functions)
-        self.assertIn("install_admin_dashboard_button", functions)
-        self.assertIn('text="Админка"', text)
-        self.assertIn('"cpa:home:', text)
-        self.assertIn('"cpa:formats:', text)
-        self.assertIn('"cpa:back:', text)
-        self.assertIn("business_delivery_summary", text)
-        self.assertIn("list_booking_slots", text)
+        for required in {
+            "_load_admin_context",
+            "_menu_keyboard",
+            "_safe_edit",
+            "_navigate_back",
+            "_assert_section_allowed",
+            "_render_customer_card",
+            "_render_members",
+            "_render_permissions",
+            "admin_gate",
+            "open_admin_command",
+            "install_admin_dashboard_button",
+        }:
+            self.assertIn(required, functions)
+
+        self.assertIn("🛠 Админ-панель", text)
+        self.assertIn('text="🛠 Панель"', text)
+        self.assertIn('"📊 Сегодня (кратко)"', text)
+        self.assertIn('"📈 Сегодня (подробно)"', text)
+        self.assertIn('"👥 Клиенты сегодня"', text)
+        self.assertIn('"🔎 Карточка клиента"', text)
+        self.assertIn('"🧠 Поведение"', text)
+        self.assertIn('"💬 Мессенджеры"', text)
+        self.assertIn('"⚠️ Требуют внимания"', text)
+        self.assertIn('"🤖 Growth Autopilot"', text)
+        self.assertIn('"📣 Публикации"', text)
+        self.assertIn('"📉 Путь до заявки"', text)
+        self.assertIn('"💰 Деньги и клиенты"', text)
+        self.assertIn('"💰 Оплаты"', text)
+        self.assertIn('"🧲 Группы клиентов"', text)
+        self.assertIn('"🧪 Проверка предложений"', text)
+        self.assertIn('"✍️ Подготовить тексты"', text)
+        self.assertIn('"💡 Подсказка по ценам"', text)
+        self.assertIn('"🚦 Release gate"', text)
+        self.assertIn('"🎁 Приглашения и рекомендации"', text)
+        self.assertIn('"🧲 Воронка 2.0"', text)
+        self.assertIn('"🧩 Удержание"', text)
+        self.assertIn('"🧾 Последние действия"', text)
+        self.assertIn('"🧪 Системные проверки"', text)
+        self.assertIn('"💳 Тариф ClientPlatform"', text)
+        self.assertIn('"👥 Добавить сотрудника"', text)
+        self.assertIn('"👥 Роли команды"', text)
+        self.assertIn('"🔐 Доступы сотрудников"', text)
+        self.assertIn('"⬅️ Назад"', text)
+
+    def test_admin_never_routes_into_legacy_global_metrotherapy_admin(self) -> None:
+        text = ADMIN.read_text(encoding="utf-8")
+
+        self.assertNotIn("handlers.admin_inline", text)
+        self.assertNotIn("services.admin", text)
+        self.assertNotIn("services.roles", text)
+        self.assertNotIn("ADMIN_IDS", text)
+        self.assertIn("business_id", text)
+        self.assertIn("control._actor", text)
+        self.assertIn("TenancyRepository", text)
+        self.assertIn("TenantPermissionDenied", text)
+
+    def test_every_admin_callback_revalidates_live_role(self) -> None:
+        text = ADMIN.read_text(encoding="utf-8")
+
+        self.assertIn('@router.callback_query(F.data.startswith("cpa:"))', text)
+        self.assertIn("ctx = await _load_admin_context(", text)
+        self.assertIn("_assert_section_allowed(ctx, action)", text)
+        self.assertIn("resolve_context(", text)
+        self.assertIn("current.assert_can_manage_business()", text)
+
+    def test_admin_callback_payloads_stay_in_clientplatform_namespace(self) -> None:
+        text = ADMIN.read_text(encoding="utf-8")
+
+        self.assertIn('value = f"cpa:{ctx.business_token}:{action}"', text)
+        self.assertIn('raise ValueError("ClientPlatform admin callback exceeds Telegram limit")', text)
+        self.assertNotIn('callback_data="admin:', text)
 
     def test_callbacks_are_acknowledged_before_single_flight_lock(self) -> None:
         text = SAFETY.read_text(encoding="utf-8")
         acknowledgement = "await _answer_callback(event)"
         lock = "async with lock:"
-        load = "async def load_dashboard_context"
 
         self.assertIn(acknowledgement, text)
         self.assertIn(lock, text)
         self.assertLess(text.index(acknowledgement), text.index(lock))
-        self.assertIn(load, text)
-        self.assertIn("await asyncio.gather(", text)
         self.assertIn("_optimized_dashboard_queries_installed", text)
-        self.assertIn('"cpa:home:"', text)
+        self.assertIn('"/admin"', text)
 
 
 if __name__ == "__main__":
