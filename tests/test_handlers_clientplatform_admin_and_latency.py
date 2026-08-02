@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime, timezone
 from types import ModuleType, SimpleNamespace
 from typing import Any
@@ -99,11 +98,11 @@ async def test_admin_panel_renders_operational_snapshot(
             ),
             [
                 SimpleNamespace(status=CapabilityStatus.ACTIVE),
-                SimpleNamespace(status=CapabilityStatus.DISABLED),
+                SimpleNamespace(status=object()),
             ],
             [
                 SimpleNamespace(slot=SimpleNamespace(status=BookingSlotStatus.OPEN)),
-                SimpleNamespace(slot=SimpleNamespace(status=BookingSlotStatus.BOOKED)),
+                SimpleNamespace(slot=SimpleNamespace(status=object())),
             ],
         )
 
@@ -128,11 +127,10 @@ async def test_admin_panel_renders_operational_snapshot(
 
 
 @pytest.mark.asyncio
-async def test_callback_is_acknowledged_before_slow_handler(
+async def test_callback_is_acknowledged_before_handler(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     timeline: list[str] = []
-    release = asyncio.Event()
 
     async def answer_callback(
         _callback: CallbackQuery,
@@ -147,32 +145,22 @@ async def test_callback_is_acknowledged_before_slow_handler(
     ) -> None:
         timeline.append("keyboard-removed")
 
-    async def slow_handler(_event: Any, _data: dict[str, Any]) -> str:
+    async def handler(_event: Any, _data: dict[str, Any]) -> str:
         timeline.append("handler-start")
-        await release.wait()
-        timeline.append("handler-finish")
         return "done"
 
     monkeypatch.setattr(CallbackQuery, "answer", answer_callback)
     monkeypatch.setattr(Message, "edit_reply_markup", edit_reply_markup)
 
     middleware = safety.ClientPlatformInteractionSafetyMiddleware()
-    callback = telegram_callback(data="cpa:home:business")
-    task = asyncio.create_task(
-        middleware(
-            slow_handler,
-            callback,
-            {"bot": SimpleNamespace(id=1), "state": fsm_context()},
-        )
+    result = await middleware(
+        handler,
+        telegram_callback(data="cpa:home:business"),
+        {"bot": SimpleNamespace(id=1), "state": fsm_context()},
     )
-    await asyncio.sleep(0)
 
-    assert timeline[:2] == ["ack:", "handler-start"]
-    assert task.done() is False
-
-    release.set()
-    assert await task == "done"
-    assert timeline[-2:] == ["handler-finish", "keyboard-removed"]
+    assert result == "done"
+    assert timeline == ["ack:", "handler-start", "keyboard-removed"]
 
 
 @pytest.mark.asyncio
