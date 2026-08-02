@@ -99,7 +99,7 @@ def test_self_invite_is_blocked_before_claim_mutation() -> None:
 
     with pytest.raises(ActivityInvariantViolation, match="собственного бизнеса"):
         repository._assert_invite_claim_is_external(
-            token="invite-token",
+            token="invite_token_abcdefghijklmnopqrstuvwxyz",
             telegram_user_id=101,
         )
 
