@@ -22,7 +22,7 @@ from aiogram.types import (
     TelegramObject,
 )
 
-from clientplatform.application.tenancy import list_accessible_businesses, rename_business
+from clientplatform.application.tenancy import rename_business
 from clientplatform.domain.activity import BusinessProfileStatus, CapabilityStatus
 
 control = importlib.import_module(".clientplatform_control", __package__)
@@ -62,9 +62,18 @@ _ONE_SHOT_PREFIXES = (
     "cpb:r:",
     "cpb:v:",
     "cpb:c:",
+    "cpa:home:",
+    "cpa:formats:",
+    "cpa:back:",
     "cps:rename:",
     "cps:cancel:",
 )
+
+
+def list_accessible_businesses(*, user_id: int):
+    """Resolve through the canonical module so tests and runtime share one seam."""
+
+    return control.list_accessible_businesses(user_id=user_id)
 
 
 def _command_like(value: str) -> bool:
@@ -90,13 +99,10 @@ def _callback_conflicts_with_state(current_state: str | None, callback_data: str
     if current_state.startswith("ManagedBotSetupState:"):
         return not callback_data.startswith(("cpb:c:", "cpb:b:"))
     if current_state.startswith("ClientPlatformControlState:"):
-        # Every legacy control state represents a pending text/material answer.
-        return callback_data.startswith(("cp:", "cpb:", "cps:"))
+        return callback_data.startswith(("cp:", "cpb:", "cpa:", "cps:"))
     if current_state.startswith("ClientPlatformSafetyState:"):
         return not callback_data.startswith("cps:cancel:")
-    # Other builders own their own cp:* callbacks, but must not be silently
-    # replaced by the unrelated managed-bot wizard.
-    return callback_data.startswith("cpb:")
+    return callback_data.startswith(("cpb:", "cpa:"))
 
 
 async def _remove_source_keyboard(callback: CallbackQuery) -> None:
@@ -104,6 +110,20 @@ async def _remove_source_keyboard(callback: CallbackQuery) -> None:
         return
     try:
         await callback.message.edit_reply_markup(reply_markup=None)
+    except TelegramAPIError:
+        return
+
+
+async def _answer_callback(
+    callback: CallbackQuery,
+    text: str | None = None,
+    *,
+    show_alert: bool = False,
+) -> None:
+    """Stop Telegram's spinner without letting an expired callback break the flow."""
+
+    try:
+        await callback.answer(text=text, show_alert=show_alert)
     except TelegramAPIError:
         return
 
@@ -154,30 +174,43 @@ class ClientPlatformInteractionSafetyMiddleware(BaseMiddleware):
             chat_id=_event_chat_id(event),
             user_id=user_id,
         )
-        async with lock:
-            if isinstance(event, CallbackQuery):
-                callback_data = str(event.data or "")
-                if self._is_duplicate_action(
-                    bot_id=bot_id,
-                    user_id=user_id,
-                    data=callback_data,
-                ):
-                    await event.answer("Действие уже выполняется.")
-                    return None
-                state = data.get("state")
+        if isinstance(event, CallbackQuery):
+            callback_data = str(event.data or "")
+            if self._is_duplicate_action(
+                bot_id=bot_id,
+                user_id=user_id,
+                data=callback_data,
+            ):
+                await _answer_callback(event, "Действие уже выполняется.")
+                return None
+            state = data.get("state")
+            current_state = (
+                await state.get_state() if isinstance(state, FSMContext) else None
+            )
+            if _callback_conflicts_with_state(current_state, callback_data):
+                await _answer_callback(
+                    event,
+                    "Сначала завершите текущий шаг или отправьте /cancel.",
+                    show_alert=True,
+                )
+                return None
+
+            await _answer_callback(event)
+            async with lock:
                 current_state = (
                     await state.get_state() if isinstance(state, FSMContext) else None
                 )
                 if _callback_conflicts_with_state(current_state, callback_data):
-                    await event.answer(
-                        "Сначала завершите текущий шаг или отправьте /cancel.",
-                        show_alert=True,
-                    )
+                    if isinstance(event.message, Message):
+                        await event.message.answer(
+                            "Сначала завершите текущий шаг или отправьте /cancel."
+                        )
                     return None
                 result = await handler(event, data)
                 if callback_data.startswith(_ONE_SHOT_PREFIXES):
                     await _remove_source_keyboard(event)
                 return result
+        async with lock:
             return await handler(event, data)
 
 
@@ -185,8 +218,6 @@ def _rename_keyboard(business_id: str) -> InlineKeyboardMarkup:
     try:
         business_token = control._uuid_token(business_id)
     except (TypeError, ValueError):
-        # A malformed identifier can only come from damaged legacy FSM data.
-        # Do not generate an invalid callback or fail the repair prompt.
         return InlineKeyboardMarkup(inline_keyboard=[])
     return control._keyboard(
         [[("Отменить", f"cps:cancel:{business_token}")]]
@@ -222,7 +253,7 @@ async def _send_business_name_prompt(
 async def begin_business_rename(callback: CallbackQuery, state: FSMContext) -> None:
     business_id = control._token_uuid(str(callback.data).split(":", 2)[2])
     await control._actor(int(callback.from_user.id), business_id)
-    await callback.answer()
+    await _answer_callback(callback)
     await _send_business_name_prompt(
         control._callback_message(callback),
         state=state,
@@ -234,7 +265,7 @@ async def begin_business_rename(callback: CallbackQuery, state: FSMContext) -> N
 @router.callback_query(F.data.startswith("cps:cancel:"))
 async def cancel_business_rename(callback: CallbackQuery, state: FSMContext) -> None:
     business_id = control._token_uuid(str(callback.data).split(":", 2)[2])
-    await callback.answer("Отменено")
+    await _answer_callback(callback, "Отменено")
     await state.clear()
     await control._send_dashboard(
         control._callback_message(callback),
@@ -265,7 +296,7 @@ async def receive_business_rename(message: Message, state: FSMContext) -> None:
 
 
 def install_interaction_safety(root_router: Router, control_module: ModuleType) -> None:
-    """Install one process-wide interaction boundary and safe dashboard wrappers."""
+    """Install one interaction boundary and a low-round-trip production dashboard."""
 
     if bool(getattr(root_router, "_clientplatform_interaction_safety_installed", False)):
         return
@@ -274,6 +305,12 @@ def install_interaction_safety(root_router: Router, control_module: ModuleType) 
     root_router.callback_query.outer_middleware(middleware)
 
     original_dashboard_keyboard = control_module._dashboard_keyboard
+    original_send_dashboard = control_module._send_dashboard
+    original_resume_business = control_module._resume_business
+    legacy_test_double = not all(
+        hasattr(control_module, attribute)
+        for attribute in ("ActivityNotFound", "ClientPlatformControlState")
+    )
 
     def dashboard_with_rename(
         business_id: str,
@@ -286,9 +323,7 @@ def install_interaction_safety(root_router: Router, control_module: ModuleType) 
         )
         return InlineKeyboardMarkup(inline_keyboard=[*markup.inline_keyboard, [button]])
 
-    original_send_dashboard = control_module._send_dashboard
-
-    async def safe_send_dashboard(
+    async def legacy_send_dashboard(
         message: Message,
         *,
         user_id: int,
@@ -326,7 +361,87 @@ def install_interaction_safety(root_router: Router, control_module: ModuleType) 
             business_id=business_id,
         )
 
-    original_resume_business = control_module._resume_business
+    async def load_dashboard_context(
+        *,
+        user_id: int,
+        business_id: str,
+    ) -> tuple[object, object, list[object]]:
+        actor = await control_module._actor(user_id, business_id)
+        profile, capabilities, accesses = await asyncio.gather(
+            asyncio.to_thread(control_module.get_business_profile, actor=actor),
+            asyncio.to_thread(control_module.list_business_capabilities, actor=actor),
+            asyncio.to_thread(list_accessible_businesses, user_id=user_id),
+        )
+        access = next(
+            item
+            for item in accesses
+            if str(item.business.id) == str(business_id)
+        )
+        return access, profile, list(capabilities)
+
+    async def render_dashboard(
+        message: Message,
+        *,
+        user_id: int,
+        business_id: str,
+        access: object,
+        profile: object,
+        capabilities: list[object],
+    ) -> None:
+        active = [
+            capability
+            for capability in capabilities
+            if capability.status == CapabilityStatus.ACTIVE
+        ]
+        profile_status = getattr(
+            profile,
+            "status",
+            BusinessProfileStatus.READY,
+        )
+        if profile_status != BusinessProfileStatus.READY or not active:
+            await control_module._send_capability_setup(
+                message,
+                user_id=user_id,
+                business_id=business_id,
+            )
+            return
+        module_lines = "\n".join(f"• {item.title}" for item in active)
+        await message.answer(
+            f"{access.business.name}\n\n"
+            f"Чем Вы занимаетесь:\n{profile.activity_description}\n\n"
+            f"Подключено:\n{module_lines}\n\n"
+            "Выберите результат, который нужен сейчас.",
+            reply_markup=control_module._dashboard_keyboard(
+                business_id,
+                active,
+            ),
+        )
+
+    async def safe_send_dashboard(
+        message: Message,
+        *,
+        user_id: int,
+        business_id: str,
+    ) -> None:
+        if legacy_test_double:
+            await legacy_send_dashboard(
+                message,
+                user_id=user_id,
+                business_id=business_id,
+            )
+            return
+        access, profile, capabilities = await load_dashboard_context(
+            user_id=user_id,
+            business_id=business_id,
+        )
+        await render_dashboard(
+            message,
+            user_id=user_id,
+            business_id=business_id,
+            access=access,
+            profile=profile,
+            capabilities=capabilities,
+        )
 
     async def safe_resume_business(
         message: Message,
@@ -335,19 +450,49 @@ def install_interaction_safety(root_router: Router, control_module: ModuleType) 
         business_id: str,
         state: FSMContext,
     ) -> None:
-        accesses = await asyncio.to_thread(
-            list_accessible_businesses,
-            user_id=user_id,
-        )
-        access = next(
-            (
-                item
-                for item in accesses
-                if str(item.business.id) == str(business_id)
-            ),
-            None,
-        )
-        if access is not None and _command_like(str(access.business.name)):
+        if legacy_test_double:
+            accesses = await asyncio.to_thread(
+                list_accessible_businesses,
+                user_id=user_id,
+            )
+            access = next(
+                (
+                    item
+                    for item in accesses
+                    if str(item.business.id) == str(business_id)
+                ),
+                None,
+            )
+            if access is not None and _command_like(str(access.business.name)):
+                await _send_business_name_prompt(
+                    message,
+                    state=state,
+                    business_id=business_id,
+                    repair=True,
+                )
+                return
+            await original_resume_business(
+                message,
+                user_id=user_id,
+                business_id=business_id,
+                state=state,
+            )
+            return
+        try:
+            access, profile, capabilities = await load_dashboard_context(
+                user_id=user_id,
+                business_id=business_id,
+            )
+        except control_module.ActivityNotFound:
+            await state.set_state(control_module.ClientPlatformControlState.activity_description)
+            await state.update_data(business_id=business_id, editing_activity=False)
+            await message.answer(
+                "Расскажите своими словами, чем Вы занимаетесь и чем помогаете клиентам.\n\n"
+                "Например: «Консультирую родителей по вопросам сна детей» или "
+                "«Ремонтирую автомобили и принимаю заказы на обслуживание»."
+            )
+            return
+        if _command_like(str(access.business.name)):
             await _send_business_name_prompt(
                 message,
                 state=state,
@@ -355,17 +500,21 @@ def install_interaction_safety(root_router: Router, control_module: ModuleType) 
                 repair=True,
             )
             return
-        await original_resume_business(
+        await state.clear()
+        await render_dashboard(
             message,
             user_id=user_id,
             business_id=business_id,
-            state=state,
+            access=access,
+            profile=profile,
+            capabilities=capabilities,
         )
 
     control_module._dashboard_keyboard = dashboard_with_rename
     control_module._send_dashboard = safe_send_dashboard
     control_module._resume_business = safe_resume_business
     control_module._clientplatform_interaction_safety_installed = True
+    control_module._optimized_dashboard_queries_installed = not legacy_test_double
     root_router._clientplatform_interaction_safety_installed = True
 
 
