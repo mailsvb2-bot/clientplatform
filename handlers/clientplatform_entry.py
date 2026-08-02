@@ -77,14 +77,18 @@ async def _send_business_choice(
     )
 
 
-async def _safe_edit_start_status(status_message: Message, text: str) -> None:
+async def _safe_edit_start_status(status_message: Message | None, text: str) -> None:
+    if status_message is None:
+        return
     try:
         await status_message.edit_text(text)
     except TelegramAPIError:
         log.warning("Failed to edit ClientPlatform /start status", exc_info=True)
 
 
-async def _safe_delete_start_status(status_message: Message) -> None:
+async def _safe_delete_start_status(status_message: Message | None) -> None:
+    if status_message is None:
+        return
     try:
         await status_message.delete()
     except TelegramAPIError:
