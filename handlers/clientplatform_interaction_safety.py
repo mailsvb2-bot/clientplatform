@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import logging
 import time
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
@@ -31,6 +32,8 @@ router = Router(name="clientplatform_interaction_safety")
 router.message.filter(control.ClientPlatformControlEnabled())
 router.callback_query.filter(control.ClientPlatformControlEnabled())
 
+log = logging.getLogger(__name__)
+
 
 class ClientPlatformSafetyState(StatesGroup):
     business_name = State()
@@ -38,6 +41,8 @@ class ClientPlatformSafetyState(StatesGroup):
 
 _RECENT_ACTION_TTL_SECONDS = 4.0
 _RECENT_ACTION_LIMIT = 4096
+_CONTROL_COMMAND_LOCK_WAIT_SECONDS = 0.25
+_CONTROL_COMMANDS = frozenset({"/start", "/admin", "/mybot", "/cancel"})
 _ONE_SHOT_PREFIXES = (
     "cp:entry:",
     "cp:business:",
@@ -78,6 +83,16 @@ def list_accessible_businesses(*, user_id: int):
 
 def _command_like(value: str) -> bool:
     return not value.strip() or value.lstrip().startswith("/")
+
+
+def _message_command(event: Message) -> str | None:
+    """Return a normalized Telegram command, including commands with a bot suffix."""
+
+    text = str(event.text or "").strip()
+    if not text.startswith("/"):
+        return None
+    token = text.split(maxsplit=1)[0]
+    return token.split("@", 1)[0].casefold()
 
 
 def _event_user_id(event: TelegramObject) -> int | None:
@@ -158,6 +173,39 @@ class ClientPlatformInteractionSafetyMiddleware(BaseMiddleware):
             self._recent_actions.popitem(last=False)
         return previous is not None and now - previous <= _RECENT_ACTION_TTL_SECONDS
 
+    async def _run_control_command(
+        self,
+        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
+        event: Message,
+        data: dict[str, Any],
+        *,
+        lock: asyncio.Lock,
+        command: str,
+        bot_id: int,
+        user_id: int,
+    ) -> Any:
+        """Prefer serialization, but never let a stale action make recovery commands silent."""
+
+        acquired = False
+        try:
+            await asyncio.wait_for(
+                lock.acquire(),
+                timeout=_CONTROL_COMMAND_LOCK_WAIT_SECONDS,
+            )
+            acquired = True
+        except TimeoutError:
+            log.warning(
+                "Bypassing busy ClientPlatform interaction lock command=%s bot_id=%s user_id=%s",
+                command,
+                bot_id,
+                user_id,
+            )
+        try:
+            return await handler(event, data)
+        finally:
+            if acquired:
+                lock.release()
+
     async def __call__(
         self,
         handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
@@ -210,6 +258,18 @@ class ClientPlatformInteractionSafetyMiddleware(BaseMiddleware):
                 if callback_data.startswith(_ONE_SHOT_PREFIXES):
                     await _remove_source_keyboard(event)
                 return result
+        if isinstance(event, Message):
+            command = _message_command(event)
+            if command in _CONTROL_COMMANDS:
+                return await self._run_control_command(
+                    handler,
+                    event,
+                    data,
+                    lock=lock,
+                    command=command,
+                    bot_id=bot_id,
+                    user_id=user_id,
+                )
         async with lock:
             return await handler(event, data)
 
@@ -516,11 +576,3 @@ def install_interaction_safety(root_router: Router, control_module: ModuleType) 
     control_module._clientplatform_interaction_safety_installed = True
     control_module._optimized_dashboard_queries_installed = not legacy_test_double
     root_router._clientplatform_interaction_safety_installed = True
-
-
-__all__ = [
-    "ClientPlatformInteractionSafetyMiddleware",
-    "ClientPlatformSafetyState",
-    "install_interaction_safety",
-    "router",
-]
