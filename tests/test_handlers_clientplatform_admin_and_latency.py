@@ -46,8 +46,10 @@ def fsm_context(*, user_id: int = 77) -> FSMContext:
     )
 
 
-def test_admin_keyboard_exposes_owner_controls() -> None:
-    admin.control._uuid_token = lambda _value: "business-token"
+def test_admin_keyboard_exposes_owner_controls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(admin.control, "_uuid_token", lambda _value: "business-token")
     markup = admin._admin_keyboard("business-id")
     labels = [button.text for row in markup.inline_keyboard for button in row]
     callbacks = [
