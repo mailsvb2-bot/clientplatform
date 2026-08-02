@@ -182,8 +182,14 @@ class ClientPlatformInteractionSafetyMiddleware(BaseMiddleware):
 
 
 def _rename_keyboard(business_id: str) -> InlineKeyboardMarkup:
+    try:
+        business_token = control._uuid_token(business_id)
+    except (TypeError, ValueError):
+        # A malformed identifier can only come from damaged legacy FSM data.
+        # Do not generate an invalid callback or fail the repair prompt.
+        return InlineKeyboardMarkup(inline_keyboard=[])
     return control._keyboard(
-        [[("Отменить", f"cps:cancel:{control._uuid_token(business_id)}")]]
+        [[("Отменить", f"cps:cancel:{business_token}")]]
     )
 
 
