@@ -41,12 +41,7 @@ def _env_bool(name: str, default: bool) -> bool:
 
 
 def telegram_ip_family() -> int:
-    """Return the explicit socket family used by Telegram polling.
-
-    Production defaults to IPv4 because the server can publish an IPv6 address
-    while Docker has no working IPv6 route. The setting remains reversible for
-    environments where IPv6 or Happy Eyeballs is known to work.
-    """
+    """Return the explicit socket family used by Telegram polling."""
 
     raw = (os.getenv("TELEGRAM_IP_FAMILY") or "ipv4").strip().lower()
     if raw in {"ipv4", "4", "inet"}:
@@ -60,13 +55,11 @@ def telegram_ip_family() -> int:
 
 
 def telegram_connector_options() -> dict[str, Any]:
-    """Build the aiohttp connector policy used by Telegram.
+    """Build a short-lived keep-alive connector policy for Telegram.
 
-    A short keep-alive window is deliberately preferred over ``force_close``.
-    It reuses the TLS connection while a person is navigating several buttons,
-    but expires idle connections long before an upstream/NAT flow can become a
-    silently stale one. Every observed network failure still resets the complete
-    connector generation before retrying.
+    Several buttons pressed in one session reuse TCP/TLS, while idle connections
+    expire quickly. A real network failure still closes the whole connector and
+    increments its generation before retrying.
     """
 
     force_close = _env_bool("TELEGRAM_FORCE_CLOSE", False)
@@ -98,13 +91,7 @@ def telegram_connector_options() -> dict[str, Any]:
 
 
 def _native_http_proxy(proxy: Any) -> str | None:
-    """Validate a native aiohttp HTTP CONNECT proxy without exposing credentials.
-
-    Aiogram normally routes every proxy scheme through the optional
-    ``aiohttp-socks`` package. A plain ``http://`` CONNECT relay is already
-    supported natively by aiohttp 3.14, so production can use a narrowly scoped
-    relay without adding another transport dependency to the locked runtime.
-    """
+    """Validate a native aiohttp HTTP CONNECT proxy without exposing secrets."""
 
     if proxy in (None, ""):
         return None
@@ -127,11 +114,8 @@ def _native_http_proxy(proxy: Any) -> str | None:
 
 
 class PollingAiohttpSession(AiohttpSession):
-    """Aiohttp transport hardened for responsive Telegram polling and UI calls."""
+    """Aiohttp transport hardened for responsive polling and UI calls."""
 
-    # Aiogram 3.29.1 creates these fields dynamically in its concrete session
-    # class. State their pinned compatibility types explicitly so strict mypy can
-    # validate our override without weakening checks or reaching into Any.
     _session: ClientSession | None
     _should_reset_connector: bool
 
@@ -148,8 +132,6 @@ class PollingAiohttpSession(AiohttpSession):
             limit=limit,
             **kwargs,
         )
-        # aiogram 3.29.1 stores the exact TCPConnector kwargs here. The project
-        # pins that version, and regression tests lock this compatibility seam.
         self._connector_init.update(telegram_connector_options())
         self._native_http_proxy = native_http_proxy
         self._transport_generation = 0
@@ -161,14 +143,10 @@ class PollingAiohttpSession(AiohttpSession):
 
     @property
     def connector_options(self) -> dict[str, Any]:
-        """Expose a read-only snapshot for health checks and contract tests."""
-
         return dict(self._connector_init)
 
     @property
     def proxy_mode(self) -> str:
-        """Expose only the transport kind, never the relay URL or credentials."""
-
         if self._native_http_proxy is not None:
             return "http_connect"
         if self.proxy is not None:
@@ -176,8 +154,6 @@ class PollingAiohttpSession(AiohttpSession):
         return "direct"
 
     async def create_session(self) -> ClientSession:
-        """Create an aiohttp session with a native HTTP CONNECT relay when set."""
-
         if self._native_http_proxy is None:
             return await super().create_session()
 
@@ -199,12 +175,7 @@ class PollingAiohttpSession(AiohttpSession):
         *,
         observed_generation: int | None = None,
     ) -> bool:
-        """Close a failed connector once and force a clean TCP/TLS session.
-
-        Several concurrent Bot API calls may observe the same outage. The
-        generation guard prevents each caller from repeatedly closing the fresh
-        session created by another retrying caller.
-        """
+        """Close one failed connector generation exactly once."""
 
         async with self._transport_reset_lock:
             if (
@@ -219,23 +190,36 @@ class PollingAiohttpSession(AiohttpSession):
 
 
 class ResilientBot(Bot):
-    """Centralized, method-aware Bot API retry policy.
+    """Method-aware Bot API retry policy.
 
-    Long polling needs a long timeout. Interactive calls must fail over quickly;
-    otherwise one broken TCP flow makes every Telegram button appear frozen for
-    tens of seconds. The policies are intentionally separate.
+    Legacy attributes stay available to diagnostics, but they no longer control
+    interactive latency. UI, callback acknowledgement and long polling have
+    separate bounded policies.
     """
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         legacy_timeout = env_float(
             "TELEGRAM_REQUEST_TIMEOUT_SEC",
-            3.0,
-            minimum=0.5,
+            20.0,
+            minimum=1.0,
             maximum=120.0,
         )
+        legacy_retries = env_int(
+            "TELEGRAM_NETWORK_RETRIES",
+            2,
+            minimum=0,
+            maximum=10,
+        )
+        legacy_retry_delay = env_float(
+            "TELEGRAM_NETWORK_RETRY_DELAY_SEC",
+            0.75,
+            minimum=0.0,
+            maximum=30.0,
+        )
+
         self._ui_request_timeout = env_float(
             "TELEGRAM_UI_REQUEST_TIMEOUT_SEC",
-            legacy_timeout,
+            3.0,
             minimum=0.5,
             maximum=20.0,
         )
@@ -251,6 +235,7 @@ class ResilientBot(Bot):
             minimum=10.0,
             maximum=120.0,
         )
+
         if kwargs.get("session") is None:
             proxy = (os.getenv("TELEGRAM_PROXY_URL") or "").strip() or None
             kwargs["session"] = PollingAiohttpSession(
@@ -259,11 +244,25 @@ class ResilientBot(Bot):
             )
         super().__init__(*args, **kwargs)
 
-        # Compatibility attributes remain available to existing diagnostics.
-        self._request_timeout = self._ui_request_timeout
+        # Keep the historical diagnostics contract without slowing new UI calls.
+        self._request_timeout = legacy_timeout
+        self._network_retries = legacy_retries
+        self._network_retry_delay = legacy_retry_delay
+
+        old_retries_explicit = os.getenv("TELEGRAM_NETWORK_RETRIES") not in (
+            None,
+            "",
+        )
+        old_delay_explicit = os.getenv("TELEGRAM_NETWORK_RETRY_DELAY_SEC") not in (
+            None,
+            "",
+        )
+        ui_retries_default = legacy_retries if old_retries_explicit else 1
+        ui_retry_delay_default = legacy_retry_delay if old_delay_explicit else 0.15
+
         self._ui_network_retries = env_int(
             "TELEGRAM_UI_NETWORK_RETRIES",
-            1,
+            ui_retries_default,
             minimum=0,
             maximum=3,
         )
@@ -273,18 +272,23 @@ class ResilientBot(Bot):
             minimum=0,
             maximum=10,
         )
-        self._network_retries = self._ui_network_retries
-        self._network_retry_delay = env_float(
-            "TELEGRAM_NETWORK_RETRY_DELAY_SEC",
-            0.15,
+        self._ui_network_retry_delay = env_float(
+            "TELEGRAM_UI_NETWORK_RETRY_DELAY_SEC",
+            ui_retry_delay_default,
             minimum=0.0,
             maximum=5.0,
         )
+        self._polling_network_retry_delay = env_float(
+            "TELEGRAM_POLLING_NETWORK_RETRY_DELAY_SEC",
+            0.75,
+            minimum=0.0,
+            maximum=30.0,
+        )
         self._network_retry_max_delay = env_float(
             "TELEGRAM_NETWORK_RETRY_MAX_DELAY_SEC",
-            1.0,
+            8.0,
             minimum=0.0,
-            maximum=10.0,
+            maximum=60.0,
         )
         self._slow_ui_warning_seconds = env_float(
             "TELEGRAM_SLOW_UI_WARNING_SEC",
@@ -298,8 +302,6 @@ class ResilientBot(Bot):
         method_name: str,
         request_timeout: Any = None,
     ) -> tuple[Any, int, str]:
-        """Return timeout, retry count and policy name for one Bot API method."""
-
         normalized = str(method_name or "").casefold()
         if normalized == _POLLING_METHOD:
             timeout = (
@@ -314,7 +316,6 @@ class ResilientBot(Bot):
                 if request_timeout is not None
                 else self._callback_request_timeout
             )
-            # Callback acknowledgement must never delay the actual handler.
             return timeout, 0, "callback"
         timeout = (
             request_timeout
@@ -322,6 +323,14 @@ class ResilientBot(Bot):
             else self._ui_request_timeout
         )
         return timeout, self._ui_network_retries, "ui"
+
+    def retry_delay(self, policy_name: str, attempt: int) -> float:
+        base = (
+            self._polling_network_retry_delay
+            if policy_name == "polling"
+            else self._ui_network_retry_delay
+        )
+        return min(base * (2**attempt), self._network_retry_max_delay)
 
     async def _reset_failed_transport(self, observed_generation: int | None) -> None:
         session = self.session
@@ -363,10 +372,7 @@ class ResilientBot(Bot):
                     await self._reset_failed_transport(observed_generation)
                     if attempt >= retry_limit:
                         raise
-                    delay = min(
-                        self._network_retry_delay * (2**attempt),
-                        self._network_retry_max_delay,
-                    )
+                    delay = self.retry_delay(policy_name, attempt)
                     log.warning(
                         "Telegram network request failed; transport reset and retry scheduled",
                         extra={
