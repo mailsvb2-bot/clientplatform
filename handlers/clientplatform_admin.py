@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from types import ModuleType
 from typing import Any
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
@@ -356,10 +356,11 @@ async def _render_menu(
 
 def _today_for(profile: object) -> date:
     try:
-        zone = ZoneInfo(str(getattr(profile, "timezone", "UTC")))
-    except Exception:
-        zone = timezone.utc
-    return datetime.now(zone).date()
+        return datetime.now(
+            ZoneInfo(str(getattr(profile, "timezone", "UTC")))
+        ).date()
+    except ZoneInfoNotFoundError:
+        return datetime.now(timezone.utc).date()
 
 
 def _on_date(value: object, target: date) -> bool:
@@ -1030,6 +1031,21 @@ async def open_admin_command(message: Message, state: FSMContext) -> None:
     )
 
 
+async def _answer_stale_callback(callback: CallbackQuery) -> None:
+    log.warning(
+        "Invalid ClientPlatform admin callback: %s",
+        callback.data,
+        exc_info=True,
+    )
+    try:
+        await callback.answer(
+            "Кнопка устарела. Откройте /admin ещё раз.",
+            show_alert=True,
+        )
+    except TelegramAPIError:
+        return
+
+
 @router.callback_query(F.data.startswith("cpa:"))
 async def admin_gate(callback: CallbackQuery, state: FSMContext) -> None:
     try:
@@ -1170,15 +1186,14 @@ async def admin_gate(callback: CallbackQuery, state: FSMContext) -> None:
             )
         except TelegramAPIError:
             return
-    except (IndexError, KeyError, TypeError, ValueError):
-        log.warning("Invalid ClientPlatform admin callback: %s", callback.data, exc_info=True)
-        try:
-            await callback.answer(
-                "Кнопка устарела. Откройте /admin ещё раз.",
-                show_alert=True,
-            )
-        except TelegramAPIError:
-            return
+    except IndexError:
+        await _answer_stale_callback(callback)
+    except KeyError:
+        await _answer_stale_callback(callback)
+    except TypeError:
+        await _answer_stale_callback(callback)
+    except ValueError:
+        await _answer_stale_callback(callback)
 
 
 async def send_admin_panel(
