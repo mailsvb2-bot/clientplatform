@@ -14,9 +14,14 @@ from aiogram import BaseMiddleware, F, Router
 from aiogram.exceptions import TelegramAPIError
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, TelegramObject
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+    TelegramObject,
+)
 
-from clientplatform.application.activity import get_business_profile, list_business_capabilities
 from clientplatform.application.tenancy import list_accessible_businesses, rename_business
 from clientplatform.domain.activity import BusinessProfileStatus, CapabilityStatus
 
@@ -284,9 +289,12 @@ def install_interaction_safety(root_router: Router, control_module: ModuleType) 
         business_id: str,
     ) -> None:
         actor = await control_module._actor(user_id, business_id)
-        profile = await asyncio.to_thread(get_business_profile, actor=actor)
+        profile = await asyncio.to_thread(
+            control_module.get_business_profile,
+            actor=actor,
+        )
         capabilities = await asyncio.to_thread(
-            list_business_capabilities,
+            control_module.list_business_capabilities,
             actor=actor,
         )
         active = [
