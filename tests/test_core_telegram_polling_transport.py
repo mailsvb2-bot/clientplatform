@@ -22,7 +22,7 @@ _TEST_TOKEN = str(123_456_789) + ":" + ("T" * 35)
 
 
 class TelegramPollingTransportContractTests(unittest.IsolatedAsyncioTestCase):
-    async def test_default_connector_forces_ipv4_and_fresh_tcp_connections(self) -> None:
+    async def test_default_connector_forces_ipv4_and_reuses_short_ui_sessions(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
             session = PollingAiohttpSession()
             options = session.connector_options
@@ -31,7 +31,10 @@ class TelegramPollingTransportContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(family, socket.AF_INET)
         self.assertEqual(options["family"], socket.AF_INET)
         self.assertEqual(options["ttl_dns_cache"], 60)
-        self.assertTrue(options["force_close"])
+        self.assertFalse(options["force_close"])
+        self.assertEqual(options["keepalive_timeout"], 20.0)
+        self.assertEqual(options["limit_per_host"], 20)
+        self.assertTrue(options["enable_cleanup_closed"])
         self.assertEqual(session.proxy_mode, "direct")
         await session.close()
 
@@ -40,7 +43,7 @@ class TelegramPollingTransportContractTests(unittest.IsolatedAsyncioTestCase):
             os.environ,
             {
                 "TELEGRAM_IP_FAMILY": "auto",
-                "TELEGRAM_FORCE_CLOSE": "0",
+                "TELEGRAM_FORCE_CLOSE": "1",
                 "TELEGRAM_DNS_TTL_SEC": "7",
             },
             clear=True,
@@ -49,7 +52,8 @@ class TelegramPollingTransportContractTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(options["family"], socket.AF_UNSPEC)
         self.assertEqual(options["ttl_dns_cache"], 7)
-        self.assertFalse(options["force_close"])
+        self.assertTrue(options["force_close"])
+        self.assertNotIn("keepalive_timeout", options)
 
     async def test_invalid_family_fails_closed_to_ipv4(self) -> None:
         with patch.dict(
