@@ -8,6 +8,13 @@ on:
       - .admin_patch_payload.b64.gz
       - scripts/materialize_clientplatform_admin.py
       - .github/workflows/materialize-clientplatform-admin.yml
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .admin_patch_payload.b64.gz
+      - scripts/materialize_clientplatform_admin.py
+      - .github/workflows/materialize-clientplatform-admin.yml
 
 permissions:
   contents: write
@@ -19,6 +26,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.head_ref || github.ref_name }}
           fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
