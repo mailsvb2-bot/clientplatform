@@ -1,0 +1,181 @@
+name: Patch ClientPlatform Optional Analytics
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - '.github/workflows/patch-clientplatform-optional-analytics.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout exact pull-request head
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+
+      - name: Make added analytics reads fail-soft
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('handlers/clientplatform_admin_extension.py')
+          source = path.read_text(encoding='utf-8')
+
+          marker = '_INSTALLED = False\n\n\nasync def _optional_thread('
+          constants = '''_INSTALLED = False
+
+_EMPTY_INSIGHTS = admin_ops.AdminInsightSnapshot(
+    active_customers=0,
+    active_offerings=0,
+    active_invites=0,
+    claimed_invites=0,
+    enrollments=0,
+    completed_enrollments=0,
+    publication_drafts=0,
+    publications_published=0,
+    paid_payments=0,
+    paid_amount_minor=0,
+    payment_currency="RUB",
+    priced_offerings=0,
+    active_staff=0,
+)
+_EMPTY_INTERACTION = admin_ops.InteractionSnapshot(
+    count=0,
+    successes=0,
+    failures=0,
+    p50_ms=0,
+    p95_ms=0,
+    max_ms=0,
+    ack_p95_ms=0,
+    lock_p95_ms=0,
+    telegram_p95_ms=0,
+    window_minutes=60,
+)
+
+
+async def _optional_thread('''
+          if source.count(marker) != 1:
+              raise SystemExit(f'unexpected_constants_marker_count:{source.count(marker)}')
+          source = source.replace(marker, constants, 1)
+
+          insight_old = '        asyncio.to_thread(admin_ops.business_admin_insights, actor=ctx.actor),\n'
+          insight_new = '''        _optional_thread(
+            admin_ops.business_admin_insights,
+            default=_EMPTY_INSIGHTS,
+            actor=ctx.actor,
+        ),
+'''
+          if source.count(insight_old) != 3:
+              raise SystemExit(f'unexpected_insight_count:{source.count(insight_old)}')
+          source = source.replace(insight_old, insight_new)
+
+          interaction_old = '''        asyncio.to_thread(
+            admin_ops.interaction_snapshot,
+            actor=ctx.actor,
+            window_minutes=60,
+        ),
+'''
+          interaction_new = '''        _optional_thread(
+            admin_ops.interaction_snapshot,
+            default=_EMPTY_INTERACTION,
+            actor=ctx.actor,
+            window_minutes=60,
+        ),
+'''
+          if source.count(interaction_old) != 2:
+              raise SystemExit(f'unexpected_interaction_count:{source.count(interaction_old)}')
+          source = source.replace(interaction_old, interaction_new)
+
+          setting_old = '''        asyncio.to_thread(
+            admin_ops.get_admin_setting,
+            actor=ctx.actor,
+            key="autopilot_enabled",
+            default="false",
+        ),
+'''
+          setting_new = '''        _optional_thread(
+            admin_ops.get_admin_setting,
+            default="false",
+            actor=ctx.actor,
+            key="autopilot_enabled",
+        ),
+'''
+          if source.count(setting_old) != 1:
+              raise SystemExit(f'unexpected_setting_count:{source.count(setting_old)}')
+          source = source.replace(setting_old, setting_new, 1)
+
+          audit_old = '        asyncio.to_thread(admin_ops.recent_audit_events, actor=ctx.actor, limit=12),\n'
+          audit_new = '''        _optional_thread(
+            admin_ops.recent_audit_events,
+            default=[],
+            actor=ctx.actor,
+            limit=12,
+        ),
+'''
+          if source.count(audit_old) != 1:
+              raise SystemExit(f'unexpected_audit_count:{source.count(audit_old)}')
+          source = source.replace(audit_old, audit_new, 1)
+
+          alerts_old = '''    alerts = await asyncio.to_thread(
+        admin_ops.refresh_interaction_alerts,
+        actor=ctx.actor,
+        route_redundant=route.egress_redundant,
+    )
+'''
+          alerts_new = '''    alerts = await _optional_thread(
+        admin_ops.refresh_interaction_alerts,
+        default=[],
+        actor=ctx.actor,
+        route_redundant=route.egress_redundant,
+    )
+'''
+          if source.count(alerts_old) != 1:
+              raise SystemExit(f'unexpected_alert_refresh_count:{source.count(alerts_old)}')
+          source = source.replace(alerts_old, alerts_new, 1)
+
+          subscription_old = '        asyncio.to_thread(admin_ops.get_subscription_state, actor=ctx.actor),\n'
+          subscription_new = '''        _optional_thread(
+            admin_ops.get_subscription_state,
+            default=admin_ops.SubscriptionState(
+                business_id=ctx.business_id,
+                plan_key="not_configured",
+                status="inactive",
+                included_staff=0,
+                included_customers=0,
+                started_at="не активирован",
+                renews_at=None,
+                updated_at="не активирован",
+            ),
+            actor=ctx.actor,
+        ),
+'''
+          if source.count(subscription_old) != 1:
+              raise SystemExit(f'unexpected_subscription_count:{source.count(subscription_old)}')
+          source = source.replace(subscription_old, subscription_new, 1)
+
+          path.write_text(source, encoding='utf-8')
+          PY
+          python -m py_compile handlers/clientplatform_admin_extension.py
+          rm -f .github/workflows/patch-clientplatform-optional-analytics.yml
+
+      - name: Commit exact patch
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --quiet && exit 0
+          git commit -m 'Make ClientPlatform optional analytics fail-soft'
+          git push origin "HEAD:${GITHUB_HEAD_REF}"
