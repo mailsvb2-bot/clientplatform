@@ -1,0 +1,90 @@
+name: Patch ClientPlatform Offering Snapshot
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - '.github/workflows/patch-clientplatform-offering-snapshot.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout exact pull-request head
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+
+      - name: Make offering snapshot tolerant and fail-soft
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('handlers/clientplatform_admin_extension.py')
+          source = path.read_text(encoding='utf-8')
+          old = (
+              'async def _all_offerings(actor: Any, capabilities: list[Any]) -> list[Any]:\n'
+              '    active = [\n'
+              '        item\n'
+              '        for item in capabilities\n'
+              '        if item.status == CapabilityStatus.ACTIVE\n'
+              '    ]\n'
+              '    groups = await asyncio.gather(\n'
+              '        *[\n'
+              '            asyncio.to_thread(\n'
+              '                list_business_offerings,\n'
+              '                actor=actor,\n'
+              '                capability_id=item.id,\n'
+              '            )\n'
+              '            for item in active\n'
+              '        ]\n'
+              '    )\n'
+              '    return [offering for group in groups for offering in group]\n'
+          )
+          new = (
+              'async def _all_offerings(actor: Any, capabilities: list[Any]) -> list[Any]:\n'
+              '    active_ids = [\n'
+              '        item.id\n'
+              '        for item in capabilities\n'
+              '        if item.status == CapabilityStatus.ACTIVE\n'
+              '        and getattr(item, "id", None) is not None\n'
+              '    ]\n'
+              '    groups = await asyncio.gather(\n'
+              '        *[\n'
+              '            _optional_thread(\n'
+              '                list_business_offerings,\n'
+              '                default=[],\n'
+              '                actor=actor,\n'
+              '                capability_id=capability_id,\n'
+              '            )\n'
+              '            for capability_id in active_ids\n'
+              '        ]\n'
+              '    )\n'
+              '    return [offering for group in groups for offering in group]\n'
+          )
+          if source.count(old) != 1:
+              raise SystemExit(f'unexpected_offering_snapshot_count:{source.count(old)}')
+          path.write_text(source.replace(old, new, 1), encoding='utf-8')
+          PY
+          python -m py_compile handlers/clientplatform_admin_extension.py
+          rm -f .github/workflows/patch-clientplatform-offering-snapshot.yml
+
+      - name: Commit exact patch
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --quiet && exit 0
+          git commit -m 'Make ClientPlatform offering snapshot fail-soft'
+          git push origin "HEAD:${GITHUB_HEAD_REF}"
