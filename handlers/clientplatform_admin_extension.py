@@ -177,19 +177,21 @@ def _status_icon(value: bool) -> str:
 
 
 async def _all_offerings(actor: Any, capabilities: list[Any]) -> list[Any]:
-    active = [
-        item
+    active_ids = [
+        item.id
         for item in capabilities
         if item.status == CapabilityStatus.ACTIVE
+        and getattr(item, "id", None) is not None
     ]
     groups = await asyncio.gather(
         *[
-            asyncio.to_thread(
+            _optional_thread(
                 list_business_offerings,
+                default=[],
                 actor=actor,
-                capability_id=item.id,
+                capability_id=capability_id,
             )
-            for item in active
+            for capability_id in active_ids
         ]
     )
     return [offering for group in groups for offering in group]
