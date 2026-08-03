@@ -59,6 +59,34 @@ _TRACE: contextvars.ContextVar[_InteractionTrace | None] = contextvars.ContextVa
 )
 _INSTALLED = False
 
+_EMPTY_INSIGHTS = admin_ops.AdminInsightSnapshot(
+    active_customers=0,
+    active_offerings=0,
+    active_invites=0,
+    claimed_invites=0,
+    enrollments=0,
+    completed_enrollments=0,
+    publication_drafts=0,
+    publications_published=0,
+    paid_payments=0,
+    paid_amount_minor=0,
+    payment_currency="RUB",
+    priced_offerings=0,
+    active_staff=0,
+)
+_EMPTY_INTERACTION = admin_ops.InteractionSnapshot(
+    count=0,
+    successes=0,
+    failures=0,
+    p50_ms=0,
+    p95_ms=0,
+    max_ms=0,
+    ack_p95_ms=0,
+    lock_p95_ms=0,
+    telegram_p95_ms=0,
+    window_minutes=60,
+)
+
 
 async def _optional_thread(
     function: Callable[..., Any],
@@ -221,7 +249,11 @@ async def _enhanced_marketing(
         autopilot_value,
     ) = await asyncio.gather(
         admin._base_snapshot(ctx),
-        asyncio.to_thread(admin_ops.business_admin_insights, actor=ctx.actor),
+        _optional_thread(
+            admin_ops.business_admin_insights,
+            default=_EMPTY_INSIGHTS,
+            actor=ctx.actor,
+        ),
         _optional_thread(
             admin_ops.list_payments,
             default=[],
@@ -239,16 +271,17 @@ async def _enhanced_marketing(
             default=[],
             actor=ctx.actor,
         ),
-        asyncio.to_thread(
+        _optional_thread(
             admin_ops.interaction_snapshot,
+            default=_EMPTY_INTERACTION,
             actor=ctx.actor,
             window_minutes=60,
         ),
-        asyncio.to_thread(
+        _optional_thread(
             admin_ops.get_admin_setting,
+            default="false",
             actor=ctx.actor,
             key="autopilot_enabled",
-            default="false",
         ),
     )
     profile, summary, capabilities, slots, customers, programs, progress = base_snapshot
@@ -459,24 +492,35 @@ async def _enhanced_admin_report(
         audit,
     ) = await asyncio.gather(
         admin._base_snapshot(ctx),
-        asyncio.to_thread(admin_ops.business_admin_insights, actor=ctx.actor),
+        _optional_thread(
+            admin_ops.business_admin_insights,
+            default=_EMPTY_INSIGHTS,
+            actor=ctx.actor,
+        ),
         _optional_thread(
             admin_ops.list_payments,
             default=[],
             actor=ctx.actor,
             limit=20,
         ),
-        asyncio.to_thread(
+        _optional_thread(
             admin_ops.interaction_snapshot,
+            default=_EMPTY_INTERACTION,
             actor=ctx.actor,
             window_minutes=60,
         ),
-        asyncio.to_thread(admin_ops.recent_audit_events, actor=ctx.actor, limit=12),
+        _optional_thread(
+            admin_ops.recent_audit_events,
+            default=[],
+            actor=ctx.actor,
+            limit=12,
+        ),
     )
     profile, summary, capabilities, slots, customers, programs, progress = base_snapshot
     route = telegram_egress_snapshot()
-    alerts = await asyncio.to_thread(
+    alerts = await _optional_thread(
         admin_ops.refresh_interaction_alerts,
+        default=[],
         actor=ctx.actor,
         route_redundant=route.egress_redundant,
     )
@@ -595,8 +639,25 @@ async def _enhanced_tariff(
 ) -> None:
     admin = importlib.import_module(".clientplatform_admin", __package__)
     subscription, insights = await asyncio.gather(
-        asyncio.to_thread(admin_ops.get_subscription_state, actor=ctx.actor),
-        asyncio.to_thread(admin_ops.business_admin_insights, actor=ctx.actor),
+        _optional_thread(
+            admin_ops.get_subscription_state,
+            default=admin_ops.SubscriptionState(
+                business_id=ctx.business_id,
+                plan_key="not_configured",
+                status="inactive",
+                included_staff=0,
+                included_customers=0,
+                started_at="не активирован",
+                renews_at=None,
+                updated_at="не активирован",
+            ),
+            actor=ctx.actor,
+        ),
+        _optional_thread(
+            admin_ops.business_admin_insights,
+            default=_EMPTY_INSIGHTS,
+            actor=ctx.actor,
+        ),
     )
     text = (
         "💳 Тариф ClientPlatform\n\n"
