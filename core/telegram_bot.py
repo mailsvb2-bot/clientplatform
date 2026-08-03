@@ -1,16 +1,21 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
+import math
 import os
 import socket
 import time
+from collections import deque
 from typing import Any
 from urllib.parse import urlsplit
 
 from aiohttp import ClientSession
+from aiohttp.abc import AbstractResolver, ResolveResult
 from aiohttp.hdrs import USER_AGENT
 from aiohttp.http import SERVER_SOFTWARE
+from aiohttp.resolver import ThreadedResolver
 from aiogram import Bot
 from aiogram.__meta__ import __version__
 from aiogram.client.session.aiohttp import AiohttpSession
@@ -25,6 +30,13 @@ _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 _FALSE_VALUES = frozenset({"0", "false", "no", "off"})
 _POLLING_METHOD = "getupdates"
 _CALLBACK_METHOD = "answercallbackquery"
+_TELEGRAM_API_HOST = "api.telegram.org"
+_ROUTE_POOL_ENV_NAMES = (
+    "CLIENTPLATFORM_TELEGRAM_API_IPV4_POOL",
+    "TELEGRAM_API_IPV4_POOL",
+    "CLIENTPLATFORM_TELEGRAM_API_IPV4",
+)
+_LATENCY_SAMPLE_LIMIT = 256
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -54,13 +66,95 @@ def telegram_ip_family() -> int:
     return socket.AF_INET
 
 
-def telegram_connector_options() -> dict[str, Any]:
-    """Build a short-lived keep-alive connector policy for Telegram.
+def telegram_route_pool() -> tuple[str, ...]:
+    """Return a validated, ordered and duplicate-free Telegram IPv4 pool."""
 
-    Several buttons pressed in one session reuse TCP/TLS, while idle connections
-    expire quickly. A real network failure still closes the whole connector and
-    increments its generation before retrying.
-    """
+    raw_values: list[str] = []
+    for name in _ROUTE_POOL_ENV_NAMES:
+        raw = (os.getenv(name) or "").strip()
+        if raw:
+            raw_values.extend(raw.replace(";", ",").split(","))
+
+    routes: list[str] = []
+    seen: set[str] = set()
+    for raw in raw_values:
+        candidate = raw.strip()
+        if not candidate:
+            continue
+        try:
+            normalized = str(ipaddress.IPv4Address(candidate))
+        except ipaddress.AddressValueError:
+            log.warning("Ignoring invalid Telegram route address from environment")
+            continue
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        routes.append(normalized)
+    return tuple(routes)
+
+
+class TelegramRouteResolver(AbstractResolver):
+    """Resolve api.telegram.org through an independently rotatable IPv4 pool."""
+
+    def __init__(
+        self,
+        routes: tuple[str, ...],
+        *,
+        start_index: int = 0,
+    ) -> None:
+        self._routes = routes
+        self._index = start_index % len(routes) if routes else 0
+        self._fallback = ThreadedResolver()
+
+    @property
+    def routes(self) -> tuple[str, ...]:
+        return self._routes
+
+    @property
+    def active_route(self) -> str | None:
+        if not self._routes:
+            return None
+        return self._routes[self._index]
+
+    @property
+    def route_count(self) -> int:
+        return len(self._routes)
+
+    def rotate(self) -> bool:
+        if len(self._routes) < 2:
+            return False
+        self._index = (self._index + 1) % len(self._routes)
+        return True
+
+    async def resolve(
+        self,
+        host: str,
+        port: int = 0,
+        family: socket.AddressFamily = socket.AF_INET,
+    ) -> list[ResolveResult]:
+        route = self.active_route
+        if host.casefold() != _TELEGRAM_API_HOST or route is None:
+            return await self._fallback.resolve(host, port, family)
+        return [
+            ResolveResult(
+                hostname=host,
+                host=route,
+                port=port,
+                family=socket.AF_INET,
+                proto=socket.IPPROTO_TCP,
+                flags=0,
+            )
+        ]
+
+    async def close(self) -> None:
+        await self._fallback.close()
+
+
+def telegram_connector_options(
+    *,
+    resolver: AbstractResolver | None = None,
+) -> dict[str, Any]:
+    """Build a short-lived keep-alive connector policy for Telegram."""
 
     force_close = _env_bool("TELEGRAM_FORCE_CLOSE", False)
     options: dict[str, Any] = {
@@ -80,6 +174,8 @@ def telegram_connector_options() -> dict[str, Any]:
         ),
         "enable_cleanup_closed": True,
     }
+    if resolver is not None:
+        options["resolver"] = resolver
     if not force_close:
         options["keepalive_timeout"] = env_float(
             "TELEGRAM_KEEPALIVE_TIMEOUT_SEC",
@@ -114,7 +210,7 @@ def _native_http_proxy(proxy: Any) -> str | None:
 
 
 class PollingAiohttpSession(AiohttpSession):
-    """Aiohttp transport hardened for responsive polling and UI calls."""
+    """One independently resettable Telegram transport lane."""
 
     _session: ClientSession | None
     _should_reset_connector: bool
@@ -124,6 +220,9 @@ class PollingAiohttpSession(AiohttpSession):
         *,
         proxy: str | None = None,
         limit: int = 100,
+        route_role: str = "ui",
+        route_offset: int = 0,
+        route_pool: tuple[str, ...] | None = None,
         **kwargs: Any,
     ) -> None:
         native_http_proxy = _native_http_proxy(proxy)
@@ -132,14 +231,28 @@ class PollingAiohttpSession(AiohttpSession):
             limit=limit,
             **kwargs,
         )
-        self._connector_init.update(telegram_connector_options())
+        routes = telegram_route_pool() if route_pool is None else route_pool
+        self._route_resolver = (
+            TelegramRouteResolver(routes, start_index=route_offset)
+            if routes and proxy is None
+            else None
+        )
+        self._connector_init.update(
+            telegram_connector_options(resolver=self._route_resolver)
+        )
         self._native_http_proxy = native_http_proxy
         self._transport_generation = 0
         self._transport_reset_lock = asyncio.Lock()
+        self._transport_role = route_role
+        self._companion_sessions: list[PollingAiohttpSession] = []
 
     @property
     def transport_generation(self) -> int:
         return self._transport_generation
+
+    @property
+    def transport_role(self) -> str:
+        return self._transport_role
 
     @property
     def connector_options(self) -> dict[str, Any]:
@@ -153,12 +266,32 @@ class PollingAiohttpSession(AiohttpSession):
             return "connector_proxy"
         return "direct"
 
+    @property
+    def active_route(self) -> str:
+        route = (
+            self._route_resolver.active_route
+            if self._route_resolver is not None
+            else None
+        )
+        return route or "system"
+
+    @property
+    def route_count(self) -> int:
+        if self._route_resolver is None:
+            return 0
+        return self._route_resolver.route_count
+
+    def attach_companion(self, session: PollingAiohttpSession) -> None:
+        if session is self or session in self._companion_sessions:
+            return
+        self._companion_sessions.append(session)
+
     async def create_session(self) -> ClientSession:
         if self._native_http_proxy is None:
             return await super().create_session()
 
         if self._should_reset_connector:
-            await self.close()
+            await super().close()
         if self._session is None or self._session.closed:
             self._session = ClientSession(
                 connector=self._connector_type(**self._connector_init),
@@ -174,8 +307,9 @@ class PollingAiohttpSession(AiohttpSession):
         self,
         *,
         observed_generation: int | None = None,
+        rotate_route: bool = True,
     ) -> bool:
-        """Close one failed connector generation exactly once."""
+        """Close one failed connector generation and rotate its route once."""
 
         async with self._transport_reset_lock:
             if (
@@ -183,19 +317,33 @@ class PollingAiohttpSession(AiohttpSession):
                 and observed_generation != self._transport_generation
             ):
                 return False
+            previous_route = self.active_route
+            rotated = False
+            if rotate_route and self._route_resolver is not None:
+                rotated = self._route_resolver.rotate()
             await super().close()
             self._should_reset_connector = True
             self._transport_generation += 1
+            log.warning(
+                "Telegram transport reset role=%s generation=%s route=%s next_route=%s rotated=%s",
+                self._transport_role,
+                self._transport_generation,
+                previous_route,
+                self.active_route,
+                rotated,
+            )
             return True
+
+    async def close(self) -> None:
+        companions = tuple(self._companion_sessions)
+        self._companion_sessions.clear()
+        await super().close()
+        for companion in companions:
+            await companion.close()
 
 
 class ResilientBot(Bot):
-    """Method-aware Bot API retry policy.
-
-    Legacy attributes stay available to diagnostics, but they no longer control
-    interactive latency. UI, callback acknowledgement and long polling have
-    separate bounded policies.
-    """
+    """Method-aware Bot API policy with isolated polling and UI transports."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         legacy_timeout = env_float(
@@ -219,13 +367,13 @@ class ResilientBot(Bot):
 
         self._ui_request_timeout = env_float(
             "TELEGRAM_UI_REQUEST_TIMEOUT_SEC",
-            3.0,
+            2.0,
             minimum=0.5,
             maximum=20.0,
         )
         self._callback_request_timeout = env_float(
             "TELEGRAM_CALLBACK_TIMEOUT_SEC",
-            1.0,
+            0.75,
             minimum=0.25,
             maximum=5.0,
         )
@@ -236,15 +384,33 @@ class ResilientBot(Bot):
             maximum=120.0,
         )
 
-        if kwargs.get("session") is None:
+        supplied_session = kwargs.get("session")
+        polling_session: PollingAiohttpSession | Any
+        if supplied_session is None:
             proxy = (os.getenv("TELEGRAM_PROXY_URL") or "").strip() or None
-            kwargs["session"] = PollingAiohttpSession(
+            routes = telegram_route_pool()
+            ui_session = PollingAiohttpSession(
                 proxy=proxy,
                 timeout=self._ui_request_timeout,
+                route_role="ui",
+                route_offset=0,
+                route_pool=routes,
             )
-        super().__init__(*args, **kwargs)
+            polling_session = PollingAiohttpSession(
+                proxy=proxy,
+                timeout=self._polling_request_timeout,
+                route_role="polling",
+                route_offset=1 if len(routes) > 1 else 0,
+                route_pool=routes,
+            )
+            ui_session.attach_companion(polling_session)
+            kwargs["session"] = ui_session
+        else:
+            polling_session = supplied_session
 
-        # Keep the historical diagnostics contract without slowing new UI calls.
+        super().__init__(*args, **kwargs)
+        self._polling_session = polling_session
+
         self._request_timeout = legacy_timeout
         self._network_retries = legacy_retries
         self._network_retry_delay = legacy_retry_delay
@@ -258,13 +424,19 @@ class ResilientBot(Bot):
             "",
         )
         ui_retries_default = legacy_retries if old_retries_explicit else 1
-        ui_retry_delay_default = legacy_retry_delay if old_delay_explicit else 0.15
+        ui_retry_delay_default = legacy_retry_delay if old_delay_explicit else 0.1
 
         self._ui_network_retries = env_int(
             "TELEGRAM_UI_NETWORK_RETRIES",
             ui_retries_default,
             minimum=0,
             maximum=3,
+        )
+        self._callback_network_retries = env_int(
+            "TELEGRAM_CALLBACK_NETWORK_RETRIES",
+            1,
+            minimum=0,
+            maximum=1,
         )
         self._polling_network_retries = env_int(
             "TELEGRAM_POLLING_NETWORK_RETRIES",
@@ -277,6 +449,12 @@ class ResilientBot(Bot):
             ui_retry_delay_default,
             minimum=0.0,
             maximum=5.0,
+        )
+        self._callback_network_retry_delay = env_float(
+            "TELEGRAM_CALLBACK_NETWORK_RETRY_DELAY_SEC",
+            0.0,
+            minimum=0.0,
+            maximum=1.0,
         )
         self._polling_network_retry_delay = env_float(
             "TELEGRAM_POLLING_NETWORK_RETRY_DELAY_SEC",
@@ -296,6 +474,13 @@ class ResilientBot(Bot):
             minimum=0.1,
             maximum=30.0,
         )
+        self._latency_samples: deque[dict[str, Any]] = deque(
+            maxlen=_LATENCY_SAMPLE_LIMIT
+        )
+
+    @property
+    def polling_session(self) -> Any:
+        return self._polling_session
 
     def request_policy(
         self,
@@ -316,7 +501,7 @@ class ResilientBot(Bot):
                 if request_timeout is not None
                 else self._callback_request_timeout
             )
-            return timeout, 0, "callback"
+            return timeout, self._callback_network_retries, "callback"
         timeout = (
             request_timeout
             if request_timeout is not None
@@ -325,27 +510,66 @@ class ResilientBot(Bot):
         return timeout, self._ui_network_retries, "ui"
 
     def retry_delay(self, policy_name: str, attempt: int) -> float:
-        base = (
-            self._polling_network_retry_delay
-            if policy_name == "polling"
-            else self._ui_network_retry_delay
-        )
+        if policy_name == "polling":
+            base = self._polling_network_retry_delay
+        elif policy_name == "callback":
+            base = self._callback_network_retry_delay
+        else:
+            base = self._ui_network_retry_delay
         return min(base * (2**attempt), self._network_retry_max_delay)
 
-    async def _reset_failed_transport(self, observed_generation: int | None) -> None:
-        session = self.session
+    def session_for_policy(self, policy_name: str) -> Any:
+        if policy_name == "polling":
+            return self._polling_session
+        return self.session
+
+    async def _reset_failed_transport(
+        self,
+        session: Any,
+        observed_generation: int | None,
+    ) -> None:
         reset_transport = getattr(session, "reset_transport", None)
         try:
             if callable(reset_transport):
-                await reset_transport(observed_generation=observed_generation)
+                await reset_transport(
+                    observed_generation=observed_generation,
+                    rotate_route=True,
+                )
             else:
                 await session.close()
-        except RuntimeError:
+        except (RuntimeError, OSError, AttributeError):
             log.warning("Telegram transport reset failed", exc_info=True)
-        except OSError:
-            log.warning("Telegram transport reset failed", exc_info=True)
-        except AttributeError:
-            log.warning("Telegram transport reset failed", exc_info=True)
+
+    def latency_snapshot(self, *, policy: str | None = None) -> dict[str, Any]:
+        samples = [
+            sample
+            for sample in self._latency_samples
+            if policy is None or sample["policy"] == policy
+        ]
+        elapsed = sorted(float(sample["elapsed_ms"]) for sample in samples)
+        if not elapsed:
+            return {
+                "count": 0,
+                "successes": 0,
+                "failures": 0,
+                "p50_ms": 0.0,
+                "p95_ms": 0.0,
+                "max_ms": 0.0,
+            }
+
+        def percentile(fraction: float) -> float:
+            index = max(0, math.ceil(len(elapsed) * fraction) - 1)
+            return round(elapsed[index], 1)
+
+        successes = sum(1 for sample in samples if sample["success"])
+        return {
+            "count": len(samples),
+            "successes": successes,
+            "failures": len(samples) - successes,
+            "p50_ms": percentile(0.50),
+            "p95_ms": percentile(0.95),
+            "max_ms": round(elapsed[-1], 1),
+        }
 
     async def __call__(self, method: Any, request_timeout: Any = None) -> Any:
         method_name = str(
@@ -355,44 +579,83 @@ class ResilientBot(Bot):
             method_name,
             request_timeout,
         )
+        session = self.session_for_policy(policy_name)
         last_exc: Exception | None = None
         started = time.monotonic()
+        success = False
 
         try:
             for attempt in range(retry_limit + 1):
                 observed_generation = getattr(
-                    self.session,
+                    session,
                     "transport_generation",
                     None,
                 )
                 try:
-                    return await super().__call__(method, request_timeout=timeout)
+                    if policy_name == "polling" and session is not self.session:
+                        result = await session(self, method, timeout=timeout)
+                    else:
+                        result = await super().__call__(
+                            method,
+                            request_timeout=timeout,
+                        )
+                    success = True
+                    return result
                 except (TelegramNetworkError, asyncio.TimeoutError) as exc:
                     last_exc = exc
-                    await self._reset_failed_transport(observed_generation)
+                    await self._reset_failed_transport(
+                        session,
+                        observed_generation,
+                    )
                     if attempt >= retry_limit:
                         raise
                     delay = self.retry_delay(policy_name, attempt)
                     log.warning(
-                        "Telegram network request failed; transport reset and retry scheduled",
+                        "Telegram network request failed; route failover and retry scheduled",
                         extra={
                             "telegram_method": method_name,
                             "telegram_policy": policy_name,
+                            "telegram_transport_role": getattr(
+                                session,
+                                "transport_role",
+                                policy_name,
+                            ),
+                            "telegram_route": getattr(
+                                session,
+                                "active_route",
+                                "unknown",
+                            ),
                             "retry_attempt": attempt + 1,
                             "retry_limit": retry_limit,
                             "retry_delay_sec": delay,
                         },
                     )
-                    await asyncio.sleep(delay)
+                    if delay > 0:
+                        await asyncio.sleep(delay)
         finally:
             elapsed = time.monotonic() - started
-            if policy_name != "polling" and elapsed >= self._slow_ui_warning_seconds:
-                log.warning(
-                    "Slow Telegram UI request method=%s policy=%s elapsed_ms=%.1f",
-                    method_name,
-                    policy_name,
-                    elapsed * 1000.0,
+            route = getattr(session, "active_route", "unknown")
+            generation = getattr(session, "transport_generation", None)
+            if policy_name != "polling":
+                self._latency_samples.append(
+                    {
+                        "method": method_name,
+                        "policy": policy_name,
+                        "elapsed_ms": round(elapsed * 1000.0, 1),
+                        "success": success,
+                        "route": route,
+                        "generation": generation,
+                    }
                 )
+                if elapsed >= self._slow_ui_warning_seconds:
+                    log.warning(
+                        "Slow Telegram UI request method=%s policy=%s elapsed_ms=%.1f route=%s generation=%s",
+                        method_name,
+                        policy_name,
+                        elapsed * 1000.0,
+                        route,
+                        generation,
+                    )
 
         if last_exc is not None:
             raise last_exc
@@ -406,7 +669,9 @@ def build_bot(token: str) -> ResilientBot:
 __all__ = [
     "PollingAiohttpSession",
     "ResilientBot",
+    "TelegramRouteResolver",
     "build_bot",
     "telegram_connector_options",
     "telegram_ip_family",
+    "telegram_route_pool",
 ]
