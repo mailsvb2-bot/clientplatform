@@ -537,7 +537,11 @@ class ResilientBot(Bot):
                 )
             else:
                 await session.close()
-        except (RuntimeError, OSError, AttributeError):
+        except RuntimeError:
+            log.warning("Telegram transport reset failed", exc_info=True)
+        except OSError:
+            log.warning("Telegram transport reset failed", exc_info=True)
+        except AttributeError:
             log.warning("Telegram transport reset failed", exc_info=True)
 
     def latency_snapshot(self, *, policy: str | None = None) -> dict[str, Any]:
