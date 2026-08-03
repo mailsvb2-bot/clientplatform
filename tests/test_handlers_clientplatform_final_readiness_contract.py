@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
+from clientplatform.domain.activity import CapabilityStatus
 from clientplatform.domain.tenancy import TenantAccessDenied
 from clientplatform.runtime import admin_observability
 from core import telegram_multi_egress
@@ -29,6 +32,12 @@ async def test_optional_thread_can_forward_function_default_explicitly() -> None
         forward_default=True,
     )
     assert result == "false"
+
+
+@pytest.mark.asyncio
+async def test_offering_snapshot_skips_active_capability_without_id() -> None:
+    capabilities = [SimpleNamespace(status=CapabilityStatus.ACTIVE)]
+    assert await extension._all_offerings(object(), capabilities) == []
 
 
 def test_telegram_polling_readiness_is_explicitly_opt_in(
