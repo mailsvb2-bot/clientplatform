@@ -12,6 +12,7 @@ from clientplatform.application.admin_ops import (
 )
 from clientplatform.domain.tenancy import PlatformRole, TenantContext
 from core.runtime_env import env_float, env_int
+from core.task_manager import TaskManager
 from core.telegram_multi_egress import (
     telegram_egress_snapshot,
     telegram_readiness_required,
@@ -32,6 +33,7 @@ class AdminObservabilitySnapshot:
     monitored_businesses: int
 
 
+_task_manager = TaskManager()
 _task: asyncio.Task[None] | None = None
 _last_tick_monotonic: float | None = None
 _last_error = ""
@@ -144,7 +146,7 @@ async def start_admin_observability(_bot: Any) -> None:
     global _task
     if _task is not None and not _task.done():
         return
-    _task = asyncio.create_task(
+    _task = _task_manager.create(
         _monitor_loop(),
         name="clientplatform-admin-observability",
     )
