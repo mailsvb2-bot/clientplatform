@@ -36,6 +36,8 @@ class TelegramPollingTransportContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(options["limit_per_host"], 20)
         self.assertTrue(options["enable_cleanup_closed"])
         self.assertEqual(session.proxy_mode, "direct")
+        self.assertEqual(session.active_route, "system")
+        self.assertEqual(session.route_count, 0)
         await session.close()
 
     async def test_connector_policy_remains_explicitly_configurable(self) -> None:
@@ -119,8 +121,56 @@ class TelegramPollingTransportContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(synthetic_password, repr(bot.session.connector_options))
         await bot.session.close()
 
+    async def test_build_bot_isolates_ui_and_polling_routes(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "CLIENTPLATFORM_TELEGRAM_API_IPV4_POOL": (
+                    "149.154.167.220,149.154.167.221"
+                )
+            },
+            clear=True,
+        ):
+            bot = build_bot(_TEST_TOKEN)
+
+        self.assertIsInstance(bot.session, PollingAiohttpSession)
+        self.assertIsInstance(bot.polling_session, PollingAiohttpSession)
+        self.assertIsNot(bot.session, bot.polling_session)
+        self.assertEqual(bot.session.transport_role, "ui")
+        self.assertEqual(bot.polling_session.transport_role, "polling")
+        self.assertEqual(bot.session.active_route, "149.154.167.220")
+        self.assertEqual(bot.polling_session.active_route, "149.154.167.221")
+        self.assertEqual(bot.session.route_count, 2)
+        self.assertEqual(bot.polling_session.route_count, 2)
+        await bot.session.close()
+
+    async def test_polling_reset_does_not_reset_or_rotate_ui_lane(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "CLIENTPLATFORM_TELEGRAM_API_IPV4_POOL": (
+                    "149.154.167.220,149.154.167.221"
+                )
+            },
+            clear=True,
+        ):
+            bot = build_bot(_TEST_TOKEN)
+
+        reset = await bot.polling_session.reset_transport(
+            observed_generation=0,
+        )
+
+        self.assertTrue(reset)
+        self.assertEqual(bot.polling_session.transport_generation, 1)
+        self.assertEqual(bot.polling_session.active_route, "149.154.167.220")
+        self.assertEqual(bot.session.transport_generation, 0)
+        self.assertEqual(bot.session.active_route, "149.154.167.220")
+        await bot.session.close()
+
     async def test_transport_generation_prevents_duplicate_concurrent_resets(self) -> None:
-        session = PollingAiohttpSession()
+        session = PollingAiohttpSession(
+            route_pool=("149.154.167.220", "149.154.167.221"),
+        )
 
         first = await session.reset_transport(observed_generation=0)
         duplicate = await session.reset_transport(observed_generation=0)
@@ -128,6 +178,7 @@ class TelegramPollingTransportContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(first)
         self.assertFalse(duplicate)
         self.assertEqual(session.transport_generation, 1)
+        self.assertEqual(session.active_route, "149.154.167.221")
         await session.close()
 
     async def test_network_retry_resets_connector_before_retrying(self) -> None:
@@ -140,6 +191,9 @@ class TelegramPollingTransportContractTests(unittest.IsolatedAsyncioTestCase):
             {
                 "TELEGRAM_NETWORK_RETRIES": "1",
                 "TELEGRAM_NETWORK_RETRY_DELAY_SEC": "1.25",
+                "CLIENTPLATFORM_TELEGRAM_API_IPV4_POOL": (
+                    "149.154.167.220,149.154.167.221"
+                ),
             },
             clear=True,
         ):
@@ -160,6 +214,8 @@ class TelegramPollingTransportContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sleep.await_count, 1)
         self.assertEqual(sleep.await_args.args, (1.25,))
         self.assertEqual(session.transport_generation, 1)
+        self.assertEqual(session.active_route, "149.154.167.221")
+        self.assertEqual(bot.polling_session.transport_generation, 0)
         await session.close()
 
     async def test_retry_limit_still_surfaces_persistent_failure(self) -> None:
@@ -182,6 +238,7 @@ class TelegramPollingTransportContractTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(parent_call.await_count, 2)
         self.assertEqual(bot.session.transport_generation, 2)
+        self.assertEqual(bot.polling_session.transport_generation, 0)
         await bot.session.close()
 
 
