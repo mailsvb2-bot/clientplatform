@@ -12,6 +12,8 @@ from aiogram.types import CallbackQuery, Chat, Message, User
 
 from handlers import clientplatform_interaction_safety as safety
 
+# This suite intentionally uses real aiogram CallbackQuery objects.
+
 
 class FakeState:
     async def get_state(self) -> None:
