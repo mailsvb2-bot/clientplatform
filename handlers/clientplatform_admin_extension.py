@@ -175,7 +175,11 @@ async def _enhanced_attention(
     admin = importlib.import_module(".clientplatform_admin", __package__)
     summary, alerts = await asyncio.gather(
         asyncio.to_thread(admin.business_delivery_summary, actor=ctx.actor),
-        asyncio.to_thread(admin_ops.list_open_alerts, actor=ctx.actor),
+        _optional_thread(
+            admin_ops.list_open_alerts,
+            default=[],
+            actor=ctx.actor,
+        ),
     )
     lines = [
         "⚠️ Требуют внимания",

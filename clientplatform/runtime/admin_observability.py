@@ -11,7 +11,7 @@ from clientplatform.application.admin_ops import (
     refresh_interaction_alerts,
 )
 from clientplatform.domain.tenancy import PlatformRole, TenantContext
-from core.runtime_env import env_float, env_int
+from core.runtime_env import env_bool, env_float, env_int
 from core.task_manager import TaskManager
 from core.telegram_multi_egress import (
     telegram_egress_snapshot,
@@ -245,7 +245,14 @@ def install_health_contract() -> None:
         require_redundancy = telegram_redundancy_required()
         polling_ok = not require_polling or egress.polling_ready
         redundancy_ok = not require_redundancy or egress.egress_redundant
-        monitor_ok = observability.task_running and not observability.last_error
+        require_monitor = env_bool(
+            "CLIENTPLATFORM_REQUIRE_ADMIN_OBSERVABILITY_READY",
+            False,
+        )
+        monitor_running_ok = (
+            observability.task_running and not observability.last_error
+        )
+        monitor_ok = not require_monitor or monitor_running_ok
         payload.update(
             {
                 "clientplatform_telegram_polling_ready": egress.polling_ready,
@@ -254,7 +261,8 @@ def install_health_contract() -> None:
                 "clientplatform_telegram_egress_redundant": egress.egress_redundant,
                 "clientplatform_telegram_redundancy_required": require_redundancy,
                 "clientplatform_telegram_route_pool_size": egress.route_pool_size,
-                "clientplatform_admin_observability_ready": monitor_ok,
+                "clientplatform_admin_observability_ready": monitor_running_ok,
+                "clientplatform_admin_observability_required": require_monitor,
                 "clientplatform_admin_open_alerts": observability.open_alerts,
             }
         )
