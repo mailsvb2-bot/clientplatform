@@ -21,6 +21,8 @@ The inherited Telegram administration surface exposes many correct but advanced 
 
 A Telegram bot cannot silently create an operating-system alarm or open a native file picker without a user gesture and platform permission. ClientPlatform therefore sends an importable calendar file and a Google Calendar action, while Telegram reminders provide the server-side fallback. Cloud links use the provider's public-share flow; a future Mini App with provider OAuth can add a native picker without changing lesson storage contracts.
 
+Provider-native OAuth pickers require separately registered provider applications, protected client credentials, approved callback domains and a validated Telegram Mini App session. Until those deployment prerequisites exist, the safe production path opens the selected cloud provider, accepts its public share link and stores no media bytes in ClientPlatform.
+
 ## Security and economics
 
 - only HTTPS public links are accepted;
