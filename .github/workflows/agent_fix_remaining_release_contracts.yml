@@ -1,0 +1,77 @@
+name: Fix remaining release contracts
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/agent_fix_remaining_release_contracts.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+      - name: Apply exact contract fixes
+        run: |
+          set -Eeuo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace(path: str, old: str, new: str) -> None:
+              file = Path(path)
+              text = file.read_text(encoding='utf-8')
+              if old not in text:
+                  raise SystemExit(f'missing expected text in {path}: {old!r}')
+              file.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          replace(
+              'handlers/clientplatform_program_lesson_editor_composition.py',
+              '"✏️ Заменить или удалить материал"',
+              '"Заменить или удалить материал"',
+          )
+          replace(
+              'handlers/clientplatform_cloud_media.py',
+              'а ClientPlatform сохранит только безопасную ссылку и не расходует место сервера.',
+              'а ClientPlatform сохранит только безопасную ссылку — без расхода места на сервере.',
+          )
+          replace(
+              'tests/test_handlers_clientplatform_simple_experience.py',
+              '    monkeypatch.setattr(simple.asyncio, "to_thread", direct_to_thread)\n',
+              '    monkeypatch.setattr(simple.asyncio, "to_thread", direct_to_thread)\n'
+              '    monkeypatch.setattr(control, "Message", FakeMessage)\n',
+          )
+          replace(
+              'tests/test_clientplatform_control_bot_behavior.py',
+              '    monkeypatch.setattr(\n'
+              '        handlers,\n'
+              '        "list_accessible_businesses",\n'
+              '        lambda **_kwargs: [business_access(business_id, "Семейная практика")],\n'
+              '    )\n'
+              '    dashboard = FakeMessage()\n',
+              '    monkeypatch.setattr(\n'
+              '        handlers,\n'
+              '        "list_accessible_businesses",\n'
+              '        lambda **_kwargs: [business_access(business_id, "Семейная практика")],\n'
+              '    )\n'
+              '    monkeypatch.setattr(handlers, "list_customers", lambda **_kwargs: [])\n'
+              '    monkeypatch.setattr(handlers, "list_programs", lambda **_kwargs: [])\n'
+              '    monkeypatch.setattr(handlers, "list_booking_slots", lambda **_kwargs: [])\n'
+              '    dashboard = FakeMessage()\n',
+          )
+          PY
+          rm -f .github/workflows/agent_fix_remaining_release_contracts.yml
+          python -m compileall -q handlers clientplatform core services tests
+          git diff --check
+          git config user.name 'clientplatform-agent'
+          git config user.email 'clientplatform-agent@users.noreply.github.com'
+          git add -A
+          git commit -m 'Align simple UI and release contracts'
+          git push origin "HEAD:${GITHUB_HEAD_REF}"
