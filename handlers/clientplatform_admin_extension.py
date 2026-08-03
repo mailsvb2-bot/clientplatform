@@ -453,11 +453,18 @@ async def _enhanced_admin_report(
     (
         base_snapshot,
         insights,
+        payments,
         interaction,
         audit,
     ) = await asyncio.gather(
         admin._base_snapshot(ctx),
         asyncio.to_thread(admin_ops.business_admin_insights, actor=ctx.actor),
+        _optional_thread(
+            admin_ops.list_payments,
+            default=[],
+            actor=ctx.actor,
+            limit=20,
+        ),
         asyncio.to_thread(
             admin_ops.interaction_snapshot,
             actor=ctx.actor,
