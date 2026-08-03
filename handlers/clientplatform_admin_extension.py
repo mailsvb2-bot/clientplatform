@@ -24,7 +24,7 @@ from clientplatform.application import admin_ops
 from clientplatform.application.activity import list_business_offerings
 from clientplatform.application.customers import list_customers
 from clientplatform.domain.activity import CapabilityStatus
-from clientplatform.domain.tenancy import TenancyError
+from clientplatform.domain.tenancy import TenantPermissionDenied, TenancyError
 from clientplatform.runtime import admin_observability
 from core.telegram_multi_egress import (
     install_multi_egress_bot,
@@ -730,6 +730,10 @@ async def admin_ops_gate(callback: CallbackQuery, state: FSMContext) -> None:
     )
 
     if action == "autopilot-toggle":
+        if ctx.role not in admin._AUTOMATION_ROLES:
+            raise TenantPermissionDenied(
+                "automation controls are not allowed for this business role"
+            )
         await asyncio.to_thread(admin_ops.toggle_autopilot, actor=ctx.actor)
         await asyncio.to_thread(
             admin_ops.refresh_interaction_alerts,
@@ -1099,12 +1103,15 @@ def _install_trace_hooks(admin: ModuleType, safety: ModuleType) -> None:
         trace = _InteractionTrace(started=time.perf_counter())
         token = _TRACE.set(trace)
         success = False
+        handler_invoked = False
         error_code: str | None = None
 
         async def marked_handler(
             marked_event: TelegramObject,
             marked_data: dict[str, Any],
         ) -> Any:
+            nonlocal handler_invoked
+            handler_invoked = True
             now = time.perf_counter()
             trace.handler_started = now
             anchor = trace.ack_finished or trace.started
@@ -1118,7 +1125,9 @@ def _install_trace_hooks(admin: ModuleType, safety: ModuleType) -> None:
                 event,
                 data,
             )
-            success = True
+            success = handler_invoked
+            if not handler_invoked:
+                error_code = "suppressed_callback"
             return result
         except Exception as exc:  # validator: allow-wide-except
             error_code = type(exc).__name__
