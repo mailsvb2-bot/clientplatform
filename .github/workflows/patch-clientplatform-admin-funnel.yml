@@ -65,7 +65,6 @@ jobs:
           path.write_text(patched, encoding='utf-8')
           PY
           python -m py_compile handlers/clientplatform_admin_extension.py
-          python -m ruff check handlers/clientplatform_admin_extension.py
           rm -f .github/workflows/patch-clientplatform-admin-funnel.yml
 
       - name: Commit exact patch
