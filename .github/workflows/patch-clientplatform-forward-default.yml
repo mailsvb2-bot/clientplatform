@@ -1,0 +1,99 @@
+name: Patch ClientPlatform Forward Default
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - '.github/workflows/patch-clientplatform-forward-default.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout exact pull-request head
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+
+      - name: Forward optional default when explicitly requested
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('handlers/clientplatform_admin_extension.py')
+          source = path.read_text(encoding='utf-8')
+          helper_old = (
+              'async def _optional_thread(\n'
+              '    function: Callable[..., Any],\n'
+              '    *,\n'
+              '    default: Any,\n'
+              '    **kwargs: Any,\n'
+              ') -> Any:\n'
+              '    try:\n'
+              '        return await asyncio.to_thread(function, **kwargs)\n'
+              '    except TenancyError:\n'
+              '        return default\n'
+          )
+          helper_new = (
+              'async def _optional_thread(\n'
+              '    function: Callable[..., Any],\n'
+              '    *,\n'
+              '    default: Any,\n'
+              '    forward_default: bool = False,\n'
+              '    **kwargs: Any,\n'
+              ') -> Any:\n'
+              '    if forward_default:\n'
+              '        kwargs["default"] = default\n'
+              '    try:\n'
+              '        return await asyncio.to_thread(function, **kwargs)\n'
+              '    except TenancyError:\n'
+              '        return default\n'
+          )
+          if source.count(helper_old) != 1:
+              raise SystemExit(f'unexpected_helper_count:{source.count(helper_old)}')
+          source = source.replace(helper_old, helper_new, 1)
+
+          setting_old = (
+              '        _optional_thread(\n'
+              '            admin_ops.get_admin_setting,\n'
+              '            default="false",\n'
+              '            actor=ctx.actor,\n'
+              '            key="autopilot_enabled",\n'
+              '        ),\n'
+          )
+          setting_new = (
+              '        _optional_thread(\n'
+              '            admin_ops.get_admin_setting,\n'
+              '            default="false",\n'
+              '            forward_default=True,\n'
+              '            actor=ctx.actor,\n'
+              '            key="autopilot_enabled",\n'
+              '        ),\n'
+          )
+          if source.count(setting_old) != 1:
+              raise SystemExit(f'unexpected_setting_count:{source.count(setting_old)}')
+          source = source.replace(setting_old, setting_new, 1)
+          path.write_text(source, encoding='utf-8')
+          PY
+          python -m py_compile handlers/clientplatform_admin_extension.py
+          rm -f .github/workflows/patch-clientplatform-forward-default.yml
+
+      - name: Commit exact patch
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --quiet && exit 0
+          git commit -m 'Forward optional default only when requested'
+          git push origin "HEAD:${GITHUB_HEAD_REF}"
