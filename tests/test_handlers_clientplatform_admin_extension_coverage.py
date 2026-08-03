@@ -1,0 +1,552 @@
+from __future__ import annotations
+
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+
+from clientplatform.domain.tenancy import TenancyError
+from handlers import clientplatform_admin_extension as extension
+
+
+class FakeState:
+    def __init__(self, data: dict[str, Any] | None = None) -> None:
+        self.data = dict(data or {})
+        self.current_state: Any = None
+        self.clear_count = 0
+
+    async def clear(self) -> None:
+        self.data.clear()
+        self.current_state = None
+        self.clear_count += 1
+
+    async def update_data(self, **kwargs: Any) -> None:
+        self.data.update(kwargs)
+
+    async def set_state(self, value: Any) -> None:
+        self.current_state = value
+
+    async def get_data(self) -> dict[str, Any]:
+        return dict(self.data)
+
+
+class FakeCallback:
+    def __init__(self, data: str) -> None:
+        self.data = data
+        self.from_user = SimpleNamespace(id=701)
+        self.answers: list[tuple[str | None, bool]] = []
+
+    async def answer(
+        self,
+        text: str | None = None,
+        *,
+        show_alert: bool = False,
+    ) -> None:
+        self.answers.append((text, show_alert))
+
+
+class FakeMessage:
+    def __init__(self, text: str | None) -> None:
+        self.text = text
+        self.from_user = SimpleNamespace(id=701)
+        self.answers: list[str] = []
+
+    async def answer(self, text: str, **_kwargs: Any) -> None:
+        self.answers.append(text)
+
+
+class FakeControl:
+    @staticmethod
+    def _token_uuid(value: str) -> str:
+        if value == "bad":
+            raise ValueError("bad token")
+        return f"uuid:{value}"
+
+    @staticmethod
+    def _uuid_token(value: object) -> str:
+        return f"token:{value}"
+
+    @staticmethod
+    def _user_id(message: FakeMessage) -> int:
+        return int(message.from_user.id)
+
+
+class FakeAdmin:
+    control = FakeControl()
+    _ADMIN_ROLES = {"owner", "admin"}
+
+    def __init__(self, ctx: Any) -> None:
+        self.ctx = ctx
+        self.edits: list[tuple[str, Any]] = []
+        self.panels: list[tuple[int, str]] = []
+
+    async def _load_admin_context(self, **_kwargs: Any) -> Any:
+        return self.ctx
+
+    async def _safe_edit(
+        self,
+        _callback: Any,
+        text: str,
+        reply_markup: Any,
+    ) -> None:
+        self.edits.append((text, reply_markup))
+
+    async def send_admin_panel(
+        self,
+        _message: Any,
+        *,
+        user_id: int,
+        business_id: str,
+    ) -> None:
+        self.panels.append((user_id, business_id))
+
+    @staticmethod
+    def _keyboard(rows: Any) -> Any:
+        return rows
+
+    @staticmethod
+    def _back_keyboard(_ctx: Any, *extra: Any) -> Any:
+        return list(extra)
+
+    @staticmethod
+    def _callback(_ctx: Any, action: str) -> str:
+        return f"cpa:business:{action}"
+
+
+@pytest.fixture
+def ctx() -> Any:
+    return SimpleNamespace(
+        actor=SimpleNamespace(business_id="business-id"),
+        business_id="business-id",
+        business_token="business",
+        business_name="Business",
+        role="owner",
+        user_id=701,
+    )
+
+
+@pytest.fixture
+def fake_admin(monkeypatch: pytest.MonkeyPatch, ctx: Any) -> FakeAdmin:
+    admin = FakeAdmin(ctx)
+    monkeypatch.setattr(extension.importlib, "import_module", lambda *_args: admin)
+    monkeypatch.setattr(
+        extension,
+        "telegram_egress_snapshot",
+        lambda: SimpleNamespace(egress_redundant=True),
+    )
+    return admin
+
+
+def _callback(action: str, *payload: str) -> FakeCallback:
+    tail = ":".join(payload)
+    data = f"cpao:business:{action}"
+    if tail:
+        data += f":{tail}"
+    return FakeCallback(data)
+
+
+def test_amount_and_display_helpers_cover_validation_and_formatting(ctx: Any) -> None:
+    assert extension._parse_amount("3500 RUB консультация") == (
+        350000,
+        "RUB",
+        "консультация",
+    )
+    assert extension._parse_amount("12,345 usd") == (1235, "USD", "")
+    assert extension._parse_amount("99 комментарий") == (
+        9900,
+        "RUB",
+        "комментарий",
+    )
+    assert extension._money(123456, "RUB") == "1 234,56 RUB"
+    assert extension._percent(1, 4) == "25%"
+    assert extension._percent(1, 0) == "0%"
+    assert extension._status_icon(True) == "✅"
+    assert extension._status_icon(False) == "⚠️"
+    assert extension._payment_totals_text([]) == "0,00 RUB"
+
+    payments = [
+        SimpleNamespace(status="paid", currency="RUB", amount_minor=10000),
+        SimpleNamespace(status="paid", currency="RUB", amount_minor=20000),
+        SimpleNamespace(status="failed", currency="RUB", amount_minor=90000),
+        SimpleNamespace(status="paid", currency="USD", amount_minor=500),
+    ]
+    assert extension._payment_totals(payments) == {"RUB": 30000, "USD": 500}
+    assert "300,00 RUB" in extension._payment_totals_text(payments)
+    assert "150,00 RUB" in extension._payment_average_text(payments)
+
+    for value, message in [
+        ("", "Укажите сумму"),
+        ("abc", "Сумма должна быть числом"),
+        ("0", "Сумма должна быть больше нуля"),
+        ("-1", "Сумма должна быть больше нуля"),
+        ("NaN", "Сумма должна быть больше нуля"),
+    ]:
+        with pytest.raises(ValueError, match=message):
+            extension._parse_amount(value)
+
+    assert extension._ops_callback(ctx, "run", "x") == "cpao:business:run:x"
+    with pytest.raises(ValueError, match="exceeds Telegram limit"):
+        extension._ops_callback(ctx, "x" * 80)
+
+
+@pytest.mark.asyncio
+async def test_admin_ops_gate_rejects_malformed_and_unknown(
+    fake_admin: FakeAdmin,
+) -> None:
+    malformed = FakeCallback("cpao:only")
+    await extension.admin_ops_gate(malformed, FakeState())
+    assert malformed.answers == [("Кнопка устарела", True)]
+
+    unknown = _callback("unknown")
+    await extension.admin_ops_gate(unknown, FakeState())
+    assert unknown.answers == [("Действие больше недоступно", True)]
+
+
+@pytest.mark.asyncio
+async def test_admin_ops_gate_autopilot_and_alert_routes(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_admin: FakeAdmin,
+    ctx: Any,
+) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(
+        extension.admin_ops,
+        "toggle_autopilot",
+        lambda **_kwargs: calls.append("toggle"),
+    )
+    monkeypatch.setattr(
+        extension.admin_ops,
+        "refresh_interaction_alerts",
+        lambda **_kwargs: calls.append("refresh") or [],
+    )
+
+    async def marketing(_callback: Any, _state: Any, _ctx: Any, action: str) -> None:
+        calls.append(f"marketing:{action}")
+
+    async def report(_callback: Any, _state: Any, _ctx: Any, action: str) -> None:
+        calls.append(f"report:{action}")
+
+    async def attention(_callback: Any, _state: Any, _ctx: Any) -> None:
+        calls.append("attention")
+
+    monkeypatch.setattr(extension, "_enhanced_marketing", marketing)
+    monkeypatch.setattr(extension, "_enhanced_admin_report", report)
+    monkeypatch.setattr(extension, "_enhanced_attention", attention)
+
+    await extension.admin_ops_gate(_callback("autopilot-toggle"), FakeState())
+    assert calls[:3] == ["toggle", "refresh", "marketing:autopilot"]
+
+    calls.clear()
+    await extension.admin_ops_gate(_callback("alerts-refresh"), FakeState())
+    assert calls == ["refresh", "report:system"]
+
+    calls.clear()
+    ctx.role = "operator"
+    await extension.admin_ops_gate(_callback("alerts-refresh"), FakeState())
+    assert calls == ["refresh", "attention"]
+
+
+@pytest.mark.asyncio
+async def test_admin_ops_gate_publication_flow(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_admin: FakeAdmin,
+) -> None:
+    state = FakeState({"old": "value"})
+    await extension.admin_ops_gate(_callback("publication-new"), state)
+    assert state.clear_count == 1
+    assert state.data["cpao_business_id"] == "business-id"
+    assert "Выберите канал" in fake_admin.edits[-1][0]
+
+    state = FakeState()
+    await extension.admin_ops_gate(
+        _callback("publication-channel", "telegram"),
+        state,
+    )
+    assert state.current_state == extension.ClientPlatformAdminOpsState.publication_title
+    assert state.data["cpao_publication_channel"] == "telegram"
+
+    with pytest.raises(ValueError, match="unsupported publication channel"):
+        await extension.admin_ops_gate(
+            _callback("publication-channel", "email"),
+            FakeState(),
+        )
+
+    published: list[str] = []
+    monkeypatch.setattr(
+        extension.admin_ops,
+        "publish_publication",
+        lambda *, publication_id, **_kwargs: published.append(publication_id),
+    )
+
+    async def marketing(_callback: Any, _state: Any, _ctx: Any, action: str) -> None:
+        published.append(action)
+
+    monkeypatch.setattr(extension, "_enhanced_marketing", marketing)
+    await extension.admin_ops_gate(
+        _callback("publication-publish", "publication"),
+        FakeState(),
+    )
+    assert published == ["uuid:publication", "publications"]
+
+
+@pytest.mark.asyncio
+async def test_admin_ops_gate_payment_and_price_flows(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_admin: FakeAdmin,
+) -> None:
+    customer = SimpleNamespace(id="customer-id", display_name="Иван")
+    monkeypatch.setattr(extension, "list_customers", lambda **_kwargs: [customer])
+
+    state = FakeState()
+    await extension.admin_ops_gate(_callback("payment-new"), state)
+    assert "Выберите клиента" in fake_admin.edits[-1][0]
+    assert state.data["cpao_business_id"] == "business-id"
+
+    state = FakeState()
+    await extension.admin_ops_gate(
+        _callback("payment-customer", "none"),
+        state,
+    )
+    assert state.data["cpao_payment_customer_id"] is None
+    assert state.current_state == extension.ClientPlatformAdminOpsState.payment_value
+
+    state = FakeState()
+    await extension.admin_ops_gate(
+        _callback("payment-customer", "customer"),
+        state,
+    )
+    assert state.data["cpao_payment_customer_id"] == "uuid:customer"
+
+    state = FakeState()
+    await extension.admin_ops_gate(_callback("price-set", "offering"), state)
+    assert state.data["cpao_offering_id"] == "uuid:offering"
+    assert state.current_state == extension.ClientPlatformAdminOpsState.price_value
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("action", "section"),
+    [
+        ("return-publications", "publications"),
+        ("return-payments", "payments"),
+        ("return-prices", "prices"),
+    ],
+)
+async def test_admin_ops_gate_return_routes(
+    action: str,
+    section: str,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_admin: FakeAdmin,
+) -> None:
+    rendered: list[str] = []
+
+    async def marketing(_callback: Any, _state: Any, _ctx: Any, value: str) -> None:
+        rendered.append(value)
+
+    monkeypatch.setattr(extension, "_enhanced_marketing", marketing)
+    state = FakeState({"dirty": True})
+    await extension.admin_ops_gate(_callback(action), state)
+    assert state.clear_count == 1
+    assert rendered == [section]
+
+
+@pytest.mark.asyncio
+async def test_publication_input_handlers_cover_invalid_and_success(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_admin: FakeAdmin,
+    ctx: Any,
+) -> None:
+    state = FakeState()
+    invalid = FakeMessage("/start")
+    await extension.receive_publication_title(invalid, state)
+    assert "обычный заголовок" in invalid.answers[-1]
+
+    title = FakeMessage("Новый заголовок")
+    await extension.receive_publication_title(title, state)
+    assert state.data["cpao_publication_title"] == "Новый заголовок"
+    assert state.current_state == extension.ClientPlatformAdminOpsState.publication_body
+
+    invalid_body = FakeMessage(" ")
+    await extension.receive_publication_body(invalid_body, state)
+    assert "Текст пустой" in invalid_body.answers[-1]
+
+    state.data.update(
+        cpao_publication_channel="vk",
+        cpao_business_id="business-id",
+    )
+    monkeypatch.setattr(extension, "_context_from_state", lambda *_args: None)
+
+    async def context_from_state(*_args: Any) -> Any:
+        return ctx
+
+    monkeypatch.setattr(extension, "_context_from_state", context_from_state)
+    monkeypatch.setattr(
+        extension.admin_ops,
+        "create_publication_draft",
+        lambda **kwargs: SimpleNamespace(title=kwargs["title"]),
+    )
+    body = FakeMessage("Полный текст")
+    await extension.receive_publication_body(body, state)
+    assert body.answers[-1] == "✅ Черновик «Новый заголовок» создан."
+    assert fake_admin.panels == [(701, "business-id")]
+
+
+@pytest.mark.asyncio
+async def test_payment_and_price_input_handlers_cover_invalid_and_success(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_admin: FakeAdmin,
+    ctx: Any,
+) -> None:
+    async def context_from_state(*_args: Any) -> Any:
+        return ctx
+
+    monkeypatch.setattr(extension, "_context_from_state", context_from_state)
+
+    invalid_payment = FakeMessage("bad")
+    await extension.receive_payment_value(invalid_payment, FakeState())
+    assert "Сумма должна быть числом" in invalid_payment.answers[-1]
+
+    monkeypatch.setattr(
+        extension.admin_ops,
+        "record_payment",
+        lambda **kwargs: SimpleNamespace(
+            amount_minor=kwargs["amount_minor"],
+            currency=kwargs["currency"],
+        ),
+    )
+    payment_state = FakeState(
+        {
+            "cpao_business_id": "business-id",
+            "cpao_payment_customer_id": "customer-id",
+        }
+    )
+    payment = FakeMessage("3500 RUB консультация")
+    await extension.receive_payment_value(payment, payment_state)
+    assert "3 500,00 RUB" in payment.answers[-1]
+
+    invalid_price = FakeMessage("0")
+    await extension.receive_price_value(invalid_price, FakeState())
+    assert "больше нуля" in invalid_price.answers[-1]
+
+    monkeypatch.setattr(
+        extension.admin_ops,
+        "set_offering_price",
+        lambda **kwargs: SimpleNamespace(
+            offering_title="Консультация",
+            amount_minor=kwargs["amount_minor"],
+            currency=kwargs["currency"],
+        ),
+    )
+    price_state = FakeState(
+        {
+            "cpao_business_id": "business-id",
+            "cpao_offering_id": "offering-id",
+        }
+    )
+    price = FakeMessage("5000 USD")
+    await extension.receive_price_value(price, price_state)
+    assert "Консультация" in price.answers[-1]
+    assert "5 000,00 USD" in price.answers[-1]
+
+
+@pytest.mark.asyncio
+async def test_record_trace_covers_filters_success_and_fail_soft(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_admin: FakeAdmin,
+) -> None:
+    trace = extension._InteractionTrace(
+        started=0.0,
+        ack_ms=2,
+        lock_wait_ms=3,
+        telegram_ms=5,
+    )
+    invalid = SimpleNamespace(
+        data="other:value",
+        from_user=SimpleNamespace(id=701),
+    )
+    await extension._record_trace(
+        event=invalid,
+        trace=trace,
+        success=True,
+        error_code=None,
+        total_ms=20,
+        data={},
+    )
+
+    bad_token = SimpleNamespace(
+        data="cpa:bad:run",
+        from_user=SimpleNamespace(id=701),
+    )
+    await extension._record_trace(
+        event=bad_token,
+        trace=trace,
+        success=True,
+        error_code=None,
+        total_ms=20,
+        data={},
+    )
+
+    recorded: list[Any] = []
+    monkeypatch.setattr(
+        extension.admin_ops,
+        "record_interaction_metric",
+        lambda metric: recorded.append(metric),
+    )
+    event = SimpleNamespace(
+        data="cpao:business:run",
+        from_user=SimpleNamespace(id=701),
+        bot=None,
+    )
+    bot = SimpleNamespace(
+        session=SimpleNamespace(
+            transport_role="ui",
+            active_route="direct",
+            transport_generation=4,
+        )
+    )
+    await extension._record_trace(
+        event=event,
+        trace=trace,
+        success=True,
+        error_code=None,
+        total_ms=20,
+        data={"bot": bot},
+    )
+    assert len(recorded) == 1
+    assert recorded[0].app_ms == 10
+
+    for exc in [TenancyError("tenant"), ValueError("bad")]:
+        def raise_known(_metric: Any, error: Exception = exc) -> None:
+            raise error
+
+        monkeypatch.setattr(
+            extension.admin_ops,
+            "record_interaction_metric",
+            raise_known,
+        )
+        await extension._record_trace(
+            event=event,
+            trace=trace,
+            success=False,
+            error_code="Failure",
+            total_ms=1,
+            data={},
+        )
+
+    for exc in [RuntimeError("db"), OSError("io")]:
+        def raise_logged(_metric: Any, error: Exception = exc) -> None:
+            raise error
+
+        monkeypatch.setattr(
+            extension.admin_ops,
+            "record_interaction_metric",
+            raise_logged,
+        )
+        await extension._record_trace(
+            event=event,
+            trace=trace,
+            success=False,
+            error_code="Failure",
+            total_ms=1,
+            data={},
+        )
