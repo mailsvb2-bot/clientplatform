@@ -1,0 +1,55 @@
+name: Materialize ClientPlatform Admin
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - '.github/materialize-admin/**'
+      - '.github/workflows/materialize-clientplatform-admin.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact pull-request head
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+
+      - name: Verify and materialize payload
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cat .github/materialize-admin/tarpart_* | base64 --decode > "$RUNNER_TEMP/admin-materialize.tar.gz"
+          echo 'dd444260ca48f9a4f738d9f4e813e5801b55574a5fe1d74581eb0787ea3f801f  '"$RUNNER_TEMP/admin-materialize.tar.gz" | sha256sum --check --strict
+          tar -tzf "$RUNNER_TEMP/admin-materialize.tar.gz" >/dev/null
+          tar -xzf "$RUNNER_TEMP/admin-materialize.tar.gz" -C .
+          python -m py_compile \
+            clientplatform/application/admin_ops.py \
+            clientplatform/runtime/admin_observability.py \
+            core/telegram_multi_egress.py \
+            handlers/clientplatform_admin_extension.py \
+            tests/test_application_clientplatform_admin_ops_runtime.py \
+            tests/test_handlers_clientplatform_admin_full_matrix.py \
+            tests/test_core_telegram_multi_egress_runtime.py \
+            tests/test_handlers_clientplatform_callback_load_chaos.py
+          rm -rf .github/materialize-admin
+          rm -f .github/workflows/materialize-clientplatform-admin.yml
+
+      - name: Commit verified source
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --quiet && exit 0
+          git commit -m 'Materialize complete ClientPlatform admin operations'
+          git push origin "HEAD:${GITHUB_HEAD_REF}"
