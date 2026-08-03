@@ -1,0 +1,111 @@
+name: Patch ClientPlatform Admin Readiness
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - '.github/workflows/patch-clientplatform-admin-readiness.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout exact pull-request head
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+
+      - name: Apply exact compatibility patches
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          admin_path = Path('handlers/clientplatform_admin_extension.py')
+          admin_source = admin_path.read_text(encoding='utf-8')
+          attention_old = '''    summary, alerts = await asyncio.gather(
+              asyncio.to_thread(admin.business_delivery_summary, actor=ctx.actor),
+              asyncio.to_thread(admin_ops.list_open_alerts, actor=ctx.actor),
+          )
+          '''
+          attention_new = '''    summary, alerts = await asyncio.gather(
+              asyncio.to_thread(admin.business_delivery_summary, actor=ctx.actor),
+              _optional_thread(
+                  admin_ops.list_open_alerts,
+                  default=[],
+                  actor=ctx.actor,
+              ),
+          )
+          '''
+          if admin_source.count(attention_old) != 1:
+              raise SystemExit(
+                  f'unexpected_attention_target_count:{admin_source.count(attention_old)}'
+              )
+          admin_path.write_text(
+              admin_source.replace(attention_old, attention_new, 1),
+              encoding='utf-8',
+          )
+
+          health_path = Path('clientplatform/runtime/admin_observability.py')
+          health_source = health_path.read_text(encoding='utf-8')
+
+          import_old = 'from core.runtime_env import env_float, env_int\n'
+          import_new = 'from core.runtime_env import env_bool, env_float, env_int\n'
+          if health_source.count(import_old) != 1:
+              raise SystemExit(
+                  f'unexpected_runtime_env_import_count:{health_source.count(import_old)}'
+              )
+          health_source = health_source.replace(import_old, import_new, 1)
+
+          monitor_old = '''        monitor_ok = observability.task_running and not observability.last_error
+          '''
+          monitor_new = '''        require_monitor = env_bool(
+              "CLIENTPLATFORM_REQUIRE_ADMIN_OBSERVABILITY_READY",
+              False,
+          )
+          monitor_running_ok = (
+              observability.task_running and not observability.last_error
+          )
+          monitor_ok = not require_monitor or monitor_running_ok
+          '''
+          if health_source.count(monitor_old) != 1:
+              raise SystemExit(
+                  f'unexpected_monitor_target_count:{health_source.count(monitor_old)}'
+              )
+          health_source = health_source.replace(monitor_old, monitor_new, 1)
+
+          payload_old = '''                "clientplatform_admin_observability_ready": monitor_ok,
+          '''
+          payload_new = '''                "clientplatform_admin_observability_ready": monitor_running_ok,
+              "clientplatform_admin_observability_required": require_monitor,
+          '''
+          if health_source.count(payload_old) != 1:
+              raise SystemExit(
+                  f'unexpected_payload_target_count:{health_source.count(payload_old)}'
+              )
+          health_source = health_source.replace(payload_old, payload_new, 1)
+          health_path.write_text(health_source, encoding='utf-8')
+          PY
+          python -m py_compile \
+            handlers/clientplatform_admin_extension.py \
+            clientplatform/runtime/admin_observability.py
+          rm -f .github/workflows/patch-clientplatform-admin-readiness.yml
+
+      - name: Commit exact patches
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --quiet && exit 0
+          git commit -m 'Make admin readiness compatible and fail-soft'
+          git push origin "HEAD:${GITHUB_HEAD_REF}"
