@@ -102,13 +102,11 @@ jobs:
           python -m piptools compile \
             --generate-hashes \
             --strip-extras \
-            --upgrade-package aiohttp==3.14.3 \
             --output-file requirements.txt \
             requirements.in
           python -m piptools compile \
             --generate-hashes \
             --strip-extras \
-            --upgrade-package aiohttp==3.14.3 \
             --output-file requirements-dev.txt \
             requirements-dev.in
 
