@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 TenantDisposition = Literal["erase", "retain", "anonymize"]
-CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-07-30.v8"
+CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-08-03.v9"
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +59,39 @@ _POLICIES = (
         table="business_offerings",
         disposition="retain",
         reason="business-owned consultation, service and custom offerings",
+        required=True,
+    ),
+    TenantPrivacyPolicy(
+        table="business_admin_settings",
+        disposition="retain",
+        reason="business-owned administrator configuration and automation settings",
+        required=True,
+    ),
+    TenantPrivacyPolicy(
+        table="business_offering_prices",
+        disposition="retain",
+        reason="business-owned offering prices and commercial configuration",
+        required=True,
+    ),
+    TenantPrivacyPolicy(
+        table="business_publications",
+        disposition="retain",
+        reason="business-owned publication drafts, schedules and delivery state",
+        required=True,
+    ),
+    TenantPrivacyPolicy(
+        table="business_subscription_state",
+        disposition="retain",
+        reason="business subscription plan, limits and renewal state",
+        required=True,
+    ),
+    TenantPrivacyPolicy(
+        table="business_payments",
+        disposition="anonymize",
+        reason=(
+            "business financial ledger retained for accounting while customer linkage "
+            "and free-form personal notes are anonymized"
+        ),
         required=True,
     ),
     TenantPrivacyPolicy(
@@ -146,6 +179,30 @@ _POLICIES = (
         table="delivery_dispatch_outbox",
         disposition="erase",
         reason="provider routing, payload snapshot and customer delivery attempts",
+        required=True,
+    ),
+    TenantPrivacyPolicy(
+        table="clientplatform_admin_alerts",
+        disposition="retain",
+        reason="tenant operational alerts and resolution history without message payloads",
+        required=True,
+    ),
+    TenantPrivacyPolicy(
+        table="clientplatform_admin_audit_events",
+        disposition="anonymize",
+        reason=(
+            "security and administrator action evidence retained while actor identifiers "
+            "and free-form details are anonymized"
+        ),
+        required=True,
+    ),
+    TenantPrivacyPolicy(
+        table="clientplatform_admin_interaction_metrics",
+        disposition="anonymize",
+        reason=(
+            "bounded performance telemetry retained while administrator identifiers, "
+            "callback subjects and error details are anonymized"
+        ),
         required=True,
     ),
 )
