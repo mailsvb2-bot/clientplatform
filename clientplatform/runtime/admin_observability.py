@@ -11,7 +11,7 @@ from clientplatform.application.admin_ops import (
     refresh_interaction_alerts,
 )
 from clientplatform.domain.tenancy import PlatformRole, TenantContext
-from core.runtime_env import env_bool, env_float, env_int
+from core.runtime_env import env_float, env_int
 from core.task_manager import TaskManager
 from core.telegram_multi_egress import (
     telegram_egress_snapshot,
@@ -88,6 +88,18 @@ def _metric_retention_days() -> int:
         14,
         minimum=1,
         maximum=365,
+    )
+
+
+def _monitor_readiness_required() -> bool:
+    return (
+        env_int(
+            "CLIENTPLATFORM_REQUIRE_ADMIN_OBSERVABILITY_READY",
+            0,
+            minimum=0,
+            maximum=1,
+        )
+        == 1
     )
 
 
@@ -245,10 +257,7 @@ def install_health_contract() -> None:
         require_redundancy = telegram_redundancy_required()
         polling_ok = not require_polling or egress.polling_ready
         redundancy_ok = not require_redundancy or egress.egress_redundant
-        require_monitor = env_bool(
-            "CLIENTPLATFORM_REQUIRE_ADMIN_OBSERVABILITY_READY",
-            False,
-        )
+        require_monitor = _monitor_readiness_required()
         monitor_running_ok = (
             observability.task_running and not observability.last_error
         )
