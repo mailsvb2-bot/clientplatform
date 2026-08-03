@@ -92,8 +92,11 @@ async def _optional_thread(
     function: Callable[..., Any],
     *,
     default: Any,
+    forward_default: bool = False,
     **kwargs: Any,
 ) -> Any:
+    if forward_default:
+        kwargs["default"] = default
     try:
         return await asyncio.to_thread(function, **kwargs)
     except TenancyError:
@@ -280,6 +283,7 @@ async def _enhanced_marketing(
         _optional_thread(
             admin_ops.get_admin_setting,
             default="false",
+            forward_default=True,
             actor=ctx.actor,
             key="autopilot_enabled",
         ),
