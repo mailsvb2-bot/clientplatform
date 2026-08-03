@@ -7,6 +7,8 @@ from clientplatform.runtime import admin_observability
 from core import telegram_multi_egress
 from handlers import clientplatform_admin_extension as extension
 
+# These contracts protect the release gate from test-order-dependent runtime state.
+
 
 @pytest.mark.asyncio
 async def test_optional_tenant_read_is_fail_soft_for_missing_membership() -> None:
