@@ -24,10 +24,7 @@ from clientplatform.application import admin_ops
 from clientplatform.application.activity import list_business_offerings
 from clientplatform.application.customers import list_customers
 from clientplatform.domain.activity import CapabilityStatus
-from clientplatform.domain.tenancy import (
-    TenantPermissionDenied,
-    TenancyError,
-)
+from clientplatform.domain.tenancy import TenancyError
 from clientplatform.runtime import admin_observability
 from core.telegram_multi_egress import (
     install_multi_egress_bot,
@@ -71,7 +68,7 @@ async def _optional_thread(
 ) -> Any:
     try:
         return await asyncio.to_thread(function, **kwargs)
-    except TenantPermissionDenied:
+    except TenancyError:
         return default
 
 

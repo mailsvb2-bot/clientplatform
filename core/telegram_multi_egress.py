@@ -351,7 +351,7 @@ def telegram_egress_snapshot() -> TelegramEgressSnapshot:
 def telegram_readiness_required() -> bool:
     raw = (
         os.getenv("CLIENTPLATFORM_REQUIRE_TELEGRAM_POLLING_READY")
-        or "true"
+        or "false"
     ).strip().lower()
     return raw in {"1", "true", "yes", "on"}
 
