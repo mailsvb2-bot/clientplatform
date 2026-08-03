@@ -6,18 +6,27 @@ on:
       - agent/harden-admin-rbac-and-callback-metrics
     paths:
       - .github/workflows/pr65-one-shot-repair.yml
+  pull_request:
+    types:
+      - reopened
+      - ready_for_review
+      - synchronize
 
 permissions:
   contents: write
 
 jobs:
   repair:
+    if: github.event_name == 'push' || github.event.pull_request.number == 65
     runs-on: ubuntu-22.04
+    env:
+      TARGET_BRANCH: ${{ github.event.pull_request.head.ref || github.ref_name }}
     steps:
-      - name: Checkout
+      - name: Checkout PR head
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           fetch-depth: 0
+          ref: ${{ env.TARGET_BRANCH }}
 
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
@@ -115,4 +124,4 @@ jobs:
             exit 0
           fi
           git commit -m "Repair PR 65 CI and dependency lock"
-          git push origin "HEAD:${GITHUB_REF_NAME}"
+          git push origin "HEAD:${TARGET_BRANCH}"
