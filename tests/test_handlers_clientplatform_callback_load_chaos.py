@@ -13,7 +13,7 @@ from aiogram.types import CallbackQuery, Chat, Message, User
 from handlers import clientplatform_interaction_safety as safety
 
 # This suite intentionally uses real aiogram CallbackQuery objects and runs
-# in the full runtime contour after every generated-source repair.
+# in the full runtime contour on every pull-request head.
 
 
 class FakeState:
