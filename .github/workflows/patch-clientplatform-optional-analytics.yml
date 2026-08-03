@@ -179,3 +179,5 @@ async def _optional_thread('''
           git diff --cached --quiet && exit 0
           git commit -m 'Make ClientPlatform optional analytics fail-soft'
           git push origin "HEAD:${GITHUB_HEAD_REF}"
+
+# Explicit synchronize trigger for the exact patch workflow.
