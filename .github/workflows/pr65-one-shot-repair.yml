@@ -1,0 +1,118 @@
+name: PR65 one-shot repair
+
+on:
+  push:
+    branches:
+      - agent/harden-admin-rbac-and-callback-metrics
+    paths:
+      - .github/workflows/pr65-one-shot-repair.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+
+      - name: Install lock compiler
+        run: |
+          python -m pip install --disable-pip-version-check pip==26.1.2 pip-tools==7.5.0
+
+      - name: Patch dependency floor and regression fixture
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          requirements = Path("requirements.in")
+          value = requirements.read_text(encoding="utf-8")
+          old = "aiohttp>=3.14.1,<4"
+          new = "aiohttp>=3.14.3,<4"
+          if old not in value and new not in value:
+              raise SystemExit("aiohttp requirement marker was not found")
+          requirements.write_text(value.replace(old, new), encoding="utf-8")
+
+          test_path = Path("tests/test_handlers_clientplatform_admin_extension_coverage.py")
+          value = test_path.read_text(encoding="utf-8")
+          old_import = "from clientplatform.domain.tenancy import TenancyError"
+          new_import = "from clientplatform.domain.tenancy import (\n    TenantPermissionDenied,\n    TenancyError,\n)"
+          if old_import in value:
+              value = value.replace(old_import, new_import, 1)
+          elif "TenantPermissionDenied" not in value:
+              raise SystemExit("tenancy import marker was not found")
+
+          old_roles = '    _ADMIN_ROLES = {"owner", "admin"}\n'
+          new_roles = (
+              '    _ADMIN_ROLES = {"owner", "admin"}\n'
+              '    _AUTOMATION_ROLES = {"owner", "administrator", "manager", "marketer"}\n'
+          )
+          if "_AUTOMATION_ROLES" not in value:
+              if old_roles not in value:
+                  raise SystemExit("FakeAdmin role marker was not found")
+              value = value.replace(old_roles, new_roles, 1)
+
+          old_flow = '''    await extension.admin_ops_gate(_callback("autopilot-toggle"), FakeState())
+              assert calls[:3] == ["toggle", "refresh", "marketing:autopilot"]
+
+              calls.clear()
+              await extension.admin_ops_gate(_callback("alerts-refresh"), FakeState())
+          '''
+          new_flow = '''    await extension.admin_ops_gate(_callback("autopilot-toggle"), FakeState())
+              assert calls[:3] == ["toggle", "refresh", "marketing:autopilot"]
+
+              calls.clear()
+              ctx.role = "content_manager"
+              with pytest.raises(TenantPermissionDenied, match="automation controls"):
+                  await extension.admin_ops_gate(_callback("autopilot-toggle"), FakeState())
+              assert calls == []
+
+              ctx.role = "owner"
+              await extension.admin_ops_gate(_callback("alerts-refresh"), FakeState())
+          '''
+          if "ctx.role = \"content_manager\"" not in value:
+              if old_flow not in value:
+                  raise SystemExit("autopilot regression marker was not found")
+              value = value.replace(old_flow, new_flow, 1)
+
+          test_path.write_text(value, encoding="utf-8")
+          PY
+
+      - name: Regenerate hash-locked dependencies
+        env:
+          CUSTOM_COMPILE_COMMAND: python -m piptools compile
+        run: |
+          python -m piptools compile \
+            --generate-hashes \
+            --strip-extras \
+            --upgrade-package aiohttp==3.14.3 \
+            --output-file requirements.txt \
+            requirements.in
+          python -m piptools compile \
+            --generate-hashes \
+            --strip-extras \
+            --upgrade-package aiohttp==3.14.3 \
+            --output-file requirements-dev.txt \
+            requirements-dev.in
+
+      - name: Commit repaired branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add requirements.in requirements.txt requirements-dev.txt \
+            tests/test_handlers_clientplatform_admin_extension_coverage.py
+          git diff --cached --check
+          if git diff --cached --quiet; then
+            echo "No repair changes were produced"
+            exit 0
+          fi
+          git commit -m "Repair PR 65 CI and dependency lock"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
