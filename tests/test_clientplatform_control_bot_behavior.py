@@ -237,6 +237,9 @@ async def test_setup_dashboard_and_resume_paths(monkeypatch: pytest.MonkeyPatch)
         "list_accessible_businesses",
         lambda **_kwargs: [business_access(business_id, "Семейная практика")],
     )
+    monkeypatch.setattr(handlers, "list_customers", lambda **_kwargs: [])
+    monkeypatch.setattr(handlers, "list_programs", lambda **_kwargs: [])
+    monkeypatch.setattr(handlers, "list_booking_slots", lambda **_kwargs: [])
     dashboard = FakeMessage()
     await handlers._send_dashboard(dashboard, user_id=101, business_id=business_id)
     assert "Семейная практика" in dashboard.answers[-1][0]

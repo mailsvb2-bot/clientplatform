@@ -76,6 +76,7 @@ async def direct_to_thread(func: Callable[..., Any], *args: Any, **kwargs: Any) 
 @pytest.fixture(autouse=True)
 def direct_threads(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(simple.asyncio, "to_thread", direct_to_thread)
+    monkeypatch.setattr(control, "Message", FakeMessage)
 
 
 def _snapshot(
