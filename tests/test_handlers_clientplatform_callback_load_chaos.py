@@ -105,27 +105,27 @@ async def test_callback_is_acknowledged_before_waiting_for_busy_user_lock(
         "bot": SimpleNamespace(id=8534548177),
         "state": FakeState(),
     }
-    first = asyncio.create_task(
-        middleware(
-            handler,
-            _callback(1, data="cpa:invalid-token:first"),
-            data,
-        )
-    )
-    await asyncio.wait_for(first_entered.wait(), timeout=1)
 
-    second = asyncio.create_task(
-        middleware(
-            handler,
-            _callback(2, data="cpa:invalid-token:second"),
-            data,
+    async with asyncio.TaskGroup() as group:
+        group.create_task(
+            middleware(
+                handler,
+                _callback(1, data="cpa:invalid-token:first"),
+                data,
+            )
         )
-    )
-    await asyncio.wait_for(second_acknowledged.wait(), timeout=0.1)
-    assert "start:second" not in handler_order
+        await asyncio.wait_for(first_entered.wait(), timeout=1)
+        group.create_task(
+            middleware(
+                handler,
+                _callback(2, data="cpa:invalid-token:second"),
+                data,
+            )
+        )
+        await asyncio.wait_for(second_acknowledged.wait(), timeout=0.1)
+        assert "start:second" not in handler_order
+        release_first.set()
 
-    release_first.set()
-    await asyncio.gather(first, second)
     assert handler_order == [
         "start:first",
         "finish:first",
