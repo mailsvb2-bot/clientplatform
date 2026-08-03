@@ -31,26 +31,26 @@ jobs:
 
           admin_path = Path('handlers/clientplatform_admin_extension.py')
           admin_source = admin_path.read_text(encoding='utf-8')
-          attention_old = '''    summary, alerts = await asyncio.gather(
-              asyncio.to_thread(admin.business_delivery_summary, actor=ctx.actor),
-              asyncio.to_thread(admin_ops.list_open_alerts, actor=ctx.actor),
+          function_start = admin_source.index('async def _enhanced_attention(')
+          function_end = admin_source.index('\n\nasync def ', function_start + 20)
+          attention = admin_source[function_start:function_end]
+          attention_old = (
+              '        asyncio.to_thread(admin_ops.list_open_alerts, actor=ctx.actor),\n'
           )
-          '''
-          attention_new = '''    summary, alerts = await asyncio.gather(
-              asyncio.to_thread(admin.business_delivery_summary, actor=ctx.actor),
-              _optional_thread(
-                  admin_ops.list_open_alerts,
-                  default=[],
-                  actor=ctx.actor,
-              ),
+          attention_new = (
+              '        _optional_thread(\n'
+              '            admin_ops.list_open_alerts,\n'
+              '            default=[],\n'
+              '            actor=ctx.actor,\n'
+              '        ),\n'
           )
-          '''
-          if admin_source.count(attention_old) != 1:
+          if attention.count(attention_old) != 1:
               raise SystemExit(
-                  f'unexpected_attention_target_count:{admin_source.count(attention_old)}'
+                  f'unexpected_attention_target_count:{attention.count(attention_old)}'
               )
+          attention = attention.replace(attention_old, attention_new, 1)
           admin_path.write_text(
-              admin_source.replace(attention_old, attention_new, 1),
+              admin_source[:function_start] + attention + admin_source[function_end:],
               encoding='utf-8',
           )
 
@@ -65,28 +65,32 @@ jobs:
               )
           health_source = health_source.replace(import_old, import_new, 1)
 
-          monitor_old = '''        monitor_ok = observability.task_running and not observability.last_error
-          '''
-          monitor_new = '''        require_monitor = env_bool(
-              "CLIENTPLATFORM_REQUIRE_ADMIN_OBSERVABILITY_READY",
-              False,
+          monitor_old = (
+              '        monitor_ok = observability.task_running and not observability.last_error\n'
           )
-          monitor_running_ok = (
-              observability.task_running and not observability.last_error
+          monitor_new = (
+              '        require_monitor = env_bool(\n'
+              '            "CLIENTPLATFORM_REQUIRE_ADMIN_OBSERVABILITY_READY",\n'
+              '            False,\n'
+              '        )\n'
+              '        monitor_running_ok = (\n'
+              '            observability.task_running and not observability.last_error\n'
+              '        )\n'
+              '        monitor_ok = not require_monitor or monitor_running_ok\n'
           )
-          monitor_ok = not require_monitor or monitor_running_ok
-          '''
           if health_source.count(monitor_old) != 1:
               raise SystemExit(
                   f'unexpected_monitor_target_count:{health_source.count(monitor_old)}'
               )
           health_source = health_source.replace(monitor_old, monitor_new, 1)
 
-          payload_old = '''                "clientplatform_admin_observability_ready": monitor_ok,
-          '''
-          payload_new = '''                "clientplatform_admin_observability_ready": monitor_running_ok,
-              "clientplatform_admin_observability_required": require_monitor,
-          '''
+          payload_old = (
+              '                "clientplatform_admin_observability_ready": monitor_ok,\n'
+          )
+          payload_new = (
+              '                "clientplatform_admin_observability_ready": monitor_running_ok,\n'
+              '                "clientplatform_admin_observability_required": require_monitor,\n'
+          )
           if health_source.count(payload_old) != 1:
               raise SystemExit(
                   f'unexpected_payload_target_count:{health_source.count(payload_old)}'
