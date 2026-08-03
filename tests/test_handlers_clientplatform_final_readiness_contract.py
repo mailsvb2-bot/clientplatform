@@ -18,6 +18,19 @@ async def test_optional_tenant_read_is_fail_soft_for_missing_membership() -> Non
     assert await extension._optional_thread(denied_read, default=[]) == []
 
 
+@pytest.mark.asyncio
+async def test_optional_thread_can_forward_function_default_explicitly() -> None:
+    def read_setting(*, default: str) -> str:
+        return default
+
+    result = await extension._optional_thread(
+        read_setting,
+        default="false",
+        forward_default=True,
+    )
+    assert result == "false"
+
+
 def test_telegram_polling_readiness_is_explicitly_opt_in(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
