@@ -28,13 +28,21 @@ _CONTENT_ROLES = frozenset(
         PlatformRole.MARKETER,
     }
 )
-_FINANCE_ROLES = frozenset(
+_FINANCE_READ_ROLES = frozenset(
     {
         PlatformRole.OWNER,
         PlatformRole.ADMINISTRATOR,
         PlatformRole.MANAGER,
         PlatformRole.MARKETER,
         PlatformRole.ANALYST,
+    }
+)
+_FINANCE_WRITE_ROLES = frozenset(
+    {
+        PlatformRole.OWNER,
+        PlatformRole.ADMINISTRATOR,
+        PlatformRole.MANAGER,
+        PlatformRole.MARKETER,
     }
 )
 _OBSERVABILITY_ROLES = frozenset(BUSINESS_MEMBER_ROLES)
@@ -431,7 +439,7 @@ def record_payment(
     timestamp = _utc_now()
 
     with get_db() as conn:
-        current = _resolve(conn, actor, allowed_roles=_FINANCE_ROLES)
+        current = _resolve(conn, actor, allowed_roles=_FINANCE_WRITE_ROLES)
         if normalized_customer is not None:
             customer = conn.execute(
                 """
@@ -495,7 +503,7 @@ def list_payments(
 ) -> list[PaymentRecord]:
     normalized_limit = max(1, min(int(limit), 100))
     with get_db_ro() as conn:
-        current = _resolve(conn, actor, allowed_roles=_FINANCE_ROLES)
+        current = _resolve(conn, actor, allowed_roles=_FINANCE_READ_ROLES)
         rows = conn.execute(
             """
             SELECT id, business_id, customer_id, amount_minor, currency,
@@ -540,7 +548,7 @@ def set_offering_price(
     timestamp = _utc_now()
 
     with get_db() as conn:
-        current = _resolve(conn, actor, allowed_roles=_FINANCE_ROLES)
+        current = _resolve(conn, actor, allowed_roles=_FINANCE_WRITE_ROLES)
         offering = conn.execute(
             """
             SELECT title FROM business_offerings
@@ -624,7 +632,7 @@ def set_offering_price(
 
 def list_offering_prices(*, actor: TenantContext) -> list[OfferingPrice]:
     with get_db_ro() as conn:
-        current = _resolve(conn, actor, allowed_roles=_FINANCE_ROLES)
+        current = _resolve(conn, actor, allowed_roles=_FINANCE_READ_ROLES)
         rows = conn.execute(
             """
             SELECT p.id, p.business_id, p.offering_id, o.title,

@@ -5,7 +5,10 @@ from typing import Any
 
 import pytest
 
-from clientplatform.domain.tenancy import TenancyError
+from clientplatform.domain.tenancy import (
+    TenantPermissionDenied,
+    TenancyError,
+)
 from handlers import clientplatform_admin_extension as extension
 
 
@@ -74,6 +77,7 @@ class FakeControl:
 class FakeAdmin:
     control = FakeControl()
     _ADMIN_ROLES = {"owner", "admin"}
+    _AUTOMATION_ROLES = {"owner", "administrator", "manager", "marketer"}
 
     def __init__(self, ctx: Any) -> None:
         self.ctx = ctx
@@ -237,6 +241,12 @@ async def test_admin_ops_gate_autopilot_and_alert_routes(
     assert calls[:3] == ["toggle", "refresh", "marketing:autopilot"]
 
     calls.clear()
+    ctx.role = "content_manager"
+    with pytest.raises(TenantPermissionDenied, match="automation controls"):
+        await extension.admin_ops_gate(_callback("autopilot-toggle"), FakeState())
+    assert calls == []
+
+    ctx.role = "owner"
     await extension.admin_ops_gate(_callback("alerts-refresh"), FakeState())
     assert calls == ["refresh", "report:system"]
 
