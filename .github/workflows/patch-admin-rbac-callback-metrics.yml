@@ -1,0 +1,256 @@
+name: Patch Admin RBAC And Callback Metrics
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - '.github/workflows/patch-admin-rbac-callback-metrics.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout exact pull-request head
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+
+      - name: Apply post-merge review hardening
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          ops_path = Path('clientplatform/application/admin_ops.py')
+          ops = ops_path.read_text(encoding='utf-8')
+          old_roles = '''_FINANCE_ROLES = frozenset(
+              {
+                  PlatformRole.OWNER,
+                  PlatformRole.ADMINISTRATOR,
+                  PlatformRole.MANAGER,
+                  PlatformRole.MARKETER,
+                  PlatformRole.ANALYST,
+              }
+          )
+          '''
+          new_roles = '''_FINANCE_READ_ROLES = frozenset(
+              {
+                  PlatformRole.OWNER,
+                  PlatformRole.ADMINISTRATOR,
+                  PlatformRole.MANAGER,
+                  PlatformRole.MARKETER,
+                  PlatformRole.ANALYST,
+              }
+          )
+          _FINANCE_WRITE_ROLES = frozenset(
+              {
+                  PlatformRole.OWNER,
+                  PlatformRole.ADMINISTRATOR,
+                  PlatformRole.MANAGER,
+                  PlatformRole.MARKETER,
+              }
+          )
+          '''
+          if ops.count(old_roles) != 1:
+              raise SystemExit(f'unexpected_finance_role_block:{ops.count(old_roles)}')
+          ops = ops.replace(old_roles, new_roles, 1)
+
+          write_functions = ('record_payment', 'set_offering_price')
+          read_functions = ('list_payments', 'list_offering_prices')
+          for name in write_functions:
+              start = ops.index(f'def {name}(')
+              end = ops.find('\n\ndef ', start + 10)
+              if end < 0:
+                  end = len(ops)
+              section = ops[start:end]
+              if section.count('allowed_roles=_FINANCE_ROLES') != 1:
+                  raise SystemExit(f'unexpected_write_role_use:{name}')
+              section = section.replace(
+                  'allowed_roles=_FINANCE_ROLES',
+                  'allowed_roles=_FINANCE_WRITE_ROLES',
+                  1,
+              )
+              ops = ops[:start] + section + ops[end:]
+          for name in read_functions:
+              start = ops.index(f'def {name}(')
+              end = ops.find('\n\ndef ', start + 10)
+              if end < 0:
+                  end = len(ops)
+              section = ops[start:end]
+              if section.count('allowed_roles=_FINANCE_ROLES') != 1:
+                  raise SystemExit(f'unexpected_read_role_use:{name}')
+              section = section.replace(
+                  'allowed_roles=_FINANCE_ROLES',
+                  'allowed_roles=_FINANCE_READ_ROLES',
+                  1,
+              )
+              ops = ops[:start] + section + ops[end:]
+          if '_FINANCE_ROLES' in ops:
+              raise SystemExit('legacy_finance_role_set_remains')
+          ops_path.write_text(ops, encoding='utf-8')
+
+          handler_path = Path('handlers/clientplatform_admin_extension.py')
+          handler = handler_path.read_text(encoding='utf-8')
+          import_old = 'from clientplatform.domain.tenancy import TenancyError\n'
+          import_new = (
+              'from clientplatform.domain.tenancy import '
+              'TenantPermissionDenied, TenancyError\n'
+          )
+          if handler.count(import_old) != 1:
+              raise SystemExit(f'unexpected_tenancy_import:{handler.count(import_old)}')
+          handler = handler.replace(import_old, import_new, 1)
+
+          autopilot_old = '''    if action == "autopilot-toggle":
+              await asyncio.to_thread(admin_ops.toggle_autopilot, actor=ctx.actor)
+          '''
+          autopilot_new = '''    if action == "autopilot-toggle":
+              if ctx.role not in admin._AUTOMATION_ROLES:
+                  raise TenantPermissionDenied(
+                      "automation controls are not allowed for this business role"
+                  )
+              await asyncio.to_thread(admin_ops.toggle_autopilot, actor=ctx.actor)
+          '''
+          if handler.count(autopilot_old) != 1:
+              raise SystemExit(f'unexpected_autopilot_branch:{handler.count(autopilot_old)}')
+          handler = handler.replace(autopilot_old, autopilot_new, 1)
+
+          init_old = '''        success = False
+              error_code: str | None = None
+
+              async def marked_handler(
+          '''
+          init_new = '''        success = False
+              handler_invoked = False
+              error_code: str | None = None
+
+              async def marked_handler(
+          '''
+          if handler.count(init_old) != 1:
+              raise SystemExit(f'unexpected_trace_init:{handler.count(init_old)}')
+          handler = handler.replace(init_old, init_new, 1)
+
+          marked_old = '''        ) -> Any:
+                  now = time.perf_counter()
+                  trace.handler_started = now
+          '''
+          marked_new = '''        ) -> Any:
+                  nonlocal handler_invoked
+                  handler_invoked = True
+                  now = time.perf_counter()
+                  trace.handler_started = now
+          '''
+          trace_start = handler.index('    async def traced_call(')
+          trace_end = handler.index('\n    safety._answer_callback', trace_start)
+          trace_section = handler[trace_start:trace_end]
+          if trace_section.count(marked_old) != 1:
+              raise SystemExit(f'unexpected_marked_handler:{trace_section.count(marked_old)}')
+          trace_section = trace_section.replace(marked_old, marked_new, 1)
+
+          success_old = '''            success = True
+                  return result
+          '''
+          success_new = '''            success = handler_invoked
+                  if not handler_invoked:
+                      error_code = "suppressed_callback"
+                  return result
+          '''
+          if trace_section.count(success_old) != 1:
+              raise SystemExit(f'unexpected_success_assignment:{trace_section.count(success_old)}')
+          trace_section = trace_section.replace(success_old, success_new, 1)
+          handler = handler[:trace_start] + trace_section + handler[trace_end:]
+          handler_path.write_text(handler, encoding='utf-8')
+          PY
+
+          cat > tests/test_handlers_clientplatform_post_merge_review_hardening.py <<'PY'
+          from __future__ import annotations
+
+          import ast
+          from pathlib import Path
+
+
+          ROOT = Path(__file__).resolve().parents[1]
+          OPS = ROOT / "clientplatform/application/admin_ops.py"
+          HANDLER = ROOT / "handlers/clientplatform_admin_extension.py"
+
+
+          def _source(path: Path) -> str:
+              value = path.read_text(encoding="utf-8")
+              ast.parse(value)
+              return value
+
+
+          def _function(source: str, name: str) -> str:
+              start = source.index(f"def {name}(")
+              end = source.find("\n\ndef ", start + 10)
+              return source[start:] if end < 0 else source[start:end]
+
+
+          def test_finance_read_and_write_roles_are_separate() -> None:
+              source = _source(OPS)
+              read_block = source[
+                  source.index("_FINANCE_READ_ROLES"):
+                  source.index("_FINANCE_WRITE_ROLES")
+              ]
+              write_block = source[
+                  source.index("_FINANCE_WRITE_ROLES"):
+                  source.index("_OBSERVABILITY_ROLES")
+              ]
+              assert "PlatformRole.ANALYST" in read_block
+              assert "PlatformRole.ANALYST" not in write_block
+              assert "_FINANCE_ROLES" not in source
+              for name in ("record_payment", "set_offering_price"):
+                  assert "allowed_roles=_FINANCE_WRITE_ROLES" in _function(source, name)
+              for name in ("list_payments", "list_offering_prices"):
+                  assert "allowed_roles=_FINANCE_READ_ROLES" in _function(source, name)
+
+
+          def test_autopilot_callback_enforces_automation_roles() -> None:
+              source = _source(HANDLER)
+              gate = _function(source, "admin_ops_gate")
+              branch = gate[
+                  gate.index('if action == "autopilot-toggle"'):
+                  gate.index('if action == "alerts-refresh"')
+              ]
+              assert "ctx.role not in admin._AUTOMATION_ROLES" in branch
+              assert "TenantPermissionDenied" in branch
+              assert branch.index("_AUTOMATION_ROLES") < branch.index("toggle_autopilot")
+
+
+          def test_suppressed_callback_is_not_recorded_as_success() -> None:
+              source = _source(HANDLER)
+              traced = source[
+                  source.index("    async def traced_call("):
+                  source.index("\n    safety._answer_callback", source.index("    async def traced_call("))
+              ]
+              assert "handler_invoked = False" in traced
+              assert "nonlocal handler_invoked" in traced
+              assert "handler_invoked = True" in traced
+              assert "success = handler_invoked" in traced
+              assert 'error_code = "suppressed_callback"' in traced
+              assert "success = True" not in traced
+          PY
+
+          python -m py_compile \
+            clientplatform/application/admin_ops.py \
+            handlers/clientplatform_admin_extension.py \
+            tests/test_handlers_clientplatform_post_merge_review_hardening.py
+          rm -f .github/workflows/patch-admin-rbac-callback-metrics.yml
+
+      - name: Commit exact hardening
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --quiet && exit 0
+          git commit -m 'Harden admin RBAC and callback metrics'
+          git push origin "HEAD:${GITHUB_HEAD_REF}"
