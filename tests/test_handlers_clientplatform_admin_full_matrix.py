@@ -1,0 +1,315 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+
+from handlers import clientplatform_admin as admin
+from handlers import clientplatform_admin_extension as extension
+
+
+OWNER_ACTIONS = [
+    "today",
+    "today-full",
+    "customers",
+    "customer-list",
+    "behavior",
+    "messengers",
+    "attention",
+    "autopilot",
+    "publications",
+    "funnel",
+    "money",
+    "payments",
+    "segments",
+    "offers",
+    "copy",
+    "prices",
+    "release",
+    "invites",
+    "funnel2",
+    "retention",
+    "recent",
+    "system",
+    "tariff",
+    "add-member",
+    "members",
+    "permissions",
+]
+
+
+@dataclass
+class FakeState:
+    data: dict[str, Any] = field(default_factory=dict)
+    state: Any = None
+
+    async def get_data(self) -> dict[str, Any]:
+        return dict(self.data)
+
+    async def update_data(self, **kwargs: Any) -> None:
+        self.data.update(kwargs)
+
+    async def set_state(self, value: Any) -> None:
+        self.state = value
+
+    async def clear(self) -> None:
+        self.data.clear()
+        self.state = None
+
+
+def _ctx() -> Any:
+    return SimpleNamespace(
+        user_id=900001,
+        business_id="00000000-0000-0000-0000-000000000001",
+        business_name="Тестовый бизнес",
+        business_token="business-token",
+        role=admin.PlatformRole.OWNER,
+        actor=SimpleNamespace(),
+    )
+
+
+def test_owner_menu_contains_all_26_sections_plus_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(admin.control, "_uuid_token", lambda _value: "business-token")
+    markup = admin._menu_keyboard(_ctx())
+    callbacks = [
+        button.callback_data
+        for row in markup.inline_keyboard
+        for button in row
+    ]
+    actions = [str(value).split(":")[2] for value in callbacks[:-1]]
+
+    assert actions == OWNER_ACTIONS
+    assert len(markup.inline_keyboard) == 27
+    assert markup.inline_keyboard[-1][0].text == "⬅️ Назад"
+    assert str(markup.inline_keyboard[-1][0].callback_data).endswith(":leave")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", OWNER_ACTIONS)
+async def test_every_top_level_section_back_returns_to_admin_menu(
+    monkeypatch: pytest.MonkeyPatch,
+    action: str,
+) -> None:
+    calls: list[str] = []
+
+    async def render_menu(*_args: Any, **_kwargs: Any) -> None:
+        calls.append("menu")
+
+    monkeypatch.setattr(admin, "_render_menu", render_menu)
+    state = FakeState(
+        {
+            "cp_admin_history": ["menu"],
+            "cp_admin_section": action,
+        }
+    )
+    await admin._navigate_back(
+        SimpleNamespace(),
+        state,  # type: ignore[arg-type]
+        _ctx(),
+    )
+
+    assert calls == ["menu"]
+    assert state.data["cp_admin_history"] == []
+    assert state.data["cp_admin_section"] == "menu"
+
+
+@pytest.fixture
+def render_contract(monkeypatch: pytest.MonkeyPatch):
+    rendered: list[tuple[str, Any]] = []
+
+    async def safe_edit(
+        _callback: Any,
+        text: str,
+        markup: Any,
+    ) -> None:
+        rendered.append((text, markup))
+
+    async def base_snapshot(_ctx: Any):
+        profile = SimpleNamespace(
+            activity_description="Помогаем клиентам",
+            status=SimpleNamespace(value="ready"),
+        )
+        summary = SimpleNamespace(
+            customers=0,
+            programs=0,
+            dispatch_pending=0,
+            dispatch_sent=0,
+            dispatch_attention=0,
+        )
+        return profile, summary, [], [], [], [], []
+
+    insights = SimpleNamespace(
+        active_customers=0,
+        active_offerings=0,
+        active_invites=0,
+        claimed_invites=0,
+        enrollments=0,
+        completed_enrollments=0,
+        publication_drafts=0,
+        publications_published=0,
+        paid_payments=0,
+        paid_amount_minor=0,
+        payment_currency="RUB",
+        priced_offerings=0,
+        active_staff=1,
+    )
+    interaction = SimpleNamespace(
+        count=0,
+        successes=0,
+        failures=0,
+        p50_ms=0,
+        p95_ms=0,
+        max_ms=0,
+        ack_p95_ms=0,
+        lock_p95_ms=0,
+        telegram_p95_ms=0,
+    )
+    route = SimpleNamespace(
+        ui_mode="direct",
+        polling_mode="direct",
+        ui_route="149.154.167.220",
+        polling_route="149.154.167.220",
+        route_pool_size=1,
+        egress_redundant=False,
+        polling_ready=True,
+        polling_in_flight=True,
+        ui_failures=0,
+        polling_failures=0,
+    )
+    subscription = SimpleNamespace(
+        plan_key="base",
+        status="active",
+        included_staff=5,
+        included_customers=500,
+        started_at="2026-08-03T00:00:00+00:00",
+        renews_at=None,
+    )
+
+    monkeypatch.setattr(admin, "_safe_edit", safe_edit)
+    monkeypatch.setattr(admin, "_base_snapshot", base_snapshot)
+    monkeypatch.setattr(extension, "_all_offerings", lambda *_args: _empty_async())
+    monkeypatch.setattr(extension, "telegram_egress_snapshot", lambda: route)
+    monkeypatch.setattr(extension.admin_ops, "business_admin_insights", lambda **_kwargs: insights)
+    monkeypatch.setattr(extension.admin_ops, "list_payments", lambda **_kwargs: [])
+    monkeypatch.setattr(extension.admin_ops, "list_publications", lambda **_kwargs: [])
+    monkeypatch.setattr(extension.admin_ops, "list_offering_prices", lambda **_kwargs: [])
+    monkeypatch.setattr(extension.admin_ops, "interaction_snapshot", lambda **_kwargs: interaction)
+    monkeypatch.setattr(extension.admin_ops, "get_admin_setting", lambda **_kwargs: "false")
+    monkeypatch.setattr(extension.admin_ops, "recent_audit_events", lambda **_kwargs: [])
+    monkeypatch.setattr(extension.admin_ops, "refresh_interaction_alerts", lambda **_kwargs: [])
+    monkeypatch.setattr(extension.admin_ops, "list_open_alerts", lambda **_kwargs: [])
+    monkeypatch.setattr(extension.admin_ops, "get_subscription_state", lambda **_kwargs: subscription)
+    monkeypatch.setattr(admin, "business_delivery_summary", lambda **_kwargs: SimpleNamespace(dispatch_attention=0, dispatch_pending=0))
+    return rendered
+
+
+async def _empty_async() -> list[Any]:
+    return []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("action", "title"),
+    [
+        ("autopilot", "🤖 Growth Autopilot"),
+        ("publications", "📣 Публикации"),
+        ("funnel", "📉 Путь до заявки"),
+        ("money", "💰 Деньги и клиенты"),
+        ("payments", "💰 Оплаты"),
+        ("segments", "🧲 Группы клиентов"),
+        ("offers", "🧪 Проверка предложений"),
+        ("copy", "✍️ Подготовить тексты"),
+        ("prices", "💡 Подсказка по ценам"),
+    ],
+)
+async def test_all_growth_sections_render_real_screen_and_back(
+    render_contract: list[tuple[str, Any]],
+    action: str,
+    title: str,
+) -> None:
+    state = FakeState({"cp_admin_section": "menu", "cp_admin_history": []})
+    await extension._enhanced_marketing(
+        SimpleNamespace(),  # type: ignore[arg-type]
+        state,  # type: ignore[arg-type]
+        _ctx(),
+        action,
+    )
+    text, markup = render_contract[-1]
+    assert text.startswith(title)
+    assert "ещё не подключ" not in text.casefold()
+    assert markup.inline_keyboard[-1][0].text == "⬅️ Назад"
+    assert state.data["cp_admin_section"] == action
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("action", "title"),
+    [
+        ("release", "🚦 Release gate"),
+        ("invites", "🎁 Приглашения и рекомендации"),
+        ("funnel2", "🧲 Воронка 2.0"),
+        ("retention", "🧩 Удержание"),
+        ("recent", "🧾 Последние действия"),
+        ("system", "🧪 Системные проверки"),
+    ],
+)
+async def test_all_admin_reports_render_real_screen_and_back(
+    render_contract: list[tuple[str, Any]],
+    action: str,
+    title: str,
+) -> None:
+    state = FakeState({"cp_admin_section": "menu", "cp_admin_history": []})
+    await extension._enhanced_admin_report(
+        SimpleNamespace(),  # type: ignore[arg-type]
+        state,  # type: ignore[arg-type]
+        _ctx(),
+        action,
+    )
+    text, markup = render_contract[-1]
+    assert text.startswith(title)
+    assert markup.inline_keyboard[-1][0].text == "⬅️ Назад"
+    assert state.data["cp_admin_section"] == action
+
+
+@pytest.mark.asyncio
+async def test_attention_and_tariff_render_real_state(
+    render_contract: list[tuple[str, Any]],
+) -> None:
+    state = FakeState({"cp_admin_section": "menu", "cp_admin_history": []})
+    await extension._enhanced_attention(
+        SimpleNamespace(),  # type: ignore[arg-type]
+        state,  # type: ignore[arg-type]
+        _ctx(),
+    )
+    assert render_contract[-1][0].startswith("⚠️ Требуют внимания")
+    assert render_contract[-1][1].inline_keyboard[-1][0].text == "⬅️ Назад"
+
+    await extension._enhanced_tariff(
+        SimpleNamespace(),  # type: ignore[arg-type]
+        state,  # type: ignore[arg-type]
+        _ctx(),
+    )
+    assert render_contract[-1][0].startswith("💳 Тариф ClientPlatform")
+    assert "пока не активирован" not in render_contract[-1][0].casefold()
+    assert render_contract[-1][1].inline_keyboard[-1][0].text == "⬅️ Назад"
+
+
+def test_all_operation_subflows_have_explicit_back_buttons() -> None:
+    ctx = _ctx()
+    for return_action in (
+        "return-publications",
+        "return-payments",
+        "return-prices",
+    ):
+        markup = extension._flow_keyboard(
+            admin,
+            ctx,
+            return_action=return_action,
+        )
+        button = markup.inline_keyboard[-1][0]
+        assert button.text == "⬅️ Назад"
+        assert button.callback_data == f"cpao:business-token:{return_action}"

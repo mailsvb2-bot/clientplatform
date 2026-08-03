@@ -38,6 +38,13 @@ def _load_clientplatform_modules() -> tuple[ModuleType, ModuleType]:
     if not bool(getattr(entry, "_managed_bot_setup_composed", False)):
         entry.router.include_router(bot_setup.router)
         entry._managed_bot_setup_composed = True
+
+    admin_extension = importlib.import_module(
+        ".clientplatform_admin_extension",
+        __name__,
+    )
+    globals()["clientplatform_admin_extension"] = admin_extension
+    admin_extension.install_admin_extension(entry.router, control)
     return entry, control
 
 
@@ -54,10 +61,14 @@ def __getattr__(name: str) -> ModuleType:
     if name == "clientplatform_bot_lifecycle":
         _load_clientplatform_modules()
         return globals()["clientplatform_bot_lifecycle"]
+    if name == "clientplatform_admin_extension":
+        _load_clientplatform_modules()
+        return globals()["clientplatform_admin_extension"]
     raise AttributeError(name)
 
 
 __all__ = [
+    "clientplatform_admin_extension",
     "clientplatform_bot_lifecycle",
     "clientplatform_bot_setup",
     "clientplatform_control",

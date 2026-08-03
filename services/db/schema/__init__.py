@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 from . import clientplatform_activity
+from . import clientplatform_admin_ops
 from . import clientplatform_bookings
 from . import clientplatform_bot_gateway
 from . import clientplatform_bot_provisioning
@@ -20,10 +21,9 @@ from . import plans
 from . import settings
 from . import users
 
-# Execution order matters: legacy users first, then clientplatform tenant, customer,
-# program-delivery, program-media cleanup, connection/outbox, managed-bot gateway and
-# provisioning boundaries, then legacy tables. Additive clientplatform schemas do not
-# mutate imported Metrotherapy tables.
+# Execution order matters: legacy users first, then all isolated ClientPlatform
+# tenant/customer/activity/program/connection/admin boundaries, then legacy tables.
+# Additive ClientPlatform schemas never mutate imported Metrotherapy tables.
 PARTS = [
     users,
     clientplatform_tenancy,
@@ -35,6 +35,7 @@ PARTS = [
     clientplatform_connections,
     clientplatform_bot_gateway,
     clientplatform_bot_provisioning,
+    clientplatform_admin_ops,
     plans,
     payments,
     gifts,
@@ -47,5 +48,5 @@ PARTS = [
 
 def create_or_update_tables(c: sqlite3.Connection) -> None:
     """Create tables and add missing columns (idempotent)."""
-    for p in PARTS:
-        p.ensure(c)
+    for part in PARTS:
+        part.ensure(c)
