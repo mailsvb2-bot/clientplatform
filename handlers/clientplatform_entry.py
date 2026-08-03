@@ -167,10 +167,14 @@ async def _dispatch_clientplatform_start(
         await control._send_client_portal(message, links=links)
         return
 
-    await state.set_state(control.ClientPlatformControlState.business_name)
+    simple = importlib.import_module(
+        ".clientplatform_simple_experience",
+        __package__,
+    )
+    await state.clear()
     await message.answer(
-        "Добро пожаловать в ClientPlatform.\n\n"
-        "Сначала напишите название Вашего дела, проекта или практики."
+        simple.welcome_text(),
+        reply_markup=simple.welcome_keyboard(),
     )
 
 
@@ -350,6 +354,14 @@ if not bool(getattr(control, "_dual_role_entry_composed", False)):
         ".clientplatform_program_builder",
         __package__,
     )
+    simple_experience = importlib.import_module(
+        ".clientplatform_simple_experience",
+        __package__,
+    )
+    cloud_media = importlib.import_module(
+        ".clientplatform_cloud_media",
+        __package__,
+    )
     lesson_editor = importlib.import_module(
         ".clientplatform_program_lesson_editor_composition",
         __package__,
@@ -357,6 +369,8 @@ if not bool(getattr(control, "_dual_role_entry_composed", False)):
     router.include_router(admin.router)
     router.include_router(interaction_safety.router)
     router.include_router(onboarding_recovery.router)
+    router.include_router(simple_experience.router)
+    router.include_router(cloud_media.router)
     router.include_router(program_media.router)
     router.include_router(lesson_editor.router)
     router.include_router(program_builder.router)
@@ -365,6 +379,8 @@ if not bool(getattr(control, "_dual_role_entry_composed", False)):
     control._admin_router_composed = True
     control._interaction_safety_router_composed = True
     control._onboarding_recovery_router_composed = True
+    control._simple_experience_router_composed = True
+    control._cloud_media_router_composed = True
     control._program_media_router_composed = True
     control._program_lesson_editor_composed = True
     control._multi_lesson_program_builder_composed = True

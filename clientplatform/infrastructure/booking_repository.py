@@ -262,6 +262,30 @@ class BookingRepository:
             raise BookingNotFound("Вы не подключены к этому бизнесу")
         return matches[0]
 
+    def get_customer_booking(
+        self,
+        *,
+        telegram_user_id: int,
+        business_id: str,
+        slot_id: str,
+    ) -> BookingClaim:
+        link = self._customer_link(
+            telegram_user_id=telegram_user_id,
+            business_id=business_id,
+        )
+        normalized_slot = normalize_uuid(slot_id, field_name="booking_slot_id")
+        row = self._conn.execute(
+            _SLOT_SELECT
+            + " WHERE bs.id=? AND bs.business_id=? AND bs.booked_customer_id=? LIMIT 1",
+            (normalized_slot, link.business_id, link.customer_id),
+        ).fetchone()
+        if row is None:
+            raise BookingNotFound("запись не найдена")
+        view = _view_from_row(row)
+        if view.slot.status != BookingSlotStatus.BOOKED:
+            raise BookingNotFound("запись больше не активна")
+        return BookingClaim(slot=view, customer_id=link.customer_id)
+
     def list_open_slots_for_customer(
         self,
         *,

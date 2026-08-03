@@ -1,0 +1,288 @@
+from __future__ import annotations
+
+"""A result-first ClientPlatform surface for non-technical owners."""
+
+import asyncio
+import importlib
+from types import ModuleType
+from typing import Any
+
+from aiogram import F, Router
+from aiogram.fsm.context import FSMContext
+from aiogram.types import CallbackQuery, Message
+
+from clientplatform.domain.activity import CapabilityStatus
+from clientplatform.domain.bookings import BookingSlotStatus
+
+control = importlib.import_module(".clientplatform_control", __package__)
+builder = importlib.import_module(".clientplatform_program_builder", __package__)
+
+router = Router(name="clientplatform_simple_experience")
+router.message.filter(control.ClientPlatformControlEnabled())
+router.callback_query.filter(control.ClientPlatformControlEnabled())
+
+_ADVANCED_KEYBOARD: Any = None
+
+
+def _routed_callback(callback: CallbackQuery, data: str) -> CallbackQuery:
+    copier = getattr(callback, "model_copy", None)
+    if callable(copier):
+        return copier(update={"data": data})
+    callback.data = data
+    return callback
+
+
+def welcome_keyboard():
+    return control._keyboard(
+        [[("🚀 Запустить мой бизнес", "cps:start")]]
+    )
+
+
+def welcome_text() -> str:
+    return (
+        "Здравствуйте! Я ClientPlatform — цифровой помощник для Вашего дела.\n\n"
+        "Я помогу без сложных настроек:\n"
+        "• подключать клиентов;\n"
+        "• записывать их на встречи и напоминать;\n"
+        "• выдавать аудио, видео, документы и программы;\n"
+        "• показывать, кто получил материал и что требует внимания.\n\n"
+        "Сначала понадобится только название и одно простое описание. "
+        "Остальное я подготовлю сам."
+    )
+
+
+def _simple_keyboard(business_id: str):
+    token = control._uuid_token(business_id)
+    return control._keyboard(
+        [
+            [("✨ Сделать следующий шаг", f"cps:next:{token}")],
+            [
+                ("👥 Клиенты", f"cp:clients:{token}"),
+                ("📚 Материалы", f"cps:programs:{token}"),
+            ],
+            [
+                ("📅 Запись", f"cps:booking:{token}"),
+                ("📊 Результат", f"cp:results:{token}"),
+            ],
+            [("⚙️ Все возможности", f"cps:advanced:{token}")],
+        ]
+    )
+
+
+async def _business_snapshot(*, user_id: int, business_id: str):
+    actor = await control._actor(user_id, business_id)
+    profile, capabilities, customers, programs, slots, accesses = await asyncio.gather(
+        asyncio.to_thread(control.get_business_profile, actor=actor),
+        asyncio.to_thread(control.list_business_capabilities, actor=actor),
+        asyncio.to_thread(control.list_customers, actor=actor),
+        asyncio.to_thread(control.list_programs, actor=actor),
+        asyncio.to_thread(control.list_booking_slots, actor=actor),
+        asyncio.to_thread(control.list_accessible_businesses, user_id=user_id),
+    )
+    access = next(item for item in accesses if item.business.id == business_id)
+    return actor, access, profile, capabilities, customers, programs, slots
+
+
+async def send_simple_dashboard(
+    message: Message,
+    *,
+    user_id: int,
+    business_id: str,
+) -> None:
+    _actor, access, profile, _capabilities, customers, programs, slots = (
+        await _business_snapshot(user_id=user_id, business_id=business_id)
+    )
+    open_slots = sum(item.slot.status == BookingSlotStatus.OPEN for item in slots)
+    await message.answer(
+        f"🏠 {access.business.name}\n\n"
+        f"Чем Вы занимаетесь: {profile.activity_description}\n\n"
+        "Что можно сделать прямо сейчас:\n"
+        "• подключить клиента;\n"
+        "• создать и выдать материалы;\n"
+        "• открыть время для записи;\n"
+        "• посмотреть результат.\n\n"
+        f"Клиентов: {len(customers)} · программ: {len(programs)} · "
+        f"свободных времён: {open_slots}\n\n"
+        "Не знаете, с чего начать? Нажмите первую кнопку — я сам предложу следующий шаг.",
+        reply_markup=_simple_keyboard(business_id),
+    )
+
+
+async def send_advanced_dashboard(
+    message: Message,
+    *,
+    user_id: int,
+    business_id: str,
+) -> None:
+    actor = await control._actor(user_id, business_id)
+    profile, capabilities, accesses = await asyncio.gather(
+        asyncio.to_thread(control.get_business_profile, actor=actor),
+        asyncio.to_thread(control.list_business_capabilities, actor=actor),
+        asyncio.to_thread(control.list_accessible_businesses, user_id=user_id),
+    )
+    access = next(item for item in accesses if item.business.id == business_id)
+    module_lines = "\n".join(f"• {item.title}" for item in capabilities) or "• пока не выбраны"
+    keyboard = _ADVANCED_KEYBOARD(business_id, capabilities)
+    await message.answer(
+        f"⚙️ Все возможности · {access.business.name}\n\n"
+        f"Чем Вы занимаетесь:\n{profile.activity_description}\n\n"
+        f"Подключено:\n{module_lines}",
+        reply_markup=keyboard,
+    )
+
+
+def install_simple_experience(control_module: ModuleType) -> None:
+    global _ADVANCED_KEYBOARD
+    if bool(getattr(control_module, "_simple_experience_installed", False)):
+        return
+    _ADVANCED_KEYBOARD = control_module._dashboard_keyboard
+    control_module._send_dashboard = send_simple_dashboard
+    control_module._simple_experience_installed = True
+
+
+@router.callback_query(F.data == "cps:start")
+async def start_simple_onboarding(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await state.set_state(control.ClientPlatformControlState.business_name)
+    await callback.answer()
+    await control._callback_message(callback).answer(
+        "Как называется Ваше дело, проект или практика?\n\n"
+        "Например: «Практика Анны», «Автосервис Мотор» или «Школа английского»."
+    )
+
+
+async def _invite_customer(callback: CallbackQuery, *, actor: Any, business_id: str) -> None:
+    issued = await asyncio.to_thread(control.issue_customer_invite, actor=actor)
+    bot = await callback.bot.get_me()
+    if not bot.username:
+        raise RuntimeError("clientplatform control bot requires a public username")
+    link = f"https://t.me/{bot.username}?start=cpj_{issued.token}"
+    await control._callback_message(callback).answer(
+        "Первый полезный шаг — подключить клиента.\n\n"
+        "Отправьте ему эту персональную ссылку. После перехода он сможет записываться "
+        "и получать Ваши материалы:\n\n"
+        f"{link}"
+    )
+
+
+@router.callback_query(F.data.startswith("cps:next:"))
+async def next_best_action(callback: CallbackQuery, state: FSMContext) -> None:
+    business_id = control._token_uuid(str(callback.data).split(":", 2)[2])
+    user_id = int(callback.from_user.id)
+    actor, _access, _profile, capabilities, customers, programs, slots = (
+        await _business_snapshot(user_id=user_id, business_id=business_id)
+    )
+    await callback.answer()
+    message = control._callback_message(callback)
+
+    if not programs:
+        await state.clear()
+        await state.update_data(business_id=business_id)
+        await state.set_state(builder.ClientPlatformProgramBuilderState.program_title)
+        await message.answer(
+            "Давайте создадим первый материал или программу.\n\n"
+            "Напишите её название. Например: «Подготовка к первой встрече» "
+            "или «Мини-курс из трёх уроков»."
+        )
+        return
+    if not customers:
+        await state.clear()
+        await _invite_customer(callback, actor=actor, business_id=business_id)
+        return
+
+    active = [item for item in capabilities if item.status == CapabilityStatus.ACTIVE]
+    offerings: list[Any] = []
+    for capability in active:
+        if capability.connector_key == "programs":
+            continue
+        offerings.extend(
+            await asyncio.to_thread(
+                control.list_business_offerings,
+                actor=actor,
+                capability_id=capability.id,
+            )
+        )
+    if not offerings:
+        capability = next(
+            (item for item in active if item.connector_key in {"consultations", "services"}),
+            None,
+        )
+        if capability is not None:
+            await state.clear()
+            await state.set_state(control.ClientPlatformControlState.offering_title)
+            await state.update_data(business_id=business_id, capability_id=capability.id)
+            await message.answer(
+                "Теперь добавим то, на что клиент сможет записаться.\n\n"
+                "Как называется Ваша встреча или услуга? Например: «Консультация 60 минут»."
+            )
+            return
+    if offerings and not any(item.slot.status == BookingSlotStatus.OPEN for item in slots):
+        offering = offerings[0]
+        await state.clear()
+        await state.set_state(control.ClientPlatformControlState.booking_start)
+        await state.update_data(business_id=business_id, offering_id=offering.id)
+        await message.answer(
+            f"Откроем первое время для записи на «{offering.title}».\n\n"
+            "Напишите дату и время: ДД.ММ.ГГГГ ЧЧ:ММ. Например: 10.08.2026 15:00"
+        )
+        return
+
+    await message.answer(
+        "✅ Основной путь уже настроен.\n\n"
+        "У Вас есть материалы, клиенты и возможность записи. Теперь можно выдать "
+        "программу клиенту или посмотреть результат.",
+        reply_markup=control._keyboard(
+            [[("📚 Выдать программу", f"cp:deliver:{control._uuid_token(business_id)}")],
+             [("📊 Посмотреть результат", f"cp:results:{control._uuid_token(business_id)}")]]
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("cps:programs:"))
+async def open_simple_programs(callback: CallbackQuery, state: FSMContext) -> None:
+    token = str(callback.data).split(":", 2)[2]
+    routed = _routed_callback(callback, f"cp:cap:{token}:programs")
+    await builder.open_programs(routed, state)
+
+
+@router.callback_query(F.data.startswith("cps:booking:"))
+async def open_simple_booking(callback: CallbackQuery, state: FSMContext) -> None:
+    business_id = control._token_uuid(str(callback.data).split(":", 2)[2])
+    actor = await control._actor(int(callback.from_user.id), business_id)
+    capabilities = await asyncio.to_thread(control.list_business_capabilities, actor=actor)
+    capability = next(
+        (item for item in capabilities if item.connector_key in {"consultations", "services"} and item.status == CapabilityStatus.ACTIVE),
+        None,
+    )
+    if capability is None:
+        await callback.answer()
+        await control._callback_message(callback).answer(
+            "Запись пока не подключена. Нажмите «Сделать следующий шаг» — я настрою её."
+        )
+        return
+    routed = _routed_callback(
+        callback,
+        f"cp:cap:{control._uuid_token(business_id)}:{capability.connector_key}",
+    )
+    await control.open_capability(routed, state)
+
+
+@router.callback_query(F.data.startswith("cps:advanced:"))
+async def open_advanced_dashboard(callback: CallbackQuery, state: FSMContext) -> None:
+    business_id = control._token_uuid(str(callback.data).split(":", 2)[2])
+    await state.clear()
+    await callback.answer()
+    await send_advanced_dashboard(
+        control._callback_message(callback),
+        user_id=int(callback.from_user.id),
+        business_id=business_id,
+    )
+
+
+__all__ = [
+    "install_simple_experience",
+    "router",
+    "send_simple_dashboard",
+    "welcome_keyboard",
+    "welcome_text",
+]

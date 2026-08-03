@@ -137,6 +137,19 @@ class ClientPlatformBookingTests(unittest.TestCase):
         )
         self.assertEqual(repeated.customer_id, customer_id)
 
+        restored = self.bookings.get_customer_booking(
+            telegram_user_id=700001,
+            business_id=self.business.business.id,
+            slot_id=slot.slot.id,
+        )
+        self.assertEqual(restored.customer_id, customer_id)
+        with self.assertRaises(BookingNotFound):
+            self.bookings.get_customer_booking(
+                telegram_user_id=700002,
+                business_id=self.business.business.id,
+                slot_id=slot.slot.id,
+            )
+
     def test_slot_claim_is_atomic_between_two_customers(self) -> None:
         slot = self.bookings.create_slot(
             actor=self.owner,

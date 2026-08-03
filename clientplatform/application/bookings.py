@@ -73,6 +73,25 @@ def list_customer_booking_slots(
         )
 
 
+def get_customer_booking(
+    *,
+    telegram_user_id: int,
+    business_id: str,
+    slot_id: str,
+) -> BookingClaim:
+    with get_db_ro() as conn:
+        assert_external_customer(
+            conn,
+            telegram_user_id=telegram_user_id,
+            business_id=business_id,
+        )
+        return BookingRepository(conn).get_customer_booking(
+            telegram_user_id=telegram_user_id,
+            business_id=business_id,
+            slot_id=slot_id,
+        )
+
+
 def book_customer_slot(
     *,
     telegram_user_id: int,

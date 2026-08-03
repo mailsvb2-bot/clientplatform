@@ -163,8 +163,11 @@ class ClientPlatformDualRoleEntryTests(unittest.IsolatedAsyncioTestCase):
             new_message = FakeMessage()
             await entry.clientplatform_entry_start(new_message, new_state)
 
-        self.assertEqual(new_state.states[-1], control.ClientPlatformControlState.business_name)
-        self.assertIn("название Вашего дела", new_message.answers[-1][0])
+        self.assertEqual(new_state.states, [])
+        self.assertIn("цифровой помощник", new_message.answers[-1][0])
+        button = new_message.answers[-1][1]["reply_markup"].inline_keyboard[0][0]
+        self.assertEqual(button.text, "🚀 Запустить мой бизнес")
+        self.assertEqual(button.callback_data, "cps:start")
 
     async def test_owner_only_paths_preserve_single_and_multiple_business_behavior(self) -> None:
         first = access("Первый")

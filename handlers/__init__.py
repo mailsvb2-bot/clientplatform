@@ -45,6 +45,13 @@ def _load_clientplatform_modules() -> tuple[ModuleType, ModuleType]:
     )
     globals()["clientplatform_admin_extension"] = admin_extension
     admin_extension.install_admin_extension(entry.router, control)
+
+    simple_experience = importlib.import_module(
+        ".clientplatform_simple_experience",
+        __name__,
+    )
+    globals()["clientplatform_simple_experience"] = simple_experience
+    simple_experience.install_simple_experience(control)
     return entry, control
 
 
@@ -72,5 +79,6 @@ __all__ = [
     "clientplatform_bot_lifecycle",
     "clientplatform_bot_setup",
     "clientplatform_control",
+    "clientplatform_simple_experience",
     "clientplatform_entry",
 ]

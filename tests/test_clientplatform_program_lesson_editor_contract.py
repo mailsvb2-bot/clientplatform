@@ -24,7 +24,8 @@ class ClientPlatformProgramLessonEditorContractTests(unittest.TestCase):
         source = Path(
             "handlers/clientplatform_program_lesson_editor_composition.py"
         ).read_text(encoding="utf-8")
-        self.assertIn("Редактировать уроки", source)
+        self.assertIn("Заменить или удалить материал", source)
+        self.assertNotIn("Редактировать уроки", source)
         self.assertIn("builder._draft_keyboard =", source)
         self.assertIn("_draft_lesson_editor_composed", source)
         self.assertIn("router = editor.router", source)

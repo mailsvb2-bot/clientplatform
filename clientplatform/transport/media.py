@@ -6,11 +6,20 @@ import hashlib
 import hmac
 import re
 import time
+import json
+from urllib.request import Request, urlopen
 from collections.abc import Callable
 from typing import Protocol
-from urllib.parse import quote, urlsplit, urlunsplit
+from urllib.parse import quote, urlencode, urlsplit, urlunsplit
 
 from clientplatform.domain.program_media import unwrap_program_media_reference
+from clientplatform.domain.external_media import (
+    ExternalMediaProvider,
+    dropbox_direct_url,
+    google_drive_direct_url,
+    normalize_external_media_url,
+    onedrive_direct_url,
+)
 from clientplatform.domain.programs import ContentKind
 from clientplatform.transport.base import CredentialProvider
 
@@ -28,6 +37,42 @@ class MediaReferenceResolver(Protocol):
 
 _BUCKET_RE = re.compile(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]")
 _SIGNATURE_RE = re.compile(r"[A-Za-z0-9_-]{43}")
+
+
+def _yandex_download_url_sync(public_url: str, *, timeout: float = 12.0) -> str:
+    endpoint = "https://cloud-api.yandex.net/v1/disk/public/resources/download?" + urlencode(
+        {"public_key": public_url}
+    )
+    request = Request(
+        endpoint,
+        headers={"Accept": "application/json", "User-Agent": "ClientPlatform/1.0"},
+        method="GET",
+    )
+    try:
+        with urlopen(request, timeout=timeout) as response:  # nosec B310 - fixed HTTPS Yandex API
+            payload = json.loads(response.read(262144).decode("utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise MediaReferenceError("external_media_yandex_unavailable") from exc
+    href = str(payload.get("href") or "").strip()
+    if not href:
+        raise MediaReferenceError("external_media_yandex_not_public")
+    return normalize_external_media_url(href).url
+
+
+async def resolve_external_media_reference(value: str) -> str:
+    reference = normalize_external_media_url(value)
+    if reference.provider == ExternalMediaProvider.YANDEX_DISK:
+        return await asyncio.to_thread(_yandex_download_url_sync, reference.url)
+    if reference.provider == ExternalMediaProvider.GOOGLE_DRIVE:
+        try:
+            return google_drive_direct_url(reference.url)
+        except ValueError as exc:
+            raise MediaReferenceError("external_media_google_drive_invalid") from exc
+    if reference.provider == ExternalMediaProvider.DROPBOX:
+        return dropbox_direct_url(reference.url)
+    if reference.provider == ExternalMediaProvider.ONEDRIVE:
+        return onedrive_direct_url(reference.url)
+    return reference.url
 
 
 def _provider_safe_reference(value: str) -> str:
@@ -105,11 +150,14 @@ def verify_media_gateway_signature(
 
 
 class SafeMediaReferenceResolver:
-    """Allow Telegram file IDs and HTTPS URLs for explicit local/dev use."""
+    """Allow Telegram file IDs and resolve supported public cloud links."""
 
     async def resolve(self, reference: str, kind: ContentKind) -> str:
         del kind
-        return _provider_safe_reference(reference)
+        normalized = _provider_safe_reference(reference)
+        if normalized.startswith("https://"):
+            return await resolve_external_media_reference(normalized)
+        return normalized
 
 
 class HmacMediaGatewayResolver:
@@ -156,7 +204,10 @@ class HmacMediaGatewayResolver:
         if not storage_reference.startswith("s3://"):
             if "://" not in normalized:
                 raise MediaReferenceError("media_bot_local_reference_not_portable")
-            return _provider_safe_reference(normalized)
+            safe = _provider_safe_reference(normalized)
+            if safe.startswith("https://"):
+                return await resolve_external_media_reference(safe)
+            return safe
 
         bucket, key = parse_s3_reference(storage_reference)
         secret = str(

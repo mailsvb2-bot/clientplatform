@@ -5,7 +5,13 @@ from aiogram import F, Router
 from aiogram.filters import BaseFilter, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import (
+    BufferedInputFile,
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
 
 from clientplatform.application.activity import (
     claim_customer_invite,
@@ -18,6 +24,7 @@ from clientplatform.application.activity import (
     list_business_offerings,
     save_business_profile,
 )
+from clientplatform.application.booking_reminders import schedule_booking_reminders
 from clientplatform.application.bookings import (
     book_customer_slot,
     create_booking_slot,
@@ -49,6 +56,11 @@ from clientplatform.domain.activity import (
     ActivityError,
     ActivityNotFound,
     CapabilityStatus,
+)
+from clientplatform.domain.booking_calendar import (
+    booking_calendar_filename,
+    booking_calendar_ics,
+    google_calendar_url,
 )
 from clientplatform.domain.bookings import BookingError, BookingSlotStatus
 from clientplatform.domain.programs import ContentKind, ProgramError
@@ -338,8 +350,24 @@ async def receive_activity_description(message: Message, state: FSMContext) -> N
         await message.answer("Описание деятельности обновлено.")
         await _send_dashboard(message, user_id=_user_id(message), business_id=business_id)
         return
+
+    # Первый запуск не перекладывает устройство платформы на владельца.
+    # Подключаем базовые возможности автоматически; их можно изменить позже.
+    for connector_key in ("programs", "consultations", "services"):
+        await asyncio.to_thread(
+            enable_business_capability,
+            actor=actor,
+            connector_key=connector_key,
+        )
+    await asyncio.to_thread(complete_business_profile, actor=actor)
     await state.clear()
-    await _send_capability_setup(message, user_id=_user_id(message), business_id=business_id)
+    await message.answer(
+        "✅ Всё готово.\n\n"
+        "Я создал рабочее пространство, где можно подключать клиентов, "
+        "назначать встречи, выдавать материалы и видеть результат. "
+        "Технические настройки Вам не понадобятся."
+    )
+    await _send_dashboard(message, user_id=_user_id(message), business_id=business_id)
 
 
 @router.callback_query(F.data.startswith("cp:business:"))
@@ -720,11 +748,43 @@ async def book_client_slot(callback: CallbackQuery) -> None:
         slot_id=_token_uuid(slot_token),
     )
     await callback.answer("Запись подтверждена")
-    await _callback_message(callback).answer(
-        f"Вы записаны: {claim.slot.offering_title} — {claim.slot.local_start}, "
+    message = _callback_message(callback)
+    await message.answer(
+        f"✅ Вы записаны: {claim.slot.offering_title} — {claim.slot.local_start}, "
         f"{claim.slot.slot.duration_minutes} мин.\n"
-        f"Бизнес: {claim.slot.business_name}."
+        f"Бизнес: {claim.slot.business_name}.\n\n"
+        "Я также пришлю напоминания в Telegram. Ниже можно одним нажатием "
+        "добавить встречу в календарь телефона."
     )
+
+    slot = claim.slot.slot
+    if all(hasattr(slot, name) for name in ("starts_at", "ends_at", "business_id", "id")):
+        await asyncio.to_thread(
+            schedule_booking_reminders,
+            telegram_user_id=int(callback.from_user.id),
+            claim=claim,
+        )
+        document_sender = getattr(message, "answer_document", None)
+        if callable(document_sender):
+            calendar = BufferedInputFile(
+                booking_calendar_ics(claim.slot),
+                filename=booking_calendar_filename(claim.slot),
+            )
+            await document_sender(
+                calendar,
+                caption=(
+                    "📅 Нажмите на файл — телефон предложит добавить встречу "
+                    "с напоминаниями за 24 часа и за 1 час."
+                ),
+                reply_markup=InlineKeyboardMarkup(
+                    inline_keyboard=[[
+                        InlineKeyboardButton(
+                            text="Добавить в Google Календарь",
+                            url=google_calendar_url(claim.slot),
+                        )
+                    ]]
+                ),
+            )
 
 
 @router.callback_query(F.data.startswith("cp:progadd:"))

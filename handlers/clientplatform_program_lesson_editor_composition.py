@@ -24,7 +24,7 @@ def _draft_keyboard_with_lesson_editor(record):
         rows.append(
             [
                 (
-                    "Редактировать уроки",
+                    "✏️ Заменить или удалить материал",
                     editor._program_callback(
                         "dless",
                         business_id,
