@@ -1,0 +1,91 @@
+name: Patch ClientPlatform Admin Funnel
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - '.github/workflows/patch-clientplatform-admin-funnel.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout exact pull-request head
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+
+      - name: Apply exact funnel payment patch
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('handlers/clientplatform_admin_extension.py')
+          source = path.read_text(encoding='utf-8')
+          old = '''    (
+              base_snapshot,
+              insights,
+              interaction,
+              audit,
+          ) = await asyncio.gather(
+              admin._base_snapshot(ctx),
+              asyncio.to_thread(admin_ops.business_admin_insights, actor=ctx.actor),
+              asyncio.to_thread(
+                  admin_ops.interaction_snapshot,
+                  actor=ctx.actor,
+                  window_minutes=60,
+              ),
+              asyncio.to_thread(admin_ops.recent_audit_events, actor=ctx.actor, limit=12),
+          )
+          '''
+          new = '''    (
+              base_snapshot,
+              insights,
+              payments,
+              interaction,
+              audit,
+          ) = await asyncio.gather(
+              admin._base_snapshot(ctx),
+              asyncio.to_thread(admin_ops.business_admin_insights, actor=ctx.actor),
+              _optional_thread(
+                  admin_ops.list_payments,
+                  default=[],
+                  actor=ctx.actor,
+                  limit=20,
+              ),
+              asyncio.to_thread(
+                  admin_ops.interaction_snapshot,
+                  actor=ctx.actor,
+                  window_minutes=60,
+              ),
+              asyncio.to_thread(admin_ops.recent_audit_events, actor=ctx.actor, limit=12),
+          )
+          '''
+          if source.count(old) != 1:
+              raise SystemExit(f'unexpected_target_count:{source.count(old)}')
+          path.write_text(source.replace(old, new), encoding='utf-8')
+          PY
+          python -m py_compile handlers/clientplatform_admin_extension.py
+          grep -Fq 'payments,' handlers/clientplatform_admin_extension.py
+          grep -Fq 'admin_ops.list_payments' handlers/clientplatform_admin_extension.py
+          rm -f .github/workflows/patch-clientplatform-admin-funnel.yml
+
+      - name: Commit exact patch
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --quiet && exit 0
+          git commit -m 'Load payment records in admin funnel report'
+          git push origin "HEAD:${GITHUB_HEAD_REF}"
