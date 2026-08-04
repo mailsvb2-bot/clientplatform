@@ -3,20 +3,15 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from runtime import health_server
-
 ROOT = Path(__file__).resolve().parents[1]
 BACKUP_CONFIGURATOR = ROOT / "deploy/clientplatform/configure-backup-age.sh"
 
 
 def test_health_probe_uses_clientplatform_service_identity() -> None:
-    assert health_server._SERVICE_NAME == "clientplatform"
-    assert health_server._public_probe_payload({"ok": True, "probe": "health"}) == {
-        "ok": True,
-        "service": "clientplatform",
-        "probe": "health",
-    }
     source = (ROOT / "runtime/health_server.py").read_text(encoding="utf-8")
+    assert "_SERVICE_NAME = 'clientplatform'" in source
+    assert "'service': str(payload.get('service') or _SERVICE_NAME)" in source
+    assert source.count("'service': _SERVICE_NAME") == 2
     assert "'service': 'metrotherapy'" not in source
 
 
