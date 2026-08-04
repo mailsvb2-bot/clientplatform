@@ -66,6 +66,21 @@ def _load_clientplatform_modules() -> tuple[ModuleType, ModuleType]:
     )
     globals()["clientplatform_public_storefront"] = public_storefront
     public_storefront.install_public_storefront(owner_journey)
+
+    promotion = importlib.import_module(
+        ".clientplatform_promotion",
+        __name__,
+    )
+    globals()["clientplatform_promotion"] = promotion
+    promotion_install = importlib.import_module(
+        ".clientplatform_promotion_install",
+        __name__,
+    )
+    globals()["clientplatform_promotion_install"] = promotion_install
+    promotion_install.install_promotion_engine(
+        owner_module=owner_journey,
+        simple_module=simple_experience,
+    )
     return entry, control
 
 
@@ -91,6 +106,12 @@ def __getattr__(name: str) -> ModuleType:
     if name == "clientplatform_public_storefront":
         _load_clientplatform_modules()
         return globals()["clientplatform_public_storefront"]
+    if name == "clientplatform_promotion":
+        _load_clientplatform_modules()
+        return globals()["clientplatform_promotion"]
+    if name == "clientplatform_promotion_install":
+        _load_clientplatform_modules()
+        return globals()["clientplatform_promotion_install"]
     raise AttributeError(name)
 
 
@@ -100,6 +121,8 @@ __all__ = [
     "clientplatform_bot_setup",
     "clientplatform_control",
     "clientplatform_owner_journey",
+    "clientplatform_promotion",
+    "clientplatform_promotion_install",
     "clientplatform_public_storefront",
     "clientplatform_simple_experience",
     "clientplatform_entry",
