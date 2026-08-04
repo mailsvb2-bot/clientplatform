@@ -43,14 +43,14 @@ _CHANNEL_LABELS = {
     PromotionChannel.VK: "ВКонтакте",
     PromotionChannel.WHATSAPP: "WhatsApp",
     PromotionChannel.WEBSITE: "Сайт и объявления",
-    PromotionChannel.OFFLINE: "Офлайн и QR",
+    PromotionChannel.OFFLINE: "Офлайн-материалы",
 }
 _CHANNEL_BUTTONS = (
     (PromotionChannel.TELEGRAM, "✈️ Telegram"),
     (PromotionChannel.VK, "🔵 ВКонтакте"),
     (PromotionChannel.WHATSAPP, "🟢 WhatsApp"),
     (PromotionChannel.WEBSITE, "🌐 Сайт/объявление"),
-    (PromotionChannel.OFFLINE, "📄 Офлайн/QR"),
+    (PromotionChannel.OFFLINE, "📄 Офлайн-материалы"),
 )
 _SLOT_LIMIT = 12
 
@@ -77,8 +77,11 @@ def _creative_text(view: Any, link: str) -> str:
     )
 
 
-async def open_promotion_workspace(callback: CallbackQuery) -> None:
-    business_token = str(callback.data).split(":", 2)[2]
+async def _render_promotion_workspace(
+    callback: CallbackQuery,
+    *,
+    business_token: str,
+) -> None:
     business_id = control._token_uuid(business_token)
     actor = await control._actor(int(callback.from_user.id), business_id)
     slots, stats, campaigns = await asyncio.gather(
@@ -93,7 +96,7 @@ async def open_promotion_workspace(callback: CallbackQuery) -> None:
     lines = (
         f"Рекламных ссылок: {stats.campaigns}\n"
         f"Сейчас активны: {active_campaigns}\n"
-        f"Людей открыли: {stats.people_opened}\n"
+        f"Уникальных людей: {stats.people_opened}\n"
         f"Записались: {stats.bookings}\n"
         f"Конверсия в запись: {stats.conversion_percent:.1f}%"
     )
@@ -130,11 +133,19 @@ async def open_promotion_workspace(callback: CallbackQuery) -> None:
     )
 
 
+async def open_promotion_workspace(callback: CallbackQuery) -> None:
+    await _render_promotion_workspace(
+        callback,
+        business_token=str(callback.data).split(":", 2)[2],
+    )
+
+
 @simple.router.callback_query(F.data.startswith("cpp:stats:"))
 async def refresh_promotion_stats(callback: CallbackQuery) -> None:
-    business_token = str(callback.data).split(":", 2)[2]
-    callback.data = f"cpj:promote:{business_token}"
-    await open_promotion_workspace(callback)
+    await _render_promotion_workspace(
+        callback,
+        business_token=str(callback.data).split(":", 2)[2],
+    )
 
 
 @simple.router.callback_query(F.data.startswith("cpp:slot:"))
@@ -142,12 +153,13 @@ async def choose_promotion_channel(callback: CallbackQuery) -> None:
     _, _, business_token, slot_token = str(callback.data).split(":", 3)
     business_id = control._token_uuid(business_token)
     actor = await control._actor(int(callback.from_user.id), business_id)
-    slot = await asyncio.to_thread(
+    slots = await asyncio.to_thread(
         control.list_booking_slots,
         actor=actor,
     )
+    selected_slot_id = control._token_uuid(slot_token)
     selected = next(
-        (item for item in slot if item.slot.id == control._token_uuid(slot_token)),
+        (item for item in slots if item.slot.id == selected_slot_id),
         None,
     )
     if selected is None:
@@ -293,27 +305,29 @@ async def book_from_promotion(callback: CallbackQuery) -> None:
         telegram_user_id=int(callback.from_user.id),
         claim=claim,
     )
-    calendar = BufferedInputFile(
-        booking_calendar_ics(claim.slot),
-        filename=booking_calendar_filename(claim.slot),
-    )
-    await message.answer_document(
-        calendar,
-        caption=(
-            "📅 Нажмите на файл — телефон предложит добавить встречу "
-            "с напоминаниями за 24 часа и за 1 час."
-        ),
-        reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text="Добавить в Google Календарь",
-                        url=google_calendar_url(claim.slot),
-                    )
+    document_sender = getattr(message, "answer_document", None)
+    if callable(document_sender):
+        calendar = BufferedInputFile(
+            booking_calendar_ics(claim.slot),
+            filename=booking_calendar_filename(claim.slot),
+        )
+        await document_sender(
+            calendar,
+            caption=(
+                "📅 Нажмите на файл — телефон предложит добавить встречу "
+                "с напоминаниями за 24 часа и за 1 час."
+            ),
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="Добавить в Google Календарь",
+                            url=google_calendar_url(claim.slot),
+                        )
+                    ]
                 ]
-            ]
-        ),
-    )
+            ),
+        )
 
 
 __all__ = [
