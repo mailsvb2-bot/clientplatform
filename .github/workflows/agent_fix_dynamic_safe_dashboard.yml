@@ -1,0 +1,68 @@
+name: Fix dynamic safe dashboard
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/agent_fix_dynamic_safe_dashboard.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+      - name: Preserve safety and honor current dashboard
+        run: |
+          set -Eeuo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('handlers/clientplatform_interaction_safety.py')
+          text = path.read_text(encoding='utf-8')
+          old = '''        await state.clear()
+          await render_dashboard(
+              message,
+              user_id=user_id,
+              business_id=business_id,
+              access=access,
+              profile=profile,
+              capabilities=capabilities,
+          )
+          '''
+          new = '''        await state.clear()
+          current_dashboard = control_module._send_dashboard
+          if current_dashboard is not safe_send_dashboard:
+              await current_dashboard(
+                  message,
+                  user_id=user_id,
+                  business_id=business_id,
+              )
+              return
+          await render_dashboard(
+              message,
+              user_id=user_id,
+              business_id=business_id,
+              access=access,
+              profile=profile,
+              capabilities=capabilities,
+          )
+          '''
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one safe-resume render block, found {text.count(old)}')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+          rm -f .github/workflows/agent_fix_dynamic_safe_dashboard.yml
+          python -m compileall -q handlers clientplatform core services tests
+          git diff --check
+          git config user.name 'clientplatform-agent'
+          git config user.email 'clientplatform-agent@users.noreply.github.com'
+          git add -A
+          git commit -m 'Honor the current dashboard after safety checks'
+          git push origin "HEAD:${GITHUB_HEAD_REF}"
