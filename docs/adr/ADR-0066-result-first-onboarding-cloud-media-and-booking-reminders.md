@@ -16,6 +16,7 @@ The inherited Telegram administration surface exposes many correct but advanced 
 5. A confirmed booking creates two independent reminder layers:
    - a standards-compliant `.ics` event with alarms at 24 hours and 1 hour, which the user can import into the phone calendar;
    - persistent Telegram reminder jobs at the same offsets. Every reminder rechecks that the customer still owns an active booking before sending.
+6. Dashboard extensions do not bypass onboarding or interaction safety. The safety layer validates the business profile, business name and active capabilities first, then delegates ready businesses to the currently installed simple or advanced dashboard.
 
 ## Platform limitation handled explicitly
 
