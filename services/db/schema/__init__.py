@@ -11,6 +11,7 @@ from . import clientplatform_connections
 from . import clientplatform_customers
 from . import clientplatform_program_media
 from . import clientplatform_programs
+from . import clientplatform_promotions
 from . import clientplatform_tenancy
 from . import analytics
 from . import funnel
@@ -30,6 +31,7 @@ PARTS = [
     clientplatform_customers,
     clientplatform_activity,
     clientplatform_bookings,
+    clientplatform_promotions,
     clientplatform_programs,
     clientplatform_program_media,
     clientplatform_connections,
