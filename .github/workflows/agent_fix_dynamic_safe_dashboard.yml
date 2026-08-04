@@ -26,34 +26,36 @@ jobs:
 
           path = Path('handlers/clientplatform_interaction_safety.py')
           text = path.read_text(encoding='utf-8')
-          old = '''        await state.clear()
-          await render_dashboard(
-              message,
-              user_id=user_id,
-              business_id=business_id,
-              access=access,
-              profile=profile,
-              capabilities=capabilities,
+          old = (
+              "        await state.clear()\n"
+              "        await render_dashboard(\n"
+              "            message,\n"
+              "            user_id=user_id,\n"
+              "            business_id=business_id,\n"
+              "            access=access,\n"
+              "            profile=profile,\n"
+              "            capabilities=capabilities,\n"
+              "        )\n"
           )
-          '''
-          new = '''        await state.clear()
-          current_dashboard = control_module._send_dashboard
-          if current_dashboard is not safe_send_dashboard:
-              await current_dashboard(
-                  message,
-                  user_id=user_id,
-                  business_id=business_id,
-              )
-              return
-          await render_dashboard(
-              message,
-              user_id=user_id,
-              business_id=business_id,
-              access=access,
-              profile=profile,
-              capabilities=capabilities,
+          new = (
+              "        await state.clear()\n"
+              "        current_dashboard = control_module._send_dashboard\n"
+              "        if current_dashboard is not safe_send_dashboard:\n"
+              "            await current_dashboard(\n"
+              "                message,\n"
+              "                user_id=user_id,\n"
+              "                business_id=business_id,\n"
+              "            )\n"
+              "            return\n"
+              "        await render_dashboard(\n"
+              "            message,\n"
+              "            user_id=user_id,\n"
+              "            business_id=business_id,\n"
+              "            access=access,\n"
+              "            profile=profile,\n"
+              "            capabilities=capabilities,\n"
+              "        )\n"
           )
-          '''
           if text.count(old) != 1:
               raise SystemExit(f'expected one safe-resume render block, found {text.count(old)}')
           path.write_text(text.replace(old, new, 1), encoding='utf-8')
