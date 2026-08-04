@@ -52,6 +52,13 @@ def _load_clientplatform_modules() -> tuple[ModuleType, ModuleType]:
     )
     globals()["clientplatform_simple_experience"] = simple_experience
     simple_experience.install_simple_experience(control)
+
+    owner_journey = importlib.import_module(
+        ".clientplatform_owner_journey",
+        __name__,
+    )
+    globals()["clientplatform_owner_journey"] = owner_journey
+    owner_journey.install_owner_journey(entry, control, simple_experience)
     return entry, control
 
 
@@ -71,6 +78,9 @@ def __getattr__(name: str) -> ModuleType:
     if name == "clientplatform_admin_extension":
         _load_clientplatform_modules()
         return globals()["clientplatform_admin_extension"]
+    if name == "clientplatform_owner_journey":
+        _load_clientplatform_modules()
+        return globals()["clientplatform_owner_journey"]
     raise AttributeError(name)
 
 
@@ -79,6 +89,7 @@ __all__ = [
     "clientplatform_bot_lifecycle",
     "clientplatform_bot_setup",
     "clientplatform_control",
+    "clientplatform_owner_journey",
     "clientplatform_simple_experience",
     "clientplatform_entry",
 ]
