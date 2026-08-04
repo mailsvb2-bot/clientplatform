@@ -4,7 +4,11 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
-from clientplatform.domain.bookings import BookingSlotStatus, BookingSlotView
+from clientplatform.domain.bookings import (
+    BookingSlot,
+    BookingSlotStatus,
+    BookingSlotView,
+)
 from clientplatform.domain.promotions import (
     PromotionCampaign,
     PromotionCampaignStatus,
@@ -52,6 +56,35 @@ def _campaign_from_row(row: Any) -> PromotionCampaign:
         created_by_member_id=str(_value(row, "created_by_member_id", 13)),
         created_at=str(_value(row, "created_at", 14)),
         updated_at=str(_value(row, "updated_at", 15)),
+    )
+
+
+def _slot_view_from_row(row: Any) -> BookingSlotView:
+    booked_customer_id = _value(row, "booked_customer_id", 7)
+    booked_at = _value(row, "booked_at", 11)
+    cancelled_at = _value(row, "cancelled_at", 12)
+    slot = BookingSlot(
+        id=str(_value(row, "id", 0)),
+        business_id=str(_value(row, "business_id", 1)),
+        offering_id=str(_value(row, "offering_id", 2)),
+        starts_at=str(_value(row, "starts_at", 3)),
+        ends_at=str(_value(row, "ends_at", 4)),
+        duration_minutes=int(_value(row, "duration_minutes", 5)),
+        status=BookingSlotStatus(str(_value(row, "status", 6))),
+        booked_customer_id=(
+            None if booked_customer_id is None else str(booked_customer_id)
+        ),
+        created_by_member_id=str(_value(row, "created_by_member_id", 8)),
+        created_at=str(_value(row, "created_at", 9)),
+        updated_at=str(_value(row, "updated_at", 10)),
+        booked_at=None if booked_at is None else str(booked_at),
+        cancelled_at=None if cancelled_at is None else str(cancelled_at),
+    )
+    return BookingSlotView(
+        slot=slot,
+        offering_title=str(_value(row, "offering_title", 13)),
+        business_name=str(_value(row, "business_name", 14)),
+        timezone=str(_value(row, "timezone", 15)),
     )
 
 
@@ -196,7 +229,17 @@ class PromotionRepository:
         token = normalize_source_token(source_token)
         row = self._conn.execute(
             _CAMPAIGN_SELECT
-            + " WHERE source_token=? AND status='active' LIMIT 1",
+            + """
+              WHERE source_token=? AND status='active'
+                AND EXISTS(
+                    SELECT 1
+                    FROM booking_slots bs
+                    WHERE bs.id=promotion_campaigns.booking_slot_id
+                      AND bs.business_id=promotion_campaigns.business_id
+                      AND bs.status='open'
+                )
+              LIMIT 1
+            """,
             (token,),
         ).fetchone()
         if row is None:
@@ -228,9 +271,7 @@ class PromotionRepository:
         ).fetchone()
         if row is None:
             raise PromotionNotFound("Опубликованное время больше не найдено")
-        from clientplatform.infrastructure.booking_repository import _view_from_row
-
-        return _view_from_row(row)
+        return _slot_view_from_row(row)
 
     def record_event(
         self,
@@ -246,6 +287,7 @@ class PromotionRepository:
             if isinstance(event_type, PromotionEventType)
             else PromotionEventType(str(event_type))
         )
+        timestamp = str(now or _utc_now())
         dedupe_key = f"{selected_type.value}:{campaign.id}:{normalized_customer}"
         cursor = self._conn.execute(
             """
@@ -263,7 +305,7 @@ class PromotionRepository:
                 normalized_customer,
                 campaign.booking_slot_id,
                 dedupe_key,
-                str(now or _utc_now()),
+                timestamp,
             ),
         )
         inserted = int(getattr(cursor, "rowcount", 1) or 0) == 1
@@ -274,7 +316,7 @@ class PromotionRepository:
                 SET status='closed', updated_at=?
                 WHERE id=? AND business_id=?
                 """,
-                (str(now or _utc_now()), campaign.id, campaign.business_id),
+                (timestamp, campaign.id, campaign.business_id),
             )
         return inserted
 
