@@ -561,6 +561,14 @@ def install_interaction_safety(root_router: Router, control_module: ModuleType) 
             )
             return
         await state.clear()
+        current_dashboard = control_module._send_dashboard
+        if current_dashboard is not safe_send_dashboard:
+            await current_dashboard(
+                message,
+                user_id=user_id,
+                business_id=business_id,
+            )
+            return
         await render_dashboard(
             message,
             user_id=user_id,
