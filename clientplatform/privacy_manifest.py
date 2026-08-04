@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 TenantDisposition = Literal["erase", "retain", "anonymize"]
-CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-08-03.v9"
+CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-08-05.v10"
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,6 +104,24 @@ _POLICIES = (
         table="booking_slots",
         disposition="anonymize",
         reason="business availability and customer appointment fulfilment",
+        required=True,
+    ),
+    TenantPrivacyPolicy(
+        table="promotion_campaigns",
+        disposition="retain",
+        reason=(
+            "business-owned advertising copy, source channel and campaign lifecycle "
+            "without customer identity"
+        ),
+        required=True,
+    ),
+    TenantPrivacyPolicy(
+        table="promotion_events",
+        disposition="anonymize",
+        reason=(
+            "customer-linked campaign open and booking attribution retained only after "
+            "customer identity is anonymized"
+        ),
         required=True,
     ),
     TenantPrivacyPolicy(
