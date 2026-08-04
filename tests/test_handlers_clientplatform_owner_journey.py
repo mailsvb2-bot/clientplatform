@@ -148,8 +148,8 @@ async def test_publishing_time_ends_with_actionable_receipt_not_generic_dashboar
     ]
     assert "👀 Посмотреть глазами клиента" in labels
     assert "📅 Открыть мой календарь" in labels
-    assert "📨 Отправить клиенту" in labels
-    assert "📢 Рекламировать" in labels
+    assert "📨 Просто отправить" in labels
+    assert "🚀 Получить клиентов" in labels
     assert "✏️ Изменить" in labels
     assert "➕ Ещё время" in labels
     assert all(
@@ -182,7 +182,11 @@ async def test_owner_dashboard_exposes_services_calendar_page_and_promotion(
     )
     monkeypatch.setattr(simple, "_business_snapshot", AsyncMock(return_value=snapshot))
     monkeypatch.setattr(owner, "_all_offerings", AsyncMock(return_value=[object()]))
-    monkeypatch.setattr(control, "list_booking_slots", lambda **_kwargs: [_slot(business_id=business_id)])
+    monkeypatch.setattr(
+        control,
+        "list_booking_slots",
+        lambda **_kwargs: [_slot(business_id=business_id)],
+    )
     message = FakeMessage()
 
     await owner.send_owner_dashboard(message, user_id=101, business_id=business_id)
@@ -199,7 +203,7 @@ async def test_owner_dashboard_exposes_services_calendar_page_and_promotion(
     assert "📅 Мой календарь" in labels
     assert "👥 Записи клиентов" in labels
     assert "🔗 Моя страница" in labels
-    assert "📢 Продвижение" in labels
+    assert "🚀 Получить клиентов" in labels
 
 
 @pytest.mark.asyncio
@@ -223,7 +227,11 @@ async def test_fixed_width_public_payload_handles_underscore_inside_uuid_tokens(
             customer_id=str(uuid4()),
         ),
     )
-    monkeypatch.setattr(control, "list_customer_booking_slots", lambda **_kwargs: [published])
+    monkeypatch.setattr(
+        control,
+        "list_customer_booking_slots",
+        lambda **_kwargs: [published],
+    )
 
     await public.dispatch_public_start(
         original,
