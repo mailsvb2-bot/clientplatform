@@ -99,6 +99,7 @@ _PROMOTION_ANALYTICS_ROLES = frozenset(
         PlatformRole.OWNER,
         PlatformRole.ADMINISTRATOR,
         PlatformRole.MANAGER,
+        PlatformRole.CONTENT_MANAGER,
         PlatformRole.MARKETER,
         PlatformRole.ANALYST,
     }
@@ -249,7 +250,7 @@ class TenantContext:
         if self.role not in _PROMOTION_ANALYTICS_ROLES:
             raise TenantPermissionDenied(
                 "promotion analytics requires owner, administrator, manager, "
-                "marketer or analyst role"
+                "content manager, marketer or analyst role"
             )
 
     def assert_can_manage_deliveries(self) -> None:
