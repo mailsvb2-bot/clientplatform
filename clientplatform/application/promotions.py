@@ -53,7 +53,10 @@ def parse_promotion_start_payload(payload: str) -> str | None:
     raw = str(payload or "").strip()
     if not raw.startswith(PUBLIC_PROMOTION_PREFIX):
         return None
-    return normalize_source_token(raw.removeprefix(PUBLIC_PROMOTION_PREFIX))
+    try:
+        return normalize_source_token(raw.removeprefix(PUBLIC_PROMOTION_PREFIX))
+    except ValueError:
+        return None
 
 
 def create_slot_promotion(
