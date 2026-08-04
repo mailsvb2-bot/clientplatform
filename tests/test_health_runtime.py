@@ -42,8 +42,8 @@ async def test_health_handler_reports_ok(tmp_path, monkeypatch):
     response = await health_server._health(None)  # type: ignore[arg-type]
     assert response.status == 200
     assert response.text
-    assert 'metrotherapy' in response.text
-    assert 'probe' in response.text
+    assert '"service": "clientplatform"' in response.text
+    assert '"probe": "health"' in response.text
     assert 'precise_scheduler_queue_size' not in response.text
     assert 'telegram_transport' not in response.text
     assert 'telegram_webhook_enabled' not in response.text
@@ -65,6 +65,7 @@ async def test_health_handler_reports_db_failure(tmp_path, monkeypatch):
     response = await health_server._ready(None)  # type: ignore[arg-type]
     assert response.status == 500
     assert '"ok": false' in response.text
+    assert '"service": "clientplatform"' in response.text
     assert '"probe": "readiness"' in response.text
     assert 'db:broken' not in response.text
 
@@ -77,6 +78,7 @@ def test_build_health_payload_reports_schema_missing(monkeypatch, tmp_path):
 
     payload, status = health_server.build_readiness_payload()
     assert status == 500
+    assert payload['service'] == 'clientplatform'
     assert payload['db_ready'] is True
     assert payload['schema_ready'] is False
     assert payload['error'].startswith('schema_missing:')
@@ -119,6 +121,7 @@ def test_build_health_payload_reports_hybrid_polling_plus_http_ingress(monkeypat
     payload, status = health_server.build_health_payload()
 
     assert status == 200
+    assert payload['service'] == 'clientplatform'
     assert payload['telegram_transport'] == 'polling'
     assert payload['telegram_webhook_enabled'] is False
     assert payload['messenger_webhook_enabled'] is True

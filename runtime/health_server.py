@@ -32,6 +32,7 @@ from services.validators.audio import audio_readiness
 log = logging.getLogger(__name__)
 
 
+_SERVICE_NAME = 'clientplatform'
 _DIAGNOSTICS_HEADER = 'X-Metrotherapy-Diagnostics-Token'
 _DIAGNOSTICS_ENV = 'HEALTHCHECK_DIAGNOSTICS_TOKEN'
 
@@ -61,7 +62,7 @@ def _diagnostics_authorized(request: web.Request) -> bool:
 def _public_probe_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         'ok': bool(payload.get('ok')),
-        'service': str(payload.get('service') or 'metrotherapy'),
+        'service': str(payload.get('service') or _SERVICE_NAME),
         'probe': str(payload.get('probe') or 'health'),
     }
 
@@ -302,7 +303,7 @@ def build_health_payload() -> tuple[dict[str, Any], int]:
     _, _, messenger_preflight_fields = _messenger_preflight_readiness()
     details: dict[str, Any] = {
         'ok': True,
-        'service': 'metrotherapy',
+        'service': _SERVICE_NAME,
         'probe': 'health',
         'db_engine': CONFIG.engine,
         'db_target': redacted_db_target(),
@@ -361,7 +362,7 @@ def build_readiness_payload() -> tuple[dict[str, Any], int]:
     )
     details: dict[str, Any] = {
         'ok': ready,
-        'service': 'metrotherapy',
+        'service': _SERVICE_NAME,
         'probe': 'readiness',
         'db_ready': db_ok,
         'schema_ready': schema_ok,
