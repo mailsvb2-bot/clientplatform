@@ -154,7 +154,8 @@ async def _monitor_loop() -> None:
         raise
 
 
-async def start_admin_observability(_bot: Any) -> None:
+async def start_admin_observability(bot: Any) -> None:
+    del bot
     global _task
     if _task is not None and not _task.done():
         return
@@ -164,7 +165,8 @@ async def start_admin_observability(_bot: Any) -> None:
     )
 
 
-async def stop_admin_observability(_bot: Any) -> None:
+async def stop_admin_observability(bot: Any) -> None:
+    del bot
     global _task
     task = _task
     _task = None
