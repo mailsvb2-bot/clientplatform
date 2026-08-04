@@ -12,9 +12,11 @@ import pytest
 
 from clientplatform.domain.activity import CapabilityStatus
 from clientplatform.domain.bookings import BookingSlot, BookingSlotStatus, BookingSlotView
+from clientplatform.domain.promotions import PromotionStats
 
 control = importlib.import_module("handlers.clientplatform_control")
 owner = importlib.import_module("handlers.clientplatform_owner_journey")
+promotion_engine = importlib.import_module("handlers.clientplatform_promotion")
 
 
 class FakeUser:
@@ -415,6 +417,16 @@ async def test_public_page_and_promotion_cover_ready_and_empty_states(
     )
     monkeypatch.setattr(owner, "_all_offerings", AsyncMock(return_value=[offering]))
     monkeypatch.setattr(control, "list_booking_slots", lambda **_kwargs: [slot])
+    monkeypatch.setattr(
+        promotion_engine,
+        "promotion_stats",
+        lambda **_kwargs: PromotionStats(campaigns=1, people_opened=4, bookings=1),
+    )
+    monkeypatch.setattr(
+        promotion_engine,
+        "list_promotion_campaigns",
+        lambda **_kwargs: [],
+    )
 
     page = FakeCallback(f"cpj:page:{business_token}")
     await owner.open_public_page_for_owner(page)
@@ -426,11 +438,19 @@ async def test_public_page_and_promotion_cover_ready_and_empty_states(
 
     promotion = FakeCallback(f"cpj:promote:{business_token}")
     await owner.open_promotion(promotion)
-    assert "готовый рекламный текст" in promotion.message.answers[-1][0]
-    assert any(label.startswith("📢 ") for label in _labels(promotion.message))
+    promotion_text = promotion.message.answers[-1][0]
+    assert "Получить клиентов" in promotion_text
+    assert "Уникальных людей: 4" in promotion_text
+    assert "Записались: 1" in promotion_text
+    assert any(label.startswith("🚀 ") for label in _labels(promotion.message))
 
     monkeypatch.setattr(owner, "_all_offerings", AsyncMock(return_value=[]))
     monkeypatch.setattr(control, "list_booking_slots", lambda **_kwargs: [])
+    monkeypatch.setattr(
+        promotion_engine,
+        "promotion_stats",
+        lambda **_kwargs: PromotionStats(campaigns=0, people_opened=0, bookings=0),
+    )
     empty_page = FakeCallback(f"cpj:page:{business_token}")
     await owner.open_public_page_for_owner(empty_page)
     assert "услуги пока не добавлены" in empty_page.message.answers[-1][0]
@@ -438,7 +458,7 @@ async def test_public_page_and_promotion_cover_ready_and_empty_states(
 
     empty_promotion = FakeCallback(f"cpj:promote:{business_token}")
     await owner.open_promotion(empty_promotion)
-    assert "Сначала опубликуйте" in empty_promotion.message.answers[-1][0]
+    assert "сначала опубликуйте" in empty_promotion.message.answers[-1][0].lower()
 
 
 @pytest.mark.asyncio
