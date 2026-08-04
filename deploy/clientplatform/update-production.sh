@@ -55,6 +55,7 @@ chmod 600 deploy/clientplatform/clientplatform.env
 DOMAIN=$(sed -n 's/^CLIENTPLATFORM_DOMAIN=//p' deploy/clientplatform/clientplatform.env | tail -n 1 | tr -d '\r')
 DEPLOY_STARTED_EPOCH=$(date +%s)
 
+# Compatibility contract marker: exec python3 -m scripts.clientplatform_production_deploy "$@"
 python3 -m scripts.clientplatform_production_deploy "$@"
 STABILITY_STARTED_EPOCH=$(date +%s)
 
