@@ -14,6 +14,7 @@ from clientplatform.domain.bookings import BookingSlotStatus
 simple = importlib.import_module("handlers.clientplatform_simple_experience")
 control = importlib.import_module("handlers.clientplatform_control")
 builder = importlib.import_module("handlers.clientplatform_program_builder")
+owner = importlib.import_module("handlers.clientplatform_owner_journey")
 
 
 class FakeUser:
@@ -129,7 +130,14 @@ async def test_start_simple_onboarding_sets_only_first_plain_language_step() -> 
 @pytest.mark.asyncio
 async def test_simple_dashboard_explains_outcomes_and_counts(monkeypatch: pytest.MonkeyPatch) -> None:
     business_id = str(uuid4())
-    slot = SimpleNamespace(slot=SimpleNamespace(status=BookingSlotStatus.OPEN))
+    slot = SimpleNamespace(
+        slot=SimpleNamespace(
+            status=BookingSlotStatus.OPEN,
+            starts_at="2026-08-10T10:00:00+00:00",
+        ),
+        local_start="10.08.2026 12:00",
+        offering_title="Консультация",
+    )
     monkeypatch.setattr(
         simple,
         "_business_snapshot",
@@ -140,11 +148,14 @@ async def test_simple_dashboard_explains_outcomes_and_counts(monkeypatch: pytest
             slots=[slot],
         )),
     )
+    monkeypatch.setattr(owner, "_all_offerings", AsyncMock(return_value=[object()]))
+    monkeypatch.setattr(control, "list_booking_slots", lambda **_kwargs: [slot])
     message = FakeMessage()
     await simple.send_simple_dashboard(message, user_id=101, business_id=business_id)
     text, kwargs = message.answers[-1]
     assert "Помогаю клиентам" in text
-    assert "Клиентов: 1 · программ: 2 · свободных времён: 1" in text
+    assert "Услуг: 1 · свободных времён: 1 · записей клиентов: 0" in text
+    assert "Материалов и программ: 2 · клиентов: 1" in text
     assert kwargs["reply_markup"].inline_keyboard[0][0].text == "✨ Сделать следующий шаг"
 
 
