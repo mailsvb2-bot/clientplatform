@@ -56,6 +56,7 @@ DOMAIN=$(sed -n 's/^CLIENTPLATFORM_DOMAIN=//p' deploy/clientplatform/clientplatf
 DEPLOY_STARTED_EPOCH=$(date +%s)
 
 python3 -m scripts.clientplatform_production_deploy "$@"
+STABILITY_STARTED_EPOCH=$(date +%s)
 
 post_deploy_ready() {
     docker exec "$APP_CONTAINER" python -c \
@@ -127,7 +128,7 @@ if [ -z "$container_id" ] || [ -z "$restart_count" ]; then
     exit 1
 fi
 
-deadline=$((DEPLOY_STARTED_EPOCH + STABILITY_SECONDS))
+deadline=$((STABILITY_STARTED_EPOCH + STABILITY_SECONDS))
 while [ "$(date +%s)" -lt "$deadline" ]; do
     current_id=$(docker inspect --format '{{.Id}}' "$APP_CONTAINER" 2>/dev/null || true)
     current_status=$(docker inspect --format '{{.State.Status}}' "$APP_CONTAINER" 2>/dev/null || true)
