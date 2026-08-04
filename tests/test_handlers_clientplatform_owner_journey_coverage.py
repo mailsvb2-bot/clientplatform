@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import inspect
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any, Callable
@@ -80,7 +81,10 @@ class FakeState:
 
 
 async def direct_to_thread(func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
-    return func(*args, **kwargs)
+    result = func(*args, **kwargs)
+    if inspect.isawaitable(result):
+        return await result
+    return result
 
 
 @pytest.fixture(autouse=True)
