@@ -7,7 +7,12 @@ from typing import Any
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
 
 from clientplatform.application.programs import (
     archive_program_draft_lesson,
@@ -17,6 +22,7 @@ from clientplatform.application.programs import (
     replace_program_draft_lesson_content,
     update_program_draft_lesson_title,
 )
+from clientplatform.domain.external_media import normalize_external_media_url
 from clientplatform.domain.programs import (
     ContentKind,
     Lesson,
@@ -101,6 +107,19 @@ def _lesson_detail_text(record: ProgramRecord, lesson: Lesson) -> str:
         if len(lesson.content_ref) > len(preview):
             preview += "…"
         lines.extend(["", f"Материал:\n{preview}"])
+    elif lesson.content_ref.startswith("https://"):
+        try:
+            external = normalize_external_media_url(lesson.content_ref)
+        except ValueError:
+            pass
+        else:
+            lines.extend(
+                [
+                    "",
+                    f"Источник: {external.provider_label}",
+                    "Хранение: внешний файл — место ClientPlatform не расходуется.",
+                ]
+            )
     return "\n".join(lines)
 
 
@@ -114,14 +133,14 @@ def _lesson_detail_keyboard(record: ProgramRecord, lesson: Lesson):
         movement.append(("⬇️ Ниже", _lesson_callback("dldown", business_id, lesson_id)))
     page = (lesson.position - 1) // _PAGE_SIZE
     rows: list[list[tuple[str, str]]] = [
-        [("Переименовать", _lesson_callback("dlname", business_id, lesson_id))],
-        [("Заменить материал", _lesson_callback("dlmat", business_id, lesson_id))],
+        [("✏️ Переименовать", _lesson_callback("dlname", business_id, lesson_id))],
+        [("🔄 Заменить материал", _lesson_callback("dlmat", business_id, lesson_id))],
     ]
     if movement:
         rows.append(movement)
     rows.extend(
         [
-            [("Удалить урок", _lesson_callback("dlask", business_id, lesson_id))],
+            [("🗑 Удалить урок", _lesson_callback("dlask", business_id, lesson_id))],
             [
                 (
                     "К списку уроков",
@@ -135,7 +154,19 @@ def _lesson_detail_keyboard(record: ProgramRecord, lesson: Lesson):
             ],
         ]
     )
-    return control._keyboard(rows)
+    markup = control._keyboard(rows)
+    if lesson.content_ref.startswith("https://"):
+        try:
+            external = normalize_external_media_url(lesson.content_ref)
+        except ValueError:
+            return markup
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="▶️ Открыть материал", url=external.url)],
+                *markup.inline_keyboard,
+            ]
+        )
+    return markup
 
 
 def _lesson_list_keyboard(record: ProgramRecord, *, page: int):

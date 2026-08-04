@@ -230,6 +230,7 @@ class Engine:
             "funnel2_expired_return_3d": self._funnel2_expired_return_3d,
             "remind_continue": self._remind_continue,
             "post_prompt": self._post_prompt,
+            "clientplatform_booking_reminder": self._clientplatform_booking_reminder,
         }
 
     async def _execute_job(self, bot: Bot, job: Job, payload: dict) -> None:
@@ -613,6 +614,50 @@ class Engine:
         )
         await bot.send_message(user_id, text, reply_markup=self._kb_offer(user_id))
         await asyncio.to_thread(log_event, user_id, "remind_continue_sent", {"src": payload.get("src")})
+
+    async def _clientplatform_booking_reminder(
+        self,
+        bot: Bot,
+        user_id: int,
+        payload: dict,
+    ) -> None:
+        business_id = str(payload.get("business_id") or "").strip()
+        slot_id = str(payload.get("slot_id") or "").strip()
+        if not business_id or not slot_id:
+            return
+        try:
+            from clientplatform.application.bookings import get_customer_booking
+            from clientplatform.domain.bookings import BookingError
+
+            claim = await asyncio.to_thread(
+                get_customer_booking,
+                telegram_user_id=int(user_id),
+                business_id=business_id,
+                slot_id=slot_id,
+            )
+        except BookingError:
+            await asyncio.to_thread(
+                log_event,
+                user_id,
+                "clientplatform_booking_reminder_skipped",
+                {"slot_id": slot_id, "reason": "booking_inactive"},
+            )
+            return
+
+        label = str(payload.get("reminder_label") or "скоро").strip()
+        await bot.send_message(
+            int(user_id),
+            "⏰ Напоминание о записи\n\n"
+            f"{claim.slot.offering_title} — {claim.slot.local_start}.\n"
+            f"Бизнес: {claim.slot.business_name}.\n\n"
+            f"Встреча {label}.",
+        )
+        await asyncio.to_thread(
+            log_event,
+            user_id,
+            "clientplatform_booking_reminder_sent",
+            {"slot_id": slot_id, "label": label},
+        )
 
     async def _post_prompt(self, bot: Bot, user_id: int, payload: dict):
         """Пост-оценка состояния после транса.

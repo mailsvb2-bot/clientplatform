@@ -134,7 +134,7 @@ def test_helpers_cover_empty_and_capacity_branches() -> None:
         for button in row
     ]
     assert full_labels == [
-        "Редактировать уроки",
+        "Заменить или удалить материал",
         "Опубликовать программу",
         "Удалить черновик",
     ]

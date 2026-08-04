@@ -24,6 +24,7 @@ ALLOWED_ENGINE_JOB_TYPES = frozenset({
     "funnel2_expired_return_3d",
     "remind_continue",
     "post_prompt",
+    "clientplatform_booking_reminder",
 })
 
 

@@ -40,9 +40,13 @@ class FakeMessage:
         self.document = None
         self.photo: list[Any] = []
         self.answers: list[tuple[str, dict[str, Any]]] = []
+        self.documents: list[tuple[Any, dict[str, Any]]] = []
 
     async def answer(self, text: str, **kwargs: Any) -> None:
         self.answers.append((text, kwargs))
+
+    async def answer_document(self, document: Any, **kwargs: Any) -> None:
+        self.documents.append((document, kwargs))
 
 
 class FakeBot:
@@ -233,6 +237,9 @@ async def test_setup_dashboard_and_resume_paths(monkeypatch: pytest.MonkeyPatch)
         "list_accessible_businesses",
         lambda **_kwargs: [business_access(business_id, "Семейная практика")],
     )
+    monkeypatch.setattr(handlers, "list_customers", lambda **_kwargs: [])
+    monkeypatch.setattr(handlers, "list_programs", lambda **_kwargs: [])
+    monkeypatch.setattr(handlers, "list_booking_slots", lambda **_kwargs: [])
     dashboard = FakeMessage()
     await handlers._send_dashboard(dashboard, user_id=101, business_id=business_id)
     assert "Семейная практика" in dashboard.answers[-1][0]
@@ -362,25 +369,36 @@ async def test_business_and_activity_input_paths(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(handlers, "_actor", fake_actor)
     saved: list[dict[str, Any]] = []
     monkeypatch.setattr(handlers, "save_business_profile", lambda **kwargs: saved.append(kwargs))
-    setup_calls: list[str] = []
-
-    async def fake_setup(_message: Any, **kwargs: Any) -> None:
-        setup_calls.append(kwargs["business_id"])
-
-    monkeypatch.setattr(handlers, "_send_capability_setup", fake_setup)
-    state = FakeState({"business_id": business_id, "editing_activity": False})
-    activity = FakeMessage(text="Консультирую и провожу занятия")
-    await handlers.receive_activity_description(activity, state)
-    assert saved[0]["activity_description"] == "Консультирую и провожу занятия"
-    assert setup_calls == [business_id]
-    assert state.clear_count == 1
-
+    enabled: list[str] = []
+    completed: list[object] = []
+    monkeypatch.setattr(
+        handlers,
+        "enable_business_capability",
+        lambda **kwargs: enabled.append(kwargs["connector_key"]),
+    )
+    monkeypatch.setattr(
+        handlers,
+        "complete_business_profile",
+        lambda **kwargs: completed.append(kwargs["actor"]),
+    )
     dashboard_calls: list[str] = []
 
     async def fake_dashboard(_message: Any, **kwargs: Any) -> None:
         dashboard_calls.append(kwargs["business_id"])
 
     monkeypatch.setattr(handlers, "_send_dashboard", fake_dashboard)
+    state = FakeState({"business_id": business_id, "editing_activity": False})
+    activity = FakeMessage(text="Консультирую и провожу занятия")
+    await handlers.receive_activity_description(activity, state)
+    assert saved[0]["activity_description"] == "Консультирую и провожу занятия"
+    assert enabled == ["programs", "consultations", "services"]
+    assert completed == [saved[0]["actor"]]
+    assert dashboard_calls == [business_id]
+    assert "Всё готово" in activity.answers[-1][0]
+    assert state.clear_count == 1
+
+    dashboard_calls.clear()
+
     editing = FakeMessage(text="Ремонтирую автомобили")
     edit_state = FakeState({"business_id": business_id, "editing_activity": True})
     await handlers.receive_activity_description(editing, edit_state)
@@ -773,6 +791,50 @@ async def test_booking_owner_and_client_journeys(monkeypatch: pytest.MonkeyPatch
     await handlers.book_client_slot(booked)
     assert "Вы записаны" in booked.message.answers[-1][0]
     assert booked.answers[-1][0] == ("Запись подтверждена",)
+
+
+@pytest.mark.asyncio
+async def test_booking_confirmation_adds_phone_calendar_and_persistent_reminders(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    business_id = str(uuid4())
+    customer_id = str(uuid4())
+    slot_id = str(uuid4())
+    business_token = handlers._uuid_token(business_id)
+    slot_token = handlers._uuid_token(slot_id)
+    view = SimpleNamespace(
+        slot=SimpleNamespace(
+            id=slot_id,
+            business_id=business_id,
+            starts_at="2026-08-10T13:00:00+00:00",
+            ends_at="2026-08-10T14:00:00+00:00",
+            duration_minutes=60,
+        ),
+        offering_title="Вебинар",
+        business_name="Школа",
+        timezone="Europe/Amsterdam",
+        local_start="10.08.2026 15:00",
+    )
+    claim = SimpleNamespace(slot=view, customer_id=customer_id)
+    monkeypatch.setattr(handlers, "book_customer_slot", lambda **_kwargs: claim)
+    scheduled: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        handlers,
+        "schedule_booking_reminders",
+        lambda **kwargs: scheduled.append(kwargs),
+    )
+    callback = FakeCallback(
+        f"cp:book:{business_token}:{slot_token}",
+        user_id=700001,
+    )
+    await handlers.book_client_slot(callback)
+    assert scheduled[0]["telegram_user_id"] == 700001
+    assert callback.message.documents
+    _document, kwargs = callback.message.documents[-1]
+    assert "напоминаниями за 24 часа" in kwargs["caption"]
+    assert kwargs["reply_markup"].inline_keyboard[0][0].url.startswith(
+        "https://calendar.google.com/"
+    )
 
 
 @pytest.mark.asyncio
