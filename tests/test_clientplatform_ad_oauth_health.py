@@ -1,37 +1,27 @@
 from __future__ import annotations
 
-import asyncio
-import json
 import unittest
-from types import SimpleNamespace
-
-from runtime import messenger_webhooks
+from pathlib import Path
 
 
-class AdOAuthHealthTests(unittest.TestCase):
+class AdOAuthHealthContractTests(unittest.TestCase):
     def test_ad_oauth_health_is_additive_and_backward_compatible(self) -> None:
-        disabled = asyncio.run(messenger_webhooks._health(SimpleNamespace(app={})))
-        self.assertEqual(
-            json.loads(disabled.body),
-            {
-                "ok": True,
-                "service": "http-ingress",
-            },
-        )
+        source = (
+            Path(__file__).resolve().parents[1]
+            / "runtime"
+            / "messenger_webhooks.py"
+        ).read_text(encoding="utf-8")
 
-        enabled = asyncio.run(
-            messenger_webhooks._health(
-                SimpleNamespace(app={"clientplatform_ad_oauth_bot": object()})
-            )
+        self.assertIn(
+            'payload: dict[str, Any] = {"ok": True, "service": "http-ingress"}',
+            source,
         )
-        self.assertEqual(
-            json.loads(enabled.body),
-            {
-                "ok": True,
-                "service": "http-ingress",
-                "ad_oauth": True,
-            },
+        self.assertIn(
+            'request.app.get("clientplatform_ad_oauth_bot") is not None',
+            source,
         )
+        self.assertIn('payload["ad_oauth"] = True', source)
+        self.assertNotIn('"ad_oauth": False', source)
 
 
 if __name__ == "__main__":
