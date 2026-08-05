@@ -92,6 +92,13 @@ def _load_clientplatform_modules() -> tuple[ModuleType, ModuleType]:
         __name__,
     )
     globals()["clientplatform_ad_disconnect"] = ad_disconnect
+
+    ad_spend = importlib.import_module(
+        ".clientplatform_ad_spend",
+        __name__,
+    )
+    globals()["clientplatform_ad_spend"] = ad_spend
+    ad_spend.install_ad_spend_controls(control, simple_experience)
     return entry, control
 
 
@@ -129,12 +136,16 @@ def __getattr__(name: str) -> ModuleType:
     if name == "clientplatform_ad_disconnect":
         _load_clientplatform_modules()
         return globals()["clientplatform_ad_disconnect"]
+    if name == "clientplatform_ad_spend":
+        _load_clientplatform_modules()
+        return globals()["clientplatform_ad_spend"]
     raise AttributeError(name)
 
 
 __all__ = [
     "clientplatform_ad_connections",
     "clientplatform_ad_disconnect",
+    "clientplatform_ad_spend",
     "clientplatform_admin_extension",
     "clientplatform_bot_lifecycle",
     "clientplatform_bot_setup",
