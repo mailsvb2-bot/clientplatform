@@ -14,7 +14,6 @@ from clientplatform.integrations.yandex_direct_moderation import (
 
 _GROUP_NAME = "ClientPlatform adjob_0123456789abcdef0123456789abcdef"
 _DESTINATION = "https://t.me/clientplatform_bot?start=cpa_source"
-_EXACT_KEYWORD = '"!Замена !раковины"'
 
 
 class FakeTransport:
@@ -94,6 +93,10 @@ def _methods(transport: FakeTransport) -> list[str]:
     return [json.loads(call["body"])["method"] for call in transport.calls]
 
 
+def _services(transport: FakeTransport) -> list[str]:
+    return [str(call["url"]).rsplit("/", 1)[-1] for call in transport.calls]
+
+
 class YandexDraftSafetyTests(unittest.TestCase):
     def test_catalog_exposes_only_active_accepted_text_campaigns(self) -> None:
         transport = FakeTransport(
@@ -139,7 +142,7 @@ class YandexDraftSafetyTests(unittest.TestCase):
             ["TEXT_CAMPAIGN"],
         )
 
-    def test_publication_creates_draft_and_never_calls_moderate(self) -> None:
+    def test_publication_creates_draft_without_moderation_or_keywords(self) -> None:
         transport = FakeTransport(
             [
                 _campaign_response(),
@@ -147,8 +150,6 @@ class YandexDraftSafetyTests(unittest.TestCase):
                 (200, {}, {"result": {"AddResults": [{"Id": 7001}]}}),
                 (200, {}, {"result": {"Ads": []}}),
                 (200, {}, {"result": {"AddResults": [{"Id": 8001}]}}),
-                (200, {}, {"result": {"Keywords": []}}),
-                (200, {}, {"result": {"AddResults": [{"Id": 9001}]}}),
                 (200, {}, {"result": {"Ads": [{"Id": 8001, "Status": "DRAFT"}]}}),
             ]
         )
@@ -157,11 +158,7 @@ class YandexDraftSafetyTests(unittest.TestCase):
 
         self.assertEqual((result.ad_group_id, result.ad_id), ("7001", "8001"))
         self.assertNotIn("moderate", _methods(transport))
-        add_keyword = json.loads(transport.calls[6]["body"])
-        self.assertEqual(
-            add_keyword["params"]["Keywords"][0],
-            {"AdGroupId": 7001, "Keyword": _EXACT_KEYWORD},
-        )
+        self.assertNotIn("keywords", _services(transport))
         for call in transport.calls:
             self.assertEqual(
                 call["headers"]["Authorization"],
@@ -169,7 +166,7 @@ class YandexDraftSafetyTests(unittest.TestCase):
             )
             self.assertNotIn("secret-token", str(call["body"]))
 
-    def test_existing_draft_objects_are_reconciled_without_duplicates(self) -> None:
+    def test_existing_draft_objects_are_reconciled_without_mutation(self) -> None:
         transport = FakeTransport(
             [
                 _campaign_response(),
@@ -189,22 +186,6 @@ class YandexDraftSafetyTests(unittest.TestCase):
                         }
                     },
                 ),
-                (
-                    200,
-                    {},
-                    {
-                        "result": {
-                            "Keywords": [
-                                {
-                                    "Id": 9001,
-                                    "Keyword": _EXACT_KEYWORD,
-                                    "State": "ON",
-                                    "Status": "DRAFT",
-                                }
-                            ]
-                        }
-                    },
-                ),
                 (200, {}, {"result": {"Ads": [{"Id": 8001, "Status": "DRAFT"}]}}),
             ]
         )
@@ -212,9 +193,10 @@ class YandexDraftSafetyTests(unittest.TestCase):
         result = _publish(_provider(transport))
 
         self.assertEqual((result.ad_group_id, result.ad_id), ("7001", "8001"))
-        self.assertEqual(_methods(transport), ["get"] * 5)
+        self.assertEqual(_methods(transport), ["get"] * 4)
+        self.assertNotIn("keywords", _services(transport))
 
-    def test_non_draft_existing_ad_fails_closed(self) -> None:
+    def test_non_draft_existing_ad_fails_closed_without_targeting_changes(self) -> None:
         for status in ("MODERATION", "PREACCEPTED", "ACCEPTED", "REJECTED"):
             with self.subTest(status=status):
                 transport = FakeTransport(
@@ -248,20 +230,6 @@ class YandexDraftSafetyTests(unittest.TestCase):
                         (
                             200,
                             {},
-                            {
-                                "result": {
-                                    "Keywords": [
-                                        {
-                                            "Id": 9001,
-                                            "Keyword": _EXACT_KEYWORD,
-                                        }
-                                    ]
-                                }
-                            },
-                        ),
-                        (
-                            200,
-                            {},
                             {"result": {"Ads": [{"Id": 8001, "Status": status}]}},
                         ),
                     ]
@@ -273,6 +241,7 @@ class YandexDraftSafetyTests(unittest.TestCase):
                     "existing_ad_is_not_draft",
                 )
                 self.assertNotIn("moderate", _methods(transport))
+                self.assertNotIn("keywords", _services(transport))
 
     def test_unified_or_ineligible_campaign_fails_before_creation(self) -> None:
         cases = (
