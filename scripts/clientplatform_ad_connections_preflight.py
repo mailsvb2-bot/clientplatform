@@ -3,6 +3,7 @@ from __future__ import annotations
 """Fail closed before enabling personal advertising account credentials."""
 
 import os
+import stat
 from pathlib import Path
 
 from clientplatform.application.ad_connections import ad_connections_enabled
@@ -18,6 +19,34 @@ def _required(name: str) -> str:
     if not value or value.lower().startswith("change"):
         raise AdConnectionsPreflightError(f"missing_{name.lower()}")
     return value
+
+
+def _assert_private_identity(identity_path: Path) -> None:
+    try:
+        directory_stat = identity_path.parent.lstat()
+        identity_stat = identity_path.lstat()
+    except OSError as exc:
+        raise AdConnectionsPreflightError("credential_identity_missing") from exc
+
+    if stat.S_ISLNK(directory_stat.st_mode) or not stat.S_ISDIR(
+        directory_stat.st_mode
+    ):
+        raise AdConnectionsPreflightError("credential_identity_directory_invalid")
+    if directory_stat.st_mode & 0o777 != 0o700:
+        raise AdConnectionsPreflightError(
+            "credential_identity_directory_permissions_invalid"
+        )
+    if hasattr(os, "geteuid") and directory_stat.st_uid != os.geteuid():
+        raise AdConnectionsPreflightError("credential_identity_directory_owner_invalid")
+
+    if stat.S_ISLNK(identity_stat.st_mode) or not stat.S_ISREG(identity_stat.st_mode):
+        raise AdConnectionsPreflightError("credential_identity_type_invalid")
+    if identity_stat.st_size <= 0:
+        raise AdConnectionsPreflightError("credential_identity_missing")
+    if identity_stat.st_mode & 0o777 != 0o600:
+        raise AdConnectionsPreflightError("credential_identity_permissions_invalid")
+    if hasattr(os, "geteuid") and identity_stat.st_uid != os.geteuid():
+        raise AdConnectionsPreflightError("credential_identity_owner_invalid")
 
 
 def run() -> None:
@@ -36,12 +65,7 @@ def run() -> None:
     identity_path = Path(_required("CLIENTPLATFORM_AD_CREDENTIAL_IDENTITY_FILE"))
     if identity_path != Path("/run/secrets/clientplatform-ad/identity.txt"):
         raise AdConnectionsPreflightError("credential_identity_path_mismatch")
-    if not identity_path.is_file() or identity_path.stat().st_size <= 0:
-        raise AdConnectionsPreflightError("credential_identity_missing")
-    if identity_path.stat().st_mode & 0o777 != 0o600:
-        raise AdConnectionsPreflightError("credential_identity_permissions_invalid")
-    if hasattr(os, "geteuid") and identity_path.stat().st_uid != os.geteuid():
-        raise AdConnectionsPreflightError("credential_identity_owner_invalid")
+    _assert_private_identity(identity_path)
 
     vault = AgeAdCredentialVault(identity_path)
     probe = "clientplatform-ad-credential-preflight"
