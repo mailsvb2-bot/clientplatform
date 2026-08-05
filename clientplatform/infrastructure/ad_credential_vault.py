@@ -44,7 +44,7 @@ class AgeAdCredentialVault:
     def __init__(self, identity_path: str | Path | None = None) -> None:
         configured = identity_path or os.getenv(
             "CLIENTPLATFORM_AD_CREDENTIAL_IDENTITY_FILE",
-            "/var/lib/clientplatform/ad-secrets/identity.txt",
+            "/run/secrets/clientplatform-ad/identity.txt",
         )
         self._identity_path = Path(configured)
 
