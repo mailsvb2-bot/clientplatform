@@ -112,6 +112,26 @@ class AdvertisingRetryLifecycleTests(unittest.TestCase):
             "access-two",
         )
 
+    def test_creative_failure_keeps_account_usable_and_preserves_safe_error(self) -> None:
+        self.conn.execute(
+            """
+            UPDATE ad_connections
+            SET status='attention', last_error_code='provider_8800'
+            WHERE id=?
+            """,
+            (self.connection.id,),
+        )
+        worker = AdWorkerStore(self.conn, vault=self.vault)
+        worker.keep_available_after_job_failure(
+            business_id=self.actor.business_id,
+            connection_id=self.connection.id,
+        )
+        status, error_code = self.conn.execute(
+            "SELECT status, last_error_code FROM ad_connections WHERE id=?",
+            (self.connection.id,),
+        ).fetchone()
+        self.assertEqual((status, error_code), ("active", "provider_8800"))
+
     def test_disabled_and_revoked_connections_remain_blocked(self) -> None:
         worker = AdWorkerStore(self.conn, vault=self.vault)
         for status in ("disabled", "revoked"):
@@ -120,6 +140,15 @@ class AdvertisingRetryLifecycleTests(unittest.TestCase):
                     "UPDATE ad_connections SET status=? WHERE id=?",
                     (status, self.connection.id),
                 )
+                worker.keep_available_after_job_failure(
+                    business_id=self.actor.business_id,
+                    connection_id=self.connection.id,
+                )
+                stored_status = self.conn.execute(
+                    "SELECT status FROM ad_connections WHERE id=?",
+                    (self.connection.id,),
+                ).fetchone()[0]
+                self.assertEqual(stored_status, status)
                 with self.assertRaises(AdConnectionNotFound):
                     worker.load_active(
                         business_id=self.actor.business_id,
