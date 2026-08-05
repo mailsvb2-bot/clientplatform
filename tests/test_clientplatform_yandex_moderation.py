@@ -12,6 +12,10 @@ from clientplatform.integrations.yandex_direct_moderation import (
 )
 
 
+_GROUP_NAME = "ClientPlatform adjob_0123456789abcdef0123456789abcdef"
+_DESTINATION = "https://t.me/clientplatform_bot?start=cpa_source"
+
+
 class FakeTransport:
     def __init__(self, responses: list[tuple[int, dict[str, str], object]]):
         self.responses = list(responses)
@@ -40,7 +44,10 @@ def _provider(transport: FakeTransport) -> ModeratingYandexDirectProvider:
     return ModeratingYandexDirectProvider(
         oauth=YandexOAuthConfig(
             client_id="client-id",
-            redirect_uri="https://app.clientplatform.ru/oauth/yandex-direct/callback",
+            redirect_uri=(
+                "https://app.clientplatform.ru/"
+                "oauth/yandex-direct/callback"
+            ),
         ),
         transport=transport,
     )
@@ -53,7 +60,7 @@ def _publish(provider: ModeratingYandexDirectProvider):
         region_ids=(47,),
         title="Замена раковины",
         text="Свободное время у сантехника. Запишитесь онлайн.",
-        href="https://t.me/clientplatform_bot?start=cpa_source",
+        href=_DESTINATION,
         idempotency_key="adjob_0123456789abcdef0123456789abcdef",
     )
 
@@ -75,6 +82,73 @@ def _campaign_response(campaign_type: str = "TEXT_CAMPAIGN"):
             }
         },
     )
+
+
+def _existing_group_response():
+    return (
+        200,
+        {},
+        {"result": {"AdGroups": [{"Id": 7001, "Name": _GROUP_NAME}]}},
+    )
+
+
+def _existing_legacy_ad_response():
+    return (
+        200,
+        {},
+        {
+            "result": {
+                "Ads": [
+                    {"Id": 8001, "TextAd": {"Href": _DESTINATION}}
+                ]
+            }
+        },
+    )
+
+
+def _existing_responsive_ad_response():
+    return (
+        200,
+        {},
+        {
+            "result": {
+                "Ads": [
+                    {"Id": 8001, "ResponsiveAd": {"Href": _DESTINATION}}
+                ]
+            }
+        },
+    )
+
+
+def _ad_status_response(status: str):
+    return (
+        200,
+        {},
+        {"result": {"Ads": [{"Id": 8001, "Status": status}]}},
+    )
+
+
+def _keyword_response(*, state: str = "ON"):
+    return (
+        200,
+        {},
+        {
+            "result": {
+                "Keywords": [
+                    {
+                        "Id": 9001,
+                        "Keyword": "Замена раковины",
+                        "State": state,
+                        "Status": "ACCEPTED",
+                    }
+                ]
+            }
+        },
+    )
+
+
+def _methods(transport: FakeTransport) -> list[str]:
+    return [json.loads(call["body"])["method"] for call in transport.calls]
 
 
 class YandexModerationTests(unittest.TestCase):
@@ -132,11 +206,7 @@ class YandexModerationTests(unittest.TestCase):
                 (200, {}, {"result": {"AddResults": [{"Id": 7001}]}}),
                 (200, {}, {"result": {"Ads": []}}),
                 (200, {}, {"result": {"AddResults": [{"Id": 8001}]}}),
-                (
-                    200,
-                    {},
-                    {"result": {"Ads": [{"Id": 8001, "Status": "DRAFT"}]}},
-                ),
+                _ad_status_response("DRAFT"),
                 (
                     200,
                     {},
@@ -157,11 +227,14 @@ class YandexModerationTests(unittest.TestCase):
             [8001],
         )
         for call in transport.calls:
-            self.assertEqual(call["headers"]["Authorization"], "Bearer secret-token")
+            self.assertEqual(
+                call["headers"]["Authorization"],
+                "Bearer secret-token",
+            )
             self.assertNotIn("secret-token", str(call["body"]))
             self.assertIn("/json/v501/", call["url"])
 
-    def test_new_unified_campaign_uses_responsive_ad_and_moderation(self) -> None:
+    def test_new_unified_campaign_creates_targeting_and_moderates(self) -> None:
         transport = FakeTransport(
             [
                 _campaign_response("UNIFIED_CAMPAIGN"),
@@ -169,11 +242,9 @@ class YandexModerationTests(unittest.TestCase):
                 (200, {}, {"result": {"AddResults": [{"Id": 7001}]}}),
                 (200, {}, {"result": {"Ads": []}}),
                 (200, {}, {"result": {"AddResults": [{"Id": 8001}]}}),
-                (
-                    200,
-                    {},
-                    {"result": {"Ads": [{"Id": 8001, "Status": "DRAFT"}]}},
-                ),
+                (200, {}, {"result": {"Keywords": []}}),
+                (200, {}, {"result": {"AddResults": [{"Id": 9001}]}}),
+                _ad_status_response("DRAFT"),
                 (
                     200,
                     {},
@@ -192,51 +263,62 @@ class YandexModerationTests(unittest.TestCase):
         add_ad = json.loads(transport.calls[4]["body"])
         responsive = add_ad["params"]["Ads"][0]["ResponsiveAd"]
         self.assertEqual(responsive["Titles"], ["Замена раковины"])
-        self.assertEqual(
-            responsive["Href"],
-            "https://t.me/clientplatform_bot?start=cpa_source",
-        )
+        self.assertEqual(responsive["Href"], _DESTINATION)
         self.assertNotIn("TextAd", add_ad["params"]["Ads"][0])
 
-    def test_existing_draft_is_moderated_without_duplicate_remote_objects(self) -> None:
+        add_keyword = json.loads(transport.calls[6]["body"])
+        self.assertEqual(
+            add_keyword["params"]["Keywords"][0],
+            {"AdGroupId": 7001, "Keyword": "Замена раковины"},
+        )
+        self.assertEqual(
+            _methods(transport),
+            ["get", "get", "add", "get", "add", "get", "add", "get", "moderate"],
+        )
+
+    def test_existing_unified_objects_are_reused_without_duplicate_actions(self) -> None:
+        transport = FakeTransport(
+            [
+                _campaign_response("UNIFIED_CAMPAIGN"),
+                _existing_group_response(),
+                _existing_responsive_ad_response(),
+                _keyword_response(),
+                _ad_status_response("ACCEPTED"),
+            ]
+        )
+        result = _publish(_provider(transport))
+        self.assertEqual((result.ad_group_id, result.ad_id), ("7001", "8001"))
+        self.assertEqual(_methods(transport), ["get"] * 5)
+
+    def test_suspended_unified_keyword_is_resumed_not_duplicated(self) -> None:
+        transport = FakeTransport(
+            [
+                _campaign_response("UNIFIED_CAMPAIGN"),
+                _existing_group_response(),
+                _existing_responsive_ad_response(),
+                _keyword_response(state="SUSPENDED"),
+                (200, {}, {"result": {"ResumeResults": [{"Id": 9001}]}}),
+                _ad_status_response("ACCEPTED"),
+            ]
+        )
+        _publish(_provider(transport))
+        self.assertEqual(
+            _methods(transport),
+            ["get", "get", "get", "get", "resume", "get"],
+        )
+        resume = json.loads(transport.calls[4]["body"])
+        self.assertEqual(
+            resume["params"]["SelectionCriteria"]["Ids"],
+            [9001],
+        )
+
+    def test_existing_legacy_draft_is_moderated_without_duplicates(self) -> None:
         transport = FakeTransport(
             [
                 _campaign_response(),
-                (
-                    200,
-                    {},
-                    {
-                        "result": {
-                            "AdGroups": [
-                                {
-                                    "Id": 7001,
-                                    "Name": "ClientPlatform adjob_0123456789abcdef0123456789abcdef",
-                                }
-                            ]
-                        }
-                    },
-                ),
-                (
-                    200,
-                    {},
-                    {
-                        "result": {
-                            "Ads": [
-                                {
-                                    "Id": 8001,
-                                    "TextAd": {
-                                        "Href": "https://t.me/clientplatform_bot?start=cpa_source"
-                                    },
-                                }
-                            ]
-                        }
-                    },
-                ),
-                (
-                    200,
-                    {},
-                    {"result": {"Ads": [{"Id": 8001, "Status": "DRAFT"}]}},
-                ),
+                _existing_group_response(),
+                _existing_legacy_ad_response(),
+                _ad_status_response("DRAFT"),
                 (
                     200,
                     {},
@@ -246,106 +328,40 @@ class YandexModerationTests(unittest.TestCase):
         )
         result = _publish(_provider(transport))
         self.assertEqual((result.ad_group_id, result.ad_id), ("7001", "8001"))
-        methods = [json.loads(call["body"])["method"] for call in transport.calls]
-        self.assertEqual(methods, ["get", "get", "get", "get", "moderate"])
+        self.assertEqual(
+            _methods(transport),
+            ["get", "get", "get", "get", "moderate"],
+        )
 
-    def test_reviewing_or_accepted_ad_is_not_moderated_again(self) -> None:
+    def test_reviewing_or_accepted_legacy_ad_is_not_moderated_again(self) -> None:
         for status in ("MODERATION", "PREACCEPTED", "ACCEPTED"):
             with self.subTest(status=status):
                 transport = FakeTransport(
                     [
                         _campaign_response(),
-                        (
-                            200,
-                            {},
-                            {
-                                "result": {
-                                    "AdGroups": [
-                                        {
-                                            "Id": 7001,
-                                            "Name": "ClientPlatform adjob_0123456789abcdef0123456789abcdef",
-                                        }
-                                    ]
-                                }
-                            },
-                        ),
-                        (
-                            200,
-                            {},
-                            {
-                                "result": {
-                                    "Ads": [
-                                        {
-                                            "Id": 8001,
-                                            "TextAd": {
-                                                "Href": "https://t.me/clientplatform_bot?start=cpa_source"
-                                            },
-                                        }
-                                    ]
-                                }
-                            },
-                        ),
-                        (
-                            200,
-                            {},
-                            {
-                                "result": {
-                                    "Ads": [{"Id": 8001, "Status": status}]
-                                }
-                            },
-                        ),
+                        _existing_group_response(),
+                        _existing_legacy_ad_response(),
+                        _ad_status_response(status),
                     ]
                 )
                 _publish(_provider(transport))
-                methods = [
-                    json.loads(call["body"])["method"] for call in transport.calls
-                ]
-                self.assertEqual(methods, ["get", "get", "get", "get"])
+                self.assertEqual(_methods(transport), ["get"] * 4)
 
     def test_rejected_ad_requires_manual_review_instead_of_resubmission(self) -> None:
         transport = FakeTransport(
             [
                 _campaign_response(),
-                (
-                    200,
-                    {},
-                    {
-                        "result": {
-                            "AdGroups": [
-                                {
-                                    "Id": 7001,
-                                    "Name": "ClientPlatform adjob_0123456789abcdef0123456789abcdef",
-                                }
-                            ]
-                        }
-                    },
-                ),
-                (
-                    200,
-                    {},
-                    {
-                        "result": {
-                            "Ads": [
-                                {
-                                    "Id": 8001,
-                                    "TextAd": {
-                                        "Href": "https://t.me/clientplatform_bot?start=cpa_source"
-                                    },
-                                }
-                            ]
-                        }
-                    },
-                ),
-                (
-                    200,
-                    {},
-                    {"result": {"Ads": [{"Id": 8001, "Status": "REJECTED"}]}},
-                ),
+                _existing_group_response(),
+                _existing_legacy_ad_response(),
+                _ad_status_response("REJECTED"),
             ]
         )
         with self.assertRaises(YandexDirectError) as raised:
             _publish(_provider(transport))
-        self.assertEqual(raised.exception.code, "ad_rejected_requires_manual_review")
+        self.assertEqual(
+            raised.exception.code,
+            "ad_rejected_requires_manual_review",
+        )
         self.assertEqual(len(transport.calls), 4)
 
     def test_moderation_error_is_reduced_to_safe_provider_code(self) -> None:
@@ -356,11 +372,7 @@ class YandexModerationTests(unittest.TestCase):
                 (200, {}, {"result": {"AddResults": [{"Id": 7001}]}}),
                 (200, {}, {"result": {"Ads": []}}),
                 (200, {}, {"result": {"AddResults": [{"Id": 8001}]}}),
-                (
-                    200,
-                    {},
-                    {"result": {"Ads": [{"Id": 8001, "Status": "DRAFT"}]}},
-                ),
+                _ad_status_response("DRAFT"),
                 (
                     200,
                     {},
@@ -371,7 +383,9 @@ class YandexModerationTests(unittest.TestCase):
                                     "Errors": [
                                         {
                                             "Code": 8800,
-                                            "Message": "sensitive provider detail",
+                                            "Message": (
+                                                "sensitive provider detail"
+                                            ),
                                         }
                                     ]
                                 }
@@ -386,11 +400,22 @@ class YandexModerationTests(unittest.TestCase):
         self.assertEqual(raised.exception.code, "provider_8800")
         self.assertNotIn("sensitive", str(raised.exception))
 
-    def test_archived_or_unsupported_campaign_fails_before_remote_creation(self) -> None:
-        for campaign in (
-            {"Id": 6001, "State": "ARCHIVED", "Status": "ACCEPTED", "Type": "TEXT_CAMPAIGN"},
-            {"Id": 6001, "State": "ON", "Status": "ACCEPTED", "Type": "CPM_BANNER_CAMPAIGN"},
-        ):
+    def test_archived_or_unsupported_campaign_fails_before_creation(self) -> None:
+        campaigns = (
+            {
+                "Id": 6001,
+                "State": "ARCHIVED",
+                "Status": "ACCEPTED",
+                "Type": "TEXT_CAMPAIGN",
+            },
+            {
+                "Id": 6001,
+                "State": "ON",
+                "Status": "ACCEPTED",
+                "Type": "CPM_BANNER_CAMPAIGN",
+            },
+        )
+        for campaign in campaigns:
             with self.subTest(campaign=campaign):
                 transport = FakeTransport(
                     [(200, {}, {"result": {"Campaigns": [campaign]}})]
