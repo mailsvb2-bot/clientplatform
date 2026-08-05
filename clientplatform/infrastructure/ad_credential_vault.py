@@ -37,7 +37,7 @@ class InMemoryAdCredentialVault:
 
 
 class AgeAdCredentialVault:
-    """Seal per-business OAuth material with an age identity outside PostgreSQL."""
+    """Seal per-business OAuth material with a separately provisioned age identity."""
 
     _PREFIX = "age-v1:"
 
@@ -112,6 +112,10 @@ class AgeAdCredentialVault:
         if self._identity_path.is_file() and self._identity_path.stat().st_size > 0:
             self._assert_private_permissions()
             return
+        if _deployed_environment() or not _allow_identity_generation():
+            raise AdCredentialVaultError(
+                "advertising credential identity must be provisioned before startup"
+            )
         self._identity_path.parent.mkdir(parents=True, exist_ok=True)
         os.chmod(self._identity_path.parent, 0o700)
         temporary = self._identity_path.with_suffix(".tmp")
@@ -136,6 +140,21 @@ class AgeAdCredentialVault:
         mode = self._identity_path.stat().st_mode & 0o777
         if mode != 0o600:
             raise AdCredentialVaultError("credential identity permissions must be 0600")
+
+
+def _deployed_environment() -> bool:
+    return (os.getenv("APP_ENV") or "dev").strip().lower() in {
+        "prod",
+        "production",
+        "stage",
+        "staging",
+    }
+
+
+def _allow_identity_generation() -> bool:
+    return (
+        os.getenv("CLIENTPLATFORM_AD_CREDENTIAL_ALLOW_GENERATE") or ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
 
 
 __all__ = [
