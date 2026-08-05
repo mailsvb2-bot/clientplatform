@@ -37,6 +37,18 @@ from clientplatform.integrations.yandex_oauth_lifecycle import YandexOAuthLifecy
 from services.db import get_db, get_db_ro
 
 
+_ACCOUNT_ATTENTION_ERRORS = {
+    "provider_http_401",
+    "provider_53",
+    "provider_54",
+    "provider_55",
+    "provider_56",
+    "provider_invalid_token",
+    "provider_unauthorized",
+    "oauth_refresh_token_missing",
+}
+
+
 @dataclass(frozen=True, slots=True)
 class AdOAuthStart:
     provider: AdProvider
@@ -107,15 +119,7 @@ def _vault() -> AdCredentialVault:
 
 
 def _auth_error(exc: YandexDirectError) -> bool:
-    return exc.code in {
-        "provider_http_401",
-        "provider_53",
-        "provider_54",
-        "provider_55",
-        "provider_56",
-        "provider_invalid_token",
-        "provider_unauthorized",
-    }
+    return exc.code in _ACCOUNT_ATTENTION_ERRORS
 
 
 def _refresh_token_bundle(
@@ -183,6 +187,15 @@ def complete_yandex_direct_oauth(
     token = selected_provider.exchange_code(code=code, verifier=verifier)
     identity = selected_provider.account_identity(access_token=token.access_token)
     with get_db() as conn:
+        current = TenancyRepository(conn).resolve_context(
+            user_id=session.user_id,
+            business_id=session.business_id,
+        )
+        current.assert_can_manage_ad_connections()
+        if current.membership_id != session.membership_id:
+            raise AdConnectionInvariantViolation(
+                "OAuth membership changed before the callback completed"
+            )
         connection = AdConnectionRepository(
             conn,
             vault=selected_vault,
@@ -360,13 +373,19 @@ def _fail_claimed_job(
     max_attempts: int,
 ) -> AdPublicationJob:
     with get_db() as conn:
-        return AdConnectionRepository(conn, vault=vault).fail_job(
+        failed = AdConnectionRepository(conn, vault=vault).fail_job(
             job=job,
             lock_token=lock_token,
             error_code=error_code,
             retryable=retryable,
             max_attempts=max_attempts,
         )
+        if error_code not in _ACCOUNT_ATTENTION_ERRORS:
+            AdWorkerStore(conn, vault=vault).keep_available_after_job_failure(
+                business_id=job.business_id,
+                connection_id=job.connection_id,
+            )
+        return failed
 
 
 def process_one_ad_publication(
