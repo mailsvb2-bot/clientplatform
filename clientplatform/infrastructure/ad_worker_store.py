@@ -78,15 +78,16 @@ class AdWorkerStore:
             field_name="ad_connection_id",
         )
         row = self._conn.execute(
-            _SELECT + " WHERE id=? AND business_id=? AND status='active' LIMIT 1",
+            _SELECT
+            + " WHERE id=? AND business_id=? AND status IN ('active', 'attention') LIMIT 1",
             (normalized_connection, normalized_business),
         ).fetchone()
         if row is None:
-            raise AdConnectionNotFound("active advertising connection was not found")
+            raise AdConnectionNotFound("available advertising connection was not found")
         ciphertext = str(_value(row, "credential_ciphertext", 13) or "")
         if not ciphertext:
             raise AdConnectionInvariantViolation(
-                "active advertising connection has no credential material"
+                "available advertising connection has no credential material"
             )
         return _connection(row), self._vault.open(ciphertext)
 
@@ -104,7 +105,7 @@ class AdWorkerStore:
             UPDATE ad_connections
             SET credential_ciphertext=?, status='active', updated_at=?,
                 last_success_at=?, last_error_at=NULL, last_error_code=NULL
-            WHERE id=? AND business_id=? AND status='active'
+            WHERE id=? AND business_id=? AND status IN ('active', 'attention')
             """,
             (
                 ciphertext,
@@ -115,7 +116,7 @@ class AdWorkerStore:
             ),
         )
         if int(getattr(cursor, "rowcount", 0) or 0) != 1:
-            raise AdConnectionNotFound("active advertising connection was not found")
+            raise AdConnectionNotFound("available advertising connection was not found")
 
 
 class AdConnectionLifecycleStore:
