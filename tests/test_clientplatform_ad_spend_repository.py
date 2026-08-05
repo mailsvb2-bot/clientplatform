@@ -7,7 +7,6 @@ from uuid import uuid4
 
 from clientplatform.domain.ad_connections import (
     AdProvider,
-    AdPublicationStatus,
     new_oauth_state,
     new_pkce_verifier,
 )
@@ -211,15 +210,17 @@ class AdSpendRepositoryTests(unittest.TestCase):
             1,
         )
 
-        unsubmitted = self._new_publication_job()
-        self.assertEqual(unsubmitted.status, AdPublicationStatus.DRAFT)
+        self.conn.execute(
+            "UPDATE ad_publication_jobs SET status='draft' WHERE id=?",
+            (self.submitted_job.id,),
+        )
         with self.assertRaisesRegex(
             AdSpendInvariantViolation,
             "provider-created DRAFT",
         ):
             self.spend.create_or_get_draft(
                 actor=self.owner,
-                publication_job_id=unsubmitted.id,
+                publication_job_id=self.submitted_job.id,
                 snapshot=self._snapshot(),
                 region_ids=(47,),
                 hard_cap_minor=10_000,
@@ -366,6 +367,11 @@ class AdSpendRepositoryTests(unittest.TestCase):
             receipt_id=str(uuid4()),
             now=_NOW + timedelta(seconds=2),
         )
+        original_terms = self.conn.execute(
+            "SELECT terms_json FROM ad_spend_consent_receipts "
+            "WHERE authorization_id=?",
+            (authorized.id,),
+        ).fetchone()[0]
         self.conn.execute(
             "UPDATE ad_spend_consent_receipts SET terms_json='{}' "
             "WHERE authorization_id=?",
@@ -373,10 +379,29 @@ class AdSpendRepositoryTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(AdSpendInvariantViolation, "terms hash"):
             self.spend.get(actor=self.owner, authorization_id=authorized.id)
+        self.conn.execute(
+            "UPDATE ad_spend_consent_receipts SET terms_json=? "
+            "WHERE authorization_id=?",
+            (original_terms, authorized.id),
+        )
 
-        self.conn.rollback()
-        # The rollback above removes the deliberate tamper and the uncommitted test setup,
-        # so this assertion is covered independently by the repository snapshot check.
+        original_snapshot = self.conn.execute(
+            "SELECT snapshot_json FROM ad_spend_authorizations WHERE id=?",
+            (authorized.id,),
+        ).fetchone()[0]
+        self.conn.execute(
+            "UPDATE ad_spend_authorizations SET snapshot_json='{}' WHERE id=?",
+            (authorized.id,),
+        )
+        with self.assertRaisesRegex(
+            AdSpendInvariantViolation,
+            "stored provider snapshot",
+        ):
+            self.spend.get(actor=self.owner, authorization_id=authorized.id)
+        self.conn.execute(
+            "UPDATE ad_spend_authorizations SET snapshot_json=? WHERE id=?",
+            (original_snapshot, authorized.id),
+        )
 
     def test_schema_and_privacy_manifest_cover_new_tenant_tables(self) -> None:
         clientplatform_ad_connections.ensure(self.conn)
