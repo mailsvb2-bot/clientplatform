@@ -7,7 +7,10 @@ import stat
 from pathlib import Path
 
 from clientplatform.application.ad_connections import ad_connections_enabled
-from clientplatform.infrastructure.ad_credential_vault import AgeAdCredentialVault
+from clientplatform.infrastructure.ad_credential_vault import (
+    AdCredentialVaultError,
+    AgeAdCredentialVault,
+)
 
 
 class AdConnectionsPreflightError(RuntimeError):
@@ -69,8 +72,12 @@ def run() -> None:
 
     vault = AgeAdCredentialVault(identity_path)
     probe = "clientplatform-ad-credential-preflight"
-    ciphertext = vault.seal(probe)
-    if vault.open(ciphertext) != probe:
+    try:
+        ciphertext = vault.seal(probe)
+        opened = vault.open(ciphertext)
+    except AdCredentialVaultError as exc:
+        raise AdConnectionsPreflightError("credential_round_trip_failed") from exc
+    if opened != probe:
         raise AdConnectionsPreflightError("credential_round_trip_failed")
 
     print("CLIENTPLATFORM_AD_CONNECTIONS_PREFLIGHT_OK")
