@@ -220,6 +220,20 @@ def validate_wide_except_policy(*, strict: bool = True) -> None:
         "services/messenger/delivery_outbox.py": {"_worker_loop"},
         "clientplatform/application/dispatch_worker.py": {"_release_claims", "run_dispatch_batch"},
         "tests/test_clientplatform_connections_dispatch_outbox.py": {"managed"},
+        # Reviewed external boundaries. These functions translate provider,
+        # transport and malformed-callback failures into sanitized outcomes;
+        # no provider payload, OAuth token or secret is returned to the user.
+        "runtime/ad_oauth_http.py": {"yandex_direct_oauth_callback"},
+        "handlers/clientplatform_ad_connections.py": {
+            "connect_yandex_direct",
+            "choose_ad_connection",
+            "choose_yandex_campaign",
+            "request_ad_regions",
+            "prepare_ad_publication",
+            "confirm_yandex_publication",
+        },
+        "handlers/clientplatform_ad_disconnect.py": {"revoke_ad_connection"},
+        "clientplatform/application/ad_connections.py": {"process_one_ad_publication"},
     }
     suppression_markers = {
         "# validator: allow-wide-except",
