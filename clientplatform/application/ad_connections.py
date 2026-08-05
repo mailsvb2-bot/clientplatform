@@ -311,11 +311,11 @@ def disconnect_ad_connection(
         client_id=_client_id(),
         client_secret=_client_secret(),
     )
-    with get_db_ro() as conn:
+    with get_db() as conn:
         connection, token_json = AdConnectionLifecycleStore(
             conn,
             vault=selected_vault,
-        ).load_for_disconnect(
+        ).begin_disconnect(
             actor=actor,
             connection_id=connection_id,
         )
