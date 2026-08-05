@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import os
+import stat
 import subprocess
 from pathlib import Path
 from typing import Protocol
@@ -109,15 +110,23 @@ class AgeAdCredentialVault:
         return recipient
 
     def _ensure_identity(self) -> None:
-        if self._identity_path.is_file() and self._identity_path.stat().st_size > 0:
-            self._assert_private_permissions()
+        try:
+            self._identity_path.lstat()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            raise AdCredentialVaultError("credential identity cannot be inspected") from exc
+        else:
+            self._assert_private_identity()
             return
+
         if _deployed_environment() or not _allow_identity_generation():
             raise AdCredentialVaultError(
                 "advertising credential identity must be provisioned before startup"
             )
         self._identity_path.parent.mkdir(parents=True, exist_ok=True)
         os.chmod(self._identity_path.parent, 0o700)
+        self._assert_private_directory()
         temporary = self._identity_path.with_suffix(".tmp")
         temporary.unlink(missing_ok=True)
         completed = subprocess.run(
@@ -126,20 +135,55 @@ class AgeAdCredentialVault:
             stderr=subprocess.DEVNULL,
             check=False,
         )
-        if completed.returncode != 0 or not temporary.is_file():
+        if completed.returncode != 0:
             temporary.unlink(missing_ok=True)
             raise AdCredentialVaultError("credential identity generation failed")
-        os.chmod(temporary, 0o600)
         try:
-            os.replace(temporary, self._identity_path)
-        except FileExistsError:
+            temporary_stat = temporary.lstat()
+        except OSError as exc:
             temporary.unlink(missing_ok=True)
-        self._assert_private_permissions()
+            raise AdCredentialVaultError("credential identity generation failed") from exc
+        if not stat.S_ISREG(temporary_stat.st_mode) or stat.S_ISLNK(
+            temporary_stat.st_mode
+        ):
+            temporary.unlink(missing_ok=True)
+            raise AdCredentialVaultError("credential identity generation was unsafe")
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, self._identity_path)
+        self._assert_private_identity()
 
-    def _assert_private_permissions(self) -> None:
-        mode = self._identity_path.stat().st_mode & 0o777
-        if mode != 0o600:
+    def _assert_private_directory(self) -> None:
+        try:
+            directory_stat = self._identity_path.parent.lstat()
+        except OSError as exc:
+            raise AdCredentialVaultError(
+                "credential identity directory cannot be inspected"
+            ) from exc
+        if stat.S_ISLNK(directory_stat.st_mode) or not stat.S_ISDIR(
+            directory_stat.st_mode
+        ):
+            raise AdCredentialVaultError("credential identity directory is unsafe")
+        if directory_stat.st_mode & 0o777 != 0o700:
+            raise AdCredentialVaultError(
+                "credential identity directory permissions must be 0700"
+            )
+        if hasattr(os, "geteuid") and directory_stat.st_uid != os.geteuid():
+            raise AdCredentialVaultError("credential identity directory owner is invalid")
+
+    def _assert_private_identity(self) -> None:
+        self._assert_private_directory()
+        try:
+            identity_stat = self._identity_path.lstat()
+        except OSError as exc:
+            raise AdCredentialVaultError("credential identity cannot be inspected") from exc
+        if stat.S_ISLNK(identity_stat.st_mode) or not stat.S_ISREG(identity_stat.st_mode):
+            raise AdCredentialVaultError("credential identity must be a regular file")
+        if identity_stat.st_size <= 0:
+            raise AdCredentialVaultError("credential identity must not be empty")
+        if identity_stat.st_mode & 0o777 != 0o600:
             raise AdCredentialVaultError("credential identity permissions must be 0600")
+        if hasattr(os, "geteuid") and identity_stat.st_uid != os.geteuid():
+            raise AdCredentialVaultError("credential identity owner is invalid")
 
 
 def _deployed_environment() -> bool:
