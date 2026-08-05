@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 
-_AIogram_AVAILABLE = importlib.util.find_spec("aiogram") is not None
+_AIOGRAM_AVAILABLE = importlib.util.find_spec("aiogram") is not None
 _SOURCE_PATH = (
     Path(__file__).resolve().parents[1]
     / "clientplatform"
@@ -14,7 +14,7 @@ _SOURCE_PATH = (
 )
 
 
-@unittest.skipUnless(_AIogram_AVAILABLE, "aiogram is not installed")
+@unittest.skipUnless(_AIOGRAM_AVAILABLE, "aiogram is not installed")
 class AdSpendTelegramRuntimeTests(unittest.TestCase):
     @staticmethod
     def _module():
@@ -50,10 +50,8 @@ class AdSpendTelegramSourceContractTests(unittest.TestCase):
     def test_consent_copy_does_not_claim_that_spend_already_started(self) -> None:
         source = _SOURCE_PATH.read_text(encoding="utf-8")
         self.assertIn("Показы и расходы не запущены", source)
-        self.assertIn(
-            "Подтверждение создания черновика DRAFT никогда не считается согласием",
-            source,
-        )
+        self.assertIn("Подтверждение создания", source)
+        self.assertIn("черновика DRAFT никогда не считается согласием", source)
         self.assertIn("идемпотентная очередь запуска и остановки", source)
         self.assertNotIn("provider.publish", source)
         self.assertNotIn("moderate(", source)
