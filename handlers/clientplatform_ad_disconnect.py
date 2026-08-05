@@ -30,7 +30,10 @@ async def list_disconnectable_ad_connections(callback: CallbackQuery) -> None:
     actor = await control._actor(int(callback.from_user.id), business_id)
     try:
         connections = await asyncio.to_thread(list_ad_connections, actor=actor)
-    except (AdConnectionError, RuntimeError, ValueError):
+    except (AdConnectionError, ValueError):
+        await callback.answer("Не удалось открыть подключения", show_alert=True)
+        return
+    except RuntimeError:
         await callback.answer("Не удалось открыть подключения", show_alert=True)
         return
     active = [
@@ -70,7 +73,10 @@ async def confirm_ad_connection_disconnect(callback: CallbackQuery) -> None:
     actor = await control._actor(int(callback.from_user.id), business_id)
     try:
         connections = await asyncio.to_thread(list_ad_connections, actor=actor)
-    except (AdConnectionError, RuntimeError, ValueError):
+    except (AdConnectionError, ValueError):
+        await callback.answer("Не удалось проверить кабинет", show_alert=True)
+        return
+    except RuntimeError:
         await callback.answer("Не удалось проверить кабинет", show_alert=True)
         return
     selected = next((item for item in connections if item.id == connection_id), None)
@@ -110,7 +116,10 @@ async def revoke_ad_connection(callback: CallbackQuery) -> None:
             actor=actor,
             connection_id=connection_id,
         )
-    except (AdConnectionError, YandexDirectError, RuntimeError, ValueError):
+    except (AdConnectionError, YandexDirectError, ValueError):
+        await callback.answer("Не удалось отключить кабинет", show_alert=True)
+        return
+    except RuntimeError:
         await callback.answer("Не удалось отключить кабинет", show_alert=True)
         return
     await callback.answer("Доступ удалён")
