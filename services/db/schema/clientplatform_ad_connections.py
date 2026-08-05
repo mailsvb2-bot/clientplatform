@@ -4,7 +4,7 @@ import sqlite3
 
 
 def ensure(c: sqlite3.Connection) -> None:
-    """Create the provider-neutral advertising account and publication boundary."""
+    """Create provider-neutral advertising account, consent and outbox boundaries."""
 
     c.execute(
         """
@@ -38,7 +38,7 @@ def ensure(c: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS ad_oauth_sessions(
             state_hash TEXT PRIMARY KEY,
             business_id TEXT NOT NULL,
-            user_id INTEGER NOT NULL,
+            user_id BIGINT NOT NULL,
             membership_id TEXT NOT NULL,
             provider TEXT NOT NULL,
             verifier_ciphertext TEXT NOT NULL,
@@ -97,6 +97,81 @@ def ensure(c: sqlite3.Connection) -> None:
     )
     c.execute(
         """
+        CREATE TABLE IF NOT EXISTS ad_spend_authorizations(
+            id TEXT PRIMARY KEY,
+            business_id TEXT NOT NULL,
+            connection_id TEXT NOT NULL,
+            publication_job_id TEXT NOT NULL,
+            external_campaign_id TEXT NOT NULL,
+            region_ids_json TEXT NOT NULL,
+            currency TEXT NOT NULL,
+            hard_cap_minor BIGINT NOT NULL,
+            daily_cap_minor BIGINT NOT NULL,
+            authorization_expires_at TEXT NOT NULL,
+            stop_condition TEXT NOT NULL,
+            snapshot_json TEXT NOT NULL,
+            snapshot_hash TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'draft',
+            request_key TEXT NOT NULL,
+            consent_receipt_id TEXT,
+            created_by_member_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            revoked_at TEXT,
+            stopped_at TEXT,
+            last_error_code TEXT,
+            row_version BIGINT NOT NULL DEFAULT 0,
+            UNIQUE(id, business_id),
+            UNIQUE(business_id, request_key),
+            FOREIGN KEY(business_id) REFERENCES businesses(id) ON DELETE CASCADE,
+            FOREIGN KEY(connection_id, business_id)
+                REFERENCES ad_connections(id, business_id) ON DELETE CASCADE,
+            FOREIGN KEY(publication_job_id, business_id)
+                REFERENCES ad_publication_jobs(id, business_id) ON DELETE CASCADE,
+            FOREIGN KEY(created_by_member_id, business_id)
+                REFERENCES business_members(id, business_id),
+            CHECK(length(currency)=3),
+            CHECK(hard_cap_minor > 0),
+            CHECK(daily_cap_minor > 0 AND daily_cap_minor <= hard_cap_minor),
+            CHECK(row_version >= 0),
+            CHECK(stop_condition IN ('hard_cap_or_daily_cap_or_expiry')),
+            CHECK(status IN (
+                'draft', 'awaiting_consent', 'authorized', 'launching', 'active',
+                'stopping', 'stopped', 'expired', 'revoked', 'failed'
+            ))
+        )
+        """
+    )
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ad_spend_consent_receipts(
+            id TEXT PRIMARY KEY,
+            business_id TEXT NOT NULL,
+            authorization_id TEXT NOT NULL,
+            actor_member_id TEXT NOT NULL,
+            actor_user_id BIGINT NOT NULL,
+            terms_json TEXT NOT NULL,
+            terms_hash TEXT NOT NULL,
+            snapshot_hash TEXT NOT NULL,
+            consented_at TEXT NOT NULL,
+            receipt_hash TEXT NOT NULL,
+            version TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(id, business_id),
+            UNIQUE(business_id, authorization_id),
+            UNIQUE(receipt_hash),
+            FOREIGN KEY(business_id) REFERENCES businesses(id) ON DELETE CASCADE,
+            FOREIGN KEY(authorization_id, business_id)
+                REFERENCES ad_spend_authorizations(id, business_id) ON DELETE CASCADE,
+            FOREIGN KEY(actor_member_id, business_id)
+                REFERENCES business_members(id, business_id),
+            CHECK(actor_user_id > 0),
+            CHECK(version='1')
+        )
+        """
+    )
+    c.execute(
+        """
         CREATE TABLE IF NOT EXISTS ad_audit_events(
             id TEXT PRIMARY KEY,
             business_id TEXT NOT NULL,
@@ -135,6 +210,24 @@ def ensure(c: sqlite3.Connection) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_ad_publication_jobs_business
         ON ad_publication_jobs(business_id, status, created_at)
+        """
+    )
+    c.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_ad_spend_authorizations_business_status
+        ON ad_spend_authorizations(business_id, status, authorization_expires_at)
+        """
+    )
+    c.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_ad_spend_authorizations_snapshot
+        ON ad_spend_authorizations(business_id, snapshot_hash, status)
+        """
+    )
+    c.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_ad_spend_receipts_business_time
+        ON ad_spend_consent_receipts(business_id, consented_at, authorization_id)
         """
     )
     c.execute(

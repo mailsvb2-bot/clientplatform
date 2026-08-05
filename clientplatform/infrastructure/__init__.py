@@ -4,8 +4,10 @@ from clientplatform.infrastructure.safe_dispatch_outbox import DispatchOutboxRep
 from clientplatform.infrastructure.safe_bot_provisioning_repository import (
     BotProvisioningRepository,
 )
+from clientplatform.infrastructure.ad_spend_repository import AdSpendRepository
 
 __all__ = [
+    "AdSpendRepository",
     "BotProvisioningRepository",
     "ConnectionRepository",
     "DispatchOutboxRepository",

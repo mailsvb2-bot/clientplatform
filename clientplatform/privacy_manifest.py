@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 TenantDisposition = Literal["erase", "retain", "anonymize"]
-CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-08-05.v11"
+CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-08-05.v12"
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,6 +145,24 @@ _POLICIES = (
         reason=(
             "business-owned provider publication intent, remote object ids and bounded "
             "delivery evidence without customer identity"
+        ),
+        required=True,
+    ),
+    TenantPrivacyPolicy(
+        table="ad_spend_authorizations",
+        disposition="retain",
+        reason=(
+            "business-owned advertising limits, provider snapshot and authorization "
+            "lifecycle retained as bounded commercial and safety evidence"
+        ),
+        required=True,
+    ),
+    TenantPrivacyPolicy(
+        table="ad_spend_consent_receipts",
+        disposition="anonymize",
+        reason=(
+            "immutable advertising consent terms and hashes are retained while owner "
+            "user and membership identifiers are anonymized"
         ),
         required=True,
     ),
