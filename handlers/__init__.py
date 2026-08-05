@@ -87,6 +87,11 @@ def _load_clientplatform_modules() -> tuple[ModuleType, ModuleType]:
         __name__,
     )
     globals()["clientplatform_ad_connections"] = ad_connections
+    ad_disconnect = importlib.import_module(
+        ".clientplatform_ad_disconnect",
+        __name__,
+    )
+    globals()["clientplatform_ad_disconnect"] = ad_disconnect
     return entry, control
 
 
@@ -121,11 +126,15 @@ def __getattr__(name: str) -> ModuleType:
     if name == "clientplatform_ad_connections":
         _load_clientplatform_modules()
         return globals()["clientplatform_ad_connections"]
+    if name == "clientplatform_ad_disconnect":
+        _load_clientplatform_modules()
+        return globals()["clientplatform_ad_disconnect"]
     raise AttributeError(name)
 
 
 __all__ = [
     "clientplatform_ad_connections",
+    "clientplatform_ad_disconnect",
     "clientplatform_admin_extension",
     "clientplatform_bot_lifecycle",
     "clientplatform_bot_setup",
