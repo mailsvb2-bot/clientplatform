@@ -367,6 +367,8 @@ class AdSpendRepository:
                 business_id=current.business_id,
                 authorization_id=authorization.id,
             )
+            if stored.consent_receipt is None:
+                raise AdSpendInvariantViolation("authorized state lost its consent receipt")
             self._audit(
                 actor=current,
                 action="ad_spend_consent_granted",
@@ -378,10 +380,8 @@ class AdSpendRepository:
                 },
             )
             self._conn.execute("RELEASE SAVEPOINT ad_spend_authorize")
-            if stored.consent_receipt is None:
-                raise AdSpendInvariantViolation("authorized state lost its consent receipt")
             return stored, stored.consent_receipt
-        except Exception:
+        except Exception:  # validator: allow-wide-except
             self._conn.execute("ROLLBACK TO SAVEPOINT ad_spend_authorize")
             self._conn.execute("RELEASE SAVEPOINT ad_spend_authorize")
             concurrent, _ = self._get_with_version(
@@ -454,7 +454,10 @@ class AdSpendRepository:
     ) -> None:
         row = self._conn.execute(
             """
-            SELECT j.connection_id, j.external_campaign_id, j.status, c.status
+            SELECT j.connection_id,
+                   j.external_campaign_id,
+                   j.status AS job_status,
+                   c.status AS connection_status
             FROM ad_publication_jobs AS j
             JOIN ad_connections AS c
               ON c.id=j.connection_id AND c.business_id=j.business_id
@@ -469,8 +472,10 @@ class AdSpendRepository:
             )
         connection_id = str(_value(row, "connection_id", 0))
         campaign_id = str(_value(row, "external_campaign_id", 1))
-        job_status = AdPublicationStatus(str(_value(row, "status", 2)))
-        connection_status = AdConnectionStatus(str(_value(row, "status", 3)))
+        job_status = AdPublicationStatus(str(_value(row, "job_status", 2)))
+        connection_status = AdConnectionStatus(
+            str(_value(row, "connection_status", 3))
+        )
         if job_status != AdPublicationStatus.SUBMITTED:
             raise AdSpendInvariantViolation(
                 "advertising spend requires a provider-created DRAFT"
