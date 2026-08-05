@@ -6,6 +6,7 @@ from typing import Any, Mapping
 from clientplatform.domain.ad_connections import normalize_external_campaign_id
 from clientplatform.integrations.yandex_direct import (
     JsonHttpTransport,
+    YandexAccountIdentity,
     YandexCampaign,
     YandexDirectError,
     YandexDirectProvider,
@@ -40,6 +41,51 @@ class ModeratingYandexDirectProvider(YandexDirectProvider):
         transport: JsonHttpTransport | None = None,
     ) -> None:
         super().__init__(oauth=oauth, transport=transport)
+
+    def account_identity(self, *, access_token: str) -> YandexAccountIdentity:
+        """Resolve and authorize the connected *Direct* account.
+
+        A generic Yandex profile is not an advertising account. Clients.get is
+        the authoritative source for ClientId, representative Login, archive
+        state and campaign-edit grants. Read-only or ambiguous connections are
+        rejected before any OAuth material is activated in ClientPlatform.
+        """
+
+        result = self._direct_call(
+            service="clients",
+            token=access_token,
+            payload={
+                "method": "get",
+                "params": {
+                    "FieldNames": [
+                        "ClientId",
+                        "ClientInfo",
+                        "Login",
+                        "Archived",
+                        "Grants",
+                    ]
+                },
+            },
+        )
+        clients = result.get("Clients") or []
+        if len(clients) != 1 or not isinstance(clients[0], Mapping):
+            raise YandexDirectError("direct_account_identity_ambiguous")
+        client = clients[0]
+        if str(client.get("Archived") or "NO").strip().upper() == "YES":
+            raise YandexDirectError("direct_account_archived")
+        client_id = normalize_external_campaign_id(client.get("ClientId"))
+        login = " ".join(str(client.get("Login") or "").split())
+        if not login:
+            raise YandexDirectError("direct_account_login_missing")
+        grants = client.get("Grants") or []
+        privileges = {
+            str(item.get("Privilege") or "").strip().upper()
+            for item in grants
+            if isinstance(item, Mapping)
+        }
+        if "EDIT_CAMPAIGNS" not in privileges:
+            raise YandexDirectError("direct_account_is_read_only")
+        return YandexAccountIdentity(account_id=client_id, login=login)
 
     def list_text_campaigns(self, *, access_token: str) -> list[YandexCampaign]:
         """Return only active, accepted legacy text campaigns.
