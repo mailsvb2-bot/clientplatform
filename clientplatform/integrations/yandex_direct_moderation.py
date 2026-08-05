@@ -15,6 +15,11 @@ from clientplatform.integrations.yandex_direct import (
 
 
 _SUPPORTED_CAMPAIGN_TYPE = "TEXT_CAMPAIGN"
+_PERMISSION_ERROR_CODES = {
+    "provider_54": "direct_permission_denied",
+    "provider_55": "direct_account_access_denied",
+    "provider_56": "direct_account_access_denied",
+}
 
 
 class ModeratingYandexDirectProvider(YandexDirectProvider):
@@ -36,6 +41,31 @@ class ModeratingYandexDirectProvider(YandexDirectProvider):
         transport: JsonHttpTransport | None = None,
     ) -> None:
         super().__init__(oauth=oauth, transport=transport)
+
+    def _json_or_error(
+        self,
+        *,
+        method: str,
+        url: str,
+        headers: Mapping[str, str],
+        body: bytes | None = None,
+        oauth_call: bool = False,
+    ) -> Mapping[str, Any]:
+        """Keep permission errors distinct from refreshable token errors."""
+
+        try:
+            return super()._json_or_error(
+                method=method,
+                url=url,
+                headers=headers,
+                body=body,
+                oauth_call=oauth_call,
+            )
+        except YandexDirectError as exc:
+            safe_code = _PERMISSION_ERROR_CODES.get(exc.code)
+            if safe_code is None:
+                raise
+            raise YandexDirectError(safe_code, retryable=False) from exc
 
     def account_identity(self, *, access_token: str) -> YandexAccountIdentity:
         """Resolve and authorize the connected Direct account."""
