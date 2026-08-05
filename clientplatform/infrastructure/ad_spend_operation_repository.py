@@ -233,7 +233,7 @@ class AdSpendOperationRepository:
             self._audit(business_id, actor_member_id, f"ad_spend_{operation_type.value}_queued", authorization, {"operation_id": operation_id, "reason": reason}, timestamp)
             self._conn.execute("RELEASE SAVEPOINT ad_spend_operation_enqueue")
             return self._get(operation_id, business_id)
-        except Exception:
+        except Exception:  # validator: allow-wide-except
             self._conn.execute("ROLLBACK TO SAVEPOINT ad_spend_operation_enqueue")
             self._conn.execute("RELEASE SAVEPOINT ad_spend_operation_enqueue")
             concurrent = self._find_by_key(business_id=business_id, key=key)
@@ -334,7 +334,7 @@ class AdSpendOperationRepository:
                 raise AdSpendInvariantViolation("authorization completion compare-and-set was lost")
             self._conn.execute("RELEASE SAVEPOINT ad_spend_operation_complete")
             return self._get(operation.id, operation.business_id)
-        except Exception:
+        except Exception:  # validator: allow-wide-except
             self._conn.execute("ROLLBACK TO SAVEPOINT ad_spend_operation_complete")
             self._conn.execute("RELEASE SAVEPOINT ad_spend_operation_complete")
             raise
