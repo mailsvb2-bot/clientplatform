@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 TenantDisposition = Literal["erase", "retain", "anonymize"]
-CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-08-05.v10"
+CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-08-05.v11"
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,6 +121,39 @@ _POLICIES = (
         reason=(
             "customer-linked campaign open and booking attribution retained only after "
             "customer identity is anonymized"
+        ),
+        required=True,
+    ),
+    TenantPrivacyPolicy(
+        table="ad_connections",
+        disposition="erase",
+        reason=(
+            "personal advertising account identity and encrypted OAuth material must be "
+            "removed when the tenant disconnects or is erased"
+        ),
+        required=True,
+    ),
+    TenantPrivacyPolicy(
+        table="ad_oauth_sessions",
+        disposition="erase",
+        reason="short-lived one-time OAuth state and encrypted PKCE verifier",
+        required=True,
+    ),
+    TenantPrivacyPolicy(
+        table="ad_publication_jobs",
+        disposition="retain",
+        reason=(
+            "business-owned provider publication intent, remote object ids and bounded "
+            "delivery evidence without customer identity"
+        ),
+        required=True,
+    ),
+    TenantPrivacyPolicy(
+        table="ad_audit_events",
+        disposition="anonymize",
+        reason=(
+            "security and spending-related publication audit retained while actor linkage "
+            "is anonymized"
         ),
         required=True,
     ),
