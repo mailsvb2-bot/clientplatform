@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Mapping
 
 from clientplatform.domain.ad_connections import (
@@ -209,6 +210,11 @@ class ModeratingYandexDirectProvider(YandexDirectProvider):
             text=normalized_text,
             href=destination,
         )
+        self._ensure_keyword(
+            access_token=access_token,
+            ad_group_id=group_id,
+            title=normalized_title,
+        )
         return YandexPublicationResult(
             ad_group_id=str(group_id),
             ad_id=str(ad_id),
@@ -308,6 +314,78 @@ class ModeratingYandexDirectProvider(YandexDirectProvider):
             fallback_code="responsive_ad_creation_failed",
         )
 
+    def _ensure_keyword(
+        self,
+        *,
+        access_token: str,
+        ad_group_id: int,
+        title: str,
+    ) -> int:
+        phrase = _keyword_phrase(title)
+        result = self._direct_call(
+            service="keywords",
+            token=access_token,
+            payload={
+                "method": "get",
+                "params": {
+                    "SelectionCriteria": {"AdGroupIds": [ad_group_id]},
+                    "FieldNames": ["Id", "Keyword", "State", "Status"],
+                },
+            },
+        )
+        for item in result.get("Keywords") or []:
+            if not isinstance(item, Mapping):
+                continue
+            if " ".join(str(item.get("Keyword") or "").lower().split()) != phrase.lower():
+                continue
+            keyword_id = int(item.get("Id") or 0)
+            if keyword_id <= 0:
+                raise YandexDirectError("keyword_identity_invalid")
+            if str(item.get("State") or "").strip().upper() == "SUSPENDED":
+                self._resume_keyword(
+                    access_token=access_token,
+                    keyword_id=keyword_id,
+                )
+            return keyword_id
+
+        created = self._direct_call(
+            service="keywords",
+            token=access_token,
+            payload={
+                "method": "add",
+                "params": {
+                    "Keywords": [
+                        {
+                            "AdGroupId": ad_group_id,
+                            "Keyword": phrase,
+                        }
+                    ]
+                },
+            },
+        )
+        return _first_action_id(
+            created,
+            key="AddResults",
+            fallback_code="keyword_creation_failed",
+        )
+
+    def _resume_keyword(self, *, access_token: str, keyword_id: int) -> None:
+        result = self._direct_call(
+            service="keywords",
+            token=access_token,
+            payload={
+                "method": "resume",
+                "params": {"SelectionCriteria": {"Ids": [keyword_id]}},
+            },
+        )
+        resumed_id = _first_action_id(
+            result,
+            key="ResumeResults",
+            fallback_code="keyword_resume_failed",
+        )
+        if resumed_id != keyword_id:
+            raise YandexDirectError("keyword_resume_result_mismatch")
+
     def _ad_status(self, *, access_token: str, ad_id: int) -> str:
         result = self._direct_call(
             service="ads",
@@ -353,6 +431,22 @@ class ModeratingYandexDirectProvider(YandexDirectProvider):
             raise YandexDirectError(f"provider_{code or 'ad_moderation_failed'}")
         if int(first.get("Id") or 0) != ad_id:
             raise YandexDirectError("ad_moderation_result_mismatch")
+
+
+def _keyword_phrase(title: str) -> str:
+    cleaned = re.sub(r"[^\w\s-]", " ", str(title or ""), flags=re.UNICODE)
+    words: list[str] = []
+    for raw in cleaned.split():
+        word = raw.strip("-_")[:35]
+        if not word:
+            continue
+        words.append(word)
+        if len(words) == 7:
+            break
+    phrase = " ".join(words)
+    if not phrase:
+        raise YandexDirectError("keyword_phrase_empty")
+    return phrase
 
 
 def _first_action_id(
