@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 from dataclasses import dataclass
 
@@ -18,6 +17,10 @@ from clientplatform.infrastructure.ad_credential_vault import (
     AdCredentialVault,
     AgeAdCredentialVault,
 )
+from clientplatform.infrastructure.ad_worker_store import (
+    AdConnectionLifecycleStore,
+    AdWorkerStore,
+)
 from clientplatform.infrastructure.promotion_repository import PromotionRepository
 from clientplatform.infrastructure.tenancy_repository import TenancyRepository
 from clientplatform.integrations.yandex_direct import (
@@ -27,6 +30,7 @@ from clientplatform.integrations.yandex_direct import (
     YandexOAuthConfig,
     YandexTokenBundle,
 )
+from clientplatform.integrations.yandex_oauth_lifecycle import YandexOAuthLifecycle
 from services.db import get_db, get_db_ro
 
 
@@ -62,6 +66,14 @@ def yandex_direct_provider_configured() -> bool:
     return bool((os.getenv("CLIENTPLATFORM_YANDEX_DIRECT_CLIENT_ID") or "").strip())
 
 
+def _client_id() -> str:
+    return (os.getenv("CLIENTPLATFORM_YANDEX_DIRECT_CLIENT_ID") or "").strip()
+
+
+def _client_secret() -> str:
+    return (os.getenv("CLIENTPLATFORM_YANDEX_DIRECT_CLIENT_SECRET") or "").strip()
+
+
 def _redirect_uri() -> str:
     explicit = (os.getenv("CLIENTPLATFORM_AD_OAUTH_REDIRECT_URI") or "").strip()
     if explicit:
@@ -75,15 +87,13 @@ def _redirect_uri() -> str:
 def _provider() -> YandexDirectProvider:
     if not ad_connections_enabled():
         raise RuntimeError("advertising account connections are disabled")
-    client_id = (os.getenv("CLIENTPLATFORM_YANDEX_DIRECT_CLIENT_ID") or "").strip()
+    client_id = _client_id()
     if not client_id:
         raise RuntimeError("Yandex Direct OAuth application is not configured")
     return YandexDirectProvider(
         oauth=YandexOAuthConfig(
             client_id=client_id,
-            client_secret=(
-                os.getenv("CLIENTPLATFORM_YANDEX_DIRECT_CLIENT_SECRET") or ""
-            ).strip(),
+            client_secret=_client_secret(),
             redirect_uri=_redirect_uri(),
         )
     )
@@ -91,6 +101,33 @@ def _provider() -> YandexDirectProvider:
 
 def _vault() -> AdCredentialVault:
     return AgeAdCredentialVault()
+
+
+def _auth_error(exc: YandexDirectError) -> bool:
+    return exc.code in {
+        "provider_http_401",
+        "provider_53",
+        "provider_54",
+        "provider_55",
+        "provider_56",
+        "provider_invalid_token",
+        "provider_unauthorized",
+    }
+
+
+def _refresh_token_bundle(
+    *,
+    provider: YandexDirectProvider,
+    store: AdWorkerStore,
+    connection: AdConnection,
+    bundle: YandexTokenBundle,
+) -> YandexTokenBundle:
+    refreshed = provider.refresh(bundle=bundle)
+    store.replace_token_bundle(
+        connection=connection,
+        token_bundle_json=refreshed.to_json(),
+    )
+    return refreshed
 
 
 def start_yandex_direct_oauth(
@@ -171,13 +208,40 @@ def list_yandex_direct_campaigns(
 ) -> list[YandexCampaign]:
     selected_vault = vault or _vault()
     selected_provider = provider or _provider()
-    with get_db_ro() as conn:
-        repository = AdConnectionRepository(conn, vault=selected_vault)
-        connection = repository.get_connection(actor=actor, connection_id=connection_id)
+    with get_db() as conn:
+        current = TenancyRepository(conn).resolve_context(
+            user_id=actor.user_id,
+            business_id=actor.business_id,
+        )
+        current.assert_can_manage_promotions()
+        connection = AdConnectionRepository(
+            conn,
+            vault=selected_vault,
+        ).get_connection(actor=current, connection_id=connection_id)
         if connection.provider != AdProvider.YANDEX_DIRECT:
             raise AdConnectionInvariantViolation("connection is not a Yandex Direct account")
-        bundle = YandexTokenBundle.from_json(repository.token_bundle(connection=connection))
-    return selected_provider.list_text_campaigns(access_token=bundle.access_token)
+        store = AdWorkerStore(conn, vault=selected_vault)
+        connection, token_json = store.load_active(
+            business_id=current.business_id,
+            connection_id=connection.id,
+        )
+        bundle = YandexTokenBundle.from_json(token_json)
+        try:
+            return selected_provider.list_text_campaigns(
+                access_token=bundle.access_token
+            )
+        except YandexDirectError as exc:
+            if not _auth_error(exc) or not bundle.refresh_token:
+                raise
+            refreshed = _refresh_token_bundle(
+                provider=selected_provider,
+                store=store,
+                connection=connection,
+                bundle=bundle,
+            )
+            return selected_provider.list_text_campaigns(
+                access_token=refreshed.access_token
+            )
 
 
 def create_ad_publication_draft(
@@ -230,6 +294,39 @@ def confirm_ad_publication(
         )
 
 
+def disconnect_ad_connection(
+    *,
+    actor: TenantContext,
+    connection_id: str,
+    vault: AdCredentialVault | None = None,
+    oauth_lifecycle: YandexOAuthLifecycle | None = None,
+) -> AdConnection:
+    selected_vault = vault or _vault()
+    lifecycle = oauth_lifecycle or YandexOAuthLifecycle(
+        client_id=_client_id(),
+        client_secret=_client_secret(),
+    )
+    with get_db() as conn:
+        store = AdConnectionLifecycleStore(conn, vault=selected_vault)
+        connection, token_json = store.load_for_disconnect(
+            actor=actor,
+            connection_id=connection_id,
+        )
+        if connection.provider != AdProvider.YANDEX_DIRECT:
+            raise AdConnectionInvariantViolation("unsupported advertising provider")
+        if token_json:
+            bundle = YandexTokenBundle.from_json(token_json)
+            result = lifecycle.revoke(access_token=bundle.access_token)
+            if not result.local_erasure_allowed:
+                raise AdConnectionInvariantViolation(
+                    "provider did not allow local credential erasure"
+                )
+        return store.erase_after_provider_revocation(
+            actor=actor,
+            connection_id=connection.id,
+        )
+
+
 def list_ad_publications(
     *,
     actor: TenantContext,
@@ -253,21 +350,41 @@ def process_one_ad_publication(
         if claimed is None:
             return None
         job, lock_token = claimed
-        connection = repository._get_connection(  # worker-owned, tenant id comes from claimed row
-            business_id=job.business_id,
-            connection_id=job.connection_id,
-        )
+        store = AdWorkerStore(conn, vault=selected_vault)
         try:
-            bundle = YandexTokenBundle.from_json(repository.token_bundle(connection=connection))
-            result = selected_provider.publish_text_ad(
-                access_token=bundle.access_token,
-                external_campaign_id=job.external_campaign_id,
-                region_ids=job.region_ids,
-                title=job.title,
-                text=job.text,
-                href=job.source_url,
-                idempotency_key=job.idempotency_key,
+            connection, token_json = store.load_active(
+                business_id=job.business_id,
+                connection_id=job.connection_id,
             )
+            bundle = YandexTokenBundle.from_json(token_json)
+            try:
+                result = selected_provider.publish_text_ad(
+                    access_token=bundle.access_token,
+                    external_campaign_id=job.external_campaign_id,
+                    region_ids=job.region_ids,
+                    title=job.title,
+                    text=job.text,
+                    href=job.source_url,
+                    idempotency_key=job.idempotency_key,
+                )
+            except YandexDirectError as exc:
+                if not _auth_error(exc) or not bundle.refresh_token:
+                    raise
+                refreshed = _refresh_token_bundle(
+                    provider=selected_provider,
+                    store=store,
+                    connection=connection,
+                    bundle=bundle,
+                )
+                result = selected_provider.publish_text_ad(
+                    access_token=refreshed.access_token,
+                    external_campaign_id=job.external_campaign_id,
+                    region_ids=job.region_ids,
+                    title=job.title,
+                    text=job.text,
+                    href=job.source_url,
+                    idempotency_key=job.idempotency_key,
+                )
         except YandexDirectError as exc:
             return repository.fail_job(
                 job=job,
@@ -276,7 +393,7 @@ def process_one_ad_publication(
                 retryable=exc.retryable,
                 max_attempts=max_attempts,
             )
-        except (OSError, RuntimeError, ValueError, TypeError, json.JSONDecodeError):
+        except (OSError, RuntimeError, ValueError, TypeError):
             return repository.fail_job(
                 job=job,
                 lock_token=lock_token,
@@ -300,6 +417,7 @@ __all__ = [
     "complete_yandex_direct_oauth",
     "confirm_ad_publication",
     "create_ad_publication_draft",
+    "disconnect_ad_connection",
     "list_ad_connections",
     "list_ad_publications",
     "list_yandex_direct_campaigns",
