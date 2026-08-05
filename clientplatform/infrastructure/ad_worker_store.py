@@ -119,12 +119,77 @@ class AdWorkerStore:
 
 
 class AdConnectionLifecycleStore:
-    """Owner-controlled local credential erasure and queue cancellation."""
+    """Owner-controlled credential blocking, revocation and local erasure."""
 
     def __init__(self, conn: Any, *, vault: AdCredentialVault):
         self._conn = conn
         self._vault = vault
         self._tenancy = TenancyRepository(conn)
+
+    def begin_disconnect(
+        self,
+        *,
+        actor: TenantContext,
+        connection_id: str,
+        now: str | None = None,
+    ) -> tuple[AdConnection, str]:
+        current = self._tenancy.resolve_context(
+            user_id=actor.user_id,
+            business_id=actor.business_id,
+        )
+        current.assert_can_manage_ad_connections()
+        normalized_id = normalize_uuid(connection_id, field_name="ad_connection_id")
+        timestamp = str(now or _utc_now())
+        row = self._conn.execute(
+            _SELECT + " WHERE id=? AND business_id=? LIMIT 1",
+            (normalized_id, current.business_id),
+        ).fetchone()
+        if row is None:
+            raise AdConnectionNotFound("advertising connection was not found")
+        observed = _connection(row)
+        ciphertext = str(_value(row, "credential_ciphertext", 13) or "")
+        if observed.status == AdConnectionStatus.REVOKED or not ciphertext:
+            return observed, ""
+
+        cursor = self._conn.execute(
+            """
+            UPDATE ad_connections
+            SET status='disabled', updated_at=?, last_error_code=NULL
+            WHERE id=? AND business_id=? AND status!='revoked'
+            """,
+            (timestamp, normalized_id, current.business_id),
+        )
+        if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+            raise AdConnectionNotFound("advertising connection was not found")
+        self._cancel_unsubmitted_jobs(
+            business_id=current.business_id,
+            connection_id=normalized_id,
+            timestamp=timestamp,
+            error_code="connection_disconnect_started",
+        )
+        self._conn.execute(
+            """
+            INSERT INTO ad_audit_events(
+                id, business_id, actor_member_id, action, subject_type,
+                subject_id, details_json, created_at
+            ) VALUES(?, ?, ?, 'ad_connection_disconnect_started',
+                     'ad_connection', ?, '{}', ?)
+            """,
+            (
+                str(uuid4()),
+                current.business_id,
+                current.membership_id,
+                normalized_id,
+                timestamp,
+            ),
+        )
+        row = self._conn.execute(
+            _SELECT + " WHERE id=? AND business_id=? LIMIT 1",
+            (normalized_id, current.business_id),
+        ).fetchone()
+        if row is None:
+            raise AdConnectionNotFound("advertising connection was not found")
+        return _connection(row), self._vault.open(ciphertext)
 
     def load_for_disconnect(
         self,
@@ -132,6 +197,8 @@ class AdConnectionLifecycleStore:
         actor: TenantContext,
         connection_id: str,
     ) -> tuple[AdConnection, str]:
+        """Compatibility read used by isolated lifecycle tests."""
+
         current = self._tenancy.resolve_context(
             user_id=actor.user_id,
             business_id=actor.business_id,
@@ -175,15 +242,11 @@ class AdConnectionLifecycleStore:
         )
         if int(getattr(cursor, "rowcount", 0) or 0) != 1:
             raise AdConnectionNotFound("advertising connection was not found")
-        self._conn.execute(
-            """
-            UPDATE ad_publication_jobs
-            SET status='cancelled', updated_at=?, locked_at=NULL, lock_token=NULL,
-                last_error_code='connection_revoked'
-            WHERE connection_id=? AND business_id=?
-              AND status IN ('draft', 'queued', 'retry')
-            """,
-            (timestamp, normalized_id, current.business_id),
+        self._cancel_unsubmitted_jobs(
+            business_id=current.business_id,
+            connection_id=normalized_id,
+            timestamp=timestamp,
+            error_code="connection_revoked",
         )
         self._conn.execute(
             """
@@ -207,6 +270,25 @@ class AdConnectionLifecycleStore:
         if row is None:
             raise AdConnectionNotFound("advertising connection was not found")
         return _connection(row)
+
+    def _cancel_unsubmitted_jobs(
+        self,
+        *,
+        business_id: str,
+        connection_id: str,
+        timestamp: str,
+        error_code: str,
+    ) -> None:
+        self._conn.execute(
+            """
+            UPDATE ad_publication_jobs
+            SET status='cancelled', updated_at=?, locked_at=NULL, lock_token=NULL,
+                last_error_code=?
+            WHERE connection_id=? AND business_id=?
+              AND status IN ('draft', 'queued', 'publishing', 'retry')
+            """,
+            (timestamp, error_code, connection_id, business_id),
+        )
 
 
 __all__ = ["AdConnectionLifecycleStore", "AdWorkerStore"]
