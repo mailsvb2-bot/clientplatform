@@ -54,8 +54,15 @@ async def yandex_direct_oauth_callback(request: web.Request) -> web.Response:
             state=state,
             code=code,
         )
-    except (AdConnectionError, YandexDirectError, RuntimeError, ValueError):
+    except (AdConnectionError, YandexDirectError, ValueError):
         log.exception("Yandex Direct OAuth callback failed")
+        return _page(
+            title="Не удалось подключить кабинет",
+            message="Доступ не сохранён. Вернитесь в Telegram и повторите подключение.",
+            status=400,
+        )
+    except RuntimeError:
+        log.exception("Yandex Direct OAuth runtime composition failed")
         return _page(
             title="Не удалось подключить кабинет",
             message="Доступ не сохранён. Вернитесь в Telegram и повторите подключение.",
@@ -71,8 +78,10 @@ async def yandex_direct_oauth_callback(request: web.Request) -> web.Response:
                 f"Кабинет: {completion.connection.external_login}\n"
                 "Теперь рекламный черновик можно отправить в этот кабинет после Вашего подтверждения.",
             )
-        except (OSError, RuntimeError):
-            log.exception("Yandex Direct OAuth success notification failed")
+        except OSError:
+            log.exception("Yandex Direct OAuth success notification transport failed")
+        except RuntimeError:
+            log.exception("Yandex Direct OAuth success notification runtime failed")
 
     return _page(
         title="Кабинет подключён",
