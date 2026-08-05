@@ -9,6 +9,9 @@ import secrets
 from pathlib import Path
 
 _KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
+_TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
+_AD_IDENTITY_FILE = "/run/secrets/clientplatform-ad/identity.txt"
+_AD_HOST_DIR = "/var/lib/clientplatform/ad-secrets"
 
 
 class EnvironmentPreparationError(RuntimeError):
@@ -42,6 +45,31 @@ def _exact_or_missing(values: dict[str, str], name: str, expected: str) -> None:
         raise EnvironmentPreparationError(f"mismatched_{name.lower()}")
 
 
+def _enabled(values: dict[str, str], name: str) -> bool:
+    return str(values.get(name, "") or "").strip().lower() in _TRUE_VALUES
+
+
+def _validate_ad_connections(values: dict[str, str], *, domain: str) -> None:
+    if not _enabled(values, "CLIENTPLATFORM_AD_CONNECTIONS_ENABLED"):
+        return
+    _required(values, "CLIENTPLATFORM_YANDEX_DIRECT_CLIENT_ID")
+    _required(values, "CLIENTPLATFORM_YANDEX_DIRECT_CLIENT_SECRET")
+    expected_redirect = f"https://{domain}/oauth/yandex-direct/callback"
+    observed_redirect = _required(values, "CLIENTPLATFORM_AD_OAUTH_REDIRECT_URI")
+    if observed_redirect != expected_redirect:
+        raise EnvironmentPreparationError(
+            "mismatched_clientplatform_ad_oauth_redirect_uri"
+        )
+    if _required(values, "CLIENTPLATFORM_AD_CREDENTIAL_IDENTITY_FILE") != _AD_IDENTITY_FILE:
+        raise EnvironmentPreparationError(
+            "mismatched_clientplatform_ad_credential_identity_file"
+        )
+    if _required(values, "CLIENTPLATFORM_AD_CREDENTIAL_HOST_DIR") != _AD_HOST_DIR:
+        raise EnvironmentPreparationError(
+            "mismatched_clientplatform_ad_credential_host_dir"
+        )
+
+
 def prepare(path: Path) -> tuple[str, ...]:
     expanded = path.expanduser()
     if expanded.is_symlink():
@@ -63,6 +91,7 @@ def prepare(path: Path) -> tuple[str, ...]:
 
     expected_public = f"https://{domain}"
     expected_media = f"https://{domain}/clientplatform"
+    expected_ad_redirect = f"https://{domain}/oauth/yandex-direct/callback"
     _exact_or_missing(values, "CLIENTPLATFORM_PUBLIC_BASE_URL", expected_public)
     _exact_or_missing(values, "CLIENTPLATFORM_MEDIA_GATEWAY_BASE_URL", expected_media)
     _exact_or_missing(values, "CLIENTPLATFORM_MEDIA_GATEWAY_ALLOWED_BUCKETS", bucket)
@@ -94,6 +123,11 @@ def prepare(path: Path) -> tuple[str, ...]:
         "CLIENTPLATFORM_BACKUP_ENCRYPTION_REQUIRED": "1",
         "CLIENTPLATFORM_POSTGRES_BACKUP_S3_ENABLED": "0",
         "CLIENTPLATFORM_POSTGRES_BACKUP_FRESHNESS_REQUIRED": "0",
+        "CLIENTPLATFORM_AD_CONNECTIONS_ENABLED": "0",
+        "CLIENTPLATFORM_AD_OAUTH_REDIRECT_URI": expected_ad_redirect,
+        "CLIENTPLATFORM_AD_CREDENTIAL_IDENTITY_FILE": _AD_IDENTITY_FILE,
+        "CLIENTPLATFORM_AD_CREDENTIAL_HOST_DIR": _AD_HOST_DIR,
+        "CLIENTPLATFORM_AD_PUBLICATION_INTERVAL_SEC": "2",
     }
     if not str(values.get("CLIENTPLATFORM_SECRET_MEDIA_SIGNING_KEY", "")).strip():
         defaults["CLIENTPLATFORM_SECRET_MEDIA_SIGNING_KEY"] = secrets.token_urlsafe(48)
@@ -105,6 +139,8 @@ def prepare(path: Path) -> tuple[str, ...]:
         added.append(key)
         lines.append(f"{key}={value}")
         values[key] = value
+
+    _validate_ad_connections(values, domain=domain)
 
     backup = resolved.with_name(resolved.name + ".before-current-main")
     if added:

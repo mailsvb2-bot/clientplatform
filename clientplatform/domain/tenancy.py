@@ -105,6 +105,13 @@ _PROMOTION_ANALYTICS_ROLES = frozenset(
     }
 )
 
+_AD_CONNECTION_MANAGEMENT_ROLES = frozenset(
+    {
+        PlatformRole.OWNER,
+        PlatformRole.ADMINISTRATOR,
+    }
+)
+
 
 def normalize_user_id(value: int) -> int:
     if isinstance(value, bool):
@@ -218,6 +225,12 @@ class TenantContext:
         if self.role not in {PlatformRole.OWNER, PlatformRole.ADMINISTRATOR}:
             raise TenantPermissionDenied(
                 "business management requires owner or administrator role"
+            )
+
+    def assert_can_manage_ad_connections(self) -> None:
+        if self.role not in _AD_CONNECTION_MANAGEMENT_ROLES:
+            raise TenantPermissionDenied(
+                "advertising account connections require owner or administrator role"
             )
 
     def assert_can_view_customer_records(self) -> None:

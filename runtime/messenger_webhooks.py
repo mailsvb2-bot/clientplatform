@@ -8,11 +8,14 @@ from typing import TYPE_CHECKING, Any
 
 from aiohttp import web
 
+from clientplatform.runtime.ad_publication_worker import AdPublicationWorker
 from clientplatform.runtime.bot_gateway import (
     ManagedBotGatewayRuntime,
     bot_gateway_runtime_config,
 )
 from config.settings import settings
+from core.task_manager import TaskManager
+from runtime.ad_oauth_http import ad_oauth_http_enabled, register_ad_oauth_routes
 from runtime.ingress_flags import (
     http_ingress_enabled,
     max_webhook_enabled,
@@ -50,9 +53,18 @@ class MessengerWebhookRuntime:
     telegram_public_url: str = ""
     delivery_worker_started: bool = False
     bot_gateway_runtime: ManagedBotGatewayRuntime | None = None
+    ad_publication_worker: AdPublicationWorker | None = None
 
     async def stop(self) -> None:
         errors: list[BaseException] = []
+        if self.ad_publication_worker is not None:
+            try:
+                await self.ad_publication_worker.stop()
+            except BaseException as exc:  # validator: allow-wide-except
+                log.exception("Advertising publication worker shutdown failed")
+                errors.append(exc)
+            finally:
+                self.ad_publication_worker = None
         if self.bot_gateway_runtime is not None:
             try:
                 await self.bot_gateway_runtime.stop()
@@ -83,6 +95,8 @@ async def _health(request: web.Request) -> web.Response:
     payload: dict[str, Any] = {"ok": True, "service": "http-ingress"}
     if isinstance(gateway, ManagedBotGatewayRuntime):
         payload["managed_bot_gateway"] = gateway.health_snapshot()
+    if request.app.get("clientplatform_ad_oauth_bot") is not None:
+        payload["ad_oauth"] = True
     return web.json_response(payload)
 
 
@@ -189,20 +203,16 @@ async def start_messenger_webhook_runtime(
     bot: "Bot | None" = None,
     dispatcher: "Dispatcher | None" = None,
 ) -> MessengerWebhookRuntime | None:
-    """Start webhook providers and the managed Telegram polling owner.
+    """Start webhook providers, OAuth callbacks and durable provider workers."""
 
-    ``bot`` is retained only for call-site compatibility and is intentionally
-    ignored. The central Telegram bot is owned by the separate polling loop.
-    """
-
-    del bot
     payment_enabled = payment_http_enabled()
     privacy_export_enabled = privacy_export_http_enabled()
     max_enabled = max_webhook_enabled()
     vk_enabled = vk_webhook_enabled()
+    ad_oauth_enabled = ad_oauth_http_enabled()
     gateway_config = bot_gateway_runtime_config()
     gateway_enabled = gateway_config.enabled
-    ingress_enabled = http_ingress_enabled() or gateway_enabled
+    ingress_enabled = http_ingress_enabled() or gateway_enabled or ad_oauth_enabled
     if not ingress_enabled:
         return None
 
@@ -222,6 +232,10 @@ async def start_messenger_webhook_runtime(
         _register_vk_routes(app)
     if max_enabled or vk_enabled:
         _register_audio_routes(app)
+    if ad_oauth_enabled:
+        if bot is None:
+            raise RuntimeError("Advertising OAuth callback requires the central bot")
+        register_ad_oauth_routes(app, bot=bot)
 
     bot_gateway_runtime: ManagedBotGatewayRuntime | None = None
     if gateway_enabled:
@@ -233,11 +247,23 @@ async def start_messenger_webhook_runtime(
         )
         bot_gateway_runtime.register_route(app)
 
+    ad_publication_worker: AdPublicationWorker | None = None
+    if ad_oauth_enabled:
+        if dispatcher is None:
+            raise RuntimeError("Advertising publication worker requires dispatcher")
+        workflow_manager = dispatcher.workflow_data.get("task_manager")
+        if not isinstance(workflow_manager, TaskManager):
+            raise RuntimeError("Advertising publication worker requires canonical TaskManager")
+        ad_publication_worker = AdPublicationWorker.from_environment(
+            task_manager=workflow_manager
+        )
+
     host, port = _resolve_ingress_bind()
     runner = web.AppRunner(app)
     await runner.setup()
     delivery_worker_started = False
     gateway_started = False
+    ad_worker_started = False
     try:
         site = web.TCPSite(runner, host=host, port=port)
         await site.start()
@@ -249,10 +275,15 @@ async def start_messenger_webhook_runtime(
             gateway_started = bot_gateway_runtime.start()
             if not gateway_started:
                 raise RuntimeError("Managed bot polling gateway failed to start")
+        if ad_publication_worker is not None:
+            ad_worker_started = ad_publication_worker.start()
+            if not ad_worker_started:
+                raise RuntimeError("Advertising publication worker failed to start")
 
         log.info(
             "HTTP ingress started on %s:%s payment=%s privacy_export=%s "
-            "max=%s vk=%s durable_delivery=%s managed_bot_polling=%s",
+            "max=%s vk=%s durable_delivery=%s managed_bot_polling=%s "
+            "ad_oauth=%s ad_publication_worker=%s",
             host,
             port,
             payment_enabled,
@@ -261,6 +292,8 @@ async def start_messenger_webhook_runtime(
             vk_enabled,
             delivery_worker_started,
             gateway_started,
+            ad_oauth_enabled,
+            ad_worker_started,
         )
         return MessengerWebhookRuntime(
             runner=runner,
@@ -268,8 +301,14 @@ async def start_messenger_webhook_runtime(
             telegram_public_url="",
             delivery_worker_started=delivery_worker_started,
             bot_gateway_runtime=bot_gateway_runtime,
+            ad_publication_worker=ad_publication_worker,
         )
     except (OSError, RuntimeError, ValueError, TypeError, AttributeError):
+        if ad_worker_started and ad_publication_worker is not None:
+            try:
+                await ad_publication_worker.stop()
+            except BaseException:  # validator: allow-wide-except
+                log.exception("Advertising publication worker startup rollback failed")
         if gateway_started and bot_gateway_runtime is not None:
             try:
                 await bot_gateway_runtime.stop()

@@ -24,10 +24,12 @@ def _owner_keyboard(control: ModuleType, business_id: str) -> InlineKeyboardMark
                 ("👥 Записи клиентов", f"cpj:bookings:{token}"),
                 ("🔗 Моя страница", f"cpj:page:{token}"),
             ],
+            [("🚀 Получить клиентов", f"cpj:promote:{token}")],
             [
-                ("🚀 Получить клиентов", f"cpj:promote:{token}"),
-                ("⚙️ Настройки", f"cps:advanced:{token}"),
+                ("📣 Рекламные кабинеты", f"cpa:home:{token}"),
+                ("🔌 Отключить кабинет", f"cpa:disconnects:{token}"),
             ],
+            [("⚙️ Настройки", f"cps:advanced:{token}")],
         ]
     )
 
@@ -59,6 +61,7 @@ async def _send_publish_receipt(
                     ("📨 Просто отправить", f"cpj:share:{business_token}:{slot_token}"),
                     ("🚀 Получить клиентов", f"cpp:slot:{business_token}:{slot_token}"),
                 ],
+                [("📣 Отправить в рекламный кабинет", f"cpa:slot:{business_token}:{slot_token}")],
                 [
                     ("✏️ Изменить", f"cpj:edit:{business_token}:{slot_token}"),
                     ("➕ Ещё время", f"cpj:add:{business_token}:{offering_token}"),
