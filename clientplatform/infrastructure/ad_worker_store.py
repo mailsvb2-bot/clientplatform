@@ -118,6 +118,32 @@ class AdWorkerStore:
         if int(getattr(cursor, "rowcount", 0) or 0) != 1:
             raise AdConnectionNotFound("available advertising connection was not found")
 
+    def keep_available_after_job_failure(
+        self,
+        *,
+        business_id: str,
+        connection_id: str,
+    ) -> None:
+        """Undo account-level attention for a failure scoped to one ad job.
+
+        Error timestamps and safe error codes remain available for diagnostics;
+        only the account availability state is restored. Disabled and revoked
+        connections are intentionally never changed by this operation.
+        """
+
+        normalized_business = normalize_uuid(business_id, field_name="business_id")
+        normalized_connection = normalize_uuid(
+            connection_id,
+            field_name="ad_connection_id",
+        )
+        self._conn.execute(
+            """
+            UPDATE ad_connections SET status='active'
+            WHERE id=? AND business_id=? AND status='attention'
+            """,
+            (normalized_connection, normalized_business),
+        )
+
 
 class AdConnectionLifecycleStore:
     """Owner-controlled credential blocking, revocation and local erasure."""
