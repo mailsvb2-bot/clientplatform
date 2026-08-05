@@ -20,7 +20,7 @@ from clientplatform.domain.promotions import (
     PromotionCreative,
     stable_creative_id,
 )
-from clientplatform.domain.tenancy import PlatformRole, TenantContext, TenantPermissionDenied
+from clientplatform.domain.tenancy import PlatformRole, TenantPermissionDenied
 from clientplatform.infrastructure import TenancyRepository
 from clientplatform.infrastructure.activity_repository import ActivityRepository
 from clientplatform.infrastructure.ad_connection_repository import AdConnectionRepository
@@ -283,11 +283,15 @@ class AdConnectionRepositoryTests(unittest.TestCase):
         with self.assertRaises(AdConnectionInvariantViolation):
             self.ads.consume_oauth_session(state=state, now=_NOW)
 
-        marketer = TenantContext(
-            business_id=self.owner.business_id,
+        self.tenancy.grant_member(
+            actor=self.owner,
             user_id=202,
-            membership_id=self.owner.membership_id,
             role=PlatformRole.MARKETER,
+            now="2026-08-05T08:00:00+00:00",
+        )
+        marketer = self.tenancy.resolve_context(
+            user_id=202,
+            business_id=self.owner.business_id,
         )
         with self.assertRaises(TenantPermissionDenied):
             self.ads.create_oauth_session(
