@@ -168,11 +168,15 @@ class DisconnectPrivacySafetyTests(unittest.TestCase):
 
 
 class NoAutomaticSpendStaticContractTests(unittest.TestCase):
-    def test_provider_source_contains_no_moderation_api_call(self) -> None:
+    def test_provider_source_contains_no_activation_or_targeting_calls(self) -> None:
         source = inspect.getsource(ModeratingYandexDirectProvider)
-        forbidden_method = '"method"' + ': "moderate"'
-        self.assertNotIn(forbidden_method, source)
+        forbidden_moderate = '"method"' + ': "moderate"'
+        forbidden_keyword_add = 'service=' + '"keywords"'
+        self.assertNotIn(forbidden_moderate, source)
         self.assertNotIn("_moderate_ad", source)
+        self.assertNotIn(forbidden_keyword_add, source)
+        self.assertNotIn("_ensure_keyword", source)
+        self.assertNotIn("_resume_keyword", source)
 
     def test_user_confirmation_is_described_as_draft_not_launch(self) -> None:
         from handlers import clientplatform_ad_connections
