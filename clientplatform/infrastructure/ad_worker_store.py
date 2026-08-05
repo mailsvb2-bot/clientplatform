@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -65,6 +65,32 @@ class AdWorkerStore:
     def __init__(self, conn: Any, *, vault: AdCredentialVault):
         self._conn = conn
         self._vault = vault
+
+    def recover_stale_publication_leases(
+        self,
+        *,
+        lock_ttl_seconds: int = 300,
+        now: datetime | None = None,
+    ) -> int:
+        """Return abandoned publishing jobs to the idempotent retry queue."""
+
+        timestamp_dt = now or datetime.now(timezone.utc)
+        ttl = max(30, min(int(lock_ttl_seconds), 3600))
+        timestamp = timestamp_dt.astimezone(timezone.utc).isoformat(timespec="seconds")
+        stale = (timestamp_dt - timedelta(seconds=ttl)).astimezone(
+            timezone.utc
+        ).isoformat(timespec="seconds")
+        cursor = self._conn.execute(
+            """
+            UPDATE ad_publication_jobs
+            SET status='retry', available_at=?, updated_at=?,
+                locked_at=NULL, lock_token=NULL,
+                last_error_code='stale_publication_lease_recovered'
+            WHERE status='publishing' AND locked_at IS NOT NULL AND locked_at<?
+            """,
+            (timestamp, timestamp, stale),
+        )
+        return int(getattr(cursor, "rowcount", 0) or 0)
 
     def load_active(
         self,
