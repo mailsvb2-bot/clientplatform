@@ -21,6 +21,7 @@ def test_current_schema_has_explicit_policy_for_every_user_owned_table() -> None
     assert "mood_sessions" in report.discovered_user_tables
     assert "messenger_delivery_outbox" in report.discovered_user_tables
     assert "yookassa_refunds" in report.discovered_user_tables
+    assert "ad_oauth_sessions" in report.discovered_user_tables
 
 
 def test_new_user_owned_table_fails_closed_until_policy_is_added() -> None:
