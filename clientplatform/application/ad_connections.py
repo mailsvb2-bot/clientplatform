@@ -397,6 +397,7 @@ def process_one_ad_publication(
     selected_vault = vault or _vault()
     selected_provider = provider or _provider()
     with get_db() as conn:
+        AdWorkerStore(conn, vault=selected_vault).recover_stale_publication_leases()
         claimed = AdConnectionRepository(
             conn,
             vault=selected_vault,
