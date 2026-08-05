@@ -144,7 +144,10 @@ async def open_ad_spend_controls(callback: CallbackQuery, state: FSMContext) -> 
             asyncio.to_thread(list_ad_publications, actor=actor),
             asyncio.to_thread(list_ad_spend_authorizations, actor=actor),
         )
-    except (AdConnectionError, AdSpendError, RuntimeError, ValueError):
+    except (AdConnectionError, AdSpendError):
+        await callback.answer("Не удалось открыть безопасный запуск", show_alert=True)
+        return
+    except (RuntimeError, ValueError):
         await callback.answer("Не удалось открыть безопасный запуск", show_alert=True)
         return
 
@@ -244,12 +247,22 @@ async def receive_ad_spend_daily_cap(message: Message, state: FSMContext) -> Non
         if daily_cap_minor > hard_cap_minor:
             raise ValueError("daily cap exceeds hard cap")
         business_id = str(data["business_id"])
+        business_token = str(data["business_token"])
+        publication_job_id = str(data["publication_job_id"])
+    except (KeyError, TypeError, ValueError):
+        await message.answer(
+            "Не удалось прочитать параметры разрешения. Начните настройку заново."
+        )
+        await state.clear()
+        return
+
+    try:
         actor = await c._actor(c._user_id(message), business_id)
         now = datetime.now(timezone.utc).replace(microsecond=0)
         prepared = await asyncio.to_thread(
             prepare_ad_spend_authorization,
             actor=actor,
-            publication_job_id=str(data["publication_job_id"]),
+            publication_job_id=publication_job_id,
             hard_cap_minor=hard_cap_minor,
             daily_cap_minor=daily_cap_minor,
             authorization_expires_at=now + timedelta(minutes=5),
@@ -262,18 +275,15 @@ async def receive_ad_spend_daily_cap(message: Message, state: FSMContext) -> Non
             authorization_id=prepared.authorization.id,
             now=now,
         )
-    except (
-        KeyError,
-        TypeError,
-        ValueError,
-        AdConnectionError,
-        AdSpendError,
-        YandexDirectError,
-        RuntimeError,
-    ):
+    except (AdConnectionError, AdSpendError, YandexDirectError):
         await message.answer(
             "Не удалось подготовить безопасное разрешение. Проверьте суммы, "
             "подключение кабинета и статус кампании, затем попробуйте снова."
+        )
+        return
+    except RuntimeError:
+        await message.answer(
+            "Не удалось подготовить безопасное разрешение. Сервис временно недоступен."
         )
         return
 
@@ -307,13 +317,13 @@ async def receive_ad_spend_daily_cap(message: Message, state: FSMContext) -> Non
                     (
                         "✅ Подтверждаю точные условия",
                         "cpsp:confirm:"
-                        f"{data['business_token']}:{c._uuid_token(authorization.id)}",
+                        f"{business_token}:{c._uuid_token(authorization.id)}",
                     )
                 ],
                 [
                     (
                         "Отмена",
-                        f"cpsp:home:{data['business_token']}",
+                        f"cpsp:home:{business_token}",
                     )
                 ],
             ]
