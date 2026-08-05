@@ -95,7 +95,8 @@ async def _health(request: web.Request) -> web.Response:
     payload: dict[str, Any] = {"ok": True, "service": "http-ingress"}
     if isinstance(gateway, ManagedBotGatewayRuntime):
         payload["managed_bot_gateway"] = gateway.health_snapshot()
-    payload["ad_oauth"] = bool(request.app.get("clientplatform_ad_oauth_bot"))
+    if request.app.get("clientplatform_ad_oauth_bot") is not None:
+        payload["ad_oauth"] = True
     return web.json_response(payload)
 
 
