@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
 
 from aiogram import F
 from aiogram.fsm.context import FSMContext
@@ -29,7 +28,7 @@ from clientplatform.domain.ad_connections import (
     normalize_region_ids,
 )
 from clientplatform.domain.bookings import BookingSlotStatus
-from clientplatform.domain.promotions import PromotionChannel
+from clientplatform.domain.promotions import PromotionChannel, PromotionError
 from clientplatform.integrations.yandex_direct import YandexDirectError
 
 from . import clientplatform_control as control
@@ -123,6 +122,9 @@ async def _workspace(callback: CallbackQuery, *, business_token: str) -> None:
                 for slot in open_slots[:10]
             ]
         )
+        rows.append(
+            [("🔌 Отключить кабинет", f"cpa:disconnects:{business_token}")]
+        )
     rows.extend(
         [
             [("🔄 Обновить", f"cpa:home:{business_token}")],
@@ -139,7 +141,11 @@ async def _workspace(callback: CallbackQuery, *, business_token: str) -> None:
         + "\n".join(connection_lines)
         + "\n\nПоследние отправки:\n"
         + "\n".join(job_lines)
-        + ("\n\nВыберите свободное время для рекламы:" if open_slots else "\n\nСначала опубликуйте свободное время."),
+        + (
+            "\n\nВыберите свободное время для рекламы:"
+            if open_slots
+            else "\n\nСначала опубликуйте свободное время."
+        ),
         reply_markup=control._keyboard(rows),
     )
 
@@ -195,18 +201,27 @@ async def choose_ad_connection(
     business_id = control._token_uuid(business_token)
     slot_id = control._token_uuid(slot_token)
     actor = await control._actor(int(callback.from_user.id), business_id)
-    connections = await asyncio.to_thread(list_ad_connections, actor=actor)
-    active = [item for item in connections if item.status == AdConnectionStatus.ACTIVE]
-    if not active:
-        await callback.answer("Сначала подключите рекламный кабинет", show_alert=True)
+    try:
+        connections = await asyncio.to_thread(list_ad_connections, actor=actor)
+        active = [
+            item for item in connections if item.status == AdConnectionStatus.ACTIVE
+        ]
+        if not active:
+            await callback.answer(
+                "Сначала подключите рекламный кабинет",
+                show_alert=True,
+            )
+            return
+        view = await asyncio.to_thread(
+            create_slot_promotion,
+            actor=actor,
+            slot_id=slot_id,
+            channel=PromotionChannel.WEBSITE,
+        )
+        username = await _bot_username(callback)
+    except (AdConnectionError, PromotionError, RuntimeError, ValueError):
+        await callback.answer("Не удалось подготовить объявление", show_alert=True)
         return
-    view = await asyncio.to_thread(
-        create_slot_promotion,
-        actor=actor,
-        slot_id=slot_id,
-        channel=PromotionChannel.WEBSITE,
-    )
-    username = await _bot_username(callback)
     await state.set_state(AdConnectionState.selecting_connection)
     await state.set_data(
         {
@@ -250,18 +265,30 @@ async def choose_yandex_campaign(
             actor=actor,
             connection_id=connection_id,
         )
-    except (IndexError, KeyError, TypeError, ValueError, AdConnectionError, YandexDirectError):
-        await callback.answer("Не удалось получить кампании Яндекса", show_alert=True)
+    except (
+        IndexError,
+        KeyError,
+        TypeError,
+        ValueError,
+        AdConnectionError,
+        YandexDirectError,
+    ):
+        await callback.answer(
+            "Не удалось получить кампании Яндекса",
+            show_alert=True,
+        )
         return
     eligible = [item for item in campaigns if item.state != "ARCHIVED"][:20]
     if not eligible:
-        await callback.answer("В кабинете нет подходящей текстовой кампании", show_alert=True)
+        await callback.answer(
+            "В кабинете нет подходящей текстовой кампании",
+            show_alert=True,
+        )
         return
     await state.update_data(
         connection_id=connection_id,
         yandex_campaigns=[
-            {"id": item.campaign_id, "name": item.name}
-            for item in eligible
+            {"id": item.campaign_id, "name": item.name} for item in eligible
         ],
     )
     await state.set_state(AdConnectionState.selecting_campaign)
@@ -372,7 +399,10 @@ async def confirm_yandex_publication(
             job_id=str(data["job_id"]),
         )
     except (KeyError, AdConnectionError, RuntimeError, ValueError):
-        await callback.answer("Не удалось поставить объявление в очередь", show_alert=True)
+        await callback.answer(
+            "Не удалось поставить объявление в очередь",
+            show_alert=True,
+        )
         return
     await state.clear()
     await callback.answer("Объявление принято")
@@ -382,7 +412,14 @@ async def confirm_yandex_publication(
         "ClientPlatform отправит его в личный кабинет идемпотентно: повторное "
         "нажатие не создаст второе расходующее деньги объявление.",
         reply_markup=control._keyboard(
-            [[("📣 Открыть рекламные кабинеты", f"cpa:home:{data['business_token']}")]]
+            [
+                [
+                    (
+                        "📣 Открыть рекламные кабинеты",
+                        f"cpa:home:{data['business_token']}",
+                    )
+                ]
+            ]
         ),
     )
 
