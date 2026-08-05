@@ -15,6 +15,7 @@ from clientplatform.integrations.yandex_direct import (
 class YandexRevocationResult:
     provider_revoked: bool
     local_erasure_allowed: bool
+    provider_error_code: str | None = None
 
 
 class YandexOAuthLifecycle:
@@ -32,17 +33,28 @@ class YandexOAuthLifecycle:
         self._transport = transport or UrllibJsonTransport()
 
     def revoke(self, *, access_token: str) -> YandexRevocationResult:
+        """Best-effort provider revocation with mandatory local erasure.
+
+        A user request to disconnect must never leave ClientPlatform holding an
+        OAuth credential merely because Yandex is temporarily unavailable. The
+        provider token is revoked when possible; local erasure is always
+        allowed and remains the authoritative privacy boundary.
+        """
+
         token = str(access_token or "").strip()
         if not token:
             return YandexRevocationResult(
                 provider_revoked=False,
                 local_erasure_allowed=True,
+                provider_error_code=None,
             )
         if not self._client_id or not self._client_secret:
             return YandexRevocationResult(
                 provider_revoked=False,
                 local_erasure_allowed=True,
+                provider_error_code="oauth_revoke_not_configured",
             )
+
         body = urlencode(
             {
                 "access_token": token,
@@ -50,34 +62,42 @@ class YandexOAuthLifecycle:
                 "client_secret": self._client_secret,
             }
         ).encode("ascii")
-        status, _headers, raw = self._transport.request(
-            method="POST",
-            url=self.REVOKE_URL,
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-            body=body,
-            timeout=20.0,
-        )
+        try:
+            status, _headers, raw = self._transport.request(
+                method="POST",
+                url=self.REVOKE_URL,
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                body=body,
+                timeout=20.0,
+            )
+        except YandexDirectError as exc:
+            return YandexRevocationResult(
+                provider_revoked=False,
+                local_erasure_allowed=True,
+                provider_error_code=exc.code,
+            )
+
         try:
             payload = json.loads(raw.decode("utf-8")) if raw else {}
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise YandexDirectError(
-                "oauth_revoke_response_invalid",
-                retryable=status >= 500,
-            ) from exc
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return YandexRevocationResult(
+                provider_revoked=False,
+                local_erasure_allowed=True,
+                provider_error_code="oauth_revoke_response_invalid",
+            )
+
         if status == 200 and payload.get("status") == "ok":
             return YandexRevocationResult(
                 provider_revoked=True,
                 local_erasure_allowed=True,
+                provider_error_code=None,
             )
+
         error = str(payload.get("error") or f"http_{status}").strip().lower()
-        if error == "unsupported_token_type":
-            return YandexRevocationResult(
-                provider_revoked=False,
-                local_erasure_allowed=True,
-            )
-        raise YandexDirectError(
-            f"oauth_revoke_{error}",
-            retryable=status in {408, 425, 429} or status >= 500,
+        return YandexRevocationResult(
+            provider_revoked=False,
+            local_erasure_allowed=True,
+            provider_error_code=f"oauth_revoke_{error}",
         )
 
 

@@ -50,11 +50,11 @@ _STATUS_LABELS = {
     AdConnectionStatus.REVOKED: "⛔ доступ отозван",
 }
 _JOB_LABELS = {
-    AdPublicationStatus.DRAFT: "черновик",
-    AdPublicationStatus.QUEUED: "в очереди",
-    AdPublicationStatus.PUBLISHING: "отправляется",
-    AdPublicationStatus.RETRY: "повторная попытка",
-    AdPublicationStatus.SUBMITTED: "передано в Яндекс",
+    AdPublicationStatus.DRAFT: "черновик ClientPlatform",
+    AdPublicationStatus.QUEUED: "готовится черновик в Яндексе",
+    AdPublicationStatus.PUBLISHING: "создаётся черновик в Яндексе",
+    AdPublicationStatus.RETRY: "повторная попытка создания черновика",
+    AdPublicationStatus.SUBMITTED: "черновик создан в Яндексе",
     AdPublicationStatus.FAILED: "ошибка",
     AdPublicationStatus.CANCELLED: "отменено",
 }
@@ -135,14 +135,14 @@ async def _workspace(callback: CallbackQuery, *, business_token: str) -> None:
     await _message(callback).answer(
         "📣 Личные рекламные кабинеты\n\n"
         "Каждый бизнес подключает собственный кабинет. ClientPlatform не получает "
-        "доступ к кабинетам других пользователей и не запускает расходы без "
-        "отдельного подтверждения.\n\n"
+        "доступ к кабинетам других пользователей. На этом этапе система создаёт "
+        "только черновики: показы и расходы автоматически не запускаются.\n\n"
         "Подключения:\n"
         + "\n".join(connection_lines)
         + "\n\nПоследние отправки:\n"
         + "\n".join(job_lines)
         + (
-            "\n\nВыберите свободное время для рекламы:"
+            "\n\nВыберите свободное время для рекламного черновика:"
             if open_slots
             else "\n\nСначала опубликуйте свободное время."
         ),
@@ -281,7 +281,7 @@ async def choose_yandex_campaign(
     eligible = [item for item in campaigns if item.state != "ARCHIVED"][:20]
     if not eligible:
         await callback.answer(
-            "В кабинете нет подходящей текстовой кампании",
+            "В кабинете нет подходящей активной текстовой кампании",
             show_alert=True,
         )
         return
@@ -299,8 +299,9 @@ async def choose_yandex_campaign(
     rows.append([("Отмена", f"cpa:home:{data['business_token']}")])
     await callback.answer()
     await _message(callback).answer(
-        "В какую существующую кампанию Яндекс Директа добавить объявление?\n\n"
-        "ClientPlatform не меняет бюджет и стратегию выбранной кампании.",
+        "В какой существующей кампании создать рекламный черновик?\n\n"
+        "ClientPlatform не меняет бюджет и стратегию кампании и не отправляет "
+        "черновик на модерацию автоматически.",
         reply_markup=control._keyboard(rows),
     )
 
@@ -362,17 +363,17 @@ async def prepare_ad_publication(message: Message, state: FSMContext) -> None:
     await state.update_data(job_id=draft.job.id)
     await state.set_state(AdConnectionState.confirming_publication)
     await message.answer(
-        "Проверьте перед отправкой:\n\n"
+        "Проверьте рекламный черновик:\n\n"
         f"Кампания: {draft.campaign_name}\n"
         f"Регионы: {', '.join(str(item) for item in draft.job.region_ids)}\n"
         f"Заголовок: {draft.job.title}\n"
         f"Текст: {draft.job.text}\n"
         f"Ссылка: {draft.job.source_url}\n\n"
-        "После подтверждения ClientPlatform создаст группу и объявление в Вашем "
-        "кабинете. Бюджет и стратегия существующей кампании не изменяются.",
+        "После подтверждения ClientPlatform создаст группу и объявление со статусом "
+        "DRAFT в Вашем кабинете. Показов, модерации и расходов автоматически не будет.",
         reply_markup=control._keyboard(
             [
-                [("✅ Отправить в Яндекс Директ", "cpa:confirm")],
+                [("✅ Создать черновик в Яндекс Директе", "cpa:confirm")],
                 [("Отмена", f"cpa:home:{data['business_token']}")],
             ]
         ),
@@ -400,17 +401,18 @@ async def confirm_yandex_publication(
         )
     except (KeyError, AdConnectionError, RuntimeError, ValueError):
         await callback.answer(
-            "Не удалось поставить объявление в очередь",
+            "Не удалось поставить черновик в очередь",
             show_alert=True,
         )
         return
     await state.clear()
-    await callback.answer("Объявление принято")
+    await callback.answer("Черновик принят")
     await _message(callback).answer(
-        "✅ Объявление поставлено в защищённую очередь\n\n"
+        "✅ Рекламный черновик поставлен в защищённую очередь\n\n"
         f"Статус: {_JOB_LABELS[job.status]}\n"
-        "ClientPlatform отправит его в личный кабинет идемпотентно: повторное "
-        "нажатие не создаст второе расходующее деньги объявление.",
+        "ClientPlatform создаст его в личном кабинете идемпотентно: повторное "
+        "нажатие не создаст дубликат. Чтобы начались показы и расходы, черновик "
+        "нужно отдельно проверить и запустить в Яндекс Директе.",
         reply_markup=control._keyboard(
             [
                 [

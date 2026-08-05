@@ -342,7 +342,7 @@ class AdConnectionTelegramJourneyTests(unittest.IsolatedAsyncioTestCase):
         ):
             await ad_handlers.choose_yandex_campaign(cb, state)
         cb.answer.assert_awaited_once_with(
-            "В кабинете нет подходящей текстовой кампании",
+            "В кабинете нет подходящей активной текстовой кампании",
             show_alert=True,
         )
 
@@ -410,7 +410,10 @@ class AdConnectionTelegramJourneyTests(unittest.IsolatedAsyncioTestCase):
             await ad_handlers.prepare_ad_publication(msg, state)
         self.assertEqual(state.state, ad_handlers.AdConnectionState.confirming_publication)
         self.assertEqual(state.data["job_id"], "job-1")
-        self.assertIn("Проверьте перед отправкой", msg.answer.await_args.args[0])
+        rendered = msg.answer.await_args.args[0]
+        self.assertIn("Проверьте рекламный черновик", rendered)
+        self.assertIn("DRAFT", rendered)
+        self.assertIn("расходов автоматически не будет", rendered)
 
         invalid = message("не регион")
         with patch.object(ad_handlers.control, "_user_id", return_value=101):
@@ -435,7 +438,7 @@ class AdConnectionTelegramJourneyTests(unittest.IsolatedAsyncioTestCase):
         ):
             await ad_handlers.confirm_yandex_publication(cb, state)
         self.assertTrue(state.cleared)
-        cb.answer.assert_awaited_once_with("Объявление принято")
+        cb.answer.assert_awaited_once_with("Черновик принят")
         self.assertIn("защищённую очередь", out.answer.await_args.args[0])
 
         failed_cb = callback("cpa:confirm")
@@ -443,7 +446,7 @@ class AdConnectionTelegramJourneyTests(unittest.IsolatedAsyncioTestCase):
         with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
             await ad_handlers.confirm_yandex_publication(failed_cb, FakeState({}))
         failed_cb.answer.assert_awaited_once_with(
-            "Не удалось поставить объявление в очередь",
+            "Не удалось поставить черновик в очередь",
             show_alert=True,
         )
 
