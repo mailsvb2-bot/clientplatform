@@ -3,6 +3,7 @@ from __future__ import annotations
 import inspect
 import json
 import unittest
+from pathlib import Path
 
 from clientplatform.integrations.yandex_direct import (
     YandexDirectError,
@@ -179,9 +180,12 @@ class NoAutomaticSpendStaticContractTests(unittest.TestCase):
         self.assertNotIn("_resume_keyword", source)
 
     def test_user_confirmation_is_described_as_draft_not_launch(self) -> None:
-        from handlers import clientplatform_ad_connections
-
-        source = inspect.getsource(clientplatform_ad_connections)
+        source_path = (
+            Path(__file__).resolve().parents[1]
+            / "handlers"
+            / "clientplatform_ad_connections.py"
+        )
+        source = source_path.read_text(encoding="utf-8")
         self.assertIn("Создать черновик в Яндекс Директе", source)
         self.assertIn("расходы автоматически не запускаются", source)
         self.assertNotIn("Отправить в Яндекс Директ", source)
