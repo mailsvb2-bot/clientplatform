@@ -115,7 +115,13 @@ class AdSpendPreparationRepository:
             )
         if str(_value(row, "connection_status", 8)) != "active":
             raise AdSpendInvariantViolation("advertising connection is not active")
-        if AdProvider(str(_value(row, "provider", 9))) != AdProvider.YANDEX_DIRECT:
+        try:
+            provider = AdProvider(str(_value(row, "provider", 9)))
+        except ValueError as exc:
+            raise AdSpendInvariantViolation(
+                "advertising provider is unsupported"
+            ) from exc
+        if provider != AdProvider.YANDEX_DIRECT:
             raise AdSpendInvariantViolation("advertising provider is unsupported")
         try:
             regions = tuple(json.loads(str(_value(row, "region_ids_json", 6))))
