@@ -152,7 +152,7 @@ def _methods(transport: FakeTransport) -> list[str]:
 
 
 class YandexModerationTests(unittest.TestCase):
-    def test_campaign_catalog_includes_legacy_and_unified_campaigns(self) -> None:
+    def test_campaign_catalog_includes_only_active_accepted_supported(self) -> None:
         transport = FakeTransport(
             [
                 (
@@ -171,6 +171,13 @@ class YandexModerationTests(unittest.TestCase):
                                 {
                                     "Id": 6002,
                                     "Name": "Единая кампания",
+                                    "State": "ON",
+                                    "Status": "ACCEPTED",
+                                    "Type": "UNIFIED_CAMPAIGN",
+                                },
+                                {
+                                    "Id": 6003,
+                                    "Name": "Выключенная кампания",
                                     "State": "OFF",
                                     "Status": "DRAFT",
                                     "Type": "UNIFIED_CAMPAIGN",
@@ -192,10 +199,13 @@ class YandexModerationTests(unittest.TestCase):
             ],
         )
         request = json.loads(transport.calls[0]["body"])
+        selection = request["params"]["SelectionCriteria"]
         self.assertEqual(
-            set(request["params"]["SelectionCriteria"]["Types"]),
+            set(selection["Types"]),
             {"TEXT_CAMPAIGN", "UNIFIED_CAMPAIGN"},
         )
+        self.assertEqual(selection["States"], ["ON"])
+        self.assertEqual(selection["Statuses"], ["ACCEPTED"])
         self.assertIn("/json/v501/campaigns", transport.calls[0]["url"])
 
     def test_new_legacy_text_ad_is_submitted_for_moderation(self) -> None:
@@ -400,13 +410,25 @@ class YandexModerationTests(unittest.TestCase):
         self.assertEqual(raised.exception.code, "provider_8800")
         self.assertNotIn("sensitive", str(raised.exception))
 
-    def test_archived_or_unsupported_campaign_fails_before_creation(self) -> None:
+    def test_ineligible_campaign_fails_before_remote_creation(self) -> None:
         campaigns = (
             {
                 "Id": 6001,
                 "State": "ARCHIVED",
                 "Status": "ACCEPTED",
                 "Type": "TEXT_CAMPAIGN",
+            },
+            {
+                "Id": 6001,
+                "State": "OFF",
+                "Status": "ACCEPTED",
+                "Type": "UNIFIED_CAMPAIGN",
+            },
+            {
+                "Id": 6001,
+                "State": "ON",
+                "Status": "DRAFT",
+                "Type": "UNIFIED_CAMPAIGN",
             },
             {
                 "Id": 6001,
