@@ -7,6 +7,11 @@
         reverse_proxy {$CLIENTPLATFORM_INGRESS_UPSTREAM:127.0.0.1:8181}
     }
 
+    @ad_oauth path /oauth/yandex-direct/callback
+    handle @ad_oauth {
+        reverse_proxy {$CLIENTPLATFORM_INGRESS_UPSTREAM:127.0.0.1:8181}
+    }
+
     @payment_http path /terms /pay/*
     handle @payment_http {
         reverse_proxy {$CLIENTPLATFORM_INGRESS_UPSTREAM:127.0.0.1:8181}
