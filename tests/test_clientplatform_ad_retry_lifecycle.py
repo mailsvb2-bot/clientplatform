@@ -28,6 +28,139 @@ from services.db.schema import (
 _NOW = datetime(2026, 8, 5, 10, 0, tzinfo=timezone.utc)
 
 
+class StaleAdvertisingLeaseRecoveryTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.row_factory = sqlite3.Row
+        self.conn.execute(
+            """
+            CREATE TABLE ad_publication_jobs(
+                id TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                available_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                locked_at TEXT,
+                lock_token TEXT,
+                last_error_code TEXT
+            )
+            """
+        )
+        rows = [
+            (
+                "stale",
+                "publishing",
+                "2026-08-05T09:50:00+00:00",
+                "2026-08-05T09:50:00+00:00",
+                "2026-08-05T09:50:00+00:00",
+                "stale-lock",
+                None,
+            ),
+            (
+                "fresh",
+                "publishing",
+                "2026-08-05T09:58:00+00:00",
+                "2026-08-05T09:58:00+00:00",
+                "2026-08-05T09:58:00+00:00",
+                "fresh-lock",
+                None,
+            ),
+            (
+                "queued",
+                "queued",
+                "2026-08-05T09:40:00+00:00",
+                "2026-08-05T09:40:00+00:00",
+                None,
+                None,
+                None,
+            ),
+            (
+                "cancelled",
+                "cancelled",
+                "2026-08-05T09:40:00+00:00",
+                "2026-08-05T09:40:00+00:00",
+                "2026-08-05T09:40:00+00:00",
+                "old-lock",
+                "connection_revoked",
+            ),
+        ]
+        self.conn.executemany(
+            """
+            INSERT INTO ad_publication_jobs(
+                id, status, available_at, updated_at,
+                locked_at, lock_token, last_error_code
+            ) VALUES(?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+
+    def tearDown(self) -> None:
+        self.conn.close()
+
+    def test_only_expired_publishing_lease_returns_to_retry(self) -> None:
+        recovered = AdWorkerStore(
+            self.conn,
+            vault=InMemoryAdCredentialVault(),
+        ).recover_stale_publication_leases(
+            lock_ttl_seconds=300,
+            now=_NOW,
+        )
+        self.assertEqual(recovered, 1)
+
+        stale = self.conn.execute(
+            """
+            SELECT status, available_at, locked_at, lock_token, last_error_code
+            FROM ad_publication_jobs WHERE id='stale'
+            """
+        ).fetchone()
+        self.assertEqual(
+            tuple(stale),
+            (
+                "retry",
+                "2026-08-05T10:00:00+00:00",
+                None,
+                None,
+                "stale_publication_lease_recovered",
+            ),
+        )
+
+        fresh = self.conn.execute(
+            """
+            SELECT status, locked_at, lock_token, last_error_code
+            FROM ad_publication_jobs WHERE id='fresh'
+            """
+        ).fetchone()
+        self.assertEqual(
+            tuple(fresh),
+            (
+                "publishing",
+                "2026-08-05T09:58:00+00:00",
+                "fresh-lock",
+                None,
+            ),
+        )
+
+        queued = self.conn.execute(
+            "SELECT status, locked_at, lock_token FROM ad_publication_jobs WHERE id='queued'"
+        ).fetchone()
+        self.assertEqual(tuple(queued), ("queued", None, None))
+
+        cancelled = self.conn.execute(
+            """
+            SELECT status, locked_at, lock_token, last_error_code
+            FROM ad_publication_jobs WHERE id='cancelled'
+            """
+        ).fetchone()
+        self.assertEqual(
+            tuple(cancelled),
+            (
+                "cancelled",
+                "2026-08-05T09:40:00+00:00",
+                "old-lock",
+                "connection_revoked",
+            ),
+        )
+
+
 class AdvertisingRetryLifecycleTests(unittest.TestCase):
     def setUp(self) -> None:
         self.conn = sqlite3.connect(":memory:")
