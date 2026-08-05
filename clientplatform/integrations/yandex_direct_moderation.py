@@ -48,7 +48,7 @@ class ModeratingYandexDirectProvider(YandexDirectProvider):
         super().__init__(oauth=oauth, transport=transport)
 
     def list_text_campaigns(self, *, access_token: str) -> list[YandexCampaign]:
-        """Return campaigns that can receive a ClientPlatform service ad."""
+        """Return active reviewed campaigns that can immediately serve ads."""
 
         result = self._direct_call(
             service="campaigns",
@@ -58,7 +58,8 @@ class ModeratingYandexDirectProvider(YandexDirectProvider):
                 "params": {
                     "SelectionCriteria": {
                         "Types": sorted(_SUPPORTED_CAMPAIGN_TYPES),
-                        "States": ["ON", "OFF", "SUSPENDED"],
+                        "States": ["ON"],
+                        "Statuses": ["ACCEPTED"],
                     },
                     "FieldNames": ["Id", "Name", "State", "Status", "Type"],
                 },
@@ -69,7 +70,13 @@ class ModeratingYandexDirectProvider(YandexDirectProvider):
             if not isinstance(item, Mapping):
                 continue
             campaign_type = str(item.get("Type") or "").strip().upper()
-            if campaign_type not in _SUPPORTED_CAMPAIGN_TYPES:
+            state = str(item.get("State") or "UNKNOWN").strip().upper()
+            status = str(item.get("Status") or "UNKNOWN").strip().upper()
+            if (
+                campaign_type not in _SUPPORTED_CAMPAIGN_TYPES
+                or state != "ON"
+                or status != "ACCEPTED"
+            ):
                 continue
             campaigns.append(
                 YandexCampaign(
@@ -77,8 +84,8 @@ class ModeratingYandexDirectProvider(YandexDirectProvider):
                     name=" ".join(
                         str(item.get("Name") or "Без названия").split()
                     )[:255],
-                    state=str(item.get("State") or "UNKNOWN"),
-                    status=str(item.get("Status") or "UNKNOWN"),
+                    state=state,
+                    status=status,
                     campaign_type=campaign_type,
                 )
             )
@@ -159,8 +166,11 @@ class ModeratingYandexDirectProvider(YandexDirectProvider):
         if int(item.get("Id") or 0) != campaign_id:
             raise YandexDirectError("campaign_identity_mismatch")
         state = str(item.get("State") or "UNKNOWN").strip().upper()
-        if state in {"ARCHIVED", "CONVERTED", "ENDED"}:
-            raise YandexDirectError("campaign_not_publishable")
+        status = str(item.get("Status") or "UNKNOWN").strip().upper()
+        if state != "ON":
+            raise YandexDirectError("campaign_not_active")
+        if status != "ACCEPTED":
+            raise YandexDirectError("campaign_not_accepted")
         campaign_type = str(item.get("Type") or "UNKNOWN").strip().upper()
         if campaign_type not in _SUPPORTED_CAMPAIGN_TYPES:
             raise YandexDirectError("campaign_type_unsupported")
@@ -336,7 +346,10 @@ class ModeratingYandexDirectProvider(YandexDirectProvider):
         for item in result.get("Keywords") or []:
             if not isinstance(item, Mapping):
                 continue
-            if " ".join(str(item.get("Keyword") or "").lower().split()) != phrase.lower():
+            observed = " ".join(
+                str(item.get("Keyword") or "").lower().split()
+            )
+            if observed != phrase.lower():
                 continue
             keyword_id = int(item.get("Id") or 0)
             if keyword_id <= 0:
