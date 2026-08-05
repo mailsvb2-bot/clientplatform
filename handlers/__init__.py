@@ -81,6 +81,12 @@ def _load_clientplatform_modules() -> tuple[ModuleType, ModuleType]:
         owner_module=owner_journey,
         simple_module=simple_experience,
     )
+
+    ad_connections = importlib.import_module(
+        ".clientplatform_ad_connections",
+        __name__,
+    )
+    globals()["clientplatform_ad_connections"] = ad_connections
     return entry, control
 
 
@@ -112,10 +118,14 @@ def __getattr__(name: str) -> ModuleType:
     if name == "clientplatform_promotion_install":
         _load_clientplatform_modules()
         return globals()["clientplatform_promotion_install"]
+    if name == "clientplatform_ad_connections":
+        _load_clientplatform_modules()
+        return globals()["clientplatform_ad_connections"]
     raise AttributeError(name)
 
 
 __all__ = [
+    "clientplatform_ad_connections",
     "clientplatform_admin_extension",
     "clientplatform_bot_lifecycle",
     "clientplatform_bot_setup",
