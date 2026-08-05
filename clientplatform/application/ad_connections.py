@@ -30,6 +30,9 @@ from clientplatform.integrations.yandex_direct import (
     YandexOAuthConfig,
     YandexTokenBundle,
 )
+from clientplatform.integrations.yandex_direct_moderation import (
+    ModeratingYandexDirectProvider,
+)
 from clientplatform.integrations.yandex_oauth_lifecycle import YandexOAuthLifecycle
 from services.db import get_db, get_db_ro
 
@@ -90,7 +93,7 @@ def _provider() -> YandexDirectProvider:
     client_id = _client_id()
     if not client_id:
         raise RuntimeError("Yandex Direct OAuth application is not configured")
-    return YandexDirectProvider(
+    return ModeratingYandexDirectProvider(
         oauth=YandexOAuthConfig(
             client_id=client_id,
             client_secret=_client_secret(),
