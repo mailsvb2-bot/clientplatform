@@ -82,7 +82,7 @@ class AdSpendTelegramRuntimeTests(unittest.TestCase):
         payloads = [payload for row in rows for _label, payload in row]
         self.assertEqual(payloads, ["cpsp:revoke:business:authorization"])
 
-    def test_live_item_exposes_stop_and_revoke(self) -> None:
+    def test_active_item_exposes_stop_and_revoke(self) -> None:
         module = self._module()
         item = SimpleNamespace(
             status=module.AdSpendAuthorizationStatus.ACTIVE,
