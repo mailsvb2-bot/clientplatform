@@ -101,6 +101,14 @@ async def connect_yandex_direct_screen_code(
     )
 
 
+async def _restart_message(message: Message, state: FSMContext, *, reason: str) -> None:
+    await state.clear()
+    await message.answer(
+        "Не удалось подтвердить доступ. "
+        f"{reason} Начните подключение Яндекс Директа заново."
+    )
+
+
 @simple.router.message(YandexScreenCodeState.waiting_code)
 async def complete_yandex_direct_screen_code(
     message: Message,
@@ -108,36 +116,58 @@ async def complete_yandex_direct_screen_code(
 ) -> None:
     data = await state.get_data()
     try:
-        if control._user_id(message) != int(data["oauth_user_id"]):
-            raise ValueError("OAuth user changed")
-        code = _confirmation_code(message.text)
-        provider = screen_code_provider_from_environment()
-        completion = await asyncio.to_thread(
-            complete_yandex_direct_oauth,
-            state=str(data["oauth_state"]),
-            code=code,
-            provider=provider,
+        initiating_user_id = int(data["oauth_user_id"])
+        oauth_state = str(data["oauth_state"])
+    except (KeyError, TypeError, ValueError):
+        await _restart_message(
+            message,
+            state,
+            reason="Сессия подключения потеряна.",
         )
+        return
+    if control._user_id(message) != initiating_user_id:
+        await _restart_message(
+            message,
+            state,
+            reason="Сессия принадлежит другому пользователю.",
+        )
+        return
+    try:
+        code = _confirmation_code(message.text)
     except ValueError:
         await message.answer(
             "Код должен состоять ровно из семи цифр. Скопируйте код со страницы Яндекса и отправьте его ещё раз."
         )
         return
-    except (KeyError, TypeError, AdConnectionError, YandexDirectError, RuntimeError):
-        await state.clear()
-        await message.answer(
-            "Не удалось подтвердить доступ. Код мог истечь или уже быть использован. Начните подключение Яндекс Директа заново."
+
+    try:
+        provider = screen_code_provider_from_environment()
+        completion = await asyncio.to_thread(
+            complete_yandex_direct_oauth,
+            state=oauth_state,
+            code=code,
+            provider=provider,
+        )
+    except (AdConnectionError, YandexDirectError, RuntimeError, ValueError):
+        await _restart_message(
+            message,
+            state,
+            reason="Код мог истечь или уже быть использован.",
         )
         return
 
+    business_token = str(data.get("business_token") or "").strip()
     await state.clear()
+    rows = []
+    if business_token:
+        rows.append(
+            [("Вернуться к рекламным кабинетам", f"cpa:home:{business_token}")]
+        )
     await message.answer(
         "✅ Яндекс Директ подключён\n\n"
         f"Кабинет: {completion.connection.external_login}\n"
         "Теперь ClientPlatform может безопасно читать кампании и готовить рекламные действия в пределах Ваших подтверждений.",
-        reply_markup=control._keyboard(
-            [[("Вернуться к рекламным кабинетам", f"cpa:home:{data['business_token']}")]]
-        ),
+        reply_markup=control._keyboard(rows) if rows else None,
     )
 
 
