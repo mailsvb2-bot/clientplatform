@@ -19,6 +19,9 @@ from clientplatform.application.ad_spend_consent import (
     request_ad_spend_consent,
     revoke_ad_spend_consent,
 )
+from clientplatform.application.ad_spend_runtime import (
+    provider_report_date as current_provider_report_date,
+)
 from clientplatform.domain.ad_connections import (
     AdConnectionError,
     AdPublicationStatus,
@@ -266,7 +269,7 @@ async def receive_ad_spend_daily_cap(message: Message, state: FSMContext) -> Non
             hard_cap_minor=hard_cap_minor,
             daily_cap_minor=daily_cap_minor,
             authorization_expires_at=now + timedelta(minutes=5),
-            provider_report_date=now.date(),
+            provider_report_date=current_provider_report_date(now=now),
             now=now,
         )
         authorization = await asyncio.to_thread(
@@ -356,7 +359,13 @@ async def confirm_ad_spend_consent(callback: CallbackQuery, state: FSMContext) -
             expected_terms_hash=expected_terms_hash,
             expected_snapshot_hash=expected_snapshot_hash,
         )
-    except (AdSpendError, KeyError, RuntimeError, TypeError, ValueError):
+    except (  # validator: allow-wide-except - bounded Telegram callback boundary
+        AdSpendError,
+        KeyError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ):
         await callback.answer(
             "Разрешение устарело или изменилось. Подготовьте его заново.",
             show_alert=True,
