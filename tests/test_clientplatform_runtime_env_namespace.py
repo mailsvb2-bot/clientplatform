@@ -110,6 +110,13 @@ class ClientPlatformRuntimeEnvironmentTests(unittest.TestCase):
         self.assertNotIn("METRO_DB_ENGINE", source)
         self.assertNotIn("METRO_DB_PATH", source)
 
+    def test_runtime_namespace_files_are_in_critical_static_gate(self) -> None:
+        source = (ROOT / "scripts/critical_static_gate.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('"core/paths.py"', source)
+        self.assertIn('"services/db/runtime.py"', source)
+
 
 if __name__ == "__main__":
     unittest.main()
