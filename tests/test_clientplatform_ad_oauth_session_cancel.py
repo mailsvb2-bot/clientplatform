@@ -89,7 +89,7 @@ class AdOAuthSessionCancellationTests(unittest.TestCase):
         self.assertEqual(len(audit_rows), 1)
         self.assertEqual(
             json.loads(audit_rows[0]["details_json"]),
-            {"reason": "owner_cancelled"},
+            {"reason": "actor_cancelled"},
         )
         self.assertNotIn(state, audit_rows[0]["details_json"])
         with self.assertRaisesRegex(
