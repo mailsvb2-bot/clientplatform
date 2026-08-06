@@ -90,8 +90,10 @@ TYPE_CONTRACT_FILES = (
 
 SECURITY_SCAN_PATHS = (
     "check_db.py",
+    "clientplatform/integrations/yandex_screen_code.py",
     "dashboard/sla_dashboard.py",
     "dashboard/sla_retention_money.py",
+    "handlers/clientplatform_yandex_screen_code.py",
     "handlers/info.py",
     "runtime/messenger_ingress_reliability.py",
     "runtime/messenger_media_http.py",
