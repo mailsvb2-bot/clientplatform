@@ -1,9 +1,16 @@
 from __future__ import annotations
 
+import json
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, patch
+from urllib.parse import parse_qs
 
+from clientplatform.integrations.yandex_direct import YandexOAuthConfig
+from clientplatform.integrations.yandex_screen_code import (
+    YANDEX_SCREEN_CODE_REDIRECT_URI,
+    YandexScreenCodeDirectProvider,
+)
 from handlers import clientplatform_yandex_screen_code as screen_code
 from runtime import ad_oauth_http
 from scripts import clientplatform_prepare_production_env as prepare_env
@@ -29,6 +36,26 @@ class FakeState:
         self.data.clear()
 
 
+class FakeTransport:
+    def __init__(self, responses: list[tuple[int, dict[str, str], object]]):
+        self.responses = list(responses)
+        self.calls: list[dict[str, object]] = []
+
+    def request(self, *, method, url, headers, body=None, timeout=20.0):
+        self.calls.append(
+            {
+                "method": method,
+                "url": url,
+                "headers": dict(headers),
+                "body": body,
+                "timeout": timeout,
+            }
+        )
+        status, response_headers, payload = self.responses.pop(0)
+        encoded = payload if isinstance(payload, bytes) else json.dumps(payload).encode("utf-8")
+        return status, response_headers, encoded
+
+
 async def immediate_to_thread(function, *args, **kwargs):
     return function(*args, **kwargs)
 
@@ -47,6 +74,67 @@ def message(text: str):
         from_user=SimpleNamespace(id=101),
         answer=AsyncMock(),
     )
+
+
+class YandexScreenCodeProviderTests(unittest.TestCase):
+    def test_token_exchange_matches_official_screen_code_contract(self) -> None:
+        transport = FakeTransport(
+            [
+                (
+                    200,
+                    {},
+                    {
+                        "access_token": "access-token",
+                        "token_type": "bearer",
+                        "expires_in": 3600,
+                        "refresh_token": "refresh-token",
+                        "scope": "direct:api",
+                    },
+                )
+            ]
+        )
+        provider = YandexScreenCodeDirectProvider(
+            oauth=YandexOAuthConfig(
+                client_id="client-id",
+                client_secret="client-secret",
+                redirect_uri=YANDEX_SCREEN_CODE_REDIRECT_URI,
+            ),
+            transport=transport,
+        )
+        bundle = provider.exchange_code(
+            code="1234567",
+            verifier="v" * 64,
+        )
+
+        self.assertEqual(bundle.access_token, "access-token")
+        self.assertEqual(len(transport.calls), 1)
+        call = transport.calls[0]
+        self.assertEqual(call["url"], "https://oauth.yandex.ru/token")
+        form = parse_qs(call["body"].decode("ascii"))
+        self.assertEqual(form["grant_type"], ["authorization_code"])
+        self.assertEqual(form["code"], ["1234567"])
+        self.assertEqual(form["client_id"], ["client-id"])
+        self.assertEqual(form["client_secret"], ["client-secret"])
+        self.assertEqual(form["code_verifier"], ["v" * 64])
+        self.assertNotIn("redirect_uri", form)
+
+    def test_provider_rejects_wrong_redirect_and_non_seven_digit_code(self) -> None:
+        with self.assertRaisesRegex(ValueError, "redirect URI"):
+            YandexScreenCodeDirectProvider(
+                oauth=YandexOAuthConfig(
+                    client_id="client-id",
+                    redirect_uri="https://clientplatform.ru/callback",
+                )
+            )
+        provider = YandexScreenCodeDirectProvider(
+            oauth=YandexOAuthConfig(
+                client_id="client-id",
+                redirect_uri=YANDEX_SCREEN_CODE_REDIRECT_URI,
+            ),
+            transport=FakeTransport([]),
+        )
+        with self.assertRaisesRegex(RuntimeError, "oauth_code_invalid"):
+            provider.exchange_code(code="123456", verifier="v" * 64)
 
 
 class YandexScreenCodeTelegramTests(unittest.IsolatedAsyncioTestCase):
@@ -71,6 +159,7 @@ class YandexScreenCodeTelegramTests(unittest.IsolatedAsyncioTestCase):
         cb = callback("cpa:connect:business-1")
         state = FakeState()
         outbound = SimpleNamespace(answer=AsyncMock())
+        provider = object()
         start = SimpleNamespace(
             authorization_url=(
                 "https://oauth.yandex.ru/authorize?response_type=code"
@@ -85,11 +174,21 @@ class YandexScreenCodeTelegramTests(unittest.IsolatedAsyncioTestCase):
                 "_actor",
                 new=AsyncMock(return_value="actor"),
             ),
-            patch.object(screen_code, "start_yandex_direct_oauth", return_value=start),
+            patch.object(
+                screen_code,
+                "screen_code_provider_from_environment",
+                return_value=provider,
+            ),
+            patch.object(
+                screen_code,
+                "start_yandex_direct_oauth",
+                return_value=start,
+            ) as start_oauth,
             patch.object(screen_code, "_message", return_value=outbound),
         ):
             await screen_code.connect_yandex_direct_screen_code(cb, state)
 
+        start_oauth.assert_called_once_with(actor="actor", provider=provider)
         self.assertEqual(state.state, screen_code.YandexScreenCodeState.waiting_code)
         self.assertEqual(state.data["oauth_state"], "oauth-state")
         self.assertEqual(state.data["oauth_user_id"], 101)
@@ -118,6 +217,11 @@ class YandexScreenCodeTelegramTests(unittest.IsolatedAsyncioTestCase):
             patch.object(screen_code.control, "_user_id", return_value=101),
             patch.object(
                 screen_code,
+                "screen_code_provider_from_environment",
+                return_value=object(),
+            ),
+            patch.object(
+                screen_code,
                 "complete_yandex_direct_oauth",
                 side_effect=RuntimeError("secret provider response"),
             ),
@@ -137,6 +241,7 @@ class YandexScreenCodeTelegramTests(unittest.IsolatedAsyncioTestCase):
             }
         )
         incoming = message("1234567")
+        provider = object()
         completion = SimpleNamespace(
             connection=SimpleNamespace(external_login="direct-login")
         )
@@ -146,13 +251,22 @@ class YandexScreenCodeTelegramTests(unittest.IsolatedAsyncioTestCase):
             patch.object(screen_code.control, "_keyboard", side_effect=lambda rows: rows),
             patch.object(
                 screen_code,
+                "screen_code_provider_from_environment",
+                return_value=provider,
+            ),
+            patch.object(
+                screen_code,
                 "complete_yandex_direct_oauth",
                 return_value=completion,
             ) as complete,
         ):
             await screen_code.complete_yandex_direct_screen_code(incoming, state)
 
-        complete.assert_called_once_with(state="oauth-state", code="1234567")
+        complete.assert_called_once_with(
+            state="oauth-state",
+            code="1234567",
+            provider=provider,
+        )
         self.assertTrue(state.cleared)
         self.assertIn("direct-login", incoming.answer.await_args.args[0])
         self.assertEqual(
