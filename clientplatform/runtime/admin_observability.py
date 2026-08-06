@@ -103,6 +103,16 @@ def _monitor_readiness_required() -> bool:
     )
 
 
+def _route_redundancy_alert_state(
+    *,
+    egress_redundant: bool,
+    redundancy_required: bool,
+) -> bool | None:
+    """Return None when redundancy is informational rather than required."""
+
+    return bool(egress_redundant) if redundancy_required else None
+
+
 async def _tick() -> None:
     global _last_tick_monotonic
     global _last_error
@@ -110,13 +120,17 @@ async def _tick() -> None:
     global _monitored_businesses
 
     egress = telegram_egress_snapshot()
+    route_redundant = _route_redundancy_alert_state(
+        egress_redundant=egress.egress_redundant,
+        redundancy_required=telegram_redundancy_required(),
+    )
     contexts = await asyncio.to_thread(_owner_contexts)
     alert_count = 0
     for actor in contexts:
         alerts = await asyncio.to_thread(
             refresh_interaction_alerts,
             actor=actor,
-            route_redundant=egress.egress_redundant,
+            route_redundant=route_redundant,
         )
         alert_count += len(alerts)
         for alert in alerts:
