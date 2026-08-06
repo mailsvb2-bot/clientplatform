@@ -1,0 +1,125 @@
+from __future__ import annotations
+
+import os
+from collections.abc import Callable
+from datetime import datetime, timezone
+
+from clientplatform.domain.ad_spend import AdSpendInvariantViolation
+from clientplatform.domain.ad_spend_operations import AdSpendOperation, AdSpendOperationType
+from clientplatform.domain.tenancy import TenantContext
+from clientplatform.infrastructure.ad_credential_vault import AdCredentialVault, AgeAdCredentialVault
+from clientplatform.infrastructure.ad_spend_operation_repository import AdSpendOperationContext, AdSpendOperationRepository
+from clientplatform.integrations.yandex_direct import YandexDirectError, YandexOAuthConfig, YandexTokenBundle
+from clientplatform.integrations.yandex_direct_actions import YandexDirectAdActions
+from services.db import get_db, get_db_ro
+
+
+PreMutationGuard = Callable[[AdSpendOperationContext, datetime], bool]
+
+
+def ad_spend_mutations_enabled() -> bool:
+    return (os.getenv("CLIENTPLATFORM_AD_SPEND_MUTATIONS_ENABLED") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _provider() -> YandexDirectAdActions:
+    client_id = (os.getenv("CLIENTPLATFORM_YANDEX_DIRECT_CLIENT_ID") or "").strip()
+    redirect_uri = (os.getenv("CLIENTPLATFORM_AD_OAUTH_REDIRECT_URI") or "").strip()
+    if not client_id or not redirect_uri:
+        raise AdSpendInvariantViolation("Yandex Direct provider is not configured")
+    return YandexDirectAdActions(
+        oauth=YandexOAuthConfig(
+            client_id=client_id,
+            client_secret=(os.getenv("CLIENTPLATFORM_YANDEX_DIRECT_CLIENT_SECRET") or "").strip(),
+            redirect_uri=redirect_uri,
+        )
+    )
+
+
+def queue_ad_spend_launch(*, actor: TenantContext, authorization_id: str) -> AdSpendOperation:
+    if not ad_spend_mutations_enabled():
+        raise AdSpendInvariantViolation("advertising spend mutations are disabled")
+    with get_db() as conn:
+        return AdSpendOperationRepository(conn).enqueue_launch(actor=actor, authorization_id=authorization_id)
+
+
+def queue_ad_spend_stop(*, actor: TenantContext, authorization_id: str) -> AdSpendOperation:
+    with get_db() as conn:
+        return AdSpendOperationRepository(conn).enqueue_stop(actor=actor, authorization_id=authorization_id)
+
+
+def process_one_ad_spend_operation(
+    *,
+    pre_mutation_guard: PreMutationGuard | None,
+    vault: AdCredentialVault | None = None,
+    provider: YandexDirectAdActions | None = None,
+    max_attempts: int = 8,
+) -> AdSpendOperation | None:
+    selected_vault = vault or AgeAdCredentialVault()
+    selected_provider = provider or _provider()
+    with get_db() as conn:
+        repository = AdSpendOperationRepository(conn, vault=selected_vault)
+        repository.recover_stale_leases()
+        operation = repository.claim_due()
+    if operation is None:
+        return None
+
+    try:
+        with get_db_ro() as conn:
+            context, token_json = AdSpendOperationRepository(conn, vault=selected_vault).load_claimed_context(operation=operation)
+        now = datetime.now(timezone.utc)
+        if operation.operation_type == AdSpendOperationType.LAUNCH:
+            if not ad_spend_mutations_enabled():
+                raise AdSpendInvariantViolation("advertising spend mutations are disabled")
+            if pre_mutation_guard is None or not pre_mutation_guard(context, now):
+                raise AdSpendInvariantViolation("fresh server-side spend guard rejected launch")
+        bundle = YandexTokenBundle.from_json(token_json)
+        if operation.operation_type == AdSpendOperationType.LAUNCH:
+            result = selected_provider.moderate_ad(
+                access_token=bundle.access_token,
+                external_ad_id=context.external_ad_id,
+                expected_campaign_id=context.external_campaign_id,
+                captured_at=now,
+                client_login=context.external_login,
+            )
+        else:
+            result = selected_provider.suspend_ad(
+                access_token=bundle.access_token,
+                external_ad_id=context.external_ad_id,
+                expected_campaign_id=context.external_campaign_id,
+                captured_at=now,
+                client_login=context.external_login,
+            )
+        evidence = {
+            "operation": result.operation,
+            "ad_id": result.after.ad_id,
+            "campaign_id": result.after.campaign_id,
+            "state": result.after.state,
+            "status": result.after.status,
+            "provider_version": result.after.provider_version,
+            "reconciled_without_mutation": result.reconciled_without_mutation,
+        }
+        with get_db() as conn:
+            return AdSpendOperationRepository(conn, vault=selected_vault).complete(
+                operation=operation,
+                provider_evidence=evidence,
+                now=now,
+            )
+    except (AdSpendInvariantViolation, YandexDirectError, ValueError) as exc:
+        retryable = isinstance(exc, YandexDirectError) and bool(exc.retryable)
+        error_code = exc.code if isinstance(exc, YandexDirectError) else type(exc).__name__.lower()
+        with get_db() as conn:
+            return AdSpendOperationRepository(conn, vault=selected_vault).fail(
+                operation=operation,
+                error_code=error_code,
+                retryable=retryable,
+                max_attempts=max_attempts,
+            )
+
+
+__all__ = [
+    "PreMutationGuard",
+    "ad_spend_mutations_enabled",
+    "process_one_ad_spend_operation",
+    "queue_ad_spend_launch",
+    "queue_ad_spend_stop",
+]

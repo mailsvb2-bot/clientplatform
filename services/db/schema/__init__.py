@@ -4,6 +4,7 @@ import sqlite3
 
 from . import clientplatform_activity
 from . import clientplatform_ad_connections
+from . import clientplatform_ad_spend_operations
 from . import clientplatform_admin_ops
 from . import clientplatform_bookings
 from . import clientplatform_bot_gateway
@@ -34,6 +35,7 @@ PARTS = [
     clientplatform_bookings,
     clientplatform_promotions,
     clientplatform_ad_connections,
+    clientplatform_ad_spend_operations,
     clientplatform_programs,
     clientplatform_program_media,
     clientplatform_connections,
