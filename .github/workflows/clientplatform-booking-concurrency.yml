@@ -19,19 +19,20 @@ jobs:
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: metrotherapy_ci
+          POSTGRES_DB: clientplatform_booking_ci
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U postgres -d metrotherapy_ci"
+          --health-cmd "pg_isready -U postgres -d clientplatform_booking_ci"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 12
     env:
       APP_ENV: test
       LOAD_DOTENV: '0'
-      METRO_DB_ENGINE: postgres
-      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/metrotherapy_ci
+      CLIENTPLATFORM_DB_ENGINE: postgres
+      CLIENTPLATFORM_DATABASE_NAME: clientplatform_booking_ci
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/clientplatform_booking_ci
       POSTGRES_REUSE_CONNECTIONS: '0'
       BOT_TOKEN: '000000:CI'
       TELEGRAM_TRANSPORT: polling
