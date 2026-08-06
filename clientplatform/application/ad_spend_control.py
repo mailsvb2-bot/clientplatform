@@ -14,6 +14,9 @@ from clientplatform.domain.ad_spend import (
 )
 from clientplatform.domain.tenancy import TenantContext
 from clientplatform.infrastructure.ad_spend_repository import AdSpendRepository
+from clientplatform.infrastructure.ad_spend_revocation_repository import (
+    queue_stop_for_revoked_live_authorization,
+)
 from services.db import get_db, get_db_ro
 
 
@@ -106,16 +109,27 @@ def grant_ad_spend_consent(
     timestamp = _now(now)
     with get_db() as conn:
         repository = AdSpendRepository(conn)
-        current = repository.get(actor=actor, authorization_id=authorization_id)
+        current = repository.get(
+            actor=actor,
+            authorization_id=authorization_id,
+        )
         if current.status not in {
             AdSpendAuthorizationStatus.AWAITING_CONSENT,
             AdSpendAuthorizationStatus.AUTHORIZED,
         }:
-            raise AdSpendInvariantViolation("authorization is not awaiting owner consent")
+            raise AdSpendInvariantViolation(
+                "authorization is not awaiting owner consent"
+            )
         if current.terms_hash != str(expected_terms_hash or "").strip():
-            raise AdSpendInvariantViolation("consent terms changed before confirmation")
-        if current.snapshot.snapshot_hash != str(expected_snapshot_hash or "").strip():
-            raise AdSpendInvariantViolation("provider snapshot changed before confirmation")
+            raise AdSpendInvariantViolation(
+                "consent terms changed before confirmation"
+            )
+        if current.snapshot.snapshot_hash != str(
+            expected_snapshot_hash or ""
+        ).strip():
+            raise AdSpendInvariantViolation(
+                "provider snapshot changed before confirmation"
+            )
         authorized, receipt = repository.authorize(
             actor=actor,
             authorization_id=authorization_id,
@@ -133,11 +147,29 @@ def revoke_ad_spend_consent(
 ) -> AdSpendConsentView:
     timestamp = _now(now)
     with get_db() as conn:
-        authorization = AdSpendRepository(conn).revoke(
+        repository = AdSpendRepository(conn)
+        current = repository.get(
+            actor=actor,
+            authorization_id=authorization_id,
+        )
+        was_live = current.status in {
+            AdSpendAuthorizationStatus.LAUNCHING,
+            AdSpendAuthorizationStatus.ACTIVE,
+            AdSpendAuthorizationStatus.STOPPING,
+        }
+        authorization = repository.revoke(
             actor=actor,
             authorization_id=authorization_id,
             now=timestamp,
         )
+        if was_live:
+            queue_stop_for_revoked_live_authorization(
+                conn,
+                business_id=authorization.business_id,
+                authorization_id=authorization.id,
+                actor_member_id=actor.membership_id,
+                now=timestamp,
+            )
     return _view(authorization)
 
 
@@ -174,7 +206,10 @@ def evaluate_ad_spend_guard(
         return AdSpendGuardDecision(False, AdSpendStopReason.PROVIDER_INELIGIBLE)
     if provider_snapshot.external_campaign_id != authorization.external_campaign_id:
         return AdSpendGuardDecision(False, AdSpendStopReason.PROVIDER_INELIGIBLE)
-    if provider_snapshot.currency != authorization.currency or not provider_snapshot.launch_eligible:
+    if (
+        provider_snapshot.currency != authorization.currency
+        or not provider_snapshot.launch_eligible
+    ):
         return AdSpendGuardDecision(False, AdSpendStopReason.PROVIDER_INELIGIBLE)
     if isinstance(total_spent_minor, bool) or int(total_spent_minor) < 0:
         raise ValueError("total_spent_minor must be a non-negative integer")
