@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 _RUNTIME_HARDENING_FILES = (
     "core/middlewares.py",
+    "core/paths.py",
     "core/runtime_env.py",
     "core/runtime_paths.py",
     "core/telegram_bot.py",
@@ -19,6 +20,7 @@ _RUNTIME_HARDENING_FILES = (
     "services/audio_asset_integrity.py",
     "services/auto_audio.py",
     "services/db/read_only.py",
+    "services/db/runtime.py",
     "services/db/sql_compat_guard.py",
     "services/messenger/media_assets.py",
     "services/messenger/observability.py",

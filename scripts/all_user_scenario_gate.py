@@ -67,7 +67,7 @@ BASE_ENV = {
     "VALIDATOR_RELEASE_MODE": "1",
     "VALIDATOR_GUARDRAILS_STRICT": "1",
     "VALIDATOR_SKIP_AUDIO": "1",
-    "METRO_DB_ENGINE": "sqlite",
+    "CLIENTPLATFORM_DB_ENGINE": "sqlite",
     "DATABASE_URL": "",
     "BOT_TOKEN": _smoke_bot_token(),
     "PAY_PROVIDER_TOKEN": "000000:SCENARIO",
@@ -182,7 +182,7 @@ def _isolated_parent_env() -> dict[str, str]:
 def _step_env(step: ScenarioStep, db_path: Path) -> dict[str, str]:
     env = _isolated_parent_env()
     env.update(BASE_ENV)
-    env["METRO_DB_PATH"] = str(db_path)
+    env["CLIENTPLATFORM_DB_PATH"] = str(db_path)
     if step.env:
         env.update(step.env)
     return env

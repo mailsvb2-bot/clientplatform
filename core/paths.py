@@ -15,13 +15,21 @@ def _is_prod() -> bool:
     return (os.getenv("APP_ENV", "dev") or "dev").strip().lower() in {"prod", "production"}
 
 
-def _explicit_path(name: str) -> Path | None:
-    raw = (os.getenv(name) or "").strip()
+def _first_env(*names: str) -> str:
+    for name in names:
+        value = (os.getenv(name) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _explicit_path(*names: str) -> Path | None:
+    raw = _first_env(*names)
     return Path(raw).expanduser().resolve() if raw else None
 
 
 def resolve_data_dir(project_root: Path | None = None) -> Path:
-    explicit = _explicit_path("METRO_DATA_DIR")
+    explicit = _explicit_path("CLIENTPLATFORM_DATA_DIR", "METRO_DATA_DIR")
     if explicit is not None:
         return explicit
     if _is_prod():
@@ -30,7 +38,7 @@ def resolve_data_dir(project_root: Path | None = None) -> Path:
 
 
 def resolve_logs_dir(project_root: Path | None = None) -> Path:
-    explicit = _explicit_path("METRO_LOGS_DIR")
+    explicit = _explicit_path("CLIENTPLATFORM_LOGS_DIR", "METRO_LOGS_DIR")
     if explicit is not None:
         return explicit
     if _is_prod():
@@ -39,9 +47,15 @@ def resolve_logs_dir(project_root: Path | None = None) -> Path:
 
 
 DATA_DIR = resolve_data_dir()
-DB_ENGINE = (os.getenv("METRO_DB_ENGINE") or ("postgres" if os.getenv("DATABASE_URL") else "sqlite")).strip().lower()
+DB_ENGINE = (
+    _first_env("CLIENTPLATFORM_DB_ENGINE", "METRO_DB_ENGINE")
+    or ("postgres" if os.getenv("DATABASE_URL") else "sqlite")
+).lower()
 DATABASE_URL = (os.getenv("DATABASE_URL") or "").strip()
-DB_PATH = Path(os.getenv("METRO_DB_PATH") or (DATA_DIR / "data.db"))
+DB_PATH = Path(
+    _first_env("CLIENTPLATFORM_DB_PATH", "METRO_DB_PATH")
+    or (DATA_DIR / "data.db")
+)
 
 AUDIO_DIR = ROOT / "audio"
 DEMO_DIR = AUDIO_DIR / "demo"
