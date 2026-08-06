@@ -10,16 +10,26 @@ DEPLOY_SCRIPT = ROOT / "scripts/clientplatform_production_deploy.py"
 COMPOSE_FILE = ROOT / "deploy/clientplatform/compose.production.yml"
 
 
-def _bash_blocks(text: str) -> str:
-    return "\n".join(
+def _bash_block_list(text: str) -> list[str]:
+    return [
         match.group(1)
         for match in re.finditer(r"```bash\n(.*?)\n```", text, flags=re.DOTALL)
-    )
+    ]
+
+
+def _bash_blocks(text: str) -> str:
+    return "\n".join(_bash_block_list(text))
 
 
 def test_runbook_uses_only_real_deploy_cli_options() -> None:
     runbook = RUNBOOK.read_text(encoding="utf-8")
-    commands = _bash_blocks(runbook)
+    blocks = _bash_block_list(runbook)
+    commands = "\n".join(blocks)
+    deploy_commands = "\n".join(
+        block
+        for block in blocks
+        if "clientplatform_production_deploy.py" in block
+    )
     deploy_source = DEPLOY_SCRIPT.read_text(encoding="utf-8")
 
     for supported in (
@@ -38,15 +48,13 @@ def test_runbook_uses_only_real_deploy_cli_options() -> None:
         "--compose-file",
         "--project-name",
     ):
-        assert unsupported not in "\n".join(
-            line
-            for line in commands.splitlines()
-            if "clientplatform_production_deploy.py" in line
-            or line.lstrip().startswith("--")
-        )
+        assert unsupported not in deploy_commands
 
     assert "clientplatform.env.example" not in runbook
-    assert "clientplatform_production_deploy.py \\\n  --timeout-seconds 240" in commands
+    expected_default = (
+        "clientplatform_production_deploy.py \\" + "\n  --timeout-seconds 240"
+    )
+    assert expected_default in commands
 
 
 def test_runbook_matches_compose_services_and_internal_ports() -> None:
@@ -58,7 +66,7 @@ def test_runbook_matches_compose_services_and_internal_ports() -> None:
         assert re.search(rf"^  {re.escape(service)}:\s*$", compose, flags=re.MULTILINE)
         assert f"`{service}`" in runbook
 
-    assert 'logs --tail=200 app caddy postgres' in commands
+    assert "logs --tail=200 app caddy postgres" in commands
     assert "bot_gateway" not in commands
     assert ":8080" not in commands
     assert "127.0.0.1:8182/healthz" in commands
