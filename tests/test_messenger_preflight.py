@@ -5,6 +5,8 @@ from services.messenger import preflight
 
 def test_telegram_preflight_accepts_polling_with_bot_token(monkeypatch):
     monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.delenv("TELEGRAM_TRANSPORT", raising=False)
+    monkeypatch.delenv("TELEGRAM_WEBHOOK_ENABLED", raising=False)
     monkeypatch.setattr(preflight.settings, "BOT_TOKEN", "000000:TEST", raising=False)
     monkeypatch.setattr(preflight.settings, "TELEGRAM_TRANSPORT", "polling", raising=False)
     monkeypatch.setattr(preflight.settings, "TELEGRAM_WEBHOOK_ENABLED", False, raising=False)
@@ -13,21 +15,50 @@ def test_telegram_preflight_accepts_polling_with_bot_token(monkeypatch):
 
     assert status.ok is True
     assert status.channel == "telegram"
-    assert status.details == {"enabled": False, "transport": "polling", "webhook_enabled": False}
+    assert status.warnings == ()
+    assert status.details == {
+        "enabled": False,
+        "transport": "polling",
+        "webhook_enabled": False,
+        "webhook_requested": False,
+    }
 
 
-def test_telegram_preflight_requires_webhook_secret_for_webhook(monkeypatch):
-    monkeypatch.setenv("APP_ENV", "test")
+def test_telegram_preflight_reports_stale_webhook_as_ignored_warning(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "prod")
+    monkeypatch.setenv("TELEGRAM_TRANSPORT", "webhook")
+    monkeypatch.setenv("TELEGRAM_WEBHOOK_ENABLED", "1")
     monkeypatch.setattr(preflight.settings, "BOT_TOKEN", "000000:TEST", raising=False)
-    monkeypatch.setattr(preflight.settings, "TELEGRAM_TRANSPORT", "webhook", raising=False)
-    monkeypatch.setattr(preflight.settings, "TELEGRAM_WEBHOOK_ENABLED", True, raising=False)
-    monkeypatch.setattr(preflight.settings, "TELEGRAM_WEBHOOK_PUBLIC_BASE_URL", "https://example.test", raising=False)
+    monkeypatch.setattr(preflight.settings, "TELEGRAM_WEBHOOK_PUBLIC_BASE_URL", "", raising=False)
     monkeypatch.setattr(preflight.settings, "TELEGRAM_WEBHOOK_SECRET_TOKEN", "", raising=False)
 
     status = preflight.check_telegram_preflight()
 
+    assert status.ok is True
+    assert status.missing == ()
+    assert status.warnings == (
+        "Stale Telegram webhook configuration is ignored; runtime remains polling-only",
+    )
+    assert status.details == {
+        "enabled": True,
+        "transport": "polling",
+        "webhook_enabled": False,
+        "webhook_requested": True,
+    }
+
+
+def test_telegram_preflight_still_requires_bot_token(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "prod")
+    monkeypatch.setenv("TELEGRAM_TRANSPORT", "webhook")
+    monkeypatch.setattr(preflight.settings, "BOT_TOKEN", "", raising=False)
+
+    status = preflight.check_telegram_preflight()
+
     assert status.ok is False
-    assert "TELEGRAM_WEBHOOK_SECRET_TOKEN" in status.missing
+    assert status.missing == ("BOT_TOKEN",)
+    assert status.details is not None
+    assert status.details["transport"] == "polling"
+    assert status.details["webhook_enabled"] is False
 
 
 def test_payment_preflight_can_be_enabled_independently(monkeypatch):

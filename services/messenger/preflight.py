@@ -8,6 +8,7 @@ from typing import Any
 
 from config.settings import settings
 from runtime.ingress_flags import max_webhook_enabled, payment_http_enabled, vk_webhook_enabled
+from runtime.telegram_transport import telegram_transport, telegram_webhook_requested
 from services.messenger.delivery_health import delivery_health_snapshot
 
 
@@ -85,21 +86,25 @@ def check_telegram_preflight() -> MessengerPreflightStatus:
     warnings: list[str] = []
     if not str(_value("BOT_TOKEN", "") or "").strip():
         missing.append("BOT_TOKEN")
-    transport = str(_value("TELEGRAM_TRANSPORT", "polling") or "polling").strip().lower()
-    webhook_enabled = bool(_value("TELEGRAM_WEBHOOK_ENABLED", False)) or transport == "webhook"
-    if webhook_enabled:
-        for name in ("TELEGRAM_WEBHOOK_PUBLIC_BASE_URL", "TELEGRAM_WEBHOOK_SECRET_TOKEN"):
-            if not str(_value(name, "") or "").strip():
-                missing.append(name)
-        public_base = str(_value("TELEGRAM_WEBHOOK_PUBLIC_BASE_URL", "") or "").strip()
-        if public_base and not public_base.startswith("https://"):
-            warnings.append("TELEGRAM_WEBHOOK_PUBLIC_BASE_URL should start with https://")
+
+    transport = telegram_transport()
+    stale_webhook_requested = telegram_webhook_requested()
+    if stale_webhook_requested:
+        warnings.append(
+            "Stale Telegram webhook configuration is ignored; runtime remains polling-only"
+        )
+
     return MessengerPreflightStatus(
         channel="telegram",
         ok=not missing,
         missing=tuple(missing),
         warnings=tuple(warnings),
-        details={"enabled": _deployed_env(), "transport": transport, "webhook_enabled": webhook_enabled},
+        details={
+            "enabled": _deployed_env(),
+            "transport": transport,
+            "webhook_enabled": False,
+            "webhook_requested": stale_webhook_requested,
+        },
     )
 
 
