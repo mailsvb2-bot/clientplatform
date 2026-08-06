@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from clientplatform.application.ad_spend_control import (
@@ -70,6 +71,10 @@ def _timestamp(value: datetime | str | None = None) -> datetime:
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise ValueError("now must be timezone-aware")
     return parsed.astimezone(timezone.utc)
+
+
+def _value(row: Any, key: str, position: int) -> Any:
+    return row[key] if hasattr(row, "keys") else row[position]
 
 
 def _report_timezone() -> ZoneInfo:
@@ -288,7 +293,22 @@ def _active_authorization_ids(*, limit: int) -> list[tuple[str, str]]:
             """,
             (max(1, min(int(limit), 500)),),
         ).fetchall()
-    return [(str(row[0]), str(row[1])) for row in rows]
+    return [
+        (
+            str(_value(row, "business_id", 0)),
+            str(_value(row, "id", 1)),
+        )
+        for row in rows
+    ]
+
+
+def _fail_closed(
+    exc: BaseException,
+) -> tuple[AdSpendGuardDecision, str]:
+    return (
+        AdSpendGuardDecision(False, AdSpendStopReason.PROVIDER_INELIGIBLE),
+        f"provider_guard_{type(exc).__name__.lower()}",
+    )
 
 
 def sweep_active_ad_spend_authorizations(
@@ -335,13 +355,18 @@ def sweep_active_ad_spend_authorizations(
                 AdSpendStopReason.PROVIDER_INELIGIBLE,
             )
             reason = f"provider_guard_{exc.code}"
-        except (AdSpendInvariantViolation, OSError, RuntimeError, ValueError) as exc:
+        except AdSpendInvariantViolation as exc:
             failed_closed += 1
-            decision = AdSpendGuardDecision(
-                False,
-                AdSpendStopReason.PROVIDER_INELIGIBLE,
-            )
-            reason = f"provider_guard_{type(exc).__name__.lower()}"
+            decision, reason = _fail_closed(exc)
+        except OSError as exc:
+            failed_closed += 1
+            decision, reason = _fail_closed(exc)
+        except RuntimeError as exc:
+            failed_closed += 1
+            decision, reason = _fail_closed(exc)
+        except ValueError as exc:
+            failed_closed += 1
+            decision, reason = _fail_closed(exc)
 
         if decision.allowed:
             allowed += 1
