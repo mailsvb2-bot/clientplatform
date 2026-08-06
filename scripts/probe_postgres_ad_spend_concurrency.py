@@ -196,6 +196,18 @@ def _seed_authorized_spend() -> tuple[object, str]:
 
 def _cleanup(business_id: str) -> None:
     with db() as conn:
+        conn.execute(
+            "DELETE FROM business_offerings WHERE business_id=?",
+            (business_id,),
+        )
+        conn.execute(
+            "DELETE FROM business_capabilities WHERE business_id=?",
+            (business_id,),
+        )
+        conn.execute(
+            "DELETE FROM business_profiles WHERE business_id=?",
+            (business_id,),
+        )
         conn.execute("DELETE FROM businesses WHERE id=?", (business_id,))
 
 
