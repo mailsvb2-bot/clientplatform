@@ -168,6 +168,59 @@ class MessengerChannelPreflightTests(unittest.TestCase):
         self.assertFalse(status.vk_ok)
         self.assertFalse(status.webhook_runtime_ok)
 
+    def test_enabled_vk_rejects_insecure_production_base_url(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "APP_ENV": "production",
+                "TELEGRAM_TRANSPORT": "polling",
+                "MAX_WEBHOOK_ENABLED": "0",
+                "VK_WEBHOOK_ENABLED": "1",
+            },
+            clear=False,
+        ), self._settings(
+            MESSENGER_PUBLIC_BASE_URL="http://client.example.test",
+            VK_GROUP_ID="238191212",
+            VK_GROUP_TOKEN="vk-token",
+            VK_CONFIRMATION_TOKEN="vk-confirmation",
+            VK_SECRET="vk-secret",
+        ):
+            status = build_setup_status()
+            inspected = inspect_messenger_channels()
+
+        self.assertIn(
+            "MESSENGER_PUBLIC_BASE_URL must use https://",
+            status.missing,
+        )
+        self.assertFalse(status.vk_ok)
+        self.assertFalse(status.webhook_runtime_ok)
+        self.assertFalse(inspected.vk_ready)
+        self.assertFalse(inspected.webhook_runtime_ready)
+        self.assertFalse(inspected.ok)
+
+    def test_telegram_webhook_rejects_insecure_production_url(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "APP_ENV": "production",
+                "MAX_WEBHOOK_ENABLED": "0",
+                "VK_WEBHOOK_ENABLED": "0",
+            },
+            clear=False,
+        ), self._settings(
+            TELEGRAM_WEBHOOK_PUBLIC_BASE_URL="http://client.example.test",
+        ), patch(
+            "services.messenger.setup.telegram_transport",
+            return_value="webhook",
+        ):
+            status = build_setup_status()
+
+        self.assertIn(
+            "TELEGRAM_WEBHOOK_PUBLIC_BASE_URL must use https://",
+            status.missing,
+        )
+        self.assertFalse(status.webhook_runtime_ok)
+
 
 if __name__ == "__main__":
     unittest.main()
