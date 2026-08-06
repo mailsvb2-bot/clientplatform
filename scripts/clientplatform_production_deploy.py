@@ -24,6 +24,7 @@ APP_IMAGE = "clientplatform-production-app"
 LOCK_PATH = Path("/run/lock/clientplatform-production-deploy.lock")
 EVIDENCE_DIR = Path("/var/lib/clientplatform/deploy-evidence")
 LOCAL_BACKUP_DIR = Path("/var/backups/clientplatform/predeploy")
+_DEFAULT_TELEGRAM_WEBHOOK_PREFIX = "/telegram-webhook"
 
 
 class DeploymentError(RuntimeError):
@@ -73,6 +74,27 @@ def _env_values(path: Path) -> dict[str, str]:
         key, value = line.split("=", 1)
         values[key.strip()] = value.strip()
     return values
+
+
+def _telegram_webhook_prefix(values: dict[str, str] | None = None) -> str:
+    source = values
+    if source is None:
+        source = _env_values(DEPLOY_DIR / "clientplatform.env")
+    prefix = str(
+        source.get("TELEGRAM_WEBHOOK_PREFIX", _DEFAULT_TELEGRAM_WEBHOOK_PREFIX)
+        or _DEFAULT_TELEGRAM_WEBHOOK_PREFIX
+    ).strip()
+    invalid = (
+        len(prefix) > 256
+        or not prefix.startswith("/")
+        or prefix.startswith("//")
+        or prefix == "/"
+        or any(character.isspace() for character in prefix)
+        or any(character in prefix for character in ("?", "#", "\\"))
+    )
+    if invalid:
+        raise DeploymentError("invalid_telegram_webhook_prefix")
+    return prefix
 
 
 def _utc_stamp() -> str:
@@ -248,7 +270,7 @@ def _wait_for_readiness(timeout_seconds: int) -> None:
     raise DeploymentError("production_readiness_timeout")
 
 
-def _external_https(domain: str) -> None:
+def _external_root(domain: str) -> None:
     completed = _run(
         [
             "curl",
@@ -267,6 +289,43 @@ def _external_https(domain: str) -> None:
     )
     if completed.returncode != 0 or completed.stdout.strip() != "ClientPlatform":
         raise DeploymentError("external_https_proof_failed")
+
+
+def _external_polling_absence(domain: str, webhook_prefix: str) -> None:
+    completed = _run(
+        [
+            "curl",
+            "--proto",
+            "=https",
+            "--tlsv1.2",
+            "--silent",
+            "--show-error",
+            "--output",
+            "/dev/null",
+            "--write-out",
+            "%{http_code}",
+            "--max-time",
+            "20",
+            "--request",
+            "POST",
+            "--header",
+            "Content-Type: application/json",
+            "--header",
+            "X-Telegram-Bot-Api-Secret-Token: intentionally-invalid-deploy-proof",
+            "--data-binary",
+            "{}",
+            f"https://{domain}{webhook_prefix}",
+        ],
+        capture=True,
+        check=False,
+    )
+    if completed.returncode != 0 or completed.stdout.strip() != "404":
+        raise DeploymentError("external_telegram_webhook_absence_failed")
+
+
+def _external_https(domain: str) -> None:
+    _external_root(domain)
+    _external_polling_absence(domain, _telegram_webhook_prefix())
 
 
 def _write_evidence(payload: dict[str, Any]) -> Path:
@@ -318,6 +377,7 @@ def deploy(
     domain = str(values.get("CLIENTPLATFORM_DOMAIN", "") or "").strip()
     if not domain or domain.endswith("your-domain.ru"):
         raise DeploymentError("production_domain_missing")
+    webhook_prefix = _telegram_webhook_prefix(values)
 
     target_sha = _git_sha()
     compose = _compose()
@@ -328,7 +388,7 @@ def deploy(
     if app_exists:
         try:
             _wait_for_baseline_readiness(min(timeout_seconds, 60))
-            _external_https(domain)
+            _external_root(domain)
             baseline_ready = True
         except Exception as exc:  # validator: allow-wide-except - baseline must fail closed by default
             if not recover_unavailable_baseline:
@@ -379,6 +439,9 @@ def deploy(
                     "backup_mode": backup_mode,
                     "backup_reference": backup_reference,
                     "domain": domain,
+                    "telegram_transport": "polling",
+                    "telegram_webhook_prefix": webhook_prefix,
+                    "telegram_webhook_absent": True,
                     "failure_class": type(deployment_error).__name__,
                     "rollback_full_readiness": _ready(),
                     "completed_at": _completed_at(),
@@ -396,6 +459,8 @@ def deploy(
                     "backup_mode": backup_mode,
                     "backup_reference": backup_reference,
                     "domain": domain,
+                    "telegram_transport": "polling",
+                    "telegram_webhook_prefix": webhook_prefix,
                     "failure_class": type(deployment_error).__name__,
                     "baseline_ready": False,
                     "rollback_skipped": True,
@@ -419,6 +484,9 @@ def deploy(
             "backup_mode": backup_mode,
             "backup_reference": backup_reference,
             "domain": domain,
+            "telegram_transport": "polling",
+            "telegram_webhook_prefix": webhook_prefix,
+            "telegram_webhook_absent": True,
             "baseline_ready": baseline_ready,
             "recovery_mode": bool(app_exists and not baseline_ready),
             "completed_at": _completed_at(),
