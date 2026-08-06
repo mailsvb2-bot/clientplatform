@@ -119,7 +119,7 @@ def _git_sha() -> str:
 
 
 def _assert_tracked_worktree_clean() -> None:
-    completed = _run(
+    completed = subprocess.run(
         [
             "git",
             "status",
@@ -128,8 +128,12 @@ def _assert_tracked_worktree_clean() -> None:
             "--ignore-submodules=none",
         ],
         cwd=ROOT,
-        capture=True,
+        check=False,
+        text=True,
+        capture_output=True,
     )
+    if completed.returncode != 0:
+        raise DeploymentError("tracked_worktree_check_failed")
     if any(line.strip() for line in completed.stdout.splitlines()):
         raise DeploymentError("tracked_worktree_dirty")
 
