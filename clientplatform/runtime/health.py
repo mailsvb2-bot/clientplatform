@@ -90,13 +90,25 @@ def clientplatform_ad_runtime_snapshot() -> dict[str, Any]:
         'clientplatform_ad_runtime_errors': 0,
         'clientplatform_ad_runtime_last_error': '',
         'clientplatform_ad_runtime_last_tick_age_seconds': 0,
+        'clientplatform_ad_spend_outbox_checked': False,
+        'clientplatform_ad_spend_outbox_available': False,
+        'clientplatform_ad_spend_outbox_queued': 0,
+        'clientplatform_ad_spend_outbox_processing': 0,
+        'clientplatform_ad_spend_outbox_retry': 0,
+        'clientplatform_ad_spend_outbox_succeeded': 0,
+        'clientplatform_ad_spend_outbox_failed': 0,
+        'clientplatform_ad_spend_outbox_due': 0,
+        'clientplatform_ad_spend_outbox_stale_processing': 0,
+        'clientplatform_ad_spend_outbox_recent_failed': 0,
+        'clientplatform_ad_spend_outbox_oldest_due_age_seconds': 0,
+        'clientplatform_ad_spend_outbox_error': '',
     }
     try:
         from clientplatform.runtime.ad_publication_worker import (
             ad_publication_worker_health_snapshot,
         )
 
-        snapshot = dict(ad_publication_worker_health_snapshot())
+        worker_snapshot = dict(ad_publication_worker_health_snapshot())
     except ImportError:
         return fallback
     except AttributeError:
@@ -109,10 +121,78 @@ def clientplatform_ad_runtime_snapshot() -> dict[str, Any]:
         return fallback
     except ValueError:
         return fallback
-    return {
+
+    runtime = {
         **fallback,
         'clientplatform_ad_runtime_health_available': True,
-        **snapshot,
+        **worker_snapshot,
+    }
+    if not bool(runtime.get('clientplatform_ad_runtime_configured')):
+        return runtime
+
+    stale_lock_seconds = env_int(
+        'CLIENTPLATFORM_AD_SPEND_LOCK_TTL_SEC',
+        300,
+        minimum=30,
+        maximum=86_400,
+    )
+    dead_window_seconds = env_int(
+        'CLIENTPLATFORM_AD_SPEND_READY_DEAD_WINDOW_SEC',
+        900,
+        minimum=60,
+        maximum=86_400,
+    )
+    try:
+        from clientplatform.infrastructure.ad_spend_observability import (
+            load_ad_spend_operation_snapshot,
+        )
+
+        outbox_snapshot = dict(
+            load_ad_spend_operation_snapshot(
+                stale_lock_seconds=stale_lock_seconds,
+                dead_window_seconds=dead_window_seconds,
+            )
+        )
+    except ImportError as exc:
+        return {
+            **runtime,
+            'clientplatform_ad_spend_outbox_checked': True,
+            'clientplatform_ad_spend_outbox_error': type(exc).__name__,
+        }
+    except sqlite3.Error as exc:
+        return {
+            **runtime,
+            'clientplatform_ad_spend_outbox_checked': True,
+            'clientplatform_ad_spend_outbox_error': type(exc).__name__,
+        }
+    except OSError as exc:
+        return {
+            **runtime,
+            'clientplatform_ad_spend_outbox_checked': True,
+            'clientplatform_ad_spend_outbox_error': type(exc).__name__,
+        }
+    except RuntimeError as exc:
+        return {
+            **runtime,
+            'clientplatform_ad_spend_outbox_checked': True,
+            'clientplatform_ad_spend_outbox_error': type(exc).__name__,
+        }
+    except TypeError as exc:
+        return {
+            **runtime,
+            'clientplatform_ad_spend_outbox_checked': True,
+            'clientplatform_ad_spend_outbox_error': type(exc).__name__,
+        }
+    except ValueError as exc:
+        return {
+            **runtime,
+            'clientplatform_ad_spend_outbox_checked': True,
+            'clientplatform_ad_spend_outbox_error': type(exc).__name__,
+        }
+    return {
+        **runtime,
+        'clientplatform_ad_spend_outbox_checked': True,
+        **outbox_snapshot,
     }
 
 
@@ -282,6 +362,54 @@ def clientplatform_ad_runtime_readiness(
         _metric(snapshot, 'clientplatform_ad_runtime_errors') > 0
         and str(snapshot.get('clientplatform_ad_runtime_last_error') or '').strip()
     )
+    outbox_available = bool(
+        snapshot.get('clientplatform_ad_spend_outbox_available')
+    )
+    due = _metric(snapshot, 'clientplatform_ad_spend_outbox_due')
+    stale_processing_count = _metric(
+        snapshot,
+        'clientplatform_ad_spend_outbox_stale_processing',
+    )
+    recent_failed_count = _metric(
+        snapshot,
+        'clientplatform_ad_spend_outbox_recent_failed',
+    )
+    oldest_due_age = _metric(
+        snapshot,
+        'clientplatform_ad_spend_outbox_oldest_due_age_seconds',
+    )
+    max_due = env_int(
+        'CLIENTPLATFORM_AD_SPEND_READY_MAX_DUE',
+        100,
+        minimum=0,
+        maximum=100_000,
+    )
+    max_stale_processing = env_int(
+        'CLIENTPLATFORM_AD_SPEND_READY_MAX_STALE_PROCESSING',
+        0,
+        minimum=0,
+        maximum=100_000,
+    )
+    max_recent_failed = env_int(
+        'CLIENTPLATFORM_AD_SPEND_READY_MAX_RECENT_FAILED',
+        0,
+        minimum=0,
+        maximum=100_000,
+    )
+    max_oldest_due_age = env_int(
+        'CLIENTPLATFORM_AD_SPEND_READY_MAX_OLDEST_DUE_AGE_SEC',
+        300,
+        minimum=0,
+        maximum=86_400,
+    )
+    due_backlog = due > max_due
+    stale_processing = stale_processing_count > max_stale_processing
+    recent_failed = recent_failed_count > max_recent_failed
+    oldest_due = bool(
+        due > 0
+        and max_oldest_due_age > 0
+        and oldest_due_age > max_oldest_due_age
+    )
 
     errors: list[str] = []
     if configured:
@@ -295,6 +423,17 @@ def clientplatform_ad_runtime_readiness(
             errors.append('clientplatform_ad_runtime:recent_tick_error')
         if stale:
             errors.append('clientplatform_ad_runtime:stale_tick')
+        if not outbox_available:
+            errors.append('clientplatform_ad_spend_outbox:unavailable')
+        else:
+            if due_backlog:
+                errors.append('clientplatform_ad_spend_outbox:due_backlog')
+            if oldest_due:
+                errors.append('clientplatform_ad_spend_outbox:oldest_due')
+            if stale_processing:
+                errors.append('clientplatform_ad_spend_outbox:stale_processing')
+            if recent_failed:
+                errors.append('clientplatform_ad_spend_outbox:recent_failed')
 
     degraded = bool(errors)
     ready = bool(not configured or not degraded)
@@ -305,6 +444,10 @@ def clientplatform_ad_runtime_readiness(
             'clientplatform_ad_runtime_ready': ready,
             'clientplatform_ad_runtime_recent_error': recent_error,
             'clientplatform_ad_runtime_stale': stale,
+            'clientplatform_ad_spend_outbox_due_backlog': due_backlog,
+            'clientplatform_ad_spend_outbox_oldest_due': oldest_due,
+            'clientplatform_ad_spend_outbox_stale_processing': stale_processing,
+            'clientplatform_ad_spend_outbox_recent_failed_exceeded': recent_failed,
             'clientplatform_ad_runtime_degraded': degraded,
         },
     )
