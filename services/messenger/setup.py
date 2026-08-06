@@ -50,6 +50,7 @@ def _positive_integer(value: str) -> bool:
 
 def build_setup_status() -> MessengerSetupStatus:
     public_base = _strip(getattr(settings, 'MESSENGER_PUBLIC_BASE_URL', ''))
+    public_base_https = public_base.startswith('https://')
     deployed = _deployed_env()
     max_enabled = max_webhook_enabled()
     vk_enabled = vk_webhook_enabled()
@@ -70,7 +71,7 @@ def build_setup_status() -> MessengerSetupStatus:
         public_base
         and max_link
         and max_token
-        and (not deployed or max_secret)
+        and (not deployed or (public_base_https and max_secret))
     )
     max_ok = bool(not max_enabled or max_configured)
 
@@ -90,15 +91,20 @@ def build_setup_status() -> MessengerSetupStatus:
         and vk_group_id_valid
         and vk_group_token
         and vk_confirmation
-        and (not deployed or vk_secret)
+        and (not deployed or (public_base_https and vk_secret))
     )
     vk_ok = bool(not vk_enabled or vk_configured)
 
     telegram_public = _strip(
         getattr(settings, 'TELEGRAM_WEBHOOK_PUBLIC_BASE_URL', '')
     )
+    telegram_public_https = telegram_public.startswith('https://')
     telegram_webhook_ok = bool(
-        not telegram_webhook_enabled or telegram_public
+        not telegram_webhook_enabled
+        or (
+            telegram_public
+            and (not deployed or telegram_public_https)
+        )
     )
     webhook_runtime_ok = bool(max_ok and vk_ok and telegram_webhook_ok)
 
@@ -143,7 +149,7 @@ def build_setup_status() -> MessengerSetupStatus:
         warnings.append(
             'MAX_BOT_LINK_BASE не содержит {payload}; проект добавит ?start=..., но шаблон с {payload} надёжнее.'
         )
-    if public_base and not public_base.startswith('https://'):
+    if public_base and not public_base_https:
         if deployed and (max_enabled or vk_enabled):
             missing.append('MESSENGER_PUBLIC_BASE_URL must use https://')
         elif max_enabled or vk_enabled:
@@ -153,7 +159,7 @@ def build_setup_status() -> MessengerSetupStatus:
 
     if telegram_webhook_enabled and not telegram_public:
         missing.append('TELEGRAM_WEBHOOK_PUBLIC_BASE_URL')
-    if telegram_public and not telegram_public.startswith('https://'):
+    if telegram_public and not telegram_public_https:
         if deployed and telegram_webhook_enabled:
             missing.append('TELEGRAM_WEBHOOK_PUBLIC_BASE_URL must use https://')
         elif telegram_webhook_enabled:
