@@ -73,6 +73,7 @@ def message(text: str):
         text=text,
         from_user=SimpleNamespace(id=101),
         answer=AsyncMock(),
+        delete=AsyncMock(),
     )
 
 
@@ -194,6 +195,7 @@ class YandexScreenCodeTelegramTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state.data["oauth_user_id"], 101)
         rendered = outbound.answer.await_args.args[0]
         self.assertIn("семизначный код", rendered)
+        self.assertIn("удалить", rendered)
         markup = outbound.answer.await_args.kwargs["reply_markup"]
         self.assertEqual(markup.inline_keyboard[0][0].url, start.authorization_url)
 
@@ -209,6 +211,7 @@ class YandexScreenCodeTelegramTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(screen_code.control, "_user_id", return_value=101):
             await screen_code.complete_yandex_direct_screen_code(bad, state)
         self.assertFalse(state.cleared)
+        bad.delete.assert_not_awaited()
         self.assertIn("семи цифр", bad.answer.await_args.args[0])
 
         failed = message("1234567")
@@ -227,6 +230,7 @@ class YandexScreenCodeTelegramTests(unittest.IsolatedAsyncioTestCase):
             ),
         ):
             await screen_code.complete_yandex_direct_screen_code(failed, state)
+        failed.delete.assert_awaited_once()
         self.assertTrue(state.cleared)
         rendered = failed.answer.await_args.args[0]
         self.assertIn("Начните подключение", rendered)
@@ -262,6 +266,7 @@ class YandexScreenCodeTelegramTests(unittest.IsolatedAsyncioTestCase):
         ):
             await screen_code.complete_yandex_direct_screen_code(incoming, state)
 
+        incoming.delete.assert_awaited_once()
         complete.assert_called_once_with(
             state="oauth-state",
             code="1234567",
