@@ -21,6 +21,9 @@ from clientplatform.application.ad_spend_runtime import (
     provider_report_date,
     sweep_active_ad_spend_authorizations,
 )
+from clientplatform.infrastructure.ad_spend_expiry_repository import (
+    expire_due_ad_spend_authorizations,
+)
 from core.task_manager import TaskManager
 
 log = logging.getLogger(__name__)
@@ -35,6 +38,9 @@ _HEALTH: dict[str, Any] = {
     "spend_guard_allowed": 0,
     "spend_guard_stops_queued": 0,
     "spend_guard_failed_closed": 0,
+    "spend_expiry_scanned": 0,
+    "spend_expired": 0,
+    "spend_expiry_lost_races": 0,
     "errors": 0,
     "last_error": "",
     "last_tick_monotonic": 0.0,
@@ -102,6 +108,13 @@ def ad_publication_worker_health_snapshot() -> dict[str, Any]:
         ),
         "clientplatform_ad_spend_guard_failed_closed": int(
             _HEALTH["spend_guard_failed_closed"]
+        ),
+        "clientplatform_ad_spend_expiry_scanned": int(
+            _HEALTH["spend_expiry_scanned"]
+        ),
+        "clientplatform_ad_spend_expired": int(_HEALTH["spend_expired"]),
+        "clientplatform_ad_spend_expiry_lost_races": int(
+            _HEALTH["spend_expiry_lost_races"]
         ),
         "clientplatform_ad_runtime_errors": int(_HEALTH["errors"]),
         "clientplatform_ad_runtime_last_error": str(_HEALTH["last_error"]),
@@ -173,6 +186,20 @@ class AdPublicationWorker:
 
                 current_monotonic = time.monotonic()
                 if current_monotonic >= next_guard_at:
+                    expiry = await asyncio.to_thread(
+                        expire_due_ad_spend_authorizations
+                    )
+                    _HEALTH["spend_expiry_scanned"] = (
+                        int(_HEALTH["spend_expiry_scanned"]) + expiry.scanned
+                    )
+                    _HEALTH["spend_expired"] = (
+                        int(_HEALTH["spend_expired"]) + expiry.expired
+                    )
+                    _HEALTH["spend_expiry_lost_races"] = (
+                        int(_HEALTH["spend_expiry_lost_races"])
+                        + expiry.lost_races
+                    )
+
                     sweep = await asyncio.to_thread(
                         sweep_active_ad_spend_authorizations
                     )
