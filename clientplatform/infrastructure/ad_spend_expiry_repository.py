@@ -9,9 +9,6 @@ from uuid import uuid4
 from services.db import get_db
 
 
-_EXPIRABLE = ("draft", "awaiting_consent", "authorized")
-
-
 @dataclass(frozen=True, slots=True)
 class AdSpendExpirySweepResult:
     scanned: int = 0
