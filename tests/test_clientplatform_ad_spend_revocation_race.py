@@ -90,7 +90,7 @@ def _connection() -> sqlite3.Connection:
 
 
 class RevocationStopTests(unittest.TestCase):
-    def test_live_revocation_queues_stop_and_moves_to_stopping_atomically(self) -> None:
+    def test_active_revocation_queues_stop_atomically(self) -> None:
         conn = _connection()
         business_id = _id()
         authorization_id = _id()
