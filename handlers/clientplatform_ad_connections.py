@@ -158,8 +158,9 @@ async def open_ad_connections(callback: CallbackQuery) -> None:
     )
 
 
-@simple.router.callback_query(F.data.startswith("cpa:connect:"))
 async def connect_yandex_direct(callback: CallbackQuery) -> None:
+    """Legacy callback-flow helper retained unregistered for compatibility tests."""
+
     business_token = str(callback.data).split(":", 2)[2]
     business_id = control._token_uuid(business_token)
     actor = await control._actor(int(callback.from_user.id), business_id)
