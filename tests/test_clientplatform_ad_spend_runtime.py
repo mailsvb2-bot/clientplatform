@@ -53,6 +53,7 @@ def _authorization(
     *,
     hard_cap_minor: int = 1_000,
     daily_cap_minor: int = 1_000,
+    now: datetime = NOW,
 ) -> AdSpendAuthorization:
     authorization = AdSpendAuthorization.draft(
         authorization_id=str(uuid4()),
@@ -61,10 +62,10 @@ def _authorization(
         region_ids=(213,),
         hard_cap_minor=hard_cap_minor,
         daily_cap_minor=daily_cap_minor,
-        authorization_expires_at=NOW + timedelta(minutes=4),
+        authorization_expires_at=now + timedelta(minutes=4),
         snapshot=snapshot,
         created_by_member_id=str(uuid4()),
-        now=NOW,
+        now=now,
     )
     object.__setattr__(
         authorization,
@@ -138,11 +139,12 @@ class AdSpendRuntimeGuardTests(unittest.TestCase):
         self.assertEqual(decision.stop_reason, AdSpendStopReason.HARD_CAP)
 
     def test_guard_fails_closed_when_provider_day_or_counter_changes(self) -> None:
+        consent_time = datetime(2026, 8, 5, 20, 0, tzinfo=timezone.utc)
         original = _snapshot(
-            captured_at=datetime(2026, 8, 5, 20, 0, tzinfo=timezone.utc),
+            captured_at=consent_time,
             spent_today_minor=500,
         )
-        authorization = _authorization(original)
+        authorization = _authorization(original, now=consent_time)
         object.__setattr__(
             authorization,
             "authorization_expires_at",
