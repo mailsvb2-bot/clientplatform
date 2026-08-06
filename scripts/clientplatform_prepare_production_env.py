@@ -13,6 +13,7 @@ _KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 _AD_IDENTITY_FILE = "/run/secrets/clientplatform-ad/identity.txt"
 _AD_HOST_DIR = "/var/lib/clientplatform/ad-secrets"
+_AD_OAUTH_REDIRECT_URI = "https://oauth.yandex.ru/verification_code"
 
 
 class EnvironmentPreparationError(RuntimeError):
@@ -63,7 +64,7 @@ def _validate_timezone(values: dict[str, str]) -> None:
         ) from exc
 
 
-def _validate_ad_connections(values: dict[str, str], *, domain: str) -> None:
+def _validate_ad_connections(values: dict[str, str]) -> None:
     connections_enabled = _enabled(
         values,
         "CLIENTPLATFORM_AD_CONNECTIONS_ENABLED",
@@ -80,9 +81,8 @@ def _validate_ad_connections(values: dict[str, str], *, domain: str) -> None:
         return
     _required(values, "CLIENTPLATFORM_YANDEX_DIRECT_CLIENT_ID")
     _required(values, "CLIENTPLATFORM_YANDEX_DIRECT_CLIENT_SECRET")
-    expected_redirect = f"https://{domain}/oauth/yandex-direct/callback"
     observed_redirect = _required(values, "CLIENTPLATFORM_AD_OAUTH_REDIRECT_URI")
-    if observed_redirect != expected_redirect:
+    if observed_redirect != _AD_OAUTH_REDIRECT_URI:
         raise EnvironmentPreparationError(
             "mismatched_clientplatform_ad_oauth_redirect_uri"
         )
@@ -118,7 +118,6 @@ def prepare(path: Path) -> tuple[str, ...]:
 
     expected_public = f"https://{domain}"
     expected_media = f"https://{domain}/clientplatform"
-    expected_ad_redirect = f"https://{domain}/oauth/yandex-direct/callback"
     _exact_or_missing(values, "CLIENTPLATFORM_PUBLIC_BASE_URL", expected_public)
     _exact_or_missing(values, "CLIENTPLATFORM_MEDIA_GATEWAY_BASE_URL", expected_media)
     _exact_or_missing(values, "CLIENTPLATFORM_MEDIA_GATEWAY_ALLOWED_BUCKETS", bucket)
@@ -154,7 +153,7 @@ def prepare(path: Path) -> tuple[str, ...]:
         "VK_WEBHOOK_ENABLED": "0",
         "CLIENTPLATFORM_AD_CONNECTIONS_ENABLED": "0",
         "CLIENTPLATFORM_AD_SPEND_MUTATIONS_ENABLED": "0",
-        "CLIENTPLATFORM_AD_OAUTH_REDIRECT_URI": expected_ad_redirect,
+        "CLIENTPLATFORM_AD_OAUTH_REDIRECT_URI": _AD_OAUTH_REDIRECT_URI,
         "CLIENTPLATFORM_AD_CREDENTIAL_IDENTITY_FILE": _AD_IDENTITY_FILE,
         "CLIENTPLATFORM_AD_CREDENTIAL_HOST_DIR": _AD_HOST_DIR,
         "CLIENTPLATFORM_AD_PUBLICATION_INTERVAL_SEC": "2",
@@ -171,7 +170,7 @@ def prepare(path: Path) -> tuple[str, ...]:
         lines.append(f"{key}={value}")
         values[key] = value
 
-    _validate_ad_connections(values, domain=domain)
+    _validate_ad_connections(values)
 
     backup = resolved.with_name(resolved.name + ".before-current-main")
     if added:
