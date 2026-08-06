@@ -33,7 +33,7 @@ jobs:
     env:
       APP_ENV: dev
       LOAD_DOTENV: "0"
-      METRO_DB_ENGINE: postgres
+      CLIENTPLATFORM_DB_ENGINE: postgres
       DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/clientplatform_backup_ci
       CLIENTPLATFORM_POSTGRES_CLIENT_MAJOR: "16"
       CLIENTPLATFORM_PG_DUMP_PATH: /usr/lib/postgresql/16/bin/pg_dump
