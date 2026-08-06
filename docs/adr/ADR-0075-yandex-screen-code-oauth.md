@@ -30,9 +30,22 @@ ClientPlatform uses the Yandex screen-code flow inside the Telegram owner journe
 3. Telegram opens the official Yandex authorization URL.
 4. Yandex displays a seven-digit confirmation code.
 5. The owner sends that code to the ClientPlatform bot.
-6. ClientPlatform exchanges the code server-side, resolves the Yandex account identity, revalidates current membership, encrypts the token bundle and activates the business-scoped connection.
+6. The bot validates the code and makes a best-effort attempt to delete the Telegram message containing it.
+7. ClientPlatform exchanges the code server-side, resolves the Yandex account identity, revalidates current membership, encrypts the token bundle and activates the business-scoped connection.
 
 The code is accepted only in the initiating Telegram FSM session. It is validated as seven ASCII digits and is never logged. Provider failures are returned to the user as sanitized messages.
+
+The token exchange sends only the parameters documented for the browser-displayed screen-code flow:
+
+```text
+grant_type=authorization_code
+code=<seven-digit confirmation code>
+client_id=<application id>
+client_secret=<application secret>
+code_verifier=<PKCE verifier>
+```
+
+The callback-only `redirect_uri` parameter is deliberately omitted from the token request.
 
 Production preflight requires the exact immutable redirect URI:
 
@@ -47,6 +60,8 @@ When that URI is configured, ClientPlatform does not register its legacy HTTP ca
 - OAuth state and PKCE verifier remain one-time and tenant-scoped.
 - The verifier is encrypted at rest before authorization begins.
 - The confirmation code is short-lived and never persisted as a credential.
+- The Telegram message containing a validly formatted code is deleted when Telegram permits deletion.
+- A code submitted from a different Telegram user is rejected before any provider call.
 - The OAuth token bundle remains protected by the existing age-backed credential vault.
 - Current business membership and owner permission are revalidated before activation.
 - Advertising connections and spend mutations remain independently disabled by default.
@@ -60,10 +75,12 @@ When that URI is configured, ClientPlatform does not register its legacy HTTP ca
 - Authorization can be completed entirely through the Telegram control bot.
 - ClientPlatform no longer depends on a callback URI that Yandex will not use for this application type.
 - The production preflight fails closed on an incorrect redirect URI.
+- The confirmation code has less exposure in Telegram chat history.
 
 ### Trade-offs
 
 - The owner must copy one short code from Yandex to Telegram.
+- Telegram message deletion is best effort and can be denied by Telegram or chat permissions.
 - An invalid or expired code requires starting a new authorization attempt because OAuth sessions are one-time.
 - The legacy callback implementation remains for compatibility with a future separately registered web-service application, but it is not registered in screen-code production mode.
 
@@ -84,7 +101,10 @@ Regression coverage proves:
 
 - exact extraction of the one-time OAuth state;
 - strict seven-digit confirmation-code validation;
+- exact screen-code token-request shape without `redirect_uri`;
 - Telegram FSM state persistence and sanitized failure handling;
+- rejection of a different Telegram user before provider access;
+- best-effort deletion of the message containing the code;
 - successful connection completion and return to the business workspace;
 - production environment rejection of the obsolete callback URI;
 - absence of the legacy HTTP callback handler in screen-code mode.
