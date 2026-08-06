@@ -30,8 +30,12 @@
         respond "not public" 404
     }
 
-    handle {
+    handle / {
         respond "ClientPlatform" 200
+    }
+
+    handle {
+        respond "not found" 404
     }
 
     header {
