@@ -117,6 +117,35 @@ class MessengerChannelPreflightTests(unittest.TestCase):
         self.assertTrue(status.max_ok)
         self.assertTrue(status.webhook_runtime_ok)
 
+    def test_enabled_max_rejects_insecure_production_base_url(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "APP_ENV": "production",
+                "TELEGRAM_TRANSPORT": "polling",
+                "MAX_WEBHOOK_ENABLED": "1",
+                "VK_WEBHOOK_ENABLED": "0",
+            },
+            clear=False,
+        ), self._settings(
+            MESSENGER_PUBLIC_BASE_URL="http://client.example.test",
+            MAX_BOT_TOKEN="max-token",
+            MAX_WEBHOOK_SECRET="max-webhook-secret",
+            MAX_BOT_LINK_BASE="https://max.example.test/{payload}",
+        ):
+            status = build_setup_status()
+            inspected = inspect_messenger_channels()
+
+        self.assertIn(
+            "MESSENGER_PUBLIC_BASE_URL must use https://",
+            status.missing,
+        )
+        self.assertFalse(status.max_ok)
+        self.assertFalse(status.webhook_runtime_ok)
+        self.assertFalse(inspected.max_ready)
+        self.assertFalse(inspected.webhook_runtime_ready)
+        self.assertFalse(inspected.ok)
+
     def test_enabled_vk_rejects_invalid_group_identity(self) -> None:
         with patch.dict(
             os.environ,
@@ -136,6 +165,7 @@ class MessengerChannelPreflightTests(unittest.TestCase):
             status = build_setup_status()
 
         self.assertIn("VK_GROUP_ID must be a positive integer", status.missing)
+        self.assertFalse(status.vk_ok)
         self.assertFalse(status.webhook_runtime_ok)
 
 
