@@ -13,6 +13,9 @@ from clientplatform.infrastructure.ad_credential_vault import (
 )
 
 
+_SCREEN_CODE_REDIRECT_URI = "https://oauth.yandex.ru/verification_code"
+
+
 class AdConnectionsPreflightError(RuntimeError):
     """Sanitized configuration failure safe for startup logs."""
 
@@ -57,12 +60,10 @@ def run() -> None:
         print("CLIENTPLATFORM_AD_CONNECTIONS_PREFLIGHT_DISABLED_OK")
         return
 
-    domain = _required("CLIENTPLATFORM_DOMAIN")
     _required("CLIENTPLATFORM_YANDEX_DIRECT_CLIENT_ID")
     _required("CLIENTPLATFORM_YANDEX_DIRECT_CLIENT_SECRET")
     redirect_uri = _required("CLIENTPLATFORM_AD_OAUTH_REDIRECT_URI")
-    expected_redirect = f"https://{domain}/oauth/yandex-direct/callback"
-    if redirect_uri != expected_redirect:
+    if redirect_uri != _SCREEN_CODE_REDIRECT_URI:
         raise AdConnectionsPreflightError("oauth_redirect_uri_mismatch")
 
     identity_path = Path(_required("CLIENTPLATFORM_AD_CREDENTIAL_IDENTITY_FILE"))
