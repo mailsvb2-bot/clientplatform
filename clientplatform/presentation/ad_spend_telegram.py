@@ -290,6 +290,8 @@ async def receive_ad_spend_daily_cap(message: Message, state: FSMContext) -> Non
     await state.update_data(
         authorization_id=authorization.id,
         authorization_token=c._uuid_token(authorization.id),
+        expected_terms_hash=authorization.terms_hash,
+        expected_snapshot_hash=authorization.snapshot.snapshot_hash,
     )
     await state.set_state(AdSpendConsentState.confirming_consent)
     expiry = authorization.authorization_expires_at.replace("T", " ").replace("+00:00", " UTC")
@@ -341,13 +343,20 @@ async def confirm_ad_spend_consent(callback: CallbackQuery, state: FSMContext) -
         _, _, business_token, authorization_token = str(callback.data).split(":", 3)
         business_id = c._token_uuid(business_token)
         authorization_id = c._token_uuid(authorization_token)
+        data = await state.get_data()
+        if authorization_id != str(data["authorization_id"]):
+            raise ValueError("authorization callback does not match displayed terms")
+        expected_terms_hash = str(data["expected_terms_hash"])
+        expected_snapshot_hash = str(data["expected_snapshot_hash"])
         actor = await c._actor(int(callback.from_user.id), business_id)
         granted = await asyncio.to_thread(
             grant_ad_spend_consent,
             actor=actor,
             authorization_id=authorization_id,
+            expected_terms_hash=expected_terms_hash,
+            expected_snapshot_hash=expected_snapshot_hash,
         )
-    except (AdSpendError, RuntimeError, ValueError):
+    except (AdSpendError, KeyError, RuntimeError, TypeError, ValueError):
         await callback.answer(
             "Разрешение устарело или изменилось. Подготовьте его заново.",
             show_alert=True,
@@ -387,9 +396,14 @@ async def revoke_ad_spend(callback: CallbackQuery, state: FSMContext) -> None:
         return
     await state.clear()
     await callback.answer("Разрешение отозвано")
+    live_stop = revoked.status == AdSpendAuthorizationStatus.STOPPING
     await _message(callback).answer(
         f"⛔ Разрешение для кампании {revoked.external_campaign_id} отозвано.\n\n"
-        "Отозванное согласие нельзя использовать для запуска.",
+        + (
+            "Остановка рекламы поставлена в защищённую очередь."
+            if live_stop
+            else "Отозванное согласие нельзя использовать для запуска."
+        ),
         reply_markup=c._keyboard(
             [[("💳 К разрешениям", f"cpsp:home:{business_token}")]]
         ),
