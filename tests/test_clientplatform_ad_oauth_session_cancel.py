@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import unittest
 from datetime import datetime, timezone
@@ -79,10 +80,18 @@ class AdOAuthSessionCancellationTests(unittest.TestCase):
             "SELECT consumed_at FROM ad_oauth_sessions"
         ).fetchone()
         self.assertIsNotNone(row["consumed_at"])
-        audit_count = self.conn.execute(
-            "SELECT COUNT(*) FROM ad_audit_events WHERE action='ad_oauth_cancelled'"
-        ).fetchone()[0]
-        self.assertEqual(audit_count, 1)
+        audit_rows = self.conn.execute(
+            """
+            SELECT details_json FROM ad_audit_events
+            WHERE action='ad_oauth_cancelled'
+            """
+        ).fetchall()
+        self.assertEqual(len(audit_rows), 1)
+        self.assertEqual(
+            json.loads(audit_rows[0]["details_json"]),
+            {"reason": "owner_cancelled"},
+        )
+        self.assertNotIn(state, audit_rows[0]["details_json"])
         with self.assertRaisesRegex(
             AdConnectionInvariantViolation,
             "invalid, expired or already used",
