@@ -39,6 +39,10 @@ jobs:
           runtime_tests = {
               "test_clientplatform_control_bot_behavior.py",
               "test_clientplatform_multi_lesson_program_builder.py",
+              "test_clientplatform_yandex_cancel.py",
+              "test_clientplatform_yandex_code_erasure.py",
+              "test_clientplatform_yandex_screen_code.py",
+              "test_clientplatform_yandex_screen_code_edges.py",
           }
           tests = [
               str(path)

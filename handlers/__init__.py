@@ -82,6 +82,12 @@ def _load_clientplatform_modules() -> tuple[ModuleType, ModuleType]:
         simple_module=simple_experience,
     )
 
+    yandex_screen_code = importlib.import_module(
+        ".clientplatform_yandex_screen_code",
+        __name__,
+    )
+    globals()["clientplatform_yandex_screen_code"] = yandex_screen_code
+
     ad_connections = importlib.import_module(
         ".clientplatform_ad_connections",
         __name__,
@@ -130,6 +136,9 @@ def __getattr__(name: str) -> ModuleType:
     if name == "clientplatform_promotion_install":
         _load_clientplatform_modules()
         return globals()["clientplatform_promotion_install"]
+    if name == "clientplatform_yandex_screen_code":
+        _load_clientplatform_modules()
+        return globals()["clientplatform_yandex_screen_code"]
     if name == "clientplatform_ad_connections":
         _load_clientplatform_modules()
         return globals()["clientplatform_ad_connections"]
@@ -155,5 +164,6 @@ __all__ = [
     "clientplatform_promotion_install",
     "clientplatform_public_storefront",
     "clientplatform_simple_experience",
+    "clientplatform_yandex_screen_code",
     "clientplatform_entry",
 ]

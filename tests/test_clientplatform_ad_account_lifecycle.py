@@ -293,7 +293,7 @@ class AdProductionContractTests(unittest.TestCase):
         self.assertIn("CLIENTPLATFORM_AD_CONNECTIONS_ENABLED=0", payload)
         self.assertIn(
             "CLIENTPLATFORM_AD_OAUTH_REDIRECT_URI="
-            "https://clientplatform.example.test/oauth/yandex-direct/callback",
+            "https://oauth.yandex.ru/verification_code",
             payload,
         )
         self.assertIn(

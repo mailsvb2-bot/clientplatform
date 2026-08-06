@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import html
 import logging
+import os
 from typing import TYPE_CHECKING
 
 from aiohttp import web
@@ -20,9 +21,22 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
+_SCREEN_CODE_REDIRECT_URI = "https://oauth.yandex.ru/verification_code"
+
+
+def _screen_code_flow_enabled() -> bool:
+    return (
+        str(os.getenv("CLIENTPLATFORM_AD_OAUTH_REDIRECT_URI") or "").strip()
+        == _SCREEN_CODE_REDIRECT_URI
+    )
+
 
 def ad_oauth_http_enabled() -> bool:
-    return ad_connections_enabled() and yandex_direct_provider_configured()
+    return (
+        ad_connections_enabled()
+        and yandex_direct_provider_configured()
+        and not _screen_code_flow_enabled()
+    )
 
 
 def register_ad_oauth_routes(app: web.Application, *, bot: "Bot") -> None:

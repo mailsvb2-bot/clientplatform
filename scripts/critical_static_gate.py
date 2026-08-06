@@ -90,9 +90,12 @@ TYPE_CONTRACT_FILES = (
 
 SECURITY_SCAN_PATHS = (
     "check_db.py",
+    "clientplatform/integrations/yandex_screen_code.py",
     "dashboard/sla_dashboard.py",
     "dashboard/sla_retention_money.py",
+    "handlers/clientplatform_yandex_screen_code.py",
     "handlers/info.py",
+    "runtime/ad_oauth_http.py",
     "runtime/messenger_ingress_reliability.py",
     "runtime/messenger_media_http.py",
     "runtime/messenger_webhooks.py",
@@ -101,6 +104,8 @@ SECURITY_SCAN_PATHS = (
     "scripts/all_user_scenario_gate.py",
     "scripts/archive_legacy_sqlite.py",
     "scripts/backup_db.py",
+    "scripts/clientplatform_ad_connections_preflight.py",
+    "scripts/clientplatform_prepare_production_env.py",
     "scripts/immutable_release.py",
     "scripts/probe_auto_audio_dry_run.py",
     "scripts/probe_payment_reconciliation_live.py",
