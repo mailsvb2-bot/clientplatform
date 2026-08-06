@@ -82,6 +82,7 @@ def message(text: str):
 class YandexScreenCodeProviderEdgeTests(unittest.TestCase):
     def test_environment_factory_fails_closed_for_each_missing_setting(self) -> None:
         base = {
+            "CLIENTPLATFORM_AD_CONNECTIONS_ENABLED": "1",
             "CLIENTPLATFORM_YANDEX_DIRECT_CLIENT_ID": "client-id",
             "CLIENTPLATFORM_YANDEX_DIRECT_CLIENT_SECRET": "client-secret",
             "CLIENTPLATFORM_AD_OAUTH_REDIRECT_URI": YANDEX_SCREEN_CODE_REDIRECT_URI,
