@@ -14,6 +14,9 @@ from clientplatform.application.ad_connections import (
 )
 from clientplatform.domain.ad_connections import AdConnectionError
 from clientplatform.integrations.yandex_direct import YandexDirectError
+from clientplatform.integrations.yandex_screen_code import (
+    screen_code_provider_from_environment,
+)
 
 from . import clientplatform_control as control
 from . import clientplatform_simple_experience as simple
@@ -51,7 +54,12 @@ async def connect_yandex_direct_screen_code(
     business_id = control._token_uuid(business_token)
     actor = await control._actor(int(callback.from_user.id), business_id)
     try:
-        start = await asyncio.to_thread(start_yandex_direct_oauth, actor=actor)
+        provider = screen_code_provider_from_environment()
+        start = await asyncio.to_thread(
+            start_yandex_direct_oauth,
+            actor=actor,
+            provider=provider,
+        )
         oauth_state = _oauth_state_from_authorization_url(start.authorization_url)
     except (AdConnectionError, YandexDirectError, RuntimeError, ValueError):
         await callback.answer("Не удалось начать подключение", show_alert=True)
@@ -103,10 +111,12 @@ async def complete_yandex_direct_screen_code(
         if control._user_id(message) != int(data["oauth_user_id"]):
             raise ValueError("OAuth user changed")
         code = _confirmation_code(message.text)
+        provider = screen_code_provider_from_environment()
         completion = await asyncio.to_thread(
             complete_yandex_direct_oauth,
             state=str(data["oauth_state"]),
             code=code,
+            provider=provider,
         )
     except ValueError:
         await message.answer(
