@@ -27,6 +27,8 @@ class YandexScreenCodeHandlerOrderTests(unittest.TestCase):
             encoding="utf-8"
         )
         required_paths = (
+            "clientplatform/application/ad_oauth_sessions.py",
+            "clientplatform/infrastructure/ad_oauth_session_store.py",
             "clientplatform/integrations/yandex_screen_code.py",
             "handlers/clientplatform_yandex_screen_code.py",
             "runtime/ad_oauth_http.py",

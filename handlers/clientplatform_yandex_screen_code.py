@@ -13,6 +13,7 @@ from clientplatform.application.ad_connections import (
     complete_yandex_direct_oauth,
     start_yandex_direct_oauth,
 )
+from clientplatform.application.ad_oauth_sessions import cancel_yandex_direct_oauth
 from clientplatform.domain.ad_connections import AdConnectionError
 from clientplatform.integrations.yandex_direct import YandexDirectError
 from clientplatform.integrations.yandex_screen_code import (
@@ -108,11 +109,30 @@ async def cancel_yandex_direct_screen_code(
     callback: CallbackQuery,
     state: FSMContext,
 ) -> None:
-    business_token = str(callback.data).split(":", 2)[2]
+    data = await state.get_data()
+    try:
+        business_token = str(callback.data).split(":", 2)[2]
+        if str(data["business_token"]) != business_token:
+            raise ValueError("OAuth business token does not match the callback")
+        initiating_user_id = int(data["oauth_user_id"])
+        if int(callback.from_user.id) != initiating_user_id:
+            raise ValueError("OAuth session belongs to another user")
+        oauth_state = str(data["oauth_state"])
+        business_id = control._token_uuid(business_token)
+        actor = await control._actor(initiating_user_id, business_id)
+        await asyncio.to_thread(
+            cancel_yandex_direct_oauth,
+            actor=actor,
+            state=oauth_state,
+        )
+    except (AdConnectionError, KeyError, RuntimeError, TypeError, ValueError):
+        await callback.answer("Не удалось отменить подключение", show_alert=True)
+        return
+
     await state.clear()
     await callback.answer("Подключение отменено")
     await _message(callback).answer(
-        "Подключение Яндекс Директа отменено. Временная сессия перестанет действовать автоматически.",
+        "Подключение Яндекс Директа отменено. Временная OAuth-сессия закрыта и больше не может быть использована.",
         reply_markup=control._keyboard(
             [[("Вернуться к рекламным кабинетам", f"cpa:home:{business_token}")]]
         ),

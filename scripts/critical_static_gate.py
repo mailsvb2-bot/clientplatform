@@ -39,6 +39,8 @@ _REWARD_HARDENING_FILES = (
 
 TYPE_CONTRACT_FILES = (
     "check_db.py",
+    "clientplatform/application/ad_oauth_sessions.py",
+    "clientplatform/infrastructure/ad_oauth_session_store.py",
     "dashboard/sla_dashboard.py",
     "dashboard/sla_retention_money.py",
     "handlers/info.py",
@@ -90,6 +92,8 @@ TYPE_CONTRACT_FILES = (
 
 SECURITY_SCAN_PATHS = (
     "check_db.py",
+    "clientplatform/application/ad_oauth_sessions.py",
+    "clientplatform/infrastructure/ad_oauth_session_store.py",
     "clientplatform/integrations/yandex_screen_code.py",
     "dashboard/sla_dashboard.py",
     "dashboard/sla_retention_money.py",
