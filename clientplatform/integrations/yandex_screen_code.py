@@ -15,6 +15,7 @@ from clientplatform.integrations.yandex_direct_moderation import (
 
 
 YANDEX_SCREEN_CODE_REDIRECT_URI = "https://oauth.yandex.ru/verification_code"
+_TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 
 
 class YandexScreenCodeDirectProvider(ModeratingYandexDirectProvider):
@@ -75,6 +76,9 @@ class YandexScreenCodeDirectProvider(ModeratingYandexDirectProvider):
 
 
 def screen_code_provider_from_environment() -> YandexScreenCodeDirectProvider:
+    connections_enabled = str(
+        os.getenv("CLIENTPLATFORM_AD_CONNECTIONS_ENABLED") or ""
+    ).strip().lower() in _TRUE_VALUES
     client_id = str(
         os.getenv("CLIENTPLATFORM_YANDEX_DIRECT_CLIENT_ID") or ""
     ).strip()
@@ -84,6 +88,8 @@ def screen_code_provider_from_environment() -> YandexScreenCodeDirectProvider:
     redirect_uri = str(
         os.getenv("CLIENTPLATFORM_AD_OAUTH_REDIRECT_URI") or ""
     ).strip()
+    if not connections_enabled:
+        raise RuntimeError("advertising account connections are disabled")
     if not client_id:
         raise RuntimeError("Yandex Direct OAuth application is not configured")
     if not client_secret:
