@@ -194,6 +194,7 @@ class AdSpendRuntimeReadinessTests(unittest.TestCase):
             errors,
         )
         self.assertIn("clientplatform_ad_runtime:not_running", errors)
+        self.assertIn("clientplatform_ad_spend_outbox:unavailable", errors)
         self.assertTrue(flags["clientplatform_ad_runtime_degraded"])
 
     def test_healthy_runtime_is_ready(self) -> None:
@@ -207,6 +208,11 @@ class AdSpendRuntimeReadinessTests(unittest.TestCase):
                 "clientplatform_ad_runtime_errors": 0,
                 "clientplatform_ad_runtime_last_error": "",
                 "clientplatform_ad_runtime_last_tick_age_seconds": 1,
+                "clientplatform_ad_spend_outbox_available": True,
+                "clientplatform_ad_spend_outbox_due": 0,
+                "clientplatform_ad_spend_outbox_stale_processing": 0,
+                "clientplatform_ad_spend_outbox_recent_failed": 0,
+                "clientplatform_ad_spend_outbox_oldest_due_age_seconds": 0,
             }
         )
         self.assertTrue(ready)
