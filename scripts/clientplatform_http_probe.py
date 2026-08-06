@@ -47,17 +47,42 @@ def synthetic_journey(
     health_base_url: str,
     public_base_url: str,
     webhook_prefix: str,
+    telegram_transport: str = "polling",
     timeout: float = 10.0,
 ) -> dict[str, Any]:
-    results: dict[str, Any] = {"probe": "synthetic", "ok": True}
+    transport = str(telegram_transport or "").strip().lower()
+    if transport not in {"polling", "webhook"}:
+        raise ValueError("telegram transport must be polling or webhook")
+
+    results: dict[str, Any] = {
+        "probe": "synthetic",
+        "ok": True,
+        "telegram_transport": transport,
+    }
     for endpoint in ("healthz", "readyz"):
         status, _, elapsed = _request(_join(health_base_url, endpoint), timeout=timeout)
         results[endpoint] = {"status": status, "elapsed_ms": round(elapsed * 1000, 2)}
         if status != 200:
             results["ok"] = False
 
+    root_status, root_body, root_elapsed = _request(
+        _join(public_base_url, "/"),
+        timeout=timeout,
+    )
+    root_body_exact = root_body.strip() == b"ClientPlatform"
+    results["public_root"] = {
+        "status": root_status,
+        "elapsed_ms": round(root_elapsed * 1000, 2),
+        "body_exact": root_body_exact,
+    }
+    if root_status != 200 or not root_body_exact:
+        results["ok"] = False
+
     payload = json.dumps(
-        {"update_id": 9_999_999_999, "message": {"message_id": 1, "chat": {"id": 1}, "text": "/start"}},
+        {
+            "update_id": 9_999_999_999,
+            "message": {"message_id": 1, "chat": {"id": 1}, "text": "/start"},
+        },
         separators=(",", ":"),
     ).encode("utf-8")
     status, _, elapsed = _request(
@@ -70,12 +95,20 @@ def synthetic_journey(
         },
         timeout=timeout,
     )
-    results["invalid_webhook_secret"] = {
-        "status": status,
-        "elapsed_ms": round(elapsed * 1000, 2),
-    }
-    if status not in {401, 403}:
-        results["ok"] = False
+    if transport == "polling":
+        results["telegram_webhook_absent"] = {
+            "status": status,
+            "elapsed_ms": round(elapsed * 1000, 2),
+        }
+        if status != 404:
+            results["ok"] = False
+    else:
+        results["invalid_webhook_secret"] = {
+            "status": status,
+            "elapsed_ms": round(elapsed * 1000, 2),
+        }
+        if status not in {401, 403}:
+            results["ok"] = False
     return results
 
 
@@ -196,6 +229,11 @@ def main() -> int:
     synthetic.add_argument("--health-base-url", default="http://127.0.0.1:8182")
     synthetic.add_argument("--public-base-url", default=os.getenv("CLIENTPLATFORM_PUBLIC_BASE_URL", ""))
     synthetic.add_argument("--webhook-prefix", default=os.getenv("TELEGRAM_WEBHOOK_PREFIX", "/telegram-webhook"))
+    synthetic.add_argument(
+        "--telegram-transport",
+        choices=("polling", "webhook"),
+        default=os.getenv("TELEGRAM_TRANSPORT", "polling"),
+    )
 
     replay = subparsers.add_parser("replay")
     replay.add_argument("fixture", type=Path)
@@ -216,6 +254,7 @@ def main() -> int:
             health_base_url=args.health_base_url,
             public_base_url=args.public_base_url,
             webhook_prefix=args.webhook_prefix,
+            telegram_transport=args.telegram_transport,
         )
     elif args.command == "replay":
         result = replay_webhooks(
