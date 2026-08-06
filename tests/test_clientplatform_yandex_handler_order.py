@@ -26,6 +26,36 @@ class YandexScreenCodeHandlerOrderTests(unittest.TestCase):
         self.assertIn(route, screen_code_source)
         self.assertIn(route, legacy_source)
 
+    def test_complete_oauth_production_surface_is_security_scanned(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        gate_source = (root / "scripts/critical_static_gate.py").read_text(
+            encoding="utf-8"
+        )
+        required_paths = (
+            "clientplatform/integrations/yandex_screen_code.py",
+            "handlers/clientplatform_yandex_screen_code.py",
+            "runtime/ad_oauth_http.py",
+            "scripts/clientplatform_ad_connections_preflight.py",
+            "scripts/clientplatform_prepare_production_env.py",
+        )
+        for relative in required_paths:
+            with self.subTest(path=relative):
+                self.assertIn(f'"{relative}"', gate_source)
+
+    def test_screen_code_redirect_contract_cannot_drift_between_layers(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        redirect_uri = "https://oauth.yandex.ru/verification_code"
+        contract_paths = (
+            "clientplatform/integrations/yandex_screen_code.py",
+            "runtime/ad_oauth_http.py",
+            "scripts/clientplatform_ad_connections_preflight.py",
+            "scripts/clientplatform_prepare_production_env.py",
+        )
+        for relative in contract_paths:
+            with self.subTest(path=relative):
+                source = (root / relative).read_text(encoding="utf-8")
+                self.assertIn(redirect_uri, source)
+
 
 if __name__ == "__main__":
     unittest.main()
