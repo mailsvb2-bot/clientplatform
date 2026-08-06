@@ -14,9 +14,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, BinaryIO, Sequence
 
+ROOT = Path(__file__).resolve().parents[1]
+if __package__ in {None, ""}:
+    root_text = str(ROOT)
+    if root_text not in sys.path:
+        sys.path.insert(0, root_text)
+
 from scripts.clientplatform_prepare_production_env import prepare
 
-ROOT = Path(__file__).resolve().parents[1]
 DEPLOY_DIR = ROOT / "deploy" / "clientplatform"
 APP_CONTAINER = "clientplatform-production-app-1"
 POSTGRES_CONTAINER = "clientplatform-production-postgres-1"
@@ -111,6 +116,26 @@ def _git_sha() -> str:
     if len(sha) != 40 or any(ch not in "0123456789abcdef" for ch in sha):
         raise DeploymentError("invalid_git_sha")
     return sha
+
+
+def _assert_tracked_worktree_clean() -> None:
+    completed = subprocess.run(
+        [
+            "git",
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=no",
+            "--ignore-submodules=none",
+        ],
+        cwd=ROOT,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if completed.returncode != 0:
+        raise DeploymentError("tracked_worktree_check_failed")
+    if any(line.strip() for line in completed.stdout.splitlines()):
+        raise DeploymentError("tracked_worktree_dirty")
 
 
 def _container_exists(container: str) -> bool:
@@ -371,6 +396,7 @@ def deploy(
 ) -> Path:
     if os.name != "posix" or not hasattr(os, "geteuid") or os.geteuid() != 0:
         raise DeploymentError("production_deploy_requires_root")
+    _assert_tracked_worktree_clean()
     env_file = DEPLOY_DIR / "clientplatform.env"
     prepare(env_file)
     values = _env_values(env_file)

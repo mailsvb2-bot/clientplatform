@@ -67,3 +67,11 @@ logs/*.log
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# ClientPlatform production-local files (also excluded from Docker build context)
+deploy/clientplatform/clientplatform.env
+deploy/clientplatform/clientplatform.env.*
+deploy/clientplatform/Dockerfile.server
+deploy/clientplatform/*.before-*
+deploy/clientplatform/*.failed
+deploy/clientplatform/postgres.gpg.asc
