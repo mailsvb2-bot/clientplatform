@@ -80,7 +80,6 @@ def _validate_ad_connections(values: dict[str, str], *, domain: str) -> None:
         return
     _required(values, "CLIENTPLATFORM_YANDEX_DIRECT_CLIENT_ID")
     _required(values, "CLIENTPLATFORM_YANDEX_DIRECT_CLIENT_SECRET")
-    _validate_timezone(values)
     expected_redirect = f"https://{domain}/oauth/yandex-direct/callback"
     observed_redirect = _required(values, "CLIENTPLATFORM_AD_OAUTH_REDIRECT_URI")
     if observed_redirect != expected_redirect:
@@ -95,6 +94,7 @@ def _validate_ad_connections(values: dict[str, str], *, domain: str) -> None:
         raise EnvironmentPreparationError(
             "mismatched_clientplatform_ad_credential_host_dir"
         )
+    _validate_timezone(values)
 
 
 def prepare(path: Path) -> tuple[str, ...]:
