@@ -1,14 +1,14 @@
 from __future__ import annotations
 
+import io
+import json
 import os
 import unittest
-from contextlib import ExitStack
+from contextlib import ExitStack, redirect_stdout
 from unittest.mock import patch
 
 from config.settings import settings
-from scripts.clientplatform_messenger_channels_preflight import (
-    inspect_messenger_channels,
-)
+from scripts import clientplatform_messenger_channels_preflight as preflight
 from services.messenger.setup import build_setup_status
 
 
@@ -48,7 +48,7 @@ class MessengerChannelPreflightTests(unittest.TestCase):
             clear=False,
         ), self._settings():
             status = build_setup_status()
-            inspected = inspect_messenger_channels()
+            inspected = preflight.inspect_messenger_channels()
 
         self.assertEqual(status.missing, ())
         self.assertEqual(status.warnings, ())
@@ -134,7 +134,7 @@ class MessengerChannelPreflightTests(unittest.TestCase):
             MAX_BOT_LINK_BASE="https://max.example.test/{payload}",
         ):
             status = build_setup_status()
-            inspected = inspect_messenger_channels()
+            inspected = preflight.inspect_messenger_channels()
 
         self.assertIn(
             "MESSENGER_PUBLIC_BASE_URL must use https://",
@@ -186,7 +186,7 @@ class MessengerChannelPreflightTests(unittest.TestCase):
             VK_SECRET="vk-secret",
         ):
             status = build_setup_status()
-            inspected = inspect_messenger_channels()
+            inspected = preflight.inspect_messenger_channels()
 
         self.assertIn(
             "MESSENGER_PUBLIC_BASE_URL must use https://",
@@ -220,6 +220,62 @@ class MessengerChannelPreflightTests(unittest.TestCase):
             status.missing,
         )
         self.assertFalse(status.webhook_runtime_ok)
+
+    def test_cli_success_emits_safe_json_and_success_marker(self) -> None:
+        result = preflight.MessengerChannelPreflight(
+            telegram_transport="polling",
+            max_enabled=False,
+            max_ready=True,
+            vk_enabled=False,
+            vk_ready=True,
+            webhook_runtime_ready=True,
+            missing=(),
+            warnings=("disabled optional channel",),
+        )
+        output = io.StringIO()
+        with patch.object(
+            preflight,
+            "inspect_messenger_channels",
+            return_value=result,
+        ), redirect_stdout(output):
+            exit_code = preflight.main()
+
+        lines = output.getvalue().splitlines()
+        payload = json.loads(lines[0])
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["telegram_transport"], "polling")
+        self.assertEqual(lines[-1], "CLIENTPLATFORM_MESSENGER_CHANNELS_PREFLIGHT_OK")
+        self.assertNotIn("secret", output.getvalue().lower())
+
+    def test_cli_failure_emits_only_missing_names_and_nonzero_exit(self) -> None:
+        result = preflight.MessengerChannelPreflight(
+            telegram_transport="polling",
+            max_enabled=True,
+            max_ready=False,
+            vk_enabled=False,
+            vk_ready=True,
+            webhook_runtime_ready=False,
+            missing=("MAX_WEBHOOK_SECRET",),
+            warnings=(),
+        )
+        output = io.StringIO()
+        with patch.object(
+            preflight,
+            "inspect_messenger_channels",
+            return_value=result,
+        ), redirect_stdout(output):
+            exit_code = preflight.main()
+
+        lines = output.getvalue().splitlines()
+        payload = json.loads(lines[0])
+        self.assertEqual(exit_code, 1)
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["missing"], ["MAX_WEBHOOK_SECRET"])
+        self.assertEqual(
+            lines[-1],
+            "CLIENTPLATFORM_MESSENGER_CHANNELS_PREFLIGHT_FAILED:MAX_WEBHOOK_SECRET",
+        )
 
 
 if __name__ == "__main__":
