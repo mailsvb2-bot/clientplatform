@@ -33,7 +33,7 @@ jobs:
     env:
       APP_ENV: prod
       LOAD_DOTENV: "0"
-      METRO_DB_ENGINE: postgres
+      CLIENTPLATFORM_DB_ENGINE: postgres
       CLIENTPLATFORM_DATABASE_NAME: clientplatform_ci
       DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/clientplatform_ci
       POSTGRES_REUSE_CONNECTIONS: "0"
