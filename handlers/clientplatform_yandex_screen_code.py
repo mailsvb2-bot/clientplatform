@@ -51,10 +51,10 @@ async def connect_yandex_direct_screen_code(
     callback: CallbackQuery,
     state: FSMContext,
 ) -> None:
-    business_token = str(callback.data).split(":", 2)[2]
-    business_id = control._token_uuid(business_token)
-    actor = await control._actor(int(callback.from_user.id), business_id)
     try:
+        business_token = str(callback.data).split(":", 2)[2]
+        business_id = control._token_uuid(business_token)
+        actor = await control._actor(int(callback.from_user.id), business_id)
         provider = screen_code_provider_from_environment()
         start = await asyncio.to_thread(
             start_yandex_direct_oauth,
@@ -95,10 +95,26 @@ async def connect_yandex_direct_screen_code(
                 [
                     InlineKeyboardButton(
                         text="Отмена",
-                        callback_data=f"cpa:home:{business_token}",
+                        callback_data=f"cpa:yandex-cancel:{business_token}",
                     )
                 ],
             ]
+        ),
+    )
+
+
+@simple.router.callback_query(F.data.startswith("cpa:yandex-cancel:"))
+async def cancel_yandex_direct_screen_code(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    business_token = str(callback.data).split(":", 2)[2]
+    await state.clear()
+    await callback.answer("Подключение отменено")
+    await _message(callback).answer(
+        "Подключение Яндекс Директа отменено. Временная сессия перестанет действовать автоматически.",
+        reply_markup=control._keyboard(
+            [[("Вернуться к рекламным кабинетам", f"cpa:home:{business_token}")]]
         ),
     )
 
@@ -186,6 +202,7 @@ async def complete_yandex_direct_screen_code(
 
 __all__ = [
     "YandexScreenCodeState",
+    "cancel_yandex_direct_screen_code",
     "complete_yandex_direct_screen_code",
     "connect_yandex_direct_screen_code",
 ]
