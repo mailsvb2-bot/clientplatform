@@ -7,6 +7,7 @@ import os
 import re
 import secrets
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 _KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
@@ -49,11 +50,37 @@ def _enabled(values: dict[str, str], name: str) -> bool:
     return str(values.get(name, "") or "").strip().lower() in _TRUE_VALUES
 
 
+def _validate_timezone(values: dict[str, str]) -> None:
+    configured = _required(
+        values,
+        "CLIENTPLATFORM_YANDEX_DIRECT_REPORT_TIMEZONE",
+    )
+    try:
+        ZoneInfo(configured)
+    except ZoneInfoNotFoundError as exc:
+        raise EnvironmentPreparationError(
+            "invalid_clientplatform_yandex_direct_report_timezone"
+        ) from exc
+
+
 def _validate_ad_connections(values: dict[str, str], *, domain: str) -> None:
-    if not _enabled(values, "CLIENTPLATFORM_AD_CONNECTIONS_ENABLED"):
+    connections_enabled = _enabled(
+        values,
+        "CLIENTPLATFORM_AD_CONNECTIONS_ENABLED",
+    )
+    mutations_enabled = _enabled(
+        values,
+        "CLIENTPLATFORM_AD_SPEND_MUTATIONS_ENABLED",
+    )
+    if mutations_enabled and not connections_enabled:
+        raise EnvironmentPreparationError(
+            "ad_spend_mutations_require_ad_connections"
+        )
+    if not connections_enabled:
         return
     _required(values, "CLIENTPLATFORM_YANDEX_DIRECT_CLIENT_ID")
     _required(values, "CLIENTPLATFORM_YANDEX_DIRECT_CLIENT_SECRET")
+    _validate_timezone(values)
     expected_redirect = f"https://{domain}/oauth/yandex-direct/callback"
     observed_redirect = _required(values, "CLIENTPLATFORM_AD_OAUTH_REDIRECT_URI")
     if observed_redirect != expected_redirect:
@@ -124,10 +151,12 @@ def prepare(path: Path) -> tuple[str, ...]:
         "CLIENTPLATFORM_POSTGRES_BACKUP_S3_ENABLED": "0",
         "CLIENTPLATFORM_POSTGRES_BACKUP_FRESHNESS_REQUIRED": "0",
         "CLIENTPLATFORM_AD_CONNECTIONS_ENABLED": "0",
+        "CLIENTPLATFORM_AD_SPEND_MUTATIONS_ENABLED": "0",
         "CLIENTPLATFORM_AD_OAUTH_REDIRECT_URI": expected_ad_redirect,
         "CLIENTPLATFORM_AD_CREDENTIAL_IDENTITY_FILE": _AD_IDENTITY_FILE,
         "CLIENTPLATFORM_AD_CREDENTIAL_HOST_DIR": _AD_HOST_DIR,
         "CLIENTPLATFORM_AD_PUBLICATION_INTERVAL_SEC": "2",
+        "CLIENTPLATFORM_AD_SPEND_GUARD_INTERVAL_SEC": "5",
     }
     if not str(values.get("CLIENTPLATFORM_SECRET_MEDIA_SIGNING_KEY", "")).strip():
         defaults["CLIENTPLATFORM_SECRET_MEDIA_SIGNING_KEY"] = secrets.token_urlsafe(48)
