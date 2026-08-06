@@ -28,8 +28,10 @@ def _reload_setup(monkeypatch, **env):
         monkeypatch.setenv(key, value)
 
     settings_mod = importlib.import_module("config.settings")
+    ingress_flags_mod = importlib.import_module("runtime.ingress_flags")
     setup_mod = importlib.import_module("services.messenger.setup")
     importlib.reload(settings_mod)
+    importlib.reload(ingress_flags_mod)
     importlib.reload(setup_mod)
     return setup_mod
 
