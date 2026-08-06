@@ -39,6 +39,15 @@ def _present(*values: object) -> bool:
     return any(_strip(str(value or '')) for value in values)
 
 
+def _positive_integer(value: str) -> bool:
+    if not value:
+        return False
+    try:
+        return int(value) > 0
+    except ValueError:
+        return False
+
+
 def build_setup_status() -> MessengerSetupStatus:
     public_base = _strip(getattr(settings, 'MESSENGER_PUBLIC_BASE_URL', ''))
     deployed = _deployed_env()
@@ -75,9 +84,10 @@ def build_setup_status() -> MessengerSetupStatus:
         vk_confirmation,
         vk_secret,
     )
+    vk_group_id_valid = _positive_integer(vk_group_id)
     vk_configured = bool(
         public_base
-        and vk_group_id
+        and vk_group_id_valid
         and vk_group_token
         and vk_confirmation
         and (not deployed or vk_secret)
@@ -116,6 +126,8 @@ def build_setup_status() -> MessengerSetupStatus:
             missing.append('MESSENGER_PUBLIC_BASE_URL')
         if not vk_group_id:
             missing.append('VK_GROUP_ID')
+        elif not vk_group_id_valid:
+            missing.append('VK_GROUP_ID must be a positive integer')
         if not vk_group_token:
             missing.append('VK_GROUP_TOKEN')
         if not vk_confirmation:
@@ -131,12 +143,6 @@ def build_setup_status() -> MessengerSetupStatus:
         warnings.append(
             'MAX_BOT_LINK_BASE не содержит {payload}; проект добавит ?start=..., но шаблон с {payload} надёжнее.'
         )
-    if vk_enabled and vk_group_id:
-        try:
-            if int(vk_group_id) <= 0:
-                raise ValueError('group id is not positive')
-        except ValueError:
-            missing.append('VK_GROUP_ID must be a positive integer')
     if public_base and not public_base.startswith('https://'):
         if deployed and (max_enabled or vk_enabled):
             missing.append('MESSENGER_PUBLIC_BASE_URL must use https://')
