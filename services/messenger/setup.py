@@ -4,6 +4,7 @@ import os
 from dataclasses import dataclass
 
 from config.settings import settings
+from runtime.ingress_flags import max_webhook_enabled, vk_webhook_enabled
 from runtime.telegram_transport import telegram_transport
 from services.messenger.bridge import issue_bridge_token
 from services.messenger.links import build_switch_targets, build_messenger_targets
@@ -34,72 +35,125 @@ def _deployed_env() -> bool:
     return _app_env() in {'prod', 'production', 'stage', 'staging'}
 
 
+def _present(*values: object) -> bool:
+    return any(_strip(str(value or '')) for value in values)
+
+
 def build_setup_status() -> MessengerSetupStatus:
     public_base = _strip(getattr(settings, 'MESSENGER_PUBLIC_BASE_URL', ''))
     deployed = _deployed_env()
-    messenger_webhook_enabled = bool(getattr(settings, 'MESSENGER_WEBHOOK_ENABLED', False))
+    max_enabled = max_webhook_enabled()
+    vk_enabled = vk_webhook_enabled()
+    telegram_transport_mode = telegram_transport()
+    telegram_webhook_enabled = telegram_transport_mode == 'webhook'
     telegram_ok = bool(_strip(getattr(settings, 'TELEGRAM_BOT_USERNAME', '')))
 
-    max_link_ready = bool(_strip(getattr(settings, 'MAX_BOT_LINK_BASE', '')))
-    max_token_ready = bool(_strip(getattr(settings, 'MAX_BOT_TOKEN', '')))
-    max_secret_ready = bool(_strip(getattr(settings, 'MAX_WEBHOOK_SECRET', '')))
-    max_ok = bool(max_link_ready and max_token_ready and (not (deployed and messenger_webhook_enabled) or max_secret_ready))
-
-    vk_core_ok = bool(
-        _strip(getattr(settings, 'VK_GROUP_ID', ''))
-        and _strip(getattr(settings, 'VK_GROUP_TOKEN', ''))
-        and _strip(getattr(settings, 'VK_CONFIRMATION_TOKEN', ''))
+    max_link = _strip(getattr(settings, 'MAX_BOT_LINK_BASE', ''))
+    max_token = _strip(getattr(settings, 'MAX_BOT_TOKEN', ''))
+    max_secret = _strip(getattr(settings, 'MAX_WEBHOOK_SECRET', ''))
+    max_values_present = _present(
+        max_link,
+        max_token,
+        max_secret,
+        getattr(settings, 'MAX_BOT_NAME', ''),
     )
-    vk_secret_ready = bool(_strip(getattr(settings, 'VK_SECRET', '')))
-    vk_ok = bool(vk_core_ok and (not (deployed and messenger_webhook_enabled) or vk_secret_ready))
-
-    messenger_runtime_ok = bool(
-        messenger_webhook_enabled
-        and public_base
-        and (max_ok or vk_ok)
+    max_configured = bool(
+        public_base
+        and max_link
+        and max_token
+        and (not deployed or max_secret)
     )
-    telegram_transport_mode = telegram_transport()
+    max_ok = bool(not max_enabled or max_configured)
+
+    vk_group_id = _strip(getattr(settings, 'VK_GROUP_ID', ''))
+    vk_group_token = _strip(getattr(settings, 'VK_GROUP_TOKEN', ''))
+    vk_confirmation = _strip(getattr(settings, 'VK_CONFIRMATION_TOKEN', ''))
+    vk_secret = _strip(getattr(settings, 'VK_SECRET', ''))
+    vk_values_present = _present(
+        vk_group_id,
+        vk_group_token,
+        vk_confirmation,
+        vk_secret,
+    )
+    vk_configured = bool(
+        public_base
+        and vk_group_id
+        and vk_group_token
+        and vk_confirmation
+        and (not deployed or vk_secret)
+    )
+    vk_ok = bool(not vk_enabled or vk_configured)
+
+    telegram_public = _strip(
+        getattr(settings, 'TELEGRAM_WEBHOOK_PUBLIC_BASE_URL', '')
+    )
     telegram_webhook_ok = bool(
-        telegram_transport_mode == 'webhook'
-        and _strip(getattr(settings, 'TELEGRAM_WEBHOOK_PUBLIC_BASE_URL', ''))
+        not telegram_webhook_enabled or telegram_public
     )
-    webhook_runtime_ok = bool(messenger_runtime_ok or telegram_webhook_ok)
+    webhook_runtime_ok = bool(max_ok and vk_ok and telegram_webhook_ok)
 
     missing: list[str] = []
     warnings: list[str] = []
     if not telegram_ok:
         missing.append('TELEGRAM_BOT_USERNAME')
-    if not max_link_ready:
-        missing.append('MAX_BOT_LINK_BASE')
-    if not max_token_ready:
-        missing.append('MAX_BOT_TOKEN')
-    if deployed and messenger_webhook_enabled and not max_secret_ready:
-        missing.append('MAX_WEBHOOK_SECRET')
-    if not _strip(getattr(settings, 'VK_GROUP_ID', '')):
-        missing.append('VK_GROUP_ID')
-    if not _strip(getattr(settings, 'VK_GROUP_TOKEN', '')):
-        missing.append('VK_GROUP_TOKEN')
-    if not _strip(getattr(settings, 'VK_CONFIRMATION_TOKEN', '')):
-        missing.append('VK_CONFIRMATION_TOKEN')
-    if deployed and messenger_webhook_enabled and not vk_secret_ready:
-        missing.append('VK_SECRET')
-    if not public_base:
-        missing.append('MESSENGER_PUBLIC_BASE_URL')
-    if not messenger_webhook_enabled and not telegram_webhook_ok:
-        missing.append('MESSENGER_WEBHOOK_ENABLED=1 or TELEGRAM_TRANSPORT=webhook')
-    if _strip(getattr(settings, 'MAX_BOT_LINK_BASE', '')) and '{payload}' not in _strip(getattr(settings, 'MAX_BOT_LINK_BASE', '')):
-        warnings.append('MAX_BOT_LINK_BASE не содержит {payload}; проект добавит ?start=..., но шаблон с {payload} надёжнее.')
-    if vk_core_ok and not vk_secret_ready and not deployed:
-        warnings.append('VK_SECRET пустой; в dev webhook будет работать, но подпись входящих событий не усилена секретом.')
-    if max_token_ready and not max_secret_ready and not deployed:
-        warnings.append('MAX_WEBHOOK_SECRET пустой; в dev webhook будет работать, но подпись входящих событий не усилена секретом.')
-    if public_base and not (public_base.startswith('https://') or public_base.startswith('http://')):
-        warnings.append('MESSENGER_PUBLIC_BASE_URL должен быть полным URL, например https://your-domain.tld')
-    telegram_public = _strip(getattr(settings, 'TELEGRAM_WEBHOOK_PUBLIC_BASE_URL', ''))
-    if telegram_transport_mode == 'webhook' and not telegram_public:
+
+    if max_enabled:
+        if not public_base:
+            missing.append('MESSENGER_PUBLIC_BASE_URL')
+        if not max_token:
+            missing.append('MAX_BOT_TOKEN')
+        if not max_link:
+            missing.append('MAX_BOT_LINK_BASE')
+        if deployed and not max_secret:
+            missing.append('MAX_WEBHOOK_SECRET')
+    elif max_values_present:
+        warnings.append(
+            'Настройки MAX присутствуют, но MAX_WEBHOOK_ENABLED выключен; канал не запускается.'
+        )
+
+    if vk_enabled:
+        if not public_base:
+            missing.append('MESSENGER_PUBLIC_BASE_URL')
+        if not vk_group_id:
+            missing.append('VK_GROUP_ID')
+        if not vk_group_token:
+            missing.append('VK_GROUP_TOKEN')
+        if not vk_confirmation:
+            missing.append('VK_CONFIRMATION_TOKEN')
+        if deployed and not vk_secret:
+            missing.append('VK_SECRET')
+    elif vk_values_present:
+        warnings.append(
+            'Настройки VK присутствуют, но VK_WEBHOOK_ENABLED выключен; канал не запускается.'
+        )
+
+    if max_enabled and max_link and '{payload}' not in max_link:
+        warnings.append(
+            'MAX_BOT_LINK_BASE не содержит {payload}; проект добавит ?start=..., но шаблон с {payload} надёжнее.'
+        )
+    if vk_enabled and vk_group_id:
+        try:
+            if int(vk_group_id) <= 0:
+                raise ValueError('group id is not positive')
+        except ValueError:
+            missing.append('VK_GROUP_ID must be a positive integer')
+    if public_base and not public_base.startswith('https://'):
+        if deployed and (max_enabled or vk_enabled):
+            missing.append('MESSENGER_PUBLIC_BASE_URL must use https://')
+        elif max_enabled or vk_enabled:
+            warnings.append(
+                'MESSENGER_PUBLIC_BASE_URL должен использовать https:// вне локальной разработки.'
+            )
+
+    if telegram_webhook_enabled and not telegram_public:
         missing.append('TELEGRAM_WEBHOOK_PUBLIC_BASE_URL')
-    if telegram_public and not (telegram_public.startswith('https://') or telegram_public.startswith('http://')):
-        warnings.append('TELEGRAM_WEBHOOK_PUBLIC_BASE_URL должен быть полным URL, например https://your-domain.tld')
+    if telegram_public and not telegram_public.startswith('https://'):
+        if deployed and telegram_webhook_enabled:
+            missing.append('TELEGRAM_WEBHOOK_PUBLIC_BASE_URL must use https://')
+        elif telegram_webhook_enabled:
+            warnings.append(
+                'TELEGRAM_WEBHOOK_PUBLIC_BASE_URL должен использовать https:// вне локальной разработки.'
+            )
 
     vk_webhook_url = f'{public_base}/webhooks/vk' if public_base else ''
     max_webhook_url = f'{public_base}/webhooks/max' if public_base else ''
@@ -111,37 +165,49 @@ def build_setup_status() -> MessengerSetupStatus:
         public_base_url=public_base,
         vk_webhook_url=vk_webhook_url,
         max_webhook_url=max_webhook_url,
-        missing=tuple(missing),
-        warnings=tuple(warnings),
+        missing=tuple(dict.fromkeys(missing)),
+        warnings=tuple(dict.fromkeys(warnings)),
     )
 
 
 def render_setup_text() -> str:
     status = build_setup_status()
+    max_enabled = max_webhook_enabled()
+    vk_enabled = vk_webhook_enabled()
     lines = ['🔧 Настройка multi-messenger', '']
     lines.append(f"Telegram referral/switch links: {'✅' if status.telegram_ok else '❌'}")
-    lines.append(f"MAX link + sender: {'✅' if status.max_ok else '❌'}")
-    lines.append(f"VK link + sender: {'✅' if status.vk_ok else '❌'}")
-    lines.append(f"Webhook runtime: {'✅' if status.webhook_runtime_ok else '❌'}")
+    lines.append(
+        'MAX webhook: '
+        + ('✅' if status.max_ok else '❌')
+        + (' включён' if max_enabled else ' выключен')
+    )
+    lines.append(
+        'VK webhook: '
+        + ('✅' if status.vk_ok else '❌')
+        + (' включён' if vk_enabled else ' выключен')
+    )
+    lines.append(f"Webhook runtime contract: {'✅' if status.webhook_runtime_ok else '❌'}")
     lines.append('')
-    if status.public_base_url:
+    if status.public_base_url and (max_enabled or vk_enabled):
         lines.append(f'Public base URL: {status.public_base_url}')
-        lines.append(f'VK webhook URL: {status.vk_webhook_url}')
-        lines.append(f'MAX webhook URL: {status.max_webhook_url}')
+        if vk_enabled:
+            lines.append(f'VK webhook URL: {status.vk_webhook_url}')
+        if max_enabled:
+            lines.append(f'MAX webhook URL: {status.max_webhook_url}')
         lines.append('')
     lines.append('Как это работает:')
     lines.append('1) Пользователь в Telegram нажимает переход в VK/MAX.')
     lines.append('2) Открывается ссылка с start-параметром bridge/ref.')
-    lines.append('3) VK/MAX webhook получает входящее сообщение и сам фиксирует внешний user id.')
+    lines.append('3) Включённый VK/MAX webhook получает входящее сообщение и фиксирует внешний user id.')
     lines.append('4) Ручной ввод VK ID / MAX ID пользователю не нужен.')
     lines.append('5) Для новых VK callback-кнопок в Callback API должен быть включён тип события message_event.')
     lines.append('')
     if status.missing:
-        lines.append('Не хватает переменных:')
+        lines.append('Не хватает переменных для включённых каналов:')
         for item in status.missing:
             lines.append(f'• {item}')
     else:
-        lines.append('Все основные переменные для Telegram/VK/MAX заданы.')
+        lines.append('Все включённые messenger-каналы настроены; выключенные каналы не считаются ошибкой.')
     if status.warnings:
         lines.append('')
         lines.append('Предупреждения:')
@@ -161,7 +227,7 @@ def render_setup_links_preview(user_id: int) -> str:
             lines.append(f"• {item['title']}: {item['url']}")
         lines.append('')
     else:
-        lines.append('Ссылки перехода пока не строятся — не хватает переменных окружения.')
+        lines.append('Ссылки перехода пока не строятся — соответствующие каналы выключены или не настроены.')
         lines.append('')
     if referral_targets:
         lines.append('Реферальные / share ссылки:')
