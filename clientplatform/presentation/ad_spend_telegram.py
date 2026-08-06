@@ -19,6 +19,11 @@ from clientplatform.application.ad_spend_consent import (
     request_ad_spend_consent,
     revoke_ad_spend_consent,
 )
+from clientplatform.application.ad_spend_operations import (
+    ad_spend_mutations_enabled,
+    queue_ad_spend_launch,
+    queue_ad_spend_stop,
+)
 from clientplatform.application.ad_spend_runtime import (
     provider_report_date as current_provider_report_date,
 )
@@ -62,6 +67,10 @@ _TERMINAL = {
     AdSpendAuthorizationStatus.REVOKED,
     AdSpendAuthorizationStatus.FAILED,
 }
+_LIVE = {
+    AdSpendAuthorizationStatus.LAUNCHING,
+    AdSpendAuthorizationStatus.ACTIVE,
+}
 
 
 def _control() -> ModuleType:
@@ -102,6 +111,44 @@ def _authorization_line(item: AdSpendAuthorization) -> str:
         f"• Кампания {item.external_campaign_id}: {_STATUS_LABELS[item.status]} · "
         f"лимит {_format_minor(item.hard_cap_minor, item.currency)}"
     )
+
+
+def _authorization_action_rows(
+    *,
+    item: AdSpendAuthorization,
+    business_token: str,
+    authorization_token: str,
+    launch_enabled: bool,
+) -> list[list[tuple[str, str]]]:
+    rows: list[list[tuple[str, str]]] = []
+    if item.status == AdSpendAuthorizationStatus.AUTHORIZED and launch_enabled:
+        rows.append(
+            [
+                (
+                    f"🚀 Запустить · {item.external_campaign_id}",
+                    f"cpsp:launch:{business_token}:{authorization_token}",
+                )
+            ]
+        )
+    if item.status in _LIVE:
+        rows.append(
+            [
+                (
+                    f"⏹ Остановить · {item.external_campaign_id}",
+                    f"cpsp:stop:{business_token}:{authorization_token}",
+                )
+            ]
+        )
+    if item.status not in _TERMINAL:
+        rows.append(
+            [
+                (
+                    f"⛔ Отозвать · {item.external_campaign_id}",
+                    f"cpsp:revoke:{business_token}:{authorization_token}",
+                )
+            ]
+        )
+    return rows
 
 
 def install_ad_spend_controls(
@@ -165,30 +212,35 @@ async def open_ad_spend_controls(callback: CallbackQuery, state: FSMContext) -> 
         ]
         for item in submitted[:10]
     ]
+    launch_enabled = ad_spend_mutations_enabled()
     for item in authorizations[:10]:
-        if item.status not in _TERMINAL:
-            rows.append(
-                [
-                    (
-                        f"⛔ Отозвать · {item.external_campaign_id}",
-                        "cpsp:revoke:"
-                        f"{business_token}:{c._uuid_token(item.id)}",
-                    )
-                ]
+        rows.extend(
+            _authorization_action_rows(
+                item=item,
+                business_token=business_token,
+                authorization_token=c._uuid_token(item.id),
+                launch_enabled=launch_enabled,
             )
+        )
     rows.append([("⬅️ К рекламным кабинетам", f"cpa:home:{business_token}")])
 
     history = "\n".join(_authorization_line(item) for item in authorizations[:8])
     if not history:
         history = "• разрешений пока нет"
+    launch_note = (
+        "Запуск разрешён оператором только через отдельную кнопку владельца."
+        if launch_enabled
+        else "Запуск рекламы временно выключен операторским kill switch; остановка и отзыв доступны."
+    )
     await callback.answer()
     await _message(callback).answer(
         "💳 Безопасный запуск рекламы\n\n"
         "Здесь подтверждаются именно показы и расходы. Подтверждение создания "
         "черновика DRAFT никогда не считается согласием на списание бюджета.\n\n"
-        "Перед отдельным подтверждением ClientPlatform заново прочитает состояние "
-        "кампании и расход из Яндекс Директа, проверит владельца бизнеса и покажет "
-        "точные лимиты.\n\n"
+        "Перед отдельным запуском ClientPlatform заново прочитает состояние "
+        "кампании и расход из Яндекс Директа, проверит владельца бизнеса и точные "
+        "лимиты.\n\n"
+        f"{launch_note}\n\n"
         f"Последние разрешения:\n{history}\n\n"
         + (
             "Выберите созданный в Яндексе черновик:"
@@ -315,7 +367,7 @@ async def receive_ad_spend_daily_cap(message: Message, state: FSMContext) -> Non
         "Подтверждая, Вы разрешаете ClientPlatform в дальнейшем поставить только "
         "этот конкретный DRAFT на модерацию и остановить его при достижении лимита. "
         "Кампания, регионы, стратегия и лимиты автоматически расширяться не будут.\n\n"
-        "На текущем этапе подтверждение только фиксируется: запуск в Яндексе ещё не выполняется.",
+        "Подтверждение лишь фиксирует разрешение. Для запуска потребуется отдельная кнопка.",
         reply_markup=c._keyboard(
             [
                 [
@@ -373,14 +425,102 @@ async def confirm_ad_spend_consent(callback: CallbackQuery, state: FSMContext) -
         return
     await state.clear()
     await callback.answer("Согласие зафиксировано")
+    launch_enabled = ad_spend_mutations_enabled()
+    rows: list[list[tuple[str, str]]] = []
+    if launch_enabled:
+        rows.append(
+            [
+                (
+                    "🚀 Запустить отдельно",
+                    f"cpsp:launch:{business_token}:{authorization_token}",
+                )
+            ]
+        )
+    rows.append([("💳 К разрешениям", f"cpsp:home:{business_token}")])
+    next_step = (
+        "Для реального запуска нажмите отдельную кнопку ниже. Перед обращением к "
+        "Яндексу сервер ещё раз проверит кабинет, расход, срок и лимиты."
+        if launch_enabled
+        else "Показы и расходы не запущены. Операторский kill switch сейчас запрещает запуск."
+    )
     await _message(callback).answer(
         "✅ Согласие владельца сохранено неизменяемой квитанцией\n\n"
         f"Кампания: {granted.authorization.external_campaign_id}\n"
         f"Общий лимит: {_format_minor(granted.authorization.hard_cap_minor, granted.authorization.currency)}\n"
         f"Дневной лимит: {_format_minor(granted.authorization.daily_cap_minor, granted.authorization.currency)}\n"
         f"Квитанция: …{granted.receipt.receipt_hash[-12:]}\n\n"
-        "Показы и расходы не запущены. Следующий защищённый слой — отдельная "
-        "идемпотентная очередь запуска и остановки с повторной сверкой Яндекс Директа.",
+        f"{next_step}",
+        reply_markup=c._keyboard(rows),
+    )
+
+
+@router.callback_query(F.data.startswith("cpsp:launch:"))
+async def launch_ad_spend(callback: CallbackQuery, state: FSMContext) -> None:
+    c = _control()
+    try:
+        _, _, business_token, authorization_token = str(callback.data).split(":", 3)
+        business_id = c._token_uuid(business_token)
+        authorization_id = c._token_uuid(authorization_token)
+        actor = await c._actor(int(callback.from_user.id), business_id)
+        operation = await asyncio.to_thread(
+            queue_ad_spend_launch,
+            actor=actor,
+            authorization_id=authorization_id,
+        )
+    except (AdSpendError, RuntimeError, ValueError):
+        await callback.answer(
+            "Запуск запрещён, устарел или уже изменил состояние.",
+            show_alert=True,
+        )
+        return
+    await state.clear()
+    await callback.answer("Запуск поставлен в очередь")
+    await _message(callback).answer(
+        "🚀 Запуск поставлен в защищённую идемпотентную очередь.\n\n"
+        "Непосредственно перед запросом в Яндекс сервер заново проверит кабинет, "
+        "свежий расход, срок, дневной и общий лимиты. При любом расхождении запуск "
+        "будет заблокирован.\n\n"
+        f"Операция: …{operation.id[-12:]}",
+        reply_markup=c._keyboard(
+            [
+                [
+                    (
+                        "⏹ Остановить",
+                        f"cpsp:stop:{business_token}:{authorization_token}",
+                    )
+                ],
+                [("💳 К разрешениям", f"cpsp:home:{business_token}")],
+            ]
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("cpsp:stop:"))
+async def stop_ad_spend(callback: CallbackQuery, state: FSMContext) -> None:
+    c = _control()
+    try:
+        _, _, business_token, authorization_token = str(callback.data).split(":", 3)
+        business_id = c._token_uuid(business_token)
+        authorization_id = c._token_uuid(authorization_token)
+        actor = await c._actor(int(callback.from_user.id), business_id)
+        operation = await asyncio.to_thread(
+            queue_ad_spend_stop,
+            actor=actor,
+            authorization_id=authorization_id,
+        )
+    except (AdSpendError, RuntimeError, ValueError):
+        await callback.answer(
+            "Остановка уже выполнена или состояние изменилось.",
+            show_alert=True,
+        )
+        return
+    await state.clear()
+    await callback.answer("Остановка поставлена в очередь")
+    await _message(callback).answer(
+        "⏹ Остановка поставлена в защищённую идемпотентную очередь.\n\n"
+        "Кнопка остановки работает независимо от разрешения новых запусков. "
+        "Повторное нажатие не создаст вторую provider-операцию.\n\n"
+        f"Операция: …{operation.id[-12:]}",
         reply_markup=c._keyboard(
             [[("💳 К разрешениям", f"cpsp:home:{business_token}")]]
         ),
@@ -423,9 +563,11 @@ __all__ = [
     "AdSpendConsentState",
     "confirm_ad_spend_consent",
     "install_ad_spend_controls",
+    "launch_ad_spend",
     "open_ad_spend_controls",
     "receive_ad_spend_daily_cap",
     "receive_ad_spend_hard_cap",
     "revoke_ad_spend",
     "router",
+    "stop_ad_spend",
 ]
