@@ -63,7 +63,7 @@ def queue_stop_for_revoked_live_authorization(
         JOIN ad_publication_jobs AS j
           ON j.id=a.publication_job_id AND j.business_id=a.business_id
         JOIN ad_connections AS c
-          ON c.id=a.connection_id AND c.business_id=a.business_id
+          ON c.id=j.connection_id AND c.business_id=a.business_id
         WHERE a.id=? AND a.business_id=?
         LIMIT 1
         """,
