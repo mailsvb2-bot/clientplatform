@@ -95,10 +95,22 @@ class ClientPlatformHttpProbeTransportTests(unittest.TestCase):
     def test_caddy_exposes_only_exact_root_as_public_fallback(self) -> None:
         caddy = (ROOT / "deploy/clientplatform/Caddyfile").read_text(encoding="utf-8")
 
-        self.assertIn('handle / {\n        respond "ClientPlatform" 200', caddy)
-        self.assertIn('handle {\n        respond "not found" 404', caddy)
+        webhook_matcher = "@messenger_webhooks path /webhooks/*"
+        webhook_handler = (
+            "handle @messenger_webhooks {\n"
+            "        reverse_proxy {$CLIENTPLATFORM_INGRESS_UPSTREAM:127.0.0.1:8181}"
+        )
+        root_handler = 'handle / {\n        respond "ClientPlatform" 200'
+        fallback_handler = 'handle {\n        respond "not found" 404'
+
+        self.assertIn(webhook_matcher, caddy)
+        self.assertIn(webhook_handler, caddy)
+        self.assertIn(root_handler, caddy)
+        self.assertIn(fallback_handler, caddy)
         self.assertIn('handle /healthz {\n        respond "not public" 404', caddy)
         self.assertIn('handle /readyz {\n        respond "not public" 404', caddy)
+        self.assertLess(caddy.index(webhook_matcher), caddy.index(fallback_handler))
+        self.assertLess(caddy.index(root_handler), caddy.index(fallback_handler))
 
 
 if __name__ == "__main__":
