@@ -40,6 +40,7 @@ def queue_stop_for_revoked_live_authorization(
     The caller must invoke this in the same transaction that persisted
     ``status='revoked'``. Any failure therefore rolls back both revocation and
     stop enqueue instead of leaving provider spend live without a durable stop.
+    The stop is retained even when the OAuth connection needs operator repair.
     """
 
     business = normalize_uuid(business_id, field_name="business_id")
@@ -58,12 +59,10 @@ def queue_stop_for_revoked_live_authorization(
     row = conn.execute(
         """
         SELECT a.status, a.row_version, a.consent_receipt_id,
-               j.external_ad_id, c.status AS connection_status
+               j.external_ad_id
         FROM ad_spend_authorizations AS a
         JOIN ad_publication_jobs AS j
           ON j.id=a.publication_job_id AND j.business_id=a.business_id
-        JOIN ad_connections AS c
-          ON c.id=j.connection_id AND c.business_id=a.business_id
         WHERE a.id=? AND a.business_id=?
         LIMIT 1
         """,
@@ -81,8 +80,6 @@ def queue_stop_for_revoked_live_authorization(
         )
     if not _value(row, "external_ad_id", 3):
         raise AdSpendInvariantViolation("provider advertisement identity is missing")
-    if str(_value(row, "connection_status", 4)) != "active":
-        raise AdSpendInvariantViolation("advertising connection is not active")
 
     row_version = int(_value(row, "row_version", 1) or 0)
     operation_id = str(uuid4())
