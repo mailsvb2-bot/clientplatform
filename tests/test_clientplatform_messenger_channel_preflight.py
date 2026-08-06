@@ -13,7 +13,6 @@ from services.messenger.setup import build_setup_status
 
 
 _FIELDS = {
-    "APP_ENV": "production",
     "TELEGRAM_BOT_USERNAME": "clientplatform_bot",
     "MESSENGER_WEBHOOK_ENABLED": False,
     "MESSENGER_PUBLIC_BASE_URL": "https://client.example.test",
