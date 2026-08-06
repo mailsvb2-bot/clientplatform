@@ -62,14 +62,21 @@ def _record_error(exc: BaseException) -> None:
     _HEALTH["last_tick_monotonic"] = time.monotonic()
 
 
+def _configuration_error() -> str:
+    try:
+        provider_report_date(now=datetime.now(timezone.utc))
+    except OSError as exc:
+        return type(exc).__name__
+    except RuntimeError as exc:
+        return type(exc).__name__
+    except ValueError as exc:
+        return type(exc).__name__
+    return ""
+
+
 def ad_publication_worker_health_snapshot() -> dict[str, Any]:
     configured = ad_connections_enabled() and yandex_direct_provider_configured()
-    configuration_error = ""
-    if configured:
-        try:
-            provider_report_date(now=datetime.now(timezone.utc))
-        except (OSError, RuntimeError, ValueError) as exc:
-            configuration_error = type(exc).__name__
+    configuration_error = _configuration_error() if configured else ""
     last_tick = float(_HEALTH.get("last_tick_monotonic") or 0.0)
     age = 0 if last_tick <= 0 else max(0, int(time.monotonic() - last_tick))
     return {
@@ -201,7 +208,19 @@ class AdPublicationWorker:
                     await asyncio.sleep(self.interval_seconds)
             except asyncio.CancelledError:
                 raise
-            except (OSError, RuntimeError, ValueError, TypeError) as exc:
+            except OSError as exc:
+                _record_error(exc)
+                log.exception("Advertising runtime worker iteration failed")
+                await asyncio.sleep(min(self.interval_seconds * 2.0, 30.0))
+            except RuntimeError as exc:
+                _record_error(exc)
+                log.exception("Advertising runtime worker iteration failed")
+                await asyncio.sleep(min(self.interval_seconds * 2.0, 30.0))
+            except TypeError as exc:
+                _record_error(exc)
+                log.exception("Advertising runtime worker iteration failed")
+                await asyncio.sleep(min(self.interval_seconds * 2.0, 30.0))
+            except ValueError as exc:
                 _record_error(exc)
                 log.exception("Advertising runtime worker iteration failed")
                 await asyncio.sleep(min(self.interval_seconds * 2.0, 30.0))
