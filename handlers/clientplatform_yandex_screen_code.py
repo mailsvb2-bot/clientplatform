@@ -4,6 +4,7 @@ import asyncio
 from urllib.parse import parse_qs, urlparse
 
 from aiogram import F
+from aiogram.exceptions import TelegramAPIError
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
@@ -81,7 +82,8 @@ async def connect_yandex_direct_screen_code(
         "2. Выберите рекламный аккаунт и разрешите доступ.\n"
         "3. Яндекс покажет семизначный код.\n"
         "4. Скопируйте код и отправьте его сюда одним сообщением.\n\n"
-        "Код действует 10 минут. Пароль и OAuth-токен ClientPlatform не просит.",
+        "Код действует 10 минут. Пароль и OAuth-токен ClientPlatform не просит. "
+        "Сообщение с кодом бот постарается удалить сразу после получения.",
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
                 [
@@ -107,6 +109,16 @@ async def _restart_message(message: Message, state: FSMContext, *, reason: str) 
         "Не удалось подтвердить доступ. "
         f"{reason} Начните подключение Яндекс Директа заново."
     )
+
+
+async def _erase_confirmation_code_message(message: Message) -> None:
+    delete = getattr(message, "delete", None)
+    if not callable(delete):
+        return
+    try:
+        await delete()
+    except (TelegramAPIError, OSError, RuntimeError):
+        return
 
 
 @simple.router.message(YandexScreenCodeState.waiting_code)
@@ -140,6 +152,7 @@ async def complete_yandex_direct_screen_code(
         )
         return
 
+    await _erase_confirmation_code_message(message)
     try:
         provider = screen_code_provider_from_environment()
         completion = await asyncio.to_thread(
