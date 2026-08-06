@@ -77,7 +77,7 @@ class AdOAuthSessionStore:
                     "provider",
                     provider.value,
                     json.dumps(
-                        {"reason": "owner_cancelled"},
+                        {"reason": "actor_cancelled"},
                         ensure_ascii=False,
                         sort_keys=True,
                     ),
