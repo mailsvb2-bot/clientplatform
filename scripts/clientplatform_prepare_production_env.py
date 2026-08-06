@@ -64,7 +64,12 @@ def _validate_timezone(values: dict[str, str]) -> None:
         ) from exc
 
 
-def _validate_ad_connections(values: dict[str, str]) -> None:
+def _validate_ad_connections(
+    values: dict[str, str],
+    *,
+    domain: str | None = None,
+) -> None:
+    del domain  # retained for backward-compatible callers and tests
     connections_enabled = _enabled(
         values,
         "CLIENTPLATFORM_AD_CONNECTIONS_ENABLED",
@@ -170,7 +175,7 @@ def prepare(path: Path) -> tuple[str, ...]:
         lines.append(f"{key}={value}")
         values[key] = value
 
-    _validate_ad_connections(values)
+    _validate_ad_connections(values, domain=domain)
 
     backup = resolved.with_name(resolved.name + ".before-current-main")
     if added:
