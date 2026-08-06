@@ -86,7 +86,7 @@ def configure_libpq_timeouts() -> None:
 
 
 CONFIG: Final[DbRuntimeConfig] = DbRuntimeConfig(
-    engine=_normalize_engine(DB_ENGINE or os.getenv("METRO_DB_ENGINE")),
+    engine=_normalize_engine(DB_ENGINE),
     db_path=Path(DB_PATH),
     database_url=(DATABASE_URL or "").strip(),
 )
@@ -124,5 +124,6 @@ def redacted_db_target() -> str:
 def postgres_driver_error_hint() -> str:
     return (
         "Postgres mode requires psycopg. Install dependencies from requirements.txt "
-        "and set DATABASE_URL, for example: postgresql://metro:secret@127.0.0.1:5432/metrotherapy"
+        "and set DATABASE_URL, for example: "
+        "postgresql://clientplatform:secret@127.0.0.1:5432/clientplatform"
     )
