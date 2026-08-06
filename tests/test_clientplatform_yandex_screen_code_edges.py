@@ -4,7 +4,7 @@ import json
 import os
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 from urllib.parse import parse_qs, urlparse
 
 from clientplatform.integrations.yandex_direct import (
@@ -190,14 +190,32 @@ class YandexScreenCodeTelegramEdgeTests(unittest.IsolatedAsyncioTestCase):
             patch.object(screen_code.control, "_user_id", return_value=202),
             patch.object(
                 screen_code,
+                "screen_code_provider_from_environment",
+            ) as provider_factory,
+            patch.object(
+                screen_code,
                 "complete_yandex_direct_oauth",
-                new=AsyncMock(),
+                new=Mock(),
             ) as complete,
         ):
             await screen_code.complete_yandex_direct_screen_code(incoming, state)
-        complete.assert_not_awaited()
-        self.assertFalse(state.cleared)
-        self.assertIn("семи цифр", incoming.answer.await_args.args[0])
+        provider_factory.assert_not_called()
+        complete.assert_not_called()
+        self.assertTrue(state.cleared)
+        self.assertIn("другому пользователю", incoming.answer.await_args.args[0])
+        self.assertIn("Начните подключение", incoming.answer.await_args.args[0])
+
+    async def test_missing_fsm_session_is_cleared_before_provider_call(self) -> None:
+        incoming = message("1234567")
+        state = FakeState({"business_token": "business-1"})
+        with patch.object(
+            screen_code,
+            "screen_code_provider_from_environment",
+        ) as provider_factory:
+            await screen_code.complete_yandex_direct_screen_code(incoming, state)
+        provider_factory.assert_not_called()
+        self.assertTrue(state.cleared)
+        self.assertIn("Сессия подключения потеряна", incoming.answer.await_args.args[0])
 
     async def test_invalid_authorization_url_is_sanitized(self) -> None:
         cb = callback("cpa:connect:business-1")
