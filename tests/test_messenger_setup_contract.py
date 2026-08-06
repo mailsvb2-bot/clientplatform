@@ -5,14 +5,17 @@ import importlib
 
 def _reload_setup(monkeypatch, **env):
     keys = {
+        "APP_ENV",
         "TELEGRAM_BOT_USERNAME",
         "MAX_BOT_LINK_BASE",
         "MAX_BOT_TOKEN",
         "MAX_BOT_NAME",
+        "MAX_WEBHOOK_ENABLED",
         "VK_GROUP_ID",
         "VK_GROUP_TOKEN",
         "VK_CONFIRMATION_TOKEN",
         "VK_SECRET",
+        "VK_WEBHOOK_ENABLED",
         "MESSENGER_PUBLIC_BASE_URL",
         "MESSENGER_WEBHOOK_ENABLED",
         "TELEGRAM_TRANSPORT",
