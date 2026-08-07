@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 import unittest
 from contextlib import contextmanager
@@ -39,6 +40,12 @@ class _Provisioner:
 
     async def rollback(self, request) -> None:
         self.rollback_calls += 1
+
+
+class _CancellingProvisioner(_Provisioner):
+    async def provision(self, request):
+        self.calls += 1
+        raise asyncio.CancelledError()
 
 
 class ClientPlatformExistingBotOnboardingTests(unittest.IsolatedAsyncioTestCase):
@@ -130,6 +137,34 @@ class ClientPlatformExistingBotOnboardingTests(unittest.IsolatedAsyncioTestCase)
             "SELECT ciphertext,status FROM managed_bot_credentials"
         ).fetchone()
         self.assertEqual(credential["status"], "revoked")
+        self.assertNotIn(raw_token, credential["ciphertext"])
+
+    async def test_cancelled_verification_rolls_back_and_revokes_secret(self) -> None:
+        raw_token = "900001:" + ("C" * 40)
+        provisioner = _CancellingProvisioner()
+        app_db, bot_db, bot_ro = self._patch_db()
+        with app_db, bot_db, bot_ro:
+            with self.assertRaises(asyncio.CancelledError):
+                await application.connect_existing_telegram_bot(
+                    actor=self.actor,
+                    token=raw_token,
+                    idempotency_key="existing-bot-test-cancelled",
+                    vault=self.vault,
+                    provisioner=provisioner,
+                )
+
+        self.assertEqual(provisioner.calls, 1)
+        self.assertEqual(provisioner.rollback_calls, 1)
+        request = self.conn.execute(
+            "SELECT status,last_error_code FROM managed_bot_provisioning_requests"
+        ).fetchone()
+        self.assertEqual(request["status"], "failed")
+        self.assertEqual(request["last_error_code"], "verification_cancelled")
+        credential = self.conn.execute(
+            "SELECT ciphertext,status FROM managed_bot_credentials"
+        ).fetchone()
+        self.assertEqual(credential["status"], "revoked")
+        self.assertEqual(credential["ciphertext"], "revoked")
         self.assertNotIn(raw_token, credential["ciphertext"])
 
     async def test_invalid_token_is_rejected_before_database_write(self) -> None:
