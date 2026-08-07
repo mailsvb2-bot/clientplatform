@@ -358,6 +358,10 @@ if not bool(getattr(control, "_dual_role_entry_composed", False)):
         ".clientplatform_simple_experience",
         __package__,
     )
+    booking_wizard_ux = importlib.import_module(
+        ".clientplatform_booking_wizard_ux",
+        __package__,
+    )
     cloud_media = importlib.import_module(
         ".clientplatform_cloud_media",
         __package__,
@@ -369,6 +373,10 @@ if not bool(getattr(control, "_dual_role_entry_composed", False)):
     router.include_router(admin.router)
     router.include_router(interaction_safety.router)
     router.include_router(onboarding_recovery.router)
+    # Booking wizard UX must precede the legacy/simple router because it owns
+    # the same booking_start FSM state and intentionally replaces only that
+    # prompt with one-click duration choices.
+    router.include_router(booking_wizard_ux.router)
     router.include_router(simple_experience.router)
     router.include_router(cloud_media.router)
     router.include_router(program_media.router)
@@ -379,6 +387,7 @@ if not bool(getattr(control, "_dual_role_entry_composed", False)):
     control._admin_router_composed = True
     control._interaction_safety_router_composed = True
     control._onboarding_recovery_router_composed = True
+    control._booking_wizard_ux_router_composed = True
     control._simple_experience_router_composed = True
     control._cloud_media_router_composed = True
     control._program_media_router_composed = True
