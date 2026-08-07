@@ -4,6 +4,7 @@ import importlib
 from types import SimpleNamespace
 from typing import Any, Callable
 from unittest.mock import AsyncMock
+from urllib.parse import parse_qs, urlsplit
 from uuid import uuid4
 
 import pytest
@@ -116,6 +117,24 @@ def test_welcome_and_simple_keyboard_are_result_first() -> None:
     assert button.text == "🚀 Запустить мой бизнес"
     assert button.callback_data == "cps:start"
 
+    business_id = str(uuid4())
+    first = simple._simple_keyboard(business_id).inline_keyboard[0][0]
+    assert first.text == "✨ Что настроить первым?"
+    assert str(first.callback_data).startswith("cps:firstgoal:")
+
+
+def test_telegram_share_url_round_trips_link_and_text() -> None:
+    link = "https://t.me/clientplatform_bot?start=cpj_invite-token"
+    text = "Подключитесь ко мне"
+    share = simple._telegram_share_url(link, text)
+    parsed = urlsplit(share)
+    assert parsed.scheme == "https"
+    assert parsed.netloc == "t.me"
+    assert parsed.path == "/share/url"
+    params = parse_qs(parsed.query)
+    assert params["url"] == [link]
+    assert params["text"] == [text]
+
 
 @pytest.mark.asyncio
 async def test_start_simple_onboarding_sets_only_first_plain_language_step() -> None:
@@ -156,6 +175,7 @@ async def test_simple_dashboard_explains_outcomes_and_counts(monkeypatch: pytest
     assert "Помогаю клиентам" in text
     assert "Услуг: 1 · свободных времён: 1 · записей клиентов: 0" in text
     assert "Материалов и программ: 2 · клиентов: 1" in text
+    assert "Что настроить первым?" in text
     first_button = kwargs["reply_markup"].inline_keyboard[0][0]
     assert first_button.text == "✨ Что настроить первым?"
     assert str(first_button.callback_data).startswith("cps:firstgoal:")
@@ -174,7 +194,9 @@ async def test_next_action_creates_program_first(monkeypatch: pytest.MonkeyPatch
 
 
 @pytest.mark.asyncio
-async def test_next_action_invites_first_customer(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_next_action_invites_first_customer_with_one_tap_share(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     business_id = str(uuid4())
     monkeypatch.setattr(
         simple,
@@ -188,8 +210,16 @@ async def test_next_action_invites_first_customer(monkeypatch: pytest.MonkeyPatc
     )
     callback = FakeCallback(f"cps:next:{control._uuid_token(business_id)}")
     await simple.next_best_action(callback, FakeState())
-    assert "invite-token" in callback.message.answers[-1][0]
-    assert "подключить клиента" in callback.message.answers[-1][0]
+
+    text, kwargs = callback.message.answers[-1]
+    direct_link = "https://t.me/clientplatform_bot?start=cpj_invite-token"
+    assert direct_link in text
+    assert "Отправить клиенту" in text
+    button = kwargs["reply_markup"].inline_keyboard[0][0]
+    assert button.text == "📨 Отправить клиенту"
+    params = parse_qs(urlsplit(button.url).query)
+    assert params["url"] == [direct_link]
+    assert "ClientPlatform" in params["text"][0]
 
 
 @pytest.mark.asyncio
@@ -227,6 +257,25 @@ async def test_next_action_builds_offer_then_slot_then_ready(monkeypatch: pytest
     third = FakeCallback(f"cps:next:{control._uuid_token(business_id)}")
     await simple.next_best_action(third, FakeState())
     assert "Основной путь уже настроен" in third.message.answers[-1][0]
+
+
+@pytest.mark.asyncio
+async def test_simple_booking_fallback_returns_to_result_first_menu(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    business_id = str(uuid4())
+    token = control._uuid_token(business_id)
+    callback = FakeCallback(f"cps:booking:{token}")
+    monkeypatch.setattr(control, "_actor", AsyncMock(return_value=object()))
+    monkeypatch.setattr(control, "list_business_capabilities", lambda **_kwargs: [])
+
+    await simple.open_simple_booking(callback, FakeState())
+
+    text, kwargs = callback.message.answers[-1]
+    assert "Что настроить первым?" in text
+    button = kwargs["reply_markup"].inline_keyboard[0][0]
+    assert button.text == "✨ Что настроить первым?"
+    assert button.callback_data == f"cps:firstgoal:{token}"
 
 
 @pytest.mark.asyncio
