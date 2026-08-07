@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from clientplatform.application.bot_provisioning import finalize_botfather_provisioning
 from clientplatform.domain.bot_provisioning import (
@@ -27,6 +27,9 @@ from clientplatform.runtime.bot_provisioning import (
 )
 from clientplatform.runtime.secrets import EnvironmentCredentialProvider
 from services.db import get_db, get_db_ro
+
+
+_EVENT_CLOCK_SKEW = timedelta(seconds=60)
 
 
 def _aware(value: datetime) -> datetime:
@@ -116,12 +119,13 @@ async def complete_telegram_managed_bot_onboarding(
         pending = ManagedBotOnboardingRepository(conn).pending_for_user(
             user_id=user_id
         )
-        if event_at is not None and _aware(event_at).astimezone(timezone.utc) < _created_at(
-            pending.request.created_at
-        ):
-            raise BotProvisioningInvariantViolation(
-                "managed bot creation event predates the active request"
-            )
+        if event_at is not None:
+            observed_at = _aware(event_at).astimezone(timezone.utc)
+            request_created_at = _created_at(pending.request.created_at)
+            if observed_at + _EVENT_CLOCK_SKEW < request_created_at:
+                raise BotProvisioningInvariantViolation(
+                    "managed bot creation event predates the active request"
+                )
         credential_reference = ManagedBotCredentialStore(
             conn,
             vault=selected_vault,
@@ -135,7 +139,8 @@ async def complete_telegram_managed_bot_onboarding(
             request_id=pending.request.id,
             credential_reference=credential_reference,
             # The historical column is retained by the polling schema. It points
-            # to the same encrypted token reference and is never used as a webhook secret.
+            # to the same encrypted token reference and is not used as a webhook
+            # secret by the polling-only runtime.
             webhook_secret_reference=credential_reference,
         )
 
