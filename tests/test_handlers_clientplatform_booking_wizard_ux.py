@@ -78,6 +78,34 @@ async def test_booking_start_offers_common_durations_and_escape_routes() -> None
 
 
 @pytest.mark.asyncio
+async def test_booking_start_without_business_fails_closed() -> None:
+    message = FakeMessage("10.08.2026 15:00")
+    state = FakeState({"offering_id": str(uuid4())})
+
+    await wizard.receive_booking_start_with_quick_duration(message, state)
+
+    assert state.cleared == 1
+    assert "Откройте кабинет через /start" in message.answers[-1][0]
+
+
+@pytest.mark.asyncio
+async def test_replacement_booking_start_uses_replacement_copy() -> None:
+    business_id = str(uuid4())
+    message = FakeMessage("10.08.2026 16:00")
+    state = FakeState(
+        {
+            "business_id": business_id,
+            "offering_id": str(uuid4()),
+            "replacing_slot_id": str(uuid4()),
+        }
+    )
+
+    await wizard.receive_booking_start_with_quick_duration(message, state)
+
+    assert message.answers[-1][0].startswith("Новое время принято.")
+
+
+@pytest.mark.asyncio
 async def test_quick_duration_reuses_canonical_booking_completion() -> None:
     business_id = str(uuid4())
     token = wizard.control._uuid_token(business_id)
@@ -105,6 +133,21 @@ async def test_quick_duration_reuses_canonical_booking_completion() -> None:
     assert forwarded_state is state
     assert message.edits == 1
     assert callback.answers[-1][0] == "60 минут"
+
+
+@pytest.mark.asyncio
+async def test_quick_duration_rejects_unknown_preset() -> None:
+    business_id = str(uuid4())
+    token = wizard.control._uuid_token(business_id)
+    callback = FakeCallback(f"cpj:wizdur:{token}:75")
+    state = FakeState({"business_id": business_id})
+    actor = AsyncMock()
+
+    with patch.object(wizard.control, "_actor", new=actor):
+        await wizard.choose_quick_duration(callback, state)
+
+    actor.assert_not_awaited()
+    assert callback.answers[-1] == ("Выберите длительность заново", True)
 
 
 @pytest.mark.asyncio
@@ -178,6 +221,35 @@ async def test_visible_cancel_clears_wizard_and_returns_owner_home() -> None:
     assert state.cleared == 1
     dashboard.assert_awaited_once_with(message, user_id=101, business_id=business_id)
     assert callback.answers[-1][0] == "Настройка отменена"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("handler", "callback_data"),
+    [
+        (wizard.choose_quick_duration, "cpj:wizdur:{token}:60"),
+        (wizard.choose_custom_duration, "cpj:wizcustom:{token}"),
+        (wizard.return_to_booking_start, "cpj:wizback:{token}"),
+        (wizard.cancel_booking_wizard, "cpj:wizcancel:{token}"),
+    ],
+)
+async def test_stale_business_callback_fails_closed(handler, callback_data: str) -> None:
+    selected_business = str(uuid4())
+    other_business = str(uuid4())
+    token = wizard.control._uuid_token(selected_business)
+    callback = FakeCallback(callback_data.format(token=token))
+    state = FakeState({"business_id": other_business, "offering_id": str(uuid4())})
+    actor = AsyncMock()
+
+    with patch.object(wizard.control, "_actor", new=actor):
+        await handler(callback, state)
+
+    actor.assert_not_awaited()
+    assert state.cleared == 0
+    assert callback.answers[-1] == (
+        "Этот шаг уже устарел. Откройте кабинет заново.",
+        True,
+    )
 
 
 def test_booking_wizard_router_precedes_legacy_simple_router() -> None:
