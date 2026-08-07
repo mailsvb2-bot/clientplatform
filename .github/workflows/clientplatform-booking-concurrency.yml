@@ -53,6 +53,9 @@ jobs:
           python -m pip install --require-hashes -r requirements-dev.txt
 
       - name: SQLite fallback, DST and dual-role regression wall
+        env:
+          CLIENTPLATFORM_DB_ENGINE: sqlite
+          DATABASE_URL: ''
         run: |
           set -o pipefail
           python -m pytest -q \
