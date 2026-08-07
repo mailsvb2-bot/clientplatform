@@ -162,8 +162,8 @@ async def return_to_booking_start(callback: CallbackQuery, state: FSMContext) ->
     await _remove_keyboard(message)
     await callback.answer()
     await message.answer(
-        "Напишите дату и время заново: ДД.ММ.ГГГГ ЧЧ:ММ.\n"
-        "Например: 15.08.2026 18:30.",
+        "Напишите дату и время заново. Можно коротко: 15.08 18:30.\n"
+        "Если нужен другой год: 15.08.27 18:30 или 15.08.2027 18:30.",
         reply_markup=control._keyboard(
             [[("✖️ Отмена", f"cpj:wizcancel:{_business_token(business_id)}")]]
         ),

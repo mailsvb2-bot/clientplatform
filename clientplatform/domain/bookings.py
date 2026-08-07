@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import StrEnum
@@ -79,13 +80,16 @@ def _parse_local_wall_clock(
         except ValueError:
             pass
 
-    try:
-        month_day = datetime.strptime(raw, "%d.%m %H:%M")
-    except ValueError as exc:
+    match = re.fullmatch(
+        r"(?P<day>\d{1,2})\.(?P<month>\d{1,2}) "
+        r"(?P<hour>\d{1,2}):(?P<minute>\d{2})",
+        raw,
+    )
+    if match is None:
         raise ValueError(
             "дата и время должны выглядеть как 10.08 15:00, "
             "10.08.26 15:00 или 10.08.2026 15:00"
-        ) from exc
+        )
 
     if now_utc is None:
         reference_utc = datetime.now(timezone.utc)
@@ -93,10 +97,30 @@ def _parse_local_wall_clock(
         normalized_now = normalize_utc_datetime(now_utc, field_name="now")
         reference_utc = datetime.fromisoformat(normalized_now)
     reference_local = reference_utc.astimezone(zone)
-    candidate = month_day.replace(year=reference_local.year)
-    if candidate <= reference_local.replace(tzinfo=None):
-        candidate = candidate.replace(year=reference_local.year + 1)
-    return candidate
+    reference_wall_clock = reference_local.replace(tzinfo=None)
+
+    parts = {name: int(value) for name, value in match.groupdict().items()}
+    # Eight years is sufficient to cross the largest Gregorian leap-year gap
+    # around a non-leap century (for example 2096 -> 2104). We include one
+    # extra year so any valid recurring month/day has a future occurrence.
+    for year in range(reference_local.year, reference_local.year + 9):
+        try:
+            candidate = datetime(
+                year,
+                parts["month"],
+                parts["day"],
+                parts["hour"],
+                parts["minute"],
+            )
+        except ValueError:
+            continue
+        if candidate > reference_wall_clock:
+            return candidate
+
+    raise ValueError(
+        "такой даты и времени не существует; используйте формат 10.08 15:00, "
+        "10.08.26 15:00 или 10.08.2026 15:00"
+    )
 
 
 def parse_local_booking_start(

@@ -176,7 +176,8 @@ async def setup_first_booking(callback: CallbackQuery, state: FSMContext) -> Non
         )
         await message.answer(
             f"Услуга «{offering.title}» уже есть. Теперь откроем первое время.\n\n"
-            "Напишите дату и время, например: 10.08.2026 15:00.",
+            "Напишите дату и время. Можно коротко: 10.08 15:00. "
+            "Если нужен другой год: 10.08.27 15:00.",
             reply_markup=_cancel_setup_keyboard(business_token),
         )
         return
