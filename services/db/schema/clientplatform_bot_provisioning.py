@@ -4,7 +4,7 @@ import sqlite3
 
 
 def ensure(c: sqlite3.Connection) -> None:
-    """Create the durable BotFather provisioning state machine."""
+    """Create the durable Telegram bot provisioning state machine."""
     c.execute(
         """
         CREATE TABLE IF NOT EXISTS managed_bot_provisioning_requests(
@@ -40,7 +40,7 @@ def ensure(c: sqlite3.Connection) -> None:
                 REFERENCES connections(id, business_id),
             FOREIGN KEY(managed_bot_id, business_id)
                 REFERENCES managed_bots(id, business_id),
-            CHECK(provider IN ('botfather')),
+            CHECK(provider IN ('telegram_managed', 'botfather')),
             CHECK(status IN (
                 'awaiting_secret', 'ready', 'verifying',
                 'completed', 'failed', 'cancelled'
