@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -20,6 +21,7 @@ _REQUEST_ID = "00000000-0000-0000-0000-000000000103"
 _CONNECTION_ID = "00000000-0000-0000-0000-000000000104"
 _MANAGED_BOT_ID = "00000000-0000-0000-0000-000000000105"
 _AUTO_ENV = {"CLIENTPLATFORM_MANAGED_BOT_AUTO_PROVISIONING_ENABLED": "1"}
+_EVENT_AT = datetime(2026, 8, 7, 12, 5, tzinfo=timezone.utc)
 
 
 def _request(status: BotProvisioningStatus) -> ManagedBotProvisioningRequest:
@@ -74,6 +76,7 @@ class _Message:
         self.from_user = SimpleNamespace(id=101)
         self.managed_bot_created = None
         self.bot = None
+        self.date = _EVENT_AT
 
     async def answer(self, text: str, reply_markup=None) -> None:
         self.answers.append((text, reply_markup))
@@ -198,6 +201,7 @@ class ClientPlatformManagedBotOnboardingUiTests(unittest.IsolatedAsyncioTestCase
 
         manager_bot.get_managed_bot_token.assert_awaited_once_with(user_id=900001)
         self.assertEqual(complete.await_args.kwargs["token"], raw_token)
+        self.assertEqual(complete.await_args.kwargs["event_at"], _EVENT_AT)
         self.assertEqual(state.cleared, 1)
         rendered = " ".join(text for text, _ in message.answers)
         self.assertNotIn(raw_token, rendered)
