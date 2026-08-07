@@ -43,14 +43,24 @@ def _replace_next_action(markup: InlineKeyboardMarkup) -> InlineKeyboardMarkup:
 
 
 def install_first_result(owner_module: ModuleType) -> None:
+    """Install or repair the result-first owner dashboard wrapper.
+
+    Test tooling and hot-reload environments may reload the owner module while
+    the package-level composition marker survives. Checking the actual callable
+    keeps composition idempotent in production and self-healing after a reload.
+    """
+
     global _ORIGINAL_OWNER_KEYBOARD
-    if bool(getattr(owner_module, "_first_result_installed", False)):
+    current = owner_module._owner_keyboard
+    if bool(getattr(current, "_clientplatform_first_result_wrapper", False)):
+        owner_module._first_result_installed = True
         return
-    _ORIGINAL_OWNER_KEYBOARD = owner_module._owner_keyboard
+    _ORIGINAL_OWNER_KEYBOARD = current
 
     def owner_keyboard(business_id: str) -> InlineKeyboardMarkup:
-        return _replace_next_action(_ORIGINAL_OWNER_KEYBOARD(business_id))
+        return _replace_next_action(current(business_id))
 
+    owner_keyboard._clientplatform_first_result_wrapper = True  # type: ignore[attr-defined]
     owner_module._owner_keyboard = owner_keyboard
     owner_module._first_result_installed = True
 
