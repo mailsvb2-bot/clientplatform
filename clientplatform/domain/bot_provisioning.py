@@ -25,6 +25,7 @@ class BotProvisioningVerificationFailed(BotProvisioningError):
 
 
 class BotProvisioningProvider(StrEnum):
+    TELEGRAM_MANAGED = "telegram_managed"
     BOTFATHER = "botfather"
 
 
