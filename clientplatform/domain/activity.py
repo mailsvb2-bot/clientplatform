@@ -6,6 +6,7 @@ import secrets
 from dataclasses import dataclass
 from enum import StrEnum
 from types import MappingProxyType
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from clientplatform.domain.tenancy import normalize_uuid
 
@@ -111,9 +112,28 @@ def normalize_activity_description(value: str) -> str:
 
 
 def normalize_timezone(value: str) -> str:
+    """Normalize the stored timezone identifier without revalidating legacy data."""
+
     normalized = _normalize_text(value, field_name="timezone", maximum=100)
     if not re.fullmatch(r"[A-Za-z0-9._+\-/]+", normalized):
         raise ValueError("timezone contains unsupported characters")
+    return normalized
+
+
+def normalize_known_timezone(value: str) -> str:
+    """Require a timezone that the booking runtime can actually resolve.
+
+    Stored legacy profiles continue to use ``normalize_timezone`` when they are
+    read, so one historical bad value cannot make the profile impossible to
+    inspect or repair. New writes fail immediately instead of saving a value
+    that would only break later when a booking is converted to local time.
+    """
+
+    normalized = normalize_timezone(value)
+    try:
+        ZoneInfo(normalized)
+    except ZoneInfoNotFoundError as exc:
+        raise ValueError("timezone must be a known IANA timezone") from exc
     return normalized
 
 

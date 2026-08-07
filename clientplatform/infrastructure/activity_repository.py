@@ -22,9 +22,9 @@ from clientplatform.domain.activity import (
     new_invite_token,
     normalize_activity_description,
     normalize_capability_title,
+    normalize_known_timezone,
     normalize_offering_description,
     normalize_offering_title,
-    normalize_timezone,
     resolve_activity_connector,
 )
 from clientplatform.domain.customers import CustomerNotFound, CustomerPlatform
@@ -121,7 +121,7 @@ class ActivityRepository:
         current = self._current_actor(actor)
         current.assert_can_manage_business()
         description = normalize_activity_description(activity_description)
-        timezone_value = normalize_timezone(timezone_name)
+        timezone_value = normalize_known_timezone(timezone_name)
         timestamp = str(now or _utc_now())
         existing = self._conn.execute(
             "SELECT business_id FROM business_profiles WHERE business_id=?",
