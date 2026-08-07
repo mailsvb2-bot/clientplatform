@@ -146,10 +146,13 @@ class BotFatherTelegramProvisioner:
             await bot.session.close()
 
     async def rollback(self, request: ManagedBotProvisioningRequest) -> None:
-        """Keep webhook disabled when a database commit fails.
+        """Restore the safe polling boundary after a failed local commit.
 
-        Polling itself has no remote registration to roll back. Deleting any
-        stale webhook is idempotent and preserves the polling-only invariant.
+        Polling has no remote registration to undo. For newly managed polling
+        bots, deleting a stale webhook is idempotent. Existing-bot import is
+        stricter: if takeover protection is enabled, rollback must first prove
+        that no active webhook belongs to another service. If Telegram cannot
+        provide that proof, fail safe and leave the remote webhook untouched.
         """
 
         if request.credential_reference is None:
@@ -164,10 +167,18 @@ class BotFatherTelegramProvisioner:
             return
         bot = Bot(token=token)
         try:
+            if self._reject_active_webhook:
+                webhook = await bot.get_webhook_info()
+                if str(getattr(webhook, "url", "") or "").strip():
+                    log.info(
+                        "Existing bot rollback preserved an active webhook",
+                        extra={"provisioning_request_id": request.id},
+                    )
+                    return
             await bot.delete_webhook(drop_pending_updates=False)
         except TelegramAPIError:
             log.exception(
-                "Managed bot polling rollback could not confirm webhook removal",
+                "Managed bot polling rollback could not confirm a safe webhook state",
                 extra={"provisioning_request_id": request.id},
             )
         finally:

@@ -137,6 +137,25 @@ class ClientPlatformBotProvisioningRuntimeTests(unittest.IsolatedAsyncioTestCase
         self.assertEqual(bot.delete_calls, [False])
         self.assertEqual(bot.session.closed, 1)
 
+    async def test_existing_bot_rollback_preserves_foreign_active_webhook(self) -> None:
+        _FakeBot.webhook_url = "https://other-service.example/webhook"
+        with patch("clientplatform.runtime.bot_provisioning.Bot", _FakeBot):
+            await self._provisioner(reject_active_webhook=True).rollback(
+                self.request
+            )
+        bot = _FakeBot.instances[-1]
+        self.assertEqual(bot.delete_calls, [])
+        self.assertEqual(bot.session.closed, 1)
+
+    async def test_existing_bot_rollback_removes_webhook_only_after_empty_check(self) -> None:
+        with patch("clientplatform.runtime.bot_provisioning.Bot", _FakeBot):
+            await self._provisioner(reject_active_webhook=True).rollback(
+                self.request
+            )
+        bot = _FakeBot.instances[-1]
+        self.assertEqual(bot.delete_calls, [False])
+        self.assertEqual(bot.session.closed, 1)
+
     async def test_missing_secret_reference_fails_without_creating_bot(self) -> None:
         provisioner = BotFatherTelegramProvisioner(
             credential_provider=EnvironmentCredentialProvider({}),
