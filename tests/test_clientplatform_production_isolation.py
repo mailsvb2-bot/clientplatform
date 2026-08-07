@@ -27,7 +27,7 @@ class ClientPlatformProductionIsolationTests(unittest.TestCase):
             "CLIENTPLATFORM_PRODUCTION_BOT_USERNAME": "clientplatform_bot",
             "BOT_TOKEN": "ci-bot-token-material-without-provider-shape",
             "ADMIN_IDS": "100001",
-            "METRO_DB_ENGINE": "postgres",
+            "CLIENTPLATFORM_DB_ENGINE": "postgres",
             "CLIENTPLATFORM_DATABASE_NAME": "clientplatform_ci",
             "DATABASE_URL": (
                 "postgresql://clientplatform_app:password@127.0.0.1:5433/"
@@ -36,8 +36,8 @@ class ClientPlatformProductionIsolationTests(unittest.TestCase):
             "ALLOW_SQLITE_IN_PROD": "0",
             "METRO_RUNTIME_ROOT": "/var/lib/clientplatform/runtime",
             "METRO_WRITABLE_ROOT": "/var/lib/clientplatform/state",
-            "METRO_DATA_DIR": "/var/lib/clientplatform/state/data",
-            "METRO_LOGS_DIR": "/var/log/clientplatform",
+            "CLIENTPLATFORM_DATA_DIR": "/var/lib/clientplatform/state/data",
+            "CLIENTPLATFORM_LOGS_DIR": "/var/log/clientplatform",
             "MPLCONFIGDIR": "/var/lib/clientplatform/state/matplotlib",
             "PREWARM_MARKER_PATH": "/var/lib/clientplatform/state/prewarm/audio.done",
             "TELEGRAM_TRANSPORT": "polling",
@@ -99,6 +99,24 @@ class ClientPlatformProductionIsolationTests(unittest.TestCase):
     def test_valid_dedicated_systemd_environment_passes(self) -> None:
         self.assertEqual(validate_environment(self._valid_env()), [])
 
+    def test_clientplatform_namespace_wins_over_conflicting_legacy_values(self) -> None:
+        env = self._valid_env()
+        env.update(
+            {
+                "METRO_DB_ENGINE": "sqlite",
+                "METRO_DATA_DIR": "/app/legacy-data",
+                "METRO_LOGS_DIR": "/tmp/legacy-logs",
+            }
+        )
+        self.assertEqual(validate_environment(env), [])
+
+    def test_legacy_database_and_path_names_remain_fallbacks(self) -> None:
+        env = self._valid_env()
+        env["METRO_DB_ENGINE"] = env.pop("CLIENTPLATFORM_DB_ENGINE")
+        env["METRO_DATA_DIR"] = env.pop("CLIENTPLATFORM_DATA_DIR")
+        env["METRO_LOGS_DIR"] = env.pop("CLIENTPLATFORM_LOGS_DIR")
+        self.assertEqual(validate_environment(env), [])
+
     def test_shared_or_insecure_boundaries_fail_closed(self) -> None:
         cases = {
             "telegram_webhook": {
@@ -124,7 +142,7 @@ class ClientPlatformProductionIsolationTests(unittest.TestCase):
             "shared_runtime": {
                 "METRO_WRITABLE_ROOT": "/var/lib/metrotherapy/state"
             },
-            "project_data": {"METRO_DATA_DIR": "/app/data"},
+            "project_data": {"CLIENTPLATFORM_DATA_DIR": "/app/data"},
             "unexpected_webhook_secret": {
                 "TELEGRAM_WEBHOOK_SECRET_TOKEN": "short"
             },
@@ -201,6 +219,13 @@ class ClientPlatformProductionIsolationTests(unittest.TestCase):
         self.assertIn(
             "METRO_WRITABLE_ROOT=/var/lib/clientplatform/state", env_example
         )
+        self.assertIn(
+            "CLIENTPLATFORM_DATA_DIR=/var/lib/clientplatform/state/data", env_example
+        )
+        self.assertIn(
+            "CLIENTPLATFORM_LOGS_DIR=/var/log/clientplatform", env_example
+        )
+        self.assertIn("CLIENTPLATFORM_DB_ENGINE=postgres", env_example)
         self.assertIn("TELEGRAM_TRANSPORT=polling", env_example)
         self.assertIn("TELEGRAM_WEBHOOK_ENABLED=0", env_example)
         self.assertIn("MESSENGER_WEBHOOK_ENABLED=1", env_example)
