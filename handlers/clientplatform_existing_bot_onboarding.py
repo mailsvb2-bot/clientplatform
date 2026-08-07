@@ -121,11 +121,12 @@ def install_existing_bot_onboarding(bot_setup_module: ModuleType) -> None:
     bot_setup_module._existing_bot_onboarding_installed = True
 
 
-async def _delete_token_message(message: Message) -> None:
+async def _delete_token_message(message: Message) -> bool:
     try:
         await message.delete()
     except TelegramAPIError:
-        return
+        return False
+    return True
 
 
 @router.callback_query(F.data.startswith("cpe:n:"))
@@ -157,7 +158,13 @@ async def receive_existing_bot_token(
     state: FSMContext,
 ) -> None:
     token = str(message.text or "").strip()
-    await _delete_token_message(message)
+    if not await _delete_token_message(message):
+        await message.answer(
+            "Не удалось безопасно удалить сообщение с токеном, поэтому я не стал "
+            "использовать или сохранять его. Удалите это сообщение, обновите токен "
+            "в @BotFather и пришлите новый токен ещё раз."
+        )
+        return
     data = await state.get_data()
     business_id = str(data.get("business_id") or "")
     idempotency_key = str(data.get("idempotency_key") or "")
