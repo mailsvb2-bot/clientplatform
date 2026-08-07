@@ -78,7 +78,8 @@ async def connect_existing_telegram_bot(
     is sealed immediately and only the opaque vault reference is persisted.
     Telegram verification then reopens it through the normal credential
     provider, so the existing durable provisioning state machine remains the
-    single source of truth.
+    single source of truth. Existing third-party webhook ownership is never
+    removed silently by the default user-facing flow.
     """
 
     raw_token = str(token or "").strip()
@@ -112,7 +113,8 @@ async def connect_existing_telegram_bot(
     delegate = provisioner or BotFatherTelegramProvisioner(
         credential_provider=EnvironmentCredentialProvider(
             managed_bot_vault=selected_vault,
-        )
+        ),
+        reject_active_webhook=True,
     )
     selected_provisioner = _ExpectedExistingBotProvisioner(
         delegate,
