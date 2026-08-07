@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import importlib
+import os
 from types import ModuleType
 from uuid import uuid4
 
@@ -43,6 +44,12 @@ _ORIGINAL_STATUS_TEXT = None
 _ORIGINAL_STATUS_KEYBOARD = None
 
 
+def _auto_onboarding_enabled() -> bool:
+    return (
+        os.getenv("CLIENTPLATFORM_MANAGED_BOT_AUTO_PROVISIONING_ENABLED") or ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _business_token(business_id: str) -> str:
     return control._uuid_token(business_id)
 
@@ -61,6 +68,12 @@ def _telegram_request_id(request_id: str) -> int:
 
 def _managed_status_text(request: ManagedBotProvisioningRequest | None) -> str:
     if request is None:
+        if not _auto_onboarding_enabled():
+            return (
+                "Мой Telegram-бот\n\n"
+                "Автоматическое создание персонального бота сейчас подготавливается. "
+                "Если у Вас уже есть отдельный бот, его можно подключить резервным способом."
+            )
         return (
             "Мой Telegram-бот\n\n"
             "Создайте персонального бота прямо внутри Telegram. ClientPlatform сам "
@@ -113,22 +126,18 @@ def _managed_status_keyboard(
 
     rows: list[list[tuple[str, str]]] = []
     if request is None or request.status == BotProvisioningStatus.CANCELLED:
-        rows.extend(
-            [
-                [("✨ Создать моего бота", f"cpm:n:{business_token}")],
-                [("Подключить существующего бота", f"cpb:n:{business_token}")],
-            ]
-        )
+        if _auto_onboarding_enabled():
+            rows.append([("✨ Создать моего бота", f"cpm:n:{business_token}")])
+        rows.append([("Подключить существующего бота", f"cpb:n:{business_token}")])
     elif request.status == BotProvisioningStatus.AWAITING_SECRET:
-        rows.extend(
+        if _auto_onboarding_enabled():
+            rows.append([("✨ Создать в Telegram", f"cpm:n:{business_token}")])
+        rows.append(
             [
-                [("✨ Создать в Telegram", f"cpm:n:{business_token}")],
-                [
-                    (
-                        "Отменить",
-                        f"cpb:c:{business_token}:{_request_token(request.id)}",
-                    )
-                ],
+                (
+                    "Отменить",
+                    f"cpb:c:{business_token}:{_request_token(request.id)}",
+                )
             ]
         )
     elif request.status in {BotProvisioningStatus.READY, BotProvisioningStatus.FAILED}:
@@ -183,6 +192,12 @@ async def request_managed_bot_creation(
     callback: CallbackQuery,
     state: FSMContext,
 ) -> None:
+    if not _auto_onboarding_enabled():
+        await callback.answer(
+            "Автоматическое создание бота пока подготавливается",
+            show_alert=True,
+        )
+        return
     business_token = str(callback.data).split(":", 2)[2]
     business_id = control._token_uuid(business_token)
     user_id = int(callback.from_user.id)
