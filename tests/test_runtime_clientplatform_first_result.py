@@ -4,6 +4,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+import handlers
 from handlers import clientplatform_first_result as first
 from handlers import clientplatform_owner_journey as owner
 
@@ -40,7 +41,8 @@ class _Callback:
 
 
 class ClientPlatformFirstResultUiTests(unittest.IsolatedAsyncioTestCase):
-    def test_owner_dashboard_asks_for_result_not_internal_sequence(self) -> None:
+    def test_composed_owner_dashboard_asks_for_result_not_internal_sequence(self) -> None:
+        handlers._load_clientplatform_modules()
         markup = owner._owner_keyboard(_BUSINESS_ID)
         buttons = [button for row in markup.inline_keyboard for button in row]
         first_button = buttons[0]
