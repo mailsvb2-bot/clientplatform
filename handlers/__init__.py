@@ -80,6 +80,16 @@ def _load_clientplatform_modules() -> tuple[ModuleType, ModuleType]:
     globals()["clientplatform_owner_journey"] = owner_journey
     owner_journey.install_owner_journey(entry, control, simple_experience)
 
+    first_result = importlib.import_module(
+        ".clientplatform_first_result",
+        __name__,
+    )
+    globals()["clientplatform_first_result"] = first_result
+    first_result.install_first_result(owner_journey)
+    if not bool(getattr(simple_experience, "_first_result_composed", False)):
+        simple_experience.router.include_router(first_result.router)
+        simple_experience._first_result_composed = True
+
     public_storefront = importlib.import_module(
         ".clientplatform_public_storefront",
         __name__,
@@ -153,6 +163,9 @@ def __getattr__(name: str) -> ModuleType:
     if name == "clientplatform_owner_journey":
         _load_clientplatform_modules()
         return globals()["clientplatform_owner_journey"]
+    if name == "clientplatform_first_result":
+        _load_clientplatform_modules()
+        return globals()["clientplatform_first_result"]
     if name == "clientplatform_public_storefront":
         _load_clientplatform_modules()
         return globals()["clientplatform_public_storefront"]
@@ -186,6 +199,7 @@ __all__ = [
     "clientplatform_bot_setup",
     "clientplatform_control",
     "clientplatform_existing_bot_onboarding",
+    "clientplatform_first_result",
     "clientplatform_managed_bot_onboarding",
     "clientplatform_owner_journey",
     "clientplatform_promotion",
