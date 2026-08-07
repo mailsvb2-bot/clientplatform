@@ -11,12 +11,14 @@ class ClientPlatformManagedBotSecuritySurfaceTests(unittest.TestCase):
     def test_sensitive_managed_bot_files_are_scanned(self) -> None:
         source = (ROOT / "scripts/critical_static_gate.py").read_text(encoding="utf-8")
         required = (
+            "clientplatform/application/existing_bot_onboarding.py",
             "clientplatform/application/managed_bot_onboarding.py",
             "clientplatform/application/managed_bot_owner.py",
             "clientplatform/infrastructure/managed_bot_credentials.py",
             "clientplatform/infrastructure/managed_bot_onboarding_repository.py",
             "clientplatform/runtime/bot_provisioning.py",
             "clientplatform/runtime/secrets.py",
+            "handlers/clientplatform_existing_bot_onboarding.py",
             "handlers/clientplatform_managed_bot_onboarding.py",
             "scripts/clientplatform_bot_gateway_preflight.py",
             "services/migrations/clientplatform_managed_bot_provider_v1.py",
@@ -51,13 +53,29 @@ class ClientPlatformManagedBotSecuritySurfaceTests(unittest.TestCase):
             compose,
         )
 
+    def test_production_systemd_mounts_the_same_identity_path_read_only(self) -> None:
+        service = (ROOT / "deploy/clientplatform/clientplatform.service").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            "BindReadOnlyPaths=-/var/lib/clientplatform/managed-bot-secrets:/run/secrets/clientplatform-managed-bot",
+            service,
+        )
+
     def test_managed_bot_ui_never_contains_secret_store_in_primary_copy(self) -> None:
-        source = (
+        managed_source = (
             ROOT / "handlers/clientplatform_managed_bot_onboarding.py"
         ).read_text(encoding="utf-8")
-        self.assertNotIn("CLIENTPLATFORM_SECRET_", source)
-        self.assertNotIn("secret-store", source.lower())
-        self.assertIn("Никаких токенов копировать не потребуется", source)
+        existing_source = (
+            ROOT / "handlers/clientplatform_existing_bot_onboarding.py"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("CLIENTPLATFORM_SECRET_", managed_source)
+        self.assertNotIn("secret-store", managed_source.lower())
+        self.assertIn("Никаких токенов копировать не потребуется", managed_source)
+        self.assertNotIn("CLIENTPLATFORM_SECRET_", existing_source)
+        self.assertNotIn("secret-store", existing_source.lower())
+        self.assertNotIn("credential_reference", existing_source)
+        self.assertNotIn("polling", existing_source.lower())
 
 
 if __name__ == "__main__":
