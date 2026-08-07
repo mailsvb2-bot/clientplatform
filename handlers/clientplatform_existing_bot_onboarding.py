@@ -18,6 +18,7 @@ from clientplatform.domain.bot_provisioning import (
     BotProvisioningError,
     BotProvisioningProvider,
     BotProvisioningStatus,
+    BotProvisioningWebhookConflict,
     ManagedBotProvisioningRequest,
 )
 from clientplatform.infrastructure.managed_bot_credentials import (
@@ -175,6 +176,14 @@ async def receive_existing_bot_token(
             token=token,
             idempotency_key=idempotency_key,
         )
+    except BotProvisioningWebhookConflict:
+        await message.answer(
+            "Этот бот уже подключён к другому сервису. Чтобы случайно не сломать "
+            "его текущую работу, ClientPlatform ничего не переключал.\n\n"
+            "Если хотите перенести именно этого бота сюда, сначала отключите его "
+            "в прежнем сервисе, затем пришлите новый актуальный токен ещё раз."
+        )
+        return
     except (
         BotProvisioningError,
         ManagedBotCredentialError,
