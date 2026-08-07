@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from clientplatform.application.bot_provisioning import finalize_botfather_provisioning
 from clientplatform.domain.bot_provisioning import (
+    BotProvisioningInvariantViolation,
     ManagedBotProvisioningRequest,
     VerifiedTelegramBot,
 )
@@ -24,6 +27,15 @@ from clientplatform.runtime.bot_provisioning import (
 )
 from clientplatform.runtime.secrets import EnvironmentCredentialProvider
 from services.db import get_db, get_db_ro
+
+
+def _aware(value: datetime) -> datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
+def _created_at(value: str) -> datetime:
+    parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    return _aware(parsed).astimezone(timezone.utc)
 
 
 def has_active_telegram_managed_bot(*, actor: TenantContext) -> bool:
@@ -80,6 +92,7 @@ async def complete_telegram_managed_bot_onboarding(
     username: str,
     display_name: str | None,
     token: str,
+    event_at: datetime | None = None,
     vault: ManagedBotCredentialVault | None = None,
     provisioner: ManagedBotProvisioner | None = None,
 ) -> ManagedBotProvisioningRequest:
@@ -103,6 +116,12 @@ async def complete_telegram_managed_bot_onboarding(
         pending = ManagedBotOnboardingRepository(conn).pending_for_user(
             user_id=user_id
         )
+        if event_at is not None and _aware(event_at).astimezone(timezone.utc) < _created_at(
+            pending.request.created_at
+        ):
+            raise BotProvisioningInvariantViolation(
+                "managed bot creation event predates the active request"
+            )
         credential_reference = ManagedBotCredentialStore(
             conn,
             vault=selected_vault,
