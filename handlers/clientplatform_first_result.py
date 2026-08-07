@@ -42,6 +42,12 @@ def _replace_next_action(markup: InlineKeyboardMarkup) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def _cancel_setup_keyboard(business_token: str) -> InlineKeyboardMarkup:
+    return control._keyboard(
+        [[("✖️ Отмена", f"cps:cancelsetup:{business_token}")]]
+    )
+
+
 def install_first_result(owner_module: ModuleType) -> None:
     """Install or repair the result-first owner dashboard wrapper.
 
@@ -87,6 +93,20 @@ async def choose_first_result(callback: CallbackQuery, state: FSMContext) -> Non
     )
 
 
+@router.callback_query(F.data.startswith("cps:cancelsetup:"))
+async def cancel_first_result_setup(callback: CallbackQuery, state: FSMContext) -> None:
+    business_token = str(callback.data).split(":", 2)[2]
+    business_id = control._token_uuid(business_token)
+    await control._actor(int(callback.from_user.id), business_id)
+    await state.clear()
+    await callback.answer("Настройка отменена")
+    await simple.send_simple_dashboard(
+        control._callback_message(callback),
+        user_id=int(callback.from_user.id),
+        business_id=business_id,
+    )
+
+
 async def _active_service_capability(actor):
     capabilities = await asyncio.to_thread(
         control.list_business_capabilities,
@@ -116,7 +136,10 @@ async def setup_first_booking(callback: CallbackQuery, state: FSMContext) -> Non
             "Для записи сначала нужно включить консультации или услуги. "
             "Откройте «Все возможности» и включите нужный формат.",
             reply_markup=control._keyboard(
-                [[("⚙️ Все возможности", f"cps:advanced:{business_token}")]]
+                [
+                    [("⚙️ Все возможности", f"cps:advanced:{business_token}")],
+                    [("🏠 В кабинет", f"cpj:home:{business_token}")],
+                ]
             ),
         )
         return
@@ -138,8 +161,8 @@ async def setup_first_booking(callback: CallbackQuery, state: FSMContext) -> Non
         await message.answer(
             "Сначала добавим то, на что человек сможет записаться.\n\n"
             "Как называется Ваша встреча или услуга? "
-            "Например: «Консультация 60 минут».\n\n"
-            "Отменить можно командой /cancel."
+            "Например: «Консультация 60 минут».",
+            reply_markup=_cancel_setup_keyboard(business_token),
         )
         return
 
@@ -153,8 +176,8 @@ async def setup_first_booking(callback: CallbackQuery, state: FSMContext) -> Non
         )
         await message.answer(
             f"Услуга «{offering.title}» уже есть. Теперь откроем первое время.\n\n"
-            "Напишите дату и время, например: 10.08.2026 15:00.\n\n"
-            "Отменить можно командой /cancel."
+            "Напишите дату и время, например: 10.08.2026 15:00.",
+            reply_markup=_cancel_setup_keyboard(business_token),
         )
         return
 
@@ -186,8 +209,8 @@ async def setup_first_material(callback: CallbackQuery, state: FSMContext) -> No
         await state.update_data(business_id=business_id)
         await message.answer(
             "Создадим первый материал или программу.\n\n"
-            "Напишите название. Например: «Подготовка к первой встрече».\n\n"
-            "Отменить можно командой /cancel."
+            "Напишите название. Например: «Подготовка к первой встрече».",
+            reply_markup=_cancel_setup_keyboard(business_token),
         )
         return
     if not customers:
@@ -221,6 +244,7 @@ async def setup_first_client(callback: CallbackQuery, state: FSMContext) -> None
 
 
 __all__ = [
+    "cancel_first_result_setup",
     "choose_first_result",
     "install_first_result",
     "router",
