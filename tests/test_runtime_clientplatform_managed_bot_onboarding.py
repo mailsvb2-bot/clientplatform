@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from aiogram.types import ReplyKeyboardMarkup, ReplyKeyboardRemove
 
@@ -24,14 +24,20 @@ _AUTO_ENV = {"CLIENTPLATFORM_MANAGED_BOT_AUTO_PROVISIONING_ENABLED": "1"}
 _EVENT_AT = datetime(2026, 8, 7, 12, 5, tzinfo=timezone.utc)
 
 
-def _request(status: BotProvisioningStatus) -> ManagedBotProvisioningRequest:
+def _request(
+    status: BotProvisioningStatus,
+    *,
+    created_identity: bool = False,
+) -> ManagedBotProvisioningRequest:
     has_reference = status not in {
         BotProvisioningStatus.AWAITING_SECRET,
         BotProvisioningStatus.CANCELLED,
     }
     completed = status == BotProvisioningStatus.COMPLETED
+    has_identity = created_identity or completed
     reference = (
-        f"vault://managed-bot/{_BUSINESS_ID}/00000000-0000-0000-0000-000000000106"
+        f"vault://managed-bot/{_BUSINESS_ID}/"
+        "00000000-0000-0000-0000-000000000106"
         if has_reference
         else None
     )
@@ -46,8 +52,8 @@ def _request(status: BotProvisioningStatus) -> ManagedBotProvisioningRequest:
         display_name="Практика",
         credential_reference=reference,
         webhook_secret_reference=reference,
-        external_bot_id="900001" if completed else None,
-        verified_username="practice_helper_bot" if completed else None,
+        external_bot_id="900001" if has_identity else None,
+        verified_username="practice_helper_bot" if has_identity else None,
         connection_id=_CONNECTION_ID if completed else None,
         managed_bot_id=_MANAGED_BOT_ID if completed else None,
         attempts=1 if has_reference else 0,
@@ -85,15 +91,22 @@ class _Message:
 class _ManagerBot:
     def __init__(self, *, can_manage_bots: bool = True) -> None:
         self.can_manage_bots = can_manage_bots
-        self.get_managed_bot_token = AsyncMock(return_value="900001:" + ("A" * 40))
+        self.get_managed_bot_token = AsyncMock(
+            return_value="900001:" + ("A" * 40)
+        )
 
     async def get_me(self):
         return SimpleNamespace(can_manage_bots=self.can_manage_bots)
 
 
 class _Callback:
-    def __init__(self, *, can_manage_bots: bool = True) -> None:
-        self.data = f"cpm:n:{managed._business_token(_BUSINESS_ID)}"
+    def __init__(
+        self,
+        *,
+        can_manage_bots: bool = True,
+        route: str = "n",
+    ) -> None:
+        self.data = f"cpm:{route}:{managed._business_token(_BUSINESS_ID)}"
         self.from_user = SimpleNamespace(id=101)
         self.bot = _ManagerBot(can_manage_bots=can_manage_bots)
         self.message = _Message()
@@ -129,13 +142,29 @@ class ClientPlatformManagedBotOnboardingUiTests(unittest.IsolatedAsyncioTestCase
         self.assertNotIn("✨ Создать моего бота", labels)
         self.assertIn("Подключить существующего бота", labels)
 
+    def test_created_but_unsealed_bot_offers_resume_not_new_creation(self) -> None:
+        request = _request(
+            BotProvisioningStatus.AWAITING_SECRET,
+            created_identity=True,
+        )
+        with patch.dict("os.environ", _AUTO_ENV, clear=False):
+            markup = managed._managed_status_keyboard(_BUSINESS_ID, request)
+        labels = [button.text for row in markup.inline_keyboard for button in row]
+        self.assertIn("🔄 Завершить подключение", labels)
+        self.assertNotIn("✨ Создать в Telegram", labels)
+        self.assertIn("Новый бот создавать не нужно", managed._managed_status_text(request))
+
     async def test_manager_capability_opens_native_managed_bot_request(self) -> None:
         callback = _Callback(can_manage_bots=True)
         state = _State()
         with (
             patch.dict("os.environ", _AUTO_ENV, clear=False),
             patch.object(managed.control, "_actor", new=AsyncMock(return_value=object())),
-            patch.object(managed, "_business_name", new=AsyncMock(return_value="Практика")),
+            patch.object(
+                managed,
+                "_business_name",
+                new=AsyncMock(return_value="Практика"),
+            ),
             patch.object(
                 managed,
                 "begin_telegram_managed_bot_onboarding",
@@ -174,7 +203,7 @@ class ClientPlatformManagedBotOnboardingUiTests(unittest.IsolatedAsyncioTestCase
         self.assertEqual(state.cleared, 0)
         self.assertTrue(callback.answers[-1][1])
 
-    async def test_created_bot_token_is_consumed_in_memory_and_never_rendered(self) -> None:
+    async def test_created_bot_is_recorded_before_token_is_consumed(self) -> None:
         raw_token = "900001:" + ("A" * 40)
         manager_bot = _ManagerBot()
         manager_bot.get_managed_bot_token = AsyncMock(return_value=raw_token)
@@ -189,8 +218,14 @@ class ClientPlatformManagedBotOnboardingUiTests(unittest.IsolatedAsyncioTestCase
         message.managed_bot_created = SimpleNamespace(bot=child)
         state = _State()
         completed = _request(BotProvisioningStatus.COMPLETED)
+        record = Mock()
         with (
             patch.object(managed.control, "_user_id", return_value=101),
+            patch.object(
+                managed,
+                "record_telegram_managed_bot_created",
+                record,
+            ),
             patch.object(
                 managed,
                 "complete_telegram_managed_bot_onboarding",
@@ -199,14 +234,61 @@ class ClientPlatformManagedBotOnboardingUiTests(unittest.IsolatedAsyncioTestCase
         ):
             await managed.receive_managed_bot_created(message, state)
 
+        record.assert_called_once_with(
+            user_id=101,
+            external_bot_id="900001",
+            username="practice_helper_bot",
+            display_name="Помощник Практики",
+            event_at=_EVENT_AT,
+        )
         manager_bot.get_managed_bot_token.assert_awaited_once_with(user_id=900001)
         self.assertEqual(complete.await_args.kwargs["token"], raw_token)
-        self.assertEqual(complete.await_args.kwargs["event_at"], _EVENT_AT)
         self.assertEqual(state.cleared, 1)
         rendered = " ".join(text for text, _ in message.answers)
         self.assertNotIn(raw_token, rendered)
         self.assertIn("подключён", rendered)
         self.assertIsInstance(message.answers[0][1], ReplyKeyboardRemove)
+
+    async def test_resume_uses_same_created_bot_without_new_creation(self) -> None:
+        callback = _Callback(route="r")
+        state = _State()
+        request = _request(
+            BotProvisioningStatus.AWAITING_SECRET,
+            created_identity=True,
+        )
+        pending = SimpleNamespace(
+            actor=SimpleNamespace(business_id=_BUSINESS_ID),
+            request=request,
+        )
+        completed = _request(BotProvisioningStatus.COMPLETED)
+        actor = SimpleNamespace(business_id=_BUSINESS_ID)
+        with (
+            patch.object(managed.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(
+                managed,
+                "get_pending_telegram_managed_bot_onboarding",
+                return_value=pending,
+            ),
+            patch.object(
+                managed,
+                "complete_telegram_managed_bot_onboarding",
+                new=AsyncMock(return_value=completed),
+            ) as complete,
+            patch.object(
+                managed.control,
+                "_callback_message",
+                return_value=callback.message,
+            ),
+        ):
+            await managed.resume_managed_bot_connection(callback, state)
+
+        callback.bot.get_managed_bot_token.assert_awaited_once_with(user_id=900001)
+        self.assertEqual(
+            complete.await_args.kwargs["external_bot_id"],
+            "900001",
+        )
+        self.assertEqual(state.cleared, 1)
+        self.assertEqual(callback.answers[-1], ("Бот подключён", False))
 
 
 if __name__ == "__main__":
