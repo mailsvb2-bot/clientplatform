@@ -113,6 +113,36 @@ class ClientPlatformBookingHardeningTests(unittest.TestCase):
                 timezone_name="Europe/Amsterdam",
             )
 
+    def test_booking_start_accepts_short_year_and_yearless_future_date(self) -> None:
+        short_year = parse_local_booking_start(
+            "10.08.26 15:00",
+            timezone_name="Europe/Amsterdam",
+            now_utc="2026-08-07T12:00:00+00:00",
+        )
+        yearless = parse_local_booking_start(
+            "10.08 15:00",
+            timezone_name="Europe/Amsterdam",
+            now_utc="2026-08-07T12:00:00+00:00",
+        )
+        self.assertEqual(short_year, "2026-08-10T13:00:00+00:00")
+        self.assertEqual(yearless, short_year)
+
+    def test_yearless_booking_date_rolls_to_next_year_after_date_passes(self) -> None:
+        parsed = parse_local_booking_start(
+            "10.08 15:00",
+            timezone_name="Europe/Amsterdam",
+            now_utc="2026-08-11T12:00:00+00:00",
+        )
+        self.assertEqual(parsed, "2027-08-10T13:00:00+00:00")
+
+    def test_bad_booking_date_explains_all_supported_human_formats(self) -> None:
+        with self.assertRaisesRegex(ValueError, "10.08 15:00"):
+            parse_local_booking_start(
+                "завтра после обеда",
+                timezone_name="Europe/Amsterdam",
+                now_utc="2026-08-07T12:00:00+00:00",
+            )
+
     def test_sqlite_serializes_overlapping_slot_publication(self) -> None:
         gate = threading.Barrier(2)
 
