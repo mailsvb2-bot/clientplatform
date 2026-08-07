@@ -4,7 +4,7 @@ import base64
 import os
 import re
 import stat
-import subprocess
+import subprocess  # nosec B404 - fixed age binaries, shell is never used
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
@@ -75,7 +75,7 @@ class AgeManagedBotCredentialVault:
         if not value:
             raise ManagedBotCredentialError("managed bot credential must not be empty")
         recipient = self._recipient()
-        completed = subprocess.run(
+        completed = subprocess.run(  # nosec B603,B607 - fixed age CLI and arguments
             ["age", "--encrypt", "--recipient", recipient],
             input=value.encode("utf-8"),
             stdout=subprocess.PIPE,
@@ -97,7 +97,7 @@ class AgeManagedBotCredentialVault:
             raise ManagedBotCredentialError(
                 "managed bot credential ciphertext is invalid"
             ) from exc
-        completed = subprocess.run(
+        completed = subprocess.run(  # nosec B603,B607 - fixed age CLI and identity path
             ["age", "--decrypt", "--identity", str(self._identity_path)],
             input=payload,
             stdout=subprocess.PIPE,
@@ -118,7 +118,7 @@ class AgeManagedBotCredentialVault:
 
     def _recipient(self) -> str:
         self._ensure_identity()
-        completed = subprocess.run(
+        completed = subprocess.run(  # nosec B603,B607 - fixed age-keygen CLI
             ["age-keygen", "-y", str(self._identity_path)],
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -155,7 +155,7 @@ class AgeManagedBotCredentialVault:
         self._assert_private_directory()
         temporary = self._identity_path.with_suffix(".tmp")
         temporary.unlink(missing_ok=True)
-        completed = subprocess.run(
+        completed = subprocess.run(  # nosec B603,B607 - fixed age-keygen CLI
             ["age-keygen", "-o", str(temporary)],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
