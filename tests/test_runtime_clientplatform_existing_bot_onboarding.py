@@ -4,6 +4,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+from aiogram.exceptions import TelegramAPIError
+
 from clientplatform.domain.bot_provisioning import (
     BotProvisioningProvider,
     BotProvisioningStatus,
@@ -116,6 +118,7 @@ class ClientPlatformExistingBotOnboardingUiTests(unittest.IsolatedAsyncioTestCas
         async def delete_first(_message):
             events.append("delete")
             await _message.delete()
+            return True
 
         async def connect(**kwargs):
             events.append("connect")
@@ -166,6 +169,24 @@ class ClientPlatformExistingBotOnboardingUiTests(unittest.IsolatedAsyncioTestCas
         self.assertNotIn(raw_token, rendered)
         self.assertNotIn("secret raw token", rendered)
         self.assertIn("пришлите его ещё раз", rendered.lower())
+
+    async def test_delete_failure_never_persists_or_verifies_token(self) -> None:
+        raw_token = "900001:" + ("C" * 40)
+        message = _Message(raw_token)
+        state = _State()
+        connector = AsyncMock()
+        with (
+            patch.object(existing, "_delete_token_message", new=AsyncMock(return_value=False)),
+            patch.object(existing, "connect_existing_telegram_bot", connector),
+        ):
+            await existing.receive_existing_bot_token(message, state)
+
+        connector.assert_not_awaited()
+        self.assertEqual(state.cleared, 0)
+        rendered = " ".join(text for text, _markup in message.answers)
+        self.assertNotIn(raw_token, rendered)
+        self.assertIn("не стал использовать или сохранять", rendered)
+        self.assertIn("обновите токен", rendered.lower())
 
 
 if __name__ == "__main__":
