@@ -4,7 +4,7 @@ import base64
 import os
 import re
 import stat
-import subprocess  # nosec B404 - fixed age binaries, shell is never used
+import subprocess  # nosec B404
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
@@ -78,7 +78,9 @@ class AgeManagedBotCredentialVault:
         if not value:
             raise ManagedBotCredentialError("managed bot credential must not be empty")
         recipient = self._recipient()
-        completed = subprocess.run(  # nosec B603,B607 - fixed age CLI and arguments
+        # The executable and all switches are fixed; only the validated age
+        # recipient is data, and shell execution is never used.
+        completed = subprocess.run(  # nosec B603, B607
             ["age", "--encrypt", "--recipient", recipient],
             input=value.encode("utf-8"),
             stdout=subprocess.PIPE,
@@ -100,7 +102,9 @@ class AgeManagedBotCredentialVault:
             raise ManagedBotCredentialError(
                 "managed bot credential ciphertext is invalid"
             ) from exc
-        completed = subprocess.run(  # nosec B603,B607 - fixed age CLI and identity path
+        # The executable and switches are fixed. The identity path is an
+        # operator-owned file whose type, mode and owner are checked below.
+        completed = subprocess.run(  # nosec B603, B607
             ["age", "--decrypt", "--identity", str(self._identity_path)],
             input=payload,
             stdout=subprocess.PIPE,
@@ -121,7 +125,8 @@ class AgeManagedBotCredentialVault:
 
     def _recipient(self) -> str:
         self._ensure_identity()
-        completed = subprocess.run(  # nosec B603,B607 - fixed age-keygen CLI
+        # Fixed age-keygen command; shell execution is never used.
+        completed = subprocess.run(  # nosec B603, B607
             ["age-keygen", "-y", str(self._identity_path)],
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -158,7 +163,8 @@ class AgeManagedBotCredentialVault:
         self._assert_private_directory()
         temporary = self._identity_path.with_suffix(".tmp")
         temporary.unlink(missing_ok=True)
-        completed = subprocess.run(  # nosec B603,B607 - fixed age-keygen CLI
+        # Fixed local key-generation command; shell execution is never used.
+        completed = subprocess.run(  # nosec B603, B607
             ["age-keygen", "-o", str(temporary)],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
