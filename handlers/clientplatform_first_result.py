@@ -22,10 +22,6 @@ router.callback_query.filter(control.ClientPlatformControlEnabled())
 _ORIGINAL_OWNER_KEYBOARD = None
 
 
-def _business_token(business_id: str) -> str:
-    return control._uuid_token(business_id)
-
-
 def _replace_next_action(markup: InlineKeyboardMarkup) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     for row in markup.inline_keyboard:
@@ -37,7 +33,7 @@ def _replace_next_action(markup: InlineKeyboardMarkup) -> InlineKeyboardMarkup:
                 buttons.append(
                     InlineKeyboardButton(
                         text="✨ Что настроить первым?",
-                        callback_data=f"cpx:goal:{token}",
+                        callback_data=f"cps:firstgoal:{token}",
                     )
                 )
             else:
@@ -59,7 +55,7 @@ def install_first_result(owner_module: ModuleType) -> None:
     owner_module._first_result_installed = True
 
 
-@router.callback_query(F.data.startswith("cpx:goal:"))
+@router.callback_query(F.data.startswith("cps:firstgoal:"))
 async def choose_first_result(callback: CallbackQuery, state: FSMContext) -> None:
     business_token = str(callback.data).split(":", 2)[2]
     business_id = control._token_uuid(business_token)
@@ -71,9 +67,9 @@ async def choose_first_result(callback: CallbackQuery, state: FSMContext) -> Non
         "Выберите результат — ClientPlatform сам проведёт по минимальному числу шагов.",
         reply_markup=control._keyboard(
             [
-                [("📅 Принимать записи", f"cpx:booking:{business_token}")],
-                [("📚 Выдавать материалы", f"cpx:materials:{business_token}")],
-                [("👥 Подключить клиента", f"cpx:client:{business_token}")],
+                [("📅 Принимать записи", f"cps:firstbook:{business_token}")],
+                [("📚 Выдавать материалы", f"cps:firstmat:{business_token}")],
+                [("👥 Подключить клиента", f"cps:firstclient:{business_token}")],
                 [("🤖 Настроить Telegram-бота", f"cpb:o:{business_token}")],
                 [("🏠 В кабинет", f"cpj:home:{business_token}")],
             ]
@@ -97,7 +93,7 @@ async def _active_service_capability(actor):
     )
 
 
-@router.callback_query(F.data.startswith("cpx:booking:"))
+@router.callback_query(F.data.startswith("cps:firstbook:"))
 async def setup_first_booking(callback: CallbackQuery, state: FSMContext) -> None:
     business_token = str(callback.data).split(":", 2)[2]
     business_id = control._token_uuid(business_token)
@@ -131,7 +127,8 @@ async def setup_first_booking(callback: CallbackQuery, state: FSMContext) -> Non
         )
         await message.answer(
             "Сначала добавим то, на что человек сможет записаться.\n\n"
-            "Как называется Ваша встреча или услуга? Например: «Консультация 60 минут».\n\n"
+            "Как называется Ваша встреча или услуга? "
+            "Например: «Консультация 60 минут».\n\n"
             "Отменить можно командой /cancel."
         )
         return
@@ -162,7 +159,7 @@ async def setup_first_booking(callback: CallbackQuery, state: FSMContext) -> Non
     )
 
 
-@router.callback_query(F.data.startswith("cpx:materials:"))
+@router.callback_query(F.data.startswith("cps:firstmat:"))
 async def setup_first_material(callback: CallbackQuery, state: FSMContext) -> None:
     business_token = str(callback.data).split(":", 2)[2]
     business_id = control._token_uuid(business_token)
@@ -192,18 +189,14 @@ async def setup_first_material(callback: CallbackQuery, state: FSMContext) -> No
         )
         return
 
-    routed = getattr(callback, "model_copy", None)
-    if callable(routed):
-        delivery_callback = callback.model_copy(
-            update={"data": f"cp:deliver:{business_token}"}
-        )
-    else:
-        callback.data = f"cp:deliver:{business_token}"
-        delivery_callback = callback
+    delivery_callback = simple._routed_callback(
+        callback,
+        f"cp:deliver:{business_token}",
+    )
     await control.choose_program_for_delivery(delivery_callback, state)
 
 
-@router.callback_query(F.data.startswith("cpx:client:"))
+@router.callback_query(F.data.startswith("cps:firstclient:"))
 async def setup_first_client(callback: CallbackQuery, state: FSMContext) -> None:
     business_token = str(callback.data).split(":", 2)[2]
     business_id = control._token_uuid(business_token)
