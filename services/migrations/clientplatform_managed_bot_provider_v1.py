@@ -8,22 +8,12 @@ from services.migrations._helpers import mark_migration, migration_applied
 
 
 NAME = "clientplatform_managed_bot_provider_v1"
-_TABLE = "managed_bot_provisioning_requests"
-_LEGACY_TABLE = "managed_bot_provisioning_requests_provider_v0"
-_COLUMNS = """
-    id, business_id, created_by_member_id, provider, status, idempotency_key,
-    requested_username, display_name, credential_reference,
-    webhook_secret_reference, external_bot_id, verified_username,
-    connection_id, managed_bot_id, attempts, verification_token,
-    verification_started_at, created_at, updated_at, completed_at,
-    failed_at, cancelled_at, last_error_code
-""".strip()
 
 
 def _sqlite_supports_managed_provider(conn: sqlite3.Connection) -> bool:
     row = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
-        (_TABLE,),
+        ("managed_bot_provisioning_requests",),
     ).fetchone()
     if row is None:
         return True
@@ -36,13 +26,35 @@ def _rebuild_sqlite(conn: sqlite3.Connection) -> None:
 
     conn.execute("DROP INDEX IF EXISTS idx_managed_bot_provisioning_business_status")
     conn.execute("DROP INDEX IF EXISTS idx_managed_bot_provisioning_verifying")
-    conn.execute(f"DROP TABLE IF EXISTS {_LEGACY_TABLE}")
-    conn.execute(f"ALTER TABLE {_TABLE} RENAME TO {_LEGACY_TABLE}")
+    conn.execute(
+        "DROP TABLE IF EXISTS managed_bot_provisioning_requests_provider_v0"
+    )
+    conn.execute(
+        "ALTER TABLE managed_bot_provisioning_requests "
+        "RENAME TO managed_bot_provisioning_requests_provider_v0"
+    )
     clientplatform_bot_provisioning.ensure(conn)
     conn.execute(
-        f"INSERT INTO {_TABLE}({_COLUMNS}) SELECT {_COLUMNS} FROM {_LEGACY_TABLE}"
+        """
+        INSERT INTO managed_bot_provisioning_requests(
+            id, business_id, created_by_member_id, provider, status,
+            idempotency_key, requested_username, display_name,
+            credential_reference, webhook_secret_reference, external_bot_id,
+            verified_username, connection_id, managed_bot_id, attempts,
+            verification_token, verification_started_at, created_at, updated_at,
+            completed_at, failed_at, cancelled_at, last_error_code
+        )
+        SELECT
+            id, business_id, created_by_member_id, provider, status,
+            idempotency_key, requested_username, display_name,
+            credential_reference, webhook_secret_reference, external_bot_id,
+            verified_username, connection_id, managed_bot_id, attempts,
+            verification_token, verification_started_at, created_at, updated_at,
+            completed_at, failed_at, cancelled_at, last_error_code
+        FROM managed_bot_provisioning_requests_provider_v0
+        """
     )
-    conn.execute(f"DROP TABLE {_LEGACY_TABLE}")
+    conn.execute("DROP TABLE managed_bot_provisioning_requests_provider_v0")
 
 
 def _update_postgres_constraint(conn: sqlite3.Connection) -> None:
