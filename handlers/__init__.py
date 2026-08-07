@@ -35,6 +35,16 @@ def _load_clientplatform_modules() -> tuple[ModuleType, ModuleType]:
         bot_setup.router.include_router(managed_bot_onboarding.router)
         bot_setup._managed_bot_onboarding_composed = True
 
+    existing_bot_onboarding = importlib.import_module(
+        ".clientplatform_existing_bot_onboarding",
+        __name__,
+    )
+    globals()["clientplatform_existing_bot_onboarding"] = existing_bot_onboarding
+    existing_bot_onboarding.install_existing_bot_onboarding(bot_setup)
+    if not bool(getattr(bot_setup, "_existing_bot_onboarding_composed", False)):
+        bot_setup.router.include_router(existing_bot_onboarding.router)
+        bot_setup._existing_bot_onboarding_composed = True
+
     bot_lifecycle = importlib.import_module(
         ".clientplatform_bot_lifecycle",
         __name__,
@@ -131,6 +141,9 @@ def __getattr__(name: str) -> ModuleType:
     if name == "clientplatform_managed_bot_onboarding":
         _load_clientplatform_modules()
         return globals()["clientplatform_managed_bot_onboarding"]
+    if name == "clientplatform_existing_bot_onboarding":
+        _load_clientplatform_modules()
+        return globals()["clientplatform_existing_bot_onboarding"]
     if name == "clientplatform_bot_lifecycle":
         _load_clientplatform_modules()
         return globals()["clientplatform_bot_lifecycle"]
@@ -172,6 +185,7 @@ __all__ = [
     "clientplatform_bot_lifecycle",
     "clientplatform_bot_setup",
     "clientplatform_control",
+    "clientplatform_existing_bot_onboarding",
     "clientplatform_managed_bot_onboarding",
     "clientplatform_owner_journey",
     "clientplatform_promotion",
