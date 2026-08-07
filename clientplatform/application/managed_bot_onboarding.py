@@ -20,6 +20,7 @@ from clientplatform.infrastructure.managed_bot_credentials import (
 )
 from clientplatform.infrastructure.managed_bot_onboarding_repository import (
     ManagedBotOnboardingRepository,
+    PendingManagedBotOnboarding,
 )
 from clientplatform.infrastructure.safe_tenancy_repository import TenancyRepository
 from clientplatform.runtime.bot_provisioning import (
@@ -40,6 +41,20 @@ def _aware(value: datetime) -> datetime:
 def _created_at(value: str) -> datetime:
     parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
     return _aware(parsed).astimezone(timezone.utc)
+
+
+def _assert_event_is_current(
+    pending: PendingManagedBotOnboarding,
+    event_at: datetime | None,
+) -> None:
+    if event_at is None:
+        return
+    observed_at = _aware(event_at).astimezone(timezone.utc)
+    request_created_at = _created_at(pending.request.created_at)
+    if observed_at + _EVENT_CLOCK_SKEW < request_created_at:
+        raise BotProvisioningInvariantViolation(
+            "managed bot creation event predates the active request"
+        )
 
 
 class _ExpectedManagedBotProvisioner:
@@ -109,9 +124,37 @@ def begin_telegram_managed_bot_onboarding(
         return ManagedBotOnboardingRepository(conn).create(
             actor=actor,
             idempotency_key=idempotency_key,
-            # Suggested usernames in Telegram are advisory. Do not persist one as
-            # a verification invariant because the owner is allowed to edit it.
             suggested_username=None,
+            display_name=display_name,
+        )
+
+
+def get_pending_telegram_managed_bot_onboarding(
+    *,
+    user_id: int,
+) -> PendingManagedBotOnboarding:
+    with get_db_ro() as conn:
+        return ManagedBotOnboardingRepository(conn).pending_for_user(user_id=user_id)
+
+
+def record_telegram_managed_bot_created(
+    *,
+    user_id: int,
+    external_bot_id: str,
+    username: str,
+    display_name: str | None,
+    event_at: datetime | None = None,
+) -> PendingManagedBotOnboarding:
+    """Persist the child identity before token retrieval so retry survives failure."""
+
+    with get_db() as conn:
+        repository = ManagedBotOnboardingRepository(conn)
+        pending = repository.pending_for_user(user_id=user_id)
+        _assert_event_is_current(pending, event_at)
+        return repository.record_created_bot(
+            user_id=user_id,
+            external_bot_id=external_bot_id,
+            username=username,
             display_name=display_name,
         )
 
@@ -127,12 +170,7 @@ async def complete_telegram_managed_bot_onboarding(
     vault: ManagedBotCredentialVault | None = None,
     provisioner: ManagedBotProvisioner | None = None,
 ) -> ManagedBotProvisioningRequest:
-    """Seal a Telegram-issued token, bind it to the durable request and verify it.
-
-    The raw token is accepted only as an in-memory argument obtained from the
-    manager bot API. Persistence receives encrypted ciphertext plus an opaque
-    ``vault://`` reference; neither logs nor domain objects contain the token.
-    """
+    """Seal a Telegram-issued token, bind it to the durable request and verify it."""
 
     event_identity = VerifiedTelegramBot(
         external_bot_id=external_bot_id,
@@ -144,16 +182,23 @@ async def complete_telegram_managed_bot_onboarding(
         raise ValueError("managed bot token is unavailable")
     selected_vault = vault or AgeManagedBotCredentialVault()
     with get_db() as conn:
-        pending = ManagedBotOnboardingRepository(conn).pending_for_user(
-            user_id=user_id
-        )
-        if event_at is not None:
-            observed_at = _aware(event_at).astimezone(timezone.utc)
-            request_created_at = _created_at(pending.request.created_at)
-            if observed_at + _EVENT_CLOCK_SKEW < request_created_at:
-                raise BotProvisioningInvariantViolation(
-                    "managed bot creation event predates the active request"
-                )
+        repository = ManagedBotOnboardingRepository(conn)
+        pending = repository.pending_for_user(user_id=user_id)
+        _assert_event_is_current(pending, event_at)
+        if pending.request.external_bot_id is None:
+            pending = repository.record_created_bot(
+                user_id=user_id,
+                external_bot_id=event_identity.external_bot_id,
+                username=event_identity.username,
+                display_name=event_identity.display_name,
+            )
+        if (
+            pending.request.external_bot_id != event_identity.external_bot_id
+            or pending.request.verified_username != event_identity.username
+        ):
+            raise BotProvisioningInvariantViolation(
+                "managed bot creation identity does not match the active request"
+            )
         credential_reference = ManagedBotCredentialStore(
             conn,
             vault=selected_vault,
@@ -166,9 +211,6 @@ async def complete_telegram_managed_bot_onboarding(
             actor=pending.actor,
             request_id=pending.request.id,
             credential_reference=credential_reference,
-            # The historical column is retained by the polling schema. It points
-            # to the same encrypted token reference and is not used as a webhook
-            # secret by the polling-only runtime.
             webhook_secret_reference=credential_reference,
         )
 
@@ -191,5 +233,7 @@ async def complete_telegram_managed_bot_onboarding(
 __all__ = [
     "begin_telegram_managed_bot_onboarding",
     "complete_telegram_managed_bot_onboarding",
+    "get_pending_telegram_managed_bot_onboarding",
     "has_active_telegram_managed_bot",
+    "record_telegram_managed_bot_created",
 ]
