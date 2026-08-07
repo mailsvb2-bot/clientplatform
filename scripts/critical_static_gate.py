@@ -40,6 +40,7 @@ _REWARD_HARDENING_FILES = (
 )
 
 _CLIENTPLATFORM_MANAGED_BOT_TYPE_FILES = (
+    "clientplatform/application/existing_bot_onboarding.py",
     "clientplatform/application/managed_bot_onboarding.py",
     "clientplatform/domain/bot_provisioning.py",
     "clientplatform/infrastructure/managed_bot_credentials.py",
@@ -52,6 +53,7 @@ _CLIENTPLATFORM_MANAGED_BOT_SECURITY_FILES = (
     *_CLIENTPLATFORM_MANAGED_BOT_TYPE_FILES,
     "clientplatform/application/managed_bot_owner.py",
     "clientplatform/runtime/bot_provisioning.py",
+    "handlers/clientplatform_existing_bot_onboarding.py",
     "handlers/clientplatform_managed_bot_onboarding.py",
     "scripts/clientplatform_bot_gateway_preflight.py",
 )
