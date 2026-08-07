@@ -126,14 +126,18 @@ class ClientPlatformManagedBotOnboardingApplicationTests(
             "SELECT credential_reference,status FROM connections"
         ).fetchone()
         self.assertEqual(connection["status"], "active")
-        self.assertTrue(connection["credential_reference"].startswith("vault://managed-bot/"))
+        self.assertTrue(
+            connection["credential_reference"].startswith("vault://managed-bot/")
+        )
         self.assertNotIn(raw_token, connection["credential_reference"])
         credential = self.conn.execute(
             "SELECT ciphertext FROM managed_bot_credentials"
         ).fetchone()
         self.assertNotIn(raw_token, credential["ciphertext"])
         self.assertEqual(
-            self.conn.execute("SELECT COUNT(*) FROM managed_bots").fetchone()[0],
+            self.conn.execute(
+                "SELECT COUNT(*) FROM managed_bots"
+            ).fetchone()[0],
             1,
         )
 
@@ -178,7 +182,9 @@ class ClientPlatformManagedBotOnboardingApplicationTests(
                 )
         self.assertNotIn(raw_token, str(caught.exception))
         self.assertEqual(
-            self.conn.execute("SELECT COUNT(*) FROM managed_bot_credentials").fetchone()[0],
+            self.conn.execute(
+                "SELECT COUNT(*) FROM managed_bot_credentials"
+            ).fetchone()[0],
             0,
         )
 
@@ -190,7 +196,7 @@ class ClientPlatformManagedBotOnboardingApplicationTests(
                 actor=self.first,
                 idempotency_key="managed-owner-ui-006",
             )
-            stale = datetime.fromisoformat(request.created_at) - timedelta(seconds=1)
+            stale = datetime.fromisoformat(request.created_at) - timedelta(minutes=2)
             with self.assertRaisesRegex(
                 BotProvisioningInvariantViolation,
                 "predates the active request",
@@ -206,9 +212,32 @@ class ClientPlatformManagedBotOnboardingApplicationTests(
                     provisioner=_Provisioner(),
                 )
         self.assertEqual(
-            self.conn.execute("SELECT COUNT(*) FROM managed_bot_credentials").fetchone()[0],
+            self.conn.execute(
+                "SELECT COUNT(*) FROM managed_bot_credentials"
+            ).fetchone()[0],
             0,
         )
+
+    async def test_small_clock_skew_is_accepted(self) -> None:
+        provisioner = _Provisioner()
+        managed_db, managed_ro, bot_db, bot_ro = self._patch_db()
+        with managed_db, managed_ro, bot_db, bot_ro:
+            request = application.begin_telegram_managed_bot_onboarding(
+                actor=self.first,
+                idempotency_key="managed-owner-ui-007",
+            )
+            event_at = datetime.fromisoformat(request.created_at) - timedelta(seconds=30)
+            completed = await application.complete_telegram_managed_bot_onboarding(
+                user_id=self.first.user_id,
+                external_bot_id="900001",
+                username="practice_helper_bot",
+                display_name=None,
+                token="900001:" + ("A" * 40),
+                event_at=event_at,
+                vault=self.vault,
+                provisioner=provisioner,
+            )
+        self.assertEqual(completed.status, BotProvisioningStatus.COMPLETED)
 
 
 if __name__ == "__main__":
