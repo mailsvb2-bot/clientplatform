@@ -64,10 +64,17 @@ def _bounded_float(
 
 def validate_environment(env: Mapping[str, str]) -> list[str]:
     errors: list[str] = []
-    deployed = _value(env, "APP_ENV").lower() in {"prod", "production", "stage", "staging"}
+    deployed = _value(env, "APP_ENV").lower() in {
+        "prod",
+        "production",
+        "stage",
+        "staging",
+    }
     enabled = _truthy(env, "CLIENTPLATFORM_BOT_GATEWAY_ENABLED")
     if deployed and not enabled:
-        errors.append("CLIENTPLATFORM_BOT_GATEWAY_ENABLED must be 1 in deployed environments")
+        errors.append(
+            "CLIENTPLATFORM_BOT_GATEWAY_ENABLED must be 1 in deployed environments"
+        )
 
     auto_provisioning = _truthy(
         env,
@@ -76,7 +83,8 @@ def validate_environment(env: Mapping[str, str]) -> list[str]:
     if auto_provisioning:
         if not enabled:
             errors.append(
-                "CLIENTPLATFORM_BOT_GATEWAY_ENABLED must be 1 when managed bot auto provisioning is enabled"
+                "CLIENTPLATFORM_BOT_GATEWAY_ENABLED must be 1 when managed bot "
+                "auto provisioning is enabled"
             )
         identity = _value(
             env,
@@ -84,25 +92,32 @@ def validate_environment(env: Mapping[str, str]) -> list[str]:
         )
         if not identity:
             errors.append(
-                "CLIENTPLATFORM_MANAGED_BOT_CREDENTIAL_IDENTITY_FILE is required when managed bot auto provisioning is enabled"
+                "CLIENTPLATFORM_MANAGED_BOT_CREDENTIAL_IDENTITY_FILE is required "
+                "when managed bot auto provisioning is enabled"
             )
         elif not Path(identity).is_absolute():
             errors.append(
-                "CLIENTPLATFORM_MANAGED_BOT_CREDENTIAL_IDENTITY_FILE must be an absolute path"
+                "CLIENTPLATFORM_MANAGED_BOT_CREDENTIAL_IDENTITY_FILE must be an "
+                "absolute path"
             )
         if deployed and _truthy(
             env,
             "CLIENTPLATFORM_MANAGED_BOT_CREDENTIAL_ALLOW_GENERATE",
         ):
             errors.append(
-                "CLIENTPLATFORM_MANAGED_BOT_CREDENTIAL_ALLOW_GENERATE must be 0 in deployed environments"
+                "CLIENTPLATFORM_MANAGED_BOT_CREDENTIAL_ALLOW_GENERATE must be 0 in "
+                "deployed environments"
             )
 
-    telegram_transport = (_value(env, "TELEGRAM_TRANSPORT") or "polling").lower()
+    telegram_transport = (
+        _value(env, "TELEGRAM_TRANSPORT") or "polling"
+    ).lower()
     if telegram_transport != "polling":
         errors.append("TELEGRAM_TRANSPORT must be polling")
     if _truthy(env, "TELEGRAM_WEBHOOK_ENABLED"):
-        errors.append("TELEGRAM_WEBHOOK_ENABLED must be 0 for polling-only Telegram")
+        errors.append(
+            "TELEGRAM_WEBHOOK_ENABLED must be 0 for polling-only Telegram"
+        )
     if _truthy(env, "TELEGRAM_LEGACY_TOKEN_WEBHOOK_ENABLED"):
         errors.append("token-bearing legacy Telegram webhook paths are forbidden")
 
@@ -185,15 +200,25 @@ def _validate_managed_bot_identity(
     env: Mapping[str, str],
     errors: list[str],
 ) -> None:
-    if not _truthy(env, "CLIENTPLATFORM_MANAGED_BOT_AUTO_PROVISIONING_ENABLED"):
+    if not _truthy(
+        env,
+        "CLIENTPLATFORM_MANAGED_BOT_AUTO_PROVISIONING_ENABLED",
+    ):
         return
-    identity = _value(env, "CLIENTPLATFORM_MANAGED_BOT_CREDENTIAL_IDENTITY_FILE")
+    identity = _value(
+        env,
+        "CLIENTPLATFORM_MANAGED_BOT_CREDENTIAL_IDENTITY_FILE",
+    )
     if not identity or not Path(identity).is_absolute():
         return
+    marker = "clientplatform-managed-bot-preflight"
     try:
-        AgeManagedBotCredentialVault(identity).seal(
-            "clientplatform-managed-bot-preflight"
-        )
+        vault = AgeManagedBotCredentialVault(identity)
+        ciphertext = vault.seal(marker)
+        if vault.open(ciphertext) != marker:
+            raise ManagedBotCredentialError(
+                "managed bot credential round trip failed"
+            )
     except ManagedBotCredentialError:
         errors.append(
             "managed bot credential identity must be a private usable age identity"
