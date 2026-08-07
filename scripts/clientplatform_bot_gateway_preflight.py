@@ -8,6 +8,11 @@ import os
 from pathlib import Path
 from typing import Mapping
 
+from clientplatform.infrastructure.managed_bot_credentials import (
+    AgeManagedBotCredentialVault,
+    ManagedBotCredentialError,
+)
+
 _TRUE = frozenset({"1", "true", "yes", "on", "webhook"})
 
 
@@ -63,6 +68,35 @@ def validate_environment(env: Mapping[str, str]) -> list[str]:
     enabled = _truthy(env, "CLIENTPLATFORM_BOT_GATEWAY_ENABLED")
     if deployed and not enabled:
         errors.append("CLIENTPLATFORM_BOT_GATEWAY_ENABLED must be 1 in deployed environments")
+
+    auto_provisioning = _truthy(
+        env,
+        "CLIENTPLATFORM_MANAGED_BOT_AUTO_PROVISIONING_ENABLED",
+    )
+    if auto_provisioning:
+        if not enabled:
+            errors.append(
+                "CLIENTPLATFORM_BOT_GATEWAY_ENABLED must be 1 when managed bot auto provisioning is enabled"
+            )
+        identity = _value(
+            env,
+            "CLIENTPLATFORM_MANAGED_BOT_CREDENTIAL_IDENTITY_FILE",
+        )
+        if not identity:
+            errors.append(
+                "CLIENTPLATFORM_MANAGED_BOT_CREDENTIAL_IDENTITY_FILE is required when managed bot auto provisioning is enabled"
+            )
+        elif not Path(identity).is_absolute():
+            errors.append(
+                "CLIENTPLATFORM_MANAGED_BOT_CREDENTIAL_IDENTITY_FILE must be an absolute path"
+            )
+        if deployed and _truthy(
+            env,
+            "CLIENTPLATFORM_MANAGED_BOT_CREDENTIAL_ALLOW_GENERATE",
+        ):
+            errors.append(
+                "CLIENTPLATFORM_MANAGED_BOT_CREDENTIAL_ALLOW_GENERATE must be 0 in deployed environments"
+            )
 
     telegram_transport = (_value(env, "TELEGRAM_TRANSPORT") or "polling").lower()
     if telegram_transport != "polling":
@@ -147,6 +181,25 @@ def validate_environment(env: Mapping[str, str]) -> list[str]:
     return errors
 
 
+def _validate_managed_bot_identity(
+    env: Mapping[str, str],
+    errors: list[str],
+) -> None:
+    if not _truthy(env, "CLIENTPLATFORM_MANAGED_BOT_AUTO_PROVISIONING_ENABLED"):
+        return
+    identity = _value(env, "CLIENTPLATFORM_MANAGED_BOT_CREDENTIAL_IDENTITY_FILE")
+    if not identity or not Path(identity).is_absolute():
+        return
+    try:
+        AgeManagedBotCredentialVault(identity).seal(
+            "clientplatform-managed-bot-preflight"
+        )
+    except ManagedBotCredentialError:
+        errors.append(
+            "managed bot credential identity must be a private usable age identity"
+        )
+
+
 def _read_env_file(path: Path) -> dict[str, str]:
     values: dict[str, str] = {}
     for raw in path.read_text(encoding="utf-8").splitlines():
@@ -169,6 +222,7 @@ def main() -> int:
     if args.env_file is not None:
         env.update(_read_env_file(args.env_file))
     errors = validate_environment(env)
+    _validate_managed_bot_identity(env, errors)
     if args.json:
         print(json.dumps({"ok": not errors, "errors": errors}, sort_keys=True))
     if errors:
