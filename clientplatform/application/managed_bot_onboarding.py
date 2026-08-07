@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from clientplatform.application.bot_provisioning import finalize_botfather_provisioning
 from clientplatform.domain.bot_provisioning import (
     BotProvisioningInvariantViolation,
+    BotProvisioningVerificationFailed,
     ManagedBotProvisioningRequest,
     VerifiedTelegramBot,
 )
@@ -39,6 +40,33 @@ def _aware(value: datetime) -> datetime:
 def _created_at(value: str) -> datetime:
     parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
     return _aware(parsed).astimezone(timezone.utc)
+
+
+class _ExpectedManagedBotProvisioner:
+    """Require the token identity to match the Telegram creation event."""
+
+    def __init__(
+        self,
+        delegate: ManagedBotProvisioner,
+        *,
+        expected_external_bot_id: str,
+    ) -> None:
+        self._delegate = delegate
+        self._expected_external_bot_id = str(expected_external_bot_id)
+
+    async def provision(
+        self,
+        request: ManagedBotProvisioningRequest,
+    ) -> VerifiedTelegramBot:
+        verified = await self._delegate.provision(request)
+        if verified.external_bot_id != self._expected_external_bot_id:
+            raise BotProvisioningVerificationFailed(
+                "managed bot token identity does not match the creation event"
+            )
+        return verified
+
+    async def rollback(self, request: ManagedBotProvisioningRequest) -> None:
+        await self._delegate.rollback(request)
 
 
 def has_active_telegram_managed_bot(*, actor: TenantContext) -> bool:
@@ -144,10 +172,14 @@ async def complete_telegram_managed_bot_onboarding(
             webhook_secret_reference=credential_reference,
         )
 
-    selected_provisioner = provisioner or BotFatherTelegramProvisioner(
+    delegate = provisioner or BotFatherTelegramProvisioner(
         credential_provider=EnvironmentCredentialProvider(
             managed_bot_vault=selected_vault
         )
+    )
+    selected_provisioner = _ExpectedManagedBotProvisioner(
+        delegate,
+        expected_external_bot_id=event_identity.external_bot_id,
     )
     return await finalize_botfather_provisioning(
         actor=pending.actor,
