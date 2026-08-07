@@ -117,12 +117,12 @@ class ManagedBotOnboardingRepository:
         )
         timestamp = str(now or _utc_now())
         cursor = self._conn.execute(
-            f"""
+            """
             UPDATE managed_bot_provisioning_requests
             SET external_bot_id=?, verified_username=?,
                 display_name=COALESCE(?, display_name), updated_at=?
             WHERE id=? AND business_id=? AND provider=?
-              AND status IN ({','.join('?' for _ in _ACTIVE_STATUSES)})
+              AND status IN (?, ?, ?, ?)
               AND (external_bot_id IS NULL OR external_bot_id=?)
               AND (verified_username IS NULL OR verified_username=?)
             """,
@@ -158,9 +158,8 @@ class ManagedBotOnboardingRepository:
         return PendingManagedBotOnboarding(actor=pending.actor, request=request)
 
     def _rows_for_user(self, user_id: int) -> list[Any]:
-        placeholders = ",".join("?" for _ in _ACTIVE_STATUSES)
         return self._conn.execute(
-            f"""
+            """
             SELECT request.id, request.business_id
             FROM managed_bot_provisioning_requests AS request
             JOIN business_members AS member
@@ -169,7 +168,7 @@ class ManagedBotOnboardingRepository:
             WHERE member.user_id=?
               AND member.status='active'
               AND request.provider=?
-              AND request.status IN ({placeholders})
+              AND request.status IN (?, ?, ?, ?)
             ORDER BY request.created_at DESC, request.id DESC
             LIMIT 2
             """,
