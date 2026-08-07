@@ -1,15 +1,12 @@
 from __future__ import annotations
 
-import os
 from datetime import datetime, timezone
+
+from services.db.runtime import is_postgres_enabled
 
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def _is_postgres() -> bool:
-    return os.getenv("METRO_DB_ENGINE", "").strip().lower() == "postgres"
 
 
 def ensure_schema_migrations(conn) -> None:
@@ -62,12 +59,12 @@ def table_exists(conn, table_name: str) -> bool:
     never SELECT from a possibly missing table, because that aborts the
     transaction and poisons the rest of startup migrations.
     """
-    if _is_postgres():
+    if is_postgres_enabled():
         row = conn.execute(
             """
             SELECT 1 AS present
             FROM information_schema.tables
-            WHERE table_schema = 'public'
+            WHERE table_schema = current_schema()
               AND table_name = ?
             LIMIT 1
             """,
