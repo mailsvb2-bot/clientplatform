@@ -60,10 +60,13 @@ class AgeManagedBotCredentialVault:
     _PREFIX = "age-managed-bot-v1:"
 
     def __init__(self, identity_path: str | Path | None = None) -> None:
-        configured = identity_path or os.getenv(
-            "CLIENTPLATFORM_MANAGED_BOT_CREDENTIAL_IDENTITY_FILE",
-            "/run/secrets/clientplatform-managed-bot/identity.txt",
-        )
+        if identity_path is not None:
+            configured: str | Path = identity_path
+        else:
+            configured = (
+                os.getenv("CLIENTPLATFORM_MANAGED_BOT_CREDENTIAL_IDENTITY_FILE")
+                or "/run/secrets/clientplatform-managed-bot/identity.txt"
+            )
         self._identity_path = Path(configured)
 
     @property
