@@ -41,6 +41,7 @@ jobs:
       TELEGRAM_TRANSPORT: polling
       TELEGRAM_WEBHOOK_ENABLED: "0"
       CLIENTPLATFORM_BOT_GATEWAY_ENABLED: "0"
+      CLIENTPLATFORM_MANAGED_BOT_AUTO_PROVISIONING_ENABLED: "0"
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
@@ -65,10 +66,12 @@ jobs:
             tests/test_clientplatform_managed_bot_owner_read_model.py \
             tests/test_runtime_clientplatform_bot_provisioning.py \
             tests/test_application_clientplatform_bot_provisioning.py \
+            tests/test_application_clientplatform_managed_bot_onboarding.py \
             tests/test_application_clientplatform_managed_bot_owner.py \
-            tests/test_runtime_clientplatform_managed_bot_owner.py \
             tests/test_runtime_clientplatform_bot_setup_ui.py \
+            tests/test_runtime_clientplatform_managed_bot_onboarding.py \
             tests/test_runtime_clientplatform_managed_bot_lifecycle_ui.py \
+            tests/test_runtime_clientplatform_managed_bot_owner.py \
             tests/test_runtime_clientplatform_polling_entry.py \
             tests/test_runtime_clientplatform_cross_messenger_entry.py \
             2>&1 | tee "$RUNNER_TEMP/clientplatform-bot-provisioning-tests.log"
