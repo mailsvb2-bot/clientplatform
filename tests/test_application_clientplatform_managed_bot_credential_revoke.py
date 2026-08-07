@@ -17,6 +17,7 @@ from clientplatform.infrastructure.managed_bot_credentials import (
 )
 from clientplatform.infrastructure.safe_tenancy_repository import TenancyRepository
 from services.db.schema import (
+    clientplatform_bot_gateway,
     clientplatform_bot_provisioning,
     clientplatform_connections,
     clientplatform_tenancy,
@@ -43,6 +44,7 @@ class ManagedBotCredentialRevokeTests(unittest.IsolatedAsyncioTestCase):
         clientplatform_tenancy.ensure(self.conn)
         clientplatform_connections.ensure(self.conn)
         clientplatform_bot_provisioning.ensure(self.conn)
+        clientplatform_bot_gateway.ensure(self.conn)
         tenancy = TenancyRepository(self.conn)
         access = tenancy.create_business(owner_user_id=101, name="Практика")
         self.actor = tenancy.resolve_context(
