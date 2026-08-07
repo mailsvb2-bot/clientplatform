@@ -14,6 +14,8 @@ _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 _AD_IDENTITY_FILE = "/run/secrets/clientplatform-ad/identity.txt"
 _AD_HOST_DIR = "/var/lib/clientplatform/ad-secrets"
 _AD_OAUTH_REDIRECT_URI = "https://oauth.yandex.ru/verification_code"
+_MANAGED_BOT_IDENTITY_FILE = "/run/secrets/clientplatform-managed-bot/identity.txt"
+_MANAGED_BOT_HOST_DIR = "/var/lib/clientplatform/managed-bot-secrets"
 
 
 class EnvironmentPreparationError(RuntimeError):
@@ -102,6 +104,29 @@ def _validate_ad_connections(
     _validate_timezone(values)
 
 
+def _validate_managed_bot_auto_provisioning(values: dict[str, str]) -> None:
+    if not _enabled(values, "CLIENTPLATFORM_MANAGED_BOT_AUTO_PROVISIONING_ENABLED"):
+        return
+    if _required(
+        values,
+        "CLIENTPLATFORM_MANAGED_BOT_CREDENTIAL_IDENTITY_FILE",
+    ) != _MANAGED_BOT_IDENTITY_FILE:
+        raise EnvironmentPreparationError(
+            "mismatched_clientplatform_managed_bot_credential_identity_file"
+        )
+    if _required(
+        values,
+        "CLIENTPLATFORM_MANAGED_BOT_CREDENTIAL_HOST_DIR",
+    ) != _MANAGED_BOT_HOST_DIR:
+        raise EnvironmentPreparationError(
+            "mismatched_clientplatform_managed_bot_credential_host_dir"
+        )
+    if _enabled(values, "CLIENTPLATFORM_MANAGED_BOT_CREDENTIAL_ALLOW_GENERATE"):
+        raise EnvironmentPreparationError(
+            "managed_bot_credential_generation_forbidden_in_production"
+        )
+
+
 def prepare(path: Path) -> tuple[str, ...]:
     expanded = path.expanduser()
     if expanded.is_symlink():
@@ -154,6 +179,12 @@ def prepare(path: Path) -> tuple[str, ...]:
         "CLIENTPLATFORM_BACKUP_ENCRYPTION_REQUIRED": "1",
         "CLIENTPLATFORM_POSTGRES_BACKUP_S3_ENABLED": "0",
         "CLIENTPLATFORM_POSTGRES_BACKUP_FRESHNESS_REQUIRED": "0",
+        "CLIENTPLATFORM_MANAGED_BOT_AUTO_PROVISIONING_ENABLED": "0",
+        "CLIENTPLATFORM_MANAGED_BOT_CREDENTIAL_IDENTITY_FILE": (
+            _MANAGED_BOT_IDENTITY_FILE
+        ),
+        "CLIENTPLATFORM_MANAGED_BOT_CREDENTIAL_HOST_DIR": _MANAGED_BOT_HOST_DIR,
+        "CLIENTPLATFORM_MANAGED_BOT_CREDENTIAL_ALLOW_GENERATE": "0",
         "MAX_WEBHOOK_ENABLED": "0",
         "VK_WEBHOOK_ENABLED": "0",
         "CLIENTPLATFORM_AD_CONNECTIONS_ENABLED": "0",
@@ -175,6 +206,7 @@ def prepare(path: Path) -> tuple[str, ...]:
         lines.append(f"{key}={value}")
         values[key] = value
 
+    _validate_managed_bot_auto_provisioning(values)
     _validate_ad_connections(values, domain=domain)
 
     backup = resolved.with_name(resolved.name + ".before-current-main")
