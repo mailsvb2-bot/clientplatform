@@ -71,8 +71,8 @@ services:
       - clientplatform-logs:/var/log/clientplatform
     ports:
       - "80:80"
-      - "443:443/udp"
       - "443:443"
+      - "443:443/udp"
     depends_on: [app]
     cap_drop: ["ALL"]
     cap_add: ["NET_BIND_SERVICE"]
