@@ -85,6 +85,25 @@ def ensure(c: sqlite3.Connection) -> None:
     )
     c.execute(
         """
+        CREATE TABLE IF NOT EXISTS managed_bot_credentials(
+            id TEXT PRIMARY KEY,
+            business_id TEXT NOT NULL,
+            external_bot_id TEXT NOT NULL,
+            ciphertext TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            revoked_at TEXT,
+            UNIQUE(id, business_id),
+            UNIQUE(business_id, external_bot_id),
+            FOREIGN KEY(business_id) REFERENCES businesses(id) ON DELETE CASCADE,
+            CHECK(status IN ('active', 'revoked')),
+            CHECK(length(ciphertext) > 0)
+        )
+        """
+    )
+    c.execute(
+        """
         CREATE TABLE IF NOT EXISTS delivery_dispatch_outbox(
             id TEXT PRIMARY KEY,
             business_id TEXT NOT NULL,
@@ -137,6 +156,12 @@ def ensure(c: sqlite3.Connection) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_managed_bots_business_status
         ON managed_bots(business_id, platform, status)
+        """
+    )
+    c.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_managed_bot_credentials_business_status
+        ON managed_bot_credentials(business_id, status, updated_at)
         """
     )
     c.execute(
