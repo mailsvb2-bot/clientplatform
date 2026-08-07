@@ -7,10 +7,11 @@ import importlib
 import os
 from types import ModuleType
 from typing import Any
+from urllib.parse import urlencode
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from clientplatform.application.managed_bot_onboarding import (
     has_active_telegram_managed_bot,
@@ -65,7 +66,7 @@ def _simple_keyboard(business_id: str):
     token = control._uuid_token(business_id)
     return control._keyboard(
         [
-            [("✨ Сделать следующий шаг", f"cps:next:{token}")],
+            [("✨ Что настроить первым?", f"cps:firstgoal:{token}")],
             [
                 ("👥 Клиенты", f"cp:clients:{token}"),
                 ("📚 Материалы", f"cps:programs:{token}"),
@@ -77,6 +78,12 @@ def _simple_keyboard(business_id: str):
             [("⚙️ Все возможности", f"cps:advanced:{token}")],
         ]
     )
+
+
+def _telegram_share_url(url: str, text: str) -> str:
+    """Build Telegram's documented share URL with encoded values."""
+
+    return "https://t.me/share/url?" + urlencode({"url": url, "text": text})
 
 
 async def _business_snapshot(*, user_id: int, business_id: str):
@@ -113,7 +120,8 @@ async def send_simple_dashboard(
         "• посмотреть результат.\n\n"
         f"Клиентов: {len(customers)} · программ: {len(programs)} · "
         f"свободных времён: {open_slots}\n\n"
-        "Не знаете, с чего начать? Нажмите первую кнопку — я сам предложу следующий шаг.",
+        "Не знаете, с чего начать? Нажмите «Что настроить первым?» — "
+        "я проведу по минимальному числу шагов.",
         reply_markup=_simple_keyboard(business_id),
     )
 
@@ -167,11 +175,25 @@ async def _invite_customer(callback: CallbackQuery, *, actor: Any, business_id: 
     if not bot.username:
         raise RuntimeError("clientplatform control bot requires a public username")
     link = f"https://t.me/{bot.username}?start=cpj_{issued.token}"
+    share_url = _telegram_share_url(
+        link,
+        "Подключитесь ко мне в ClientPlatform — здесь можно записываться и получать материалы.",
+    )
     await control._callback_message(callback).answer(
         "Первый полезный шаг — подключить клиента.\n\n"
-        "Отправьте ему эту персональную ссылку. После перехода он сможет записываться "
-        "и получать Ваши материалы:\n\n"
-        f"{link}"
+        "Нажмите «Отправить клиенту» и выберите нужный чат — Telegram сам подставит "
+        "персональное приглашение. Ссылку ниже можно скопировать вручную, если удобнее:\n\n"
+        f"{link}",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="📨 Отправить клиенту",
+                        url=share_url,
+                    )
+                ]
+            ]
+        ),
     )
 
 
@@ -283,9 +305,14 @@ async def open_simple_booking(callback: CallbackQuery, state: FSMContext) -> Non
         None,
     )
     if capability is None:
+        token = control._uuid_token(business_id)
         await callback.answer()
         await control._callback_message(callback).answer(
-            "Запись пока не подключена. Нажмите «Сделать следующий шаг» — я настрою её."
+            "Запись пока не подключена. Нажмите «Что настроить первым?» — "
+            "я проведу по нужным шагам.",
+            reply_markup=control._keyboard(
+                [[("✨ Что настроить первым?", f"cps:firstgoal:{token}")]]
+            ),
         )
         return
     routed = _routed_callback(
