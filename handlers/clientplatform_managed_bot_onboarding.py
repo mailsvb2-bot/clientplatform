@@ -23,6 +23,8 @@ from aiogram.types import (
 from clientplatform.application.managed_bot_onboarding import (
     begin_telegram_managed_bot_onboarding,
     complete_telegram_managed_bot_onboarding,
+    get_pending_telegram_managed_bot_onboarding,
+    record_telegram_managed_bot_created,
 )
 from clientplatform.domain.bot_provisioning import (
     BotProvisioningError,
@@ -59,8 +61,6 @@ def _request_token(request_id: str) -> str:
 
 
 def _telegram_request_id(request_id: str) -> int:
-    """Return a stable signed 32-bit ID unique enough for one Telegram message."""
-
     digest = hashlib.sha256(str(request_id).encode("ascii")).digest()
     value = int.from_bytes(digest[:4], byteorder="big", signed=True)
     return value if value != 0 else 1
@@ -84,6 +84,12 @@ def _managed_status_text(request: ManagedBotProvisioningRequest | None) -> str:
         assert _ORIGINAL_STATUS_TEXT is not None
         return _ORIGINAL_STATUS_TEXT(request)
     if request.status == BotProvisioningStatus.AWAITING_SECRET:
+        if request.external_bot_id and request.verified_username:
+            return (
+                "Мой Telegram-бот\n\n"
+                f"✅ Telegram уже создал @{request.verified_username}.\n\n"
+                "Осталось завершить безопасное подключение. Новый бот создавать не нужно."
+            )
         return (
             "Мой Telegram-бот\n\n"
             "⏳ Telegram ещё не передал созданного бота ClientPlatform.\n\n"
@@ -99,7 +105,7 @@ def _managed_status_text(request: ManagedBotProvisioningRequest | None) -> str:
     if request.status == BotProvisioningStatus.FAILED:
         return (
             "Мой Telegram-бот\n\n"
-            "⚠️ Telegram создал бота, но автоматическое подключение не завершилось.\n\n"
+            "⚠️ Бот создан, но автоматическая проверка не завершилась.\n\n"
             "Можно безопасно повторить проверку — повторный бот создан не будет."
         )
     if request.status == BotProvisioningStatus.CANCELLED:
@@ -130,7 +136,11 @@ def _managed_status_keyboard(
             rows.append([("✨ Создать моего бота", f"cpm:n:{business_token}")])
         rows.append([("Подключить существующего бота", f"cpb:n:{business_token}")])
     elif request.status == BotProvisioningStatus.AWAITING_SECRET:
-        if _auto_onboarding_enabled():
+        if request.external_bot_id and request.verified_username:
+            rows.append(
+                [("🔄 Завершить подключение", f"cpm:r:{business_token}")]
+            )
+        elif _auto_onboarding_enabled():
             rows.append([("✨ Создать в Telegram", f"cpm:n:{business_token}")])
         rows.append(
             [
@@ -163,8 +173,6 @@ def _managed_status_keyboard(
 
 
 def install_managed_bot_onboarding(bot_setup_module: ModuleType) -> None:
-    """Install the managed-bot path without deleting the BotFather fallback."""
-
     global _ORIGINAL_STATUS_TEXT, _ORIGINAL_STATUS_KEYBOARD
     if bool(getattr(bot_setup_module, "_managed_bot_onboarding_installed", False)):
         return
@@ -185,6 +193,51 @@ async def _business_name(user_id: int, business_id: str) -> str:
         None,
     )
     return "Мой помощник" if access is None else str(access.business.name)[:64]
+
+
+def _bot_display_name(bot_user) -> str | None:
+    return " ".join(
+        part
+        for part in (
+            str(bot_user.first_name or "").strip(),
+            str(bot_user.last_name or "").strip(),
+        )
+        if part
+    ) or None
+
+
+async def _send_success(
+    message: Message,
+    state: FSMContext,
+    completed: ManagedBotProvisioningRequest,
+) -> None:
+    await state.clear()
+    await message.answer(
+        f"✅ @{completed.verified_username} подключён к ClientPlatform.\n\n"
+        "Теперь клиенты смогут получать материалы и программы через Вашего "
+        "персонального бота. Токен уже сохранён зашифрованно — ничего дополнительно "
+        "настраивать не нужно.",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+    await message.answer(
+        "Что дальше?",
+        reply_markup=control._keyboard(
+            [
+                [
+                    (
+                        "Открыть кабинет",
+                        f"cpb:b:{_business_token(completed.business_id)}",
+                    )
+                ],
+                [
+                    (
+                        "Статус моего бота",
+                        f"cpb:o:{_business_token(completed.business_id)}",
+                    )
+                ],
+            ]
+        ),
+    )
 
 
 @router.callback_query(F.data.startswith("cpm:n:"))
@@ -249,6 +302,51 @@ async def request_managed_bot_creation(
     )
 
 
+@router.callback_query(F.data.startswith("cpm:r:"))
+async def resume_managed_bot_connection(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    try:
+        business_id = control._token_uuid(str(callback.data).split(":", 2)[2])
+        user_id = int(callback.from_user.id)
+        actor = await control._actor(user_id, business_id)
+        pending = await asyncio.to_thread(
+            get_pending_telegram_managed_bot_onboarding,
+            user_id=user_id,
+        )
+        if pending.actor.business_id != actor.business_id:
+            raise ValueError("managed bot retry belongs to another business")
+        request = pending.request
+        if not request.external_bot_id or not request.verified_username:
+            raise ValueError("managed bot identity is unavailable for retry")
+        token = await callback.bot.get_managed_bot_token(
+            user_id=int(request.external_bot_id)
+        )
+        completed = await complete_telegram_managed_bot_onboarding(
+            user_id=user_id,
+            external_bot_id=request.external_bot_id,
+            username=request.verified_username,
+            display_name=request.display_name,
+            token=token,
+        )
+    except (
+        BotProvisioningError,
+        ManagedBotCredentialError,
+        TelegramAPIError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ):
+        await callback.answer(
+            "Не удалось завершить подключение. Попробуйте ещё раз позже.",
+            show_alert=True,
+        )
+        return
+    await callback.answer("Бот подключён")
+    await _send_success(control._callback_message(callback), state, completed)
+
+
 @router.message(F.managed_bot_created)
 async def receive_managed_bot_created(
     message: Message,
@@ -265,21 +363,23 @@ async def receive_managed_bot_created(
             reply_markup=ReplyKeyboardRemove(),
         )
         return
+    user_id = control._user_id(message)
+    display_name = _bot_display_name(bot_user)
     try:
-        token = await message.bot.get_managed_bot_token(user_id=int(bot_user.id))
-        completed = await complete_telegram_managed_bot_onboarding(
-            user_id=control._user_id(message),
+        await asyncio.to_thread(
+            record_telegram_managed_bot_created,
+            user_id=user_id,
             external_bot_id=str(bot_user.id),
             username=username,
-            display_name=" ".join(
-                part
-                for part in (
-                    str(bot_user.first_name or "").strip(),
-                    str(bot_user.last_name or "").strip(),
-                )
-                if part
-            )
-            or None,
+            display_name=display_name,
+            event_at=message.date,
+        )
+        token = await message.bot.get_managed_bot_token(user_id=int(bot_user.id))
+        completed = await complete_telegram_managed_bot_onboarding(
+            user_id=user_id,
+            external_bot_id=str(bot_user.id),
+            username=username,
+            display_name=display_name,
             token=token,
             event_at=message.date,
         )
@@ -292,44 +392,20 @@ async def receive_managed_bot_created(
         ValueError,
     ):
         await message.answer(
-            "Telegram создал бота, но ClientPlatform не смог завершить подключение. "
-            "Откройте /mybot и нажмите повторную проверку — новый бот создавать не нужно.",
+            "Telegram уже создал бота, но ClientPlatform пока не завершил подключение. "
+            "Откройте /mybot и нажмите «Завершить подключение» — новый бот создавать "
+            "не нужно.",
             reply_markup=ReplyKeyboardRemove(),
         )
         return
 
-    await state.clear()
-    await message.answer(
-        f"✅ @{completed.verified_username} подключён к ClientPlatform.\n\n"
-        "Теперь клиенты смогут получать материалы и программы через Вашего "
-        "персонального бота. Токен уже сохранён зашифрованно — ничего дополнительно "
-        "настраивать не нужно.",
-        reply_markup=ReplyKeyboardRemove(),
-    )
-    await message.answer(
-        "Что дальше?",
-        reply_markup=control._keyboard(
-            [
-                [
-                    (
-                        "Открыть кабинет",
-                        f"cpb:b:{_business_token(completed.business_id)}",
-                    )
-                ],
-                [
-                    (
-                        "Статус моего бота",
-                        f"cpb:o:{_business_token(completed.business_id)}",
-                    )
-                ],
-            ]
-        ),
-    )
+    await _send_success(message, state, completed)
 
 
 __all__ = [
     "install_managed_bot_onboarding",
     "receive_managed_bot_created",
     "request_managed_bot_creation",
+    "resume_managed_bot_connection",
     "router",
 ]
