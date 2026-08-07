@@ -12,6 +12,7 @@ from scripts import all_user_scenario_gate as gate
     "name,value",
     [
         ("DATABASE_URL", "postgresql://prod-user:prod-pass@db.internal/prod"),
+        ("CLIENTPLATFORM_DB_PATH", "/srv/clientplatform/data/data.db"),
         ("METRO_DB_PATH", "/srv/metrotherapy/data/data.db"),
         ("YOOKASSA_SECRET_KEY", "live-yookassa-secret"),
         ("YOOKASSA_WEBHOOK_SECRET", "live-webhook-secret"),
@@ -38,7 +39,8 @@ def test_step_env_uses_private_sqlite_and_disables_live_ingress(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setenv("DATABASE_URL", "postgresql://prod.example/metrotherapy")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://prod.example/clientplatform")
+    monkeypatch.setenv("CLIENTPLATFORM_DB_PATH", "/srv/clientplatform/data/data.db")
     monkeypatch.setenv("METRO_DB_PATH", "/srv/metrotherapy/data/data.db")
     monkeypatch.setenv("YOOKASSA_SECRET_KEY", "live-secret")
     target = tmp_path / "scenario.db"
@@ -47,14 +49,15 @@ def test_step_env_uses_private_sqlite_and_disables_live_ingress(
 
     assert env["APP_ENV"] == "test"
     assert env["LOAD_DOTENV"] == "0"
-    assert env["METRO_DB_ENGINE"] == "sqlite"
-    assert env["METRO_DB_PATH"] == str(target)
+    assert env["CLIENTPLATFORM_DB_ENGINE"] == "sqlite"
+    assert env["CLIENTPLATFORM_DB_PATH"] == str(target)
     assert env["DATABASE_URL"] == ""
     assert env["MESSENGER_WEBHOOK_ENABLED"] == "0"
     assert env["MAX_WEBHOOK_ENABLED"] == "0"
     assert env["VK_WEBHOOK_ENABLED"] == "0"
     assert env["PAYMENT_HTTP_ENABLED"] == "0"
     assert "live-secret" not in env.values()
+    assert "/srv/clientplatform/data/data.db" not in env.values()
     assert "/srv/metrotherapy/data/data.db" not in env.values()
 
 
@@ -64,7 +67,7 @@ def test_each_step_gets_distinct_database_path(
     first = gate._step_env(gate.STEPS[0], tmp_path / "first.db")
     second = gate._step_env(gate.STEPS[1], tmp_path / "second.db")
 
-    assert first["METRO_DB_PATH"] != second["METRO_DB_PATH"]
+    assert first["CLIENTPLATFORM_DB_PATH"] != second["CLIENTPLATFORM_DB_PATH"]
 
 
 def test_safe_system_environment_is_preserved(monkeypatch: pytest.MonkeyPatch) -> None:
