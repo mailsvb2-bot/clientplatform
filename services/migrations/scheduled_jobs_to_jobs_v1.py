@@ -14,8 +14,8 @@ def _table_exists(conn, table_name: str) -> bool:
     """Backend-safe table existence check for optional legacy tables."""
 
     # Selecting from a missing table aborts a PostgreSQL transaction, so the
-    # catalog check must use the canonical ClientPlatform DB runtime rather than
-    # the old METRO_DB_ENGINE environment variable.
+    # catalog check must use the canonical ClientPlatform DB runtime instead of
+    # reading an inherited product environment variable directly.
     if is_postgres_enabled():
         row = conn.execute(
             """
