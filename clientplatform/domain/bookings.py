@@ -67,17 +67,51 @@ def _valid_local_occurrences(local: datetime, zone: ZoneInfo) -> list[datetime]:
     return occurrences
 
 
-def parse_local_booking_start(value: str, *, timezone_name: str) -> str:
-    raw = " ".join(str(value or "").split())
+def _parse_local_wall_clock(
+    raw: str,
+    *,
+    zone: ZoneInfo,
+    now_utc: str | None,
+) -> datetime:
+    for pattern in ("%d.%m.%Y %H:%M", "%d.%m.%y %H:%M"):
+        try:
+            return datetime.strptime(raw, pattern)
+        except ValueError:
+            pass
+
     try:
-        local = datetime.strptime(raw, "%d.%m.%Y %H:%M")
+        month_day = datetime.strptime(raw, "%d.%m %H:%M")
     except ValueError as exc:
-        raise ValueError("дата и время должны быть в формате ДД.ММ.ГГГГ ЧЧ:ММ") from exc
+        raise ValueError(
+            "дата и время должны выглядеть как 10.08 15:00, "
+            "10.08.26 15:00 или 10.08.2026 15:00"
+        ) from exc
+
+    if now_utc is None:
+        reference_utc = datetime.now(timezone.utc)
+    else:
+        normalized_now = normalize_utc_datetime(now_utc, field_name="now")
+        reference_utc = datetime.fromisoformat(normalized_now)
+    reference_local = reference_utc.astimezone(zone)
+    candidate = month_day.replace(year=reference_local.year)
+    if candidate <= reference_local.replace(tzinfo=None):
+        candidate = candidate.replace(year=reference_local.year + 1)
+    return candidate
+
+
+def parse_local_booking_start(
+    value: str,
+    *,
+    timezone_name: str,
+    now_utc: str | None = None,
+) -> str:
+    raw = " ".join(str(value or "").split())
     try:
         zone = ZoneInfo(str(timezone_name or "").strip())
     except ZoneInfoNotFoundError as exc:
         raise ValueError("неизвестный часовой пояс бизнеса") from exc
 
+    local = _parse_local_wall_clock(raw, zone=zone, now_utc=now_utc)
     occurrences = _valid_local_occurrences(local, zone)
     if not occurrences:
         raise ValueError(
