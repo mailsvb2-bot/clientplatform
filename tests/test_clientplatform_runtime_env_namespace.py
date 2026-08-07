@@ -110,6 +110,16 @@ class ClientPlatformRuntimeEnvironmentTests(unittest.TestCase):
         self.assertNotIn("METRO_DB_ENGINE", source)
         self.assertNotIn("METRO_DB_PATH", source)
 
+    def test_migration_backend_detection_uses_canonical_runtime(self) -> None:
+        paths = (
+            ROOT / "services/migrations/_helpers.py",
+            ROOT / "services/migrations/scheduled_jobs_to_jobs_v1.py",
+        )
+        for path in paths:
+            source = path.read_text(encoding="utf-8")
+            self.assertIn("is_postgres_enabled", source, str(path))
+            self.assertNotIn("METRO_DB_ENGINE", source, str(path))
+
     def test_runtime_namespace_files_are_in_critical_static_gate(self) -> None:
         source = (ROOT / "scripts/critical_static_gate.py").read_text(
             encoding="utf-8"
