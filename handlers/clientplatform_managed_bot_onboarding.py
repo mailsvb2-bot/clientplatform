@@ -151,20 +151,16 @@ def _managed_status_keyboard(
             ]
         )
     elif request.status in {BotProvisioningStatus.READY, BotProvisioningStatus.FAILED}:
-        rows.extend(
+        if request.external_bot_id and request.verified_username:
+            rows.append(
+                [("🔄 Повторить безопасное подключение", f"cpm:r:{business_token}")]
+            )
+        rows.append(
             [
-                [
-                    (
-                        "Повторить безопасное подключение",
-                        f"cpb:v:{business_token}:{_request_token(request.id)}",
-                    )
-                ],
-                [
-                    (
-                        "Отменить",
-                        f"cpb:c:{business_token}:{_request_token(request.id)}",
-                    )
-                ],
+                (
+                    "Отменить",
+                    f"cpb:c:{business_token}:{_request_token(request.id)}",
+                )
             ]
         )
     rows.append([("Обновить", f"cpb:o:{business_token}")])
