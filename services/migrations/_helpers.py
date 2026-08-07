@@ -9,12 +9,18 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _is_postgres() -> bool:
+    """Compatibility alias for older migrations using the canonical DB runtime."""
+
+    return is_postgres_enabled()
+
+
 def ensure_schema_migrations(conn) -> None:
     """
     Canonical migration ledger.
 
     Compatibility contract:
-    - older migrations import migration_applied()
+    - older migrations import migration_applied() and _is_postgres()
     - newer migrations may import is_migration_applied() / is_applied()
     - some migrations import table_exists()
     - mark_migration() must work on SQLite and Postgres
