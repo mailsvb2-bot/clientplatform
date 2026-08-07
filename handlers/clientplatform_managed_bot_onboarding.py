@@ -198,27 +198,26 @@ async def request_managed_bot_creation(
             show_alert=True,
         )
         return
-    business_token = str(callback.data).split(":", 2)[2]
-    business_id = control._token_uuid(business_token)
-    user_id = int(callback.from_user.id)
-    actor = await control._actor(user_id, business_id)
-    identity = await callback.bot.get_me()
-    if getattr(identity, "can_manage_bots", None) is not True:
-        await callback.answer(
-            "Автоматическое создание бота пока не включено для ClientPlatform",
-            show_alert=True,
-        )
-        return
-
-    display_name = await _business_name(user_id, business_id)
     try:
+        business_token = str(callback.data).split(":", 2)[2]
+        business_id = control._token_uuid(business_token)
+        user_id = int(callback.from_user.id)
+        actor = await control._actor(user_id, business_id)
+        identity = await callback.bot.get_me()
+        if getattr(identity, "can_manage_bots", None) is not True:
+            await callback.answer(
+                "Автоматическое создание бота пока не включено для ClientPlatform",
+                show_alert=True,
+            )
+            return
+        display_name = await _business_name(user_id, business_id)
         request = await asyncio.to_thread(
             begin_telegram_managed_bot_onboarding,
             actor=actor,
             idempotency_key=f"managed-ui-{uuid4().hex}",
             display_name=display_name,
         )
-    except (BotProvisioningError, RuntimeError, ValueError):
+    except (BotProvisioningError, TelegramAPIError, RuntimeError, TypeError, ValueError):
         await callback.answer(
             "Не удалось начать создание бота. Попробуйте ещё раз.",
             show_alert=True,
@@ -282,12 +281,14 @@ async def receive_managed_bot_created(
             )
             or None,
             token=token,
+            event_at=message.date,
         )
     except (
         BotProvisioningError,
         ManagedBotCredentialError,
         TelegramAPIError,
         RuntimeError,
+        TypeError,
         ValueError,
     ):
         await message.answer(
