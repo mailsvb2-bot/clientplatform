@@ -9,6 +9,7 @@ from aiogram.exceptions import TelegramAPIError
 
 from clientplatform.domain.bot_provisioning import (
     BotProvisioningVerificationFailed,
+    BotProvisioningWebhookConflict,
     ManagedBotProvisioningRequest,
     VerifiedTelegramBot,
 )
@@ -71,6 +72,7 @@ class BotFatherTelegramProvisioner:
         credential_provider: CredentialProvider | None = None,
         public_base_url: str | None = None,
         gateway_path_prefix: str | None = None,
+        reject_active_webhook: bool = False,
     ) -> None:
         self._credential_provider = (
             credential_provider or ClientPlatformCredentialProvider()
@@ -79,6 +81,7 @@ class BotFatherTelegramProvisioner:
         # transport migration. Neither value participates in Telegram ingress.
         self._public_base_url_value = public_base_url
         self._gateway_path_prefix_value = gateway_path_prefix
+        self._reject_active_webhook = bool(reject_active_webhook)
 
     async def provision(
         self,
@@ -117,6 +120,12 @@ class BotFatherTelegramProvisioner:
                 )
                 or request.display_name,
             )
+            if self._reject_active_webhook:
+                webhook = await bot.get_webhook_info()
+                if str(getattr(webhook, "url", "") or "").strip():
+                    raise BotProvisioningWebhookConflict(
+                        "Telegram bot already has an active webhook"
+                    )
             removed = await bot.delete_webhook(drop_pending_updates=False)
             if removed is not True:
                 raise BotProvisioningVerificationFailed(
