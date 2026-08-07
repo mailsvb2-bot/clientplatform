@@ -135,6 +135,22 @@ class ClientPlatformBookingHardeningTests(unittest.TestCase):
         )
         self.assertEqual(parsed, "2027-08-10T13:00:00+00:00")
 
+    def test_yearless_leap_day_finds_next_real_calendar_occurrence(self) -> None:
+        parsed = parse_local_booking_start(
+            "29.02 15:00",
+            timezone_name="Europe/Amsterdam",
+            now_utc="2026-08-07T12:00:00+00:00",
+        )
+        self.assertEqual(parsed, "2028-02-29T14:00:00+00:00")
+
+    def test_invalid_yearless_calendar_date_has_human_error(self) -> None:
+        with self.assertRaisesRegex(ValueError, "такой даты"):
+            parse_local_booking_start(
+                "31.04 15:00",
+                timezone_name="Europe/Amsterdam",
+                now_utc="2026-08-07T12:00:00+00:00",
+            )
+
     def test_bad_booking_date_explains_all_supported_human_formats(self) -> None:
         with self.assertRaisesRegex(ValueError, "10.08 15:00"):
             parse_local_booking_start(
