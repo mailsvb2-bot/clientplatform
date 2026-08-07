@@ -19,6 +19,7 @@ _MEMBER_ID = "00000000-0000-0000-0000-000000000102"
 _REQUEST_ID = "00000000-0000-0000-0000-000000000103"
 _CONNECTION_ID = "00000000-0000-0000-0000-000000000104"
 _MANAGED_BOT_ID = "00000000-0000-0000-0000-000000000105"
+_AUTO_ENV = {"CLIENTPLATFORM_MANAGED_BOT_AUTO_PROVISIONING_ENABLED": "1"}
 
 
 def _request(status: BotProvisioningStatus) -> ManagedBotProvisioningRequest:
@@ -101,11 +102,12 @@ class _Callback:
 
 class ClientPlatformManagedBotOnboardingUiTests(unittest.IsolatedAsyncioTestCase):
     def test_managed_status_never_asks_owner_for_token(self) -> None:
-        texts = [managed._managed_status_text(None)]
-        texts.extend(
-            managed._managed_status_text(_request(status))
-            for status in BotProvisioningStatus
-        )
+        with patch.dict("os.environ", _AUTO_ENV, clear=False):
+            texts = [managed._managed_status_text(None)]
+            texts.extend(
+                managed._managed_status_text(_request(status))
+                for status in BotProvisioningStatus
+            )
         rendered = "\n".join(texts).lower()
         self.assertNotIn("clientplatform_secret_", rendered)
         self.assertNotIn("secret-store", rendered)
@@ -113,10 +115,22 @@ class ClientPlatformManagedBotOnboardingUiTests(unittest.IsolatedAsyncioTestCase
         self.assertIn("токен", rendered)
         self.assertIn("не нужно", rendered)
 
+    def test_disabled_runtime_hides_native_creation_button(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {"CLIENTPLATFORM_MANAGED_BOT_AUTO_PROVISIONING_ENABLED": "0"},
+            clear=False,
+        ):
+            markup = managed._managed_status_keyboard(_BUSINESS_ID, None)
+        labels = [button.text for row in markup.inline_keyboard for button in row]
+        self.assertNotIn("✨ Создать моего бота", labels)
+        self.assertIn("Подключить существующего бота", labels)
+
     async def test_manager_capability_opens_native_managed_bot_request(self) -> None:
         callback = _Callback(can_manage_bots=True)
         state = _State()
         with (
+            patch.dict("os.environ", _AUTO_ENV, clear=False),
             patch.object(managed.control, "_actor", new=AsyncMock(return_value=object())),
             patch.object(managed, "_business_name", new=AsyncMock(return_value="Практика")),
             patch.object(
@@ -145,6 +159,7 @@ class ClientPlatformManagedBotOnboardingUiTests(unittest.IsolatedAsyncioTestCase
         callback = _Callback(can_manage_bots=False)
         state = _State()
         with (
+            patch.dict("os.environ", _AUTO_ENV, clear=False),
             patch.object(managed.control, "_actor", new=AsyncMock(return_value=object())),
             patch.object(
                 managed,
