@@ -3,12 +3,14 @@ from __future__ import annotations
 import sqlite3
 import unittest
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 from clientplatform.application import bot_provisioning as bot_application
 from clientplatform.application import managed_bot_onboarding as application
 from clientplatform.domain.bot_provisioning import (
     BotProvisioningInvariantViolation,
+    BotProvisioningNotFound,
     BotProvisioningProvider,
     BotProvisioningStatus,
     VerifiedTelegramBot,
@@ -81,6 +83,7 @@ class ClientPlatformManagedBotOnboardingApplicationTests(
     def _patch_db(self):
         return (
             patch.object(application, "get_db", self._db),
+            patch.object(application, "get_db_ro", self._db),
             patch.object(bot_application, "get_db", self._db),
             patch.object(bot_application, "get_db_ro", self._db),
         )
@@ -88,12 +91,15 @@ class ClientPlatformManagedBotOnboardingApplicationTests(
     async def test_creation_survives_without_fsm_and_completes_active_route(self) -> None:
         provisioner = _Provisioner()
         raw_token = "900001:" + ("A" * 40)
-        managed_db, bot_db, bot_ro = self._patch_db()
-        with managed_db, bot_db, bot_ro:
+        managed_db, managed_ro, bot_db, bot_ro = self._patch_db()
+        with managed_db, managed_ro, bot_db, bot_ro:
             request = application.begin_telegram_managed_bot_onboarding(
                 actor=self.first,
                 idempotency_key="managed-owner-ui-001",
                 display_name="Практика",
+            )
+            self.assertFalse(
+                application.has_active_telegram_managed_bot(actor=self.first)
             )
             # Completion intentionally has no FSM/request ID input. The durable
             # membership correlation must recover the request after a restart.
@@ -103,8 +109,12 @@ class ClientPlatformManagedBotOnboardingApplicationTests(
                 username="practice_helper_bot",
                 display_name="Помощник практики",
                 token=raw_token,
+                event_at=datetime.now(timezone.utc) + timedelta(seconds=1),
                 vault=self.vault,
                 provisioner=provisioner,
+            )
+            self.assertTrue(
+                application.has_active_telegram_managed_bot(actor=self.first)
             )
 
         self.assertEqual(request.provider, BotProvisioningProvider.TELEGRAM_MANAGED)
@@ -128,8 +138,8 @@ class ClientPlatformManagedBotOnboardingApplicationTests(
         )
 
     async def test_one_user_cannot_start_two_managed_bot_creations(self) -> None:
-        managed_db, bot_db, bot_ro = self._patch_db()
-        with managed_db, bot_db, bot_ro:
+        managed_db, managed_ro, bot_db, bot_ro = self._patch_db()
+        with managed_db, managed_ro, bot_db, bot_ro:
             first = application.begin_telegram_managed_bot_onboarding(
                 actor=self.first,
                 idempotency_key="managed-owner-ui-002",
@@ -149,23 +159,52 @@ class ClientPlatformManagedBotOnboardingApplicationTests(
                 )
 
     async def test_foreign_user_cannot_claim_another_users_creation_event(self) -> None:
-        managed_db, bot_db, bot_ro = self._patch_db()
-        with managed_db, bot_db, bot_ro:
+        raw_token = "900001:" + ("A" * 40)
+        managed_db, managed_ro, bot_db, bot_ro = self._patch_db()
+        with managed_db, managed_ro, bot_db, bot_ro:
             application.begin_telegram_managed_bot_onboarding(
                 actor=self.first,
                 idempotency_key="managed-owner-ui-005",
             )
-            with self.assertRaises(Exception) as caught:
+            with self.assertRaises(BotProvisioningNotFound) as caught:
                 await application.complete_telegram_managed_bot_onboarding(
                     user_id=self.other.user_id,
                     external_bot_id="900001",
                     username="practice_helper_bot",
                     display_name=None,
-                    token="900001:" + ("A" * 40),
+                    token=raw_token,
                     vault=self.vault,
                     provisioner=_Provisioner(),
                 )
-        self.assertNotIn("900001:" + ("A" * 40), str(caught.exception))
+        self.assertNotIn(raw_token, str(caught.exception))
+        self.assertEqual(
+            self.conn.execute("SELECT COUNT(*) FROM managed_bot_credentials").fetchone()[0],
+            0,
+        )
+
+    async def test_stale_creation_message_cannot_bind_to_new_request(self) -> None:
+        raw_token = "900001:" + ("A" * 40)
+        managed_db, managed_ro, bot_db, bot_ro = self._patch_db()
+        with managed_db, managed_ro, bot_db, bot_ro:
+            request = application.begin_telegram_managed_bot_onboarding(
+                actor=self.first,
+                idempotency_key="managed-owner-ui-006",
+            )
+            stale = datetime.fromisoformat(request.created_at) - timedelta(seconds=1)
+            with self.assertRaisesRegex(
+                BotProvisioningInvariantViolation,
+                "predates the active request",
+            ):
+                await application.complete_telegram_managed_bot_onboarding(
+                    user_id=self.first.user_id,
+                    external_bot_id="900001",
+                    username="practice_helper_bot",
+                    display_name=None,
+                    token=raw_token,
+                    event_at=stale,
+                    vault=self.vault,
+                    provisioner=_Provisioner(),
+                )
         self.assertEqual(
             self.conn.execute("SELECT COUNT(*) FROM managed_bot_credentials").fetchone()[0],
             0,
