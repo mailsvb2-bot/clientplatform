@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from clientplatform.application.bot_provisioning import finalize_botfather_provisioning
-from clientplatform.domain.bot_provisioning import ManagedBotProvisioningRequest
+from clientplatform.domain.bot_provisioning import (
+    ManagedBotProvisioningRequest,
+    VerifiedTelegramBot,
+)
 from clientplatform.domain.tenancy import TenantContext
 from clientplatform.infrastructure.bot_provisioning_repository import (
     BotProvisioningRepository,
@@ -58,6 +61,11 @@ async def complete_telegram_managed_bot_onboarding(
     ``vault://`` reference; neither logs nor domain objects contain the token.
     """
 
+    event_identity = VerifiedTelegramBot(
+        external_bot_id=external_bot_id,
+        username=username,
+        display_name=display_name,
+    )
     raw_token = str(token or "").strip()
     if not raw_token:
         raise ValueError("managed bot token is unavailable")
@@ -71,7 +79,7 @@ async def complete_telegram_managed_bot_onboarding(
             vault=selected_vault,
         ).put(
             actor=pending.actor,
-            external_bot_id=external_bot_id,
+            external_bot_id=event_identity.external_bot_id,
             token=raw_token,
         )
         request = BotProvisioningRepository(conn).submit_secret_references(
@@ -88,18 +96,11 @@ async def complete_telegram_managed_bot_onboarding(
             managed_bot_vault=selected_vault
         )
     )
-    completed = await finalize_botfather_provisioning(
+    return await finalize_botfather_provisioning(
         actor=pending.actor,
         request_id=request.id,
         provisioner=selected_provisioner,
     )
-    # The verifier reads the authoritative Telegram identity from the child bot.
-    # These inputs are used only to fail early on obviously mismatched events.
-    if completed.external_bot_id != str(external_bot_id):
-        raise RuntimeError("managed bot identity changed during provisioning")
-    if completed.verified_username != str(username or "").strip().lstrip("@").lower():
-        raise RuntimeError("managed bot username changed during provisioning")
-    return completed
 
 
 __all__ = [
