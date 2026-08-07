@@ -17,12 +17,41 @@ from clientplatform.infrastructure.managed_bot_credentials import (
 from clientplatform.infrastructure.managed_bot_onboarding_repository import (
     ManagedBotOnboardingRepository,
 )
+from clientplatform.infrastructure.safe_tenancy_repository import TenancyRepository
 from clientplatform.runtime.bot_provisioning import (
     BotFatherTelegramProvisioner,
     ManagedBotProvisioner,
 )
 from clientplatform.runtime.secrets import EnvironmentCredentialProvider
-from services.db import get_db
+from services.db import get_db, get_db_ro
+
+
+def has_active_telegram_managed_bot(*, actor: TenantContext) -> bool:
+    """Return whether the current business has an actually active Telegram route."""
+
+    with get_db_ro() as conn:
+        current = TenancyRepository(conn).resolve_context(
+            user_id=actor.user_id,
+            business_id=actor.business_id,
+        )
+        current.assert_can_manage_business()
+        row = conn.execute(
+            """
+            SELECT 1
+            FROM managed_bots AS bot
+            JOIN connections AS connection
+              ON connection.id=bot.connection_id
+             AND connection.business_id=bot.business_id
+             AND connection.platform=bot.platform
+            WHERE bot.business_id=?
+              AND bot.platform='telegram'
+              AND bot.status='active'
+              AND connection.status='active'
+            LIMIT 1
+            """,
+            (current.business_id,),
+        ).fetchone()
+        return row is not None
 
 
 def begin_telegram_managed_bot_onboarding(
@@ -106,4 +135,5 @@ async def complete_telegram_managed_bot_onboarding(
 __all__ = [
     "begin_telegram_managed_bot_onboarding",
     "complete_telegram_managed_bot_onboarding",
+    "has_active_telegram_managed_bot",
 ]
