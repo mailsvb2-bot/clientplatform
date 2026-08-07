@@ -12,12 +12,11 @@ from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
-from clientplatform.application.bot_provisioning import (
-    list_bot_provisioning_requests,
+from clientplatform.application.managed_bot_onboarding import (
+    has_active_telegram_managed_bot,
 )
 from clientplatform.domain.activity import CapabilityStatus
 from clientplatform.domain.bookings import BookingSlotStatus
-from clientplatform.domain.bot_provisioning import BotProvisioningStatus
 
 control = importlib.import_module(".clientplatform_control", __package__)
 builder = importlib.import_module(".clientplatform_program_builder", __package__)
@@ -197,27 +196,22 @@ async def next_best_action(callback: CallbackQuery, state: FSMContext) -> None:
         )
         return
 
-    if _managed_bot_auto_enabled():
-        provisioning = await asyncio.to_thread(
-            list_bot_provisioning_requests,
-            actor=actor,
+    if _managed_bot_auto_enabled() and not await asyncio.to_thread(
+        has_active_telegram_managed_bot,
+        actor=actor,
+    ):
+        await state.clear()
+        token = control._uuid_token(business_id)
+        await message.answer(
+            "Материалы готовы. Теперь создадим Вашего персонального бота — через "
+            "него клиенты будут получать программы и общаться с ClientPlatform.\n\n"
+            "Нажмите кнопку ниже: Telegram откроет встроенное создание, а всё "
+            "техническое ClientPlatform выполнит сам.",
+            reply_markup=control._keyboard(
+                [[("✨ Создать моего бота", f"cpb:o:{token}")]]
+            ),
         )
-        if not any(
-            item.status == BotProvisioningStatus.COMPLETED
-            for item in provisioning
-        ):
-            await state.clear()
-            token = control._uuid_token(business_id)
-            await message.answer(
-                "Материалы готовы. Теперь создадим Вашего персонального бота — через "
-                "него клиенты будут получать программы и общаться с ClientPlatform.\n\n"
-                "Нажмите кнопку ниже: Telegram откроет встроенное создание, а всё "
-                "техническое ClientPlatform выполнит сам.",
-                reply_markup=control._keyboard(
-                    [[("✨ Создать моего бота", f"cpb:o:{token}")]]
-                ),
-            )
-            return
+        return
 
     if not customers:
         await state.clear()
