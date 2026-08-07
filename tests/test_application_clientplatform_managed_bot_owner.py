@@ -181,7 +181,7 @@ class ClientPlatformManagedBotOwnerApplicationTests(
         revoked = _snapshot(ManagedBotStatus.REVOKED)
         with (
             patch.object(application, "_get_webhook_material", return_value=_material()),
-            patch.object(application, "revoke_managed_bot") as revoke,
+            patch.object(application, "_revoke_managed_bot_and_credential") as revoke,
             patch.object(
                 application,
                 "_snapshot_async",
@@ -193,7 +193,11 @@ class ClientPlatformManagedBotOwnerApplicationTests(
                 managed_bot_id=_BOT_ID,
                 controller=controller,
             )
-        revoke.assert_called_once_with(actor=self.actor, managed_bot_id=_BOT_ID)
+        revoke.assert_called_once_with(
+            actor=self.actor,
+            managed_bot_id=_BOT_ID,
+            material=_material(),
+        )
         self.assertEqual(controller.detach_calls, 1)
         self.assertEqual(result.snapshot.bot_status, ManagedBotStatus.REVOKED)
         self.assertEqual(result.warning_code, "webhook_detach_failed")
