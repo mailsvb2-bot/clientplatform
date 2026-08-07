@@ -25,6 +25,26 @@ def _load_clientplatform_modules() -> tuple[ModuleType, ModuleType]:
     globals()["clientplatform_bot_setup"] = bot_setup
     bot_setup.install_dashboard_button(control)
 
+    managed_bot_onboarding = importlib.import_module(
+        ".clientplatform_managed_bot_onboarding",
+        __name__,
+    )
+    globals()["clientplatform_managed_bot_onboarding"] = managed_bot_onboarding
+    managed_bot_onboarding.install_managed_bot_onboarding(bot_setup)
+    if not bool(getattr(bot_setup, "_managed_bot_onboarding_composed", False)):
+        bot_setup.router.include_router(managed_bot_onboarding.router)
+        bot_setup._managed_bot_onboarding_composed = True
+
+    existing_bot_onboarding = importlib.import_module(
+        ".clientplatform_existing_bot_onboarding",
+        __name__,
+    )
+    globals()["clientplatform_existing_bot_onboarding"] = existing_bot_onboarding
+    existing_bot_onboarding.install_existing_bot_onboarding(bot_setup)
+    if not bool(getattr(bot_setup, "_existing_bot_onboarding_composed", False)):
+        bot_setup.router.include_router(existing_bot_onboarding.router)
+        bot_setup._existing_bot_onboarding_composed = True
+
     bot_lifecycle = importlib.import_module(
         ".clientplatform_bot_lifecycle",
         __name__,
@@ -59,6 +79,16 @@ def _load_clientplatform_modules() -> tuple[ModuleType, ModuleType]:
     )
     globals()["clientplatform_owner_journey"] = owner_journey
     owner_journey.install_owner_journey(entry, control, simple_experience)
+
+    first_result = importlib.import_module(
+        ".clientplatform_first_result",
+        __name__,
+    )
+    globals()["clientplatform_first_result"] = first_result
+    first_result.install_first_result(owner_journey)
+    if not bool(getattr(simple_experience, "_first_result_composed", False)):
+        simple_experience.router.include_router(first_result.router)
+        simple_experience._first_result_composed = True
 
     public_storefront = importlib.import_module(
         ".clientplatform_public_storefront",
@@ -118,6 +148,12 @@ def __getattr__(name: str) -> ModuleType:
     if name == "clientplatform_bot_setup":
         _load_clientplatform_modules()
         return globals()["clientplatform_bot_setup"]
+    if name == "clientplatform_managed_bot_onboarding":
+        _load_clientplatform_modules()
+        return globals()["clientplatform_managed_bot_onboarding"]
+    if name == "clientplatform_existing_bot_onboarding":
+        _load_clientplatform_modules()
+        return globals()["clientplatform_existing_bot_onboarding"]
     if name == "clientplatform_bot_lifecycle":
         _load_clientplatform_modules()
         return globals()["clientplatform_bot_lifecycle"]
@@ -127,6 +163,9 @@ def __getattr__(name: str) -> ModuleType:
     if name == "clientplatform_owner_journey":
         _load_clientplatform_modules()
         return globals()["clientplatform_owner_journey"]
+    if name == "clientplatform_first_result":
+        _load_clientplatform_modules()
+        return globals()["clientplatform_first_result"]
     if name == "clientplatform_public_storefront":
         _load_clientplatform_modules()
         return globals()["clientplatform_public_storefront"]
@@ -159,6 +198,9 @@ __all__ = [
     "clientplatform_bot_lifecycle",
     "clientplatform_bot_setup",
     "clientplatform_control",
+    "clientplatform_existing_bot_onboarding",
+    "clientplatform_first_result",
+    "clientplatform_managed_bot_onboarding",
     "clientplatform_owner_journey",
     "clientplatform_promotion",
     "clientplatform_promotion_install",

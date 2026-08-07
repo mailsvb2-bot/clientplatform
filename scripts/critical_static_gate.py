@@ -39,6 +39,25 @@ _REWARD_HARDENING_FILES = (
     "services/reward_tokens.py",
 )
 
+_CLIENTPLATFORM_MANAGED_BOT_TYPE_FILES = (
+    "clientplatform/application/existing_bot_onboarding.py",
+    "clientplatform/application/managed_bot_onboarding.py",
+    "clientplatform/domain/bot_provisioning.py",
+    "clientplatform/infrastructure/managed_bot_credentials.py",
+    "clientplatform/infrastructure/managed_bot_onboarding_repository.py",
+    "clientplatform/runtime/secrets.py",
+    "services/migrations/clientplatform_managed_bot_provider_v1.py",
+)
+
+_CLIENTPLATFORM_MANAGED_BOT_SECURITY_FILES = (
+    *_CLIENTPLATFORM_MANAGED_BOT_TYPE_FILES,
+    "clientplatform/application/managed_bot_owner.py",
+    "clientplatform/runtime/bot_provisioning.py",
+    "handlers/clientplatform_existing_bot_onboarding.py",
+    "handlers/clientplatform_managed_bot_onboarding.py",
+    "scripts/clientplatform_bot_gateway_preflight.py",
+)
+
 TYPE_CONTRACT_FILES = (
     "check_db.py",
     "clientplatform/application/ad_oauth_sessions.py",
@@ -88,6 +107,7 @@ TYPE_CONTRACT_FILES = (
     "services/sales_desk.py",
     "services/sales_desk_repository.py",
     "services/sales_desk_sync.py",
+    *_CLIENTPLATFORM_MANAGED_BOT_TYPE_FILES,
     *_REWARD_HARDENING_FILES,
     *_RUNTIME_HARDENING_FILES,
 )
@@ -139,6 +159,7 @@ SECURITY_SCAN_PATHS = (
     "services/sales_desk_db.py",
     "services/sales_desk_repository.py",
     "services/sales_desk_sync.py",
+    *_CLIENTPLATFORM_MANAGED_BOT_SECURITY_FILES,
     *_REWARD_HARDENING_FILES,
     *_RUNTIME_HARDENING_FILES,
 )

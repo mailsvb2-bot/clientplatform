@@ -14,6 +14,8 @@ class ClientPlatformBotGatewayPreflightTests(unittest.TestCase):
             "TELEGRAM_WEBHOOK_ENABLED": "0",
             "TELEGRAM_LEGACY_TOKEN_WEBHOOK_ENABLED": "0",
             "CLIENTPLATFORM_BOT_GATEWAY_ENABLED": "1",
+            "CLIENTPLATFORM_MANAGED_BOT_AUTO_PROVISIONING_ENABLED": "0",
+            "CLIENTPLATFORM_MANAGED_BOT_CREDENTIAL_ALLOW_GENERATE": "0",
             "CLIENTPLATFORM_BOT_GATEWAY_BATCH_SIZE": "10",
             "CLIENTPLATFORM_BOT_GATEWAY_INTERVAL_SEC": "0.5",
             "CLIENTPLATFORM_BOT_GATEWAY_TICK_TIMEOUT_SEC": "30",
@@ -52,6 +54,38 @@ class ClientPlatformBotGatewayPreflightTests(unittest.TestCase):
         env = self.valid_env()
         env["MESSENGER_WEBHOOK_ENABLED"] = "0"
         self.assertEqual(validate_environment(env), [])
+
+    def test_auto_provisioning_requires_absolute_managed_bot_identity(self) -> None:
+        env = self.valid_env()
+        env["CLIENTPLATFORM_MANAGED_BOT_AUTO_PROVISIONING_ENABLED"] = "1"
+        errors = validate_environment(env)
+        self.assertIn(
+            "CLIENTPLATFORM_MANAGED_BOT_CREDENTIAL_IDENTITY_FILE is required when managed bot auto provisioning is enabled",
+            errors,
+        )
+
+        env["CLIENTPLATFORM_MANAGED_BOT_CREDENTIAL_IDENTITY_FILE"] = "relative/key.txt"
+        errors = validate_environment(env)
+        self.assertIn(
+            "CLIENTPLATFORM_MANAGED_BOT_CREDENTIAL_IDENTITY_FILE must be an absolute path",
+            errors,
+        )
+
+    def test_deployed_auto_provisioning_forbids_runtime_key_generation(self) -> None:
+        env = self.valid_env()
+        env.update(
+            {
+                "CLIENTPLATFORM_MANAGED_BOT_AUTO_PROVISIONING_ENABLED": "1",
+                "CLIENTPLATFORM_MANAGED_BOT_CREDENTIAL_IDENTITY_FILE": (
+                    "/run/secrets/clientplatform-managed-bot/identity.txt"
+                ),
+                "CLIENTPLATFORM_MANAGED_BOT_CREDENTIAL_ALLOW_GENERATE": "1",
+            }
+        )
+        self.assertIn(
+            "CLIENTPLATFORM_MANAGED_BOT_CREDENTIAL_ALLOW_GENERATE must be 0 in deployed environments",
+            validate_environment(env),
+        )
 
     def test_limits_are_bounded(self) -> None:
         env = self.valid_env()

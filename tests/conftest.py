@@ -16,11 +16,13 @@ TEST_ROOT.mkdir(parents=True, exist_ok=True)
 # Pytest must never inherit production DB/messenger/webhook state from systemd/.env.
 os.environ["APP_ENV"] = "test"
 os.environ["LOAD_DOTENV"] = "0"
+os.environ["CLIENTPLATFORM_DB_ENGINE"] = "sqlite"
 os.environ["METRO_DB_ENGINE"] = "sqlite"
 os.environ["DATABASE_URL"] = ""
 TEST_DB_PATH = TEST_ROOT / f"pytest_{os.getpid()}.db"
 for suffix in ("", "-wal", "-shm"):
     (TEST_ROOT / f"{TEST_DB_PATH.name}{suffix}").unlink(missing_ok=True)
+os.environ["CLIENTPLATFORM_DB_PATH"] = str(TEST_DB_PATH)
 os.environ["METRO_DB_PATH"] = str(TEST_DB_PATH)
 
 os.environ.setdefault("BOT_TOKEN", "000000:TEST")

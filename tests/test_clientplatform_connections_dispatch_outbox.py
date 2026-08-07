@@ -462,6 +462,7 @@ class ClientPlatformConnectionsDispatchOutboxTests(unittest.TestCase):
                 "lesson_deliveries",
                 "lesson_progress",
                 "lessons",
+                "managed_bot_credentials",
                 "managed_bots",
                 "programs",
             },

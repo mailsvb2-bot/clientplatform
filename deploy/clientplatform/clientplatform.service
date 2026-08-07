@@ -43,6 +43,10 @@ UMask=0077
 StateDirectory=clientplatform
 LogsDirectory=clientplatform
 ReadWritePaths=/var/lib/clientplatform /var/log/clientplatform
+# Keep the managed-bot age identity read-only inside the same canonical path
+# used by the container deployment. A missing source is ignored while the
+# feature is disabled; the bot-gateway preflight fails closed when enabled.
+BindReadOnlyPaths=-/var/lib/clientplatform/managed-bot-secrets:/run/secrets/clientplatform-managed-bot
 LimitNOFILE=65536
 
 [Install]

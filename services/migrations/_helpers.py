@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import os
 from datetime import datetime, timezone
+
+from services.db.runtime import is_postgres_enabled
 
 
 def _utc_now() -> str:
@@ -9,7 +10,9 @@ def _utc_now() -> str:
 
 
 def _is_postgres() -> bool:
-    return os.getenv("METRO_DB_ENGINE", "").strip().lower() == "postgres"
+    """Compatibility alias for older migrations using the canonical DB runtime."""
+
+    return is_postgres_enabled()
 
 
 def ensure_schema_migrations(conn) -> None:
@@ -17,7 +20,7 @@ def ensure_schema_migrations(conn) -> None:
     Canonical migration ledger.
 
     Compatibility contract:
-    - older migrations import migration_applied()
+    - older migrations import migration_applied() and _is_postgres()
     - newer migrations may import is_migration_applied() / is_applied()
     - some migrations import table_exists()
     - mark_migration() must work on SQLite and Postgres
@@ -62,12 +65,12 @@ def table_exists(conn, table_name: str) -> bool:
     never SELECT from a possibly missing table, because that aborts the
     transaction and poisons the rest of startup migrations.
     """
-    if _is_postgres():
+    if is_postgres_enabled():
         row = conn.execute(
             """
             SELECT 1 AS present
             FROM information_schema.tables
-            WHERE table_schema = 'public'
+            WHERE table_schema = current_schema()
               AND table_name = ?
             LIMIT 1
             """,

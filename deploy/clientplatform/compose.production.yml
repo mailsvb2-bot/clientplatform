@@ -51,6 +51,7 @@ services:
       - clientplatform-logs:/var/log/clientplatform
       - clientplatform-backups:/var/backups/clientplatform
       - ${CLIENTPLATFORM_AD_CREDENTIAL_HOST_DIR:-/var/lib/clientplatform/ad-secrets}:/run/secrets/clientplatform-ad:ro
+      - ${CLIENTPLATFORM_MANAGED_BOT_CREDENTIAL_HOST_DIR:-/var/lib/clientplatform/managed-bot-secrets}:/run/secrets/clientplatform-managed-bot:ro
     expose: ["8181", "8182", "8191"]
     cap_drop: ["ALL"]
     security_opt: ["no-new-privileges:true"]

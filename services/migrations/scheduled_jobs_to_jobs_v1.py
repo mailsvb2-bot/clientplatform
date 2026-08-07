@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import logging
-import os
 
+from services.db.runtime import is_postgres_enabled
 from services.migrations._helpers import is_migration_applied, mark_migration
 
 log = logging.getLogger(__name__)
@@ -10,24 +10,18 @@ log = logging.getLogger(__name__)
 NAME = "scheduled_jobs_to_jobs_v1"
 
 
-def _is_postgres() -> bool:
-    return os.getenv("METRO_DB_ENGINE", "").strip().lower() == "postgres"
-
-
 def _table_exists(conn, table_name: str) -> bool:
-    """
-    Backend-safe table existence check.
+    """Backend-safe table existence check for optional legacy tables."""
 
-    Critical for Postgres:
-    selecting from a missing table aborts the whole transaction, so we must
-    check catalog existence before touching optional legacy tables.
-    """
-    if _is_postgres():
+    # Selecting from a missing table aborts a PostgreSQL transaction, so the
+    # catalog check must use the canonical ClientPlatform DB runtime instead of
+    # reading an inherited product environment variable directly.
+    if is_postgres_enabled():
         row = conn.execute(
             """
             SELECT 1
             FROM information_schema.tables
-            WHERE table_schema = 'public'
+            WHERE table_schema = current_schema()
               AND table_name = ?
             LIMIT 1
             """,

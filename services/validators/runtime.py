@@ -234,6 +234,15 @@ def validate_wide_except_policy(*, strict: bool = True) -> None:
         },
         "handlers/clientplatform_ad_disconnect.py": {"revoke_ad_connection"},
         "clientplatform/application/ad_connections.py": {"process_one_ad_publication"},
+        "handlers/clientplatform_yandex_screen_code.py": {
+            "connect_yandex_direct_screen_code",
+            "cancel_yandex_direct_screen_code",
+            "_erase_confirmation_code_message",
+            "complete_yandex_direct_screen_code",
+        },
+        "handlers/clientplatform_managed_bot_onboarding.py": {
+            "request_managed_bot_creation"
+        },
     }
     suppression_markers = {
         "# validator: allow-wide-except",

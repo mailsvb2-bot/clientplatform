@@ -24,7 +24,12 @@ class BotProvisioningVerificationFailed(BotProvisioningError):
     """The provider could not verify or configure the requested bot."""
 
 
+class BotProvisioningWebhookConflict(BotProvisioningVerificationFailed):
+    """An existing bot is already attached to another webhook consumer."""
+
+
 class BotProvisioningProvider(StrEnum):
+    TELEGRAM_MANAGED = "telegram_managed"
     BOTFATHER = "botfather"
 
 

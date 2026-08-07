@@ -7,6 +7,7 @@ from unittest.mock import patch
 from clientplatform.domain.bot_provisioning import (
     BotProvisioningStatus,
     BotProvisioningVerificationFailed,
+    BotProvisioningWebhookConflict,
     ManagedBotProvisioningRequest,
 )
 from clientplatform.runtime.bot_provisioning import BotFatherTelegramProvisioner
@@ -30,6 +31,7 @@ class _FakeBot:
         last_name="Практики",
     )
     delete_result = True
+    webhook_url = ""
 
     def __init__(self, *, token: str) -> None:
         self.token = token
@@ -40,6 +42,9 @@ class _FakeBot:
     async def get_me(self):
         return self.identity
 
+    async def get_webhook_info(self):
+        return SimpleNamespace(url=self.webhook_url)
+
     async def delete_webhook(self, *, drop_pending_updates: bool):
         self.delete_calls.append(drop_pending_updates)
         return self.delete_result
@@ -49,6 +54,7 @@ class ClientPlatformBotProvisioningRuntimeTests(unittest.IsolatedAsyncioTestCase
     def setUp(self) -> None:
         _FakeBot.instances.clear()
         _FakeBot.delete_result = True
+        _FakeBot.webhook_url = ""
         _FakeBot.identity = SimpleNamespace(
             id=900001,
             username="practice_helper_bot",
@@ -82,11 +88,16 @@ class ClientPlatformBotProvisioningRuntimeTests(unittest.IsolatedAsyncioTestCase
             updated_at="2026-07-29T09:00:00+00:00",
         )
 
-    def _provisioner(self) -> BotFatherTelegramProvisioner:
+    def _provisioner(
+        self,
+        *,
+        reject_active_webhook: bool = False,
+    ) -> BotFatherTelegramProvisioner:
         return BotFatherTelegramProvisioner(
             credential_provider=EnvironmentCredentialProvider(self.environment),
             public_base_url="http://ignored.invalid",
             gateway_path_prefix="/ignored",
+            reject_active_webhook=reject_active_webhook,
         )
 
     async def test_verifies_identity_and_removes_webhook_for_polling(self) -> None:
@@ -99,6 +110,25 @@ class ClientPlatformBotProvisioningRuntimeTests(unittest.IsolatedAsyncioTestCase
         self.assertEqual(bot.delete_calls, [False])
         self.assertEqual(bot.session.closed, 1)
         self.assertFalse(hasattr(bot, "set_webhook"))
+
+    async def test_existing_webhook_can_be_rejected_without_removal(self) -> None:
+        _FakeBot.webhook_url = "https://other-service.example/webhook"
+        with patch("clientplatform.runtime.bot_provisioning.Bot", _FakeBot):
+            with self.assertRaises(BotProvisioningWebhookConflict):
+                await self._provisioner(reject_active_webhook=True).provision(
+                    self.request
+                )
+        bot = _FakeBot.instances[-1]
+        self.assertEqual(bot.delete_calls, [])
+        self.assertEqual(bot.session.closed, 1)
+
+    async def test_empty_webhook_allows_safe_existing_bot_import(self) -> None:
+        with patch("clientplatform.runtime.bot_provisioning.Bot", _FakeBot):
+            verified = await self._provisioner(
+                reject_active_webhook=True
+            ).provision(self.request)
+        self.assertEqual(verified.external_bot_id, "900001")
+        self.assertEqual(_FakeBot.instances[-1].delete_calls, [False])
 
     async def test_rollback_keeps_webhook_disabled_without_dropping_updates(self) -> None:
         with patch("clientplatform.runtime.bot_provisioning.Bot", _FakeBot):

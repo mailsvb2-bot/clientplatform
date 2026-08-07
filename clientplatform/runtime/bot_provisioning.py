@@ -9,11 +9,13 @@ from aiogram.exceptions import TelegramAPIError
 
 from clientplatform.domain.bot_provisioning import (
     BotProvisioningVerificationFailed,
+    BotProvisioningWebhookConflict,
     ManagedBotProvisioningRequest,
     VerifiedTelegramBot,
 )
 from clientplatform.runtime.secrets import (
-    EnvironmentCredentialProvider,
+    ClientPlatformCredentialProvider,
+    CredentialProvider,
     SecretReferenceError,
 )
 
@@ -57,22 +59,29 @@ def _gateway_path_prefix(value: str | None = None) -> str:
 
 
 class BotFatherTelegramProvisioner:
-    """Verify an existing BotFather bot and prepare it for long polling."""
+    """Verify a Telegram bot credential and prepare it for long polling.
+
+    The historical class name remains for compatibility with the BotFather
+    fallback. Its credential resolver now also supports encrypted tokens of bots
+    created through Telegram Managed Bots.
+    """
 
     def __init__(
         self,
         *,
-        credential_provider: EnvironmentCredentialProvider | None = None,
+        credential_provider: CredentialProvider | None = None,
         public_base_url: str | None = None,
         gateway_path_prefix: str | None = None,
+        reject_active_webhook: bool = False,
     ) -> None:
         self._credential_provider = (
-            credential_provider or EnvironmentCredentialProvider()
+            credential_provider or ClientPlatformCredentialProvider()
         )
         # Accepted only so old composition code and tests do not break during the
         # transport migration. Neither value participates in Telegram ingress.
         self._public_base_url_value = public_base_url
         self._gateway_path_prefix_value = gateway_path_prefix
+        self._reject_active_webhook = bool(reject_active_webhook)
 
     async def provision(
         self,
@@ -111,6 +120,12 @@ class BotFatherTelegramProvisioner:
                 )
                 or request.display_name,
             )
+            if self._reject_active_webhook:
+                webhook = await bot.get_webhook_info()
+                if str(getattr(webhook, "url", "") or "").strip():
+                    raise BotProvisioningWebhookConflict(
+                        "Telegram bot already has an active webhook"
+                    )
             removed = await bot.delete_webhook(drop_pending_updates=False)
             if removed is not True:
                 raise BotProvisioningVerificationFailed(

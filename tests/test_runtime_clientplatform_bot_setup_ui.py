@@ -133,15 +133,17 @@ class ClientPlatformBotSetupUiTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             setup._secret_reference_from_input("TELEGRAM_TOKEN")
 
-    def test_status_text_is_polling_only_and_never_displays_reference(self) -> None:
+    def test_status_text_hides_transport_details_and_secret_references(self) -> None:
         for status in BotProvisioningStatus:
             text = setup._status_text(_request(status))
+            lowered = text.lower()
             self.assertNotIn("CLIENTPLATFORM_SECRET_TELEGRAM_PRACTICE", text)
             self.assertNotIn("secret://", text)
-            self.assertNotIn("webhook-секрет", text.lower())
+            self.assertNotIn("webhook-секрет", lowered)
+            self.assertNotIn("транспорт:", lowered)
         completed = setup._status_text(_request(BotProvisioningStatus.COMPLETED))
-        self.assertIn("Транспорт: polling", completed)
-        self.assertIn("Webhook для этого бота отключён", completed)
+        self.assertIn("подключён", completed.lower())
+        self.assertIn("технических настроек", completed.lower())
 
     def test_all_callback_payloads_fit_telegram_limit(self) -> None:
         requests = [None, *(_request(status) for status in BotProvisioningStatus)]

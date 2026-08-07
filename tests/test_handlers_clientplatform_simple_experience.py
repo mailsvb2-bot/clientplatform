@@ -156,7 +156,9 @@ async def test_simple_dashboard_explains_outcomes_and_counts(monkeypatch: pytest
     assert "Помогаю клиентам" in text
     assert "Услуг: 1 · свободных времён: 1 · записей клиентов: 0" in text
     assert "Материалов и программ: 2 · клиентов: 1" in text
-    assert kwargs["reply_markup"].inline_keyboard[0][0].text == "✨ Сделать следующий шаг"
+    first_button = kwargs["reply_markup"].inline_keyboard[0][0]
+    assert first_button.text == "✨ Что настроить первым?"
+    assert str(first_button.callback_data).startswith("cps:firstgoal:")
 
 
 @pytest.mark.asyncio

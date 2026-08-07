@@ -6,7 +6,6 @@ import logging
 from clientplatform.application.connections import (
     activate_managed_bot,
     disable_managed_bot,
-    revoke_managed_bot,
 )
 from clientplatform.domain.managed_bot_owner import (
     ManagedBotOwnerLifecycleResult,
@@ -15,6 +14,12 @@ from clientplatform.domain.managed_bot_owner import (
     ManagedBotWebhookOperationFailed,
 )
 from clientplatform.domain.tenancy import TenantContext
+from clientplatform.infrastructure import ConnectionRepository
+from clientplatform.infrastructure.managed_bot_credentials import (
+    AgeManagedBotCredentialVault,
+    ManagedBotCredentialError,
+    ManagedBotCredentialStore,
+)
 from clientplatform.infrastructure.managed_bot_owner_repository import (
     ManagedBotOwnerRepository,
 )
@@ -22,7 +27,7 @@ from clientplatform.runtime.managed_bot_owner import (
     ManagedBotWebhookController,
     TelegramManagedBotWebhookController,
 )
-from services.db import get_db_ro
+from services.db import get_db, get_db_ro
 
 log = logging.getLogger(__name__)
 
@@ -49,6 +54,46 @@ def _get_webhook_material(
             actor=actor,
             managed_bot_id=managed_bot_id,
         )
+
+
+def _revoke_managed_bot_and_credential(
+    *,
+    actor: TenantContext,
+    managed_bot_id: str,
+    material: ManagedBotWebhookMaterial,
+) -> None:
+    """Revoke the route and make a managed-bot token unrecoverable atomically."""
+
+    with get_db() as conn:
+        ConnectionRepository(conn).revoke_managed_bot(
+            actor=actor,
+            managed_bot_id=managed_bot_id,
+        )
+        if not material.credential_reference.startswith("vault://managed-bot/"):
+            return
+        store = ManagedBotCredentialStore(
+            conn,
+            vault=AgeManagedBotCredentialVault(),
+        )
+        if not store.revoke(
+            actor=actor,
+            reference=material.credential_reference,
+        ):
+            raise ManagedBotCredentialError(
+                "managed bot credential was not active during revocation"
+            )
+        cursor = conn.execute(
+            """
+            UPDATE managed_bot_credentials
+            SET ciphertext='revoked'
+            WHERE business_id=? AND external_bot_id=? AND status='revoked'
+            """,
+            (material.business_id, material.external_bot_id),
+        )
+        if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+            raise ManagedBotCredentialError(
+                "managed bot credential erasure did not affect exactly one record"
+            )
 
 
 async def _snapshot_async(
@@ -156,9 +201,10 @@ async def revoke_managed_bot_for_owner(
         managed_bot_id=managed_bot_id,
     )
     await asyncio.to_thread(
-        revoke_managed_bot,
+        _revoke_managed_bot_and_credential,
         actor=actor,
         managed_bot_id=managed_bot_id,
+        material=material,
     )
     adapter = controller or TelegramManagedBotWebhookController()
     warning_code: str | None = None
