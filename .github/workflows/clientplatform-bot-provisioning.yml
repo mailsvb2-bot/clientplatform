@@ -71,6 +71,7 @@ jobs:
             tests/test_application_clientplatform_managed_bot_credential_revoke.py \
             tests/test_application_clientplatform_managed_bot_owner.py \
             tests/test_runtime_clientplatform_bot_setup_ui.py \
+            tests/test_runtime_clientplatform_existing_bot_onboarding.py \
             tests/test_runtime_clientplatform_managed_bot_onboarding.py \
             tests/test_runtime_clientplatform_managed_bot_lifecycle_ui.py \
             tests/test_runtime_clientplatform_managed_bot_owner.py \
