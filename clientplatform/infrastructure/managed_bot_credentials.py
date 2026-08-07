@@ -352,7 +352,7 @@ class ManagedBotCredentialStore:
         cursor = self._conn.execute(
             """
             UPDATE managed_bot_credentials
-            SET status='revoked', revoked_at=?, updated_at=?
+            SET ciphertext='revoked', status='revoked', revoked_at=?, updated_at=?
             WHERE id=? AND business_id=? AND status='active'
             """,
             (timestamp, timestamp, credential_id, current.business_id),
