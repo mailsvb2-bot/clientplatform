@@ -7,6 +7,7 @@ from clientplatform.domain.customers import CustomerIdentityStatus, CustomerPlat
 from clientplatform.domain.sales import (
     SalesActionKind,
     SalesInvariantViolation,
+    SalesLeadStage,
     can_contact,
 )
 from clientplatform.domain.tenancy import TenantContext, normalize_uuid
@@ -28,6 +29,7 @@ _MACHINE_OUTBOUND_PLATFORMS = (
     CustomerPlatform.VK,
     CustomerPlatform.MAX,
 )
+_CLOSED_LEAD_STAGES = frozenset({SalesLeadStage.WON, SalesLeadStage.LOST})
 
 
 def _utc_now() -> str:
@@ -93,8 +95,6 @@ class SalesActionRepository:
         current = self._current(actor, manage=True)
         item = self.get(actor=current, plan_id=plan_id)
         status = str(item["status"])
-        if status == "approved":
-            return item
         if status != "planned":
             raise SalesInvariantViolation(
                 f"sales action plan cannot be approved from status {status}"
@@ -105,6 +105,10 @@ class SalesActionRepository:
                 "only an outward sales action may be approved for outbound"
             )
         lead = self._sales.get_lead(actor=current, lead_id=str(item["lead_id"]))
+        if lead.stage in _CLOSED_LEAD_STAGES:
+            raise SalesInvariantViolation(
+                "closed sales lead cannot approve or authorize outbound"
+            )
         if not can_contact(lead.contact_basis):
             raise SalesInvariantViolation(
                 "sales outbound is forbidden without an active contact basis"
@@ -120,9 +124,9 @@ class SalesActionRepository:
         )
         if int(getattr(cursor, "rowcount", 1) or 0) != 1:
             latest = self.get(actor=current, plan_id=str(item["id"]))
-            if str(latest["status"]) == "approved":
-                return latest
-            raise SalesInvariantViolation("sales action plan changed concurrently")
+            raise SalesInvariantViolation(
+                f"sales action plan changed concurrently to status {latest['status']}"
+            )
         self._sales.record_event(
             actor=current,
             lead_id=lead.id,
@@ -161,6 +165,10 @@ class SalesActionRepository:
         if action not in _OUTBOUND_ACTIONS:
             raise SalesInvariantViolation("sales action is not outbound-capable")
         lead = self._sales.get_lead(actor=current, lead_id=str(item["lead_id"]))
+        if lead.stage in _CLOSED_LEAD_STAGES:
+            raise SalesInvariantViolation(
+                "closed sales lead cannot approve or authorize outbound"
+            )
         if not can_contact(lead.contact_basis):
             raise SalesInvariantViolation(
                 "sales outbound is forbidden without an active contact basis"
