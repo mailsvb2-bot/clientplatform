@@ -27,8 +27,9 @@ def _owner_keyboard(control: ModuleType, business_id: str) -> InlineKeyboardMark
             [("🚀 Получить клиентов", f"cpj:promote:{token}")],
             [
                 ("📣 Рекламные кабинеты", f"cpa:home:{token}"),
-                ("🔌 Отключить кабинет", f"cpa:disconnects:{token}"),
+                ("📊 Яндекс", f"cpy:a:{token}:30"),
             ],
+            [("🔌 Отключить кабинет", f"cpa:disconnects:{token}")],
             [("⚙️ Настройки", f"cps:advanced:{token}")],
         ]
     )
