@@ -1,0 +1,180 @@
++
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/tests/test_clientplatform_sales_state_machine.py b/tests/test_clientplatform_sales_state_machine.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..6e90b3edeca93a7cd5bdbfa490f51e506467782d
+--- /dev/null
++++ b/tests/test_clientplatform_sales_state_machine.py
+@@ -0,0 +1,207 @@
++from __future__ import annotations
++
++import sqlite3
++import unittest
++
++from clientplatform.domain.sales import ContactBasis, SalesLeadStage
++from clientplatform.domain.sales_state_machine import (
++    SalesConversationEvent,
++    SalesConversationState,
++    reduce_sales_conversation,
++)
++from clientplatform.infrastructure import TenancyRepository
++from clientplatform.infrastructure.customer_repository import CustomerRepository
++from clientplatform.infrastructure.sales_repository import SalesRepository
++from clientplatform.infrastructure.sales_state_repository import SalesStateRepository
++from services.db.schema import (
++    clientplatform_activity,
++    clientplatform_customers,
++    clientplatform_sales,
++    clientplatform_tenancy,
++)
++
++
++class ClientPlatformSalesStateMachineTests(unittest.TestCase):
++    def setUp(self) -> None:
++        self.conn = sqlite3.connect(":memory:")
++        self.conn.row_factory = sqlite3.Row
++        self.conn.execute("PRAGMA foreign_keys=ON")
++        clientplatform_tenancy.ensure(self.conn)
++        clientplatform_customers.ensure(self.conn)
++        clientplatform_activity.ensure(self.conn)
++        clientplatform_sales.ensure(self.conn)
++        tenancy = TenancyRepository(self.conn)
++        access = tenancy.create_business(owner_user_id=101, name="Практика")
++        self.owner = tenancy.resolve_context(
++            user_id=101, business_id=access.business.id
++        )
++        customer = CustomerRepository(self.conn).create_customer(
++            actor=self.owner, display_name="Клиент"
++        )
++        self.sales = SalesRepository(self.conn)
++        self.lead = self.sales.create_or_refresh_lead(
++            actor=self.owner,
++            opportunity_key="tg:conversation-1",
++            customer_id=customer.id,
++            source_kind="telegram",
++            contact_basis=ContactBasis.INBOUND,
++        )
++        self.states = SalesStateRepository(self.conn)
++
++    def tearDown(self) -> None:
++        self.conn.close()
++
++    def test_reference_funnel_reaches_checkout_and_won(self) -> None:
++        sequence = (
++            SalesConversationEvent.INBOUND_RECEIVED,
++            SalesConversationEvent.NEED_CAPTURED,
++            SalesConversationEvent.QUALIFICATION_PASSED,
++            SalesConversationEvent.OFFER_PRESENTED,
++            SalesConversationEvent.CHECKOUT_STARTED,
++            SalesConversationEvent.PAYMENT_CONFIRMED,
++        )
++        for index, event in enumerate(sequence):
++            transition, inserted = self.states.apply(
++                actor=self.owner,
++                lead_id=self.lead.id,
++                event=event,
++                dedupe_key=f"provider:{index}",
++            )
++            self.assertTrue(inserted)
++        self.assertEqual(transition.current, SalesConversationState.WON)
++        self.assertEqual(
++            self.sales.get_lead(actor=self.owner, lead_id=self.lead.id).stage,
++            SalesLeadStage.WON,
++        )
++
++    def test_provider_replay_is_idempotent(self) -> None:
++        first = self.states.apply(
++            actor=self.owner,
++            lead_id=self.lead.id,
++            event=SalesConversationEvent.INBOUND_RECEIVED,
++            dedupe_key="telegram:update:100",
++        )
++        second = self.states.apply(
++            actor=self.owner,
++            lead_id=self.lead.id,
++            event=SalesConversationEvent.INBOUND_RECEIVED,
++            dedupe_key="telegram:update:100",
++        )
++        self.assertTrue(first[1])
++        self.assertFalse(second[1])
++        transitions = [
++            item for item in self.sales.list_events(actor=self.owner, lead_id=self.lead.id)
++            if item["event_type"] == "conversation_transition"
++        ]
++        self.assertEqual(len(transitions), 1)
++
++
++    def test_handoff_signal_does_not_erase_qualified_progress(self) -> None:
++        state = SalesConversationState.QUALIFIED
++        handoff = reduce_sales_conversation(
++            state, SalesConversationEvent.HUMAN_REQUESTED
++        )
++        self.assertEqual(handoff.current, SalesConversationState.QUALIFIED)
++
++    def test_state_projection_does_not_regress_more_advanced_lead_stage(self) -> None:
++        self.sales.set_stage(
++            actor=self.owner,
++            lead_id=self.lead.id,
++            stage=SalesLeadStage.CHECKOUT,
++        )
++        transition, inserted = self.states.apply(
++            actor=self.owner,
++            lead_id=self.lead.id,
++            event=SalesConversationEvent.INBOUND_RECEIVED,
++            dedupe_key="telegram:update:advanced-stage",
++        )
++        self.assertTrue(inserted)
++        self.assertEqual(transition.current, SalesConversationState.ENGAGED)
++        self.assertEqual(
++            self.sales.get_lead(actor=self.owner, lead_id=self.lead.id).stage,
++            SalesLeadStage.CHECKOUT,
++        )
++
++    def test_invalid_jump_fails_closed(self) -> None:
++        with self.assertRaisesRegex(ValueError, "transition_not_allowed"):
++            reduce_sales_conversation(
++                SalesConversationState.DISCOVERED,
++                SalesConversationEvent.CHECKOUT_STARTED,
++            )
++
++    def test_repeated_progress_events_are_idempotent_and_resume_does_not_rewind(self) -> None:
++        state = SalesConversationState.QUALIFIED
++        repeated = reduce_sales_conversation(state, SalesConversationEvent.NEED_CAPTURED)
++        self.assertEqual(repeated.current, SalesConversationState.QUALIFIED)
++        resumed = reduce_sales_conversation(state, SalesConversationEvent.HUMAN_RESUMED)
++        self.assertEqual(resumed.current, SalesConversationState.QUALIFIED)
++
++    def test_payment_is_hard_evidence_even_after_decline(self) -> None:
++        won = reduce_sales_conversation(
++            SalesConversationState.LOST,
++            SalesConversationEvent.PAYMENT_CONFIRMED,
++        )
++        self.assertEqual(won.current, SalesConversationState.WON)
++
++    def test_won_coarse_stage_cannot_regress(self) -> None:
++        self.sales.set_stage(
++            actor=self.owner, lead_id=self.lead.id, stage=SalesLeadStage.WON
++        )
++        with self.assertRaisesRegex(Exception, "cannot regress"):
++            self.sales.set_stage(
++                actor=self.owner, lead_id=self.lead.id, stage=SalesLeadStage.LOST
++            )
++
++    def test_same_external_dedupe_key_is_isolated_per_lead(self) -> None:
++        other_customer = CustomerRepository(self.conn).create_customer(
++            actor=self.owner, display_name="Другой клиент"
++        )
++        other = self.sales.create_or_refresh_lead(
++            actor=self.owner,
++            opportunity_key="tg:dedupe-other",
++            customer_id=other_customer.id,
++            source_kind="telegram",
++            contact_basis=ContactBasis.INBOUND,
++        )
++        first, first_inserted = self.states.apply(
++            actor=self.owner,
++            lead_id=self.lead.id,
++            event=SalesConversationEvent.INBOUND_RECEIVED,
