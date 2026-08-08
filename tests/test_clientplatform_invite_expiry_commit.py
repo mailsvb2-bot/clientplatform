@@ -48,7 +48,7 @@ class ClientPlatformInviteExpiryCommitTests(unittest.TestCase):
         def transaction():
             try:
                 yield conn
-            except Exception:
+            except ActivityInvariantViolation:
                 conn.rollback()
                 raise
             else:
