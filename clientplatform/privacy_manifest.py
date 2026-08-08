@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 TenantDisposition = Literal["erase", "retain", "anonymize"]
-CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-08-07.v14"
+CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-08-08.v18-sales-commercial"
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +66,13 @@ _POLICIES = (
     _required("clientplatform_admin_alerts", "retain", "tenant operational alerts and resolution history without message payloads"),
     _required("clientplatform_admin_audit_events", "anonymize", "administrator action evidence with anonymized actor identifiers and details"),
     _required("clientplatform_admin_interaction_metrics", "anonymize", "bounded telemetry with anonymized administrator identifiers and error details"),
+    _required("clientplatform_sales_leads", "anonymize", "tenant sales opportunity projection linked to customer identity and source metadata"),
+    _required("clientplatform_sales_events", "erase", "sales event payloads may contain customer conversation and attribution metadata"),
+    _required("clientplatform_sales_action_plans", "erase", "customer-linked proposed sales actions and rationales"),
+    _required("clientplatform_sales_conversation_state", "erase", "rebuildable customer-linked sales journey projection"),
+    _required("clientplatform_sales_handoffs", "erase", "operator takeover context can contain customer conversation metadata"),
+    _required("commercial_ladders", "retain", "business-owned commercial ladder configuration"),
+    _required("commercial_ladder_steps", "retain", "business-owned commercial offer sequence and approval thresholds"),
 )
 
 TENANT_POLICIES: dict[str, TenantPrivacyPolicy] = {policy.table: policy for policy in _POLICIES}
