@@ -127,6 +127,15 @@ def _load_clientplatform_modules() -> tuple[ModuleType, ModuleType]:
     )
     globals()["clientplatform_yandex_screen_code"] = yandex_screen_code
 
+    yandex_analytics = importlib.import_module(
+        ".clientplatform_yandex_analytics",
+        __name__,
+    )
+    globals()["clientplatform_yandex_analytics"] = yandex_analytics
+    if not bool(getattr(simple_experience, "_yandex_analytics_composed", False)):
+        simple_experience.router.include_router(yandex_analytics.router)
+        simple_experience._yandex_analytics_composed = True
+
     ad_connections = importlib.import_module(
         ".clientplatform_ad_connections",
         __name__,
@@ -193,6 +202,9 @@ def __getattr__(name: str) -> ModuleType:
     if name == "clientplatform_yandex_screen_code":
         _load_clientplatform_modules()
         return globals()["clientplatform_yandex_screen_code"]
+    if name == "clientplatform_yandex_analytics":
+        _load_clientplatform_modules()
+        return globals()["clientplatform_yandex_analytics"]
     if name == "clientplatform_ad_connections":
         _load_clientplatform_modules()
         return globals()["clientplatform_ad_connections"]
@@ -223,6 +235,7 @@ __all__ = [
     "clientplatform_sales",
     "clientplatform_sales_install",
     "clientplatform_simple_experience",
+    "clientplatform_yandex_analytics",
     "clientplatform_yandex_screen_code",
     "clientplatform_entry",
 ]

@@ -1,0 +1,267 @@
+from __future__ import annotations
+
+import hashlib
+import json
+from dataclasses import dataclass
+from datetime import date
+from typing import Mapping
+
+from clientplatform.domain.ad_connections import normalize_external_campaign_id
+from clientplatform.integrations.yandex_direct import (
+    JsonHttpTransport,
+    UrllibJsonTransport,
+    YandexDirectError,
+    YandexDirectProvider,
+    YandexOAuthConfig,
+    YandexTokenBundle,
+)
+
+_REPORTS_URL = "https://api.direct.yandex.com/json/v501/reports"
+_MAX_AD_IDS = 500
+
+
+def _report_date(value: date | str, *, field_name: str) -> str:
+    if isinstance(value, date):
+        parsed = value
+    else:
+        try:
+            parsed = date.fromisoformat(str(value).strip())
+        except ValueError as exc:
+            raise ValueError(f"{field_name} must use YYYY-MM-DD") from exc
+    return parsed.isoformat()
+
+
+def _positive_external_id(value: object, *, field_name: str) -> str:
+    normalized = str(value or "").strip()
+    if not normalized.isascii() or not normalized.isdigit() or int(normalized) <= 0:
+        raise YandexDirectError(f"{field_name}_invalid")
+    return normalized
+
+
+def _nonnegative_int(value: object, *, field_name: str) -> int:
+    if isinstance(value, (bool, float)):
+        raise YandexDirectError(f"{field_name}_invalid")
+    try:
+        parsed = int(str(value).strip())
+    except (TypeError, ValueError) as exc:
+        raise YandexDirectError(f"{field_name}_invalid") from exc
+    if parsed < 0 or parsed > 9_000_000_000_000_000_000:
+        raise YandexDirectError(f"{field_name}_invalid")
+    return parsed
+
+
+def _clean_name(value: object) -> str:
+    normalized = " ".join(str(value or "").replace("\x00", " ").split())
+    return normalized[:255] or "Без названия"
+
+
+@dataclass(frozen=True, slots=True)
+class YandexAdPerformanceRow:
+    ad_id: str
+    campaign_id: str
+    campaign_name: str
+    impressions: int
+    clicks: int
+    cost_micros: int
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "ad_id",
+            _positive_external_id(self.ad_id, field_name="ad_id"),
+        )
+        object.__setattr__(
+            self,
+            "campaign_id",
+            normalize_external_campaign_id(self.campaign_id),
+        )
+        object.__setattr__(self, "campaign_name", _clean_name(self.campaign_name))
+        for name in ("impressions", "clicks", "cost_micros"):
+            object.__setattr__(
+                self,
+                name,
+                _nonnegative_int(getattr(self, name), field_name=name),
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class YandexAdPerformanceReport:
+    date_from: str
+    date_to: str
+    rows: tuple[YandexAdPerformanceRow, ...]
+
+    @property
+    def impressions(self) -> int:
+        return sum(row.impressions for row in self.rows)
+
+    @property
+    def clicks(self) -> int:
+        return sum(row.clicks for row in self.rows)
+
+    @property
+    def cost_micros(self) -> int:
+        return sum(row.cost_micros for row in self.rows)
+
+
+class ReadOnlyYandexDirectAnalyticsProvider:
+    """Exact-AdId performance reader for ClientPlatform-created Yandex ads.
+
+    This adapter only uses the Yandex Reports service and OAuth refresh. It does
+    not expose campaign/ad mutation methods, so the analytics path cannot launch,
+    resume, moderate, bid or change budgets.
+    """
+
+    def __init__(
+        self,
+        *,
+        oauth: YandexOAuthConfig,
+        transport: JsonHttpTransport | None = None,
+    ) -> None:
+        oauth.validate()
+        self._transport = transport or UrllibJsonTransport()
+        self._oauth = YandexDirectProvider(oauth=oauth, transport=self._transport)
+
+    def refresh(self, *, bundle: YandexTokenBundle) -> YandexTokenBundle:
+        return self._oauth.refresh(bundle=bundle)
+
+    def performance_report(
+        self,
+        *,
+        access_token: str,
+        ad_ids: tuple[str, ...],
+        date_from: date | str,
+        date_to: date | str,
+        client_login: str = "",
+    ) -> YandexAdPerformanceReport:
+        start = _report_date(date_from, field_name="date_from")
+        end = _report_date(date_to, field_name="date_to")
+        if start > end:
+            raise ValueError("date_from must not be after date_to")
+        normalized_ids = tuple(
+            sorted(
+                {
+                    _positive_external_id(value, field_name="ad_id")
+                    for value in ad_ids
+                },
+                key=int,
+            )
+        )
+        if not normalized_ids:
+            return YandexAdPerformanceReport(date_from=start, date_to=end, rows=())
+        if len(normalized_ids) > _MAX_AD_IDS:
+            raise YandexDirectError("analytics_ad_limit_exceeded")
+
+        fingerprint = hashlib.sha256(
+            (start + "|" + end + "|" + ",".join(normalized_ids)).encode("ascii")
+        ).hexdigest()[:16]
+        payload = {
+            "params": {
+                "SelectionCriteria": {
+                    "DateFrom": start,
+                    "DateTo": end,
+                    "Filter": [
+                        {
+                            "Field": "AdId",
+                            "Operator": "IN",
+                            "Values": list(normalized_ids),
+                        }
+                    ],
+                },
+                "FieldNames": [
+                    "AdId",
+                    "CampaignId",
+                    "CampaignName",
+                    "Impressions",
+                    "Clicks",
+                    "Cost",
+                ],
+                "ReportName": f"clientplatform-growth-{fingerprint}",
+                "ReportType": "AD_PERFORMANCE_REPORT",
+                "DateRangeType": "CUSTOM_DATE",
+                "Format": "TSV",
+                "IncludeVAT": "NO",
+                "IncludeDiscount": "NO",
+            }
+        }
+        headers = {
+            "Authorization": f"Bearer {str(access_token).strip()}",
+            "Accept-Language": "ru",
+            "Content-Type": "application/json; charset=utf-8",
+            "returnMoneyInMicros": "true",
+            "skipReportHeader": "true",
+            "skipColumnHeader": "true",
+            "skipReportSummary": "true",
+        }
+        normalized_login = " ".join(str(client_login or "").split())
+        if normalized_login:
+            headers["Client-Login"] = normalized_login
+        status, _response_headers, raw = self._transport.request(
+            method="POST",
+            url=_REPORTS_URL,
+            headers=headers,
+            body=json.dumps(
+                payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8"),
+            timeout=20.0,
+        )
+        if status in {201, 202}:
+            raise YandexDirectError("analytics_report_pending", retryable=True)
+        if status == 401:
+            raise YandexDirectError("provider_http_401")
+        if status != 200:
+            raise YandexDirectError(
+                "analytics_report_failed",
+                retryable=status in {408, 425, 429} or status >= 500,
+            )
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise YandexDirectError("analytics_report_invalid") from exc
+        rows = self._parse_rows(text)
+        requested = set(normalized_ids)
+        if any(row.ad_id not in requested for row in rows):
+            raise YandexDirectError("analytics_report_ad_mismatch")
+        return YandexAdPerformanceReport(date_from=start, date_to=end, rows=rows)
+
+    @staticmethod
+    def _parse_rows(text: str) -> tuple[YandexAdPerformanceRow, ...]:
+        aggregated: dict[tuple[str, str, str], list[int]] = {}
+        for raw_line in text.splitlines():
+            if not raw_line.strip():
+                continue
+            columns = raw_line.split("\t")
+            if len(columns) != 6:
+                raise YandexDirectError("analytics_report_invalid")
+            ad_id, campaign_id, campaign_name, impressions, clicks, cost = (
+                column.strip() for column in columns
+            )
+            key = (
+                _positive_external_id(ad_id, field_name="ad_id"),
+                normalize_external_campaign_id(campaign_id),
+                _clean_name(campaign_name),
+            )
+            values = aggregated.setdefault(key, [0, 0, 0])
+            values[0] += _nonnegative_int(impressions, field_name="impressions")
+            values[1] += _nonnegative_int(clicks, field_name="clicks")
+            values[2] += _nonnegative_int(cost, field_name="cost_micros")
+        return tuple(
+            YandexAdPerformanceRow(
+                ad_id=key[0],
+                campaign_id=key[1],
+                campaign_name=key[2],
+                impressions=values[0],
+                clicks=values[1],
+                cost_micros=values[2],
+            )
+            for key, values in sorted(aggregated.items(), key=lambda item: int(item[0][0]))
+        )
+
+
+__all__ = [
+    "ReadOnlyYandexDirectAnalyticsProvider",
+    "YandexAdPerformanceReport",
+    "YandexAdPerformanceRow",
+]
