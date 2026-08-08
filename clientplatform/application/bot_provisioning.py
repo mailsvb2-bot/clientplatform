@@ -137,6 +137,44 @@ def _fail_verification(
         )
 
 
+async def _rollback_then_fail_verification(
+    *,
+    adapter: ManagedBotProvisioner,
+    actor: TenantContext,
+    lease: ProvisioningVerificationLease,
+    error_code: str,
+) -> Exception | None:
+    """Attempt external rollback without letting it strand VERIFYING state.
+
+    Rollback still runs first so a retry cannot race a known external cleanup.
+    If rollback itself fails, the durable FAILED transition is nevertheless
+    recorded in ``finally`` and the caller can preserve the original failure as
+    the primary exception while attaching a diagnostic note.
+    """
+
+    rollback_error: Exception | None = None
+    try:
+        await adapter.rollback(lease.request)
+    except Exception as exc:  # validator: allow-wide-except
+        rollback_error = exc
+    finally:
+        await asyncio.to_thread(
+            _fail_verification,
+            actor=actor,
+            lease=lease,
+            error_code=error_code,
+        )
+    return rollback_error
+
+
+def _annotate_rollback_failure(
+    primary_error: BaseException,
+    rollback_error: Exception | None,
+) -> None:
+    if rollback_error is not None:
+        primary_error.add_note("managed bot rollback failed during compensation")
+
+
 async def finalize_botfather_provisioning(
     *,
     actor: TenantContext,
@@ -167,14 +205,14 @@ async def finalize_botfather_provisioning(
     adapter = provisioner or BotFatherTelegramProvisioner()
     try:
         verified_bot = await adapter.provision(lease.request)
-    except asyncio.CancelledError:
-        await adapter.rollback(lease.request)
-        await asyncio.to_thread(
-            _fail_verification,
+    except asyncio.CancelledError as exc:
+        rollback_error = await _rollback_then_fail_verification(
+            adapter=adapter,
             actor=actor,
             lease=lease,
             error_code="verification_cancelled",
         )
+        _annotate_rollback_failure(exc, rollback_error)
         raise
     except BotProvisioningVerificationFailed:
         await asyncio.to_thread(
@@ -202,21 +240,21 @@ async def finalize_botfather_provisioning(
             lease=lease,
             verified_bot=verified_bot,
         )
-    except asyncio.CancelledError:
-        await adapter.rollback(lease.request)
-        await asyncio.to_thread(
-            _fail_verification,
+    except asyncio.CancelledError as exc:
+        rollback_error = await _rollback_then_fail_verification(
+            adapter=adapter,
             actor=actor,
             lease=lease,
             error_code="commit_cancelled",
         )
+        _annotate_rollback_failure(exc, rollback_error)
         raise
-    except Exception:  # validator: allow-wide-except
-        await adapter.rollback(lease.request)
-        await asyncio.to_thread(
-            _fail_verification,
+    except Exception as exc:  # validator: allow-wide-except
+        rollback_error = await _rollback_then_fail_verification(
+            adapter=adapter,
             actor=actor,
             lease=lease,
             error_code="provisioning_commit_failed",
         )
+        _annotate_rollback_failure(exc, rollback_error)
         raise

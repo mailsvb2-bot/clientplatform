@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 import unittest
 from contextlib import contextmanager
@@ -28,7 +29,8 @@ class _FakeProvisioner:
         self,
         *,
         verified: VerifiedTelegramBot | None = None,
-        error: Exception | None = None,
+        error: BaseException | None = None,
+        rollback_error: Exception | None = None,
     ) -> None:
         self.verified = verified or VerifiedTelegramBot(
             external_bot_id="900001",
@@ -36,6 +38,7 @@ class _FakeProvisioner:
             display_name="Помощник практики",
         )
         self.error = error
+        self.rollback_error = rollback_error
         self.provision_calls = 0
         self.rollback_calls = 0
 
@@ -47,6 +50,8 @@ class _FakeProvisioner:
 
     async def rollback(self, request) -> None:
         self.rollback_calls += 1
+        if self.rollback_error is not None:
+            raise self.rollback_error
 
 
 class ClientPlatformBotProvisioningApplicationTests(
@@ -151,6 +156,32 @@ class ClientPlatformBotProvisioningApplicationTests(
             0,
         )
 
+    async def test_cancelled_verification_stays_failed_when_rollback_fails(self) -> None:
+        get_db_patch, get_db_ro_patch = self._patch_db()
+        with get_db_patch, get_db_ro_patch:
+            request = self._prepare_request()
+            provisioner = _FakeProvisioner(
+                error=asyncio.CancelledError(),
+                rollback_error=RuntimeError("rollback unavailable"),
+            )
+            with self.assertRaises(asyncio.CancelledError) as caught:
+                await application.finalize_botfather_provisioning(
+                    actor=self.owner,
+                    request_id=request.id,
+                    provisioner=provisioner,
+                )
+            failed = application.get_bot_provisioning(
+                actor=self.owner,
+                request_id=request.id,
+            )
+        self.assertEqual(provisioner.rollback_calls, 1)
+        self.assertEqual(failed.status, BotProvisioningStatus.FAILED)
+        self.assertEqual(failed.last_error_code, "verification_cancelled")
+        self.assertIn(
+            "managed bot rollback failed during compensation",
+            getattr(caught.exception, "__notes__", []),
+        )
+
     async def test_database_conflict_rolls_back_configured_webhook(self) -> None:
         connections = ConnectionRepository(self.conn)
         existing_connection = connections.create_connection(
@@ -206,6 +237,39 @@ class ClientPlatformBotProvisioningApplicationTests(
         self.assertEqual(
             self.conn.execute("SELECT COUNT(*) FROM connections").fetchone()[0],
             1,
+        )
+
+    async def test_commit_failure_stays_failed_when_rollback_fails(self) -> None:
+        get_db_patch, get_db_ro_patch = self._patch_db()
+        with (
+            get_db_patch,
+            get_db_ro_patch,
+            patch.object(
+                application,
+                "_complete_verification",
+                side_effect=ConnectionInvariantViolation("commit conflict"),
+            ),
+        ):
+            request = self._prepare_request()
+            provisioner = _FakeProvisioner(
+                rollback_error=RuntimeError("rollback unavailable")
+            )
+            with self.assertRaises(ConnectionInvariantViolation) as caught:
+                await application.finalize_botfather_provisioning(
+                    actor=self.owner,
+                    request_id=request.id,
+                    provisioner=provisioner,
+                )
+            failed = application.get_bot_provisioning(
+                actor=self.owner,
+                request_id=request.id,
+            )
+        self.assertEqual(provisioner.rollback_calls, 1)
+        self.assertEqual(failed.status, BotProvisioningStatus.FAILED)
+        self.assertEqual(failed.last_error_code, "provisioning_commit_failed")
+        self.assertIn(
+            "managed bot rollback failed during compensation",
+            getattr(caught.exception, "__notes__", []),
         )
 
 
