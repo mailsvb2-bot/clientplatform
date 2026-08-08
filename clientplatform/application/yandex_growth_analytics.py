@@ -280,10 +280,8 @@ def _load_local_attribution(
 ) -> _LocalAttribution:
     if not promotion_campaign_ids:
         return _LocalAttribution(leads={}, bookings={}, won={})
-    ordered = sorted(promotion_campaign_ids)
-    placeholders = ",".join("?" for _ in ordered)
     event_from, event_until = _event_window(date_from, date_to)
-    params = (actor.business_id, *ordered, event_from, event_until)
+    params = (actor.business_id, event_from, event_until)
     with get_db_ro() as conn:
         current = TenancyRepository(conn).resolve_context(
             user_id=actor.user_id,
@@ -291,11 +289,10 @@ def _load_local_attribution(
         )
         current.assert_can_view_promotion_analytics()
         event_rows = conn.execute(
-            f"""
+            """
             SELECT campaign_id, event_type, customer_id
             FROM promotion_events
             WHERE business_id=?
-              AND campaign_id IN ({placeholders})
               AND event_type IN ('opened','booked')
               AND occurred_at>=?
               AND occurred_at<?
@@ -303,7 +300,7 @@ def _load_local_attribution(
             params,
         ).fetchall()
         won_rows = conn.execute(
-            f"""
+            """
             SELECT DISTINCT pe.campaign_id, pe.customer_id
             FROM promotion_events pe
             JOIN clientplatform_sales_leads sl
@@ -311,7 +308,6 @@ def _load_local_attribution(
              AND sl.customer_id=pe.customer_id
              AND sl.stage='won'
             WHERE pe.business_id=?
-              AND pe.campaign_id IN ({placeholders})
               AND pe.event_type='opened'
               AND pe.occurred_at>=?
               AND pe.occurred_at<?
@@ -324,6 +320,8 @@ def _load_local_attribution(
     won: dict[str, set[str]] = defaultdict(set)
     for row in event_rows:
         campaign_id = str(_value(row, "campaign_id", 0))
+        if campaign_id not in promotion_campaign_ids:
+            continue
         event_type = str(_value(row, "event_type", 1))
         customer_id = str(_value(row, "customer_id", 2))
         if event_type == "opened":
@@ -331,7 +329,10 @@ def _load_local_attribution(
         elif event_type == "booked":
             bookings[campaign_id].add(customer_id)
     for row in won_rows:
-        won[str(_value(row, "campaign_id", 0))].add(str(_value(row, "customer_id", 1)))
+        campaign_id = str(_value(row, "campaign_id", 0))
+        if campaign_id not in promotion_campaign_ids:
+            continue
+        won[campaign_id].add(str(_value(row, "customer_id", 1)))
     return _LocalAttribution(
         leads={key: frozenset(value) for key, value in leads.items()},
         bookings={key: frozenset(value) for key, value in bookings.items()},
@@ -473,11 +474,15 @@ def get_yandex_growth_snapshot(
             if (connection_id, ad_id) in report_rows
         ]
         promotion_ids = {item.promotion_campaign_id for item in items}
-        leads = set().union(*(attribution.leads.get(item, frozenset()) for item in promotion_ids))
+        leads = set().union(
+            *(attribution.leads.get(item, frozenset()) for item in promotion_ids)
+        )
         bookings = set().union(
             *(attribution.bookings.get(item, frozenset()) for item in promotion_ids)
         )
-        won = set().union(*(attribution.won.get(item, frozenset()) for item in promotion_ids))
+        won = set().union(
+            *(attribution.won.get(item, frozenset()) for item in promotion_ids)
+        )
         all_leads.update(leads)
         all_bookings.update(bookings)
         all_won.update(won)
