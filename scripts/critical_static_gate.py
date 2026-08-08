@@ -69,6 +69,12 @@ _CLIENTPLATFORM_SALES_UI_FILES = (
     "handlers/clientplatform_sales_install.py",
 )
 
+_CLIENTPLATFORM_YANDEX_ANALYTICS_FILES = (
+    "clientplatform/application/yandex_growth_analytics.py",
+    "clientplatform/integrations/yandex_direct_analytics.py",
+    "handlers/clientplatform_yandex_analytics.py",
+)
+
 TYPE_CONTRACT_FILES = (
     "check_db.py",
     "clientplatform/application/ad_oauth_sessions.py",
@@ -121,6 +127,7 @@ TYPE_CONTRACT_FILES = (
     "services/sales_desk_sync.py",
     *_CLIENTPLATFORM_MANAGED_BOT_TYPE_FILES,
     *_CLIENTPLATFORM_SALES_UI_FILES,
+    *_CLIENTPLATFORM_YANDEX_ANALYTICS_FILES,
     *_REWARD_HARDENING_FILES,
     *_RUNTIME_HARDENING_FILES,
 )
@@ -175,6 +182,7 @@ SECURITY_SCAN_PATHS = (
     "services/sales_desk_sync.py",
     *_CLIENTPLATFORM_MANAGED_BOT_SECURITY_FILES,
     *_CLIENTPLATFORM_SALES_UI_FILES,
+    *_CLIENTPLATFORM_YANDEX_ANALYTICS_FILES,
     *_REWARD_HARDENING_FILES,
     *_RUNTIME_HARDENING_FILES,
 )
