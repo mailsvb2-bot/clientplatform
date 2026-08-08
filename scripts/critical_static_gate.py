@@ -247,3 +247,7 @@ def main() -> int:
             return code
         print("CRITICAL_BANDIT_OK")
     return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
