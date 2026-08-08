@@ -17,10 +17,10 @@
 +    unittest.main()
 diff --git a/tests/test_clientplatform_sales_agent.py b/tests/test_clientplatform_sales_agent.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..863a7e8bfc89780d94eb8f0dd9135a0aa17ea789
+index 0000000000000000000000000000000000000000..e85dab9d66b92ad12b9956ebc74d7932f582dd68
 --- /dev/null
 +++ b/tests/test_clientplatform_sales_agent.py
-@@ -0,0 +1,228 @@
+@@ -0,0 +1,235 @@
 +from __future__ import annotations
 +
 +import sqlite3
