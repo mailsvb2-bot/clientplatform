@@ -58,6 +58,13 @@ _CLIENTPLATFORM_MANAGED_BOT_SECURITY_FILES = (
     "scripts/clientplatform_bot_gateway_preflight.py",
 )
 
+_CLIENTPLATFORM_SALES_UI_FILES = (
+    "clientplatform/application/sales_ui.py",
+    "clientplatform/infrastructure/sales_ui_repository.py",
+    "handlers/clientplatform_sales.py",
+    "handlers/clientplatform_sales_install.py",
+)
+
 TYPE_CONTRACT_FILES = (
     "check_db.py",
     "clientplatform/application/ad_oauth_sessions.py",
@@ -109,6 +116,7 @@ TYPE_CONTRACT_FILES = (
     "services/sales_desk_repository.py",
     "services/sales_desk_sync.py",
     *_CLIENTPLATFORM_MANAGED_BOT_TYPE_FILES,
+    *_CLIENTPLATFORM_SALES_UI_FILES,
     *_REWARD_HARDENING_FILES,
     *_RUNTIME_HARDENING_FILES,
 )
@@ -162,6 +170,7 @@ SECURITY_SCAN_PATHS = (
     "services/sales_desk_repository.py",
     "services/sales_desk_sync.py",
     *_CLIENTPLATFORM_MANAGED_BOT_SECURITY_FILES,
+    *_CLIENTPLATFORM_SALES_UI_FILES,
     *_REWARD_HARDENING_FILES,
     *_RUNTIME_HARDENING_FILES,
 )
@@ -238,7 +247,3 @@ def main() -> int:
             return code
         print("CRITICAL_BANDIT_OK")
     return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
