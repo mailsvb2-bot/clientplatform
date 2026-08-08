@@ -132,7 +132,7 @@ def normalize_known_timezone(value: str) -> str:
     normalized = normalize_timezone(value)
     try:
         ZoneInfo(normalized)
-    except ZoneInfoNotFoundError as exc:
+    except (ZoneInfoNotFoundError, ValueError) as exc:
         raise ValueError("timezone must be a known IANA timezone") from exc
     return normalized
 

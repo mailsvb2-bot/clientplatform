@@ -50,6 +50,26 @@ class ClientPlatformActivityTimezoneValidationTests(unittest.TestCase):
         ).fetchone()[0]
         self.assertEqual(count, 0)
 
+    def test_pathlike_timezones_use_the_same_domain_error(self) -> None:
+        for timezone_name in ("/etc/passwd", "../Etc/UTC"):
+            with self.subTest(timezone_name=timezone_name):
+                with self.assertRaisesRegex(ValueError, "known IANA timezone"):
+                    normalize_known_timezone(timezone_name)
+
+    def test_pathlike_timezone_is_rejected_before_profile_write(self) -> None:
+        with self.assertRaisesRegex(ValueError, "known IANA timezone"):
+            self.repo.upsert_profile(
+                actor=self.actor,
+                activity_description="Консультации",
+                timezone_name="../Etc/UTC",
+                now="2026-08-08T00:00:00+00:00",
+            )
+
+        count = self.conn.execute(
+            "SELECT COUNT(*) FROM business_profiles"
+        ).fetchone()[0]
+        self.assertEqual(count, 0)
+
     def test_legacy_normalizer_remains_non_resolving_for_read_recovery(self) -> None:
         self.assertEqual(normalize_timezone("Mars/Olympus"), "Mars/Olympus")
         with self.assertRaisesRegex(ValueError, "known IANA timezone"):
