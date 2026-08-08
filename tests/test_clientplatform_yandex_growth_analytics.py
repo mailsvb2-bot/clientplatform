@@ -4,11 +4,13 @@ import inspect
 import json
 import unittest
 from datetime import date
+from unittest.mock import patch
 
 from clientplatform.application.yandex_growth_analytics import (
     YandexGrowthCampaignSnapshot,
     YandexGrowthSnapshot,
     _current_period,
+    _event_window,
 )
 from clientplatform.integrations.yandex_direct import YandexDirectError, YandexOAuthConfig
 from clientplatform.integrations.yandex_direct_analytics import (
@@ -200,10 +202,18 @@ class YandexDirectAnalyticsProviderTests(unittest.TestCase):
 
 class YandexGrowthValueTests(unittest.TestCase):
     def test_period_and_unit_metrics_are_deterministic(self) -> None:
-        self.assertEqual(
-            _current_period(7, now=date(2026, 8, 9)),
-            ("2026-08-03", "2026-08-09"),
-        )
+        with patch.dict(
+            "os.environ",
+            {"CLIENTPLATFORM_YANDEX_DIRECT_REPORT_TIMEZONE": "Europe/Moscow"},
+        ):
+            self.assertEqual(
+                _current_period(7, now=date(2026, 8, 9)),
+                ("2026-08-03", "2026-08-09"),
+            )
+            self.assertEqual(
+                _event_window("2026-08-03", "2026-08-09"),
+                ("2026-08-02T21:00:00+00:00", "2026-08-09T21:00:00+00:00"),
+            )
         with self.assertRaises(ValueError):
             _current_period(14, now=date(2026, 8, 9))
 
