@@ -44,13 +44,8 @@ class PublicStorefrontSalesSignalTests(unittest.TestCase):
 
     @contextmanager
     def _use_db(self) -> Iterator[sqlite3.Connection]:
-        try:
-            yield self.conn
-        except BaseException:
-            self.conn.rollback()
-            raise
-        else:
-            self.conn.commit()
+        yield self.conn
+        self.conn.commit()
 
     def test_public_storefront_visit_is_real_replay_safe_sales_evidence(self) -> None:
         with patch.object(journey, "get_db", self._use_db):
@@ -115,6 +110,7 @@ class PublicStorefrontSalesSignalTests(unittest.TestCase):
                     display_name="Владелец",
                 )
 
+        self.conn.rollback()
         count = self.conn.execute(
             "SELECT COUNT(*) FROM clientplatform_sales_leads WHERE business_id=?",
             (self.access.business.id,),
