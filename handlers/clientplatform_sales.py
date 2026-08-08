@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import importlib
-from typing import Any
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
@@ -44,10 +43,7 @@ _STAGE_LABELS = {
     "contacted": "На связи",
     "qualified": "Готов к предложению",
     "checkout": "Оформление",
-    "won": "Клиент оплатил",
-    "lost": "Не состоялось",
 }
-
 _ACTION_LABELS = {
     "respond": "Ответить на обращение",
     "ask_qualification": "Уточнить задачу",
@@ -56,7 +52,6 @@ _ACTION_LABELS = {
     "human_handoff": "Подключиться лично",
     "noop": "Действий не требуется",
 }
-
 _HANDOFF_REASON_LABELS = {
     "explicit_request": "Клиент попросил человека",
     "low_confidence": "Нужна ручная проверка",
@@ -65,20 +60,23 @@ _HANDOFF_REASON_LABELS = {
     "negative_sentiment": "Клиент недоволен",
     "repeated_failure": "Автоматический сценарий не справился",
 }
-
 _SEVERITY_LABELS = {
     "urgent": "🔴 Срочно",
     "high": "🟠 Важно",
     "normal": "🟢 Обычно",
 }
-
 _LADDER_KIND_LABELS = {
     "diagnostic": "Диагностика",
     "audit": "Разбор / аудит",
     "implementation": "Основная услуга",
     "recurring": "Сопровождение",
 }
-
+_KIND_CODES = {
+    "d": "diagnostic",
+    "a": "audit",
+    "i": "implementation",
+    "r": "recurring",
+}
 _SOURCE_LABELS = {
     "telegram": "Telegram",
     "website": "Сайт",
@@ -95,6 +93,11 @@ def _uuid(value: str) -> str:
     return control._token_uuid(value)
 
 
+def _source_label(value: object) -> str:
+    normalized = str(value or "").strip().lower()
+    return _SOURCE_LABELS.get(normalized, normalized or "Другой источник")
+
+
 def _home_keyboard(business_id: str):
     token = _token(business_id)
     return control._keyboard(
@@ -107,14 +110,7 @@ def _home_keyboard(business_id: str):
 
 
 def _back_keyboard(business_id: str):
-    return control._keyboard(
-        [[("← Продажи", f"cps:s:{_token(business_id)}")]]
-    )
-
-
-def _source_label(value: object) -> str:
-    normalized = str(value or "").strip().lower()
-    return _SOURCE_LABELS.get(normalized, normalized or "Другой источник")
+    return control._keyboard([[('← Продажи', f"cps:s:{_token(business_id)}")]])
 
 
 async def send_sales_home(
@@ -128,11 +124,15 @@ async def send_sales_home(
         asyncio.to_thread(list_sales_handoff_work, actor=actor, limit=50),
         asyncio.to_thread(get_sales_funnel_snapshot, actor=actor),
     )
+    active_count = max(
+        0,
+        snapshot.total.discovered - snapshot.total.won - snapshot.total.lost,
+    )
     await message.answer(
         "💼 Продажи\n\n"
         "Здесь собраны реальные обращения и подтверждённые результаты. "
         "ClientPlatform ничего не отправляет клиентам сам: внешнее действие остаётся за Вами.\n\n"
-        f"Сейчас в работе: {snapshot.total.discovered - snapshot.total.won - snapshot.total.lost}\n"
+        f"Сейчас в работе: {active_count}\n"
         f"Нужен человек: {len(handoffs)}\n"
         f"Оплатили: {snapshot.total.won}",
         reply_markup=_home_keyboard(business_id),
@@ -166,7 +166,6 @@ async def open_sales_work(callback: CallbackQuery, state: FSMContext) -> None:
     else:
         lines = ["📋 В работе", ""]
         for index, item in enumerate(items, start=1):
-            stage = _STAGE_LABELS.get(str(item.get("stage")), "В работе")
             action = item.get("next_action_kind")
             action_text = (
                 _ACTION_LABELS.get(str(action), "Проверить ситуацию")
@@ -176,7 +175,7 @@ async def open_sales_work(callback: CallbackQuery, state: FSMContext) -> None:
             lines.extend(
                 [
                     f"{index}. {item.get('customer_name') or 'Клиент'}",
-                    f"   Статус: {stage}",
+                    f"   Статус: {_STAGE_LABELS.get(str(item.get('stage')), 'В работе')}",
                     f"   Источник: {_source_label(item.get('source_kind'))}",
                     f"   Следующий шаг: {action_text}",
                     "",
@@ -189,14 +188,14 @@ async def open_sales_work(callback: CallbackQuery, state: FSMContext) -> None:
     )
 
 
-@router.callback_query(F.data.startswith("cps:sh:"))
-async def open_sales_handoffs(callback: CallbackQuery, state: FSMContext) -> None:
-    business_id = _uuid(str(callback.data).split(":", 2)[2])
-    await state.clear()
-    actor = await control._actor(int(callback.from_user.id), business_id)
+async def _send_handoffs(
+    message: Message,
+    *,
+    user_id: int,
+    business_id: str,
+) -> None:
+    actor = await control._actor(user_id, business_id)
     items = await asyncio.to_thread(list_sales_handoff_work, actor=actor, limit=12)
-    await callback.answer()
-    message = control._callback_message(callback)
     if not items:
         await message.answer(
             "🙋 Нужен человек\n\nСейчас нет обращений, где требуется Ваше личное участие.",
@@ -208,85 +207,77 @@ async def open_sales_handoffs(callback: CallbackQuery, state: FSMContext) -> Non
     lines = ["🙋 Нужен человек", ""]
     business_token = _token(business_id)
     for index, item in enumerate(items, start=1):
-        handoff_id = str(item["id"])
-        handoff_token = _token(handoff_id)
-        severity = _SEVERITY_LABELS.get(str(item.get("severity")), "🟢 Обычно")
-        reason = _HANDOFF_REASON_LABELS.get(
-            str(item.get("reason")),
-            "Нужно личное внимание",
-        )
+        handoff_token = _token(str(item["id"]))
         status = "уже взято в работу" if str(item.get("status")) == "claimed" else "ожидает"
         lines.extend(
             [
-                f"{index}. {item.get('customer_name') or 'Клиент'} · {severity}",
-                f"   {reason} · {status}",
+                f"{index}. {item.get('customer_name') or 'Клиент'} · "
+                f"{_SEVERITY_LABELS.get(str(item.get('severity')), '🟢 Обычно')}",
+                f"   {_HANDOFF_REASON_LABELS.get(str(item.get('reason')), 'Нужно личное внимание')} · {status}",
                 "",
             ]
         )
         if str(item.get("status")) == "open":
-            rows.append(
-                [("✋ Взять", f"cps:shc:{business_token}:{handoff_token}")]
-            )
-        rows.append(
-            [("✅ Готово", f"cps:shr:{business_token}:{handoff_token}")]
-        )
+            rows.append([("✋ Взять", f"cps:shc:{business_token}:{handoff_token}")])
+        rows.append([("✅ Готово", f"cps:shr:{business_token}:{handoff_token}")])
     rows.append([("← Продажи", f"cps:s:{business_token}")])
-    await message.answer(
-        "\n".join(lines).rstrip(),
-        reply_markup=control._keyboard(rows),
+    await message.answer("\n".join(lines).rstrip(), reply_markup=control._keyboard(rows))
+
+
+@router.callback_query(F.data.startswith("cps:sh:"))
+async def open_sales_handoffs(callback: CallbackQuery, state: FSMContext) -> None:
+    business_id = _uuid(str(callback.data).split(":", 2)[2])
+    await state.clear()
+    await callback.answer()
+    await _send_handoffs(
+        control._callback_message(callback),
+        user_id=int(callback.from_user.id),
+        business_id=business_id,
     )
-
-
-async def _refresh_handoffs(
-    callback: CallbackQuery,
-    *,
-    business_id: str,
-    state: FSMContext,
-) -> None:
-    routed = callback.model_copy(
-        update={"data": f"cps:sh:{_token(business_id)}"}
-    ) if callable(getattr(callback, "model_copy", None)) else callback
-    if routed is callback:
-        callback.data = f"cps:sh:{_token(business_id)}"
-    await open_sales_handoffs(routed, state)
 
 
 @router.callback_query(F.data.startswith("cps:shc:"))
 async def claim_handoff(callback: CallbackQuery, state: FSMContext) -> None:
     parts = str(callback.data).split(":")
-    business_id = _uuid(parts[2])
-    handoff_id = _uuid(parts[3])
+    business_id, handoff_id = _uuid(parts[2]), _uuid(parts[3])
     actor = await control._actor(int(callback.from_user.id), business_id)
     try:
-        await asyncio.to_thread(
-            claim_sales_handoff,
-            actor=actor,
-            handoff_id=handoff_id,
-        )
+        await asyncio.to_thread(claim_sales_handoff, actor=actor, handoff_id=handoff_id)
     except (PermissionError, ValueError, RuntimeError):
-        await callback.answer("Не удалось взять: возможно, обращение уже изменилось.", show_alert=True)
+        await callback.answer(
+            "Не удалось взять: возможно, обращение уже изменилось.",
+            show_alert=True,
+        )
         return
+    await state.clear()
     await callback.answer("Взято в работу")
-    await _refresh_handoffs(callback, business_id=business_id, state=state)
+    await _send_handoffs(
+        control._callback_message(callback),
+        user_id=int(callback.from_user.id),
+        business_id=business_id,
+    )
 
 
 @router.callback_query(F.data.startswith("cps:shr:"))
 async def resolve_handoff(callback: CallbackQuery, state: FSMContext) -> None:
     parts = str(callback.data).split(":")
-    business_id = _uuid(parts[2])
-    handoff_id = _uuid(parts[3])
+    business_id, handoff_id = _uuid(parts[2]), _uuid(parts[3])
     actor = await control._actor(int(callback.from_user.id), business_id)
     try:
-        await asyncio.to_thread(
-            resolve_sales_handoff,
-            actor=actor,
-            handoff_id=handoff_id,
-        )
+        await asyncio.to_thread(resolve_sales_handoff, actor=actor, handoff_id=handoff_id)
     except (PermissionError, ValueError, RuntimeError):
-        await callback.answer("Не удалось закрыть: возможно, обращение уже изменилось.", show_alert=True)
+        await callback.answer(
+            "Не удалось закрыть: возможно, обращение уже изменилось.",
+            show_alert=True,
+        )
         return
+    await state.clear()
     await callback.answer("Готово")
-    await _refresh_handoffs(callback, business_id=business_id, state=state)
+    await _send_handoffs(
+        control._callback_message(callback),
+        user_id=int(callback.from_user.id),
+        business_id=business_id,
+    )
 
 
 @router.callback_query(F.data.startswith("cps:sf:"))
@@ -325,12 +316,12 @@ async def open_sales_funnel(callback: CallbackQuery, state: FSMContext) -> None:
 async def _send_ladders(message: Message, *, user_id: int, business_id: str) -> None:
     actor = await control._actor(user_id, business_id)
     ladders = await asyncio.to_thread(list_commercial_ladders, actor=actor)
-    token = _token(business_id)
+    business_token = _token(business_id)
     rows: list[list[tuple[str, str]]] = []
     lines = [
         "🪜 Линейка",
         "",
-        "Настройте естественный путь клиента от первого шага к основной услуге и сопровождению.",
+        "Настройте путь клиента от первого шага к основной услуге и сопровождению.",
         "Никакое предложение не отправляется автоматически.",
         "",
     ]
@@ -343,14 +334,14 @@ async def _send_ladders(message: Message, *, user_id: int, business_id: str) -> 
                 [
                     (
                         f"🪜 {item['name']}",
-                        f"cps:slv:{token}:{_token(str(item['id']))}",
+                        f"cps:slv:{business_token}:{_token(str(item['id']))}",
                     )
                 ]
             )
     rows.extend(
         [
-            [("➕ Создать линейку", f"cps:sln:{token}")],
-            [("← Продажи", f"cps:s:{token}")],
+            [("➕ Создать линейку", f"cps:sln:{business_token}")],
+            [("← Продажи", f"cps:s:{business_token}")],
         ]
     )
     await message.answer("\n".join(lines), reply_markup=control._keyboard(rows))
@@ -393,10 +384,13 @@ async def _send_ladder_detail(
     else:
         for index, step in enumerate(steps, start=1):
             kind = _LADDER_KIND_LABELS.get(str(step.get("kind")), "Этап")
-            approval = " · с Вашим подтверждением" if bool(step.get("requires_human_approval")) else ""
+            approval = (
+                " · с Вашим подтверждением"
+                if bool(step.get("requires_human_approval"))
+                else ""
+            )
             lines.append(f"{index}. {step['title']} — {kind}{approval}")
-    business_token = _token(business_id)
-    ladder_token = _token(ladder_id)
+    business_token, ladder_token = _token(business_id), _token(ladder_id)
     await message.answer(
         "\n".join(lines),
         reply_markup=control._keyboard(
@@ -411,8 +405,7 @@ async def _send_ladder_detail(
 @router.callback_query(F.data.startswith("cps:slv:"))
 async def open_ladder_detail(callback: CallbackQuery, state: FSMContext) -> None:
     parts = str(callback.data).split(":")
-    business_id = _uuid(parts[2])
-    ladder_id = _uuid(parts[3])
+    business_id, ladder_id = _uuid(parts[2]), _uuid(parts[3])
     await state.clear()
     await callback.answer()
     try:
@@ -449,7 +442,8 @@ async def begin_ladder_creation(callback: CallbackQuery, state: FSMContext) -> N
 async def receive_ladder_name(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     business_id = str(data.get("business_id") or "")
-    actor = await control._actor(int(message.from_user.id), business_id)
+    user_id = control._user_id(message)
+    actor = await control._actor(user_id, business_id)
     name = " ".join(str(message.text or "").split())
     try:
         ladder_id = await asyncio.to_thread(
@@ -464,7 +458,7 @@ async def receive_ladder_name(message: Message, state: FSMContext) -> None:
     await message.answer("✅ Линейка создана. Теперь добавьте первый этап.")
     await _send_ladder_detail(
         message,
-        user_id=int(message.from_user.id),
+        user_id=user_id,
         business_id=business_id,
         ladder_id=ladder_id,
     )
@@ -473,8 +467,7 @@ async def receive_ladder_name(message: Message, state: FSMContext) -> None:
 @router.callback_query(F.data.startswith("cps:sla:"))
 async def begin_ladder_step(callback: CallbackQuery, state: FSMContext) -> None:
     parts = str(callback.data).split(":")
-    business_id = _uuid(parts[2])
-    ladder_id = _uuid(parts[3])
+    business_id, ladder_id = _uuid(parts[2]), _uuid(parts[3])
     actor = await control._actor(int(callback.from_user.id), business_id)
     await asyncio.to_thread(
         list_commercial_ladder_steps,
@@ -484,16 +477,15 @@ async def begin_ladder_step(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     await state.update_data(business_id=business_id, ladder_id=ladder_id)
     await callback.answer()
-    business_token = _token(business_id)
-    ladder_token = _token(ladder_id)
+    business_token, ladder_token = _token(business_id), _token(ladder_id)
     await control._callback_message(callback).answer(
         "Какой это этап?",
         reply_markup=control._keyboard(
             [
-                [("🔎 Диагностика", f"cps:slk:{business_token}:{ladder_token}:diagnostic")],
-                [("📋 Разбор / аудит", f"cps:slk:{business_token}:{ladder_token}:audit")],
-                [("🎯 Основная услуга", f"cps:slk:{business_token}:{ladder_token}:implementation")],
-                [("🔁 Сопровождение", f"cps:slk:{business_token}:{ladder_token}:recurring")],
+                [("🔎 Диагностика", f"cps:slk:{business_token}:{ladder_token}:d")],
+                [("📋 Разбор / аудит", f"cps:slk:{business_token}:{ladder_token}:a")],
+                [("🎯 Основная услуга", f"cps:slk:{business_token}:{ladder_token}:i")],
+                [("🔁 Сопровождение", f"cps:slk:{business_token}:{ladder_token}:r")],
                 [("✖️ Отмена", f"cps:slv:{business_token}:{ladder_token}")],
             ]
         ),
@@ -503,10 +495,9 @@ async def begin_ladder_step(callback: CallbackQuery, state: FSMContext) -> None:
 @router.callback_query(F.data.startswith("cps:slk:"))
 async def choose_ladder_step_kind(callback: CallbackQuery, state: FSMContext) -> None:
     parts = str(callback.data).split(":")
-    business_id = _uuid(parts[2])
-    ladder_id = _uuid(parts[3])
-    kind = parts[4]
-    if kind not in _LADDER_KIND_LABELS:
+    business_id, ladder_id = _uuid(parts[2]), _uuid(parts[3])
+    kind = _KIND_CODES.get(parts[4])
+    if kind is None:
         await callback.answer("Неизвестный тип этапа", show_alert=True)
         return
     actor = await control._actor(int(callback.from_user.id), business_id)
@@ -535,7 +526,8 @@ async def receive_ladder_step_title(message: Message, state: FSMContext) -> None
     business_id = str(data.get("business_id") or "")
     ladder_id = str(data.get("ladder_id") or "")
     kind = str(data.get("kind") or "")
-    actor = await control._actor(int(message.from_user.id), business_id)
+    user_id = control._user_id(message)
+    actor = await control._actor(user_id, business_id)
     steps = await asyncio.to_thread(
         list_commercial_ladder_steps,
         actor=actor,
@@ -561,14 +553,10 @@ async def receive_ladder_step_title(message: Message, state: FSMContext) -> None
     await message.answer("✅ Этап добавлен.")
     await _send_ladder_detail(
         message,
-        user_id=int(message.from_user.id),
+        user_id=user_id,
         business_id=business_id,
         ladder_id=ladder_id,
     )
 
 
-__all__ = [
-    "ClientPlatformSalesUiState",
-    "router",
-    "send_sales_home",
-]
+__all__ = ["ClientPlatformSalesUiState", "router", "send_sales_home"]
