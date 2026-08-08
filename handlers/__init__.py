@@ -73,6 +73,15 @@ def _load_clientplatform_modules() -> tuple[ModuleType, ModuleType]:
     globals()["clientplatform_simple_experience"] = simple_experience
     simple_experience.install_simple_experience(control)
 
+    sales = importlib.import_module(".clientplatform_sales", __name__)
+    sales_install = importlib.import_module(".clientplatform_sales_install", __name__)
+    globals()["clientplatform_sales"] = sales
+    globals()["clientplatform_sales_install"] = sales_install
+    sales_install.install_sales_ui(simple_experience)
+    if not bool(getattr(simple_experience, "_sales_ui_composed", False)):
+        simple_experience.router.include_router(sales.router)
+        simple_experience._sales_ui_composed = True
+
     owner_journey = importlib.import_module(
         ".clientplatform_owner_journey",
         __name__,
@@ -175,6 +184,12 @@ def __getattr__(name: str) -> ModuleType:
     if name == "clientplatform_promotion_install":
         _load_clientplatform_modules()
         return globals()["clientplatform_promotion_install"]
+    if name == "clientplatform_sales":
+        _load_clientplatform_modules()
+        return globals()["clientplatform_sales"]
+    if name == "clientplatform_sales_install":
+        _load_clientplatform_modules()
+        return globals()["clientplatform_sales_install"]
     if name == "clientplatform_yandex_screen_code":
         _load_clientplatform_modules()
         return globals()["clientplatform_yandex_screen_code"]
@@ -205,6 +220,8 @@ __all__ = [
     "clientplatform_promotion",
     "clientplatform_promotion_install",
     "clientplatform_public_storefront",
+    "clientplatform_sales",
+    "clientplatform_sales_install",
     "clientplatform_simple_experience",
     "clientplatform_yandex_screen_code",
     "clientplatform_entry",
