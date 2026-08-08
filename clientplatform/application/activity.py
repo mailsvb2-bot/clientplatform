@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from clientplatform.domain.activity import (
+    ActivityError,
     ActivityInvariantViolation,
     BusinessCapability,
     BusinessOffering,
@@ -16,6 +17,47 @@ _REPOSITORY_INVITE_EXPIRED_ERROR = "customer invite has expired"
 _CUSTOMER_INVITE_EXPIRED_MESSAGE = (
     "Срок действия ссылки истёк. Попросите специалиста отправить новую ссылку."
 )
+_CUSTOMER_INVITE_OWNER_MESSAGE = (
+    "Эту ссылку нельзя использовать владельцу или сотруднику собственного бизнеса. "
+    "Отправьте её другому клиенту."
+)
+_CUSTOMER_INVITE_INVALID_MESSAGE = (
+    "Эта ссылка недействительна или больше не доступна. "
+    "Попросите специалиста отправить новую ссылку."
+)
+_CUSTOMER_INVITE_ALREADY_USED_MESSAGE = (
+    "Эта ссылка уже использована другим клиентом. "
+    "Попросите специалиста отправить новую ссылку."
+)
+_CUSTOMER_INVITE_INACTIVE_MESSAGE = (
+    "Эта ссылка больше не активна. Попросите специалиста отправить новую ссылку."
+)
+_CUSTOMER_INVITE_CONCURRENT_MESSAGE = (
+    "Эту ссылку только что использовал другой клиент. "
+    "Попросите специалиста отправить новую ссылку."
+)
+_CUSTOMER_INVITE_GENERIC_MESSAGE = (
+    "Не удалось использовать эту ссылку. Попросите специалиста отправить новую ссылку."
+)
+_REPOSITORY_INVITE_PUBLIC_ERRORS = {
+    "customer invite was not found": _CUSTOMER_INVITE_INVALID_MESSAGE,
+    "invalid customer invite token": _CUSTOMER_INVITE_INVALID_MESSAGE,
+    "customer invite has already been used": _CUSTOMER_INVITE_ALREADY_USED_MESSAGE,
+    "customer invite is not active": _CUSTOMER_INVITE_INACTIVE_MESSAGE,
+    "customer invite was claimed concurrently": _CUSTOMER_INVITE_CONCURRENT_MESSAGE,
+}
+
+
+def customer_invite_error_message(exc: Exception) -> str:
+    """Return only stable, user-safe copy for invite claim failures."""
+
+    message = str(exc).strip()
+    if message in {_CUSTOMER_INVITE_EXPIRED_MESSAGE, _CUSTOMER_INVITE_OWNER_MESSAGE}:
+        return message
+    return _REPOSITORY_INVITE_PUBLIC_ERRORS.get(
+        message,
+        _CUSTOMER_INVITE_GENERIC_MESSAGE,
+    )
 
 
 def save_business_profile(
@@ -121,21 +163,24 @@ def claim_customer_invite(
     display_name: str | None,
 ) -> InviteClaim:
     expired_error: ActivityInvariantViolation | None = None
-    with get_db() as conn:
-        try:
-            return ActivityRepository(conn).claim_customer_invite(
-                token=token,
-                telegram_user_id=telegram_user_id,
-                username=username,
-                display_name=display_name,
-            )
-        except ActivityInvariantViolation as exc:
-            if str(exc) != _REPOSITORY_INVITE_EXPIRED_ERROR:
-                raise
-            # The repository has already transitioned the invite to `expired`.
-            # Swallow only this specific signal until get_db() commits that
-            # transition; re-raise a user-facing error after the transaction.
-            expired_error = exc
+    try:
+        with get_db() as conn:
+            try:
+                return ActivityRepository(conn).claim_customer_invite(
+                    token=token,
+                    telegram_user_id=telegram_user_id,
+                    username=username,
+                    display_name=display_name,
+                )
+            except ActivityInvariantViolation as exc:
+                if str(exc) != _REPOSITORY_INVITE_EXPIRED_ERROR:
+                    raise
+                # The repository has already transitioned the invite to `expired`.
+                # Swallow only this specific signal until get_db() commits that
+                # transition; re-raise a user-facing error after the transaction.
+                expired_error = exc
+    except (ActivityError, ValueError) as exc:
+        raise ActivityInvariantViolation(customer_invite_error_message(exc)) from exc
 
     if expired_error is None:  # pragma: no cover - defensive invariant
         raise RuntimeError("customer invite expiration signal was lost")
