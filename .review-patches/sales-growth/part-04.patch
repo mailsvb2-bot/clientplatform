@@ -1,0 +1,180 @@
++        object.__setattr__(self, "summary", summary)
++
++
++def evaluate_handoff(
++    *,
++    model_confidence: float,
++    explicit_human_request: bool = False,
++    sensitive_context: bool = False,
++    pricing_exception: bool = False,
++    negative_sentiment: bool = False,
++    failed_attempts: int = 0,
++) -> HandoffSignal | None:
++    """Return an operational handoff signal; never contact staff directly."""
++
++    for flag_name, flag_value in (
++        ("explicit_human_request", explicit_human_request),
++        ("sensitive_context", sensitive_context),
++        ("pricing_exception", pricing_exception),
++        ("negative_sentiment", negative_sentiment),
++    ):
++        if not isinstance(flag_value, bool):
++            raise ValueError(f"{flag_name} must be a boolean")
++    confidence = float(model_confidence)
++    if not math.isfinite(confidence):
++        raise ValueError("model_confidence must be finite")
++    confidence = max(0.0, min(confidence, 1.0))
++    if isinstance(failed_attempts, bool) or not isinstance(failed_attempts, int):
++        raise ValueError("failed_attempts must be a non-negative integer")
++    attempts = failed_attempts
++    if attempts < 0:
++        raise ValueError("failed_attempts must be a non-negative integer")
++    if sensitive_context:
++        return HandoffSignal(
++            HandoffReason.SENSITIVE_CONTEXT,
++            HandoffSeverity.URGENT,
++            "Sensitive or regulated context requires a human.",
++        )
++    if explicit_human_request:
++        return HandoffSignal(
++            HandoffReason.EXPLICIT_REQUEST,
++            HandoffSeverity.HIGH,
++            "The customer explicitly requested a human.",
++        )
++    if pricing_exception:
++        return HandoffSignal(
++            HandoffReason.PRICING_EXCEPTION,
++            HandoffSeverity.HIGH,
++            "The request falls outside the approved pricing/offer path.",
++        )
++    if attempts >= 2:
++        return HandoffSignal(
++            HandoffReason.REPEATED_FAILURE,
++            HandoffSeverity.HIGH,
++            "Automation failed repeatedly; preserve context and hand off.",
++        )
++    if negative_sentiment:
++        return HandoffSignal(
++            HandoffReason.NEGATIVE_SENTIMENT,
++            HandoffSeverity.NORMAL,
++            "Negative sentiment warrants human review.",
++        )
++    if confidence < 0.72:
++        return HandoffSignal(
++            HandoffReason.LOW_CONFIDENCE,
++            HandoffSeverity.NORMAL,
++            "Model confidence is below the sales automation threshold.",
++        )
++    return None
++
++
++__all__ = [
++    "HandoffReason",
++    "HandoffSeverity",
++    "HandoffSignal",
++    "evaluate_handoff",
++]
++diff --git a/clientplatform/domain/sales_metrics.py b/clientplatform/domain/sales_metrics.py
++new file mode 100644
++index 0000000000000000000000000000000000000000..90c1c4a1e3a6c28f4903219638a7ae3edb1443a0
++--- /dev/null
+++++ b/clientplatform/domain/sales_metrics.py
++@@ -0,0 +1,61 @@
+++from __future__ import annotations
+++
+++from dataclasses import dataclass
+++
+++
+++@dataclass(frozen=True, slots=True)
+++class SalesFunnelCounts:
+++    discovered: int = 0
+++    engaged: int = 0
+++    qualified: int = 0
+++    checkout: int = 0
+++    won: int = 0
+++    lost: int = 0
+++    open_handoffs: int = 0
+++
+++    def __post_init__(self) -> None:
+++        for name in (
+++            "discovered",
+++            "engaged",
+++            "qualified",
+++            "checkout",
+++            "won",
+++            "lost",
+++            "open_handoffs",
+++        ):
+++            value = getattr(self, name)
+++            if isinstance(value, bool) or not isinstance(value, int):
+++                raise ValueError(f"{name} must be a non-negative integer")
+++            if value < 0:
+++                raise ValueError(f"{name} must be non-negative")
+++
+++    @staticmethod
+++    def _percent(numerator: int, denominator: int) -> float:
+++        if denominator <= 0:
+++            return 0.0
+++        return round((int(numerator) / int(denominator)) * 100.0, 1)
+++
+++    @property
+++    def engagement_percent(self) -> float:
+++        return self._percent(self.engaged, self.discovered)
+++
+++    @property
+++    def qualification_percent(self) -> float:
+++        return self._percent(self.qualified, self.engaged)
+++
+++    @property
+++    def checkout_percent(self) -> float:
+++        return self._percent(self.checkout, self.qualified)
+++
+++    @property
+++    def win_percent(self) -> float:
+++        return self._percent(self.won, self.discovered)
+++
+++
+++@dataclass(frozen=True, slots=True)
+++class SalesFunnelSnapshot:
+++    total: SalesFunnelCounts
+++    by_source: dict[str, SalesFunnelCounts]
+++
+++
+++__all__ = ["SalesFunnelCounts", "SalesFunnelSnapshot"]
++diff --git a/clientplatform/domain/sales_state_machine.py b/clientplatform/domain/sales_state_machine.py
++new file mode 100644
++index 0000000000000000000000000000000000000000..7e925303de10e7898dcb221eca0d777849ebc976
++--- /dev/null
+++++ b/clientplatform/domain/sales_state_machine.py
++@@ -0,0 +1,159 @@
+++from __future__ import annotations
+++
+++from dataclasses import dataclass
+++from enum import StrEnum
+++
+++from clientplatform.domain.sales import SalesLeadStage
+++
+++
+++class SalesConversationState(StrEnum):
+++    DISCOVERED = "discovered"
+++    ENGAGED = "engaged"
+++    NEED_KNOWN = "need_known"
+++    QUALIFIED = "qualified"
+++    OFFER_PRESENTED = "offer_presented"
+++    CHECKOUT = "checkout"
+++    WON = "won"
+++    LOST = "lost"
+++    HANDOFF = "handoff"
+++
+++
+++class SalesConversationEvent(StrEnum):
+++    INBOUND_RECEIVED = "inbound_received"
+++    CONTACT_RECORDED = "contact_recorded"
+++    NEED_CAPTURED = "need_captured"
+++    QUALIFICATION_PASSED = "qualification_passed"
+++    QUALIFICATION_FAILED = "qualification_failed"
+++    OFFER_PRESENTED = "offer_presented"
+++    CHECKOUT_STARTED = "checkout_started"
+++    PAYMENT_CONFIRMED = "payment_confirmed"
+++    DECLINED = "declined"
+++    HUMAN_REQUESTED = "human_requested"
