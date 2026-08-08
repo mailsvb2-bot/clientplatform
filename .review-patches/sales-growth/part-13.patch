@@ -1,0 +1,180 @@
++                REFERENCES business_members(id, business_id),
++            CHECK(status IN ('active','archived'))
++        )
++        """
++    )
++    c.execute(
++        """
++        CREATE TABLE IF NOT EXISTS commercial_ladder_steps(
++            id TEXT PRIMARY KEY,
++            business_id TEXT NOT NULL,
++            ladder_id TEXT NOT NULL,
++            position INTEGER NOT NULL,
++            kind TEXT NOT NULL,
++            title TEXT NOT NULL,
++            offering_id TEXT,
++            min_evidence_score REAL NOT NULL DEFAULT 0.0,
++            requires_human_approval INTEGER NOT NULL DEFAULT 1,
++            created_at TEXT NOT NULL,
++            updated_at TEXT NOT NULL,
++            UNIQUE(id, business_id),
++            UNIQUE(business_id, ladder_id, position),
++            FOREIGN KEY(ladder_id, business_id)
++                REFERENCES commercial_ladders(id, business_id) ON DELETE CASCADE,
++            FOREIGN KEY(offering_id, business_id)
++                REFERENCES business_offerings(id, business_id),
++            CHECK(position >= 0),
++            CHECK(kind IN ('diagnostic','audit','implementation','recurring')),
++            CHECK(min_evidence_score >= 0.0 AND min_evidence_score <= 1.0),
++            CHECK(requires_human_approval IN (0,1))
++        )
++        """
++    )
++    c.execute(
++        """
++        CREATE INDEX IF NOT EXISTS idx_commercial_ladders_business_status
++        ON commercial_ladders(business_id, status, created_at)
++        """
++    )
++    c.execute(
++        """
++        CREATE INDEX IF NOT EXISTS idx_commercial_ladder_steps_order
++        ON commercial_ladder_steps(business_id, ladder_id, position)
++        """
++    )
+diff --git a/services/db/schema/clientplatform_sales.py b/services/db/schema/clientplatform_sales.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..21fcb389334d589749aa9c500095a75dfbab84a1
+--- /dev/null
++++ b/services/db/schema/clientplatform_sales.py
+@@ -0,0 +1,176 @@
++from __future__ import annotations
++
++import sqlite3
++
++
++def ensure(c: sqlite3.Connection) -> None:
++    """Create the canonical tenant-scoped sales opportunity boundary."""
++
++    c.execute(
++        """
++        CREATE TABLE IF NOT EXISTS clientplatform_sales_leads(
++            id TEXT PRIMARY KEY,
++            business_id TEXT NOT NULL,
++            opportunity_key TEXT NOT NULL,
++            customer_id TEXT NOT NULL,
++            offering_id TEXT,
++            source_kind TEXT NOT NULL,
++            source_ref TEXT,
++            contact_basis TEXT NOT NULL,
++            stage TEXT NOT NULL DEFAULT 'new',
++            assigned_member_id TEXT,
++            last_signal_at TEXT NOT NULL,
++            created_at TEXT NOT NULL,
++            updated_at TEXT NOT NULL,
++            UNIQUE(id, business_id),
++            UNIQUE(business_id, opportunity_key),
++            FOREIGN KEY(business_id) REFERENCES businesses(id) ON DELETE CASCADE,
++            FOREIGN KEY(customer_id, business_id)
++                REFERENCES customers(id, business_id) ON DELETE CASCADE,
++            FOREIGN KEY(offering_id, business_id)
++                REFERENCES business_offerings(id, business_id),
++            FOREIGN KEY(assigned_member_id, business_id)
++                REFERENCES business_members(id, business_id),
++            CHECK(contact_basis IN (
++                'inbound','explicit_consent','existing_customer','requested_followup','none'
++            )),
++            CHECK(stage IN ('new','contacted','qualified','checkout','won','lost'))
++        )
++        """
++    )
++    c.execute(
++        """
++        CREATE INDEX IF NOT EXISTS idx_cp_sales_leads_business_stage
++        ON clientplatform_sales_leads(business_id, stage, updated_at)
++        """
++    )
++    c.execute(
++        """
++        CREATE INDEX IF NOT EXISTS idx_cp_sales_leads_customer
++        ON clientplatform_sales_leads(business_id, customer_id, updated_at)
++        """
++    )
++
++    c.execute(
++        """
++        CREATE TABLE IF NOT EXISTS clientplatform_sales_events(
++            id TEXT PRIMARY KEY,
++            business_id TEXT NOT NULL,
++            lead_id TEXT NOT NULL,
++            event_type TEXT NOT NULL,
++            dedupe_key TEXT NOT NULL,
++            payload_json TEXT NOT NULL DEFAULT '{}',
++            occurred_at TEXT NOT NULL,
++            UNIQUE(id, business_id),
++            UNIQUE(business_id, lead_id, dedupe_key),
++            FOREIGN KEY(lead_id, business_id)
++                REFERENCES clientplatform_sales_leads(id, business_id) ON DELETE CASCADE
++        )
++        """
++    )
++    c.execute(
++        """
++        CREATE INDEX IF NOT EXISTS idx_cp_sales_events_lead
++        ON clientplatform_sales_events(business_id, lead_id, occurred_at, id)
++        """
++    )
++
++    c.execute(
++        """
++        CREATE TABLE IF NOT EXISTS clientplatform_sales_action_plans(
++            id TEXT PRIMARY KEY,
++            business_id TEXT NOT NULL,
++            lead_id TEXT NOT NULL,
++            action_kind TEXT NOT NULL,
++            rationale TEXT NOT NULL,
++            requires_approval INTEGER NOT NULL,
++            status TEXT NOT NULL DEFAULT 'planned',
++            created_by_member_id TEXT NOT NULL,
++            created_at TEXT NOT NULL,
++            updated_at TEXT NOT NULL,
++            UNIQUE(id, business_id),
++            FOREIGN KEY(lead_id, business_id)
++                REFERENCES clientplatform_sales_leads(id, business_id) ON DELETE CASCADE,
++            FOREIGN KEY(created_by_member_id, business_id)
++                REFERENCES business_members(id, business_id),
++            CHECK(action_kind IN (
++                'respond','ask_qualification','present_offer',
++                'checkout_followup','human_handoff','noop'
++            )),
++            CHECK(requires_approval IN (0, 1)),
++            CHECK(status IN ('planned','approved','dismissed','executed'))
++        )
++        """
++    )
++    c.execute(
++        """
++        CREATE INDEX IF NOT EXISTS idx_cp_sales_plans_business_status
++        ON clientplatform_sales_action_plans(business_id, status, created_at)
++        """
++    )
++
++    c.execute(
++        """
++        CREATE TABLE IF NOT EXISTS clientplatform_sales_conversation_state(
++            lead_id TEXT NOT NULL,
++            business_id TEXT NOT NULL,
++            state TEXT NOT NULL DEFAULT 'discovered',
++            version INTEGER NOT NULL DEFAULT 1,
++            updated_at TEXT NOT NULL,
++            PRIMARY KEY(lead_id, business_id),
++            FOREIGN KEY(lead_id, business_id)
++                REFERENCES clientplatform_sales_leads(id, business_id) ON DELETE CASCADE,
++            CHECK(state IN (
++                'discovered','engaged','need_known','qualified',
++                'offer_presented','checkout','won','lost','handoff'
++            )),
++            CHECK(version >= 1)
++        )
++        """
++    )
