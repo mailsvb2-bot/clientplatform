@@ -74,11 +74,43 @@ def _parse_local_wall_clock(
     zone: ZoneInfo,
     now_utc: str | None,
 ) -> datetime:
-    for pattern in ("%d.%m.%Y %H:%M", "%d.%m.%y %H:%M"):
+    try:
+        return datetime.strptime(raw, "%d.%m.%Y %H:%M")
+    except ValueError:
+        pass
+
+    if now_utc is None:
+        reference_utc = datetime.now(timezone.utc)
+    else:
+        normalized_now = normalize_utc_datetime(now_utc, field_name="now")
+        reference_utc = datetime.fromisoformat(normalized_now)
+    reference_local = reference_utc.astimezone(zone)
+    reference_wall_clock = reference_local.replace(tzinfo=None)
+
+    short_year_match = re.fullmatch(
+        r"(?P<day>\d{1,2})\.(?P<month>\d{1,2})\.(?P<year>\d{2}) "
+        r"(?P<hour>\d{1,2}):(?P<minute>\d{2})",
+        raw,
+    )
+    if short_year_match is not None:
+        parts = {
+            name: int(value)
+            for name, value in short_year_match.groupdict().items()
+        }
+        year = (reference_local.year // 100) * 100 + parts["year"]
         try:
-            return datetime.strptime(raw, pattern)
-        except ValueError:
-            pass
+            return datetime(
+                year,
+                parts["month"],
+                parts["day"],
+                parts["hour"],
+                parts["minute"],
+            )
+        except ValueError as exc:
+            raise ValueError(
+                "такой даты и времени не существует; используйте формат "
+                "10.08 15:00, 10.08.26 15:00 или 10.08.2026 15:00"
+            ) from exc
 
     match = re.fullmatch(
         r"(?P<day>\d{1,2})\.(?P<month>\d{1,2}) "
@@ -90,14 +122,6 @@ def _parse_local_wall_clock(
             "дата и время должны выглядеть как 10.08 15:00, "
             "10.08.26 15:00 или 10.08.2026 15:00"
         )
-
-    if now_utc is None:
-        reference_utc = datetime.now(timezone.utc)
-    else:
-        normalized_now = normalize_utc_datetime(now_utc, field_name="now")
-        reference_utc = datetime.fromisoformat(normalized_now)
-    reference_local = reference_utc.astimezone(zone)
-    reference_wall_clock = reference_local.replace(tzinfo=None)
 
     parts = {name: int(value) for name, value in match.groupdict().items()}
     # Eight years is sufficient to cross the largest Gregorian leap-year gap
