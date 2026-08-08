@@ -29,7 +29,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          sha256sum .review-patches/sales-growth/part-*.patch
           cat .review-patches/sales-growth/part-*.patch > /tmp/sales.patch
+          sha256sum /tmp/sales.patch
           echo '5613d288c7e49e7498e3c48d980a792a8f4adeec0418f895460318a6e946f9d4  /tmp/sales.patch' | sha256sum -c -
           git apply --check --whitespace=error /tmp/sales.patch
           git apply --whitespace=error /tmp/sales.patch
