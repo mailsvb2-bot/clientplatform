@@ -1,0 +1,180 @@
++        )
++
++
++def resolve_sales_handoff(
++    *, actor: TenantContext, handoff_id: str
++) -> dict[str, object]:
++    with get_db() as conn:
++        return SalesHandoffRepository(conn).resolve(
++            actor=actor,
++            handoff_id=handoff_id,
++        )
++
++def evaluate_and_open_sales_handoff(
++    *,
++    actor: TenantContext,
++    lead_id: str,
++    model_confidence: float,
++    explicit_human_request: bool = False,
++    sensitive_context: bool = False,
++    pricing_exception: bool = False,
++    negative_sentiment: bool = False,
++    failed_attempts: int = 0,
++    context: dict[str, object] | None = None,
++) -> dict[str, object] | None:
++    signal = evaluate_handoff(
++        model_confidence=model_confidence,
++        explicit_human_request=explicit_human_request,
++        sensitive_context=sensitive_context,
++        pricing_exception=pricing_exception,
++        negative_sentiment=negative_sentiment,
++        failed_attempts=failed_attempts,
++    )
++    if signal is None:
++        return None
++    return open_sales_handoff(
++        actor=actor, lead_id=lead_id, signal=signal, context=context
++    )
+diff --git a/clientplatform/application/sales_metrics.py b/clientplatform/application/sales_metrics.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..649983f8d242e9385fe455b60e686dee80fe7222
+--- /dev/null
++++ b/clientplatform/application/sales_metrics.py
+@@ -0,0 +1,11 @@
++from __future__ import annotations
++
++from clientplatform.domain.sales_metrics import SalesFunnelSnapshot
++from clientplatform.domain.tenancy import TenantContext
++from clientplatform.infrastructure.sales_metrics_repository import SalesMetricsRepository
++from services.db import get_db_ro
++
++
++def get_sales_funnel_snapshot(*, actor: TenantContext) -> SalesFunnelSnapshot:
++    with get_db_ro() as conn:
++        return SalesMetricsRepository(conn).snapshot(actor=actor)
+diff --git a/clientplatform/application/sales_state_machine.py b/clientplatform/application/sales_state_machine.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..7ed3085b913265a46508a60ed1ad73c876af9d1c
+--- /dev/null
++++ b/clientplatform/application/sales_state_machine.py
+@@ -0,0 +1,27 @@
++from __future__ import annotations
++
++from clientplatform.domain.sales_state_machine import (
++    SalesConversationEvent,
++    SalesTransition,
++)
++from clientplatform.domain.tenancy import TenantContext
++from clientplatform.infrastructure.sales_state_repository import SalesStateRepository
++from services.db import get_db
++
++
++def apply_sales_conversation_event(
++    *,
++    actor: TenantContext,
++    lead_id: str,
++    event: SalesConversationEvent | str,
++    dedupe_key: str,
++    metadata: dict[str, object] | None = None,
++) -> tuple[SalesTransition, bool]:
++    with get_db() as conn:
++        return SalesStateRepository(conn).apply(
++            actor=actor,
++            lead_id=lead_id,
++            event=event,
++            dedupe_key=dedupe_key,
++            metadata=metadata,
++        )
+diff --git a/clientplatform/domain/commercial_ladder.py b/clientplatform/domain/commercial_ladder.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..1824a4d0940ae3e282253b072fb7cf4189a5fb13
+--- /dev/null
++++ b/clientplatform/domain/commercial_ladder.py
+@@ -0,0 +1,117 @@
++from __future__ import annotations
++
++import math
++import re
++from dataclasses import dataclass
++from enum import StrEnum
++
++from clientplatform.domain.tenancy import normalize_uuid
++
++
++class CommercialStepKind(StrEnum):
++    DIAGNOSTIC = "diagnostic"
++    AUDIT = "audit"
++    IMPLEMENTATION = "implementation"
++    RECURRING = "recurring"
++
++
++@dataclass(frozen=True, slots=True)
++class CommercialLadderStep:
++    id: str
++    business_id: str
++    ladder_id: str
++    position: int
++    kind: CommercialStepKind
++    title: str
++    offering_id: str | None
++    min_evidence_score: float
++    requires_human_approval: bool
++
++    def __post_init__(self) -> None:
++        object.__setattr__(self, "id", normalize_uuid(self.id, field_name="ladder_step_id"))
++        object.__setattr__(
++            self, "business_id", normalize_uuid(self.business_id, field_name="business_id")
++        )
++        object.__setattr__(
++            self, "ladder_id", normalize_uuid(self.ladder_id, field_name="ladder_id")
++        )
++        if self.offering_id is not None:
++            object.__setattr__(
++                self,
++                "offering_id",
++                normalize_uuid(self.offering_id, field_name="offering_id"),
++            )
++        if isinstance(self.position, bool):
++            raise ValueError("commercial ladder position must be a non-negative integer")
++        if isinstance(self.position, int):
++            position = self.position
++        elif isinstance(self.position, str) and re.fullmatch(r"[+-]?\d+", self.position.strip()):
++            position = int(self.position.strip())
++        else:
++            raise ValueError("commercial ladder position must be a non-negative integer")
++        if position < 0:
++            raise ValueError("commercial ladder position must be non-negative")
++        object.__setattr__(self, "position", position)
++        kind = (
++            self.kind
++            if isinstance(self.kind, CommercialStepKind)
++            else CommercialStepKind(str(self.kind).strip())
++        )
++        object.__setattr__(self, "kind", kind)
++        title = re.sub(r"\s+", " ", str(self.title or "")).strip()
++        if not title or len(title) > 200:
++            raise ValueError("commercial ladder title must be 1..200 characters")
++        object.__setattr__(self, "title", title)
++        score = float(self.min_evidence_score)
++        if not math.isfinite(score):
++            raise ValueError("min_evidence_score must be finite")
++        object.__setattr__(self, "min_evidence_score", max(0.0, min(score, 1.0)))
++        if not isinstance(self.requires_human_approval, bool):
++            raise ValueError("requires_human_approval must be a boolean")
++
++
++@dataclass(frozen=True, slots=True)
++class CommercialOfferCandidate:
++    step_id: str
++    kind: CommercialStepKind
++    title: str
++    offering_id: str | None
++    requires_human_approval: bool
++
++
++def eligible_offer_candidates(
++    steps: list[CommercialLadderStep] | tuple[CommercialLadderStep, ...],
++    *,
++    evidence_score: float,
++    completed_step_ids: set[str] | frozenset[str] = frozenset(),
++) -> tuple[CommercialOfferCandidate, ...]:
