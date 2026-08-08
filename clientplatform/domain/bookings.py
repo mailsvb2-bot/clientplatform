@@ -50,6 +50,13 @@ def normalize_utc_datetime(value: str, *, field_name: str) -> str:
     return parsed.astimezone(timezone.utc).isoformat(timespec="seconds")
 
 
+def _load_timezone(timezone_name: str) -> ZoneInfo:
+    try:
+        return ZoneInfo(str(timezone_name or "").strip())
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise ValueError("неизвестный часовой пояс бизнеса") from exc
+
+
 def _valid_local_occurrences(local: datetime, zone: ZoneInfo) -> list[datetime]:
     """Return real UTC-resolvable occurrences for one local wall-clock value.
 
@@ -154,10 +161,7 @@ def parse_local_booking_start(
     now_utc: str | None = None,
 ) -> str:
     raw = " ".join(str(value or "").split())
-    try:
-        zone = ZoneInfo(str(timezone_name or "").strip())
-    except ZoneInfoNotFoundError as exc:
-        raise ValueError("неизвестный часовой пояс бизнеса") from exc
+    zone = _load_timezone(timezone_name)
 
     local = _parse_local_wall_clock(raw, zone=zone, now_utc=now_utc)
     occurrences = _valid_local_occurrences(local, zone)
@@ -183,10 +187,7 @@ def booking_end(starts_at: str, duration_minutes: int) -> str:
 
 def format_booking_local(starts_at: str, *, timezone_name: str) -> str:
     start = datetime.fromisoformat(normalize_utc_datetime(starts_at, field_name="starts_at"))
-    try:
-        zone = ZoneInfo(str(timezone_name or "").strip())
-    except ZoneInfoNotFoundError as exc:
-        raise ValueError("неизвестный часовой пояс бизнеса") from exc
+    zone = _load_timezone(timezone_name)
     return start.astimezone(zone).strftime("%d.%m.%Y %H:%M")
 
 
