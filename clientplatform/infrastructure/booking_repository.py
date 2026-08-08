@@ -142,10 +142,14 @@ class BookingRepository:
         if offering.status != OfferingStatus.ACTIVE:
             raise ActivityInvariantViolation("archived offering cannot receive booking slots")
         profile = self._activity.get_profile(actor=current)
-        starts_at = parse_local_booking_start(local_start, timezone_name=profile.timezone)
+        timestamp = normalize_utc_datetime(str(now or _utc_now()), field_name="now")
+        starts_at = parse_local_booking_start(
+            local_start,
+            timezone_name=profile.timezone,
+            now_utc=timestamp,
+        )
         duration = normalize_duration_minutes(duration_minutes)
         ends_at = booking_end(starts_at, duration)
-        timestamp = normalize_utc_datetime(str(now or _utc_now()), field_name="now")
         if datetime.fromisoformat(starts_at) <= datetime.fromisoformat(timestamp):
             raise BookingInvariantViolation("время записи должно быть в будущем")
         _serialize_booking_write(
