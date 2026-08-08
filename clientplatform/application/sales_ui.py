@@ -1,0 +1,42 @@
+from __future__ import annotations
+
+from typing import Any
+
+from clientplatform.domain.tenancy import TenantContext
+from clientplatform.infrastructure.sales_ui_repository import SalesUiRepository
+from services.db import get_db_ro
+
+
+def list_sales_work(
+    *,
+    actor: TenantContext,
+    limit: int = 12,
+) -> list[dict[str, Any]]:
+    with get_db_ro() as conn:
+        return SalesUiRepository(conn).list_open_work(actor=actor, limit=limit)
+
+
+def list_sales_handoff_work(
+    *,
+    actor: TenantContext,
+    limit: int = 12,
+) -> list[dict[str, Any]]:
+    with get_db_ro() as conn:
+        return SalesUiRepository(conn).list_handoff_work(actor=actor, limit=limit)
+
+
+def list_commercial_ladders(*, actor: TenantContext) -> list[dict[str, Any]]:
+    with get_db_ro() as conn:
+        return SalesUiRepository(conn).list_ladders(actor=actor)
+
+
+def list_commercial_ladder_steps(
+    *,
+    actor: TenantContext,
+    ladder_id: str,
+) -> list[dict[str, Any]]:
+    with get_db_ro() as conn:
+        return SalesUiRepository(conn).list_ladder_steps(
+            actor=actor,
+            ladder_id=ladder_id,
+        )
