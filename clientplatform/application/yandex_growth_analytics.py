@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -140,25 +140,52 @@ def _unit_cost(cost_micros: int, outcomes: int) -> int | None:
     return int(cost_micros) // int(outcomes)
 
 
+def _report_zone() -> ZoneInfo:
+    zone_name = (
+        os.getenv("CLIENTPLATFORM_YANDEX_DIRECT_REPORT_TIMEZONE") or "Europe/Moscow"
+    ).strip()
+    try:
+        return ZoneInfo(zone_name)
+    except ZoneInfoNotFoundError as exc:
+        raise RuntimeError("Yandex Direct report timezone is invalid") from exc
+
+
 def _current_period(days: int, now: datetime | date | None = None) -> tuple[str, str]:
     if int(days) not in _ALLOWED_PERIOD_DAYS:
         raise ValueError("Yandex analytics period must be 7 or 30 days")
+    zone = _report_zone()
     if isinstance(now, datetime):
-        end = now.date()
+        if now.tzinfo is not None and now.utcoffset() is not None:
+            end = now.astimezone(zone).date()
+        else:
+            end = now.date()
     elif isinstance(now, date):
         end = now
     else:
-        zone_name = (
-            os.getenv("CLIENTPLATFORM_YANDEX_DIRECT_REPORT_TIMEZONE")
-            or "Europe/Moscow"
-        ).strip()
-        try:
-            zone = ZoneInfo(zone_name)
-        except ZoneInfoNotFoundError as exc:
-            raise RuntimeError("Yandex Direct report timezone is invalid") from exc
         end = datetime.now(zone).date()
     start = end - timedelta(days=int(days) - 1)
     return start.isoformat(), end.isoformat()
+
+
+def _event_window(date_from: str, date_to: str) -> tuple[str, str]:
+    try:
+        start_date = date.fromisoformat(date_from)
+        end_date = date.fromisoformat(date_to)
+    except ValueError as exc:
+        raise ValueError("Yandex analytics dates must use YYYY-MM-DD") from exc
+    if start_date > end_date:
+        raise ValueError("Yandex analytics date_from must not be after date_to")
+    zone = _report_zone()
+    start = datetime.combine(start_date, time.min, tzinfo=zone).astimezone(timezone.utc)
+    end = datetime.combine(
+        end_date + timedelta(days=1),
+        time.min,
+        tzinfo=zone,
+    ).astimezone(timezone.utc)
+    return (
+        start.isoformat(timespec="seconds"),
+        end.isoformat(timespec="seconds"),
+    )
 
 
 def _provider() -> ReadOnlyYandexDirectAnalyticsProvider:
@@ -245,13 +272,18 @@ def _load_tracked_ads(
 
 
 def _load_local_attribution(
-    *, actor: TenantContext, promotion_campaign_ids: set[str]
+    *,
+    actor: TenantContext,
+    promotion_campaign_ids: set[str],
+    date_from: str,
+    date_to: str,
 ) -> _LocalAttribution:
     if not promotion_campaign_ids:
         return _LocalAttribution(leads={}, bookings={}, won={})
     ordered = sorted(promotion_campaign_ids)
     placeholders = ",".join("?" for _ in ordered)
-    params = (actor.business_id, *ordered)
+    event_from, event_until = _event_window(date_from, date_to)
+    params = (actor.business_id, *ordered, event_from, event_until)
     with get_db_ro() as conn:
         current = TenancyRepository(conn).resolve_context(
             user_id=actor.user_id,
@@ -265,6 +297,8 @@ def _load_local_attribution(
             WHERE business_id=?
               AND campaign_id IN ({placeholders})
               AND event_type IN ('opened','booked')
+              AND occurred_at>=?
+              AND occurred_at<?
             """,
             params,
         ).fetchall()
@@ -279,6 +313,8 @@ def _load_local_attribution(
             WHERE pe.business_id=?
               AND pe.campaign_id IN ({placeholders})
               AND pe.event_type='opened'
+              AND pe.occurred_at>=?
+              AND pe.occurred_at<?
             """,
             params,
         ).fetchall()
@@ -414,6 +450,8 @@ def get_yandex_growth_snapshot(
     attribution = _load_local_attribution(
         actor=current,
         promotion_campaign_ids={item.promotion_campaign_id for item in tracked},
+        date_from=date_from,
+        date_to=date_to,
     )
 
     campaign_targets: dict[tuple[str, str], list[_TrackedAd]] = defaultdict(list)
