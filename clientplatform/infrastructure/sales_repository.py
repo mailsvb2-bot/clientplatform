@@ -22,7 +22,6 @@ from clientplatform.infrastructure.customer_repository import CustomerRepository
 from clientplatform.infrastructure.tenancy_repository import TenancyRepository
 
 
-
 _MAX_EVENT_PAYLOAD_BYTES = 32 * 1024
 
 
@@ -42,6 +41,7 @@ def _event_payload_json(payload: dict[str, Any] | None) -> str:
     if len(encoded.encode("utf-8")) > _MAX_EVENT_PAYLOAD_BYTES:
         raise ValueError("sales event payload is too large")
     return encoded
+
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -316,6 +316,17 @@ class SalesRepository:
         lead = self.get_lead(actor=current, lead_id=plan.lead_id)
         timestamp = str(now or _utc_now())
         plan_id = str(uuid4())
+        # A recommendation is a snapshot of the latest known conversation state.
+        # Replanning atomically invalidates any older unsent recommendation, even
+        # one the owner approved earlier, so stale callbacks cannot authorize it.
+        self._conn.execute(
+            """
+            UPDATE clientplatform_sales_action_plans
+            SET status='dismissed', updated_at=?
+            WHERE business_id=? AND lead_id=? AND status IN ('planned','approved')
+            """,
+            (timestamp, current.business_id, lead.id),
+        )
         self._conn.execute(
             """
             INSERT INTO clientplatform_sales_action_plans(

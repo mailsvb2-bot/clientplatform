@@ -107,7 +107,7 @@ def test_sales_entry_is_added_to_simple_dashboard_once() -> None:
         button
         for row in markup.inline_keyboard
         for button in row
-        if button.text == "💼 Продажи"
+        if button.text == "✨ Получать клиентов"
     ]
     assert len(sales_buttons) == 1
     assert sales_buttons[0].callback_data == f"cps:s:{control._uuid_token(business_id)}"
@@ -125,17 +125,18 @@ async def test_sales_home_is_plain_language_and_never_claims_to_auto_send(
     await sales.send_sales_home(message, user_id=101, business_id=business_id)
 
     text, kwargs = message.answers[-1]
-    assert "💼 Продажи" in text
-    assert "ничего не отправляет клиентам сам" in text
+    assert "✨ Получать клиентов" in text
+    assert "Ничего не отправляется клиенту без Вашего подтверждения" in text
     labels = [button.text for row in kwargs["reply_markup"].inline_keyboard for button in row]
     assert labels == ["📋 В работе", "🙋 Нужен человек", "📊 Воронка", "🪜 Линейка", "🏠 В кабинет"]
 
 
 @pytest.mark.asyncio
-async def test_work_queue_uses_customer_language_and_persisted_plan_only(
+async def test_work_queue_shows_persisted_plan_candidate_and_approval(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     business_id = str(uuid4())
+    plan_id = str(uuid4())
     token = control._uuid_token(business_id)
     monkeypatch.setattr(
         sales,
@@ -145,13 +146,20 @@ async def test_work_queue_uses_customer_language_and_persisted_plan_only(
                 "customer_name": "Анна",
                 "stage": "qualified",
                 "source_kind": "telegram",
+                "next_plan_id": plan_id,
                 "next_action_kind": "present_offer",
+                "next_plan_status": "planned",
+                "next_plan_requires_approval": 1,
+                "commercial_candidate_title": "Основная консультация",
             },
             {
                 "customer_name": "Борис",
                 "stage": "new",
                 "source_kind": "website",
+                "next_plan_id": None,
                 "next_action_kind": None,
+                "next_plan_status": None,
+                "next_plan_requires_approval": None,
             },
         ],
     )
@@ -159,11 +167,51 @@ async def test_work_queue_uses_customer_language_and_persisted_plan_only(
 
     await sales.open_sales_work(callback, FakeState())
 
-    text = callback.message.answers[-1][0]
+    text, kwargs = callback.message.answers[-1]
     assert "Анна" in text and "Готов к предложению" in text
     assert "Предложить подходящую услугу" in text
+    assert "Подходящий этап: Основная консультация" in text
     assert "Борис" in text and "пока не определён" in text
     assert "model_confidence" not in text
+    buttons = [button for row in kwargs["reply_markup"].inline_keyboard for button in row]
+    approval = next(button for button in buttons if button.text == "✅ Одобрить шаг для 1")
+    assert approval.callback_data == (
+        f"cps:swa:{control._uuid_token(business_id)}:{control._uuid_token(plan_id)}"
+    )
+    assert all(len(str(button.callback_data).encode("utf-8")) <= 64 for button in buttons)
+
+
+@pytest.mark.asyncio
+async def test_owner_approval_opens_outbound_gate_then_refreshes_work(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    business_id, plan_id = str(uuid4()), str(uuid4())
+    callback = FakeCallback(
+        f"cps:swa:{control._uuid_token(business_id)}:{control._uuid_token(plan_id)}"
+    )
+    captured: dict[str, Any] = {}
+
+    def approve(**kwargs: Any) -> dict[str, object]:
+        captured.update(kwargs)
+        return {
+            "plan_id": plan_id,
+            "platform": "telegram",
+            "external_subject": "202",
+            "dispatch_allowed": True,
+        }
+
+    monkeypatch.setattr(sales, "approve_and_authorize_sales_outbound", approve)
+    refresh = AsyncMock()
+    monkeypatch.setattr(sales, "_send_sales_work", refresh)
+    state = FakeState({"stale": True})
+
+    await sales.approve_sales_plan(callback, state)
+
+    assert captured["plan_id"] == plan_id
+    assert captured["actor"].business_id == business_id
+    assert state.clear_count == 1
+    assert callback.answers[-1][0] == ("Одобрено — outbound разрешён",)
+    refresh.assert_awaited_once()
 
 
 @pytest.mark.asyncio

@@ -12,6 +12,7 @@ from clientplatform.infrastructure import TenancyRepository
 from services.db.schema import (
     clientplatform_activity,
     clientplatform_customers,
+    clientplatform_offer_ladders,
     clientplatform_sales,
     clientplatform_tenancy,
 )
@@ -27,6 +28,7 @@ def _database() -> sqlite3.Connection:
     clientplatform_customers.ensure(conn)
     clientplatform_activity.ensure(conn)
     clientplatform_sales.ensure(conn)
+    clientplatform_offer_ladders.ensure(conn)
     return conn
 
 
@@ -47,7 +49,7 @@ class PublicStorefrontSalesSignalTests(unittest.TestCase):
         yield self.conn
         self.conn.commit()
 
-    def test_public_storefront_visit_is_real_replay_safe_sales_evidence(self) -> None:
+    def test_public_storefront_visit_closes_into_replay_safe_sales_plan(self) -> None:
         with patch.object(journey, "get_db", self._use_db):
             first = journey.connect_public_storefront_customer(
                 business_id=self.access.business.id,
@@ -84,12 +86,12 @@ class PublicStorefrontSalesSignalTests(unittest.TestCase):
             SELECT event_type, dedupe_key, payload_json
             FROM clientplatform_sales_events
             WHERE business_id=? AND lead_id=?
+              AND event_type='conversation_transition'
             ORDER BY occurred_at, id
             """,
             (self.access.business.id, lead["id"]),
         ).fetchall()
         self.assertEqual(len(events), 1)
-        self.assertEqual(events[0]["event_type"], "conversation_transition")
         self.assertTrue(events[0]["dedupe_key"].startswith("conversation_transition:"))
         payload = json.loads(events[0]["payload_json"])
         self.assertEqual(payload["event"], "inbound_received")
@@ -99,6 +101,19 @@ class PublicStorefrontSalesSignalTests(unittest.TestCase):
             payload["metadata"],
             {"channel": "telegram", "surface": "public_storefront"},
         )
+
+        plans = self.conn.execute(
+            """
+            SELECT action_kind, requires_approval, status
+            FROM clientplatform_sales_action_plans
+            WHERE business_id=? AND lead_id=?
+            """,
+            (self.access.business.id, lead["id"]),
+        ).fetchall()
+        self.assertEqual(len(plans), 1)
+        self.assertEqual(plans[0]["action_kind"], "respond")
+        self.assertEqual(plans[0]["requires_approval"], 1)
+        self.assertEqual(plans[0]["status"], "planned")
 
     def test_owner_cannot_generate_sales_signal_by_opening_own_storefront(self) -> None:
         with patch.object(journey, "get_db", self._use_db):

@@ -59,7 +59,11 @@ _CLIENTPLATFORM_MANAGED_BOT_SECURITY_FILES = (
 )
 
 _CLIENTPLATFORM_SALES_UI_FILES = (
+    "clientplatform/application/owner_booking_journey.py",
+    "clientplatform/application/sales_agent.py",
+    "clientplatform/application/sales_orchestration.py",
     "clientplatform/application/sales_ui.py",
+    "clientplatform/infrastructure/sales_action_repository.py",
     "clientplatform/infrastructure/sales_ui_repository.py",
     "handlers/clientplatform_sales.py",
     "handlers/clientplatform_sales_install.py",

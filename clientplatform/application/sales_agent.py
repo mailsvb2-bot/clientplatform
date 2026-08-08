@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from clientplatform.domain.sales import (
     ContactBasis,
     SalesActionPlan,
@@ -38,6 +40,36 @@ def get_sales_lead(*, actor: TenantContext, lead_id: str) -> SalesLead:
         return SalesRepository(conn).get_lead(actor=actor, lead_id=lead_id)
 
 
+def build_next_sales_plan_in_transaction(
+    *,
+    conn: Any,
+    actor: TenantContext,
+    lead_id: str,
+    model_confidence: float,
+    unanswered_inbound: bool = False,
+    explicit_human_request: bool = False,
+    sensitive_context: bool = False,
+) -> tuple[SalesActionPlan, str]:
+    """Plan and persist one next action on the caller's transaction.
+
+    This is the composable form used by sales orchestration. It deliberately
+    returns the persisted plan id so later handoff/candidate/approval stages can
+    reference the exact plan without opening a second database transaction.
+    """
+
+    repository = SalesRepository(conn)
+    lead = repository.get_lead(actor=actor, lead_id=lead_id)
+    plan = plan_sales_action(
+        lead,
+        model_confidence=model_confidence,
+        unanswered_inbound=unanswered_inbound,
+        explicit_human_request=explicit_human_request,
+        sensitive_context=sensitive_context,
+    )
+    plan_id = repository.save_plan(actor=actor, plan=plan)
+    return plan, plan_id
+
+
 def build_next_sales_plan(
     *,
     actor: TenantContext,
@@ -50,14 +82,21 @@ def build_next_sales_plan(
     """Plan and persist the next action; never perform the external action."""
 
     with get_db() as conn:
-        repository = SalesRepository(conn)
-        lead = repository.get_lead(actor=actor, lead_id=lead_id)
-        plan = plan_sales_action(
-            lead,
+        plan, _plan_id = build_next_sales_plan_in_transaction(
+            conn=conn,
+            actor=actor,
+            lead_id=lead_id,
             model_confidence=model_confidence,
             unanswered_inbound=unanswered_inbound,
             explicit_human_request=explicit_human_request,
             sensitive_context=sensitive_context,
         )
-        repository.save_plan(actor=actor, plan=plan)
         return plan
+
+
+__all__ = [
+    "build_next_sales_plan",
+    "build_next_sales_plan_in_transaction",
+    "create_or_refresh_sales_lead",
+    "get_sales_lead",
+]

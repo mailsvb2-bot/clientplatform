@@ -5,6 +5,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from clientplatform.application.customer_role_guard import active_member_business_ids
+from clientplatform.application.sales_orchestration import (
+    orchestrate_sales_signal_in_transaction,
+)
 from clientplatform.domain.bookings import (
     BookingInvariantViolation,
     BookingNotFound,
@@ -20,7 +23,6 @@ from clientplatform.domain.tenancy import TenantContext, normalize_uuid
 from clientplatform.infrastructure.booking_repository import BookingRepository
 from clientplatform.infrastructure.customer_repository import CustomerRepository
 from clientplatform.infrastructure.sales_repository import SalesRepository
-from clientplatform.infrastructure.sales_state_repository import SalesStateRepository
 from clientplatform.infrastructure.tenancy_repository import TenancyRepository
 from services.db import get_db, get_db_ro
 
@@ -136,9 +138,11 @@ def connect_public_storefront_customer(
 
     The public storefront intentionally makes the business discoverable. It does
     not grant staff access and refuses to turn an owner or employee into a
-    customer of the same tenant. A genuine public visit is also persisted as
-    replay-safe inbound sales evidence so the owner's sales UI reflects real
-    customer activity rather than synthetic model output.
+    customer of the same tenant. A genuine public visit is persisted as replay-
+    safe inbound sales evidence and immediately flows through the internal sales
+    orchestrator. The orchestrator may plan work, choose a commercial candidate
+    or open a handoff, but it never sends an external message without owner
+    approval.
     """
 
     normalized_business_id = normalize_uuid(business_id, field_name="business_id")
@@ -196,7 +200,7 @@ def connect_public_storefront_customer(
 
         # One Telegram visitor has one stable public-storefront opportunity per
         # business. Reopening the same permanent link refreshes signal time but
-        # cannot duplicate the lead or its first inbound transition.
+        # the stable transition dedupe key prevents duplicate orchestration.
         lead = SalesRepository(conn).create_or_refresh_lead(
             actor=actor,
             opportunity_key=f"public-storefront:telegram:{principal_id}",
@@ -205,12 +209,17 @@ def connect_public_storefront_customer(
             contact_basis=ContactBasis.INBOUND,
             source_ref="public_storefront",
         )
-        SalesStateRepository(conn).apply(
+        orchestrate_sales_signal_in_transaction(
+            conn=conn,
             actor=actor,
             lead_id=lead.id,
             event=SalesConversationEvent.INBOUND_RECEIVED,
             dedupe_key=f"public-storefront-open:{principal_id}",
             metadata={"channel": "telegram", "surface": "public_storefront"},
+            # Opening the permanent storefront link is deterministic inbound
+            # evidence; no uncertain semantic classification is being invented.
+            model_confidence=1.0,
+            unanswered_inbound=True,
         )
         return CustomerBusinessLink(
             business_id=normalized_business_id,

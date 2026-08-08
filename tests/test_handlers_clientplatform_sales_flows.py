@@ -102,7 +102,7 @@ async def test_empty_handoff_queue_has_clear_return_path(monkeypatch: pytest.Mon
     text, kwargs = message.answers[-1]
     assert "нет обращений" in text
     button = kwargs["reply_markup"].inline_keyboard[0][0]
-    assert button.text == "← Продажи"
+    assert button.text == "← Получать клиентов"
 
 
 @pytest.mark.asyncio
@@ -192,7 +192,11 @@ async def test_ladder_list_renders_existing_and_create_actions(monkeypatch: pyte
     text, kwargs = message.answers[-1]
     assert "Основной путь · этапов: 3" in text
     buttons = [button for row in kwargs["reply_markup"].inline_keyboard for button in row]
-    assert {button.text for button in buttons} >= {"🪜 Основной путь", "➕ Создать линейку", "← Продажи"}
+    assert {button.text for button in buttons} >= {
+        "🪜 Основной путь",
+        "➕ Создать линейку",
+        "← Получать клиентов",
+    }
     assert all(len(str(button.callback_data).encode("utf-8")) <= 64 for button in buttons)
 
 

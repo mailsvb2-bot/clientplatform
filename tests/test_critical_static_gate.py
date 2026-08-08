@@ -27,8 +27,13 @@ def test_critical_static_gate_direct_entrypoint_runs_manifest() -> None:
     assert "CRITICAL_STATIC_MANIFEST_OK" in proc.stdout
 
 
-def test_recent_payment_privacy_and_messenger_boundaries_are_covered() -> None:
+def test_recent_payment_privacy_messenger_and_sales_boundaries_are_covered() -> None:
     required_type_files = {
+        "clientplatform/application/owner_booking_journey.py",
+        "clientplatform/application/sales_agent.py",
+        "clientplatform/application/sales_orchestration.py",
+        "clientplatform/infrastructure/sales_action_repository.py",
+        "handlers/clientplatform_sales.py",
         "handlers/info.py",
         "runtime/messenger_ingress_reliability.py",
         "runtime/messenger_media_http.py",
