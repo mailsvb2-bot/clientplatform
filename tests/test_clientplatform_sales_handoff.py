@@ -64,7 +64,6 @@ class ClientPlatformSalesHandoffTests(unittest.TestCase):
         self.assertEqual(item["status"], "open")
         self.assertEqual(item["context"]["last_customer_message"], "Нужен человек")
 
-
     def test_open_is_idempotent_while_handoff_is_active(self) -> None:
         signal = evaluate_handoff(model_confidence=0.4)
         assert signal is not None
@@ -75,6 +74,39 @@ class ClientPlatformSalesHandoffTests(unittest.TestCase):
             actor=self.owner, lead_id=self.lead.id, signal=signal
         )
         self.assertEqual(first["id"], second["id"])
+        self.assertEqual(len(self.handoffs.list_open(actor=self.owner)), 1)
+
+    def test_repeated_claimed_handoff_refreshes_context_without_downgrade(self) -> None:
+        urgent = evaluate_handoff(model_confidence=0.99, sensitive_context=True)
+        normal = evaluate_handoff(model_confidence=0.4)
+        assert urgent is not None and normal is not None
+        first = self.handoffs.open(
+            actor=self.owner,
+            lead_id=self.lead.id,
+            signal=urgent,
+            context={"last_customer_message": "Первый снимок"},
+            now="2026-08-08T10:00:00+00:00",
+        )
+        claimed = self.handoffs.claim(
+            actor=self.owner,
+            handoff_id=str(first["id"]),
+            now="2026-08-08T10:01:00+00:00",
+        )
+        refreshed = self.handoffs.open(
+            actor=self.owner,
+            lead_id=self.lead.id,
+            signal=normal,
+            context={"last_customer_message": "Свежий снимок"},
+            now="2026-08-08T10:02:00+00:00",
+        )
+
+        self.assertEqual(refreshed["id"], claimed["id"])
+        self.assertEqual(refreshed["status"], "claimed")
+        self.assertEqual(refreshed["reason"], urgent.reason.value)
+        self.assertEqual(refreshed["severity"], urgent.severity.value)
+        self.assertEqual(refreshed["summary"], urgent.summary)
+        self.assertEqual(refreshed["context"]["last_customer_message"], "Свежий снимок")
+        self.assertEqual(refreshed["updated_at"], "2026-08-08T10:02:00+00:00")
         self.assertEqual(len(self.handoffs.list_open(actor=self.owner)), 1)
 
     def test_claim_and_resolve_are_explicit(self) -> None:
@@ -127,7 +159,6 @@ class ClientPlatformSalesHandoffTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "explicit_human_request"):
             evaluate_handoff(model_confidence=0.9, explicit_human_request="false")
 
-
     def test_handoff_context_rejects_non_finite_json_numbers(self) -> None:
         signal = evaluate_handoff(model_confidence=0.1)
         self.assertIsNotNone(signal)
@@ -139,8 +170,6 @@ class ClientPlatformSalesHandoffTests(unittest.TestCase):
                     signal=signal,
                     context={"score": value},
                 )
-
-
 
 
 if __name__ == "__main__":

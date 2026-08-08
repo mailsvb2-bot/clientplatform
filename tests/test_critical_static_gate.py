@@ -1,8 +1,30 @@
+from __future__ import annotations
+
+import subprocess
+import sys
+from pathlib import Path
+
 from scripts import critical_static_gate
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_critical_static_manifest_paths_exist() -> None:
     assert critical_static_gate.missing_critical_paths() == []
+
+
+def test_critical_static_gate_direct_entrypoint_runs_manifest() -> None:
+    proc = subprocess.run(
+        [sys.executable, "scripts/critical_static_gate.py", "manifest"],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert "CRITICAL_STATIC_MANIFEST_OK" in proc.stdout
 
 
 def test_recent_payment_privacy_and_messenger_boundaries_are_covered() -> None:

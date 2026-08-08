@@ -111,27 +111,42 @@ class SalesHandoffRepository:
             raise RuntimeError("sales handoff open failed")
         active_id = str(row["id"] if hasattr(row, "keys") else row[0])
         active = self.get(actor=current, handoff_id=active_id)
-        if (
-            active_id != handoff_id
-            and _SEVERITY_RANK[signal.severity.value]
-            > _SEVERITY_RANK.get(str(active.get("severity") or "normal"), 0)
-        ):
-            self._conn.execute(
-                """
-                UPDATE clientplatform_sales_handoffs
-                SET reason=?, severity=?, summary=?, context_json=?, updated_at=?
-                WHERE id=? AND business_id=? AND status IN ('open','claimed')
-                """,
-                (
-                    signal.reason.value,
-                    signal.severity.value,
-                    signal.summary,
-                    context_json,
-                    timestamp,
-                    active_id,
-                    current.business_id,
-                ),
+        if active_id != handoff_id:
+            is_escalation = (
+                _SEVERITY_RANK[signal.severity.value]
+                > _SEVERITY_RANK.get(str(active.get("severity") or "normal"), 0)
             )
+            if is_escalation:
+                self._conn.execute(
+                    """
+                    UPDATE clientplatform_sales_handoffs
+                    SET reason=?, severity=?, summary=?, context_json=?, updated_at=?
+                    WHERE id=? AND business_id=? AND status IN ('open','claimed')
+                    """,
+                    (
+                        signal.reason.value,
+                        signal.severity.value,
+                        signal.summary,
+                        context_json,
+                        timestamp,
+                        active_id,
+                        current.business_id,
+                    ),
+                )
+            else:
+                self._conn.execute(
+                    """
+                    UPDATE clientplatform_sales_handoffs
+                    SET context_json=?, updated_at=?
+                    WHERE id=? AND business_id=? AND status IN ('open','claimed')
+                    """,
+                    (
+                        context_json,
+                        timestamp,
+                        active_id,
+                        current.business_id,
+                    ),
+                )
             active = self.get(actor=current, handoff_id=active_id)
         return active
 

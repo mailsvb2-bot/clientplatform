@@ -1,11 +1,22 @@
 from __future__ import annotations
 
-from types import ModuleType
+from collections.abc import Callable
+from typing import Protocol
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 
-def install_sales_ui(simple_module: ModuleType) -> None:
+class _ControlModule(Protocol):
+    _uuid_token: Callable[[str], str]
+
+
+class _SimpleExperienceModule(Protocol):
+    _simple_keyboard: Callable[[str], InlineKeyboardMarkup]
+    _sales_ui_installed: bool
+    control: _ControlModule
+
+
+def install_sales_ui(simple_module: _SimpleExperienceModule) -> None:
     """Add one sales entry point without coupling the simple dashboard to sales code."""
 
     if bool(getattr(simple_module, "_sales_ui_installed", False)):
