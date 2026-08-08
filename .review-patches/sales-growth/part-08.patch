@@ -1,0 +1,180 @@
++        now: str | None = None,
++    ) -> dict[str, Any]:
++        current = self._current(actor, manage=True)
++        item = self.get(actor=current, handoff_id=handoff_id)
++        if str(item["status"]) == "resolved":
++            raise ValueError("resolved sales handoff cannot be claimed")
++        claimed_by = item.get("claimed_by_member_id")
++        if str(item["status"]) == "claimed":
++            if claimed_by == current.membership_id:
++                self._sales.assign_member(
++                    actor=current,
++                    lead_id=str(item["lead_id"]),
++                    member_id=current.membership_id,
++                    now=now,
++                )
++                return item
++            raise PermissionError("sales handoff is already claimed by another member")
++        timestamp = str(now or _utc_now())
++        cursor = self._conn.execute(
++            """
++            UPDATE clientplatform_sales_handoffs
++            SET status='claimed', claimed_by_member_id=?, updated_at=?
++            WHERE id=? AND business_id=? AND status='open'
++            """,
++            (
++                current.membership_id,
++                timestamp,
++                item["id"],
++                current.business_id,
++            ),
++        )
++        if int(getattr(cursor, "rowcount", 1) or 0) != 1:
++            latest = self.get(actor=current, handoff_id=str(item["id"]))
++            if latest.get("claimed_by_member_id") == current.membership_id:
++                self._sales.assign_member(
++                    actor=current,
++                    lead_id=str(latest["lead_id"]),
++                    member_id=current.membership_id,
++                    now=now,
++                )
++                return latest
++            raise PermissionError("sales handoff was claimed concurrently")
++        self._sales.assign_member(
++            actor=current,
++            lead_id=str(item["lead_id"]),
++            member_id=current.membership_id,
++            now=now,
++        )
++        return self.get(actor=current, handoff_id=item["id"])
++
++    def resolve(
++        self,
++        *,
++        actor: TenantContext,
++        handoff_id: str,
++        now: str | None = None,
++    ) -> dict[str, Any]:
++        current = self._current(actor, manage=True)
++        item = self.get(actor=current, handoff_id=handoff_id)
++        claimed_by = item.get("claimed_by_member_id")
++        if (
++            claimed_by
++            and claimed_by != current.membership_id
++            and current.role not in {PlatformRole.OWNER, PlatformRole.ADMINISTRATOR}
++        ):
++            raise PermissionError("sales handoff is owned by another member")
++        timestamp = str(now or _utc_now())
++        self._conn.execute(
++            """
++            UPDATE clientplatform_sales_handoffs
++            SET status='resolved', resolved_at=?, updated_at=?
++            WHERE id=? AND business_id=? AND status<>'resolved'
++            """,
++            (timestamp, timestamp, item["id"], current.business_id),
++        )
++        return self.get(actor=current, handoff_id=item["id"])
+diff --git a/clientplatform/infrastructure/sales_metrics_repository.py b/clientplatform/infrastructure/sales_metrics_repository.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..891f8fc7016461368b4c9769bccedfb6530104e5
+--- /dev/null
++++ b/clientplatform/infrastructure/sales_metrics_repository.py
+@@ -0,0 +1,148 @@
++from __future__ import annotations
++
++import json
++from collections import defaultdict
++from typing import Any
++
++from clientplatform.domain.sales_metrics import SalesFunnelCounts, SalesFunnelSnapshot
++from clientplatform.domain.tenancy import TenantContext
++from clientplatform.infrastructure.tenancy_repository import TenancyRepository
++
++
++_REACHED_ENGAGED = frozenset(
++    {
++        "engaged",
++        "need_known",
++        "qualified",
++        "offer_presented",
++        "checkout",
++        "won",
++        "handoff",
++    }
++)
++_REACHED_QUALIFIED = frozenset(
++    {"qualified", "offer_presented", "checkout", "won"}
++)
++_REACHED_CHECKOUT = frozenset({"checkout", "won"})
++
++
++def _rowdict(row: Any) -> dict[str, Any]:
++    if hasattr(row, "keys"):
++        return {str(key): row[key] for key in row.keys()}
++    return dict(row)
++
++
++class SalesMetricsRepository:
++    """Read-only, tenant-scoped evidence metrics; no synthetic AI activity counts."""
++
++    def __init__(self, conn: Any):
++        self._conn = conn
++        self._tenancy = TenancyRepository(conn)
++
++    def _current(self, actor: TenantContext) -> TenantContext:
++        current = self._tenancy.resolve_context(
++            user_id=actor.user_id, business_id=actor.business_id
++        )
++        current.assert_can_view_promotion_analytics()
++        return current
++
++    @staticmethod
++    def _counts_from_flags(items: list[dict[str, object]], handoffs: int) -> SalesFunnelCounts:
++        return SalesFunnelCounts(
++            discovered=len(items),
++            engaged=sum(bool(item["engaged"]) for item in items),
++            qualified=sum(bool(item["qualified"]) for item in items),
++            checkout=sum(bool(item["checkout"]) for item in items),
++            won=sum(bool(item["won"]) for item in items),
++            lost=sum(bool(item["lost"]) for item in items),
++            open_handoffs=max(0, int(handoffs)),
++        )
++
++    def snapshot(self, *, actor: TenantContext) -> SalesFunnelSnapshot:
++        current = self._current(actor)
++        lead_rows = [
++            _rowdict(row)
++            for row in self._conn.execute(
++                """
++                SELECT id, source_kind, stage
++                FROM clientplatform_sales_leads
++                WHERE business_id=?
++                """,
++                (current.business_id,),
++            ).fetchall()
++        ]
++        lead_ids = {str(row["id"]) for row in lead_rows}
++        reached: dict[str, set[str]] = defaultdict(set)
++        if lead_ids:
++            for row in self._conn.execute(
++                """
++                SELECT lead_id, payload_json
++                FROM clientplatform_sales_events
++                WHERE business_id=? AND event_type='conversation_transition'
++                """,
++                (current.business_id,),
++            ).fetchall():
++                item = _rowdict(row)
++                lead_id = str(item.get("lead_id") or "")
++                if lead_id not in lead_ids:
++                    continue
++                try:
++                    payload = json.loads(str(item.get("payload_json") or "{}"))
++                except (TypeError, ValueError):
++                    payload = {}
++                state = str((payload or {}).get("to") or "")
++                if state:
++                    reached[lead_id].add(state)
++
++        flags: list[dict[str, object]] = []
++        by_source_flags: dict[str, list[dict[str, object]]] = defaultdict(list)
