@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from clientplatform.application.sales_agent import build_next_sales_plan_in_transaction
-from clientplatform.domain.commercial_ladder import CommercialOfferCandidate
+from clientplatform.domain.commercial_ladder import CommercialOfferCandidate, CommercialStepKind
 from clientplatform.domain.sales import SalesActionKind, SalesActionPlan
 from clientplatform.domain.sales_handoff import HandoffSignal, evaluate_handoff
 from clientplatform.domain.sales_state_machine import (
@@ -28,6 +28,7 @@ from services.db import get_db
 class SalesCommercialCandidateSelection:
     ladder_id: str
     step_id: str
+    kind: CommercialStepKind
     title: str
     offering_id: str | None
     requires_human_approval: bool
@@ -117,6 +118,7 @@ def _select_commercial_candidate(
     result = SalesCommercialCandidateSelection(
         ladder_id=ladder_id,
         step_id=candidate.step_id,
+        kind=candidate.kind,
         title=candidate.title,
         offering_id=candidate.offering_id,
         requires_human_approval=candidate.requires_human_approval,
@@ -131,6 +133,7 @@ def _select_commercial_candidate(
             "plan_id": plan_id,
             "ladder_id": result.ladder_id,
             "step_id": result.step_id,
+            "kind": result.kind.value,
             "title": result.title,
             "offering_id": result.offering_id,
             "requires_human_approval": result.requires_human_approval,
