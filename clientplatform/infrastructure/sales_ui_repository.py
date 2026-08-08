@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from clientplatform.domain.tenancy import TenantContext, normalize_uuid
@@ -43,6 +44,41 @@ class SalesUiRepository:
         current.assert_can_view_promotion_analytics()
         return current
 
+    def _commercial_candidate_for_plan(
+        self,
+        *,
+        business_id: str,
+        lead_id: str,
+        plan_id: str,
+    ) -> dict[str, Any] | None:
+        rows = self._conn.execute(
+            """
+            SELECT payload_json
+            FROM clientplatform_sales_events
+            WHERE business_id=? AND lead_id=?
+              AND event_type='commercial_candidate_selected'
+            ORDER BY occurred_at DESC, id DESC
+            """,
+            (business_id, lead_id),
+        ).fetchall()
+        for row in rows:
+            raw = row["payload_json"] if hasattr(row, "keys") else row[0]
+            try:
+                payload = json.loads(str(raw or "{}"))
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(payload, dict) or str(payload.get("plan_id") or "") != plan_id:
+                continue
+            return {
+                "commercial_candidate_title": str(payload.get("title") or "") or None,
+                "commercial_candidate_kind": str(payload.get("kind") or "") or None,
+                "commercial_candidate_step_id": str(payload.get("step_id") or "") or None,
+                "commercial_candidate_requires_approval": bool(
+                    payload.get("requires_human_approval", True)
+                ),
+            }
+        return None
+
     def list_open_work(
         self,
         *,
@@ -61,14 +97,41 @@ class SalesUiRepository:
                 l.stage,
                 l.updated_at,
                 (
+                    SELECT p.id
+                    FROM clientplatform_sales_action_plans p
+                    WHERE p.business_id=l.business_id
+                      AND p.lead_id=l.id
+                      AND p.status IN ('planned','approved')
+                    ORDER BY p.created_at DESC, p.id DESC
+                    LIMIT 1
+                ) AS next_plan_id,
+                (
                     SELECT p.action_kind
                     FROM clientplatform_sales_action_plans p
                     WHERE p.business_id=l.business_id
                       AND p.lead_id=l.id
-                      AND p.status='planned'
+                      AND p.status IN ('planned','approved')
                     ORDER BY p.created_at DESC, p.id DESC
                     LIMIT 1
-                ) AS next_action_kind
+                ) AS next_action_kind,
+                (
+                    SELECT p.status
+                    FROM clientplatform_sales_action_plans p
+                    WHERE p.business_id=l.business_id
+                      AND p.lead_id=l.id
+                      AND p.status IN ('planned','approved')
+                    ORDER BY p.created_at DESC, p.id DESC
+                    LIMIT 1
+                ) AS next_plan_status,
+                (
+                    SELECT p.requires_approval
+                    FROM clientplatform_sales_action_plans p
+                    WHERE p.business_id=l.business_id
+                      AND p.lead_id=l.id
+                      AND p.status IN ('planned','approved')
+                    ORDER BY p.created_at DESC, p.id DESC
+                    LIMIT 1
+                ) AS next_plan_requires_approval
             FROM clientplatform_sales_leads l
             JOIN customers c
               ON c.id=l.customer_id AND c.business_id=l.business_id
@@ -79,7 +142,20 @@ class SalesUiRepository:
             """,
             (current.business_id, selected_limit),
         ).fetchall()
-        return [_rowdict(row) for row in rows]
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            item = _rowdict(row)
+            plan_id = str(item.get("next_plan_id") or "")
+            if plan_id:
+                candidate = self._commercial_candidate_for_plan(
+                    business_id=current.business_id,
+                    lead_id=str(item["id"]),
+                    plan_id=plan_id,
+                )
+                if candidate is not None:
+                    item.update(candidate)
+            result.append(item)
+        return result
 
     def list_handoff_work(
         self,
