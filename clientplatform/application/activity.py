@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from clientplatform.domain.activity import (
+    ActivityInvariantViolation,
     BusinessCapability,
     BusinessOffering,
     BusinessProfile,
@@ -10,6 +11,11 @@ from clientplatform.domain.activity import (
 from clientplatform.domain.tenancy import TenantContext
 from clientplatform.infrastructure.postgres_safe_activity_repository import ActivityRepository
 from services.db import get_db, get_db_ro
+
+_REPOSITORY_INVITE_EXPIRED_ERROR = "customer invite has expired"
+_CUSTOMER_INVITE_EXPIRED_MESSAGE = (
+    "Срок действия ссылки истёк. Попросите специалиста отправить новую ссылку."
+)
 
 
 def save_business_profile(
@@ -114,10 +120,23 @@ def claim_customer_invite(
     username: str | None,
     display_name: str | None,
 ) -> InviteClaim:
+    expired_error: ActivityInvariantViolation | None = None
     with get_db() as conn:
-        return ActivityRepository(conn).claim_customer_invite(
-            token=token,
-            telegram_user_id=telegram_user_id,
-            username=username,
-            display_name=display_name,
-        )
+        try:
+            return ActivityRepository(conn).claim_customer_invite(
+                token=token,
+                telegram_user_id=telegram_user_id,
+                username=username,
+                display_name=display_name,
+            )
+        except ActivityInvariantViolation as exc:
+            if str(exc) != _REPOSITORY_INVITE_EXPIRED_ERROR:
+                raise
+            # The repository has already transitioned the invite to `expired`.
+            # Swallow only this specific signal until get_db() commits that
+            # transition; re-raise a user-facing error after the transaction.
+            expired_error = exc
+
+    if expired_error is None:  # pragma: no cover - defensive invariant
+        raise RuntimeError("customer invite expiration signal was lost")
+    raise ActivityInvariantViolation(_CUSTOMER_INVITE_EXPIRED_MESSAGE) from expired_error
