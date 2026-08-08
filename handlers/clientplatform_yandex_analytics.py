@@ -77,7 +77,7 @@ def _format_snapshot(snapshot: YandexGrowthSnapshot) -> str:
         "",
         f"Лиды по измеряемым ссылкам: {snapshot.leads}",
         f"Записались: {snapshot.bookings}",
-        f"Оплатили: {snapshot.won}",
+        f"Стали клиентами: {snapshot.won}",
         _metric("CPL", snapshot.cpl_micros),
         _metric("Стоимость записи", snapshot.booking_cost_micros),
         _metric("CAC", snapshot.cac_micros),
@@ -88,7 +88,7 @@ def _format_snapshot(snapshot: YandexGrowthSnapshot) -> str:
             lines.append(
                 f"• {campaign.campaign_name[:38]} — "
                 f"{_money(campaign.cost_micros)} · {campaign.clicks} кликов · "
-                f"{campaign.leads} лидов · {campaign.won} оплат"
+                f"{campaign.leads} лидов · {campaign.won} клиентов"
             )
     lines.extend(
         [
