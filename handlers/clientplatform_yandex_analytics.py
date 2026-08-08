@@ -103,6 +103,13 @@ def _format_snapshot(snapshot: YandexGrowthSnapshot) -> str:
     return "\n".join(lines)
 
 
+async def _answer_unavailable(callback: CallbackQuery) -> None:
+    await callback.answer(
+        "Статистика Яндекса сейчас недоступна.",
+        show_alert=True,
+    )
+
+
 @router.callback_query(F.data.startswith("cpy:a:"))
 async def open_yandex_analytics(callback: CallbackQuery, state: FSMContext) -> None:
     parts = str(callback.data).split(":")
@@ -129,11 +136,11 @@ async def open_yandex_analytics(callback: CallbackQuery, state: FSMContext) -> N
                 show_alert=True,
             )
         return
-    except (IndexError, PermissionError, RuntimeError, TypeError, ValueError):
-        await callback.answer(
-            "Статистика Яндекса сейчас недоступна.",
-            show_alert=True,
-        )
+    except (IndexError, TypeError, ValueError):
+        await _answer_unavailable(callback)
+        return
+    except (PermissionError, RuntimeError):
+        await _answer_unavailable(callback)
         return
 
     await state.clear()
