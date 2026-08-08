@@ -19,6 +19,9 @@ from clientplatform.application.sales_handoff import (
     resolve_sales_handoff,
 )
 from clientplatform.application.sales_metrics import get_sales_funnel_snapshot
+from clientplatform.application.sales_orchestration import (
+    approve_and_authorize_sales_outbound,
+)
 from clientplatform.application.sales_ui import (
     list_commercial_ladder_steps,
     list_commercial_ladders,
@@ -110,7 +113,9 @@ def _home_keyboard(business_id: str):
 
 
 def _back_keyboard(business_id: str):
-    return control._keyboard([[('← Продажи', f"cps:s:{_token(business_id)}")]])
+    return control._keyboard(
+        [[("← Получать клиентов", f"cps:s:{_token(business_id)}")]]
+    )
 
 
 async def send_sales_home(
@@ -129,9 +134,10 @@ async def send_sales_home(
         snapshot.total.discovered - snapshot.total.won - snapshot.total.lost,
     )
     await message.answer(
-        "💼 Продажи\n\n"
-        "Здесь собраны реальные обращения и подтверждённые результаты. "
-        "ClientPlatform ничего не отправляет клиентам сам: внешнее действие остаётся за Вами.\n\n"
+        "✨ Получать клиентов\n\n"
+        "ClientPlatform собирает реальные входящие сигналы, определяет следующий шаг "
+        "и подбирает подходящий этап Вашей линейки. Ничего не отправляется клиенту "
+        "без Вашего подтверждения.\n\n"
         f"Сейчас в работе: {active_count}\n"
         f"Нужен человек: {len(handoffs)}\n"
         f"Оплатили: {snapshot.total.won}",
@@ -151,17 +157,20 @@ async def open_sales_home(callback: CallbackQuery, state: FSMContext) -> None:
     )
 
 
-@router.callback_query(F.data.startswith("cps:sw:"))
-async def open_sales_work(callback: CallbackQuery, state: FSMContext) -> None:
-    business_id = _uuid(str(callback.data).split(":", 2)[2])
-    await state.clear()
-    actor = await control._actor(int(callback.from_user.id), business_id)
+async def _send_sales_work(
+    message: Message,
+    *,
+    user_id: int,
+    business_id: str,
+) -> None:
+    actor = await control._actor(user_id, business_id)
     items = await asyncio.to_thread(list_sales_work, actor=actor, limit=12)
-    await callback.answer()
+    business_token = _token(business_id)
+    rows: list[list[tuple[str, str]]] = []
     if not items:
         text = (
             "📋 В работе\n\nПока нет активных обращений. "
-            "Когда появятся реальные сигналы от клиентов, они будут собраны здесь."
+            "Когда появятся реальные сигналы от клиентов, система сама создаст следующий шаг."
         )
     else:
         lines = ["📋 В работе", ""]
@@ -178,13 +187,72 @@ async def open_sales_work(callback: CallbackQuery, state: FSMContext) -> None:
                     f"   Статус: {_STAGE_LABELS.get(str(item.get('stage')), 'В работе')}",
                     f"   Источник: {_source_label(item.get('source_kind'))}",
                     f"   Следующий шаг: {action_text}",
-                    "",
                 ]
             )
+            candidate = str(item.get("commercial_candidate_title") or "").strip()
+            if candidate:
+                lines.append(f"   Подходящий этап: {candidate}")
+            plan_id = str(item.get("next_plan_id") or "")
+            plan_status = str(item.get("next_plan_status") or "")
+            if plan_status == "approved":
+                lines.append("   Разрешение: ✅ outbound разрешён Вами")
+            elif (
+                plan_id
+                and plan_status == "planned"
+                and bool(item.get("next_plan_requires_approval"))
+            ):
+                rows.append(
+                    [
+                        (
+                            f"✅ Одобрить шаг для {index}",
+                            f"cps:swa:{business_token}:{_token(plan_id)}",
+                        )
+                    ]
+                )
+            lines.append("")
         text = "\n".join(lines).rstrip()
-    await control._callback_message(callback).answer(
-        text,
-        reply_markup=_back_keyboard(business_id),
+    rows.append([("← Получать клиентов", f"cps:s:{business_token}")])
+    await message.answer(text, reply_markup=control._keyboard(rows))
+
+
+@router.callback_query(F.data.startswith("cps:sw:"))
+async def open_sales_work(callback: CallbackQuery, state: FSMContext) -> None:
+    business_id = _uuid(str(callback.data).split(":", 2)[2])
+    await state.clear()
+    await callback.answer()
+    await _send_sales_work(
+        control._callback_message(callback),
+        user_id=int(callback.from_user.id),
+        business_id=business_id,
+    )
+
+
+@router.callback_query(F.data.startswith("cps:swa:"))
+async def approve_sales_plan(callback: CallbackQuery, state: FSMContext) -> None:
+    parts = str(callback.data).split(":")
+    business_id, plan_id = _uuid(parts[2]), _uuid(parts[3])
+    actor = await control._actor(int(callback.from_user.id), business_id)
+    try:
+        authorization = await asyncio.to_thread(
+            approve_and_authorize_sales_outbound,
+            actor=actor,
+            plan_id=plan_id,
+        )
+    except (PermissionError, ValueError, RuntimeError):
+        await callback.answer(
+            "Не удалось одобрить шаг: проверьте клиента и актуальность рекомендации.",
+            show_alert=True,
+        )
+        return
+    if not bool(authorization.get("dispatch_allowed")):
+        await callback.answer("Outbound не разрешён", show_alert=True)
+        return
+    await state.clear()
+    await callback.answer("Одобрено — outbound разрешён")
+    await _send_sales_work(
+        control._callback_message(callback),
+        user_id=int(callback.from_user.id),
+        business_id=business_id,
     )
 
 
@@ -220,7 +288,7 @@ async def _send_handoffs(
         if str(item.get("status")) == "open":
             rows.append([("✋ Взять", f"cps:shc:{business_token}:{handoff_token}")])
         rows.append([("✅ Готово", f"cps:shr:{business_token}:{handoff_token}")])
-    rows.append([("← Продажи", f"cps:s:{business_token}")])
+    rows.append([("← Получать клиентов", f"cps:s:{business_token}")])
     await message.answer("\n".join(lines).rstrip(), reply_markup=control._keyboard(rows))
 
 
@@ -322,7 +390,7 @@ async def _send_ladders(message: Message, *, user_id: int, business_id: str) -> 
         "🪜 Линейка",
         "",
         "Настройте путь клиента от первого шага к основной услуге и сопровождению.",
-        "Никакое предложение не отправляется автоматически.",
+        "ClientPlatform может сам выбрать подходящий этап, но outbound откроется только после Вашего подтверждения.",
         "",
     ]
     if not ladders:
@@ -341,7 +409,7 @@ async def _send_ladders(message: Message, *, user_id: int, business_id: str) -> 
     rows.extend(
         [
             [("➕ Создать линейку", f"cps:sln:{business_token}")],
-            [("← Продажи", f"cps:s:{business_token}")],
+            [("← Получать клиентов", f"cps:s:{business_token}")],
         ]
     )
     await message.answer("\n".join(lines), reply_markup=control._keyboard(rows))
