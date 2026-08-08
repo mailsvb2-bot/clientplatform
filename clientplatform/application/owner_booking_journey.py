@@ -14,9 +14,13 @@ from clientplatform.domain.bookings import (
     normalize_telegram_principal,
 )
 from clientplatform.domain.customers import CustomerNotFound, CustomerPlatform
+from clientplatform.domain.sales import ContactBasis
+from clientplatform.domain.sales_state_machine import SalesConversationEvent
 from clientplatform.domain.tenancy import TenantContext, normalize_uuid
 from clientplatform.infrastructure.booking_repository import BookingRepository
 from clientplatform.infrastructure.customer_repository import CustomerRepository
+from clientplatform.infrastructure.sales_repository import SalesRepository
+from clientplatform.infrastructure.sales_state_repository import SalesStateRepository
 from clientplatform.infrastructure.tenancy_repository import TenancyRepository
 from services.db import get_db, get_db_ro
 
@@ -132,7 +136,9 @@ def connect_public_storefront_customer(
 
     The public storefront intentionally makes the business discoverable. It does
     not grant staff access and refuses to turn an owner or employee into a
-    customer of the same tenant.
+    customer of the same tenant. A genuine public visit is also persisted as
+    replay-safe inbound sales evidence so the owner's sales UI reflects real
+    customer activity rather than synthetic model output.
     """
 
     normalized_business_id = normalize_uuid(business_id, field_name="business_id")
@@ -187,6 +193,25 @@ def connect_public_storefront_customer(
                 display_name=display_name,
             )
             customer_id = customer.id
+
+        # One Telegram visitor has one stable public-storefront opportunity per
+        # business. Reopening the same permanent link refreshes signal time but
+        # cannot duplicate the lead or its first inbound transition.
+        lead = SalesRepository(conn).create_or_refresh_lead(
+            actor=actor,
+            opportunity_key=f"public-storefront:telegram:{principal_id}",
+            customer_id=customer_id,
+            source_kind="telegram",
+            contact_basis=ContactBasis.INBOUND,
+            source_ref="public_storefront",
+        )
+        SalesStateRepository(conn).apply(
+            actor=actor,
+            lead_id=lead.id,
+            event=SalesConversationEvent.INBOUND_RECEIVED,
+            dedupe_key=f"public-storefront-open:{principal_id}",
+            metadata={"channel": "telegram", "surface": "public_storefront"},
+        )
         return CustomerBusinessLink(
             business_id=normalized_business_id,
             business_name=business_name,
