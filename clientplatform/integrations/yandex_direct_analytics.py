@@ -4,7 +4,6 @@ import hashlib
 import json
 from dataclasses import dataclass
 from datetime import date
-from typing import Mapping
 
 from clientplatform.domain.ad_connections import normalize_external_campaign_id
 from clientplatform.integrations.yandex_direct import (
@@ -18,6 +17,7 @@ from clientplatform.integrations.yandex_direct import (
 
 _REPORTS_URL = "https://api.direct.yandex.com/json/v501/reports"
 _MAX_AD_IDS = 500
+_MAX_METRIC_VALUE = 9_000_000_000_000_000_000
 
 
 def _report_date(value: date | str, *, field_name: str) -> str:
@@ -45,9 +45,16 @@ def _nonnegative_int(value: object, *, field_name: str) -> int:
         parsed = int(str(value).strip())
     except (TypeError, ValueError) as exc:
         raise YandexDirectError(f"{field_name}_invalid") from exc
-    if parsed < 0 or parsed > 9_000_000_000_000_000_000:
+    if parsed < 0 or parsed > _MAX_METRIC_VALUE:
         raise YandexDirectError(f"{field_name}_invalid")
     return parsed
+
+
+def _checked_add(left: int, right: int, *, field_name: str) -> int:
+    result = int(left) + int(right)
+    if result > _MAX_METRIC_VALUE:
+        raise YandexDirectError(f"{field_name}_invalid")
+    return result
 
 
 def _clean_name(value: object) -> str:
@@ -137,6 +144,9 @@ class ReadOnlyYandexDirectAnalyticsProvider:
         end = _report_date(date_to, field_name="date_to")
         if start > end:
             raise ValueError("date_from must not be after date_to")
+        token = str(access_token or "").strip()
+        if not token:
+            raise YandexDirectError("provider_token_missing")
         normalized_ids = tuple(
             sorted(
                 {
@@ -184,7 +194,7 @@ class ReadOnlyYandexDirectAnalyticsProvider:
             }
         }
         headers = {
-            "Authorization": f"Bearer {str(access_token).strip()}",
+            "Authorization": f"Bearer {token}",
             "Accept-Language": "ru",
             "Content-Type": "application/json; charset=utf-8",
             "returnMoneyInMicros": "true",
@@ -228,7 +238,8 @@ class ReadOnlyYandexDirectAnalyticsProvider:
 
     @staticmethod
     def _parse_rows(text: str) -> tuple[YandexAdPerformanceRow, ...]:
-        aggregated: dict[tuple[str, str, str], list[int]] = {}
+        aggregated: dict[tuple[str, str], tuple[str, int, int, int]] = {}
+        campaign_by_ad: dict[str, str] = {}
         for raw_line in text.splitlines():
             if not raw_line.strip():
                 continue
@@ -238,25 +249,59 @@ class ReadOnlyYandexDirectAnalyticsProvider:
             ad_id, campaign_id, campaign_name, impressions, clicks, cost = (
                 column.strip() for column in columns
             )
-            key = (
-                _positive_external_id(ad_id, field_name="ad_id"),
-                normalize_external_campaign_id(campaign_id),
-                _clean_name(campaign_name),
+            normalized_ad = _positive_external_id(ad_id, field_name="ad_id")
+            normalized_campaign = normalize_external_campaign_id(campaign_id)
+            previous_campaign = campaign_by_ad.setdefault(
+                normalized_ad,
+                normalized_campaign,
             )
-            values = aggregated.setdefault(key, [0, 0, 0])
-            values[0] += _nonnegative_int(impressions, field_name="impressions")
-            values[1] += _nonnegative_int(clicks, field_name="clicks")
-            values[2] += _nonnegative_int(cost, field_name="cost_micros")
+            if previous_campaign != normalized_campaign:
+                raise YandexDirectError("analytics_report_campaign_ambiguous")
+            key = (normalized_ad, normalized_campaign)
+            clean_name = _clean_name(campaign_name)
+            previous = aggregated.get(key)
+            if previous is None:
+                aggregated[key] = (
+                    clean_name,
+                    _nonnegative_int(impressions, field_name="impressions"),
+                    _nonnegative_int(clicks, field_name="clicks"),
+                    _nonnegative_int(cost, field_name="cost_micros"),
+                )
+                continue
+            previous_name, previous_impressions, previous_clicks, previous_cost = previous
+            if previous_name != clean_name:
+                raise YandexDirectError("analytics_report_campaign_name_ambiguous")
+            aggregated[key] = (
+                previous_name,
+                _checked_add(
+                    previous_impressions,
+                    _nonnegative_int(impressions, field_name="impressions"),
+                    field_name="impressions",
+                ),
+                _checked_add(
+                    previous_clicks,
+                    _nonnegative_int(clicks, field_name="clicks"),
+                    field_name="clicks",
+                ),
+                _checked_add(
+                    previous_cost,
+                    _nonnegative_int(cost, field_name="cost_micros"),
+                    field_name="cost_micros",
+                ),
+            )
         return tuple(
             YandexAdPerformanceRow(
                 ad_id=key[0],
                 campaign_id=key[1],
-                campaign_name=key[2],
-                impressions=values[0],
-                clicks=values[1],
-                cost_micros=values[2],
+                campaign_name=values[0],
+                impressions=values[1],
+                clicks=values[2],
+                cost_micros=values[3],
             )
-            for key, values in sorted(aggregated.items(), key=lambda item: int(item[0][0]))
+            for key, values in sorted(
+                aggregated.items(),
+                key=lambda item: int(item[0][0]),
+            )
         )
 
 
