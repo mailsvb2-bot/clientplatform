@@ -1,0 +1,41 @@
+name: Apply Reviewed Sales Growth Patch
+
+on:
+  push:
+    branches: [agent/reviewed-sales-growth-v3]
+    paths:
+      - .github/workflows/apply-reviewed-sales-growth.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-reviewed-sales-growth-v3
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    if: github.repository == 'mailsvb2-bot/clientplatform'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout exact review branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: agent/reviewed-sales-growth-v3
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Verify and apply exact reviewed patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .review-patches/sales-growth/part-*.patch > /tmp/sales.patch
+          echo '5613d288c7e49e7498e3c48d980a792a8f4adeec0418f895460318a6e946f9d4  /tmp/sales.patch' | sha256sum -c -
+          git apply --check --whitespace=error /tmp/sales.patch
+          git apply --whitespace=error /tmp/sales.patch
+          python -m compileall -q clientplatform services tests
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add clientplatform services tests
+          git commit -m 'Add reviewed tenant-safe sales growth core'
+          git push origin HEAD:agent/reviewed-sales-growth-v3
