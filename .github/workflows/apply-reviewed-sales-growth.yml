@@ -1,8 +1,8 @@
 name: Apply Reviewed Sales Growth Patch
 
 on:
-  push:
-    branches: [agent/reviewed-sales-growth-v3]
+  pull_request:
+    branches: [main]
     paths:
       - .github/workflows/apply-reviewed-sales-growth.yml
 
@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   apply:
-    if: github.repository == 'mailsvb2-bot/clientplatform'
+    if: github.repository == 'mailsvb2-bot/clientplatform' && github.event.pull_request.head.ref == 'agent/reviewed-sales-growth-v3'
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout exact review branch
