@@ -76,6 +76,10 @@ def _promotion_link(username: str, source_token: str) -> str:
     return f"https://t.me/{username}?start={promotion_start_payload(source_token)}"
 
 
+def _active_connections(connections):
+    return [item for item in connections if item.status == AdConnectionStatus.ACTIVE]
+
+
 async def _workspace(callback: CallbackQuery, *, business_token: str) -> None:
     business_id = control._token_uuid(business_token)
     actor = await control._actor(int(callback.from_user.id), business_id)
@@ -92,12 +96,11 @@ async def _workspace(callback: CallbackQuery, *, business_token: str) -> None:
         )
         return
 
-    connections, slots, jobs = await asyncio.gather(
+    connections, jobs = await asyncio.gather(
         asyncio.to_thread(list_ad_connections, actor=actor),
-        asyncio.to_thread(control.list_booking_slots, actor=actor),
         asyncio.to_thread(list_ad_publications, actor=actor),
     )
-    open_slots = [item for item in slots if item.slot.status == BookingSlotStatus.OPEN]
+    active = _active_connections(connections)
     connection_lines = [
         f"• Яндекс Директ · {item.external_login} · {_STATUS_LABELS[item.status]}"
         for item in connections
@@ -107,23 +110,18 @@ async def _workspace(callback: CallbackQuery, *, business_token: str) -> None:
         f"{_JOB_LABELS[item.status]}"
         for item in jobs[:5]
     ] or ["• отправок пока нет"]
-    rows: list[list[tuple[str, str]]] = [
-        [("➕ Подключить Яндекс Директ", f"cpa:connect:{business_token}")]
-    ]
-    if any(item.status == AdConnectionStatus.ACTIVE for item in connections):
+
+    rows: list[list[tuple[str, str]]] = []
+    if active:
         rows.extend(
             [
-                [
-                    (
-                        f"🎯 {slot.local_start} · {slot.offering_title[:20]}",
-                        f"cpa:slot:{business_token}:{control._uuid_token(slot.slot.id)}",
-                    )
-                ]
-                for slot in open_slots[:10]
+                [("🎯 Создать рекламу", f"cpa:promote:{business_token}")],
+                [("🔌 Отключить кабинет", f"cpa:disconnects:{business_token}")],
             ]
         )
+    else:
         rows.append(
-            [("🔌 Отключить кабинет", f"cpa:disconnects:{business_token}")]
+            [("➕ Подключить Яндекс Директ", f"cpa:connect:{business_token}")]
         )
     rows.extend(
         [
@@ -131,21 +129,28 @@ async def _workspace(callback: CallbackQuery, *, business_token: str) -> None:
             [("⬅️ Получить клиентов", f"cpj:promote:{business_token}")],
         ]
     )
+
+    next_step = (
+        "\n\nКабинет готов. Нажмите «🎯 Создать рекламу». Экран «Выберите свободное время» "
+        "откроется отдельным шагом."
+        if active
+        else (
+            "\n\nПодключите Яндекс Директ, чтобы создавать рекламные черновики. "
+            "Сначала опубликуйте свободное время в разделе «Запись», если хотите "
+            "рекламировать конкретное окно."
+        )
+    )
     await callback.answer()
     await _message(callback).answer(
         "📣 Личные рекламные кабинеты\n\n"
-        "Каждый бизнес подключает собственный кабинет. ClientPlatform не получает "
-        "доступ к кабинетам других пользователей. На этом этапе система создаёт "
-        "только черновики: показы и расходы автоматически не запускаются.\n\n"
+        "Здесь только управление подключением к Яндекс Директу. ClientPlatform не "
+        "получает доступ к кабинетам других пользователей. "
+        "Показы и расходы автоматически не запускаются.\n\n"
         "Подключения:\n"
         + "\n".join(connection_lines)
-        + "\n\nПоследние отправки:\n"
+        + "\n\nПоследние рекламные черновики:\n"
         + "\n".join(job_lines)
-        + (
-            "\n\nВыберите свободное время для рекламного черновика:"
-            if open_slots
-            else "\n\nСначала опубликуйте свободное время."
-        ),
+        + next_step,
         reply_markup=control._keyboard(rows),
     )
 
@@ -155,6 +160,55 @@ async def open_ad_connections(callback: CallbackQuery) -> None:
     await _workspace(
         callback,
         business_token=str(callback.data).split(":", 2)[2],
+    )
+
+
+@simple.router.callback_query(F.data.startswith("cpa:promote:"))
+async def open_ad_promotion_slots(callback: CallbackQuery) -> None:
+    business_token = str(callback.data).split(":", 2)[2]
+    business_id = control._token_uuid(business_token)
+    actor = await control._actor(int(callback.from_user.id), business_id)
+    connections, slots = await asyncio.gather(
+        asyncio.to_thread(list_ad_connections, actor=actor),
+        asyncio.to_thread(control.list_booking_slots, actor=actor),
+    )
+    if not _active_connections(connections):
+        await callback.answer(
+            "Сначала подключите рекламный кабинет",
+            show_alert=True,
+        )
+        return
+
+    open_slots = [item for item in slots if item.slot.status == BookingSlotStatus.OPEN]
+    rows: list[list[tuple[str, str]]] = [
+        [
+            (
+                f"🎯 {slot.local_start} · {slot.offering_title[:20]}",
+                f"cpa:slot:{business_token}:{control._uuid_token(slot.slot.id)}",
+            )
+        ]
+        for slot in open_slots[:10]
+    ]
+    rows.append([("⬅️ К рекламному кабинету", f"cpa:home:{business_token}")])
+
+    await callback.answer()
+    if not open_slots:
+        await _message(callback).answer(
+            "🎯 Создать рекламу\n\n"
+            "Сейчас нет свободного времени, которое можно превратить в рекламный "
+            "черновик. Сначала откройте время для записи в разделе «Запись», затем "
+            "вернитесь сюда.",
+            reply_markup=control._keyboard(rows),
+        )
+        return
+
+    await _message(callback).answer(
+        "🎯 Создать рекламу\n\n"
+        "Выберите, какое свободное время рекламировать. Следующим шагом ClientPlatform "
+        "предложит кабинет, кампанию и регион, а перед созданием покажет полный "
+        "черновик для подтверждения.\n\n"
+        "Свободное время:",
+        reply_markup=control._keyboard(rows),
     )
 
 
@@ -204,9 +258,7 @@ async def choose_ad_connection(
     actor = await control._actor(int(callback.from_user.id), business_id)
     try:
         connections = await asyncio.to_thread(list_ad_connections, actor=actor)
-        active = [
-            item for item in connections if item.status == AdConnectionStatus.ACTIVE
-        ]
+        active = _active_connections(connections)
         if not active:
             await callback.answer(
                 "Сначала подключите рекламный кабинет",
@@ -432,5 +484,6 @@ __all__ = [
     "confirm_yandex_publication",
     "connect_yandex_direct",
     "open_ad_connections",
+    "open_ad_promotion_slots",
     "prepare_ad_publication",
 ]

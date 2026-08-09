@@ -28,6 +28,7 @@ async def test_admin_callback_guard_does_not_swallow_advertising_namespace() -> 
     advertising_callbacks = (
         "cpa:connect:business-token",
         "cpa:home:business-token",
+        "cpa:promote:business-token",
         "cpa:slot:business-token:slot-token",
         "cpa:conn:0",
         "cpa:campaign:0",
