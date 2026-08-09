@@ -116,6 +116,7 @@ class AdConnectionWorkspaceUxTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch.object(ads_ui.asyncio, "to_thread", new=immediate_to_thread),
             patch.object(ads_ui.control, "_token_uuid", side_effect=lambda value: value),
+            patch.object(ads_ui.control, "_uuid_token", side_effect=lambda value: value),
             patch.object(
                 ads_ui.control,
                 "_actor",
