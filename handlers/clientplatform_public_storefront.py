@@ -11,6 +11,7 @@ from aiogram.types import Message
 
 from clientplatform.application.owner_booking_journey import (
     connect_public_storefront_customer,
+    is_public_storefront_staff,
 )
 
 _TOKEN_LENGTH = 22
@@ -54,6 +55,35 @@ async def dispatch_public_start(
         return
 
     business_id = control._token_uuid(business_token)
+    if await asyncio.to_thread(
+        is_public_storefront_staff,
+        business_id=business_id,
+        telegram_user_id=user_id,
+    ):
+        # Public deep links are deliberately customer acquisition surfaces. Staff
+        # must not become customers of their own tenant merely by testing a link.
+        # Route them back to the existing safe preview/dashboard callbacks before
+        # the customer-connect transaction is even attempted.
+        await state.clear()
+        rows: list[list[tuple[str, str]]] = []
+        if slot_token:
+            rows.append(
+                [
+                    (
+                        "👀 Посмотреть глазами клиента",
+                        f"cpj:preview:{business_token}:{slot_token}",
+                    )
+                ]
+            )
+        rows.append([("🏠 В мой кабинет", f"cpj:home:{business_token}")])
+        await message.answer(
+            "Это Ваша публичная ссылка для клиентов. Вы открыли её как сотрудник "
+            "этого бизнеса, поэтому ClientPlatform не создаёт для Вас клиентскую "
+            "карточку. Используйте безопасный предпросмотр или вернитесь в кабинет.",
+            reply_markup=control._keyboard(rows),
+        )
+        return
+
     user = message.from_user
     link = await asyncio.to_thread(
         connect_public_storefront_customer,
