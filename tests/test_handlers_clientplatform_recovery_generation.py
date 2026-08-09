@@ -52,7 +52,11 @@ async def test_recovery_generation_rejects_late_stale_callback_write(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     button_surface_contract.install_button_surface_contract(interaction_safety)
-    monkeypatch.setattr(interaction_safety, "_LOCK_WAIT_SECONDS", 0.01)
+    monkeypatch.setattr(
+        interaction_safety,
+        "_CONTROL_COMMAND_LOCK_WAIT_SECONDS",
+        0.01,
+    )
 
     user_id = 940060
     state = _state(user_id=user_id)
