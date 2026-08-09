@@ -52,6 +52,10 @@ def install_button_surface_contract(safety: ModuleType) -> None:
     _extend_tuple(
         safety,
         "_STATE_ESCAPE_PREFIXES",
+        # Legacy advanced-dashboard slot creation is a fresh add flow. It must
+        # clear stale owner-journey edit state (for example replacing_slot_id)
+        # before the control handler stores the new offering/business context.
+        "cp:slotadd:",
         "cp:dless:",
         "cp:dled:",
         "cp:dlcancel:",
