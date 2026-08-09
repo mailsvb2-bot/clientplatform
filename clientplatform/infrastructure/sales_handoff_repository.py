@@ -75,6 +75,7 @@ class SalesHandoffRepository:
         timestamp = str(now or _utc_now())
         handoff_id = str(uuid4())
         context_json = _context_json(context)
+        replacement_context_json = None if context is None else context_json
         self._conn.execute(
             """
             INSERT INTO clientplatform_sales_handoffs(
@@ -120,14 +121,15 @@ class SalesHandoffRepository:
                 self._conn.execute(
                     """
                     UPDATE clientplatform_sales_handoffs
-                    SET reason=?, severity=?, summary=?, context_json=?, updated_at=?
+                    SET reason=?, severity=?, summary=?,
+                        context_json=COALESCE(?, context_json), updated_at=?
                     WHERE id=? AND business_id=? AND status IN ('open','claimed')
                     """,
                     (
                         signal.reason.value,
                         signal.severity.value,
                         signal.summary,
-                        context_json,
+                        replacement_context_json,
                         timestamp,
                         active_id,
                         current.business_id,
@@ -137,11 +139,11 @@ class SalesHandoffRepository:
                 self._conn.execute(
                     """
                     UPDATE clientplatform_sales_handoffs
-                    SET context_json=?, updated_at=?
+                    SET context_json=COALESCE(?, context_json), updated_at=?
                     WHERE id=? AND business_id=? AND status IN ('open','claimed')
                     """,
                     (
-                        context_json,
+                        replacement_context_json,
                         timestamp,
                         active_id,
                         current.business_id,
