@@ -199,6 +199,8 @@ async def _replace_panel(
 async def open_yandex_analytics(callback: CallbackQuery, state: FSMContext) -> None:
     parts = str(callback.data).split(":")
     try:
+        if len(parts) != 4:
+            raise ValueError("malformed Yandex analytics callback")
         business_id = control._token_uuid(parts[2])
         period_days = int(parts[3])
         if period_days not in {7, 30}:
@@ -233,7 +235,7 @@ async def open_yandex_analytics(callback: CallbackQuery, state: FSMContext) -> N
                 show_alert=True,
             )
         return
-    except (PermissionError, RuntimeError):
+    except (PermissionError, RuntimeError, ValueError):
         await _answer_unavailable(callback)
         return
 
