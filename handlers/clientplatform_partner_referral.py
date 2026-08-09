@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from urllib.parse import quote
 
 from aiogram import F
@@ -31,7 +30,6 @@ from . import clientplatform_control as control
 from . import clientplatform_simple_experience as simple
 
 
-log = logging.getLogger(__name__)
 _PARTNER_START_PREFIX = "cpg_"
 _MAX_REFERRAL_TOKEN_LENGTH = 128
 
@@ -101,8 +99,6 @@ async def dispatch_partner_referral_start(
         business_id=landing.business_id,
         telegram_user_id=user_id,
     ):
-        # Owner/staff previews must not inflate partner attribution and must not
-        # create a customer identity in their own tenant.
         await state.clear()
         await message.answer(
             "Это партнёрская ссылка Вашего бизнеса. Просмотр сотрудником не "
@@ -224,12 +220,10 @@ async def book_partner_referral(callback: CallbackQuery) -> None:
         )
         return
 
-    # Attribution is written only after canonical booking succeeds and uses the
-    # business event identity, not the Telegram user id, as its dedupe key.
     await asyncio.to_thread(
         record_partner_referral_result,
         referral_token=referral_token,
-        result_key=f"booking:{claim.slot.slot.id}",
+        result_key=f"booking_{claim.slot.slot.id}",
     )
     await callback.answer("Запись подтверждена")
     message = control._callback_message(callback)
