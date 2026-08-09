@@ -53,13 +53,32 @@ class ClientPlatformExternalMediaTests(unittest.TestCase):
             )
         )
 
-    def test_streaming_pages_are_delivered_as_links(self) -> None:
-        youtube = normalize_external_media_url("https://youtu.be/abcdefghijk")
-        self.assertEqual(youtube.provider, ExternalMediaProvider.STREAMING)
-        self.assertEqual(
-            external_delivery_kind(youtube, ContentKind.VIDEO),
-            ContentKind.LINK,
-        )
+    def test_streaming_pages_and_mobile_subdomains_are_delivered_as_links(self) -> None:
+        for url in (
+            "https://youtu.be/abcdefghijk",
+            "https://m.youtube.com/watch?v=abcdefghijk",
+            "https://music.youtube.com/watch?v=abcdefghijk",
+            "https://m.rutube.ru/video/example",
+            "https://m.vk.com/video1_2",
+            "https://player.vimeo.com/video/123456",
+        ):
+            with self.subTest(url=url):
+                reference = normalize_external_media_url(url)
+                self.assertEqual(reference.provider, ExternalMediaProvider.STREAMING)
+                self.assertEqual(
+                    external_delivery_kind(reference, ContentKind.VIDEO),
+                    ContentKind.LINK,
+                )
+
+    def test_streaming_suffix_matching_rejects_lookalike_hosts(self) -> None:
+        for url in (
+            "https://evilyoutube.com/video.mp4",
+            "https://youtube.com.evil.example/video.mp4",
+            "https://notvk.com/video.mp4",
+        ):
+            with self.subTest(url=url):
+                reference = normalize_external_media_url(url)
+                self.assertEqual(reference.provider, ExternalMediaProvider.DIRECT)
 
 
 if __name__ == "__main__":
