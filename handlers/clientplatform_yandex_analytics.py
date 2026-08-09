@@ -124,8 +124,28 @@ def _format_snapshot(snapshot: YandexGrowthSnapshot) -> str:
     return "\n".join(lines)
 
 
+async def _answer_feedback(
+    callback: CallbackQuery,
+    text: str,
+    *,
+    show_alert: bool = True,
+) -> None:
+    """Report analytics status even when interaction safety already acked the tap."""
+
+    try:
+        await callback.answer(text, show_alert=show_alert)
+        return
+    except TelegramAPIError:
+        pass
+    try:
+        await control._callback_message(callback).answer(text)
+    except TelegramAPIError:
+        return
+
+
 async def _answer_unavailable(callback: CallbackQuery) -> None:
-    await callback.answer(
+    await _answer_feedback(
+        callback,
         "Статистика Яндекса сейчас недоступна.",
         show_alert=True,
     )
@@ -156,6 +176,16 @@ async def open_yandex_analytics(callback: CallbackQuery, state: FSMContext) -> N
         period_days = int(parts[3])
         if period_days not in {7, 30}:
             raise ValueError("unsupported Yandex analytics period")
+    except (IndexError, TypeError, ValueError):
+        await _answer_unavailable(callback)
+        return
+
+    # Analytics period buttons are navigation, not a continuation of an ad-creation
+    # wizard. Clear any stale/active FSM step before provider I/O so 7/30 always
+    # gives the owner a deterministic escape from the wizard surface.
+    await state.clear()
+
+    try:
         actor = await control._actor(int(callback.from_user.id), business_id)
         snapshot = await asyncio.to_thread(
             get_yandex_growth_snapshot,
@@ -164,25 +194,24 @@ async def open_yandex_analytics(callback: CallbackQuery, state: FSMContext) -> N
         )
     except YandexDirectError as exc:
         if exc.code == "analytics_report_pending":
-            await callback.answer(
-                "Яндекс готовит отчёт. Нажмите обновить через несколько секунд.",
+            await _answer_feedback(
+                callback,
+                "Яндекс готовит отчёт. Нажмите эту кнопку ещё раз через несколько секунд.",
                 show_alert=True,
             )
         else:
-            await callback.answer(
+            await _answer_feedback(
+                callback,
                 "Не удалось прочитать статистику Яндекса. Проверьте подключение кабинета.",
                 show_alert=True,
             )
-        return
-    except (IndexError, TypeError, ValueError):
-        await _answer_unavailable(callback)
         return
     except (PermissionError, RuntimeError):
         await _answer_unavailable(callback)
         return
 
-    await state.clear()
-    await callback.answer()
+    # The global interaction-safety middleware acknowledges callback taps before
+    # dispatch. Do not answer the same callback a second time after provider I/O.
     await _replace_panel(
         control._callback_message(callback),
         text=_format_snapshot(snapshot),
