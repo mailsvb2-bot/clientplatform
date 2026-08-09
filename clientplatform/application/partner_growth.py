@@ -28,6 +28,7 @@ from clientplatform.integrations.partner_discovery import (
     CompositePartnerDiscovery,
     DiscoveredPartner,
     PartnerDiscoveryQuery,
+    PartnerDiscoveryUnavailable,
 )
 from services.db import get_db, get_db_ro
 
@@ -79,6 +80,10 @@ class PartnerGrowthService:
     def discovery_configured(self) -> bool:
         return self._discovery.configured
 
+    def _assert_discovery_configured(self) -> None:
+        if not self.discovery_configured:
+            raise PartnerDiscoveryUnavailable("partner discovery is not configured")
+
     def start(
         self,
         *,
@@ -87,6 +92,9 @@ class PartnerGrowthService:
         goal: PartnerCampaignGoal,
         automation_mode: PartnerAutomationMode | str = PartnerAutomationMode.CAUTIOUS,
     ) -> PartnerPreparationRun:
+        # Fail before creating durable campaign state. An empty provider set is
+        # an infrastructure/configuration condition, not a real zero-result run.
+        self._assert_discovery_configured()
         # automation_mode is persisted as future execution intent only. It does
         # not grant this preparation service authority to contact anyone.
         with get_db() as conn:
@@ -108,6 +116,7 @@ class PartnerGrowthService:
         actor: TenantContext,
         campaign_id: str,
     ) -> PartnerPreparationRun:
+        self._assert_discovery_configured()
         profile, offering_titles, campaign = self._load_context(
             actor=actor,
             campaign_id=campaign_id,
