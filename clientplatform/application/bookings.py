@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from clientplatform.application.customer_role_guard import (
     active_member_business_ids,
     assert_external_customer,
 )
 from clientplatform.domain.bookings import (
     BookingClaim,
+    BookingNotFound,
     BookingSlotView,
     CustomerBusinessLink,
+    normalize_utc_datetime,
 )
 from clientplatform.domain.tenancy import TenantContext
 from clientplatform.infrastructure.booking_repository import BookingRepository
@@ -78,18 +82,34 @@ def get_customer_booking(
     telegram_user_id: int,
     business_id: str,
     slot_id: str,
+    now: datetime | str | None = None,
 ) -> BookingClaim:
+    """Return a booked customer appointment only while its start is still future.
+
+    Scheduler reminders use this application boundary. Booking rows remain
+    readable in the repository for historical/reporting use, but an overdue job
+    after process downtime must not treat a meeting that already started as an
+    active reminder target.
+    """
+
     with get_db_ro() as conn:
         assert_external_customer(
             conn,
             telegram_user_id=telegram_user_id,
             business_id=business_id,
         )
-        return BookingRepository(conn).get_customer_booking(
+        claim = BookingRepository(conn).get_customer_booking(
             telegram_user_id=telegram_user_id,
             business_id=business_id,
             slot_id=slot_id,
         )
+    current = normalize_utc_datetime(
+        str(now or datetime.now(timezone.utc).isoformat(timespec="seconds")),
+        field_name="now",
+    )
+    if datetime.fromisoformat(claim.slot.slot.starts_at) <= datetime.fromisoformat(current):
+        raise BookingNotFound("запись уже началась")
+    return claim
 
 
 def book_customer_slot(
