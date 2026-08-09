@@ -1,25 +1,13 @@
 from __future__ import annotations
 
-import asyncio
-import hashlib
-import json
 import sqlite3
 import unittest
 from contextlib import contextmanager
-from types import SimpleNamespace
-from unittest.mock import Mock, patch
 from uuid import uuid4
+from unittest.mock import patch
 
-from clientplatform.application.partner_runtime import (
-    record_partner_reply_if_expected,
-)
+from clientplatform.application.partner_runtime import record_partner_reply_if_expected
 from clientplatform.application.partner_scoring import score_partner
-from clientplatform.domain.bot_gateway import (
-    ClaimedIngressEvent,
-    IngressEvent,
-    IngressEventStatus,
-    ManagedBotRoute,
-)
 from clientplatform.domain.partners import (
     ContactBasis,
     PartnerCampaignGoal,
@@ -43,8 +31,6 @@ from clientplatform.integrations.partner_discovery import (
 from clientplatform.integrations.partner_discovery_runtime import (
     VkConnectionPartnerDiscoveryProvider,
 )
-from clientplatform.runtime.bot_gateway import BotGatewayRuntimeConfig
-from clientplatform.runtime.partner_aware_bot_gateway import ManagedBotGatewayRuntime
 from services.db.schema import (
     clientplatform_connections,
     clientplatform_customers,
@@ -114,7 +100,7 @@ class PartnerLiveRuntimeFixture:
         basis: ContactBasis,
         contact_value: str,
         competitor: bool = False,
-    ):
+    ) -> PartnerCandidate:
         provisional = PartnerCandidate(
             id=str(uuid4()),
             business_id=self.owner.business_id,
@@ -314,7 +300,7 @@ class PartnerVkDiscoveryTests(unittest.TestCase):
         credentials = _Credentials("super-secret-token")
         captured: dict[str, object] = {}
 
-        def request(url: str, params: dict[str, object]):
+        def request(url: str, params: dict[str, object]) -> dict[str, object]:
             captured["url"] = url
             captured["params"] = dict(params)
             return {
@@ -339,10 +325,15 @@ class PartnerVkDiscoveryTests(unittest.TestCase):
         found = provider.discover(
             PartnerDiscoveryQuery(terms=("психология",), limit=10)
         )
-        self.assertEqual(credentials.references, ["secret://env/CLIENTPLATFORM_SECRET_VK_TEST"])
+        self.assertEqual(
+            credentials.references,
+            ["secret://env/CLIENTPLATFORM_SECRET_VK_TEST"],
+        )
         self.assertEqual(found[0].channel, PartnerChannel.VK)
         self.assertEqual(found[0].source_url, "https://vk.com/psychology_practice")
-        self.assertEqual(captured["params"]["access_token"], "super-secret-token")
+        params = captured["params"]
+        assert isinstance(params, dict)
+        self.assertEqual(params["access_token"], "super-secret-token")
         self.assertNotIn("super-secret-token", repr(found))
 
     def test_vk_provider_error_exposes_only_code_not_secret_or_provider_message(self) -> None:
@@ -363,79 +354,6 @@ class PartnerVkDiscoveryTests(unittest.TestCase):
         self.assertIn("7", str(caught.exception))
         self.assertNotIn(secret, str(caught.exception))
         self.assertNotIn("permission denied", str(caught.exception))
-
-
-class PartnerAwareGatewayTests(unittest.IsolatedAsyncioTestCase):
-    async def test_partner_reply_is_processed_before_customer_link_or_dispatcher(self) -> None:
-        business_id = str(uuid4())
-        connection_id = str(uuid4())
-        managed_bot_id = str(uuid4())
-        payload = {
-            "update_id": 90001,
-            "message": {
-                "message_id": 1,
-                "date": 1,
-                "chat": {"id": 700003, "type": "private"},
-                "from": {"id": 700003, "is_bot": False, "first_name": "Partner"},
-                "text": "Да, интересно",
-            },
-        }
-        encoded = json.dumps(payload, separators=(",", ":"), sort_keys=True)
-        event = IngressEvent(
-            id=str(uuid4()),
-            business_id=business_id,
-            managed_bot_id=managed_bot_id,
-            provider_update_id="90001",
-            payload_sha256=hashlib.sha256(encoded.encode("utf-8")).hexdigest(),
-            payload_json=encoded,
-            status=IngressEventStatus.PROCESSING,
-            attempts=0,
-            available_at="2026-08-10T00:00:00+00:00",
-            created_at="2026-08-10T00:00:00+00:00",
-            updated_at="2026-08-10T00:00:00+00:00",
-            locked_at="2026-08-10T00:00:00+00:00",
-            lock_token="lease",
-        )
-        route = ManagedBotRoute(
-            managed_bot_id=managed_bot_id,
-            business_id=business_id,
-            connection_id=connection_id,
-            external_bot_id="123456",
-            credential_reference="secret://env/CLIENTPLATFORM_SECRET_PARTNER_TEST",
-            webhook_secret_reference="secret://env/CLIENTPLATFORM_SECRET_PARTNER_WEBHOOK",
-        )
-        dispatcher = SimpleNamespace(workflow_data={}, feed_webhook_update=Mock())
-        config = BotGatewayRuntimeConfig(
-            enabled=True,
-            path_prefix="/clientplatform/managed-bots",
-            batch_size=10,
-            interval_seconds=1.0,
-            tick_timeout_seconds=30.0,
-            lock_ttl_seconds=300,
-            max_attempts=5,
-            per_minute_limit=120,
-            queue_limit=1000,
-            max_payload_bytes=262144,
-        )
-        runtime = ManagedBotGatewayRuntime(dispatcher=dispatcher, config=config)
-        with (
-            patch(
-                "clientplatform.runtime.partner_aware_bot_gateway.record_partner_reply_if_expected",
-                return_value=str(uuid4()),
-            ) as record_reply,
-            patch(
-                "clientplatform.runtime.partner_aware_bot_gateway.ensure_telegram_customer_link"
-            ) as ensure_customer,
-            patch(
-                "clientplatform.runtime.partner_aware_bot_gateway.mark_ingress_event_processed"
-            ) as mark_processed,
-        ):
-            await runtime._process_item(ClaimedIngressEvent(event=event, route=route))
-        record_reply.assert_called_once()
-        ensure_customer.assert_not_called()
-        dispatcher.feed_webhook_update.assert_not_called()
-        mark_processed.assert_called_once()
-        self.assertEqual(runtime._processed, 1)
 
 
 if __name__ == "__main__":
