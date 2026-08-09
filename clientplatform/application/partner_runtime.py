@@ -25,7 +25,9 @@ from clientplatform.domain.tenancy import TenantContext, normalize_uuid
 from clientplatform.infrastructure import DispatchOutboxRepository
 from clientplatform.infrastructure.partner_repository import PartnerRepository
 from clientplatform.infrastructure.tenancy_repository import TenancyRepository
-from clientplatform.integrations.partner_discovery_runtime import build_live_partner_discovery
+from clientplatform.integrations.partner_discovery_runtime import (
+    build_connected_partner_discovery,
+)
 from services.db import get_db, get_db_ro
 
 
@@ -53,13 +55,13 @@ class PartnerReplyView:
     reply_text: str
 
 
-def start_live_partner_campaign(
+def start_connected_partner_campaign(
     *,
     actor: TenantContext,
     name: str = "",
     target_count: int = 50,
 ) -> PartnerPreparationRun:
-    discovery = build_live_partner_discovery(actor=actor)
+    discovery = build_connected_partner_discovery(actor=actor)
     stamp = datetime.now(timezone.utc).date().isoformat()
     campaign_name = " ".join(str(name or "").split()).strip() or f"Партнёрства {stamp}"
     service = PartnerGrowthService(discovery=discovery)
@@ -74,13 +76,13 @@ def start_live_partner_campaign(
     )
 
 
-def rerun_live_partner_campaign(
+def rerun_connected_partner_campaign(
     *,
     actor: TenantContext,
     campaign_id: str,
 ) -> PartnerPreparationRun:
     return PartnerGrowthService(
-        discovery=build_live_partner_discovery(actor=actor)
+        discovery=build_connected_partner_discovery(actor=actor)
     ).run(actor=actor, campaign_id=campaign_id)
 
 
@@ -400,7 +402,7 @@ __all__ = [
     "partner_stats",
     "queue_partner_outreach",
     "record_partner_reply_if_expected",
-    "rerun_live_partner_campaign",
+    "rerun_connected_partner_campaign",
     "set_partner_candidate_status",
-    "start_live_partner_campaign",
+    "start_connected_partner_campaign",
 ]
