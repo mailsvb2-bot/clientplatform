@@ -3,8 +3,8 @@ from __future__ import annotations
 import sqlite3
 import unittest
 from contextlib import contextmanager
-from uuid import uuid4
 from unittest.mock import patch
+from uuid import uuid4
 
 from clientplatform.application.partner_runtime import record_partner_reply_if_expected
 from clientplatform.application.partner_scoring import score_partner
@@ -17,13 +17,11 @@ from clientplatform.domain.partners import (
     PartnerContentPack,
     PartnerInvariantViolation,
 )
+from clientplatform.infrastructure import DispatchOutboxRepository
 from clientplatform.infrastructure.connection_repository import ConnectionRepository
 from clientplatform.infrastructure.partner_repository import PartnerRepository
 from clientplatform.infrastructure.tenancy_repository import TenancyRepository
-from clientplatform.infrastructure.unified_dispatch_outbox import (
-    ClaimedProviderDispatch,
-    DispatchOutboxRepository,
-)
+from clientplatform.infrastructure.unified_dispatch_outbox import ClaimedProviderDispatch
 from clientplatform.integrations.partner_discovery import (
     PartnerDiscoveryProviderError,
     PartnerDiscoveryQuery,
