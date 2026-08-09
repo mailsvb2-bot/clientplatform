@@ -8,6 +8,7 @@ from clientplatform.domain.bookings import (
     BookingSlot,
     BookingSlotStatus,
     BookingSlotView,
+    normalize_utc_datetime,
 )
 from clientplatform.domain.promotions import (
     PromotionCampaign,
@@ -96,6 +97,22 @@ _CAMPAIGN_SELECT = """
     FROM promotion_campaigns
 """
 
+_SLOT_SELECT = """
+    SELECT bs.id, bs.business_id, bs.offering_id, bs.starts_at, bs.ends_at,
+           bs.duration_minutes, bs.status, bs.booked_customer_id,
+           bs.created_by_member_id, bs.created_at, bs.updated_at,
+           bs.booked_at, bs.cancelled_at,
+           bo.title AS offering_title, b.name AS business_name,
+           bp.timezone AS timezone
+    FROM booking_slots bs
+    JOIN business_offerings bo
+      ON bo.id=bs.offering_id AND bo.business_id=bs.business_id
+    JOIN businesses b
+      ON b.id=bs.business_id AND b.status='active'
+    JOIN business_profiles bp
+      ON bp.business_id=bs.business_id
+"""
+
 
 class PromotionRepository:
     """Tenant-safe campaigns with idempotent, restart-safe outcome evidence."""
@@ -111,6 +128,30 @@ class PromotionRepository:
             business_id=actor.business_id,
         )
 
+    def list_promotable_slots(
+        self,
+        *,
+        actor: TenantContext,
+        now: str | None = None,
+    ) -> list[BookingSlotView]:
+        """Return only future open slots under promotion permissions."""
+
+        current = self._current_actor(actor)
+        current.assert_can_manage_promotions()
+        timestamp = normalize_utc_datetime(str(now or _utc_now()), field_name="now")
+        rows = self._conn.execute(
+            _SLOT_SELECT
+            + """
+              WHERE bs.business_id=?
+                AND bs.status='open'
+                AND bs.starts_at>?
+                AND bo.status='active'
+              ORDER BY bs.starts_at, bs.id
+            """,
+            (current.business_id, timestamp),
+        ).fetchall()
+        return [_slot_view_from_row(row) for row in rows]
+
     def create_or_refresh_campaign(
         self,
         *,
@@ -122,15 +163,19 @@ class PromotionRepository:
     ) -> tuple[PromotionCampaign, BookingSlotView]:
         current = self._current_actor(actor)
         current.assert_can_manage_promotions()
+        timestamp = normalize_utc_datetime(str(now or _utc_now()), field_name="now")
         slot = self._bookings.get_slot(actor=current, slot_id=slot_id)
         if slot.slot.status != BookingSlotStatus.OPEN:
             raise PromotionInvariantViolation(
                 "Рекламировать можно только свободное опубликованное время"
             )
+        if datetime.fromisoformat(slot.slot.starts_at) <= datetime.fromisoformat(timestamp):
+            raise PromotionInvariantViolation(
+                "Рекламировать можно только будущее свободное время"
+            )
         selected_channel = (
             channel if isinstance(channel, PromotionChannel) else PromotionChannel(str(channel))
         )
-        timestamp = str(now or _utc_now())
         campaign_id = str(uuid4())
         source_token = new_source_token()
         self._conn.execute(
@@ -225,8 +270,14 @@ class PromotionRepository:
         ).fetchall()
         return [_campaign_from_row(row) for row in rows]
 
-    def get_public_campaign(self, *, source_token: str) -> PromotionCampaign:
+    def get_public_campaign(
+        self,
+        *,
+        source_token: str,
+        now: str | None = None,
+    ) -> PromotionCampaign:
         token = normalize_source_token(source_token)
+        timestamp = normalize_utc_datetime(str(now or _utc_now()), field_name="now")
         row = self._conn.execute(
             _CAMPAIGN_SELECT
             + """
@@ -234,13 +285,17 @@ class PromotionRepository:
                 AND EXISTS(
                     SELECT 1
                     FROM booking_slots bs
+                    JOIN business_offerings bo
+                      ON bo.id=bs.offering_id AND bo.business_id=bs.business_id
                     WHERE bs.id=promotion_campaigns.booking_slot_id
                       AND bs.business_id=promotion_campaigns.business_id
                       AND bs.status='open'
+                      AND bs.starts_at>?
+                      AND bo.status='active'
                 )
               LIMIT 1
             """,
-            (token,),
+            (token, timestamp),
         ).fetchone()
         if row is None:
             raise PromotionNotFound(
@@ -250,23 +305,7 @@ class PromotionRepository:
 
     def get_public_campaign_slot(self, *, campaign: PromotionCampaign) -> BookingSlotView:
         row = self._conn.execute(
-            """
-            SELECT bs.id, bs.business_id, bs.offering_id, bs.starts_at, bs.ends_at,
-                   bs.duration_minutes, bs.status, bs.booked_customer_id,
-                   bs.created_by_member_id, bs.created_at, bs.updated_at,
-                   bs.booked_at, bs.cancelled_at,
-                   bo.title AS offering_title, b.name AS business_name,
-                   bp.timezone AS timezone
-            FROM booking_slots bs
-            JOIN business_offerings bo
-              ON bo.id=bs.offering_id AND bo.business_id=bs.business_id
-            JOIN businesses b
-              ON b.id=bs.business_id AND b.status='active'
-            JOIN business_profiles bp
-              ON bp.business_id=bs.business_id
-            WHERE bs.id=? AND bs.business_id=?
-            LIMIT 1
-            """,
+            _SLOT_SELECT + " WHERE bs.id=? AND bs.business_id=? LIMIT 1",
             (campaign.booking_slot_id, campaign.business_id),
         ).fetchone()
         if row is None:
