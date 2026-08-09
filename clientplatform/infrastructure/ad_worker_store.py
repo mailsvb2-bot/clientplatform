@@ -92,6 +92,30 @@ class AdWorkerStore:
         )
         return int(getattr(cursor, "rowcount", 0) or 0)
 
+    def has_publishing_job(
+        self,
+        *,
+        business_id: str,
+        connection_id: str,
+    ) -> bool:
+        """Return whether a provider call already owns a durable publication lease."""
+
+        normalized_business = normalize_uuid(business_id, field_name="business_id")
+        normalized_connection = normalize_uuid(
+            connection_id,
+            field_name="ad_connection_id",
+        )
+        row = self._conn.execute(
+            """
+            SELECT 1
+            FROM ad_publication_jobs
+            WHERE business_id=? AND connection_id=? AND status='publishing'
+            LIMIT 1
+            """,
+            (normalized_business, normalized_connection),
+        ).fetchone()
+        return row is not None
+
     def load_active(
         self,
         *,
@@ -332,13 +356,16 @@ class AdConnectionLifecycleStore:
         timestamp: str,
         error_code: str,
     ) -> None:
+        # A publishing row owns the durable provider-call lease. Never rewrite
+        # it to cancelled: disconnect first disables the connection so no new
+        # jobs can start, then the application waits for this lease to finish.
         self._conn.execute(
             """
             UPDATE ad_publication_jobs
             SET status='cancelled', updated_at=?, locked_at=NULL, lock_token=NULL,
                 last_error_code=?
             WHERE connection_id=? AND business_id=?
-              AND status IN ('draft', 'queued', 'publishing', 'retry')
+              AND status IN ('draft', 'queued', 'retry')
             """,
             (timestamp, error_code, connection_id, business_id),
         )
