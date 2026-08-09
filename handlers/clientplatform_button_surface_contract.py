@@ -182,6 +182,7 @@ def install_button_surface_contract(safety: ModuleType) -> None:
         "cpg:r:",
         "cpg:a:",
         "cpg:s:",
+        "cpg:sc:",
         "cpg:ok:",
         "cpg:no:",
         "cpg:b:",
