@@ -12,6 +12,9 @@ from clientplatform.application.yandex_growth_analytics import (
     get_yandex_growth_snapshot,
 )
 from clientplatform.integrations.yandex_direct import YandexDirectError
+from clientplatform.integrations.yandex_screen_code import (
+    screen_code_configuration_available,
+)
 
 from . import clientplatform_control as control
 
@@ -37,13 +40,15 @@ def _keyboard(
     period_days: int,
     *,
     connected_accounts: int,
+    connect_available: bool,
 ) -> InlineKeyboardMarkup:
     token = control._uuid_token(business_id)
     rows: list[list[tuple[str, str]]] = []
     if connected_accounts <= 0:
-        rows.append(
-            [("➕ Подключить Яндекс Директ", f"cpa:connect:{token}")]
-        )
+        if connect_available:
+            rows.append(
+                [("➕ Подключить Яндекс Директ", f"cpa:connect:{token}")]
+            )
     else:
         rows.append(
             [
@@ -66,13 +71,24 @@ def _keyboard(
     return control._keyboard(rows)
 
 
-def _format_snapshot(snapshot: YandexGrowthSnapshot) -> str:
+def _format_snapshot(
+    snapshot: YandexGrowthSnapshot,
+    *,
+    connect_available: bool = True,
+) -> str:
     if snapshot.connected_accounts == 0:
+        if connect_available:
+            return (
+                "📊 Яндекс Директ\n\n"
+                "Рекламный кабинет ещё не подключён. Нажмите «Подключить Яндекс "
+                "Директ» ниже — OAuth-токен будет храниться зашифрованно, а этот "
+                "экран будет читать только подтверждённую статистику Яндекса."
+            )
         return (
             "📊 Яндекс Директ\n\n"
-            "Рекламный кабинет ещё не подключён. Нажмите «Подключить Яндекс "
-            "Директ» ниже — OAuth-токен будет храниться зашифрованно, а этот "
-            "экран будет читать только подтверждённую статистику Яндекса."
+            "Рекламный кабинет ещё не подключён. Подключение Яндекс Директа "
+            "сейчас отключено или не настроено администратором. Когда безопасная "
+            "OAuth-конфигурация будет готова, действие подключения появится здесь."
         )
     if snapshot.tracked_ads == 0:
         return (
@@ -103,13 +119,24 @@ def _format_snapshot(snapshot: YandexGrowthSnapshot) -> str:
         _metric("Стоимость записи", snapshot.booking_cost_micros),
         _metric("CAC", snapshot.cac_micros),
     ]
+    if snapshot.cost_micros is None:
+        lines.extend(
+            [
+                "",
+                "Денежные итоги не складываются между несколькими рекламными "
+                "кабинетами: ClientPlatform пока не хранит подтверждённую валюту "
+                "каждого подключения. Показы, клики и подтверждённые исходы "
+                "суммируются, а общий расход/CPC/CPL/CAC остаются пустыми.",
+            ]
+        )
     if snapshot.campaigns:
         lines.extend(["", "По кампаниям:"])
         for campaign in snapshot.campaigns[:8]:
             lines.append(
                 f"• {campaign.campaign_name[:38]} — "
-                f"{_money(campaign.cost_micros)} · {campaign.clicks} кликов · "
-                f"{campaign.leads} лидов · {campaign.won} клиентов"
+                f"{_money(campaign.cost_micros)} в валюте кабинета · "
+                f"{campaign.clicks} кликов · {campaign.leads} лидов · "
+                f"{campaign.won} клиентов"
             )
     lines.extend(
         [
@@ -210,15 +237,17 @@ async def open_yandex_analytics(callback: CallbackQuery, state: FSMContext) -> N
         await _answer_unavailable(callback)
         return
 
+    connect_available = screen_code_configuration_available()
     # The global interaction-safety middleware acknowledges callback taps before
     # dispatch. Do not answer the same callback a second time after provider I/O.
     await _replace_panel(
         control._callback_message(callback),
-        text=_format_snapshot(snapshot),
+        text=_format_snapshot(snapshot, connect_available=connect_available),
         reply_markup=_keyboard(
             business_id,
             period_days,
             connected_accounts=snapshot.connected_accounts,
+            connect_available=connect_available,
         ),
     )
 
