@@ -28,6 +28,9 @@ from clientplatform.infrastructure.program_media_store import (
 from services.db import get_db
 
 
+_UNCERTAIN_UPLOAD_CLEANUP_DELAY_SECONDS = 600
+
+
 class ProgramMediaCleanupQueueError(RuntimeError):
     """Sanitized failure to durably schedule an uncertain media object."""
 
@@ -85,11 +88,24 @@ def store_program_media(
     except ProgramMediaStoreError as exc:
         cleanup_reference = exc.cleanup_reference
         if cleanup_reference:
+            # A PUT transport timeout is ambiguous: the client may have stopped
+            # receiving while the gateway continues and commits the object. An
+            # immediate DELETE can therefore race that completion, observe 404,
+            # and permanently lose the orphan reference. The configured upload
+            # timeout is capped at 120s; 600s gives the uncertain PUT a wide
+            # completion window before cleanup begins. Post-PUT verification
+            # failures remain immediate because upload completion is known.
+            delay_seconds = (
+                _UNCERTAIN_UPLOAD_CLEANUP_DELAY_SECONDS
+                if exc.code == "program_media_upload_transport_failure"
+                else 0
+            )
             try:
                 scheduled = queue_program_media_cleanup(
                     business_id=business_id,
                     media_reference=cleanup_reference,
                     reason="failed_program_media_ingest",
+                    delay_seconds=delay_seconds,
                 )
             except ProgramMediaCleanupQueueError:
                 raise ProgramMediaStoreError(
@@ -157,6 +173,7 @@ def queue_program_media_cleanup(
     business_id: str,
     media_reference: str,
     reason: str,
+    delay_seconds: int = 0,
 ) -> bool:
     try:
         enabled = _cleanup_enabled()
@@ -172,7 +189,7 @@ def queue_program_media_cleanup(
                 business_id=business_id,
                 media_reference=media_reference,
                 reason=reason,
-                delay_seconds=0,
+                delay_seconds=max(0, int(delay_seconds)),
             )
     except sqlite3.Error:
         raise ProgramMediaCleanupQueueError() from None
