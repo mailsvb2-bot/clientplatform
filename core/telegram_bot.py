@@ -287,21 +287,27 @@ class PollingAiohttpSession(AiohttpSession):
         self._companion_sessions.append(session)
 
     async def create_session(self) -> ClientSession:
-        if self._native_http_proxy is None:
-            return await super().create_session()
-
-        if self._should_reset_connector:
-            await super().close()
-        if self._session is None or self._session.closed:
-            self._session = ClientSession(
-                connector=self._connector_type(**self._connector_init),
-                headers={
-                    USER_AGENT: f"{SERVER_SOFTWARE} aiogram/{__version__}",
-                },
-                proxy=self._native_http_proxy,
-            )
-            self._should_reset_connector = False
-        return self._session
+        # Session construction and transport reset share one lifecycle lock.
+        # Without it, a request can install a new ClientSession while reset is
+        # awaiting close(), after which the reset path marks that fresh connector
+        # stale and the next request interrupts the one already using it.
+        async with self._transport_reset_lock:
+            if self._should_reset_connector:
+                # Bypass this class' close() here: connector recreation for one
+                # lane must not close its independently owned companion lane.
+                await super().close()
+            if self._session is None or self._session.closed:
+                session_kwargs: dict[str, Any] = {
+                    "connector": self._connector_type(**self._connector_init),
+                    "headers": {
+                        USER_AGENT: f"{SERVER_SOFTWARE} aiogram/{__version__}",
+                    },
+                }
+                if self._native_http_proxy is not None:
+                    session_kwargs["proxy"] = self._native_http_proxy
+                self._session = ClientSession(**session_kwargs)
+                self._should_reset_connector = False
+            return self._session
 
     async def reset_transport(
         self,
@@ -321,8 +327,11 @@ class PollingAiohttpSession(AiohttpSession):
             rotated = False
             if rotate_route and self._route_resolver is not None:
                 rotated = self._route_resolver.rotate()
-            await super().close()
+            # Publish reset intent before the first await. Even callers that only
+            # inspect the inherited reset flag can never observe an in-progress
+            # close as a healthy connector generation.
             self._should_reset_connector = True
+            await super().close()
             self._transport_generation += 1
             log.warning(
                 "Telegram transport reset role=%s generation=%s route=%s next_route=%s rotated=%s",
