@@ -108,6 +108,62 @@ class AdConnectionWorkspaceUxTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("🎯 Создать рекламу", labels)
         self.assertNotIn("🔌 Отключить кабинет", labels)
 
+    async def test_create_ad_step_rejects_without_active_connection(self) -> None:
+        cb = callback("cpa:promote:business-token")
+        outbound = SimpleNamespace(answer=AsyncMock())
+
+        with (
+            patch.object(ads_ui.asyncio, "to_thread", new=immediate_to_thread),
+            patch.object(ads_ui.control, "_token_uuid", return_value="business-id"),
+            patch.object(
+                ads_ui.control,
+                "_actor",
+                new=AsyncMock(return_value="actor"),
+            ),
+            patch.object(ads_ui, "list_ad_connections", return_value=[]),
+            patch.object(ads_ui.control, "list_booking_slots", return_value=[]),
+            patch.object(ads_ui, "_message", return_value=outbound),
+        ):
+            await ads_ui.open_ad_promotion_slots(cb)
+
+        cb.answer.assert_awaited_once_with(
+            "Сначала подключите рекламный кабинет",
+            show_alert=True,
+        )
+        outbound.answer.assert_not_awaited()
+
+    async def test_create_ad_step_explains_when_no_open_slots(self) -> None:
+        cb = callback("cpa:promote:business-token")
+        outbound = SimpleNamespace(answer=AsyncMock())
+
+        with (
+            patch.object(ads_ui.asyncio, "to_thread", new=immediate_to_thread),
+            patch.object(ads_ui.control, "_token_uuid", return_value="business-id"),
+            patch.object(
+                ads_ui.control,
+                "_actor",
+                new=AsyncMock(return_value="actor"),
+            ),
+            patch.object(
+                ads_ui,
+                "list_ad_connections",
+                return_value=[active_connection()],
+            ),
+            patch.object(ads_ui.control, "list_booking_slots", return_value=[]),
+            patch.object(ads_ui.control, "_keyboard", side_effect=lambda rows: rows),
+            patch.object(ads_ui, "_message", return_value=outbound),
+        ):
+            await ads_ui.open_ad_promotion_slots(cb)
+
+        cb.answer.assert_awaited_once_with()
+        rendered = outbound.answer.await_args.args[0]
+        rows = outbound.answer.await_args.kwargs["reply_markup"]
+        labels = [label for row in rows for label, _callback in row]
+
+        self.assertIn("Сейчас нет свободного времени", rendered)
+        self.assertIn("разделе «Запись»", rendered)
+        self.assertEqual(labels, ["⬅️ К рекламному кабинету"])
+
     async def test_create_ad_step_lists_open_slots_only_after_explicit_action(self) -> None:
         cb = callback("cpa:promote:business-token")
         outbound = SimpleNamespace(answer=AsyncMock())
