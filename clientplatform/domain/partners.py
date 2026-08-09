@@ -77,20 +77,6 @@ class PartnerCandidateStatus(StrEnum):
     INVALID = "invalid"
 
 
-class OutreachKind(StrEnum):
-    INITIAL = "initial"
-    FOLLOWUP = "followup"
-    REPLY = "reply"
-
-
-class OutreachStatus(StrEnum):
-    PREPARED = "prepared"
-    SENT = "sent"
-    MANUAL_REQUIRED = "manual_required"
-    BLOCKED = "blocked"
-    FAILED = "failed"
-
-
 class PlacementKind(StrEnum):
     POST = "post"
     JOINT_LIVE = "joint_live"
@@ -206,17 +192,6 @@ class PartnerCandidate:
                 PartnerCandidateStatus.DO_NOT_CONTACT,
                 PartnerCandidateStatus.INVALID,
             }
-            and self.contact_basis.permits_first_contact
-            and bool(self.contact_value)
-        )
-
-    @property
-    def followup_permitted(self) -> bool:
-        """Allow one follow-up only after a confirmed sent initial contact."""
-
-        return (
-            not self.competitor
-            and self.status == PartnerCandidateStatus.CONTACTED
             and self.contact_basis.permits_first_contact
             and bool(self.contact_value)
         )
@@ -375,8 +350,6 @@ def _tokens(values: object, *, maximum: int, item_maximum: int) -> tuple[str, ..
 
 __all__ = [
     "ContactBasis",
-    "OutreachKind",
-    "OutreachStatus",
     "PartnerAutomationMode",
     "PartnerCampaign",
     "PartnerCampaignGoal",
