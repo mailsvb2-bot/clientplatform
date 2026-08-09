@@ -127,6 +127,22 @@ def replace_owner_booking_slot(
         )
 
 
+def is_public_storefront_staff(
+    *,
+    business_id: str,
+    telegram_user_id: int,
+) -> bool:
+    """Return whether this principal is active staff of the public-link tenant."""
+
+    normalized_business_id = normalize_uuid(business_id, field_name="business_id")
+    principal_id = normalize_telegram_principal(telegram_user_id)
+    with get_db_ro() as conn:
+        return normalized_business_id in active_member_business_ids(
+            conn,
+            telegram_user_id=principal_id,
+        )
+
+
 def connect_public_storefront_customer(
     *,
     business_id: str,
@@ -232,5 +248,6 @@ __all__ = [
     "cancel_owner_booking_slot",
     "connect_public_storefront_customer",
     "get_owner_booking_slot",
+    "is_public_storefront_staff",
     "replace_owner_booking_slot",
 ]
