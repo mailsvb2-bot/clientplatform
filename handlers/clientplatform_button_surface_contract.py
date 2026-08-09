@@ -140,6 +140,7 @@ def install_button_surface_contract(safety: ModuleType) -> None:
         "_CLIENTPLATFORM_CALLBACK_PREFIXES",
         "cpbl:",
         "cpcm:",
+        "cpg:",
     )
     _extend_tuple(
         safety,
@@ -154,6 +155,9 @@ def install_button_surface_contract(safety: ModuleType) -> None:
         "cpbl:o:",
         "cpbl:dc:",
         "cpbl:rc:",
+        "cpg:home:",
+        "cpg:p:",
+        "cpg:c:",
     )
     _extend_tuple(
         safety,
@@ -162,6 +166,24 @@ def install_button_surface_contract(safety: ModuleType) -> None:
         "cp:dled:",
         "cp:dlcancel:",
         "cpbl:o:",
+        "cpg:home:",
+        "cpg:p:",
+        "cpg:c:",
+    )
+    _extend_tuple(
+        safety,
+        "_SENSITIVE_STATE_PREFIXES",
+        "ClientPlatformPartnerGrowthState:",
+    )
+    _extend_tuple(
+        safety,
+        "_ONE_SHOT_PREFIXES",
+        "cpg:start:",
+        "cpg:r:",
+        "cpg:a:",
+        "cpg:s:",
+        "cpg:ok:",
+        "cpg:no:",
     )
 
     original_state_local = cast(
