@@ -59,6 +59,20 @@ def parse_promotion_start_payload(payload: str) -> str | None:
         return None
 
 
+def list_promotable_slots(
+    *,
+    actor: TenantContext,
+    now: str | None = None,
+) -> list[BookingSlotView]:
+    """List future open slots using promotion permissions, not customer-record access."""
+
+    with get_db_ro() as conn:
+        return PromotionRepository(conn).list_promotable_slots(
+            actor=actor,
+            now=now,
+        )
+
+
 def create_slot_promotion(
     *,
     actor: TenantContext,
@@ -206,6 +220,7 @@ __all__ = [
     "PromotionLanding",
     "book_promoted_slot",
     "create_slot_promotion",
+    "list_promotable_slots",
     "list_promotion_campaigns",
     "open_promotion_link",
     "parse_promotion_start_payload",
