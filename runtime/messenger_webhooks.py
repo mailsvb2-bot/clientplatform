@@ -8,6 +8,10 @@ from typing import TYPE_CHECKING, Any
 
 from aiohttp import web
 
+from clientplatform.application.ad_connections import (
+    ad_connections_enabled,
+    yandex_direct_provider_configured,
+)
 from clientplatform.runtime.ad_publication_worker import AdPublicationWorker
 from clientplatform.runtime.bot_gateway import (
     ManagedBotGatewayRuntime,
@@ -199,6 +203,16 @@ def _resolve_ingress_bind() -> tuple[str, int]:
     )
 
 
+def _ad_publication_worker_enabled() -> bool:
+    """Run durable ad work whenever the provider connection is configured.
+
+    Screen-code OAuth intentionally has no HTTP callback route, so worker
+    lifecycle must not depend on ``ad_oauth_http_enabled()``.
+    """
+
+    return ad_connections_enabled() and yandex_direct_provider_configured()
+
+
 async def start_messenger_webhook_runtime(
     bot: "Bot | None" = None,
     dispatcher: "Dispatcher | None" = None,
@@ -210,9 +224,15 @@ async def start_messenger_webhook_runtime(
     max_enabled = max_webhook_enabled()
     vk_enabled = vk_webhook_enabled()
     ad_oauth_enabled = ad_oauth_http_enabled()
+    ad_worker_enabled = _ad_publication_worker_enabled()
     gateway_config = bot_gateway_runtime_config()
     gateway_enabled = gateway_config.enabled
-    ingress_enabled = http_ingress_enabled() or gateway_enabled or ad_oauth_enabled
+    ingress_enabled = (
+        http_ingress_enabled()
+        or gateway_enabled
+        or ad_oauth_enabled
+        or ad_worker_enabled
+    )
     if not ingress_enabled:
         return None
 
@@ -248,7 +268,7 @@ async def start_messenger_webhook_runtime(
         bot_gateway_runtime.register_route(app)
 
     ad_publication_worker: AdPublicationWorker | None = None
-    if ad_oauth_enabled:
+    if ad_worker_enabled:
         if dispatcher is None:
             raise RuntimeError("Advertising publication worker requires dispatcher")
         workflow_manager = dispatcher.workflow_data.get("task_manager")
