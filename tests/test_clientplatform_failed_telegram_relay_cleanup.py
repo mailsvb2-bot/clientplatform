@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import subprocess
+import sys
 from pathlib import Path
 
 
@@ -7,6 +9,29 @@ ROOT = Path(__file__).resolve().parents[1]
 DEPLOY = ROOT / "deploy" / "clientplatform"
 CLEANUP = DEPLOY / "cleanup-failed-telegram-relays.sh"
 COMPOSE = DEPLOY / "compose.production.yml"
+
+
+def _env_cleanup_program() -> str:
+    text = CLEANUP.read_text(encoding="utf-8")
+    marker = 'python3 - "$ENV_FILE" <<\'PY\'\n'
+    return text.split(marker, 1)[1].split("\nPY\n", 1)[0]
+
+
+def _run_env_cleanup(tmp_path: Path, proxy_url: str) -> tuple[str, str]:
+    env_file = tmp_path / "clientplatform.env"
+    env_file.write_text(
+        "BOT_TOKEN=synthetic\n"
+        f"TELEGRAM_PROXY_URL={proxy_url}\n"
+        "CLIENTPLATFORM_CONTROL_ENABLED=1\n",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", _env_cleanup_program(), str(env_file)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return env_file.read_text(encoding="utf-8"), result.stdout
 
 
 def test_failed_relay_implementations_are_not_shipped() -> None:
@@ -23,9 +48,40 @@ def test_cleanup_targets_only_known_clientplatform_relay_markers() -> None:
     assert "visible_hostname clientplatform-telegram-relay" in text
     assert "unrelated_active_squid_detected" in text
     assert "unrelated_local_relay_service_detected" in text
-    assert "host.docker.internal" in text
-    assert "147.45.146.112" in text
+    assert 'squid.conf.before-clientplatform-*' in text
+    assert "PRE_CLIENTPLATFORM_SQUID_CONFIG_RESTORED" in text
+    assert 'cp --preserve=mode,ownership,timestamps "$SQUID_BACKUP" "$SQUID_CONFIG"' in text
+    assert "restored_squid_config_invalid" in text
+    assert "restored_squid_start_failed" in text
+    assert "known_failed_endpoints" in text
+    assert '("http", "host.docker.internal", 3128)' in text
+    assert '("http", "147.45.146.112", 3128)' in text
     assert "UNRELATED_TELEGRAM_PROXY_PRESERVED" in text
+    assert "UNRELATED_OR_RESTORED_PORT_3128_LISTENER_PRESERVED" in text
+    assert 'fail "port_3128_still_listening"' not in text
+
+
+def test_cleanup_removes_only_exact_failed_proxy_endpoint(tmp_path: Path) -> None:
+    cleaned, output = _run_env_cleanup(tmp_path, "http://147.45.146.112:3128")
+
+    assert "TELEGRAM_PROXY_URL=" not in cleaned
+    assert "ACCIDENTAL_TELEGRAM_PROXY_ENV_REMOVED" in output
+
+
+def test_cleanup_preserves_unrelated_proxy_on_same_host(tmp_path: Path) -> None:
+    preserved, output = _run_env_cleanup(tmp_path, "http://147.45.146.112:8080")
+
+    assert "TELEGRAM_PROXY_URL=http://147.45.146.112:8080" in preserved
+    assert "UNRELATED_TELEGRAM_PROXY_PRESERVED" in output
+    assert "ACCIDENTAL_TELEGRAM_PROXY_ENV_REMOVED" not in output
+
+
+def test_cleanup_preserves_unrelated_proxy_scheme_on_same_endpoint(tmp_path: Path) -> None:
+    preserved, output = _run_env_cleanup(tmp_path, "https://147.45.146.112:3128")
+
+    assert "TELEGRAM_PROXY_URL=https://147.45.146.112:3128" in preserved
+    assert "UNRELATED_TELEGRAM_PROXY_PRESERVED" in output
+    assert "ACCIDENTAL_TELEGRAM_PROXY_ENV_REMOVED" not in output
 
 
 def test_cleanup_does_not_restart_or_deploy_application() -> None:
