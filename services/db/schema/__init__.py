@@ -10,6 +10,7 @@ from . import clientplatform_bookings
 from . import clientplatform_bot_gateway
 from . import clientplatform_bot_provisioning
 from . import clientplatform_connections
+from . import clientplatform_provider_dispatch
 from . import clientplatform_offer_ladders
 from . import clientplatform_customers
 from . import clientplatform_partners
@@ -45,6 +46,7 @@ PARTS = [
     clientplatform_programs,
     clientplatform_program_media,
     clientplatform_connections,
+    clientplatform_provider_dispatch,
     clientplatform_bot_gateway,
     clientplatform_bot_provisioning,
     clientplatform_admin_ops,
