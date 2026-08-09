@@ -4,6 +4,7 @@ set -Eeuo pipefail
 ROOT="${CLIENTPLATFORM_ROOT:-/opt/clientplatform}"
 ENV_FILE="$ROOT/deploy/clientplatform/clientplatform.env"
 SQUID_CONFIG="/etc/squid/squid.conf"
+SQUID_BACKUP_GLOB="/etc/squid/squid.conf.before-clientplatform-*"
 LOCAL_RELAY_SERVICE="/etc/systemd/system/clientplatform-telegram-ipv6-relay.service"
 LOCAL_RELAY_DIR="/opt/clientplatform-telegram-ipv6-relay"
 APP="clientplatform-production-app-1"
@@ -19,11 +20,34 @@ fi
 
 if [ -f "$SQUID_CONFIG" ] \
     && grep -Fq 'visible_hostname clientplatform-telegram-relay' "$SQUID_CONFIG"; then
-    systemctl disable --now squid.service >/dev/null 2>&1 || true
-    DEBIAN_FRONTEND=noninteractive apt-get purge -y \
-        squid squid-common squid-langpack >/dev/null 2>&1 || true
-    rm -rf /etc/squid /var/spool/squid
-    printf 'ACCIDENTAL_CLIENTPLATFORM_SQUID_REMOVED\n'
+    # The historical installer copied any configuration it found to
+    # squid.conf.before-clientplatform-<UTC stamp> before replacing it. If such
+    # provenance exists, fail safe: restore the newest saved configuration and
+    # retain the Squid package instead of purging a potentially unrelated proxy.
+    SQUID_BACKUP="$(
+        find /etc/squid -maxdepth 1 -type f \
+            -name 'squid.conf.before-clientplatform-*' \
+            -printf '%T@ %p\n' 2>/dev/null \
+            | sort -nr \
+            | head -n 1 \
+            | cut -d' ' -f2-
+    )"
+    systemctl stop squid.service >/dev/null 2>&1 || true
+    if [ -n "$SQUID_BACKUP" ] && [ -f "$SQUID_BACKUP" ]; then
+        cp --preserve=mode,ownership,timestamps "$SQUID_BACKUP" "$SQUID_CONFIG"
+        if command -v squid >/dev/null 2>&1; then
+            squid -k parse >/dev/null 2>&1 \
+                || fail "restored_squid_config_invalid"
+            systemctl start squid.service >/dev/null 2>&1 \
+                || fail "restored_squid_start_failed"
+        fi
+        printf 'PRE_CLIENTPLATFORM_SQUID_CONFIG_RESTORED:%s\n' "$SQUID_BACKUP"
+    else
+        DEBIAN_FRONTEND=noninteractive apt-get purge -y \
+            squid squid-common squid-langpack >/dev/null 2>&1 || true
+        rm -rf /etc/squid /var/spool/squid
+        printf 'ACCIDENTAL_CLIENTPLATFORM_SQUID_REMOVED\n'
+    fi
 elif systemctl is-active --quiet squid.service 2>/dev/null; then
     fail "unrelated_active_squid_detected"
 fi
@@ -55,16 +79,42 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 path = Path(sys.argv[1])
-known_hosts = {
-    "147.45.146.112",
-    "127.0.0.1",
-    "localhost",
-    "host.docker.internal",
+
+# These are the exact endpoint shapes created by the failed relay experiments.
+# Matching host alone is unsafe: production may intentionally use another
+# proxy on the same machine and that configuration must be preserved.
+known_failed_endpoints = {
+    ("http", "147.45.146.112", 3128),
+    ("http", "127.0.0.1", 3128),
+    ("http", "localhost", 3128),
+    ("http", "host.docker.internal", 3128),
 }
+
+
+def normalized_endpoint(value: str) -> tuple[str, str, int] | None:
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError:
+        return None
+    if (
+        parsed.scheme.lower() != "http"
+        or not parsed.hostname
+        or port is None
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        return None
+    return (parsed.scheme.lower(), parsed.hostname.lower(), port)
+
+
 original = path.read_text(encoding="utf-8")
 result: list[str] = []
 removed = False
-unexpected_proxy = ""
+preserved_proxy = False
 
 for raw in original.splitlines():
     stripped = raw.strip()
@@ -73,20 +123,14 @@ for raw in original.splitlines():
         continue
 
     value = stripped.split("=", 1)[1].strip()
-    try:
-        parsed = urlsplit(value)
-    except ValueError:
-        parsed = None
-
-    host = (parsed.hostname or "").lower() if parsed is not None else ""
-    if host in known_hosts:
+    if normalized_endpoint(value) in known_failed_endpoints:
         removed = True
         continue
 
-    unexpected_proxy = value
+    preserved_proxy = True
     result.append(raw)
 
-if unexpected_proxy:
+if preserved_proxy:
     print("UNRELATED_TELEGRAM_PROXY_PRESERVED")
 
 payload = "\n".join(result).rstrip() + "\n"
@@ -106,8 +150,11 @@ os.chmod(path, 0o600)
 PY
 fi
 
+# Do not require global port 3128 to become unused: a restored/unrelated Squid
+# or another operator-managed proxy may legitimately own it. Ownership is
+# established by the exact ClientPlatform config/unit markers above.
 if ss -ltn 2>/dev/null | grep -Eq ':3128([[:space:]]|$)'; then
-    fail "port_3128_still_listening"
+    printf 'UNRELATED_OR_RESTORED_PORT_3128_LISTENER_PRESERVED\n'
 fi
 
 if docker inspect "$APP" >/dev/null 2>&1; then
