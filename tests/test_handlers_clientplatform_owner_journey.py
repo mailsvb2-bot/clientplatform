@@ -218,6 +218,7 @@ async def test_fixed_width_public_payload_handles_underscore_inside_uuid_tokens(
     message = FakeMessage(f"/start {payload}")
     state = FakeState()
     original = AsyncMock()
+    monkeypatch.setattr(public, "is_public_storefront_staff", lambda **_kwargs: False)
     monkeypatch.setattr(
         public,
         "connect_public_storefront_customer",
@@ -246,6 +247,47 @@ async def test_fixed_width_public_payload_handles_underscore_inside_uuid_tokens(
     assert "Замена раковины" in text
     assert "Можно записаться" in text
     assert kwargs["reply_markup"].inline_keyboard[0][0].text == "✅ Записаться"
+
+
+@pytest.mark.asyncio
+async def test_staff_public_slot_link_uses_preview_without_customer_connect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    business_id = str(uuid4())
+    slot_id = str(uuid4())
+    payload = owner._public_slot_payload(
+        _slot(business_id=business_id, slot_id=slot_id)
+    )
+    message = FakeMessage(f"/start {payload}")
+    state = FakeState({"stale": "wizard"})
+    original = AsyncMock()
+    customer_connect = AsyncMock()
+    monkeypatch.setattr(public, "is_public_storefront_staff", lambda **_kwargs: True)
+    monkeypatch.setattr(public, "connect_public_storefront_customer", customer_connect)
+
+    await public.dispatch_public_start(
+        original,
+        message,
+        state,
+        user_id=101,
+        managed_bot_business_id=None,
+    )
+
+    original.assert_not_awaited()
+    customer_connect.assert_not_awaited()
+    assert state.clear_count == 1
+    text, kwargs = message.answers[-1]
+    assert "не создаёт для Вас клиентскую карточку" in text
+    buttons = [
+        button
+        for row in kwargs["reply_markup"].inline_keyboard
+        for button in row
+    ]
+    assert buttons[0].text == "👀 Посмотреть глазами клиента"
+    assert buttons[0].callback_data == (
+        f"cpj:preview:{control._uuid_token(business_id)}:{control._uuid_token(slot_id)}"
+    )
+    assert buttons[-1].text == "🏠 В мой кабинет"
 
 
 @pytest.mark.asyncio
