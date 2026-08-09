@@ -191,20 +191,40 @@ async def _render_candidate(
     rows: list[list[tuple[str, str]]] = []
     if candidate.first_contact_permitted and connections:
         rows.append(
-            [("📨 Поставить в очередь Telegram", f"cpg:s:{business_token}:{candidate_token}")]
+            [
+                (
+                    "📨 Поставить в очередь Telegram",
+                    f"cpg:s:{business_token}:{candidate_token}",
+                )
+            ]
         )
     elif candidate.status not in _TERMINAL_CONTACT_STATUSES:
         rows.extend(
             [
-                [("✅ Есть согласие на Telegram", f"cpg:a:{business_token}:{candidate_token}:o")],
-                [("🤝 Уже есть деловой контакт", f"cpg:a:{business_token}:{candidate_token}:r")],
+                [
+                    (
+                        "✅ Есть согласие на Telegram",
+                        f"cpg:a:{business_token}:{candidate_token}:o",
+                    )
+                ],
+                [
+                    (
+                        "🤝 Уже есть деловой контакт",
+                        f"cpg:a:{business_token}:{candidate_token}:r",
+                    )
+                ],
             ]
         )
     rows.extend(
         [
             [("✅ Сотрудничаем", f"cpg:ok:{business_token}:{candidate_token}")],
             [("🚫 Больше не писать", f"cpg:no:{business_token}:{candidate_token}")],
-            [("⬅️ К кампании", f"cpg:p:{business_token}:{_token(candidate.campaign_id)}")],
+            [
+                (
+                    "⬅️ К кампании",
+                    f"cpg:p:{business_token}:{_token(candidate.campaign_id)}",
+                )
+            ],
         ]
     )
     if answer_callback:
@@ -212,6 +232,35 @@ async def _render_candidate(
     await control._callback_message(callback).answer(
         text[:4000],
         reply_markup=control._keyboard(rows),
+    )
+
+
+async def _queue_selected_connection(
+    callback: CallbackQuery,
+    *,
+    business_token: str,
+    candidate_token: str,
+    connection_id: str,
+) -> None:
+    actor = await _actor(callback, business_token)
+    try:
+        dispatch = await asyncio.to_thread(
+            queue_partner_outreach,
+            actor=actor,
+            candidate_id=control._token_uuid(candidate_token),
+            connection_id=connection_id,
+        )
+    except PartnerInvariantViolation as exc:
+        await callback.answer(str(exc)[:180], show_alert=True)
+        return
+    await callback.answer("Поставлено в очередь")
+    await control._callback_message(callback).answer(
+        "📨 Предложение поставлено в каноническую очередь отправки.\n\n"
+        f"Статус dispatch: {dispatch.status.value}. "
+        "Повторное нажатие не создаст дубль.",
+        reply_markup=control._keyboard(
+            [[("Открыть партнёра", f"cpg:c:{business_token}:{candidate_token}")]]
+        ),
     )
 
 
@@ -238,9 +287,17 @@ async def start_partner_growth(callback: CallbackQuery) -> None:
         return
     await control._callback_message(callback).answer(
         f"✅ Поиск завершён\n\nНайдено публичных источников: {run.discovered}\n"
-        f"Прошли порог качества: {run.prepared}\n\nКонтакты не отправлялись автоматически.",
+        f"Прошли порог качества: {run.prepared}\n\n"
+        "Контакты не отправлялись автоматически.",
         reply_markup=control._keyboard(
-            [[("Открыть кандидатов", f"cpg:p:{business_token}:{_token(run.campaign.id)}")]]
+            [
+                [
+                    (
+                        "Открыть кандидатов",
+                        f"cpg:p:{business_token}:{_token(run.campaign.id)}",
+                    )
+                ]
+            ]
         ),
     )
 
@@ -268,7 +325,8 @@ async def rerun_partner_growth(callback: CallbackQuery) -> None:
         )
     except PartnerDiscoveryUnavailable:
         await control._callback_message(callback).answer(
-            "VK discovery сейчас недоступен; прежние кандидаты сохранены, ложный ноль не записан."
+            "VK discovery сейчас недоступен; прежние кандидаты сохранены, "
+            "ложный ноль не записан."
         )
         return
     await _render_campaign(
@@ -294,7 +352,9 @@ async def begin_partner_contact_authorization(
     callback: CallbackQuery,
     state: FSMContext,
 ) -> None:
-    _, _, business_token, candidate_token, raw_basis = str(callback.data).split(":", 4)
+    _, _, business_token, candidate_token, raw_basis = str(callback.data).split(
+        ":", 4
+    )
     basis = "opted_in" if raw_basis == "o" else "existing_relationship"
     await state.clear()
     await state.update_data(
@@ -306,8 +366,8 @@ async def begin_partner_contact_authorization(
     await callback.answer()
     await control._callback_message(callback).answer(
         "Введите numeric Telegram chat ID партнёра.\n\n"
-        "Используйте этот шаг только если человек действительно дал согласие или у Вас "
-        "уже есть деловой контакт. @username и ссылки намеренно не принимаются."
+        "Используйте этот шаг только если человек действительно дал согласие или "
+        "у Вас уже есть деловой контакт. @username и ссылки намеренно не принимаются."
     )
 
 
@@ -319,7 +379,9 @@ async def save_partner_contact(message: Message, state: FSMContext) -> None:
     basis = str(data.get("partner_contact_basis") or "")
     if not business_token or not candidate_token:
         await state.clear()
-        await message.answer("Контекст партнёра устарел. Откройте «Партнёрства» ещё раз.")
+        await message.answer(
+            "Контекст партнёра устарел. Откройте «Партнёрства» ещё раз."
+        )
         return
     actor = await control._actor(
         int(message.from_user.id),
@@ -335,13 +397,14 @@ async def save_partner_contact(message: Message, state: FSMContext) -> None:
         )
     except (ValueError, PartnerInvariantViolation):
         await message.answer(
-            "Не удалось подтвердить контакт. Нужен numeric Telegram chat ID и реальное "
-            "основание: согласие или существующий деловой контакт."
+            "Не удалось подтвердить контакт. Нужен numeric Telegram chat ID и "
+            "реальное основание: согласие или существующий деловой контакт."
         )
         return
     await state.clear()
     await message.answer(
-        "✅ Контакт подтверждён. Автоматическая отправка теперь разрешена доменным правилом.",
+        "✅ Контакт подтверждён. Автоматическая отправка теперь разрешена "
+        "доменным правилом.",
         reply_markup=control._keyboard(
             [[("Открыть партнёра", f"cpg:c:{business_token}:{candidate_token}")]]
         ),
@@ -356,23 +419,45 @@ async def send_partner_outreach(callback: CallbackQuery) -> None:
     if not connections:
         await callback.answer("Нет активного Telegram bot connection", show_alert=True)
         return
-    try:
-        dispatch = await asyncio.to_thread(
-            queue_partner_outreach,
-            actor=actor,
-            candidate_id=control._token_uuid(candidate_token),
+    if len(connections) == 1:
+        await _queue_selected_connection(
+            callback,
+            business_token=business_token,
+            candidate_token=candidate_token,
             connection_id=connections[0].id,
         )
-    except PartnerInvariantViolation as exc:
-        await callback.answer(str(exc)[:180], show_alert=True)
         return
-    await callback.answer("Поставлено в очередь")
+
+    await callback.answer()
     await control._callback_message(callback).answer(
-        "📨 Предложение поставлено в каноническую очередь отправки.\n\n"
-        f"Статус dispatch: {dispatch.status.value}. Повторное нажатие не создаст дубль.",
+        "Выберите Telegram-бота, от имени которого отправить предложение. "
+        "ClientPlatform не выбирает его автоматически, когда подключено несколько.",
         reply_markup=control._keyboard(
-            [[("Открыть партнёра", f"cpg:c:{business_token}:{candidate_token}")]]
+            [
+                [
+                    (
+                        connection.label[:36],
+                        "cpg:sc:"
+                        f"{business_token}:{candidate_token}:{_token(connection.id)}",
+                    )
+                ]
+                for connection in connections[:10]
+            ]
+            + [[("⬅️ К партнёру", f"cpg:c:{business_token}:{candidate_token}")]],
         ),
+    )
+
+
+@simple.router.callback_query(F.data.startswith("cpg:sc:"))
+async def send_partner_outreach_via_connection(callback: CallbackQuery) -> None:
+    _, _, business_token, candidate_token, connection_token = str(
+        callback.data
+    ).split(":", 4)
+    await _queue_selected_connection(
+        callback,
+        business_token=business_token,
+        candidate_token=candidate_token,
+        connection_id=control._token_uuid(connection_token),
     )
 
 
