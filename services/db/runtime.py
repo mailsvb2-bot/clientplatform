@@ -8,6 +8,11 @@ from typing import Final
 
 from core.paths import DB_PATH, DATABASE_URL, DB_ENGINE
 
+_POSTGRES_CONNECT_TIMEOUT_DEFAULT_SEC = 5.0
+_POSTGRES_STATEMENT_TIMEOUT_DEFAULT_SEC = 15.0
+_POSTGRES_LOCK_TIMEOUT_DEFAULT_SEC = 3.0
+_POSTGRES_IDLE_TX_TIMEOUT_DEFAULT_SEC = 30.0
+
 
 @dataclass(frozen=True)
 class DbRuntimeConfig:
@@ -22,6 +27,62 @@ class DbRuntimeConfig:
     @property
     def uses_sqlite(self) -> bool:
         return self.engine == "sqlite"
+
+    @property
+    def connect_timeout_sec(self) -> int:
+        return max(
+            1,
+            int(
+                _timeout_seconds(
+                    "POSTGRES_CONNECT_TIMEOUT_SEC",
+                    _POSTGRES_CONNECT_TIMEOUT_DEFAULT_SEC,
+                    minimum=1.0,
+                )
+                + 0.999
+            ),
+        )
+
+    @property
+    def statement_timeout_ms(self) -> int:
+        return max(
+            1,
+            int(
+                _timeout_seconds(
+                    "POSTGRES_STATEMENT_TIMEOUT_SEC",
+                    _POSTGRES_STATEMENT_TIMEOUT_DEFAULT_SEC,
+                    minimum=0.1,
+                )
+                * 1000
+            ),
+        )
+
+    @property
+    def lock_timeout_ms(self) -> int:
+        return max(
+            1,
+            int(
+                _timeout_seconds(
+                    "POSTGRES_LOCK_TIMEOUT_SEC",
+                    _POSTGRES_LOCK_TIMEOUT_DEFAULT_SEC,
+                    minimum=0.1,
+                )
+                * 1000
+            ),
+        )
+
+    @property
+    def idle_tx_timeout_ms(self) -> int:
+        return max(
+            1,
+            int(
+                _timeout_seconds(
+                    "POSTGRES_IDLE_TX_TIMEOUT_SEC",
+                    _POSTGRES_IDLE_TX_TIMEOUT_DEFAULT_SEC,
+                    minimum=0.1,
+                )
+                * 1000
+            ),
+        )
 
 
 def _normalize_engine(value: str | None) -> str:
@@ -48,6 +109,13 @@ def _strip_pg_option(options: str, setting: str) -> str:
     return " ".join(pattern.sub(" ", str(options or "")).split())
 
 
+CONFIG: Final[DbRuntimeConfig] = DbRuntimeConfig(
+    engine=_normalize_engine(DB_ENGINE),
+    db_path=Path(DB_PATH),
+    database_url=(DATABASE_URL or "").strip(),
+)
+
+
 def configure_libpq_timeouts() -> None:
     """Apply bounded waits to every psycopg/libpq connection in this process.
 
@@ -56,26 +124,13 @@ def configure_libpq_timeouts() -> None:
     so a stale process environment cannot silently re-enable unbounded waits.
     """
 
-    connect_timeout = max(
-        1,
-        int(_timeout_seconds("POSTGRES_CONNECT_TIMEOUT_SEC", 5.0, minimum=1.0) + 0.999),
-    )
     timeout_ms = {
-        "statement_timeout": max(
-            1,
-            int(_timeout_seconds("POSTGRES_STATEMENT_TIMEOUT_SEC", 15.0, minimum=0.1) * 1000),
-        ),
-        "lock_timeout": max(
-            1,
-            int(_timeout_seconds("POSTGRES_LOCK_TIMEOUT_SEC", 3.0, minimum=0.1) * 1000),
-        ),
-        "idle_in_transaction_session_timeout": max(
-            1,
-            int(_timeout_seconds("POSTGRES_IDLE_TX_TIMEOUT_SEC", 30.0, minimum=0.1) * 1000),
-        ),
+        "statement_timeout": CONFIG.statement_timeout_ms,
+        "lock_timeout": CONFIG.lock_timeout_ms,
+        "idle_in_transaction_session_timeout": CONFIG.idle_tx_timeout_ms,
     }
 
-    os.environ["PGCONNECT_TIMEOUT"] = str(connect_timeout)
+    os.environ["PGCONNECT_TIMEOUT"] = str(CONFIG.connect_timeout_sec)
     options = os.getenv("PGOPTIONS", "")
     for setting in timeout_ms:
         options = _strip_pg_option(options, setting)
@@ -84,12 +139,6 @@ def configure_libpq_timeouts() -> None:
     )
     os.environ["PGOPTIONS"] = " ".join(part for part in (options, enforced) if part).strip()
 
-
-CONFIG: Final[DbRuntimeConfig] = DbRuntimeConfig(
-    engine=_normalize_engine(DB_ENGINE),
-    db_path=Path(DB_PATH),
-    database_url=(DATABASE_URL or "").strip(),
-)
 
 if CONFIG.uses_postgres:
     configure_libpq_timeouts()
