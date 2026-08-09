@@ -16,6 +16,31 @@ from clientplatform.integrations.yandex_direct_moderation import (
 
 YANDEX_SCREEN_CODE_REDIRECT_URI = "https://oauth.yandex.ru/verification_code"
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
+_MAX_CONFIRMATION_CODE_LENGTH = 1024
+
+
+def normalize_yandex_confirmation_code(value: str | None) -> str:
+    """Normalize the opaque confirmation code rendered by Yandex OAuth.
+
+    Yandex currently renders an opaque alphanumeric authorization code for the
+    ``verification_code`` redirect flow.  OAuth authorization codes are opaque
+    to the client, so we must not impose a legacy seven-digit/device-code
+    format.  A leading ``# `` is tolerated because users commonly copy the
+    visual fragment marker together with the displayed code.
+    """
+
+    code = str(value or "").strip()
+    if code.startswith("# "):
+        code = code[2:].strip()
+    if (
+        not code
+        or len(code) > _MAX_CONFIRMATION_CODE_LENGTH
+        or not code.isascii()
+        or any(character.isspace() for character in code)
+        or any(ord(character) < 33 or ord(character) > 126 for character in code)
+    ):
+        raise YandexDirectError("oauth_code_invalid")
+    return code
 
 
 class YandexScreenCodeDirectProvider(ModeratingYandexDirectProvider):
@@ -35,13 +60,7 @@ class YandexScreenCodeDirectProvider(ModeratingYandexDirectProvider):
         super().__init__(oauth=oauth, transport=transport)
 
     def exchange_code(self, *, code: str, verifier: str) -> YandexTokenBundle:
-        confirmation_code = "".join(str(code or "").split())
-        if (
-            len(confirmation_code) != 7
-            or not confirmation_code.isascii()
-            or not confirmation_code.isdigit()
-        ):
-            raise YandexDirectError("oauth_code_invalid")
+        confirmation_code = normalize_yandex_confirmation_code(code)
         fields = {
             "grant_type": "authorization_code",
             "code": confirmation_code,
@@ -108,5 +127,6 @@ def screen_code_provider_from_environment() -> YandexScreenCodeDirectProvider:
 __all__ = [
     "YANDEX_SCREEN_CODE_REDIRECT_URI",
     "YandexScreenCodeDirectProvider",
+    "normalize_yandex_confirmation_code",
     "screen_code_provider_from_environment",
 ]
