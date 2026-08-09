@@ -8,7 +8,49 @@ single idempotent router composition after all public modules are initialized.
 from __future__ import annotations
 
 import importlib
+from collections.abc import Callable
 from types import ModuleType
+
+from aiogram.filters import BaseFilter
+from aiogram.types import CallbackQuery
+
+
+class _ClientPlatformAdminCallbackNamespace(BaseFilter):
+    """Keep ``cpa:`` admin callbacks from swallowing advertising actions."""
+
+    def __init__(self, decode_token: Callable[[str], str]):
+        self._decode_token = decode_token
+
+    async def __call__(self, event: CallbackQuery) -> bool:
+        data = str(event.data or "")
+        parts = data.split(":")
+        if len(parts) < 3 or parts[0] != "cpa":
+            return False
+
+        # ``cpa:home:<token>`` now belongs to the advertising workspace. The
+        # remaining legacy admin callbacks stay accepted for old Telegram
+        # messages, while canonical admin callbacks always carry the business
+        # token in the second segment: ``cpa:<token>:<action>``.
+        if parts[1] == "home":
+            return False
+        token = parts[2] if parts[1] in {"formats", "back"} and len(parts) == 3 else parts[1]
+        try:
+            self._decode_token(token)
+        except (TypeError, ValueError):
+            return False
+        return True
+
+
+def _install_admin_callback_namespace_guard(
+    admin_module: ModuleType,
+    control_module: ModuleType,
+) -> None:
+    if bool(getattr(admin_module, "_callback_namespace_guard_composed", False)):
+        return
+    admin_module.router.callback_query.filter(
+        _ClientPlatformAdminCallbackNamespace(control_module._token_uuid)
+    )
+    admin_module._callback_namespace_guard_composed = True
 
 
 def _load_clientplatform_modules() -> tuple[ModuleType, ModuleType]:
@@ -16,6 +58,10 @@ def _load_clientplatform_modules() -> tuple[ModuleType, ModuleType]:
     control = importlib.import_module(".clientplatform_control", __name__)
     globals()["clientplatform_entry"] = entry
     globals()["clientplatform_control"] = control
+
+    admin = importlib.import_module(".clientplatform_admin", __name__)
+    globals()["clientplatform_admin"] = admin
+    _install_admin_callback_namespace_guard(admin, control)
 
     if not bool(getattr(entry, "_telegram_commands_startup_composed", False)):
         entry.router.startup.register(entry.register_clientplatform_bot_commands)
@@ -163,6 +209,9 @@ def __getattr__(name: str) -> ModuleType:
     if name == "clientplatform_entry":
         entry, _ = _load_clientplatform_modules()
         return entry
+    if name == "clientplatform_admin":
+        _load_clientplatform_modules()
+        return globals()["clientplatform_admin"]
     if name == "clientplatform_bot_setup":
         _load_clientplatform_modules()
         return globals()["clientplatform_bot_setup"]
@@ -221,6 +270,7 @@ __all__ = [
     "clientplatform_ad_connections",
     "clientplatform_ad_disconnect",
     "clientplatform_ad_spend",
+    "clientplatform_admin",
     "clientplatform_admin_extension",
     "clientplatform_bot_lifecycle",
     "clientplatform_bot_setup",
