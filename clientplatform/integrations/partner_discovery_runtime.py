@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from clientplatform.domain.partners import PartnerChannel
 from clientplatform.domain.tenancy import TenantContext
 from clientplatform.infrastructure.tenancy_repository import TenancyRepository
 from clientplatform.integrations.partner_discovery import (
@@ -125,6 +126,7 @@ class VkConnectionPartnerDiscoveryProvider:
                             if description
                             else f"Публичное VK-сообщество найдено по запросу «{term}»"
                         ),
+                        channel=PartnerChannel.VK,
                         tags=(str(term), "vk"),
                     )
                 )
