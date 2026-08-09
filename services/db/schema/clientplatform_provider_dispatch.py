@@ -4,12 +4,12 @@ import sqlite3
 
 
 def ensure(c: sqlite3.Connection) -> None:
-    """Create the canonical provider dispatch outbox.
+    """Create generic provider work for non-lesson ClientPlatform sends.
 
-    The historical ``delivery_dispatch_outbox`` is retained as a rollback/read
-    compatibility source, but all new runtime work is materialized into this
-    generic outbox. Lesson deliveries and partner outreach therefore share one
-    lease/idempotency/transport contour instead of running parallel senders.
+    Lesson delivery remains in ``delivery_dispatch_outbox`` during this rollout.
+    The canonical worker leases both stores and uses the same credential,
+    adapter, retry and idempotency machinery. This deliberately avoids copying
+    in-flight lesson work while an older process may still own its lease.
     """
 
     c.execute(
@@ -110,37 +110,35 @@ def ensure(c: sqlite3.Connection) -> None:
         """
     )
 
-    # One-way idempotent adoption of already-materialized lesson work. The old
-    # table remains untouched so a binary rollback can still inspect it, while
-    # the new runtime has one canonical queue to claim from.
     c.execute(
         """
-        INSERT INTO provider_dispatch_outbox(
-            id, business_id, platform, source_kind, source_id,
-            logical_delivery_id, partner_campaign_id, partner_candidate_id,
-            connection_id, recipient_kind, customer_identity_id,
-            external_subject, payload_kind, payload_ref, idempotency_key,
-            status, attempts, available_at, locked_at, lock_token,
-            provider_message_id, last_error, created_at, updated_at,
-            sent_at, dead_at
+        CREATE TABLE IF NOT EXISTS partner_reply_events(
+            id TEXT PRIMARY KEY,
+            business_id TEXT NOT NULL,
+            campaign_id TEXT NOT NULL,
+            candidate_id TEXT NOT NULL,
+            connection_id TEXT NOT NULL,
+            platform TEXT NOT NULL,
+            external_subject TEXT NOT NULL,
+            provider_event_key TEXT NOT NULL,
+            reply_text TEXT NOT NULL DEFAULT '',
+            occurred_at TEXT NOT NULL,
+            UNIQUE(id, business_id),
+            UNIQUE(business_id, connection_id, provider_event_key),
+            FOREIGN KEY(candidate_id, business_id, campaign_id)
+                REFERENCES partner_candidates(id, business_id, campaign_id)
+                ON DELETE CASCADE,
+            FOREIGN KEY(connection_id, business_id, platform)
+                REFERENCES connections(id, business_id, platform),
+            CHECK(platform IN ('telegram', 'vk', 'max')),
+            CHECK(length(external_subject) > 0),
+            CHECK(length(provider_event_key) > 0)
         )
-        SELECT
-            d.id, d.business_id, d.platform, 'lesson_delivery',
-            d.logical_delivery_id, d.logical_delivery_id, NULL, NULL,
-            d.connection_id, 'customer_identity', d.customer_identity_id,
-            ci.external_subject, d.payload_kind, d.payload_ref,
-            d.idempotency_key, d.status, d.attempts, d.available_at,
-            d.locked_at, d.lock_token, d.provider_message_id, d.last_error,
-            d.created_at, d.updated_at, d.sent_at, d.dead_at
-        FROM delivery_dispatch_outbox d
-        JOIN customer_identities ci
-          ON ci.id=d.customer_identity_id
-         AND ci.business_id=d.business_id
-         AND ci.platform=d.platform
-        WHERE NOT EXISTS (
-            SELECT 1 FROM provider_dispatch_outbox p
-            WHERE p.business_id=d.business_id
-              AND p.idempotency_key=d.idempotency_key
-        )
+        """
+    )
+    c.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_partner_reply_events_candidate
+        ON partner_reply_events(business_id, campaign_id, candidate_id, occurred_at)
         """
     )
