@@ -25,9 +25,7 @@ from clientplatform.domain.tenancy import TenantContext, normalize_uuid
 from clientplatform.infrastructure import DispatchOutboxRepository
 from clientplatform.infrastructure.partner_repository import PartnerRepository
 from clientplatform.infrastructure.tenancy_repository import TenancyRepository
-from clientplatform.integrations.partner_discovery_runtime import (
-    build_live_partner_discovery,
-)
+from clientplatform.integrations.partner_discovery_runtime import build_live_partner_discovery
 from services.db import get_db, get_db_ro
 
 
@@ -134,7 +132,7 @@ def get_partner_candidate_view(
         ).fetchone()
         reply = conn.execute(
             """
-            SELECT COUNT(*), MAX(occurred_at)
+            SELECT COUNT(*) AS reply_count
             FROM partner_reply_events
             WHERE business_id=? AND campaign_id=? AND candidate_id=?
             """,
@@ -150,7 +148,7 @@ def get_partner_candidate_view(
             (candidate.business_id, candidate.campaign_id, candidate.id),
         ).fetchone()
         fit_total = float(_value(row, "fit_total", 0) or 0) if row is not None else 0.0
-        reply_count = int(_value(reply, "COUNT(*)", 0) or 0) if reply is not None else 0
+        reply_count = int(_value(reply, "reply_count", 0) or 0) if reply is not None else 0
         latest_reply = "" if latest is None else str(_value(latest, "reply_text", 0) or "")
         return PartnerCandidateView(
             candidate=candidate,
