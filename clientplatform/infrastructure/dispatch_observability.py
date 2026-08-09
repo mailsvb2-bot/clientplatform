@@ -40,7 +40,7 @@ def load_dispatch_outbox_snapshot(
     stale_lock_seconds: int = 900,
     dead_window_seconds: int = 900,
 ) -> dict[str, Any]:
-    """Return aggregate clientplatform dispatch pressure without exposing tenant or payload data."""
+    """Return aggregate provider-dispatch pressure without tenant/payload data."""
 
     current = (now or _utc_now()).astimezone(timezone.utc).replace(microsecond=0)
     current_iso = current.isoformat()
@@ -54,6 +54,13 @@ def load_dispatch_outbox_snapshot(
     with get_connection() as conn:
         row = conn.execute(
             """
+            WITH dispatch_rows AS (
+                SELECT status,available_at,locked_at,dead_at
+                FROM delivery_dispatch_outbox
+                UNION ALL
+                SELECT status,available_at,locked_at,dead_at
+                FROM provider_dispatch_outbox
+            )
             SELECT
                 COALESCE(SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END), 0)
                     AS pending_count,
@@ -79,7 +86,7 @@ def load_dispatch_outbox_snapshot(
                 MIN(CASE
                     WHEN status IN ('pending','retry') AND available_at<=? THEN available_at
                     ELSE NULL END) AS oldest_due_at
-            FROM delivery_dispatch_outbox
+            FROM dispatch_rows
             """,
             (current_iso, stale_before, dead_after, current_iso),
         ).fetchone()
