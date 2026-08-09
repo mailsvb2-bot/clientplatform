@@ -457,7 +457,9 @@ class AdSpendRepository:
             SELECT j.connection_id,
                    j.external_campaign_id,
                    j.status AS job_status,
-                   c.status AS connection_status
+                   c.status AS connection_status,
+                   c.provider AS connection_provider,
+                   c.external_account_id AS connection_external_account_id
             FROM ad_publication_jobs AS j
             JOIN ad_connections AS c
               ON c.id=j.connection_id AND c.business_id=j.business_id
@@ -476,6 +478,10 @@ class AdSpendRepository:
         connection_status = AdConnectionStatus(
             str(_value(row, "connection_status", 3))
         )
+        connection_provider = str(_value(row, "connection_provider", 4))
+        connection_external_account_id = str(
+            _value(row, "connection_external_account_id", 5)
+        )
         if job_status != AdPublicationStatus.SUBMITTED:
             raise AdSpendInvariantViolation(
                 "advertising spend requires a provider-created DRAFT"
@@ -484,6 +490,14 @@ class AdSpendRepository:
             raise AdSpendInvariantViolation("advertising connection is not active")
         if snapshot.connection_id != connection_id:
             raise AdSpendInvariantViolation("provider snapshot connection does not match job")
+        if snapshot.provider.value != connection_provider:
+            raise AdSpendInvariantViolation(
+                "provider snapshot provider does not match connection"
+            )
+        if snapshot.external_account_id != connection_external_account_id:
+            raise AdSpendInvariantViolation(
+                "provider snapshot account does not match connection"
+            )
         if snapshot.external_campaign_id != campaign_id:
             raise AdSpendInvariantViolation("provider snapshot campaign does not match job")
 
