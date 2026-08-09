@@ -206,22 +206,40 @@ def install_button_surface_contract(safety: ModuleType) -> None:
         event: Any,
         data: dict[str, Any],
     ) -> Any:
+        if isinstance(event, safety.CallbackQuery):
+            callback_data = str(event.data or "")
+            if not safety._is_clientplatform_callback(callback_data):
+                return await original_call(self, handler, event, data)
+
         principal_key = _principal_key(safety, event, data)
         if principal_key is None:
+            return await original_call(self, handler, event, data)
+
+        state = data.get("state")
+        if not isinstance(state, FSMContext):
             return await original_call(self, handler, event, data)
 
         generations = getattr(self, "_clientplatform_recovery_generations", None)
         if generations is None:
             generations = {}
             setattr(self, "_clientplatform_recovery_generations", generations)
+        generation_users = getattr(
+            self,
+            "_clientplatform_recovery_generation_users",
+            None,
+        )
+        if generation_users is None:
+            generation_users = {}
+            setattr(
+                self,
+                "_clientplatform_recovery_generation_users",
+                generation_users,
+            )
+        generation_users[principal_key] = generation_users.get(principal_key, 0) + 1
 
         if _is_recovery_command(safety, event):
             generations[principal_key] = generations.get(principal_key, 0) + 1
         generation = generations.get(principal_key, 0)
-
-        state = data.get("state")
-        if not isinstance(state, FSMContext):
-            return await original_call(self, handler, event, data)
 
         guarded_state = _GenerationBoundFSMContext(
             state,
@@ -240,14 +258,22 @@ def install_button_surface_contract(safety: ModuleType) -> None:
             return await handler(guarded_event, handler_data)
 
         try:
-            return await original_call(
-                self,
-                guarded_handler,
-                event,
-                guarded_data,
-            )
-        except _SupersededInteraction:
-            return None
+            try:
+                return await original_call(
+                    self,
+                    guarded_handler,
+                    event,
+                    guarded_data,
+                )
+            except _SupersededInteraction:
+                return None
+        finally:
+            remaining = generation_users.get(principal_key, 1) - 1
+            if remaining > 0:
+                generation_users[principal_key] = remaining
+            else:
+                generation_users.pop(principal_key, None)
+                generations.pop(principal_key, None)
 
     setattr(safety, "_state_local_callback_allowed", state_local_callback_allowed)
     setattr(safety, "_is_repeatable_navigation", repeatable_navigation)
