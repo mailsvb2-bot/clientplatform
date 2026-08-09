@@ -147,7 +147,7 @@ class VkConnectionPartnerDiscoveryProvider:
         return result
 
 
-def build_live_partner_discovery(
+def build_connected_partner_discovery(
     *,
     actor: TenantContext,
     credential_provider: CredentialProvider | None = None,
@@ -189,5 +189,5 @@ def build_live_partner_discovery(
 
 __all__ = [
     "VkConnectionPartnerDiscoveryProvider",
-    "build_live_partner_discovery",
+    "build_connected_partner_discovery",
 ]
