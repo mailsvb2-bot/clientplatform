@@ -222,9 +222,11 @@ chmod 0600 clientplatform.env
 export CLIENTPLATFORM_POSTGRES_ADMIN_PASSWORD='from-admin-secret-store'
 export CLIENTPLATFORM_POSTGRES_APP_PASSWORD='from-app-secret-store'
 export CLIENTPLATFORM_DOMAIN='clientplatform.your-domain.ru'
-docker compose -f compose.production.yml config
-docker compose -f compose.production.yml up -d --build
+docker compose --env-file clientplatform.env -f compose.production.yml config
+docker compose --env-file clientplatform.env -f compose.production.yml up -d --build
 ```
+
+`--env-file clientplatform.env` is mandatory for manual Compose operations so interpolation uses the same production route and feature settings as the canonical updater; operator-provided secret-store exports remain explicit overrides.
 
 The PostgreSQL container creates `clientplatform_app` as `NOSUPERUSER NOCREATEDB NOCREATEROLE`. Only Caddy publishes ports. The application container runs both production preflights before `main.py` and may write only to mounted ClientPlatform state/log/backup volumes.
 

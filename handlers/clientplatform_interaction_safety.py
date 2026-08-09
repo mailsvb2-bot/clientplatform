@@ -371,15 +371,36 @@ class ClientPlatformInteractionSafetyMiddleware(BaseMiddleware):
 
     def __init__(self) -> None:
         self._locks: dict[tuple[int, int, int], asyncio.Lock] = {}
+        self._lock_users: dict[tuple[int, int, int], int] = {}
         self._recent_actions: OrderedDict[tuple[int, int, str], float] = OrderedDict()
 
-    def _lock_for(self, *, bot_id: int, chat_id: int, user_id: int) -> asyncio.Lock:
+    def _lock_for(
+        self,
+        *,
+        bot_id: int,
+        chat_id: int,
+        user_id: int,
+    ) -> tuple[tuple[int, int, int], asyncio.Lock]:
         key = (bot_id, chat_id, user_id)
         lock = self._locks.get(key)
         if lock is None:
             lock = asyncio.Lock()
             self._locks[key] = lock
-        return lock
+        self._lock_users[key] = self._lock_users.get(key, 0) + 1
+        return key, lock
+
+    def _release_lock_reference(
+        self,
+        key: tuple[int, int, int],
+        lock: asyncio.Lock,
+    ) -> None:
+        remaining = self._lock_users.get(key, 1) - 1
+        if remaining > 0:
+            self._lock_users[key] = remaining
+            return
+        self._lock_users.pop(key, None)
+        if not lock.locked() and self._locks.get(key) is lock:
+            self._locks.pop(key, None)
 
     def _is_duplicate_action(self, *, bot_id: int, user_id: int, data: str) -> bool:
         now = time.monotonic()
@@ -438,71 +459,106 @@ class ClientPlatformInteractionSafetyMiddleware(BaseMiddleware):
         user_id = _event_user_id(event)
         if user_id is None:
             return await handler(event, data)
+
+        callback_data: str | None = None
+        if isinstance(event, CallbackQuery):
+            callback_data = str(event.data or "")
+            # This middleware is mounted outside router filters. Foreign callback
+            # namespaces must propagate untouched to payments/settings/other
+            # routers: no dedup record, no per-principal lock, no eager answer.
+            if not _is_clientplatform_callback(callback_data):
+                return await handler(event, data)
+
         bot = data.get("bot")
         bot_id = int(getattr(bot, "id", 0) or 0)
-        lock = self._lock_for(
+        lock_key, lock = self._lock_for(
             bot_id=bot_id,
             chat_id=_event_chat_id(event),
             user_id=user_id,
         )
-        if isinstance(event, CallbackQuery):
-            callback_data = str(event.data or "")
-            if (
-                not _is_repeatable_navigation(callback_data)
-                and self._is_duplicate_action(
-                    bot_id=bot_id,
-                    user_id=user_id,
-                    data=callback_data,
-                )
-            ):
-                await _answer_callback(event, "Действие уже выполняется.")
-                return None
-            state = data.get("state")
-            current_state = (
-                await state.get_state() if isinstance(state, FSMContext) else None
-            )
-            if _callback_conflicts_with_state(current_state, callback_data):
-                await _answer_callback(
-                    event,
-                    "Сначала завершите текущий шаг или отправьте /cancel.",
-                    show_alert=True,
-                )
-                return None
-
-            await _answer_callback(event)
-            async with lock:
+        try:
+            if isinstance(event, CallbackQuery):
+                assert callback_data is not None
+                repeatable_navigation = _is_repeatable_navigation(callback_data)
+                if (
+                    not repeatable_navigation
+                    and self._is_duplicate_action(
+                        bot_id=bot_id,
+                        user_id=user_id,
+                        data=callback_data,
+                    )
+                ):
+                    await _answer_callback(event, "Действие уже выполняется.")
+                    return None
+                state = data.get("state")
                 current_state = (
                     await state.get_state() if isinstance(state, FSMContext) else None
                 )
                 if _callback_conflicts_with_state(current_state, callback_data):
-                    if isinstance(event.message, Message):
-                        await event.message.answer(
-                            "Сначала завершите текущий шаг или отправьте /cancel."
-                        )
+                    await _answer_callback(
+                        event,
+                        "Сначала завершите текущий шаг или отправьте /cancel.",
+                        show_alert=True,
+                    )
                     return None
-                if (
-                    isinstance(state, FSMContext)
-                    and _callback_should_clear_state(current_state, callback_data)
-                ):
-                    await state.clear()
-                result = await handler(event, data)
-                if callback_data.startswith(_ONE_SHOT_PREFIXES):
-                    await _remove_source_keyboard(event)
-                return result
-        if isinstance(event, Message):
-            command = _message_command(event)
-            if command in _CONTROL_COMMANDS:
-                return await self._run_control_command(
-                    handler,
-                    event,
-                    data,
-                    lock=lock,
-                    command=command,
-                    bot_id=bot_id,
-                    user_id=user_id,
-                )
-        async with lock:
-            return await handler(event, data)
+
+                # Read-only/repeatable navigation gets an immediate spinner ack.
+                # Mutating or validated actions intentionally do not: their
+                # handler owns the first answer so a semantic toast/alert cannot
+                # be consumed by a preceding blank answerCallbackQuery call.
+                eager_ack = repeatable_navigation
+                if eager_ack:
+                    await _answer_callback(event)
+
+                async with lock:
+                    current_state = (
+                        await state.get_state() if isinstance(state, FSMContext) else None
+                    )
+                    if _callback_conflicts_with_state(current_state, callback_data):
+                        if eager_ack and isinstance(event.message, Message):
+                            await event.message.answer(
+                                "Сначала завершите текущий шаг или отправьте /cancel."
+                            )
+                        else:
+                            await _answer_callback(
+                                event,
+                                "Сначала завершите текущий шаг или отправьте /cancel.",
+                                show_alert=True,
+                            )
+                        return None
+                    if (
+                        isinstance(state, FSMContext)
+                        and _callback_should_clear_state(current_state, callback_data)
+                    ):
+                        await state.clear()
+                    try:
+                        result = await handler(event, data)
+                    finally:
+                        if not eager_ack:
+                            # If the handler already sent a semantic answer this
+                            # becomes a harmless expired/duplicate blank ack and
+                            # _answer_callback intentionally swallows Telegram's
+                            # API error. If it did not, this closes the spinner.
+                            await _answer_callback(event)
+                    if callback_data.startswith(_ONE_SHOT_PREFIXES):
+                        await _remove_source_keyboard(event)
+                    return result
+            if isinstance(event, Message):
+                command = _message_command(event)
+                if command in _CONTROL_COMMANDS:
+                    return await self._run_control_command(
+                        handler,
+                        event,
+                        data,
+                        lock=lock,
+                        command=command,
+                        bot_id=bot_id,
+                        user_id=user_id,
+                    )
+            async with lock:
+                return await handler(event, data)
+        finally:
+            self._release_lock_reference(lock_key, lock)
 
 
 def _rename_keyboard(business_id: str) -> InlineKeyboardMarkup:

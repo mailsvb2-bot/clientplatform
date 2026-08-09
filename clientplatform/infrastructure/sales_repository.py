@@ -316,6 +316,22 @@ class SalesRepository:
         lead = self.get_lead(actor=current, lead_id=plan.lead_id)
         timestamp = str(now or _utc_now())
         plan_id = str(uuid4())
+        # Serialize replans on the lead row before touching active plans. This
+        # no-op UPDATE is deliberately cross-dialect: PostgreSQL takes a row
+        # write lock until transaction end, while SQLite takes its normal write
+        # lock. A second concurrent replan therefore cannot dismiss-and-insert
+        # against the same stale snapshot; after the first commits it observes
+        # and dismisses that first replacement, preserving latest-plan-wins.
+        lock_cursor = self._conn.execute(
+            """
+            UPDATE clientplatform_sales_leads
+            SET updated_at=updated_at
+            WHERE id=? AND business_id=?
+            """,
+            (lead.id, current.business_id),
+        )
+        if int(getattr(lock_cursor, "rowcount", 1) or 0) != 1:
+            raise SalesLeadNotFound("sales lead was not found in the active business")
         # A recommendation is a snapshot of the latest known conversation state.
         # Replanning atomically invalidates any older unsent recommendation, even
         # one the owner approved earlier, so stale callbacks cannot authorize it.

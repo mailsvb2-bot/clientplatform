@@ -417,6 +417,7 @@ async def test_public_page_and_promotion_cover_ready_and_empty_states(
     )
     monkeypatch.setattr(owner, "_all_offerings", AsyncMock(return_value=[offering]))
     monkeypatch.setattr(control, "list_booking_slots", lambda **_kwargs: [slot])
+    monkeypatch.setattr(promotion_engine, "list_promotable_slots", lambda **_kwargs: [slot])
     monkeypatch.setattr(
         promotion_engine,
         "promotion_stats",
@@ -446,6 +447,7 @@ async def test_public_page_and_promotion_cover_ready_and_empty_states(
 
     monkeypatch.setattr(owner, "_all_offerings", AsyncMock(return_value=[]))
     monkeypatch.setattr(control, "list_booking_slots", lambda **_kwargs: [])
+    monkeypatch.setattr(promotion_engine, "list_promotable_slots", lambda **_kwargs: [])
     monkeypatch.setattr(
         promotion_engine,
         "promotion_stats",

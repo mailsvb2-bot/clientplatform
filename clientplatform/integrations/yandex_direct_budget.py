@@ -5,6 +5,7 @@ import json
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Mapping
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from clientplatform.domain.ad_connections import (
     AdProvider,
@@ -76,6 +77,15 @@ def _report_date(value: date | str) -> str:
         except ValueError as exc:
             raise ValueError("report_date must use YYYY-MM-DD") from exc
     return parsed.isoformat()
+
+
+def _provider_day(now: datetime | str, timezone_name: str) -> str:
+    zone_name = str(timezone_name or "").strip()
+    try:
+        zone = ZoneInfo(zone_name)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise YandexDirectError("report_timezone_invalid") from exc
+    return _timestamp(now, "now").astimezone(zone).date().isoformat()
 
 
 def _token(value: object, name: str, limit: int = 160) -> str:
@@ -222,17 +232,46 @@ class ReadOnlyYandexDirectBudgetProvider(ModeratingYandexDirectProvider):
     ) -> None:
         super().__init__(oauth=oauth, transport=transport)
 
+    def _client_scoped_direct_call(
+        self,
+        *,
+        service: str,
+        token: str,
+        payload: Mapping[str, Any],
+        client_login: str = "",
+    ) -> Mapping[str, Any]:
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept-Language": "ru",
+            "Content-Type": "application/json; charset=utf-8",
+        }
+        normalized_login = " ".join(str(client_login or "").split())
+        if normalized_login:
+            headers["Client-Login"] = normalized_login
+        response = self._json_or_error(
+            method="POST",
+            url=f"{self.API_ROOT}/{service}",
+            headers=headers,
+            body=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        )
+        result = response.get("result")
+        if not isinstance(result, Mapping):
+            raise YandexDirectError("provider_result_missing")
+        return result
+
     def campaign_budget_readout(
         self,
         *,
         access_token: str,
         external_campaign_id: str,
         captured_at: datetime | str,
+        client_login: str = "",
     ) -> YandexCampaignBudgetReadout:
         campaign_id = normalize_external_campaign_id(external_campaign_id)
-        result = self._direct_call(
+        result = self._client_scoped_direct_call(
             service="campaigns",
             token=access_token,
+            client_login=client_login,
             payload={
                 "method": "get",
                 "params": {
@@ -462,6 +501,7 @@ def reconcile_yandex_budget_snapshot(
     daily_spend: YandexDailySpendReadout,
     expected_report_date: date | str,
     now: datetime | str,
+    provider_timezone: str = "Europe/Moscow",
     max_read_age_seconds: int = 120,
     validity_seconds: int = 60,
 ) -> ProviderBudgetSnapshot:
@@ -473,6 +513,8 @@ def reconcile_yandex_budget_snapshot(
         raise YandexDirectError("direct_account_id_invalid")
     expected_day = _report_date(expected_report_date)
     current = _timestamp(now, "now")
+    if expected_day != _provider_day(current, provider_timezone):
+        raise YandexDirectError("budget_reconciliation_report_not_today")
     if isinstance(max_read_age_seconds, bool) or not 1 <= int(max_read_age_seconds) <= 600:
         raise ValueError("max_read_age_seconds must be between 1 and 600")
     if isinstance(validity_seconds, bool) or not 1 <= int(validity_seconds) <= 300:

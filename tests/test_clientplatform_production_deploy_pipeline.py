@@ -214,7 +214,7 @@ class ProductionDeploymentContractTests(unittest.TestCase):
         compose = ["docker", "compose", "--env-file", ".env"]
         with (
             mock.patch.object(production_deploy, "_run") as run,
-            mock.patch.object(production_deploy, "_wait_for_startup") as wait,
+            mock.patch.object(production_deploy, "_wait_for_baseline_readiness") as wait,
             mock.patch.object(production_deploy, "_external_https") as external,
         ):
             production_deploy._rollback(
@@ -257,7 +257,7 @@ class ProductionDeploymentContractTests(unittest.TestCase):
             mock.patch.object(production_deploy, "_run"),
             mock.patch.object(
                 production_deploy,
-                "_wait_for_startup",
+                "_wait_for_baseline_readiness",
                 side_effect=production_deploy.DeploymentError("not-started"),
             ),
             mock.patch.object(production_deploy, "_external_https") as external,

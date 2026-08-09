@@ -3,11 +3,12 @@ from __future__ import annotations
 import json
 import sqlite3
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs, urlparse
 
 from clientplatform.domain.ad_connections import (
     AdConnectionInvariantViolation,
+    AdConnectionStatus,
     AdProvider,
     AdPublicationStatus,
     new_oauth_state,
@@ -25,6 +26,10 @@ from clientplatform.infrastructure import TenancyRepository
 from clientplatform.infrastructure.activity_repository import ActivityRepository
 from clientplatform.infrastructure.ad_connection_repository import AdConnectionRepository
 from clientplatform.infrastructure.ad_credential_vault import InMemoryAdCredentialVault
+from clientplatform.infrastructure.ad_worker_store import (
+    AdConnectionLifecycleStore,
+    AdWorkerStore,
+)
 from clientplatform.infrastructure.booking_repository import BookingRepository
 from clientplatform.infrastructure.promotion_repository import PromotionRepository
 from clientplatform.integrations.yandex_direct import (
@@ -269,6 +274,27 @@ class AdConnectionRepositoryTests(unittest.TestCase):
         )
         return connection
 
+    def _publication_job(
+        self,
+        *,
+        connection_id: str,
+        external_campaign_id: str,
+        now: datetime,
+    ):
+        return self.ads.create_or_get_job(
+            actor=self.owner,
+            promotion_campaign_id=self.promotion.id,
+            connection_id=connection_id,
+            external_campaign_id=external_campaign_id,
+            external_campaign_name=f"Локальные услуги {external_campaign_id}",
+            region_ids=(47,),
+            source_url="https://t.me/clientplatform_bot?start=cpa_source",
+            title=self.promotion.creative.headline,
+            text=self.promotion.creative.primary_text,
+            creative_id=self.promotion.creative.creative_id,
+            now=now,
+        )
+
     def test_oauth_state_is_one_time_and_account_connections_are_owner_only(self) -> None:
         state = new_oauth_state()
         verifier = new_pkce_verifier()
@@ -339,6 +365,113 @@ class AdConnectionRepositoryTests(unittest.TestCase):
         )
         self.assertEqual(completed.status, AdPublicationStatus.SUBMITTED)
         self.assertEqual(completed.external_ad_id, "8001")
+
+    def test_disconnect_barrier_preserves_inflight_publication_truth(self) -> None:
+        connection = self._connection()
+        first = self._publication_job(
+            connection_id=connection.id,
+            external_campaign_id="6001",
+            now=_NOW,
+        )
+        second = self._publication_job(
+            connection_id=connection.id,
+            external_campaign_id="6002",
+            now=_NOW + timedelta(seconds=1),
+        )
+        self.ads.queue_job(actor=self.owner, job_id=first.id, now=_NOW)
+        self.ads.queue_job(
+            actor=self.owner,
+            job_id=second.id,
+            now=_NOW + timedelta(seconds=1),
+        )
+        claimed = self.ads.claim_due_job(now=_NOW + timedelta(seconds=2))
+        self.assertIsNotNone(claimed)
+        publishing, lock_token = claimed
+        self.assertEqual(publishing.id, first.id)
+        self.assertEqual(publishing.status, AdPublicationStatus.PUBLISHING)
+
+        lifecycle = AdConnectionLifecycleStore(self.conn, vault=self.vault)
+        disabled, token_json = lifecycle.begin_disconnect(
+            actor=self.owner,
+            connection_id=connection.id,
+            now="2026-08-05T08:00:03+00:00",
+        )
+        self.assertEqual(disabled.status, AdConnectionStatus.DISABLED)
+        self.assertEqual(
+            YandexTokenBundle.from_json(token_json).access_token,
+            "secret-token",
+        )
+
+        rows = self.conn.execute(
+            """
+            SELECT id, status, lock_token, last_error_code
+            FROM ad_publication_jobs
+            WHERE id IN (?, ?)
+            ORDER BY id
+            """,
+            (first.id, second.id),
+        ).fetchall()
+        states = {
+            str(row[0]): (str(row[1]), row[2], row[3])
+            for row in rows
+        }
+        self.assertEqual(
+            states[first.id],
+            ("publishing", lock_token, None),
+        )
+        self.assertEqual(
+            states[second.id],
+            ("cancelled", None, "connection_disconnect_started"),
+        )
+        worker = AdWorkerStore(self.conn, vault=self.vault)
+        self.assertTrue(
+            worker.has_publishing_job(
+                business_id=self.owner.business_id,
+                connection_id=connection.id,
+            )
+        )
+
+        completed = self.ads.complete_job(
+            job=publishing,
+            lock_token=lock_token,
+            external_ad_group_id="7001",
+            external_ad_id="8001",
+            now=_NOW + timedelta(seconds=4),
+        )
+        self.assertEqual(completed.status, AdPublicationStatus.SUBMITTED)
+        self.assertFalse(
+            worker.has_publishing_job(
+                business_id=self.owner.business_id,
+                connection_id=connection.id,
+            )
+        )
+        status = self.conn.execute(
+            "SELECT status FROM ad_connections WHERE id=?",
+            (connection.id,),
+        ).fetchone()[0]
+        self.assertEqual(status, AdConnectionStatus.DISABLED.value)
+
+        disabled_again, retry_token_json = lifecycle.begin_disconnect(
+            actor=self.owner,
+            connection_id=connection.id,
+            now="2026-08-05T08:00:05+00:00",
+        )
+        self.assertEqual(disabled_again.status, AdConnectionStatus.DISABLED)
+        self.assertEqual(
+            YandexTokenBundle.from_json(retry_token_json).access_token,
+            "secret-token",
+        )
+        revoked = lifecycle.erase_after_provider_revocation(
+            actor=self.owner,
+            connection_id=connection.id,
+            now="2026-08-05T08:00:06+00:00",
+        )
+        self.assertEqual(revoked.status, AdConnectionStatus.REVOKED)
+        credential = self.conn.execute(
+            "SELECT credential_ciphertext FROM ad_connections WHERE id=?",
+            (connection.id,),
+        ).fetchone()[0]
+        self.assertEqual(credential, "")
 
     def test_privacy_manifest_covers_all_ad_tables(self) -> None:
         report = validate_clientplatform_privacy_manifest(

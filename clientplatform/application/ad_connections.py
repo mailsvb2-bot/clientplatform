@@ -337,6 +337,21 @@ def disconnect_ad_connection(
         )
     if connection.provider != AdProvider.YANDEX_DIRECT:
         raise AdConnectionInvariantViolation("unsupported advertising provider")
+
+    # begin_disconnect commits the durable barrier first: the connection is now
+    # disabled and all not-yet-started jobs are cancelled. A publishing row owns
+    # an existing provider-call lease and must finish truthfully before token
+    # revocation; otherwise the UI could report cancellation while Yandex still
+    # receives the in-flight request.
+    with get_db_ro() as conn:
+        if AdWorkerStore(conn, vault=selected_vault).has_publishing_job(
+            business_id=connection.business_id,
+            connection_id=connection.id,
+        ):
+            raise AdConnectionInvariantViolation(
+                "advertising publication is still in progress; retry disconnect"
+            )
+
     if token_json:
         bundle = YandexTokenBundle.from_json(token_json)
         result = lifecycle.revoke(access_token=bundle.access_token)

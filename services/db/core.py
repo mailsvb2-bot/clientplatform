@@ -7,6 +7,7 @@ import sqlite3
 import threading
 import time
 from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Iterator, Sequence
 
@@ -27,10 +28,57 @@ except ImportError:  # pragma: no cover
     DATABASE_URL = ""
 
 
+class DatabaseOperationDeadlineExceeded(TimeoutError):
+    """A caller-owned database operation exhausted its absolute time budget."""
+
+
+_DB_OPERATION_DEADLINE: ContextVar[float | None] = ContextVar(
+    "db_operation_deadline",
+    default=None,
+)
+
+
+@contextmanager
+def db_operation_deadline(timeout_seconds: float) -> Iterator[None]:
+    """Bound all DB work in this context to one absolute monotonic deadline.
+
+    ``asyncio.to_thread`` copies ContextVars, so async entry points can establish
+    a budget once and every repository call executed in worker threads inherits
+    the same deadline. Nested callers may only shorten an existing budget.
+    """
+
+    timeout = float(timeout_seconds)
+    if timeout <= 0:
+        raise ValueError("database operation deadline must be positive")
+    requested = time.monotonic() + timeout
+    existing = _DB_OPERATION_DEADLINE.get()
+    deadline = requested if existing is None else min(existing, requested)
+    token = _DB_OPERATION_DEADLINE.set(deadline)
+    try:
+        yield
+    finally:
+        _DB_OPERATION_DEADLINE.reset(token)
+
+
+def _remaining_operation_ms(deadline: float | None = None) -> int | None:
+    target = _DB_OPERATION_DEADLINE.get() if deadline is None else deadline
+    if target is None:
+        return None
+    remaining = target - time.monotonic()
+    if remaining <= 0:
+        raise DatabaseOperationDeadlineExceeded("database_operation_deadline_exceeded")
+    return max(1, int(remaining * 1000))
+
+
 def _raise_sqlite_compat(exc: Exception):
     msg = str(exc)
     if isinstance(exc, sqlite3.Error):
         raise exc
+    sqlstate = str(getattr(exc, "sqlstate", "") or "")
+    if _DB_OPERATION_DEADLINE.get() is not None and sqlstate in {"57014", "55P03"}:
+        raise DatabaseOperationDeadlineExceeded(
+            "database_operation_deadline_exceeded"
+        ) from exc
     text = msg.lower()
     if 'does not exist' in text or 'undefined table' in text or 'undefined column' in text:
         raise sqlite3.OperationalError(msg) from exc
@@ -68,6 +116,11 @@ def _is_dml_sql(sql: str) -> bool:
     return s.startswith("INSERT") or s.startswith("UPDATE") or s.startswith("DELETE") or s.startswith("REPLACE")
 
 
+def _is_transaction_control_sql(sql: str) -> bool:
+    token = (sql or "").lstrip().split(maxsplit=1)
+    return bool(token and token[0].upper() in {"BEGIN", "COMMIT", "ROLLBACK", "SAVEPOINT", "RELEASE"})
+
+
 class PostgresCompatCursor:
     def __init__(self, cursor, conn: "PostgresCompatConnection"):
         self._cursor = cursor
@@ -85,7 +138,11 @@ class PostgresCompatCursor:
         self._synthetic_rows = None
         translated = translate_sql_for_postgres(sql)
         try:
+            if not _is_transaction_control_sql(translated):
+                self._conn._apply_operation_deadline(self._cursor)
             self._cursor.execute(translated, _normalize_params(params))
+        except DatabaseOperationDeadlineExceeded:
+            raise
         except Exception as exc:  # validator: allow-wide-except
             _raise_sqlite_compat(exc)
         self.rowcount = getattr(self._cursor, "rowcount", -1)
@@ -95,6 +152,16 @@ class PostgresCompatCursor:
 
     def executemany(self, sql: str, seq_of_params):
         validate_sqlite_compat_statement(sql)
+        if self._conn.operation_deadline is not None:
+            total = 0
+            for params in seq_of_params:
+                self.execute(sql, params)
+                total += max(int(self.rowcount or 0), 0)
+            self.rowcount = total
+            if _is_dml_sql(sql):
+                self._conn.last_rowcount = total
+            return self
+
         self._synthetic_rows = None
         translated = translate_sql_for_postgres(sql)
         try:
@@ -133,10 +200,35 @@ class PostgresCompatCursor:
 
 
 class PostgresCompatConnection:
-    def __init__(self, conn, *, reusable: bool = False):
+    def __init__(
+        self,
+        conn,
+        *,
+        reusable: bool = False,
+        operation_deadline: float | None = None,
+    ):
         self._conn = conn
         self._reusable = bool(reusable)
+        self._operation_deadline = operation_deadline
         self.last_rowcount = 0
+
+    @property
+    def operation_deadline(self) -> float | None:
+        return self._operation_deadline
+
+    def _apply_operation_deadline(self, cursor: Any) -> None:
+        remaining_ms = _remaining_operation_ms(self._operation_deadline)
+        if remaining_ms is None:
+            return
+        lock_timeout_ms = min(int(CONFIG.lock_timeout_ms), remaining_ms)
+        cursor.execute(
+            "SELECT set_config('statement_timeout', %s, true)",
+            (f"{remaining_ms}ms",),
+        )
+        cursor.execute(
+            "SELECT set_config('lock_timeout', %s, true)",
+            (f"{max(1, lock_timeout_ms)}ms",),
+        )
 
     def __enter__(self):
         return self
@@ -169,6 +261,12 @@ class PostgresCompatConnection:
         return cur.execute(sql, params)
 
     def commit(self):
+        if self._operation_deadline is not None:
+            cursor = self._conn.cursor()
+            try:
+                self._apply_operation_deadline(cursor)
+            finally:
+                cursor.close()
         self._conn.commit()
 
     def rollback(self):
@@ -393,9 +491,43 @@ def _get_reusable_postgres_connection(psycopg: Any, dict_row: Any) -> Any:
     return conn
 
 
+def _operation_pg_connect_kwargs(deadline: float) -> dict[str, Any]:
+    remaining_ms = _remaining_operation_ms(deadline)
+    assert remaining_ms is not None
+    connect_timeout = max(
+        1,
+        min(
+            int(CONFIG.connect_timeout_sec),
+            max(1, (remaining_ms + 999) // 1000),
+        ),
+    )
+    lock_timeout_ms = max(1, min(int(CONFIG.lock_timeout_ms), remaining_ms))
+    inherited_options = (os.getenv("PGOPTIONS") or "").strip()
+    deadline_options = (
+        f"-c statement_timeout={remaining_ms}ms "
+        f"-c lock_timeout={lock_timeout_ms}ms"
+    )
+    return {
+        "connect_timeout": connect_timeout,
+        "options": f"{inherited_options} {deadline_options}".strip(),
+    }
+
+
 def get_connection():
+    operation_deadline = _DB_OPERATION_DEADLINE.get()
     if is_postgres_enabled():
         psycopg, dict_row = _load_psycopg()
+        if operation_deadline is not None:
+            conn = psycopg.connect(
+                DATABASE_URL,
+                autocommit=False,
+                row_factory=dict_row,
+                **_operation_pg_connect_kwargs(operation_deadline),
+            )
+            return PostgresCompatConnection(
+                conn,
+                operation_deadline=operation_deadline,
+            )
         if _env_flag("POSTGRES_REUSE_CONNECTIONS", "1"):
             conn = _get_reusable_postgres_connection(psycopg, dict_row)
             return PostgresCompatConnection(conn, reusable=True)
@@ -407,13 +539,23 @@ def get_connection():
     except OSError:
         pass
 
-    conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
+    sqlite_timeout = 30.0
+    remaining_ms = _remaining_operation_ms(operation_deadline)
+    if remaining_ms is not None:
+        sqlite_timeout = max(0.001, min(sqlite_timeout, remaining_ms / 1000.0))
+    conn = sqlite3.connect(DB_PATH, timeout=sqlite_timeout, check_same_thread=False)
     conn.row_factory = sqlite3.Row
+    if operation_deadline is not None:
+        def _abort_expired_sqlite_query() -> int:
+            return int(time.monotonic() >= operation_deadline)
+
+        conn.set_progress_handler(_abort_expired_sqlite_query, 1000)
     try:
         conn.execute("PRAGMA journal_mode=WAL;")
         conn.execute("PRAGMA synchronous=NORMAL;")
         conn.execute("PRAGMA temp_store=MEMORY;")
-        conn.execute("PRAGMA busy_timeout=10000;")
+        busy_timeout_ms = 10000 if remaining_ms is None else min(10000, remaining_ms)
+        conn.execute(f"PRAGMA busy_timeout={max(1, int(busy_timeout_ms))};")
         conn.execute("PRAGMA foreign_keys=ON;")
     except sqlite3.Error as e:
         log.warning("PRAGMA init failed: %s", e)

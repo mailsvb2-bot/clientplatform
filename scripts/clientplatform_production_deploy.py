@@ -382,7 +382,11 @@ def _rollback(
     _run(["docker", "image", "tag", rollback_tag, f"{APP_IMAGE}:latest"])
     _run([*compose, "up", "-d", "--no-build", "--force-recreate", "app", "caddy"])
     try:
-        _wait_for_startup(timeout_seconds)
+        # A rollback image can legitimately predate the current startup-marker
+        # contract. Validate the restored deployment by persistent readiness and
+        # the external HTTPS contract; requiring new-image log markers here would
+        # make a healthy legacy rollback impossible.
+        _wait_for_baseline_readiness(timeout_seconds)
         _external_https(domain)
     except Exception as exc:  # validator: allow-wide-except - every rollback gate is mandatory
         raise DeploymentError("rollback_not_available") from exc

@@ -65,8 +65,14 @@ class DirectIdentitySafetyTests(unittest.TestCase):
                                     "ClientInfo": "Мастер",
                                     "Archived": "NO",
                                     "Grants": [
-                                        {"Privilege": "EDIT_CAMPAIGNS"},
-                                        {"Privilege": "IMPORT_XLS"},
+                                        {
+                                            "Privilege": "EDIT_CAMPAIGNS",
+                                            "Value": "YES",
+                                        },
+                                        {
+                                            "Privilege": "IMPORT_XLS",
+                                            "Value": "YES",
+                                        },
                                     ],
                                 }
                             ]
@@ -87,6 +93,42 @@ class DirectIdentitySafetyTests(unittest.TestCase):
         request = json.loads(transport.calls[0]["body"])
         self.assertEqual(request["method"], "get")
         self.assertIn("Grants", request["params"]["FieldNames"])
+
+    def test_denied_edit_grant_is_rejected_before_activation(self) -> None:
+        transport = FakeTransport(
+            [
+                (
+                    200,
+                    {},
+                    {
+                        "result": {
+                            "Clients": [
+                                {
+                                    "ClientId": 100500,
+                                    "Login": "denied-login",
+                                    "Archived": "NO",
+                                    "Grants": [
+                                        {
+                                            "Privilege": "EDIT_CAMPAIGNS",
+                                            "Value": "NO",
+                                        },
+                                        {
+                                            "Privilege": "IMPORT_XLS",
+                                            "Value": "YES",
+                                        },
+                                    ],
+                                }
+                            ]
+                        }
+                    },
+                )
+            ]
+        )
+
+        with self.assertRaises(YandexDirectError) as raised:
+            _provider(transport).account_identity(access_token="private-token")
+
+        self.assertEqual(raised.exception.code, "direct_account_is_read_only")
 
     def test_read_only_direct_account_is_rejected_before_activation(self) -> None:
         transport = FakeTransport(

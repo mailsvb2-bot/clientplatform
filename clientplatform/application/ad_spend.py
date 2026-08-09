@@ -46,6 +46,7 @@ _AUTH_ERRORS = {
     "provider_unauthorized",
     "oauth_refresh_token_missing",
 }
+_DEFAULT_REPORT_TIMEZONE = "Europe/Moscow"
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,6 +97,13 @@ def _report_date(value: date | str, *, now: datetime) -> str:
             "provider report date is outside the current account-day boundary"
         )
     return parsed.isoformat()
+
+
+def _report_timezone() -> str:
+    return str(
+        os.getenv("CLIENTPLATFORM_YANDEX_DIRECT_REPORT_TIMEZONE")
+        or _DEFAULT_REPORT_TIMEZONE
+    ).strip()
 
 
 def _vault() -> AdCredentialVault:
@@ -160,6 +168,7 @@ def _read_provider_evidence(
         access_token=bundle.access_token,
         external_campaign_id=target.external_campaign_id,
         captured_at=captured_at,
+        client_login=target.external_login,
     )
     daily_spend = provider.daily_spend_readout(
         access_token=bundle.access_token,
@@ -253,6 +262,7 @@ def prepare_ad_spend_authorization(
         daily_spend=daily_spend,
         expected_report_date=report_date,
         now=current_time,
+        provider_timezone=_report_timezone(),
         validity_seconds=ttl_seconds,
     )
     if not snapshot.launch_eligible:

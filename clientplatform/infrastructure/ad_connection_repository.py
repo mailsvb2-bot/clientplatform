@@ -643,11 +643,13 @@ class AdConnectionRepository:
         return _job_from_row(row)
 
     def _mark_connection_success(self, connection_id: str, business_id: str, now: str) -> None:
+        # A disconnect barrier sets status=disabled before an in-flight provider
+        # lease is allowed to finish. Never resurrect that connection here.
         self._conn.execute(
             """
             UPDATE ad_connections SET status='active', last_success_at=?,
                 last_error_at=NULL, last_error_code=NULL, updated_at=?
-            WHERE id=? AND business_id=?
+            WHERE id=? AND business_id=? AND status IN ('active', 'attention')
             """,
             (now, now, connection_id, business_id),
         )
@@ -659,11 +661,13 @@ class AdConnectionRepository:
         now: str,
         error_code: str,
     ) -> None:
+        # Likewise, a late worker failure must not turn a disabled/revoked
+        # connection back into an available attention state.
         self._conn.execute(
             """
             UPDATE ad_connections SET status='attention', last_error_at=?,
                 last_error_code=?, updated_at=?
-            WHERE id=? AND business_id=?
+            WHERE id=? AND business_id=? AND status IN ('active', 'attention')
             """,
             (now, error_code, now, connection_id, business_id),
         )

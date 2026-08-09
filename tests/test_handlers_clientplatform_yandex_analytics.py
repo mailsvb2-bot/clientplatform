@@ -75,6 +75,7 @@ def direct_threads(monkeypatch: pytest.MonkeyPatch) -> None:
         ),
     )
     monkeypatch.setattr(yandex.control, "_callback_message", lambda callback: callback.message)
+    monkeypatch.setattr(yandex, "screen_code_configuration_available", lambda: True)
 
 
 def _snapshot(*, connected_accounts: int = 1, tracked_ads: int = 2) -> YandexGrowthSnapshot:
@@ -152,6 +153,7 @@ def test_not_connected_keyboard_has_direct_connect_and_no_period_noise() -> None
         business_id,
         30,
         connected_accounts=0,
+        connect_available=True,
     )
     buttons = [button for row in markup.inline_keyboard for button in row]
     assert [button.text for button in buttons] == [
@@ -164,6 +166,49 @@ def test_not_connected_keyboard_has_direct_connect_and_no_period_noise() -> None
         button.text not in {"7 дней", "30 дней", "✅ 7 дней", "✅ 30 дней"}
         for button in buttons
     )
+
+
+def test_disabled_yandex_configuration_hides_dead_connect_action() -> None:
+    business_id = str(uuid4())
+    markup = yandex._keyboard(
+        business_id,
+        30,
+        connected_accounts=0,
+        connect_available=False,
+    )
+    labels = [button.text for row in markup.inline_keyboard for button in row]
+    assert "➕ Подключить Яндекс Директ" not in labels
+    assert labels == ["📣 Рекламные кабинеты", "← Получать клиентов"]
+    text = yandex._format_snapshot(
+        _snapshot(connected_accounts=0, tracked_ads=0),
+        connect_available=False,
+    )
+    assert "отключено или не настроено администратором" in text
+    assert "Нажмите «Подключить" not in text
+
+
+def test_mixed_account_money_is_explicitly_hidden() -> None:
+    snapshot = _snapshot()
+    snapshot = YandexGrowthSnapshot(
+        date_from=snapshot.date_from,
+        date_to=snapshot.date_to,
+        period_days=snapshot.period_days,
+        connected_accounts=2,
+        tracked_ads=snapshot.tracked_ads,
+        impressions=snapshot.impressions,
+        clicks=snapshot.clicks,
+        cost_micros=None,
+        leads=snapshot.leads,
+        bookings=snapshot.bookings,
+        won=snapshot.won,
+        campaigns=snapshot.campaigns,
+    )
+    text = yandex._format_snapshot(snapshot)
+    assert "Расход: —" in text
+    assert "Средний CPC: —" in text
+    assert "CPL: —" in text
+    assert "CAC: —" in text
+    assert "Денежные итоги не складываются" in text
 
 
 @pytest.mark.asyncio
@@ -269,6 +314,32 @@ async def test_not_connected_snapshot_replaces_owner_panel_with_connect_cta(
 
 
 @pytest.mark.asyncio
+async def test_not_connected_snapshot_hides_cta_when_oauth_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    business_id = str(uuid4())
+    token = control._uuid_token(business_id)
+    monkeypatch.setattr(
+        yandex,
+        "get_yandex_growth_snapshot",
+        lambda **_kwargs: _snapshot(connected_accounts=0, tracked_ads=0),
+    )
+    monkeypatch.setattr(yandex, "screen_code_configuration_available", lambda: False)
+    callback = FakeCallback(f"cpy:a:{token}:30")
+
+    await yandex.open_yandex_analytics(callback, FakeState())
+
+    text, kwargs = callback.message.edits[-1]
+    assert "отключено или не настроено администратором" in text
+    labels = [
+        button.text
+        for row in kwargs["reply_markup"].inline_keyboard
+        for button in row
+    ]
+    assert "➕ Подключить Яндекс Директ" not in labels
+
+
+@pytest.mark.asyncio
 async def test_pending_report_is_explicit_and_sends_no_fake_snapshot(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -309,12 +380,30 @@ async def test_provider_and_input_errors_are_sanitized(
     assert failed_state.clear_count == 1
     assert "Проверьте подключение кабинета" in callback.answers[-1][0][0]
 
+    def invalid_runtime_value(**_kwargs: Any) -> YandexGrowthSnapshot:
+        raise ValueError("path-like or corrupted analytics configuration")
+
+    monkeypatch.setattr(yandex, "get_yandex_growth_snapshot", invalid_runtime_value)
+    invalid_runtime = FakeCallback(f"cpy:a:{token}:7")
+    invalid_runtime_state = FakeState()
+    await yandex.open_yandex_analytics(invalid_runtime, invalid_runtime_state)
+    assert invalid_runtime_state.clear_count == 1
+    assert invalid_runtime.answers[-1][0] == ("Статистика Яндекса сейчас недоступна.",)
+    assert invalid_runtime.answers[-1][1]["show_alert"] is True
+
     bad = FakeCallback(f"cpy:a:{token}:14")
     bad_state = FakeState()
     await yandex.open_yandex_analytics(bad, bad_state)
     assert bad_state.clear_count == 0
     assert bad.answers[-1][0] == ("Статистика Яндекса сейчас недоступна.",)
     assert bad.answers[-1][1]["show_alert"] is True
+
+    malformed = FakeCallback(f"cpy:a:{token}:7:unexpected")
+    malformed_state = FakeState()
+    await yandex.open_yandex_analytics(malformed, malformed_state)
+    assert malformed_state.clear_count == 0
+    assert malformed.answers[-1][0] == ("Статистика Яндекса сейчас недоступна.",)
+    assert malformed.answers[-1][1]["show_alert"] is True
 
 
 if __name__ == "__main__":

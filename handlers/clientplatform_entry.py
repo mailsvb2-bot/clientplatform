@@ -15,6 +15,7 @@ from clientplatform.application.activity import claim_customer_invite
 from clientplatform.application.bookings import list_customer_businesses
 from clientplatform.application.tenancy import list_accessible_businesses
 from clientplatform.domain.activity import ActivityInvariantViolation
+from services.db.core import db_operation_deadline
 
 control = importlib.import_module(".clientplatform_control", __package__)
 
@@ -24,6 +25,7 @@ router.callback_query.filter(control.ClientPlatformControlEnabled())
 
 log = logging.getLogger(__name__)
 _START_TIMEOUT_SECONDS = 12.0
+_START_STORAGE_DEADLINE_SECONDS = 8.0
 
 
 async def register_clientplatform_bot_commands(bot: Bot) -> bool:
@@ -189,15 +191,16 @@ async def clientplatform_entry_start(
     user_id = control._user_id(message)
     status_message = await message.answer("Открываю…")
     try:
-        await asyncio.wait_for(
-            _dispatch_clientplatform_start(
-                message,
-                state,
-                user_id=user_id,
-                managed_bot_business_id=managed_bot_business_id,
-            ),
-            timeout=_START_TIMEOUT_SECONDS,
-        )
+        with db_operation_deadline(_START_STORAGE_DEADLINE_SECONDS):
+            await asyncio.wait_for(
+                _dispatch_clientplatform_start(
+                    message,
+                    state,
+                    user_id=user_id,
+                    managed_bot_business_id=managed_bot_business_id,
+                ),
+                timeout=_START_TIMEOUT_SECONDS,
+            )
     except TimeoutError:
         log.error(
             "ClientPlatform /start timed out user_id=%s timeout_seconds=%s",
@@ -337,6 +340,11 @@ if not bool(getattr(control, "_dual_role_entry_composed", False)):
         __package__,
     )
     admin.install_admin_dashboard_button(control)
+    admin_callback_guard = importlib.import_module(
+        ".clientplatform_admin_callback_guard",
+        __package__,
+    )
+    admin_callback_guard.install_admin_callback_namespace_guard(admin, control)
     dashboard_dispatch = importlib.import_module(
         ".clientplatform_dashboard_dispatch",
         __package__,

@@ -58,6 +58,11 @@ _SELECT = """
     FROM ad_connections
 """
 
+_ACCOUNT_SCOPED_FAILURES = (
+    "direct_account_access_denied",
+    "direct_permission_denied",
+)
+
 
 class AdWorkerStore:
     """Provider-worker access that remains business-scoped without a human actor."""
@@ -91,6 +96,30 @@ class AdWorkerStore:
             (timestamp, timestamp, stale),
         )
         return int(getattr(cursor, "rowcount", 0) or 0)
+
+    def has_publishing_job(
+        self,
+        *,
+        business_id: str,
+        connection_id: str,
+    ) -> bool:
+        """Return whether a provider call already owns a durable publication lease."""
+
+        normalized_business = normalize_uuid(business_id, field_name="business_id")
+        normalized_connection = normalize_uuid(
+            connection_id,
+            field_name="ad_connection_id",
+        )
+        row = self._conn.execute(
+            """
+            SELECT 1
+            FROM ad_publication_jobs
+            WHERE business_id=? AND connection_id=? AND status='publishing'
+            LIMIT 1
+            """,
+            (normalized_business, normalized_connection),
+        ).fetchone()
+        return row is not None
 
     def load_active(
         self,
@@ -150,11 +179,12 @@ class AdWorkerStore:
         business_id: str,
         connection_id: str,
     ) -> None:
-        """Undo account-level attention for a failure scoped to one ad job.
+        """Undo attention only for failures proven to be job-scoped.
 
-        Error timestamps and safe error codes remain available for diagnostics;
-        only the account availability state is restored. Disabled and revoked
-        connections are intentionally never changed by this operation.
+        Permission/account-access failures describe the advertising connection,
+        not one creative. They intentionally remain in ``attention`` so another
+        draft cannot be queued against an account that has lost Direct access.
+        Disabled and revoked connections are also never changed here.
         """
 
         normalized_business = normalize_uuid(business_id, field_name="business_id")
@@ -162,12 +192,18 @@ class AdWorkerStore:
             connection_id,
             field_name="ad_connection_id",
         )
+        placeholders = ", ".join("?" for _ in _ACCOUNT_SCOPED_FAILURES)
         self._conn.execute(
-            """
+            f"""
             UPDATE ad_connections SET status='active'
             WHERE id=? AND business_id=? AND status='attention'
+              AND COALESCE(last_error_code, '') NOT IN ({placeholders})
             """,
-            (normalized_connection, normalized_business),
+            (
+                normalized_connection,
+                normalized_business,
+                *_ACCOUNT_SCOPED_FAILURES,
+            ),
         )
 
 
@@ -332,13 +368,16 @@ class AdConnectionLifecycleStore:
         timestamp: str,
         error_code: str,
     ) -> None:
+        # A publishing row owns the durable provider-call lease. Never rewrite
+        # it to cancelled: disconnect first disables the connection so no new
+        # jobs can start, then the application waits for this lease to finish.
         self._conn.execute(
             """
             UPDATE ad_publication_jobs
             SET status='cancelled', updated_at=?, locked_at=NULL, lock_token=NULL,
                 last_error_code=?
             WHERE connection_id=? AND business_id=?
-              AND status IN ('draft', 'queued', 'publishing', 'retry')
+              AND status IN ('draft', 'queued', 'retry')
             """,
             (timestamp, error_code, connection_id, business_id),
         )

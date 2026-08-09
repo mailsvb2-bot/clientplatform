@@ -229,6 +229,45 @@ class AdSpendRepositoryTests(unittest.TestCase):
                 now=_NOW,
             )
 
+    def test_snapshot_must_match_connected_external_account(self) -> None:
+        valid = self._snapshot()
+        foreign_account = ProviderBudgetSnapshot(
+            provider=valid.provider,
+            connection_id=valid.connection_id,
+            external_account_id="999999",
+            external_campaign_id=valid.external_campaign_id,
+            currency=valid.currency,
+            available_budget_minor=valid.available_budget_minor,
+            spent_today_minor=valid.spent_today_minor,
+            campaign_status=valid.campaign_status,
+            strategy=valid.strategy,
+            launch_eligible=valid.launch_eligible,
+            provider_version=valid.provider_version,
+            captured_at=valid.captured_at,
+            valid_until=valid.valid_until,
+        )
+
+        with self.assertRaisesRegex(
+            AdSpendInvariantViolation,
+            "provider snapshot account does not match connection",
+        ):
+            self.spend.create_or_get_draft(
+                actor=self.owner,
+                publication_job_id=self.submitted_job.id,
+                snapshot=foreign_account,
+                region_ids=(47, 213),
+                hard_cap_minor=20_000,
+                daily_cap_minor=5_000,
+                authorization_expires_at=_NOW + timedelta(minutes=10),
+                now=_NOW,
+            )
+        self.assertEqual(
+            self.conn.execute(
+                "SELECT COUNT(*) FROM ad_spend_authorizations"
+            ).fetchone()[0],
+            0,
+        )
+
     def test_consent_is_idempotent_and_persists_exactly_one_receipt(self) -> None:
         draft = self._draft()
         awaiting = self.spend.request_consent(

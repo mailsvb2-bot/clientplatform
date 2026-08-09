@@ -20,6 +20,7 @@ from clientplatform.application.booking_reminders import schedule_booking_remind
 from clientplatform.application.promotions import (
     book_promoted_slot,
     create_slot_promotion,
+    list_promotable_slots,
     list_promotion_campaigns,
     open_promotion_link,
     parse_promotion_start_payload,
@@ -31,7 +32,6 @@ from clientplatform.domain.booking_calendar import (
     booking_calendar_ics,
     google_calendar_url,
 )
-from clientplatform.domain.bookings import BookingSlotStatus
 from clientplatform.domain.promotions import PromotionChannel
 
 from . import clientplatform_control as control
@@ -84,12 +84,11 @@ async def _render_promotion_workspace(
 ) -> None:
     business_id = control._token_uuid(business_token)
     actor = await control._actor(int(callback.from_user.id), business_id)
-    slots, stats, campaigns = await asyncio.gather(
-        asyncio.to_thread(control.list_booking_slots, actor=actor),
+    open_slots, stats, campaigns = await asyncio.gather(
+        asyncio.to_thread(list_promotable_slots, actor=actor),
         asyncio.to_thread(promotion_stats, actor=actor),
         asyncio.to_thread(list_promotion_campaigns, actor=actor),
     )
-    open_slots = [slot for slot in slots if slot.slot.status == BookingSlotStatus.OPEN]
     active_campaigns = sum(
         1 for item in campaigns if item.campaign.status.value == "active"
     )
@@ -154,7 +153,7 @@ async def choose_promotion_channel(callback: CallbackQuery) -> None:
     business_id = control._token_uuid(business_token)
     actor = await control._actor(int(callback.from_user.id), business_id)
     slots = await asyncio.to_thread(
-        control.list_booking_slots,
+        list_promotable_slots,
         actor=actor,
     )
     selected_slot_id = control._token_uuid(slot_token)

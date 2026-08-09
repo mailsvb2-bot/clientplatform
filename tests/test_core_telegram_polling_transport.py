@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import socket
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from aiogram import Bot
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.exceptions import TelegramNetworkError
 from aiogram.methods import GetMe
 
@@ -142,6 +144,67 @@ class TelegramPollingTransportContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bot.polling_session.active_route, "149.154.167.221")
         self.assertEqual(bot.session.route_count, 2)
         self.assertEqual(bot.polling_session.route_count, 2)
+        await bot.session.close()
+
+    async def test_ui_close_keeps_polling_companion_registered_for_reuse(self) -> None:
+        ui_session = PollingAiohttpSession(route_role="ui")
+        polling_session = PollingAiohttpSession(route_role="polling")
+        polling_close = AsyncMock(wraps=polling_session.close)
+        ui_session.attach_companion(polling_session)
+
+        with patch.object(polling_session, "close", new=polling_close):
+            await ui_session.close()
+            await ui_session.close()
+
+        self.assertEqual(polling_close.await_count, 2)
+
+    async def test_session_creation_waits_until_transport_reset_finishes(self) -> None:
+        session = PollingAiohttpSession(
+            route_pool=("149.154.167.220", "149.154.167.221"),
+        )
+        reset_entered_close = asyncio.Event()
+        release_reset_close = asyncio.Event()
+        original_close = AiohttpSession.close
+        close_calls = 0
+
+        async def controlled_close(target: AiohttpSession) -> None:
+            nonlocal close_calls
+            close_calls += 1
+            if close_calls == 1:
+                reset_entered_close.set()
+                await release_reset_close.wait()
+            await original_close(target)
+
+        with patch.object(AiohttpSession, "close", new=controlled_close):
+            async with asyncio.TaskGroup() as group:
+                reset_task = group.create_task(
+                    session.reset_transport(observed_generation=0)
+                )
+                await asyncio.wait_for(reset_entered_close.wait(), timeout=1.0)
+                create_task = group.create_task(session.create_session())
+                await asyncio.sleep(0)
+                self.assertFalse(create_task.done())
+                release_reset_close.set()
+
+        self.assertTrue(reset_task.result())
+        self.assertEqual(session.transport_generation, 1)
+        self.assertIs(create_task.result(), session._session)
+        self.assertFalse(session._should_reset_connector)
+        await session.close()
+
+    async def test_ui_reset_and_recreate_does_not_close_polling_companion(self) -> None:
+        bot = build_bot(_TEST_TOKEN)
+        self.assertIsInstance(bot.session, PollingAiohttpSession)
+        self.assertIsInstance(bot.polling_session, PollingAiohttpSession)
+        polling_close = AsyncMock(wraps=bot.polling_session.close)
+
+        with patch.object(bot.polling_session, "close", new=polling_close):
+            self.assertTrue(
+                await bot.session.reset_transport(observed_generation=0)
+            )
+            await bot.session.create_session()
+            self.assertEqual(polling_close.await_count, 0)
+
         await bot.session.close()
 
     async def test_polling_reset_does_not_reset_or_rotate_ui_lane(self) -> None:

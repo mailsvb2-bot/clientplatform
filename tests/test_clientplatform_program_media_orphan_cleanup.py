@@ -119,9 +119,7 @@ class ProgramMediaOrphanReferenceTests(unittest.TestCase):
         )
         self.assertEqual(str(raised.exception), raised.exception.code)
 
-    def test_application_queues_uncertain_object_and_preserves_original_error(
-        self,
-    ) -> None:
+    def test_post_put_verification_failure_cleanup_remains_immediate(self) -> None:
         business_id = str(uuid4())
         cleanup_reference = (
             "s3://clientplatform-production/program-media/scope/audio/aa/orphan.mp3"
@@ -163,6 +161,56 @@ class ProgramMediaOrphanReferenceTests(unittest.TestCase):
             business_id=business_id,
             media_reference=cleanup_reference,
             reason="failed_program_media_ingest",
+            delay_seconds=0,
+        )
+
+    def test_uncertain_put_failure_cleanup_waits_past_maximum_upload_timeout(self) -> None:
+        business_id = str(uuid4())
+        cleanup_reference = (
+            "s3://clientplatform-production/program-media/scope/audio/aa/uncertain.mp3"
+        )
+        original = ProgramMediaStoreError(
+            "program_media_upload_transport_failure",
+            retryable=True,
+            cleanup_reference=cleanup_reference,
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "lesson.mp3"
+            source.write_bytes(b"program-media")
+            with (
+                patch.object(
+                    program_media_app,
+                    "program_media_store_config",
+                    return_value=enabled_config(),
+                ),
+                patch.object(program_media_app, "ProgramMediaStore") as store_type,
+                patch.object(
+                    program_media_app,
+                    "queue_program_media_cleanup",
+                    return_value=True,
+                ) as queue_cleanup,
+            ):
+                store_type.return_value.put_file.side_effect = original
+                with self.assertRaises(ProgramMediaStoreError) as raised:
+                    program_media_app.store_program_media(
+                        source,
+                        business_id=business_id,
+                        content_kind=ContentKind.AUDIO,
+                        content_type="audio/mpeg",
+                        extension="mp3",
+                    )
+
+        self.assertIs(raised.exception, original)
+        queue_cleanup.assert_called_once_with(
+            business_id=business_id,
+            media_reference=cleanup_reference,
+            reason="failed_program_media_ingest",
+            delay_seconds=600,
+        )
+        self.assertGreater(
+            program_media_app._UNCERTAIN_UPLOAD_CLEANUP_DELAY_SECONDS,
+            120,
         )
 
     def test_cleanup_queue_failure_is_sanitized_and_keeps_reference(self) -> None:

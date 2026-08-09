@@ -7,6 +7,7 @@ from uuid import uuid4
 import pytest
 
 from clientplatform.domain.activity import ActivityNotFound
+from clientplatform.domain.tenancy import PlatformRole
 from handlers import clientplatform_entry as entry
 from handlers import clientplatform_onboarding_recovery as recovery
 
@@ -59,15 +60,25 @@ async def direct_to_thread(
     return func(*args, **kwargs)
 
 
-def access(business_id: str) -> Any:
+def access(
+    business_id: str,
+    *,
+    role: PlatformRole = PlatformRole.OWNER,
+) -> Any:
     return SimpleNamespace(
         business=SimpleNamespace(id=business_id, name="Ремонты"),
+        membership=SimpleNamespace(role=role),
     )
 
 
 @pytest.fixture(autouse=True)
 def direct_threads(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(recovery.asyncio, "to_thread", direct_to_thread)
+    monkeypatch.setattr(
+        recovery,
+        "list_customer_businesses",
+        lambda **_kwargs: [],
+    )
 
 
 @pytest.mark.asyncio
@@ -99,6 +110,81 @@ async def test_plain_repairs_answer_recovers_missing_fsm_state(
     )
 
     assert result == {"recovered_business_id": business_id}
+
+
+@pytest.mark.asyncio
+async def test_recovery_does_not_steal_dual_role_customer_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    business_id = str(uuid4())
+    customer_business_id = str(uuid4())
+    profile_reads = 0
+    monkeypatch.setattr(
+        recovery,
+        "list_accessible_businesses",
+        lambda **_kwargs: [access(business_id)],
+    )
+    monkeypatch.setattr(
+        recovery,
+        "list_customer_businesses",
+        lambda **_kwargs: [SimpleNamespace(business_id=customer_business_id)],
+    )
+
+    def profile(**_kwargs: Any) -> Any:
+        nonlocal profile_reads
+        profile_reads += 1
+        raise ActivityNotFound("missing")
+
+    monkeypatch.setattr(recovery, "get_business_profile", profile)
+
+    assert (
+        await recovery.IncompleteActivityDescriptionFilter()(
+            FakeMessage("это ответ специалисту"),
+            FakeState(),
+        )
+        is False
+    )
+    assert profile_reads == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "role",
+    [
+        PlatformRole.MANAGER,
+        PlatformRole.CONTENT_MANAGER,
+        PlatformRole.MARKETER,
+        PlatformRole.ANALYST,
+        PlatformRole.SUPPORT,
+    ],
+)
+async def test_recovery_never_onboards_staff_without_business_write_permission(
+    role: PlatformRole,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    business_id = str(uuid4())
+    actor_calls = 0
+    monkeypatch.setattr(
+        recovery,
+        "list_accessible_businesses",
+        lambda **_kwargs: [access(business_id, role=role)],
+    )
+
+    async def actor(*_args: Any, **_kwargs: Any) -> object:
+        nonlocal actor_calls
+        actor_calls += 1
+        return object()
+
+    monkeypatch.setattr(recovery.control, "_actor", actor)
+
+    assert (
+        await recovery.IncompleteActivityDescriptionFilter()(
+            FakeMessage("ремонты"),
+            FakeState(),
+        )
+        is False
+    )
+    assert actor_calls == 0
 
 
 @pytest.mark.asyncio

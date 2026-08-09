@@ -11,8 +11,10 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
 from clientplatform.application.activity import get_business_profile
+from clientplatform.application.bookings import list_customer_businesses
 from clientplatform.application.tenancy import list_accessible_businesses
 from clientplatform.domain.activity import ActivityNotFound
+from clientplatform.domain.tenancy import PlatformRole
 
 control = importlib.import_module(".clientplatform_control", __package__)
 
@@ -21,11 +23,13 @@ router.message.filter(control.ClientPlatformControlEnabled())
 
 
 class IncompleteActivityDescriptionFilter(BaseFilter):
-    """Match only the durable onboarding step that can be reconstructed safely.
+    """Match only an unambiguous, write-authorized owner onboarding recovery.
 
-    The owner/business relationship and the missing profile are persisted in the
-    database. A plain-text answer can therefore continue after an Aiogram FSM
-    reset without guessing a tenant or hijacking unrelated messages.
+    A missing profile is durable evidence that onboarding is incomplete, but a
+    plain text message is not evidence that the user is currently in the owner
+    workspace. Recovery therefore fails closed for dual-role customer accounts
+    and for staff roles that cannot manage the business profile. The user can
+    always use /start to select the intended workspace explicitly.
     """
 
     async def __call__(
@@ -55,7 +59,24 @@ class IncompleteActivityDescriptionFilter(BaseFilter):
         if len(accesses) != 1:
             return False
 
-        business_id = str(accesses[0].business.id)
+        access = accesses[0]
+        if access.membership.role not in {
+            PlatformRole.OWNER,
+            PlatformRole.ADMINISTRATOR,
+        }:
+            return False
+
+        # A member may simultaneously be a customer of another specialist.
+        # With no surviving FSM/workspace marker, consuming arbitrary text as an
+        # owner-profile answer would steal the customer's message. Do not guess.
+        customer_links = await asyncio.to_thread(
+            list_customer_businesses,
+            telegram_user_id=user_id,
+        )
+        if customer_links:
+            return False
+
+        business_id = str(access.business.id)
         actor = await control._actor(user_id, business_id)
         try:
             await asyncio.to_thread(get_business_profile, actor=actor)

@@ -147,7 +147,7 @@ CLIENTPLATFORM_PRODUCTION_DEPLOY_OK:<evidence-path>
 3. Press **Connect Yandex Direct**.
 4. Open the official Yandex authorization page from the bot.
 5. Select the intended Direct account and approve access.
-6. Copy the seven-digit code displayed by Yandex.
+6. Copy the one-time confirmation code displayed by Yandex exactly as shown. Treat it as an opaque value: it may be alphanumeric and must not be assumed to have a fixed digit count.
 7. Send the code to the bot within ten minutes.
 8. Confirm that the bot displays the connected Direct login.
 

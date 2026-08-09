@@ -13,10 +13,12 @@ from clientplatform.domain.promotions import (
     PromotionChannel,
     PromotionCreative,
     PromotionEventType,
+    PromotionInvariantViolation,
     PromotionNotFound,
     stable_creative_id,
     validate_creative,
 )
+from clientplatform.domain.tenancy import PlatformRole, TenantPermissionDenied
 from clientplatform.infrastructure import TenancyRepository
 from clientplatform.infrastructure.activity_repository import ActivityRepository
 from clientplatform.infrastructure.booking_repository import BookingRepository
@@ -171,6 +173,36 @@ class ClientPlatformPromotionRepositoryTests(unittest.TestCase):
         )
         return claim.customer_id
 
+    def test_promotion_roles_list_slots_without_customer_record_access(self) -> None:
+        for user_id, role in (
+            (202, PlatformRole.MARKETER),
+            (203, PlatformRole.CONTENT_MANAGER),
+        ):
+            with self.subTest(role=role.value):
+                self.tenancy.grant_member(
+                    actor=self.owner,
+                    user_id=user_id,
+                    role=role,
+                    now="2026-08-01T10:00:00+00:00",
+                )
+                actor = self.tenancy.resolve_context(
+                    user_id=user_id,
+                    business_id=self.business.business.id,
+                )
+                with self.assertRaises(TenantPermissionDenied):
+                    self.bookings.list_slots(
+                        actor=actor,
+                        now="2026-08-01T10:00:00+00:00",
+                    )
+                promotable = self.promotions.list_promotable_slots(
+                    actor=actor,
+                    now="2026-08-01T10:00:00+00:00",
+                )
+                self.assertEqual(
+                    [item.slot.id for item in promotable],
+                    [self.slot.slot.id],
+                )
+
     def test_campaign_refresh_preserves_source_link_and_separates_channels(self) -> None:
         telegram, _ = self.promotions.create_or_refresh_campaign(
             actor=self.owner,
@@ -205,6 +237,37 @@ class ClientPlatformPromotionRepositoryTests(unittest.TestCase):
         self.assertEqual(refreshed.creative.headline, "Свободное время сантехника")
         self.assertNotEqual(vk.source_token, telegram.source_token)
         self.assertEqual(len(self.promotions.list_campaigns(actor=self.owner)), 2)
+
+    def test_expired_open_slot_is_not_promotable_or_public(self) -> None:
+        campaign, _ = self.promotions.create_or_refresh_campaign(
+            actor=self.owner,
+            slot_id=self.slot.slot.id,
+            channel=PromotionChannel.TELEGRAM,
+            creative=self.creative,
+            now="2026-08-01T10:10:00+00:00",
+        )
+        expired_at = "2026-08-10T10:00:00+00:00"
+
+        self.assertEqual(
+            self.promotions.list_promotable_slots(
+                actor=self.owner,
+                now=expired_at,
+            ),
+            [],
+        )
+        with self.assertRaises(PromotionNotFound):
+            self.promotions.get_public_campaign(
+                source_token=campaign.source_token,
+                now=expired_at,
+            )
+        with self.assertRaises(PromotionInvariantViolation):
+            self.promotions.create_or_refresh_campaign(
+                actor=self.owner,
+                slot_id=self.slot.slot.id,
+                channel=PromotionChannel.VK,
+                creative=self.creative,
+                now=expired_at,
+            )
 
     def test_unique_opens_booking_attribution_and_stale_link_closure(self) -> None:
         campaign, _ = self.promotions.create_or_refresh_campaign(
@@ -253,7 +316,10 @@ class ClientPlatformPromotionRepositoryTests(unittest.TestCase):
         self.assertEqual(stats.bookings, 1)
         self.assertEqual(stats.conversion_percent, 100.0)
         with self.assertRaises(PromotionNotFound):
-            self.promotions.get_public_campaign(source_token=campaign.source_token)
+            self.promotions.get_public_campaign(
+                source_token=campaign.source_token,
+                now="2026-08-01T10:23:00+00:00",
+            )
 
     def test_public_link_closes_when_slot_is_booked_by_another_path(self) -> None:
         campaign, _ = self.promotions.create_or_refresh_campaign(
@@ -261,6 +327,7 @@ class ClientPlatformPromotionRepositoryTests(unittest.TestCase):
             slot_id=self.slot.slot.id,
             channel=PromotionChannel.WEBSITE,
             creative=self.creative,
+            now="2026-08-01T10:10:00+00:00",
         )
         self._connect_customer()
         self.bookings.book_slot(
@@ -270,7 +337,10 @@ class ClientPlatformPromotionRepositoryTests(unittest.TestCase):
             now="2026-08-01T10:22:00+00:00",
         )
         with self.assertRaises(PromotionNotFound):
-            self.promotions.get_public_campaign(source_token=campaign.source_token)
+            self.promotions.get_public_campaign(
+                source_token=campaign.source_token,
+                now="2026-08-01T10:23:00+00:00",
+            )
 
     def test_privacy_manifest_covers_promotion_tables(self) -> None:
         report = validate_clientplatform_privacy_manifest(
