@@ -21,6 +21,14 @@ def install_dynamic_dashboard_dispatch(control_module: ModuleType) -> None:
     if bool(getattr(control_module, "_dynamic_dashboard_dispatch_installed", False)):
         return
 
+    # Interaction safety is installed before optional lesson/media and managed
+    # bot lifecycle routers. Compose their callback namespaces into the same
+    # state/navigation policy before any user interaction can be dispatched.
+    from . import clientplatform_button_surface_contract as button_surface_contract
+    from . import clientplatform_interaction_safety as interaction_safety
+
+    button_surface_contract.install_button_surface_contract(interaction_safety)
+
     guarded_resume = control_module._resume_business
 
     async def dispatch_resume(

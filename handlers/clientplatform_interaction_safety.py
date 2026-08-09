@@ -43,6 +43,130 @@ _RECENT_ACTION_TTL_SECONDS = 4.0
 _RECENT_ACTION_LIMIT = 4096
 _CONTROL_COMMAND_LOCK_WAIT_SECONDS = 0.25
 _CONTROL_COMMANDS = frozenset({"/start", "/admin", "/mybot", "/cancel"})
+
+# Callback namespaces are shared by several independently composed routers.  Keep
+# the interaction boundary semantic: screen navigation may leave an ordinary
+# text wizard, while state-local buttons are accepted only by the state that
+# rendered them.  This prevents a callback namespace (for example ``cpa:``)
+# from accidentally blocking its own next step.
+_CLIENTPLATFORM_CALLBACK_PREFIXES = (
+    "cp:",
+    "cpb:",
+    "cpm:",
+    "cpe:",
+    "cpa:",
+    "cpao:",
+    "cps:",
+    "cpj:",
+    "cpp:",
+    "cpy:",
+    "cpsp:",
+)
+
+# Safe screen transitions.  A user may use these to leave an ordinary wizard;
+# the middleware clears stale FSM data before dispatch.  Mutating confirmation
+# callbacks are intentionally excluded.
+_STATE_ESCAPE_PREFIXES = (
+    "cp:entry:",
+    "cp:business:",
+    "cp:clients:",
+    "cp:results:",
+    "cp:cap:",
+    "cp:cprograms:",
+    "cp:cprog:",
+    "cp:drafts:",
+    "cp:dopen:",
+    "cps:programs:",
+    "cps:booking:",
+    "cps:advanced:",
+    "cps:firstgoal:",
+    "cps:firstbook:",
+    "cps:firstmat:",
+    "cps:firstclient:",
+    "cps:cancelsetup:",
+    "cps:s:",
+    "cps:sw:",
+    "cps:sh:",
+    "cps:sf:",
+    "cps:sl:",
+    "cps:slv:",
+    "cps:sln:",
+    "cps:sla:",
+    "cpj:home:",
+    "cpj:services:",
+    "cpj:calendar:",
+    "cpj:bookings:",
+    "cpj:page:",
+    "cpj:promote:",
+    "cpj:slot:",
+    "cpj:preview:",
+    "cpj:share:",
+    "cpj:add:",
+    "cpj:edit:",
+    "cpp:stats:",
+    "cpp:slot:",
+    "cpb:o:",
+    "cpb:b:",
+    "cpa:home:",
+    "cpa:promote:",
+    "cpa:disconnects:",
+    "cpy:a:",
+    "cpsp:home:",
+)
+
+# Read-only/repeatable navigation must never emit "Действие уже выполняется"
+# merely because the user changed period, refreshed a screen, or went back.
+_REPEATABLE_NAVIGATION_PREFIXES = (
+    "cp:entry:",
+    "cp:business:",
+    "cp:clients:",
+    "cp:results:",
+    "cp:cap:",
+    "cp:cprograms:",
+    "cp:cprog:",
+    "cp:drafts:",
+    "cp:dopen:",
+    "cps:programs:",
+    "cps:booking:",
+    "cps:advanced:",
+    "cps:firstgoal:",
+    "cps:s:",
+    "cps:sw:",
+    "cps:sh:",
+    "cps:sf:",
+    "cps:sl:",
+    "cps:slv:",
+    "cpj:home:",
+    "cpj:services:",
+    "cpj:calendar:",
+    "cpj:bookings:",
+    "cpj:page:",
+    "cpj:promote:",
+    "cpj:slot:",
+    "cpj:preview:",
+    "cpj:share:",
+    "cpp:stats:",
+    "cpp:slot:",
+    "cpb:o:",
+    "cpb:b:",
+    "cpa:home:",
+    "cpa:promote:",
+    "cpa:disconnects:",
+    "cpy:a:",
+    "cpsp:home:",
+)
+
+# These state families carry secrets, explicit money consent, or privileged
+# identity changes.  Old unrelated keyboards must not silently abandon them.
+_SENSITIVE_STATE_PREFIXES = (
+    "ManagedBotSetupState:",
+    "ExistingBotSetupState:",
+    "YandexScreenCodeState:",
+    "ClientPlatformSafetyState:",
+    "ClientPlatformAdminState:",
+    "AdSpendConsentState:",
+)
+
 _ONE_SHOT_PREFIXES = (
     "cp:entry:",
     "cp:business:",
@@ -108,16 +232,115 @@ def _event_chat_id(event: TelegramObject) -> int:
     return 0
 
 
-def _callback_conflicts_with_state(current_state: str | None, callback_data: str) -> bool:
+def _is_clientplatform_callback(callback_data: str) -> bool:
+    return callback_data.startswith(_CLIENTPLATFORM_CALLBACK_PREFIXES)
+
+
+def _is_admin_screen_navigation(callback_data: str) -> bool:
+    """Recognize only non-mutating token-first admin navigation callbacks."""
+
+    parts = callback_data.split(":")
+    if len(parts) < 3 or parts[0] != "cpa":
+        return False
+    # Advertising callbacks are action-first and are handled separately.
+    if parts[1] in {
+        "home",
+        "connect",
+        "yandex-cancel",
+        "promote",
+        "slot",
+        "conn",
+        "campaign",
+        "confirm",
+        "disconnects",
+        "disconnect",
+        "revoke",
+        "formats",
+        "back",
+    }:
+        return False
+    return parts[2] in {"menu", "back", "leave"}
+
+
+def _is_state_escape_callback(callback_data: str) -> bool:
+    return callback_data.startswith(_STATE_ESCAPE_PREFIXES) or _is_admin_screen_navigation(
+        callback_data
+    )
+
+
+def _is_repeatable_navigation(callback_data: str) -> bool:
+    return callback_data.startswith(
+        _REPEATABLE_NAVIGATION_PREFIXES
+    ) or _is_admin_screen_navigation(callback_data)
+
+
+def _state_local_callback_allowed(current_state: str, callback_data: str) -> bool:
+    """Return True only for callbacks that belong to the active FSM step."""
+
+    if current_state.startswith("ManagedBotSetupState:"):
+        return callback_data.startswith(("cpb:c:", "cpb:b:"))
+    if current_state.startswith("ClientPlatformSafetyState:"):
+        return callback_data.startswith("cps:cancel:")
+    if current_state.startswith("YandexScreenCodeState:waiting_code"):
+        return callback_data.startswith("cpa:yandex-cancel:")
+    if current_state.startswith("AdConnectionState:selecting_connection"):
+        return callback_data.startswith("cpa:conn:")
+    if current_state.startswith("AdConnectionState:selecting_campaign"):
+        return callback_data.startswith("cpa:campaign:")
+    if current_state.startswith("AdConnectionState:confirming_publication"):
+        return callback_data == "cpa:confirm"
+    if current_state.startswith("ClientPlatformControlState:booking_start"):
+        return callback_data.startswith("cpj:wizcancel:")
+    if current_state.startswith("ClientPlatformControlState:booking_duration"):
+        return callback_data.startswith(
+            (
+                "cpj:wizdur:",
+                "cpj:wizcustom:",
+                "cpj:wizback:",
+                "cpj:wizcancel:",
+            )
+        )
+    if current_state.startswith("ClientPlatformProgramBuilderState:review"):
+        return callback_data.startswith(("cp:dadd:", "cp:dpub:", "cp:darc:"))
+    if current_state.startswith("AdSpendConsentState:confirming_consent"):
+        return callback_data.startswith("cpsp:confirm:")
+    if current_state.startswith("ClientPlatformAdminOpsState:"):
+        return callback_data.startswith("cpao:return-")
+    return False
+
+
+def _callback_can_escape_state(current_state: str, callback_data: str) -> bool:
+    if not _is_state_escape_callback(callback_data):
+        return False
+    # The spend-consent screen has an explicit "Отмена" / home button.  It is
+    # safe because the target handler rebuilds the screen and no provider
+    # mutation has happened yet.
+    if current_state.startswith("AdSpendConsentState:"):
+        return callback_data.startswith("cpsp:home:")
+    if current_state.startswith(_SENSITIVE_STATE_PREFIXES):
+        return False
+    return True
+
+
+def _callback_should_clear_state(
+    current_state: str | None,
+    callback_data: str,
+) -> bool:
     if not current_state:
         return False
-    if current_state.startswith("ManagedBotSetupState:"):
-        return not callback_data.startswith(("cpb:c:", "cpb:b:"))
-    if current_state.startswith("ClientPlatformControlState:"):
-        return callback_data.startswith(("cp:", "cpb:", "cpa:", "cps:"))
-    if current_state.startswith("ClientPlatformSafetyState:"):
-        return not callback_data.startswith("cps:cancel:")
-    return callback_data.startswith(("cpb:", "cpa:"))
+    if _state_local_callback_allowed(current_state, callback_data):
+        return False
+    return _callback_can_escape_state(current_state, callback_data)
+
+
+def _callback_conflicts_with_state(current_state: str | None, callback_data: str) -> bool:
+    if not current_state or not _is_clientplatform_callback(callback_data):
+        return False
+    if _state_local_callback_allowed(current_state, callback_data):
+        return False
+    if _callback_can_escape_state(current_state, callback_data):
+        return False
+    return True
 
 
 async def _remove_source_keyboard(callback: CallbackQuery) -> None:
@@ -224,10 +447,13 @@ class ClientPlatformInteractionSafetyMiddleware(BaseMiddleware):
         )
         if isinstance(event, CallbackQuery):
             callback_data = str(event.data or "")
-            if self._is_duplicate_action(
-                bot_id=bot_id,
-                user_id=user_id,
-                data=callback_data,
+            if (
+                not _is_repeatable_navigation(callback_data)
+                and self._is_duplicate_action(
+                    bot_id=bot_id,
+                    user_id=user_id,
+                    data=callback_data,
+                )
             ):
                 await _answer_callback(event, "Действие уже выполняется.")
                 return None
@@ -254,6 +480,11 @@ class ClientPlatformInteractionSafetyMiddleware(BaseMiddleware):
                             "Сначала завершите текущий шаг или отправьте /cancel."
                         )
                     return None
+                if (
+                    isinstance(state, FSMContext)
+                    and _callback_should_clear_state(current_state, callback_data)
+                ):
+                    await state.clear()
                 result = await handler(event, data)
                 if callback_data.startswith(_ONE_SHOT_PREFIXES):
                     await _remove_source_keyboard(event)
