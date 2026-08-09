@@ -23,9 +23,9 @@ def normalize_yandex_confirmation_code(value: str | None) -> str:
     """Normalize the opaque confirmation code rendered by Yandex OAuth.
 
     Yandex currently renders an opaque alphanumeric authorization code for the
-    ``verification_code`` redirect flow.  OAuth authorization codes are opaque
+    ``verification_code`` redirect flow. OAuth authorization codes are opaque
     to the client, so we must not impose a legacy seven-digit/device-code
-    format.  A leading ``# `` is tolerated because users commonly copy the
+    format. A leading ``# `` is tolerated because users commonly copy the
     visual fragment marker together with the displayed code.
     """
 
@@ -41,6 +41,29 @@ def normalize_yandex_confirmation_code(value: str | None) -> str:
     ):
         raise YandexDirectError("oauth_code_invalid")
     return code
+
+
+def screen_code_configuration_available() -> bool:
+    """Return whether the owner-facing screen-code connection can actually start."""
+
+    connections_enabled = str(
+        os.getenv("CLIENTPLATFORM_AD_CONNECTIONS_ENABLED") or ""
+    ).strip().lower() in _TRUE_VALUES
+    client_id = str(
+        os.getenv("CLIENTPLATFORM_YANDEX_DIRECT_CLIENT_ID") or ""
+    ).strip()
+    client_secret = str(
+        os.getenv("CLIENTPLATFORM_YANDEX_DIRECT_CLIENT_SECRET") or ""
+    ).strip()
+    redirect_uri = str(
+        os.getenv("CLIENTPLATFORM_AD_OAUTH_REDIRECT_URI") or ""
+    ).strip()
+    return bool(
+        connections_enabled
+        and client_id
+        and client_secret
+        and redirect_uri == YANDEX_SCREEN_CODE_REDIRECT_URI
+    )
 
 
 class YandexScreenCodeDirectProvider(ModeratingYandexDirectProvider):
@@ -128,5 +151,6 @@ __all__ = [
     "YANDEX_SCREEN_CODE_REDIRECT_URI",
     "YandexScreenCodeDirectProvider",
     "normalize_yandex_confirmation_code",
+    "screen_code_configuration_available",
     "screen_code_provider_from_environment",
 ]
