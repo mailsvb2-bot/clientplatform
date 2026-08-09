@@ -16,6 +16,9 @@ from runtime import ad_oauth_http
 from scripts import clientplatform_prepare_production_env as prepare_env
 
 
+OFFICIAL_STYLE_CODE = "ugsr5hvmusf7zyaf"
+
+
 class FakeState:
     def __init__(self, data=None) -> None:
         self.data = dict(data or {})
@@ -103,7 +106,7 @@ class YandexScreenCodeProviderTests(unittest.TestCase):
             transport=transport,
         )
         bundle = provider.exchange_code(
-            code="1234567",
+            code=OFFICIAL_STYLE_CODE,
             verifier="v" * 64,
         )
 
@@ -113,13 +116,13 @@ class YandexScreenCodeProviderTests(unittest.TestCase):
         self.assertEqual(call["url"], "https://oauth.yandex.ru/token")
         form = parse_qs(call["body"].decode("ascii"))
         self.assertEqual(form["grant_type"], ["authorization_code"])
-        self.assertEqual(form["code"], ["1234567"])
+        self.assertEqual(form["code"], [OFFICIAL_STYLE_CODE])
         self.assertEqual(form["client_id"], ["client-id"])
         self.assertEqual(form["client_secret"], ["client-secret"])
         self.assertEqual(form["code_verifier"], ["v" * 64])
         self.assertNotIn("redirect_uri", form)
 
-    def test_provider_rejects_wrong_redirect_and_non_seven_digit_code(self) -> None:
+    def test_provider_accepts_opaque_code_and_rejects_invalid_input(self) -> None:
         with self.assertRaisesRegex(ValueError, "redirect URI"):
             YandexScreenCodeDirectProvider(
                 oauth=YandexOAuthConfig(
@@ -135,26 +138,37 @@ class YandexScreenCodeProviderTests(unittest.TestCase):
             transport=FakeTransport([]),
         )
         with self.assertRaisesRegex(RuntimeError, "oauth_code_invalid"):
-            provider.exchange_code(code="123456", verifier="v" * 64)
+            provider.exchange_code(code="", verifier="v" * 64)
+        with self.assertRaisesRegex(RuntimeError, "oauth_code_invalid"):
+            provider.exchange_code(code="two words", verifier="v" * 64)
+        with self.assertRaisesRegex(RuntimeError, "oauth_code_invalid"):
+            provider.exchange_code(code="яндекс", verifier="v" * 64)
 
 
 class YandexScreenCodeTelegramTests(unittest.IsolatedAsyncioTestCase):
-    def test_state_and_confirmation_code_are_strict(self) -> None:
+    def test_state_and_confirmation_code_accept_current_opaque_format(self) -> None:
         self.assertEqual(
             screen_code._oauth_state_from_authorization_url(
                 "https://oauth.yandex.ru/authorize?client_id=one&state=safe-state"
             ),
             "safe-state",
         )
-        self.assertEqual(screen_code._confirmation_code(" 123 4567 "), "1234567")
+        self.assertEqual(
+            screen_code._confirmation_code(f"  {OFFICIAL_STYLE_CODE}  "),
+            OFFICIAL_STYLE_CODE,
+        )
+        self.assertEqual(
+            screen_code._confirmation_code(f"# {OFFICIAL_STYLE_CODE}"),
+            OFFICIAL_STYLE_CODE,
+        )
         with self.assertRaises(ValueError):
             screen_code._oauth_state_from_authorization_url(
                 "https://oauth.yandex.ru/authorize?client_id=one"
             )
         with self.assertRaises(ValueError):
-            screen_code._confirmation_code("123456")
+            screen_code._confirmation_code("")
         with self.assertRaises(ValueError):
-            screen_code._confirmation_code("12345ab")
+            screen_code._confirmation_code("not a code")
 
     async def test_connect_stores_one_time_state_and_explains_manual_code(self) -> None:
         cb = callback("cpa:connect:business-1")
@@ -194,7 +208,8 @@ class YandexScreenCodeTelegramTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state.data["oauth_state"], "oauth-state")
         self.assertEqual(state.data["oauth_user_id"], 101)
         rendered = outbound.answer.await_args.args[0]
-        self.assertIn("семизначный код", rendered)
+        self.assertIn("код подтверждения", rendered)
+        self.assertNotIn("семизнач", rendered)
         self.assertIn("удалить", rendered)
         markup = outbound.answer.await_args.kwargs["reply_markup"]
         self.assertEqual(markup.inline_keyboard[0][0].url, start.authorization_url)
@@ -207,14 +222,14 @@ class YandexScreenCodeTelegramTests(unittest.IsolatedAsyncioTestCase):
                 "oauth_user_id": 101,
             }
         )
-        bad = message("not-a-code")
+        bad = message("not a code")
         with patch.object(screen_code.control, "_user_id", return_value=101):
             await screen_code.complete_yandex_direct_screen_code(bad, state)
         self.assertFalse(state.cleared)
         bad.delete.assert_not_awaited()
-        self.assertIn("семи цифр", bad.answer.await_args.args[0])
+        self.assertIn("только код подтверждения", bad.answer.await_args.args[0])
 
-        failed = message("1234567")
+        failed = message(OFFICIAL_STYLE_CODE)
         with (
             patch.object(screen_code.asyncio, "to_thread", new=immediate_to_thread),
             patch.object(screen_code.control, "_user_id", return_value=101),
@@ -244,7 +259,7 @@ class YandexScreenCodeTelegramTests(unittest.IsolatedAsyncioTestCase):
                 "oauth_user_id": 101,
             }
         )
-        incoming = message("1234567")
+        incoming = message(OFFICIAL_STYLE_CODE)
         provider = object()
         completion = SimpleNamespace(
             connection=SimpleNamespace(external_login="direct-login")
@@ -269,7 +284,7 @@ class YandexScreenCodeTelegramTests(unittest.IsolatedAsyncioTestCase):
         incoming.delete.assert_awaited_once()
         complete.assert_called_once_with(
             state="oauth-state",
-            code="1234567",
+            code=OFFICIAL_STYLE_CODE,
             provider=provider,
         )
         self.assertTrue(state.cleared)
