@@ -103,16 +103,17 @@ class PartnerAttributionTests(unittest.TestCase):
                     referral_token=self.candidate.referral_token,
                 )
             )
+            result_key = "booking_11111111-1111-4111-8111-111111111111"
             self.assertTrue(
                 record_partner_referral_result(
                     referral_token=self.candidate.referral_token,
-                    result_key="booking:11111111-1111-4111-8111-111111111111",
+                    result_key=result_key,
                 )
             )
             self.assertFalse(
                 record_partner_referral_result(
                     referral_token=self.candidate.referral_token,
-                    result_key="booking:11111111-1111-4111-8111-111111111111",
+                    result_key=result_key,
                 )
             )
 
