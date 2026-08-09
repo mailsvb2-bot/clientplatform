@@ -61,6 +61,14 @@ async def test_legacy_slotadd_clears_stale_replacement_state_before_handler(
     ) -> None:
         observed.setdefault("answers", []).append(text)
 
+    async def edit_reply_markup(
+        _message: Message,
+        *,
+        reply_markup: Any = None,
+        **_kwargs: Any,
+    ) -> None:
+        observed.setdefault("reply_markups", []).append(reply_markup)
+
     async def handler(_event: Any, data: dict[str, Any]) -> str:
         current = data["state"]
         observed["state"] = await current.get_state()
@@ -68,6 +76,7 @@ async def test_legacy_slotadd_clears_stale_replacement_state_before_handler(
         return "handled"
 
     monkeypatch.setattr(CallbackQuery, "answer", answer_callback)
+    monkeypatch.setattr(Message, "edit_reply_markup", edit_reply_markup)
     callback = _callback(
         "cp:slotadd:abcdefghijklmnopqrstuv:zyxwvutsrqponmlkjihgfe"
     )
@@ -82,5 +91,6 @@ async def test_legacy_slotadd_clears_stale_replacement_state_before_handler(
     assert result == "handled"
     assert observed["state"] is None
     assert observed["data"] == {}
+    assert observed["reply_markups"] == [None]
     assert interaction_safety._is_state_escape_callback(str(callback.data))
     assert not interaction_safety._is_repeatable_navigation(str(callback.data))
