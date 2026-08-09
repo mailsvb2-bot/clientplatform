@@ -335,8 +335,11 @@ class PollingAiohttpSession(AiohttpSession):
             return True
 
     async def close(self) -> None:
+        # Companion ownership belongs to this lane for the lifetime of the
+        # reusable session object. Aiogram may reopen a closed ClientSession on
+        # a later polling retry, so dropping this association on the first close
+        # would leak that reopened polling connector during the next shutdown.
         companions = tuple(self._companion_sessions)
-        self._companion_sessions.clear()
         await super().close()
         for companion in companions:
             await companion.close()
