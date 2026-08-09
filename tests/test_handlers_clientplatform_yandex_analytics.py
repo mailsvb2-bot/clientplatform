@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
+from aiogram.methods import AnswerCallbackQuery
 
 from clientplatform.application.yandex_growth_analytics import (
     YandexGrowthCampaignSnapshot,
@@ -213,6 +214,31 @@ async def test_period_navigation_clears_active_wizard_before_provider_io(
     assert state.clear_count == 1
     assert callback.answers == []
     assert callback.message.edits
+
+
+@pytest.mark.asyncio
+async def test_expired_callback_feedback_falls_back_to_normal_message() -> None:
+    callback = FakeCallback("cpy:a:ignored:7")
+    callback.answer = AsyncMock(
+        side_effect=yandex.TelegramBadRequest(
+            method=AnswerCallbackQuery(callback_query_id="expired"),
+            message="Bad Request: query is too old",
+        )
+    )
+
+    await yandex._answer_feedback(
+        callback,
+        "Яндекс готовит отчёт. Попробуйте ещё раз.",
+        show_alert=True,
+    )
+
+    callback.answer.assert_awaited_once_with(
+        "Яндекс готовит отчёт. Попробуйте ещё раз.",
+        show_alert=True,
+    )
+    assert callback.message.answers == [
+        ("Яндекс готовит отчёт. Попробуйте ещё раз.", {})
+    ]
 
 
 @pytest.mark.asyncio
