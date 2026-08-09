@@ -80,7 +80,7 @@ async def test_one_hundred_real_callback_objects_remain_low_latency(
 
 
 @pytest.mark.asyncio
-async def test_callback_is_acknowledged_before_waiting_for_busy_user_lock(
+async def test_repeatable_navigation_is_acknowledged_before_waiting_for_busy_user_lock(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     middleware = safety.ClientPlatformInteractionSafetyMiddleware()
@@ -111,7 +111,7 @@ async def test_callback_is_acknowledged_before_waiting_for_busy_user_lock(
         group.create_task(
             middleware(
                 handler,
-                _callback(1, data="cpa:invalid-token:first"),
+                _callback(1, data="cpp:stats:first"),
                 data,
             )
         )
@@ -119,7 +119,7 @@ async def test_callback_is_acknowledged_before_waiting_for_busy_user_lock(
         group.create_task(
             middleware(
                 handler,
-                _callback(2, data="cpa:invalid-token:second"),
+                _callback(2, data="cpp:stats:second"),
                 data,
             )
         )
