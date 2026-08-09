@@ -17,6 +17,7 @@ from clientplatform.application.ad_oauth_sessions import cancel_yandex_direct_oa
 from clientplatform.domain.ad_connections import AdConnectionError
 from clientplatform.integrations.yandex_direct import YandexDirectError
 from clientplatform.integrations.yandex_screen_code import (
+    normalize_yandex_confirmation_code,
     screen_code_provider_from_environment,
 )
 
@@ -41,10 +42,10 @@ def _oauth_state_from_authorization_url(value: str) -> str:
 
 
 def _confirmation_code(value: str | None) -> str:
-    code = "".join(str(value or "").split())
-    if len(code) != 7 or not code.isascii() or not code.isdigit():
-        raise ValueError("Yandex OAuth confirmation code must contain seven digits")
-    return code
+    try:
+        return normalize_yandex_confirmation_code(value)
+    except YandexDirectError as exc:
+        raise ValueError("Yandex OAuth confirmation code is invalid") from exc
 
 
 @simple.router.callback_query(F.data.startswith("cpa:connect:"))
@@ -81,8 +82,8 @@ async def connect_yandex_direct_screen_code(
         "🔐 Подключение Яндекс Директа\n\n"
         "1. Откройте официальный экран Яндекса.\n"
         "2. Выберите рекламный аккаунт и разрешите доступ.\n"
-        "3. Яндекс покажет семизначный код.\n"
-        "4. Скопируйте код и отправьте его сюда одним сообщением.\n\n"
+        "3. Яндекс покажет код подтверждения.\n"
+        "4. Скопируйте сам код и отправьте его сюда одним сообщением.\n\n"
         "Код действует 10 минут. Пароль и OAuth-токен ClientPlatform не просит. "
         "Сообщение с кодом бот постарается удалить сразу после получения.",
         reply_markup=InlineKeyboardMarkup(
@@ -184,7 +185,7 @@ async def complete_yandex_direct_screen_code(
         code = _confirmation_code(message.text)
     except ValueError:
         await message.answer(
-            "Код должен состоять ровно из семи цифр. Скопируйте код со страницы Яндекса и отправьте его ещё раз."
+            "Отправьте только код подтверждения со страницы Яндекса одним сообщением, без пояснений."
         )
         return
 
