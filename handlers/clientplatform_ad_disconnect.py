@@ -11,6 +11,7 @@ from clientplatform.application.ad_connections import (
 )
 from clientplatform.domain.ad_connections import (
     AdConnectionError,
+    AdConnectionInvariantViolation,
     AdConnectionStatus,
 )
 from clientplatform.integrations.yandex_direct import YandexDirectError
@@ -36,30 +37,34 @@ async def list_disconnectable_ad_connections(callback: CallbackQuery) -> None:
     except RuntimeError:
         await callback.answer("Не удалось открыть подключения", show_alert=True)
         return
-    active = [
-        item
-        for item in connections
-        if item.status not in {AdConnectionStatus.REVOKED, AdConnectionStatus.DISABLED}
+    disconnectable = [
+        item for item in connections if item.status != AdConnectionStatus.REVOKED
     ]
     rows = [
         [
             (
-                f"Отключить Яндекс · {item.external_login[:24]}",
+                (
+                    "Завершить отключение Яндекс · "
+                    if item.status == AdConnectionStatus.DISABLED
+                    else "Отключить Яндекс · "
+                )
+                + item.external_login[:24],
                 "cpa:disconnect:"
                 f"{business_token}:{control._uuid_token(item.id)}",
             )
         ]
-        for item in active
+        for item in disconnectable
     ]
     rows.append([("⬅️ Рекламные кабинеты", f"cpa:home:{business_token}")])
     await callback.answer()
     await _message(callback).answer(
         "🔌 Отключение рекламного кабинета\n\n"
         + (
-            "Выберите кабинет. ClientPlatform удалит локальный зашифрованный "
-            "OAuth-доступ и отменит ещё не отправленные задания."
-            if active
-            else "Активных подключений нет."
+            "Выберите кабинет. ClientPlatform сразу блокирует новые отправки, "
+            "дожидается правдивого завершения уже начатой публикации и только "
+            "после этого удаляет локальный зашифрованный OAuth-доступ."
+            if disconnectable
+            else "Подключений для отключения нет."
         ),
         reply_markup=control._keyboard(rows),
     )
@@ -80,14 +85,16 @@ async def confirm_ad_connection_disconnect(callback: CallbackQuery) -> None:
         await callback.answer("Не удалось проверить кабинет", show_alert=True)
         return
     selected = next((item for item in connections if item.id == connection_id), None)
-    if selected is None:
+    if selected is None or selected.status == AdConnectionStatus.REVOKED:
         await callback.answer("Кабинет не найден", show_alert=True)
         return
     await callback.answer()
     await _message(callback).answer(
         "Отключить Яндекс Директ?\n\n"
         f"Кабинет: {selected.external_login}\n\n"
-        "ClientPlatform потеряет доступ и отменит неотправленные задания. Уже "
+        "ClientPlatform заблокирует новые отправки и отменит ещё не начатые "
+        "задания. Если публикация уже ушла worker-у, её состояние сначала будет "
+        "зафиксировано честно; затем можно завершить отзыв OAuth-доступа. Уже "
         "созданные объявления и расходы в Яндексе автоматически не остановятся.",
         reply_markup=control._keyboard(
             [
@@ -116,6 +123,15 @@ async def revoke_ad_connection(callback: CallbackQuery) -> None:
             actor=actor,
             connection_id=connection_id,
         )
+    except AdConnectionInvariantViolation as exc:
+        if str(exc) == "advertising publication is still in progress; retry disconnect":
+            await callback.answer(
+                "Новые отправки уже заблокированы. Завершается ранее начатая публикация; повторите отключение ещё раз.",
+                show_alert=True,
+            )
+        else:
+            await callback.answer("Не удалось отключить кабинет", show_alert=True)
+        return
     except (AdConnectionError, YandexDirectError, ValueError):
         await callback.answer("Не удалось отключить кабинет", show_alert=True)
         return
