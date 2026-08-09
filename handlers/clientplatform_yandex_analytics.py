@@ -3,8 +3,9 @@ from __future__ import annotations
 import asyncio
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 
 from clientplatform.application.yandex_growth_analytics import (
     YandexGrowthSnapshot,
@@ -31,27 +32,47 @@ def _metric(label: str, value: int | None) -> str:
     return f"{label}: {_money(value)}"
 
 
-def _keyboard(business_id: str, period_days: int):
+def _keyboard(
+    business_id: str,
+    period_days: int,
+    *,
+    connected_accounts: int,
+) -> InlineKeyboardMarkup:
     token = control._uuid_token(business_id)
-    return control._keyboard(
-        [
+    rows: list[list[tuple[str, str]]] = []
+    if connected_accounts <= 0:
+        rows.append(
+            [("➕ Подключить Яндекс Директ", f"cpa:connect:{token}")]
+        )
+    else:
+        rows.append(
             [
-                ("7 дней" if period_days != 7 else "✅ 7 дней", f"cpy:a:{token}:7"),
-                ("30 дней" if period_days != 30 else "✅ 30 дней", f"cpy:a:{token}:30"),
-            ],
+                (
+                    "7 дней" if period_days != 7 else "✅ 7 дней",
+                    f"cpy:a:{token}:7",
+                ),
+                (
+                    "30 дней" if period_days != 30 else "✅ 30 дней",
+                    f"cpy:a:{token}:30",
+                ),
+            ]
+        )
+    rows.extend(
+        [
             [("📣 Рекламные кабинеты", f"cpa:home:{token}")],
             [("← Получать клиентов", f"cps:s:{token}")],
         ]
     )
+    return control._keyboard(rows)
 
 
 def _format_snapshot(snapshot: YandexGrowthSnapshot) -> str:
     if snapshot.connected_accounts == 0:
         return (
             "📊 Яндекс Директ\n\n"
-            "Рекламный кабинет ещё не подключён. Подключите его один раз — "
-            "OAuth-токен будет храниться зашифрованно, а этот экран будет читать "
-            "только подтверждённую статистику Яндекса."
+            "Рекламный кабинет ещё не подключён. Нажмите «Подключить Яндекс "
+            "Директ» ниже — OAuth-токен будет храниться зашифрованно, а этот "
+            "экран будет читать только подтверждённую статистику Яндекса."
         )
     if snapshot.tracked_ads == 0:
         return (
@@ -110,6 +131,23 @@ async def _answer_unavailable(callback: CallbackQuery) -> None:
     )
 
 
+async def _replace_panel(
+    message: Message,
+    *,
+    text: str,
+    reply_markup: InlineKeyboardMarkup,
+) -> None:
+    try:
+        await message.edit_text(text, reply_markup=reply_markup)
+        return
+    except TelegramBadRequest as exc:
+        if "message is not modified" in str(exc).casefold():
+            return
+    except TelegramAPIError:
+        pass
+    await message.answer(text, reply_markup=reply_markup)
+
+
 @router.callback_query(F.data.startswith("cpy:a:"))
 async def open_yandex_analytics(callback: CallbackQuery, state: FSMContext) -> None:
     parts = str(callback.data).split(":")
@@ -145,9 +183,14 @@ async def open_yandex_analytics(callback: CallbackQuery, state: FSMContext) -> N
 
     await state.clear()
     await callback.answer()
-    await control._callback_message(callback).answer(
-        _format_snapshot(snapshot),
-        reply_markup=_keyboard(business_id, period_days),
+    await _replace_panel(
+        control._callback_message(callback),
+        text=_format_snapshot(snapshot),
+        reply_markup=_keyboard(
+            business_id,
+            period_days,
+            connected_accounts=snapshot.connected_accounts,
+        ),
     )
 
 
