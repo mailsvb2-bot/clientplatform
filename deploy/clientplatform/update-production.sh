@@ -7,6 +7,7 @@ TARGET_REF=${CLIENTPLATFORM_TARGET_REF:-main}
 EXPECTED_SHA=${CLIENTPLATFORM_EXPECTED_SHA:-}
 APP_CONTAINER=clientplatform-production-app-1
 EVIDENCE=/var/lib/clientplatform/deploy-evidence/latest.json
+DEPLOY_LOCK=/run/lock/clientplatform-production-deploy.lock
 STABILITY_SECONDS=${CLIENTPLATFORM_POST_DEPLOY_STABILITY_SECONDS:-20}
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -24,6 +25,29 @@ if [ "$STABILITY_SECONDS" -lt 10 ] || [ "$STABILITY_SECONDS" -gt 120 ]; then
     echo "CLIENTPLATFORM_UPDATE_FAILED:invalid_stability_seconds" >&2
     exit 1
 fi
+
+# Keep the canonical deploy lock open in this outer updater from before any git
+# mutation until the stability window and any rollback are finished. The small
+# Python probe acquires flock on the inherited open-file description; because
+# fd 9 remains open in this shell, that same lock survives after the probe exits.
+mkdir -p "$(dirname "$DEPLOY_LOCK")"
+exec 9>>"$DEPLOY_LOCK"
+if ! CLIENTPLATFORM_DEPLOY_LOCK_FD=9 python3 - <<'PY'
+import fcntl
+import os
+import sys
+
+fd = int(os.environ["CLIENTPLATFORM_DEPLOY_LOCK_FD"])
+try:
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except BlockingIOError:
+    sys.exit(75)
+PY
+then
+    echo "CLIENTPLATFORM_UPDATE_FAILED:production_deploy_already_running" >&2
+    exit 1
+fi
+export CLIENTPLATFORM_DEPLOY_LOCK_FD=9
 
 mkdir -p "$ROOT"
 cd "$ROOT"
@@ -55,8 +79,11 @@ chmod 600 deploy/clientplatform/clientplatform.env
 DOMAIN=$(sed -n 's/^CLIENTPLATFORM_DOMAIN=//p' deploy/clientplatform/clientplatform.env | tail -n 1 | tr -d '\r')
 DEPLOY_STARTED_EPOCH=$(date +%s)
 
-# Compatibility contract marker: exec python3 -m scripts.clientplatform_production_deploy "$@"
-python3 -m scripts.clientplatform_production_deploy "$@"
+# The wrapper uses inherited fd 9 instead of opening the lock again. The outer
+# shell continues owning the same locked open-file description after it exits.
+# Compatibility contract: scripts.clientplatform_production_deploy remains the
+# implementation of deploy(); the wrapper only extends its lock lifetime.
+python3 -m scripts.clientplatform_locked_production_deploy "$@"
 STABILITY_STARTED_EPOCH=$(date +%s)
 
 post_deploy_ready() {
@@ -77,15 +104,8 @@ rollback_after_unstable_runtime() {
         return 1
     fi
 
-    rollback_tag=$(python3 -c \
-        'import json,sys; print(str(json.load(open(sys.argv[1], encoding="utf-8")).get("rollback_tag") or ""))' \
-        "$EVIDENCE")
-    if [ -z "$rollback_tag" ]; then
-        echo "CLIENTPLATFORM_UPDATE_FAILED:${reason}:rollback_tag_missing" >&2
-        return 1
-    fi
-
-    python3 - "$rollback_tag" "$DOMAIN" "$TARGET_SHA" "$reason" <<'PY'
+    python3 - "$EVIDENCE" "$DOMAIN" "$TARGET_SHA" "$reason" <<'PY'
+import json
 import sys
 
 from scripts.clientplatform_production_deploy import (
@@ -97,7 +117,42 @@ from scripts.clientplatform_production_deploy import (
     _write_evidence,
 )
 
-rollback_tag, domain, target_sha, reason = sys.argv[1:]
+evidence_path, domain, target_sha, reason = sys.argv[1:]
+with open(evidence_path, encoding="utf-8") as handle:
+    evidence = json.load(handle)
+rollback_tag = str(evidence.get("rollback_tag") or "")
+baseline_ready = evidence.get("baseline_ready") is True
+recovery_mode = evidence.get("recovery_mode") is True
+
+# Never restore a baseline that production_deploy explicitly classified as
+# unavailable. A failed recovery deployment remains failed, but the known-bad
+# old image is not resurrected merely because the post-deploy window failed.
+if recovery_mode or not baseline_ready:
+    path = _write_evidence(
+        {
+            "ok": False,
+            "operation": "production_post_deploy_recovery_failed",
+            "target_sha": target_sha,
+            "rollback_tag": rollback_tag,
+            "domain": domain,
+            "failure_class": reason,
+            "baseline_ready": baseline_ready,
+            "recovery_mode": recovery_mode,
+            "rollback_skipped": True,
+            "app_container": APP_CONTAINER,
+            "completed_at": _completed_at(),
+        }
+    )
+    print(f"CLIENTPLATFORM_PRODUCTION_POST_DEPLOY_ROLLBACK_SKIPPED:{path}")
+    raise SystemExit(0)
+
+if not rollback_tag:
+    print(
+        f"CLIENTPLATFORM_UPDATE_FAILED:{reason}:rollback_tag_missing",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
 _rollback(
     compose=_compose(),
     rollback_tag=rollback_tag,
@@ -112,6 +167,8 @@ path = _write_evidence(
         "rollback_tag": rollback_tag,
         "domain": domain,
         "failure_class": reason,
+        "baseline_ready": baseline_ready,
+        "recovery_mode": recovery_mode,
         "rollback_full_readiness": _ready(),
         "app_container": APP_CONTAINER,
         "completed_at": _completed_at(),
@@ -129,26 +186,30 @@ if [ -z "$container_id" ] || [ -z "$restart_count" ]; then
     exit 1
 fi
 
-deadline=$((STABILITY_STARTED_EPOCH + STABILITY_SECONDS))
-while [ "$(date +%s)" -lt "$deadline" ]; do
+post_deploy_failure() {
     current_id=$(docker inspect --format '{{.Id}}' "$APP_CONTAINER" 2>/dev/null || true)
     current_status=$(docker inspect --format '{{.State.Status}}' "$APP_CONTAINER" 2>/dev/null || true)
     current_restarts=$(docker inspect --format '{{.RestartCount}}' "$APP_CONTAINER" 2>/dev/null || true)
 
-    failure=
     if [ "$current_id" != "$container_id" ]; then
-        failure=post_deploy_container_replaced
+        printf '%s\n' post_deploy_container_replaced
     elif [ "$current_status" != "running" ]; then
-        failure=post_deploy_container_not_running
+        printf '%s\n' post_deploy_container_not_running
     elif [ "$current_restarts" != "$restart_count" ]; then
-        failure=post_deploy_container_restarted
+        printf '%s\n' post_deploy_container_restarted
     elif post_deploy_crashed; then
-        failure=post_deploy_application_crashed
+        printf '%s\n' post_deploy_application_crashed
     elif ! post_deploy_ready; then
-        failure=post_deploy_readiness_lost
+        printf '%s\n' post_deploy_readiness_lost
+    else
+        return 1
     fi
+    return 0
+}
 
-    if [ -n "$failure" ]; then
+deadline=$((STABILITY_STARTED_EPOCH + STABILITY_SECONDS))
+while [ "$(date +%s)" -lt "$deadline" ]; do
+    if failure=$(post_deploy_failure); then
         rollback_after_unstable_runtime "$failure" || true
         echo "CLIENTPLATFORM_UPDATE_FAILED:$failure" >&2
         exit 1
@@ -156,9 +217,12 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
     sleep 2
 done
 
-if post_deploy_crashed || ! post_deploy_ready; then
-    rollback_after_unstable_runtime post_deploy_final_probe_failed || true
-    echo "CLIENTPLATFORM_UPDATE_FAILED:post_deploy_final_probe_failed" >&2
+# Re-run the complete identity/status/restart/crash/readiness invariant at the
+# deadline. A container that restarted after the loop's last sample must not be
+# accepted merely because Docker brought /readyz back before this final probe.
+if failure=$(post_deploy_failure); then
+    rollback_after_unstable_runtime "$failure" || true
+    echo "CLIENTPLATFORM_UPDATE_FAILED:$failure" >&2
     exit 1
 fi
 
