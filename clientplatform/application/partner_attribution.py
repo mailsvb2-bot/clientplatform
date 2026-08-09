@@ -39,13 +39,21 @@ def record_partner_referral_open(*, referral_token: str) -> bool:
         )
 
 
-def record_partner_referral_result(*, referral_token: str) -> bool:
-    """Record only a confirmed downstream result, never a click or a reply."""
+def record_partner_referral_result(
+    *,
+    referral_token: str,
+    result_key: str,
+) -> bool:
+    """Record one confirmed downstream result under a stable non-personal key."""
 
+    key = str(result_key or "").strip()
+    if not key or len(key) > 160:
+        raise ValueError("partner result key must be a bounded non-empty value")
     with get_db() as conn:
         return PartnerRepository(conn).record_referral_event(
             referral_token=referral_token,
             event_type="result",
+            event_key=key,
         )
 
 
