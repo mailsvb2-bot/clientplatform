@@ -28,9 +28,13 @@ class FakeMessage:
     def __init__(self, user_id: int = 101) -> None:
         self.from_user = FakeUser(user_id)
         self.answers: list[tuple[str, dict[str, Any]]] = []
+        self.edits: list[tuple[str, dict[str, Any]]] = []
 
     async def answer(self, text: str, **kwargs: Any) -> None:
         self.answers.append((text, kwargs))
+
+    async def edit_text(self, text: str, **kwargs: Any) -> None:
+        self.edits.append((text, kwargs))
 
 
 class FakeCallback:
@@ -129,6 +133,7 @@ def test_snapshot_copy_is_evidence_only_and_no_romi_guess() -> None:
 def test_empty_states_do_not_invent_provider_metrics() -> None:
     not_connected = yandex._format_snapshot(_snapshot(connected_accounts=0, tracked_ads=0))
     assert "Рекламный кабинет ещё не подключён" in not_connected
+    assert "Подключить Яндекс Директ" in not_connected
     assert "OAuth-токен будет храниться зашифрованно" in not_connected
 
     no_tracked_ads = yandex._format_snapshot(_snapshot(connected_accounts=1, tracked_ads=0))
@@ -137,6 +142,24 @@ def test_empty_states_do_not_invent_provider_metrics() -> None:
 
     assert yandex._money(None) == "—"
     assert yandex._metric("CAC", None) == "CAC: —"
+
+
+def test_not_connected_keyboard_has_direct_connect_and_no_period_noise() -> None:
+    business_id = str(uuid4())
+    token = control._uuid_token(business_id)
+    markup = yandex._keyboard(
+        business_id,
+        30,
+        connected_accounts=0,
+    )
+    buttons = [button for row in markup.inline_keyboard for button in row]
+    assert [button.text for button in buttons] == [
+        "➕ Подключить Яндекс Директ",
+        "📣 Рекламные кабинеты",
+        "← Получать клиентов",
+    ]
+    assert buttons[0].callback_data == f"cpa:connect:{token}"
+    assert all(button.text not in {"7 дней", "30 дней", "✅ 7 дней", "✅ 30 дней"} for button in buttons)
 
 
 @pytest.mark.asyncio
@@ -151,10 +174,34 @@ async def test_owner_can_open_30_day_snapshot(monkeypatch: pytest.MonkeyPatch) -
 
     assert state.clear_count == 1
     assert callback.answers[-1] == ((), {})
-    text, kwargs = callback.message.answers[-1]
+    assert callback.message.answers == []
+    text, kwargs = callback.message.edits[-1]
     assert "📊 Яндекс Директ" in text
     labels = [button.text for row in kwargs["reply_markup"].inline_keyboard for button in row]
     assert labels == ["7 дней", "✅ 30 дней", "📣 Рекламные кабинеты", "← Получать клиентов"]
+
+
+@pytest.mark.asyncio
+async def test_not_connected_snapshot_replaces_owner_panel_with_connect_cta(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    business_id = str(uuid4())
+    token = control._uuid_token(business_id)
+    monkeypatch.setattr(
+        yandex,
+        "get_yandex_growth_snapshot",
+        lambda **_kwargs: _snapshot(connected_accounts=0, tracked_ads=0),
+    )
+    callback = FakeCallback(f"cpy:a:{token}:30")
+
+    await yandex.open_yandex_analytics(callback, FakeState())
+
+    assert callback.message.answers == []
+    text, kwargs = callback.message.edits[-1]
+    assert "Рекламный кабинет ещё не подключён" in text
+    labels = [button.text for row in kwargs["reply_markup"].inline_keyboard for button in row]
+    assert labels[0] == "➕ Подключить Яндекс Директ"
+    assert "✅ 30 дней" not in labels
 
 
 @pytest.mark.asyncio
@@ -173,6 +220,7 @@ async def test_pending_report_is_explicit_and_sends_no_fake_snapshot(
     await yandex.open_yandex_analytics(callback, FakeState())
 
     assert callback.message.answers == []
+    assert callback.message.edits == []
     args, kwargs = callback.answers[-1]
     assert "Яндекс готовит отчёт" in args[0]
     assert kwargs["show_alert"] is True
