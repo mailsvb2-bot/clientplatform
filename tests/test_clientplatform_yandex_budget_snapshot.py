@@ -145,6 +145,7 @@ class YandexBudgetReaderTests(unittest.TestCase):
             access_token="private-token",
             external_campaign_id="6001",
             captured_at=_NOW,
+            client_login="vasya",
         )
         daily = provider.daily_spend_readout(
             access_token="private-token",
@@ -184,6 +185,7 @@ class YandexBudgetReaderTests(unittest.TestCase):
             campaign_body["params"]["TextCampaignFieldNames"],
         )
         self.assertTrue(str(campaign_call["url"]).endswith("/campaigns"))
+        self.assertEqual(campaign_call["headers"]["Client-Login"], "vasya")
 
         report_body = json.loads(report_call["body"])
         report_params = report_body["params"]
@@ -310,6 +312,21 @@ class YandexBudgetReconciliationTests(unittest.TestCase):
                 daily_spend=_spend(report_date="2026-08-04"),
                 expected_report_date="2026-08-05",
                 now=_NOW,
+            )
+
+    def test_reconciliation_rejects_non_current_provider_day(self) -> None:
+        with self.assertRaisesRegex(
+            YandexDirectError,
+            "budget_reconciliation_report_not_today",
+        ):
+            reconcile_yandex_budget_snapshot(
+                connection_id=str(uuid4()),
+                external_account_id="100500",
+                campaign=_readout(),
+                daily_spend=_spend(report_date="2026-08-06", spend_micros=0),
+                expected_report_date="2026-08-06",
+                now=_NOW,
+                provider_timezone="Europe/Moscow",
             )
 
     def test_stale_and_future_provider_reads_fail_closed(self) -> None:
