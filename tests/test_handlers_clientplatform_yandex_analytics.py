@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
+from aiogram.methods import AnswerCallbackQuery
 
 from clientplatform.application.yandex_growth_analytics import (
     YandexGrowthCampaignSnapshot,
@@ -159,7 +160,10 @@ def test_not_connected_keyboard_has_direct_connect_and_no_period_noise() -> None
         "← Получать клиентов",
     ]
     assert buttons[0].callback_data == f"cpa:connect:{token}"
-    assert all(button.text not in {"7 дней", "30 дней", "✅ 7 дней", "✅ 30 дней"} for button in buttons)
+    assert all(
+        button.text not in {"7 дней", "30 дней", "✅ 7 дней", "✅ 30 дней"}
+        for button in buttons
+    )
 
 
 @pytest.mark.asyncio
@@ -173,12 +177,68 @@ async def test_owner_can_open_30_day_snapshot(monkeypatch: pytest.MonkeyPatch) -
     await yandex.open_yandex_analytics(callback, state)
 
     assert state.clear_count == 1
-    assert callback.answers[-1] == ((), {})
+    assert callback.answers == []
     assert callback.message.answers == []
     text, kwargs = callback.message.edits[-1]
     assert "📊 Яндекс Директ" in text
-    labels = [button.text for row in kwargs["reply_markup"].inline_keyboard for button in row]
-    assert labels == ["7 дней", "✅ 30 дней", "📣 Рекламные кабинеты", "← Получать клиентов"]
+    labels = [
+        button.text
+        for row in kwargs["reply_markup"].inline_keyboard
+        for button in row
+    ]
+    assert labels == [
+        "7 дней",
+        "✅ 30 дней",
+        "📣 Рекламные кабинеты",
+        "← Получать клиентов",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_period_navigation_clears_active_wizard_before_provider_io(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    business_id = str(uuid4())
+    token = control._uuid_token(business_id)
+    state = FakeState()
+
+    def snapshot_after_escape(**_kwargs: Any) -> YandexGrowthSnapshot:
+        assert state.clear_count == 1
+        return _snapshot()
+
+    monkeypatch.setattr(yandex, "get_yandex_growth_snapshot", snapshot_after_escape)
+    callback = FakeCallback(f"cpy:a:{token}:7")
+
+    await yandex.open_yandex_analytics(callback, state)
+
+    assert state.clear_count == 1
+    assert callback.answers == []
+    assert callback.message.edits
+
+
+@pytest.mark.asyncio
+async def test_expired_callback_feedback_falls_back_to_normal_message() -> None:
+    callback = FakeCallback("cpy:a:ignored:7")
+    callback.answer = AsyncMock(
+        side_effect=yandex.TelegramBadRequest(
+            method=AnswerCallbackQuery(callback_query_id="expired"),
+            message="Bad Request: query is too old",
+        )
+    )
+
+    await yandex._answer_feedback(
+        callback,
+        "Яндекс готовит отчёт. Попробуйте ещё раз.",
+        show_alert=True,
+    )
+
+    callback.answer.assert_awaited_once_with(
+        "Яндекс готовит отчёт. Попробуйте ещё раз.",
+        show_alert=True,
+    )
+    assert callback.message.answers == [
+        ("Яндекс готовит отчёт. Попробуйте ещё раз.", {})
+    ]
 
 
 @pytest.mark.asyncio
@@ -199,7 +259,11 @@ async def test_not_connected_snapshot_replaces_owner_panel_with_connect_cta(
     assert callback.message.answers == []
     text, kwargs = callback.message.edits[-1]
     assert "Рекламный кабинет ещё не подключён" in text
-    labels = [button.text for row in kwargs["reply_markup"].inline_keyboard for button in row]
+    labels = [
+        button.text
+        for row in kwargs["reply_markup"].inline_keyboard
+        for button in row
+    ]
     assert labels[0] == "➕ Подключить Яндекс Директ"
     assert "✅ 30 дней" not in labels
 
@@ -216,9 +280,11 @@ async def test_pending_report_is_explicit_and_sends_no_fake_snapshot(
 
     monkeypatch.setattr(yandex, "get_yandex_growth_snapshot", pending)
     callback = FakeCallback(f"cpy:a:{token}:7")
+    state = FakeState()
 
-    await yandex.open_yandex_analytics(callback, FakeState())
+    await yandex.open_yandex_analytics(callback, state)
 
+    assert state.clear_count == 1
     assert callback.message.answers == []
     assert callback.message.edits == []
     args, kwargs = callback.answers[-1]
@@ -238,11 +304,15 @@ async def test_provider_and_input_errors_are_sanitized(
 
     monkeypatch.setattr(yandex, "get_yandex_growth_snapshot", failed)
     callback = FakeCallback(f"cpy:a:{token}:30")
-    await yandex.open_yandex_analytics(callback, FakeState())
+    failed_state = FakeState()
+    await yandex.open_yandex_analytics(callback, failed_state)
+    assert failed_state.clear_count == 1
     assert "Проверьте подключение кабинета" in callback.answers[-1][0][0]
 
     bad = FakeCallback(f"cpy:a:{token}:14")
-    await yandex.open_yandex_analytics(bad, FakeState())
+    bad_state = FakeState()
+    await yandex.open_yandex_analytics(bad, bad_state)
+    assert bad_state.clear_count == 0
     assert bad.answers[-1][0] == ("Статистика Яндекса сейчас недоступна.",)
     assert bad.answers[-1][1]["show_alert"] is True
 
