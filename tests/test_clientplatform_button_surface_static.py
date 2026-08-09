@@ -64,24 +64,24 @@ def _callback_prefix(node: ast.AST) -> str | None:
 
 
 def _keyboard_callbacks(tree: ast.AST) -> set[str]:
+    """Collect callbacks even when rows are assembled before ``_keyboard``."""
+
     emitted: set[str] = set()
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        if _call_name(node) == "InlineKeyboardButton":
-            for keyword in node.keywords:
-                if keyword.arg == "callback_data":
-                    prefix = _callback_prefix(keyword.value)
-                    if prefix:
-                        emitted.add(prefix)
-        if not _call_name(node).endswith("keyboard"):
-            continue
-        for descendant in ast.walk(node):
-            if not isinstance(descendant, ast.Tuple) or len(descendant.elts) != 2:
-                continue
-            prefix = _callback_prefix(descendant.elts[1])
+        if isinstance(node, ast.Tuple) and len(node.elts) == 2:
+            prefix = _callback_prefix(node.elts[1])
             if prefix:
                 emitted.add(prefix)
+            continue
+        if not isinstance(node, ast.Call):
+            continue
+        if _call_name(node) != "InlineKeyboardButton":
+            continue
+        for keyword in node.keywords:
+            if keyword.arg == "callback_data":
+                prefix = _callback_prefix(keyword.value)
+                if prefix:
+                    emitted.add(prefix)
     return emitted
 
 
