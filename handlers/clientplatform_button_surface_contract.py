@@ -3,13 +3,13 @@ from __future__ import annotations
 """Compose callback namespaces owned by optional ClientPlatform UI modules.
 
 The core interaction-safety middleware is installed before lesson/media and
-managed-bot lifecycle extensions are composed.  Those extensions still need to
+managed-bot lifecycle extensions are composed. Those extensions still need to
 participate in the same FSM/navigation contract instead of bypassing it merely
 because their callback prefixes were added later.
 """
 
 from types import ModuleType
-from typing import Callable
+from typing import Callable, cast
 
 
 _INSTALLED = False
@@ -50,7 +50,10 @@ def install_button_surface_contract(safety: ModuleType) -> None:
         "cpbl:o:",
     )
 
-    original: Callable[[str, str], bool] = safety._state_local_callback_allowed
+    original = cast(
+        Callable[[str, str], bool],
+        getattr(safety, "_state_local_callback_allowed"),
+    )
 
     def state_local_callback_allowed(current_state: str, callback_data: str) -> bool:
         if current_state.startswith("ClientPlatformProgramBuilderState:review"):
@@ -67,7 +70,7 @@ def install_button_surface_contract(safety: ModuleType) -> None:
                 return True
         return original(current_state, callback_data)
 
-    safety._state_local_callback_allowed = state_local_callback_allowed
+    setattr(safety, "_state_local_callback_allowed", state_local_callback_allowed)
     _INSTALLED = True
 
 
