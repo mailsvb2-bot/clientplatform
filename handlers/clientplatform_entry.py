@@ -337,6 +337,11 @@ if not bool(getattr(control, "_dual_role_entry_composed", False)):
         __package__,
     )
     admin.install_admin_dashboard_button(control)
+    admin_callback_guard = importlib.import_module(
+        ".clientplatform_admin_callback_guard",
+        __package__,
+    )
+    admin_callback_guard.install_admin_callback_namespace_guard(admin, control)
     dashboard_dispatch = importlib.import_module(
         ".clientplatform_dashboard_dispatch",
         __package__,
