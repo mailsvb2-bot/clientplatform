@@ -184,15 +184,29 @@ async def test_publish_receipt_routes_to_attributable_promotion() -> None:
 
 
 @pytest.mark.asyncio
-async def test_workspace_shows_measurable_results_and_open_slots(
+async def test_workspace_shows_measurable_results_and_promotion_scoped_slots(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     business_id = str(uuid4())
     business_token = control._uuid_token(business_id)
     slot = _slot(business_id=business_id)
     campaign = _campaign(slot)
-    monkeypatch.setattr(control, "_actor", AsyncMock(return_value=object()))
-    monkeypatch.setattr(control, "list_booking_slots", lambda **_kwargs: [slot])
+    actor = object()
+    monkeypatch.setattr(control, "_actor", AsyncMock(return_value=actor))
+    slot_calls: list[object] = []
+
+    def promotion_slots(**kwargs: Any) -> list[BookingSlotView]:
+        slot_calls.append(kwargs["actor"])
+        return [slot]
+
+    monkeypatch.setattr(promotion, "list_promotable_slots", promotion_slots)
+    monkeypatch.setattr(
+        control,
+        "list_booking_slots",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("promotion workspace must not require customer-record slots")
+        ),
+    )
     monkeypatch.setattr(
         promotion,
         "promotion_stats",
@@ -207,6 +221,7 @@ async def test_workspace_shows_measurable_results_and_open_slots(
 
     await promotion.open_promotion_workspace(callback)
 
+    assert slot_calls == [actor]
     text, kwargs = callback.message.answers[-1]
     assert "🚀 Получить клиентов" in text
     assert "Уникальных людей: 10" in text
@@ -219,6 +234,33 @@ async def test_workspace_shows_measurable_results_and_open_slots(
     ]
     assert any((button.callback_data or "").startswith("cpp:slot:") for button in buttons)
     assert all(len(button.callback_data or "") <= 64 for button in buttons)
+
+
+@pytest.mark.asyncio
+async def test_choose_channel_revalidates_promotable_slot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    business_id = str(uuid4())
+    slot = _slot(business_id=business_id)
+    business_token = control._uuid_token(business_id)
+    slot_token = control._uuid_token(slot.slot.id)
+    actor = object()
+    monkeypatch.setattr(control, "_actor", AsyncMock(return_value=actor))
+    monkeypatch.setattr(promotion, "list_promotable_slots", lambda **_kwargs: [slot])
+    callback = FakeCallback(f"cpp:slot:{business_token}:{slot_token}")
+
+    await promotion.choose_promotion_channel(callback)
+
+    assert callback.answers == [((), {})]
+    text, kwargs = callback.message.answers[-1]
+    assert "Куда Вы хотите вывести это предложение?" in text
+    labels = [
+        button.text
+        for row in kwargs["reply_markup"].inline_keyboard
+        for button in row
+    ]
+    assert "✈️ Telegram" in labels
+    assert "⬅️ Назад" in labels
 
 
 @pytest.mark.asyncio
