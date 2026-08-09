@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 TenantDisposition = Literal["erase", "retain", "anonymize"]
-CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-08-08.v18-sales-commercial"
+CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-08-10.v19-partner-growth-foundation"
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +44,11 @@ _POLICIES = (
     _required("booking_slots", "anonymize", "business availability and customer appointment fulfilment"),
     _required("promotion_campaigns", "retain", "business-owned advertising copy, source channel and campaign lifecycle without customer identity"),
     _required("promotion_events", "anonymize", "customer-linked campaign attribution retained only after customer identity is anonymized"),
+    _required("partner_campaigns", "retain", "business-owned partner acquisition goal and preparation policy"),
+    _required("partner_candidates", "erase", "partner profiles can contain public business contact and relationship evidence"),
+    _required("partner_content_packs", "erase", "candidate-specific prepared outreach and collaboration copy"),
+    _required("partner_placements", "erase", "candidate-linked partner placement and publication evidence"),
+    _required("partner_referral_events", "erase", "candidate-linked referral capability and attribution evidence"),
     _required("ad_connections", "erase", "personal advertising account identity and encrypted OAuth material"),
     _required("ad_oauth_sessions", "erase", "short-lived one-time OAuth state and encrypted PKCE verifier"),
     _required("ad_publication_jobs", "retain", "business-owned provider publication intent and bounded delivery evidence"),
