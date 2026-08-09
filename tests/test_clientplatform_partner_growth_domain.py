@@ -8,6 +8,7 @@ from clientplatform.application.partner_copy import (
     PartnerCopyContext,
     validate_partner_content,
 )
+from clientplatform.application.partner_growth import PartnerGrowthService
 from clientplatform.application.partner_scoring import score_partner
 from clientplatform.domain.partners import (
     ContactBasis,
@@ -18,6 +19,7 @@ from clientplatform.domain.partners import (
     PartnerCandidate,
     PartnerChannel,
 )
+from clientplatform.domain.tenancy import PlatformRole, TenantContext
 from clientplatform.integrations.partner_discovery import (
     CompositePartnerDiscovery,
     PartnerDiscoveryProviderError,
@@ -126,6 +128,29 @@ class PartnerGrowthDomainTests(unittest.TestCase):
         with self.assertRaisesRegex(PartnerDiscoveryUnavailable, "broken"):
             discovery.discover(
                 PartnerDiscoveryQuery(("psychology",), limit=5)
+            )
+
+    def test_unconfigured_discovery_fails_before_campaign_persistence(self) -> None:
+        service = PartnerGrowthService(
+            discovery=CompositePartnerDiscovery(()),
+        )
+        actor = TenantContext(
+            business_id=str(uuid4()),
+            user_id=101,
+            membership_id=str(uuid4()),
+            role=PlatformRole.OWNER,
+        )
+        with self.assertRaisesRegex(
+            PartnerDiscoveryUnavailable,
+            "not configured",
+        ):
+            service.start(
+                actor=actor,
+                name="Should not persist",
+                goal=PartnerCampaignGoal(
+                    target_count=10,
+                    audience_terms=("psychology",),
+                ),
             )
 
 
