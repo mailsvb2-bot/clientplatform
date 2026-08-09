@@ -2,10 +2,10 @@ from __future__ import annotations
 
 """Compose callback namespaces owned by optional ClientPlatform UI modules.
 
-The core interaction-safety middleware is installed before lesson/media and
-managed-bot lifecycle extensions are composed. Those extensions still need to
-participate in the same FSM/navigation contract instead of bypassing it merely
-because their callback prefixes were added later.
+The core interaction-safety middleware is installed before lesson/media,
+managed-bot lifecycle and admin-operation extensions are composed. Those
+extensions still need to participate in the same FSM/navigation contract
+instead of bypassing it merely because their callback shapes are added later.
 """
 
 from types import ModuleType
@@ -15,6 +15,16 @@ from typing import Callable, cast
 def _extend_tuple(module: ModuleType, name: str, *values: str) -> None:
     current = tuple(getattr(module, name))
     setattr(module, name, tuple(dict.fromkeys((*current, *values))))
+
+
+def _is_admin_ops_return(callback_data: str) -> bool:
+    parts = callback_data.split(":", 3)
+    return (
+        len(parts) >= 3
+        and parts[0] == "cpao"
+        and bool(parts[1])
+        and parts[2].startswith("return-")
+    )
 
 
 def install_button_surface_contract(safety: ModuleType) -> None:
@@ -63,6 +73,9 @@ def install_button_surface_contract(safety: ModuleType) -> None:
                 return True
         if current_state.startswith("ClientPlatformCloudMediaState:choose_source"):
             if callback_data.startswith("cpcm:s:"):
+                return True
+        if current_state.startswith("ClientPlatformAdminOpsState:"):
+            if _is_admin_ops_return(callback_data):
                 return True
         return original(current_state, callback_data)
 
