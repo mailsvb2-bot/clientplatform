@@ -176,6 +176,40 @@ def _status_icon(value: bool) -> str:
     return "✅" if value else "⚠️"
 
 
+def _can_write_finance(ctx: Any) -> bool:
+    """Use the application layer's canonical finance-write role set."""
+
+    return getattr(ctx.actor, "role", None) in admin_ops._FINANCE_WRITE_ROLES
+
+
+def _finance_write_buttons(
+    admin: ModuleType,
+    ctx: Any,
+    *,
+    action: str,
+    offerings: list[Any],
+) -> list[tuple[str, str]]:
+    if not _can_write_finance(ctx):
+        return []
+    if action in {"money", "payments"}:
+        return [
+            ("➕ Зафиксировать оплату вручную", _ops_callback(ctx, "payment-new"))
+        ]
+    if action == "prices":
+        return [
+            (
+                f"💵 Цена · {item.title[:22]}",
+                _ops_callback(
+                    ctx,
+                    "price-set",
+                    admin.control._uuid_token(item.id),
+                ),
+            )
+            for item in offerings[:10]
+        ]
+    return []
+
+
 async def _all_offerings(actor: Any, capabilities: list[Any]) -> list[Any]:
     active_ids = [
         item.id
@@ -384,7 +418,7 @@ async def _enhanced_marketing(
             f"Доля платящих: "
             f"{_percent(len(paid_customer_ids), insights.active_customers)}"
         )
-        extra = [("➕ Зафиксировать оплату вручную", _ops_callback(ctx, "payment-new"))]
+        extra = _finance_write_buttons(admin, ctx, action=action, offerings=offerings)
     elif action == "payments":
         recent = "\n".join(
             f"• {_money(item.amount_minor, item.currency)} · "
@@ -397,7 +431,7 @@ async def _enhanced_marketing(
             f"Сумма: {_payment_totals_text(payments)}\n\n"
             f"{recent}"
         )
-        extra = [("➕ Зафиксировать оплату вручную", _ops_callback(ctx, "payment-new"))]
+        extra = _finance_write_buttons(admin, ctx, action=action, offerings=offerings)
     elif action == "segments":
         without_program = max(0, insights.active_customers - len(enrolled_ids))
         text = (
@@ -456,17 +490,7 @@ async def _enhanced_marketing(
             f"Средний платёж: {_payment_average_text(payments)}\n\n"
             f"{lines}"
         )
-        extra = [
-            (
-                f"💵 Цена · {item.title[:22]}",
-                _ops_callback(
-                    ctx,
-                    "price-set",
-                    admin.control._uuid_token(item.id),
-                ),
-            )
-            for item in offerings[:10]
-        ]
+        extra = _finance_write_buttons(admin, ctx, action=action, offerings=offerings)
     else:
         raise ValueError("unknown enhanced marketing section")
 
@@ -729,6 +753,12 @@ async def admin_ops_gate(callback: CallbackQuery, state: FSMContext) -> None:
         business_id=business_id,
     )
 
+    if action in {"payment-new", "payment-customer", "price-set"} and not _can_write_finance(ctx):
+        await callback.answer(
+            "Для вашей роли финансовые данные доступны только для просмотра.",
+            show_alert=True,
+        )
+        return
     if action == "autopilot-toggle":
         if ctx.role not in admin._AUTOMATION_ROLES:
             raise TenantPermissionDenied(
@@ -940,14 +970,21 @@ async def receive_payment_value(message: Message, state: FSMContext) -> None:
         return
     data = await state.get_data()
     ctx = await _context_from_state(message, state)
-    payment = await asyncio.to_thread(
-        admin_ops.record_payment,
-        actor=ctx.actor,
-        amount_minor=amount_minor,
-        currency=currency,
-        customer_id=data.get("cpao_payment_customer_id"),
-        note=note,
-    )
+    try:
+        payment = await asyncio.to_thread(
+            admin_ops.record_payment,
+            actor=ctx.actor,
+            amount_minor=amount_minor,
+            currency=currency,
+            customer_id=data.get("cpao_payment_customer_id"),
+            note=note,
+        )
+    except TenantPermissionDenied:
+        await state.clear()
+        await message.answer(
+            "Для вашей роли финансовые данные доступны только для просмотра."
+        )
+        return
     await state.clear()
     await message.answer(
         f"✅ Оплата сохранена: {_money(payment.amount_minor, payment.currency)}."
@@ -969,13 +1006,20 @@ async def receive_price_value(message: Message, state: FSMContext) -> None:
         return
     data = await state.get_data()
     ctx = await _context_from_state(message, state)
-    price = await asyncio.to_thread(
-        admin_ops.set_offering_price,
-        actor=ctx.actor,
-        offering_id=str(data["cpao_offering_id"]),
-        amount_minor=amount_minor,
-        currency=currency,
-    )
+    try:
+        price = await asyncio.to_thread(
+            admin_ops.set_offering_price,
+            actor=ctx.actor,
+            offering_id=str(data["cpao_offering_id"]),
+            amount_minor=amount_minor,
+            currency=currency,
+        )
+    except TenantPermissionDenied:
+        await state.clear()
+        await message.answer(
+            "Для вашей роли финансовые данные доступны только для просмотра."
+        )
+        return
     await state.clear()
     await message.answer(
         f"✅ Цена «{price.offering_title}»: "
