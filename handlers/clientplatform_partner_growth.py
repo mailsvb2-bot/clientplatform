@@ -25,9 +25,7 @@ from clientplatform.domain.partners import (
     PartnerInvariantViolation,
 )
 from clientplatform.integrations.partner_discovery import PartnerDiscoveryUnavailable
-from clientplatform.integrations.partner_discovery_runtime import (
-    build_live_partner_discovery,
-)
+from clientplatform.integrations.partner_discovery_runtime import build_live_partner_discovery
 
 from . import clientplatform_control as control
 from . import clientplatform_simple_experience as simple
@@ -48,13 +46,14 @@ _STATUS_LABELS = {
     PartnerCandidateStatus.DO_NOT_CONTACT: "не писать",
     PartnerCandidateStatus.INVALID: "недоступен",
 }
+_TERMINAL_CONTACT_STATUSES = {
+    PartnerCandidateStatus.DECLINED,
+    PartnerCandidateStatus.DO_NOT_CONTACT,
+    PartnerCandidateStatus.INVALID,
+}
 
 
-def _business_token(value: str) -> str:
-    return control._uuid_token(value)
-
-
-def _candidate_token(value: str) -> str:
+def _token(value: str) -> str:
     return control._uuid_token(value)
 
 
@@ -75,34 +74,29 @@ async def _render_home(callback: CallbackQuery, business_token: str) -> None:
     lines = [
         "🤝 Партнёрства",
         "",
-        "ClientPlatform ищет подходящие публичные сообщества, ранжирует их и готовит персональный материал.",
-        "Автоматическая отправка возможна только после подтверждённого согласия или существующего контакта.",
+        "ClientPlatform находит публичные сообщества, ранжирует их и готовит персональный материал.",
+        "Автоотправка возможна только после подтверждённого согласия или существующего контакта.",
         "",
         f"Кампаний: {stats.campaigns}",
         f"Кандидатов: {stats.candidates}",
-        f"Ответили: {stats.replied}",
+        f"Ответили: {stats.replies}",
         f"Сотрудничают: {stats.accepted}",
     ]
     if not discovery.configured:
         lines.extend(
             [
                 "",
-                "⚠️ Live-поиск пока не настроен для этого бизнеса: нужен активный VK connection.",
-                "Ложный результат «ничего не найдено» ClientPlatform показывать не будет.",
+                "⚠️ Live-поиск не настроен: у бизнеса нет активного VK connection.",
+                "Фиктивный результат «0 найдено» в этом состоянии не создаётся.",
             ]
         )
     rows: list[list[tuple[str, str]]] = []
     if discovery.configured:
         rows.append([("🔎 Найти партнёров", f"cpg:start:{business_token}")])
-    for campaign in campaigns[:8]:
-        rows.append(
-            [
-                (
-                    f"📂 {campaign.name[:28]}",
-                    f"cpg:p:{business_token}:{control._uuid_token(campaign.id)}",
-                )
-            ]
-        )
+    rows.extend(
+        [[(f"📂 {item.name[:28]}", f"cpg:p:{business_token}:{_token(item.id)}")]]
+        for item in campaigns[:8]
+    )
     rows.extend(
         [
             [("🔄 Обновить", f"cpg:home:{business_token}")],
@@ -113,6 +107,108 @@ async def _render_home(callback: CallbackQuery, business_token: str) -> None:
     await callback.answer()
     await control._callback_message(callback).answer(
         "\n".join(lines),
+        reply_markup=control._keyboard(rows),
+    )
+
+
+async def _render_campaign(
+    callback: CallbackQuery,
+    *,
+    business_token: str,
+    campaign_token: str,
+    answer_callback: bool = True,
+) -> None:
+    actor = await _actor(callback, business_token)
+    campaign_id = control._token_uuid(campaign_token)
+    candidates, stats = await asyncio.gather(
+        asyncio.to_thread(
+            list_partner_candidates,
+            actor=actor,
+            campaign_id=campaign_id,
+            limit=20,
+        ),
+        asyncio.to_thread(partner_stats, actor=actor, campaign_id=campaign_id),
+    )
+    rows = [
+        [
+            (
+                f"{_STATUS_LABELS[item.status]} · {item.name[:24]}",
+                f"cpg:c:{business_token}:{_token(item.id)}",
+            )
+        ]
+        for item in candidates[:12]
+    ]
+    rows.extend(
+        [
+            [("🔎 Найти ещё", f"cpg:r:{business_token}:{campaign_token}")],
+            [("⬅️ Все партнёрства", f"cpg:home:{business_token}")],
+        ]
+    )
+    if answer_callback:
+        await callback.answer()
+    await control._callback_message(callback).answer(
+        "📂 Партнёрская кампания\n\n"
+        f"Кандидатов: {stats.candidates}\n"
+        f"Написали: {stats.contacted}\n"
+        f"Ответили: {stats.replies}\n"
+        f"Сотрудничают: {stats.accepted}\n\n"
+        "Откройте кандидата — там готовый текст и безопасные действия.",
+        reply_markup=control._keyboard(rows),
+    )
+
+
+async def _render_candidate(
+    callback: CallbackQuery,
+    *,
+    business_token: str,
+    candidate_token: str,
+    answer_callback: bool = True,
+) -> None:
+    actor = await _actor(callback, business_token)
+    view, connections = await asyncio.gather(
+        asyncio.to_thread(
+            get_partner_candidate_view,
+            actor=actor,
+            candidate_id=control._token_uuid(candidate_token),
+        ),
+        asyncio.to_thread(list_partner_send_connections, actor=actor),
+    )
+    candidate = view.candidate
+    reply = (
+        f"\n\n💬 Последний ответ:\n{view.latest_reply[:900]}"
+        if view.latest_reply
+        else ""
+    )
+    text = (
+        f"🤝 {candidate.name}\n"
+        f"Оценка соответствия: {view.fit_total:.1f}/100\n"
+        f"Статус: {_STATUS_LABELS[candidate.status]}\n"
+        f"Источник: {candidate.source_url or '—'}\n\n"
+        f"✉️ Готовое предложение:\n{view.content.outreach_message[:2200]}{reply}"
+    )
+    rows: list[list[tuple[str, str]]] = []
+    if candidate.first_contact_permitted and connections:
+        rows.append(
+            [("📨 Поставить в очередь Telegram", f"cpg:s:{business_token}:{candidate_token}")]
+        )
+    elif candidate.status not in _TERMINAL_CONTACT_STATUSES:
+        rows.extend(
+            [
+                [("✅ Есть согласие на Telegram", f"cpg:a:{business_token}:{candidate_token}:o")],
+                [("🤝 Уже есть деловой контакт", f"cpg:a:{business_token}:{candidate_token}:r")],
+            ]
+        )
+    rows.extend(
+        [
+            [("✅ Сотрудничаем", f"cpg:ok:{business_token}:{candidate_token}")],
+            [("🚫 Больше не писать", f"cpg:no:{business_token}:{candidate_token}")],
+            [("⬅️ К кампании", f"cpg:p:{business_token}:{_token(candidate.campaign_id)}")],
+        ]
+    )
+    if answer_callback:
+        await callback.answer()
+    await control._callback_message(callback).answer(
+        text[:4000],
         reply_markup=control._keyboard(rows),
     )
 
@@ -138,13 +234,11 @@ async def start_partner_growth(callback: CallbackQuery) -> None:
             ),
         )
         return
-    campaign_token = control._uuid_token(run.campaign.id)
     await control._callback_message(callback).answer(
         f"✅ Поиск завершён\n\nНайдено публичных источников: {run.discovered}\n"
-        f"Прошли порог качества: {run.prepared}\n\n"
-        "Контакты не отправлялись автоматически.",
+        f"Прошли порог качества: {run.prepared}\n\nКонтакты не отправлялись автоматически.",
         reply_markup=control._keyboard(
-            [[("Открыть кандидатов", f"cpg:p:{business_token}:{campaign_token}")]]
+            [[("Открыть кандидатов", f"cpg:p:{business_token}:{_token(run.campaign.id)}")]]
         ),
     )
 
@@ -152,41 +246,10 @@ async def start_partner_growth(callback: CallbackQuery) -> None:
 @simple.router.callback_query(F.data.startswith("cpg:p:"))
 async def open_partner_campaign(callback: CallbackQuery) -> None:
     _, _, business_token, campaign_token = str(callback.data).split(":", 3)
-    actor = await _actor(callback, business_token)
-    campaign_id = control._token_uuid(campaign_token)
-    candidates, stats = await asyncio.gather(
-        asyncio.to_thread(
-            list_partner_candidates,
-            actor=actor,
-            campaign_id=campaign_id,
-            limit=20,
-        ),
-        asyncio.to_thread(partner_stats, actor=actor, campaign_id=campaign_id),
-    )
-    rows = [
-        [
-            (
-                f"{_STATUS_LABELS[item.status]} · {item.name[:24]}",
-                f"cpg:c:{business_token}:{_candidate_token(item.id)}",
-            )
-        ]
-        for item in candidates[:12]
-    ]
-    rows.extend(
-        [
-            [("🔎 Найти ещё", f"cpg:r:{business_token}:{campaign_token}")],
-            [("⬅️ Все партнёрства", f"cpg:home:{business_token}")],
-        ]
-    )
-    await callback.answer()
-    await control._callback_message(callback).answer(
-        "📂 Партнёрская кампания\n\n"
-        f"Кандидатов: {stats.candidates}\n"
-        f"Написали: {stats.contacted}\n"
-        f"Ответили: {stats.replied}\n"
-        f"Сотрудничают: {stats.accepted}\n\n"
-        "Откройте кандидата — там готовый персональный текст и безопасные действия.",
-        reply_markup=control._keyboard(rows),
+    await _render_campaign(
+        callback,
+        business_token=business_token,
+        campaign_token=campaign_token,
     )
 
 
@@ -206,71 +269,11 @@ async def rerun_partner_growth(callback: CallbackQuery) -> None:
             "VK discovery сейчас недоступен; прежние кандидаты сохранены, ложный ноль не записан."
         )
         return
-    await open_partner_campaign(callback)
-
-
-async def _render_candidate(
-    callback: CallbackQuery,
-    *,
-    business_token: str,
-    candidate_token: str,
-) -> None:
-    actor = await _actor(callback, business_token)
-    view, connections = await asyncio.gather(
-        asyncio.to_thread(
-            get_partner_candidate_view,
-            actor=actor,
-            candidate_id=control._token_uuid(candidate_token),
-        ),
-        asyncio.to_thread(list_partner_send_connections, actor=actor),
-    )
-    candidate = view.candidate
-    source = candidate.source_url or "—"
-    reply = (
-        f"\n\n💬 Последний ответ:\n{view.latest_reply[:900]}"
-        if view.latest_reply
-        else ""
-    )
-    message = (
-        f"🤝 {candidate.name}\n"
-        f"Оценка соответствия: {view.fit_total:.1f}/100\n"
-        f"Статус: {_STATUS_LABELS[candidate.status]}\n"
-        f"Источник: {source}\n\n"
-        f"✉️ Готовое предложение:\n{view.content.outreach_message[:2200]}"
-        f"{reply}"
-    )
-    rows: list[list[tuple[str, str]]] = []
-    if candidate.first_contact_permitted and connections:
-        rows.append(
-            [("📨 Поставить в очередь Telegram", f"cpg:s:{business_token}:{candidate_token}")]
-        )
-    elif candidate.status not in {
-        PartnerCandidateStatus.DECLINED,
-        PartnerCandidateStatus.DO_NOT_CONTACT,
-        PartnerCandidateStatus.INVALID,
-    }:
-        rows.extend(
-            [
-                [("✅ Есть согласие на Telegram", f"cpg:a:{business_token}:{candidate_token}:o")],
-                [("🤝 Уже есть деловой контакт", f"cpg:a:{business_token}:{candidate_token}:r")],
-            ]
-        )
-    rows.extend(
-        [
-            [("✅ Сотрудничаем", f"cpg:ok:{business_token}:{candidate_token}")],
-            [("🚫 Больше не писать", f"cpg:no:{business_token}:{candidate_token}")],
-            [
-                (
-                    "⬅️ К кампании",
-                    f"cpg:p:{business_token}:{control._uuid_token(candidate.campaign_id)}",
-                )
-            ],
-        ]
-    )
-    await callback.answer()
-    await control._callback_message(callback).answer(
-        message[:4000],
-        reply_markup=control._keyboard(rows),
+    await _render_campaign(
+        callback,
+        business_token=business_token,
+        campaign_token=campaign_token,
+        answer_callback=False,
     )
 
 
@@ -301,8 +304,8 @@ async def begin_partner_contact_authorization(
     await callback.answer()
     await control._callback_message(callback).answer(
         "Введите numeric Telegram chat ID партнёра.\n\n"
-        "Используйте этот шаг только если человек действительно дал согласие на сообщение "
-        "или у Вас уже есть деловой контакт. @username и ссылки здесь намеренно не принимаются."
+        "Используйте этот шаг только если человек действительно дал согласие или у Вас "
+        "уже есть деловой контакт. @username и ссылки намеренно не принимаются."
     )
 
 
@@ -314,7 +317,7 @@ async def save_partner_contact(message: Message, state: FSMContext) -> None:
     basis = str(data.get("partner_contact_basis") or "")
     if not business_token or not candidate_token:
         await state.clear()
-        await message.answer("Контекст партнёра устарел. Откройте раздел «Партнёрства» ещё раз.")
+        await message.answer("Контекст партнёра устарел. Откройте «Партнёрства» ещё раз.")
         return
     actor = await control._actor(
         int(message.from_user.id),
@@ -330,13 +333,13 @@ async def save_partner_contact(message: Message, state: FSMContext) -> None:
         )
     except (ValueError, PartnerInvariantViolation):
         await message.answer(
-            "Не удалось подтвердить контакт. Нужен именно numeric Telegram chat ID, "
-            "а основание должно быть «есть согласие» или «уже есть контакт»."
+            "Не удалось подтвердить контакт. Нужен numeric Telegram chat ID и реальное "
+            "основание: согласие или существующий деловой контакт."
         )
         return
     await state.clear()
     await message.answer(
-        "✅ Контакт подтверждён. Теперь автоматическая отправка разрешена доменным правилом.",
+        "✅ Контакт подтверждён. Автоматическая отправка теперь разрешена доменным правилом.",
         reply_markup=control._keyboard(
             [[("Открыть партнёра", f"cpg:c:{business_token}:{candidate_token}")]]
         ),
