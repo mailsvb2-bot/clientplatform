@@ -8,6 +8,7 @@ from aiogram.types import InlineKeyboardMarkup, Message
 
 from clientplatform.domain.bookings import BookingSlotView
 
+from . import clientplatform_partner_growth as partner_growth  # noqa: F401
 from . import clientplatform_promotion as promotion
 
 
@@ -24,7 +25,10 @@ def _owner_keyboard(control: ModuleType, business_id: str) -> InlineKeyboardMark
                 ("👥 Записи клиентов", f"cpj:bookings:{token}"),
                 ("🔗 Моя страница", f"cpj:page:{token}"),
             ],
-            [("🚀 Получить клиентов", f"cpj:promote:{token}")],
+            [
+                ("🚀 Получить клиентов", f"cpj:promote:{token}"),
+                ("🤝 Партнёрства", f"cpg:home:{token}"),
+            ],
             [
                 ("📣 Рекламные кабинеты", f"cpa:home:{token}"),
                 ("📊 Яндекс", f"cpy:a:{token}:30"),
