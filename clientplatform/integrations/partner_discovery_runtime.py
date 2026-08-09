@@ -79,7 +79,19 @@ class VkConnectionPartnerDiscoveryProvider:
                         "v": self._api_version,
                     },
                 )
-            except (ProviderPermanentHTTPError, ConnectionError, TimeoutError, OSError) as exc:
+            except ProviderPermanentHTTPError as exc:
+                raise PartnerDiscoveryProviderError(
+                    "vk partner discovery transport unavailable"
+                ) from exc
+            except ConnectionError as exc:
+                raise PartnerDiscoveryProviderError(
+                    "vk partner discovery transport unavailable"
+                ) from exc
+            except TimeoutError as exc:
+                raise PartnerDiscoveryProviderError(
+                    "vk partner discovery transport unavailable"
+                ) from exc
+            except OSError as exc:
                 raise PartnerDiscoveryProviderError(
                     "vk partner discovery transport unavailable"
                 ) from exc
