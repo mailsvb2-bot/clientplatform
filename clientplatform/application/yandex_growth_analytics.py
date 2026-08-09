@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from collections import defaultdict
 from dataclasses import dataclass
@@ -39,6 +40,7 @@ _AUTH_ERRORS = frozenset(
     }
 )
 _ALLOWED_PERIOD_DAYS = frozenset({7, 30})
+_REPORT_AD_BATCH_SIZE = 500
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,7 +103,7 @@ class YandexGrowthSnapshot:
     tracked_ads: int
     impressions: int
     clicks: int
-    cost_micros: int
+    cost_micros: int | None
     leads: int
     bookings: int
     won: int
@@ -134,8 +136,8 @@ def _percent(numerator: int, denominator: int) -> float:
     return round((int(numerator) / int(denominator)) * 100.0, 1)
 
 
-def _unit_cost(cost_micros: int, outcomes: int) -> int | None:
-    if outcomes <= 0:
+def _unit_cost(cost_micros: int | None, outcomes: int) -> int | None:
+    if cost_micros is None or outcomes <= 0:
         return None
     return int(cost_micros) // int(outcomes)
 
@@ -299,20 +301,33 @@ def _load_local_attribution(
             """,
             params,
         ).fetchall()
+        # ``won`` is intentionally stricter than a simple customer-stage join.
+        # A conversion belongs to a promotion only when the same customer has
+        # an exact booked event for that campaign, the sales lead is for the
+        # campaign's offering, and persisted conversation evidence reaches won
+        # after that booking inside the reporting window.
         won_rows = conn.execute(
             """
-            SELECT DISTINCT pe.campaign_id, pe.customer_id
+            SELECT pe.campaign_id, pe.customer_id, se.payload_json
             FROM promotion_events pe
+            JOIN promotion_campaigns pc
+              ON pc.id=pe.campaign_id AND pc.business_id=pe.business_id
             JOIN clientplatform_sales_leads sl
               ON sl.business_id=pe.business_id
              AND sl.customer_id=pe.customer_id
-             AND sl.stage='won'
+             AND sl.offering_id=pc.offering_id
+            JOIN clientplatform_sales_events se
+              ON se.business_id=sl.business_id
+             AND se.lead_id=sl.id
+             AND se.event_type='conversation_transition'
             WHERE pe.business_id=?
-              AND pe.event_type='opened'
+              AND pe.event_type='booked'
               AND pe.occurred_at>=?
               AND pe.occurred_at<?
+              AND se.occurred_at>=pe.occurred_at
+              AND se.occurred_at<?
             """,
-            params,
+            (actor.business_id, event_from, event_until, event_until),
         ).fetchall()
 
     leads: dict[str, set[str]] = defaultdict(set)
@@ -331,6 +346,12 @@ def _load_local_attribution(
     for row in won_rows:
         campaign_id = str(_value(row, "campaign_id", 0))
         if campaign_id not in promotion_campaign_ids:
+            continue
+        try:
+            payload = json.loads(str(_value(row, "payload_json", 2) or "{}"))
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(payload, dict) or payload.get("to") != "won":
             continue
         won[campaign_id].add(str(_value(row, "customer_id", 1)))
     return _LocalAttribution(
@@ -356,6 +377,13 @@ def _refresh_bundle(
     return refreshed
 
 
+def _ad_id_batches(ad_ids: tuple[str, ...]) -> tuple[tuple[str, ...], ...]:
+    return tuple(
+        ad_ids[offset : offset + _REPORT_AD_BATCH_SIZE]
+        for offset in range(0, len(ad_ids), _REPORT_AD_BATCH_SIZE)
+    )
+
+
 def _provider_rows(
     *,
     current: TenantContext,
@@ -377,38 +405,39 @@ def _provider_rows(
             )
         bundle = YandexTokenBundle.from_json(token_json)
         ad_ids = tuple(sorted({item.external_ad_id for item in items}, key=int))
-        try:
-            report = provider.performance_report(
-                access_token=bundle.access_token,
-                ad_ids=ad_ids,
-                date_from=date_from,
-                date_to=date_to,
-                client_login=items[0].external_login,
-            )
-        except YandexDirectError as exc:
-            if exc.code not in _AUTH_ERRORS or not bundle.refresh_token:
-                raise
-            bundle = _refresh_bundle(
-                provider=provider,
-                vault=vault,
-                connection=connection,
-                bundle=bundle,
-            )
-            report = provider.performance_report(
-                access_token=bundle.access_token,
-                ad_ids=ad_ids,
-                date_from=date_from,
-                date_to=date_to,
-                client_login=items[0].external_login,
-            )
         expected_campaign_by_ad = {
             item.external_ad_id: item.external_campaign_id for item in items
         }
-        for row in report.rows:
-            expected_campaign = expected_campaign_by_ad.get(row.ad_id)
-            if expected_campaign is None or row.campaign_id != expected_campaign:
-                raise YandexDirectError("analytics_report_campaign_mismatch")
-            rows[(connection_id, row.ad_id)] = row
+        for ad_batch in _ad_id_batches(ad_ids):
+            try:
+                report = provider.performance_report(
+                    access_token=bundle.access_token,
+                    ad_ids=ad_batch,
+                    date_from=date_from,
+                    date_to=date_to,
+                    client_login=items[0].external_login,
+                )
+            except YandexDirectError as exc:
+                if exc.code not in _AUTH_ERRORS or not bundle.refresh_token:
+                    raise
+                bundle = _refresh_bundle(
+                    provider=provider,
+                    vault=vault,
+                    connection=connection,
+                    bundle=bundle,
+                )
+                report = provider.performance_report(
+                    access_token=bundle.access_token,
+                    ad_ids=ad_batch,
+                    date_from=date_from,
+                    date_to=date_to,
+                    client_login=items[0].external_login,
+                )
+            for row in report.rows:
+                expected_campaign = expected_campaign_by_ad.get(row.ad_id)
+                if expected_campaign is None or row.campaign_id != expected_campaign:
+                    raise YandexDirectError("analytics_report_campaign_mismatch")
+                rows[(connection_id, row.ad_id)] = row
     return rows
 
 
@@ -506,6 +535,16 @@ def get_yandex_growth_snapshot(
         )
 
     unique_report_rows = list(report_rows.values())
+    tracked_connections = {item.connection_id for item in tracked}
+    # Ad connections currently do not persist a trustworthy currency identity.
+    # Never add monetary micros or derive CPC/CPL/CAC across multiple accounts:
+    # they may be RUB, KZT or another currency. Non-monetary counts remain safe
+    # to aggregate, while per-campaign costs stay scoped to one connection.
+    aggregate_cost_micros = (
+        sum(row.cost_micros for row in unique_report_rows)
+        if len(tracked_connections) == 1
+        else None
+    )
     return YandexGrowthSnapshot(
         date_from=date_from,
         date_to=date_to,
@@ -514,7 +553,7 @@ def get_yandex_growth_snapshot(
         tracked_ads=len({(item.connection_id, item.external_ad_id) for item in tracked}),
         impressions=sum(row.impressions for row in unique_report_rows),
         clicks=sum(row.clicks for row in unique_report_rows),
-        cost_micros=sum(row.cost_micros for row in unique_report_rows),
+        cost_micros=aggregate_cost_micros,
         leads=len(all_leads),
         bookings=len(all_bookings),
         won=len(all_won),
