@@ -19,7 +19,7 @@ https://clientplatform.ru/oauth/yandex-direct/callback
 
 That callback cannot receive an authorization code for the registered application. Enabling the old production contract would therefore pass local checks but fail during real user authorization.
 
-Yandex documents an alternative confirmation-code flow for applications that cannot receive the code from a redirect URL. The user authorizes on Yandex, Yandex displays a short-lived confirmation code, and the application exchanges that code for an OAuth token. PKCE remains applicable.
+Yandex supports a confirmation-code flow for applications that cannot receive the code from a redirect URL. The user authorizes on Yandex, Yandex displays a short-lived authorization code, and the application exchanges that code for an OAuth token. PKCE remains applicable. The displayed authorization code is an opaque provider value: ClientPlatform must not depend on a fixed digit count or a numeric-only format.
 
 ## Decision
 
@@ -28,18 +28,18 @@ ClientPlatform uses the Yandex screen-code flow inside the Telegram owner journe
 1. The owner presses **Connect Yandex Direct**.
 2. ClientPlatform creates a one-time tenant-scoped OAuth session and PKCE verifier.
 3. Telegram opens the official Yandex authorization URL.
-4. Yandex displays a seven-digit confirmation code.
+4. Yandex displays a one-time opaque confirmation code.
 5. The owner sends that code to the ClientPlatform bot.
-6. The bot validates the code and makes a best-effort attempt to delete the Telegram message containing it.
+6. The bot validates the bounded opaque code and makes a best-effort attempt to delete the Telegram message containing it.
 7. ClientPlatform exchanges the code server-side, resolves the Yandex account identity, revalidates current membership, encrypts the token bundle and activates the business-scoped connection.
 
-The code is accepted only in the initiating Telegram FSM session. It is validated as seven ASCII digits and is never logged. Provider failures are returned to the user as sanitized messages.
+The code is accepted only in the initiating Telegram FSM session. ClientPlatform treats it as opaque printable ASCII, rejects whitespace/control/non-ASCII input, enforces a bounded length, and tolerates the copied visual `# ` prefix supported by the shared normalizer. The code is never logged. Provider failures are returned to the user as sanitized messages.
 
 The token exchange sends only the parameters documented for the browser-displayed screen-code flow:
 
 ```text
 grant_type=authorization_code
-code=<seven-digit confirmation code>
+code=<opaque one-time confirmation code>
 client_id=<application id>
 client_secret=<application secret>
 code_verifier=<PKCE verifier>
@@ -76,6 +76,7 @@ When that URI is configured, ClientPlatform does not register its legacy HTTP ca
 - ClientPlatform no longer depends on a callback URI that Yandex will not use for this application type.
 - The production preflight fails closed on an incorrect redirect URI.
 - The confirmation code has less exposure in Telegram chat history.
+- Provider changes to the visual shape of an otherwise valid opaque authorization code do not break the client merely because the value is not seven digits.
 
 ### Trade-offs
 
@@ -100,7 +101,8 @@ Before enabling advertising connections in production:
 Regression coverage proves:
 
 - exact extraction of the one-time OAuth state;
-- strict seven-digit confirmation-code validation;
+- shared opaque confirmation-code normalization, including current alphanumeric provider-style values;
+- rejection of whitespace, control, non-ASCII and overlong confirmation-code input;
 - exact screen-code token-request shape without `redirect_uri`;
 - Telegram FSM state persistence and sanitized failure handling;
 - rejection of a different Telegram user before provider access;
