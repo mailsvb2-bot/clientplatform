@@ -58,6 +58,17 @@ async def test_recovery_generation_rejects_late_stale_callback_write(
         0.01,
     )
 
+    async def answer_callback(
+        _callback: CallbackQuery,
+        text: str | None = None,
+        *,
+        show_alert: bool = False,
+        **_kwargs: Any,
+    ) -> None:
+        del text, show_alert
+
+    monkeypatch.setattr(CallbackQuery, "answer", answer_callback)
+
     user_id = 940060
     state = _state(user_id=user_id)
     await state.set_state("OldWizard:waiting")
