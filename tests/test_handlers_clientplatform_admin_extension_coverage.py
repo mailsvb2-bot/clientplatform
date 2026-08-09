@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 
 from clientplatform.domain.tenancy import (
+    PlatformRole,
     TenantPermissionDenied,
     TenancyError,
 )
@@ -120,7 +121,10 @@ class FakeAdmin:
 @pytest.fixture
 def ctx() -> Any:
     return SimpleNamespace(
-        actor=SimpleNamespace(business_id="business-id"),
+        actor=SimpleNamespace(
+            business_id="business-id",
+            role=PlatformRole.OWNER,
+        ),
         business_id="business-id",
         business_token="business",
         business_name="Business",
