@@ -76,30 +76,35 @@ async def test_recovery_generation_rejects_late_stale_callback_write(
         await data["state"].clear()
         return "recovered"
 
-    callback_task = asyncio.create_task(
-        middleware(
+    async def run_old_callback() -> Any:
+        return await middleware(
             slow_callback_handler,
             _callback("cpj:home:abcdefghijklmnopqrstuv", user_id=user_id),
             {"bot": _Bot(), "state": state},
         )
-    )
-    await asyncio.wait_for(entered.wait(), timeout=1.0)
 
-    recovery_result = await asyncio.wait_for(
-        middleware(
-            recovery_handler,
-            _message("/cancel", user_id=user_id),
-            {"bot": _Bot(), "state": state},
-        ),
-        timeout=1.0,
+    async def run_recovery() -> Any:
+        await asyncio.wait_for(entered.wait(), timeout=1.0)
+        result = await asyncio.wait_for(
+            middleware(
+                recovery_handler,
+                _message("/cancel", user_id=user_id),
+                {"bot": _Bot(), "state": state},
+            ),
+            timeout=1.0,
+        )
+        assert result == "recovered"
+        assert await state.get_state() is None
+        assert await state.get_data() == {}
+        release.set()
+        return result
+
+    old_result, recovery_result = await asyncio.wait_for(
+        asyncio.gather(run_old_callback(), run_recovery()),
+        timeout=2.0,
     )
+
     assert recovery_result == "recovered"
-    assert await state.get_state() is None
-    assert await state.get_data() == {}
-
-    release.set()
-    old_result = await asyncio.wait_for(callback_task, timeout=1.0)
-
     assert old_result is None
     assert stale_write_completed is False
     assert await state.get_state() is None
