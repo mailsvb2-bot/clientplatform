@@ -64,7 +64,7 @@ async def list_disconnectable_ad_connections(callback: CallbackQuery) -> None:
             "дожидается правдивого завершения уже начатой публикации и только "
             "после этого удаляет локальный зашифрованный OAuth-доступ."
             if disconnectable
-            else "Подключений для отключения нет."
+            else "Активных подключений нет."
         ),
         reply_markup=control._keyboard(rows),
     )
