@@ -380,12 +380,30 @@ async def test_provider_and_input_errors_are_sanitized(
     assert failed_state.clear_count == 1
     assert "Проверьте подключение кабинета" in callback.answers[-1][0][0]
 
+    def invalid_runtime_value(**_kwargs: Any) -> YandexGrowthSnapshot:
+        raise ValueError("path-like or corrupted analytics configuration")
+
+    monkeypatch.setattr(yandex, "get_yandex_growth_snapshot", invalid_runtime_value)
+    invalid_runtime = FakeCallback(f"cpy:a:{token}:7")
+    invalid_runtime_state = FakeState()
+    await yandex.open_yandex_analytics(invalid_runtime, invalid_runtime_state)
+    assert invalid_runtime_state.clear_count == 1
+    assert invalid_runtime.answers[-1][0] == ("Статистика Яндекса сейчас недоступна.",)
+    assert invalid_runtime.answers[-1][1]["show_alert"] is True
+
     bad = FakeCallback(f"cpy:a:{token}:14")
     bad_state = FakeState()
     await yandex.open_yandex_analytics(bad, bad_state)
     assert bad_state.clear_count == 0
     assert bad.answers[-1][0] == ("Статистика Яндекса сейчас недоступна.",)
     assert bad.answers[-1][1]["show_alert"] is True
+
+    malformed = FakeCallback(f"cpy:a:{token}:7:unexpected")
+    malformed_state = FakeState()
+    await yandex.open_yandex_analytics(malformed, malformed_state)
+    assert malformed_state.clear_count == 0
+    assert malformed.answers[-1][0] == ("Статистика Яндекса сейчас недоступна.",)
+    assert malformed.answers[-1][1]["show_alert"] is True
 
 
 if __name__ == "__main__":
