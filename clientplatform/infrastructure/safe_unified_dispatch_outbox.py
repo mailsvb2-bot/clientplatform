@@ -32,6 +32,13 @@ d.provider_message_id, d.last_error, d.created_at, d.updated_at, d.sent_at,
 d.dead_at
 """.strip()
 
+_RETURNING_PROVIDER_COLUMNS = """
+id, business_id, platform, source_kind, source_id, connection_id,
+external_subject, payload_kind, payload_ref, idempotency_key,
+status, attempts, available_at, locked_at, lock_token,
+provider_message_id, last_error, created_at, updated_at, sent_at, dead_at
+""".strip()
+
 
 class DispatchOutboxRepository(_UnifiedDispatchOutboxRepository):
     """Production hardening for the staged lesson/partner dispatch rollout.
@@ -68,8 +75,6 @@ class DispatchOutboxRepository(_UnifiedDispatchOutboxRepository):
                 "partner has not granted automatic first-contact authority"
             )
         external_subject = str(candidate.contact_value or "").strip()
-        # Keep the parent's numeric-only Telegram recipient contract without
-        # duplicating its private regular expression as a second authority.
         if not external_subject.lstrip("-").isdigit() or external_subject in {
             "",
             "0",
@@ -119,8 +124,8 @@ class DispatchOutboxRepository(_UnifiedDispatchOutboxRepository):
             f"partner:{candidate.id}:first-contact:connection:{normalized_connection}"
         )
         dispatch_id = str(uuid.uuid4())
-        self._conn.execute(
-            """
+        row = self._conn.execute(
+            f"""
             INSERT INTO provider_dispatch_outbox(
                 id,business_id,platform,source_kind,source_id,
                 logical_delivery_id,partner_campaign_id,partner_candidate_id,
@@ -133,8 +138,10 @@ class DispatchOutboxRepository(_UnifiedDispatchOutboxRepository):
                 'external_subject',NULL,?,'text',?,?,'pending',0,?,
                 NULL,NULL,NULL,NULL,?,?,NULL,NULL
             )
-            ON CONFLICT(business_id,idempotency_key) DO NOTHING
-            """,
+            ON CONFLICT(business_id,idempotency_key) DO UPDATE
+            SET idempotency_key=excluded.idempotency_key
+            RETURNING {_RETURNING_PROVIDER_COLUMNS}
+            """,  # nosec B608 - static returning column list
             (
                 dispatch_id,
                 current.business_id,
@@ -149,14 +156,10 @@ class DispatchOutboxRepository(_UnifiedDispatchOutboxRepository):
                 timestamp,
                 timestamp,
             ),
-        )
-        persisted = self._find_provider_by_idempotency(
-            business_id=current.business_id,
-            idempotency_key=idempotency_key,
-        )
-        if persisted is None:
-            raise RuntimeError("partner_dispatch_idempotent_insert_unavailable")
-        return persisted
+        ).fetchone()
+        if row is None:
+            raise RuntimeError("partner_dispatch_atomic_upsert_unavailable")
+        return _provider_dispatch_from_row(row)
 
     def claim_due(
         self,
@@ -176,9 +179,6 @@ class DispatchOutboxRepository(_UnifiedDispatchOutboxRepository):
                 )
             )
 
-        # Reserve bounded capacity before lesson claiming so a permanently full
-        # lesson backlog cannot starve partner work. Empty partner capacity is
-        # immediately reusable by lessons, then by a final partner top-up.
         partner_reserve = max(1, batch_limit // 3)
         partner = self._claim_provider_due(
             limit=partner_reserve,
