@@ -26,16 +26,12 @@ _PROVIDER_LABELS = {
     ExternalMediaProvider.STREAMING: "видеосервис",
     ExternalMediaProvider.DIRECT: "внешнее облако",
 }
-_STREAMING_HOSTS = {
+_STREAMING_ROOT_HOSTS = {
     "youtube.com",
-    "www.youtube.com",
     "youtu.be",
     "rutube.ru",
-    "www.rutube.ru",
     "vk.com",
-    "www.vk.com",
     "vimeo.com",
-    "www.vimeo.com",
 }
 
 
@@ -64,6 +60,12 @@ def _normalized_host(value: str) -> str:
     return host
 
 
+def _host_is_or_subdomain(host: str, root: str) -> bool:
+    """Match one DNS boundary without accepting lookalikes such as evilyoutube.com."""
+
+    return host == root or host.endswith(f".{root}")
+
+
 def detect_external_media_provider(url: str) -> ExternalMediaProvider:
     host = _normalized_host(urlsplit(str(url or "").strip()).hostname or "")
     if host == "disk.yandex.ru" or host.endswith(".disk.yandex.ru") or host == "yadi.sk":
@@ -74,7 +76,7 @@ def detect_external_media_provider(url: str) -> ExternalMediaProvider:
         return ExternalMediaProvider.DROPBOX
     if host in {"1drv.ms", "onedrive.live.com"} or host.endswith(".onedrive.live.com"):
         return ExternalMediaProvider.ONEDRIVE
-    if host in _STREAMING_HOSTS:
+    if any(_host_is_or_subdomain(host, root) for root in _STREAMING_ROOT_HOSTS):
         return ExternalMediaProvider.STREAMING
     return ExternalMediaProvider.DIRECT
 
