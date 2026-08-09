@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import stat
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from clientplatform.application.ad_connections import ad_connections_enabled
 from clientplatform.infrastructure.ad_credential_vault import (
@@ -14,6 +15,7 @@ from clientplatform.infrastructure.ad_credential_vault import (
 
 
 _SCREEN_CODE_REDIRECT_URI = "https://oauth.yandex.ru/verification_code"
+_DEFAULT_REPORT_TIMEZONE = "Europe/Moscow"
 
 
 class AdConnectionsPreflightError(RuntimeError):
@@ -55,6 +57,17 @@ def _assert_private_identity(identity_path: Path) -> None:
         raise AdConnectionsPreflightError("credential_identity_owner_invalid")
 
 
+def _validate_report_timezone() -> None:
+    zone_name = str(
+        os.getenv("CLIENTPLATFORM_YANDEX_DIRECT_REPORT_TIMEZONE")
+        or _DEFAULT_REPORT_TIMEZONE
+    ).strip()
+    try:
+        ZoneInfo(zone_name)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise AdConnectionsPreflightError("report_timezone_invalid") from exc
+
+
 def run() -> None:
     if not ad_connections_enabled():
         print("CLIENTPLATFORM_AD_CONNECTIONS_PREFLIGHT_DISABLED_OK")
@@ -65,6 +78,7 @@ def run() -> None:
     redirect_uri = _required("CLIENTPLATFORM_AD_OAUTH_REDIRECT_URI")
     if redirect_uri != _SCREEN_CODE_REDIRECT_URI:
         raise AdConnectionsPreflightError("oauth_redirect_uri_mismatch")
+    _validate_report_timezone()
 
     identity_path = Path(_required("CLIENTPLATFORM_AD_CREDENTIAL_IDENTITY_FILE"))
     if identity_path != Path("/run/secrets/clientplatform-ad/identity.txt"):
