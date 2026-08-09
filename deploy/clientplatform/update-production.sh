@@ -79,10 +79,11 @@ chmod 600 deploy/clientplatform/clientplatform.env
 DOMAIN=$(sed -n 's/^CLIENTPLATFORM_DOMAIN=//p' deploy/clientplatform/clientplatform.env | tail -n 1 | tr -d '\r')
 DEPLOY_STARTED_EPOCH=$(date +%s)
 
-# The wrapper uses inherited fd 9 instead of opening the lock again. The outer
-# shell continues owning the same locked open-file description after it exits.
-# Compatibility contract: scripts.clientplatform_production_deploy remains the
-# implementation of deploy(); the wrapper only extends its lock lifetime.
+# Direct operator/debug entrypoint remains:
+# exec python3 -m scripts.clientplatform_production_deploy "$@"
+# The updater intentionally does not exec it: the outer shell must retain fd 9
+# through the post-deploy stability window and any rollback. The wrapper below
+# calls that same deploy() implementation while sharing the inherited lock.
 python3 -m scripts.clientplatform_locked_production_deploy "$@"
 STABILITY_STARTED_EPOCH=$(date +%s)
 
