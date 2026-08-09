@@ -27,6 +27,18 @@ def _is_admin_ops_return(callback_data: str) -> bool:
     )
 
 
+def _is_admin_stack_back(callback_data: str) -> bool:
+    """Recognize token-first admin back actions that mutate navigation history."""
+
+    parts = callback_data.split(":", 3)
+    return (
+        len(parts) >= 3
+        and parts[0] == "cpa"
+        and bool(parts[1])
+        and parts[2] == "back"
+    )
+
+
 def install_button_surface_contract(safety: ModuleType) -> None:
     if bool(getattr(safety, "_button_surface_contract_installed", False)):
         return
@@ -56,9 +68,13 @@ def install_button_surface_contract(safety: ModuleType) -> None:
         "cpbl:o:",
     )
 
-    original = cast(
+    original_state_local = cast(
         Callable[[str, str], bool],
         getattr(safety, "_state_local_callback_allowed"),
+    )
+    original_repeatable = cast(
+        Callable[[str], bool],
+        getattr(safety, "_is_repeatable_navigation"),
     )
 
     def state_local_callback_allowed(current_state: str, callback_data: str) -> bool:
@@ -77,9 +93,18 @@ def install_button_surface_contract(safety: ModuleType) -> None:
         if current_state.startswith("ClientPlatformAdminOpsState:"):
             if _is_admin_ops_return(callback_data):
                 return True
-        return original(current_state, callback_data)
+        return original_state_local(current_state, callback_data)
+
+    def repeatable_navigation(callback_data: str) -> bool:
+        # Token-first admin ``back`` pops cp_admin_history and is therefore not
+        # idempotent. Keep it available as a state-escape action, but let the
+        # core middleware's duplicate-action guard reject rapid double taps.
+        if _is_admin_stack_back(callback_data):
+            return False
+        return original_repeatable(callback_data)
 
     setattr(safety, "_state_local_callback_allowed", state_local_callback_allowed)
+    setattr(safety, "_is_repeatable_navigation", repeatable_navigation)
     setattr(safety, "_button_surface_contract_installed", True)
 
 
