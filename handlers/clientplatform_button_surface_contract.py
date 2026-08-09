@@ -12,17 +12,13 @@ from types import ModuleType
 from typing import Callable, cast
 
 
-_INSTALLED = False
-
-
 def _extend_tuple(module: ModuleType, name: str, *values: str) -> None:
     current = tuple(getattr(module, name))
     setattr(module, name, tuple(dict.fromkeys((*current, *values))))
 
 
 def install_button_surface_contract(safety: ModuleType) -> None:
-    global _INSTALLED
-    if _INSTALLED:
+    if bool(getattr(safety, "_button_surface_contract_installed", False)):
         return
 
     _extend_tuple(
@@ -71,7 +67,7 @@ def install_button_surface_contract(safety: ModuleType) -> None:
         return original(current_state, callback_data)
 
     setattr(safety, "_state_local_callback_allowed", state_local_callback_allowed)
-    _INSTALLED = True
+    setattr(safety, "_button_surface_contract_installed", True)
 
 
 __all__ = ["install_button_surface_contract"]
