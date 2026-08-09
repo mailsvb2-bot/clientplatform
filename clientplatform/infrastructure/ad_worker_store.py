@@ -58,6 +58,11 @@ _SELECT = """
     FROM ad_connections
 """
 
+_ACCOUNT_SCOPED_FAILURES = (
+    "direct_account_access_denied",
+    "direct_permission_denied",
+)
+
 
 class AdWorkerStore:
     """Provider-worker access that remains business-scoped without a human actor."""
@@ -174,11 +179,12 @@ class AdWorkerStore:
         business_id: str,
         connection_id: str,
     ) -> None:
-        """Undo account-level attention for a failure scoped to one ad job.
+        """Undo attention only for failures proven to be job-scoped.
 
-        Error timestamps and safe error codes remain available for diagnostics;
-        only the account availability state is restored. Disabled and revoked
-        connections are intentionally never changed by this operation.
+        Permission/account-access failures describe the advertising connection,
+        not one creative. They intentionally remain in ``attention`` so another
+        draft cannot be queued against an account that has lost Direct access.
+        Disabled and revoked connections are also never changed here.
         """
 
         normalized_business = normalize_uuid(business_id, field_name="business_id")
@@ -186,12 +192,18 @@ class AdWorkerStore:
             connection_id,
             field_name="ad_connection_id",
         )
+        placeholders = ", ".join("?" for _ in _ACCOUNT_SCOPED_FAILURES)
         self._conn.execute(
-            """
+            f"""
             UPDATE ad_connections SET status='active'
             WHERE id=? AND business_id=? AND status='attention'
+              AND COALESCE(last_error_code, '') NOT IN ({placeholders})
             """,
-            (normalized_connection, normalized_business),
+            (
+                normalized_connection,
+                normalized_business,
+                *_ACCOUNT_SCOPED_FAILURES,
+            ),
         )
 
 
