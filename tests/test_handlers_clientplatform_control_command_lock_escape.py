@@ -41,7 +41,7 @@ async def test_start_escapes_a_busy_interaction_lock() -> None:
     middleware = ClientPlatformInteractionSafetyMiddleware()
     message = telegram_message(text="/start")
     data = {"bot": SimpleNamespace(id=1)}
-    lock = middleware._lock_for(bot_id=1, chat_id=7, user_id=7)
+    lock_key, lock = middleware._lock_for(bot_id=1, chat_id=7, user_id=7)
     await lock.acquire()
     handled: list[str] = []
 
@@ -57,6 +57,7 @@ async def test_start_escapes_a_busy_interaction_lock() -> None:
         )
     finally:
         lock.release()
+        middleware._release_lock_reference(lock_key, lock)
 
     assert result == "opened"
     assert handled == ["/start"]
@@ -69,7 +70,7 @@ async def test_all_control_commands_escape_a_busy_interaction_lock() -> None:
         middleware = ClientPlatformInteractionSafetyMiddleware()
         message = telegram_message(text=command)
         data = {"bot": SimpleNamespace(id=1)}
-        lock = middleware._lock_for(bot_id=1, chat_id=7, user_id=7)
+        lock_key, lock = middleware._lock_for(bot_id=1, chat_id=7, user_id=7)
         await lock.acquire()
 
         async def handler(_event: Any, _data: dict[str, Any]) -> str:
@@ -85,6 +86,7 @@ async def test_all_control_commands_escape_a_busy_interaction_lock() -> None:
             )
         finally:
             lock.release()
+            middleware._release_lock_reference(lock_key, lock)
 
 
 @pytest.mark.asyncio
@@ -92,7 +94,7 @@ async def test_ordinary_text_still_waits_for_the_user_lock() -> None:
     middleware = ClientPlatformInteractionSafetyMiddleware()
     message = telegram_message(text="Сантехник")
     data = {"bot": SimpleNamespace(id=1)}
-    lock = middleware._lock_for(bot_id=1, chat_id=7, user_id=7)
+    lock_key, lock = middleware._lock_for(bot_id=1, chat_id=7, user_id=7)
     await lock.acquire()
 
     async def handler(_event: Any, _data: dict[str, Any]) -> str:
@@ -106,6 +108,7 @@ async def test_ordinary_text_still_waits_for_the_user_lock() -> None:
             )
     finally:
         lock.release()
+        middleware._release_lock_reference(lock_key, lock)
 
 
 @pytest.mark.asyncio
@@ -113,11 +116,14 @@ async def test_control_command_uses_and_releases_an_available_lock() -> None:
     middleware = ClientPlatformInteractionSafetyMiddleware()
     message = telegram_message(text="/admin")
     data = {"bot": SimpleNamespace(id=1)}
-    lock = middleware._lock_for(bot_id=1, chat_id=7, user_id=7)
+    lock_key, lock = middleware._lock_for(bot_id=1, chat_id=7, user_id=7)
 
     async def handler(_event: Any, _data: dict[str, Any]) -> str:
         assert lock.locked() is True
         return "admin"
 
-    assert await middleware(handler, message, data) == "admin"
-    assert lock.locked() is False
+    try:
+        assert await middleware(handler, message, data) == "admin"
+        assert lock.locked() is False
+    finally:
+        middleware._release_lock_reference(lock_key, lock)
