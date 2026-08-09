@@ -12,6 +12,7 @@ from . import clientplatform_bot_provisioning
 from . import clientplatform_connections
 from . import clientplatform_offer_ladders
 from . import clientplatform_customers
+from . import clientplatform_partners
 from . import clientplatform_program_media
 from . import clientplatform_programs
 from . import clientplatform_promotions
@@ -36,6 +37,7 @@ PARTS = [
     clientplatform_activity,
     clientplatform_bookings,
     clientplatform_promotions,
+    clientplatform_partners,
     clientplatform_sales,
     clientplatform_offer_ladders,
     clientplatform_ad_connections,
