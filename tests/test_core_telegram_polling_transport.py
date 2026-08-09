@@ -144,6 +144,18 @@ class TelegramPollingTransportContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bot.polling_session.route_count, 2)
         await bot.session.close()
 
+    async def test_ui_close_keeps_polling_companion_registered_for_reuse(self) -> None:
+        ui_session = PollingAiohttpSession(route_role="ui")
+        polling_session = PollingAiohttpSession(route_role="polling")
+        polling_close = AsyncMock(wraps=polling_session.close)
+        ui_session.attach_companion(polling_session)
+
+        with patch.object(polling_session, "close", new=polling_close):
+            await ui_session.close()
+            await ui_session.close()
+
+        self.assertEqual(polling_close.await_count, 2)
+
     async def test_polling_reset_does_not_reset_or_rotate_ui_lane(self) -> None:
         with patch.dict(
             os.environ,
