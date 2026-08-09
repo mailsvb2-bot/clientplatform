@@ -24,7 +24,7 @@ from clientplatform.infrastructure.connection_repository import ConnectionReposi
 from clientplatform.infrastructure.partner_repository import PartnerRepository
 from clientplatform.infrastructure.tenancy_repository import TenancyRepository
 from clientplatform.infrastructure.unified_dispatch_outbox import ClaimedProviderDispatch
-from services.db import get_connection, init_db
+from services.db import get_db, get_db_ro, init_db
 
 
 class ProbeFailure(RuntimeError):
@@ -38,7 +38,7 @@ def _postgres_configured() -> bool:
 
 def _setup_fixture() -> tuple[object, str, str]:
     owner_user_id = 9_120_001
-    with get_connection() as conn:
+    with get_db() as conn:
         conn.execute(
             """
             INSERT INTO users(user_id,username,created_at)
@@ -157,7 +157,7 @@ def main() -> None:
     actor, candidate_id, connection_id = _setup_fixture()
 
     def enqueue():
-        with get_connection() as conn:
+        with get_db() as conn:
             return DispatchOutboxRepository(conn).materialize_partner_outreach(
                 actor=actor,
                 candidate_id=candidate_id,
@@ -170,7 +170,7 @@ def main() -> None:
         raise ProbeFailure(
             f"concurrent enqueue was not idempotent: ids={sorted(enqueue_ids)!r}"
         )
-    with get_connection() as conn:
+    with get_db_ro() as conn:
         count = conn.execute(
             """
             SELECT COUNT(*) AS total
@@ -184,7 +184,7 @@ def main() -> None:
         raise ProbeFailure(f"expected one persisted partner dispatch, got {total}")
 
     def claim():
-        with get_connection() as conn:
+        with get_db() as conn:
             claimed = DispatchOutboxRepository(conn).claim_due(limit=1)
             return [
                 item.dispatch.id
