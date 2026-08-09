@@ -9,6 +9,7 @@ from aiogram.types import InlineKeyboardMarkup, Message
 from clientplatform.domain.bookings import BookingSlotView
 
 from . import clientplatform_partner_growth as partner_growth  # noqa: F401
+from . import clientplatform_partner_referral as partner_referral
 from . import clientplatform_promotion as promotion
 
 
@@ -136,6 +137,14 @@ def install_promotion_engine(
         user_id: int,
         managed_bot_business_id: str | None,
     ) -> None:
+        partner_handled = await partner_referral.dispatch_partner_referral_start(
+            message,
+            state,
+            user_id=user_id,
+            managed_bot_business_id=managed_bot_business_id,
+        )
+        if partner_handled:
+            return
         handled = await promotion.dispatch_promotion_start(
             message,
             state,
