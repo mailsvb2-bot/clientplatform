@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import ast
+import importlib
 import re
 from pathlib import Path
 
-from handlers.clientplatform_interaction_safety import (
-    _CLIENTPLATFORM_CALLBACK_PREFIXES,
+from handlers.clientplatform_button_surface_contract import (
+    install_button_surface_contract,
 )
 
+
+safety = importlib.import_module("handlers.clientplatform_interaction_safety")
+install_button_surface_contract(safety)
 
 ROOT = Path(__file__).resolve().parents[1]
 _CALLBACK_ROOT = re.compile(r"^(cp[a-z]*):")
@@ -138,7 +142,7 @@ def test_every_rendered_callback_namespace_is_known_to_interaction_safety() -> N
             assert match is not None
             roots.add(f"{match.group(1)}:")
 
-    missing = sorted(roots.difference(_CLIENTPLATFORM_CALLBACK_PREFIXES))
+    missing = sorted(roots.difference(safety._CLIENTPLATFORM_CALLBACK_PREFIXES))
     assert not missing, f"callback namespaces missing from safety contract: {missing}"
 
 
@@ -159,8 +163,5 @@ def test_every_statically_rendered_callback_has_a_registered_handler() -> None:
         for prefix in emitted
         if not _specific_handler_exists(prefix, accepted)
     )
-    detail = {
-        prefix: sorted(origins[prefix])
-        for prefix in missing
-    }
+    detail = {prefix: sorted(origins[prefix]) for prefix in missing}
     assert not missing, f"rendered callbacks without handler contract: {detail}"
