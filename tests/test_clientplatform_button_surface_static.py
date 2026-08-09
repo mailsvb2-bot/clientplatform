@@ -1,17 +1,10 @@
 from __future__ import annotations
 
 import ast
-import importlib
 import re
+import unittest
 from pathlib import Path
 
-from handlers.clientplatform_button_surface_contract import (
-    install_button_surface_contract,
-)
-
-
-safety = importlib.import_module("handlers.clientplatform_interaction_safety")
-install_button_surface_contract(safety)
 
 ROOT = Path(__file__).resolve().parents[1]
 _CALLBACK_ROOT = re.compile(r"^(cp[a-z]*):")
@@ -103,10 +96,7 @@ def _decorator_callback_patterns(tree: ast.AST) -> set[str]:
             for part in ast.walk(decorator):
                 if isinstance(part, ast.Call) and _call_name(part) == "startswith":
                     for argument in part.args[:1]:
-                        if isinstance(argument, ast.Tuple):
-                            candidates = argument.elts
-                        else:
-                            candidates = [argument]
+                        candidates = argument.elts if isinstance(argument, ast.Tuple) else [argument]
                         for candidate in candidates:
                             prefix, complete = _static_prefix(candidate)
                             if complete and _CALLBACK_ROOT.match(prefix):
@@ -121,9 +111,7 @@ def _decorator_callback_patterns(tree: ast.AST) -> set[str]:
 def _specific_handler_exists(emitted: str, accepted: set[str]) -> bool:
     parts = emitted.split(":")
     action_first_ad = (
-        len(parts) >= 2
-        and parts[0] == "cpa"
-        and parts[1] in _AD_ACTION_FIRST
+        len(parts) >= 2 and parts[0] == "cpa" and parts[1] in _AD_ACTION_FIRST
     )
     for pattern in accepted:
         if action_first_ad and pattern == "cpa:":
@@ -133,35 +121,83 @@ def _specific_handler_exists(emitted: str, accepted: set[str]) -> bool:
     return False
 
 
-def test_every_rendered_callback_namespace_is_known_to_interaction_safety() -> None:
-    roots: set[str] = set()
-    for path in _surface_files():
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        for emitted in _keyboard_callbacks(tree):
-            match = _CALLBACK_ROOT.match(emitted)
-            assert match is not None
-            roots.add(f"{match.group(1)}:")
+def _known_safety_namespaces() -> set[str]:
+    known: set[str] = set()
+    safety_path = ROOT / "handlers" / "clientplatform_interaction_safety.py"
+    safety_tree = ast.parse(safety_path.read_text(encoding="utf-8"), filename=str(safety_path))
+    for node in safety_tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(
+            isinstance(target, ast.Name) and target.id == "_CLIENTPLATFORM_CALLBACK_PREFIXES"
+            for target in node.targets
+        ):
+            continue
+        if isinstance(node.value, (ast.Tuple, ast.List)):
+            for item in node.value.elts:
+                if isinstance(item, ast.Constant) and isinstance(item.value, str):
+                    known.add(item.value)
 
-    missing = sorted(roots.difference(safety._CLIENTPLATFORM_CALLBACK_PREFIXES))
-    assert not missing, f"callback namespaces missing from safety contract: {missing}"
-
-
-def test_every_statically_rendered_callback_has_a_registered_handler() -> None:
-    emitted: set[str] = set()
-    accepted: set[str] = set()
-    origins: dict[str, set[str]] = {}
-
-    for path in _surface_files():
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        for prefix in _keyboard_callbacks(tree):
-            emitted.add(prefix)
-            origins.setdefault(prefix, set()).add(str(path.relative_to(ROOT)))
-        accepted.update(_decorator_callback_patterns(tree))
-
-    missing = sorted(
-        prefix
-        for prefix in emitted
-        if not _specific_handler_exists(prefix, accepted)
+    extension_path = ROOT / "handlers" / "clientplatform_button_surface_contract.py"
+    extension_tree = ast.parse(
+        extension_path.read_text(encoding="utf-8"),
+        filename=str(extension_path),
     )
-    detail = {prefix: sorted(origins[prefix]) for prefix in missing}
-    assert not missing, f"rendered callbacks without handler contract: {detail}"
+    for node in ast.walk(extension_tree):
+        if not isinstance(node, ast.Call) or _call_name(node) != "_extend_tuple":
+            continue
+        if len(node.args) < 3:
+            continue
+        name = node.args[1]
+        if not (
+            isinstance(name, ast.Constant)
+            and name.value == "_CLIENTPLATFORM_CALLBACK_PREFIXES"
+        ):
+            continue
+        for item in node.args[2:]:
+            if isinstance(item, ast.Constant) and isinstance(item.value, str):
+                known.add(item.value)
+    return known
+
+
+class ClientPlatformButtonSurfaceStaticTests(unittest.TestCase):
+    def test_every_rendered_callback_namespace_is_known_to_interaction_safety(self) -> None:
+        roots: set[str] = set()
+        for path in _surface_files():
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for emitted in _keyboard_callbacks(tree):
+                match = _CALLBACK_ROOT.match(emitted)
+                self.assertIsNotNone(match)
+                assert match is not None
+                roots.add(f"{match.group(1)}:")
+
+        missing = sorted(roots.difference(_known_safety_namespaces()))
+        self.assertFalse(
+            missing,
+            f"callback namespaces missing from safety contract: {missing}",
+        )
+
+    def test_every_statically_rendered_callback_has_a_registered_handler(self) -> None:
+        emitted: set[str] = set()
+        accepted: set[str] = set()
+        origins: dict[str, set[str]] = {}
+
+        for path in _surface_files():
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for prefix in _keyboard_callbacks(tree):
+                emitted.add(prefix)
+                origins.setdefault(prefix, set()).add(str(path.relative_to(ROOT)))
+            accepted.update(_decorator_callback_patterns(tree))
+
+        missing = sorted(
+            prefix for prefix in emitted if not _specific_handler_exists(prefix, accepted)
+        )
+        detail = {prefix: sorted(origins[prefix]) for prefix in missing}
+        self.assertFalse(
+            missing,
+            f"rendered callbacks without handler contract: {detail}",
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()
