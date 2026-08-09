@@ -15,9 +15,9 @@ from clientplatform.application.partner_runtime import (
     list_partner_send_connections,
     partner_stats,
     queue_partner_outreach,
-    rerun_live_partner_campaign,
+    rerun_connected_partner_campaign,
     set_partner_candidate_status,
-    start_live_partner_campaign,
+    start_connected_partner_campaign,
 )
 from clientplatform.domain.partners import (
     ContactBasis,
@@ -25,7 +25,9 @@ from clientplatform.domain.partners import (
     PartnerInvariantViolation,
 )
 from clientplatform.integrations.partner_discovery import PartnerDiscoveryUnavailable
-from clientplatform.integrations.partner_discovery_runtime import build_live_partner_discovery
+from clientplatform.integrations.partner_discovery_runtime import (
+    build_connected_partner_discovery,
+)
 
 from . import clientplatform_control as control
 from . import clientplatform_simple_experience as simple
@@ -69,7 +71,7 @@ async def _render_home(callback: CallbackQuery, business_token: str) -> None:
     campaigns, stats, discovery = await asyncio.gather(
         asyncio.to_thread(list_partner_campaigns, actor=actor),
         asyncio.to_thread(partner_stats, actor=actor),
-        asyncio.to_thread(build_live_partner_discovery, actor=actor),
+        asyncio.to_thread(build_connected_partner_discovery, actor=actor),
     )
     lines = [
         "🤝 Партнёрства",
@@ -224,7 +226,7 @@ async def start_partner_growth(callback: CallbackQuery) -> None:
     actor = await _actor(callback, business_token)
     await callback.answer("Ищу и оцениваю…")
     try:
-        run = await asyncio.to_thread(start_live_partner_campaign, actor=actor)
+        run = await asyncio.to_thread(start_connected_partner_campaign, actor=actor)
     except PartnerDiscoveryUnavailable:
         await control._callback_message(callback).answer(
             "Live-поиск сейчас недоступен. Проверьте подключение VK и его права. "
@@ -260,7 +262,7 @@ async def rerun_partner_growth(callback: CallbackQuery) -> None:
     await callback.answer("Обновляю поиск…")
     try:
         await asyncio.to_thread(
-            rerun_live_partner_campaign,
+            rerun_connected_partner_campaign,
             actor=actor,
             campaign_id=control._token_uuid(campaign_token),
         )
