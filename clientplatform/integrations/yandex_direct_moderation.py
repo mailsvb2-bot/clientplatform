@@ -101,6 +101,7 @@ class ModeratingYandexDirectProvider(YandexDirectProvider):
             str(item.get("Privilege") or "").strip().upper()
             for item in grants
             if isinstance(item, Mapping)
+            and str(item.get("Value") or "").strip().upper() == "YES"
         }
         if "EDIT_CAMPAIGNS" not in privileges:
             raise YandexDirectError("direct_account_is_read_only")
