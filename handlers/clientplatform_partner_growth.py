@@ -96,7 +96,7 @@ async def _render_home(callback: CallbackQuery, business_token: str) -> None:
     if discovery.configured:
         rows.append([("🔎 Найти партнёров", f"cpg:start:{business_token}")])
     rows.extend(
-        [[(f"📂 {item.name[:28]}", f"cpg:p:{business_token}:{_token(item.id)}")]]
+        [(f"📂 {item.name[:28]}", f"cpg:p:{business_token}:{_token(item.id)}")]
         for item in campaigns[:8]
     )
     rows.extend(
