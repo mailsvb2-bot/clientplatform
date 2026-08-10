@@ -23,6 +23,7 @@ jobs:
         run: |
           sed -n "/^          python - <<'PY'$/,/^          PY$/p" .github/workflows/one-shot-booking-pagination-refactor.yml | sed 's/^          //' > /tmp/apply-pagination.sh
           bash /tmp/apply-pagination.sh
+          nl -ba handlers/clientplatform_owner_journey.py | sed -n '295,325p'
           python -m compileall clientplatform/application/pagination.py handlers/clientplatform_control.py handlers/clientplatform_owner_journey.py handlers/clientplatform_promotion.py tests/test_handlers_clientplatform_booking_pagination.py
           git diff --check
           rm -f .github/workflows/pr-trigger-booking-pagination-refactor.yml
