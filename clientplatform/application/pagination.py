@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Generic, Sequence, TypeVar
 
 _T = TypeVar("_T")
-DEFAULT_PAGE_SIZE = 12
+_DEFAULT_PAGE_SIZE = 12
 
 
 @dataclass(frozen=True)
@@ -27,7 +27,7 @@ def paginate(
     items: Sequence[_T],
     raw_page: object = 0,
     *,
-    page_size: int = DEFAULT_PAGE_SIZE,
+    page_size: int = _DEFAULT_PAGE_SIZE,
 ) -> Page[_T]:
     if page_size <= 0:
         raise ValueError("page_size must be positive")
