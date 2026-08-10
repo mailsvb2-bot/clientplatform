@@ -108,11 +108,12 @@ def _lesson_detail_text(record: ProgramRecord, lesson: Lesson) -> str:
             preview += "…"
         lines.extend(["", f"Материал:\n{preview}"])
     elif lesson.content_ref.startswith("https://"):
+        external = None
         try:
             external = normalize_external_media_url(lesson.content_ref)
         except ValueError:
-            pass
-        else:
+            external = None
+        if external is not None:
             lines.extend(
                 [
                     "",

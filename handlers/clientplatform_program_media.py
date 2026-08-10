@@ -3,6 +3,7 @@ from __future__ import annotations
 """Turn control-bot media into bot-independent private lesson references."""
 
 import asyncio
+import logging
 import os
 import re
 import tempfile
@@ -27,6 +28,7 @@ else:
 
 _EXTENSION_RE = re.compile(r"^[a-z0-9]{1,10}$")
 StoreMedia = Callable[..., Any]
+log = logging.getLogger(__name__)
 
 
 class _UnavailableTelegramBadRequest(Exception):
@@ -225,7 +227,7 @@ async def materialize_program_content(
         try:
             temporary.unlink(missing_ok=True)
         except OSError:
-            pass
+            log.warning("Failed to remove temporary program media file", exc_info=True)
 
 
 __all__ = [

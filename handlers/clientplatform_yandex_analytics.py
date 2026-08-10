@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
@@ -21,6 +22,7 @@ from . import clientplatform_control as control
 router = Router(name="clientplatform_yandex_analytics")
 router.message.filter(control.ClientPlatformControlEnabled())
 router.callback_query.filter(control.ClientPlatformControlEnabled())
+log = logging.getLogger(__name__)
 
 
 def _money(micros: int | None) -> str:
@@ -163,7 +165,7 @@ async def _answer_feedback(
         await callback.answer(text, show_alert=show_alert)
         return
     except TelegramAPIError:
-        pass
+        log.debug("Failed to answer Yandex analytics callback; using message fallback", exc_info=True)
     try:
         await control._callback_message(callback).answer(text)
     except TelegramAPIError:
@@ -191,7 +193,7 @@ async def _replace_panel(
         if "message is not modified" in str(exc).casefold():
             return
     except TelegramAPIError:
-        pass
+        log.debug("Failed to edit Yandex analytics panel; sending a new message", exc_info=True)
     await message.answer(text, reply_markup=reply_markup)
 
 
