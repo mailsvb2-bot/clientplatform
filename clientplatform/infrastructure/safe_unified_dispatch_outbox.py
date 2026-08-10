@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import uuid
 from datetime import datetime, timedelta
 from typing import Any
@@ -52,13 +53,23 @@ OR (
 """.strip()
 
 
+def _partner_recipient_idempotency_key(external_subject: str) -> str:
+    """Return a bounded non-PII first-contact key for one Telegram recipient."""
+
+    digest = hashlib.sha256(
+        f"telegram\x00{external_subject}".encode("utf-8")
+    ).hexdigest()[:32]
+    return f"partner:telegram:{digest}:first-contact"
+
+
 class DispatchOutboxRepository(_UnifiedDispatchOutboxRepository):
     """Production hardening for the staged lesson/partner dispatch rollout.
 
     The parent owns shared settlement/retry semantics. This wrapper keeps the
     public repository safe under multiple PostgreSQL workers and under operator
-    revocation: enqueue is candidate-wide idempotent, partner work receives
-    bounded batch capacity, and every claim revalidates first-contact authority.
+    revocation: first-contact enqueue is business-wide recipient-idempotent,
+    partner work receives bounded batch capacity, and every claim revalidates
+    first-contact authority.
     """
 
     def materialize_partner_outreach(
@@ -132,9 +143,10 @@ class DispatchOutboxRepository(_UnifiedDispatchOutboxRepository):
             raise PartnerInvariantViolation("partner outreach text is not sendable")
 
         timestamp = str(now or _utc_now().isoformat())
-        # First-contact idempotency belongs to the candidate, not the selected
-        # bot. Switching connections must never create a second first contact.
-        idempotency_key = f"partner:{candidate.id}:first-contact"
+        # Automatic first contact belongs to the actual Telegram recipient, not
+        # to a campaign/candidate or selected bot. The raw chat id is already the
+        # dispatch destination, but is intentionally not repeated in the key.
+        idempotency_key = _partner_recipient_idempotency_key(external_subject)
         dispatch_id = str(uuid.uuid4())
         row = self._conn.execute(
             f"""
@@ -171,7 +183,12 @@ class DispatchOutboxRepository(_UnifiedDispatchOutboxRepository):
         ).fetchone()
         if row is None:
             raise RuntimeError("partner_dispatch_atomic_upsert_unavailable")
-        return _provider_dispatch_from_row(row)
+        persisted = _provider_dispatch_from_row(row)
+        if persisted.source_id != candidate.id:
+            raise PartnerInvariantViolation(
+                "this Telegram contact already has a first-contact attempt"
+            )
+        return persisted
 
     def cancel_not_started_partner_outreach(
         self,
