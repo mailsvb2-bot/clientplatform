@@ -24,7 +24,8 @@ from clientplatform.infrastructure.connection_repository import ConnectionReposi
 from clientplatform.infrastructure.partner_repository import PartnerRepository
 from clientplatform.infrastructure.tenancy_repository import TenancyRepository
 from clientplatform.infrastructure.unified_dispatch_outbox import ClaimedProviderDispatch
-from services.db import get_db, get_db_ro, init_db
+from services.db import get_db, get_db_ro
+from services.schema import init_db
 
 
 class ProbeFailure(RuntimeError):
@@ -150,6 +151,11 @@ def _run_concurrently(function) -> list[object]:
     return results
 
 
+def _backend_pid(conn) -> int:
+    row = conn.execute("SELECT pg_backend_pid() AS pid").fetchone()
+    return int(row["pid"] if hasattr(row, "keys") else row[0])
+
+
 def main() -> None:
     if not _postgres_configured():
         raise SystemExit("DATABASE_URL must point to PostgreSQL")
@@ -158,14 +164,24 @@ def main() -> None:
 
     def enqueue():
         with get_db() as conn:
-            return DispatchOutboxRepository(conn).materialize_partner_outreach(
+            pid = _backend_pid(conn)
+            dispatch = DispatchOutboxRepository(conn).materialize_partner_outreach(
                 actor=actor,
                 candidate_id=candidate_id,
                 connection_id=connection_id,
             )
+            return dispatch, pid
 
     enqueue_results = _run_concurrently(enqueue)
-    enqueue_ids = {str(getattr(result, "id", "")) for result in enqueue_results}
+    enqueue_ids = {
+        str(getattr(result[0], "id", ""))
+        for result in enqueue_results
+    }
+    enqueue_pids = {int(result[1]) for result in enqueue_results}
+    if len(enqueue_pids) != 2:
+        raise ProbeFailure(
+            f"enqueue did not use two PostgreSQL backends: pids={sorted(enqueue_pids)!r}"
+        )
     if len(enqueue_ids) != 1 or "" in enqueue_ids:
         raise ProbeFailure(
             f"concurrent enqueue was not idempotent: ids={sorted(enqueue_ids)!r}"
@@ -185,16 +201,23 @@ def main() -> None:
 
     def claim():
         with get_db() as conn:
+            pid = _backend_pid(conn)
             claimed = DispatchOutboxRepository(conn).claim_due(limit=1)
-            return [
+            ids = [
                 item.dispatch.id
                 for item in claimed
                 if isinstance(item, ClaimedProviderDispatch)
                 and item.dispatch.source_id == candidate_id
             ]
+            return ids, pid
 
     claim_results = _run_concurrently(claim)
-    claimed_ids = [item for result in claim_results for item in result]
+    claim_pids = {int(result[1]) for result in claim_results}
+    if len(claim_pids) != 2:
+        raise ProbeFailure(
+            f"claim did not use two PostgreSQL backends: pids={sorted(claim_pids)!r}"
+        )
+    claimed_ids = [item for result in claim_results for item in result[0]]
     if len(claimed_ids) != 1 or claimed_ids[0] not in enqueue_ids:
         raise ProbeFailure(
             f"concurrent claim duplicated or lost work: claimed={claimed_ids!r}"
@@ -202,7 +225,8 @@ def main() -> None:
 
     print(
         "POSTGRES_PARTNER_DISPATCH_CONCURRENCY_OK "
-        f"dispatch_id={next(iter(enqueue_ids))} claims={len(claimed_ids)}"
+        f"dispatch_id={next(iter(enqueue_ids))} claims={len(claimed_ids)} "
+        f"enqueue_backends={len(enqueue_pids)} claim_backends={len(claim_pids)}"
     )
 
 
