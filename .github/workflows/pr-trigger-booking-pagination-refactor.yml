@@ -1,0 +1,33 @@
+name: PR-trigger canonical booking pagination refactor
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  refactor:
+    if: github.event.pull_request.head.ref == 'agent/paginate-booking-surfaces'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: agent/paginate-booking-surfaces
+          fetch-depth: 0
+
+      - name: Apply deterministic canonical refactor
+        shell: bash
+        run: |
+          sed -n "/^          python - <<'PY'$/,/^          PY$/p" .github/workflows/one-shot-booking-pagination-refactor.yml | sed 's/^          //' > /tmp/apply-pagination.sh
+          bash /tmp/apply-pagination.sh
+          python -m compileall clientplatform/application/pagination.py handlers/clientplatform_control.py handlers/clientplatform_owner_journey.py handlers/clientplatform_promotion.py tests/test_handlers_clientplatform_booking_pagination.py
+          git diff --check
+          rm -f .github/workflows/pr-trigger-booking-pagination-refactor.yml
+          git config user.name "clientplatform-refactor-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Paginate canonical booking surfaces"
+          git push origin HEAD:agent/paginate-booking-surfaces
