@@ -72,6 +72,7 @@ _JOB_LABELS = {
     AdPublicationStatus.FAILED: "ошибка",
     AdPublicationStatus.CANCELLED: "отменено",
 }
+_CONFIRM_DRAFT_LABEL = "✅ Создать черновик в Яндекс Директе"
 
 
 def _message(callback: CallbackQuery) -> Message:
@@ -456,12 +457,7 @@ async def prepare_ad_publication(message: Message, state: FSMContext) -> None:
             [
                 [("🖼 Создать картинку", "cpa:creative:image")],
                 [("🎬 Создать видео", "cpa:creative:video")],
-                [
-                    (
-                        "✅ Создать текстовый черновик в Яндекс Директе",
-                        "cpa:confirm",
-                    )
-                ],
+                [(_CONFIRM_DRAFT_LABEL, "cpa:confirm")],
                 [("Отмена", f"cpa:home:{data['business_token']}")],
             ]
         ),
@@ -526,14 +522,7 @@ async def _render_ad_visual(
             "Визуал готов. Текущий Yandex Direct-контур создаёт текстовый DRAFT; "
             "файл визуала пока остаётся отдельным материалом для владельца.",
             reply_markup=control._keyboard(
-                [
-                    [
-                        (
-                            "✅ Создать текстовый черновик в Яндекс Директе",
-                            "cpa:confirm",
-                        )
-                    ]
-                ]
+                [[(_CONFIRM_DRAFT_LABEL, "cpa:confirm")]]
             ),
         )
         return
@@ -605,14 +594,7 @@ async def refresh_ad_visual(callback: CallbackQuery, state: FSMContext) -> None:
             "Визуал готов. Он не прикрепляется к Yandex Direct автоматически этим "
             "контуром.",
             reply_markup=control._keyboard(
-                [
-                    [
-                        (
-                            "✅ Создать текстовый черновик в Яндекс Директе",
-                            "cpa:confirm",
-                        )
-                    ]
-                ]
+                [[(_CONFIRM_DRAFT_LABEL, "cpa:confirm")]]
             ),
         )
     elif job.status in {"queued", "running"}:
