@@ -19,6 +19,8 @@ RUFF_TARGETS = (
     "app.py",
     "main.py",
 )
+# Keep architecture audits behind Ruff so the canonical lint failure remains the
+# first actionable result while every successful lint run enforces boundaries.
 HANDLER_BOUNDARY_AUDITS = (
     "scripts/handler_exception_boundary_audit.py",
     "scripts/handler_db_boundary_audit.py",
