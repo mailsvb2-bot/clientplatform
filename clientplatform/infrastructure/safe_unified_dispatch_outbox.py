@@ -143,9 +143,6 @@ class DispatchOutboxRepository(_UnifiedDispatchOutboxRepository):
             raise PartnerInvariantViolation("partner outreach text is not sendable")
 
         timestamp = str(now or _utc_now().isoformat())
-        # Automatic first contact belongs to the actual Telegram recipient, not
-        # to a campaign/candidate or selected bot. The raw chat id is already the
-        # dispatch destination, but is intentionally not repeated in the key.
         idempotency_key = _partner_recipient_idempotency_key(external_subject)
         dispatch_id = str(uuid.uuid4())
         row = self._conn.execute(
@@ -197,8 +194,6 @@ class DispatchOutboxRepository(_UnifiedDispatchOutboxRepository):
         candidate_id: str,
         now: str | None = None,
     ) -> int:
-        """Cancel work that has not crossed the provider-I/O boundary."""
-
         current = self._tenancy.resolve_context(
             user_id=actor.user_id,
             business_id=actor.business_id,
@@ -221,12 +216,40 @@ class DispatchOutboxRepository(_UnifiedDispatchOutboxRepository):
         )
         return max(0, int(getattr(cursor, "rowcount", 0) or 0))
 
+    def cancel_invalid_pending_partner_outreach(self, *, now: str | None = None) -> int:
+        """Cancel queued partner work whose live authorization no longer matches."""
+
+        timestamp = str(now or _utc_now().isoformat())
+        cursor = self._conn.execute(
+            """
+            UPDATE provider_dispatch_outbox
+            SET status='cancelled',updated_at=?,locked_at=NULL,lock_token=NULL,
+                last_error='partner_authorization_invalid'
+            WHERE source_kind='partner_outreach' AND status IN ('pending','retry')
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM partner_candidates p
+                  JOIN connections c
+                    ON c.id=provider_dispatch_outbox.connection_id
+                   AND c.business_id=provider_dispatch_outbox.business_id
+                   AND c.platform=provider_dispatch_outbox.platform
+                  WHERE p.id=provider_dispatch_outbox.partner_candidate_id
+                    AND p.business_id=provider_dispatch_outbox.business_id
+                    AND c.status='active'
+                    AND p.competitor=0 AND p.channel='telegram'
+                    AND p.contact_basis IN ('existing_relationship','opted_in')
+                    AND p.status NOT IN ('declined','do_not_contact','invalid')
+                    AND p.contact_value=provider_dispatch_outbox.external_subject
+              )
+            """,
+            (timestamp,),
+        )
+        return max(0, int(getattr(cursor, "rowcount", 0) or 0))
+
     def partner_dispatch_still_authorized(
         self,
         item: ClaimedProviderDispatch,
     ) -> bool:
-        """Revalidate a leased partner dispatch immediately before network I/O."""
-
         if item.dispatch.source_kind != "partner_outreach":
             return True
         row = self._conn.execute(
@@ -260,13 +283,6 @@ class DispatchOutboxRepository(_UnifiedDispatchOutboxRepository):
         *,
         now: str | None = None,
     ) -> bool:
-        """Cancel a live lease iff its partner authorization is no longer valid.
-
-        The correlated authorization predicate and lease token are evaluated in
-        the same UPDATE. A worker therefore cannot turn a revoked lease into a
-        retry and accidentally send it later.
-        """
-
         if item.dispatch.source_kind != "partner_outreach":
             return False
         timestamp = str(now or _utc_now().isoformat())
@@ -358,6 +374,7 @@ class DispatchOutboxRepository(_UnifiedDispatchOutboxRepository):
         stale_before = (
             claim_now - timedelta(seconds=max(1, int(lock_ttl_seconds)))
         ).isoformat()
+        self.cancel_invalid_pending_partner_outreach(now=now_iso)
         token = uuid.uuid4().hex
         if isinstance(self._conn, PostgresCompatConnection):
             rows = self._conn.execute(
