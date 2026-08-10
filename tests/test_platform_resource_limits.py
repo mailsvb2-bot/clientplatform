@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
+
+import pytest
 
 from clientplatform.runtime import platform_resource_monitor as monitor
 from services import platform_resource_limits as limits
@@ -25,6 +28,11 @@ def _snapshot(*, used: int = 0, limit: int = 30) -> limits.PlatformResourceSnaps
         video=limits.ResourceCounter(used=0, limit=5, remaining=5),
         active=limits.ResourceCounter(used=1, limit=3, remaining=2),
     )
+
+
+def _replace_saved(saved: dict[str, object], value: dict[str, object]) -> None:
+    saved.clear()
+    saved.update(value)
 
 
 def test_platform_resource_snapshot_uses_gateway_usage_without_secrets(monkeypatch):
@@ -110,11 +118,11 @@ def test_resource_monitor_notifies_once_per_crossed_level(monkeypatch):
 
     monkeypatch.setattr(monitor, "get_platform_resource_snapshot", lambda: snapshot)
     monkeypatch.setattr(monitor, "_load_state", lambda: dict(saved))
-    monkeypatch.setattr(monitor, "_save_state", lambda value: saved.update(value))
+    monkeypatch.setattr(monitor, "_save_state", lambda value: _replace_saved(saved, value))
 
-    async def fake_send(_bot, text: str) -> int:
+    async def fake_send(_bot, text: str, **_kwargs):
         sent.append(text)
-        return 1
+        return {123}, set()
 
     monkeypatch.setattr(monitor, "_send_superadmins", fake_send)
 
@@ -137,11 +145,11 @@ def test_resource_monitor_realerts_after_limit_is_raised_and_consumed_again(monk
 
     monkeypatch.setattr(monitor, "get_platform_resource_snapshot", lambda: next(snapshots))
     monkeypatch.setattr(monitor, "_load_state", lambda: dict(saved))
-    monkeypatch.setattr(monitor, "_save_state", lambda value: saved.clear() or saved.update(value))
+    monkeypatch.setattr(monitor, "_save_state", lambda value: _replace_saved(saved, value))
 
-    async def fake_send(_bot, text: str) -> int:
+    async def fake_send(_bot, text: str, **_kwargs):
         sent.append(text)
-        return 1
+        return {123}, set()
 
     monkeypatch.setattr(monitor, "_send_superadmins", fake_send)
 
@@ -156,3 +164,95 @@ def test_resource_monitor_realerts_after_limit_is_raised_and_consumed_again(monk
     asyncio.run(monitor._tick(object()))
     assert len(sent) == 2
     assert "порог 85%" in sent[-1]
+
+
+def test_threshold_alert_retries_only_failed_superadmin(monkeypatch):
+    snapshot = _snapshot(used=26)
+    saved: dict[str, object] = {}
+    calls: list[int] = []
+
+    class Bot:
+        failed_once = False
+
+        async def send_message(self, admin_id: int, _text: str) -> None:
+            calls.append(admin_id)
+            if admin_id == 202 and not self.failed_once:
+                self.failed_once = True
+                raise asyncio.TimeoutError
+
+    monkeypatch.setattr(monitor, "get_platform_resource_snapshot", lambda: snapshot)
+    monkeypatch.setattr(monitor, "_load_state", lambda: dict(saved))
+    monkeypatch.setattr(monitor, "_save_state", lambda value: _replace_saved(saved, value))
+    monkeypatch.setattr(monitor, "_superadmin_ids", lambda: (101, 202))
+
+    bot = Bot()
+    asyncio.run(monitor._tick(bot))
+    assert calls == [101, 202]
+    assert saved["threshold_pending"]["pending_admin_ids"] == [202]
+    assert saved.get("levels", {}) == {}
+
+    asyncio.run(monitor._tick(bot))
+    assert calls == [101, 202, 202]
+    assert "threshold_pending" not in saved
+    assert saved["levels"]["image"] == 85
+
+
+def test_telemetry_alert_retries_only_failed_superadmin(monkeypatch):
+    snapshot = limits.PlatformResourceSnapshot(
+        configured=True,
+        telemetry_available=False,
+        base_url="http://visual-creative-gateway:8097",
+        token_configured=True,
+        error_code="visual_gateway_http_404",
+    )
+    saved: dict[str, object] = {}
+    calls: list[int] = []
+
+    class Bot:
+        failed_once = False
+
+        async def send_message(self, admin_id: int, _text: str) -> None:
+            calls.append(admin_id)
+            if admin_id == 202 and not self.failed_once:
+                self.failed_once = True
+                raise asyncio.TimeoutError
+
+    monkeypatch.setattr(monitor, "get_platform_resource_snapshot", lambda: snapshot)
+    monkeypatch.setattr(monitor, "_load_state", lambda: dict(saved))
+    monkeypatch.setattr(monitor, "_save_state", lambda value: _replace_saved(saved, value))
+    monkeypatch.setattr(monitor, "_superadmin_ids", lambda: (101, 202))
+
+    bot = Bot()
+    asyncio.run(monitor._tick(bot))
+    assert calls == [101, 202]
+    assert saved["telemetry_pending"]["pending_admin_ids"] == [202]
+
+    asyncio.run(monitor._tick(bot))
+    assert calls == [101, 202, 202]
+    assert "telemetry_pending" not in saved
+    assert saved["telemetry_error"] == "visual_gateway_http_404"
+
+    asyncio.run(monitor._tick(bot))
+    assert calls == [101, 202, 202]
+
+
+def test_monitor_loop_survives_database_driver_error(monkeypatch):
+    calls = 0
+
+    async def broken_tick(_bot):
+        nonlocal calls
+        calls += 1
+        raise sqlite3.OperationalError("temporary database outage")
+
+    async def stop_after_retry_window(_seconds):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(monitor, "_tick", broken_tick)
+    monkeypatch.setattr(monitor.asyncio, "sleep", stop_after_retry_window)
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(monitor._monitor_loop(object()))
+    assert calls == 1
+    assert monitor.platform_resource_monitor_snapshot()["last_error"] == (
+        "platform_resource_monitor_tick_failed"
+    )
