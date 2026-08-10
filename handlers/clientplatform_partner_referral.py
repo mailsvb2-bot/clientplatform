@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from urllib.parse import quote
 
 from aiogram import F
@@ -29,6 +30,8 @@ from clientplatform.domain.partners import PartnerNotFound
 from . import clientplatform_control as control
 from . import clientplatform_simple_experience as simple
 
+
+log = logging.getLogger(__name__)
 
 _PARTNER_START_PREFIX = "cpg_"
 _MAX_REFERRAL_TOKEN_LENGTH = 128
@@ -117,10 +120,16 @@ async def dispatch_partner_referral_start(
         username=None if user is None else user.username,
         display_name=None if user is None else user.full_name,
     )
-    await asyncio.to_thread(
-        record_partner_referral_open,
-        referral_token=referral_token,
-    )
+    try:
+        await asyncio.to_thread(
+            record_partner_referral_open,
+            referral_token=referral_token,
+        )
+    except Exception:  # validator: allow-wide-except
+        # Attribution is observability, not the source of truth for storefront
+        # access. Do not strand a visitor after the customer link already exists,
+        # and never log the opaque referral token or a provider exception body.
+        log.error("partner_referral_open_record_failed")
     await state.clear()
     slots = await asyncio.to_thread(
         control.list_customer_booking_slots,
@@ -220,11 +229,16 @@ async def book_partner_referral(callback: CallbackQuery) -> None:
         )
         return
 
-    await asyncio.to_thread(
-        record_partner_referral_result,
-        referral_token=referral_token,
-        result_key=f"booking_{claim.slot.slot.id}",
-    )
+    try:
+        await asyncio.to_thread(
+            record_partner_referral_result,
+            referral_token=referral_token,
+            result_key=f"booking_{claim.slot.slot.id}",
+        )
+    except Exception:  # validator: allow-wide-except
+        # The booking is already canonical at this point. Analytics failure must
+        # never turn a successful booking into a user-visible booking failure.
+        log.error("partner_referral_result_record_failed")
     await callback.answer("Запись подтверждена")
     message = control._callback_message(callback)
     await message.answer(
