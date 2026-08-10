@@ -29,6 +29,8 @@ def paginate(
     *,
     page_size: int = _DEFAULT_PAGE_SIZE,
 ) -> Page[_T]:
+    """Return a bounded page while preserving the caller's stable item order."""
+
     if page_size <= 0:
         raise ValueError("page_size must be positive")
     try:
