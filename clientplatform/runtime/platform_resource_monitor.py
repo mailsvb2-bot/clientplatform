@@ -181,11 +181,9 @@ async def _finish_pending_threshold(
     bot: Any,
     *,
     state: dict[str, Any],
-    day: str,
 ) -> bool:
     pending = state.get("threshold_pending")
-    if not isinstance(pending, dict) or str(pending.get("day") or "") != day:
-        state.pop("threshold_pending", None)
+    if not isinstance(pending, dict):
         return True
 
     recipients = _recipient_ids(pending.get("pending_admin_ids") or [])
@@ -237,6 +235,11 @@ async def _tick(bot: Any) -> None:
         _last_tick_monotonic = time.monotonic()
         return
 
+    if not await _finish_pending_threshold(bot, state=state):
+        _last_error = "platform_resource_alert_delivery_failed"
+        _last_tick_monotonic = time.monotonic()
+        return
+
     day = snapshot.day_utc or today
     if str(state.get("day_utc") or "") != day:
         state = {
@@ -245,11 +248,6 @@ async def _tick(bot: Any) -> None:
             "telemetry_day": "",
             "telemetry_error": "",
         }
-
-    if not await _finish_pending_threshold(bot, state=state, day=day):
-        _last_error = "platform_resource_alert_delivery_failed"
-        _last_tick_monotonic = time.monotonic()
-        return
 
     previous_levels = state.get("levels") if isinstance(state.get("levels"), dict) else {}
     crossed = crossed_thresholds(snapshot, previous_levels)
