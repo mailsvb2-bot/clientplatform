@@ -180,13 +180,7 @@ class DispatchOutboxRepository(_UnifiedDispatchOutboxRepository):
         candidate_id: str,
         now: str | None = None,
     ) -> int:
-        """Cancel only work for which no provider call has started yet.
-
-        A row already leased as ``sending`` is intentionally not rewritten here:
-        doing so could hide an in-flight provider call. Claim-time authorization
-        prevents pending/retry/stale work from being leased after revocation;
-        the send boundary can additionally revalidate a live lease.
-        """
+        """Cancel work that has not crossed the provider-I/O boundary."""
 
         current = self._tenancy.resolve_context(
             user_id=actor.user_id,
@@ -242,6 +236,54 @@ class DispatchOutboxRepository(_UnifiedDispatchOutboxRepository):
             ),
         ).fetchone()
         return row is not None
+
+    def cancel_revoked_leased_partner_outreach(
+        self,
+        item: ClaimedProviderDispatch,
+        *,
+        now: str | None = None,
+    ) -> bool:
+        """Cancel a live lease iff its partner authorization is no longer valid.
+
+        The correlated authorization predicate and lease token are evaluated in
+        the same UPDATE. A worker therefore cannot turn a revoked lease into a
+        retry and accidentally send it later.
+        """
+
+        if item.dispatch.source_kind != "partner_outreach":
+            return False
+        timestamp = str(now or _utc_now().isoformat())
+        cursor = self._conn.execute(
+            """
+            UPDATE provider_dispatch_outbox
+            SET status='cancelled',updated_at=?,locked_at=NULL,lock_token=NULL,
+                last_error='partner_contact_revoked'
+            WHERE id=? AND business_id=? AND source_kind='partner_outreach'
+              AND status='sending' AND lock_token=?
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM partner_candidates p
+                  JOIN connections c
+                    ON c.id=provider_dispatch_outbox.connection_id
+                   AND c.business_id=provider_dispatch_outbox.business_id
+                   AND c.platform=provider_dispatch_outbox.platform
+                  WHERE p.id=provider_dispatch_outbox.partner_candidate_id
+                    AND p.business_id=provider_dispatch_outbox.business_id
+                    AND c.status='active'
+                    AND p.competitor=0 AND p.channel='telegram'
+                    AND p.contact_basis IN ('existing_relationship','opted_in')
+                    AND p.status NOT IN ('declined','do_not_contact','invalid')
+                    AND p.contact_value=provider_dispatch_outbox.external_subject
+              )
+            """,
+            (
+                timestamp,
+                item.dispatch.id,
+                item.dispatch.business_id,
+                item.dispatch.lock_token,
+            ),
+        )
+        return int(getattr(cursor, "rowcount", 0) or 0) == 1
 
     def claim_due(
         self,
