@@ -5,7 +5,7 @@ import json
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Iterable
 
 from aiogram.exceptions import TelegramAPIError
 
@@ -36,6 +36,10 @@ def _interval_seconds() -> int:
         minimum=60,
         maximum=3600,
     )
+
+
+def _superadmin_ids() -> tuple[int, ...]:
+    return tuple(sorted({int(value) for value in ADMIN_IDS or []}))
 
 
 def _load_state() -> dict[str, Any]:
@@ -69,9 +73,29 @@ def _save_state(value: dict[str, Any]) -> None:
         )
 
 
-async def _send_superadmins(bot: Any, text: str) -> int:
-    delivered = 0
-    for admin_id in sorted({int(value) for value in ADMIN_IDS or []}):
+def _recipient_ids(values: Iterable[object]) -> tuple[int, ...]:
+    configured = set(_superadmin_ids())
+    recipients: set[int] = set()
+    for value in values:
+        try:
+            candidate = int(value)
+        except (TypeError, ValueError):
+            continue
+        if candidate in configured:
+            recipients.add(candidate)
+    return tuple(sorted(recipients))
+
+
+async def _send_superadmins(
+    bot: Any,
+    text: str,
+    *,
+    recipient_ids: Iterable[object] | None = None,
+) -> tuple[set[int], set[int]]:
+    targets = _superadmin_ids() if recipient_ids is None else _recipient_ids(recipient_ids)
+    delivered: set[int] = set()
+    failed: set[int] = set()
+    for admin_id in targets:
         try:
             await bot.send_message(admin_id, text)
         except TelegramAPIError:
@@ -80,6 +104,7 @@ async def _send_superadmins(bot: Any, text: str) -> int:
                 admin_id,
                 exc_info=True,
             )
+            failed.add(admin_id)
             continue
         except asyncio.TimeoutError:
             log.warning(
@@ -87,9 +112,10 @@ async def _send_superadmins(bot: Any, text: str) -> int:
                 admin_id,
                 exc_info=True,
             )
+            failed.add(admin_id)
             continue
-        delivered += 1
-    return delivered
+        delivered.add(admin_id)
+    return delivered, failed
 
 
 def _telemetry_warning(error_code: str) -> str:
@@ -103,6 +129,94 @@ def _telemetry_warning(error_code: str) -> str:
     )
 
 
+async def _deliver_telemetry_warning(
+    bot: Any,
+    *,
+    state: dict[str, Any],
+    today: str,
+    error_code: str,
+) -> None:
+    pending = state.get("telemetry_pending")
+    same_pending = (
+        isinstance(pending, dict)
+        and str(pending.get("day") or "") == today
+        and str(pending.get("error") or "") == error_code
+    )
+    if same_pending:
+        message = str(pending.get("message") or _telemetry_warning(error_code))
+        recipients = _recipient_ids(pending.get("pending_admin_ids") or [])
+    else:
+        already_reported = (
+            str(state.get("telemetry_day") or "") == today
+            and str(state.get("telemetry_error") or "") == error_code
+        )
+        if already_reported:
+            return
+        message = _telemetry_warning(error_code)
+        recipients = _superadmin_ids()
+
+    if recipients:
+        _delivered, failed = await _send_superadmins(
+            bot,
+            message,
+            recipient_ids=recipients,
+        )
+        if failed:
+            state["telemetry_pending"] = {
+                "day": today,
+                "error": error_code,
+                "message": message,
+                "pending_admin_ids": sorted(failed),
+            }
+            await asyncio.to_thread(_save_state, state)
+            return
+
+    state.pop("telemetry_pending", None)
+    state["telemetry_day"] = today
+    state["telemetry_error"] = error_code
+    await asyncio.to_thread(_save_state, state)
+
+
+async def _finish_pending_threshold(
+    bot: Any,
+    *,
+    state: dict[str, Any],
+    day: str,
+) -> bool:
+    pending = state.get("threshold_pending")
+    if not isinstance(pending, dict) or str(pending.get("day") or "") != day:
+        state.pop("threshold_pending", None)
+        return True
+
+    recipients = _recipient_ids(pending.get("pending_admin_ids") or [])
+    if recipients:
+        message = str(pending.get("message") or "").strip()
+        if not message:
+            state.pop("threshold_pending", None)
+            return True
+        _delivered, failed = await _send_superadmins(
+            bot,
+            message,
+            recipient_ids=recipients,
+        )
+        if failed:
+            pending["pending_admin_ids"] = sorted(failed)
+            state["threshold_pending"] = pending
+            await asyncio.to_thread(_save_state, state)
+            return False
+
+    target_levels = pending.get("target_levels")
+    if isinstance(target_levels, dict):
+        state["levels"] = {
+            str(key): int(value)
+            for key, value in target_levels.items()
+            if str(value).lstrip("-").isdigit()
+        }
+    state.pop("threshold_pending", None)
+    await asyncio.to_thread(_save_state, state)
+    return True
+
+
 async def _tick(bot: Any) -> None:
     global _last_error
     global _last_tick_monotonic
@@ -113,33 +227,45 @@ async def _tick(bot: Any) -> None:
 
     if not snapshot.telemetry_available:
         error_code = snapshot.error_code or "visual_gateway_usage_unavailable"
-        already_reported = (
-            str(state.get("telemetry_day") or "") == today
-            and str(state.get("telemetry_error") or "") == error_code
+        await _deliver_telemetry_warning(
+            bot,
+            state=state,
+            today=today,
+            error_code=error_code,
         )
-        if not already_reported:
-            delivered = await _send_superadmins(bot, _telemetry_warning(error_code))
-            if delivered:
-                state["telemetry_day"] = today
-                state["telemetry_error"] = error_code
-                await asyncio.to_thread(_save_state, state)
         _last_error = error_code
         _last_tick_monotonic = time.monotonic()
         return
 
     day = snapshot.day_utc or today
-    previous_levels = (
-        state.get("levels")
-        if str(state.get("day_utc") or "") == day and isinstance(state.get("levels"), dict)
-        else {}
-    )
+    if str(state.get("day_utc") or "") != day:
+        state = {
+            "day_utc": day,
+            "levels": {},
+            "telemetry_day": "",
+            "telemetry_error": "",
+        }
+
+    if not await _finish_pending_threshold(bot, state=state, day=day):
+        _last_error = "platform_resource_alert_delivery_failed"
+        _last_tick_monotonic = time.monotonic()
+        return
+
+    previous_levels = state.get("levels") if isinstance(state.get("levels"), dict) else {}
     crossed = crossed_thresholds(snapshot, previous_levels)
     levels = current_levels(snapshot)
 
     if crossed:
         message = render_threshold_notification(snapshot, crossed)
-        delivered = await _send_superadmins(bot, message)
-        if not delivered:
+        _delivered, failed = await _send_superadmins(bot, message)
+        if failed:
+            state["threshold_pending"] = {
+                "day": day,
+                "message": message,
+                "pending_admin_ids": sorted(failed),
+                "target_levels": levels,
+            }
+            await asyncio.to_thread(_save_state, state)
             _last_error = "platform_resource_alert_delivery_failed"
             _last_tick_monotonic = time.monotonic()
             return
