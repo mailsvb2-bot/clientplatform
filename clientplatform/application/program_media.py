@@ -161,7 +161,13 @@ def stage_program_media_cleanup(
                 reason=reason,
                 delay_seconds=delay_seconds,
             )
-    except (sqlite3.Error, PostgresError, OSError, RuntimeError):
+    except sqlite3.Error:
+        raise ProgramMediaCleanupQueueError() from None
+    except PostgresError:
+        raise ProgramMediaCleanupQueueError() from None
+    except OSError:
+        raise ProgramMediaCleanupQueueError() from None
+    except RuntimeError:
         raise ProgramMediaCleanupQueueError() from None
     return True
 
@@ -178,7 +184,13 @@ def cancel_program_media_cleanup(*, media_reference: str) -> bool:
             return ProgramMediaCleanupRepository(conn).discard(
                 media_reference=media_reference
             )
-    except (sqlite3.Error, PostgresError, OSError, RuntimeError):
+    except sqlite3.Error:
+        raise ProgramMediaCleanupQueueError() from None
+    except PostgresError:
+        raise ProgramMediaCleanupQueueError() from None
+    except OSError:
+        raise ProgramMediaCleanupQueueError() from None
+    except RuntimeError:
         raise ProgramMediaCleanupQueueError() from None
 
 
