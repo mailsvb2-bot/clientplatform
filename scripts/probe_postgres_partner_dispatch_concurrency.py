@@ -42,7 +42,7 @@ def _setup_fixture() -> tuple[object, str, str]:
     with get_db() as conn:
         conn.execute(
             """
-            INSERT INTO users(user_id,username,created_at)
+            INSERT INTO users(user_id,username,joined_at)
             VALUES(?,?,'2026-08-10T00:00:00+00:00')
             ON CONFLICT(user_id) DO NOTHING
             """,
