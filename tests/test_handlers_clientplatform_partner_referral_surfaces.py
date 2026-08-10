@@ -4,6 +4,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from clientplatform.application.partner_attribution import PartnerAttributionWriteError
 from clientplatform.domain.partners import PartnerNotFound
 from handlers import clientplatform_partner_referral as referral
 
@@ -161,7 +162,7 @@ class PartnerReferralStartTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 referral,
                 "record_partner_referral_open",
-                side_effect=RuntimeError("analytics unavailable"),
+                side_effect=PartnerAttributionWriteError("analytics unavailable"),
             ),
             patch.object(referral.control, "list_customer_booking_slots", return_value=[]),
             patch.object(referral.log, "error") as log_error,
@@ -176,6 +177,31 @@ class PartnerReferralStartTests(unittest.IsolatedAsyncioTestCase):
         state.clear.assert_awaited_once()
         log_error.assert_called_once_with("partner_referral_open_record_failed")
         self.assertIn("Свободного времени сейчас нет", message.answer.await_args.args[0])
+
+    async def test_unexpected_open_metric_runtime_error_is_not_silenced(self) -> None:
+        message = _message()
+        state = _state()
+        landing = SimpleNamespace(business_id="business")
+        link = SimpleNamespace(business_name="Business")
+        with (
+            patch.object(referral.asyncio, "to_thread", new=_inline_to_thread),
+            patch.object(referral.control, "_start_payload", return_value="cpg_token"),
+            patch.object(referral, "resolve_partner_referral", return_value=landing),
+            patch.object(referral, "is_public_storefront_staff", return_value=False),
+            patch.object(referral, "connect_public_storefront_customer", return_value=link),
+            patch.object(
+                referral,
+                "record_partner_referral_open",
+                side_effect=RuntimeError("programming defect"),
+            ),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "programming defect"):
+                await referral.dispatch_partner_referral_start(
+                    message,
+                    state,
+                    user_id=101,
+                    managed_bot_business_id=None,
+                )
 
     async def test_customer_with_slots_gets_only_bookable_callbacks(self) -> None:
         message = _message()
@@ -275,7 +301,7 @@ class PartnerReferralMaterialAndBookingTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 referral,
                 "record_partner_referral_result",
-                side_effect=RuntimeError("analytics unavailable"),
+                side_effect=PartnerAttributionWriteError("analytics unavailable"),
             ),
             patch.object(referral.log, "error") as log_error,
         ):
