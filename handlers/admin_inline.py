@@ -8,6 +8,10 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
 
+from clientplatform.runtime.platform_resource_monitor import (
+    start_platform_resource_monitor,
+    stop_platform_resource_monitor,
+)
 from core.callback_utils import safe_answer_callback
 from handlers import admin_inline_tariffs
 from handlers.admin_inline_common import (
@@ -20,6 +24,7 @@ from handlers.admin_inline_common import (
 from handlers.admin_inline_copy import handle as handle_copy
 from handlers.admin_inline_perms import handle as handle_perms
 from handlers.admin_inline_reports import handle as handle_reports
+from handlers.admin_inline_resources import handle as handle_resources
 from handlers.admin_inline_roles import handle as handle_roles
 from handlers.admin_inline_states import AdminManageState
 from handlers.admin_inline_users import handle as handle_users
@@ -29,6 +34,8 @@ from services.admin_permissions import admin_callback_allowed
 from services.roles import ROLE_ADMIN, ROLE_MARKETING
 
 router = Router()
+router.startup.register(start_platform_resource_monitor)
+router.shutdown.register(stop_platform_resource_monitor)
 
 
 def _load_admin_ctx(uid: int) -> AdminCtx | None:
@@ -72,6 +79,21 @@ def _load_admin_ctx(uid: int) -> AdminCtx | None:
                 InlineKeyboardButton(
                     text="🧑‍💼 Sales Desk",
                     callback_data="admin:sales",
+                )
+            ],
+        )
+    if superadmin and not any(
+        button.callback_data == "admin:resources"
+        for row in staff_kb.inline_keyboard
+        for button in row
+    ):
+        insert_at = max(0, len(staff_kb.inline_keyboard) - 1)
+        staff_kb.inline_keyboard.insert(
+            insert_at,
+            [
+                InlineKeyboardButton(
+                    text="🧯 Лимиты и ресурсы",
+                    callback_data="admin:resources",
                 )
             ],
         )
@@ -158,6 +180,8 @@ async def admin_gate(cb: CallbackQuery, state: FSMContext):
     if await handle_roles(cb, state, data, ctx):
         return
     if await handle_users(cb, state, data, ctx):
+        return
+    if await handle_resources(cb, state, data, ctx):
         return
     if await handle_reports(cb, state, data, ctx):
         return
