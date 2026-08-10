@@ -1,11 +1,19 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import os
 
 from aiogram import F
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import (
+    CallbackQuery,
+    FSInputFile,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
 
 from clientplatform.application.ad_connections import (
     ad_connections_enabled,
@@ -20,6 +28,12 @@ from clientplatform.application.ad_connections import (
 from clientplatform.application.promotions import (
     create_slot_promotion,
     promotion_start_payload,
+)
+from clientplatform.application.visual_creatives import (
+    VisualCreativeError,
+    create_ad_visual,
+    materialize_ad_visual,
+    poll_ad_visual,
 )
 from clientplatform.domain.ad_connections import (
     AdConnectionError,
@@ -78,6 +92,15 @@ def _promotion_link(username: str, source_token: str) -> str:
 
 def _active_connections(connections):
     return [item for item in connections if item.status == AdConnectionStatus.ACTIVE]
+
+
+def _visual_wait_seconds() -> int:
+    raw = str(os.getenv("VISUAL_TELEGRAM_WAIT_SECONDS", "20") or "20").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return 20
+    return max(0, min(value, 60))
 
 
 async def _workspace(callback: CallbackQuery, *, business_token: str) -> None:
@@ -413,7 +436,12 @@ async def prepare_ad_publication(message: Message, state: FSMContext) -> None:
             "или несколько ID через запятую."
         )
         return
-    await state.update_data(job_id=draft.job.id)
+    await state.update_data(
+        job_id=draft.job.id,
+        creative_title=draft.job.title,
+        creative_body=draft.job.text,
+        creative_job_id="",
+    )
     await state.set_state(AdConnectionState.confirming_publication)
     await message.answer(
         "Проверьте рекламный черновик:\n\n"
@@ -426,11 +454,192 @@ async def prepare_ad_publication(message: Message, state: FSMContext) -> None:
         "DRAFT в Вашем кабинете. Показов, модерации и расходов автоматически не будет.",
         reply_markup=control._keyboard(
             [
-                [("✅ Создать черновик в Яндекс Директе", "cpa:confirm")],
+                [("🖼 Создать картинку", "cpa:creative:image")],
+                [("🎬 Создать видео", "cpa:creative:video")],
+                [
+                    (
+                        "✅ Создать текстовый черновик в Яндекс Директе",
+                        "cpa:confirm",
+                    )
+                ],
                 [("Отмена", f"cpa:home:{data['business_token']}")],
             ]
         ),
     )
+
+
+async def _render_ad_visual(
+    callback: CallbackQuery,
+    state: FSMContext,
+    *,
+    kind: str,
+) -> None:
+    data = await state.get_data()
+    if str(data.get("creative_job_id") or "").strip():
+        await callback.answer(
+            "Предыдущий визуал ещё генерируется. Сначала проверьте его или "
+            "продолжите без визуала.",
+            show_alert=True,
+        )
+        return
+    try:
+        business_id = str(data["business_id"])
+        publication_job_id = str(data["job_id"])
+        idempotency_key = "clientplatform:" + hashlib.sha256(
+            f"{business_id}|{publication_job_id}|{kind}".encode("utf-8")
+        ).hexdigest()
+        job = await asyncio.to_thread(
+            create_ad_visual,
+            title=str(data.get("creative_title") or ""),
+            body=str(data.get("creative_body") or ""),
+            kind=kind,
+            scope_id=business_id,
+            idempotency_key=idempotency_key,
+            country_code=os.getenv("VISUAL_DEPLOYMENT_COUNTRY", ""),
+            wait_seconds=_visual_wait_seconds(),
+        )
+    except (KeyError, TypeError, ValueError, VisualCreativeError):
+        await callback.answer("Не удалось подготовить визуал", show_alert=True)
+        return
+
+    await callback.answer()
+    target = _message(callback)
+    if job.status == "succeeded" and job.asset_ready:
+        try:
+            path = await asyncio.to_thread(materialize_ad_visual, job)
+        except VisualCreativeError:
+            await state.update_data(creative_job_id="")
+            await target.answer(
+                "Визуал создан, но не удалось безопасно получить файл. "
+                "Текстовый черновик сохранён."
+            )
+            return
+        await state.update_data(creative_job_id="")
+        caption = (
+            f"Готовый рекламный визуал · {job.provider} · {job.model or 'default'}"
+        )
+        if job.kind == "video":
+            await target.answer_video(FSInputFile(path), caption=caption)
+        else:
+            await target.answer_photo(FSInputFile(path), caption=caption)
+        await target.answer(
+            "Визуал готов. Текущий Yandex Direct-контур создаёт текстовый DRAFT; "
+            "файл визуала пока остаётся отдельным материалом для владельца.",
+            reply_markup=control._keyboard(
+                [
+                    [
+                        (
+                            "✅ Создать текстовый черновик в Яндекс Директе",
+                            "cpa:confirm",
+                        )
+                    ]
+                ]
+            ),
+        )
+        return
+    if job.status in {"queued", "running"} and job.id:
+        await state.update_data(creative_job_id=job.id)
+        await target.answer(
+            "Визуал ещё генерируется. Дождитесь результата или явно продолжите "
+            "без визуала.",
+            reply_markup=control._keyboard(
+                [
+                    [("🔄 Проверить визуал", "cpa:creative:refresh")],
+                    [("➡️ Продолжить без визуала", "cpa:creative:skip")],
+                ]
+            ),
+        )
+        return
+    await state.update_data(creative_job_id="")
+    await target.answer(
+        "Визуал сейчас недоступен. Текстовый рекламный черновик остаётся готовым; "
+        "провайдер изображений/видео переключается конфигурацией."
+    )
+
+
+@simple.router.callback_query(
+    AdConnectionState.confirming_publication,
+    F.data.in_({"cpa:creative:image", "cpa:creative:video"}),
+)
+async def generate_ad_visual(callback: CallbackQuery, state: FSMContext) -> None:
+    kind = "video" if str(callback.data).endswith(":video") else "image"
+    await _render_ad_visual(callback, state, kind=kind)
+
+
+@simple.router.callback_query(
+    AdConnectionState.confirming_publication,
+    F.data == "cpa:creative:refresh",
+)
+async def refresh_ad_visual(callback: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    try:
+        job = await asyncio.to_thread(
+            poll_ad_visual,
+            job_id=str(data["creative_job_id"]),
+            scope_id=str(data["business_id"]),
+        )
+    except (KeyError, TypeError, ValueError, VisualCreativeError):
+        await callback.answer("Не удалось проверить визуал", show_alert=True)
+        return
+    await callback.answer()
+    target = _message(callback)
+    if job.status == "succeeded" and job.asset_ready:
+        try:
+            path = await asyncio.to_thread(materialize_ad_visual, job)
+        except VisualCreativeError:
+            await state.update_data(creative_job_id="")
+            await target.answer(
+                "Визуал создан, но файл получить не удалось. Можно продолжить с "
+                "текстовым черновиком."
+            )
+            return
+        await state.update_data(creative_job_id="")
+        caption = (
+            f"Готовый рекламный визуал · {job.provider} · {job.model or 'default'}"
+        )
+        if job.kind == "video":
+            await target.answer_video(FSInputFile(path), caption=caption)
+        else:
+            await target.answer_photo(FSInputFile(path), caption=caption)
+        await target.answer(
+            "Визуал готов. Он не прикрепляется к Yandex Direct автоматически этим "
+            "контуром.",
+            reply_markup=control._keyboard(
+                [
+                    [
+                        (
+                            "✅ Создать текстовый черновик в Яндекс Директе",
+                            "cpa:confirm",
+                        )
+                    ]
+                ]
+            ),
+        )
+    elif job.status in {"queued", "running"}:
+        await target.answer(
+            "Визуал ещё генерируется.",
+            reply_markup=control._keyboard(
+                [
+                    [("🔄 Проверить визуал", "cpa:creative:refresh")],
+                    [("➡️ Продолжить без визуала", "cpa:creative:skip")],
+                ]
+            ),
+        )
+    else:
+        await state.update_data(creative_job_id="")
+        await target.answer(
+            "Генерация визуала завершилась ошибкой; текстовый рекламный черновик "
+            "сохранён."
+        )
+
+
+@simple.router.callback_query(
+    AdConnectionState.confirming_publication,
+    F.data == "cpa:creative:skip",
+)
+async def skip_ad_visual(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.update_data(creative_job_id="")
+    await confirm_yandex_publication(callback, state)
 
 
 @simple.router.callback_query(
@@ -442,6 +651,13 @@ async def confirm_yandex_publication(
     state: FSMContext,
 ) -> None:
     data = await state.get_data()
+    if str(data.get("creative_job_id") or "").strip():
+        await callback.answer(
+            "Визуал ещё генерируется. Сначала проверьте его или выберите "
+            "«Продолжить без визуала».",
+            show_alert=True,
+        )
+        return
     try:
         actor = await control._actor(
             int(callback.from_user.id),
@@ -483,7 +699,10 @@ __all__ = [
     "AdConnectionState",
     "confirm_yandex_publication",
     "connect_yandex_direct",
+    "generate_ad_visual",
     "open_ad_connections",
     "open_ad_promotion_slots",
     "prepare_ad_publication",
+    "refresh_ad_visual",
+    "skip_ad_visual",
 ]
