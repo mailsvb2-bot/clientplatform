@@ -264,8 +264,9 @@ def test_poll_includes_scope_id(monkeypatch):
     monkeypatch.setenv("VISUAL_GATEWAY_URL", "http://gateway.internal")
     seen = {}
 
-    def fake_open(request, _timeout):
+    def fake_open(request, timeout):
         seen["url"] = request.full_url
+        seen["timeout"] = timeout
         return FakeResponse(
             b'{"id":"j5","provider":"x","scope_id":"tenant-1",'
             b'"kind":"image","status":"queued","asset_ready":false}'
@@ -274,4 +275,5 @@ def test_poll_includes_scope_id(monkeypatch):
     monkeypatch.setattr(gateway.urllib.request, "urlopen", fake_open)
     job = gateway.poll_visual("j5", scope_id="tenant-1")
     assert "scope_id=tenant-1" in seen["url"]
+    assert seen["timeout"] == 30
     assert job.scope_id == "tenant-1"
