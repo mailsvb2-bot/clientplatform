@@ -187,20 +187,22 @@ def next_action(snapshot: PlatformResourceSnapshot) -> str:
     if highest >= 100:
         return (
             "Лимит достигнут. Новые visual-запросы будут блокироваться до сброса "
-            "суточного окна либо увеличения лимита. Проверьте баланс/квоты Yandex "
-            "Cloud, затем при необходимости увеличьте лимиты Visual Gateway и "
-            "перезапустите gateway."
+            "суточного окна либо увеличения лимита. Сначала проверьте баланс/квоты "
+            "Yandex Cloud. Если расход ожидаемый — увеличьте соответствующий "
+            "VISUAL_GATEWAY_* лимит в gateway и штатно перезапустите его."
         )
     if highest >= 95:
         return (
             "Почти исчерпано. До следующего потока генераций проверьте баланс/квоты "
-            "Yandex Cloud и увеличьте дневной лимит Visual Gateway, если рост расхода "
-            "ожидаемый."
+            "Yandex Cloud. Если расход штатный — увеличьте соответствующий "
+            "VISUAL_GATEWAY_* дневной лимит; если нет — оставьте блокировку и "
+            "разберитесь с источником расхода."
         )
     if highest >= 85:
         return (
-            "Лимит скоро закончится. Оцените оставшийся спрос сегодня; если его не "
-            "хватит, заранее проверьте Yandex Cloud и поднимите лимит gateway."
+            "Лимит скоро закончится. Оцените оставшийся спрос сегодня. Если запаса "
+            "не хватит, заранее проверьте Yandex Cloud и поднимите соответствующий "
+            "лимит gateway; если всплеск неожиданный — сначала выясните его причину."
         )
     if highest >= 70:
         return (
@@ -212,6 +214,9 @@ def next_action(snapshot: PlatformResourceSnapshot) -> str:
 
 def render_platform_resource_status(snapshot: PlatformResourceSnapshot) -> str:
     lines = ["🧯 Лимиты и ресурсы ClientPlatform", ""]
+    lines.append(
+        "Область: весь ClientPlatform целиком, а не отдельный бизнес или пользователь."
+    )
     lines.append(
         f"Visual Creative Gateway: {'✅ подключён' if snapshot.configured else '❌ не подключён'}"
     )
@@ -266,6 +271,7 @@ def render_threshold_notification(
     severity = max(crossed.values())
     icon = "🔴" if severity >= 95 else "🟠"
     lines = [f"{icon} ClientPlatform: заканчиваются лимиты Visual Creative", ""]
+    lines.append("Область: весь ClientPlatform.")
     for name, level in sorted(crossed.items(), key=lambda item: (-item[1], item[0])):
         counter = counters.get(name)
         if counter is None:
