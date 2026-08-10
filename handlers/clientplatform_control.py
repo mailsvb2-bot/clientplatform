@@ -32,6 +32,7 @@ from clientplatform.application.bookings import (
     list_customer_booking_slots,
     list_customer_businesses,
 )
+from clientplatform.application.pagination import paginate
 from clientplatform.application.control import (
     business_delivery_summary,
     create_single_lesson_program,
@@ -62,7 +63,7 @@ from clientplatform.domain.booking_calendar import (
     booking_calendar_ics,
     google_calendar_url,
 )
-from clientplatform.domain.bookings import BookingError, BookingSlotStatus
+from clientplatform.domain.bookings import BookingError, BookingSlotStatus, BookingSlotView
 from clientplatform.domain.programs import ContentKind, ProgramError
 from clientplatform.domain.tenancy import TenancyError
 from clientplatform.runtime.control_bot import control_bot_enabled
@@ -704,9 +705,53 @@ async def complete_customer_program_lesson(callback: CallbackQuery) -> None:
     )
 
 
+async def _send_client_booking_page(
+    message: Message,
+    *,
+    business_token: str,
+    slots: list[BookingSlotView],
+    page: object = 0,
+    title: str = "Доступная запись",
+    empty_text: str = "Сейчас свободного времени нет. Специалист сможет добавить его позже.",
+) -> None:
+    if not slots:
+        await message.answer(empty_text)
+        return
+    current = paginate(slots, page)
+    lines = "\n".join(
+        f"• {slot.offering_title} — {slot.local_start}, {slot.slot.duration_minutes} мин."
+        for slot in current.items
+    )
+    rows = [
+        [
+            (
+                f"{slot.local_start} · {slot.offering_title[:20]}",
+                f"cp:book:{business_token}:{_uuid_token(slot.slot.id)}",
+            )
+        ]
+        for slot in current.items
+    ]
+    navigation: list[tuple[str, str]] = []
+    if current.has_previous:
+        navigation.append(("⬅️ Назад", f"cp:client:{business_token}:{current.index - 1}"))
+    if current.has_next:
+        navigation.append(("Вперёд ➡️", f"cp:client:{business_token}:{current.index + 1}"))
+    if navigation:
+        rows.append(navigation)
+    await message.answer(
+        f"{title}\n\n{lines}\n\nСтраница {current.index + 1}/{current.count}\n\n"
+        "Выберите удобное время:",
+        reply_markup=_keyboard(rows),
+    )
+
+
 @router.callback_query(F.data.startswith("cp:client:"))
 async def open_client_booking(callback: CallbackQuery) -> None:
-    business_token = str(callback.data).split(":", 2)[2]
+    parts = str(callback.data or "").split(":")
+    if len(parts) not in {3, 4}:
+        await callback.answer("Кнопка устарела. Откройте запись заново.", show_alert=True)
+        return
+    _, _, business_token, *raw_page = parts
     business_id = _token_uuid(business_token)
     slots = await asyncio.to_thread(
         list_customer_booking_slots,
@@ -714,27 +759,11 @@ async def open_client_booking(callback: CallbackQuery) -> None:
         business_id=business_id,
     )
     await callback.answer()
-    message = _callback_message(callback)
-    if not slots:
-        await message.answer("Сейчас свободного времени нет. Специалист сможет добавить его позже.")
-        return
-    lines = "\n".join(
-        f"• {slot.offering_title} — {slot.local_start}, {slot.slot.duration_minutes} мин."
-        for slot in slots
-    )
-    await message.answer(
-        f"Доступная запись\n\n{lines}\n\nВыберите удобное время:",
-        reply_markup=_keyboard(
-            [
-                [
-                    (
-                        f"{slot.local_start} · {slot.offering_title[:20]}",
-                        f"cp:book:{business_token}:{_uuid_token(slot.slot.id)}",
-                    )
-                ]
-                for slot in slots
-            ]
-        ),
+    await _send_client_booking_page(
+        _callback_message(callback),
+        business_token=business_token,
+        slots=slots,
+        page=raw_page[0] if raw_page else 0,
     )
 
 
