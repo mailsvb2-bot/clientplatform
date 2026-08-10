@@ -150,7 +150,19 @@ def _request(
         raise VisualCreativeGatewayError(
             f"visual_gateway_http_{int(exc.code)}"
         ) from None
-    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+    except urllib.error.URLError as exc:
+        raise VisualCreativeGatewayError(
+            f"visual_gateway_transport_{type(exc).__name__}"
+        ) from None
+    except TimeoutError as exc:
+        raise VisualCreativeGatewayError(
+            f"visual_gateway_transport_{type(exc).__name__}"
+        ) from None
+    except OSError as exc:
+        raise VisualCreativeGatewayError(
+            f"visual_gateway_transport_{type(exc).__name__}"
+        ) from None
+    except ValueError as exc:
         raise VisualCreativeGatewayError(
             f"visual_gateway_transport_{type(exc).__name__}"
         ) from None
