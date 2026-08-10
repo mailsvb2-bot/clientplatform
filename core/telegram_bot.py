@@ -501,11 +501,18 @@ class ResilientBot(Bot):
     ) -> tuple[Any, int, str]:
         normalized = str(method_name or "").casefold()
         if normalized == _POLLING_METHOD:
-            timeout = (
-                request_timeout
-                if request_timeout is not None
-                else self._polling_request_timeout
-            )
+            if request_timeout is None:
+                timeout = self._polling_request_timeout
+            elif isinstance(request_timeout, (int, float)):
+                # aiogram derives getUpdates request_timeout from bot.session.timeout
+                # + polling_timeout. ClientPlatform intentionally keeps bot.session
+                # on the short UI lane, so that derived value can be far below the
+                # separately configured polling transport budget. Enforce the
+                # configured polling value as a floor while preserving an
+                # intentionally longer caller timeout.
+                timeout = max(float(request_timeout), self._polling_request_timeout)
+            else:
+                timeout = request_timeout
             return timeout, self._polling_network_retries, "polling"
         if normalized == _CALLBACK_METHOD:
             timeout = (
