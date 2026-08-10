@@ -19,6 +19,7 @@ from clientplatform.application.owner_booking_journey import (
     is_public_storefront_staff,
 )
 from clientplatform.application.partner_attribution import (
+    PartnerAttributionWriteError,
     record_partner_referral_open,
     record_partner_referral_result,
     resolve_partner_referral,
@@ -125,10 +126,10 @@ async def dispatch_partner_referral_start(
             record_partner_referral_open,
             referral_token=referral_token,
         )
-    except Exception:  # validator: allow-wide-except
+    except (PartnerAttributionWriteError, PartnerNotFound):
         # Attribution is observability, not the source of truth for storefront
         # access. Do not strand a visitor after the customer link already exists,
-        # and never log the opaque referral token or a provider exception body.
+        # and never log the opaque referral token or an infrastructure exception body.
         log.error("partner_referral_open_record_failed")
     await state.clear()
     slots = await asyncio.to_thread(
@@ -235,9 +236,9 @@ async def book_partner_referral(callback: CallbackQuery) -> None:
             referral_token=referral_token,
             result_key=f"booking_{claim.slot.slot.id}",
         )
-    except Exception:  # validator: allow-wide-except
-        # The booking is already canonical at this point. Analytics failure must
-        # never turn a successful booking into a user-visible booking failure.
+    except (PartnerAttributionWriteError, PartnerNotFound):
+        # The booking is already canonical at this point. Attribution persistence
+        # failure must never turn a successful booking into a user-visible failure.
         log.error("partner_referral_result_record_failed")
     await callback.answer("Запись подтверждена")
     message = control._callback_message(callback)
