@@ -494,7 +494,16 @@ async def _render_ad_visual(
             country_code=os.getenv("VISUAL_DEPLOYMENT_COUNTRY", ""),
             wait_seconds=_visual_wait_seconds(),
         )
-    except (KeyError, TypeError, ValueError, VisualCreativeError):
+    except KeyError:
+        await callback.answer("Не удалось подготовить визуал", show_alert=True)
+        return
+    except TypeError:
+        await callback.answer("Не удалось подготовить визуал", show_alert=True)
+        return
+    except ValueError:
+        await callback.answer("Не удалось подготовить визуал", show_alert=True)
+        return
+    except VisualCreativeError:
         await callback.answer("Не удалось подготовить визуал", show_alert=True)
         return
 
@@ -567,7 +576,16 @@ async def refresh_ad_visual(callback: CallbackQuery, state: FSMContext) -> None:
             job_id=str(data["creative_job_id"]),
             scope_id=str(data["business_id"]),
         )
-    except (KeyError, TypeError, ValueError, VisualCreativeError):
+    except KeyError:
+        await callback.answer("Не удалось проверить визуал", show_alert=True)
+        return
+    except TypeError:
+        await callback.answer("Не удалось проверить визуал", show_alert=True)
+        return
+    except ValueError:
+        await callback.answer("Не удалось проверить визуал", show_alert=True)
+        return
+    except VisualCreativeError:
         await callback.answer("Не удалось проверить визуал", show_alert=True)
         return
     await callback.answer()
