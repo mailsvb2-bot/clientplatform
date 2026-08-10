@@ -10,11 +10,13 @@ from clientplatform.application import dispatch_worker, partner_runtime
 from clientplatform.application.partner_scoring import score_partner
 from clientplatform.domain.partners import (
     ContactBasis,
+    PartnerCampaign,
     PartnerCampaignGoal,
     PartnerCandidate,
     PartnerCandidateStatus,
     PartnerChannel,
     PartnerContentPack,
+    PartnerInvariantViolation,
 )
 from clientplatform.infrastructure import DispatchOutboxRepository
 from clientplatform.infrastructure.connection_repository import ConnectionRepository
@@ -50,18 +52,21 @@ class PartnerDispatchRevocationFixture:
             business_id=access.business.id,
         )
         self.partner_repo = PartnerRepository(self.conn)
-        self.campaign = self.partner_repo.create_campaign(
+        self.campaign = self.create_campaign("Partners")
+        self.connections = ConnectionRepository(self.conn)
+        self.connection_a = self._connection("bot-a")
+        self.connection_b = self._connection("bot-b")
+        self.outbox = DispatchOutboxRepository(self.conn)
+
+    def create_campaign(self, name: str) -> PartnerCampaign:
+        return self.partner_repo.create_campaign(
             actor=self.actor,
-            name="Partners",
+            name=name,
             goal=PartnerCampaignGoal(
                 target_count=2,
                 audience_terms=("psychology",),
             ),
         )
-        self.connections = ConnectionRepository(self.conn)
-        self.connection_a = self._connection("bot-a")
-        self.connection_b = self._connection("bot-b")
-        self.outbox = DispatchOutboxRepository(self.conn)
 
     def _connection(self, external_account_id: str):
         created = self.connections.create_connection(
@@ -80,12 +85,19 @@ class PartnerDispatchRevocationFixture:
             connection_id=created.id,
         )
 
-    def candidate(self, chat_id: str = "7005151") -> PartnerCandidate:
+    def candidate(
+        self,
+        chat_id: str = "7005151",
+        *,
+        campaign: PartnerCampaign | None = None,
+        name: str = "Revocable Partner",
+    ) -> PartnerCandidate:
+        selected_campaign = campaign or self.campaign
         provisional = PartnerCandidate(
             id=str(uuid4()),
             business_id=self.actor.business_id,
-            campaign_id=self.campaign.id,
-            name="Revocable Partner",
+            campaign_id=selected_campaign.id,
+            name=name,
             source_url=f"https://example.test/{uuid4().hex}",
             audience_summary="psychology audience",
             recent_topic="",
@@ -96,7 +108,7 @@ class PartnerDispatchRevocationFixture:
         )
         candidate = self.partner_repo.upsert_candidate(
             actor=self.actor,
-            campaign=self.campaign,
+            campaign=selected_campaign,
             name=provisional.name,
             source_url=provisional.source_url,
             audience_summary=provisional.audience_summary,
@@ -107,11 +119,11 @@ class PartnerDispatchRevocationFixture:
             follower_count=provisional.follower_count,
             tags=(),
             competitor=False,
-            score=score_partner(provisional, self.campaign.goal),
+            score=score_partner(provisional, selected_campaign.goal),
         )
         self.partner_repo.save_content_pack(
             actor=self.actor,
-            campaign_id=self.campaign.id,
+            campaign_id=selected_campaign.id,
             pack=PartnerContentPack(
                 candidate_id=candidate.id,
                 subject="Collaboration",
@@ -150,6 +162,7 @@ class PartnerDispatchRevocationTests(unittest.TestCase):
         self.assertEqual(first.id, second.id)
         self.assertEqual(first.connection_id, self.fx.connection_a.id)
         self.assertEqual(second.connection_id, self.fx.connection_a.id)
+        self.assertNotIn(candidate.contact_value, first.idempotency_key)
         total = self.fx.conn.execute(
             """
             SELECT COUNT(*) FROM provider_dispatch_outbox
@@ -158,6 +171,92 @@ class PartnerDispatchRevocationTests(unittest.TestCase):
             (self.fx.actor.business_id, candidate.id),
         ).fetchone()[0]
         self.assertEqual(total, 1)
+
+    def test_same_recipient_in_another_campaign_cannot_get_second_first_contact(self) -> None:
+        first = self.fx.candidate(chat_id="7006001", name="Partner A")
+        other_campaign = self.fx.create_campaign("Second campaign")
+        second = self.fx.candidate(
+            chat_id="7006001",
+            campaign=other_campaign,
+            name="Partner A rediscovered",
+        )
+        created = self.fx.outbox.materialize_partner_outreach(
+            actor=self.fx.actor,
+            candidate_id=first.id,
+            connection_id=self.fx.connection_a.id,
+        )
+        with self.assertRaisesRegex(
+            PartnerInvariantViolation,
+            "already has a first-contact attempt",
+        ):
+            self.fx.outbox.materialize_partner_outreach(
+                actor=self.fx.actor,
+                candidate_id=second.id,
+                connection_id=self.fx.connection_b.id,
+            )
+        rows = self.fx.conn.execute(
+            """
+            SELECT id,source_id,external_subject,idempotency_key
+            FROM provider_dispatch_outbox
+            WHERE business_id=? AND source_kind='partner_outreach'
+              AND external_subject='7006001'
+            """,
+            (self.fx.actor.business_id,),
+        ).fetchall()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["id"], created.id)
+        self.assertEqual(rows[0]["source_id"], first.id)
+        self.assertNotIn("7006001", rows[0]["idempotency_key"])
+
+    def test_corrected_recipient_cancels_old_queue_and_claims_only_new_address(self) -> None:
+        candidate = self.fx.candidate(chat_id="7007001")
+        old = self.fx.outbox.materialize_partner_outreach(
+            actor=self.fx.actor,
+            candidate_id=candidate.id,
+            connection_id=self.fx.connection_a.id,
+        )
+        self.fx.conn.execute(
+            """
+            UPDATE partner_candidates
+            SET contact_value='7007002',contact_basis='opted_in'
+            WHERE id=? AND business_id=?
+            """,
+            (candidate.id, self.fx.actor.business_id),
+        )
+        new = self.fx.outbox.materialize_partner_outreach(
+            actor=self.fx.actor,
+            candidate_id=candidate.id,
+            connection_id=self.fx.connection_a.id,
+        )
+        self.assertNotEqual(old.id, new.id)
+        self.assertNotEqual(old.idempotency_key, new.idempotency_key)
+
+        claimed = self.fx.outbox.claim_due(limit=10)
+        claimed_ids = [
+            item.dispatch.id
+            for item in claimed
+            if isinstance(item, ClaimedProviderDispatch)
+        ]
+        self.assertEqual(claimed_ids, [new.id])
+        rows = {
+            row["id"]: row
+            for row in self.fx.conn.execute(
+                """
+                SELECT id,status,last_error,external_subject
+                FROM provider_dispatch_outbox
+                WHERE id IN (?,?)
+                """,
+                (old.id, new.id),
+            ).fetchall()
+        }
+        self.assertEqual(rows[old.id]["status"], "cancelled")
+        self.assertEqual(
+            rows[old.id]["last_error"],
+            "partner_authorization_invalid",
+        )
+        self.assertEqual(rows[old.id]["external_subject"], "7007001")
+        self.assertEqual(rows[new.id]["status"], "sending")
+        self.assertEqual(rows[new.id]["external_subject"], "7007002")
 
     def test_do_not_contact_status_cancels_pending_dispatch_in_same_transaction(self) -> None:
         candidate = self.fx.candidate()
@@ -211,11 +310,12 @@ class PartnerDispatchRevocationTests(unittest.TestCase):
             item for item in claimed if isinstance(item, ClaimedProviderDispatch)
         ]
         self.assertEqual(partner_claims, [])
-        status = self.fx.conn.execute(
-            "SELECT status FROM provider_dispatch_outbox WHERE id=?",
+        row = self.fx.conn.execute(
+            "SELECT status,last_error FROM provider_dispatch_outbox WHERE id=?",
             (dispatch.id,),
-        ).fetchone()[0]
-        self.assertEqual(status, "pending")
+        ).fetchone()
+        self.assertEqual(row["status"], "cancelled")
+        self.assertEqual(row["last_error"], "partner_authorization_invalid")
 
     def test_revoked_lease_is_cancelled_before_provider_boundary(self) -> None:
         candidate = self.fx.candidate()
@@ -265,7 +365,11 @@ class PartnerDispatchWorkerBoundaryTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.object(dispatch_worker, "get_db", _db),
-            patch.object(dispatch_worker, "DispatchOutboxRepository", return_value=fake_repository),
+            patch.object(
+                dispatch_worker,
+                "DispatchOutboxRepository",
+                return_value=fake_repository,
+            ),
         ):
             result = await dispatch_worker.run_dispatch_batch(
                 credential_provider=credential_provider,
