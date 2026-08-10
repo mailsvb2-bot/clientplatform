@@ -1,0 +1,159 @@
+name: One-shot resolve handler boundaries
+
+on:
+  pull_request:
+    types: [synchronize]
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.event.pull_request.head.ref == 'agent/enforce-handler-boundary-audits'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: agent/enforce-handler-boundary-audits
+          fetch-depth: 0
+      - name: Apply exact architectural repairs
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              text = target.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected one match, got {count}: {old[:80]!r}')
+              target.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          # Telemetry: observe the active exception without catching it.
+          replace_once(
+              'handlers/clientplatform_admin_extension.py',
+              'import logging\nimport time\n',
+              'import logging\nimport sys\nimport time\n',
+          )
+          replace_once(
+              'handlers/clientplatform_admin_extension.py',
+              '''        try:\n            result = await original_call(\n                self,\n                marked_handler,\n                event,\n                data,\n            )\n            success = handler_invoked\n            if not handler_invoked:\n                error_code = "suppressed_callback"\n            return result\n        except Exception as exc:  # validator: allow-wide-except\n            error_code = type(exc).__name__\n            raise\n        finally:\n            total_ms = max(\n''',
+              '''        try:\n            result = await original_call(\n                self,\n                marked_handler,\n                event,\n                data,\n            )\n            success = handler_invoked\n            if not handler_invoked:\n                error_code = "suppressed_callback"\n            return result\n        finally:\n            if error_code is None:\n                active_error = sys.exc_info()[1]\n                if active_error is not None:\n                    error_code = type(active_error).__name__\n            total_ms = max(\n''',
+          )
+
+          # /start: expected storage outage gets UX fallback; programming bugs propagate.
+          replace_once(
+              'handlers/clientplatform_entry.py',
+              'import logging\nfrom typing import Any\n',
+              'import logging\nimport sqlite3\nfrom typing import Any\n',
+          )
+          replace_once(
+              'handlers/clientplatform_entry.py',
+              '''    except Exception:  # validator: allow-wide-except\n        log.exception("ClientPlatform /start failed user_id=%s", user_id)\n        await _safe_edit_start_status(\n            status_message,\n            "Не удалось открыть ClientPlatform. "\n            "Нажмите «Старт» ещё раз — сохранённые данные не потеряны.",\n        )\n        return\n''',
+              '''    except sqlite3.DatabaseError:\n        log.exception("ClientPlatform /start storage failed user_id=%s", user_id)\n        await _safe_edit_start_status(\n            status_message,\n            "Не удалось открыть ClientPlatform. "\n            "Нажмите «Старт» ещё раз — сохранённые данные не потеряны.",\n        )\n        return\n''',
+          )
+
+          # Lesson preview: invalid external metadata is an explicit non-match, not silent pass.
+          replace_once(
+              'handlers/clientplatform_program_lesson_editor.py',
+              '''    elif lesson.content_ref.startswith("https://"):\n        try:\n            external = normalize_external_media_url(lesson.content_ref)\n        except ValueError:\n            pass\n        else:\n            lines.extend(\n                [\n                    "",\n                    f"Источник: {external.provider_label}",\n                    "Хранение: внешний файл — место ClientPlatform не расходуется.",\n                ]\n            )\n''',
+              '''    elif lesson.content_ref.startswith("https://"):\n        external = None\n        try:\n            external = normalize_external_media_url(lesson.content_ref)\n        except ValueError:\n            external = None\n        if external is not None:\n            lines.extend(\n                [\n                    "",\n                    f"Источник: {external.provider_label}",\n                    "Хранение: внешний файл — место ClientPlatform не расходуется.",\n                ]\n            )\n''',
+          )
+
+          # Temporary-file cleanup is best-effort but observable.
+          replace_once(
+              'handlers/clientplatform_program_media.py',
+              'import asyncio\nimport os\n',
+              'import asyncio\nimport logging\nimport os\n',
+          )
+          replace_once(
+              'handlers/clientplatform_program_media.py',
+              '_EXTENSION_RE = re.compile(r"^[a-z0-9]{1,10}$")\nStoreMedia = Callable[..., Any]\n',
+              '_EXTENSION_RE = re.compile(r"^[a-z0-9]{1,10}$")\nStoreMedia = Callable[..., Any]\nlog = logging.getLogger(__name__)\n',
+          )
+          replace_once(
+              'handlers/clientplatform_program_media.py',
+              '''        try:\n            temporary.unlink(missing_ok=True)\n        except OSError:\n            pass\n''',
+              '''        try:\n            temporary.unlink(missing_ok=True)\n        except OSError:\n            log.warning("Failed to remove temporary program media file", exc_info=True)\n''',
+          )
+
+          # Yandex feedback fallbacks remain best-effort but are no longer silent.
+          replace_once(
+              'handlers/clientplatform_yandex_analytics.py',
+              'import asyncio\n\nfrom aiogram',
+              'import asyncio\nimport logging\n\nfrom aiogram',
+          )
+          replace_once(
+              'handlers/clientplatform_yandex_analytics.py',
+              'router.callback_query.filter(control.ClientPlatformControlEnabled())\n\n\ndef _money',
+              'router.callback_query.filter(control.ClientPlatformControlEnabled())\nlog = logging.getLogger(__name__)\n\n\ndef _money',
+          )
+          replace_once(
+              'handlers/clientplatform_yandex_analytics.py',
+              '''    except TelegramAPIError:\n        pass\n    try:\n        await control._callback_message(callback).answer(text)\n''',
+              '''    except TelegramAPIError:\n        log.debug("Failed to answer Yandex analytics callback; using message fallback", exc_info=True)\n    try:\n        await control._callback_message(callback).answer(text)\n''',
+          )
+          replace_once(
+              'handlers/clientplatform_yandex_analytics.py',
+              '''    except TelegramAPIError:\n        pass\n    await message.answer(text, reply_markup=reply_markup)\n''',
+              '''    except TelegramAPIError:\n        log.debug("Failed to edit Yandex analytics panel; sending a new message", exc_info=True)\n    await message.answer(text, reply_markup=reply_markup)\n''',
+          )
+
+          # Normalize cleanup repository failures at the application boundary.
+          replace_once(
+              'clientplatform/application/program_media.py',
+              '''def stage_program_media_cleanup(\n    *,\n    business_id: str,\n    media_reference: str,\n    reason: str,\n    delay_seconds: int = 600,\n) -> bool:\n    if not _cleanup_enabled() or not is_private_program_media_reference(media_reference):\n        return False\n    with get_db() as conn:\n        ProgramMediaCleanupRepository(conn).enqueue(\n            business_id=business_id,\n            media_reference=media_reference,\n            reason=reason,\n            delay_seconds=delay_seconds,\n        )\n    return True\n\n\ndef cancel_program_media_cleanup(*, media_reference: str) -> bool:\n    if not _cleanup_enabled() or not is_private_program_media_reference(media_reference):\n        return False\n    with get_db() as conn:\n        return ProgramMediaCleanupRepository(conn).discard(\n            media_reference=media_reference\n        )\n''',
+              '''def stage_program_media_cleanup(\n    *,\n    business_id: str,\n    media_reference: str,\n    reason: str,\n    delay_seconds: int = 600,\n) -> bool:\n    try:\n        enabled = _cleanup_enabled()\n    except ProgramMediaStoreError:\n        raise ProgramMediaCleanupQueueError() from None\n    if not enabled or not is_private_program_media_reference(media_reference):\n        return False\n    try:\n        with get_db() as conn:\n            ProgramMediaCleanupRepository(conn).enqueue(\n                business_id=business_id,\n                media_reference=media_reference,\n                reason=reason,\n                delay_seconds=delay_seconds,\n            )\n    except (sqlite3.Error, PostgresError, OSError, RuntimeError):\n        raise ProgramMediaCleanupQueueError() from None\n    return True\n\n\ndef cancel_program_media_cleanup(*, media_reference: str) -> bool:\n    try:\n        enabled = _cleanup_enabled()\n    except ProgramMediaStoreError:\n        raise ProgramMediaCleanupQueueError() from None\n    if not enabled or not is_private_program_media_reference(media_reference):\n        return False\n    try:\n        with get_db() as conn:\n            return ProgramMediaCleanupRepository(conn).discard(\n                media_reference=media_reference\n            )\n    except (sqlite3.Error, PostgresError, OSError, RuntimeError):\n        raise ProgramMediaCleanupQueueError() from None\n''',
+          )
+
+          # Media handler: use typed cleanup errors and finally-based compensation.
+          replace_once(
+              'handlers/clientplatform_program_media_router.py',
+              '''from clientplatform.application.program_media import (\n    cancel_program_media_cleanup,\n    delete_uncommitted_program_media,\n''',
+              '''from clientplatform.application.program_media import (\n    ProgramMediaCleanupQueueError,\n    ProgramMediaStoreError,\n    cancel_program_media_cleanup,\n    delete_uncommitted_program_media,\n''',
+          )
+          replace_once(
+              'handlers/clientplatform_program_media_router.py',
+              '''    except Exception:  # validator: allow-wide-except - compensate every staging failure\n        try:\n            await asyncio.to_thread(\n                delete_uncommitted_program_media,\n                media_reference=media_reference,\n            )\n        except Exception:  # validator: allow-wide-except - best-effort last-resort cleanup\n            log.exception("Failed to compensate uncommitted program media")\n        raise\n''',
+              '''    except ProgramMediaCleanupQueueError:\n        try:\n            await asyncio.to_thread(\n                delete_uncommitted_program_media,\n                media_reference=media_reference,\n            )\n        except ProgramMediaStoreError:\n            log.exception("Failed to compensate uncommitted program media")\n        raise\n''',
+          )
+          replace_once(
+              'handlers/clientplatform_program_media_router.py',
+              '''    except Exception:  # validator: allow-wide-except - stale intent is reference-guarded\n        log.exception("Failed to cancel a referenced program media cleanup intent")\n''',
+              '''    except ProgramMediaCleanupQueueError:\n        log.exception("Failed to cancel a referenced program media cleanup intent")\n''',
+          )
+          replace_once(
+              'handlers/clientplatform_program_media_router.py',
+              '''    except Exception:  # validator: allow-wide-except - preserve primary mutation failure\n        log.exception("Failed to expedite a program media cleanup intent")\n''',
+              '''    except ProgramMediaCleanupQueueError:\n        log.exception("Failed to expedite a program media cleanup intent")\n''',
+          )
+
+          replacements = [
+              (
+                  '''    try:\n        await asyncio.to_thread(\n            builder.add_program_lesson,\n            actor=actor,\n            program_id=program_id,\n            title=lesson_title,\n            content_kind=content_kind,\n            content_ref=content_ref,\n        )\n        record = await asyncio.to_thread(\n            builder.get_program_draft,\n            actor=actor,\n            program_id=program_id,\n        )\n    except Exception:  # validator: allow-wide-except - compensate any DB/domain mutation failure\n        if staged:\n            await _queue_cleanup_safely(\n                business_id=business_id,\n                media_reference=content_ref,\n                reason="failed_lesson_add",\n            )\n        raise\n''',
+                  '''    mutation_succeeded = False\n    try:\n        await asyncio.to_thread(\n            builder.add_program_lesson,\n            actor=actor,\n            program_id=program_id,\n            title=lesson_title,\n            content_kind=content_kind,\n            content_ref=content_ref,\n        )\n        record = await asyncio.to_thread(\n            builder.get_program_draft,\n            actor=actor,\n            program_id=program_id,\n        )\n        mutation_succeeded = True\n    finally:\n        if staged and not mutation_succeeded:\n            await _queue_cleanup_safely(\n                business_id=business_id,\n                media_reference=content_ref,\n                reason="failed_lesson_add",\n            )\n''',
+              ),
+              (
+                  '''    try:\n        record, lesson = await asyncio.to_thread(\n            editor.replace_program_draft_lesson_content,\n            actor=actor,\n            lesson_id=lesson_id,\n            content_kind=content_kind,\n            content_ref=content_ref,\n        )\n    except Exception:  # validator: allow-wide-except - compensate any DB/domain mutation failure\n        if staged:\n            await _queue_cleanup_safely(\n                business_id=business_id,\n                media_reference=content_ref,\n                reason="failed_lesson_replacement",\n            )\n        raise\n''',
+                  '''    mutation_succeeded = False\n    try:\n        record, lesson = await asyncio.to_thread(\n            editor.replace_program_draft_lesson_content,\n            actor=actor,\n            lesson_id=lesson_id,\n            content_kind=content_kind,\n            content_ref=content_ref,\n        )\n        mutation_succeeded = True\n    finally:\n        if staged and not mutation_succeeded:\n            await _queue_cleanup_safely(\n                business_id=business_id,\n                media_reference=content_ref,\n                reason="failed_lesson_replacement",\n            )\n''',
+              ),
+              (
+                  '''    try:\n        program = await asyncio.to_thread(\n            control.create_single_lesson_program,\n            actor=actor,\n            program_title=program_title,\n            lesson_title=lesson_title,\n            content_kind=content_kind,\n            content_ref=content_ref,\n        )\n    except Exception:  # validator: allow-wide-except - compensate any DB/domain mutation failure\n        if staged:\n            await _queue_cleanup_safely(\n                business_id=business_id,\n                media_reference=content_ref,\n                reason="failed_legacy_program_create",\n            )\n        raise\n''',
+                  '''    mutation_succeeded = False\n    try:\n        program = await asyncio.to_thread(\n            control.create_single_lesson_program,\n            actor=actor,\n            program_title=program_title,\n            lesson_title=lesson_title,\n            content_kind=content_kind,\n            content_ref=content_ref,\n        )\n        mutation_succeeded = True\n    finally:\n        if staged and not mutation_succeeded:\n            await _queue_cleanup_safely(\n                business_id=business_id,\n                media_reference=content_ref,\n                reason="failed_legacy_program_create",\n            )\n''',
+              ),
+          ]
+          for old, new in replacements:
+              replace_once('handlers/clientplatform_program_media_router.py', old, new)
+          PY
+
+          python -m compileall clientplatform/application/program_media.py handlers/clientplatform_admin_extension.py handlers/clientplatform_entry.py handlers/clientplatform_program_lesson_editor.py handlers/clientplatform_program_media.py handlers/clientplatform_program_media_router.py handlers/clientplatform_yandex_analytics.py
+          python scripts/handler_exception_boundary_audit.py
+          git diff --check
+          rm .github/workflows/one-shot-resolve-handler-boundaries.yml
+          git config user.name "clientplatform-boundary-repair-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Repair handler exception boundaries"
+          git push origin HEAD:agent/enforce-handler-boundary-audits
