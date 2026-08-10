@@ -756,7 +756,7 @@ async def _send_public_storefront(
         message,
         business_token=business_token,
         slots=slots,
-        title=business_name,
+        title=f"{business_name}\n\nДоступно для записи",
         empty_text=(
             f"{business_name}\n\n"
             "Публичная страница открыта, но свободного времени сейчас нет. "
