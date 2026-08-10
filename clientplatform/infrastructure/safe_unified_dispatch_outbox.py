@@ -39,14 +39,26 @@ status, attempts, available_at, locked_at, lock_token,
 provider_message_id, last_error, created_at, updated_at, sent_at, dead_at
 """.strip()
 
+_PARTNER_AUTHORIZATION_SQL = """
+d.source_kind!='partner_outreach'
+OR (
+    p.id IS NOT NULL
+    AND p.competitor=0
+    AND p.channel='telegram'
+    AND p.contact_basis IN ('existing_relationship','opted_in')
+    AND p.status NOT IN ('declined','do_not_contact','invalid')
+    AND p.contact_value=d.external_subject
+)
+""".strip()
+
 
 class DispatchOutboxRepository(_UnifiedDispatchOutboxRepository):
     """Production hardening for the staged lesson/partner dispatch rollout.
 
-    The parent owns the shared settlement/retry semantics. This wrapper keeps
-    the public repository safe under multiple PostgreSQL workers: enqueue is
-    conflict-idempotent, partner work receives bounded batch capacity, and all
-    joined provider columns are explicitly qualified.
+    The parent owns shared settlement/retry semantics. This wrapper keeps the
+    public repository safe under multiple PostgreSQL workers and under operator
+    revocation: enqueue is candidate-wide idempotent, partner work receives
+    bounded batch capacity, and every claim revalidates first-contact authority.
     """
 
     def materialize_partner_outreach(
@@ -120,9 +132,9 @@ class DispatchOutboxRepository(_UnifiedDispatchOutboxRepository):
             raise PartnerInvariantViolation("partner outreach text is not sendable")
 
         timestamp = str(now or _utc_now().isoformat())
-        idempotency_key = (
-            f"partner:{candidate.id}:first-contact:connection:{normalized_connection}"
-        )
+        # First-contact idempotency belongs to the candidate, not the selected
+        # bot. Switching connections must never create a second first contact.
+        idempotency_key = f"partner:{candidate.id}:first-contact"
         dispatch_id = str(uuid.uuid4())
         row = self._conn.execute(
             f"""
@@ -160,6 +172,76 @@ class DispatchOutboxRepository(_UnifiedDispatchOutboxRepository):
         if row is None:
             raise RuntimeError("partner_dispatch_atomic_upsert_unavailable")
         return _provider_dispatch_from_row(row)
+
+    def cancel_not_started_partner_outreach(
+        self,
+        *,
+        actor: TenantContext,
+        candidate_id: str,
+        now: str | None = None,
+    ) -> int:
+        """Cancel only work for which no provider call has started yet.
+
+        A row already leased as ``sending`` is intentionally not rewritten here:
+        doing so could hide an in-flight provider call. Claim-time authorization
+        prevents pending/retry/stale work from being leased after revocation;
+        the send boundary can additionally revalidate a live lease.
+        """
+
+        current = self._tenancy.resolve_context(
+            user_id=actor.user_id,
+            business_id=actor.business_id,
+        )
+        current.assert_can_manage_promotions()
+        candidate = PartnerRepository(self._conn).get_candidate(
+            actor=current,
+            candidate_id=candidate_id,
+        )
+        timestamp = str(now or _utc_now().isoformat())
+        cursor = self._conn.execute(
+            """
+            UPDATE provider_dispatch_outbox
+            SET status='cancelled',updated_at=?,locked_at=NULL,lock_token=NULL,
+                last_error='partner_contact_revoked'
+            WHERE business_id=? AND source_kind='partner_outreach'
+              AND source_id=? AND status IN ('pending','retry')
+            """,
+            (timestamp, current.business_id, candidate.id),
+        )
+        return max(0, int(getattr(cursor, "rowcount", 0) or 0))
+
+    def partner_dispatch_still_authorized(
+        self,
+        item: ClaimedProviderDispatch,
+    ) -> bool:
+        """Revalidate a leased partner dispatch immediately before network I/O."""
+
+        if item.dispatch.source_kind != "partner_outreach":
+            return True
+        row = self._conn.execute(
+            """
+            SELECT 1
+            FROM provider_dispatch_outbox d
+            JOIN partner_candidates p
+              ON p.id=d.partner_candidate_id AND p.business_id=d.business_id
+            JOIN connections c
+              ON c.id=d.connection_id AND c.business_id=d.business_id
+             AND c.platform=d.platform
+            WHERE d.id=? AND d.business_id=? AND d.status='sending'
+              AND d.lock_token=? AND c.status='active'
+              AND p.competitor=0 AND p.channel='telegram'
+              AND p.contact_basis IN ('existing_relationship','opted_in')
+              AND p.status NOT IN ('declined','do_not_contact','invalid')
+              AND p.contact_value=d.external_subject
+            LIMIT 1
+            """,
+            (
+                item.dispatch.id,
+                item.dispatch.business_id,
+                item.dispatch.lock_token,
+            ),
+        ).fetchone()
+        return row is not None
 
     def claim_due(
         self,
@@ -220,48 +302,52 @@ class DispatchOutboxRepository(_UnifiedDispatchOutboxRepository):
         token = uuid.uuid4().hex
         if isinstance(self._conn, PostgresCompatConnection):
             rows = self._conn.execute(
-                """
+                f"""
                 WITH due AS (
                     SELECT d.id
                     FROM provider_dispatch_outbox d
                     JOIN connections c
                       ON c.id=d.connection_id AND c.business_id=d.business_id
                      AND c.platform=d.platform AND c.status='active'
-                    WHERE (
+                    LEFT JOIN partner_candidates p
+                      ON p.id=d.partner_candidate_id AND p.business_id=d.business_id
+                    WHERE ({_PARTNER_AUTHORIZATION_SQL}) AND (
                         (d.status IN ('pending','retry') AND d.available_at<=?)
                         OR (d.status='sending' AND d.locked_at IS NOT NULL
                             AND d.locked_at<=?)
                     )
                     ORDER BY d.available_at,d.id
                     LIMIT ?
-                    FOR UPDATE SKIP LOCKED
+                    FOR UPDATE OF d SKIP LOCKED
                 )
                 UPDATE provider_dispatch_outbox d
                 SET status='sending',locked_at=?,lock_token=?,updated_at=?
                 FROM due
                 WHERE d.id=due.id
                 RETURNING d.id
-                """,
+                """,  # nosec B608 - static authorization expression
                 (now_iso, stale_before, int(limit), now_iso, token, now_iso),
             ).fetchall()
             if not rows:
                 return []
         else:
             rows = self._conn.execute(
-                """
+                f"""
                 SELECT d.id
                 FROM provider_dispatch_outbox d
                 JOIN connections c
                   ON c.id=d.connection_id AND c.business_id=d.business_id
                  AND c.platform=d.platform AND c.status='active'
-                WHERE (
+                LEFT JOIN partner_candidates p
+                  ON p.id=d.partner_candidate_id AND p.business_id=d.business_id
+                WHERE ({_PARTNER_AUTHORIZATION_SQL}) AND (
                     (d.status IN ('pending','retry') AND d.available_at<=?)
                     OR (d.status='sending' AND d.locked_at IS NOT NULL
                         AND d.locked_at<=?)
                 )
                 ORDER BY d.available_at,d.id
                 LIMIT ?
-                """,
+                """,  # nosec B608 - static authorization expression
                 (now_iso, stale_before, int(limit)),
             ).fetchall()
             ids = [str(_value(row, "id", 0)) for row in rows]
@@ -284,9 +370,12 @@ class DispatchOutboxRepository(_UnifiedDispatchOutboxRepository):
             JOIN connections c
               ON c.id=d.connection_id AND c.business_id=d.business_id
              AND c.platform=d.platform AND c.status='active'
+            LEFT JOIN partner_candidates p
+              ON p.id=d.partner_candidate_id AND p.business_id=d.business_id
             WHERE d.lock_token=? AND d.status='sending'
+              AND ({_PARTNER_AUTHORIZATION_SQL})
             ORDER BY d.available_at,d.id
-            """,  # nosec B608 - static column list
+            """,  # nosec B608 - static column list/authorization expression
             (token,),
         ).fetchall()
         claimed: list[ClaimedProviderDispatch] = []
