@@ -23,7 +23,29 @@ jobs:
         run: |
           sed -n "/^          python - <<'PY'$/,/^          PY$/p" .github/workflows/one-shot-booking-pagination-refactor.yml | sed 's/^          //' > /tmp/apply-pagination.sh
           bash /tmp/apply-pagination.sh
-          nl -ba handlers/clientplatform_owner_journey.py | sed -n '295,325p'
+          python - <<'PY'
+          from pathlib import Path
+
+          def normalize_region(path: str, start: str, end: str) -> None:
+              target = Path(path)
+              text = target.read_text(encoding="utf-8")
+              left, rest = text.split(start, 1)
+              body, right = rest.split(end, 1)
+              repaired: list[str] = []
+              for line in (start + body).splitlines():
+                  stripped = line.lstrip(" ")
+                  indent = len(line) - len(stripped)
+                  if stripped and indent % 4 == 2:
+                      line = (" " * (indent + 10)) + stripped
+                  repaired.append(line)
+              target.write_text(left + "\n".join(repaired) + "\n\n" + end + right, encoding="utf-8")
+
+          normalize_region("handlers/clientplatform_control.py", "async def _send_client_booking_page(", '@router.callback_query(F.data.startswith("cp:book:"))')
+          normalize_region("handlers/clientplatform_owner_journey.py", "async def _render_calendar(", '@simple.router.callback_query(F.data.startswith("cpj:slot:"))')
+          normalize_region("handlers/clientplatform_owner_journey.py", '@simple.router.callback_query(F.data.startswith("cpj:bookings:"))', '@simple.router.callback_query(F.data.startswith("cpj:page:"))')
+          normalize_region("handlers/clientplatform_owner_journey.py", "async def _send_public_storefront(", "async def _dispatch_public_start(")
+          normalize_region("handlers/clientplatform_promotion.py", "async def _render_promotion_workspace(", '@simple.router.callback_query(F.data.startswith("cpp:stats:"))')
+          PY
           python -m compileall clientplatform/application/pagination.py handlers/clientplatform_control.py handlers/clientplatform_owner_journey.py handlers/clientplatform_promotion.py tests/test_handlers_clientplatform_booking_pagination.py
           git diff --check
           rm -f .github/workflows/pr-trigger-booking-pagination-refactor.yml
