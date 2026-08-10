@@ -7,6 +7,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 from clientplatform.application.partner_attribution import (
+    PartnerAttributionWriteError,
     record_partner_referral_open,
     record_partner_referral_result,
     resolve_partner_referral,
@@ -135,6 +136,21 @@ class PartnerAttributionTests(unittest.TestCase):
                 record_partner_referral_result(
                     referral_token=self.candidate.referral_token,
                     result_key="x" * 161,
+                )
+
+    def test_storage_failure_is_normalized_at_application_boundary(self) -> None:
+        @contextmanager
+        def broken_db():
+            raise sqlite3.OperationalError("storage unavailable")
+            yield  # pragma: no cover
+
+        with patch("clientplatform.application.partner_attribution.get_db", broken_db):
+            with self.assertRaisesRegex(
+                PartnerAttributionWriteError,
+                "partner_attribution_write_failed",
+            ):
+                record_partner_referral_open(
+                    referral_token=self.candidate.referral_token,
                 )
 
 
