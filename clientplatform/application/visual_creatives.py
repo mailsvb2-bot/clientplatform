@@ -4,11 +4,16 @@ from pathlib import Path
 
 from services.visual_creative_gateway import (
     VisualCreativeBrief,
+    VisualCreativeGatewayError,
     VisualCreativeJob,
     download_visual,
     poll_visual,
     submit_visual,
 )
+
+
+class VisualCreativeError(RuntimeError):
+    """Sanitized failure of the shared visual-creative capability."""
 
 
 def build_ad_visual_brief(
@@ -61,29 +66,39 @@ def create_ad_visual(
     preferred_provider: str = "",
     wait_seconds: int = 20,
 ) -> VisualCreativeJob:
-    return submit_visual(
-        build_ad_visual_brief(
-            title=title,
-            body=body,
-            kind=kind,
-            country_code=country_code,
-            preferred_provider=preferred_provider,
-        ),
-        scope_id=scope_id,
-        idempotency_key=idempotency_key,
-        wait_seconds=max(0, min(int(wait_seconds or 0), 60)),
-    )
+    try:
+        return submit_visual(
+            build_ad_visual_brief(
+                title=title,
+                body=body,
+                kind=kind,
+                country_code=country_code,
+                preferred_provider=preferred_provider,
+            ),
+            scope_id=scope_id,
+            idempotency_key=idempotency_key,
+            wait_seconds=max(0, min(int(wait_seconds or 0), 60)),
+        )
+    except VisualCreativeGatewayError as exc:
+        raise VisualCreativeError("visual_creative_generation_failed") from exc
 
 
 def materialize_ad_visual(job: VisualCreativeJob) -> Path:
-    return download_visual(job)
+    try:
+        return download_visual(job)
+    except (VisualCreativeGatewayError, OSError) as exc:
+        raise VisualCreativeError("visual_creative_materialization_failed") from exc
 
 
 def poll_ad_visual(*, job_id: str, scope_id: str) -> VisualCreativeJob:
-    return poll_visual(job_id, scope_id=scope_id)
+    try:
+        return poll_visual(job_id, scope_id=scope_id)
+    except VisualCreativeGatewayError as exc:
+        raise VisualCreativeError("visual_creative_poll_failed") from exc
 
 
 __all__ = [
+    "VisualCreativeError",
     "build_ad_visual_brief",
     "create_ad_visual",
     "materialize_ad_visual",
