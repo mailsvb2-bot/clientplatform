@@ -72,6 +72,7 @@ def _setup_fixture() -> tuple[object, str, str]:
             name="Concurrency Partner",
             source_url="https://example.test/partner-concurrency",
             audience_summary="psychology audience",
+            recent_topic="",
             channel=PartnerChannel.TELEGRAM,
             contact_value="7912001",
             contact_basis=ContactBasis.OPTED_IN,
@@ -84,7 +85,7 @@ def _setup_fixture() -> tuple[object, str, str]:
             name=provisional.name,
             source_url=provisional.source_url,
             audience_summary=provisional.audience_summary,
-            recent_topic="",
+            recent_topic=provisional.recent_topic,
             channel=provisional.channel,
             contact_value=provisional.contact_value,
             contact_basis=provisional.contact_basis,
@@ -173,10 +174,7 @@ def main() -> None:
             return dispatch, pid
 
     enqueue_results = _run_concurrently(enqueue)
-    enqueue_ids = {
-        str(getattr(result[0], "id", ""))
-        for result in enqueue_results
-    }
+    enqueue_ids = {str(getattr(result[0], "id", "")) for result in enqueue_results}
     enqueue_pids = {int(result[1]) for result in enqueue_results}
     if len(enqueue_pids) != 2:
         raise ProbeFailure(
