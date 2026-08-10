@@ -32,6 +32,11 @@ from services.db import get_db, get_db_ro
 
 
 _TELEGRAM_CHAT_ID_RE = re.compile(r"-?[1-9][0-9]{0,19}")
+_CONTACT_REVOKING_STATUSES = {
+    PartnerCandidateStatus.DECLINED,
+    PartnerCandidateStatus.DO_NOT_CONTACT,
+    PartnerCandidateStatus.INVALID,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -219,11 +224,7 @@ def authorize_partner_telegram_contact(
             actor=current,
             candidate_id=normalized,
         )
-        if candidate.competitor or candidate.status in {
-            PartnerCandidateStatus.DECLINED,
-            PartnerCandidateStatus.DO_NOT_CONTACT,
-            PartnerCandidateStatus.INVALID,
-        }:
+        if candidate.competitor or candidate.status in _CONTACT_REVOKING_STATUSES:
             raise PartnerInvariantViolation("candidate cannot be authorized for outreach")
         conn.execute(
             """
@@ -265,12 +266,22 @@ def set_partner_candidate_status(
     candidate_id: str,
     status: PartnerCandidateStatus | str,
 ) -> None:
+    selected = (
+        status
+        if isinstance(status, PartnerCandidateStatus)
+        else PartnerCandidateStatus(str(status))
+    )
     with get_db() as conn:
         PartnerRepository(conn).set_candidate_status(
             actor=actor,
             candidate_id=candidate_id,
-            status=status,
+            status=selected,
         )
+        if selected in _CONTACT_REVOKING_STATUSES:
+            DispatchOutboxRepository(conn).cancel_not_started_partner_outreach(
+                actor=actor,
+                candidate_id=candidate_id,
+            )
 
 
 def record_partner_reply_if_expected(
