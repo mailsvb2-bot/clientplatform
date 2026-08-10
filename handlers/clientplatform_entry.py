@@ -222,6 +222,14 @@ async def clientplatform_entry_start(
             "Нажмите «Старт» ещё раз — сохранённые данные не потеряны.",
         )
         return
+    except RuntimeError:
+        log.exception("ClientPlatform /start dispatch failed user_id=%s", user_id)
+        await _safe_edit_start_status(
+            status_message,
+            "Не удалось открыть ClientPlatform. "
+            "Нажмите «Старт» ещё раз — сохранённые данные не потеряны.",
+        )
+        return
 
     await _safe_delete_start_status(status_message)
 
