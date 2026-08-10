@@ -5,6 +5,9 @@ from typing import Any
 
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 
+from clientplatform.runtime.platform_resource_monitor import (
+    platform_resource_monitor_snapshot,
+)
 from core.callback_utils import safe_answer_callback
 from handlers.admin_inline_common import safe_edit_admin
 from services.platform_resource_limits import (
@@ -35,6 +38,18 @@ def _keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def _monitor_text() -> str:
+    monitor = platform_resource_monitor_snapshot()
+    status = "✅ работает" if monitor["running"] else "⚠️ не запущен"
+    lines = [f"Автонапоминания супер-админу: {status}"]
+    age = monitor.get("last_tick_age_sec")
+    if age is not None:
+        lines.append(f"Последняя фоновая проверка: {round(float(age))} сек. назад")
+    if monitor.get("last_error"):
+        lines.append(f"Последняя проблема мониторинга: {monitor['last_error']}")
+    return "\n".join(lines)
+
+
 async def handle(
     cb: CallbackQuery,
     state: Any,
@@ -48,10 +63,11 @@ async def handle(
         return True
 
     snapshot = await asyncio.to_thread(get_platform_resource_snapshot)
+    text = f"{render_platform_resource_status(snapshot)}\n\n{_monitor_text()}"
     await safe_edit_admin(
         cb,
         state,
-        render_platform_resource_status(snapshot),
+        text,
         reply_markup=_keyboard(),
         push=data == "admin:resources",
     )
