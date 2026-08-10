@@ -8,6 +8,9 @@ from aiogram.types import InlineKeyboardMarkup, Message
 
 from clientplatform.domain.bookings import BookingSlotView
 
+from . import clientplatform_partner_growth as partner_growth  # noqa: F401
+from . import clientplatform_partner_materials as partner_materials  # noqa: F401
+from . import clientplatform_partner_referral as partner_referral
 from . import clientplatform_promotion as promotion
 
 
@@ -24,7 +27,11 @@ def _owner_keyboard(control: ModuleType, business_id: str) -> InlineKeyboardMark
                 ("👥 Записи клиентов", f"cpj:bookings:{token}"),
                 ("🔗 Моя страница", f"cpj:page:{token}"),
             ],
-            [("🚀 Получить клиентов", f"cpj:promote:{token}")],
+            [
+                ("🚀 Получить клиентов", f"cpj:promote:{token}"),
+                ("🤝 Партнёрства", f"cpg:home:{token}"),
+            ],
+            [("📣 Партнёрские материалы", f"cpg:materials:{token}")],
             [
                 ("📣 Рекламные кабинеты", f"cpa:home:{token}"),
                 ("📊 Яндекс", f"cpy:a:{token}:30"),
@@ -132,6 +139,14 @@ def install_promotion_engine(
         user_id: int,
         managed_bot_business_id: str | None,
     ) -> None:
+        partner_handled = await partner_referral.dispatch_partner_referral_start(
+            message,
+            state,
+            user_id=user_id,
+            managed_bot_business_id=managed_bot_business_id,
+        )
+        if partner_handled:
+            return
         handled = await promotion.dispatch_promotion_start(
             message,
             state,

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 TenantDisposition = Literal["erase", "retain", "anonymize"]
-CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-08-10.v19-partner-growth-foundation"
+CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-08-10.v20-partner-growth-runtime"
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +49,7 @@ _POLICIES = (
     _required("partner_content_packs", "erase", "candidate-specific prepared outreach and collaboration copy"),
     _required("partner_placements", "erase", "candidate-linked partner placement and publication evidence"),
     _required("partner_referral_events", "erase", "candidate-linked referral capability and attribution evidence"),
+    _required("partner_reply_events", "erase", "partner inbound messages and authenticated provider reply evidence"),
     _required("ad_connections", "erase", "personal advertising account identity and encrypted OAuth material"),
     _required("ad_oauth_sessions", "erase", "short-lived one-time OAuth state and encrypted PKCE verifier"),
     _required("ad_publication_jobs", "retain", "business-owned provider publication intent and bounded delivery evidence"),
@@ -68,6 +69,7 @@ _POLICIES = (
     _required("managed_bot_provisioning_requests", "erase", "operator provisioning workflow, secret references and verification state"),
     _required("bot_gateway_ingress_events", "erase", "short-lived Telegram update payload, tenant route and replay evidence"),
     _required("delivery_dispatch_outbox", "erase", "provider routing, payload snapshot and customer delivery attempts"),
+    _required("provider_dispatch_outbox", "erase", "provider routing, partner recipient, prepared payload and send-attempt evidence"),
     _required("clientplatform_admin_alerts", "retain", "tenant operational alerts and resolution history without message payloads"),
     _required("clientplatform_admin_audit_events", "anonymize", "administrator action evidence with anonymized actor identifiers and details"),
     _required("clientplatform_admin_interaction_metrics", "anonymize", "bounded telemetry with anonymized administrator identifiers and error details"),
