@@ -32,7 +32,7 @@ _last_error = ""
 def _interval_seconds() -> int:
     return env_int(
         "CLIENTPLATFORM_RESOURCE_MONITOR_INTERVAL_SEC",
-        300,
+        60,
         minimum=60,
         maximum=3600,
     )
@@ -74,9 +74,16 @@ async def _send_superadmins(bot: Any, text: str) -> int:
     for admin_id in sorted({int(value) for value in ADMIN_IDS or []}):
         try:
             await bot.send_message(admin_id, text)
-        except (TelegramAPIError, asyncio.TimeoutError):
+        except TelegramAPIError:
             log.warning(
                 "Failed to send platform resource alert to superadmin=%s",
+                admin_id,
+                exc_info=True,
+            )
+            continue
+        except asyncio.TimeoutError:
+            log.warning(
+                "Timed out sending platform resource alert to superadmin=%s",
                 admin_id,
                 exc_info=True,
             )
@@ -150,17 +157,27 @@ async def _tick(bot: Any) -> None:
     _last_tick_monotonic = time.monotonic()
 
 
+def _record_tick_failure() -> None:
+    global _last_error
+    global _last_tick_monotonic
+    _last_error = "platform_resource_monitor_tick_failed"
+    _last_tick_monotonic = time.monotonic()
+    log.exception("ClientPlatform platform resource monitor tick failed")
+
+
 async def _monitor_loop(bot: Any) -> None:
     try:
         while True:
             try:
                 await _tick(bot)
-            except (OSError, RuntimeError, TypeError, ValueError):
-                global _last_error
-                global _last_tick_monotonic
-                _last_error = "platform_resource_monitor_tick_failed"
-                _last_tick_monotonic = time.monotonic()
-                log.exception("ClientPlatform platform resource monitor tick failed")
+            except OSError:
+                _record_tick_failure()
+            except RuntimeError:
+                _record_tick_failure()
+            except TypeError:
+                _record_tick_failure()
+            except ValueError:
+                _record_tick_failure()
             await asyncio.sleep(_interval_seconds())
     except asyncio.CancelledError:
         raise
