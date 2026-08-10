@@ -68,7 +68,11 @@ def _base_url() -> str:
         or parsed.fragment
     ):
         raise VisualCreativeGatewayError("visual_gateway_not_configured")
-    port = f":{parsed.port}" if parsed.port else ""
+    try:
+        port_value = parsed.port
+    except ValueError as exc:
+        raise VisualCreativeGatewayError("visual_gateway_not_configured") from exc
+    port = f":{port_value}" if port_value else ""
     prefix = parsed.path.rstrip("/")
     return f"{parsed.scheme}://{parsed.hostname}{port}{prefix}"
 
@@ -205,6 +209,12 @@ def _job(value: dict[str, Any]) -> VisualCreativeJob:
     )
 
 
+def _require_scope(job: VisualCreativeJob, *, expected_scope: str) -> VisualCreativeJob:
+    if job.scope_id != expected_scope:
+        raise VisualCreativeGatewayError("visual_gateway_scope_mismatch")
+    return job
+
+
 def submit_visual(
     brief: VisualCreativeBrief,
     *,
@@ -239,7 +249,7 @@ def submit_visual(
         "scope_id": scope,
         "idempotency_key": idem,
     }
-    return _job(
+    job = _job(
         _json(
             "POST",
             "/v1/creative/generations",
@@ -247,6 +257,7 @@ def submit_visual(
             timeout_seconds=bounded_wait + 15,
         )
     )
+    return _require_scope(job, expected_scope=scope)
 
 
 def poll_visual(job_id: str, *, scope_id: str) -> VisualCreativeJob:
@@ -258,7 +269,8 @@ def poll_visual(job_id: str, *, scope_id: str) -> VisualCreativeJob:
         raise ValueError("valid visual scope is required")
     token = urllib.parse.quote(raw, safe="")
     query = urllib.parse.urlencode({"scope_id": scope})
-    return _job(_json("GET", f"/v1/creative/generations/{token}?{query}"))
+    job = _job(_json("GET", f"/v1/creative/generations/{token}?{query}"))
+    return _require_scope(job, expected_scope=scope)
 
 
 def wait_visual(
@@ -319,7 +331,11 @@ def gateway_snapshot() -> dict[str, Any]:
     parsed = urllib.parse.urlsplit(base) if base else None
     safe_base = ""
     if parsed is not None and parsed.scheme in {"http", "https"} and parsed.hostname:
-        port = f":{parsed.port}" if parsed.port else ""
+        try:
+            port_value = parsed.port
+        except ValueError:
+            port_value = None
+        port = f":{port_value}" if port_value else ""
         safe_base = f"{parsed.scheme}://{parsed.hostname}{port}"
     return {
         "configured": bool(safe_base),
