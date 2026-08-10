@@ -24,6 +24,7 @@ from aiogram.types import (
     Message,
 )
 
+from clientplatform.application.pagination import paginate
 from clientplatform.application.owner_booking_journey import (
     cancel_owner_booking_slot,
     connect_public_storefront_customer,
@@ -283,6 +284,7 @@ async def _render_calendar(
     *,
     business_id: str,
     days: int,
+    page: object = 0,
 ) -> None:
     actor = await control._actor(int(callback.from_user.id), business_id)
     slots = await asyncio.to_thread(
@@ -296,15 +298,17 @@ async def _render_calendar(
         for slot in slots
         if datetime.fromisoformat(slot.slot.starts_at).astimezone(timezone.utc) <= horizon
     ]
+    current = paginate(visible, page, page_size=_CALENDAR_LIMIT)
     business_token = _business_token(business_id)
-    if visible:
+    if current.items:
         lines = "\n".join(
             f"{_slot_status(slot)[0]} {slot.local_start} — {slot.offering_title} "
             f"({_slot_status(slot)[1]})"
-            for slot in visible[:_CALENDAR_LIMIT]
+            for slot in current.items
         )
-        if len(visible) > _CALENDAR_LIMIT:
-            lines += f"\n…и ещё {len(visible) - _CALENDAR_LIMIT}"
+        remaining = max(0, current.total_items - ((current.index + 1) * _CALENDAR_LIMIT))
+        if remaining:
+            lines += f"\n…и ещё {remaining}"
         slot_rows = [
             [
                 (
@@ -312,11 +316,16 @@ async def _render_calendar(
                     f"cpj:slot:{business_token}:{control._uuid_token(slot.slot.id)}",
                 )
             ]
-            for slot in visible[:_CALENDAR_LIMIT]
+            for slot in current.items
         ]
     else:
         lines = "В выбранном периоде времени пока нет."
         slot_rows = []
+    navigation: list[tuple[str, str]] = []
+    if current.has_previous:
+        navigation.append(("⬅️ Назад", f"cpj:calendar:{business_token}:{days}:{current.index - 1}"))
+    if current.has_next:
+        navigation.append(("Вперёд ➡️", f"cpj:calendar:{business_token}:{days}:{current.index + 1}"))
     rows = [
         [
             ("7 дней", f"cpj:calendar:{business_token}:7"),
@@ -324,23 +333,40 @@ async def _render_calendar(
             ("Все", f"cpj:calendar:{business_token}:3650"),
         ],
         *slot_rows,
-        [("➕ Добавить время", f"cpj:services:{business_token}")],
-        [("🏠 В кабинет", f"cpj:home:{business_token}")],
     ]
+    if navigation:
+        rows.append(navigation)
+    rows.extend(
+        [
+            [("➕ Добавить время", f"cpj:services:{business_token}")],
+            [("🏠 В кабинет", f"cpj:home:{business_token}")],
+        ]
+    )
     await callback.answer()
     await control._callback_message(callback).answer(
-        f"📅 Мой календарь\n\n{lines}\n\nНажмите на время, чтобы проверить, изменить или снять его.",
+        f"📅 Мой календарь\n\n{lines}\n\nСтраница {current.index + 1}/{current.count}\n\n"
+        "Нажмите на время, чтобы проверить, изменить или снять его.",
         reply_markup=control._keyboard(rows),
     )
 
 
 @simple.router.callback_query(F.data.startswith("cpj:calendar:"))
 async def open_owner_calendar(callback: CallbackQuery) -> None:
-    _, _, business_token, raw_days = str(callback.data).split(":", 3)
+    parts = str(callback.data or "").split(":")
+    if len(parts) not in {4, 5}:
+        await callback.answer("Кнопка устарела. Откройте календарь заново.", show_alert=True)
+        return
+    _, _, business_token, raw_days, *raw_page = parts
+    try:
+        days = max(1, min(int(raw_days), 3650))
+    except ValueError:
+        await callback.answer("Кнопка устарела. Откройте календарь заново.", show_alert=True)
+        return
     await _render_calendar(
         callback,
         business_id=control._token_uuid(business_token),
-        days=max(1, min(int(raw_days), 3650)),
+        days=days,
+        page=raw_page[0] if raw_page else 0,
     )
 
 
@@ -577,7 +603,11 @@ async def open_owner_services(callback: CallbackQuery) -> None:
 
 @simple.router.callback_query(F.data.startswith("cpj:bookings:"))
 async def open_customer_bookings(callback: CallbackQuery) -> None:
-    business_token = str(callback.data).split(":", 2)[2]
+    parts = str(callback.data or "").split(":")
+    if len(parts) not in {3, 4}:
+        await callback.answer("Кнопка устарела. Откройте записи заново.", show_alert=True)
+        return
+    _, _, business_token, *raw_page = parts
     business_id = control._token_uuid(business_token)
     actor = await control._actor(int(callback.from_user.id), business_id)
     slots, customers = await asyncio.gather(
@@ -586,10 +616,11 @@ async def open_customer_bookings(callback: CallbackQuery) -> None:
     )
     names = {item.id: item.display_name or "Клиент" for item in customers}
     booked = [item for item in slots if item.slot.status == BookingSlotStatus.BOOKED]
+    current = paginate(booked, raw_page[0] if raw_page else 0, page_size=_CALENDAR_LIMIT)
     lines = "\n".join(
         f"👤 {slot.local_start} — {slot.offering_title}\n"
         f"   {names.get(slot.slot.booked_customer_id or '', 'Клиент')}"
-        for slot in booked
+        for slot in current.items
     ) or "Будущих записей клиентов пока нет."
     rows = [
         [
@@ -598,8 +629,15 @@ async def open_customer_bookings(callback: CallbackQuery) -> None:
                 f"cpj:slot:{business_token}:{control._uuid_token(slot.slot.id)}",
             )
         ]
-        for slot in booked[:_CALENDAR_LIMIT]
+        for slot in current.items
     ]
+    navigation: list[tuple[str, str]] = []
+    if current.has_previous:
+        navigation.append(("⬅️ Назад", f"cpj:bookings:{business_token}:{current.index - 1}"))
+    if current.has_next:
+        navigation.append(("Вперёд ➡️", f"cpj:bookings:{business_token}:{current.index + 1}"))
+    if navigation:
+        rows.append(navigation)
     rows.extend(
         [
             [("📅 Весь календарь", f"cpj:calendar:{business_token}:30")],
@@ -608,7 +646,7 @@ async def open_customer_bookings(callback: CallbackQuery) -> None:
     )
     await callback.answer()
     await control._callback_message(callback).answer(
-        f"👥 Записи клиентов\n\n{lines}",
+        f"👥 Записи клиентов\n\n{lines}\n\nСтраница {current.index + 1}/{current.count}",
         reply_markup=control._keyboard(rows),
     )
 
@@ -714,29 +752,15 @@ async def _send_public_storefront(
             ),
         )
         return
-    if not slots:
-        await message.answer(
+    await control._send_client_booking_page(
+        message,
+        business_token=business_token,
+        slots=slots,
+        title=business_name,
+        empty_text=(
             f"{business_name}\n\n"
             "Публичная страница открыта, но свободного времени сейчас нет. "
             "Вы уже подключены и увидите новые варианты при следующем открытии страницы."
-        )
-        return
-    lines = "\n".join(
-        f"• {slot.offering_title} — {slot.local_start}, {slot.slot.duration_minutes} минут"
-        for slot in slots[:_CALENDAR_LIMIT]
-    )
-    await message.answer(
-        f"{business_name}\n\n"
-        f"Доступно для записи:\n{lines}\n\n"
-        "Выберите удобное время:",
-        reply_markup=control._keyboard(
-            [
-                [(
-                    f"{slot.local_start} · {slot.offering_title[:20]}",
-                    f"cp:book:{business_token}:{control._uuid_token(slot.slot.id)}",
-                )]
-                for slot in slots[:_CALENDAR_LIMIT]
-            ]
         ),
     )
 

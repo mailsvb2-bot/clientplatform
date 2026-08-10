@@ -17,6 +17,7 @@ from aiogram.types import (
 )
 
 from clientplatform.application.booking_reminders import schedule_booking_reminders
+from clientplatform.application.pagination import paginate
 from clientplatform.application.promotions import (
     book_promoted_slot,
     create_slot_promotion,
@@ -81,6 +82,7 @@ async def _render_promotion_workspace(
     callback: CallbackQuery,
     *,
     business_token: str,
+    page: object = 0,
 ) -> None:
     business_id = control._token_uuid(business_token)
     actor = await control._actor(int(callback.from_user.id), business_id)
@@ -92,6 +94,7 @@ async def _render_promotion_workspace(
     active_campaigns = sum(
         1 for item in campaigns if item.campaign.status.value == "active"
     )
+    current = paginate(open_slots, page, page_size=_SLOT_LIMIT)
     lines = (
         f"Рекламных ссылок: {stats.campaigns}\n"
         f"Сейчас активны: {active_campaigns}\n"
@@ -106,8 +109,15 @@ async def _render_promotion_workspace(
                 f"cpp:slot:{business_token}:{control._uuid_token(slot.slot.id)}",
             )
         ]
-        for slot in open_slots[:_SLOT_LIMIT]
+        for slot in current.items
     ]
+    navigation: list[tuple[str, str]] = []
+    if current.has_previous:
+        navigation.append(("⬅️ Назад", f"cpj:promote:{business_token}:{current.index - 1}"))
+    if current.has_next:
+        navigation.append(("Вперёд ➡️", f"cpj:promote:{business_token}:{current.index + 1}"))
+    if navigation:
+        rows.append(navigation)
     rows.extend(
         [
             [("📊 Обновить результат", f"cpp:stats:{business_token}")],
@@ -115,27 +125,31 @@ async def _render_promotion_workspace(
             [("🏠 В кабинет", f"cpj:home:{business_token}")],
         ]
     )
-    if open_slots:
-        instruction = (
-            "Выберите свободное время. ClientPlatform подготовит безопасное "
-            "объявление и отдельную ссылку, по которой будут считаться переходы и записи."
-        )
-    else:
-        instruction = (
-            "Для новой рекламы сначала опубликуйте свободное время. "
-            "Статистика ранее созданных ссылок сохранена ниже."
-        )
+    instruction = (
+        "Выберите свободное время. ClientPlatform подготовит безопасное "
+        "объявление и отдельную ссылку, по которой будут считаться переходы и записи."
+        if open_slots
+        else "Для новой рекламы сначала опубликуйте свободное время. "
+        "Статистика ранее созданных ссылок сохранена ниже."
+    )
     await callback.answer()
     await control._callback_message(callback).answer(
-        f"🚀 Получить клиентов\n\n{instruction}\n\n📊 Результат\n{lines}",
+        f"🚀 Получить клиентов\n\n{instruction}\n\n"
+        f"Страница {current.index + 1}/{current.count}\n\n📊 Результат\n{lines}",
         reply_markup=control._keyboard(rows),
     )
 
 
 async def open_promotion_workspace(callback: CallbackQuery) -> None:
+    parts = str(callback.data or "").split(":")
+    if len(parts) not in {3, 4}:
+        await callback.answer("Кнопка устарела. Откройте продвижение заново.", show_alert=True)
+        return
+    _, _, business_token, *raw_page = parts
     await _render_promotion_workspace(
         callback,
-        business_token=str(callback.data).split(":", 2)[2],
+        business_token=business_token,
+        page=raw_page[0] if raw_page else 0,
     )
 
 
