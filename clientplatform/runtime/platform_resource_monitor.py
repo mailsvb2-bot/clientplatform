@@ -170,13 +170,9 @@ async def _monitor_loop(bot: Any) -> None:
         while True:
             try:
                 await _tick(bot)
-            except OSError:
-                _record_tick_failure()
-            except RuntimeError:
-                _record_tick_failure()
-            except TypeError:
-                _record_tick_failure()
-            except ValueError:
+            except Exception:  # validator: allow-wide-except
+                # A process-owned monitor must survive one transient database,
+                # driver or transport failure and retry on the next tick.
                 _record_tick_failure()
             await asyncio.sleep(_interval_seconds())
     except asyncio.CancelledError:
