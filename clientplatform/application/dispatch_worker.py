@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 from clientplatform.domain.connections import ClaimedDispatch, DispatchStatus
 from clientplatform.infrastructure import DispatchOutboxRepository
+from clientplatform.infrastructure.unified_dispatch_outbox import ClaimedProviderDispatch
 from clientplatform.transport.base import AdapterRegistry, CredentialProvider
 from services.db import get_db
 
@@ -52,6 +53,25 @@ def _release_claims(
             continue
 
 
+def _partner_claim_can_cross_provider_boundary(item: object) -> bool:
+    """Atomically honor a last-moment partner contact revocation.
+
+    Claiming commits before network I/O by design. That leaves a deliberate
+    boundary where an owner may revoke contact after claim but before a provider
+    call starts. Revalidate the lease in a fresh transaction and convert a
+    revoked partner lease to ``cancelled`` instead of resolving credentials or
+    calling the adapter.
+    """
+
+    if not isinstance(item, ClaimedProviderDispatch):
+        return True
+    with get_db() as conn:
+        repository = DispatchOutboxRepository(conn)
+        if repository.cancel_revoked_leased_partner_outreach(item):
+            return False
+        return repository.partner_dispatch_still_authorized(item)
+
+
 async def run_dispatch_batch(
     *,
     credential_provider: CredentialProvider,
@@ -64,7 +84,9 @@ async def run_dispatch_batch(
 
     Database leases are committed before any credential lookup or network I/O.
     Each settlement uses a new short transaction, so a slow provider never
-    holds an open database transaction.
+    holds an open database transaction. Partner work is revalidated once more
+    after claim and before credential resolution/provider I/O so an operator's
+    latest contact revocation is honored at the send boundary.
     """
 
     with get_db() as conn:
@@ -80,6 +102,13 @@ async def run_dispatch_batch(
     for index, item in enumerate(claimed):
         credential = ""
         try:
+            allowed = await asyncio.to_thread(
+                _partner_claim_can_cross_provider_boundary,
+                item,
+            )
+            if not allowed:
+                continue
+
             credential = str(
                 await asyncio.to_thread(
                     credential_provider.resolve,

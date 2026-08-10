@@ -28,9 +28,6 @@ class _GenerationBoundFSMContext(FSMContext):
         principal_key: tuple[int, int, int],
         generation: int,
     ) -> None:
-        # Keep isinstance(..., FSMContext) true for the core safety middleware,
-        # but delegate all state access to the caller-owned context so no second
-        # storage identity is introduced.
         self.storage = state.storage
         self.key = state.key
         self._state = state
@@ -140,13 +137,11 @@ def install_button_surface_contract(safety: ModuleType) -> None:
         "_CLIENTPLATFORM_CALLBACK_PREFIXES",
         "cpbl:",
         "cpcm:",
+        "cpg:",
     )
     _extend_tuple(
         safety,
         "_STATE_ESCAPE_PREFIXES",
-        # Legacy advanced-dashboard slot creation is a fresh add flow. It must
-        # clear stale owner-journey edit state (for example replacing_slot_id)
-        # before the control handler stores the new offering/business context.
         "cp:slotadd:",
         "cp:dless:",
         "cp:dled:",
@@ -154,6 +149,12 @@ def install_button_surface_contract(safety: ModuleType) -> None:
         "cpbl:o:",
         "cpbl:dc:",
         "cpbl:rc:",
+        "cpg:home:",
+        "cpg:p:",
+        "cpg:c:",
+        "cpg:materials:",
+        "cpg:mc:",
+        "cpg:l:",
     )
     _extend_tuple(
         safety,
@@ -162,6 +163,29 @@ def install_button_surface_contract(safety: ModuleType) -> None:
         "cp:dled:",
         "cp:dlcancel:",
         "cpbl:o:",
+        "cpg:home:",
+        "cpg:p:",
+        "cpg:c:",
+        "cpg:materials:",
+        "cpg:mc:",
+        "cpg:l:",
+    )
+    _extend_tuple(
+        safety,
+        "_SENSITIVE_STATE_PREFIXES",
+        "ClientPlatformPartnerGrowthState:",
+    )
+    _extend_tuple(
+        safety,
+        "_ONE_SHOT_PREFIXES",
+        "cpg:start:",
+        "cpg:r:",
+        "cpg:a:",
+        "cpg:s:",
+        "cpg:sc:",
+        "cpg:ok:",
+        "cpg:no:",
+        "cpg:b:",
     )
 
     original_state_local = cast(
@@ -193,9 +217,6 @@ def install_button_surface_contract(safety: ModuleType) -> None:
         return original_state_local(current_state, callback_data)
 
     def repeatable_navigation(callback_data: str) -> bool:
-        # Token-first admin ``back`` pops cp_admin_history and is therefore not
-        # idempotent. Keep it available as a state-escape action, but let the
-        # core middleware's duplicate-action guard reject rapid double taps.
         if _is_admin_stack_back(callback_data):
             return False
         return original_repeatable(callback_data)

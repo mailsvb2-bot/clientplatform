@@ -188,7 +188,7 @@ async def test_middleware_serializes_deduplicates_and_blocks_conflicting_callbac
     middleware = ClientPlatformInteractionSafetyMiddleware()
     state = fsm_context()
     data = {"bot": SimpleNamespace(id=1), "state": state}
-    callback = telegram_callback(data="cp:client:business")
+    callback = telegram_callback(data="cp:book:business:slot")
 
     assert await middleware(handler, callback, data) == "handled"
     assert handled == ["CallbackQuery"]

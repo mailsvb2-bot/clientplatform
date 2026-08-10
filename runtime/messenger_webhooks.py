@@ -13,10 +13,8 @@ from clientplatform.application.ad_connections import (
     yandex_direct_provider_configured,
 )
 from clientplatform.runtime.ad_publication_worker import AdPublicationWorker
-from clientplatform.runtime.bot_gateway import (
-    ManagedBotGatewayRuntime,
-    bot_gateway_runtime_config,
-)
+from clientplatform.runtime.bot_gateway import bot_gateway_runtime_config
+from clientplatform.runtime.partner_aware_bot_gateway import ManagedBotGatewayRuntime
 from config.settings import settings
 from core.task_manager import TaskManager
 from runtime.ad_oauth_http import ad_oauth_http_enabled, register_ad_oauth_routes
