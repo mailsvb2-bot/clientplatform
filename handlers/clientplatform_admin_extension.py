@@ -4,6 +4,7 @@ import asyncio
 import contextvars
 import importlib
 import logging
+import sys
 import time
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
@@ -1173,10 +1174,11 @@ def _install_trace_hooks(admin: ModuleType, safety: ModuleType) -> None:
             if not handler_invoked:
                 error_code = "suppressed_callback"
             return result
-        except Exception as exc:  # validator: allow-wide-except
-            error_code = type(exc).__name__
-            raise
         finally:
+            if error_code is None:
+                active_error = sys.exc_info()[1]
+                if active_error is not None:
+                    error_code = type(active_error).__name__
             total_ms = max(
                 0,
                 round((time.perf_counter() - trace.started) * 1000),

@@ -147,25 +147,51 @@ def stage_program_media_cleanup(
     reason: str,
     delay_seconds: int = 600,
 ) -> bool:
-    if not _cleanup_enabled() or not is_private_program_media_reference(media_reference):
+    try:
+        enabled = _cleanup_enabled()
+    except ProgramMediaStoreError:
+        raise ProgramMediaCleanupQueueError() from None
+    if not enabled or not is_private_program_media_reference(media_reference):
         return False
-    with get_db() as conn:
-        ProgramMediaCleanupRepository(conn).enqueue(
-            business_id=business_id,
-            media_reference=media_reference,
-            reason=reason,
-            delay_seconds=delay_seconds,
-        )
+    try:
+        with get_db() as conn:
+            ProgramMediaCleanupRepository(conn).enqueue(
+                business_id=business_id,
+                media_reference=media_reference,
+                reason=reason,
+                delay_seconds=delay_seconds,
+            )
+    except sqlite3.Error:
+        raise ProgramMediaCleanupQueueError() from None
+    except PostgresError:
+        raise ProgramMediaCleanupQueueError() from None
+    except OSError:
+        raise ProgramMediaCleanupQueueError() from None
+    except RuntimeError:
+        raise ProgramMediaCleanupQueueError() from None
     return True
 
 
 def cancel_program_media_cleanup(*, media_reference: str) -> bool:
-    if not _cleanup_enabled() or not is_private_program_media_reference(media_reference):
+    try:
+        enabled = _cleanup_enabled()
+    except ProgramMediaStoreError:
+        raise ProgramMediaCleanupQueueError() from None
+    if not enabled or not is_private_program_media_reference(media_reference):
         return False
-    with get_db() as conn:
-        return ProgramMediaCleanupRepository(conn).discard(
-            media_reference=media_reference
-        )
+    try:
+        with get_db() as conn:
+            return ProgramMediaCleanupRepository(conn).discard(
+                media_reference=media_reference
+            )
+    except sqlite3.Error:
+        raise ProgramMediaCleanupQueueError() from None
+    except PostgresError:
+        raise ProgramMediaCleanupQueueError() from None
+    except OSError:
+        raise ProgramMediaCleanupQueueError() from None
+    except RuntimeError:
+        raise ProgramMediaCleanupQueueError() from None
 
 
 def queue_program_media_cleanup(

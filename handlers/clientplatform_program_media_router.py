@@ -11,6 +11,8 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
 from clientplatform.application.program_media import (
+    ProgramMediaCleanupQueueError,
+    ProgramMediaStoreError,
     cancel_program_media_cleanup,
     delete_uncommitted_program_media,
     program_media_ingest_policy,
@@ -95,13 +97,13 @@ async def _stage_cleanup(
             media_reference=media_reference,
             reason=reason,
         )
-    except Exception:  # validator: allow-wide-except - compensate every staging failure
+    except ProgramMediaCleanupQueueError:
         try:
             await asyncio.to_thread(
                 delete_uncommitted_program_media,
                 media_reference=media_reference,
             )
-        except Exception:  # validator: allow-wide-except - best-effort last-resort cleanup
+        except ProgramMediaStoreError:
             log.exception("Failed to compensate uncommitted program media")
         raise
 
@@ -112,7 +114,7 @@ async def _cancel_cleanup_safely(*, media_reference: str) -> None:
             cancel_program_media_cleanup,
             media_reference=media_reference,
         )
-    except Exception:  # validator: allow-wide-except - stale intent is reference-guarded
+    except ProgramMediaCleanupQueueError:
         log.exception("Failed to cancel a referenced program media cleanup intent")
 
 
@@ -129,7 +131,7 @@ async def _queue_cleanup_safely(
             media_reference=media_reference,
             reason=reason,
         )
-    except Exception:  # validator: allow-wide-except - preserve primary mutation failure
+    except ProgramMediaCleanupQueueError:
         log.exception("Failed to expedite a program media cleanup intent")
 
 
@@ -169,6 +171,7 @@ async def capture_persistent_lesson_content(
         media_reference=content_ref,
         reason="pending_lesson_add",
     )
+    mutation_succeeded = False
     try:
         await asyncio.to_thread(
             builder.add_program_lesson,
@@ -183,14 +186,14 @@ async def capture_persistent_lesson_content(
             actor=actor,
             program_id=program_id,
         )
-    except Exception:  # validator: allow-wide-except - compensate any DB/domain mutation failure
-        if staged:
+        mutation_succeeded = True
+    finally:
+        if staged and not mutation_succeeded:
             await _queue_cleanup_safely(
                 business_id=business_id,
                 media_reference=content_ref,
                 reason="failed_lesson_add",
             )
-        raise
     if staged:
         await _cancel_cleanup_safely(media_reference=content_ref)
     await state.update_data(lesson_title="")
@@ -227,6 +230,7 @@ async def replace_persistent_lesson_content(
         media_reference=content_ref,
         reason="pending_lesson_replacement",
     )
+    mutation_succeeded = False
     try:
         record, lesson = await asyncio.to_thread(
             editor.replace_program_draft_lesson_content,
@@ -235,14 +239,14 @@ async def replace_persistent_lesson_content(
             content_kind=content_kind,
             content_ref=content_ref,
         )
-    except Exception:  # validator: allow-wide-except - compensate any DB/domain mutation failure
-        if staged:
+        mutation_succeeded = True
+    finally:
+        if staged and not mutation_succeeded:
             await _queue_cleanup_safely(
                 business_id=business_id,
                 media_reference=content_ref,
                 reason="failed_lesson_replacement",
             )
-        raise
     if staged:
         await _cancel_cleanup_safely(media_reference=content_ref)
     if previous_lesson is not None and previous_lesson.content_ref != content_ref:
@@ -279,6 +283,7 @@ async def capture_legacy_lesson_content(
         media_reference=content_ref,
         reason="pending_legacy_program_create",
     )
+    mutation_succeeded = False
     try:
         program = await asyncio.to_thread(
             control.create_single_lesson_program,
@@ -288,14 +293,14 @@ async def capture_legacy_lesson_content(
             content_kind=content_kind,
             content_ref=content_ref,
         )
-    except Exception:  # validator: allow-wide-except - compensate any DB/domain mutation failure
-        if staged:
+        mutation_succeeded = True
+    finally:
+        if staged and not mutation_succeeded:
             await _queue_cleanup_safely(
                 business_id=business_id,
                 media_reference=content_ref,
                 reason="failed_legacy_program_create",
             )
-        raise
     if staged:
         await _cancel_cleanup_safely(media_reference=content_ref)
     await state.clear()

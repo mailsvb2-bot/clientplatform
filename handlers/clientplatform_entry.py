@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import logging
+import sqlite3
 from typing import Any
 
 from aiogram import F, Bot, Router
@@ -213,8 +214,16 @@ async def clientplatform_entry_start(
             "Нажмите «Старт» ещё раз через несколько секунд.",
         )
         return
-    except Exception:  # validator: allow-wide-except
-        log.exception("ClientPlatform /start failed user_id=%s", user_id)
+    except sqlite3.DatabaseError:
+        log.exception("ClientPlatform /start storage failed user_id=%s", user_id)
+        await _safe_edit_start_status(
+            status_message,
+            "Не удалось открыть ClientPlatform. "
+            "Нажмите «Старт» ещё раз — сохранённые данные не потеряны.",
+        )
+        return
+    except RuntimeError:
+        log.exception("ClientPlatform /start dispatch failed user_id=%s", user_id)
         await _safe_edit_start_status(
             status_message,
             "Не удалось открыть ClientPlatform. "
