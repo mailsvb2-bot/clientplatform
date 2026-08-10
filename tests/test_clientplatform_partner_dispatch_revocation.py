@@ -217,7 +217,7 @@ class PartnerDispatchRevocationTests(unittest.TestCase):
         ).fetchone()[0]
         self.assertEqual(status, "pending")
 
-    def test_revoked_live_lease_is_cancelled_before_provider_boundary(self) -> None:
+    def test_revoked_lease_is_cancelled_before_provider_boundary(self) -> None:
         candidate = self.fx.candidate()
         self.fx.outbox.materialize_partner_outreach(
             actor=self.fx.actor,
@@ -288,7 +288,7 @@ class SimpleCredentialProvider:
 
     def resolve(self, _reference: str) -> str:
         self.calls += 1
-        return "secret"
+        return "fixture-value"
 
 
 class SimpleClaimFactory:
