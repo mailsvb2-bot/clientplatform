@@ -160,6 +160,20 @@ def _load_clientplatform_modules() -> tuple[ModuleType, ModuleType]:
     )
     globals()["clientplatform_ad_spend"] = ad_spend
     ad_spend.install_ad_spend_controls(control, simple_experience)
+
+    one_click = importlib.import_module(
+        ".clientplatform_one_click_experience",
+        __name__,
+    )
+    globals()["clientplatform_one_click_experience"] = one_click
+    one_click.install_one_click_experience(
+        owner_module=owner_journey,
+        simple_module=simple_experience,
+        control_module=control,
+    )
+    if not bool(getattr(simple_experience, "_one_click_experience_composed", False)):
+        simple_experience.router.include_router(one_click.router)
+        simple_experience._one_click_experience_composed = True
     return entry, control
 
 
@@ -221,6 +235,9 @@ def __getattr__(name: str) -> ModuleType:
     if name == "clientplatform_ad_spend":
         _load_clientplatform_modules()
         return globals()["clientplatform_ad_spend"]
+    if name == "clientplatform_one_click_experience":
+        _load_clientplatform_modules()
+        return globals()["clientplatform_one_click_experience"]
     raise AttributeError(name)
 
 
@@ -235,6 +252,7 @@ __all__ = [
     "clientplatform_existing_bot_onboarding",
     "clientplatform_first_result",
     "clientplatform_managed_bot_onboarding",
+    "clientplatform_one_click_experience",
     "clientplatform_owner_journey",
     "clientplatform_promotion",
     "clientplatform_promotion_install",
