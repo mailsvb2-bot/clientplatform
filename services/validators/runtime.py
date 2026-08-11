@@ -243,6 +243,22 @@ def validate_wide_except_policy(*, strict: bool = True) -> None:
         "handlers/clientplatform_managed_bot_onboarding.py": {
             "request_managed_bot_creation"
         },
+        # Goal-first advertising has bounded external boundaries of the same
+        # kind: Telegram files, image decoders and Yandex provider calls. Keep
+        # each reviewed allowance at function scope rather than weakening the
+        # project-wide rule or allowing an entire new file.
+        "handlers/clientplatform_goal_first_autopilot.py": {
+            "receive_custom_text",
+            "clear_custom_media",
+            "_finish_generated_image",
+            "prepare_real_launch",
+        },
+        "handlers/clientplatform_goal_launch.py": {"prepare_real_launch"},
+        "clientplatform/application/ad_publication_assets.py": {"_normalized_image"},
+        "clientplatform/application/ad_goal_publication.py": {
+            "_sync_submitted_media",
+            "submit_goal_publication",
+        },
     }
     suppression_markers = {
         "# validator: allow-wide-except",
