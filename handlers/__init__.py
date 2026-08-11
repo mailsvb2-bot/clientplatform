@@ -166,11 +166,18 @@ def _load_clientplatform_modules() -> tuple[ModuleType, ModuleType]:
         __name__,
     )
     globals()["clientplatform_one_click_experience"] = one_click
+    canonical_owner_dashboard = owner_journey.send_owner_dashboard
     one_click.install_one_click_experience(
         owner_module=owner_journey,
         simple_module=simple_experience,
         control_module=control,
     )
+    # Keep the canonical information-rich dashboard, but replace its button
+    # surface with the one-click keyboard installed above. This removes the
+    # button wall without losing activity, service, booking or customer status.
+    owner_journey.send_owner_dashboard = canonical_owner_dashboard
+    simple_experience.send_simple_dashboard = canonical_owner_dashboard
+    control._send_dashboard = canonical_owner_dashboard
     if not bool(getattr(simple_experience, "_one_click_experience_composed", False)):
         simple_experience.router.include_router(one_click.router)
         simple_experience._one_click_experience_composed = True
