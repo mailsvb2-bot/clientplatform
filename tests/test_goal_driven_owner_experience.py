@@ -169,7 +169,8 @@ class GoalDrivenOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
         snapshot = (
             "actor",
             SimpleNamespace(business=SimpleNamespace(name="Мой бизнес")),
-            object(), [], [], [], [slot()],
+            SimpleNamespace(activity_description="Помогаю клиентам"),
+            [], [], [], [slot()],
         )
         with (
             patch.object(goal.simple, "_business_snapshot", new=AsyncMock(return_value=snapshot)),
@@ -177,11 +178,12 @@ class GoalDrivenOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
         ):
             await goal.send_goal_dashboard(out, user_id=101, business_id="business-1")
         text, kwargs = out.answers[-1]
+        self.assertIn("Помогаю клиентам", text)
         self.assertIn("Если нужны новые клиенты — нажмите одну кнопку", text)
         self.assertNotIn("кампан", text.lower())
         self.assertNotIn("ID регион", text)
         labels = [button.text for row in kwargs["reply_markup"].inline_keyboard for button in row]
-        self.assertEqual(labels, ["🚀 Хочу клиентов", "👥 Клиенты и запись", "⚙️ Управление"])
+        self.assertEqual(labels, ["🚀 Получить клиентов", "👥 Клиенты и запись", "⚙️ Ещё"])
 
     async def test_dashboard_without_slots_promises_only_needed_question(self):
         out = FakeMessage()
@@ -422,7 +424,7 @@ class GoalDrivenOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
             patch.object(goal, "_continue_goal", new=AsyncMock()) as continue_goal,
         ):
             await goal.receive_goal_booking_start(message, state)
-        continue_goal.assert_awaited_once()
+        continue_goal.assert_await_once()
 
         state = FakeState(
             {
