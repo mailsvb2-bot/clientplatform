@@ -210,6 +210,16 @@ async def _load_open_slot(actor, slot_id: str):
     )
 
 
+async def _share_failure(target: Message, *, business_token: str) -> None:
+    await target.answer(
+        "Не получилось автоматически собрать объявление. Ничего не запущено и "
+        "деньги не списывались.",
+        reply_markup=control._keyboard(
+            [[("🚀 Попробовать ещё раз", f"cpo:start:{business_token}")]]
+        ),
+    )
+
+
 async def _share_result(
     event: CallbackQuery | Message,
     state: FSMContext,
@@ -239,18 +249,16 @@ async def _share_result(
             slot_id=slot.slot.id,
             channel=PromotionChannel.TELEGRAM,
         )
+    except (PromotionError, TenantPermissionDenied):
+        await _share_failure(target, business_token=business_token)
+        return
+    try:
         link = _promotion_link(
             await _bot_username(event),
             promotion.campaign.source_token,
         )
-    except (PromotionError, TenantPermissionDenied, RuntimeError, ValueError):
-        await target.answer(
-            "Не получилось автоматически собрать объявление. Ничего не запущено и "
-            "деньги не списывались.",
-            reply_markup=control._keyboard(
-                [[("🚀 Попробовать ещё раз", f"cpo:start:{business_token}")]]
-            ),
-        )
+    except (RuntimeError, ValueError):
+        await _share_failure(target, business_token=business_token)
         return
     creative = promotion.campaign.creative
     text = f"{creative.headline}\n\n{creative.primary_text}\n\n{creative.description}"
@@ -290,13 +298,7 @@ async def _share_result(
 async def _oauth_url(actor) -> str:
     try:
         start = await asyncio.to_thread(start_yandex_direct_oauth, actor=actor)
-    except (
-        AdConnectionError,
-        YandexDirectError,
-        TenantPermissionDenied,
-        RuntimeError,
-        ValueError,
-    ):
+    except (AdConnectionError, YandexDirectError, TenantPermissionDenied):
         return ""
     return start.authorization_url
 
@@ -531,6 +533,28 @@ async def _ask_city(
     )
 
 
+async def _paid_prepare_failure(
+    event: CallbackQuery | Message,
+    state: FSMContext,
+    *,
+    actor,
+    business_token: str,
+    slot,
+) -> None:
+    await _share_result(
+        event,
+        state,
+        actor=actor,
+        business_token=business_token,
+        slot=slot,
+        note=(
+            "Платное продвижение сейчас не удалось подготовить, поэтому я не "
+            "остановил работу и сделал безопасный вариант без расходов."
+        ),
+        show_paid_settings=True,
+    )
+
+
 async def _prepare_and_queue(
     event: CallbackQuery | Message,
     state: FSMContext,
@@ -552,10 +576,30 @@ async def _prepare_and_queue(
             slot_id=slot.slot.id,
             channel=PromotionChannel.WEBSITE,
         )
+    except (PromotionError, TenantPermissionDenied):
+        await _paid_prepare_failure(
+            event,
+            state,
+            actor=actor,
+            business_token=business_token,
+            slot=slot,
+        )
+        return
+    try:
         source_url = _promotion_link(
             await _bot_username(event),
             promotion.campaign.source_token,
         )
+    except (RuntimeError, ValueError):
+        await _paid_prepare_failure(
+            event,
+            state,
+            actor=actor,
+            business_token=business_token,
+            slot=slot,
+        )
+        return
+    try:
         draft = await asyncio.to_thread(
             create_ad_publication_draft,
             actor=actor,
@@ -566,30 +610,28 @@ async def _prepare_and_queue(
             region_ids=region_ids,
             source_url=source_url,
         )
-        queued = await asyncio.to_thread(
-            confirm_ad_publication,
-            actor=actor,
-            job_id=draft.job.id,
-        )
-    except (
-        AdConnectionError,
-        PromotionError,
-        TenantPermissionDenied,
-        RuntimeError,
-        ValueError,
-        TypeError,
-    ):
-        await _share_result(
+    except (AdConnectionError, TenantPermissionDenied, ValueError):
+        await _paid_prepare_failure(
             event,
             state,
             actor=actor,
             business_token=business_token,
             slot=slot,
-            note=(
-                "Платное продвижение сейчас не удалось подготовить, поэтому я не "
-                "остановил работу и сделал безопасный вариант без расходов."
-            ),
-            show_paid_settings=True,
+        )
+        return
+    try:
+        queued = await asyncio.to_thread(
+            confirm_ad_publication,
+            actor=actor,
+            job_id=draft.job.id,
+        )
+    except (AdConnectionError, TenantPermissionDenied, ValueError):
+        await _paid_prepare_failure(
+            event,
+            state,
+            actor=actor,
+            business_token=business_token,
+            slot=slot,
         )
         return
     await state.clear()
@@ -716,12 +758,20 @@ async def _continue_goal(
             ),
             timeout=25.0,
         )
-    except (
-        asyncio.TimeoutError,
-        AdConnectionError,
-        YandexDirectError,
-        TenantPermissionDenied,
-    ):
+    except asyncio.TimeoutError:
+        await _share_result(
+            event,
+            state,
+            actor=actor,
+            business_token=business_token,
+            slot=slot,
+            note=(
+                "Платное продвижение пока не готово, поэтому я сразу подготовил "
+                "вариант без расходов."
+            ),
+        )
+        return
+    except (AdConnectionError, YandexDirectError, TenantPermissionDenied):
         await _share_result(
             event,
             state,
@@ -833,7 +883,10 @@ async def change_goal_offering_page(callback: CallbackQuery) -> None:
         actor = await control._actor(int(callback.from_user.id), business_id)
         offerings = await _selectable_offerings(actor)
     except (ValueError, TenantPermissionDenied):
-        await callback.answer("Список изменился. Нажмите «Хочу клиентов» ещё раз.", show_alert=True)
+        await callback.answer(
+            "Список изменился. Нажмите «Хочу клиентов» ещё раз.",
+            show_alert=True,
+        )
         return
     if not offerings:
         await callback.answer("Список услуг изменился. Начните ещё раз.", show_alert=True)
@@ -883,15 +936,28 @@ async def receive_goal_offering_title(message: Message, state: FSMContext) -> No
     try:
         business_id = str(data["business_id"])
         business_token = str(data["business_token"])
+        capability_id = str(data["capability_id"])
+    except KeyError:
+        await message.answer(
+            "Этот шаг уже устарел. Нажмите «🚀 Хочу клиентов» и я начну заново."
+        )
+        await state.clear()
+        return
+    try:
         actor = await control._actor(_user_id(message), business_id)
+    except TenantPermissionDenied:
+        await message.answer("Нет доступа к этому бизнесу.")
+        await state.clear()
+        return
+    try:
         offering = await asyncio.to_thread(
             control.create_business_offering,
             actor=actor,
-            capability_id=str(data["capability_id"]),
+            capability_id=capability_id,
             title=title,
             description=f"{title}. Запись через ClientPlatform.",
         )
-    except (KeyError, ActivityError, TenantPermissionDenied, ValueError):
+    except (ActivityError, TenantPermissionDenied, ValueError):
         await message.answer(
             "Не получилось сохранить название. Попробуйте написать его ещё раз."
         )
