@@ -41,7 +41,37 @@ def _assert_update_ok(result: Mapping[str, Any], *, error_code: str) -> None:
 
 
 class MediaAwareYandexDirectProvider(ModeratingYandexDirectProvider):
-    """Synchronize user/generated media on a DRAFT without initiating spend."""
+    """Synchronize user-selected copy/media on a DRAFT without initiating spend."""
+
+    def update_copy(
+        self,
+        *,
+        access_token: str,
+        ad_id: str,
+        title: str,
+        text: str,
+        href: str,
+    ) -> None:
+        result = self._direct_call(
+            service="ads",
+            token=access_token,
+            payload={
+                "method": "update",
+                "params": {
+                    "Ads": [
+                        {
+                            "Id": int(ad_id),
+                            "TextAd": {
+                                "Title": " ".join(str(title or "").split())[:56],
+                                "Text": " ".join(str(text or "").split())[:81],
+                                "Href": str(href or "").strip(),
+                            },
+                        }
+                    ]
+                },
+            },
+        )
+        _assert_update_ok(result, error_code="ad_copy_sync_failed")
 
     def upload_image(
         self,
@@ -83,13 +113,7 @@ class MediaAwareYandexDirectProvider(ModeratingYandexDirectProvider):
         image_hash: str | None,
         video_creative_id: str | None,
     ) -> None:
-        """Make provider media equal to the owner's selected media state.
-
-        Yandex Ads.update declares both TextAd.AdImageHash and
-        TextAd.VideoExtension.CreativeId as nillable. Sending null removes the
-        previous binding, so replacing an image with video (or selecting no
-        media) cannot leave stale media on the provider-side DRAFT.
-        """
+        """Make provider media equal to the owner's selected media state."""
 
         result = self._direct_call(
             service="ads",
