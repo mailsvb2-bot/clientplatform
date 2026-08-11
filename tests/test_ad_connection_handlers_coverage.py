@@ -323,11 +323,13 @@ class AdConnectionTelegramJourneyTests(unittest.IsolatedAsyncioTestCase):
             ),
         ):
             await ad_handlers.choose_yandex_campaign(cb, state)
+        cb.answer.assert_awaited_once_with("Загружаю кампании…")
         self.assertEqual(state.state, ad_handlers.AdConnectionState.selecting_campaign)
         self.assertEqual(state.data["connection_id"], "connection-1")
         self.assertEqual(state.data["yandex_campaigns"][0]["id"], "6001")
 
         cb.answer.reset_mock()
+        out.answer.reset_mock()
         state = FakeState(
             {
                 "business_id": "business-1",
@@ -341,18 +343,21 @@ class AdConnectionTelegramJourneyTests(unittest.IsolatedAsyncioTestCase):
             patch.object(ad_handlers, "list_yandex_direct_campaigns", return_value=[]),
         ):
             await ad_handlers.choose_yandex_campaign(cb, state)
-        cb.answer.assert_awaited_once_with(
+        cb.answer.assert_awaited_once_with("Загружаю кампании…")
+        self.assertIn(
             "В кабинете нет подходящей активной текстовой кампании",
-            show_alert=True,
+            out.answer.await_args.args[0],
         )
 
+        out.answer.reset_mock()
         cb = callback("cpa:conn:not-a-number")
         patches = self.common_patches(ad_handlers, out)
         with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
             await ad_handlers.choose_yandex_campaign(cb, state)
-        cb.answer.assert_awaited_once_with(
+        cb.answer.assert_awaited_once_with("Загружаю кампании…")
+        self.assertIn(
             "Не удалось получить кампании Яндекса",
-            show_alert=True,
+            out.answer.await_args.args[0],
         )
 
     async def test_region_request_and_publication_preview(self) -> None:
