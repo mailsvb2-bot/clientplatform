@@ -173,14 +173,11 @@ def _load_clientplatform_modules() -> tuple[ModuleType, ModuleType]:
         control_module=control,
     )
     # Keep the canonical information-rich dashboard until the goal-first layer
-    # is installed. One-click owns the orchestration; goal-first owns what the
-    # user sees and which questions are exposed.
+    # is installed. One-click owns advertising orchestration; goal-first owns
+    # the visible outcome and the minimum business questions.
     owner_journey.send_owner_dashboard = canonical_owner_dashboard
     simple_experience.send_simple_dashboard = canonical_owner_dashboard
     control._send_dashboard = canonical_owner_dashboard
-    if not bool(getattr(simple_experience, "_one_click_experience_composed", False)):
-        simple_experience.router.include_router(one_click.router)
-        simple_experience._one_click_experience_composed = True
 
     goal_first = importlib.import_module(
         ".clientplatform_goal_first_autopilot",
@@ -194,9 +191,23 @@ def _load_clientplatform_modules() -> tuple[ModuleType, ModuleType]:
     globals()["clientplatform_goal_dashboard"] = goal_dashboard
     goal_first.send_goal_dashboard = goal_dashboard.send_goal_dashboard
 
-    # Real launch is deliberately composed before the compatibility callbacks
-    # that still live in the goal-first presentation module. Aiogram stops on
-    # the first matching handler, so one compact adapter owns the paid boundary.
+    goal_schedule = importlib.import_module(
+        ".clientplatform_goal_schedule",
+        __name__,
+    )
+    globals()["clientplatform_goal_schedule"] = goal_schedule
+    # This router owns cpo:start first. If a slot already exists it delegates
+    # to the canonical one-click handler; otherwise it creates the missing
+    # business setup and then resumes that same handler automatically.
+    if not bool(getattr(simple_experience, "_goal_schedule_composed", False)):
+        simple_experience.router.include_router(goal_schedule.router)
+        simple_experience._goal_schedule_composed = True
+    if not bool(getattr(simple_experience, "_one_click_experience_composed", False)):
+        simple_experience.router.include_router(one_click.router)
+        simple_experience._one_click_experience_composed = True
+
+    # Real paid launch has one owner. Compose it before goal-first presentation
+    # callbacks so stale or duplicate launch actions cannot fall through.
     goal_launch = importlib.import_module(
         ".clientplatform_goal_launch",
         __name__,
@@ -299,6 +310,9 @@ def __getattr__(name: str) -> ModuleType:
     if name == "clientplatform_goal_dashboard":
         _load_clientplatform_modules()
         return globals()["clientplatform_goal_dashboard"]
+    if name == "clientplatform_goal_schedule":
+        _load_clientplatform_modules()
+        return globals()["clientplatform_goal_schedule"]
     if name == "clientplatform_goal_launch":
         _load_clientplatform_modules()
         return globals()["clientplatform_goal_launch"]
@@ -317,6 +331,7 @@ __all__ = [
     "clientplatform_first_result",
     "clientplatform_goal_dashboard",
     "clientplatform_goal_first_autopilot",
+    "clientplatform_goal_schedule",
     "clientplatform_goal_launch",
     "clientplatform_managed_bot_onboarding",
     "clientplatform_one_click_experience",
