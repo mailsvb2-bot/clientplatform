@@ -41,7 +41,7 @@ def _assert_update_ok(result: Mapping[str, Any], *, error_code: str) -> None:
 
 
 class MediaAwareYandexDirectProvider(ModeratingYandexDirectProvider):
-    """Attach user/generated media to a DRAFT without initiating spend."""
+    """Synchronize user/generated media on a DRAFT without initiating spend."""
 
     def upload_image(
         self,
@@ -75,13 +75,22 @@ class MediaAwareYandexDirectProvider(ModeratingYandexDirectProvider):
             error_code="ad_image_upload_failed",
         )
 
-    def attach_image(
+    def set_media(
         self,
         *,
         access_token: str,
         ad_id: str,
-        image_hash: str,
+        image_hash: str | None,
+        video_creative_id: str | None,
     ) -> None:
+        """Make provider media equal to the owner's selected media state.
+
+        Yandex Ads.update declares both TextAd.AdImageHash and
+        TextAd.VideoExtension.CreativeId as nillable. Sending null removes the
+        previous binding, so replacing an image with video (or selecting no
+        media) cannot leave stale media on the provider-side DRAFT.
+        """
+
         result = self._direct_call(
             service="ads",
             token=access_token,
@@ -91,13 +100,46 @@ class MediaAwareYandexDirectProvider(ModeratingYandexDirectProvider):
                     "Ads": [
                         {
                             "Id": int(ad_id),
-                            "TextAd": {"AdImageHash": str(image_hash)},
+                            "TextAd": {
+                                "AdImageHash": (
+                                    None if image_hash is None else str(image_hash)
+                                ),
+                                "VideoExtension": {
+                                    "CreativeId": (
+                                        None
+                                        if video_creative_id is None
+                                        else int(video_creative_id)
+                                    )
+                                },
+                            },
                         }
                     ]
                 },
             },
         )
-        _assert_update_ok(result, error_code="ad_image_attachment_failed")
+        _assert_update_ok(result, error_code="ad_media_sync_failed")
+
+    def attach_image(
+        self,
+        *,
+        access_token: str,
+        ad_id: str,
+        image_hash: str,
+    ) -> None:
+        self.set_media(
+            access_token=access_token,
+            ad_id=ad_id,
+            image_hash=image_hash,
+            video_creative_id=None,
+        )
+
+    def clear_media(self, *, access_token: str, ad_id: str) -> None:
+        self.set_media(
+            access_token=access_token,
+            ad_id=ad_id,
+            image_hash=None,
+            video_creative_id=None,
+        )
 
     def upload_video(
         self,
@@ -186,24 +228,12 @@ class MediaAwareYandexDirectProvider(ModeratingYandexDirectProvider):
         ad_id: str,
         creative_id: str,
     ) -> None:
-        result = self._direct_call(
-            service="ads",
-            token=access_token,
-            payload={
-                "method": "update",
-                "params": {
-                    "Ads": [
-                        {
-                            "Id": int(ad_id),
-                            "TextAd": {
-                                "VideoExtension": {"CreativeId": int(creative_id)}
-                            },
-                        }
-                    ]
-                },
-            },
+        self.set_media(
+            access_token=access_token,
+            ad_id=ad_id,
+            image_hash=None,
+            video_creative_id=creative_id,
         )
-        _assert_update_ok(result, error_code="ad_video_attachment_failed")
 
 
 __all__ = ["MediaAwareYandexDirectProvider"]
