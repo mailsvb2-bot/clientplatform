@@ -231,6 +231,9 @@ def install_button_surface_contract(safety: ModuleType) -> None:
         if current_state.startswith("OneClickOwnerState:waiting_region"):
             if callback_data.startswith("cpo:region:"):
                 return True
+        if current_state.startswith("AdConnectionState:confirming_publication"):
+            if callback_data.startswith("cpa:creative:"):
+                return True
         return original_state_local(current_state, callback_data)
 
     def repeatable_navigation(callback_data: str) -> bool:
