@@ -1,34 +1,86 @@
 from __future__ import annotations
 
-"""Goal-first owner UX layered over the canonical one-click orchestration.
+"""Goal-first owner UX over the canonical one-click orchestration.
 
-The owner states the outcome (get clients). Technical routing stays inside the
-platform. Paid or irreversible steps remain explicit confirmations.
+The default path asks for an outcome, not technical advertising objects. Owners
+who want control can open one optional customization screen for their own copy,
+image or video. Paid generation and real advertising spend remain explicit.
 """
 
 import asyncio
+import hashlib
+import os
+from decimal import Decimal
+from io import BytesIO
 from types import ModuleType
 
+from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import CallbackQuery, FSInputFile, Message
 
+from clientplatform.application.ad_goal_autopilot import prepare_goal_spend_consent
+from clientplatform.application.ad_goal_publication import (
+    GoalPublicationBusy,
+    submit_goal_publication,
+)
+from clientplatform.application.ad_publication_assets import (
+    attach_image_bytes,
+    attach_image_file,
+    attach_video_bytes,
+    remove_asset,
+)
+from clientplatform.application.ad_publication_customization import (
+    update_ad_publication_copy,
+)
+from clientplatform.application.ad_spend_consent import grant_ad_spend_consent
+from clientplatform.application.ad_spend_operations import (
+    ad_spend_mutations_enabled,
+    queue_ad_spend_launch,
+)
+from clientplatform.application.visual_creatives import (
+    VisualCreativeError,
+    create_ad_visual,
+    materialize_ad_visual,
+    poll_ad_visual,
+)
 from clientplatform.domain.ad_connections import AdConnectionError
+from clientplatform.domain.ad_publication_assets import (
+    AdPublicationAssetError,
+    AdPublicationAssetSource,
+)
+from clientplatform.domain.ad_spend import AdSpendError
 from clientplatform.domain.promotions import PromotionChannel, PromotionError
 from clientplatform.domain.tenancy import TenantPermissionDenied
+from clientplatform.integrations.yandex_direct import YandexDirectError
 
-from . import clientplatform_ad_connections as ad
 from . import clientplatform_control as control
 from . import clientplatform_one_click_experience as one_click
+
+
+router = Router(name="clientplatform_goal_first_autopilot")
+_MAX_TELEGRAM_MEDIA_BYTES = 20_000_000
+
+
+class GoalFirstAutopilotState(StatesGroup):
+    ready = State()
+    customizing = State()
+    waiting_text = State()
+    waiting_image = State()
+    waiting_video = State()
+    confirming_generation = State()
+    generation_pending = State()
+    confirming_launch = State()
 
 
 def _goal_keyboard(business_id: str):
     token = control._uuid_token(business_id)
     return control._keyboard(
         [
-            [("🚀 Хочу клиентов", f"cpo:start:{token}")],
+            [("🚀 Получить клиентов", f"cpo:start:{token}")],
             [
-                ("👥 Записи", f"cpj:bookings:{token}"),
-                ("⚙️ Настройки", f"cpo:more:{token}"),
+                ("👥 Клиенты и запись", f"cpj:bookings:{token}"),
+                ("⚙️ Ещё", f"cpo:more:{token}"),
             ],
         ]
     )
@@ -40,7 +92,7 @@ async def send_goal_dashboard(
     user_id: int,
     business_id: str,
 ) -> None:
-    _actor, access, _profile, _caps, _customers, _programs, slots = (
+    _actor, access, profile, _caps, customers, programs, slots = (
         await one_click.simple._business_snapshot(
             user_id=user_id,
             business_id=business_id,
@@ -50,21 +102,52 @@ async def send_goal_dashboard(
         item.slot.status == one_click.BookingSlotStatus.OPEN for item in slots
     )
     readiness = (
-        f"Свободных окон сейчас: {open_count}."
+        f"Свободных времён: {open_count}."
         if open_count
-        else "Свободных окон пока нет — если понадобится, я попрошу указать одно."
+        else "Свободных времён пока нет — если понадобится, я попрошу добавить одно."
     )
     await message.answer(
         f"🏠 {access.business.name}\n\n"
-        "Что хотите получить?\n\n"
-        "Нажмите «🚀 Хочу клиентов». ClientPlatform сама проверит запись, "
-        "рекламу и прежние настройки, подготовит лучший доступный вариант и "
-        "спросит только то, что действительно нельзя определить автоматически.\n\n"
-        "Технические кабинеты, кампании и служебные настройки знать не нужно. "
-        "Действие с возможными расходами всегда подтверждается отдельно.\n\n"
-        f"{readiness}",
+        f"{profile.activity_description}\n\n"
+        f"{readiness}\n"
+        f"Клиентов: {len(customers)} · материалов и программ: {len(programs)}\n\n"
+        "Главное действие — «🚀 Получить клиентов». ClientPlatform сама выберет "
+        "ближайшее свободное время, подходящий рекламный путь и сохранённые "
+        "настройки. Технические кабинеты и кампании знать не нужно.\n\n"
+        "Если захотите, перед запуском можно заменить текст и добавить свою "
+        "картинку или видео. Действия с возможными расходами подтверждаются отдельно.",
         reply_markup=_goal_keyboard(business_id),
     )
+
+
+def _custom_keyboard(business_token: str):
+    return control._keyboard(
+        [
+            [("✍️ Свой текст", f"cpo:custom-text:{business_token}")],
+            [
+                ("🖼 Своя картинка", f"cpo:custom-image:{business_token}"),
+                ("🎬 Своё видео", f"cpo:custom-video:{business_token}"),
+            ],
+            [("✨ Сделать картинку автоматически", f"cpo:genask:{business_token}")],
+            [("🧹 Без картинки и видео", f"cpo:custom-clear:{business_token}")],
+            [("✅ Готово", f"cpo:custom-done:{business_token}")],
+            [("🧰 Другие настройки", f"cpo:ads:{business_token}")],
+        ]
+    )
+
+
+def _result_keyboard(business_token: str):
+    return control._keyboard(
+        [
+            [("🚀 Продолжить к запуску", f"cpo:launch:{business_token}")],
+            [("🎨 Настроить под себя", f"cpo:custom:{business_token}")],
+            [("🏠 Не запускать", f"cpj:home:{business_token}")],
+        ]
+    )
+
+
+def _state_matches(data: dict, business_token: str) -> bool:
+    return str(data.get("business_token") or "") == str(business_token or "")
 
 
 async def _prepare_goal_result(
@@ -74,7 +157,7 @@ async def _prepare_goal_result(
     data: dict,
     region_ids: tuple[int, ...],
 ) -> None:
-    """Prepare the canonical ad draft but present only the business outcome."""
+    """Prepare the canonical local draft but expose only the owner outcome."""
 
     actor = await control._actor(
         one_click._user_id(event),
@@ -127,34 +210,25 @@ async def _prepare_goal_result(
         )
         return
 
-    await state.set_state(ad.AdConnectionState.confirming_publication)
-    await state.set_data(
-        {
-            **data,
-            "promotion_campaign_id": promotion.campaign.id,
-            "source_url": source_url,
-            "job_id": draft.job.id,
-            "creative_title": draft.job.title,
-            "creative_body": draft.job.text,
-            "creative_job_id": "",
-        }
-    )
-
+    next_data = {
+        **data,
+        "promotion_campaign_id": promotion.campaign.id,
+        "source_url": source_url,
+        "job_id": draft.job.id,
+        "creative_title": draft.job.title,
+        "creative_body": draft.job.text,
+        "creative_job_id": "",
+    }
+    await state.set_state(GoalFirstAutopilotState.ready)
+    await state.set_data(next_data)
     await one_click._target(event).answer(
-        "✅ Всё готово\n\n"
-        "Я сам выбрал ближайшее свободное время, подготовил объявление и "
-        "использовал подходящие сохранённые настройки.\n\n"
+        "✅ Реклама подготовлена — всё готово\n\n"
+        "ClientPlatform сама выбрала ближайшее свободное время и подходящие "
+        "сохранённые настройки.\n\n"
         f"{draft.job.title}\n\n{draft.job.text}\n\n"
-        "Пока ничего не запущено и рекламный бюджет не расходуется. "
-        "Теперь нужен только ваш выбор перед платным действием.",
-        reply_markup=control._keyboard(
-            [
-                [("✨ Добавить красивую картинку", "cpa:creative:image")],
-                [("🚀 Запустить рекламу", "cpa:confirm")],
-                [("✏️ Изменить", f"cpa:promote:{data['business_token']}")],
-                [("🏠 Не запускать", f"cpj:home:{data['business_token']}")],
-            ]
-        ),
+        "Можно сразу продолжить. Если хотите свой текст, картинку или видео — "
+        "откройте «Настроить под себя». Пока ничего не запущено и деньги не расходуются.",
+        reply_markup=_result_keyboard(str(data["business_token"])),
     )
 
 
@@ -166,8 +240,6 @@ async def _choose_goal_region(
     campaign_id: str,
     campaign_name: str,
 ) -> None:
-    """Reuse a previous region; otherwise ask one plain business question."""
-
     actor = await control._actor(
         int(callback.from_user.id),
         str(data["business_id"]),
@@ -200,14 +272,553 @@ async def _choose_goal_region(
     await state.set_state(one_click.OneClickOwnerState.waiting_region)
     await state.set_data(next_data)
     await control._callback_message(callback).answer(
-        "Где искать клиентов? Это нужно спросить только в первый раз — "
-        "дальше ClientPlatform запомнит выбор.",
+        "Осталось только указать регион: где искать клиентов? Это нужно спросить "
+        "только в первый раз — дальше ClientPlatform запомнит выбор.",
         reply_markup=control._keyboard(
             [
                 [("Нижний Новгород", "cpo:region:47"), ("Москва", "cpo:region:213")],
                 [("Санкт-Петербург", "cpo:region:2")],
                 [("Другой город", "cpo:region:other")],
                 [("🏠 Не сейчас", f"cpj:home:{data['business_token']}")],
+            ]
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("cpo:custom:"))
+async def open_customization(callback: CallbackQuery, state: FSMContext) -> None:
+    business_token = str(callback.data).split(":", 2)[2]
+    data = await state.get_data()
+    if not _state_matches(data, business_token) or not data.get("job_id"):
+        await callback.answer("Этот черновик уже устарел", show_alert=True)
+        return
+    await state.set_state(GoalFirstAutopilotState.customizing)
+    await callback.answer()
+    await control._callback_message(callback).answer(
+        "🎨 Настроить под себя\n\n"
+        "Это необязательно. Можно заменить только то, что хотите; остальное "
+        "ClientPlatform оставит готовым. Свои файлы я сама подготовлю и прикреплю "
+        "к объявлению.",
+        reply_markup=_custom_keyboard(business_token),
+    )
+
+
+@router.callback_query(F.data.startswith("cpo:custom-text:"))
+async def ask_custom_text(callback: CallbackQuery, state: FSMContext) -> None:
+    business_token = str(callback.data).split(":", 2)[2]
+    data = await state.get_data()
+    if not _state_matches(data, business_token):
+        await callback.answer("Этот черновик уже устарел", show_alert=True)
+        return
+    await state.set_state(GoalFirstAutopilotState.waiting_text)
+    await callback.answer()
+    await control._callback_message(callback).answer(
+        "Отправьте свой рекламный текст одним сообщением:\n\n"
+        "первая строка — заголовок;\n"
+        "со второй строки — основной текст.\n\n"
+        "Например:\nКонсультация для родителей\nПомогу спокойно разобрать сложную ситуацию."
+    )
+
+
+@router.message(GoalFirstAutopilotState.waiting_text)
+async def receive_custom_text(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    raw = str(message.text or "").strip()
+    lines = [line.strip() for line in raw.splitlines() if line.strip()]
+    if len(lines) < 2:
+        await message.answer(
+            "Нужно две части: первая строка — заголовок, дальше — текст объявления."
+        )
+        return
+    title, body = lines[0], " ".join(lines[1:])
+    try:
+        actor = await control._actor(control._user_id(message), str(data["business_id"]))
+        updated = await asyncio.to_thread(
+            update_ad_publication_copy,
+            actor=actor,
+            publication_job_id=str(data["job_id"]),
+            title=title,
+            text=body,
+        )
+    except (KeyError, ValueError, AdConnectionError, TenantPermissionDenied):
+        await message.answer(
+            "Не получилось сохранить текст. Заголовок — до 56 символов, основной "
+            "текст — до 81. Попробуйте ещё раз."
+        )
+        return
+    await state.update_data(creative_title=updated.title, creative_body=updated.text)
+    await state.set_state(GoalFirstAutopilotState.customizing)
+    await message.answer(
+        "✅ Свой текст поставил. Больше ничего делать с ним не нужно.",
+        reply_markup=_custom_keyboard(str(data["business_token"])),
+    )
+
+
+@router.callback_query(F.data.startswith("cpo:custom-image:"))
+async def ask_custom_image(callback: CallbackQuery, state: FSMContext) -> None:
+    business_token = str(callback.data).split(":", 2)[2]
+    data = await state.get_data()
+    if not _state_matches(data, business_token):
+        await callback.answer("Этот черновик уже устарел", show_alert=True)
+        return
+    await state.set_state(GoalFirstAutopilotState.waiting_image)
+    await callback.answer()
+    await control._callback_message(callback).answer(
+        "Пришлите картинку сюда как фото или файл. Я сама приведу её к формату "
+        "Яндекс Директа и прикреплю к объявлению."
+    )
+
+
+async def _download_telegram_file(message: Message, *, file_id: str, reported_size: int) -> bytes:
+    if reported_size <= 0 or reported_size > _MAX_TELEGRAM_MEDIA_BYTES:
+        raise AdPublicationAssetError("telegram media size is unsupported")
+    telegram_file = await message.bot.get_file(file_id)
+    remote_size = int(getattr(telegram_file, "file_size", 0) or reported_size)
+    if remote_size > _MAX_TELEGRAM_MEDIA_BYTES:
+        raise AdPublicationAssetError("telegram media size is unsupported")
+    file_path = str(getattr(telegram_file, "file_path", "") or "").strip()
+    if not file_path:
+        raise AdPublicationAssetError("telegram media path is unavailable")
+    target = BytesIO()
+    await message.bot.download_file(file_path, destination=target, timeout=30)
+    payload = target.getvalue()
+    if not payload or len(payload) > _MAX_TELEGRAM_MEDIA_BYTES:
+        raise AdPublicationAssetError("telegram media download is invalid")
+    return payload
+
+
+@router.message(GoalFirstAutopilotState.waiting_image)
+async def receive_custom_image(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    file_id = ""
+    size = 0
+    name = "image.jpg"
+    if message.photo:
+        selected = message.photo[-1]
+        file_id = str(selected.file_id)
+        size = int(selected.file_size or 0)
+    elif message.document and str(message.document.mime_type or "").startswith("image/"):
+        file_id = str(message.document.file_id)
+        size = int(message.document.file_size or 0)
+        name = str(message.document.file_name or "image.jpg")
+    if not file_id:
+        await message.answer("Пришлите именно изображение — как фото или графический файл.")
+        return
+    try:
+        payload = await _download_telegram_file(message, file_id=file_id, reported_size=size)
+        actor = await control._actor(control._user_id(message), str(data["business_id"]))
+        await asyncio.to_thread(
+            attach_image_bytes,
+            actor=actor,
+            publication_job_id=str(data["job_id"]),
+            payload=payload,
+            source=AdPublicationAssetSource.UPLOAD,
+            original_name=name,
+        )
+    except (
+        KeyError,
+        ValueError,
+        OSError,
+        asyncio.TimeoutError,
+        AdPublicationAssetError,
+        TenantPermissionDenied,
+    ):
+        await message.answer(
+            "Не удалось принять картинку. Пришлите JPG, PNG или обычное фото размером до 20 МБ."
+        )
+        return
+    await state.set_state(GoalFirstAutopilotState.customizing)
+    await message.answer(
+        "✅ Картинку добавил. Я сама подготовлю и прикреплю её к объявлению — "
+        "скачивать или загружать её в Яндекс вручную не понадобится.",
+        reply_markup=_custom_keyboard(str(data["business_token"])),
+    )
+
+
+@router.callback_query(F.data.startswith("cpo:custom-video:"))
+async def ask_custom_video(callback: CallbackQuery, state: FSMContext) -> None:
+    business_token = str(callback.data).split(":", 2)[2]
+    data = await state.get_data()
+    if not _state_matches(data, business_token):
+        await callback.answer("Этот черновик уже устарел", show_alert=True)
+        return
+    await state.set_state(GoalFirstAutopilotState.waiting_video)
+    await callback.answer()
+    await control._callback_message(callback).answer(
+        "Пришлите видео сюда обычным видеофайлом. Для Яндекс Директа длительность "
+        "должна быть от 5 до 60 секунд. После загрузки ClientPlatform сама дождётся "
+        "обработки Яндексом и прикрепит ролик."
+    )
+
+
+@router.message(GoalFirstAutopilotState.waiting_video)
+async def receive_custom_video(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    video = message.video
+    if video is None:
+        await message.answer("Пришлите ролик именно как видео, чтобы я увидела его длительность.")
+        return
+    try:
+        payload = await _download_telegram_file(
+            message,
+            file_id=str(video.file_id),
+            reported_size=int(video.file_size or 0),
+        )
+        actor = await control._actor(control._user_id(message), str(data["business_id"]))
+        await asyncio.to_thread(
+            attach_video_bytes,
+            actor=actor,
+            publication_job_id=str(data["job_id"]),
+            payload=payload,
+            content_type=str(video.mime_type or "video/mp4"),
+            original_name=str(video.file_name or "video.mp4"),
+            duration_seconds=int(video.duration or 0),
+            source=AdPublicationAssetSource.UPLOAD,
+        )
+    except (
+        KeyError,
+        ValueError,
+        OSError,
+        asyncio.TimeoutError,
+        AdPublicationAssetError,
+        TenantPermissionDenied,
+    ):
+        await message.answer(
+            "Не удалось принять видео. Нужен поддерживаемый ролик 5–60 секунд "
+            "размером до 20 МБ."
+        )
+        return
+    await state.set_state(GoalFirstAutopilotState.customizing)
+    await message.answer(
+        "✅ Видео добавил. Дальше всё автоматически: ClientPlatform загрузит его "
+        "в Яндекс, дождётся конвертации и прикрепит к объявлению.",
+        reply_markup=_custom_keyboard(str(data["business_token"])),
+    )
+
+
+@router.callback_query(F.data.startswith("cpo:custom-clear:"))
+async def clear_custom_media(callback: CallbackQuery, state: FSMContext) -> None:
+    business_token = str(callback.data).split(":", 2)[2]
+    data = await state.get_data()
+    if not _state_matches(data, business_token):
+        await callback.answer("Этот черновик уже устарел", show_alert=True)
+        return
+    try:
+        actor = await control._actor(int(callback.from_user.id), str(data["business_id"]))
+        await asyncio.to_thread(
+            remove_asset,
+            actor=actor,
+            publication_job_id=str(data["job_id"]),
+        )
+    except (KeyError, ValueError, AdPublicationAssetError, TenantPermissionDenied):
+        await callback.answer("Не удалось убрать медиа", show_alert=True)
+        return
+    await callback.answer("Медиа убрано")
+    await state.set_state(GoalFirstAutopilotState.customizing)
+    await control._callback_message(callback).answer(
+        "✅ Оставил объявление без картинки и видео.",
+        reply_markup=_custom_keyboard(business_token),
+    )
+
+
+@router.callback_query(F.data.startswith("cpo:genask:"))
+async def ask_generated_image_confirmation(callback: CallbackQuery, state: FSMContext) -> None:
+    business_token = str(callback.data).split(":", 2)[2]
+    data = await state.get_data()
+    if not _state_matches(data, business_token):
+        await callback.answer("Этот черновик уже устарел", show_alert=True)
+        return
+    await state.set_state(GoalFirstAutopilotState.confirming_generation)
+    await callback.answer()
+    await control._callback_message(callback).answer(
+        "✨ Сделать картинку автоматически?\n\n"
+        "Это отдельная генерация через подключённый AI-провайдер и она может "
+        "расходовать платную квоту. Будет создана ровно одна картинка; после "
+        "готовности ClientPlatform сама прикрепит её к объявлению.",
+        reply_markup=control._keyboard(
+            [
+                [("✅ Создать 1 картинку", f"cpo:gen:{business_token}")],
+                [("⬅️ Не создавать", f"cpo:custom:{business_token}")],
+            ]
+        ),
+    )
+
+
+async def _finish_generated_image(
+    event: CallbackQuery,
+    state: FSMContext,
+    *,
+    job: object,
+    data: dict,
+) -> bool:
+    status = str(getattr(job, "status", "") or "")
+    if status != "succeeded" or not bool(getattr(job, "asset_ready", False)):
+        return False
+    try:
+        path = await asyncio.to_thread(materialize_ad_visual, job)
+        actor = await control._actor(int(event.from_user.id), str(data["business_id"]))
+        await asyncio.to_thread(
+            attach_image_file,
+            actor=actor,
+            publication_job_id=str(data["job_id"]),
+            path=path,
+            source=AdPublicationAssetSource.GENERATED,
+        )
+    except (KeyError, OSError, ValueError, VisualCreativeError, AdPublicationAssetError):
+        return False
+    await state.update_data(creative_job_id="")
+    await state.set_state(GoalFirstAutopilotState.customizing)
+    await control._callback_message(event).answer_photo(
+        FSInputFile(path),
+        caption="✅ Картинка готова и уже привязана к рекламному черновику ClientPlatform.",
+    )
+    await control._callback_message(event).answer(
+        "В Яндекс вручную её загружать не нужно.",
+        reply_markup=_custom_keyboard(str(data["business_token"])),
+    )
+    return True
+
+
+@router.callback_query(F.data.startswith("cpo:gen:"))
+async def generate_custom_image(callback: CallbackQuery, state: FSMContext) -> None:
+    business_token = str(callback.data).split(":", 2)[2]
+    data = await state.get_data()
+    if not _state_matches(data, business_token):
+        await callback.answer("Этот черновик уже устарел", show_alert=True)
+        return
+    await callback.answer("Создаю картинку…")
+    try:
+        business_id = str(data["business_id"])
+        publication_job_id = str(data["job_id"])
+        idempotency_key = "clientplatform:" + hashlib.sha256(
+            f"{business_id}|{publication_job_id}|image".encode("utf-8")
+        ).hexdigest()
+        job = await asyncio.to_thread(
+            create_ad_visual,
+            title=str(data.get("creative_title") or ""),
+            body=str(data.get("creative_body") or ""),
+            kind="image",
+            scope_id=business_id,
+            idempotency_key=idempotency_key,
+            country_code=os.getenv("VISUAL_DEPLOYMENT_COUNTRY", ""),
+            wait_seconds=20,
+        )
+    except (KeyError, ValueError, VisualCreativeError):
+        await control._callback_message(callback).answer(
+            "Не удалось создать картинку. Рекламный текст сохранён и ничего не списывалось повторно.",
+            reply_markup=_custom_keyboard(business_token),
+        )
+        await state.set_state(GoalFirstAutopilotState.customizing)
+        return
+    if await _finish_generated_image(callback, state, job=job, data=data):
+        return
+    job_id = str(getattr(job, "job_id", "") or getattr(job, "id", "") or "")
+    if not job_id:
+        await state.set_state(GoalFirstAutopilotState.customizing)
+        await control._callback_message(callback).answer(
+            "Генератор не вернул результат. Можно продолжить без картинки.",
+            reply_markup=_custom_keyboard(business_token),
+        )
+        return
+    await state.update_data(creative_job_id=job_id)
+    await state.set_state(GoalFirstAutopilotState.generation_pending)
+    await control._callback_message(callback).answer(
+        "⏳ Картинка ещё создаётся. Ничего загружать заново не нужно.",
+        reply_markup=control._keyboard(
+            [[("🔄 Проверить готовность", f"cpo:gencheck:{business_token}")]]
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("cpo:gencheck:"))
+async def check_generated_image(callback: CallbackQuery, state: FSMContext) -> None:
+    business_token = str(callback.data).split(":", 2)[2]
+    data = await state.get_data()
+    if not _state_matches(data, business_token):
+        await callback.answer("Этот черновик уже устарел", show_alert=True)
+        return
+    try:
+        job = await asyncio.to_thread(
+            poll_ad_visual,
+            job_id=str(data["creative_job_id"]),
+            scope_id=str(data["business_id"]),
+        )
+    except (KeyError, VisualCreativeError):
+        await callback.answer("Пока не удалось проверить картинку", show_alert=True)
+        return
+    await callback.answer()
+    if await _finish_generated_image(callback, state, job=job, data=data):
+        return
+    if str(getattr(job, "status", "") or "") in {"queued", "running"}:
+        await control._callback_message(callback).answer(
+            "⏳ Ещё создаётся. Повторно генерация не запускается.",
+            reply_markup=control._keyboard(
+                [[("🔄 Проверить готовность", f"cpo:gencheck:{business_token}")]]
+            ),
+        )
+        return
+    await state.update_data(creative_job_id="")
+    await state.set_state(GoalFirstAutopilotState.customizing)
+    await control._callback_message(callback).answer(
+        "Генерация не удалась. Можно загрузить свою картинку или продолжить без неё.",
+        reply_markup=_custom_keyboard(business_token),
+    )
+
+
+@router.callback_query(F.data.startswith("cpo:custom-done:"))
+async def finish_customization(callback: CallbackQuery, state: FSMContext) -> None:
+    business_token = str(callback.data).split(":", 2)[2]
+    data = await state.get_data()
+    if not _state_matches(data, business_token):
+        await callback.answer("Этот черновик уже устарел", show_alert=True)
+        return
+    await state.set_state(GoalFirstAutopilotState.ready)
+    await callback.answer("Готово")
+    await control._callback_message(callback).answer(
+        "✅ Изменения сохранены. Дальше ClientPlatform всё сделает сама.",
+        reply_markup=_result_keyboard(business_token),
+    )
+
+
+def _money(minor: int, currency: str) -> str:
+    amount = Decimal(int(minor)) / Decimal(100)
+    rendered = f"{amount:.2f}".replace(".", ",")
+    return f"{rendered} {currency}"
+
+
+@router.callback_query(F.data.startswith("cpo:launch:"))
+async def prepare_real_launch(callback: CallbackQuery, state: FSMContext) -> None:
+    business_token = str(callback.data).split(":", 2)[2]
+    data = await state.get_data()
+    if not _state_matches(data, business_token) or not data.get("job_id"):
+        await callback.answer("Этот черновик уже устарел", show_alert=True)
+        return
+    await callback.answer("Готовлю безопасный запуск…")
+    try:
+        actor = await control._actor(int(callback.from_user.id), str(data["business_id"]))
+        submitted = await asyncio.to_thread(
+            submit_goal_publication,
+            actor=actor,
+            job_id=str(data["job_id"]),
+        )
+    except GoalPublicationBusy:
+        await control._callback_message(callback).answer(
+            "⏳ ClientPlatform уже готовит этот же черновик. Повторное нажатие не создаст дубль.",
+            reply_markup=control._keyboard(
+                [[("🔄 Проверить", f"cpo:launch:{business_token}")]]
+            ),
+        )
+        return
+    except (AdConnectionError, YandexDirectError, RuntimeError, ValueError):
+        await control._callback_message(callback).answer(
+            "Яндекс пока не дал безопасно продолжить. Ничего не запущено и деньги "
+            "не расходуются. Когда кабинет будет готов, достаточно нажать ещё раз.",
+            reply_markup=control._keyboard(
+                [
+                    [("🔄 Попробовать снова", f"cpo:launch:{business_token}")],
+                    [("🏠 В кабинет", f"cpj:home:{business_token}")],
+                ]
+            ),
+        )
+        return
+
+    if not ad_spend_mutations_enabled():
+        await state.set_state(GoalFirstAutopilotState.ready)
+        await control._callback_message(callback).answer(
+            "✅ Черновик уже подготовлен в Яндексе, но реальный запуск сейчас "
+            "отключён защитным переключателем ClientPlatform. Деньги не расходуются. "
+            "Когда запуск будет разрешён оператором, повторное нажатие продолжит "
+            "с того же места без дублей.",
+            reply_markup=_result_keyboard(business_token),
+        )
+        return
+
+    try:
+        prepared = await asyncio.to_thread(
+            prepare_goal_spend_consent,
+            actor=actor,
+            publication_job_id=submitted.job.id,
+        )
+    except (AdSpendError, YandexDirectError, RuntimeError, ValueError):
+        await state.set_state(GoalFirstAutopilotState.ready)
+        await control._callback_message(callback).answer(
+            "Реклама подготовлена, но свежая проверка бюджета Яндекса не позволила "
+            "показать безопасную сумму запуска. Ничего не списывается.",
+            reply_markup=_result_keyboard(business_token),
+        )
+        return
+
+    authorization = prepared.authorization
+    await state.update_data(
+        authorization_id=authorization.id,
+        expected_terms_hash=authorization.terms_hash,
+        expected_snapshot_hash=authorization.snapshot.snapshot_hash,
+    )
+    await state.set_state(GoalFirstAutopilotState.confirming_launch)
+    media_note = (
+        "\nВидео ещё конвертируется у Яндекса; ClientPlatform прикрепит его сама, "
+        "как только оно станет готово."
+        if submitted.media_pending
+        else ""
+    )
+    await control._callback_message(callback).answer(
+        "💳 Последнее подтверждение\n\n"
+        "Всё остальное уже подготовлено автоматически. Чтобы могли начаться "
+        "показы, нужно явно разрешить максимальный расход.\n\n"
+        f"Максимум всего: {_money(authorization.hard_cap_minor, authorization.currency)}\n"
+        f"Максимум за день: {_money(authorization.daily_cap_minor, authorization.currency)}\n"
+        "При достижении лимита ClientPlatform поставит остановку автоматически."
+        f"{media_note}",
+        reply_markup=control._keyboard(
+            [
+                [("🚀 Да, запустить с этим лимитом", f"cpo:launch-confirm:{business_token}")],
+                [("🏠 Нет, не запускать", f"cpj:home:{business_token}")],
+            ]
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("cpo:launch-confirm:"))
+async def confirm_real_launch(callback: CallbackQuery, state: FSMContext) -> None:
+    business_token = str(callback.data).split(":", 2)[2]
+    data = await state.get_data()
+    if not _state_matches(data, business_token):
+        await callback.answer("Подтверждение устарело", show_alert=True)
+        return
+    try:
+        actor = await control._actor(int(callback.from_user.id), str(data["business_id"]))
+        granted = await asyncio.to_thread(
+            grant_ad_spend_consent,
+            actor=actor,
+            authorization_id=str(data["authorization_id"]),
+            expected_terms_hash=str(data["expected_terms_hash"]),
+            expected_snapshot_hash=str(data["expected_snapshot_hash"]),
+        )
+        operation = await asyncio.to_thread(
+            queue_ad_spend_launch,
+            actor=actor,
+            authorization_id=granted.authorization.id,
+        )
+    except (KeyError, AdSpendError, RuntimeError, ValueError):
+        await callback.answer(
+            "Условия успели измениться. Я не буду запускать рекламу по устаревшему разрешению.",
+            show_alert=True,
+        )
+        return
+    await state.clear()
+    await callback.answer("Запуск принят")
+    auth_token = control._uuid_token(granted.authorization.id)
+    await control._callback_message(callback).answer(
+        "✅ Готово. Дальше ClientPlatform всё делает сама.\n\n"
+        "Запуск поставлен в защищённую очередь. Перед обращением к Яндексу сервер "
+        "ещё раз проверит кабинет, расход и лимиты. После достижения лимита будет "
+        "поставлена автоматическая остановка.\n\n"
+        f"Максимальный расход: {_money(granted.authorization.hard_cap_minor, granted.authorization.currency)}\n"
+        f"Операция: …{operation.id[-12:]}",
+        reply_markup=control._keyboard(
+            [
+                [("⏹ Остановить рекламу", f"cpsp:stop:{business_token}:{auth_token}")],
+                [("🏠 В кабинет", f"cpj:home:{business_token}")],
             ]
         ),
     )
@@ -222,8 +833,6 @@ def install_goal_first_autopilot(
     if bool(getattr(owner_module, "_goal_first_autopilot_installed", False)):
         return
 
-    # Keep the proven orchestration and safety boundaries, replace only the
-    # owner-facing language and decision surface.
     one_click._home_keyboard = _goal_keyboard
     one_click._prepare_draft = _prepare_goal_result
     one_click._choose_campaign = _choose_goal_region
@@ -232,10 +841,15 @@ def install_goal_first_autopilot(
     owner_module.send_owner_dashboard = send_goal_dashboard
     simple_module.send_simple_dashboard = send_goal_dashboard
     control_module._send_dashboard = send_goal_dashboard
+    if not bool(getattr(simple_module, "_goal_first_autopilot_composed", False)):
+        simple_module.router.include_router(router)
+        simple_module._goal_first_autopilot_composed = True
     owner_module._goal_first_autopilot_installed = True
 
 
 __all__ = [
+    "GoalFirstAutopilotState",
     "install_goal_first_autopilot",
+    "router",
     "send_goal_dashboard",
 ]
