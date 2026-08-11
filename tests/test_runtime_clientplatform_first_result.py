@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 import handlers
 from handlers import clientplatform_first_result as first
+from handlers import clientplatform_goal_driven_experience as goal
 from handlers import clientplatform_owner_journey as owner
 
 
@@ -41,17 +42,18 @@ class _Callback:
 
 
 class ClientPlatformFirstResultUiTests(unittest.IsolatedAsyncioTestCase):
-    def test_composed_owner_dashboard_leads_with_one_click_client_acquisition(self) -> None:
+    def test_composed_owner_dashboard_is_goal_driven_and_hides_implementation(self) -> None:
         handlers._load_clientplatform_modules()
         markup = owner._owner_keyboard(_BUSINESS_ID)
         buttons = [button for row in markup.inline_keyboard for button in row]
         first_button = buttons[0]
-        self.assertEqual(first_button.text, "🚀 Получить клиентов")
+        self.assertEqual(first_button.text, "🚀 Хочу клиентов")
         self.assertTrue(str(first_button.callback_data).startswith("cpo:start:"))
         self.assertEqual(
             [button.text for button in buttons],
-            ["🚀 Получить клиентов", "👥 Клиенты и запись", "⚙️ Ещё"],
+            ["🚀 Хочу клиентов", "👥 Клиенты и запись", "⚙️ Управление"],
         )
+        self.assertIs(owner.send_owner_dashboard, goal.send_goal_dashboard)
         self.assertFalse(
             any(str(button.callback_data or "").startswith("cps:next:") for button in buttons)
         )
