@@ -132,6 +132,22 @@ def _publish_text(
     )
 
 
+def _sync_copy(
+    *,
+    provider: MediaAwareYandexDirectProvider,
+    bundle: YandexTokenBundle,
+    job: AdPublicationJob,
+    ad_id: str,
+) -> None:
+    provider.update_copy(
+        access_token=bundle.access_token,
+        ad_id=ad_id,
+        title=job.title,
+        text=job.text,
+        href=job.source_url,
+    )
+
+
 def _remember_media_error(*, job: AdPublicationJob, error_code: str) -> None:
     with get_db() as conn:
         AdPublicationAssetRepository(conn).remember_provider_error(
@@ -153,8 +169,10 @@ def _attach_media(
         publication_job_id=job.id,
     )
     if asset is None:
+        provider.clear_media(access_token=bundle.access_token, ad_id=ad_id)
         return False, False, False
     if asset.provider_error_code:
+        provider.clear_media(access_token=bundle.access_token, ad_id=ad_id)
         return False, False, True
     payload = read_asset_bytes(asset)
     if asset.kind == AdPublicationAssetKind.IMAGE:
@@ -194,9 +212,13 @@ def _attach_media(
         video_id=video_id,
     )
     if status == "ERROR":
+        provider.clear_media(access_token=bundle.access_token, ad_id=ad_id)
         _remember_media_error(job=job, error_code="ad_video_processing_failed")
         return False, False, True
     if status in {"NEW", "CONVERTING"}:
+        # Remove a previously attached image/video immediately when the owner
+        # replaces it with a video. Spend remains blocked until READY.
+        provider.clear_media(access_token=bundle.access_token, ad_id=ad_id)
         return False, True, False
     creative_id = asset.provider_creative_id
     if not creative_id:
@@ -223,24 +245,17 @@ def _sync_submitted_media(
     vault: AdCredentialVault,
     provider: MediaAwareYandexDirectProvider,
 ) -> GoalPublicationResult:
-    asset = get_asset_for_worker(
-        business_id=job.business_id,
-        publication_job_id=job.id,
-    )
-    if asset is None:
-        return GoalPublicationResult(job=job, media_attached=False, media_pending=False)
-    if asset.provider_error_code:
-        return GoalPublicationResult(
-            job=job,
-            media_attached=False,
-            media_pending=False,
-            media_failed=True,
-        )
     if not job.external_ad_id:
         raise AdConnectionError("submitted advertising draft is missing provider ad id")
     connection, bundle = _load_bundle(job=job, vault=vault)
     try:
         try:
+            _sync_copy(
+                provider=provider,
+                bundle=bundle,
+                job=job,
+                ad_id=job.external_ad_id,
+            )
             attached, pending, failed = _attach_media(
                 provider=provider,
                 bundle=bundle,
@@ -255,6 +270,12 @@ def _sync_submitted_media(
                 bundle=bundle,
                 provider=provider,
                 vault=vault,
+            )
+            _sync_copy(
+                provider=provider,
+                bundle=bundle,
+                job=job,
+                ad_id=job.external_ad_id,
             )
             attached, pending, failed = _attach_media(
                 provider=provider,
@@ -279,11 +300,7 @@ def submit_goal_publication(
     vault: AdCredentialVault | None = None,
     provider: MediaAwareYandexDirectProvider | None = None,
 ) -> GoalPublicationResult:
-    """Create exactly this owner's Yandex DRAFT and attach selected media.
-
-    This operation never sends the DRAFT to moderation and never authorizes
-    spend. Those remain in the separate consent-bound launch vertical.
-    """
+    """Create/sync exactly this owner's Yandex DRAFT before spend consent."""
 
     selected_vault = vault or _vault()
     selected_provider = provider or _provider()
@@ -315,6 +332,12 @@ def submit_goal_publication(
                 bundle=bundle,
                 job=job,
             )
+            _sync_copy(
+                provider=selected_provider,
+                bundle=bundle,
+                job=job,
+                ad_id=result.ad_id,
+            )
             media_attached, media_pending, media_failed = _attach_media(
                 provider=selected_provider,
                 bundle=bundle,
@@ -334,6 +357,12 @@ def submit_goal_publication(
                 provider=selected_provider,
                 bundle=bundle,
                 job=job,
+            )
+            _sync_copy(
+                provider=selected_provider,
+                bundle=bundle,
+                job=job,
+                ad_id=result.ad_id,
             )
             media_attached, media_pending, media_failed = _attach_media(
                 provider=selected_provider,
@@ -382,12 +411,7 @@ def process_one_pending_video_asset(
     vault: AdCredentialVault | None = None,
     provider: MediaAwareYandexDirectProvider | None = None,
 ) -> bool:
-    """Finish one persisted Yandex video extension after provider conversion.
-
-    Permanent conversion errors are recorded and skipped on future ticks. A
-    converting item is deferred before the next query so it cannot monopolize
-    a tick or block ready videos belonging to another tenant.
-    """
+    """Finish one persisted Yandex video extension after provider conversion."""
 
     selected_vault = vault or _vault()
     selected_provider = provider or _provider()
@@ -446,6 +470,13 @@ def process_one_pending_video_asset(
             video_id=video_id,
         )
     if status == "ERROR":
+        try:
+            selected_provider.clear_media(
+                access_token=bundle.access_token,
+                ad_id=ad_id,
+            )
+        except YandexDirectError:
+            return False
         with get_db() as conn:
             AdPublicationAssetRepository(conn).remember_provider_error(
                 business_id=business_id,
