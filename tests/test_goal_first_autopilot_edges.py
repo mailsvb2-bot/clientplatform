@@ -62,7 +62,7 @@ def promotion():
     return SimpleNamespace(
         campaign=SimpleNamespace(
             id="promotion-1",
-            source_token="source-1",
+            source_token="source-token-123",
         )
     )
 
