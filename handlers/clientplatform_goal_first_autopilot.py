@@ -19,7 +19,10 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, FSInputFile, Message
 
-from clientplatform.application.ad_goal_autopilot import prepare_goal_spend_consent
+from clientplatform.application.ad_goal_autopilot import (
+    prepare_goal_spend_consent,
+    preview_goal_spend,
+)
 from clientplatform.application.ad_goal_publication import (
     GoalPublicationBusy,
     submit_goal_publication,
@@ -71,6 +74,12 @@ class GoalFirstAutopilotState(StatesGroup):
     confirming_generation = State()
     generation_pending = State()
     confirming_launch = State()
+
+
+def _money(minor: int, currency: str) -> str:
+    amount = Decimal(int(minor)) / Decimal(100)
+    rendered = f"{amount:.2f}".replace(".", ",")
+    return f"{rendered} {currency}"
 
 
 def _goal_keyboard(business_id: str):
@@ -136,10 +145,20 @@ def _custom_keyboard(business_token: str):
     )
 
 
-def _result_keyboard(business_token: str):
+def _launch_label(data: dict) -> str:
+    if not ad_spend_mutations_enabled():
+        return "🚀 Подготовить в Яндексе"
+    hard = data.get("preview_hard_cap_minor")
+    currency = str(data.get("preview_currency") or "").strip()
+    if hard not in {None, ""} and currency:
+        return f"🚀 Запустить · максимум {_money(int(hard), currency)}"
+    return "🚀 Проверить и запустить"
+
+
+def _result_keyboard(business_token: str, data: dict):
     return control._keyboard(
         [
-            [("🚀 Продолжить к запуску", f"cpo:launch:{business_token}")],
+            [(_launch_label(data), f"cpo:launch:{business_token}")],
             [("🎨 Настроить под себя", f"cpo:custom:{business_token}")],
             [("🏠 Не запускать", f"cpj:home:{business_token}")],
         ]
@@ -157,7 +176,7 @@ async def _prepare_goal_result(
     data: dict,
     region_ids: tuple[int, ...],
 ) -> None:
-    """Prepare the canonical local draft but expose only the owner outcome."""
+    """Prepare the local draft and, when possible, the exact safe launch cap."""
 
     actor = await control._actor(
         one_click._user_id(event),
@@ -219,16 +238,49 @@ async def _prepare_goal_result(
         "creative_body": draft.job.text,
         "creative_job_id": "",
     }
+    if ad_spend_mutations_enabled():
+        try:
+            preview = await asyncio.to_thread(
+                preview_goal_spend,
+                actor=actor,
+                connection_id=str(data["connection_id"]),
+                external_campaign_id=str(data["external_campaign_id"]),
+            )
+        except (
+            AdConnectionError,
+            AdSpendError,
+            TenantPermissionDenied,
+            YandexDirectError,
+            RuntimeError,
+            ValueError,
+        ):
+            preview = None
+        if preview is not None:
+            next_data.update(
+                {
+                    "preview_currency": preview.currency,
+                    "preview_hard_cap_minor": preview.recommended_hard_cap_minor,
+                    "preview_daily_cap_minor": preview.recommended_daily_cap_minor,
+                }
+            )
+
     await state.set_state(GoalFirstAutopilotState.ready)
     await state.set_data(next_data)
+    launch_hint = (
+        f"Нажатие «{_launch_label(next_data)}» — это единственное подтверждение, "
+        "после которого могут начаться рекламные расходы."
+        if ad_spend_mutations_enabled()
+        else "Пока запуск расходов отключён защитным переключателем; черновик можно подготовить без списаний."
+    )
     await one_click._target(event).answer(
         "✅ Реклама подготовлена — всё готово\n\n"
         "ClientPlatform сама выбрала ближайшее свободное время и подходящие "
         "сохранённые настройки.\n\n"
         f"{draft.job.title}\n\n{draft.job.text}\n\n"
-        "Можно сразу продолжить. Если хотите свой текст, картинку или видео — "
-        "откройте «Настроить под себя». Пока ничего не запущено и деньги не расходуются.",
-        reply_markup=_result_keyboard(str(data["business_token"])),
+        "Если всё устраивает — больше технических шагов нет. Если хотите свой "
+        "текст, картинку или видео, откройте «Настроить под себя».\n\n"
+        f"{launch_hint}",
+        reply_markup=_result_keyboard(str(data["business_token"]), next_data),
     )
 
 
@@ -370,10 +422,10 @@ async def ask_custom_image(callback: CallbackQuery, state: FSMContext) -> None:
 
 
 async def _download_telegram_file(message: Message, *, file_id: str, reported_size: int) -> bytes:
-    if reported_size <= 0 or reported_size > _MAX_TELEGRAM_MEDIA_BYTES:
+    if reported_size > _MAX_TELEGRAM_MEDIA_BYTES:
         raise AdPublicationAssetError("telegram media size is unsupported")
     telegram_file = await message.bot.get_file(file_id)
-    remote_size = int(getattr(telegram_file, "file_size", 0) or reported_size)
+    remote_size = int(getattr(telegram_file, "file_size", 0) or 0)
     if remote_size > _MAX_TELEGRAM_MEDIA_BYTES:
         raise AdPublicationAssetError("telegram media size is unsupported")
     file_path = str(getattr(telegram_file, "file_path", "") or "").strip()
@@ -384,6 +436,8 @@ async def _download_telegram_file(message: Message, *, file_id: str, reported_si
     payload = target.getvalue()
     if not payload or len(payload) > _MAX_TELEGRAM_MEDIA_BYTES:
         raise AdPublicationAssetError("telegram media download is invalid")
+    if reported_size > 0 and len(payload) != reported_size and remote_size in {0, reported_size}:
+        raise AdPublicationAssetError("telegram media size changed")
     return payload
 
 
@@ -590,8 +644,15 @@ async def generate_custom_image(callback: CallbackQuery, state: FSMContext) -> N
     try:
         business_id = str(data["business_id"])
         publication_job_id = str(data["job_id"])
+        copy_digest = hashlib.sha256(
+            (
+                str(data.get("creative_title") or "")
+                + "\n"
+                + str(data.get("creative_body") or "")
+            ).encode("utf-8")
+        ).hexdigest()
         idempotency_key = "clientplatform:" + hashlib.sha256(
-            f"{business_id}|{publication_job_id}|image".encode("utf-8")
+            f"{business_id}|{publication_job_id}|image|{copy_digest}".encode("utf-8")
         ).hexdigest()
         job = await asyncio.to_thread(
             create_ad_visual,
@@ -605,7 +666,7 @@ async def generate_custom_image(callback: CallbackQuery, state: FSMContext) -> N
         )
     except (KeyError, ValueError, VisualCreativeError):
         await control._callback_message(callback).answer(
-            "Не удалось создать картинку. Рекламный текст сохранён и ничего не списывалось повторно.",
+            "Не удалось создать картинку. Повторная платная генерация автоматически не запускается.",
             reply_markup=_custom_keyboard(business_token),
         )
         await state.set_state(GoalFirstAutopilotState.customizing)
@@ -676,24 +737,81 @@ async def finish_customization(callback: CallbackQuery, state: FSMContext) -> No
     await callback.answer("Готово")
     await control._callback_message(callback).answer(
         "✅ Изменения сохранены. Дальше ClientPlatform всё сделает сама.",
-        reply_markup=_result_keyboard(business_token),
+        reply_markup=_result_keyboard(business_token, data),
     )
 
 
-def _money(minor: int, currency: str) -> str:
-    amount = Decimal(int(minor)) / Decimal(100)
-    rendered = f"{amount:.2f}".replace(".", ",")
-    return f"{rendered} {currency}"
+async def _send_launch_success(
+    callback: CallbackQuery,
+    state: FSMContext,
+    *,
+    business_token: str,
+    granted: object,
+    operation: object,
+) -> None:
+    authorization = granted.authorization
+    await state.clear()
+    await callback.answer("Запуск принят")
+    auth_token = control._uuid_token(authorization.id)
+    await control._callback_message(callback).answer(
+        "✅ Готово. Дальше ClientPlatform всё делает сама.\n\n"
+        "Запуск поставлен в защищённую очередь. Перед обращением к Яндексу сервер "
+        "ещё раз проверит кабинет, расход и лимиты. После достижения лимита будет "
+        "поставлена автоматическая остановка.\n\n"
+        f"Максимальный расход: {_money(authorization.hard_cap_minor, authorization.currency)}\n"
+        f"Операция: …{operation.id[-12:]}",
+        reply_markup=control._keyboard(
+            [
+                [("⏹ Остановить рекламу", f"cpsp:stop:{business_token}:{auth_token}")],
+                [("🏠 В кабинет", f"cpj:home:{business_token}")],
+            ]
+        ),
+    )
+
+
+async def _grant_and_queue(
+    callback: CallbackQuery,
+    state: FSMContext,
+    *,
+    business_token: str,
+    actor: object,
+    authorization: object,
+) -> bool:
+    try:
+        granted = await asyncio.to_thread(
+            grant_ad_spend_consent,
+            actor=actor,
+            authorization_id=authorization.id,
+            expected_terms_hash=authorization.terms_hash,
+            expected_snapshot_hash=authorization.snapshot.snapshot_hash,
+        )
+        operation = await asyncio.to_thread(
+            queue_ad_spend_launch,
+            actor=actor,
+            authorization_id=granted.authorization.id,
+        )
+    except (AdSpendError, RuntimeError, ValueError):
+        return False
+    await _send_launch_success(
+        callback,
+        state,
+        business_token=business_token,
+        granted=granted,
+        operation=operation,
+    )
+    return True
 
 
 @router.callback_query(F.data.startswith("cpo:launch:"))
 async def prepare_real_launch(callback: CallbackQuery, state: FSMContext) -> None:
+    """The normal launch click is the one explicit spend confirmation."""
+
     business_token = str(callback.data).split(":", 2)[2]
     data = await state.get_data()
     if not _state_matches(data, business_token) or not data.get("job_id"):
         await callback.answer("Этот черновик уже устарел", show_alert=True)
         return
-    await callback.answer("Готовлю безопасный запуск…")
+    await callback.answer("Проверяю и готовлю запуск…")
     try:
         actor = await control._actor(int(callback.from_user.id), str(data["business_id"]))
         submitted = await asyncio.to_thread(
@@ -722,6 +840,21 @@ async def prepare_real_launch(callback: CallbackQuery, state: FSMContext) -> Non
         )
         return
 
+    if submitted.media_pending:
+        await state.set_state(GoalFirstAutopilotState.ready)
+        await control._callback_message(callback).answer(
+            "🎬 Видео уже загружено в Яндекс и сейчас конвертируется. ClientPlatform "
+            "сама дождётся готовности и прикрепит его к объявлению. До этого показы "
+            "не запускаю и деньги не расходую.",
+            reply_markup=control._keyboard(
+                [
+                    [("🔄 Проверить позже", f"cpo:launch:{business_token}")],
+                    [("🏠 В кабинет", f"cpj:home:{business_token}")],
+                ]
+            ),
+        )
+        return
+
     if not ad_spend_mutations_enabled():
         await state.set_state(GoalFirstAutopilotState.ready)
         await control._callback_message(callback).answer(
@@ -729,7 +862,7 @@ async def prepare_real_launch(callback: CallbackQuery, state: FSMContext) -> Non
             "отключён защитным переключателем ClientPlatform. Деньги не расходуются. "
             "Когда запуск будет разрешён оператором, повторное нажатие продолжит "
             "с того же места без дублей.",
-            reply_markup=_result_keyboard(business_token),
+            reply_markup=_result_keyboard(business_token, data),
         )
         return
 
@@ -743,32 +876,47 @@ async def prepare_real_launch(callback: CallbackQuery, state: FSMContext) -> Non
         await state.set_state(GoalFirstAutopilotState.ready)
         await control._callback_message(callback).answer(
             "Реклама подготовлена, но свежая проверка бюджета Яндекса не позволила "
-            "показать безопасную сумму запуска. Ничего не списывается.",
-            reply_markup=_result_keyboard(business_token),
+            "безопасно запустить её. Ничего не списывается.",
+            reply_markup=_result_keyboard(business_token, data),
         )
         return
 
     authorization = prepared.authorization
+    preview_matches = (
+        str(data.get("preview_currency") or "") == authorization.currency
+        and int(data.get("preview_hard_cap_minor") or 0) == authorization.hard_cap_minor
+        and int(data.get("preview_daily_cap_minor") or 0) == authorization.daily_cap_minor
+    )
+    if preview_matches:
+        if await _grant_and_queue(
+            callback,
+            state,
+            business_token=business_token,
+            actor=actor,
+            authorization=authorization,
+        ):
+            return
+        await callback.answer(
+            "Запуск не состоялся. Ничего не списано.",
+            show_alert=True,
+        )
+        return
+
     await state.update_data(
+        preview_currency=authorization.currency,
+        preview_hard_cap_minor=authorization.hard_cap_minor,
+        preview_daily_cap_minor=authorization.daily_cap_minor,
         authorization_id=authorization.id,
         expected_terms_hash=authorization.terms_hash,
         expected_snapshot_hash=authorization.snapshot.snapshot_hash,
     )
     await state.set_state(GoalFirstAutopilotState.confirming_launch)
-    media_note = (
-        "\nВидео ещё конвертируется у Яндекса; ClientPlatform прикрепит его сама, "
-        "как только оно станет готово."
-        if submitted.media_pending
-        else ""
-    )
     await control._callback_message(callback).answer(
-        "💳 Последнее подтверждение\n\n"
-        "Всё остальное уже подготовлено автоматически. Чтобы могли начаться "
-        "показы, нужно явно разрешить максимальный расход.\n\n"
+        "💳 Сумма изменилась после свежей проверки Яндекса\n\n"
+        "Я не запускаю рекламу по условиям, которых вы не видели. Подтвердите "
+        "обновлённый максимум:\n\n"
         f"Максимум всего: {_money(authorization.hard_cap_minor, authorization.currency)}\n"
-        f"Максимум за день: {_money(authorization.daily_cap_minor, authorization.currency)}\n"
-        "При достижении лимита ClientPlatform поставит остановку автоматически."
-        f"{media_note}",
+        f"Максимум за день: {_money(authorization.daily_cap_minor, authorization.currency)}",
         reply_markup=control._keyboard(
             [
                 [("🚀 Да, запустить с этим лимитом", f"cpo:launch-confirm:{business_token}")],
@@ -787,41 +935,33 @@ async def confirm_real_launch(callback: CallbackQuery, state: FSMContext) -> Non
         return
     try:
         actor = await control._actor(int(callback.from_user.id), str(data["business_id"]))
-        granted = await asyncio.to_thread(
-            grant_ad_spend_consent,
-            actor=actor,
-            authorization_id=str(data["authorization_id"]),
-            expected_terms_hash=str(data["expected_terms_hash"]),
-            expected_snapshot_hash=str(data["expected_snapshot_hash"]),
-        )
-        operation = await asyncio.to_thread(
-            queue_ad_spend_launch,
-            actor=actor,
-            authorization_id=granted.authorization.id,
-        )
-    except (KeyError, AdSpendError, RuntimeError, ValueError):
+        authorization = type(
+            "AuthorizationConsentView",
+            (),
+            {
+                "id": str(data["authorization_id"]),
+                "terms_hash": str(data["expected_terms_hash"]),
+                "snapshot": type(
+                    "SnapshotConsentView",
+                    (),
+                    {"snapshot_hash": str(data["expected_snapshot_hash"])},
+                )(),
+            },
+        )()
+    except (KeyError, RuntimeError, ValueError):
+        await callback.answer("Подтверждение устарело", show_alert=True)
+        return
+    if not await _grant_and_queue(
+        callback,
+        state,
+        business_token=business_token,
+        actor=actor,
+        authorization=authorization,
+    ):
         await callback.answer(
             "Условия успели измениться. Я не буду запускать рекламу по устаревшему разрешению.",
             show_alert=True,
         )
-        return
-    await state.clear()
-    await callback.answer("Запуск принят")
-    auth_token = control._uuid_token(granted.authorization.id)
-    await control._callback_message(callback).answer(
-        "✅ Готово. Дальше ClientPlatform всё делает сама.\n\n"
-        "Запуск поставлен в защищённую очередь. Перед обращением к Яндексу сервер "
-        "ещё раз проверит кабинет, расход и лимиты. После достижения лимита будет "
-        "поставлена автоматическая остановка.\n\n"
-        f"Максимальный расход: {_money(granted.authorization.hard_cap_minor, granted.authorization.currency)}\n"
-        f"Операция: …{operation.id[-12:]}",
-        reply_markup=control._keyboard(
-            [
-                [("⏹ Остановить рекламу", f"cpsp:stop:{business_token}:{auth_token}")],
-                [("🏠 В кабинет", f"cpj:home:{business_token}")],
-            ]
-        ),
-    )
 
 
 def install_goal_first_autopilot(
