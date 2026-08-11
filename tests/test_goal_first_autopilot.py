@@ -25,13 +25,13 @@ class FakeState:
 
 
 class GoalFirstAutopilotTests(unittest.IsolatedAsyncioTestCase):
-    async def test_home_exposes_goal_not_tools(self) -> None:
+    async def test_home_exposes_one_primary_goal_and_optional_secondary_navigation(self) -> None:
         out = SimpleNamespace(answer=AsyncMock())
         slot = SimpleNamespace(slot=SimpleNamespace(status=BookingSlotStatus.OPEN))
         snapshot = (
             "actor",
             SimpleNamespace(business=SimpleNamespace(name="Мой бизнес")),
-            object(),
+            SimpleNamespace(activity_description="Помогаю клиентам решать задачи"),
             [],
             [],
             [],
@@ -53,9 +53,13 @@ class GoalFirstAutopilotTests(unittest.IsolatedAsyncioTestCase):
         text = out.answer.await_args.args[0]
         markup = out.answer.await_args.kwargs["reply_markup"]
         labels = [button.text for row in markup.inline_keyboard for button in row]
-        self.assertIn("Что хотите получить?", text)
+        self.assertIn("Главное действие", text)
         self.assertIn("Технические кабинеты", text)
-        self.assertEqual(labels, ["🚀 Хочу клиентов", "👥 Записи", "⚙️ Настройки"])
+        self.assertIn("свою картинку или видео", text)
+        self.assertEqual(
+            labels,
+            ["🚀 Получить клиентов", "👥 Клиенты и запись", "⚙️ Ещё"],
+        )
         self.assertEqual(
             markup.inline_keyboard[0][0].callback_data,
             "cpo:start:business-1",
@@ -92,7 +96,8 @@ class GoalFirstAutopilotTests(unittest.IsolatedAsyncioTestCase):
                 campaign_name="Campaign",
             )
         self.assertEqual(state.state, goal.one_click.OneClickOwnerState.waiting_region)
-        self.assertIn("Где искать клиентов?", out.answer.await_args.args[0])
+        self.assertIn("Осталось только указать регион", out.answer.await_args.args[0])
+        self.assertIn("где искать клиентов", out.answer.await_args.args[0].lower())
         labels = [
             button.text
             for row in out.answer.await_args.kwargs["reply_markup"].inline_keyboard
@@ -143,9 +148,11 @@ class GoalFirstAutopilotTests(unittest.IsolatedAsyncioTestCase):
         prepare.assert_awaited_once()
         self.assertEqual(prepare.await_args.kwargs["region_ids"], (47,))
 
-    async def test_install_overlays_existing_orchestration_without_new_router(self) -> None:
+    async def test_install_overlays_existing_orchestration_and_composes_goal_router(self) -> None:
         owner = SimpleNamespace()
-        simple = SimpleNamespace()
+        simple = SimpleNamespace(
+            router=SimpleNamespace(include_router=lambda _router: None)
+        )
         control = SimpleNamespace()
         previous_prepare = goal.one_click._prepare_draft
         previous_choose = goal.one_click._choose_campaign
@@ -161,6 +168,7 @@ class GoalFirstAutopilotTests(unittest.IsolatedAsyncioTestCase):
             self.assertIs(control._send_dashboard, goal.send_goal_dashboard)
             self.assertIs(goal.one_click._prepare_draft, goal._prepare_goal_result)
             self.assertIs(goal.one_click._choose_campaign, goal._choose_goal_region)
+            self.assertTrue(simple._goal_first_autopilot_composed)
         finally:
             goal.one_click._prepare_draft = previous_prepare
             goal.one_click._choose_campaign = previous_choose
