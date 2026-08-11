@@ -329,6 +329,7 @@ async def choose_yandex_campaign(
     callback: CallbackQuery,
     state: FSMContext,
 ) -> None:
+    await callback.answer("Загружаю кампании…")
     data = await state.get_data()
     try:
         index = int(str(callback.data).split(":", 2)[2])
@@ -337,12 +338,16 @@ async def choose_yandex_campaign(
             int(callback.from_user.id),
             str(data["business_id"]),
         )
-        campaigns = await asyncio.to_thread(
-            list_yandex_direct_campaigns,
-            actor=actor,
-            connection_id=connection_id,
+        campaigns = await asyncio.wait_for(
+            asyncio.to_thread(
+                list_yandex_direct_campaigns,
+                actor=actor,
+                connection_id=connection_id,
+            ),
+            timeout=25.0,
         )
     except (
+        asyncio.TimeoutError,
         IndexError,
         KeyError,
         TypeError,
@@ -350,16 +355,29 @@ async def choose_yandex_campaign(
         AdConnectionError,
         YandexDirectError,
     ):
-        await callback.answer(
-            "Не удалось получить кампании Яндекса",
-            show_alert=True,
+        rows = [[("🔄 Повторить", str(callback.data or "cpa:conn:0"))]]
+        business_token = str(data.get("business_token") or "").strip()
+        if business_token:
+            rows.append(
+                [("⬅️ К рекламному кабинету", f"cpa:home:{business_token}")]
+            )
+        await _message(callback).answer(
+            "Не удалось получить кампании Яндекса. Попробуйте ещё раз. "
+            "Если ошибка повторится, обновите подключение рекламного кабинета.",
+            reply_markup=control._keyboard(rows),
         )
         return
     eligible = [item for item in campaigns if item.state != "ARCHIVED"][:20]
     if not eligible:
-        await callback.answer(
-            "В кабинете нет подходящей активной текстовой кампании",
-            show_alert=True,
+        business_token = str(data.get("business_token") or "").strip()
+        rows = []
+        if business_token:
+            rows.append(
+                [("⬅️ К рекламному кабинету", f"cpa:home:{business_token}")]
+            )
+        await _message(callback).answer(
+            "В кабинете нет подходящей активной текстовой кампании.",
+            reply_markup=control._keyboard(rows),
         )
         return
     await state.update_data(
@@ -374,7 +392,6 @@ async def choose_yandex_campaign(
         for index, item in enumerate(eligible)
     ]
     rows.append([("Отмена", f"cpa:home:{data['business_token']}")])
-    await callback.answer()
     await _message(callback).answer(
         "В какой существующей кампании создать рекламный черновик?\n\n"
         "ClientPlatform не меняет бюджет и стратегию кампании и не отправляет "
