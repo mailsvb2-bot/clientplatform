@@ -7,6 +7,7 @@ import hashlib
 import os
 import re
 from types import ModuleType
+from typing import Any, Coroutine
 from urllib.parse import urlencode
 
 from aiogram import F, Router
@@ -43,6 +44,7 @@ from clientplatform.domain.bookings import BookingError, BookingSlotStatus
 from clientplatform.domain.promotions import PromotionChannel, PromotionError
 from clientplatform.domain.tenancy import TenantPermissionDenied
 from clientplatform.integrations.yandex_direct import YandexDirectError
+from core.task_manager import TaskManager
 
 from . import clientplatform_control as control
 from . import clientplatform_one_click_experience as one_click
@@ -65,7 +67,7 @@ _REGIONS = {
     "санкт-петербурге": (2,),
     "спб": (2,),
 }
-_VISUAL_TASKS: set[asyncio.Task[None]] = set()
+_BACKGROUND_TASKS = TaskManager()
 
 
 class GoalDrivenOwnerState(StatesGroup):
@@ -141,7 +143,9 @@ def _share_url(url: str, text: str) -> str:
 def _ordered_jobs(jobs):
     return sorted(
         jobs,
-        key=lambda item: str(getattr(item, "updated_at", "") or getattr(item, "created_at", "")),
+        key=lambda item: str(
+            getattr(item, "updated_at", "") or getattr(item, "created_at", "")
+        ),
         reverse=True,
     )
 
@@ -285,7 +289,13 @@ async def _share_result(
 async def _oauth_url(actor) -> str:
     try:
         start = await asyncio.to_thread(start_yandex_direct_oauth, actor=actor)
-    except (AdConnectionError, YandexDirectError, TenantPermissionDenied, RuntimeError, ValueError):
+    except (
+        AdConnectionError,
+        YandexDirectError,
+        TenantPermissionDenied,
+        RuntimeError,
+        ValueError,
+    ):
         return ""
     return start.authorization_url
 
@@ -401,6 +411,12 @@ async def _begin_missing_schedule(
 
 async def _find_offering(actor, offering_id: str):
     capabilities = await asyncio.to_thread(control.list_business_capabilities, actor=actor)
+    usable = [
+        item
+        for item in capabilities
+        if item.status == CapabilityStatus.ACTIVE
+        and item.connector_key in {"consultations", "services", "custom"}
+    ]
     groups = await asyncio.gather(
         *[
             asyncio.to_thread(
@@ -408,8 +424,7 @@ async def _find_offering(actor, offering_id: str):
                 actor=actor,
                 capability_id=capability.id,
             )
-            for capability in capabilities
-            if capability.status == CapabilityStatus.ACTIVE
+            for capability in usable
         ]
     )
     return next(
@@ -452,7 +467,9 @@ async def _create_slot_and_continue(
         await state.set_state(GoalDrivenOwnerState.waiting_booking_start)
         return
     await state.clear()
-    await message.answer("✅ Время добавил. Теперь сам готовлю всё для привлечения клиентов…")
+    await message.answer(
+        "✅ Время добавил. Теперь сам готовлю всё для привлечения клиентов…"
+    )
     await _continue_goal(
         message,
         state,
@@ -538,7 +555,10 @@ async def _prepare_and_queue(
             actor=actor,
             business_token=business_token,
             slot=slot,
-            note="Платное продвижение сейчас не удалось подготовить, поэтому я не остановил работу и сделал безопасный вариант без расходов.",
+            note=(
+                "Платное продвижение сейчас не удалось подготовить, поэтому я не "
+                "остановил работу и сделал безопасный вариант без расходов."
+            ),
             show_paid_settings=True,
         )
         return
@@ -546,9 +566,7 @@ async def _prepare_and_queue(
     creative = promotion.campaign.creative
     text = f"{creative.headline}\n\n{creative.primary_text}\n\n{creative.description}"
     share = _share_url(source_url, text)
-    visual_callback = (
-        f"cpo:visual:{business_token}:{control._uuid_token(queued.id)}"
-    )
+    visual_callback = f"cpo:visual:{business_token}:{control._uuid_token(queued.id)}"
     await target.answer(
         "✅ Всё подготовил\n\n"
         f"Выбрал ближайшее свободное время: {slot.local_start} · {slot.offering_title}.\n\n"
@@ -593,7 +611,10 @@ async def _continue_goal(
             actor=actor,
             business_token=business_token,
             slot=slot,
-            note="Платное продвижение на платформе пока не включено, поэтому я сразу подготовил вариант без расходов.",
+            note=(
+                "Платное продвижение на платформе пока не включено, поэтому я сразу "
+                "подготовил вариант без расходов."
+            ),
         )
         return
     try:
@@ -608,7 +629,10 @@ async def _continue_goal(
             actor=actor,
             business_token=business_token,
             slot=slot,
-            note="Для Вашей роли платное продвижение недоступно, но готовое объявление уже можно отправлять людям.",
+            note=(
+                "Для Вашей роли платное продвижение недоступно, но готовое объявление "
+                "уже можно отправлять людям."
+            ),
         )
         return
     except AdConnectionError:
@@ -618,7 +642,9 @@ async def _continue_goal(
             actor=actor,
             business_token=business_token,
             slot=slot,
-            note="Платное продвижение временно недоступно, поэтому я продолжил без него.",
+            note=(
+                "Платное продвижение временно недоступно, поэтому я продолжил без него."
+            ),
         )
         return
     active = [item for item in connections if item.status == AdConnectionStatus.ACTIVE]
@@ -629,7 +655,10 @@ async def _continue_goal(
             actor=actor,
             business_token=business_token,
             slot=slot,
-            note="Бесплатный вариант уже готов. Если захотите платное продвижение, разрешение можно дать один раз — дальше я буду использовать его сам.",
+            note=(
+                "Бесплатный вариант уже готов. Если захотите платное продвижение, "
+                "разрешение можно дать один раз — дальше я буду использовать его сам."
+            ),
             enable_paid_url=await _oauth_url(actor),
         )
         return
@@ -641,7 +670,10 @@ async def _continue_goal(
             actor=actor,
             business_token=business_token,
             slot=slot,
-            note="У платного продвижения есть несколько возможных настроек. Я не стал угадывать и рисковать — безопасный вариант уже готов.",
+            note=(
+                "У платного продвижения есть несколько возможных настроек. Я не стал "
+                "угадывать и рисковать — безопасный вариант уже готов."
+            ),
             show_paid_settings=True,
         )
         return
@@ -654,14 +686,22 @@ async def _continue_goal(
             ),
             timeout=25.0,
         )
-    except (asyncio.TimeoutError, AdConnectionError, YandexDirectError, TenantPermissionDenied):
+    except (
+        asyncio.TimeoutError,
+        AdConnectionError,
+        YandexDirectError,
+        TenantPermissionDenied,
+    ):
         await _share_result(
             event,
             state,
             actor=actor,
             business_token=business_token,
             slot=slot,
-            note="Платное продвижение пока не готово, поэтому я сразу подготовил вариант без расходов.",
+            note=(
+                "Платное продвижение пока не готово, поэтому я сразу подготовил "
+                "вариант без расходов."
+            ),
         )
         return
     eligible = _eligible_campaigns(campaigns)
@@ -672,7 +712,10 @@ async def _continue_goal(
             actor=actor,
             business_token=business_token,
             slot=slot,
-            note="Платное продвижение пока не готово к работе. Я не стал заставлять Вас разбираться с этим и уже сделал вариант без расходов.",
+            note=(
+                "Платное продвижение пока не готово к работе. Я не стал заставлять "
+                "Вас разбираться с этим и уже сделал вариант без расходов."
+            ),
         )
         return
     campaign = _pick_campaign(eligible, jobs, connection_id=str(connection.id))
@@ -683,7 +726,10 @@ async def _continue_goal(
             actor=actor,
             business_token=business_token,
             slot=slot,
-            note="Есть несколько вариантов платного продвижения, и я не буду выбирать наугад. Безопасный вариант уже готов.",
+            note=(
+                "Есть несколько вариантов платного продвижения, и я не буду выбирать "
+                "наугад. Безопасный вариант уже готов."
+            ),
             show_paid_settings=True,
         )
         return
@@ -757,7 +803,10 @@ async def choose_goal_offering(callback: CallbackQuery, state: FSMContext) -> No
     except (ValueError, TenantPermissionDenied):
         offering = None
     if offering is None:
-        await callback.answer("Не получилось выбрать услугу. Начните ещё раз.", show_alert=True)
+        await callback.answer(
+            "Не получилось выбрать услугу. Начните ещё раз.",
+            show_alert=True,
+        )
         return
     await callback.answer()
     await _ask_booking_start(
@@ -788,7 +837,9 @@ async def receive_goal_offering_title(message: Message, state: FSMContext) -> No
             description=f"{title}. Запись через ClientPlatform.",
         )
     except (KeyError, ActivityError, TenantPermissionDenied, ValueError):
-        await message.answer("Не получилось сохранить название. Попробуйте написать его ещё раз.")
+        await message.answer(
+            "Не получилось сохранить название. Попробуйте написать его ещё раз."
+        )
         return
     await _ask_booking_start(
         message,
@@ -809,10 +860,17 @@ async def receive_goal_booking_start(message: Message, state: FSMContext) -> Non
     await state.set_data({**data, "booking_start": value})
     inferred = _duration_from_title(str(data.get("offering_title") or ""))
     if inferred is not None:
-        await _create_slot_and_continue(message, state, data={**data, "booking_start": value}, duration=inferred)
+        await _create_slot_and_continue(
+            message,
+            state,
+            data={**data, "booking_start": value},
+            duration=inferred,
+        )
         return
     await state.set_state(GoalDrivenOwnerState.waiting_booking_duration)
-    await message.answer("Сколько минут обычно занимает эта встреча или услуга? Например: 60")
+    await message.answer(
+        "Сколько минут обычно занимает эта встреча или услуга? Например: 60"
+    )
 
 
 @router.message(GoalDrivenOwnerState.waiting_booking_duration)
@@ -880,13 +938,18 @@ async def receive_goal_region(message: Message, state: FSMContext) -> None:
             actor=actor,
             business_token=str(data["business_token"]),
             slot=slot,
-            note="Этот город я пока не могу определить без риска ошибиться. Поэтому уже подготовил безопасный вариант без расходов.",
+            note=(
+                "Этот город я пока не могу определить без риска ошибиться. Поэтому "
+                "уже подготовил безопасный вариант без расходов."
+            ),
             show_paid_settings=True,
         )
         return
     if slot is None:
         await state.clear()
-        await message.answer("Свободное время уже изменилось. Нажмите «🚀 Хочу клиентов» ещё раз.")
+        await message.answer(
+            "Свободное время уже изменилось. Нажмите «🚀 Хочу клиентов» ещё раз."
+        )
         return
     await _prepare_and_queue(
         message,
@@ -908,9 +971,7 @@ async def _send_visual(target: Message, job) -> bool:
     except VisualCreativeError:
         return False
     await target.answer_photo(FSInputFile(path), caption="✨ Картинка готова")
-    await target.answer(
-        "Готово. Я ничего не запускал в рекламе и не менял бюджет."
-    )
+    await target.answer("Готово. Я ничего не запускал в рекламе и не менял бюджет.")
     return True
 
 
@@ -924,24 +985,36 @@ async def _finish_visual(target: Message, *, scope_id: str, job_id: str) -> None
                 scope_id=scope_id,
             )
         except VisualCreativeError:
-            await target.answer("Картинку сейчас получить не удалось. Объявление без неё уже готово.")
+            await target.answer(
+                "Картинку сейчас получить не удалось. Объявление без неё уже готово."
+            )
             return
         if job.status == "succeeded" and job.asset_ready:
             if not await _send_visual(target, job):
-                await target.answer("Картинка создана, но файл получить не удалось. Объявление без неё уже готово.")
+                await target.answer(
+                    "Картинка создана, но файл получить не удалось. Объявление без "
+                    "неё уже готово."
+                )
             return
         if job.status == "failed":
             await target.answer("Картинка не создалась. Объявление без неё уже готово.")
             return
     await target.answer(
-        "Генерация картинки заняла слишком много времени. Объявление без неё уже готово; "
-        "эту же кнопку можно нажать позже — повторная попытка защищена от дублирования."
+        "Генерация картинки заняла слишком много времени. Объявление без неё уже "
+        "готово; эту же кнопку можно нажать позже — повторная попытка защищена от "
+        "дублирования."
     )
 
 
-def _track_task(task: asyncio.Task[None]) -> None:
-    _VISUAL_TASKS.add(task)
-    task.add_done_callback(_VISUAL_TASKS.discard)
+def _track_task(coro: Coroutine[Any, Any, None]) -> None:
+    _BACKGROUND_TASKS.create(coro, name="clientplatform-goal-visual-delivery")
+
+
+async def _shutdown_background_tasks() -> None:
+    await _BACKGROUND_TASKS.shutdown()
+
+
+router.shutdown.register(_shutdown_background_tasks)
 
 
 @router.callback_query(F.data.startswith("cpo:visual:"))
@@ -966,9 +1039,8 @@ async def generate_goal_visual(callback: CallbackQuery) -> None:
             body=str(publication.text),
             kind="image",
             scope_id=business_id,
-            idempotency_key="clientplatform:" + hashlib.sha256(
-                f"{business_id}|{job_id}|image".encode("utf-8")
-            ).hexdigest(),
+            idempotency_key="clientplatform:"
+            + hashlib.sha256(f"{business_id}|{job_id}|image".encode("utf-8")).hexdigest(),
             country_code=os.getenv("VISUAL_DEPLOYMENT_COUNTRY", ""),
             wait_seconds=60,
         )
@@ -980,15 +1052,17 @@ async def generate_goal_visual(callback: CallbackQuery) -> None:
     target = control._callback_message(callback)
     if visual.status == "succeeded" and visual.asset_ready:
         if not await _send_visual(target, visual):
-            await target.answer("Картинка создана, но файл получить не удалось. Объявление без неё уже готово.")
+            await target.answer(
+                "Картинка создана, но файл получить не удалось. Объявление без неё "
+                "уже готово."
+            )
         return
     if visual.status in {"queued", "running"}:
-        await target.answer("Картинка создаётся. Ничего больше нажимать не нужно — пришлю её сюда автоматически.")
-        _track_task(
-            asyncio.create_task(
-                _finish_visual(target, scope_id=business_id, job_id=visual.id)
-            )
+        await target.answer(
+            "Картинка создаётся. Ничего больше нажимать не нужно — пришлю её сюда "
+            "автоматически."
         )
+        _track_task(_finish_visual(target, scope_id=business_id, job_id=visual.id))
         return
     await target.answer("Картинка не создалась. Объявление без неё уже готово.")
 
