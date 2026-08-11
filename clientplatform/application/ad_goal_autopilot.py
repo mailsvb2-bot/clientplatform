@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 from clientplatform.application import ad_spend as spend
 from clientplatform.application.ad_spend import PreparedAdSpendAuthorization
 from clientplatform.application.ad_spend_consent import request_ad_spend_consent
+from clientplatform.application.ad_spend_runtime import provider_report_date
 from clientplatform.domain.ad_connections import AdProvider
 from clientplatform.domain.ad_spend import AdSpendAuthorization, AdSpendInvariantViolation
 from clientplatform.domain.tenancy import TenantContext
@@ -23,6 +24,7 @@ from clientplatform.infrastructure.ad_spend_preparation_repository import (
     AdSpendPreparationRepository,
 )
 from clientplatform.infrastructure.ad_worker_store import AdWorkerStore
+from clientplatform.infrastructure.tenancy_repository import TenancyRepository
 from clientplatform.integrations.yandex_direct import YandexDirectError, YandexTokenBundle
 from clientplatform.integrations.yandex_direct_budget import (
     YandexCampaignBudgetReadout,
@@ -89,10 +91,10 @@ def _read_goal_evidence(
     actor: TenantContext,
     publication_job_id: str,
     now: datetime,
-) -> tuple[YandexCampaignBudgetReadout, YandexDailySpendReadout]:
+) -> tuple[YandexCampaignBudgetReadout, YandexDailySpendReadout, str]:
     selected_vault = spend._vault()
     selected_provider = spend._provider()
-    report_date = spend._report_date(now.date(), now=now)
+    report_date = provider_report_date(now=now)
 
     with get_db_ro() as conn:
         current, target = AdSpendPreparationRepository(conn).load_submitted_target(
@@ -115,7 +117,7 @@ def _read_goal_evidence(
 
     bundle = YandexTokenBundle.from_json(token_json)
     try:
-        return spend._read_provider_evidence(
+        campaign, daily_spend = spend._read_provider_evidence(
             provider=selected_provider,
             target=target,
             bundle=bundle,
@@ -132,13 +134,14 @@ def _read_goal_evidence(
             bundle=bundle,
             now=now,
         )
-        return spend._read_provider_evidence(
+        campaign, daily_spend = spend._read_provider_evidence(
             provider=selected_provider,
             target=target,
             bundle=refreshed,
             report_date=report_date,
             captured_at=now,
         )
+    return campaign, daily_spend, report_date
 
 
 def preview_goal_spend(
@@ -160,7 +163,7 @@ def preview_goal_spend(
     selected_vault = spend._vault()
     selected_provider = spend._provider()
     with get_db_ro() as conn:
-        current_actor = spend.TenancyRepository(conn).resolve_context(
+        current_actor = TenancyRepository(conn).resolve_context(
             user_id=actor.user_id,
             business_id=actor.business_id,
         )
@@ -179,7 +182,7 @@ def preview_goal_spend(
     if connection.provider != AdProvider.YANDEX_DIRECT:
         raise AdSpendInvariantViolation("advertising provider is unsupported")
     bundle = YandexTokenBundle.from_json(token_json)
-    report_date = spend._report_date(current.date(), now=current)
+    report_date = provider_report_date(now=current)
 
     def read(active_bundle: YandexTokenBundle):
         campaign = selected_provider.campaign_budget_readout(
@@ -248,7 +251,7 @@ def prepare_goal_spend_consent(
     current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).replace(
         microsecond=0
     )
-    campaign, daily_spend = _read_goal_evidence(
+    campaign, daily_spend, report_date = _read_goal_evidence(
         actor=actor,
         publication_job_id=publication_job_id,
         now=current,
@@ -264,7 +267,7 @@ def prepare_goal_spend_consent(
         external_account_id=target.external_account_id,
         campaign=campaign,
         daily_spend=daily_spend,
-        expected_report_date=current.date().isoformat(),
+        expected_report_date=report_date,
         now=current,
         provider_timezone=spend._report_timezone(),
         validity_seconds=_DEFAULT_TTL_SECONDS,
@@ -281,7 +284,7 @@ def prepare_goal_spend_consent(
         hard_cap_minor=hard_cap,
         daily_cap_minor=daily_cap,
         authorization_expires_at=current + timedelta(seconds=_DEFAULT_TTL_SECONDS),
-        provider_report_date=current.date(),
+        provider_report_date=report_date,
         now=current,
     )
     authorization = request_ad_spend_consent(
