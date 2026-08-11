@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 
 from clientplatform.application.ad_publication_assets import (
     get_asset_for_worker,
@@ -286,18 +287,25 @@ def submit_goal_publication(
 
     selected_vault = vault or _vault()
     selected_provider = provider or _provider()
+    submitted_current: AdPublicationJob | None = None
     with get_db() as conn:
         repository = AdGoalPublicationRepository(conn)
         claim = repository.claim(actor=actor, job_id=job_id)
         if claim is None:
             current = repository.get(actor=actor, job_id=job_id)
             if current.status == AdPublicationStatus.SUBMITTED:
-                return _sync_submitted_media(
-                    job=current,
-                    vault=selected_vault,
-                    provider=selected_provider,
-                )
-            raise GoalPublicationBusy("advertising draft is already being processed")
+                submitted_current = current
+            else:
+                raise GoalPublicationBusy("advertising draft is already being processed")
+    if submitted_current is not None:
+        return _sync_submitted_media(
+            job=submitted_current,
+            vault=selected_vault,
+            provider=selected_provider,
+        )
+
+    if claim is None:
+        raise GoalPublicationBusy("advertising draft claim was not acquired")
     job, lock_token = claim.job, claim.lock_token
     connection, bundle = _load_bundle(job=job, vault=selected_vault)
     try:
@@ -376,12 +384,16 @@ def process_one_pending_video_asset(
 ) -> bool:
     """Finish one persisted Yandex video extension after provider conversion.
 
-    Permanent conversion errors are recorded and skipped on future ticks so one
-    bad user video can never block media processing for other tenants.
+    Permanent conversion errors are recorded and skipped on future ticks. A
+    converting item is deferred before the next query so it cannot monopolize
+    a tick or block ready videos belonging to another tenant.
     """
 
     selected_vault = vault or _vault()
     selected_provider = provider or _provider()
+    threshold = (datetime.now(timezone.utc) - timedelta(seconds=30)).isoformat(
+        timespec="seconds"
+    )
     with get_db_ro() as conn:
         row = conn.execute(
             """
@@ -393,10 +405,11 @@ def process_one_pending_video_asset(
             WHERE a.kind='video' AND a.provider_video_id IS NOT NULL
               AND a.provider_error_code IS NULL
               AND j.status='submitted' AND j.external_ad_id IS NOT NULL
-              AND a.provider_creative_id IS NULL
+              AND a.provider_creative_id IS NULL AND a.updated_at<=?
             ORDER BY a.updated_at, a.publication_job_id
             LIMIT 1
-            """
+            """,
+            (threshold,),
         ).fetchone()
         if row is None:
             return False
@@ -441,7 +454,20 @@ def process_one_pending_video_asset(
             )
         return True
     if status != "READY":
-        return False
+        with get_db() as conn:
+            conn.execute(
+                """
+                UPDATE ad_publication_assets SET updated_at=?
+                WHERE business_id=? AND publication_job_id=?
+                  AND provider_creative_id IS NULL AND provider_error_code IS NULL
+                """,
+                (
+                    datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                    business_id,
+                    publication_job_id,
+                ),
+            )
+        return True
     creative_id = selected_provider.create_video_extension(
         access_token=bundle.access_token,
         video_id=video_id,
