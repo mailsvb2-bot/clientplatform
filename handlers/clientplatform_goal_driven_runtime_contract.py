@@ -44,8 +44,13 @@ def install_goal_runtime_contract(
         return _event_target(event, control_module=control_module)
 
     async def send_dashboard(message, *, user_id: int, business_id: str) -> None:
+        # Resolve the snapshot dependency through the goal module at call time.
+        # Besides keeping tests patchable, this prevents lazy handler composition
+        # from retaining a stale module reference if the simple experience is
+        # extended/replaced later during startup.
+        snapshot_module = getattr(goal_module, "simple", simple_module)
         actor, access, profile, capabilities, customers, programs, snapshot_slots = (
-            await simple_module._business_snapshot(
+            await snapshot_module._business_snapshot(
                 user_id=user_id,
                 business_id=business_id,
             )
