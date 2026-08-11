@@ -47,11 +47,11 @@ class ClientPlatformFirstResultUiTests(unittest.IsolatedAsyncioTestCase):
         markup = owner._owner_keyboard(_BUSINESS_ID)
         buttons = [button for row in markup.inline_keyboard for button in row]
         first_button = buttons[0]
-        self.assertEqual(first_button.text, "🚀 Хочу клиентов")
+        self.assertEqual(first_button.text, "🚀 Получить клиентов")
         self.assertTrue(str(first_button.callback_data).startswith("cpo:start:"))
         self.assertEqual(
             [button.text for button in buttons],
-            ["🚀 Хочу клиентов", "👥 Клиенты и запись", "⚙️ Управление"],
+            ["🚀 Получить клиентов", "👥 Клиенты и запись", "⚙️ Ещё"],
         )
         self.assertIs(owner.send_owner_dashboard, goal.send_goal_dashboard)
         self.assertFalse(
