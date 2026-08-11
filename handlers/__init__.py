@@ -192,6 +192,24 @@ def _load_clientplatform_modules() -> tuple[ModuleType, ModuleType]:
         simple_module=simple_experience,
         control_module=control,
     )
+
+    goal_first_safety = importlib.import_module(
+        ".clientplatform_goal_first_safety",
+        __name__,
+    )
+    interaction_safety = importlib.import_module(
+        ".clientplatform_interaction_safety",
+        __name__,
+    )
+    goal_first_safety.install_goal_first_safety(interaction_safety)
+
+    ad_media_monitor = importlib.import_module(
+        "clientplatform.runtime.ad_media_monitor"
+    )
+    if not bool(getattr(entry, "_ad_media_monitor_composed", False)):
+        entry.router.startup.register(ad_media_monitor.start_ad_media_monitor)
+        entry.router.shutdown.register(ad_media_monitor.stop_ad_media_monitor)
+        entry._ad_media_monitor_composed = True
     return entry, control
 
 
