@@ -92,7 +92,7 @@ class GoalFirstAutopilotHardeningTests(unittest.IsolatedAsyncioTestCase):
         text = out.answer.await_args.args[0]
         self.assertIn("Ближайшее время: пока не опубликовано", text)
         self.assertIn("Свободных времён пока нет", text)
-        self.assertIn("Клиентов: 1", text)
+        self.assertIn("клиентов: 1", text)
 
     async def test_launch_label_without_known_cap_requires_fresh_check(self) -> None:
         with patch.object(goal, "ad_spend_mutations_enabled", return_value=True):
