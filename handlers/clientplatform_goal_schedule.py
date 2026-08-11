@@ -267,6 +267,15 @@ async def _create_slot_and_resume(
 
     try:
         actor = await control._actor(control._user_id(message), business_id)
+    except (TenantPermissionDenied, ValueError):
+        await message.answer(
+            "Такое время не получилось сохранить. Напишите дату и время ещё раз, "
+            "например: 20.08.2026 12:00."
+        )
+        await state.set_state(GoalScheduleState.waiting_booking_start)
+        return
+
+    try:
         await asyncio.to_thread(
             control.create_booking_slot,
             actor=actor,
@@ -274,7 +283,7 @@ async def _create_slot_and_resume(
             local_start=booking_start,
             duration_minutes=duration,
         )
-    except (BookingError, TenantPermissionDenied, ValueError, TypeError):
+    except (BookingError, ValueError, TypeError):
         await message.answer(
             "Такое время не получилось сохранить. Напишите дату и время ещё раз, "
             "например: 20.08.2026 12:00."
