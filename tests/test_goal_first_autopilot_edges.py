@@ -21,6 +21,13 @@ class FakeState:
     async def set_data(self, value):
         self.data = dict(value)
 
+    async def update_data(self, **kwargs):
+        self.data.update(kwargs)
+        return dict(self.data)
+
+    async def get_data(self):
+        return dict(self.data)
+
     async def clear(self):
         self.cleared = True
         self.data.clear()
@@ -89,10 +96,10 @@ class GoalFirstAutopilotEdgeTests(unittest.IsolatedAsyncioTestCase):
                 data=base_data(),
                 region_ids=(47,),
             )
-        self.assertEqual(state.state, goal.ad.AdConnectionState.confirming_publication)
+        self.assertEqual(state.state, goal.GoalFirstAutopilotState.ready)
         self.assertEqual(state.data["job_id"], "job-1")
         text = target.answer.await_args.args[0]
-        self.assertIn("✅ Всё готово", text)
+        self.assertIn("✅ Реклама подготовлена", text)
         self.assertIn("Пока ничего не запущено", text)
         self.assertNotIn("Technical campaign name", text)
         labels = [
@@ -103,12 +110,35 @@ class GoalFirstAutopilotEdgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             labels,
             [
-                "✨ Добавить красивую картинку",
-                "🚀 Запустить рекламу",
-                "✏️ Изменить",
+                "🚀 Продолжить к запуску",
+                "🎨 Настроить под себя",
                 "🏠 Не запускать",
             ],
         )
+
+    async def test_customization_is_optional_and_contains_own_media_controls(self):
+        target = SimpleNamespace(answer=AsyncMock())
+        callback = SimpleNamespace(
+            data="cpo:custom:business-1",
+            from_user=SimpleNamespace(id=101),
+            message=target,
+            answer=AsyncMock(),
+        )
+        state = FakeState()
+        state.data = {**base_data(), "job_id": "job-1"}
+        with patch.object(goal.control, "_callback_message", return_value=target):
+            await goal.open_customization(callback, state)
+        self.assertEqual(state.state, goal.GoalFirstAutopilotState.customizing)
+        labels = [
+            button.text
+            for row in target.answer.await_args.kwargs["reply_markup"].inline_keyboard
+            for button in row
+        ]
+        self.assertIn("✍️ Свой текст", labels)
+        self.assertIn("🖼 Своя картинка", labels)
+        self.assertIn("🎬 Своё видео", labels)
+        self.assertIn("✨ Сделать картинку автоматически", labels)
+        self.assertIn("✅ Готово", labels)
 
     async def test_promotion_failure_uses_existing_safe_failure_boundary(self):
         target = SimpleNamespace(answer=AsyncMock())
