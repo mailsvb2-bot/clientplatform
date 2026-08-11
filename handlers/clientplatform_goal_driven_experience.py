@@ -81,10 +81,10 @@ def _home_keyboard(business_id: str) -> InlineKeyboardMarkup:
     token = control._uuid_token(business_id)
     return control._keyboard(
         [
-            [("🚀 Хочу клиентов", f"cpo:start:{token}")],
+            [("🚀 Получить клиентов", f"cpo:start:{token}")],
             [
                 ("👥 Клиенты и запись", f"cpj:bookings:{token}"),
-                ("⚙️ Управление", f"cpo:more:{token}"),
+                ("⚙️ Ещё", f"cpo:more:{token}"),
             ],
         ]
     )
@@ -96,7 +96,7 @@ async def send_goal_dashboard(
     user_id: int,
     business_id: str,
 ) -> None:
-    _actor, access, _profile, _caps, _customers, _programs, slots = (
+    _actor, access, profile, _caps, _customers, _programs, slots = (
         await simple._business_snapshot(user_id=user_id, business_id=business_id)
     )
     open_count = sum(item.slot.status == BookingSlotStatus.OPEN for item in slots)
@@ -105,8 +105,13 @@ async def send_goal_dashboard(
         if open_count
         else "Свободного времени пока нет — если понадобится, я сам попрошу его указать."
     )
+    activity = " ".join(
+        str(getattr(profile, "activity_description", "") or "").split()
+    )
+    activity_block = f"\n{activity}\n" if activity else "\n"
     await message.answer(
-        f"🏠 {access.business.name}\n\n"
+        f"🏠 {access.business.name}\n"
+        f"{activity_block}\n"
         "Что хотите получить?\n\n"
         "Если нужны новые клиенты — нажмите одну кнопку. Я сам выберу ближайшее "
         "свободное время, подготовлю текст, проверю доступное продвижение и использую "
@@ -117,7 +122,7 @@ async def send_goal_dashboard(
 
 
 def _target(event: CallbackQuery | Message) -> Message:
-    return event if isinstance(event, Message) else control._callback_message(event)
+    return control._callback_message(event) if isinstance(event, CallbackQuery) else event
 
 
 def _user_id(event: CallbackQuery | Message) -> int:
@@ -235,10 +240,10 @@ async def _share_result(
     target = _target(event)
     if slot is None:
         await target.answer(
-            "Свободное время изменилось. Нажмите «🚀 Хочу клиентов» ещё раз — я всё "
+            "Свободное время изменилось. Нажмите «🚀 Получить клиентов» ещё раз — я всё "
             "пересоберу автоматически.",
             reply_markup=control._keyboard(
-                [[("🚀 Хочу клиентов", f"cpo:start:{business_token}")]]
+                [[("🚀 Получить клиентов", f"cpo:start:{business_token}")]]
             ),
         )
         return
@@ -884,7 +889,7 @@ async def change_goal_offering_page(callback: CallbackQuery) -> None:
         offerings = await _selectable_offerings(actor)
     except (ValueError, TenantPermissionDenied):
         await callback.answer(
-            "Список изменился. Нажмите «Хочу клиентов» ещё раз.",
+            "Список изменился. Нажмите «Получить клиентов» ещё раз.",
             show_alert=True,
         )
         return
@@ -939,7 +944,7 @@ async def receive_goal_offering_title(message: Message, state: FSMContext) -> No
         capability_id = str(data["capability_id"])
     except KeyError:
         await message.answer(
-            "Этот шаг уже устарел. Нажмите «🚀 Хочу клиентов» и я начну заново."
+            "Этот шаг уже устарел. Нажмите «🚀 Получить клиентов» и я начну заново."
         )
         await state.clear()
         return
@@ -1027,7 +1032,7 @@ async def choose_goal_region(callback: CallbackQuery, state: FSMContext) -> None
     if slot is None:
         await state.clear()
         await control._callback_message(callback).answer(
-            "Свободное время уже изменилось. Нажмите «🚀 Хочу клиентов» ещё раз."
+            "Свободное время уже изменилось. Нажмите «🚀 Получить клиентов» ещё раз."
         )
         return
     await callback.answer("Продолжаю…")
@@ -1069,7 +1074,7 @@ async def receive_goal_region(message: Message, state: FSMContext) -> None:
     if slot is None:
         await state.clear()
         await message.answer(
-            "Свободное время уже изменилось. Нажмите «🚀 Хочу клиентов» ещё раз."
+            "Свободное время уже изменилось. Нажмите «🚀 Получить клиентов» ещё раз."
         )
         return
     await _prepare_and_queue(
