@@ -22,6 +22,7 @@ def ensure(c: sqlite3.Connection) -> None:
             provider_image_hash TEXT,
             provider_video_id TEXT,
             provider_creative_id TEXT,
+            provider_error_code TEXT,
             created_by_member_id TEXT NOT NULL,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
