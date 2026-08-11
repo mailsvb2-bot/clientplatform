@@ -197,6 +197,8 @@ class ModeratingYandexDirectProvider(YandexDirectProvider):
         return result
 
     def _assert_safe_campaign(self, *, access_token: str, campaign_id: int) -> None:
+        """Revalidate every safety-relevant campaign property at write time."""
+
         result = self._direct_call(
             service="campaigns",
             token=access_token,
@@ -204,7 +206,13 @@ class ModeratingYandexDirectProvider(YandexDirectProvider):
                 "method": "get",
                 "params": {
                     "SelectionCriteria": {"Ids": [campaign_id]},
-                    "FieldNames": ["Id", "State", "Status", "Type"],
+                    "FieldNames": [
+                        "Id",
+                        "State",
+                        "Status",
+                        "StatusPayment",
+                        "Type",
+                    ],
                 },
             },
         )
@@ -218,6 +226,8 @@ class ModeratingYandexDirectProvider(YandexDirectProvider):
             raise YandexDirectError("campaign_not_active")
         if str(item.get("Status") or "").strip().upper() != "ACCEPTED":
             raise YandexDirectError("campaign_not_accepted")
+        if str(item.get("StatusPayment") or "").strip().upper() != "ALLOWED":
+            raise YandexDirectError("campaign_payment_not_allowed")
         if str(item.get("Type") or "").strip().upper() != _SUPPORTED_CAMPAIGN_TYPE:
             raise YandexDirectError("campaign_type_unsupported")
 
