@@ -17,6 +17,25 @@ class YandexDirectMediaTests(unittest.TestCase):
             )
         )
 
+    def test_copy_sync_updates_exact_provider_draft(self) -> None:
+        provider = self.provider()
+        direct = Mock(return_value={"UpdateResults": [{"Id": 501}]})
+        provider._direct_call = direct  # type: ignore[method-assign]
+        provider.update_copy(
+            access_token="token",
+            ad_id="501",
+            title="  Мой   заголовок ",
+            text="  Мой   текст ",
+            href="https://example.test/go",
+        )
+        update = direct.call_args.kwargs
+        self.assertEqual(update["service"], "ads")
+        ad = update["payload"]["params"]["Ads"][0]
+        self.assertEqual(ad["Id"], 501)
+        self.assertEqual(ad["TextAd"]["Title"], "Мой заголовок")
+        self.assertEqual(ad["TextAd"]["Text"], "Мой текст")
+        self.assertEqual(ad["TextAd"]["Href"], "https://example.test/go")
+
     def test_image_upload_and_attachment_use_native_direct_fields(self) -> None:
         provider = self.provider()
         direct = Mock(
@@ -46,6 +65,16 @@ class YandexDirectMediaTests(unittest.TestCase):
         self.assertEqual(update["service"], "ads")
         ad = update["payload"]["params"]["Ads"][0]
         self.assertEqual(ad["TextAd"]["AdImageHash"], "hash-1")
+        self.assertIsNone(ad["TextAd"]["VideoExtension"]["CreativeId"])
+
+    def test_clear_media_removes_old_image_and_video_extension(self) -> None:
+        provider = self.provider()
+        direct = Mock(return_value={"UpdateResults": [{"Id": 501}]})
+        provider._direct_call = direct  # type: ignore[method-assign]
+        provider.clear_media(access_token="token", ad_id="501")
+        ad = direct.call_args.kwargs["payload"]["params"]["Ads"][0]
+        self.assertIsNone(ad["TextAd"]["AdImageHash"])
+        self.assertIsNone(ad["TextAd"]["VideoExtension"]["CreativeId"])
 
     def test_video_upload_conversion_creative_and_attachment_use_native_direct_fields(self) -> None:
         provider = self.provider()
@@ -83,6 +112,7 @@ class YandexDirectMediaTests(unittest.TestCase):
         self.assertEqual(creative["VideoExtensionCreative"]["VideoId"], "video-1")
         ad = direct.call_args_list[3].kwargs["payload"]["params"]["Ads"][0]
         self.assertEqual(ad["TextAd"]["VideoExtension"]["CreativeId"], 777)
+        self.assertIsNone(ad["TextAd"]["AdImageHash"])
 
     def test_video_pending_status_is_preserved(self) -> None:
         provider = self.provider()
