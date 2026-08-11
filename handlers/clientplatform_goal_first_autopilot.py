@@ -30,6 +30,15 @@ from clientplatform.application.ad_publication_customization import (
     update_ad_publication_copy,
 )
 from clientplatform.application.ad_spend_operations import ad_spend_mutations_enabled
+from clientplatform.application.creative_studio_publication import (
+    CreativeStudioPublicationError,
+    GoalStudioPublicationResult,
+    build_goal_image_variants,
+    goal_variant_labels,
+    poll_goal_image_variant,
+    selected_goal_variant,
+    start_goal_image_variant,
+)
 from clientplatform.application.visual_creatives import (
     VisualCreativeError,
     create_ad_visual,
@@ -564,6 +573,21 @@ async def clear_custom_media(callback: CallbackQuery, state: FSMContext) -> None
     )
 
 
+def _studio_country() -> str:
+    return str(os.getenv("VISUAL_DEPLOYMENT_COUNTRY", "") or "").strip().upper()
+
+
+def _studio_variant(data: dict, index: int):
+    return selected_goal_variant(
+        business_id=str(data["business_id"]),
+        publication_job_id=str(data["job_id"]),
+        title=str(data.get("creative_title") or ""),
+        body=str(data.get("creative_body") or ""),
+        country_code=_studio_country(),
+        index=index,
+    )
+
+
 @router.callback_query(F.data.startswith("cpo:genask:"))
 async def ask_generated_image_confirmation(callback: CallbackQuery, state: FSMContext) -> None:
     business_token = str(callback.data).split(":", 2)[2]
@@ -576,24 +600,90 @@ async def ask_generated_image_confirmation(callback: CallbackQuery, state: FSMCo
     await control._callback_message(callback).answer(
         "✨ Сделать картинку автоматически?\n\n"
         "Это отдельная генерация через подключённый AI-провайдер и она может "
-        "расходовать платную квоту. Будет создана ровно одна картинка; после "
-        "готовности ClientPlatform сама прикрепит её к объявлению.",
+        "расходовать платную квоту. Можно создать ровно одну картинку сразу или "
+        "сначала бесплатно выбрать одну из трёх концепций Creative Studio. "
+        "Платная генерация начнётся только после явного выбора.",
         reply_markup=control._keyboard(
             [
                 [("✅ Создать 1 картинку", f"cpo:gen:{business_token}")],
+                [("🎨 Выбрать из 3 концепций", f"cpo:genstudio:{business_token}")],
                 [("⬅️ Не создавать", f"cpo:custom:{business_token}")],
             ]
         ),
     )
 
 
+@router.callback_query(F.data.startswith("cpo:genstudio:"))
+async def open_generated_image_studio(callback: CallbackQuery, state: FSMContext) -> None:
+    business_token = str(callback.data).split(":", 2)[2]
+    data = await state.get_data()
+    if not _state_matches(data, business_token):
+        await callback.answer("Этот черновик уже устарел", show_alert=True)
+        return
+    try:
+        variants = build_goal_image_variants(
+            business_id=str(data["business_id"]),
+            publication_job_id=str(data["job_id"]),
+            title=str(data.get("creative_title") or ""),
+            body=str(data.get("creative_body") or ""),
+            country_code=_studio_country(),
+        )
+        labels = goal_variant_labels(variants)
+    except (KeyError, TypeError, ValueError):
+        await callback.answer("Не удалось подготовить варианты", show_alert=True)
+        return
+    await state.update_data(
+        creative_experiment_id=variants[0].experiment_id,
+        creative_variant_id="",
+        creative_variant_index="",
+    )
+    await state.set_state(GoalFirstAutopilotState.confirming_generation)
+    await callback.answer()
+    await control._callback_message(callback).answer(
+        "✨ Выберите направление картинки\n\n"
+        "Три концепции подготовлены без платного AI-вызова. Платная генерация "
+        "запустится только после выбора одного варианта и останется идемпотентной "
+        "при повторной проверке. После готовности ClientPlatform сама создаст "
+        "форматы и прикрепит квадратный рекламный asset к черновику.",
+        reply_markup=control._keyboard(
+            [
+                [(labels[index], f"cpo:genvariant:{index}:{business_token}")]
+                for index in range(len(labels))
+            ]
+            + [[("⬅️ Назад", f"cpo:genask:{business_token}")]],
+        ),
+    )
+
 async def _finish_generated_image(
     event: CallbackQuery,
     state: FSMContext,
     *,
-    job: object,
     data: dict,
+    result: GoalStudioPublicationResult | None = None,
+    job: object | None = None,
 ) -> bool:
+    if result is not None:
+        if not result.attached or result.asset is None:
+            return False
+        await state.update_data(
+            creative_job_id="",
+            creative_experiment_id=result.binding.experiment_id,
+            creative_variant_id=result.binding.variant_id,
+        )
+        await state.set_state(GoalFirstAutopilotState.customizing)
+        await control._callback_message(event).answer_photo(
+            FSInputFile(result.asset.storage_path),
+            caption="✅ Картинка готова и уже сохранена как рекламный asset ClientPlatform.",
+        )
+        await control._callback_message(event).answer(
+            "Квадратный формат будет прикреплён к Yandex DRAFT существующим "
+            "restart-safe media-контуром; остальные форматы остаются в render-pack.",
+            reply_markup=_custom_keyboard(str(data["business_token"])),
+        )
+        return True
+
+    if job is None:
+        return False
     status = str(getattr(job, "status", "") or "")
     if status != "succeeded" or not bool(getattr(job, "asset_ready", False)):
         return False
@@ -607,7 +697,15 @@ async def _finish_generated_image(
             path=path,
             source=AdPublicationAssetSource.GENERATED,
         )
-    except (KeyError, OSError, ValueError, VisualCreativeError, AdPublicationAssetError):
+    except KeyError:
+        return False
+    except OSError:
+        return False
+    except ValueError:
+        return False
+    except VisualCreativeError:
+        return False
+    except AdPublicationAssetError:
         return False
     await state.update_data(creative_job_id="")
     await state.set_state(GoalFirstAutopilotState.customizing)
@@ -621,9 +719,91 @@ async def _finish_generated_image(
     )
     return True
 
+async def _generate_studio_variant(
+    callback: CallbackQuery,
+    state: FSMContext,
+    *,
+    business_token: str,
+    index: int,
+) -> None:
+    data = await state.get_data()
+    if not _state_matches(data, business_token):
+        await callback.answer("Этот черновик уже устарел", show_alert=True)
+        return
+    await callback.answer("Создаю выбранный вариант…")
+    try:
+        variant = _studio_variant(data, index)
+        actor = await control._actor(int(callback.from_user.id), str(data["business_id"]))
+        result = await asyncio.to_thread(
+            start_goal_image_variant,
+            actor=actor,
+            publication_job_id=str(data["job_id"]),
+            variant=variant,
+            wait_seconds=20,
+        )
+    except (
+        KeyError,
+        TypeError,
+        ValueError,
+        CreativeStudioPublicationError,
+        TenantPermissionDenied,
+    ):
+        await control._callback_message(callback).answer(
+            "Не удалось создать выбранный вариант. Повторный запрос использует "
+            "тот же idempotency key и не должен автоматически создавать второй платный job.",
+            reply_markup=_custom_keyboard(business_token),
+        )
+        await state.set_state(GoalFirstAutopilotState.customizing)
+        return
+    await state.update_data(
+        creative_variant_index=index,
+        creative_variant_id=variant.variant_id,
+        creative_experiment_id=variant.experiment_id,
+    )
+    if await _finish_generated_image(callback, state, result=result, data=data):
+        return
+    status = result.binding.status.value
+    if status not in {"generating", "rendering"}:
+        await state.update_data(creative_job_id="")
+        await state.set_state(GoalFirstAutopilotState.customizing)
+        await control._callback_message(callback).answer(
+            "Генерация или подготовка форматов завершилась ошибкой. Можно выбрать "
+            "другой вариант, загрузить свою картинку или продолжить без неё.",
+            reply_markup=_custom_keyboard(business_token),
+        )
+        return
+    await state.update_data(creative_job_id=result.job.id)
+    await state.set_state(GoalFirstAutopilotState.generation_pending)
+    await control._callback_message(callback).answer(
+        "⏳ Вариант ещё создаётся. Повторно генерация не запускается.",
+        reply_markup=control._keyboard(
+            [[("🔄 Проверить готовность", f"cpo:gencheck:{business_token}")]]
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("cpo:genvariant:"))
+async def generate_selected_studio_image(callback: CallbackQuery, state: FSMContext) -> None:
+    try:
+        _prefix, _action, raw_index, business_token = str(callback.data).split(":", 3)
+        index = int(raw_index)
+        if index not in {0, 1, 2}:
+            raise ValueError("variant index")
+    except (TypeError, ValueError):
+        await callback.answer("Вариант больше не найден", show_alert=True)
+        return
+    await _generate_studio_variant(
+        callback,
+        state,
+        business_token=business_token,
+        index=index,
+    )
+
 
 @router.callback_query(F.data.startswith("cpo:gen:"))
 async def generate_custom_image(callback: CallbackQuery, state: FSMContext) -> None:
+    """Preserve the original one-image flow while Creative Studio remains opt-in."""
+
     business_token = str(callback.data).split(":", 2)[2]
     data = await state.get_data()
     if not _state_matches(data, business_token):
@@ -679,6 +859,52 @@ async def generate_custom_image(callback: CallbackQuery, state: FSMContext) -> N
         ),
     )
 
+async def _check_studio_generated_image(
+    callback: CallbackQuery,
+    state: FSMContext,
+    *,
+    business_token: str,
+    data: dict,
+) -> None:
+    try:
+        index = int(data.get("creative_variant_index") or 0)
+        variant = _studio_variant(data, index)
+        actor = await control._actor(int(callback.from_user.id), str(data["business_id"]))
+        result = await asyncio.to_thread(
+            poll_goal_image_variant,
+            actor=actor,
+            publication_job_id=str(data["job_id"]),
+            job_id=str(data["creative_job_id"]),
+            variant=variant,
+        )
+    except (
+        KeyError,
+        TypeError,
+        ValueError,
+        CreativeStudioPublicationError,
+        TenantPermissionDenied,
+    ):
+        await callback.answer("Пока не удалось проверить картинку", show_alert=True)
+        return
+    await callback.answer()
+    if await _finish_generated_image(callback, state, result=result, data=data):
+        return
+    if result.binding.status.value in {"generating", "rendering"}:
+        await control._callback_message(callback).answer(
+            "⏳ Ещё создаётся. Повторно платная генерация не запускается.",
+            reply_markup=control._keyboard(
+                [[("🔄 Проверить готовность", f"cpo:gencheck:{business_token}")]]
+            ),
+        )
+        return
+    await state.update_data(creative_job_id="")
+    await state.set_state(GoalFirstAutopilotState.customizing)
+    await control._callback_message(callback).answer(
+        "Генерация или render-pack завершились ошибкой. Можно выбрать другой "
+        "вариант, загрузить свою картинку или продолжить без неё.",
+        reply_markup=_custom_keyboard(business_token),
+    )
+
 
 @router.callback_query(F.data.startswith("cpo:gencheck:"))
 async def check_generated_image(callback: CallbackQuery, state: FSMContext) -> None:
@@ -686,6 +912,14 @@ async def check_generated_image(callback: CallbackQuery, state: FSMContext) -> N
     data = await state.get_data()
     if not _state_matches(data, business_token):
         await callback.answer("Этот черновик уже устарел", show_alert=True)
+        return
+    if str(data.get("creative_variant_id") or "").strip():
+        await _check_studio_generated_image(
+            callback,
+            state,
+            business_token=business_token,
+            data=data,
+        )
         return
     try:
         job = await asyncio.to_thread(
@@ -713,7 +947,6 @@ async def check_generated_image(callback: CallbackQuery, state: FSMContext) -> N
         "Генерация не удалась. Можно загрузить свою картинку или продолжить без неё.",
         reply_markup=_custom_keyboard(business_token),
     )
-
 
 @router.callback_query(F.data.startswith("cpo:custom-done:"))
 async def finish_customization(callback: CallbackQuery, state: FSMContext) -> None:
