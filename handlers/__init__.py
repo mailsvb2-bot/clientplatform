@@ -172,15 +172,26 @@ def _load_clientplatform_modules() -> tuple[ModuleType, ModuleType]:
         simple_module=simple_experience,
         control_module=control,
     )
-    # Keep the canonical information-rich dashboard, but replace its button
-    # surface with the one-click keyboard installed above. This removes the
-    # button wall without losing activity, service, booking or customer status.
+    # Keep the canonical information-rich dashboard until the goal-first layer
+    # is installed. One-click owns the orchestration; goal-first owns what the
+    # user sees and which questions are exposed.
     owner_journey.send_owner_dashboard = canonical_owner_dashboard
     simple_experience.send_simple_dashboard = canonical_owner_dashboard
     control._send_dashboard = canonical_owner_dashboard
     if not bool(getattr(simple_experience, "_one_click_experience_composed", False)):
         simple_experience.router.include_router(one_click.router)
         simple_experience._one_click_experience_composed = True
+
+    goal_first = importlib.import_module(
+        ".clientplatform_goal_first_autopilot",
+        __name__,
+    )
+    globals()["clientplatform_goal_first_autopilot"] = goal_first
+    goal_first.install_goal_first_autopilot(
+        owner_module=owner_journey,
+        simple_module=simple_experience,
+        control_module=control,
+    )
     return entry, control
 
 
@@ -245,6 +256,9 @@ def __getattr__(name: str) -> ModuleType:
     if name == "clientplatform_one_click_experience":
         _load_clientplatform_modules()
         return globals()["clientplatform_one_click_experience"]
+    if name == "clientplatform_goal_first_autopilot":
+        _load_clientplatform_modules()
+        return globals()["clientplatform_goal_first_autopilot"]
     raise AttributeError(name)
 
 
@@ -258,6 +272,7 @@ __all__ = [
     "clientplatform_control",
     "clientplatform_existing_bot_onboarding",
     "clientplatform_first_result",
+    "clientplatform_goal_first_autopilot",
     "clientplatform_managed_bot_onboarding",
     "clientplatform_one_click_experience",
     "clientplatform_owner_journey",
