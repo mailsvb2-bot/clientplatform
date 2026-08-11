@@ -67,6 +67,7 @@ _REGIONS = {
     "санкт-петербурге": (2,),
     "спб": (2,),
 }
+_OFFERINGS_PAGE_SIZE = 8
 _BACKGROUND_TASKS = TaskManager()
 
 
@@ -323,6 +324,62 @@ async def _ask_booking_start(
     )
 
 
+async def _selectable_offerings(actor):
+    capabilities = await asyncio.to_thread(control.list_business_capabilities, actor=actor)
+    usable = [
+        item
+        for item in capabilities
+        if item.status == CapabilityStatus.ACTIVE
+        and item.connector_key in {"consultations", "services", "custom"}
+    ]
+    groups = await asyncio.gather(
+        *[
+            asyncio.to_thread(
+                control.list_business_offerings,
+                actor=actor,
+                capability_id=capability.id,
+            )
+            for capability in usable
+        ]
+    )
+    return [item for group in groups for item in group]
+
+
+async def _show_offering_page(
+    target: Message,
+    *,
+    business_token: str,
+    offerings,
+    page: int,
+) -> None:
+    total_pages = max(1, (len(offerings) + _OFFERINGS_PAGE_SIZE - 1) // _OFFERINGS_PAGE_SIZE)
+    safe_page = max(0, min(page, total_pages - 1))
+    start = safe_page * _OFFERINGS_PAGE_SIZE
+    current = offerings[start : start + _OFFERINGS_PAGE_SIZE]
+    rows = [
+        [
+            (
+                f"🎯 {item.title[:42]}",
+                f"cpo:offer:{business_token}:{control._uuid_token(item.id)}",
+            )
+        ]
+        for item in current
+    ]
+    navigation = []
+    if safe_page > 0:
+        navigation.append(("⬅️ Назад", f"cpo:offers:{business_token}:{safe_page - 1}"))
+    if safe_page + 1 < total_pages:
+        navigation.append(("Дальше ➡️", f"cpo:offers:{business_token}:{safe_page + 1}"))
+    if navigation:
+        rows.append(navigation)
+    rows.append([("🏠 Отмена", f"cpj:home:{business_token}")])
+    suffix = f" · страница {safe_page + 1}/{total_pages}" if total_pages > 1 else ""
+    await target.answer(
+        f"Для чего сейчас нужен новый клиент?{suffix}",
+        reply_markup=control._keyboard(rows),
+    )
+
+
 async def _begin_missing_schedule(
     event: CallbackQuery | Message,
     state: FSMContext,
@@ -393,44 +450,17 @@ async def _begin_missing_schedule(
         )
         return
     await state.clear()
-    rows = [
-        [
-            (
-                f"🎯 {offering.title[:42]}",
-                f"cpo:offer:{business_token}:{control._uuid_token(offering.id)}",
-            )
-        ]
-        for offering in offerings[:12]
-    ]
-    rows.append([("🏠 Отмена", f"cpj:home:{business_token}")])
-    await target.answer(
-        "Для чего сейчас нужен новый клиент?",
-        reply_markup=control._keyboard(rows),
+    await _show_offering_page(
+        target,
+        business_token=business_token,
+        offerings=offerings,
+        page=0,
     )
 
 
 async def _find_offering(actor, offering_id: str):
-    capabilities = await asyncio.to_thread(control.list_business_capabilities, actor=actor)
-    usable = [
-        item
-        for item in capabilities
-        if item.status == CapabilityStatus.ACTIVE
-        and item.connector_key in {"consultations", "services", "custom"}
-    ]
-    groups = await asyncio.gather(
-        *[
-            asyncio.to_thread(
-                control.list_business_offerings,
-                actor=actor,
-                capability_id=capability.id,
-            )
-            for capability in usable
-        ]
-    )
-    return next(
-        (item for group in groups for item in group if str(item.id) == offering_id),
-        None,
-    )
+    offerings = await _selectable_offerings(actor)
+    return next((item for item in offerings if str(item.id) == offering_id), None)
 
 
 def _duration_from_title(title: str) -> int | None:
@@ -789,6 +819,31 @@ async def get_clients_goal(callback: CallbackQuery, state: FSMContext) -> None:
         business_id=business_id,
         business_token=business_token,
         slot=slot,
+    )
+
+
+@router.callback_query(F.data.startswith("cpo:offers:"))
+async def change_goal_offering_page(callback: CallbackQuery) -> None:
+    try:
+        _, _, business_token, raw_page = str(callback.data).split(":", 3)
+        business_id = control._token_uuid(business_token)
+        page = int(raw_page)
+        if page < 0:
+            raise ValueError
+        actor = await control._actor(int(callback.from_user.id), business_id)
+        offerings = await _selectable_offerings(actor)
+    except (ValueError, TenantPermissionDenied):
+        await callback.answer("Список изменился. Нажмите «Хочу клиентов» ещё раз.", show_alert=True)
+        return
+    if not offerings:
+        await callback.answer("Список услуг изменился. Начните ещё раз.", show_alert=True)
+        return
+    await callback.answer()
+    await _show_offering_page(
+        control._callback_message(callback),
+        business_token=business_token,
+        offerings=offerings,
+        page=page,
     )
 
 
