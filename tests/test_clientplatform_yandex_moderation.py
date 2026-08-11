@@ -70,6 +70,7 @@ def _campaign_response(
     *,
     state: str = "ON",
     status: str = "ACCEPTED",
+    status_payment: str = "ALLOWED",
 ):
     return (
         200,
@@ -81,6 +82,7 @@ def _campaign_response(
                         "Id": 6001,
                         "State": state,
                         "Status": status,
+                        "StatusPayment": status_payment,
                         "Type": campaign_type,
                     }
                 ]
@@ -98,7 +100,7 @@ def _services(transport: FakeTransport) -> list[str]:
 
 
 class YandexDraftSafetyTests(unittest.TestCase):
-    def test_catalog_exposes_only_active_accepted_text_campaigns(self) -> None:
+    def test_catalog_exposes_only_active_accepted_paid_ready_text_campaigns(self) -> None:
         transport = FakeTransport(
             [
                 (
@@ -112,13 +114,23 @@ class YandexDraftSafetyTests(unittest.TestCase):
                                     "Name": "Текстовая кампания",
                                     "State": "ON",
                                     "Status": "ACCEPTED",
+                                    "StatusPayment": "ALLOWED",
                                     "Type": "TEXT_CAMPAIGN",
                                 },
                                 {
                                     "Id": 6002,
+                                    "Name": "Без оплаты",
+                                    "State": "ON",
+                                    "Status": "ACCEPTED",
+                                    "StatusPayment": "DISALLOWED",
+                                    "Type": "TEXT_CAMPAIGN",
+                                },
+                                {
+                                    "Id": 6003,
                                     "Name": "Единая кампания",
                                     "State": "ON",
                                     "Status": "ACCEPTED",
+                                    "StatusPayment": "ALLOWED",
                                     "Type": "UNIFIED_CAMPAIGN",
                                 },
                             ]
@@ -137,10 +149,12 @@ class YandexDraftSafetyTests(unittest.TestCase):
             [("6001", "TEXT_CAMPAIGN")],
         )
         request = json.loads(transport.calls[0]["body"])
-        self.assertEqual(
-            request["params"]["SelectionCriteria"]["Types"],
-            ["TEXT_CAMPAIGN"],
-        )
+        criteria = request["params"]["SelectionCriteria"]
+        self.assertEqual(criteria["Types"], ["TEXT_CAMPAIGN"])
+        self.assertEqual(criteria["States"], ["ON"])
+        self.assertEqual(criteria["Statuses"], ["ACCEPTED"])
+        self.assertEqual(criteria["StatusesPayment"], ["ALLOWED"])
+        self.assertIn("StatusPayment", request["params"]["FieldNames"])
 
     def test_publication_creates_draft_without_moderation_or_keywords(self) -> None:
         transport = FakeTransport(
@@ -245,15 +259,20 @@ class YandexDraftSafetyTests(unittest.TestCase):
 
     def test_unified_or_ineligible_campaign_fails_before_creation(self) -> None:
         cases = (
-            _campaign_response("UNIFIED_CAMPAIGN"),
-            _campaign_response(state="OFF"),
-            _campaign_response(status="DRAFT"),
+            (_campaign_response("UNIFIED_CAMPAIGN"), "campaign_type_unsupported"),
+            (_campaign_response(state="OFF"), "campaign_not_active"),
+            (_campaign_response(status="DRAFT"), "campaign_not_accepted"),
+            (
+                _campaign_response(status_payment="DISALLOWED"),
+                "campaign_payment_not_allowed",
+            ),
         )
-        for response in cases:
-            with self.subTest(response=response):
+        for response, expected_code in cases:
+            with self.subTest(expected_code=expected_code):
                 transport = FakeTransport([response])
-                with self.assertRaises(YandexDirectError):
+                with self.assertRaises(YandexDirectError) as raised:
                     _publish(_provider(transport))
+                self.assertEqual(raised.exception.code, expected_code)
                 self.assertEqual(len(transport.calls), 1)
 
 

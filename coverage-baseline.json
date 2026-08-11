@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
-  "total_percent": 73.58,
-  "branch_percent": 64.58,
+  "total_percent": 73.72,
+  "branch_percent": 64.66,
   "comparison_tolerance": 0.01,
   "require_update_on_improvement": true,
   "measurement": "combined coverage with an independent branch coverage ratchet",
