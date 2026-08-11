@@ -1,0 +1,87 @@
+from __future__ import annotations
+
+"""Information-rich goal-first owner dashboard presentation."""
+
+import asyncio
+
+from aiogram.types import Message
+
+from clientplatform.domain.bookings import BookingSlotStatus
+
+from . import clientplatform_control as control
+from . import clientplatform_one_click_experience as one_click
+from . import clientplatform_owner_journey as owner
+
+
+def _goal_keyboard(business_id: str):
+    token = control._uuid_token(business_id)
+    return control._keyboard(
+        [
+            [("🚀 Получить клиентов", f"cpo:start:{token}")],
+            [
+                ("👥 Клиенты и запись", f"cpj:bookings:{token}"),
+                ("⚙️ Ещё", f"cpo:more:{token}"),
+            ],
+        ]
+    )
+
+
+async def send_goal_dashboard(
+    message: Message,
+    *,
+    user_id: int,
+    business_id: str,
+) -> None:
+    actor, access, profile, capabilities, customers, programs, _snapshot_slots = (
+        await one_click.simple._business_snapshot(
+            user_id=user_id,
+            business_id=business_id,
+        )
+    )
+    offerings, slots = await asyncio.gather(
+        owner._all_offerings(actor, capabilities),
+        asyncio.to_thread(
+            control.list_booking_slots,
+            actor=actor,
+            include_unavailable=True,
+        ),
+    )
+    open_slots = [item for item in slots if item.slot.status == BookingSlotStatus.OPEN]
+    booked_slots = [item for item in slots if item.slot.status == BookingSlotStatus.BOOKED]
+    nearest = min(
+        (
+            item
+            for item in slots
+            if item.slot.status in {BookingSlotStatus.OPEN, BookingSlotStatus.BOOKED}
+        ),
+        key=lambda item: item.slot.starts_at,
+        default=None,
+    )
+    nearest_line = (
+        "Ближайшее время: пока не опубликовано"
+        if nearest is None
+        else f"Ближайшее время: {nearest.local_start} · {nearest.offering_title}"
+    )
+    readiness = (
+        f"Свободных времён: {len(open_slots)}."
+        if open_slots
+        else "Свободных времён пока нет — если понадобится, я попрошу добавить одно."
+    )
+    await message.answer(
+        f"🏠 {access.business.name}\n\n"
+        f"{profile.activity_description}\n\n"
+        f"Услуг: {len(offerings)} · свободных времён: {len(open_slots)} · "
+        f"записей клиентов: {len(booked_slots)}\n"
+        f"Материалов и программ: {len(programs)} · клиентов: {len(customers)}\n"
+        f"{nearest_line}\n\n"
+        f"{readiness}\n\n"
+        "Главное действие — «🚀 Получить клиентов». ClientPlatform сама выберет "
+        "ближайшее свободное время, подходящий рекламный путь и сохранённые "
+        "настройки. Технические кабинеты и кампании знать не нужно.\n\n"
+        "Если захотите, перед запуском можно заменить текст и добавить свою "
+        "картинку или видео. Действия с возможными расходами подтверждаются отдельно.",
+        reply_markup=_goal_keyboard(business_id),
+    )
+
+
+__all__ = ["send_goal_dashboard"]
