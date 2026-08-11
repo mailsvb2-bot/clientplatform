@@ -161,7 +161,7 @@ async def test_publishing_time_ends_with_actionable_receipt_not_generic_dashboar
 
 
 @pytest.mark.asyncio
-async def test_owner_dashboard_exposes_services_calendar_page_and_promotion(
+async def test_owner_dashboard_keeps_status_but_reduces_controls_to_one_click(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     business_id = str(uuid4())
@@ -192,6 +192,7 @@ async def test_owner_dashboard_exposes_services_calendar_page_and_promotion(
     await owner.send_owner_dashboard(message, user_id=101, business_id=business_id)
 
     text, kwargs = message.answers[-1]
+    assert "Ремонтирую сантехнику" in text
     assert "Услуг: 1" in text
     assert "свободных времён: 1" in text
     labels = [
@@ -199,11 +200,7 @@ async def test_owner_dashboard_exposes_services_calendar_page_and_promotion(
         for row in kwargs["reply_markup"].inline_keyboard
         for button in row
     ]
-    assert "🧰 Мои услуги" in labels
-    assert "📅 Мой календарь" in labels
-    assert "👥 Записи клиентов" in labels
-    assert "🔗 Моя страница" in labels
-    assert "🚀 Получить клиентов" in labels
+    assert labels == ["🚀 Получить клиентов", "👥 Клиенты и запись", "⚙️ Ещё"]
 
 
 @pytest.mark.asyncio
