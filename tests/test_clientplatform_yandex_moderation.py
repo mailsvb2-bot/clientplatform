@@ -70,6 +70,7 @@ def _campaign_response(
     *,
     state: str = "ON",
     status: str = "ACCEPTED",
+    status_payment: str = "ALLOWED",
 ):
     return (
         200,
@@ -81,6 +82,7 @@ def _campaign_response(
                         "Id": 6001,
                         "State": state,
                         "Status": status,
+                        "StatusPayment": status_payment,
                         "Type": campaign_type,
                     }
                 ]
@@ -257,15 +259,20 @@ class YandexDraftSafetyTests(unittest.TestCase):
 
     def test_unified_or_ineligible_campaign_fails_before_creation(self) -> None:
         cases = (
-            _campaign_response("UNIFIED_CAMPAIGN"),
-            _campaign_response(state="OFF"),
-            _campaign_response(status="DRAFT"),
+            (_campaign_response("UNIFIED_CAMPAIGN"), "campaign_type_unsupported"),
+            (_campaign_response(state="OFF"), "campaign_not_active"),
+            (_campaign_response(status="DRAFT"), "campaign_not_accepted"),
+            (
+                _campaign_response(status_payment="DISALLOWED"),
+                "campaign_payment_not_allowed",
+            ),
         )
-        for response in cases:
-            with self.subTest(response=response):
+        for response, expected_code in cases:
+            with self.subTest(expected_code=expected_code):
                 transport = FakeTransport([response])
-                with self.assertRaises(YandexDirectError):
+                with self.assertRaises(YandexDirectError) as raised:
                     _publish(_provider(transport))
+                self.assertEqual(raised.exception.code, expected_code)
                 self.assertEqual(len(transport.calls), 1)
 
 
