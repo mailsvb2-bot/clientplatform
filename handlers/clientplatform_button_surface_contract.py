@@ -138,6 +138,7 @@ def install_button_surface_contract(safety: ModuleType) -> None:
         "cpbl:",
         "cpcm:",
         "cpg:",
+        "cpo:",
     )
     _extend_tuple(
         safety,
@@ -155,6 +156,10 @@ def install_button_surface_contract(safety: ModuleType) -> None:
         "cpg:materials:",
         "cpg:mc:",
         "cpg:l:",
+        "cpo:start:",
+        "cpo:more:",
+        "cpo:work:",
+        "cpo:ads:",
     )
     _extend_tuple(
         safety,
@@ -169,6 +174,9 @@ def install_button_surface_contract(safety: ModuleType) -> None:
         "cpg:materials:",
         "cpg:mc:",
         "cpg:l:",
+        "cpo:more:",
+        "cpo:work:",
+        "cpo:ads:",
     )
     _extend_tuple(
         safety,
@@ -213,6 +221,15 @@ def install_button_surface_contract(safety: ModuleType) -> None:
                 return True
         if current_state.startswith("ClientPlatformAdminOpsState:"):
             if _is_admin_ops_return(callback_data):
+                return True
+        if current_state.startswith("OneClickOwnerState:selecting_connection"):
+            if callback_data.startswith("cpo:connection:"):
+                return True
+        if current_state.startswith("OneClickOwnerState:selecting_campaign"):
+            if callback_data.startswith("cpo:campaign:"):
+                return True
+        if current_state.startswith("OneClickOwnerState:waiting_region"):
+            if callback_data.startswith("cpo:region:"):
                 return True
         return original_state_local(current_state, callback_data)
 
