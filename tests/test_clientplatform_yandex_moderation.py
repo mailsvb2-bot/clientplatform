@@ -98,7 +98,7 @@ def _services(transport: FakeTransport) -> list[str]:
 
 
 class YandexDraftSafetyTests(unittest.TestCase):
-    def test_catalog_exposes_only_active_accepted_text_campaigns(self) -> None:
+    def test_catalog_exposes_only_active_accepted_paid_ready_text_campaigns(self) -> None:
         transport = FakeTransport(
             [
                 (
@@ -112,13 +112,23 @@ class YandexDraftSafetyTests(unittest.TestCase):
                                     "Name": "Текстовая кампания",
                                     "State": "ON",
                                     "Status": "ACCEPTED",
+                                    "StatusPayment": "ALLOWED",
                                     "Type": "TEXT_CAMPAIGN",
                                 },
                                 {
                                     "Id": 6002,
+                                    "Name": "Без оплаты",
+                                    "State": "ON",
+                                    "Status": "ACCEPTED",
+                                    "StatusPayment": "DISALLOWED",
+                                    "Type": "TEXT_CAMPAIGN",
+                                },
+                                {
+                                    "Id": 6003,
                                     "Name": "Единая кампания",
                                     "State": "ON",
                                     "Status": "ACCEPTED",
+                                    "StatusPayment": "ALLOWED",
                                     "Type": "UNIFIED_CAMPAIGN",
                                 },
                             ]
@@ -137,10 +147,12 @@ class YandexDraftSafetyTests(unittest.TestCase):
             [("6001", "TEXT_CAMPAIGN")],
         )
         request = json.loads(transport.calls[0]["body"])
-        self.assertEqual(
-            request["params"]["SelectionCriteria"]["Types"],
-            ["TEXT_CAMPAIGN"],
-        )
+        criteria = request["params"]["SelectionCriteria"]
+        self.assertEqual(criteria["Types"], ["TEXT_CAMPAIGN"])
+        self.assertEqual(criteria["States"], ["ON"])
+        self.assertEqual(criteria["Statuses"], ["ACCEPTED"])
+        self.assertEqual(criteria["StatusesPayment"], ["ALLOWED"])
+        self.assertIn("StatusPayment", request["params"]["FieldNames"])
 
     def test_publication_creates_draft_without_moderation_or_keywords(self) -> None:
         transport = FakeTransport(
