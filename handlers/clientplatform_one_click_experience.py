@@ -1,11 +1,6 @@
 from __future__ import annotations
 
-"""One-click owner UX over the canonical ClientPlatform application boundaries.
-
-The module automates deterministic, reversible preparation only. It never
-changes Yandex budgets or strategies, never submits moderation and never starts
-ad spend. Paid visual generation remains an explicit owner action.
-"""
+"""One primary owner action with safe automatic orchestration."""
 
 import asyncio
 from types import ModuleType
@@ -29,6 +24,7 @@ from clientplatform.application.promotions import create_slot_promotion, promoti
 from clientplatform.domain.ad_connections import AdConnectionError, AdConnectionStatus
 from clientplatform.domain.bookings import BookingSlotStatus
 from clientplatform.domain.promotions import PromotionChannel, PromotionError
+from clientplatform.domain.tenancy import TenantPermissionDenied
 from clientplatform.integrations.yandex_direct import YandexDirectError
 
 from . import clientplatform_ad_connections as ad
@@ -39,7 +35,7 @@ router = Router(name="clientplatform_one_click_experience")
 router.message.filter(control.ClientPlatformControlEnabled())
 router.callback_query.filter(control.ClientPlatformControlEnabled())
 
-_COMMON_REGIONS = {
+_REGIONS = {
     "47": (47,),
     "нижний новгород": (47,),
     "213": (213,),
@@ -57,12 +53,8 @@ class OneClickOwnerState(StatesGroup):
     waiting_region = State()
 
 
-def _token(business_id: str) -> str:
-    return control._uuid_token(business_id)
-
-
 def _home_keyboard(business_id: str) -> InlineKeyboardMarkup:
-    token = _token(business_id)
+    token = control._uuid_token(business_id)
     return control._keyboard(
         [
             [("🚀 Получить клиентов", f"cpo:start:{token}")],
@@ -80,92 +72,83 @@ async def send_one_click_dashboard(
     user_id: int,
     business_id: str,
 ) -> None:
-    _actor, access, _profile, _capabilities, _customers, _programs, slots = (
+    _actor, access, _profile, _caps, _customers, _programs, slots = (
         await simple._business_snapshot(user_id=user_id, business_id=business_id)
     )
-    open_slots = [item for item in slots if item.slot.status == BookingSlotStatus.OPEN]
+    open_count = sum(item.slot.status == BookingSlotStatus.OPEN for item in slots)
     status = (
-        f"Свободных времён для записи: {len(open_slots)}."
-        if open_slots
-        else "Свободного времени пока нет — я помогу открыть его по ходу."
+        f"Свободных времён для записи: {open_count}."
+        if open_count
+        else "Свободного времени пока нет — помогу открыть его по ходу."
     )
     await message.answer(
         f"🏠 {access.business.name}\n\n"
-        "Здесь всё начинается с одной кнопки.\n\n"
-        "Нажмите «🚀 Получить клиентов». Я сам проверю запись, рекламу и уже "
-        "сохранённые настройки, пропущу ненужные шаги и спрошу только то, чего "
-        "действительно не могу определить сам.\n\n"
+        "Нажмите «🚀 Получить клиентов». Я сам проверю свободное время, рекламу "
+        "и прежние настройки. Спрошу только то, что нельзя определить безопасно.\n\n"
         f"{status}",
         reply_markup=_home_keyboard(business_id),
     )
 
 
-def _recent_job_for_connection(jobs, connection_id: str):
-    return next(
-        (item for item in jobs if str(getattr(item, "connection_id", "")) == connection_id),
-        None,
-    )
+def _target(event: CallbackQuery | Message) -> Message:
+    return event if isinstance(event, Message) else control._callback_message(event)
 
 
-def _recent_job_for_campaign(jobs, connection_id: str, campaign_id: str):
+def _user_id(event: CallbackQuery | Message) -> int:
+    if event.from_user is None:
+        raise ValueError("Telegram user is required")
+    return int(event.from_user.id)
+
+
+def _eligible(campaigns):
+    return [
+        item
+        for item in campaigns
+        if str(getattr(item, "state", "")).strip().upper() == "ON"
+        and str(getattr(item, "status", "")).strip().upper() == "ACCEPTED"
+    ]
+
+
+def _recent(jobs, *, connection_id: str, campaign_id: str = ""):
     return next(
         (
             item
             for item in jobs
             if str(getattr(item, "connection_id", "")) == connection_id
-            and str(getattr(item, "external_campaign_id", "")) == campaign_id
+            and (
+                not campaign_id
+                or str(getattr(item, "external_campaign_id", "")) == campaign_id
+            )
         ),
         None,
     )
 
 
-def _eligible_campaigns(campaigns):
-    return [
-        item
-        for item in campaigns
-        if str(getattr(item, "state", "")) != "ARCHIVED"
-        and str(getattr(item, "status", "")) == "ACCEPTED"
-    ]
-
-
-def _target(event: CallbackQuery | Message) -> Message:
-    if isinstance(event, CallbackQuery):
-        return control._callback_message(event)
-    return event
-
-
-def _event_user_id(event: CallbackQuery | Message) -> int:
-    if event.from_user is None:
-        raise ValueError("ClientPlatform requires a Telegram user")
-    return int(event.from_user.id)
-
-
-async def _bot_username(event: CallbackQuery | Message) -> str:
-    bot = await event.bot.get_me()
-    username = str(getattr(bot, "username", "") or "").strip()
+async def _username(event: CallbackQuery | Message) -> str:
+    username = str(getattr(await event.bot.get_me(), "username", "") or "").strip()
     if not username:
-        raise RuntimeError("ClientPlatform bot requires a public username")
+        raise RuntimeError("bot username missing")
     return username
 
 
-def _promotion_link(username: str, source_token: str) -> str:
+def _link(username: str, source_token: str) -> str:
     return f"https://t.me/{username}?start={promotion_start_payload(source_token)}"
 
 
-async def _load_open_slot(actor, slot_id: str):
+async def _reload_slot(actor, slot_id: str):
     slots = await asyncio.to_thread(control.list_booking_slots, actor=actor)
     return next(
         (
             item
             for item in slots
-            if str(item.slot.id) == str(slot_id)
+            if str(item.slot.id) == slot_id
             and item.slot.status == BookingSlotStatus.OPEN
         ),
         None,
     )
 
 
-async def _send_share_fallback(
+async def _fallback(
     callback: CallbackQuery,
     state: FSMContext,
     *,
@@ -177,8 +160,7 @@ async def _send_share_fallback(
     if slot is None:
         await state.clear()
         await control._callback_message(callback).answer(
-            "Свободное время уже изменилось. Нажмите «Получить клиентов» ещё раз — "
-            "я заново проверю актуальное состояние.",
+            "Свободное время уже изменилось. Проверю всё заново по одной кнопке.",
             reply_markup=control._keyboard(
                 [[("🔄 Проверить снова", f"cpo:start:{business_token}")]]
             ),
@@ -191,19 +173,16 @@ async def _send_share_fallback(
             slot_id=slot.slot.id,
             channel=PromotionChannel.TELEGRAM,
         )
-        username = await _bot_username(callback)
-    except (PromotionError, RuntimeError, ValueError):
+        link = _link(await _username(callback), view.campaign.source_token)
+    except (PromotionError, TenantPermissionDenied, RuntimeError, ValueError):
         await state.clear()
         await control._callback_message(callback).answer(
-            f"{reason}\n\nНе удалось автоматически собрать запасной вариант. "
-            "Откройте «Ещё → Реклама и продвижение» и повторите позже.",
+            f"{reason}\n\nНе удалось собрать запасной вариант автоматически.",
             reply_markup=control._keyboard(
                 [[("🏠 В кабинет", f"cpj:home:{business_token}")]]
             ),
         )
         return
-
-    link = _promotion_link(username, view.campaign.source_token)
     creative = view.campaign.creative
     text = f"{creative.headline}\n\n{creative.primary_text}\n\n{creative.description}"
     share_url = "https://t.me/share/url?" + urlencode({"url": link, "text": text})
@@ -211,16 +190,15 @@ async def _send_share_fallback(
     await control._callback_message(callback).answer(
         "✅ Уже можно привлекать клиентов\n\n"
         f"{reason}\n\n"
-        f"Я не оставил Вас в тупике: сам выбрал ближайшее свободное время "
-        f"«{slot.offering_title}» — {slot.local_start} — и подготовил объявление "
-        "с отдельной измеряемой ссылкой.\n\n"
+        f"Я выбрал ближайшее свободное время: {slot.local_start} · "
+        f"{slot.offering_title}. Готовы текст и измеряемая ссылка.\n\n"
         f"{text}\n\nЗаписаться: {link}",
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
                 [InlineKeyboardButton(text="📨 Отправить объявление", url=share_url)],
                 [
                     InlineKeyboardButton(
-                        text="🔄 Проверить Яндекс ещё раз",
+                        text="🔄 Проверить Яндекс",
                         callback_data=f"cpo:start:{business_token}",
                     )
                 ],
@@ -235,103 +213,58 @@ async def _send_share_fallback(
     )
 
 
-async def _open_yandex_oauth(
-    callback: CallbackQuery,
-    state: FSMContext,
-    *,
-    actor,
-    business_token: str,
-) -> None:
-    try:
-        start = await asyncio.to_thread(start_yandex_direct_oauth, actor=actor)
-    except (AdConnectionError, YandexDirectError, RuntimeError, ValueError):
-        await state.clear()
-        await control._callback_message(callback).answer(
-            "Не удалось открыть подключение Яндекса. Попробуйте ещё раз позже.",
-            reply_markup=control._keyboard(
-                [[("🏠 В кабинет", f"cpj:home:{business_token}")]]
-            ),
-        )
-        return
-    await state.clear()
-    await control._callback_message(callback).answer(
-        "Чтобы ClientPlatform сам готовил рекламные черновики, один раз подключите "
-        "Яндекс Директ. Пароль остаётся у Яндекса — ClientPlatform его не видит.",
-        reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text="🔐 Подключить Яндекс",
-                        url=start.authorization_url,
-                    )
-                ],
-                [
-                    InlineKeyboardButton(
-                        text="🏠 В кабинет",
-                        callback_data=f"cpj:home:{business_token}",
-                    )
-                ],
-            ]
-        ),
-    )
-
-
-async def _prepare_direct_draft(
+async def _prepare_draft(
     event: CallbackQuery | Message,
     state: FSMContext,
     *,
-    business_id: str,
-    business_token: str,
-    slot_id: str,
-    connection_id: str,
-    campaign_id: str,
-    campaign_name: str,
+    data: dict,
     region_ids: tuple[int, ...],
 ) -> None:
-    actor = await control._actor(_event_user_id(event), business_id)
+    actor = await control._actor(_user_id(event), str(data["business_id"]))
     try:
         promotion = await asyncio.to_thread(
             create_slot_promotion,
             actor=actor,
-            slot_id=slot_id,
+            slot_id=str(data["slot_id"]),
             channel=PromotionChannel.WEBSITE,
         )
-        username = await _bot_username(event)
-        source_url = _promotion_link(username, promotion.campaign.source_token)
+        source_url = _link(await _username(event), promotion.campaign.source_token)
         draft = await asyncio.to_thread(
             create_ad_publication_draft,
             actor=actor,
             promotion_campaign_id=promotion.campaign.id,
-            connection_id=connection_id,
-            external_campaign_id=campaign_id,
-            external_campaign_name=campaign_name,
+            connection_id=str(data["connection_id"]),
+            external_campaign_id=str(data["external_campaign_id"]),
+            external_campaign_name=str(data["external_campaign_name"]),
             region_ids=region_ids,
             source_url=source_url,
         )
-    except (AdConnectionError, PromotionError, RuntimeError, TypeError, ValueError):
+    except (
+        AdConnectionError,
+        PromotionError,
+        TenantPermissionDenied,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ):
         await state.clear()
         await _target(event).answer(
-            "Не удалось автоматически подготовить рекламный черновик. Ничего не "
-            "запущено и деньги не списывались. Попробуйте ещё раз.",
+            "Не удалось подготовить рекламный черновик. "
+            "Ничего не запущено и деньги не списывались.",
             reply_markup=control._keyboard(
                 [
-                    [("🔄 Попробовать снова", f"cpo:start:{business_token}")],
-                    [("🏠 В кабинет", f"cpj:home:{business_token}")],
+                    [("🔄 Попробовать снова", f"cpo:start:{data['business_token']}")],
+                    [("🏠 В кабинет", f"cpj:home:{data['business_token']}")],
                 ]
             ),
         )
         return
-
     await state.set_state(ad.AdConnectionState.confirming_publication)
     await state.set_data(
         {
-            "business_id": business_id,
-            "business_token": business_token,
+            **data,
             "promotion_campaign_id": promotion.campaign.id,
             "source_url": source_url,
-            "connection_id": connection_id,
-            "external_campaign_id": campaign_id,
-            "external_campaign_name": campaign_name,
             "job_id": draft.job.id,
             "creative_title": draft.job.title,
             "creative_body": draft.job.text,
@@ -341,36 +274,52 @@ async def _prepare_direct_draft(
     await _target(event).answer(
         "✅ Реклама подготовлена\n\n"
         f"Кампания: {draft.campaign_name}\n"
-        f"Регион: {', '.join(str(item) for item in draft.job.region_ids)}\n"
         f"Заголовок: {draft.job.title}\n"
         f"Текст: {draft.job.text}\n\n"
-        "Я сам использовал сохранённые настройки там, где это было безопасно. "
-        "Ничего не запущено: показов, модерации и расходов нет.\n\n"
-        "Картинка создаётся только по Вашему явному нажатию, потому что это платная "
-        "операция провайдера.",
+        "Ничего ещё не запущено: показов, модерации и расходов нет.",
         reply_markup=control._keyboard(
             [
                 [("🖼 Создать красивую картинку", "cpa:creative:image")],
                 [(ad._CONFIRM_DRAFT_LABEL, "cpa:confirm")],
-                [("✏️ Изменить вручную", f"cpa:promote:{business_token}")],
-                [("🏠 В кабинет", f"cpj:home:{business_token}")],
+                [("✏️ Изменить вручную", f"cpa:promote:{data['business_token']}")],
+                [("🏠 В кабинет", f"cpj:home:{data['business_token']}")],
             ]
         ),
     )
 
 
-async def _ask_region(
+async def _choose_campaign(
     callback: CallbackQuery,
     state: FSMContext,
     *,
     data: dict,
+    campaign_id: str,
+    campaign_name: str,
 ) -> None:
+    actor = await control._actor(int(callback.from_user.id), str(data["business_id"]))
+    try:
+        jobs = await asyncio.to_thread(list_ad_publications, actor=actor)
+    except (AdConnectionError, TenantPermissionDenied):
+        jobs = []
+    saved = _recent(
+        jobs,
+        connection_id=str(data["connection_id"]),
+        campaign_id=campaign_id,
+    )
+    next_data = {
+        **data,
+        "external_campaign_id": campaign_id,
+        "external_campaign_name": campaign_name,
+    }
+    regions = tuple(getattr(saved, "region_ids", ()) or ()) if saved else ()
+    if regions:
+        await _prepare_draft(callback, state, data=next_data, region_ids=regions)
+        return
     await state.set_state(OneClickOwnerState.waiting_region)
-    await state.set_data(data)
+    await state.set_data(next_data)
     await control._callback_message(callback).answer(
-        "Нужна только география рекламы — её нельзя безопасно угадать.\n\n"
-        "Если подходит один из вариантов, просто нажмите кнопку. Это запомнится в "
-        "рекламном черновике, и в следующий раз ClientPlatform использует прежний регион сам.",
+        "Осталось только указать регион — это нельзя безопасно угадать. "
+        "В следующий раз ClientPlatform возьмёт прежний выбор сам.",
         reply_markup=control._keyboard(
             [
                 [("Нижний Новгород", "cpo:region:47"), ("Москва", "cpo:region:213")],
@@ -382,40 +331,7 @@ async def _ask_region(
     )
 
 
-async def _continue_campaign(
-    callback: CallbackQuery,
-    state: FSMContext,
-    *,
-    data: dict,
-    campaign_id: str,
-    campaign_name: str,
-) -> None:
-    actor = await control._actor(int(callback.from_user.id), str(data["business_id"]))
-    jobs = await asyncio.to_thread(list_ad_publications, actor=actor)
-    recent = _recent_job_for_campaign(jobs, str(data["connection_id"]), campaign_id)
-    remembered_regions = tuple(getattr(recent, "region_ids", ()) or ()) if recent else ()
-    next_data = dict(data)
-    next_data.update(
-        external_campaign_id=campaign_id,
-        external_campaign_name=campaign_name,
-    )
-    if remembered_regions:
-        await _prepare_direct_draft(
-            callback,
-            state,
-            business_id=str(data["business_id"]),
-            business_token=str(data["business_token"]),
-            slot_id=str(data["slot_id"]),
-            connection_id=str(data["connection_id"]),
-            campaign_id=campaign_id,
-            campaign_name=campaign_name,
-            region_ids=remembered_regions,
-        )
-        return
-    await _ask_region(callback, state, data=next_data)
-
-
-async def _continue_connection(
+async def _choose_connection(
     callback: CallbackQuery,
     state: FSMContext,
     *,
@@ -436,64 +352,53 @@ async def _continue_connection(
         asyncio.TimeoutError,
         AdConnectionError,
         YandexDirectError,
+        TenantPermissionDenied,
         RuntimeError,
         TypeError,
         ValueError,
     ):
-        slot = await _load_open_slot(actor, str(data["slot_id"]))
-        await _send_share_fallback(
+        await _fallback(
             callback,
             state,
             actor=actor,
             business_token=str(data["business_token"]),
-            slot=slot,
-            reason="Яндекс сейчас не ответил. Это не должно останавливать Вашу работу.",
+            slot=await _reload_slot(actor, str(data["slot_id"])),
+            reason="Яндекс сейчас не ответил. Это не должно останавливать работу.",
         )
         return
-
-    eligible = _eligible_campaigns(campaigns)
+    eligible = _eligible(campaigns)
     if not eligible:
-        slot = await _load_open_slot(actor, str(data["slot_id"]))
-        reason = (
-            "Подходящая кампания Яндекса пока не готова — например, она может "
-            "ждать оплату или модерацию."
-            if campaigns
-            else "В Яндекс Директе пока нет готовой кампании."
-        )
-        await _send_share_fallback(
+        await _fallback(
             callback,
             state,
             actor=actor,
             business_token=str(data["business_token"]),
-            slot=slot,
-            reason=reason,
+            slot=await _reload_slot(actor, str(data["slot_id"])),
+            reason="Кампания Яндекса пока не готова: возможны оплата, модерация или пауза.",
         )
         return
-
-    jobs = await asyncio.to_thread(list_ad_publications, actor=actor)
-    recent = _recent_job_for_connection(jobs, connection_id)
-    recent_campaign_id = str(getattr(recent, "external_campaign_id", "")) if recent else ""
+    try:
+        jobs = await asyncio.to_thread(list_ad_publications, actor=actor)
+    except (AdConnectionError, TenantPermissionDenied):
+        jobs = []
+    previous = _recent(jobs, connection_id=connection_id)
+    previous_id = str(getattr(previous, "external_campaign_id", "")) if previous else ""
     selected = next(
-        (item for item in eligible if str(item.campaign_id) == recent_campaign_id),
+        (item for item in eligible if str(item.campaign_id) == previous_id),
         None,
     )
-    next_data = dict(data)
-    next_data["connection_id"] = connection_id
-    next_data["campaigns"] = [
-        {"id": str(item.campaign_id), "name": str(item.name)} for item in eligible
-    ]
-    if selected is not None:
-        await _continue_campaign(
-            callback,
-            state,
-            data=next_data,
-            campaign_id=str(selected.campaign_id),
-            campaign_name=str(selected.name),
-        )
-        return
-    if len(eligible) == 1:
+    if selected is None and len(eligible) == 1:
         selected = eligible[0]
-        await _continue_campaign(
+    next_data = {
+        **data,
+        "connection_id": connection_id,
+        "campaigns": [
+            {"id": str(item.campaign_id), "name": str(item.name)}
+            for item in eligible
+        ],
+    }
+    if selected is not None:
+        await _choose_campaign(
             callback,
             state,
             data=next_data,
@@ -501,17 +406,12 @@ async def _continue_connection(
             campaign_name=str(selected.name),
         )
         return
-
     await state.set_state(OneClickOwnerState.selecting_campaign)
     await state.set_data(next_data)
     await control._callback_message(callback).answer(
-        "У Вас несколько готовых рекламных кампаний. Я не буду угадывать, куда "
-        "записывать черновик. Выберите одну — дальше всё снова сделаю сам.",
+        "Нашёл несколько готовых кампаний. Выберите одну — дальше всё сделаю сам.",
         reply_markup=control._keyboard(
-            [
-                [(item.name[:45], f"cpo:campaign:{index}")]
-                for index, item in enumerate(eligible[:20])
-            ]
+            [[(item.name[:45], f"cpo:campaign:{i}")] for i, item in enumerate(eligible[:20])]
             + [[("🏠 Отмена", f"cpj:home:{data['business_token']}")]],
         ),
     )
@@ -519,60 +419,85 @@ async def _continue_connection(
 
 @router.callback_query(F.data.startswith("cpo:start:"))
 async def get_clients_one_click(callback: CallbackQuery, state: FSMContext) -> None:
-    business_token = str(callback.data).split(":", 2)[2]
-    business_id = control._token_uuid(business_token)
+    token = str(callback.data).split(":", 2)[2]
+    business_id = control._token_uuid(token)
     actor = await control._actor(int(callback.from_user.id), business_id)
     await callback.answer("Готовлю всё сам…")
     await state.clear()
-
-    connections, slots, jobs = await asyncio.gather(
-        asyncio.to_thread(list_ad_connections, actor=actor),
-        asyncio.to_thread(control.list_booking_slots, actor=actor),
-        asyncio.to_thread(list_ad_publications, actor=actor),
-    )
+    slots = await asyncio.to_thread(control.list_booking_slots, actor=actor)
     open_slots = [item for item in slots if item.slot.status == BookingSlotStatus.OPEN]
     if not open_slots:
         await control._callback_message(callback).answer(
-            "Чтобы привлекать людей, им нужно куда-то записываться. Свободного времени "
-            "пока нет — нажмите одну кнопку, и я помогу открыть ближайшее окно.",
+            "Сначала нужно одно свободное время. Нажмите кнопку — остальное поведу сам.",
             reply_markup=control._keyboard(
-                [
-                    [("➕ Открыть время", f"cps:firstbook:{business_token}")],
-                    [("🏠 В кабинет", f"cpj:home:{business_token}")],
-                ]
+                [[("➕ Открыть время", f"cps:firstbook:{token}")], [("🏠 В кабинет", f"cpj:home:{token}")]]
             ),
         )
         return
-
-    slot = min(open_slots, key=lambda item: str(item.slot.starts_at))
-    data = {
-        "business_id": business_id,
-        "business_token": business_token,
-        "slot_id": str(slot.slot.id),
-    }
-
+    slot = min(open_slots, key=lambda item: item.slot.starts_at)
+    data = {"business_id": business_id, "business_token": token, "slot_id": str(slot.slot.id)}
+    await state.set_data(data)
     if not ad_connections_enabled() or not yandex_direct_provider_configured():
-        await _send_share_fallback(
+        await _fallback(
             callback,
             state,
             actor=actor,
-            business_token=business_token,
+            business_token=token,
             slot=slot,
             reason="Яндекс-реклама пока не включена на платформе.",
         )
         return
-
-    active = [item for item in connections if item.status == AdConnectionStatus.ACTIVE]
-    if not active:
-        await _open_yandex_oauth(
+    try:
+        connections, jobs = await asyncio.gather(
+            asyncio.to_thread(list_ad_connections, actor=actor),
+            asyncio.to_thread(list_ad_publications, actor=actor),
+        )
+    except TenantPermissionDenied:
+        await _fallback(
             callback,
             state,
             actor=actor,
-            business_token=business_token,
+            business_token=token,
+            slot=slot,
+            reason="У этой роли нет доступа к личному рекламному кабинету, но продвижение доступно.",
         )
         return
-
-    recent_connection_id = next(
+    except AdConnectionError:
+        await _fallback(
+            callback,
+            state,
+            actor=actor,
+            business_token=token,
+            slot=slot,
+            reason="Рекламный кабинет временно недоступен.",
+        )
+        return
+    active = [item for item in connections if item.status == AdConnectionStatus.ACTIVE]
+    if not active:
+        try:
+            oauth = await asyncio.to_thread(start_yandex_direct_oauth, actor=actor)
+        except (AdConnectionError, YandexDirectError, TenantPermissionDenied, RuntimeError, ValueError):
+            await _fallback(
+                callback,
+                state,
+                actor=actor,
+                business_token=token,
+                slot=slot,
+                reason="Подключение Яндекс Директа сейчас недоступно.",
+            )
+            return
+        await state.clear()
+        await control._callback_message(callback).answer(
+            "Один раз подключите Яндекс. Пароль остаётся у Яндекса.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="🔐 Подключить Яндекс", url=oauth.authorization_url)],
+                    [InlineKeyboardButton(text="🏠 В кабинет", callback_data=f"cpj:home:{token}")],
+                ]
+            ),
+        )
+        return
+    previous = next(
         (
             str(job.connection_id)
             for job in jobs
@@ -580,77 +505,45 @@ async def get_clients_one_click(callback: CallbackQuery, state: FSMContext) -> N
         ),
         "",
     )
-    selected_connection = next(
-        (item for item in active if str(item.id) == recent_connection_id),
-        None,
-    )
-    if selected_connection is not None:
-        await _continue_connection(
-            callback,
-            state,
-            data=data,
-            connection_id=str(selected_connection.id),
-        )
+    selected = next((item for item in active if str(item.id) == previous), None)
+    if selected is None and len(active) == 1:
+        selected = active[0]
+    if selected is not None:
+        await _choose_connection(callback, state, data=data, connection_id=str(selected.id))
         return
-    if len(active) == 1:
-        await _continue_connection(
-            callback,
-            state,
-            data=data,
-            connection_id=str(active[0].id),
-        )
-        return
-
     await state.set_state(OneClickOwnerState.selecting_connection)
-    await state.set_data(
-        {
-            **data,
-            "connection_ids": [str(item.id) for item in active],
-        }
-    )
+    await state.set_data({**data, "connection_ids": [str(item.id) for item in active]})
     await control._callback_message(callback).answer(
-        "Подключено несколько рекламных кабинетов. Выберите нужный один раз — "
-        "ClientPlatform запомнит выбор по последнему черновику.",
+        "Подключено несколько кабинетов. Выберите нужный один раз.",
         reply_markup=control._keyboard(
-            [
-                [(f"Яндекс · {item.external_login}", f"cpo:connection:{index}")]
-                for index, item in enumerate(active)
-            ]
-            + [[("🏠 Отмена", f"cpj:home:{business_token}")]],
+            [[(f"Яндекс · {item.external_login}", f"cpo:connection:{i}")] for i, item in enumerate(active)]
+            + [[("🏠 Отмена", f"cpj:home:{token}")]],
         ),
     )
 
 
-@router.callback_query(
-    OneClickOwnerState.selecting_connection,
-    F.data.startswith("cpo:connection:"),
-)
+@router.callback_query(OneClickOwnerState.selecting_connection, F.data.startswith("cpo:connection:"))
 async def choose_one_click_connection(callback: CallbackQuery, state: FSMContext) -> None:
     data = await state.get_data()
     try:
-        index = int(str(callback.data).split(":", 2)[2])
-        connection_id = list(data["connection_ids"])[index]
+        connection_id = list(data["connection_ids"])[int(str(callback.data).split(":", 2)[2])]
     except (IndexError, KeyError, TypeError, ValueError):
         await callback.answer("Кнопка устарела. Начните ещё раз.", show_alert=True)
         return
     await callback.answer("Продолжаю…")
-    await _continue_connection(callback, state, data=data, connection_id=str(connection_id))
+    await _choose_connection(callback, state, data=data, connection_id=str(connection_id))
 
 
-@router.callback_query(
-    OneClickOwnerState.selecting_campaign,
-    F.data.startswith("cpo:campaign:"),
-)
+@router.callback_query(OneClickOwnerState.selecting_campaign, F.data.startswith("cpo:campaign:"))
 async def choose_one_click_campaign(callback: CallbackQuery, state: FSMContext) -> None:
     data = await state.get_data()
     try:
-        index = int(str(callback.data).split(":", 2)[2])
-        selected = list(data["campaigns"])[index]
+        selected = list(data["campaigns"])[int(str(callback.data).split(":", 2)[2])]
     except (IndexError, KeyError, TypeError, ValueError):
         await callback.answer("Кнопка устарела. Начните ещё раз.", show_alert=True)
         return
     await callback.answer("Продолжаю…")
-    await _continue_campaign(
+    await _choose_campaign(
         callback,
         state,
         data=data,
@@ -659,76 +552,47 @@ async def choose_one_click_campaign(callback: CallbackQuery, state: FSMContext) 
     )
 
 
-@router.callback_query(
-    OneClickOwnerState.waiting_region,
-    F.data.startswith("cpo:region:"),
-)
+@router.callback_query(OneClickOwnerState.waiting_region, F.data.startswith("cpo:region:"))
 async def choose_one_click_region(callback: CallbackQuery, state: FSMContext) -> None:
     data = await state.get_data()
     raw = str(callback.data).split(":", 2)[2]
     if raw == "other":
         await callback.answer()
         await control._callback_message(callback).answer(
-            "Напишите город, если это Москва, Нижний Новгород или Санкт-Петербург. "
+            "Напишите город: Москва, Нижний Новгород, Санкт-Петербург. "
             "Для другого города можно указать ID региона Яндекс Директа."
         )
         return
-    regions = _COMMON_REGIONS.get(raw)
-    if not regions:
+    regions = _REGIONS.get(raw)
+    if regions is None:
         await callback.answer("Регион не найден", show_alert=True)
         return
     await callback.answer("Готовлю черновик…")
-    await _prepare_direct_draft(
-        callback,
-        state,
-        business_id=str(data["business_id"]),
-        business_token=str(data["business_token"]),
-        slot_id=str(data["slot_id"]),
-        connection_id=str(data["connection_id"]),
-        campaign_id=str(data["external_campaign_id"]),
-        campaign_name=str(data["external_campaign_name"]),
-        region_ids=regions,
-    )
+    await _prepare_draft(callback, state, data=data, region_ids=regions)
 
 
 @router.message(OneClickOwnerState.waiting_region)
 async def receive_one_click_region(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     raw = " ".join(str(message.text or "").strip().lower().split())
-    regions = _COMMON_REGIONS.get(raw)
+    regions = _REGIONS.get(raw)
     if regions is None:
         try:
-            parsed = tuple(int(item.strip()) for item in raw.split(",") if item.strip())
-            if not parsed or any(item <= 0 for item in parsed):
+            regions = tuple(int(item.strip()) for item in raw.split(",") if item.strip())
+            if not regions or any(item <= 0 for item in regions):
                 raise ValueError
-            regions = parsed
         except ValueError:
-            await message.answer(
-                "Не смог определить регион. Можно написать «Москва», «Нижний Новгород», "
-                "«Санкт-Петербург» или ID региона из Яндекс Директа."
-            )
+            await message.answer("Напишите город или ID региона Яндекс Директа.")
             return
-    await _prepare_direct_draft(
-        message,
-        state,
-        business_id=str(data["business_id"]),
-        business_token=str(data["business_token"]),
-        slot_id=str(data["slot_id"]),
-        connection_id=str(data["connection_id"]),
-        campaign_id=str(data["external_campaign_id"]),
-        campaign_name=str(data["external_campaign_name"]),
-        region_ids=regions,
-    )
+    await _prepare_draft(message, state, data=data, region_ids=regions)
 
 
 @router.callback_query(F.data.startswith("cpo:more:"))
 async def open_more(callback: CallbackQuery) -> None:
     token = str(callback.data).split(":", 2)[2]
-    business_id = control._token_uuid(token)
-    await control._actor(int(callback.from_user.id), business_id)
-    await callback.answer()
+    await control._actor(int(callback.from_user.id), control._token_uuid(token))
     await control._callback_message(callback).answer(
-        "⚙️ Ещё\n\nРедко используемые функции собраны здесь, чтобы не мешать основному пути.",
+        "⚙️ Ещё\n\nРедко используемые функции убраны сюда.",
         reply_markup=control._keyboard(
             [
                 [("🧰 Услуги и расписание", f"cpo:work:{token}")],
@@ -744,9 +608,7 @@ async def open_more(callback: CallbackQuery) -> None:
 @router.callback_query(F.data.startswith("cpo:work:"))
 async def open_work_tools(callback: CallbackQuery) -> None:
     token = str(callback.data).split(":", 2)[2]
-    business_id = control._token_uuid(token)
-    await control._actor(int(callback.from_user.id), business_id)
-    await callback.answer()
+    await control._actor(int(callback.from_user.id), control._token_uuid(token))
     await control._callback_message(callback).answer(
         "🧰 Услуги и расписание",
         reply_markup=control._keyboard(
@@ -763,11 +625,9 @@ async def open_work_tools(callback: CallbackQuery) -> None:
 @router.callback_query(F.data.startswith("cpo:ads:"))
 async def open_ad_tools(callback: CallbackQuery) -> None:
     token = str(callback.data).split(":", 2)[2]
-    business_id = control._token_uuid(token)
-    await control._actor(int(callback.from_user.id), business_id)
-    await callback.answer()
+    await control._actor(int(callback.from_user.id), control._token_uuid(token))
     await control._callback_message(callback).answer(
-        "📣 Реклама и продвижение\n\nОбычный путь — «Получить клиентов». Здесь оставлены ручные инструменты.",
+        "📣 Реклама и продвижение\n\nОбычный путь — «Получить клиентов».",
         reply_markup=control._keyboard(
             [
                 [("🚀 Получить клиентов", f"cpo:start:{token}")],
