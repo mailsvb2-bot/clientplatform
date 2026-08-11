@@ -166,18 +166,29 @@ def _load_clientplatform_modules() -> tuple[ModuleType, ModuleType]:
         __name__,
     )
     globals()["clientplatform_one_click_experience"] = one_click
-    canonical_owner_dashboard = owner_journey.send_owner_dashboard
     one_click.install_one_click_experience(
         owner_module=owner_journey,
         simple_module=simple_experience,
         control_module=control,
     )
-    # Keep the canonical information-rich dashboard, but replace its button
-    # surface with the one-click keyboard installed above. This removes the
-    # button wall without losing activity, service, booking or customer status.
-    owner_journey.send_owner_dashboard = canonical_owner_dashboard
-    simple_experience.send_simple_dashboard = canonical_owner_dashboard
-    control._send_dashboard = canonical_owner_dashboard
+
+    goal_driven = importlib.import_module(
+        ".clientplatform_goal_driven_experience",
+        __name__,
+    )
+    globals()["clientplatform_goal_driven_experience"] = goal_driven
+    goal_driven.install_goal_driven_experience(
+        owner_module=owner_journey,
+        simple_module=simple_experience,
+        control_module=control,
+        one_click_module=one_click,
+    )
+    # Goal-driven routes intentionally precede the legacy one-click routes.
+    # The legacy router remains reachable for advanced/compatibility callbacks,
+    # while the ordinary cpo:start path is owned by the intent-first engine.
+    if not bool(getattr(simple_experience, "_goal_driven_experience_composed", False)):
+        simple_experience.router.include_router(goal_driven.router)
+        simple_experience._goal_driven_experience_composed = True
     if not bool(getattr(simple_experience, "_one_click_experience_composed", False)):
         simple_experience.router.include_router(one_click.router)
         simple_experience._one_click_experience_composed = True
@@ -245,6 +256,9 @@ def __getattr__(name: str) -> ModuleType:
     if name == "clientplatform_one_click_experience":
         _load_clientplatform_modules()
         return globals()["clientplatform_one_click_experience"]
+    if name == "clientplatform_goal_driven_experience":
+        _load_clientplatform_modules()
+        return globals()["clientplatform_goal_driven_experience"]
     raise AttributeError(name)
 
 
@@ -258,6 +272,7 @@ __all__ = [
     "clientplatform_control",
     "clientplatform_existing_bot_onboarding",
     "clientplatform_first_result",
+    "clientplatform_goal_driven_experience",
     "clientplatform_managed_bot_onboarding",
     "clientplatform_one_click_experience",
     "clientplatform_owner_journey",
