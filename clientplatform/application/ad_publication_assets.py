@@ -147,7 +147,7 @@ def attach_image_bytes(
                 size_bytes=size,
                 duration_seconds=None,
             )
-    except Exception:
+    except Exception:  # validator: allow-wide-except - rollback local file on any DB boundary failure
         _safe_unlink(storage_path)
         raise
     if previous != storage_path:
@@ -224,7 +224,7 @@ def attach_video_bytes(
                 size_bytes=size,
                 duration_seconds=duration,
             )
-    except Exception:
+    except Exception:  # validator: allow-wide-except - rollback local file on any DB boundary failure
         _safe_unlink(storage_path)
         raise
     if previous != storage_path:
