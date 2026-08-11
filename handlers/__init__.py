@@ -187,6 +187,19 @@ def _load_clientplatform_modules() -> tuple[ModuleType, ModuleType]:
         __name__,
     )
     globals()["clientplatform_goal_first_autopilot"] = goal_first
+
+    # Real launch is deliberately composed before the compatibility callbacks
+    # that still live in the goal-first presentation module. Aiogram stops on
+    # the first matching handler, so one compact adapter owns the paid boundary.
+    goal_launch = importlib.import_module(
+        ".clientplatform_goal_launch",
+        __name__,
+    )
+    globals()["clientplatform_goal_launch"] = goal_launch
+    if not bool(getattr(simple_experience, "_goal_launch_composed", False)):
+        simple_experience.router.include_router(goal_launch.router)
+        simple_experience._goal_launch_composed = True
+
     goal_first.install_goal_first_autopilot(
         owner_module=owner_journey,
         simple_module=simple_experience,
@@ -277,6 +290,9 @@ def __getattr__(name: str) -> ModuleType:
     if name == "clientplatform_goal_first_autopilot":
         _load_clientplatform_modules()
         return globals()["clientplatform_goal_first_autopilot"]
+    if name == "clientplatform_goal_launch":
+        _load_clientplatform_modules()
+        return globals()["clientplatform_goal_launch"]
     raise AttributeError(name)
 
 
@@ -291,6 +307,7 @@ __all__ = [
     "clientplatform_existing_bot_onboarding",
     "clientplatform_first_result",
     "clientplatform_goal_first_autopilot",
+    "clientplatform_goal_launch",
     "clientplatform_managed_bot_onboarding",
     "clientplatform_one_click_experience",
     "clientplatform_owner_journey",
