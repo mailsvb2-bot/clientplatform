@@ -24,6 +24,10 @@ b4ac43c2961fb581078aedc25efeffd2ab4ecb34
 
 Проект имеет отдельный production deployment, fail-closed preflight, автоматизированный rollback, encrypted backup, production-isolation проверки и расширенный CI. Это не означает, что весь долгосрочный roadmap уже завершён: отдельные каналы и продуктовые вертикали продолжают развиваться.
 
+### Версия
+
+Актуальная версия runtime определяется только файлом `VERSION`. README намеренно не дублирует номер версии, чтобы не создавать второй источник истины о релизе.
+
 ## Критическое ограничение
 
 ClientPlatform **запрещено запускать с production-конфигурацией Метротерапии**. Нельзя использовать её Telegram-токены, PostgreSQL/backup-контур, платёжные credentials, webhook, домены, object storage, systemd units, серверные пути или реальные пользовательские данные.
