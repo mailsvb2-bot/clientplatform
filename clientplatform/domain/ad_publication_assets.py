@@ -22,6 +22,7 @@ class AdPublicationAssetSource(StrEnum):
 
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_SAFE_PROVIDER_ERROR_RE = re.compile(r"^[a-z0-9_.:-]{1,120}$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +43,7 @@ class AdPublicationAsset:
     provider_image_hash: str | None = None
     provider_video_id: str | None = None
     provider_creative_id: str | None = None
+    provider_error_code: str | None = None
 
     def __post_init__(self) -> None:
         for name in ("publication_job_id", "business_id", "created_by_member_id"):
@@ -84,6 +86,11 @@ class AdPublicationAsset:
                 if not normalized or len(normalized) > 255 or "\x00" in normalized:
                     raise ValueError(f"{name} is invalid")
                 object.__setattr__(self, name, normalized)
+        if self.provider_error_code is not None:
+            error_code = str(self.provider_error_code).strip().lower()
+            if not _SAFE_PROVIDER_ERROR_RE.fullmatch(error_code):
+                raise ValueError("provider_error_code is invalid")
+            object.__setattr__(self, "provider_error_code", error_code)
 
 
 __all__ = [
