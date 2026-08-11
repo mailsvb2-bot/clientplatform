@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import os
 import tempfile
+import time
 from pathlib import Path
 
 from PIL import Image, ImageOps, UnidentifiedImageError
@@ -285,10 +286,69 @@ def remember_provider_ids(
         )
 
 
+def cleanup_orphaned_assets(
+    *,
+    grace_seconds: int = 300,
+    max_files: int = 200,
+) -> int:
+    """Remove persisted files whose tenant DB row was erased or cascaded away.
+
+    A grace window protects the tiny file-write/DB-commit interval. This makes
+    tenant/privacy erasure clean the filesystem too instead of leaving media
+    behind after the relational row disappears.
+    """
+
+    root = _asset_root()
+    grace = max(60, min(int(grace_seconds), 86_400))
+    limit = max(1, min(int(max_files), 5_000))
+    with get_db_ro() as conn:
+        rows = conn.execute("SELECT storage_path FROM ad_publication_assets").fetchall()
+    referenced = {
+        str(row["storage_path"] if hasattr(row, "keys") else row[0])
+        for row in rows
+        if str(row["storage_path"] if hasattr(row, "keys") else row[0]).strip()
+    }
+    now = time.time()
+    removed = 0
+    for candidate in root.rglob("*"):
+        if removed >= limit:
+            break
+        try:
+            if candidate.is_symlink():
+                if now - candidate.lstat().st_mtime >= grace:
+                    candidate.unlink(missing_ok=True)
+                    removed += 1
+                continue
+            if not candidate.is_file():
+                continue
+            resolved = candidate.resolve(strict=True)
+            if root not in resolved.parents or str(resolved) in referenced:
+                continue
+            if now - resolved.stat().st_mtime < grace:
+                continue
+            resolved.unlink(missing_ok=True)
+            removed += 1
+        except OSError:
+            continue
+    # Best-effort empty-directory pruning is deliberately separate from file
+    # deletion and never affects referenced assets.
+    for directory in sorted(
+        (item for item in root.rglob("*") if item.is_dir()),
+        key=lambda item: len(item.parts),
+        reverse=True,
+    ):
+        try:
+            directory.rmdir()
+        except OSError:
+            continue
+    return removed
+
+
 __all__ = [
     "attach_image_bytes",
     "attach_image_file",
     "attach_video_bytes",
+    "cleanup_orphaned_assets",
     "get_asset_for_worker",
     "read_asset_bytes",
     "remember_provider_ids",
