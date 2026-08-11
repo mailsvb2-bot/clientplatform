@@ -183,6 +183,17 @@ def _load_clientplatform_modules() -> tuple[ModuleType, ModuleType]:
         control_module=control,
         one_click_module=one_click,
     )
+    goal_runtime = importlib.import_module(
+        ".clientplatform_goal_driven_runtime_contract",
+        __name__,
+    )
+    globals()["clientplatform_goal_driven_runtime_contract"] = goal_runtime
+    goal_runtime.install_goal_runtime_contract(
+        goal_module=goal_driven,
+        owner_module=owner_journey,
+        simple_module=simple_experience,
+        control_module=control,
+    )
     # Goal-driven routes intentionally precede the legacy one-click routes.
     # The legacy router remains reachable for advanced/compatibility callbacks,
     # while the ordinary cpo:start path is owned by the intent-first engine.
@@ -259,6 +270,9 @@ def __getattr__(name: str) -> ModuleType:
     if name == "clientplatform_goal_driven_experience":
         _load_clientplatform_modules()
         return globals()["clientplatform_goal_driven_experience"]
+    if name == "clientplatform_goal_driven_runtime_contract":
+        _load_clientplatform_modules()
+        return globals()["clientplatform_goal_driven_runtime_contract"]
     raise AttributeError(name)
 
 
@@ -273,6 +287,7 @@ __all__ = [
     "clientplatform_existing_bot_onboarding",
     "clientplatform_first_result",
     "clientplatform_goal_driven_experience",
+    "clientplatform_goal_driven_runtime_contract",
     "clientplatform_managed_bot_onboarding",
     "clientplatform_one_click_experience",
     "clientplatform_owner_journey",
