@@ -49,11 +49,15 @@ def update_ad_publication_copy(
             business_id=actor.business_id,
         )
         current.assert_can_manage_promotions()
+        # `submitted` in the ClientPlatform outbox means the provider object was
+        # created as a Yandex DRAFT. It is still safe to edit before separate
+        # spend consent; the goal publication synchronizer pushes the new copy
+        # to that exact DRAFT immediately before any launch authorization.
         cursor = conn.execute(
             """
             UPDATE ad_publication_jobs
             SET title=?, text=?, updated_at=CURRENT_TIMESTAMP
-            WHERE id=? AND business_id=? AND status IN ('draft', 'failed')
+            WHERE id=? AND business_id=? AND status IN ('draft', 'failed', 'submitted')
             """,
             (normalized_title, normalized_text, job_id, current.business_id),
         )
