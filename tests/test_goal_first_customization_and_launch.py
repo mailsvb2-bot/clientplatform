@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 from handlers import clientplatform_goal_first_autopilot as goal
+from handlers import clientplatform_goal_launch as launch
 
 
 class FakeState:
@@ -203,8 +204,7 @@ class GoalFirstCustomizationAndLaunchTests(unittest.IsolatedAsyncioTestCase):
         ):
             await goal.generate_custom_image(cb, state)
         create.assert_called_once()
-        key = create.call_args.kwargs["idempotency_key"]
-        self.assertTrue(key.startswith("clientplatform:"))
+        self.assertTrue(create.call_args.kwargs["idempotency_key"].startswith("clientplatform:"))
         self.assertEqual(state.data["creative_job_id"], "visual-1")
         self.assertEqual(state.state, goal.GoalFirstAutopilotState.generation_pending)
         self.assertIn("Ничего загружать заново не нужно", out.answer.await_args.args[0])
@@ -236,22 +236,23 @@ class GoalFirstCustomizationAndLaunchTests(unittest.IsolatedAsyncioTestCase):
         submitted = SimpleNamespace(
             job=SimpleNamespace(id=base_data()["job_id"]),
             media_pending=False,
+            media_failed=False,
         )
         prepared = SimpleNamespace(authorization=authorization())
         granted = SimpleNamespace(authorization=authorization())
         operation = SimpleNamespace(id="operation-123456789012")
         with (
-            patch.object(goal.control, "_actor", new=AsyncMock(return_value="actor")),
-            patch.object(goal, "submit_goal_publication", return_value=submitted),
-            patch.object(goal, "ad_spend_mutations_enabled", return_value=True),
-            patch.object(goal, "prepare_goal_spend_consent", return_value=prepared),
-            patch.object(goal, "grant_ad_spend_consent", return_value=granted) as grant,
-            patch.object(goal, "queue_ad_spend_launch", return_value=operation) as queue,
-            patch.object(goal.control, "_uuid_token", return_value="auth-token"),
-            patch.object(goal.control, "_callback_message", return_value=out),
-            patch.object(goal.asyncio, "to_thread", new=direct),
+            patch.object(launch.control, "_actor", new=AsyncMock(return_value="actor")),
+            patch.object(launch, "submit_goal_publication", return_value=submitted),
+            patch.object(launch, "ad_spend_mutations_enabled", return_value=True),
+            patch.object(launch, "prepare_goal_spend_consent", return_value=prepared),
+            patch.object(launch, "grant_ad_spend_consent", return_value=granted) as grant,
+            patch.object(launch, "queue_ad_spend_launch", return_value=operation) as queue,
+            patch.object(launch.control, "_uuid_token", return_value="auth-token"),
+            patch.object(launch.control, "_callback_message", return_value=out),
+            patch.object(launch.asyncio, "to_thread", new=direct),
         ):
-            await goal.prepare_real_launch(cb, state)
+            await launch.prepare_real_launch(cb, state)
         grant.assert_called_once()
         queue.assert_called_once()
         self.assertTrue(state.cleared)
@@ -266,21 +267,22 @@ class GoalFirstCustomizationAndLaunchTests(unittest.IsolatedAsyncioTestCase):
         submitted = SimpleNamespace(
             job=SimpleNamespace(id=base_data()["job_id"]),
             media_pending=False,
+            media_failed=False,
         )
         with (
-            patch.object(goal.control, "_actor", new=AsyncMock(return_value="actor")),
-            patch.object(goal, "submit_goal_publication", return_value=submitted),
-            patch.object(goal, "ad_spend_mutations_enabled", return_value=True),
+            patch.object(launch.control, "_actor", new=AsyncMock(return_value="actor")),
+            patch.object(launch, "submit_goal_publication", return_value=submitted),
+            patch.object(launch, "ad_spend_mutations_enabled", return_value=True),
             patch.object(
-                goal,
+                launch,
                 "prepare_goal_spend_consent",
                 return_value=SimpleNamespace(authorization=changed),
             ),
-            patch.object(goal, "grant_ad_spend_consent") as grant,
-            patch.object(goal.control, "_callback_message", return_value=out),
-            patch.object(goal.asyncio, "to_thread", new=direct),
+            patch.object(launch, "grant_ad_spend_consent") as grant,
+            patch.object(launch.control, "_callback_message", return_value=out),
+            patch.object(launch.asyncio, "to_thread", new=direct),
         ):
-            await goal.prepare_real_launch(cb, state)
+            await launch.prepare_real_launch(cb, state)
         grant.assert_not_called()
         self.assertEqual(state.state, goal.GoalFirstAutopilotState.confirming_launch)
         self.assertEqual(state.data["preview_hard_cap_minor"], 8_000)
@@ -293,18 +295,59 @@ class GoalFirstCustomizationAndLaunchTests(unittest.IsolatedAsyncioTestCase):
         submitted = SimpleNamespace(
             job=SimpleNamespace(id=base_data()["job_id"]),
             media_pending=True,
+            media_failed=False,
         )
         with (
-            patch.object(goal.control, "_actor", new=AsyncMock(return_value="actor")),
-            patch.object(goal, "submit_goal_publication", return_value=submitted),
-            patch.object(goal, "prepare_goal_spend_consent") as prepare,
-            patch.object(goal.control, "_callback_message", return_value=out),
-            patch.object(goal.asyncio, "to_thread", new=direct),
+            patch.object(launch.control, "_actor", new=AsyncMock(return_value="actor")),
+            patch.object(launch, "submit_goal_publication", return_value=submitted),
+            patch.object(launch, "prepare_goal_spend_consent") as prepare,
+            patch.object(launch.control, "_callback_message", return_value=out),
+            patch.object(launch.asyncio, "to_thread", new=direct),
         ):
-            await goal.prepare_real_launch(cb, state)
+            await launch.prepare_real_launch(cb, state)
         prepare.assert_not_called()
         self.assertEqual(state.state, goal.GoalFirstAutopilotState.ready)
-        self.assertIn("показы не запускаю", out.answer.await_args.args[0])
+        self.assertIn("показы", out.answer.await_args.args[0])
+        self.assertIn("не расходую", out.answer.await_args.args[0])
+
+    async def test_failed_custom_video_never_spends_and_offers_human_recovery(self) -> None:
+        state = FakeState(base_data())
+        out = target()
+        cb = callback("cpo:launch:business-token", out)
+        submitted = SimpleNamespace(
+            job=SimpleNamespace(id=base_data()["job_id"]),
+            media_pending=False,
+            media_failed=True,
+        )
+        with (
+            patch.object(launch.control, "_actor", new=AsyncMock(return_value="actor")),
+            patch.object(launch, "submit_goal_publication", return_value=submitted),
+            patch.object(launch, "prepare_goal_spend_consent") as prepare,
+            patch.object(launch, "queue_ad_spend_launch") as queue,
+            patch.object(launch.control, "_callback_message", return_value=out),
+            patch.object(launch.asyncio, "to_thread", new=direct),
+        ):
+            await launch.prepare_real_launch(cb, state)
+        prepare.assert_not_called()
+        queue.assert_not_called()
+        self.assertEqual(state.state, goal.GoalFirstAutopilotState.customizing)
+        text = out.answer.await_args.args[0]
+        self.assertIn("Яндекс не принял", text)
+        self.assertIn("НЕ запущена", text)
+        labels = [
+            button.text
+            for row in out.answer.await_args.kwargs["reply_markup"].inline_keyboard
+            for button in row
+        ]
+        self.assertEqual(
+            labels,
+            [
+                "🎬 Загрузить другое видео",
+                "🖼 Вместо него своя картинка",
+                "🧹 Продолжить без картинки и видео",
+                "🏠 Не запускать",
+            ],
+        )
 
 
 if __name__ == "__main__":
