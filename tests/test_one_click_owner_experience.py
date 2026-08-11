@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, patch
 from clientplatform.domain.ad_connections import AdConnectionStatus
 from clientplatform.domain.bookings import BookingSlotStatus
 from clientplatform.domain.tenancy import TenantPermissionDenied
+from handlers import clientplatform_goal_first_autopilot as goal
 from handlers import clientplatform_one_click_experience as one_click
 
 
@@ -263,24 +264,24 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
                 "create_ad_publication_draft",
                 return_value=draft,
             ) as create_draft,
+            patch.object(goal, "ad_spend_mutations_enabled", return_value=False),
         ):
             await one_click.get_clients_one_click(cb, state)
         create_draft.assert_called_once()
-        self.assertEqual(
-            state.state,
-            one_click.ad.AdConnectionState.confirming_publication,
-        )
+        self.assertEqual(state.state, goal.GoalFirstAutopilotState.ready)
         self.assertEqual(state.data["job_id"], "job-2")
         text = out.answer.await_args.args[0]
-        self.assertIn("✅ Реклама подготовлена", text)
-        self.assertIn("Ничего ещё не запущено", text)
+        self.assertIn("✅ Реклама подготовлена — всё готово", text)
+        self.assertIn("запуск расходов отключён защитным переключателем", text)
         labels = [
             button.text
             for row in out.answer.await_args.kwargs["reply_markup"].inline_keyboard
             for button in row
         ]
-        self.assertIn("🖼 Создать красивую картинку", labels)
-        self.assertIn(one_click.ad._CONFIRM_DRAFT_LABEL, labels)
+        self.assertEqual(
+            labels,
+            ["🚀 Подготовить в Яндексе", "🎨 Настроить под себя", "🏠 Не запускать"],
+        )
 
     async def test_first_direct_run_asks_only_for_missing_region(self) -> None:
         out = outbound_message()

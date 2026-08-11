@@ -172,15 +172,74 @@ def _load_clientplatform_modules() -> tuple[ModuleType, ModuleType]:
         simple_module=simple_experience,
         control_module=control,
     )
-    # Keep the canonical information-rich dashboard, but replace its button
-    # surface with the one-click keyboard installed above. This removes the
-    # button wall without losing activity, service, booking or customer status.
+    # Keep the canonical information-rich dashboard until the goal-first layer
+    # is installed. One-click owns advertising orchestration; goal-first owns
+    # the visible outcome and the minimum business questions.
     owner_journey.send_owner_dashboard = canonical_owner_dashboard
     simple_experience.send_simple_dashboard = canonical_owner_dashboard
     control._send_dashboard = canonical_owner_dashboard
+
+    goal_first = importlib.import_module(
+        ".clientplatform_goal_first_autopilot",
+        __name__,
+    )
+    globals()["clientplatform_goal_first_autopilot"] = goal_first
+    goal_dashboard = importlib.import_module(
+        ".clientplatform_goal_dashboard",
+        __name__,
+    )
+    globals()["clientplatform_goal_dashboard"] = goal_dashboard
+    goal_first.send_goal_dashboard = goal_dashboard.send_goal_dashboard
+
+    goal_schedule = importlib.import_module(
+        ".clientplatform_goal_schedule",
+        __name__,
+    )
+    globals()["clientplatform_goal_schedule"] = goal_schedule
+    # This router owns cpo:start first. If a slot already exists it delegates
+    # to the canonical one-click handler; otherwise it creates the missing
+    # business setup and then resumes that same handler automatically.
+    if not bool(getattr(simple_experience, "_goal_schedule_composed", False)):
+        simple_experience.router.include_router(goal_schedule.router)
+        simple_experience._goal_schedule_composed = True
     if not bool(getattr(simple_experience, "_one_click_experience_composed", False)):
         simple_experience.router.include_router(one_click.router)
         simple_experience._one_click_experience_composed = True
+
+    # Real paid launch has one owner. Compose it before goal-first presentation
+    # callbacks so stale or duplicate launch actions cannot fall through.
+    goal_launch = importlib.import_module(
+        ".clientplatform_goal_launch",
+        __name__,
+    )
+    globals()["clientplatform_goal_launch"] = goal_launch
+    if not bool(getattr(simple_experience, "_goal_launch_composed", False)):
+        simple_experience.router.include_router(goal_launch.router)
+        simple_experience._goal_launch_composed = True
+
+    goal_first.install_goal_first_autopilot(
+        owner_module=owner_journey,
+        simple_module=simple_experience,
+        control_module=control,
+    )
+
+    goal_first_safety = importlib.import_module(
+        ".clientplatform_goal_first_safety",
+        __name__,
+    )
+    interaction_safety = importlib.import_module(
+        ".clientplatform_interaction_safety",
+        __name__,
+    )
+    goal_first_safety.install_goal_first_safety(interaction_safety)
+
+    ad_media_monitor = importlib.import_module(
+        "clientplatform.runtime.ad_media_monitor"
+    )
+    if not bool(getattr(entry, "_ad_media_monitor_composed", False)):
+        entry.router.startup.register(ad_media_monitor.start_ad_media_monitor)
+        entry.router.shutdown.register(ad_media_monitor.stop_ad_media_monitor)
+        entry._ad_media_monitor_composed = True
     return entry, control
 
 
@@ -245,6 +304,18 @@ def __getattr__(name: str) -> ModuleType:
     if name == "clientplatform_one_click_experience":
         _load_clientplatform_modules()
         return globals()["clientplatform_one_click_experience"]
+    if name == "clientplatform_goal_first_autopilot":
+        _load_clientplatform_modules()
+        return globals()["clientplatform_goal_first_autopilot"]
+    if name == "clientplatform_goal_dashboard":
+        _load_clientplatform_modules()
+        return globals()["clientplatform_goal_dashboard"]
+    if name == "clientplatform_goal_schedule":
+        _load_clientplatform_modules()
+        return globals()["clientplatform_goal_schedule"]
+    if name == "clientplatform_goal_launch":
+        _load_clientplatform_modules()
+        return globals()["clientplatform_goal_launch"]
     raise AttributeError(name)
 
 
@@ -258,6 +329,10 @@ __all__ = [
     "clientplatform_control",
     "clientplatform_existing_bot_onboarding",
     "clientplatform_first_result",
+    "clientplatform_goal_dashboard",
+    "clientplatform_goal_first_autopilot",
+    "clientplatform_goal_schedule",
+    "clientplatform_goal_launch",
     "clientplatform_managed_bot_onboarding",
     "clientplatform_one_click_experience",
     "clientplatform_owner_journey",
