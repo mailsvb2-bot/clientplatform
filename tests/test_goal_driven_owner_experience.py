@@ -424,7 +424,7 @@ class GoalDrivenOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
             patch.object(goal, "_continue_goal", new=AsyncMock()) as continue_goal,
         ):
             await goal.receive_goal_booking_start(message, state)
-        continue_goal.assert_await_once()
+        continue_goal.assert_awaited_once()
 
         state = FakeState(
             {
