@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from datetime import datetime, timezone
 
 from clientplatform.application.ad_publication_assets import (
     get_asset_for_worker,
@@ -23,6 +22,9 @@ from clientplatform.infrastructure.ad_credential_vault import (
 )
 from clientplatform.infrastructure.ad_goal_publication_repository import (
     AdGoalPublicationRepository,
+)
+from clientplatform.infrastructure.ad_publication_asset_repository import (
+    AdPublicationAssetRepository,
 )
 from clientplatform.infrastructure.ad_worker_store import AdWorkerStore
 from clientplatform.integrations.yandex_direct import (
@@ -57,6 +59,7 @@ class GoalPublicationResult:
     job: AdPublicationJob
     media_attached: bool
     media_pending: bool
+    media_failed: bool = False
 
 
 def _vault() -> AdCredentialVault:
@@ -128,19 +131,30 @@ def _publish_text(
     )
 
 
+def _remember_media_error(*, job: AdPublicationJob, error_code: str) -> None:
+    with get_db() as conn:
+        AdPublicationAssetRepository(conn).remember_provider_error(
+            business_id=job.business_id,
+            publication_job_id=job.id,
+            error_code=error_code,
+        )
+
+
 def _attach_media(
     *,
     provider: MediaAwareYandexDirectProvider,
     bundle: YandexTokenBundle,
     job: AdPublicationJob,
     ad_id: str,
-) -> tuple[bool, bool]:
+) -> tuple[bool, bool, bool]:
     asset = get_asset_for_worker(
         business_id=job.business_id,
         publication_job_id=job.id,
     )
     if asset is None:
-        return False, False
+        return False, False, False
+    if asset.provider_error_code:
+        return False, False, True
     payload = read_asset_bytes(asset)
     if asset.kind == AdPublicationAssetKind.IMAGE:
         image_hash = asset.provider_image_hash
@@ -160,7 +174,7 @@ def _attach_media(
             ad_id=ad_id,
             image_hash=image_hash,
         )
-        return True, False
+        return True, False, False
 
     video_id = asset.provider_video_id
     if not video_id:
@@ -179,9 +193,10 @@ def _attach_media(
         video_id=video_id,
     )
     if status == "ERROR":
-        raise YandexDirectError("ad_video_processing_failed")
+        _remember_media_error(job=job, error_code="ad_video_processing_failed")
+        return False, False, True
     if status in {"NEW", "CONVERTING"}:
-        return False, True
+        return False, True, False
     creative_id = asset.provider_creative_id
     if not creative_id:
         creative_id = provider.create_video_extension(
@@ -198,7 +213,62 @@ def _attach_media(
         ad_id=ad_id,
         creative_id=creative_id,
     )
-    return True, False
+    return True, False, False
+
+
+def _sync_submitted_media(
+    *,
+    job: AdPublicationJob,
+    vault: AdCredentialVault,
+    provider: MediaAwareYandexDirectProvider,
+) -> GoalPublicationResult:
+    asset = get_asset_for_worker(
+        business_id=job.business_id,
+        publication_job_id=job.id,
+    )
+    if asset is None:
+        return GoalPublicationResult(job=job, media_attached=False, media_pending=False)
+    if asset.provider_error_code:
+        return GoalPublicationResult(
+            job=job,
+            media_attached=False,
+            media_pending=False,
+            media_failed=True,
+        )
+    if not job.external_ad_id:
+        raise AdConnectionError("submitted advertising draft is missing provider ad id")
+    connection, bundle = _load_bundle(job=job, vault=vault)
+    try:
+        try:
+            attached, pending, failed = _attach_media(
+                provider=provider,
+                bundle=bundle,
+                job=job,
+                ad_id=job.external_ad_id,
+            )
+        except YandexDirectError as exc:
+            if exc.code not in _AUTH_ERRORS or not bundle.refresh_token:
+                raise
+            bundle = _refresh_bundle(
+                connection=connection,
+                bundle=bundle,
+                provider=provider,
+                vault=vault,
+            )
+            attached, pending, failed = _attach_media(
+                provider=provider,
+                bundle=bundle,
+                job=job,
+                ad_id=job.external_ad_id,
+            )
+    except (OSError, RuntimeError, TypeError, ValueError, YandexDirectError) as exc:
+        raise AdConnectionError("provider_media_sync_failure") from exc
+    return GoalPublicationResult(
+        job=job,
+        media_attached=attached,
+        media_pending=pending,
+        media_failed=failed,
+    )
 
 
 def submit_goal_publication(
@@ -222,20 +292,10 @@ def submit_goal_publication(
         if claim is None:
             current = repository.get(actor=actor, job_id=job_id)
             if current.status == AdPublicationStatus.SUBMITTED:
-                asset = get_asset_for_worker(
-                    business_id=current.business_id,
-                    publication_job_id=current.id,
-                )
-                pending = bool(
-                    asset is not None
-                    and asset.kind == AdPublicationAssetKind.VIDEO
-                    and asset.provider_video_id
-                    and not asset.provider_creative_id
-                )
-                return GoalPublicationResult(
+                return _sync_submitted_media(
                     job=current,
-                    media_attached=bool(asset is not None and not pending),
-                    media_pending=pending,
+                    vault=selected_vault,
+                    provider=selected_provider,
                 )
             raise GoalPublicationBusy("advertising draft is already being processed")
     job, lock_token = claim.job, claim.lock_token
@@ -247,7 +307,7 @@ def submit_goal_publication(
                 bundle=bundle,
                 job=job,
             )
-            media_attached, media_pending = _attach_media(
+            media_attached, media_pending, media_failed = _attach_media(
                 provider=selected_provider,
                 bundle=bundle,
                 job=job,
@@ -267,7 +327,7 @@ def submit_goal_publication(
                 bundle=bundle,
                 job=job,
             )
-            media_attached, media_pending = _attach_media(
+            media_attached, media_pending, media_failed = _attach_media(
                 provider=selected_provider,
                 bundle=bundle,
                 job=job,
@@ -305,6 +365,7 @@ def submit_goal_publication(
         job=submitted,
         media_attached=media_attached,
         media_pending=media_pending,
+        media_failed=media_failed,
     )
 
 
@@ -315,8 +376,8 @@ def process_one_pending_video_asset(
 ) -> bool:
     """Finish one persisted Yandex video extension after provider conversion.
 
-    Returning False means there was no ready item. Persistent provider IDs make
-    the process restart-safe and prevent re-uploading the video on every tick.
+    Permanent conversion errors are recorded and skipped on future ticks so one
+    bad user video can never block media processing for other tenants.
     """
 
     selected_vault = vault or _vault()
@@ -330,6 +391,7 @@ def process_one_pending_video_asset(
             JOIN ad_publication_jobs j
               ON j.id=a.publication_job_id AND j.business_id=a.business_id
             WHERE a.kind='video' AND a.provider_video_id IS NOT NULL
+              AND a.provider_error_code IS NULL
               AND j.status='submitted' AND j.external_ad_id IS NOT NULL
               AND a.provider_creative_id IS NULL
             ORDER BY a.updated_at, a.publication_job_id
@@ -338,8 +400,10 @@ def process_one_pending_video_asset(
         ).fetchone()
         if row is None:
             return False
+
         def value(key: str, position: int):
             return row[key] if hasattr(row, "keys") else row[position]
+
         business_id = str(value("business_id", 0))
         publication_job_id = str(value("publication_job_id", 1))
         video_id = str(value("provider_video_id", 2))
@@ -368,6 +432,14 @@ def process_one_pending_video_asset(
             access_token=bundle.access_token,
             video_id=video_id,
         )
+    if status == "ERROR":
+        with get_db() as conn:
+            AdPublicationAssetRepository(conn).remember_provider_error(
+                business_id=business_id,
+                publication_job_id=publication_job_id,
+                error_code="ad_video_processing_failed",
+            )
+        return True
     if status != "READY":
         return False
     creative_id = selected_provider.create_video_extension(
