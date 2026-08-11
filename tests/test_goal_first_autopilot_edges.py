@@ -79,9 +79,14 @@ def draft():
 
 
 class GoalFirstAutopilotEdgeTests(unittest.IsolatedAsyncioTestCase):
-    async def test_prepared_result_hides_campaign_mechanics_and_stops_before_spend(self):
+    async def test_prepared_result_hides_campaign_mechanics_and_shows_exact_spend_boundary(self):
         target = SimpleNamespace(answer=AsyncMock())
         state = FakeState()
+        preview = SimpleNamespace(
+            currency="RUB",
+            recommended_hard_cap_minor=10_000,
+            recommended_daily_cap_minor=10_000,
+        )
         with (
             patch.object(goal.asyncio, "to_thread", new=direct),
             patch.object(goal.control, "_actor", new=AsyncMock(return_value="actor")),
@@ -89,6 +94,8 @@ class GoalFirstAutopilotEdgeTests(unittest.IsolatedAsyncioTestCase):
             patch.object(goal.one_click, "create_ad_publication_draft", return_value=draft()),
             patch.object(goal.one_click, "_target", return_value=target),
             patch.object(goal.one_click, "_username", new=AsyncMock(return_value="clientplatform_bot")),
+            patch.object(goal, "ad_spend_mutations_enabled", return_value=True),
+            patch.object(goal, "preview_goal_spend", return_value=preview),
         ):
             await goal._prepare_goal_result(
                 event(target),
@@ -98,9 +105,10 @@ class GoalFirstAutopilotEdgeTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(state.state, goal.GoalFirstAutopilotState.ready)
         self.assertEqual(state.data["job_id"], "job-1")
+        self.assertEqual(state.data["preview_hard_cap_minor"], 10_000)
         text = target.answer.await_args.args[0]
         self.assertIn("✅ Реклама подготовлена", text)
-        self.assertIn("Пока ничего не запущено", text)
+        self.assertIn("единственное подтверждение", text)
         self.assertNotIn("Technical campaign name", text)
         labels = [
             button.text
@@ -110,7 +118,7 @@ class GoalFirstAutopilotEdgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             labels,
             [
-                "🚀 Продолжить к запуску",
+                "🚀 Запустить · максимум 100,00 RUB",
                 "🎨 Настроить под себя",
                 "🏠 Не запускать",
             ],
