@@ -27,7 +27,14 @@ class FakeState:
 class GoalFirstAutopilotTests(unittest.IsolatedAsyncioTestCase):
     async def test_home_exposes_one_primary_goal_and_optional_secondary_navigation(self) -> None:
         out = SimpleNamespace(answer=AsyncMock())
-        slot = SimpleNamespace(slot=SimpleNamespace(status=BookingSlotStatus.OPEN))
+        slot = SimpleNamespace(
+            slot=SimpleNamespace(
+                status=BookingSlotStatus.OPEN,
+                starts_at="2026-08-20T09:00:00+00:00",
+            ),
+            local_start="20.08.2026 12:00",
+            offering_title="Консультация",
+        )
         snapshot = (
             "actor",
             SimpleNamespace(business=SimpleNamespace(name="Мой бизнес")),
@@ -43,6 +50,7 @@ class GoalFirstAutopilotTests(unittest.IsolatedAsyncioTestCase):
                 "_business_snapshot",
                 new=AsyncMock(return_value=snapshot),
             ),
+            patch.object(goal.control, "list_booking_slots", return_value=[slot]),
             patch.object(goal.control, "_uuid_token", side_effect=lambda value: value),
         ):
             await goal.send_goal_dashboard(
@@ -56,6 +64,7 @@ class GoalFirstAutopilotTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Главное действие", text)
         self.assertIn("Технические кабинеты", text)
         self.assertIn("свою картинку или видео", text)
+        self.assertIn("свободных времён: 1", text)
         self.assertEqual(
             labels,
             ["🚀 Получить клиентов", "👥 Клиенты и запись", "⚙️ Ещё"],
