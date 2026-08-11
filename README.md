@@ -1,6 +1,6 @@
 # ClientPlatform
 
-ClientPlatform — самостоятельная мультитенантная платформа и цифровой сотрудник для специалистов, самозанятых и малого бизнеса.
+ClientPlatform — мультитенантная платформа и цифровой сотрудник для специалистов, самозанятых и малого бизнеса.
 
 Главный продуктовый принцип:
 
@@ -12,11 +12,23 @@ ClientPlatform — самостоятельная мультитенантная
 
 ClientPlatform развивается как отдельный продукт со своей предметной моделью, архитектурой, production-контуром и каноном.
 
-Исторически репозиторий был создан из независимой копии технического baseline `metrotherapy-bot-telegram`. Происхождение зафиксировано в [`docs/BASELINE_PROVENANCE.md`](docs/BASELINE_PROVENANCE.md), но оно **не определяет текущую предметную модель ClientPlatform**. Канонические продуктовые и архитектурные решения находятся в [`docs/CLIENTPLATFORM_CANON_TZ.md`](docs/CLIENTPLATFORM_CANON_TZ.md).
+Исторически репозиторий был создан из независимой копии технического baseline `metrotherapy-bot-telegram` на коммите:
+
+```text
+b4ac43c2961fb581078aedc25efeffd2ab4ecb34
+```
+
+Происхождение зафиксировано в [`docs/BASELINE_PROVENANCE.md`](docs/BASELINE_PROVENANCE.md), но оно **не определяет текущую предметную модель ClientPlatform**. Канонические продуктовые и архитектурные решения находятся в [`docs/CLIENTPLATFORM_CANON_TZ.md`](docs/CLIENTPLATFORM_CANON_TZ.md).
 
 В репозитории ещё могут встречаться legacy-названия и миграционные артефакты. Они не являются нормативными: при любом противоречии приоритет имеет канон ClientPlatform.
 
 Проект имеет отдельный production deployment, fail-closed preflight, автоматизированный rollback, encrypted backup, production-isolation проверки и расширенный CI. Это не означает, что весь долгосрочный roadmap уже завершён: отдельные каналы и продуктовые вертикали продолжают развиваться.
+
+## Критическое ограничение
+
+ClientPlatform **запрещено запускать с production-конфигурацией Метротерапии**. Нельзя использовать её Telegram-токены, PostgreSQL/backup-контур, платёжные credentials, webhook, домены, object storage, systemd units, серверные пути или реальные пользовательские данные.
+
+Репозиторий публичный, поэтому реальные секреты, `.env`, DSN, ключи, дампы и пользовательские данные запрещены в GitHub, Actions logs и artifacts.
 
 ## Что уже реализовано
 
