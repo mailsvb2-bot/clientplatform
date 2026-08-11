@@ -124,6 +124,19 @@ def _recent(jobs, *, connection_id: str, campaign_id: str = ""):
     )
 
 
+def _indexed_choice(data: dict, key: str, callback_data: str | None):
+    raw_index = str(callback_data or "").rsplit(":", 1)[-1]
+    if not raw_index.isdigit():
+        return None
+    values = data.get(key)
+    if not isinstance(values, list):
+        return None
+    index = int(raw_index)
+    if index >= len(values):
+        return None
+    return values[index]
+
+
 async def _username(event: CallbackQuery | Message) -> str:
     username = str(getattr(await event.bot.get_me(), "username", "") or "").strip()
     if not username:
@@ -145,6 +158,22 @@ async def _reload_slot(actor, slot_id: str):
             and item.slot.status == BookingSlotStatus.OPEN
         ),
         None,
+    )
+
+
+async def _fallback_failure(
+    callback: CallbackQuery,
+    state: FSMContext,
+    *,
+    business_token: str,
+    reason: str,
+) -> None:
+    await state.clear()
+    await control._callback_message(callback).answer(
+        f"{reason}\n\nНе удалось собрать запасной вариант автоматически.",
+        reply_markup=control._keyboard(
+            [[("🏠 В кабинет", f"cpj:home:{business_token}")]]
+        ),
     )
 
 
@@ -173,14 +202,22 @@ async def _fallback(
             slot_id=slot.slot.id,
             channel=PromotionChannel.TELEGRAM,
         )
+    except (PromotionError, TenantPermissionDenied):
+        await _fallback_failure(
+            callback,
+            state,
+            business_token=business_token,
+            reason=reason,
+        )
+        return
+    try:
         link = _link(await _username(callback), view.campaign.source_token)
-    except (PromotionError, TenantPermissionDenied, RuntimeError, ValueError):
-        await state.clear()
-        await control._callback_message(callback).answer(
-            f"{reason}\n\nНе удалось собрать запасной вариант автоматически.",
-            reply_markup=control._keyboard(
-                [[("🏠 В кабинет", f"cpj:home:{business_token}")]]
-            ),
+    except (RuntimeError, ValueError):
+        await _fallback_failure(
+            callback,
+            state,
+            business_token=business_token,
+            reason=reason,
         )
         return
     creative = view.campaign.creative
@@ -213,6 +250,25 @@ async def _fallback(
     )
 
 
+async def _draft_failure(
+    event: CallbackQuery | Message,
+    state: FSMContext,
+    *,
+    business_token: str,
+) -> None:
+    await state.clear()
+    await _target(event).answer(
+        "Не удалось подготовить рекламный черновик. "
+        "Ничего не запущено и деньги не списывались.",
+        reply_markup=control._keyboard(
+            [
+                [("🔄 Попробовать снова", f"cpo:start:{business_token}")],
+                [("🏠 В кабинет", f"cpj:home:{business_token}")],
+            ]
+        ),
+    )
+
+
 async def _prepare_draft(
     event: CallbackQuery | Message,
     state: FSMContext,
@@ -228,7 +284,23 @@ async def _prepare_draft(
             slot_id=str(data["slot_id"]),
             channel=PromotionChannel.WEBSITE,
         )
+    except (PromotionError, TenantPermissionDenied):
+        await _draft_failure(
+            event,
+            state,
+            business_token=str(data["business_token"]),
+        )
+        return
+    try:
         source_url = _link(await _username(event), promotion.campaign.source_token)
+    except (RuntimeError, ValueError):
+        await _draft_failure(
+            event,
+            state,
+            business_token=str(data["business_token"]),
+        )
+        return
+    try:
         draft = await asyncio.to_thread(
             create_ad_publication_draft,
             actor=actor,
@@ -239,24 +311,11 @@ async def _prepare_draft(
             region_ids=region_ids,
             source_url=source_url,
         )
-    except (
-        AdConnectionError,
-        PromotionError,
-        TenantPermissionDenied,
-        RuntimeError,
-        TypeError,
-        ValueError,
-    ):
-        await state.clear()
-        await _target(event).answer(
-            "Не удалось подготовить рекламный черновик. "
-            "Ничего не запущено и деньги не списывались.",
-            reply_markup=control._keyboard(
-                [
-                    [("🔄 Попробовать снова", f"cpo:start:{data['business_token']}")],
-                    [("🏠 В кабинет", f"cpj:home:{data['business_token']}")],
-                ]
-            ),
+    except (AdConnectionError, TenantPermissionDenied):
+        await _draft_failure(
+            event,
+            state,
+            business_token=str(data["business_token"]),
         )
         return
     await state.set_state(ad.AdConnectionState.confirming_publication)
@@ -348,15 +407,7 @@ async def _choose_connection(
             ),
             timeout=25.0,
         )
-    except (
-        asyncio.TimeoutError,
-        AdConnectionError,
-        YandexDirectError,
-        TenantPermissionDenied,
-        RuntimeError,
-        TypeError,
-        ValueError,
-    ):
+    except (asyncio.TimeoutError, AdConnectionError, YandexDirectError):
         await _fallback(
             callback,
             state,
@@ -364,6 +415,16 @@ async def _choose_connection(
             business_token=str(data["business_token"]),
             slot=await _reload_slot(actor, str(data["slot_id"])),
             reason="Яндекс сейчас не ответил. Это не должно останавливать работу.",
+        )
+        return
+    except TenantPermissionDenied:
+        await _fallback(
+            callback,
+            state,
+            actor=actor,
+            business_token=str(data["business_token"]),
+            slot=await _reload_slot(actor, str(data["slot_id"])),
+            reason="Для этой роли личный рекламный кабинет недоступен.",
         )
         return
     eligible = _eligible(campaigns)
@@ -411,7 +472,10 @@ async def _choose_connection(
     await control._callback_message(callback).answer(
         "Нашёл несколько готовых кампаний. Выберите одну — дальше всё сделаю сам.",
         reply_markup=control._keyboard(
-            [[(item.name[:45], f"cpo:campaign:{i}")] for i, item in enumerate(eligible[:20])]
+            [
+                [(item.name[:45], f"cpo:campaign:{index}")]
+                for index, item in enumerate(eligible[:20])
+            ]
             + [[("🏠 Отмена", f"cpj:home:{data['business_token']}")]],
         ),
     )
@@ -430,12 +494,19 @@ async def get_clients_one_click(callback: CallbackQuery, state: FSMContext) -> N
         await control._callback_message(callback).answer(
             "Сначала нужно одно свободное время. Нажмите кнопку — остальное поведу сам.",
             reply_markup=control._keyboard(
-                [[("➕ Открыть время", f"cps:firstbook:{token}")], [("🏠 В кабинет", f"cpj:home:{token}")]]
+                [
+                    [("➕ Открыть время", f"cps:firstbook:{token}")],
+                    [("🏠 В кабинет", f"cpj:home:{token}")],
+                ]
             ),
         )
         return
     slot = min(open_slots, key=lambda item: item.slot.starts_at)
-    data = {"business_id": business_id, "business_token": token, "slot_id": str(slot.slot.id)}
+    data = {
+        "business_id": business_id,
+        "business_token": token,
+        "slot_id": str(slot.slot.id),
+    }
     await state.set_data(data)
     if not ad_connections_enabled() or not yandex_direct_provider_configured():
         await _fallback(
@@ -476,7 +547,7 @@ async def get_clients_one_click(callback: CallbackQuery, state: FSMContext) -> N
     if not active:
         try:
             oauth = await asyncio.to_thread(start_yandex_direct_oauth, actor=actor)
-        except (AdConnectionError, YandexDirectError, TenantPermissionDenied, RuntimeError, ValueError):
+        except (AdConnectionError, YandexDirectError, TenantPermissionDenied):
             await _fallback(
                 callback,
                 state,
@@ -491,8 +562,18 @@ async def get_clients_one_click(callback: CallbackQuery, state: FSMContext) -> N
             "Один раз подключите Яндекс. Пароль остаётся у Яндекса.",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
-                    [InlineKeyboardButton(text="🔐 Подключить Яндекс", url=oauth.authorization_url)],
-                    [InlineKeyboardButton(text="🏠 В кабинет", callback_data=f"cpj:home:{token}")],
+                    [
+                        InlineKeyboardButton(
+                            text="🔐 Подключить Яндекс",
+                            url=oauth.authorization_url,
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="🏠 В кабинет",
+                            callback_data=f"cpj:home:{token}",
+                        )
+                    ],
                 ]
             ),
         )
@@ -509,37 +590,63 @@ async def get_clients_one_click(callback: CallbackQuery, state: FSMContext) -> N
     if selected is None and len(active) == 1:
         selected = active[0]
     if selected is not None:
-        await _choose_connection(callback, state, data=data, connection_id=str(selected.id))
+        await _choose_connection(
+            callback,
+            state,
+            data=data,
+            connection_id=str(selected.id),
+        )
         return
     await state.set_state(OneClickOwnerState.selecting_connection)
-    await state.set_data({**data, "connection_ids": [str(item.id) for item in active]})
+    await state.set_data(
+        {**data, "connection_ids": [str(item.id) for item in active]}
+    )
     await control._callback_message(callback).answer(
         "Подключено несколько кабинетов. Выберите нужный один раз.",
         reply_markup=control._keyboard(
-            [[(f"Яндекс · {item.external_login}", f"cpo:connection:{i}")] for i, item in enumerate(active)]
+            [
+                [
+                    (f"Яндекс · {item.external_login}", f"cpo:connection:{index}")
+                ]
+                for index, item in enumerate(active)
+            ]
             + [[("🏠 Отмена", f"cpj:home:{token}")]],
         ),
     )
 
 
-@router.callback_query(OneClickOwnerState.selecting_connection, F.data.startswith("cpo:connection:"))
+@router.callback_query(
+    OneClickOwnerState.selecting_connection,
+    F.data.startswith("cpo:connection:"),
+)
 async def choose_one_click_connection(callback: CallbackQuery, state: FSMContext) -> None:
     data = await state.get_data()
-    try:
-        connection_id = list(data["connection_ids"])[int(str(callback.data).split(":", 2)[2])]
-    except (IndexError, KeyError, TypeError, ValueError):
+    connection_id = _indexed_choice(data, "connection_ids", callback.data)
+    if connection_id is None:
         await callback.answer("Кнопка устарела. Начните ещё раз.", show_alert=True)
         return
     await callback.answer("Продолжаю…")
-    await _choose_connection(callback, state, data=data, connection_id=str(connection_id))
+    await _choose_connection(
+        callback,
+        state,
+        data=data,
+        connection_id=str(connection_id),
+    )
 
 
-@router.callback_query(OneClickOwnerState.selecting_campaign, F.data.startswith("cpo:campaign:"))
+@router.callback_query(
+    OneClickOwnerState.selecting_campaign,
+    F.data.startswith("cpo:campaign:"),
+)
 async def choose_one_click_campaign(callback: CallbackQuery, state: FSMContext) -> None:
     data = await state.get_data()
-    try:
-        selected = list(data["campaigns"])[int(str(callback.data).split(":", 2)[2])]
-    except (IndexError, KeyError, TypeError, ValueError):
+    selected = _indexed_choice(data, "campaigns", callback.data)
+    if not isinstance(selected, dict):
+        await callback.answer("Кнопка устарела. Начните ещё раз.", show_alert=True)
+        return
+    campaign_id = str(selected.get("id") or "").strip()
+    campaign_name = str(selected.get("name") or "").strip()
+    if not campaign_id or not campaign_name:
         await callback.answer("Кнопка устарела. Начните ещё раз.", show_alert=True)
         return
     await callback.answer("Продолжаю…")
@@ -547,12 +654,15 @@ async def choose_one_click_campaign(callback: CallbackQuery, state: FSMContext) 
         callback,
         state,
         data=data,
-        campaign_id=str(selected["id"]),
-        campaign_name=str(selected["name"]),
+        campaign_id=campaign_id,
+        campaign_name=campaign_name,
     )
 
 
-@router.callback_query(OneClickOwnerState.waiting_region, F.data.startswith("cpo:region:"))
+@router.callback_query(
+    OneClickOwnerState.waiting_region,
+    F.data.startswith("cpo:region:"),
+)
 async def choose_one_click_region(callback: CallbackQuery, state: FSMContext) -> None:
     data = await state.get_data()
     raw = str(callback.data).split(":", 2)[2]
@@ -578,7 +688,9 @@ async def receive_one_click_region(message: Message, state: FSMContext) -> None:
     regions = _REGIONS.get(raw)
     if regions is None:
         try:
-            regions = tuple(int(item.strip()) for item in raw.split(",") if item.strip())
+            regions = tuple(
+                int(item.strip()) for item in raw.split(",") if item.strip()
+            )
             if not regions or any(item <= 0 for item in regions):
                 raise ValueError
         except ValueError:
