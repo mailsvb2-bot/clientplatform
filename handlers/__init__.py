@@ -187,6 +187,12 @@ def _load_clientplatform_modules() -> tuple[ModuleType, ModuleType]:
         __name__,
     )
     globals()["clientplatform_goal_first_autopilot"] = goal_first
+    goal_dashboard = importlib.import_module(
+        ".clientplatform_goal_dashboard",
+        __name__,
+    )
+    globals()["clientplatform_goal_dashboard"] = goal_dashboard
+    goal_first.send_goal_dashboard = goal_dashboard.send_goal_dashboard
 
     # Real launch is deliberately composed before the compatibility callbacks
     # that still live in the goal-first presentation module. Aiogram stops on
@@ -290,6 +296,9 @@ def __getattr__(name: str) -> ModuleType:
     if name == "clientplatform_goal_first_autopilot":
         _load_clientplatform_modules()
         return globals()["clientplatform_goal_first_autopilot"]
+    if name == "clientplatform_goal_dashboard":
+        _load_clientplatform_modules()
+        return globals()["clientplatform_goal_dashboard"]
     if name == "clientplatform_goal_launch":
         _load_clientplatform_modules()
         return globals()["clientplatform_goal_launch"]
@@ -306,6 +315,7 @@ __all__ = [
     "clientplatform_control",
     "clientplatform_existing_bot_onboarding",
     "clientplatform_first_result",
+    "clientplatform_goal_dashboard",
     "clientplatform_goal_first_autopilot",
     "clientplatform_goal_launch",
     "clientplatform_managed_bot_onboarding",
