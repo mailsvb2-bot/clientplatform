@@ -2,9 +2,9 @@ from __future__ import annotations
 
 """One-click owner UX over the canonical ClientPlatform application boundaries.
 
-The module deliberately automates only deterministic, reversible preparation.
-It never changes Yandex budgets/strategies, never submits moderation and never
-starts ad spend. Paid visual generation remains an explicit owner action.
+The module automates deterministic, reversible preparation only. It never
+changes Yandex budgets or strategies, never submits moderation and never starts
+ad spend. Paid visual generation remains an explicit owner action.
 """
 
 import asyncio
@@ -128,8 +128,20 @@ def _eligible_campaigns(campaigns):
     ]
 
 
-async def _bot_username(callback: CallbackQuery) -> str:
-    bot = await callback.bot.get_me()
+def _target(event: CallbackQuery | Message) -> Message:
+    if isinstance(event, CallbackQuery):
+        return control._callback_message(event)
+    return event
+
+
+def _event_user_id(event: CallbackQuery | Message) -> int:
+    if event.from_user is None:
+        raise ValueError("ClientPlatform requires a Telegram user")
+    return int(event.from_user.id)
+
+
+async def _bot_username(event: CallbackQuery | Message) -> str:
+    bot = await event.bot.get_me()
     username = str(getattr(bot, "username", "") or "").strip()
     if not username:
         raise RuntimeError("ClientPlatform bot requires a public username")
@@ -138,6 +150,19 @@ async def _bot_username(callback: CallbackQuery) -> str:
 
 def _promotion_link(username: str, source_token: str) -> str:
     return f"https://t.me/{username}?start={promotion_start_payload(source_token)}"
+
+
+async def _load_open_slot(actor, slot_id: str):
+    slots = await asyncio.to_thread(control.list_booking_slots, actor=actor)
+    return next(
+        (
+            item
+            for item in slots
+            if str(item.slot.id) == str(slot_id)
+            and item.slot.status == BookingSlotStatus.OPEN
+        ),
+        None,
+    )
 
 
 async def _send_share_fallback(
@@ -149,6 +174,16 @@ async def _send_share_fallback(
     slot,
     reason: str,
 ) -> None:
+    if slot is None:
+        await state.clear()
+        await control._callback_message(callback).answer(
+            "Свободное время уже изменилось. Нажмите «Получить клиентов» ещё раз — "
+            "я заново проверю актуальное состояние.",
+            reply_markup=control._keyboard(
+                [[("🔄 Проверить снова", f"cpo:start:{business_token}")]]
+            ),
+        )
+        return
     try:
         view = await asyncio.to_thread(
             create_slot_promotion,
@@ -174,7 +209,7 @@ async def _send_share_fallback(
     share_url = "https://t.me/share/url?" + urlencode({"url": link, "text": text})
     await state.clear()
     await control._callback_message(callback).answer(
-        f"✅ Уже можно привлекать клиентов\n\n"
+        "✅ Уже можно привлекать клиентов\n\n"
         f"{reason}\n\n"
         f"Я не оставил Вас в тупике: сам выбрал ближайшее свободное время "
         f"«{slot.offering_title}» — {slot.local_start} — и подготовил объявление "
@@ -242,7 +277,7 @@ async def _open_yandex_oauth(
 
 
 async def _prepare_direct_draft(
-    callback: CallbackQuery,
+    event: CallbackQuery | Message,
     state: FSMContext,
     *,
     business_id: str,
@@ -253,7 +288,7 @@ async def _prepare_direct_draft(
     campaign_name: str,
     region_ids: tuple[int, ...],
 ) -> None:
-    actor = await control._actor(int(callback.from_user.id), business_id)
+    actor = await control._actor(_event_user_id(event), business_id)
     try:
         promotion = await asyncio.to_thread(
             create_slot_promotion,
@@ -261,7 +296,7 @@ async def _prepare_direct_draft(
             slot_id=slot_id,
             channel=PromotionChannel.WEBSITE,
         )
-        username = await _bot_username(callback)
+        username = await _bot_username(event)
         source_url = _promotion_link(username, promotion.campaign.source_token)
         draft = await asyncio.to_thread(
             create_ad_publication_draft,
@@ -275,7 +310,7 @@ async def _prepare_direct_draft(
         )
     except (AdConnectionError, PromotionError, RuntimeError, TypeError, ValueError):
         await state.clear()
-        await control._callback_message(callback).answer(
+        await _target(event).answer(
             "Не удалось автоматически подготовить рекламный черновик. Ничего не "
             "запущено и деньги не списывались. Попробуйте ещё раз.",
             reply_markup=control._keyboard(
@@ -303,7 +338,7 @@ async def _prepare_direct_draft(
             "creative_job_id": "",
         }
     )
-    await control._callback_message(callback).answer(
+    await _target(event).answer(
         "✅ Реклама подготовлена\n\n"
         f"Кампания: {draft.campaign_name}\n"
         f"Регион: {', '.join(str(item) for item in draft.job.region_ids)}\n"
@@ -405,7 +440,7 @@ async def _continue_connection(
         TypeError,
         ValueError,
     ):
-        slot = data["slot"]
+        slot = await _load_open_slot(actor, str(data["slot_id"]))
         await _send_share_fallback(
             callback,
             state,
@@ -418,7 +453,7 @@ async def _continue_connection(
 
     eligible = _eligible_campaigns(campaigns)
     if not eligible:
-        slot = data["slot"]
+        slot = await _load_open_slot(actor, str(data["slot_id"]))
         reason = (
             "Подходящая кампания Яндекса пока не готова — например, она может "
             "ждать оплату или модерацию."
@@ -513,8 +548,7 @@ async def get_clients_one_click(callback: CallbackQuery, state: FSMContext) -> N
     data = {
         "business_id": business_id,
         "business_token": business_token,
-        "slot_id": slot.slot.id,
-        "slot": slot,
+        "slot_id": str(slot.slot.id),
     }
 
     if not ad_connections_enabled() or not yandex_direct_provider_configured():
@@ -635,8 +669,8 @@ async def choose_one_click_region(callback: CallbackQuery, state: FSMContext) ->
     if raw == "other":
         await callback.answer()
         await control._callback_message(callback).answer(
-            "Напишите ID региона Яндекс Директа. Это единственный технический шаг, "
-            "который нужен только если Вашего города нет среди быстрых вариантов."
+            "Напишите город, если это Москва, Нижний Новгород или Санкт-Петербург. "
+            "Для другого города можно указать ID региона Яндекс Директа."
         )
         return
     regions = _COMMON_REGIONS.get(raw)
@@ -664,11 +698,7 @@ async def receive_one_click_region(message: Message, state: FSMContext) -> None:
     regions = _COMMON_REGIONS.get(raw)
     if regions is None:
         try:
-            parsed = tuple(
-                int(item.strip())
-                for item in raw.split(",")
-                if item.strip()
-            )
+            parsed = tuple(int(item.strip()) for item in raw.split(",") if item.strip())
             if not parsed or any(item <= 0 for item in parsed):
                 raise ValueError
             regions = parsed
@@ -678,33 +708,8 @@ async def receive_one_click_region(message: Message, state: FSMContext) -> None:
                 "«Санкт-Петербург» или ID региона из Яндекс Директа."
             )
             return
-    actor_callback = None
-    # The finalizer needs a CallbackQuery for the canonical Telegram helpers. A
-    # message-only custom region therefore keeps the existing canonical region
-    # handler contract: save normalized IDs and show a one-button continuation.
-    await state.update_data(one_click_region_ids=list(regions))
-    await message.answer(
-        "Регион принят. Нажмите одну кнопку — остальное уже готово.",
-        reply_markup=control._keyboard(
-            [[("🚀 Продолжить", "cpo:region:stored")]]
-        ),
-    )
-
-
-@router.callback_query(
-    OneClickOwnerState.waiting_region,
-    F.data == "cpo:region:stored",
-)
-async def continue_stored_one_click_region(callback: CallbackQuery, state: FSMContext) -> None:
-    data = await state.get_data()
-    try:
-        regions = tuple(int(item) for item in data["one_click_region_ids"])
-    except (KeyError, TypeError, ValueError):
-        await callback.answer("Регион не найден. Введите его ещё раз.", show_alert=True)
-        return
-    await callback.answer("Готовлю черновик…")
     await _prepare_direct_draft(
-        callback,
+        message,
         state,
         business_id=str(data["business_id"]),
         business_token=str(data["business_token"]),
