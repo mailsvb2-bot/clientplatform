@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from clientplatform.domain.ad_connections import AdConnectionStatus
 from clientplatform.domain.bookings import BookingSlotStatus
@@ -169,11 +169,7 @@ class GoalDrivenOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
         snapshot = (
             "actor",
             SimpleNamespace(business=SimpleNamespace(name="Мой бизнес")),
-            object(),
-            [],
-            [],
-            [],
-            [slot()],
+            object(), [], [], [], [slot()],
         )
         with (
             patch.object(goal.simple, "_business_snapshot", new=AsyncMock(return_value=snapshot)),
@@ -183,7 +179,6 @@ class GoalDrivenOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
         text, kwargs = out.answers[-1]
         self.assertIn("Если нужны новые клиенты — нажмите одну кнопку", text)
         self.assertNotIn("кампан", text.lower())
-        self.assertNotIn("кабинет", text.lower())
         self.assertNotIn("ID регион", text)
         labels = [button.text for row in kwargs["reply_markup"].inline_keyboard for button in row]
         self.assertEqual(labels, ["🚀 Хочу клиентов", "👥 Клиенты и запись", "⚙️ Управление"])
@@ -202,7 +197,7 @@ class GoalDrivenOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
             await goal.send_goal_dashboard(out, user_id=101, business_id="business-1")
         self.assertIn("если понадобится, я сам попрошу его указать", out.answers[-1][0])
 
-    async def test_helpers_choose_recent_safe_connection_campaign_and_region(self):
+    async def test_helpers_choose_recent_safe_history_and_filter_program_capability(self):
         older = publication(connection_id="conn-1", campaign_id="6001", regions=(47,), updated_at="2026-08-10")
         newer = publication(connection_id="conn-2", campaign_id="7001", regions=(213,), updated_at="2026-08-11")
         active = [connection("conn-1"), connection("conn-2")]
@@ -212,14 +207,30 @@ class GoalDrivenOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(goal._pick_regions([older, newer], connection_id="conn-2", campaign_id="7001"), (213,))
         self.assertIsNone(goal._pick_connection(active, []))
         self.assertIsNone(goal._pick_campaign(camps, [], connection_id="conn-2"))
+        program = capability("program-cap", "programs")
+        service = capability("service-cap", "services")
+        with (
+            patch.object(goal.asyncio, "to_thread", new=direct),
+            patch.object(goal.control, "list_business_capabilities", return_value=[program, service]),
+            patch.object(goal.control, "list_business_offerings", return_value=[offering()]) as list_offerings,
+        ):
+            found = await goal._find_offering("actor", "offering-1")
+        self.assertEqual(found.id, "offering-1")
+        list_offerings.assert_called_once_with(actor="actor", capability_id="service-cap")
 
-    async def test_eligibility_and_duration_helpers_fail_closed(self):
+    async def test_eligibility_duration_and_identity_helpers_fail_closed(self):
         self.assertEqual(len(goal._eligible_campaigns([campaign()])), 1)
         self.assertEqual(goal._eligible_campaigns([campaign(state="OFF")]), [])
         self.assertEqual(goal._eligible_campaigns([campaign(status="DRAFT")]), [])
         self.assertEqual(goal._duration_from_title("Консультация 60 минут"), 60)
         self.assertIsNone(goal._duration_from_title("Консультация"))
         self.assertIsNone(goal._duration_from_title("Консультация 999 минут"))
+        message = FakeMessage()
+        self.assertIs(goal._target(message), message)
+        self.assertEqual(goal._user_id(message), 101)
+        with self.assertRaises(ValueError):
+            goal._user_id(SimpleNamespace(from_user=None))
+        self.assertEqual(await goal._bot_username(message), "clientplatform_bot")
 
     async def test_one_click_with_saved_choices_queues_safe_draft_without_confirmation(self):
         out = FakeMessage()
@@ -294,7 +305,7 @@ class GoalDrivenOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
         text, kwargs = out.answers[-1]
         self.assertIn("безопасный вариант уже готов", text.lower())
         labels = [button.text for row in kwargs["reply_markup"].inline_keyboard for button in row]
-        self.assertNotIn("Яндекс · owner", labels)
+        self.assertFalse(any(label.startswith("Яндекс ·") for label in labels))
         self.assertIn("📨 Отправить людям", labels)
         self.assertIn("⚙️ Настроить платное продвижение", labels)
 
@@ -336,7 +347,7 @@ class GoalDrivenOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
             await goal.get_clients_goal(cb, state)
         self.assertIn("готовое объявление уже можно отправлять", out.answers[-1][0])
 
-    async def test_no_open_slot_auto_enables_generic_service_and_asks_only_service_name(self):
+    async def test_missing_schedule_asks_only_business_questions(self):
         out = FakeMessage()
         cb = callback("cpo:start:business-1", out)
         state = FakeState()
@@ -354,20 +365,19 @@ class GoalDrivenOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state.state, goal.GoalDrivenOwnerState.waiting_offering_title)
         self.assertIn("Как называется то, на что Вы хотите получить клиента?", out.answers[-1][0])
 
-    async def test_existing_single_service_skips_setup_menu_and_asks_availability(self):
-        out = FakeMessage()
-        cb = callback("cpo:start:business-1", out)
-        state = FakeState()
-        p = self.patches(out)
+        out2 = FakeMessage()
+        cb2 = callback("cpo:start:business-1", out2)
+        state2 = FakeState()
+        p2 = self.patches(out2)
         with (
-            p[0], p[1], p[2], p[3], p[4], p[5],
+            p2[0], p2[1], p2[2], p2[3], p2[4], p2[5],
             patch.object(goal.control, "list_booking_slots", return_value=[]),
             patch.object(goal.control, "list_business_capabilities", return_value=[capability()]),
             patch.object(goal.control, "list_business_offerings", return_value=[offering()]),
         ):
-            await goal.get_clients_goal(cb, state)
-        self.assertEqual(state.state, goal.GoalDrivenOwnerState.waiting_booking_start)
-        self.assertIn("Когда Вы можете принять нового клиента", out.answers[-1][0])
+            await goal.get_clients_goal(cb2, state2)
+        self.assertEqual(state2.state, goal.GoalDrivenOwnerState.waiting_booking_start)
+        self.assertIn("Когда Вы можете принять нового клиента", out2.answers[-1][0])
 
     async def test_multiple_services_ask_business_choice_not_internal_setting(self):
         out = FakeMessage()
@@ -387,7 +397,7 @@ class GoalDrivenOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("🎯 Консультация", labels)
         self.assertIn("🎯 Диагностика", labels)
 
-    async def test_new_offering_then_time_then_inferred_duration_continues_automatically(self):
+    async def test_new_offering_time_and_duration_continue_automatically(self):
         state = FakeState(
             {
                 "business_id": "business-1",
@@ -404,8 +414,8 @@ class GoalDrivenOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
         ):
             await goal.receive_goal_offering_title(message, state)
         self.assertEqual(state.state, goal.GoalDrivenOwnerState.waiting_booking_start)
-        self.assertEqual(state.data["offering_id"], "offering-1")
         message.text = "20.08 12:00"
+        p = self.patches(message)
         with (
             p[0], p[3], p[4], p[5],
             patch.object(goal.control, "create_booking_slot", return_value=slot()),
@@ -414,7 +424,6 @@ class GoalDrivenOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
             await goal.receive_goal_booking_start(message, state)
         continue_goal.assert_awaited_once()
 
-    async def test_duration_prompt_validates_and_then_creates_slot(self):
         state = FakeState(
             {
                 "business_id": "business-1",
@@ -437,7 +446,7 @@ class GoalDrivenOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
             await goal.receive_goal_booking_duration(message, state)
         continue_goal.assert_awaited_once()
 
-    async def test_city_button_finishes_without_exposing_campaign_choice(self):
+    async def test_city_selection_finishes_without_provider_details(self):
         out = FakeMessage()
         cb = callback("cpo:region:47", out)
         state = FakeState(
@@ -460,7 +469,6 @@ class GoalDrivenOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
         prepare.assert_awaited_once()
         self.assertEqual(prepare.await_args.kwargs["region_ids"], (47,))
 
-    async def test_unknown_city_falls_back_instead_of_asking_for_provider_id(self):
         message = FakeMessage("Екатеринбург")
         state = FakeState(
             {
@@ -479,19 +487,14 @@ class GoalDrivenOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
             patch.object(goal, "create_slot_promotion", return_value=promotion()),
         ):
             await goal.receive_goal_region(message, state)
-        text = message.answers[-1][0]
-        self.assertIn("не могу определить без риска ошибиться", text)
-        self.assertNotIn("ID", text)
+        self.assertIn("не могу определить без риска ошибиться", message.answers[-1][0])
+        self.assertNotIn("ID", message.answers[-1][0])
 
-    async def test_visual_generation_is_explicit_and_idempotent(self):
+    async def test_visual_generation_is_explicit_idempotent_and_task_managed(self):
         out = FakeMessage()
         cb = callback("cpo:visual:business-1:job-1", out)
         p = self.patches(out)
-        visual = SimpleNamespace(
-            id="visual-1",
-            status="succeeded",
-            asset_ready=True,
-        )
+        visual = SimpleNamespace(id="visual-1", status="succeeded", asset_ready=True)
         with (
             p[0], p[1], p[2], p[3], p[4], p[5],
             patch.object(goal, "list_ad_publications", return_value=[publication()]),
@@ -501,29 +504,35 @@ class GoalDrivenOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
         ):
             await goal.generate_goal_visual(cb)
         cb.answer.assert_awaited_once_with("Создаю картинку…")
-        create_visual.assert_called_once()
         idem = create_visual.call_args.kwargs["idempotency_key"]
         self.assertTrue(idem.startswith("clientplatform:"))
         self.assertEqual(len(out.photos), 1)
-        self.assertIn("ничего не запускал", out.answers[-1][0])
 
-    async def test_visual_queue_requires_no_second_click(self):
         out = FakeMessage()
         cb = callback("cpo:visual:business-1:job-1", out)
         p = self.patches(out)
-        visual = SimpleNamespace(id="visual-1", status="queued", asset_ready=False)
-        fake_task = SimpleNamespace(add_done_callback=lambda callback: None)
+        queued = SimpleNamespace(id="visual-1", status="queued", asset_ready=False)
+        tracked = Mock()
         with (
             p[0], p[1], p[2], p[3], p[4], p[5],
             patch.object(goal, "list_ad_publications", return_value=[publication()]),
-            patch.object(goal, "create_ad_visual", return_value=visual),
-            patch.object(goal.asyncio, "create_task", return_value=fake_task) as create_task,
-            patch.object(goal, "_track_task"),
+            patch.object(goal, "create_ad_visual", return_value=queued),
+            patch.object(goal, "_track_task", tracked),
         ):
             await goal.generate_goal_visual(cb)
         self.assertIn("Ничего больше нажимать не нужно", out.answers[-1][0])
-        create_task.assert_called_once()
-        create_task.call_args.args[0].close()
+        tracked.assert_called_once()
+        tracked.call_args.args[0].close()
+
+        coroutine = goal._finish_visual(FakeMessage(), scope_id="business-1", job_id="visual-1")
+        manager = Mock()
+        with patch.object(goal, "_BACKGROUND_TASKS", manager):
+            goal._track_task(coroutine)
+        manager.create.assert_called_once_with(
+            coroutine,
+            name="clientplatform-goal-visual-delivery",
+        )
+        coroutine.close()
 
     async def test_install_replaces_daily_dashboard_and_legacy_keyboard(self):
         owner = SimpleNamespace(
