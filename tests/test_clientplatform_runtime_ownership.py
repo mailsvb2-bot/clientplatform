@@ -76,11 +76,64 @@ class ClientPlatformRuntimeOwnershipTests(unittest.TestCase):
     def test_root_deploy_is_only_a_clientplatform_compatibility_entrypoint(self) -> None:
         root = Path(__file__).resolve().parents[1]
         wrapper = (root / "deploy.sh").read_text(encoding="utf-8")
-        self.assertIn("scripts/clientplatform_production_deploy.py", wrapper)
+        self.assertTrue(wrapper.startswith("#!/usr/bin/env bash\nset -Eeuo pipefail\n"))
+        self.assertIn(
+            'exec python3 "$ROOT/scripts/clientplatform_production_deploy.py" "$@"',
+            wrapper,
+        )
         self.assertNotIn("scripts/immutable_deploy.sh", wrapper)
+        self.assertNotIn("run_deploy_worker.sh", wrapper)
+        self.assertNotIn("repair_contaminated_current_release.sh", wrapper)
         self.assertNotIn("/root/metrotherapy", wrapper)
         self.assertNotIn("/etc/metrotherapy", wrapper)
         self.assertNotIn("metrotherapy.service", wrapper)
+
+    def test_canonical_deploy_owns_lock_backup_readiness_rollback_and_evidence(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        source = (root / "scripts/clientplatform_production_deploy.py").read_text(
+            encoding="utf-8"
+        )
+
+        main_start = source.index("def main() -> int:")
+        lock = source.index(
+            "fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)",
+            main_start,
+        )
+        deploy_call = source.index("            deploy(\n", lock)
+        self.assertLess(lock, deploy_call)
+        self.assertIn("CLIENTPLATFORM_PRODUCTION_DEPLOY_FAILED:production_deploy_already_running", source)
+
+        deploy_start = source.index("def deploy(\n")
+        encrypted_backup = source.index(
+            "backup_reference = _encrypted_backup(compose)", deploy_start
+        )
+        emergency_backup = source.index(
+            "backup_reference = str(_local_backup(target_sha))", deploy_start
+        )
+        build = source.index('_run([*compose, "build", "app", "backup"])', deploy_start)
+        rollout = source.index(
+            '_run([*compose, "up", "-d", "--force-recreate", "app", "caddy"])',
+            build,
+        )
+        readiness = source.index("_wait_for_readiness(timeout_seconds)", rollout)
+        external = source.index("_external_https(domain)", readiness)
+        rollback = source.index("                _rollback(\n", external)
+        rollback_evidence = source.index(
+            "            rollback_evidence = _write_evidence(\n", rollback
+        )
+        success_evidence = source.index("    evidence = _write_evidence(\n", rollback_evidence)
+
+        self.assertLess(encrypted_backup, build)
+        self.assertLess(emergency_backup, build)
+        self.assertLess(build, rollout)
+        self.assertLess(rollout, readiness)
+        self.assertLess(readiness, external)
+        self.assertLess(external, rollback)
+        self.assertLess(rollback, rollback_evidence)
+        self.assertLess(rollback_evidence, success_evidence)
+        self.assertNotIn("run_deploy_worker.sh", source)
+        self.assertNotIn("scripts/immutable_deploy.sh", source)
+        self.assertNotIn("/var/lib/metrotherapy", source)
 
     def test_workflows_cannot_revive_legacy_deploy_webhook(self) -> None:
         root = Path(__file__).resolve().parents[1]
