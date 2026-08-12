@@ -28,6 +28,7 @@ class CreativeWinnerApplyError(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class CreativeWinnerPreview:
+    plan: CreativeTrafficPlan
     recommendation: CreativeWinnerRecommendation
     date_from: str
     date_to: str
@@ -119,6 +120,7 @@ def preview_creative_winner(
         policy=rules,
     )
     return CreativeWinnerPreview(
+        plan=snapshot.plan,
         recommendation=recommendation,
         date_from=snapshot.date_from,
         date_to=snapshot.date_to,
