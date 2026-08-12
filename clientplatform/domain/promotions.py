@@ -5,8 +5,12 @@ import re
 import secrets
 from dataclasses import dataclass, field
 from enum import StrEnum
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from clientplatform.domain.tenancy import normalize_uuid
+
+
+PUBLIC_PROMOTION_PREFIX = "cpa_"
 
 
 class PromotionError(RuntimeError):
@@ -129,6 +133,52 @@ class PromotionCampaign:
 
 
 @dataclass(frozen=True, slots=True)
+class PromotionSourceAlias:
+    source_token: str
+    business_id: str
+    campaign_id: str
+    source_kind: str
+    source_key: str
+    status: str
+    created_at: str
+    updated_at: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "source_token", normalize_source_token(self.source_token))
+        object.__setattr__(
+            self,
+            "business_id",
+            normalize_uuid(self.business_id, field_name="business_id"),
+        )
+        object.__setattr__(
+            self,
+            "campaign_id",
+            normalize_uuid(self.campaign_id, field_name="campaign_id"),
+        )
+        object.__setattr__(self, "source_kind", normalize_source_kind(self.source_kind))
+        object.__setattr__(self, "source_key", normalize_source_key(self.source_key))
+        status = str(self.status or "").strip()
+        if status not in {"active", "revoked"}:
+            raise ValueError("promotion source alias status is invalid")
+        object.__setattr__(self, "status", status)
+
+
+@dataclass(frozen=True, slots=True)
+class PromotionSourceResolution:
+    campaign: PromotionCampaign
+    attribution_token: str
+    source_kind: str = "campaign"
+    source_key: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "attribution_token",
+            normalize_source_token(self.attribution_token),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class PromotionStats:
     campaigns: int
     people_opened: int
@@ -158,8 +208,51 @@ def normalize_source_token(value: object) -> str:
     return normalized
 
 
+def normalize_source_kind(value: object) -> str:
+    normalized = str(value or "").strip().lower()
+    if not re.fullmatch(r"[a-z][a-z0-9_]{0,39}", normalized):
+        raise ValueError("promotion source kind is invalid")
+    return normalized
+
+
+def normalize_source_key(value: object) -> str:
+    normalized = re.sub(r"\s+", " ", str(value or "").replace("\x00", " ")).strip()
+    if not normalized or len(normalized) > 300:
+        raise ValueError("promotion source key is invalid")
+    return normalized
+
+
 def new_source_token() -> str:
     return normalize_source_token(secrets.token_urlsafe(12))
+
+
+def rewrite_promotion_source_url(
+    value: object,
+    *,
+    from_token: str,
+    to_token: str,
+) -> str:
+    """Replace exactly one Telegram promotion start token in an HTTPS URL."""
+
+    source = str(value or "").strip()
+    parsed = urlsplit(source)
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise ValueError("advertising destination must be an HTTPS URL")
+    expected = PUBLIC_PROMOTION_PREFIX + normalize_source_token(from_token)
+    replacement = PUBLIC_PROMOTION_PREFIX + normalize_source_token(to_token)
+    pairs = parse_qsl(parsed.query, keep_blank_values=True)
+    matches = sum(1 for key, item in pairs if key == "start" and item == expected)
+    if matches != 1:
+        raise PromotionInvariantViolation(
+            "advertising destination is not bound to the expected promotion source"
+        )
+    rewritten = [
+        (key, replacement if key == "start" and item == expected else item)
+        for key, item in pairs
+    ]
+    return urlunsplit(
+        (parsed.scheme, parsed.netloc, parsed.path, urlencode(rewritten), parsed.fragment)
+    )
 
 
 def stable_creative_id(*parts: object) -> str:
@@ -228,6 +321,7 @@ def validate_creative(
 
 __all__ = [
     "CreativeGuardrails",
+    "PUBLIC_PROMOTION_PREFIX",
     "PromotionCampaign",
     "PromotionCampaignStatus",
     "PromotionChannel",
@@ -236,9 +330,14 @@ __all__ = [
     "PromotionEventType",
     "PromotionInvariantViolation",
     "PromotionNotFound",
+    "PromotionSourceAlias",
+    "PromotionSourceResolution",
     "PromotionStats",
     "new_source_token",
+    "normalize_source_key",
+    "normalize_source_kind",
     "normalize_source_token",
+    "rewrite_promotion_source_url",
     "stable_creative_id",
     "validate_creative",
 ]

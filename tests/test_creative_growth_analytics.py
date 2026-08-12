@@ -88,6 +88,52 @@ def test_shared_campaign_outcomes_are_not_duplicated_across_variants(monkeypatch
     assert (shared.leads, shared.bookings, shared.won) == (2, 1, 1)
 
 
+def test_shared_campaign_with_exact_source_tokens_gets_variant_outcomes(monkeypatch) -> None:
+    actor = _actor()
+    campaign_id = str(uuid4())
+    source_a = "variantSourceA12"
+    source_b = "variantSourceB12"
+    plan = CreativeTrafficPlan(
+        trial_id=str(uuid4()),
+        business_id=actor.business_id,
+        status=CreativeTrialStatus.RUNNING,
+        revision=2,
+        arms=(
+            CreativeTrialArm("variant-a", str(uuid4()), 5000, campaign_id, source_a),
+            CreativeTrialArm("variant-b", str(uuid4()), 5000, campaign_id, source_b),
+        ),
+    ).normalized()
+    _install(
+        monkeypatch,
+        plan=plan,
+        attribution=PromotionAttribution(
+            leads={campaign_id: frozenset({"customer-a", "customer-b"})},
+            bookings={campaign_id: frozenset({"customer-a"})},
+            won={campaign_id: frozenset({"customer-a"})},
+            source_leads={
+                source_a: frozenset({"customer-a"}),
+                source_b: frozenset({"customer-b"}),
+            },
+            source_bookings={source_a: frozenset({"customer-a"})},
+            source_won={source_a: frozenset({"customer-a"})},
+        ),
+    )
+
+    snapshot = analytics.get_creative_growth_outcomes(
+        actor=actor,
+        trial_id=plan.trial_id,
+        now=date(2026, 8, 12),
+    )
+
+    assert snapshot.variant_level_ready is True
+    assert snapshot.shared_campaigns == ()
+    first, second = snapshot.variants
+    assert first.attribution_scope == CreativeAttributionScope.VARIANT
+    assert (first.leads, first.bookings, first.won) == (1, 1, 1)
+    assert second.attribution_scope == CreativeAttributionScope.VARIANT
+    assert (second.leads, second.bookings, second.won) == (1, 0, 0)
+
+
 def test_unique_campaigns_receive_variant_level_downstream_outcomes(monkeypatch) -> None:
     actor = _actor()
     campaign_a = str(uuid4())

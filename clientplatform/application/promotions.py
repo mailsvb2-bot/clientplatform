@@ -15,6 +15,7 @@ from clientplatform.application.promotion_creatives import (
 )
 from clientplatform.domain.bookings import BookingClaim, BookingSlotView
 from clientplatform.domain.promotions import (
+    PUBLIC_PROMOTION_PREFIX,
     PromotionCampaign,
     PromotionChannel,
     PromotionEventType,
@@ -29,9 +30,6 @@ from clientplatform.infrastructure.tenancy_repository import TenancyRepository
 from services.db import get_db, get_db_ro
 
 
-PUBLIC_PROMOTION_PREFIX = "cpa_"
-
-
 @dataclass(frozen=True, slots=True)
 class PromotionCampaignView:
     campaign: PromotionCampaign
@@ -43,6 +41,14 @@ class PromotionLanding:
     campaign: PromotionCampaign
     slot: BookingSlotView
     customer_id: str
+    attribution_token: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "attribution_token",
+            normalize_source_token(self.attribution_token or self.campaign.source_token),
+        )
 
 
 def promotion_start_payload(source_token: str) -> str:
@@ -153,30 +159,33 @@ def open_promotion_link(
     username: str | None,
     display_name: str | None,
 ) -> PromotionLanding:
-    """Connect one visitor and record one unique campaign open."""
+    """Connect one visitor and preserve the exact campaign/variant source."""
 
     token = normalize_source_token(source_token)
     with get_db_ro() as conn:
-        initial = PromotionRepository(conn).get_public_campaign(source_token=token)
+        initial = PromotionRepository(conn).resolve_public_source(source_token=token)
     link = connect_public_storefront_customer(
-        business_id=initial.business_id,
+        business_id=initial.campaign.business_id,
         telegram_user_id=telegram_user_id,
         username=username,
         display_name=display_name,
     )
     with get_db() as conn:
         repository = PromotionRepository(conn)
-        campaign = repository.get_public_campaign(source_token=token)
+        resolution = repository.resolve_public_source(source_token=token)
+        campaign = resolution.campaign
         slot = repository.get_public_campaign_slot(campaign=campaign)
         repository.record_event(
             campaign=campaign,
             customer_id=link.customer_id,
             event_type=PromotionEventType.OPENED,
+            source_token=resolution.attribution_token,
         )
         return PromotionLanding(
             campaign=campaign,
             slot=slot,
             customer_id=link.customer_id,
+            attribution_token=resolution.attribution_token,
         )
 
 
@@ -185,12 +194,13 @@ def book_promoted_slot(
     source_token: str,
     telegram_user_id: int,
 ) -> tuple[BookingClaim, PromotionCampaign]:
-    """Book canonically and persist opened/booked attribution in one transaction."""
+    """Book canonically and persist exact source attribution in one transaction."""
 
     token = normalize_source_token(source_token)
     with get_db() as conn:
         promotions = PromotionRepository(conn)
-        campaign = promotions.get_public_campaign(source_token=token)
+        resolution = promotions.resolve_public_source(source_token=token)
+        campaign = resolution.campaign
         assert_external_customer(
             conn,
             telegram_user_id=telegram_user_id,
@@ -205,11 +215,13 @@ def book_promoted_slot(
             campaign=campaign,
             customer_id=claim.customer_id,
             event_type=PromotionEventType.OPENED,
+            source_token=resolution.attribution_token,
         )
         promotions.record_event(
             campaign=campaign,
             customer_id=claim.customer_id,
             event_type=PromotionEventType.BOOKED,
+            source_token=resolution.attribution_token,
         )
         return claim, campaign
 

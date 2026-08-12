@@ -18,8 +18,12 @@ from clientplatform.domain.promotions import (
     PromotionEventType,
     PromotionInvariantViolation,
     PromotionNotFound,
+    PromotionSourceAlias,
+    PromotionSourceResolution,
     PromotionStats,
     new_source_token,
+    normalize_source_key,
+    normalize_source_kind,
     normalize_source_token,
 )
 from clientplatform.domain.tenancy import TenantContext, normalize_uuid
@@ -60,6 +64,19 @@ def _campaign_from_row(row: Any) -> PromotionCampaign:
     )
 
 
+def _source_alias_from_row(row: Any) -> PromotionSourceAlias:
+    return PromotionSourceAlias(
+        source_token=str(_value(row, "source_token", 0)),
+        business_id=str(_value(row, "business_id", 1)),
+        campaign_id=str(_value(row, "campaign_id", 2)),
+        source_kind=str(_value(row, "source_kind", 3)),
+        source_key=str(_value(row, "source_key", 4)),
+        status=str(_value(row, "status", 5)),
+        created_at=str(_value(row, "created_at", 6)),
+        updated_at=str(_value(row, "updated_at", 7)),
+    )
+
+
 def _slot_view_from_row(row: Any) -> BookingSlotView:
     booked_customer_id = _value(row, "booked_customer_id", 7)
     booked_at = _value(row, "booked_at", 11)
@@ -95,6 +112,12 @@ _CAMPAIGN_SELECT = """
            cta, creative_style, status, created_by_member_id, created_at,
            updated_at
     FROM promotion_campaigns
+"""
+
+_SOURCE_ALIAS_SELECT = """
+    SELECT source_token, business_id, campaign_id, source_kind, source_key,
+           status, created_at, updated_at
+    FROM promotion_source_aliases
 """
 
 _SLOT_SELECT = """
@@ -270,14 +293,111 @@ class PromotionRepository:
         ).fetchall()
         return [_campaign_from_row(row) for row in rows]
 
-    def get_public_campaign(
+    def ensure_source_alias(
+        self,
+        *,
+        actor: TenantContext,
+        campaign_id: str,
+        source_kind: str,
+        source_key: str,
+        now: str | None = None,
+    ) -> PromotionSourceAlias:
+        """Issue one durable public token for a logical source inside a campaign."""
+
+        current = self._current_actor(actor)
+        current.assert_can_manage_promotions()
+        normalized_campaign = normalize_uuid(campaign_id, field_name="campaign_id")
+        kind = normalize_source_kind(source_kind)
+        key = normalize_source_key(source_key)
+        campaign = self._conn.execute(
+            "SELECT 1 FROM promotion_campaigns WHERE id=? AND business_id=? LIMIT 1",
+            (normalized_campaign, current.business_id),
+        ).fetchone()
+        if campaign is None:
+            raise PromotionNotFound("Рекламная кампания не найдена")
+        timestamp = normalize_utc_datetime(str(now or _utc_now()), field_name="now")
+        self._conn.execute(
+            """
+            INSERT INTO promotion_source_aliases(
+                source_token, business_id, campaign_id, source_kind, source_key,
+                status, created_at, updated_at
+            ) VALUES(?, ?, ?, ?, ?, 'active', ?, ?)
+            ON CONFLICT(business_id, campaign_id, source_kind, source_key)
+            DO UPDATE SET status='active', updated_at=excluded.updated_at
+            """,
+            (
+                new_source_token(),
+                current.business_id,
+                normalized_campaign,
+                kind,
+                key,
+                timestamp,
+                timestamp,
+            ),
+        )
+        row = self._conn.execute(
+            _SOURCE_ALIAS_SELECT
+            + " WHERE business_id=? AND campaign_id=? AND source_kind=? AND source_key=? LIMIT 1",
+            (current.business_id, normalized_campaign, kind, key),
+        ).fetchone()
+        if row is None:
+            raise PromotionInvariantViolation("promotion source alias was not persisted")
+        return _source_alias_from_row(row)
+
+    def _public_campaign_by_id(
+        self,
+        *,
+        campaign_id: str,
+        business_id: str,
+        timestamp: str,
+    ) -> PromotionCampaign | None:
+        row = self._conn.execute(
+            _CAMPAIGN_SELECT
+            + """
+              WHERE id=? AND business_id=? AND status='active'
+                AND EXISTS(
+                    SELECT 1
+                    FROM booking_slots bs
+                    JOIN business_offerings bo
+                      ON bo.id=bs.offering_id AND bo.business_id=bs.business_id
+                    WHERE bs.id=promotion_campaigns.booking_slot_id
+                      AND bs.business_id=promotion_campaigns.business_id
+                      AND bs.status='open'
+                      AND bs.starts_at>?
+                      AND bo.status='active'
+                )
+              LIMIT 1
+            """,
+            (campaign_id, business_id, timestamp),
+        ).fetchone()
+        return None if row is None else _campaign_from_row(row)
+
+    def resolve_public_source(
         self,
         *,
         source_token: str,
         now: str | None = None,
-    ) -> PromotionCampaign:
+    ) -> PromotionSourceResolution:
         token = normalize_source_token(source_token)
         timestamp = normalize_utc_datetime(str(now or _utc_now()), field_name="now")
+        alias_row = self._conn.execute(
+            _SOURCE_ALIAS_SELECT + " WHERE source_token=? AND status='active' LIMIT 1",
+            (token,),
+        ).fetchone()
+        if alias_row is not None:
+            alias = _source_alias_from_row(alias_row)
+            campaign = self._public_campaign_by_id(
+                campaign_id=alias.campaign_id,
+                business_id=alias.business_id,
+                timestamp=timestamp,
+            )
+            if campaign is not None:
+                return PromotionSourceResolution(
+                    campaign=campaign,
+                    attribution_token=alias.source_token,
+                    source_kind=alias.source_kind,
+                    source_key=alias.source_key,
+                )
         row = self._conn.execute(
             _CAMPAIGN_SELECT
             + """
@@ -301,7 +421,19 @@ class PromotionRepository:
             raise PromotionNotFound(
                 "Эта рекламная ссылка больше не активна. Откройте страницу специалиста заново."
             )
-        return _campaign_from_row(row)
+        campaign = _campaign_from_row(row)
+        return PromotionSourceResolution(
+            campaign=campaign,
+            attribution_token=campaign.source_token,
+        )
+
+    def get_public_campaign(
+        self,
+        *,
+        source_token: str,
+        now: str | None = None,
+    ) -> PromotionCampaign:
+        return self.resolve_public_source(source_token=source_token, now=now).campaign
 
     def get_public_campaign_slot(self, *, campaign: PromotionCampaign) -> BookingSlotView:
         row = self._conn.execute(
@@ -312,12 +444,36 @@ class PromotionRepository:
             raise PromotionNotFound("Опубликованное время больше не найдено")
         return _slot_view_from_row(row)
 
+    def _event_source_token(
+        self,
+        *,
+        campaign: PromotionCampaign,
+        source_token: str | None,
+    ) -> str:
+        token = normalize_source_token(source_token or campaign.source_token)
+        if token == campaign.source_token:
+            return token
+        row = self._conn.execute(
+            """
+            SELECT 1 FROM promotion_source_aliases
+            WHERE source_token=? AND business_id=? AND campaign_id=? AND status='active'
+            LIMIT 1
+            """,
+            (token, campaign.business_id, campaign.id),
+        ).fetchone()
+        if row is None:
+            raise PromotionInvariantViolation(
+                "promotion attribution source does not belong to campaign"
+            )
+        return token
+
     def record_event(
         self,
         *,
         campaign: PromotionCampaign,
         customer_id: str,
         event_type: PromotionEventType | str,
+        source_token: str | None = None,
         now: str | None = None,
     ) -> bool:
         normalized_customer = normalize_uuid(customer_id, field_name="customer_id")
@@ -326,20 +482,27 @@ class PromotionRepository:
             if isinstance(event_type, PromotionEventType)
             else PromotionEventType(str(event_type))
         )
+        attribution_token = self._event_source_token(
+            campaign=campaign,
+            source_token=source_token,
+        )
         timestamp = str(now or _utc_now())
-        dedupe_key = f"{selected_type.value}:{campaign.id}:{normalized_customer}"
+        dedupe_key = (
+            f"{selected_type.value}:{campaign.id}:{attribution_token}:{normalized_customer}"
+        )
         cursor = self._conn.execute(
             """
             INSERT INTO promotion_events(
-                id, business_id, campaign_id, event_type, customer_id,
+                id, business_id, campaign_id, source_token, event_type, customer_id,
                 booking_slot_id, dedupe_key, occurred_at
-            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(business_id, dedupe_key) DO NOTHING
             """,
             (
                 str(uuid4()),
                 campaign.business_id,
                 campaign.id,
+                attribution_token,
                 selected_type.value,
                 normalized_customer,
                 campaign.booking_slot_id,
