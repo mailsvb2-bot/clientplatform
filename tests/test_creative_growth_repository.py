@@ -191,6 +191,28 @@ def test_reallocation_requires_same_arms_and_full_basis_points() -> None:
         )
 
 
+def test_reallocation_rejects_stale_expected_revision_without_partial_write() -> None:
+    conn, owner, _analyst, jobs = _db()
+    repo = CreativeGrowthRepository(conn)
+    plan = repo.create(
+        actor=owner,
+        name="Stale recommendation",
+        allocations=((jobs[0], 5000), (jobs[1], 5000)),
+    )
+
+    with pytest.raises(ValueError, match="recommendation is stale"):
+        repo.replace_allocations(
+            actor=owner,
+            trial_id=plan.trial_id,
+            allocations=((jobs[0], 6000), (jobs[1], 4000)),
+            expected_revision=plan.revision + 1,
+        )
+
+    unchanged = repo.get(actor=owner, trial_id=plan.trial_id)
+    assert unchanged.revision == plan.revision
+    assert [arm.allocation_bps for arm in unchanged.arms] == [5000, 5000]
+
+
 def test_analyst_can_read_but_cannot_manage_trial() -> None:
     conn, owner, analyst, jobs = _db()
     repo = CreativeGrowthRepository(conn)
