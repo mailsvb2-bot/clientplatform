@@ -54,11 +54,16 @@ class ClientPlatformRuntimeOwnershipTests(unittest.TestCase):
             "scripts/clientplatform_postgres_backup.py",
             "scripts/clientplatform_production_deploy.py",
             "scripts/clientplatform_production_preflight.py",
-            "scripts/clientplatform_postgres_restore_drill.py",
         )
         for relative in required_scripts:
             with self.subTest(path=relative):
                 self.assertTrue((root / relative).is_file(), relative)
+
+        postgres_backup = (root / "scripts/clientplatform_postgres_backup.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('subparsers.add_parser("restore-drill")', postgres_backup)
+        self.assertIn("CLIENTPLATFORM_RESTORE_DRILL_OK", postgres_backup)
 
         contract = (root / "deploy" / "RUNTIME_CONTRACT.md").read_text(
             encoding="utf-8"
