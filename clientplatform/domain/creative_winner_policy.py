@@ -7,6 +7,7 @@ from enum import StrEnum
 from clientplatform.domain.creative_growth import (
     CreativeAttributionScope,
     CreativeTrafficPlan,
+    CreativeTrialStatus,
     CreativeVariantOutcome,
 )
 
@@ -177,6 +178,18 @@ def recommend_creative_winner(
     rules = policy or CreativeWinnerPolicy()
     by_variant = _validate_outcomes(normalized_plan, outcomes)
     current = _current_allocations(normalized_plan)
+
+    if normalized_plan.status != CreativeTrialStatus.RUNNING:
+        return CreativeWinnerRecommendation(
+            decision=CreativeWinnerDecision.HOLD,
+            reason="trial_not_running",
+            trial_id=normalized_plan.trial_id,
+            expected_revision=normalized_plan.revision,
+            metric=None,
+            winner_variant_id="",
+            evidence=(),
+            recommended_allocations=current,
+        )
 
     if any(
         by_variant[arm.variant_id].attribution_scope != CreativeAttributionScope.VARIANT
