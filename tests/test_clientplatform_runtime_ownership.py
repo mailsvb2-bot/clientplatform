@@ -18,6 +18,8 @@ class ClientPlatformRuntimeOwnershipTests(unittest.TestCase):
             "ops/deploy_webhook.py",
             "ops/deploy_webhook_hardened.py",
             "ops/autodeploy_smoke_marker.md",
+            "scripts/install_github_deploy_webhook_service.sh",
+            "tests/test_deploy_webhook_hardening.py",
         )
         for relative in legacy_paths:
             with self.subTest(path=relative):
@@ -42,6 +44,16 @@ class ClientPlatformRuntimeOwnershipTests(unittest.TestCase):
             with self.subTest(path=relative):
                 self.assertTrue((canonical / relative).is_file(), relative)
 
+        required_scripts = (
+            "scripts/clientplatform_backup.py",
+            "scripts/clientplatform_production_deploy.py",
+            "scripts/clientplatform_production_preflight.py",
+            "scripts/clientplatform_restore_drill.py",
+        )
+        for relative in required_scripts:
+            with self.subTest(path=relative):
+                self.assertTrue((root / relative).is_file(), relative)
+
         contract = (root / "deploy" / "RUNTIME_CONTRACT.md").read_text(
             encoding="utf-8"
         )
@@ -49,6 +61,24 @@ class ClientPlatformRuntimeOwnershipTests(unittest.TestCase):
         self.assertIn("deploy/clientplatform/", contract)
         self.assertNotIn("cd /root/metrotherapy", contract)
         self.assertNotIn("/etc/metrotherapy/metrotherapy.env", contract)
+
+    def test_workflows_cannot_revive_legacy_deploy_webhook(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        workflow_root = root / ".github" / "workflows"
+        workflow_paths = sorted(workflow_root.glob("*.yml")) + sorted(
+            workflow_root.glob("*.yaml")
+        )
+        workflow_text = "\n".join(
+            path.read_text(encoding="utf-8") for path in workflow_paths
+        )
+        forbidden = (
+            "tests.test_deploy_webhook_hardening",
+            "ops/deploy_webhook_hardened.py",
+            "github-deploy-webhook.service",
+            "install_github_deploy_webhook_service.sh",
+        )
+        found = [value for value in forbidden if value in workflow_text]
+        self.assertEqual(found, [])
 
 
 if __name__ == "__main__":
