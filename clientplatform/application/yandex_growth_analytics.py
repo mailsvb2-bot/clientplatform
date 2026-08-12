@@ -1,13 +1,17 @@
 from __future__ import annotations
 
-import json
 import os
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from clientplatform.application.promotion_attribution import (
+    PromotionAttribution,
+    load_promotion_attribution,
+    promotion_event_window,
+)
 from clientplatform.domain.ad_connections import AdConnection
 from clientplatform.domain.tenancy import TenantContext
 from clientplatform.infrastructure.ad_credential_vault import (
@@ -26,6 +30,8 @@ from clientplatform.integrations.yandex_direct_analytics import (
     YandexAdPerformanceRow,
 )
 from services.db import get_db, get_db_ro
+
+_LocalAttribution = PromotionAttribution
 
 _AUTH_ERRORS = frozenset(
     {
@@ -51,13 +57,6 @@ class _TrackedAd:
     external_campaign_id: str
     external_campaign_name: str
     external_ad_id: str
-
-
-@dataclass(frozen=True, slots=True)
-class _LocalAttribution:
-    leads: dict[str, frozenset[str]]
-    bookings: dict[str, frozenset[str]]
-    won: dict[str, frozenset[str]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,24 +169,7 @@ def _current_period(days: int, now: datetime | date | None = None) -> tuple[str,
 
 
 def _event_window(date_from: str, date_to: str) -> tuple[str, str]:
-    try:
-        start_date = date.fromisoformat(date_from)
-        end_date = date.fromisoformat(date_to)
-    except ValueError as exc:
-        raise ValueError("Yandex analytics dates must use YYYY-MM-DD") from exc
-    if start_date > end_date:
-        raise ValueError("Yandex analytics date_from must not be after date_to")
-    zone = _report_zone()
-    start = datetime.combine(start_date, time.min, tzinfo=zone).astimezone(timezone.utc)
-    end = datetime.combine(
-        end_date + timedelta(days=1),
-        time.min,
-        tzinfo=zone,
-    ).astimezone(timezone.utc)
-    return (
-        start.isoformat(timespec="seconds"),
-        end.isoformat(timespec="seconds"),
-    )
+    return promotion_event_window(date_from, date_to, zone=_report_zone())
 
 
 def _provider() -> ReadOnlyYandexDirectAnalyticsProvider:
@@ -279,86 +261,23 @@ def _load_local_attribution(
     promotion_campaign_ids: set[str],
     date_from: str,
     date_to: str,
-) -> _LocalAttribution:
+) -> PromotionAttribution:
     if not promotion_campaign_ids:
-        return _LocalAttribution(leads={}, bookings={}, won={})
+        return PromotionAttribution(leads={}, bookings={}, won={})
     event_from, event_until = _event_window(date_from, date_to)
-    params = (actor.business_id, event_from, event_until)
     with get_db_ro() as conn:
         current = TenancyRepository(conn).resolve_context(
             user_id=actor.user_id,
             business_id=actor.business_id,
         )
         current.assert_can_view_promotion_analytics()
-        event_rows = conn.execute(
-            """
-            SELECT campaign_id, event_type, customer_id
-            FROM promotion_events
-            WHERE business_id=?
-              AND event_type IN ('opened','booked')
-              AND occurred_at>=?
-              AND occurred_at<?
-            """,
-            params,
-        ).fetchall()
-        # ``won`` is intentionally stricter than a simple customer-stage join.
-        # A conversion belongs to a promotion only when the same customer has
-        # an exact booked event for that campaign, the sales lead is for the
-        # campaign's offering, and persisted conversation evidence reaches won
-        # after that booking inside the reporting window.
-        won_rows = conn.execute(
-            """
-            SELECT pe.campaign_id, pe.customer_id, se.payload_json
-            FROM promotion_events pe
-            JOIN promotion_campaigns pc
-              ON pc.id=pe.campaign_id AND pc.business_id=pe.business_id
-            JOIN clientplatform_sales_leads sl
-              ON sl.business_id=pe.business_id
-             AND sl.customer_id=pe.customer_id
-             AND sl.offering_id=pc.offering_id
-            JOIN clientplatform_sales_events se
-              ON se.business_id=sl.business_id
-             AND se.lead_id=sl.id
-             AND se.event_type='conversation_transition'
-            WHERE pe.business_id=?
-              AND pe.event_type='booked'
-              AND pe.occurred_at>=?
-              AND pe.occurred_at<?
-              AND se.occurred_at>=pe.occurred_at
-              AND se.occurred_at<?
-            """,
-            (actor.business_id, event_from, event_until, event_until),
-        ).fetchall()
-
-    leads: dict[str, set[str]] = defaultdict(set)
-    bookings: dict[str, set[str]] = defaultdict(set)
-    won: dict[str, set[str]] = defaultdict(set)
-    for row in event_rows:
-        campaign_id = str(_value(row, "campaign_id", 0))
-        if campaign_id not in promotion_campaign_ids:
-            continue
-        event_type = str(_value(row, "event_type", 1))
-        customer_id = str(_value(row, "customer_id", 2))
-        if event_type == "opened":
-            leads[campaign_id].add(customer_id)
-        elif event_type == "booked":
-            bookings[campaign_id].add(customer_id)
-    for row in won_rows:
-        campaign_id = str(_value(row, "campaign_id", 0))
-        if campaign_id not in promotion_campaign_ids:
-            continue
-        try:
-            payload = json.loads(str(_value(row, "payload_json", 2) or "{}"))
-        except (TypeError, ValueError):
-            continue
-        if not isinstance(payload, dict) or payload.get("to") != "won":
-            continue
-        won[campaign_id].add(str(_value(row, "customer_id", 1)))
-    return _LocalAttribution(
-        leads={key: frozenset(value) for key, value in leads.items()},
-        bookings={key: frozenset(value) for key, value in bookings.items()},
-        won={key: frozenset(value) for key, value in won.items()},
-    )
+        return load_promotion_attribution(
+            conn,
+            business_id=current.business_id,
+            promotion_campaign_ids=promotion_campaign_ids,
+            event_from=event_from,
+            event_until=event_until,
+        )
 
 
 def _refresh_bundle(

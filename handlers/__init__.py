@@ -191,6 +191,15 @@ def _load_clientplatform_modules() -> tuple[ModuleType, ModuleType]:
     globals()["clientplatform_goal_dashboard"] = goal_dashboard
     goal_first.send_goal_dashboard = goal_dashboard.send_goal_dashboard
 
+    visual_brand = importlib.import_module(
+        ".clientplatform_visual_brand",
+        __name__,
+    )
+    globals()["clientplatform_visual_brand"] = visual_brand
+    if not bool(getattr(simple_experience, "_visual_brand_composed", False)):
+        simple_experience.router.include_router(visual_brand.router)
+        simple_experience._visual_brand_composed = True
+
     goal_schedule = importlib.import_module(
         ".clientplatform_goal_schedule",
         __name__,
