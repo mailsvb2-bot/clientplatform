@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from clientplatform.application.sales_ai_orchestration import sales_ai_draft_egress_permit
+import asyncio
+
+from clientplatform.application.sales_ai_orchestration import (
+    sales_ai_draft_egress_permit,
+    validate_sales_ai_draft_freshness,
+)
 from clientplatform.application.sales_ai_settings import get_business_sales_ai_enabled
 from clientplatform.domain.sales import SalesActionKind
 from clientplatform.domain.sales_intelligence import SalesAIDraft
@@ -40,7 +45,13 @@ def sales_ai_enabled_for_business(*, actor: TenantContext) -> bool:
 
 
 async def draft_sales_reply(*, actor: TenantContext, lead_id: str) -> SalesAIDraft:
-    """Generate an owner-review draft behind the same egress barrier as analysis."""
+    """Generate a current owner-review draft behind the tenant egress barrier.
+
+    The provider request is made only from the latest validated evidence. After the
+    network call returns, the source-order head and canonical plan are checked again
+    before the draft is exposed, so a customer reply arriving mid-generation makes
+    the draft fail closed instead of showing stale guidance.
+    """
     config = SalesAIRuntimeConfig.from_env()
     if not config.enabled:
         raise ValueError("sales AI runtime is disabled")
@@ -51,15 +62,29 @@ async def draft_sales_reply(*, actor: TenantContext, lead_id: str) -> SalesAIDra
         actor=actor,
         lead_id=lead_id,
         consent_target=config.consent_target,
-    ) as (_lead, customer_text, analysis, action, verified_offer):
-        if action in {SalesActionKind.HUMAN_HANDOFF.value, SalesActionKind.NOOP.value}:
+    ) as evidence:
+        if evidence.action_kind in {
+            SalesActionKind.HUMAN_HANDOFF.value,
+            SalesActionKind.NOOP.value,
+        }:
             raise ValueError("this sales item requires human handling instead of an AI draft")
-        return await provider.draft_reply(
-            customer_text=customer_text,
-            analysis=analysis,
-            approved_action=action,
-            verified_offer=verified_offer,
+        draft = await provider.draft_reply(
+            customer_text=evidence.customer_text,
+            analysis=evidence.analysis,
+            approved_action=evidence.action_kind,
+            verified_offer=evidence.verified_offer,
         )
+        expected_source_order_key = evidence.source_order_key
+        expected_plan_id = evidence.plan_id
+
+    await asyncio.to_thread(
+        validate_sales_ai_draft_freshness,
+        actor=actor,
+        lead_id=lead_id,
+        expected_source_order_key=expected_source_order_key,
+        expected_plan_id=expected_plan_id,
+    )
+    return draft
 
 
 __all__ = [
