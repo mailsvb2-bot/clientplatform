@@ -194,12 +194,16 @@ async def open_creative_trials(callback: CallbackQuery, state: FSMContext) -> No
     c = _control()
     await state.clear()
     business_token = str(callback.data).split(":", 2)[2]
-    business_id = c._token_uuid(business_token)
+    try:
+        business_id = c._token_uuid(business_token)
+    except ValueError:
+        await callback.answer("Кнопка устарела. Откройте A/B тесты заново.", show_alert=True)
+        return
     try:
         actor = await c._actor(int(callback.from_user.id), business_id)
         plans = await asyncio.to_thread(list_creative_trials, actor=actor)
-    except (TenancyError, LookupError, RuntimeError, ValueError):
-        await callback.answer("Не удалось открыть A/B тесты", show_alert=True)
+    except TenancyError:
+        await callback.answer("Недостаточно прав для просмотра A/B тестов", show_alert=True)
         return
     await callback.answer()
     if not plans:
@@ -238,6 +242,10 @@ async def open_creative_trial(callback: CallbackQuery) -> None:
     raw = str(callback.data).split(":", 2)[2]
     try:
         trial_id = c._token_uuid(raw)
+    except ValueError:
+        await callback.answer("Кнопка устарела. Откройте A/B тест заново.", show_alert=True)
+        return
+    try:
         actor = await asyncio.to_thread(
             resolve_creative_trial_actor,
             user_id=int(callback.from_user.id),
@@ -245,8 +253,12 @@ async def open_creative_trial(callback: CallbackQuery) -> None:
         )
         await callback.answer()
         await _send_trial_review(_message(callback), actor=actor, trial_id=trial_id)
-    except (TenancyError, LookupError, RuntimeError, ValueError):
-        await callback.answer("Не удалось открыть рекомендацию", show_alert=True)
+    except TenantPermissionDenied:
+        await callback.answer("Недостаточно прав для просмотра A/B теста", show_alert=True)
+    except TenancyError:
+        await callback.answer("Не удалось подтвердить доступ к A/B тесту", show_alert=True)
+    except LookupError:
+        await callback.answer("A/B тест больше не найден", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("cpw:apply:"))
@@ -260,6 +272,10 @@ async def apply_creative_trial_winner(callback: CallbackQuery) -> None:
     try:
         trial_id = c._token_uuid(trial_token)
         revision = int(raw_revision)
+    except ValueError:
+        await callback.answer("Подтверждение устарело", show_alert=True)
+        return
+    try:
         actor = await asyncio.to_thread(
             resolve_creative_trial_actor,
             user_id=int(callback.from_user.id),
@@ -281,8 +297,11 @@ async def apply_creative_trial_winner(callback: CallbackQuery) -> None:
     except TenantPermissionDenied:
         await callback.answer("Недостаточно прав для изменения A/B теста", show_alert=True)
         return
-    except (TenancyError, LookupError, RuntimeError, ValueError):
-        await callback.answer("Не удалось применить рекомендацию", show_alert=True)
+    except TenancyError:
+        await callback.answer("Не удалось подтвердить права на A/B тест", show_alert=True)
+        return
+    except LookupError:
+        await callback.answer("A/B тест больше не найден", show_alert=True)
         return
 
     await callback.answer("Распределение обновлено")
