@@ -213,7 +213,7 @@ def test_max_audit_fails_closed_when_webhook_is_missing(monkeypatch) -> None:
 
 def test_max_production_files_use_api2_and_no_query_secret_helper() -> None:
     paths = [
-        ROOT / "deploy" / "metrotherapy.env.example",
+        ROOT / "deploy" / "clientplatform" / "clientplatform.production.env.example",
         ROOT / "docs" / "MAX_WEBHOOK_SETUP.md",
         ROOT / "scripts" / "register_max_webhook.py",
     ]
@@ -235,11 +235,11 @@ def test_max_sender_source_does_not_forward_token_to_upload_url() -> None:
     assert "multipart_upload, upload_url, token=token" not in source
 
 
-def test_deploy_worker_migrates_and_audits_max_api2() -> None:
-    source = (ROOT / "scripts" / "run_deploy_worker.sh").read_text(encoding="utf-8")
+def test_clientplatform_env_preparer_migrates_max_to_api2() -> None:
+    source = (ROOT / "scripts" / "clientplatform_prepare_production_env.py").read_text(
+        encoding="utf-8"
+    )
 
-    assert "max-platform-api2-v1.applied" in source
-    assert "MAX_API_BASE_URL=https://platform-api2.max.ru" in source
-    assert "[max-provider-audit-request]" in source
-    assert "[max-provider-audit-result]" in source
-    assert "max_provider_audit.py" in source
+    assert '_MAX_API2_BASE_URL = "https://platform-api2.max.ru"' in source
+    assert '"MAX_API_BASE_URL": _MAX_API2_BASE_URL' in source
+    assert "run_deploy_worker.sh" not in source
