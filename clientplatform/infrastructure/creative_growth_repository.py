@@ -229,11 +229,15 @@ class CreativeGrowthRepository:
         actor: TenantContext,
         trial_id: str,
         allocations: Iterable[tuple[str, int]],
+        expected_revision: int | None = None,
     ) -> CreativeTrafficPlan:
         current = self._manager(actor)
         existing = self.get(actor=current, trial_id=trial_id)
         if existing.status == CreativeTrialStatus.COMPLETED:
             raise ValueError("completed creative trial cannot be changed")
+        expected = existing.revision if expected_revision is None else int(expected_revision)
+        if expected != existing.revision:
+            raise ValueError("creative trial recommendation is stale")
         requested = {
             normalize_uuid(job_id, field_name="publication_job_id"): int(allocation)
             for job_id, allocation in allocations
@@ -259,8 +263,24 @@ class CreativeGrowthRepository:
         now = _iso_now()
         self._conn.execute("SAVEPOINT creative_growth_reallocate")
         try:
+            cursor = self._conn.execute(
+                """
+                UPDATE creative_growth_trials
+                SET revision=?, updated_at=?
+                WHERE id=? AND business_id=? AND revision=?
+                """,
+                (
+                    probe.revision,
+                    now,
+                    probe.trial_id,
+                    current.business_id,
+                    expected,
+                ),
+            )
+            if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+                raise ValueError("creative trial recommendation is stale")
             for arm in probe.arms:
-                self._conn.execute(
+                arm_cursor = self._conn.execute(
                     """
                     UPDATE creative_growth_trial_variants
                     SET allocation_bps=?, updated_at=?
@@ -274,15 +294,13 @@ class CreativeGrowthRepository:
                         arm.publication_job_id,
                     ),
                 )
-            self._conn.execute(
-                """
-                UPDATE creative_growth_trials
-                SET revision=?, updated_at=?
-                WHERE id=? AND business_id=?
-                """,
-                (probe.revision, now, probe.trial_id, current.business_id),
-            )
+                if int(getattr(arm_cursor, "rowcount", 0) or 0) != 1:
+                    raise RuntimeError("creative trial allocation arm update failed")
         except (sqlite3.Error, DatabaseOperationDeadlineExceeded):
+            self._conn.execute("ROLLBACK TO SAVEPOINT creative_growth_reallocate")
+            self._conn.execute("RELEASE SAVEPOINT creative_growth_reallocate")
+            raise
+        except (RuntimeError, ValueError):
             self._conn.execute("ROLLBACK TO SAVEPOINT creative_growth_reallocate")
             self._conn.execute("RELEASE SAVEPOINT creative_growth_reallocate")
             raise
