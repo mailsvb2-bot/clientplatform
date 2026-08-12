@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import sqlite3
 
+from services.schema_core import _add_col, _cols
+
 
 def ensure(c: sqlite3.Connection) -> None:
     """Create the extensible business activity, offerings and customer invite boundary."""
@@ -15,6 +17,14 @@ def ensure(c: sqlite3.Connection) -> None:
             created_by_member_id TEXT NOT NULL,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
+            brand_display_name TEXT,
+            brand_tone_json TEXT,
+            brand_visual_keywords_json TEXT,
+            brand_forbidden_visuals_json TEXT,
+            brand_primary_color TEXT,
+            brand_accent_color TEXT,
+            brand_text_color TEXT,
+            brand_updated_at TEXT,
             FOREIGN KEY(business_id) REFERENCES businesses(id) ON DELETE CASCADE,
             FOREIGN KEY(created_by_member_id, business_id)
                 REFERENCES business_members(id, business_id),
@@ -22,6 +32,21 @@ def ensure(c: sqlite3.Connection) -> None:
         )
         """
     )
+    # Additive migration for profiles created before Visual Creative Studio.
+    have_profile = _cols(c, "business_profiles")
+    for column, ddl in {
+        "brand_display_name": "brand_display_name TEXT",
+        "brand_tone_json": "brand_tone_json TEXT",
+        "brand_visual_keywords_json": "brand_visual_keywords_json TEXT",
+        "brand_forbidden_visuals_json": "brand_forbidden_visuals_json TEXT",
+        "brand_primary_color": "brand_primary_color TEXT",
+        "brand_accent_color": "brand_accent_color TEXT",
+        "brand_text_color": "brand_text_color TEXT",
+        "brand_updated_at": "brand_updated_at TEXT",
+    }.items():
+        if column not in have_profile:
+            _add_col(c, "business_profiles", ddl)
+
     c.execute(
         """
         CREATE TABLE IF NOT EXISTS business_capabilities(

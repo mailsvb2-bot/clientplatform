@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass
 
 from clientplatform.domain.creative_experiments import stable_experiment_id
@@ -67,7 +68,7 @@ def build_ad_studio_variants(
     if country and (len(country) != 2 or not country.isalpha()):
         raise ValueError("invalid_creative_country_code")
     creative_fingerprint = hashlib.sha256(
-        f"{clean_title}\n{clean_body}".encode("utf-8")
+        (f"{clean_title}\n{clean_body}\nbrand:{normalized_brand.fingerprint()}").encode("utf-8")
     ).hexdigest()
     experiment_id = stable_experiment_id(
         business_id=business_id,
@@ -135,17 +136,9 @@ def _preflight(title: str, body: str, prompt: str) -> tuple[int, tuple[str, ...]
     score = 100
     combined = f"{title} {body}".casefold()
     forbidden = (
-        "100% гаран",
-        "гарантированно",
-        "гарантия результата",
-        "лучший в мире",
-        "до/после",
-        "исцел",
-        "100% guarantee",
-        "guaranteed cure",
-        "guaranteed result",
-        "best in the world",
-        "before/after",
+        "100% гаран", "гарантированно", "гарантия результата", "лучший в мире",
+        "до/после", "исцел", "100% guarantee", "guaranteed cure",
+        "guaranteed result", "best in the world", "before/after",
     )
     for token in forbidden:
         if token in combined:
@@ -162,6 +155,18 @@ def _preflight(title: str, body: str, prompt: str) -> tuple[int, tuple[str, ...]
         issues.append("typography_contract_missing")
         score -= 20
     return max(0, score), tuple(issues)
+
+
+def render_idempotency_key(variant: StudioVariant) -> str:
+    """Bind render idempotency to the exact formats and deterministic composition."""
+    payload = json.dumps(
+        {"composition": variant.composition, "formats": list(variant.formats)},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:32]
+    return f"clientplatform:{variant.variant_id}:render:{digest}"
 
 
 def submit_studio_variant(variant: StudioVariant, *, wait_seconds: int = 0) -> tuple[VisualCreativeJob, VisualRenderPack | None]:
@@ -199,8 +204,11 @@ def _render_when_ready(job: VisualCreativeJob, variant: StudioVariant) -> Visual
         job,
         formats=variant.formats,
         composition=variant.composition,
-        idempotency_key=f"clientplatform:{variant.variant_id}:render",
+        idempotency_key=render_idempotency_key(variant),
     )
 
 
-__all__ = ["StudioVariant", "build_ad_studio_variants", "poll_studio_variant", "submit_studio_variant"]
+__all__ = [
+    "StudioVariant", "build_ad_studio_variants", "poll_studio_variant",
+    "render_idempotency_key", "submit_studio_variant",
+]

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from dataclasses import dataclass
 
@@ -64,6 +66,26 @@ class TenantBrandDNA:
     def assert_business(self, business_id: str) -> None:
         if self.normalized().business_id != _clean(business_id, 160):
             raise ValueError("creative_brand_business_mismatch")
+
+    def fingerprint(self) -> str:
+        """Stable identity for the semantic/visual brand inputs used by generation."""
+
+        value = self.normalized()
+        payload = json.dumps(
+            {
+                "accent_color": value.accent_color,
+                "display_name": value.display_name,
+                "forbidden_visuals": list(value.forbidden_visuals),
+                "primary_color": value.primary_color,
+                "text_color": value.text_color,
+                "tone": list(value.tone),
+                "visual_keywords": list(value.visual_keywords),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     def prompt_context(self) -> str:
         value = self.normalized()

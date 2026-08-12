@@ -35,6 +35,7 @@ from clientplatform.application.creative_studio_publication import (
     GoalStudioPublicationResult,
     build_goal_image_variants,
     goal_variant_labels,
+    load_goal_visual_brand,
     poll_goal_image_variant,
     selected_goal_variant,
     start_goal_image_variant,
@@ -588,6 +589,20 @@ def _studio_variant(data: dict, index: int):
     )
 
 
+async def _studio_variant_for_actor(data: dict, index: int, *, user_id: int):
+    actor = await control._actor(user_id, str(data["business_id"]))
+    brand = await asyncio.to_thread(load_goal_visual_brand, actor=actor)
+    return selected_goal_variant(
+        business_id=str(data["business_id"]),
+        publication_job_id=str(data["job_id"]),
+        title=str(data.get("creative_title") or ""),
+        body=str(data.get("creative_body") or ""),
+        country_code=_studio_country(),
+        index=index,
+        brand=brand,
+    )
+
+
 @router.callback_query(F.data.startswith("cpo:genask:"))
 async def ask_generated_image_confirmation(callback: CallbackQuery, state: FSMContext) -> None:
     business_token = str(callback.data).split(":", 2)[2]
@@ -621,12 +636,15 @@ async def open_generated_image_studio(callback: CallbackQuery, state: FSMContext
         await callback.answer("Этот черновик уже устарел", show_alert=True)
         return
     try:
+        actor = await control._actor(int(callback.from_user.id), str(data["business_id"]))
+        brand = await asyncio.to_thread(load_goal_visual_brand, actor=actor)
         variants = build_goal_image_variants(
             business_id=str(data["business_id"]),
             publication_job_id=str(data["job_id"]),
             title=str(data.get("creative_title") or ""),
             body=str(data.get("creative_body") or ""),
             country_code=_studio_country(),
+            brand=brand,
         )
         labels = goal_variant_labels(variants)
     except (KeyError, TypeError, ValueError):
@@ -732,7 +750,9 @@ async def _generate_studio_variant(
         return
     await callback.answer("Создаю выбранный вариант…")
     try:
-        variant = _studio_variant(data, index)
+        variant = await _studio_variant_for_actor(
+            data, index, user_id=int(callback.from_user.id)
+        )
         actor = await control._actor(int(callback.from_user.id), str(data["business_id"]))
         result = await asyncio.to_thread(
             start_goal_image_variant,
@@ -868,7 +888,9 @@ async def _check_studio_generated_image(
 ) -> None:
     try:
         index = int(data.get("creative_variant_index") or 0)
-        variant = _studio_variant(data, index)
+        variant = await _studio_variant_for_actor(
+            data, index, user_id=int(callback.from_user.id)
+        )
         actor = await control._actor(int(callback.from_user.id), str(data["business_id"]))
         result = await asyncio.to_thread(
             poll_goal_image_variant,
