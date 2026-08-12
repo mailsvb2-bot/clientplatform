@@ -1,0 +1,149 @@
+name: ClientPlatform Integrate Sales AI v3
+
+on:
+  push:
+    branches: [agent/integrate-sales-ai-v3]
+    paths:
+      - .github/workflows/clientplatform-integrate-sales-ai-v3.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: clientplatform-integrate-sales-ai-v3
+  cancel-in-progress: false
+
+jobs:
+  integrate:
+    if: github.repository == 'mailsvb2-bot/clientplatform'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout exact integration branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Apply reviewed current-main wiring and remove helper
+        shell: bash
+        env:
+          SALES_HANDLER_B64: >-
+            YXN5bmMgZGVmIF9zZW5kX3NhbGVzX3dvcmsoCiAgICBtZXNzYWdlOiBNZXNzYWdlLAogICAgKiwKICAgIHVzZXJfaWQ6IGludCwKICAgIGJ1c2luZXNzX2lkOiBzdHIsCikgLT4gTm9uZToKICAgIGFjdG9yID0gYXdhaXQgY29udHJvbC5fYWN0b3IodXNlcl9pZCwgYnVzaW5lc3NfaWQpCiAgICBpdGVtcyA9IGF3YWl0IGFzeW5jaW8udG9fdGhyZWFkKGxpc3Rfc2FsZXNfd29yaywgYWN0b3I9YWN0b3IsIGxpbWl0PTEyKQogICAgYnVzaW5lc3NfdG9rZW4gPSBfdG9rZW4oYnVzaW5lc3NfaWQpCiAgICByb3dzOiBsaXN0W2xpc3RbdHVwbGVbc3RyLCBzdHJdXV0gPSBbXQogICAgZnJvbSBjbGllbnRwbGF0Zm9ybS5hcHBsaWNhdGlvbi5zYWxlc19haV9kcmFmdHMgaW1wb3J0ICgKICAgICAgICBzYWxlc19haV9lbmFibGVkX2Zvcl9idXNpbmVzcywKICAgICAgICBzYWxlc19haV9ydW50aW1lX2F2YWlsYWJsZSwKICAgICkKCiAgICBydW50aW1lX2FpX2F2YWlsYWJsZSA9IHNhbGVzX2FpX3J1bnRpbWVfYXZhaWxhYmxlKCkKICAgIGFpX2F2YWlsYWJsZSA9ICgKICAgICAgICBydW50aW1lX2FpX2F2YWlsYWJsZQogICAgICAgIGFuZCBhd2FpdCBhc3luY2lvLnRvX3RocmVhZChzYWxlc19haV9lbmFibGVkX2Zvcl9idXNpbmVzcywgYWN0b3I9YWN0b3IpCiAgICApCiAgICBpZiBub3QgaXRlbXM6CiAgICAgICAgdGV4dCA9ICgKICAgICAgICAgICAgIvCfk4sg0JIg0YDQsNCx0L7RgtC1XG5cbtCf0L7QutCwINC90LXRgiDQsNC60YLQuNCy0L3Ri9GFINC+0LHRgNCw0YnQtdC90LjQuS4gIgogICAgICAgICAgICAi0JrQvtCz0LTQsCDQv9C+0Y/QstGP0YLRgdGPINGA0LXQsNC70YzQvdGL0LUg0YHQuNCz0L3QsNC70Ysg0L7RgiDQutC70LjQtdC90YLQvtCyLCDRgdC40YHRgtC10LzQsCDRgdCw0LzQsCDRgdC+0LfQtNCw0YHRgiDRgdC70LXQtNGD0Y7RidC40Lkg0YjQsNCzLiIKICAgICAgICApCiAgICBlbHNlOgogICAgICAgIGxpbmVzID0gWyLwn5OLINCSINGA0LDQsdC+0YLQtSIsICIiXQogICAgICAgIGZvciBpbmRleCwgaXRlbSBpbiBlbnVtZXJhdGUoaXRlbXMsIHN0YXJ0PTEpOgogICAgICAgICAgICBhY3Rpb24gPSBpdGVtLmdldCgibmV4dF9hY3Rpb25fa2luZCIpCiAgICAgICAgICAgIGFjdGlvbl90ZXh0ID0gKAogICAgICAgICAgICAgICAgX0FDVElPTl9MQUJFTFMuZ2V0KHN0cihhY3Rpb24pLCAi0J/RgNC+0LLQtdGA0LjRgtGMINGB0LjRgtGD0LDRhtC40Y4iKQogICAgICAgICAgICAgICAgaWYgYWN0aW9uCiAgICAgICAgICAgICAgICBlbHNlICLQv9C+0LrQsCDQvdC1INC+0L/RgNC10LTQtdC70ZHQvSIKICAgICAgICAgICAgKQogICAgICAgICAgICBsaW5lcy5leHRlbmQoCiAgICAgICAgICAgICAgICBbCiAgICAgICAgICAgICAgICAgICAgZiJ7aW5kZXh9LiB7aXRlbS5nZXQoJ2N1c3RvbWVyX25hbWUnKSBvciAn0JrQu9C40LXQvdGCJ30iLAogICAgICAgICAgICAgICAgICAgIGYiICAg0KHRgtCw0YLRg9GBOiB7X1NUQUdFX0xBQkVMUy5nZXQoc3RyKGl0ZW0uZ2V0KCdzdGFnZScpKSwgJ9CSINGA0LDQsdC+0YLQtScpfSIsCiAgICAgICAgICAgICAgICAgICAgZiIgICDQmNGB0YLQvtGH0L3QuNC6OiB7X3NvdXJjZV9sYWJlbChpdGVtLmdldCgnc291cmNlX2tpbmQnKSl9IiwKICAgICAgICAgICAgICAgICAgICBmIiAgINCh0LvQtdC00YPRjtGJ0LjQuSDRiNCw0LM6IHthY3Rpb25fdGV4dH0iLAogICAgICAgICAgICAgICAgXQogICAgICAgICAgICApCiAgICAgICAgICAgIGNhbmRpZGF0ZSA9IHN0cihpdGVtLmdldCgiY29tbWVyY2lhbF9jYW5kaWRhdGVfdGl0bGUiKSBvciAiIikuc3RyaXAoKQogICAgICAgICAgICBpZiBjYW5kaWRhdGU6CiAgICAgICAgICAgICAgICBsaW5lcy5hcHBlbmQoZiIgICDQn9C+0LTRhdC+0LTRj9GJ0LjQuSDRjdGC0LDQvzoge2NhbmRpZGF0ZX0iKQogICAgICAgICAgICBwbGFuX2lkID0gc3RyKGl0ZW0uZ2V0KCJuZXh0X3BsYW5faWQiKSBvciAiIikKICAgICAgICAgICAgcGxhbl9zdGF0dXMgPSBzdHIoaXRlbS5nZXQoIm5leHRfcGxhbl9zdGF0dXMiKSBvciAiIikKICAgICAgICAgICAgaWYgcGxhbl9zdGF0dXMgPT0gImFwcHJvdmVkIjoKICAgICAgICAgICAgICAgIGxpbmVzLmFwcGVuZCgiICAg0KDQsNC30YDQtdGI0LXQvdC40LU6IOKchSBvdXRib3VuZCDRgNCw0LfRgNC10YjRkdC9INCS0LDQvNC4IikKICAgICAgICAgICAgZWxpZiAoCiAgICAgICAgICAgICAgICBwbGFuX2lkCiAgICAgICAgICAgICAgICBhbmQgcGxhbl9zdGF0dXMgPT0gInBsYW5uZWQiCiAgICAgICAgICAgICAgICBhbmQgYm9vbChpdGVtLmdldCgibmV4dF9wbGFuX3JlcXVpcmVzX2FwcHJvdmFsIikpCiAgICAgICAgICAgICk6CiAgICAgICAgICAgICAgICByb3dzLmFwcGVuZCgKICAgICAgICAgICAgICAgICAgICBbCiAgICAgICAgICAgICAgICAgICAgICAgICgKICAgICAgICAgICAgICAgICAgICAgICAgICAgIGYi4pyFINCe0LTQvtCx0YDQuNGC0Ywg0YjQsNCzINC00LvRjyB7aW5kZXh9IiwKICAgICAgICAgICAgICAgICAgICAgICAgICAgIGYiY3BzOnN3YTp7YnVzaW5lc3NfdG9rZW59OntfdG9rZW4ocGxhbl9pZCl9IiwKICAgICAgICAgICAgICAgICAgICAgICAgKQogICAgICAgICAgICAgICAgICAgIF0KICAgICAgICAgICAgICAgICkKICAgICAgICAgICAgaWYgYWlfYXZhaWxhYmxlIGFuZCBwbGFuX2lkIGFuZCBhY3Rpb24gbm90IGluIHtOb25lLCAiaHVtYW5faGFuZG9mZiIsICJub29wIn06CiAgICAgICAgICAgICAgICByb3dzLmFwcGVuZCgKICAgICAgICAgICAgICAgICAgICBbCiAgICAgICAgICAgICAgICAgICAgICAgICgKICAgICAgICAgICAgICAgICAgICAgICAgICAgIGYi8J+noCDQp9C10YDQvdC+0LLQuNC6INC+0YLQstC10YLQsCDQtNC70Y8ge2luZGV4fSIsCiAgICAgICAgICAgICAgICAgICAgICAgICAgICBmImNwczpzYWQ6e2J1c2luZXNzX3Rva2VufTp7X3Rva2VuKHN0cihpdGVtWydpZCddKSl9IiwKICAgICAgICAgICAgICAgICAgICAgICAgKQogICAgICAgICAgICAgICAgICAgIF0KICAgICAgICAgICAgICAgICkKICAgICAgICAgICAgbGluZXMuYXBwZW5kKCIiKQogICAgICAgIHRleHQgPSAiXG4iLmpvaW4obGluZXMpLnJzdHJpcCgpCiAgICBpZiBydW50aW1lX2FpX2F2YWlsYWJsZToKICAgICAgICByb3dzLmFwcGVuZCgKICAgICAgICAgICAgWwogICAgICAgICAgICAgICAgKAogICAgICAgICAgICAgICAgICAgICLwn6egINCY0Jgt0L/QvtC80L7RidC90LjQujog0LLQutC70Y7Rh9GR0L0iIGlmIGFpX2F2YWlsYWJsZSBlbHNlICLwn6egINCf0L7QtNC60LvRjtGH0LjRgtGMINCY0Jgt0L/QvtC80L7RidC90LjQutCwIiwKICAgICAgICAgICAgICAgICAgICBmImNwczpzYXQ6e2J1c2luZXNzX3Rva2VufSIsCiAgICAgICAgICAgICAgICApCiAgICAgICAgICAgIF0KICAgICAgICApCiAgICByb3dzLmFwcGVuZChbKCLihpAg0J/QvtC70YPRh9Cw0YLRjCDQutC70LjQtdC90YLQvtCyIiwgZiJjcHM6czp7YnVzaW5lc3NfdG9rZW59IildKQogICAgYXdhaXQgbWVzc2FnZS5hbnN3ZXIodGV4dCwgcmVwbHlfbWFya3VwPWNvbnRyb2wuX2tleWJvYXJkKHJvd3MpKQoKCkByb3V0ZXIuY2FsbGJhY2tfcXVlcnkoRi5kYXRhLnN0YXJ0c3dpdGgoImNwczpzdzoiKSkKYXN5bmMgZGVmIG9wZW5fc2FsZXNfd29yayhjYWxsYmFjazogQ2FsbGJhY2tRdWVyeSwgc3RhdGU6IEZTTUNvbnRleHQpIC0+IE5vbmU6CiAgICBidXNpbmVzc19pZCA9IF91dWlkKHN0cihjYWxsYmFjay5kYXRhKS5zcGxpdCgiOiIsIDIpWzJdKQogICAgYXdhaXQgc3RhdGUuY2xlYXIoKQogICAgYXdhaXQgY2FsbGJhY2suYW5zd2VyKCkKICAgIGF3YWl0IF9zZW5kX3NhbGVzX3dvcmsoCiAgICAgICAgY29udHJvbC5fY2FsbGJhY2tfbWVzc2FnZShjYWxsYmFjayksCiAgICAgICAgdXNlcl9pZD1pbnQoY2FsbGJhY2suZnJvbV91c2VyLmlkKSwKICAgICAgICBidXNpbmVzc19pZD1idXNpbmVzc19pZCwKICAgICkKCgpAcm91dGVyLmNhbGxiYWNrX3F1ZXJ5KEYuZGF0YS5zdGFydHN3aXRoKCJjcHM6c3dhOiIpKQphc3luYyBkZWYgYXBwcm92ZV9zYWxlc19wbGFuKGNhbGxiYWNrOiBDYWxsYmFja1F1ZXJ5LCBzdGF0ZTogRlNNQ29udGV4dCkgLT4gTm9uZToKICAgIHBhcnRzID0gc3RyKGNhbGxiYWNrLmRhdGEpLnNwbGl0KCI6IikKICAgIGJ1c2luZXNzX2lkLCBwbGFuX2lkID0gX3V1aWQocGFydHNbMl0pLCBfdXVpZChwYXJ0c1szXSkKICAgIGFjdG9yID0gYXdhaXQgY29udHJvbC5fYWN0b3IoaW50KGNhbGxiYWNrLmZyb21fdXNlci5pZCksIGJ1c2luZXNzX2lkKQogICAgdHJ5OgogICAgICAgIGF1dGhvcml6YXRpb24gPSBhd2FpdCBhc3luY2lvLnRvX3RocmVhZCgKICAgICAgICAgICAgYXBwcm92ZV9hbmRfYXV0aG9yaXplX3NhbGVzX291dGJvdW5kLAogICAgICAgICAgICBhY3Rvcj1hY3RvciwKICAgICAgICAgICAgcGxhbl9pZD1wbGFuX2lkLAogICAgICAgICkKICAgIGV4Y2VwdCAoUGVybWlzc2lvbkVycm9yLCBWYWx1ZUVycm9yLCBSdW50aW1lRXJyb3IpOgogICAgICAgIGF3YWl0IGNhbGxiYWNrLmFuc3dlcigKICAgICAgICAgICAgItCd0LUg0YPQtNCw0LvQvtGB0Ywg0L7QtNC+0LHRgNC40YLRjCDRiNCw0LM6INC/0YDQvtCy0LXRgNGM0YLQtSDQutC70LjQtdC90YLQsCDQuCDQsNC60YLRg9Cw0LvRjNC90L7RgdGC0Ywg0YDQtdC60L7QvNC10L3QtNCw0YbQuNC4LiIsCiAgICAgICAgICAgIHNob3dfYWxlcnQ9VHJ1ZSwKICAgICAgICApCiAgICAgICAgcmV0dXJuCiAgICBpZiBub3QgYm9vbChhdXRob3JpemF0aW9uLmdldCgiZGlzcGF0Y2hfYWxsb3dlZCIpKToKICAgICAgICBhd2FpdCBjYWxsYmFjay5hbnN3ZXIoIk91dGJvdW5kINC90LUg0YDQsNC30YDQtdGI0ZHQvSIsIHNob3dfYWxlcnQ9VHJ1ZSkKICAgICAgICByZXR1cm4KICAgIGF3YWl0IHN0YXRlLmNsZWFyKCkKICAgIGF3YWl0IGNhbGxiYWNrLmFuc3dlcigi0J7QtNC+0LHRgNC10L3QviDigJQgb3V0Ym91bmQg0YDQsNC30YDQtdGI0ZHQvSIpCiAgICBhd2FpdCBfc2VuZF9zYWxlc193b3JrKAogICAgICAgIGNvbnRyb2wuX2NhbGxiYWNrX21lc3NhZ2UoY2FsbGJhY2spLAogICAgICAgIHVzZXJfaWQ9aW50KGNhbGxiYWNrLmZyb21fdXNlci5pZCksCiAgICAgICAgYnVzaW5lc3NfaWQ9YnVzaW5lc3NfaWQsCiAgICApCgoKQHJvdXRlci5jYWxsYmFja19xdWVyeShGLmRhdGEuc3RhcnRzd2l0aCgiY3BzOnNhdDoiKSkKYXN5bmMgZGVmIHRvZ2dsZV9zYWxlc19haShjYWxsYmFjazogQ2FsbGJhY2tRdWVyeSwgc3RhdGU6IEZTTUNvbnRleHQpIC0+IE5vbmU6CiAgICBidXNpbmVzc19pZCA9IF91dWlkKHN0cihjYWxsYmFjay5kYXRhKS5zcGxpdCgiOiIsIDIpWzJdKQogICAgYWN0b3IgPSBhd2FpdCBjb250cm9sLl9hY3RvcihpbnQoY2FsbGJhY2suZnJvbV91c2VyLmlkKSwgYnVzaW5lc3NfaWQpCiAgICBmcm9tIGNsaWVudHBsYXRmb3JtLmFwcGxpY2F0aW9uLnNhbGVzX2FpX2RyYWZ0cyBpbXBvcnQgKAogICAgICAgIHNhbGVzX2FpX3J1bnRpbWVfYXZhaWxhYmxlLAogICAgICAgIHNhbGVzX2FpX3J1bnRpbWVfY29uc2VudF90YXJnZXQsCiAgICAgICAgc2FsZXNfYWlfcnVudGltZV9wcm92aWRlcl9sYWJlbCwKICAgICkKICAgIGZyb20gY2xpZW50cGxhdGZvcm0uYXBwbGljYXRpb24uc2FsZXNfYWlfc2V0dGluZ3MgaW1wb3J0ICgKICAgICAgICBnZXRfYnVzaW5lc3Nfc2FsZXNfYWlfZW5hYmxlZCwKICAgICAgICBzZXRfYnVzaW5lc3Nfc2FsZXNfYWlfZW5hYmxlZCwKICAgICkKCiAgICBpZiBub3Qgc2FsZXNfYWlfcnVudGltZV9hdmFpbGFibGUoKToKICAgICAgICBhd2FpdCBjYWxsYmFjay5hbnN3ZXIoItCY0Jgg0YHQtdC50YfQsNGBINC90LUg0L3QsNGB0YLRgNC+0LXQvSDQvdCwINGB0LXRgNCy0LXRgNC1Iiwgc2hvd19hbGVydD1UcnVlKQogICAgICAgIHJldHVybgogICAgZW5hYmxlZCA9IGF3YWl0IGFzeW5jaW8udG9fdGhyZWFkKGdldF9idXNpbmVzc19zYWxlc19haV9lbmFibGVkLCBhY3Rvcj1hY3RvcikKICAgIGF3YWl0IHN0YXRlLmNsZWFyKCkKICAgIGlmIGVuYWJsZWQ6CiAgICAgICAgdHJ5OgogICAgICAgICAgICBhd2FpdCBhc3luY2lvLnRvX3RocmVhZCgKICAgICAgICAgICAgICAgIHNldF9idXNpbmVzc19zYWxlc19haV9lbmFibGVkLCBhY3Rvcj1hY3RvciwgZW5hYmxlZD1GYWxzZQogICAgICAgICAgICApCiAgICAgICAgZXhjZXB0IChQZXJtaXNzaW9uRXJyb3IsIFZhbHVlRXJyb3IsIFJ1bnRpbWVFcnJvcik6CiAgICAgICAgICAgIGF3YWl0IGNhbGxiYWNrLmFuc3dlcigKICAgICAgICAgICAgICAgICLQndC10LTQvtGB0YLQsNGC0L7Rh9C90L4g0L/RgNCw0LIg0LTQu9GPINC40LfQvNC10L3QtdC90LjRjyDQvdCw0YHRgtGA0L7QtdC6INCY0JgiLCBzaG93X2FsZXJ0PVRydWUKICAgICAgICAgICAgKQogICAgICAgICAgICByZXR1cm4KICAgICAgICBhd2FpdCBjYWxsYmFjay5hbnN3ZXIoItCY0Jgt0L/QvtC80L7RidC90LjQuiDQstGL0LrQu9GO0YfQtdC9IikKICAgICAgICBhd2FpdCBfc2VuZF9zYWxlc193b3JrKAogICAgICAgICAgICBjb250cm9sLl9jYWxsYmFja19tZXNzYWdlKGNhbGxiYWNrKSwKICAgICAgICAgICAgdXNlcl9pZD1pbnQoY2FsbGJhY2suZnJvbV91c2VyLmlkKSwKICAgICAgICAgICAgYnVzaW5lc3NfaWQ9YnVzaW5lc3NfaWQsCiAgICAgICAgKQogICAgICAgIHJldHVybgogICAgYXdhaXQgY2FsbGJhY2suYW5zd2VyKCkKICAgIHRva2VuID0gX3Rva2VuKGJ1c2luZXNzX2lkKQogICAgcHJvdmlkZXJfbGFiZWwgPSBzYWxlc19haV9ydW50aW1lX3Byb3ZpZGVyX2xhYmVsKCkKICAgIGNvbnNlbnRfdGFyZ2V0ID0gc2FsZXNfYWlfcnVudGltZV9jb25zZW50X3RhcmdldCgpCiAgICBhd2FpdCBjb250cm9sLl9jYWxsYmFja19tZXNzYWdlKGNhbGxiYWNrKS5hbnN3ZXIoCiAgICAgICAgIvCfp6Ag0J/QvtC00LrQu9GO0YfQuNGC0Ywg0JjQmC3Qv9C+0LzQvtGJ0L3QuNC60LA/XG5cbiIKICAgICAgICBmItCf0L7RgdC70LUg0LLQutC70Y7Rh9C10L3QuNGPINGC0LXQutGB0YLRiyDQvdC+0LLRi9GFINC60LvQuNC10L3RgtGB0LrQuNGFINGB0L7QvtCx0YnQtdC90LjQuSDRjdGC0L7Qs9C+INCx0LjQt9C90LXRgdCwINCx0YPQtNGD0YIgIgogICAgICAgIGYi0L/QtdGA0LXQtNCw0LLQsNGC0YzRgdGPINCyIHtwcm92aWRlcl9sYWJlbH0gKHtjb25zZW50X3RhcmdldH0pINC00LvRjyDQsNC90LDQu9C40LfQsCDQuCDQv9C+0LTQs9C+0YLQvtCy0LrQuCAiCiAgICAgICAgItGH0LXRgNC90L7QstC40LrQvtCyLiDQmNCYINC90LUg0L/QvtC70YPRh9Cw0LXRgiDQv9GA0LDQstCwINC+0YLQv9GA0LDQstC70Y/RgtGMINGB0L7QvtCx0YnQtdC90LjRjyDQuCDQvdC1INC/0L7QtNGC0LLQtdGA0LbQtNCw0LXRgiAiCiAgICAgICAgItC+0L/Qu9Cw0YLRgyDQuNC70Lgg0LfQsNC/0LjRgdGMLlxuXG4iCiAgICAgICAgItCV0YHQu9C4INCw0LTQvNC40L3QuNGB0YLRgNCw0YLQvtGAINGB0LzQtdC90LjRgiBBSS3Qv9GA0L7QstCw0LnQtNC10YDQsCDQuNC70Lgg0LTQvtC80LXQvSBBUEksINGN0YLQviDRgdC+0LPQu9Cw0YHQuNC1ICIKICAgICAgICAi0LDQstGC0L7QvNCw0YLQuNGH0LXRgdC60Lgg0L/QtdGA0LXRgdGC0LDQvdC10YIg0LTQtdC50YHRgtCy0L7QstCw0YLRjCDQuCDQmNCYINC/0L7RgtGA0LXQsdGD0LXRgtGB0Y8g0LLQutC70Y7Rh9C40YLRjCDQt9Cw0L3QvtCy0L4uXG5cbiIKICAgICAgICAi0J/QviDRg9C80L7Qu9GH0LDQvdC40Y4gQ2xpZW50UGxhdGZvcm0g0YPQtNCw0LvRj9C10YIg0LjQtyDRgtC10LrRgdGC0LAg0L7Rh9C10LLQuNC00L3Ri9C1INGC0LXQu9C10YTQvtC90YssIGUtbWFpbCwgIgogICAgICAgICLQtNC70LjQvdC90YvQtSDQvdC+0LzQtdGA0LAg0Lgg0YHRgdGL0LvQutC4INC/0LXRgNC10LQg0L7RgtC/0YDQsNCy0LrQvtC5INCy0L4g0LLQvdC10YjQvdC40LkgQUkuINCd0LDQttC40LzQsNGPINC60L3QvtC/0LrRgyDQvdC40LbQtSwgIgogICAgICAgICLQktGLINGC0LDQutC20LUg0L/QvtC00YLQstC10YDQttC00LDQtdGC0LUsINGH0YLQviDRg9Cy0LXQtNC+0LzQuNC70Lgg0LrQu9C40LXQvdGC0L7QsiDQviDQv9GA0LjQvNC10L3QtdC90LjQuCDQstC90LXRiNC90LXQs9C+IEFJINC6ICIKICAgICAgICAi0LjRhSDRgdC+0L7QsdGJ0LXQvdC40Y/QvC4g0JTQu9GPINGH0YPQstGB0YLQstC40YLQtdC70YzQvdGL0YUg0YHRhNC10YAg0LjRgdC/0L7Qu9GM0LfRg9C50YLQtSDRgNC10LbQuNC8IG5vX2Nsb3VkINC40LvQuCDQvtGC0LTQtdC70YzQvdGD0Y4gIgogICAgICAgICLRgdC+0LPQu9Cw0YHQvtCy0LDQvdC90YPRjiDQv9C+0LvQuNGC0LjQutGDINC+0LHRgNCw0LHQvtGC0LrQuCDQtNCw0L3QvdGL0YUuIiwKICAgICAgICByZXBseV9tYXJrdXA9Y29udHJvbC5fa2V5Ym9hcmQoCiAgICAgICAgICAgIFsKICAgICAgICAgICAgICAgIFsoIuKchSDQktC60LvRjtGH0LjRgtGMINGBINC80LDRgdC60LjRgNC+0LLQsNC90LjQtdC8INC60L7QvdGC0LDQutGC0L7QsiIsIGYiY3BzOnNhZTp7dG9rZW59IildLAogICAgICAgICAgICAgICAgWygi4pyW77iPINCd0LUg0LLQutC70Y7Rh9Cw0YLRjCIsIGYiY3BzOnN3Ont0b2tlbn0iKV0sCiAgICAgICAgICAgIF0KICAgICAgICApLAogICAgKQoKCkByb3V0ZXIuY2FsbGJhY2tfcXVlcnkoRi5kYXRhLnN0YXJ0c3dpdGgoImNwczpzYWU6IikpCmFzeW5jIGRlZiBlbmFibGVfc2FsZXNfYWkoY2FsbGJhY2s6IENhbGxiYWNrUXVlcnksIHN0YXRlOiBGU01Db250ZXh0KSAtPiBOb25lOgogICAgYnVzaW5lc3NfaWQgPSBfdXVpZChzdHIoY2FsbGJhY2suZGF0YSkuc3BsaXQoIjoiLCAyKVsyXSkKICAgIGFjdG9yID0gYXdhaXQgY29udHJvbC5fYWN0b3IoaW50KGNhbGxiYWNrLmZyb21fdXNlci5pZCksIGJ1c2luZXNzX2lkKQogICAgZnJvbSBjbGllbnRwbGF0Zm9ybS5hcHBsaWNhdGlvbi5zYWxlc19haV9kcmFmdHMgaW1wb3J0IHNhbGVzX2FpX3J1bnRpbWVfYXZhaWxhYmxlCiAgICBmcm9tIGNsaWVudHBsYXRmb3JtLmFwcGxpY2F0aW9uLnNhbGVzX2FpX3NldHRpbmdzIGltcG9ydCBzZXRfYnVzaW5lc3Nfc2FsZXNfYWlfZW5hYmxlZAoKICAgIGlmIG5vdCBzYWxlc19haV9ydW50aW1lX2F2YWlsYWJsZSgpOgogICAgICAgIGF3YWl0IGNhbGxiYWNrLmFuc3dlcigi0JjQmCDRgdC10LnRh9Cw0YEg0L3QtSDQvdCw0YHRgtGA0L7QtdC9INC90LAg0YHQtdGA0LLQtdGA0LUiLCBzaG93X2FsZXJ0PVRydWUpCiAgICAgICAgcmV0dXJuCiAgICB0cnk6CiAgICAgICAgYXdhaXQgYXN5bmNpby50b190aHJlYWQoCiAgICAgICAgICAgIHNldF9idXNpbmVzc19zYWxlc19haV9lbmFibGVkLAogICAgICAgICAgICBhY3Rvcj1hY3RvciwKICAgICAgICAgICAgZW5hYmxlZD1UcnVlLAogICAgICAgICAgICBkYXRhX21vZGU9InJlZGFjdGVkIiwKICAgICAgICAgICAgY3VzdG9tZXJfbm90aWNlX2NvbmZpcm1lZD1UcnVlLAogICAgICAgICkKICAgIGV4Y2VwdCAoUGVybWlzc2lvbkVycm9yLCBWYWx1ZUVycm9yLCBSdW50aW1lRXJyb3IpOgogICAgICAgIGF3YWl0IGNhbGxiYWNrLmFuc3dlcigKICAgICAgICAgICAgItCd0LXQtNC+0YHRgtCw0YLQvtGH0L3QviDQv9GA0LDQsiDQtNC70Y8g0LjQt9C80LXQvdC10L3QuNGPINC90LDRgdGC0YDQvtC10Log0JjQmCIsIHNob3dfYWxlcnQ9VHJ1ZQogICAgICAgICkKICAgICAgICByZXR1cm4KICAgIGF3YWl0IHN0YXRlLmNsZWFyKCkKICAgIGF3YWl0IGNhbGxiYWNrLmFuc3dlcigi0JjQmC3Qv9C+0LzQvtGJ0L3QuNC6INCy0LrQu9GO0YfRkdC9IikKICAgIGF3YWl0IF9zZW5kX3NhbGVzX3dvcmsoCiAgICAgICAgY29udHJvbC5fY2FsbGJhY2tfbWVzc2FnZShjYWxsYmFjayksCiAgICAgICAgdXNlcl9pZD1pbnQoY2FsbGJhY2suZnJvbV91c2VyLmlkKSwKICAgICAgICBidXNpbmVzc19pZD1idXNpbmVzc19pZCwKICAgICkKCgpAcm91dGVyLmNhbGxiYWNrX3F1ZXJ5KEYuZGF0YS5zdGFydHN3aXRoKCJjcHM6c2FkOiIpKQphc3luYyBkZWYgZHJhZnRfc2FsZXNfYW5zd2VyKGNhbGxiYWNrOiBDYWxsYmFja1F1ZXJ5LCBzdGF0ZTogRlNNQ29udGV4dCkgLT4gTm9uZToKICAgIHBhcnRzID0gc3RyKGNhbGxiYWNrLmRhdGEpLnNwbGl0KCI6IikKICAgIGJ1c2luZXNzX2lkLCBsZWFkX2lkID0gX3V1aWQocGFydHNbMl0pLCBfdXVpZChwYXJ0c1szXSkKICAgIGFjdG9yID0gYXdhaXQgY29udHJvbC5fYWN0b3IoaW50KGNhbGxiYWNrLmZyb21fdXNlci5pZCksIGJ1c2luZXNzX2lkKQogICAgYXdhaXQgc3RhdGUuY2xlYXIoKQogICAgYXdhaXQgY2FsbGJhY2suYW5zd2VyKCLQk9C+0YLQvtCy0LvRjiDRh9C10YDQvdC+0LLQuNC64oCmIikKICAgIGZyb20gY2xpZW50cGxhdGZvcm0uYXBwbGljYXRpb24uc2FsZXNfYWlfZHJhZnRzIGltcG9ydCBkcmFmdF9zYWxlc19yZXBseQogICAgZnJvbSBjbGllbnRwbGF0Zm9ybS5pbmZyYXN0cnVjdHVyZS5zYWxlc19haV9wcm92aWRlciBpbXBvcnQgU2FsZXNBSVByb3ZpZGVyRXJyb3IKCiAgICB0cnk6CiAgICAgICAgZHJhZnQgPSBhd2FpdCBkcmFmdF9zYWxlc19yZXBseShhY3Rvcj1hY3RvciwgbGVhZF9pZD1sZWFkX2lkKQogICAgZXhjZXB0IChTYWxlc0FJUHJvdmlkZXJFcnJvciwgVmFsdWVFcnJvciwgUnVudGltZUVycm9yKToKICAgICAgICBhd2FpdCBjb250cm9sLl9jYWxsYmFja19tZXNzYWdlKGNhbGxiYWNrKS5hbnN3ZXIoCiAgICAgICAgICAgICLQndC1INGD0LTQsNC70L7RgdGMINC/0L7QtNCz0L7RgtC+0LLQuNGC0Ywg0LDQutGC0YPQsNC70YzQvdGL0Lkg0YfQtdGA0L3QvtCy0LjQui4g0JLQvtC30LzQvtC20L3Qviwg0L3QvtCy0L7QtSDRgdC+0L7QsdGJ0LXQvdC40LUgIgogICAgICAgICAgICAi0LXRidGRINCw0L3QsNC70LjQt9C40YDRg9C10YLRgdGPINC40LvQuCDQvtCx0YDQsNGJ0LXQvdC40LUg0YLRgNC10LHRg9C10YIg0YfQtdC70L7QstC10LrQsC4iLAogICAgICAgICAgICByZXBseV9tYXJrdXA9X2JhY2tfa2V5Ym9hcmQoYnVzaW5lc3NfaWQpLAogICAgICAgICkKICAgICAgICByZXR1cm4KICAgIGF3YWl0IGNvbnRyb2wuX2NhbGxiYWNrX21lc3NhZ2UoY2FsbGJhY2spLmFuc3dlcigKICAgICAgICAi8J+noCDQp9C10YDQvdC+0LLQuNC6INCY0Jgg4oCUINC/0YDQvtCy0LXRgNGM0YLQtSDQv9C10YDQtdC0INC+0YLQv9GA0LDQstC60L7QuVxuXG4iCiAgICAgICAgZiJ7ZHJhZnQudGV4dH1cblxuIgogICAgICAgICJDbGllbnRQbGF0Zm9ybSDQvdC40YfQtdCz0L4g0L3QtSDQvtGC0L/RgNCw0LLQuNC7INC60LvQuNC10L3RgtGDINCw0LLRgtC+0LzQsNGC0LjRh9C10YHQutC4LiIsCiAgICAgICAgcmVwbHlfbWFya3VwPV9iYWNrX2tleWJvYXJkKGJ1c2luZXNzX2lkKSwKICAgICkKCgphc3luYyBkZWYgX3NlbmRfaGFuZG9mZnMoCg==
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from __future__ import annotations
+
+          import base64
+          import os
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              p = Path(path)
+              text = p.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"SALES_AI_INTEGRATION_FAILED:{path}:marker_count={count}")
+              p.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          app_marker = "            bind_task_manager(tm)\n"
+          app_insert = app_marker + '''            # Sales AI is an optional advisory worker owned by the canonical TaskManager.
+            # Its configuration/provider failure must never take down core ClientPlatform.
+            try:
+                from clientplatform.runtime.sales_ai import bind_sales_ai_worker
+
+                bind_sales_ai_worker(tm)
+            except Exception:  # validator: allow-wide-except
+                log.exception("Optional Sales AI worker failed to start; core runtime continues")
+'''
+          replace_once("app.py", app_marker, app_insert)
+
+          bot_old = '''            actor = _telegram_actor(payload)
+            if actor is not None:
+                await asyncio.to_thread(
+                    ensure_telegram_customer_link,
+                    route=item.route,
+                    telegram_user_id=actor[0],
+                    username=actor[1],
+                    display_name=actor[2],
+                )
+            bot = await self._bot_for(item.route)
+'''
+          bot_new = '''            actor = _telegram_actor(payload)
+            if actor is not None:
+                customer_link = await asyncio.to_thread(
+                    ensure_telegram_customer_link,
+                    route=item.route,
+                    telegram_user_id=actor[0],
+                    username=actor[1],
+                    display_name=actor[2],
+                )
+                from clientplatform.application.sales_intelligence import (
+                    extract_customer_message_text,
+                    record_managed_bot_customer_message,
+                )
+
+                customer_text = extract_customer_message_text(payload)
+                if customer_text is not None:
+                    ai_enabled = False
+                    ai_target = ""
+                    try:
+                        from clientplatform.runtime.sales_ai_config import SalesAIRuntimeConfig
+
+                        ai_config = SalesAIRuntimeConfig.from_env()
+                        ai_enabled = ai_config.enabled
+                        ai_target = ai_config.consent_target
+                    except (TypeError, ValueError):
+                        log.warning(
+                            "Sales AI configuration is invalid; continuing without AI",
+                            exc_info=True,
+                        )
+                    try:
+                        await asyncio.to_thread(
+                            record_managed_bot_customer_message,
+                            route=item.route,
+                            customer_link=customer_link,
+                            telegram_user_id=actor[0],
+                            provider_update_id=item.event.provider_update_id,
+                            message_text=customer_text,
+                            runtime_ai_enabled=ai_enabled,
+                            runtime_ai_consent_target=ai_target,
+                        )
+                    except Exception:  # validator: allow-wide-except
+                        log.exception(
+                            "Managed bot sales-intelligence side channel failed; dispatch continues",
+                            extra={
+                                "managed_bot_id": item.route.managed_bot_id,
+                                "business_id": item.route.business_id,
+                            },
+                        )
+            bot = await self._bot_for(item.route)
+'''
+          replace_once("clientplatform/runtime/bot_gateway.py", bot_old, bot_new)
+
+          handler_path = Path("handlers/clientplatform_sales.py")
+          handler = handler_path.read_text(encoding="utf-8")
+          start_marker = "async def _send_sales_work("
+          end_marker = "async def _send_handoffs("
+          start = handler.find(start_marker)
+          end = handler.find(end_marker, start + 1)
+          if start < 0 or end < 0:
+              raise SystemExit("SALES_AI_INTEGRATION_FAILED:handlers/clientplatform_sales.py:section_markers")
+          if handler.find(start_marker, start + 1) >= 0:
+              raise SystemExit("SALES_AI_INTEGRATION_FAILED:handlers/clientplatform_sales.py:duplicate_start")
+          fragment = base64.b64decode(os.environ["SALES_HANDLER_B64"]).decode("utf-8")
+          fragment_end = fragment.find(end_marker)
+          if fragment_end < 0:
+              raise SystemExit("SALES_AI_INTEGRATION_FAILED:handler_fragment:end_marker")
+          fragment = fragment[:fragment_end].rstrip() + "\n\n\n"
+          handler_path.write_text(handler[:start] + fragment + handler[end:], encoding="utf-8")
+          PY
+
+          git diff --check
+          git status --short
+          git config user.name 'ClientPlatform Integration Bot'
+          git config user.email 'mailsvb2@gmail.com'
+          git add app.py clientplatform/runtime/bot_gateway.py handlers/clientplatform_sales.py
+          git rm .github/workflows/clientplatform-integrate-sales-ai-v3.yml
+          git commit -m 'Wire Sales AI into current runtime and owner flow'
+          git push origin HEAD:agent/integrate-sales-ai-v3
