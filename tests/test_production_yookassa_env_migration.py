@@ -4,46 +4,21 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-WORKER = ROOT / "scripts" / "run_deploy_worker.sh"
+ENV_EXAMPLE = ROOT / "deploy/clientplatform/clientplatform.production.env.example"
+ENV_PREPARER = ROOT / "scripts/clientplatform_prepare_production_env.py"
 
 
-def _source() -> str:
-    return WORKER.read_text(encoding="utf-8")
+def test_canonical_production_environment_disables_yookassa_by_default() -> None:
+    lines = ENV_EXAMPLE.read_text(encoding="utf-8").splitlines()
+
+    assert lines.count("TELEGRAM_YOOKASSA_ENABLED=0") == 1
+    assert not any(line.startswith("TELEGRAM_YOOKASSA_ENABLED=1") for line in lines)
 
 
-def test_deploy_worker_disables_telegram_yookassa_once() -> None:
-    source = _source()
+def test_canonical_env_preparer_adds_safe_yookassa_default_without_legacy_state() -> None:
+    source = ENV_PREPARER.read_text(encoding="utf-8")
 
-    assert "telegram-stars-only-checkout-v1.applied" in source
-    assert 'if [ ! -e "$STARS_ONLY_MIGRATION_MARKER" ]' in source
-    stars_only_block = source.index('if [ ! -e "$STARS_ONLY_MIGRATION_MARKER" ]')
-    deploy_call = source.index('/usr/bin/bash "$DEPLOY_SH"')
-    assert source.index('print "TELEGRAM_YOOKASSA_ENABLED=0"', stars_only_block) < deploy_call
-    assert deploy_call < source.index('touch "$STARS_ONLY_MIGRATION_MARKER"')
-
-
-def test_historical_enable_migration_is_overridden_before_deploy() -> None:
-    source = _source()
-
-    historical = source.index('if [ ! -e "$YOOKASSA_MIGRATION_MARKER" ]')
-    stars_only = source.index('if [ ! -e "$STARS_ONLY_MIGRATION_MARKER" ]')
-    deploy_call = source.index('/usr/bin/bash "$DEPLOY_SH"')
-    assert historical < stars_only < deploy_call
-    assert source.index('TELEGRAM_YOOKASSA_ENABLED=1', historical) < stars_only
-    assert source.index('TELEGRAM_YOOKASSA_ENABLED=0', stars_only) < deploy_call
-
-
-def test_deploy_worker_restores_env_when_deploy_fails() -> None:
-    source = _source()
-
-    assert 'cp -a "$ENV_FILE" "$ENV_BACKUP"' in source
-    assert 'cp -a "$ENV_BACKUP" "$ENV_FILE" || true' in source
-    assert 'if [ "$code" -ne 0 ] && [ "$MIGRATION_PENDING" = "1" ]' in source
-    assert 'STARS_ONLY_MIGRATION_PENDING=1' in source
-
-
-def test_migration_state_is_outside_git_worktree() -> None:
-    source = _source()
-
-    assert "/var/lib/metrotherapy/deploy-migrations" in source
-    assert "$APP_DIR/data/deploy/telegram-stars-only-checkout-v1.applied" not in source
+    assert '"TELEGRAM_YOOKASSA_ENABLED": "0"' in source
+    assert "/var/lib/metrotherapy/deploy-migrations" not in source
+    assert "telegram-stars-only-checkout-v1.applied" not in source
+    assert "run_deploy_worker.sh" not in source
