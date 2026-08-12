@@ -15,27 +15,17 @@ def _text(relative: str) -> str:
 def test_deploy_wrapper_has_no_mutable_runtime_logic() -> None:
     wrapper = _text("deploy.sh")
 
-    assert "METROTHERAPY_ENV_FILE" in wrapper
-    assert 'if [ ! -f "$ENV_FILE" ]' in wrapper
-    assert "export PYTHONDONTWRITEBYTECODE=1" in wrapper
-    assert "scripts/check_remote_main_topology.sh" in wrapper
-    assert "scripts/immutable_deploy.sh" in wrapper
-    assert wrapper.index('if [ ! -f "$ENV_FILE" ]') < wrapper.index(
-        "scripts/check_remote_main_topology.sh"
-    )
-    assert wrapper.index("export PYTHONDONTWRITEBYTECODE=1") < wrapper.index(
-        "scripts/immutable_deploy.sh"
-    )
-    assert ".venv/bin/python" not in wrapper
+    assert "scripts/clientplatform_production_deploy.py" in wrapper
+    assert "exec python3" in wrapper
+    assert "scripts/immutable_deploy.sh" not in wrapper
+    assert "METROTHERAPY_ENV_FILE" not in wrapper
+    assert "metrotherapy.service" not in wrapper
+    assert "/root/metrotherapy" not in wrapper
+    assert "/etc/metrotherapy" not in wrapper
     assert "git reset" not in wrapper
+    assert "git fetch" not in wrapper
+    assert "git merge" not in wrapper
     assert "pip install" not in wrapper
-    assert 'git -C "$SOURCE_DIR" fetch --prune origin main' in wrapper
-    assert 'git -C "$SOURCE_DIR" merge --ff-only origin/main' in wrapper
-    assert "DEPLOY_BOOTSTRAPPED_SHA" in wrapper
-    assert "re-exec updated wrapper" in wrapper
-    assert wrapper.index("merge --ff-only origin/main") < wrapper.index(
-        "scripts/immutable_deploy.sh"
-    )
 
 
 def test_immutable_deploy_governance_is_closed() -> None:
@@ -125,19 +115,20 @@ def test_deployed_sha_is_not_written_by_preflight_or_rollback() -> None:
     assert "record_successful_deployed_sha" not in rollback_region
 
 
-def test_systemd_template_executes_only_current_release() -> None:
-    service = _text("deploy/metrotherapy.service")
+def test_clientplatform_systemd_template_executes_only_canonical_runtime() -> None:
+    service = _text("deploy/clientplatform/clientplatform.service")
 
-    assert "WorkingDirectory=/var/lib/metrotherapy/runtime/current" in service
+    assert "WorkingDirectory=/var/lib/clientplatform/runtime/current" in service
+    assert "EnvironmentFile=/etc/clientplatform/clientplatform.env" in service
     assert (
-        "ExecStart=/var/lib/metrotherapy/runtime/current/.venv/bin/python "
-        "/var/lib/metrotherapy/runtime/current/main.py"
-    ) in service
+        "ExecStart=/var/lib/clientplatform/runtime/current/.venv/bin/python main.py"
+        in service
+    )
+    assert "scripts/clientplatform_production_preflight.py" in service
     assert "PYTHONDONTWRITEBYTECODE=1" in service
-    assert "METRO_DB_ENGINE=postgres" in service
-    assert "METRO_DB_ENGINE=sqlite" not in service
-    assert "/opt/metrotherapy/.venv" not in service
-    assert "/root/metrotherapy/.venv" not in service
+    assert "metrotherapy.service" not in service
+    assert "/var/lib/metrotherapy" not in service
+    assert "/root/metrotherapy" not in service
 
 
 def test_release_marker_is_a_canonical_hygiene_artifact() -> None:
@@ -165,6 +156,7 @@ def test_candidate_validator_runs_with_release_guardrails() -> None:
     assert "VALIDATOR_STRICT=1" in candidate
     assert "VALIDATOR_GUARDRAILS_STRICT=1" in candidate
 
+
 def test_immutable_systemd_dropin_wins_over_legacy_override() -> None:
     deploy = _text("scripts/immutable_deploy.sh")
 
@@ -177,13 +169,17 @@ def test_immutable_systemd_dropin_wins_over_legacy_override() -> None:
     assert install < verify < restart
 
 
-def test_deploy_wrapper_reexecutes_after_fast_forward() -> None:
-    wrapper = _text("deploy.sh")
+def test_canonical_deploy_owns_lock_readiness_and_rollback() -> None:
+    deploy = _text("scripts/clientplatform_production_deploy.py")
 
-    topology = wrapper.index("scripts/check_remote_main_topology.sh")
-    fetch = wrapper.index("fetch --prune origin main", topology)
-    merge = wrapper.index("merge --ff-only origin/main", fetch)
-    reexec = wrapper.index("re-exec updated wrapper", merge)
-    immutable = wrapper.index("scripts/immutable_deploy.sh", reexec)
-    assert topology < fetch < merge < reexec < immutable
+    lock = deploy.index("fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)")
+    backup = deploy.index("backup_reference =")
+    change = deploy.index("changed = False", backup)
+    readiness = deploy.index("_wait_for_readiness(timeout_seconds)", change)
+    evidence = deploy.index("CLIENTPLATFORM_PRODUCTION_DEPLOY_OK", readiness)
 
+    assert lock > 0
+    assert backup < change < readiness < evidence
+    assert "_rollback(" in deploy
+    assert "git push" not in deploy
+    assert "git reset --hard" not in deploy
