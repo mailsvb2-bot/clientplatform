@@ -9,7 +9,6 @@ from scripts import telegram_stars_provider_audit as audit
 
 
 ROOT = Path(__file__).resolve().parents[1]
-WORKER = ROOT / "scripts" / "run_deploy_worker.sh"
 AUDIT_SCRIPT = ROOT / "scripts" / "telegram_stars_provider_audit.py"
 
 
@@ -100,14 +99,3 @@ def test_provider_audit_runs_by_absolute_path_outside_repo() -> None:
     assert result.returncode == 2
     assert result.stdout.strip() == "status=error stage=config bot=unknown code=0 error=BOT_TOKEN_MISSING"
     assert result.stderr == ""
-
-
-def test_deploy_worker_publishes_sanitized_provider_audit_result() -> None:
-    source = WORKER.read_text(encoding="utf-8")
-
-    assert "[stars-provider-audit-request]" in source
-    assert "[stars-provider-audit-result]" in source
-    assert "telegram_stars_provider_audit.py" in source
-    assert "cut -c1-180" in source
-    audit_call = source.rindex("\npublish_stars_provider_audit_if_requested\n")
-    assert source.index('/usr/bin/bash "$DEPLOY_SH"') < audit_call

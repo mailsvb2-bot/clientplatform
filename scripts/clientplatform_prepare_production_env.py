@@ -16,6 +16,14 @@ _AD_HOST_DIR = "/var/lib/clientplatform/ad-secrets"
 _AD_OAUTH_REDIRECT_URI = "https://oauth.yandex.ru/verification_code"
 _MANAGED_BOT_IDENTITY_FILE = "/run/secrets/clientplatform-managed-bot/identity.txt"
 _MANAGED_BOT_HOST_DIR = "/var/lib/clientplatform/managed-bot-secrets"
+_MAX_API2_BASE_URL = "https://platform-api2.max.ru"
+_TELEGRAM_STARS_DEFAULTS = {
+    "TELEGRAM_STARS_PRICING_MODE": "explicit",
+    "TELEGRAM_STARS_PRICE_PRACTICE_START_7": "1500",
+    "TELEGRAM_STARS_PRICE_PRACTICE_60": "2500",
+    "TELEGRAM_STARS_PRICE_PRACTICE_ANTISTRESS_60": "5000",
+    "TELEGRAM_STARS_PRICE_PRACTICE_PERSONAL_MONTH": "15000",
+}
 
 
 class EnvironmentPreparationError(RuntimeError):
@@ -186,7 +194,9 @@ def prepare(path: Path) -> tuple[str, ...]:
         "CLIENTPLATFORM_MANAGED_BOT_CREDENTIAL_HOST_DIR": _MANAGED_BOT_HOST_DIR,
         "CLIENTPLATFORM_MANAGED_BOT_CREDENTIAL_ALLOW_GENERATE": "0",
         "MAX_WEBHOOK_ENABLED": "0",
+        "MAX_API_BASE_URL": _MAX_API2_BASE_URL,
         "VK_WEBHOOK_ENABLED": "0",
+        "TELEGRAM_YOOKASSA_ENABLED": "0",
         "CLIENTPLATFORM_AD_CONNECTIONS_ENABLED": "0",
         "CLIENTPLATFORM_AD_SPEND_MUTATIONS_ENABLED": "0",
         "CLIENTPLATFORM_AD_OAUTH_REDIRECT_URI": _AD_OAUTH_REDIRECT_URI,
@@ -194,6 +204,7 @@ def prepare(path: Path) -> tuple[str, ...]:
         "CLIENTPLATFORM_AD_CREDENTIAL_HOST_DIR": _AD_HOST_DIR,
         "CLIENTPLATFORM_AD_PUBLICATION_INTERVAL_SEC": "2",
         "CLIENTPLATFORM_AD_SPEND_GUARD_INTERVAL_SEC": "5",
+        **_TELEGRAM_STARS_DEFAULTS,
     }
     if not str(values.get("CLIENTPLATFORM_SECRET_MEDIA_SIGNING_KEY", "")).strip():
         defaults["CLIENTPLATFORM_SECRET_MEDIA_SIGNING_KEY"] = secrets.token_urlsafe(48)

@@ -14,8 +14,6 @@ RELEASE_BUILDER = ROOT / "scripts" / "build_immutable_release.sh"
 CURRENT_RELEASE_RECOVERY = ROOT / "scripts" / "repair_contaminated_current_release.sh"
 CANDIDATE_PREPARER = ROOT / "scripts" / "prepare_immutable_candidate.sh"
 REMOTE_TOPOLOGY = ROOT / "scripts" / "check_remote_main_topology.sh"
-WORKER = ROOT / "scripts" / "run_deploy_worker.sh"
-STALE_RECOVERY = ROOT / "scripts" / "recover_stale_deploy_worker.sh"
 
 
 def _run(*command: str, cwd: Path) -> str:
@@ -79,26 +77,16 @@ def test_deploy_launcher_and_immutable_pipeline_have_valid_bash_syntax() -> None
     _assert_bash_syntax(REMOTE_TOPOLOGY)
 
 
-def test_deploy_launcher_delegates_topology_recovery_prepare_immutable_and_cleanup() -> None:
+def test_deploy_launcher_delegates_only_to_clientplatform_production_deploy() -> None:
     source = DEPLOY_LAUNCHER.read_text(encoding="utf-8")
-    topology = source.index('bash "$SOURCE_DIR/scripts/check_remote_main_topology.sh" "$SOURCE_DIR"')
-    repair = source.index('bash "$RECOVERY_SCRIPT" repair "$SOURCE_DIR"', topology)
-    prepare = source.index('bash "$CANDIDATE_PREPARER" "$SOURCE_DIR"', repair)
-    immutable = source.index('bash "$SOURCE_DIR/scripts/immutable_deploy.sh" "$@"', prepare)
-    cleanup = source.index('bash "$RECOVERY_SCRIPT" cleanup "$SOURCE_DIR"', immutable)
-    assert topology < repair < prepare < immutable < cleanup
-    assert 'exec bash "$SOURCE_DIR/scripts/immutable_deploy.sh"' not in source
+
+    assert 'exec python3 "$ROOT/scripts/clientplatform_production_deploy.py" "$@"' in source
+    assert "run_deploy_worker.sh" not in source
+    assert "recover_stale_deploy_worker.sh" not in source
+    assert "immutable_deploy.sh" not in source
+    assert "check_remote_main_topology.sh" not in source
     assert "git reset --hard" not in source
     assert "pip install" not in source
-
-
-def test_deploy_worker_has_valid_bash_syntax() -> None:
-    _assert_bash_syntax(WORKER)
-
-
-def test_stale_deploy_recovery_has_valid_bash_syntax() -> None:
-    assert STALE_RECOVERY.is_file()
-    _assert_bash_syntax(STALE_RECOVERY)
 
 
 def test_older_trigger_is_coalesced_before_release_build_or_switch(tmp_path) -> None:

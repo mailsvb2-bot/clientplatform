@@ -12,20 +12,24 @@ def _text(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
-def test_every_deploy_entrypoint_uses_the_worker_lock() -> None:
+def test_root_entrypoint_has_one_canonical_deploy_lock_owner() -> None:
     wrapper = _text("deploy.sh")
+    deploy = _text("scripts/clientplatform_production_deploy.py")
 
-    acquire = wrapper.index("acquire_deploy_lock\n")
-    topology = wrapper.index('bash "$SOURCE_DIR/scripts/check_remote_main_topology.sh"', acquire)
-    repair = wrapper.index('bash "$RECOVERY_SCRIPT" repair "$SOURCE_DIR"', topology)
+    assert 'exec python3 "$ROOT/scripts/clientplatform_production_deploy.py" "$@"' in wrapper
+    assert "acquire_deploy_lock" not in wrapper
+    assert "run_deploy_worker.sh" not in wrapper
 
-    assert 'LOCK_FILE="${LOCK_FILE:-$SOURCE_DIR/data/deploy/metrotherapy_deploy.lock}"' in wrapper
-    assert 'FLOCK_BIN="${FLOCK_BIN:-/usr/bin/flock}"' in wrapper
-    assert 'parent_lock="$(readlink -f "/proc/$PPID/fd/9"' in wrapper
-    assert 'exec 8<>"$LOCK_FILE"' in wrapper
-    assert '"$FLOCK_BIN" -w "$LOCK_WAIT_SECONDS" 8' in wrapper
-    assert "DEPLOY_LOCK_HELD=1" in wrapper
-    assert acquire < topology < repair
+    main = deploy.index("def main() -> int:")
+    open_lock = deploy.index('with LOCK_PATH.open("a+") as lock_handle:', main)
+    flock = deploy.index(
+        "fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)",
+        open_lock,
+    )
+    deploy_call = deploy.index("            deploy(\n", flock)
+
+    assert 'LOCK_PATH = Path("/run/lock/clientplatform-production-deploy.lock")' in deploy
+    assert open_lock < flock < deploy_call
 
 
 def test_release_compatibility_matches_startup_schema_validation() -> None:

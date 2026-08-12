@@ -1,94 +1,64 @@
-# Metrotherapy production runtime contract
+# ClientPlatform production runtime contract
 
-This deployment keeps Telegram on polling. Do not switch Telegram to webhook for this project unless the production contract is deliberately changed and tested.
+ClientPlatform production is owned by the dedicated runtime under `deploy/clientplatform/`.
+The repository must not expose a second Metrotherapy-branded production installer,
+systemd unit, nginx configuration, deploy webhook, or `/root/metrotherapy` rollout path.
 
-## Required production mode
+## Canonical production deployment
 
-- `APP_ENV=prod`
-- `TELEGRAM_TRANSPORT=polling`
-- `TELEGRAM_WEBHOOK_ENABLED=0`
-- `HEALTHCHECK_ENABLED=1`
-- `HEALTHCHECK_HOST=127.0.0.1`
-- `HEALTHCHECK_PORT=8082`
-- `PRIVACY_EXPORT_HTTP_ENABLED=1`
-- `PRIVACY_EXPORT_PUBLIC_BASE_URL=https://<public-host>`
-- `PRIVACY_EXPORT_TOKEN_TTL_MINUTES=10` (accepted range: 2..30)
+Use the artifacts under `deploy/clientplatform/` and the ClientPlatform production
+scripts under `scripts/clientplatform_*` only.
 
-## Optional local ingress runtime
+Required identity and isolation boundaries include:
 
-The aiohttp ingress runtime may still be enabled for non-Telegram surfaces:
+- `CLIENTPLATFORM_ENVIRONMENT=production`
+- `CLIENTPLATFORM_DEPLOYMENT_ID=clientplatform-production`
+- a dedicated ClientPlatform Postgres database
+- runtime/state under `/var/lib/clientplatform`
+- logs under `/var/log/clientplatform`
+- ClientPlatform-owned media/storage buckets and signing secrets
+- Telegram polling unless the ClientPlatform production contract is deliberately changed and tested
 
-- MAX webhook
-- VK webhook
-- YooKassa web/reconciliation endpoints
-- public payment terms (`/terms`)
-- audio media/access links
-- one-time privacy export confirmation/download links
-
-Use:
-
-- `MESSENGER_WEBHOOK_ENABLED=1`
-- `MESSENGER_WEBHOOK_HOST=127.0.0.1`
-- `MESSENGER_WEBHOOK_PORT=8081`
-- `MESSENGER_PUBLIC_BASE_URL=https://<public-host>`
-
-This does not imply Telegram webhook mode. Telegram remains polling.
-
-The live `/etc/metrotherapy/metrotherapy.env` file is authoritative and is not
-replaced by immutable deploys. Prepare the first rollout without manually editing
-secrets:
+The canonical production preflight is:
 
 ```bash
-cd /root/metrotherapy
-git fetch --prune origin
-git checkout main
-git merge --ff-only origin/main
-sudo bash scripts/prepare_privacy_export_rollout.sh
+python -m scripts.clientplatform_production_preflight
 ```
 
-The helper takes an exclusive lock, preserves all unrelated bytes, writes a
-timestamped backup, atomically updates only the three privacy-export keys, and
-runs `runtime_contract.py` without restarting the service. Later immutable
-deploys repeat this idempotent migration automatically after the fast-forward and
-before candidate build or runtime switching.
-
-## Runtime state must live outside the repository
-
-Production must not write state into the project tree. Required:
-
-- `METRO_DB_PATH=/var/lib/metrotherapy/data.db` for SQLite mode, or use Postgres with external state
-- `LOG_PATH=/var/log/metrotherapy/app.log`
-
-Do not use:
-
-- `data/data.db`
-- `logs/app.log`
-- any `.env` file committed or shipped inside the repo
-
-## Preflight checks
-
-Before deploy or ad traffic:
+The production deployment implementation is:
 
 ```bash
-python scripts/runtime_contract.py
-python scripts/prod_readiness_check.py
-python scripts/validate_project.py
-python scripts/smoke.py
-python -m pytest -q
+python -m scripts.clientplatform_production_deploy
 ```
 
-`runtime_contract.py` is the explicit guard for this policy: polling-only Telegram, no Telegram webhook flag, non-colliding health/messenger ports, and out-of-tree runtime state in prod.
+Operational details, backup/restore requirements, proxying, managed bots and rollout
+procedures live in `deploy/clientplatform/` and
+`docs/runbooks/CLIENTPLATFORM_PRODUCTION_ISOLATION.md`.
 
+## Legacy compatibility is application-only
 
-## ClientPlatform canonical interface
+Some `METRO_*` environment names remain supported as compatibility fallbacks inside
+the application while migration is in progress. They do **not** authorize a separate
+Metrotherapy production deployment inside this repository. ClientPlatform-prefixed
+settings win when both are present.
 
-The Telegram control bot and dispatch runtime are enabled by default:
+In particular, production tooling in this repository must not reintroduce:
 
-```text
-CLIENTPLATFORM_CONTROL_BOT_ENABLED=1
-CLIENTPLATFORM_DISPATCH_RUNTIME_ENABLED=1
-```
+- `deploy/metrotherapy.service`
+- `deploy/metrotherapy.env.example`
+- `deploy/nginx-metrotherapy.conf`
+- root-level legacy `deploy/deploy.sh` or `deploy/install_server.sh`
+- `ops/deploy_webhook.py` or `ops/deploy_webhook_hardened.py`
+- a service or script whose operational root is `/root/metrotherapy`
 
-Set both values to `0` only for an explicit emergency rollback. Missing values do
-not return the application to the imported legacy interface. Runtime readiness
-requires the complete ClientPlatform schema, including `booking_slots`.
+## Runtime state
+
+Production state must stay outside the repository and inside ClientPlatform-owned
+locations. Do not write databases, logs, secrets, deploy evidence or backups into
+the checked-out source tree.
+
+## Regression guard
+
+`tests/test_clientplatform_runtime_ownership.py` enforces the repository-level
+ownership boundary. The more detailed environment, database, storage, backup and
+network invariants remain covered by `tests/test_clientplatform_production_isolation.py`.

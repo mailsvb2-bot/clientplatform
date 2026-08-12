@@ -1,13 +1,6 @@
 from __future__ import annotations
 
-import subprocess
-from pathlib import Path
-
 from scripts import vk_provider_audit
-
-
-ROOT = Path(__file__).resolve().parents[1]
-WORKER = ROOT / "scripts" / "run_deploy_worker.sh"
 
 
 def _configure(monkeypatch) -> None:
@@ -130,61 +123,3 @@ def test_vk_provider_audit_sanitizes_vk_api_errors(monkeypatch) -> None:
     assert code == 1
     assert "VK_ERROR_5" in message
     assert "vk-secret-token" not in message
-
-
-def test_vk_deploy_worker_shell_and_audit_markers_are_valid() -> None:
-    result = subprocess.run(
-        ["bash", "-n", str(WORKER)],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=10,
-    )
-    assert result.returncode == 0, result.stderr
-
-    source = WORKER.read_text(encoding="utf-8")
-    assert "vk-callback-runtime-v1.applied" in source
-    assert "VK_CALLBACK_SNACKBAR_ENABLED" in source
-    assert "VK_AUDIO_UPLOAD_RETRIES" in source
-    assert "[vk-provider-audit-request]" in source
-    assert "[vk-provider-audit-result]" in source
-    assert "vk_provider_audit.py" in source
-
-
-def test_deploy_workers_wait_instead_of_dropping_provider_audits() -> None:
-    source = WORKER.read_text(encoding="utf-8")
-
-    assert 'LOCK_WAIT_SECONDS="${DEPLOY_LOCK_WAIT_SECONDS:-900}"' in source
-    assert '"$FLOCK_BIN" -w "$LOCK_WAIT_SECONDS" 9' in source
-    assert '"$FLOCK_BIN" -n 9' not in source
-    assert "deploy lock wait timed out" in source
-    assert "deploy skipped: another worker holds flock" not in source
-
-
-def test_provider_workers_are_bound_to_the_authenticated_push_sha() -> None:
-    source = WORKER.read_text(encoding="utf-8")
-
-    assert 'TRIGGER_SHA="${DEPLOY_TRIGGER_SHA:-}"' in source
-    assert 'git -C "$APP_DIR" show -s --format=%B "$TRIGGER_SHA"' in source
-    assert 'request_message="$TRIGGER_MESSAGE"' in source
-    assert "deploy skipped after published provider result trigger=" in source
-    assert 'trigger=${TRIGGER_SHA:0:12}' in source
-    assert 'LATEST_MESSAGE="$(git -C "$APP_DIR" log -1' not in source
-
-
-def test_provider_audit_results_publish_without_moving_production_checkout() -> None:
-    source = WORKER.read_text(encoding="utf-8")
-
-    assert "publish_result_commit()" in source
-    assert "commit-tree" in source
-    assert 'git -C "$APP_DIR" push origin "$result_sha:refs/heads/main"' in source
-    assert "for attempt in 1 2 3" in source
-    remote_tip_check = source.index('log -1 --format=%B origin/main')
-    commit_tree = source.index("commit-tree")
-    assert remote_tip_check < commit_tree
-    assert "audit result already published at remote tip" in source
-    assert "audit result push raced with main" in source
-    assert "git -C \"$APP_DIR\" merge --ff-only origin/main" not in source
-    assert "git -C \"$APP_DIR\" rebase --keep-empty origin/main" not in source
-    assert "commit --allow-empty" not in source
-    assert 'publish_result_commit "$audit_message"' in source

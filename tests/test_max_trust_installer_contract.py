@@ -7,7 +7,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "scripts" / "install_max_trust.sh"
-WORKER = ROOT / "scripts" / "run_deploy_worker.sh"
 ROOT_CERT = ROOT / "deploy" / "certs" / "russian_trusted_root_ca.crt"
 SUB_CERT = ROOT / "deploy" / "certs" / "russian_trusted_sub_ca.crt"
 ROOT_FINGERPRINT = "D26D2D0231B7C39F92CC738512BA54103519E4405D68B5BD703E9788CA8ECF31"
@@ -25,16 +24,15 @@ def _openssl_fingerprint(path: Path) -> str:
     return result.stdout.strip().split("=", 1)[1].replace(":", "").upper()
 
 
-def test_max_trust_installer_and_worker_shell_are_valid() -> None:
-    for script in (INSTALLER, WORKER):
-        result = subprocess.run(
-            ["bash", "-n", str(script)],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=10,
-        )
-        assert result.returncode == 0, f"{script}: {result.stderr}"
+def test_max_trust_installer_shell_is_valid() -> None:
+    result = subprocess.run(
+        ["bash", "-n", str(INSTALLER)],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+    assert result.returncode == 0, f"{INSTALLER}: {result.stderr}"
 
 
 def test_vendored_max_certificates_have_expected_der_fingerprints() -> None:
@@ -87,24 +85,3 @@ def test_max_trust_installer_uses_der_fingerprints_and_never_disables_tls() -> N
     assert "--insecure" not in source
     assert "CERT_NONE" not in source
     assert "check_hostname = False" not in source
-
-
-def test_deploy_worker_reports_trust_failure_without_commit_loop() -> None:
-    source = WORKER.read_text(encoding="utf-8")
-
-    installer_call = source.index('scripts/install_max_trust.sh')
-    deploy_call = source.index('/usr/bin/bash "$DEPLOY_SH"')
-    marker_touch = source.index('touch "$MAX_TRUST_MIGRATION_MARKER"')
-
-    assert "max-mincifry-trust-v1.applied" in source
-    assert installer_call < deploy_call < marker_touch
-    assert 'PYTHON_BIN="$PYTHON"' in source
-    assert "[max-trust-install-result]" in source
-    assert "publish_max_trust_install_error" in source
-    assert "deploy skipped after published provider result" in source
-    for result_marker in (
-        "[stars-provider-audit-result]",
-        "[max-provider-audit-result]",
-        "[vk-provider-audit-result]",
-    ):
-        assert result_marker in source
