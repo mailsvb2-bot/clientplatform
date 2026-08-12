@@ -232,6 +232,14 @@ async def create_application():
             # Rebind process-owned ClientPlatform tasks on every successful startup
             # because the matching shutdown cancels them through the TaskManager.
             bind_task_manager(tm)
+            # Sales AI is an optional advisory worker owned by the canonical TaskManager.
+            # Its configuration/provider failure must never take down core ClientPlatform.
+            try:
+                from clientplatform.runtime.sales_ai import bind_sales_ai_worker
+
+                bind_sales_ai_worker(tm)
+            except Exception:  # validator: allow-wide-except
+                log.exception("Optional Sales AI worker failed to start; core runtime continues")
         except BaseException:  # validator: allow-wide-except
             await _rollback_partial_startup(
                 webhook_runtime=webhook_runtime,
