@@ -7,6 +7,7 @@ from clientplatform.application.ad_publication_assets import attach_image_file
 from clientplatform.application.creative_studio import (
     StudioVariant,
     build_ad_studio_variants,
+    render_idempotency_key,
     submit_studio_variant,
 )
 from clientplatform.domain.ad_publication_assets import (
@@ -21,9 +22,8 @@ from clientplatform.domain.creative_variant_bindings import (
 )
 from clientplatform.domain.tenancy import TenantContext
 from clientplatform.domain.visual_brand import TenantBrandDNA
-from clientplatform.infrastructure.creative_variant_binding_repository import (
-    CreativeVariantBindingRepository,
-)
+from clientplatform.infrastructure.creative_variant_binding_repository import CreativeVariantBindingRepository
+from clientplatform.infrastructure.visual_brand_repository import VisualBrandRepository
 from services.db import get_db, get_db_ro
 from services.visual_creative_gateway import (
     VisualCreativeGatewayError,
@@ -40,6 +40,11 @@ _GOAL_LABELS = (
     "🧭 Понятный процесс",
     "✨ Спокойная ценность",
 )
+_PLACEMENT_RENDER_FORMATS = {
+    # The current canonical Yandex media bridge normalizes to square. Add another
+    # placement only together with an aspect-preserving canonical asset path.
+    "yandex_direct": "square",
+}
 
 
 class CreativeStudioPublicationError(RuntimeError):
@@ -55,10 +60,25 @@ class GoalStudioPublicationResult:
 
     @property
     def attached(self) -> bool:
-        return (
-            self.asset is not None
-            and self.binding.status == CreativeVariantBindingStatus.ATTACHED
-        )
+        return self.asset is not None and self.binding.status == CreativeVariantBindingStatus.ATTACHED
+
+
+def load_goal_visual_brand(*, actor: TenantContext) -> TenantBrandDNA:
+    with get_db_ro() as conn:
+        return VisualBrandRepository(conn).get(actor=actor)
+
+
+def save_goal_visual_brand(*, actor: TenantContext, brand: TenantBrandDNA) -> TenantBrandDNA:
+    with get_db() as conn:
+        return VisualBrandRepository(conn).update(actor=actor, brand=brand)
+
+
+def render_format_for_placement(placement: str) -> str:
+    token = str(placement or "").strip().lower()
+    try:
+        return _PLACEMENT_RENDER_FORMATS[token]
+    except KeyError as exc:
+        raise ValueError("unsupported_creative_publication_placement") from exc
 
 
 def build_goal_image_variants(
@@ -68,6 +88,7 @@ def build_goal_image_variants(
     title: str,
     body: str,
     country_code: str = "",
+    brand: TenantBrandDNA | None = None,
 ) -> tuple[StudioVariant, ...]:
     return build_ad_studio_variants(
         business_id=business_id,
@@ -75,7 +96,7 @@ def build_goal_image_variants(
         title=title,
         body=body,
         kind="image",
-        brand=TenantBrandDNA(business_id=business_id),
+        brand=brand or TenantBrandDNA(business_id=business_id),
         formats=_GOAL_FORMATS,
         country_code=country_code,
     )
@@ -95,6 +116,7 @@ def selected_goal_variant(
     body: str,
     country_code: str,
     index: int,
+    brand: TenantBrandDNA | None = None,
 ) -> StudioVariant:
     variants = build_goal_image_variants(
         business_id=business_id,
@@ -102,6 +124,7 @@ def selected_goal_variant(
         title=title,
         body=body,
         country_code=country_code,
+        brand=brand,
     )
     selected = int(index)
     if selected < 0 or selected >= len(variants):
@@ -109,12 +132,7 @@ def selected_goal_variant(
     return variants[selected]
 
 
-def _select_binding(
-    *,
-    actor: TenantContext,
-    publication_job_id: str,
-    variant: StudioVariant,
-) -> CreativeVariantBinding:
+def _select_binding(*, actor: TenantContext, publication_job_id: str, variant: StudioVariant) -> CreativeVariantBinding:
     if variant.business_id != actor.business_id:
         raise ValueError("creative_variant_business_mismatch")
     with get_db() as conn:
@@ -130,10 +148,7 @@ def _select_binding(
 
 def _current_binding(*, actor: TenantContext, publication_job_id: str) -> CreativeVariantBinding:
     with get_db_ro() as conn:
-        return CreativeVariantBindingRepository(conn).get_current(
-            actor=actor,
-            publication_job_id=publication_job_id,
-        )
+        return CreativeVariantBindingRepository(conn).get_current(actor=actor, publication_job_id=publication_job_id)
 
 
 def _remember(
@@ -163,25 +178,29 @@ def _render_current(job: VisualCreativeJob, variant: StudioVariant) -> VisualRen
         job,
         formats=variant.formats,
         composition=variant.composition,
-        idempotency_key=f"clientplatform:{variant.variant_id}:render",
+        idempotency_key=render_idempotency_key(variant),
     )
 
 
-def _attach_square(
+def _attach_render(
     *,
     actor: TenantContext,
     publication_job_id: str,
     variant: StudioVariant,
     job: VisualCreativeJob,
     render: VisualRenderPack,
+    placement: str,
 ) -> tuple[AdPublicationAsset, CreativeVariantBinding]:
     if render.status != "succeeded":
         raise CreativeStudioPublicationError("creative_render_not_ready")
     if render.scope_id != actor.business_id or render.source_job_id != job.id:
         raise CreativeStudioPublicationError("creative_render_binding_mismatch")
+    format_id = render_format_for_placement(placement)
+    if format_id not in variant.formats:
+        raise CreativeStudioPublicationError("creative_render_format_not_requested")
     temporary: Path | None = None
     try:
-        temporary = download_render_asset(render, "square")
+        temporary = download_render_asset(render, format_id)
         binding = _current_binding(actor=actor, publication_job_id=publication_job_id)
         if binding.variant_id != variant.variant_id:
             raise ValueError("creative_variant_binding_changed")
@@ -210,6 +229,26 @@ def _attach_square(
     return asset, binding
 
 
+def _attach_square(
+    *,
+    actor: TenantContext,
+    publication_job_id: str,
+    variant: StudioVariant,
+    job: VisualCreativeJob,
+    render: VisualRenderPack,
+) -> tuple[AdPublicationAsset, CreativeVariantBinding]:
+    """Preserve the legacy square-only bridge through the new placement policy."""
+
+    return _attach_render(
+        actor=actor,
+        publication_job_id=publication_job_id,
+        variant=variant,
+        job=job,
+        render=render,
+        placement="yandex_direct",
+    )
+
+
 def _progress_result(
     *,
     actor: TenantContext,
@@ -217,6 +256,7 @@ def _progress_result(
     variant: StudioVariant,
     job: VisualCreativeJob,
     render: VisualRenderPack | None,
+    placement: str,
 ) -> GoalStudioPublicationResult:
     if job.status == "failed":
         status = CreativeVariantBindingStatus.FAILED
@@ -228,12 +268,13 @@ def _progress_result(
         status = CreativeVariantBindingStatus.FAILED
     else:
         try:
-            asset, binding = _attach_square(
+            asset, binding = _attach_render(
                 actor=actor,
                 publication_job_id=publication_job_id,
                 variant=variant,
                 job=job,
                 render=render,
+                placement=placement,
             )
         except AdPublicationAssetError as exc:
             raise CreativeStudioPublicationError("creative_asset_attachment_failed") from exc
@@ -261,7 +302,9 @@ def start_goal_image_variant(
     publication_job_id: str,
     variant: StudioVariant,
     wait_seconds: int = 20,
+    placement: str = "yandex_direct",
 ) -> GoalStudioPublicationResult:
+    render_format_for_placement(placement)
     _select_binding(actor=actor, publication_job_id=publication_job_id, variant=variant)
     try:
         job, render = submit_studio_variant(variant, wait_seconds=wait_seconds)
@@ -271,13 +314,11 @@ def start_goal_image_variant(
             variant=variant,
             job=job,
             render=render,
+            placement=placement,
         )
     except CreativeStudioPublicationError:
         raise
     except VisualCreativeGatewayError as exc:
-        # Selection is deliberately durable before the external call. A retry uses
-        # the same variant-derived gateway idempotency key instead of minting a
-        # second paid generation after an ambiguous transport failure.
         raise CreativeStudioPublicationError("creative_generation_submission_failed") from exc
     except ValueError as exc:
         raise CreativeStudioPublicationError("creative_generation_submission_failed") from exc
@@ -289,8 +330,10 @@ def poll_goal_image_variant(
     publication_job_id: str,
     job_id: str,
     variant: StudioVariant,
+    placement: str = "yandex_direct",
 ) -> GoalStudioPublicationResult:
     try:
+        render_format_for_placement(placement)
         binding = _current_binding(actor=actor, publication_job_id=publication_job_id)
         if binding.variant_id != variant.variant_id:
             raise ValueError("creative_variant_binding_changed")
@@ -304,6 +347,7 @@ def poll_goal_image_variant(
             variant=variant,
             job=job,
             render=render,
+            placement=placement,
         )
     except CreativeStudioPublicationError:
         raise
@@ -313,9 +357,7 @@ def poll_goal_image_variant(
         raise CreativeStudioPublicationError("creative_generation_poll_failed") from exc
 
 
-def list_observable_creative_variants(
-    *, actor: TenantContext
-) -> tuple[ObservableCreativeVariant, ...]:
+def list_observable_creative_variants(*, actor: TenantContext) -> tuple[ObservableCreativeVariant, ...]:
     with get_db_ro() as conn:
         return CreativeVariantBindingRepository(conn).list_observable(actor=actor)
 
@@ -326,7 +368,10 @@ __all__ = [
     "build_goal_image_variants",
     "goal_variant_labels",
     "list_observable_creative_variants",
+    "load_goal_visual_brand",
     "poll_goal_image_variant",
+    "render_format_for_placement",
+    "save_goal_visual_brand",
     "selected_goal_variant",
     "start_goal_image_variant",
 ]
