@@ -21,6 +21,7 @@ from . import clientplatform_program_media
 from . import clientplatform_programs
 from . import clientplatform_promotions
 from . import clientplatform_sales
+from . import clientplatform_sales_ai
 from . import clientplatform_tenancy
 from . import analytics
 from . import funnel
@@ -43,6 +44,7 @@ PARTS = [
     clientplatform_promotions,
     clientplatform_partners,
     clientplatform_sales,
+    clientplatform_sales_ai,
     clientplatform_offer_ladders,
     clientplatform_ad_connections,
     clientplatform_ad_publication_assets,
