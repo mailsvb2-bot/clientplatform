@@ -6,6 +6,7 @@ from . import clientplatform_activity
 from . import clientplatform_ad_connections
 from . import clientplatform_ad_publication_assets
 from . import clientplatform_creative_experiments
+from . import clientplatform_creative_growth
 from . import clientplatform_ad_spend_operations
 from . import clientplatform_admin_ops
 from . import clientplatform_bookings
@@ -46,6 +47,7 @@ PARTS = [
     clientplatform_ad_connections,
     clientplatform_ad_publication_assets,
     clientplatform_creative_experiments,
+    clientplatform_creative_growth,
     clientplatform_ad_spend_operations,
     clientplatform_programs,
     clientplatform_program_media,

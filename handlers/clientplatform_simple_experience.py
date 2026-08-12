@@ -140,7 +140,19 @@ async def send_advanced_dashboard(
     )
     access = next(item for item in accesses if item.business.id == business_id)
     module_lines = "\n".join(f"• {item.title}" for item in capabilities) or "• пока не выбраны"
-    keyboard = _ADVANCED_KEYBOARD(business_id, capabilities)
+    base_keyboard = _ADVANCED_KEYBOARD(business_id, capabilities)
+    token = control._uuid_token(business_id)
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            *base_keyboard.inline_keyboard,
+            [
+                InlineKeyboardButton(
+                    text="🎨 Фирменный стиль",
+                    callback_data=f"cpb:open:{token}",
+                )
+            ],
+        ]
+    )
     await message.answer(
         f"⚙️ Все возможности · {access.business.name}\n\n"
         f"Чем Вы занимаетесь:\n{profile.activity_description}\n\n"
