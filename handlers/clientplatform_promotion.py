@@ -290,7 +290,7 @@ async def dispatch_promotion_start(
         f"⏱ {landing.slot.slot.duration_minutes} минут\n"
         "🟢 Время свободно",
         reply_markup=control._keyboard(
-            [[("✅ Записаться", f"cpp:book:{landing.campaign.source_token}")]]
+            [[("✅ Записаться", f"cpp:book:{landing.attribution_token}")]]
         ),
     )
     return True

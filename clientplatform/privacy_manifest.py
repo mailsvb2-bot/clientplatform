@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 TenantDisposition = Literal["erase", "retain", "anonymize"]
-CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-08-12.v23-creative-growth"
+CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-08-12.v24-creative-variant-attribution"
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,7 +43,8 @@ _POLICIES = (
     _required("customer_invites", "erase", "expiring customer connection capability and claim routing"),
     _required("booking_slots", "anonymize", "business availability and customer appointment fulfilment"),
     _required("promotion_campaigns", "retain", "business-owned advertising copy, source channel and campaign lifecycle without customer identity"),
-    _required("promotion_events", "anonymize", "customer-linked campaign attribution retained only after customer identity is anonymized"),
+    _required("promotion_source_aliases", "retain", "business-owned source routing aliases for exact creative and placement attribution without customer identity"),
+    _required("promotion_events", "anonymize", "customer-linked campaign and exact-source attribution retained only after customer identity is anonymized"),
     _required("partner_campaigns", "retain", "business-owned partner acquisition goal and preparation policy"),
     _required("partner_candidates", "erase", "partner profiles can contain public business contact and relationship evidence"),
     _required("partner_content_packs", "erase", "candidate-specific prepared outreach and collaboration copy"),
@@ -56,7 +57,7 @@ _POLICIES = (
     _required("ad_publication_assets", "erase", "user-provided or generated advertising media, local storage references and provider media identifiers"),
     _required("creative_variant_bindings", "anonymize", "business-owned creative selection and generation lineage retained while selecting member linkage is anonymized"),
     _required("creative_growth_trials", "anonymize", "business-owned creative trial configuration retained while creator linkage is anonymized"),
-    _required("creative_growth_trial_variants", "retain", "business-owned deterministic creative allocation without customer identity"),
+    _required("creative_growth_trial_variants", "retain", "business-owned deterministic creative allocation and exact source routing without customer identity"),
     _required("ad_spend_authorizations", "retain", "business-owned advertising limits, provider snapshot and authorization lifecycle"),
     _required("ad_spend_consent_receipts", "anonymize", "immutable consent terms and hashes with anonymized owner identifiers"),
     _required("ad_spend_operations", "retain", "idempotent launch and stop intent, bounded provider evidence and retry history"),

@@ -95,17 +95,24 @@ def get_creative_growth_outcomes(
         )
 
     variants: list[CreativeVariantOutcome] = []
+    shared_campaign_ids: set[str] = set()
     for arm in plan.arms:
         campaign_id = arm.promotion_campaign_id
+        source_token = arm.promotion_source_token
         if not campaign_id:
             scope = CreativeAttributionScope.UNAVAILABLE
             leads = bookings = won = 0
+        elif source_token:
+            scope = CreativeAttributionScope.VARIANT
+            leads = len(attribution.source_leads.get(source_token, ()))
+            bookings = len(attribution.source_bookings.get(source_token, ()))
+            won = len(attribution.source_won.get(source_token, ()))
         elif frequencies[campaign_id] > 1:
-            # Never duplicate campaign outcomes across multiple variants. Until
-            # the public promotion route carries a variant-specific token,
-            # downstream attribution is provably campaign-level only.
+            # Legacy/shared campaigns without a source-level token remain
+            # intentionally unallocated. Never duplicate their totals per arm.
             scope = CreativeAttributionScope.SHARED_CAMPAIGN
             leads = bookings = won = 0
+            shared_campaign_ids.add(campaign_id)
         else:
             scope = CreativeAttributionScope.VARIANT
             leads = len(attribution.leads.get(campaign_id, ()))
@@ -124,9 +131,7 @@ def get_creative_growth_outcomes(
         )
 
     shared: list[CreativeSharedCampaignOutcome] = []
-    for campaign_id, count in sorted(frequencies.items()):
-        if count <= 1:
-            continue
+    for campaign_id in sorted(shared_campaign_ids):
         shared.append(
             CreativeSharedCampaignOutcome(
                 promotion_campaign_id=campaign_id,

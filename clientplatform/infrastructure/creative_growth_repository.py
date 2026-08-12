@@ -11,7 +11,12 @@ from clientplatform.domain.creative_growth import (
     CreativeTrialArm,
     CreativeTrialStatus,
 )
+from clientplatform.domain.promotions import (
+    PromotionInvariantViolation,
+    rewrite_promotion_source_url,
+)
 from clientplatform.domain.tenancy import TenantContext, normalize_uuid
+from clientplatform.infrastructure.promotion_repository import PromotionRepository
 from clientplatform.infrastructure.tenancy_repository import TenancyRepository
 from services.db.core import DatabaseOperationDeadlineExceeded
 
@@ -136,8 +141,9 @@ class CreativeGrowthRepository:
                     """
                     INSERT INTO creative_growth_trial_variants(
                         trial_id, business_id, variant_id, publication_job_id,
-                        position, allocation_bps, created_at, updated_at
-                    ) VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+                        position, allocation_bps, promotion_source_token,
+                        created_at, updated_at
+                    ) VALUES(?, ?, ?, ?, ?, ?, NULL, ?, ?)
                     """,
                     (
                         plan.trial_id,
@@ -174,7 +180,7 @@ class CreativeGrowthRepository:
         rows = self._conn.execute(
             """
             SELECT v.variant_id, v.publication_job_id, v.allocation_bps,
-                   j.promotion_campaign_id
+                   j.promotion_campaign_id, v.promotion_source_token
             FROM creative_growth_trial_variants v
             JOIN ad_publication_jobs j
               ON j.id=v.publication_job_id AND j.business_id=v.business_id
@@ -194,6 +200,9 @@ class CreativeGrowthRepository:
                     publication_job_id=str(_value(row, "publication_job_id", 1)),
                     allocation_bps=int(_value(row, "allocation_bps", 2)),
                     promotion_campaign_id=str(_value(row, "promotion_campaign_id", 3) or ""),
+                    promotion_source_token=str(
+                        _value(row, "promotion_source_token", 4) or ""
+                    ),
                 )
                 for row in rows
             ),
@@ -242,6 +251,7 @@ class CreativeGrowthRepository:
                     publication_job_id=arm.publication_job_id,
                     allocation_bps=requested[arm.publication_job_id],
                     promotion_campaign_id=arm.promotion_campaign_id,
+                    promotion_source_token=arm.promotion_source_token,
                 )
                 for arm in existing.arms
             ),
@@ -279,6 +289,104 @@ class CreativeGrowthRepository:
         self._conn.execute("RELEASE SAVEPOINT creative_growth_reallocate")
         return self.get(actor=current, trial_id=probe.trial_id)
 
+    def _prepare_variant_sources(
+        self,
+        *,
+        actor: TenantContext,
+        plan: CreativeTrafficPlan,
+        now: str,
+    ) -> None:
+        promotions = PromotionRepository(self._conn)
+        for arm in plan.arms:
+            if not arm.promotion_campaign_id:
+                raise ValueError("creative trial requires promotion campaigns for attribution")
+            row = self._conn.execute(
+                """
+                SELECT j.status, j.source_url, pc.source_token
+                FROM ad_publication_jobs j
+                JOIN promotion_campaigns pc
+                  ON pc.id=j.promotion_campaign_id AND pc.business_id=j.business_id
+                WHERE j.id=? AND j.business_id=?
+                LIMIT 1
+                """,
+                (arm.publication_job_id, actor.business_id),
+            ).fetchone()
+            if row is None:
+                raise ValueError("creative trial promotion campaign was not found")
+            job_status = str(_value(row, "status", 0))
+            source_url = str(_value(row, "source_url", 1) or "").strip()
+            campaign_source = str(_value(row, "source_token", 2))
+            alias = promotions.ensure_source_alias(
+                actor=actor,
+                campaign_id=arm.promotion_campaign_id,
+                source_kind="creative_variant",
+                source_key=f"{plan.trial_id}:{arm.variant_id}",
+                now=now,
+            )
+            if arm.promotion_source_token and arm.promotion_source_token != alias.source_token:
+                raise PromotionInvariantViolation("creative trial source alias changed unexpectedly")
+
+            if arm.promotion_source_token:
+                try:
+                    rewrite_promotion_source_url(
+                        source_url,
+                        from_token=alias.source_token,
+                        to_token=alias.source_token,
+                    )
+                except PromotionInvariantViolation:
+                    if job_status not in {"draft", "failed"}:
+                        raise ValueError(
+                            "creative trial source cannot change after advertising publication was queued"
+                        ) from None
+                    source_url = rewrite_promotion_source_url(
+                        source_url,
+                        from_token=campaign_source,
+                        to_token=alias.source_token,
+                    )
+                else:
+                    source_url = str(source_url)
+            else:
+                if job_status not in {"draft", "failed"}:
+                    raise ValueError(
+                        "creative trial must start before advertising publication is queued"
+                    )
+                source_url = rewrite_promotion_source_url(
+                    source_url,
+                    from_token=campaign_source,
+                    to_token=alias.source_token,
+                )
+
+            if job_status in {"draft", "failed"}:
+                cursor = self._conn.execute(
+                    """
+                    UPDATE ad_publication_jobs
+                    SET source_url=?, updated_at=?
+                    WHERE id=? AND business_id=? AND status IN ('draft','failed')
+                    """,
+                    (
+                        source_url,
+                        now,
+                        arm.publication_job_id,
+                        actor.business_id,
+                    ),
+                )
+                if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+                    raise ValueError("advertising publication changed while starting creative trial")
+            self._conn.execute(
+                """
+                UPDATE creative_growth_trial_variants
+                SET promotion_source_token=?, updated_at=?
+                WHERE trial_id=? AND business_id=? AND publication_job_id=?
+                """,
+                (
+                    alias.source_token,
+                    now,
+                    plan.trial_id,
+                    actor.business_id,
+                    arm.publication_job_id,
+                ),
+            )
+
     def set_status(
         self,
         *,
@@ -315,20 +423,34 @@ class CreativeGrowthRepository:
             ):
                 raise ValueError("creative trial requires attached generated variants before running")
         next_revision = existing.revision + 1
-        self._conn.execute(
-            """
-            UPDATE creative_growth_trials
-            SET status=?, revision=?, updated_at=?
-            WHERE id=? AND business_id=?
-            """,
-            (
-                target.value,
-                next_revision,
-                _iso_now(),
-                existing.trial_id,
-                current.business_id,
-            ),
-        )
+        now = _iso_now()
+        self._conn.execute("SAVEPOINT creative_growth_status")
+        try:
+            if target == CreativeTrialStatus.RUNNING:
+                self._prepare_variant_sources(actor=current, plan=existing, now=now)
+            self._conn.execute(
+                """
+                UPDATE creative_growth_trials
+                SET status=?, revision=?, updated_at=?
+                WHERE id=? AND business_id=?
+                """,
+                (
+                    target.value,
+                    next_revision,
+                    now,
+                    existing.trial_id,
+                    current.business_id,
+                ),
+            )
+        except (sqlite3.Error, DatabaseOperationDeadlineExceeded):
+            self._conn.execute("ROLLBACK TO SAVEPOINT creative_growth_status")
+            self._conn.execute("RELEASE SAVEPOINT creative_growth_status")
+            raise
+        except (LookupError, PromotionInvariantViolation, ValueError):
+            self._conn.execute("ROLLBACK TO SAVEPOINT creative_growth_status")
+            self._conn.execute("RELEASE SAVEPOINT creative_growth_status")
+            raise
+        self._conn.execute("RELEASE SAVEPOINT creative_growth_status")
         return self.get(actor=current, trial_id=existing.trial_id)
 
     def assign(

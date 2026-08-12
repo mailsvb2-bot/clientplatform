@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import sqlite3
 
+from services.schema_core import _add_col, _cols
+
 
 def ensure(c: sqlite3.Connection) -> None:
     """Persist tenant-owned creative traffic plans above publication-job variants."""
@@ -43,6 +45,7 @@ def ensure(c: sqlite3.Connection) -> None:
             publication_job_id TEXT NOT NULL,
             position INTEGER NOT NULL,
             allocation_bps INTEGER NOT NULL,
+            promotion_source_token TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             PRIMARY KEY(trial_id, variant_id),
@@ -59,9 +62,17 @@ def ensure(c: sqlite3.Connection) -> None:
         )
         """
     )
+    if "promotion_source_token" not in _cols(c, "creative_growth_trial_variants"):
+        _add_col(c, "creative_growth_trial_variants", "promotion_source_token TEXT")
     c.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_creative_growth_trial_variants_business
         ON creative_growth_trial_variants(business_id, trial_id, publication_job_id)
+        """
+    )
+    c.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_creative_growth_trial_variants_source
+        ON creative_growth_trial_variants(business_id, promotion_source_token)
         """
     )

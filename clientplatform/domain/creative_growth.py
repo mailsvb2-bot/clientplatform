@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from uuid import UUID
 
+from clientplatform.domain.promotions import normalize_source_token
+
 
 class CreativeTrialStatus(StrEnum):
     DRAFT = "draft"
@@ -42,6 +44,7 @@ class CreativeTrialArm:
     publication_job_id: str
     allocation_bps: int
     promotion_campaign_id: str = ""
+    promotion_source_token: str = ""
 
     def normalized(self) -> "CreativeTrialArm":
         allocation = int(self.allocation_bps)
@@ -50,6 +53,11 @@ class CreativeTrialArm:
         campaign = str(self.promotion_campaign_id or "").strip()
         if campaign:
             campaign = _uuid(campaign, field_name="promotion_campaign_id")
+        source = str(self.promotion_source_token or "").strip()
+        if source:
+            source = normalize_source_token(source)
+            if not campaign:
+                raise ValueError("creative source token requires a promotion campaign")
         return CreativeTrialArm(
             variant_id=_token(self.variant_id, field_name="variant_id"),
             publication_job_id=_uuid(
@@ -58,6 +66,7 @@ class CreativeTrialArm:
             ),
             allocation_bps=allocation,
             promotion_campaign_id=campaign,
+            promotion_source_token=source,
         )
 
 
@@ -80,6 +89,9 @@ class CreativeTrafficPlan:
             raise ValueError("creative trial variants must be unique")
         if len({arm.publication_job_id for arm in arms}) != len(arms):
             raise ValueError("creative trial publication jobs must be unique")
+        source_tokens = [arm.promotion_source_token for arm in arms if arm.promotion_source_token]
+        if len(set(source_tokens)) != len(source_tokens):
+            raise ValueError("creative trial promotion source tokens must be unique")
         if sum(arm.allocation_bps for arm in arms) != 10_000:
             raise ValueError("creative trial allocations must total 10000 basis points")
         return CreativeTrafficPlan(
