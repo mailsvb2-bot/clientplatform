@@ -71,20 +71,26 @@ class ClientPlatformControlBotContractTests(unittest.TestCase):
         self.assertIn("Прогресс клиентов", handler)
 
     def test_production_templates_enable_clientplatform_with_opt_out(self) -> None:
-        env_example = Path("deploy/metrotherapy.env.example").read_text(encoding="utf-8")
-        service = Path("deploy/metrotherapy.service").read_text(encoding="utf-8")
-        for source in (env_example, service):
-            self.assertIn("CLIENTPLATFORM_CONTROL_BOT_ENABLED=1", source)
-            self.assertIn("CLIENTPLATFORM_DISPATCH_RUNTIME_ENABLED=1", source)
-        self.assertIn("emergency rollback", env_example)
+        env_example = Path(
+            "deploy/clientplatform/clientplatform.production.env.example"
+        ).read_text(encoding="utf-8")
+        service = Path("deploy/clientplatform/clientplatform.service").read_text(
+            encoding="utf-8"
+        )
 
-        control_default = service.index("Environment=CLIENTPLATFORM_CONTROL_BOT_ENABLED=1")
-        dispatch_default = service.index("Environment=CLIENTPLATFORM_DISPATCH_RUNTIME_ENABLED=1")
-        first_override_file = service.index("EnvironmentFile=-/etc/metrotherapy/metrotherapy.env")
-        second_override_file = service.index("EnvironmentFile=-/etc/default/metrotherapy")
-        self.assertLess(control_default, first_override_file)
-        self.assertLess(dispatch_default, first_override_file)
-        self.assertLess(first_override_file, second_override_file)
+        self.assertIn("CLIENTPLATFORM_CONTROL_BOT_ENABLED=1", env_example)
+        self.assertIn("CLIENTPLATFORM_DISPATCH_RUNTIME_ENABLED=1", env_example)
+        self.assertEqual(env_example.count("CLIENTPLATFORM_CONTROL_BOT_ENABLED=1"), 1)
+        self.assertEqual(
+            env_example.count("CLIENTPLATFORM_DISPATCH_RUNTIME_ENABLED=1"), 1
+        )
+
+        self.assertIn(
+            "EnvironmentFile=/etc/clientplatform/clientplatform.env",
+            service,
+        )
+        self.assertNotIn("/etc/metrotherapy", service)
+        self.assertNotIn("deploy/metrotherapy", service)
 
     def test_legacy_start_handler_is_unchanged_and_still_registered(self) -> None:
         source = Path("handlers/start.py").read_text(encoding="utf-8")
