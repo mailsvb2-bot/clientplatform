@@ -24,6 +24,7 @@ class ClientPlatformRuntimeOwnershipTests(unittest.TestCase):
             "scripts/recover_stale_deploy_worker.sh",
             "tests/test_deploy_webhook_hardening.py",
             "tests/test_deploy_webhook_worker_isolation.py",
+            "tests/test_deploy_worker_flock.py",
             "tests/test_github_deploy_webhook_service_installer.py",
             "tests/test_nginx_runtime_routes_contract.py",
         )
@@ -68,7 +69,9 @@ class ClientPlatformRuntimeOwnershipTests(unittest.TestCase):
         contract = (root / "deploy" / "RUNTIME_CONTRACT.md").read_text(
             encoding="utf-8"
         )
-        self.assertTrue(contract.startswith("# ClientPlatform production runtime contract"))
+        self.assertTrue(
+            contract.startswith("# ClientPlatform production runtime contract")
+        )
         self.assertIn("deploy/clientplatform/", contract)
         self.assertNotIn("cd /root/metrotherapy", contract)
         self.assertNotIn("/etc/metrotherapy/metrotherapy.env", contract)
@@ -101,7 +104,11 @@ class ClientPlatformRuntimeOwnershipTests(unittest.TestCase):
         )
         deploy_call = source.index("            deploy(\n", lock)
         self.assertLess(lock, deploy_call)
-        self.assertIn("CLIENTPLATFORM_PRODUCTION_DEPLOY_FAILED:production_deploy_already_running", source)
+        self.assertIn(
+            "CLIENTPLATFORM_PRODUCTION_DEPLOY_FAILED:"
+            "production_deploy_already_running",
+            source,
+        )
 
         deploy_start = source.index("def deploy(\n")
         encrypted_backup = source.index(
@@ -110,7 +117,9 @@ class ClientPlatformRuntimeOwnershipTests(unittest.TestCase):
         emergency_backup = source.index(
             "backup_reference = str(_local_backup(target_sha))", deploy_start
         )
-        build = source.index('_run([*compose, "build", "app", "backup"])', deploy_start)
+        build = source.index(
+            '_run([*compose, "build", "app", "backup"])', deploy_start
+        )
         rollout = source.index(
             '_run([*compose, "up", "-d", "--force-recreate", "app", "caddy"])',
             build,
@@ -121,7 +130,9 @@ class ClientPlatformRuntimeOwnershipTests(unittest.TestCase):
         rollback_evidence = source.index(
             "            rollback_evidence = _write_evidence(\n", rollback
         )
-        success_evidence = source.index("    evidence = _write_evidence(\n", rollback_evidence)
+        success_evidence = source.index(
+            "    evidence = _write_evidence(\n", rollback_evidence
+        )
 
         self.assertLess(encrypted_backup, build)
         self.assertLess(emergency_backup, build)
