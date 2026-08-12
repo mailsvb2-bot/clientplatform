@@ -10,7 +10,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 GUARD = ROOT / "scripts" / "install_runtime_write_guard.sh"
-DEPLOY = ROOT / "deploy.sh"
+PRODUCTION_DEPLOY = ROOT / "scripts" / "clientplatform_production_deploy.py"
 CONTRACT_MARKER = Path("runtime") / "RUNTIME_STATE_CONTRACT_V1"
 
 
@@ -116,24 +116,23 @@ def test_guard_selects_compatibility_for_legacy_and_enforce_for_capable_release(
     ]
 
 
-def test_failed_deploy_selects_guard_for_recovered_release_before_restart() -> None:
-    source = DEPLOY.read_text(encoding="utf-8")
-    function_start = source.index("restore_runtime_after_failure()")
-    function_end = source.index(
-        "\n}\n\nacquire_deploy_lock",
-        function_start,
+def test_failed_clientplatform_deploy_rolls_back_before_reporting_recovery() -> None:
+    source = PRODUCTION_DEPLOY.read_text(encoding="utf-8")
+
+    deploy_start = source.index("def deploy(\n")
+    failure = source.index("except Exception as deployment_error", deploy_start)
+    rollback = source.index("                _rollback(\n", failure)
+    rollback_evidence = source.index(
+        "            rollback_evidence = _write_evidence(\n", rollback
     )
-    recovery_body = source[function_start:function_end]
+    rollback_marker = source.index(
+        "CLIENTPLATFORM_PRODUCTION_ROLLBACK_OK", rollback_evidence
+    )
 
-    repair = 'bash "$RECOVERY_SCRIPT" repair "$SOURCE_DIR"'
-    select_guard = 'bash "$WRITE_GUARD_SCRIPT" for-release "$recovered_release"'
-    restart = '/usr/bin/systemctl restart "$SERVICE_NAME"'
-    assert recovery_body.index(repair) < recovery_body.index(select_guard) < recovery_body.index(restart)
-
-    main_body = source[function_end:]
-    enforce = 'bash "$WRITE_GUARD_SCRIPT" enforce'
-    immutable = 'bash "$SOURCE_DIR/scripts/immutable_deploy.sh" "$@"'
-    assert main_body.index(enforce) < main_body.index(repair) < main_body.index(immutable)
+    assert failure < rollback < rollback_evidence < rollback_marker
+    assert "deployment_failed_and_rollback_failed" in source
+    assert "production_recovery_failed" in source
+    assert "run_deploy_worker.sh" not in source
 
 
 def test_current_release_declares_external_runtime_state_contract() -> None:
