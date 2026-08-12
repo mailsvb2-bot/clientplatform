@@ -13,6 +13,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 DEPLOY = ROOT / "deploy.sh"
+PRODUCTION_DEPLOY = ROOT / "scripts" / "clientplatform_production_deploy.py"
 RECOVERY = ROOT / "scripts" / "repair_contaminated_current_release.sh"
 WRITE_GUARD = ROOT / "scripts" / "install_runtime_write_guard.sh"
 BODY_HANDLER = ROOT / "handlers" / "mood_flow" / "body.py"
@@ -51,17 +52,20 @@ def test_runtime_write_guard_and_recovery_scripts_have_valid_bash_syntax() -> No
         assert completed.returncode == 0, f"{path}: {completed.stderr}"
 
 
-def test_deploy_installs_read_only_runtime_guard_before_recovery() -> None:
-    source = DEPLOY.read_text(encoding="utf-8")
-    guard = source.index('bash "$WRITE_GUARD_SCRIPT"')
-    repair = source.index('bash "$RECOVERY_SCRIPT" repair "$SOURCE_DIR"', guard)
-    immutable = source.index('bash "$SOURCE_DIR/scripts/immutable_deploy.sh"', repair)
-    assert guard < repair < immutable
-    assert 'export PYTHONPYCACHEPREFIX="$STATE_ROOT/python-cache"' in source
-    assert 'export XDG_CACHE_HOME="$STATE_ROOT/xdg-cache"' in source
-    assert 'export MPLCONFIGDIR="$STATE_ROOT/matplotlib"' in source
-    assert 'export TMPDIR="$STATE_ROOT/tmp"' in source
-    assert '/usr/bin/systemctl restart "$SERVICE_NAME"' in source
+def test_root_deploy_defers_recovery_to_canonical_clientplatform_deploy() -> None:
+    wrapper = DEPLOY.read_text(encoding="utf-8")
+    canonical = PRODUCTION_DEPLOY.read_text(encoding="utf-8")
+
+    assert 'exec python3 "$ROOT/scripts/clientplatform_production_deploy.py" "$@"' in wrapper
+    assert "install_runtime_write_guard.sh" not in wrapper
+    assert "repair_contaminated_current_release.sh" not in wrapper
+    assert "immutable_deploy.sh" not in wrapper
+
+    assert "_wait_for_baseline_readiness" in canonical
+    assert "_wait_for_readiness" in canonical
+    assert "production_not_ready_before_deploy" in canonical
+    assert "_rollback(" in canonical
+    assert "CLIENTPLATFORM_PRODUCTION_ROLLBACK_OK" in canonical
 
     dropin = WRITE_GUARD.read_text(encoding="utf-8")
     assert "Environment=PYTHONDONTWRITEBYTECODE=1" in dropin
