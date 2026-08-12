@@ -4,8 +4,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DEPLOY_PATH = ROOT / "deploy.sh"
-IMMUTABLE_DEPLOY_PATH = ROOT / "scripts" / "immutable_deploy.sh"
-REMOTE_TOPOLOGY_PATH = ROOT / "scripts" / "check_remote_main_topology.sh"
+PRODUCTION_DEPLOY_PATH = ROOT / "scripts" / "clientplatform_production_deploy.py"
 
 
 def _read(path: Path, label: str, problems: list[str]) -> str:
@@ -17,74 +16,86 @@ def _read(path: Path, label: str, problems: list[str]) -> str:
 
 def deploy_governance_problems(
     path: Path = DEPLOY_PATH,
-    immutable_path: Path = IMMUTABLE_DEPLOY_PATH,
-    remote_path: Path = REMOTE_TOPOLOGY_PATH,
+    production_path: Path = PRODUCTION_DEPLOY_PATH,
+    remote_path: Path | None = None,
 ) -> list[str]:
+    """Validate the single ClientPlatform production deploy contour.
+
+    ``remote_path`` is retained only for source compatibility with older callers.
+    Production deploy no longer performs GitHub topology/fetch/merge operations;
+    source synchronization is deliberately outside the runtime deployment boundary.
+    """
+
+    del remote_path
     problems: list[str] = []
     wrapper = _read(path, "deploy wrapper", problems)
-    immutable = _read(immutable_path, "immutable deploy script", problems)
-    remote = _read(remote_path, "remote topology gate", problems)
-    combined = "\n".join((wrapper, immutable, remote))
+    production = _read(production_path, "ClientPlatform production deploy", problems)
+    combined = "\n".join((wrapper, production))
 
     forbidden = {
         "git push": "production deploy must not push to GitHub",
         "commit --allow-empty": "production deploy must not manufacture audit commits",
         "git reset --hard": "runtime rollback must not mutate the source checkout",
-        "publish_server_branch_audit_if_requested": "legacy write-oriented audit function remains",
-        "Metrotherapy Deploy Audit": "legacy deploy write identity remains",
-        '"$SOURCE_DIR/.venv': "production deploy must not use the shared source virtualenv",
-        "post_deploy_verify.py --skip-pytest": "ordinary deploy must not bypass the strict production gate",
+        "git checkout": "production deploy must not change source branches",
+        "fetch --prune": "production deploy must not fetch source from GitHub",
+        "merge --ff-only": "production deploy must not merge source from GitHub",
+        "/root/metrotherapy": "legacy Metrotherapy source runtime remains",
+        "/etc/metrotherapy": "legacy Metrotherapy production config remains",
+        "metrotherapy.service": "legacy Metrotherapy systemd identity remains",
+        "scripts/immutable_deploy.sh": "legacy immutable deploy entrypoint remains active",
+        "run_deploy_worker.sh": "legacy deploy webhook worker remains active",
     }
     for needle, message in forbidden.items():
         if needle in combined:
             problems.append(message)
 
     wrapper_required = {
-        "scripts/check_remote_main_topology.sh": "deploy wrapper does not run remote topology audit",
-        "scripts/immutable_deploy.sh": "deploy wrapper does not delegate to immutable deployment",
+        "scripts/clientplatform_production_deploy.py": (
+            "deploy wrapper does not delegate to ClientPlatform production deploy"
+        ),
+        "exec python3": "deploy wrapper must exec the canonical Python deploy",
     }
     for needle, message in wrapper_required.items():
         if needle not in wrapper:
             problems.append(message)
 
-    remote_required = {
-        "git -C \"$SOURCE_DIR\" ls-remote --heads origin": "read-only remote branch audit is missing",
-        "REMOTE_TOPOLOGY_OK": "remote topology evidence marker is missing",
-        'branches" != "main"': "remote topology does not require exactly main",
+    production_required = {
+        'DEPLOY_DIR = ROOT / "deploy" / "clientplatform"': (
+            "canonical ClientPlatform deploy directory is missing"
+        ),
+        'LOCK_PATH = Path("/run/lock/clientplatform-production-deploy.lock")': (
+            "canonical production deploy lock is missing"
+        ),
+        "fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)": (
+            "production deploy singleton lock is missing"
+        ),
+        "_assert_tracked_worktree_clean()": (
+            "production deploy does not fail closed on tracked source changes"
+        ),
+        "prepare(env_file)": "canonical production env preparation is missing",
+        "_encrypted_backup(compose)": "encrypted pre-deploy backup path is missing",
+        "_local_backup(target_sha)": "explicit emergency local backup path is missing",
+        "_wait_for_readiness(timeout_seconds)": "readiness gate is missing",
+        "_external_https(domain)": "external HTTPS proof is missing",
+        "_rollback(": "rollback implementation is missing",
+        "_write_evidence(": "deployment evidence writer is missing",
+        "CLIENTPLATFORM_PRODUCTION_DEPLOY_OK": "deployment success evidence marker is missing",
+        "CLIENTPLATFORM_PRODUCTION_ROLLBACK_OK": "rollback evidence marker is missing",
     }
-    for needle, message in remote_required.items():
-        if needle not in remote:
+    for needle, message in production_required.items():
+        if needle not in production:
             problems.append(message)
 
-    immutable_required = {
-        "build_immutable_release.sh": "per-SHA release builder is not invoked",
-        "immutable_release.py": "atomic release manager is not invoked",
-        'RUNTIME_ROOT="${METRO_RUNTIME_ROOT:-/var/lib/metrotherapy/runtime}"': "runtime release root is missing",
-        'CURRENT_LINK="${METRO_CURRENT_RELEASE_LINK:-$RUNTIME_ROOT/current}"': "current release link is missing",
-        'PREVIOUS_LINK="${METRO_PREVIOUS_RELEASE_LINK:-$RUNTIME_ROOT/previous}"': "previous release link is missing",
-        "previous release compatibility on expanded schema": "previous-code expanded-schema proof is missing",
-        '"$SYSTEM_PYTHON" "$RELEASE_MANAGER" rollback': "atomic symlink rollback is missing",
-        '"$CURRENT_LINK/scripts/production_gate.py"': "mandatory production gate is missing",
-        '"$SYSTEM_PYTHON" "$RELEASE_MANAGER" write-proof': "deployment proof write is missing",
-        'record_successful_deployed_sha "$NEW_SHA"': "successful deployed SHA marker is missing",
-        "PRODUCTION_GATE_OK": "production gate evidence marker is missing",
-    }
-    for needle, message in immutable_required.items():
-        if needle not in immutable:
-            problems.append(message)
-
-    production_gate_pos = immutable.find('"$CURRENT_LINK/scripts/production_gate.py"')
-    proof_pos = immutable.find('"$SYSTEM_PYTHON" "$RELEASE_MANAGER" write-proof')
-    marker_pos = immutable.find('record_successful_deployed_sha "$NEW_SHA"')
-    if min(production_gate_pos, proof_pos, marker_pos) < 0 or not (
-        production_gate_pos < proof_pos < marker_pos
+    backup_pos = production.find("backup_reference =")
+    change_pos = production.find("changed = False")
+    readiness_pos = production.find("_wait_for_readiness(timeout_seconds)", change_pos)
+    success_pos = production.find("CLIENTPLATFORM_PRODUCTION_DEPLOY_OK")
+    if min(backup_pos, change_pos, readiness_pos, success_pos) < 0 or not (
+        backup_pos < change_pos < readiness_pos < success_pos
     ):
-        problems.append("deploy order must be production gate, deployment proof, then deployed SHA marker")
-
-    rollback_pos = immutable.find('"$SYSTEM_PYTHON" "$RELEASE_MANAGER" rollback')
-    restart_in_rollback = immutable.find('systemctl restart "$SERVICE_NAME"', rollback_pos)
-    if rollback_pos < 0 or restart_in_rollback < rollback_pos:
-        problems.append("rollback must switch the release link before restarting the service")
+        problems.append(
+            "deploy order must be backup, runtime change, readiness proof, then success evidence"
+        )
 
     return problems
 
@@ -97,8 +108,8 @@ def main() -> int:
             print(problem)
         return 1
     print(
-        "DEPLOY_GOVERNANCE_OK immutable_releases=1 atomic_rollback=1 "
-        "mandatory_restore_gate=1 github_write_credentials_required=0"
+        "DEPLOY_GOVERNANCE_OK single_runtime=1 singleton_lock=1 "
+        "predeploy_backup=1 readiness_gate=1 rollback=1 github_writes=0"
     )
     return 0
 
