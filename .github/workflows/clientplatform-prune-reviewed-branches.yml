@@ -1,0 +1,97 @@
+name: ClientPlatform Prune Reviewed Branches
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/clientplatform-prune-reviewed-branches.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: clientplatform-prune-reviewed-branches
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    if: github.repository == 'mailsvb2-bot/clientplatform' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout exact main
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Delete only reviewed branches and prove only main remains
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          readonly expected=(
+            'agent/creative-growth-auto-winner'
+            'agent/creative-growth-loop'
+            'agent/creative-variant-attribution'
+            'agent/creative-winner-policy'
+            'agent/creative-winner-review-ux'
+            'agent/enforce-handler-boundary-audits'
+            'agent/honor-telegram-polling-timeout'
+            'agent/integrate-visual-creative-engine'
+            'agent/integrate-visual-creative-v52'
+            'agent/paginate-booking-surfaces'
+            'agent/partner-growth-live-runtime'
+            'agent/persist-brand-dna-render-placement'
+            'agent/persist-brand-dna-render-selection'
+            'agent/platform-resource-limit-reminders'
+            'agent/prune-reviewed-branches-20260813'
+            'agent/readme-current-state'
+            'codex/finish-production-runtime-isolation'
+            'fix/clientplatform-production-ops-isolation'
+            'fix/yandex-account-button-reaction'
+            'ux/goal-driven-owner-experience'
+            'ux/goal-first-autopilot'
+            'ux/one-click-owner-flow'
+          )
+
+          git fetch --prune origin '+refs/heads/*:refs/remotes/origin/*'
+
+          mapfile -t actual < <(
+            git for-each-ref \
+              --format='%(refname:strip=3)' \
+              refs/remotes/origin \
+            | grep -vE '^(HEAD|main)$' \
+            | sort
+          )
+          mapfile -t wanted < <(printf '%s\n' "${expected[@]}" | sort)
+
+          if ! diff -u \
+            <(printf '%s\n' "${wanted[@]}") \
+            <(printf '%s\n' "${actual[@]}"); then
+            echo 'CLIENTPLATFORM_BRANCH_PRUNE_FAILED:remote_branch_set_changed' >&2
+            exit 1
+          fi
+
+          printf 'CLIENTPLATFORM_BRANCH_PRUNE_REVIEWED_COUNT:%s\n' "${#wanted[@]}"
+
+          for branch in "${wanted[@]}"; do
+            printf 'Deleting reviewed branch: %s\n' "$branch"
+            git push origin --delete "$branch"
+          done
+
+          git fetch --prune origin '+refs/heads/*:refs/remotes/origin/*'
+          mapfile -t remaining < <(
+            git for-each-ref \
+              --format='%(refname:strip=3)' \
+              refs/remotes/origin \
+            | grep -v '^HEAD$' \
+            | sort
+          )
+
+          if [[ "${#remaining[@]}" -ne 1 || "${remaining[0]}" != 'main' ]]; then
+            printf 'CLIENTPLATFORM_BRANCH_PRUNE_FAILED:remaining:%s\n' \
+              "${remaining[*]}" >&2
+            exit 1
+          fi
+
+          printf 'CLIENTPLATFORM_BRANCH_PRUNE_OK:main\n'
