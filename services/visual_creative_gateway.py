@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import mimetypes
 import os
@@ -47,6 +48,33 @@ class VisualCreativeBrief:
     brand_context: str = ""
     seed: int | None = None
 
+_RENDER_PACK_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,128}")
+_RENDER_IDEMPOTENCY_RE = re.compile(r"[A-Za-z0-9_.:@/-]{8,200}")
+_RENDER_SHA_RE = re.compile(r"[0-9a-f]{64}")
+_RENDER_FORMATS = frozenset({"square", "feed", "story", "landscape"})
+_RENDER_DIMENSIONS = {"square": (1080, 1080), "feed": (1080, 1350), "story": (1080, 1920), "landscape": (1200, 628)}
+
+
+@dataclass(frozen=True, slots=True)
+class VisualRenderAsset:
+    format_id: str
+    kind: str
+    width: int
+    height: int
+    mime_type: str
+    sha256: str
+    asset_ready: bool
+    quality: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class VisualRenderPack:
+    id: str
+    scope_id: str
+    source_job_id: str
+    status: str
+    error_code: str
+    assets: tuple[VisualRenderAsset, ...]
 
 def _env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
     try:
@@ -338,6 +366,178 @@ def download_visual(job: VisualCreativeJob, *, output_dir: str | None = None) ->
     return target
 
 
+def _render_pack(
+    value: dict[str, Any],
+    *,
+    expected_scope_id: str,
+    expected_source_job_id: str,
+    expected_formats: tuple[str, ...] = (),
+    expected_kind: str = "",
+) -> VisualRenderPack:
+    pack_id = str(value.get("id") or "").strip()
+    scope_id = str(value.get("scope_id") or "").strip()
+    source_job_id = str(value.get("source_job_id") or "").strip()
+    status = str(value.get("status") or "failed").strip().lower()
+    raw_assets = value.get("assets")
+    if (
+        _RENDER_PACK_ID_RE.fullmatch(pack_id) is None
+        or not re.fullmatch(r"[A-Za-z0-9_.:@/-]{1,160}", scope_id)
+        or scope_id != expected_scope_id
+        or source_job_id != expected_source_job_id
+        or status not in {"running", "succeeded", "failed"}
+        or not isinstance(raw_assets, list)
+        or len(raw_assets) > 4
+    ):
+        raise VisualCreativeGatewayError("visual_gateway_invalid_render_pack")
+    selected = tuple(dict.fromkeys(str(item or "").strip().lower() for item in expected_formats))
+    if any(item not in _RENDER_FORMATS for item in selected):
+        raise VisualCreativeGatewayError("visual_gateway_invalid_render_pack")
+    expected_kind = str(expected_kind or "").strip().lower()
+    if expected_kind and expected_kind not in {"image", "video"}:
+        raise VisualCreativeGatewayError("visual_gateway_invalid_render_pack")
+    assets: list[VisualRenderAsset] = []
+    seen: set[str] = set()
+    for item in raw_assets:
+        if not isinstance(item, dict):
+            raise VisualCreativeGatewayError("visual_gateway_invalid_render_asset")
+        format_id = str(item.get("format_id") or "").strip().lower()
+        kind = str(item.get("kind") or "").strip().lower()
+        mime_type = str(item.get("mime_type") or "").strip().lower()
+        sha256 = str(item.get("sha256") or "").strip().lower()
+        width = int(item.get("width") or 0)
+        height = int(item.get("height") or 0)
+        ready = item.get("asset_ready")
+        if (
+            format_id not in _RENDER_FORMATS
+            or format_id in seen
+            or kind not in {"image", "video"}
+            or not isinstance(ready, bool)
+            or (width, height) != _RENDER_DIMENSIONS[format_id]
+            or (expected_kind and kind != expected_kind)
+            or not mime_type
+            or re.fullmatch(r"[A-Za-z0-9!#$&^_.+/-]{1,128}", mime_type) is None
+            or not mime_type.startswith("video/" if kind == "video" else "image/")
+            or (status == "succeeded" and (_RENDER_SHA_RE.fullmatch(sha256) is None or ready is not True))
+            or (sha256 and _RENDER_SHA_RE.fullmatch(sha256) is None)
+        ):
+            raise VisualCreativeGatewayError("visual_gateway_invalid_render_asset")
+        seen.add(format_id)
+        assets.append(
+            VisualRenderAsset(
+                format_id=format_id,
+                kind=kind,
+                width=width,
+                height=height,
+                mime_type=mime_type,
+                sha256=sha256,
+                asset_ready=ready,
+                quality=dict(item.get("quality") or {}) if isinstance(item.get("quality"), dict) else {},
+            )
+        )
+    if status == "succeeded":
+        if not assets or (selected and set(seen) != set(selected)):
+            raise VisualCreativeGatewayError("visual_gateway_incomplete_render_pack")
+    elif selected and any(item not in set(selected) for item in seen):
+        raise VisualCreativeGatewayError("visual_gateway_unexpected_render_format")
+    return VisualRenderPack(
+        id=pack_id,
+        scope_id=scope_id,
+        source_job_id=source_job_id,
+        status=status,
+        error_code=str(value.get("error_code") or "")[:160],
+        assets=tuple(assets),
+    )
+
+
+def render_visual_pack(
+    job: VisualCreativeJob,
+    *,
+    formats: tuple[str, ...],
+    composition: dict[str, Any],
+    idempotency_key: str,
+) -> VisualRenderPack:
+    if job.status != "succeeded" or not job.asset_ready:
+        raise VisualCreativeGatewayError("visual_source_not_ready")
+    selected: list[str] = []
+    for raw in formats:
+        token = str(raw or "").strip().lower()
+        if token not in _RENDER_FORMATS:
+            raise ValueError("invalid_visual_render_format")
+        if token not in selected:
+            selected.append(token)
+    if not selected or len(selected) > 4:
+        raise ValueError("visual_render_formats_required")
+    idem = str(idempotency_key or "").strip()
+    if _RENDER_IDEMPOTENCY_RE.fullmatch(idem) is None:
+        raise ValueError("visual_render_idempotency_key_invalid")
+    if not isinstance(composition, dict):
+        raise ValueError("visual_render_composition_required")
+    value = _json(
+        "POST",
+        "/v1/creative/render-packs",
+        payload={
+            "source_job_id": job.id,
+            "scope_id": job.scope_id,
+            "idempotency_key": idem,
+            "formats": selected,
+            "composition": dict(composition),
+        },
+        timeout_seconds=300,
+    )
+    return _render_pack(
+        value,
+        expected_scope_id=job.scope_id,
+        expected_source_job_id=job.id,
+        expected_formats=tuple(selected),
+        expected_kind=job.kind,
+    )
+
+
+def download_render_asset(
+    pack: VisualRenderPack,
+    format_id: str,
+    *,
+    output_dir: str | None = None,
+) -> Path:
+    token = str(format_id or "").strip().lower()
+    asset = next((item for item in pack.assets if item.format_id == token), None)
+    if pack.status != "succeeded" or asset is None or not asset.asset_ready:
+        raise VisualCreativeGatewayError("visual_render_content_not_ready")
+    if _RENDER_PACK_ID_RE.fullmatch(pack.id) is None or token not in _RENDER_FORMATS:
+        raise VisualCreativeGatewayError("visual_gateway_invalid_render_asset")
+    query = urllib.parse.urlencode({"scope_id": pack.scope_id})
+    headers, raw = _request(
+        "GET",
+        f"/v1/creative/render-packs/{urllib.parse.quote(pack.id, safe='')}/content/{urllib.parse.quote(token, safe='')}?{query}",
+        max_bytes=_env_int(
+            "VISUAL_GATEWAY_MAX_MEDIA_BYTES",
+            256 * 1024 * 1024,
+            minimum=1024 * 1024,
+            maximum=1024 * 1024 * 1024,
+        ),
+    )
+    mime = str(headers.get("content-type") or asset.mime_type or "").split(";", 1)[0].strip().lower()
+    expected = "video/" if asset.kind == "video" else "image/"
+    if mime and mime != "application/octet-stream" and not mime.startswith(expected):
+        raise VisualCreativeGatewayError("visual_gateway_unexpected_render_media_type")
+    if asset.sha256 and hashlib.sha256(raw).hexdigest() != asset.sha256:
+        raise VisualCreativeGatewayError("visual_gateway_render_digest_mismatch")
+    suffix = mimetypes.guess_extension(mime) if mime else None
+    if suffix == ".jpe":
+        suffix = ".jpg"
+    suffix = suffix or (".mp4" if asset.kind == "video" else ".jpg")
+    root = Path(output_dir or os.getenv("VISUAL_CREATIVE_OUTPUT_DIR", "data/visual_creatives")).expanduser().resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    target = root / f"render-{pack.id}-{token}{suffix}"
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    try:
+        tmp.write_bytes(raw)
+        os.replace(tmp, target)
+    except OSError as exc:
+        tmp.unlink(missing_ok=True)
+        raise VisualCreativeGatewayError("visual_gateway_render_materialization_failed") from exc
+    return target
+
 def gateway_snapshot() -> dict[str, Any]:
     base = str(os.getenv("VISUAL_GATEWAY_URL", "") or "").strip()
     parsed = urllib.parse.urlsplit(base) if base else None
@@ -346,9 +546,10 @@ def gateway_snapshot() -> dict[str, Any]:
         try:
             port_value = parsed.port
         except ValueError:
-            port_value = None
-        port = f":{port_value}" if port_value else ""
-        safe_base = f"{parsed.scheme}://{parsed.hostname}{port}"
+            pass
+        else:
+            port = f":{port_value}" if port_value else ""
+            safe_base = f"{parsed.scheme}://{parsed.hostname}{port}"
     return {
         "configured": bool(safe_base),
         "base_url": safe_base,
@@ -360,9 +561,13 @@ __all__ = [
     "VisualCreativeBrief",
     "VisualCreativeGatewayError",
     "VisualCreativeJob",
+    "VisualRenderAsset",
+    "VisualRenderPack",
+    "download_render_asset",
     "download_visual",
     "gateway_snapshot",
     "poll_visual",
+    "render_visual_pack",
     "submit_visual",
     "wait_visual",
 ]
