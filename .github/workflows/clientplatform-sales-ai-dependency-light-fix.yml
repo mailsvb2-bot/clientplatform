@@ -1,5 +1,6 @@
 name: ClientPlatform Sales AI Dependency-Light Fix
 
+# Retry after extending the fix to keep both HTTP and crypto/secret backends lazy.
 on:
   push:
     branches: [agent/integrate-sales-ai-v3]
