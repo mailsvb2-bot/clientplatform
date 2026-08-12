@@ -12,18 +12,14 @@ ROOT = Path(__file__).resolve().parents[1]
 RECOVERY_SCRIPT = ROOT / "scripts" / "repair_contaminated_current_release.sh"
 
 
-def test_deploy_repairs_current_before_immutable_switch_and_cleans_after_success() -> None:
+def test_root_deploy_no_longer_drives_legacy_release_recovery() -> None:
     wrapper = (ROOT / "deploy.sh").read_text(encoding="utf-8")
 
-    repair = 'bash "$RECOVERY_SCRIPT" repair "$SOURCE_DIR"'
-    immutable = 'bash "$SOURCE_DIR/scripts/immutable_deploy.sh" "$@"'
-    cleanup = 'bash "$RECOVERY_SCRIPT" cleanup "$SOURCE_DIR"'
     assert wrapper.startswith("#!/usr/bin/env bash\n")
-    assert repair in wrapper
-    assert immutable in wrapper
-    assert cleanup in wrapper
-    assert wrapper.index(repair) < wrapper.index(immutable) < wrapper.index(cleanup)
-    assert "exec bash \"$SOURCE_DIR/scripts/immutable_deploy.sh\"" not in wrapper
+    assert 'exec python3 "$ROOT/scripts/clientplatform_production_deploy.py" "$@"' in wrapper
+    assert "repair_contaminated_current_release.sh" not in wrapper
+    assert "immutable_deploy.sh" not in wrapper
+    assert "install_runtime_write_guard.sh" not in wrapper
 
 
 def test_recovery_script_is_fail_closed_and_does_not_restart_the_live_service() -> None:
