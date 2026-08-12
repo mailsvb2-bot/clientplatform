@@ -30,71 +30,67 @@ def test_production_deploy_repair_script_has_valid_bash_syntax() -> None:
     assert completed.returncode == 0, completed.stderr
 
 
-def test_production_deploy_repair_script_keeps_secrets_out_of_output() -> None:
+def test_production_deploy_repair_script_is_clientplatform_only_and_secret_safe() -> None:
     text = SCRIPT.read_text(encoding="utf-8")
+    lowered = text.lower()
 
-    assert "openssl rand -hex 48" in text
-    assert 'ACTIONS_SECRET_NAME="${ACTIONS_SECRET_NAME:-METRO_DEPLOY_WEBHOOK_SECRET}"' in text
-    assert 'gh secret set "$ACTIONS_SECRET_NAME"' in text
-    assert "gh secret set GITHUB_WEBHOOK_SECRET" not in text
-    assert "WEBHOOK_SECRET=$WEBHOOK_SECRET" not in text
-    assert "echo $WEBHOOK_SECRET" not in text
-    assert "printf '%s' \"$WEBHOOK_SECRET\" | gh secret set" in text
+    assert 'APP_DIR="${APP_DIR:-/opt/clientplatform}"' in text
+    assert 'REPO="${REPO:-mailsvb2-bot/clientplatform}"' in text
+    assert "metrotherapy" not in lowered
+    assert "metro_" not in lowered
+    assert "/github-deploy" not in lowered
+    assert "CLIENTPLATFORM_PRODUCTION_SSH_PRIVATE_KEY_FILE" in text
+    assert "gh secret set CLIENTPLATFORM_PRODUCTION_SSH_PRIVATE_KEY" in text
+    assert 'cat "$SSH_PRIVATE_KEY_FILE"' in text
+    assert "echo $SSH_PRIVATE_KEY" not in text
+    assert "printf '%s' \"$SSH_PRIVATE_KEY\"" not in text
     assert "SERVER_LOCAL_BRANCH_COUNT=" in text
-    assert "GITHUB_BRANCH_COUNT=" in text
+    assert "GITHUB_PRODUCTION_TRANSPORT=dedicated_ssh" in text
 
 
-def test_repair_rejects_reserved_github_actions_secret_prefix() -> None:
+def test_production_deploy_repair_script_pins_known_host_from_local_sshd_identity() -> None:
     text = SCRIPT.read_text(encoding="utf-8")
 
-    assert 'GITHUB_*) fail "GitHub Actions secret names must not start with GITHUB_' in text
-    assert "METRO_DEPLOY_WEBHOOK_SECRET" in text
+    assert "/etc/ssh/ssh_host_ed25519_key.pub" in text
+    assert "ssh-keyscan" not in text
+    assert "CLIENTPLATFORM_PRODUCTION_SSH_KNOWN_HOSTS" in text
+    assert 'known_hosts_line="$known_host_name $host_key"' in text
 
 
-def test_repair_delegates_webhook_service_ownership_to_canonical_installer() -> None:
-    text = SCRIPT.read_text(encoding="utf-8")
-
-    assert 'SERVICE_INSTALLER="$APP_DIR/scripts/install_github_deploy_webhook_service.sh"' in text
-    assert 'bash "$SERVICE_INSTALLER"' in text
-    assert "install canonical webhook runtime and systemd service" in text
-    assert 'systemctl restart "$HOOK_SERVICE"' not in text
-    assert 'cat > "$HOOK_DROPIN_FILE"' not in text
-    assert "50-webhook-secret.conf" not in text
-
-
-def test_recovery_workflow_reads_the_allowed_actions_secret_name() -> None:
+def test_recovery_workflow_uses_dedicated_clientplatform_ssh_and_exact_trigger_sha() -> None:
     text = RECOVERY_WORKFLOW.read_text(encoding="utf-8")
+    lowered = text.lower()
 
-    assert "secrets.METRO_DEPLOY_WEBHOOK_SECRET" in text
-    assert "secrets.GITHUB_WEBHOOK_SECRET" not in text
-    assert "[recover-production-deploy]" in text
-
-
-def test_recovery_workflow_signs_the_same_trigger_bound_payload_it_posts() -> None:
-    text = RECOVERY_WORKFLOW.read_text(encoding="utf-8")
-
+    assert "metrotherapy" not in lowered
+    assert "/github-deploy" not in lowered
+    assert "secrets.CLIENTPLATFORM_PRODUCTION_SSH_PRIVATE_KEY" in text
     assert "TRIGGER_SHA: ${{ github.sha }}" in text
-    assert r'\"after\":\"%s\"' in text
-    assert '"$TRIGGER_SHA"' in text
-    assert 'PAYLOAD="$payload" SECRET="$DEPLOY_WEBHOOK_SECRET"' in text
-    assert '--data "$payload"' in text
     assert "GitHub recovery trigger SHA is invalid" in text
-    assert "Signed trigger-bound production deploy queued" in text
-    assert "payload='{\"ref\":\"refs/heads/main\"}'" not in text
+    assert 'fetched_sha" != "$expected_sha"' in text
+    assert "git fetch --prune origin main" in text
+    assert "git merge --ff-only origin/main" in text
+    assert "scripts/clientplatform_production_deploy.py" in text
+    assert "--recover-unavailable-baseline" in text
+    assert "StrictHostKeyChecking=yes" in text
+    assert "UserKnownHostsFile=" in text
 
 
-def test_topology_probe_retries_transient_health_and_deploy_endpoint_failures() -> None:
+def test_topology_probe_is_read_only_clientplatform_ssh_contract() -> None:
     text = TOPOLOGY_WORKFLOW.read_text(encoding="utf-8")
+    lowered = text.lower()
 
-    assert "for attempt in $(seq 1 24); do" in text
-    assert "health_code=\"$(curl -sS -o /dev/null -w '%{http_code}'" in text
-    assert '"$health" || true)' in text
-    assert 'response="$(curl -fsS --max-time 5 "$endpoint" 2>/dev/null || true)"' in text
-    assert '[ "$health_code" = "200" ]' in text
-    assert "sleep 5" in text
-    assert 'curl -fsS --max-time 5 "$health" >/dev/null' not in text
-    assert "SERVER_HEALTH_CODE=" in text
-    assert "Server health=${healthCode}" in text
+    assert "metrotherapy" not in lowered
+    assert "/github-deploy" not in lowered
+    assert "secrets.CLIENTPLATFORM_PRODUCTION_SSH_PRIVATE_KEY" in text
+    assert "workflow_dispatch:" in text
+    assert "repo=/opt/clientplatform" in text
+    assert "git for-each-ref --format='%(refname:short)' refs/heads" in text
+    assert 'branch_count" != "1"' in text
+    assert 'branch_csv" != "main"' in text
+    assert 'current_branch" != "main"' in text
+    assert "StrictHostKeyChecking=yes" in text
+    assert "UserKnownHostsFile=" in text
+    assert "ops/clientplatform-server-single-main" in text
 
 
 def test_github_topology_cleanup_retries_eventually_consistent_branch_reads() -> None:
