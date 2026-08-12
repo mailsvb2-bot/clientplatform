@@ -1,6 +1,7 @@
 name: Production deploy recovery
 
-# The GitHub Actions secret uses an allowed METRO_ prefix; server runtime keeps GITHUB_WEBHOOK_SECRET.
+# Marker-gated recovery for the dedicated ClientPlatform production checkout.
+# This workflow never calls another product's webhook or public health endpoint.
 on:
   push:
     branches:
@@ -10,59 +11,165 @@ permissions:
   contents: read
   statuses: write
 
+concurrency:
+  group: clientplatform-production-deploy-recovery
+  cancel-in-progress: false
+
 jobs:
   recover:
     if: contains(github.event.head_commit.message, '[recover-production-deploy]')
     runs-on: ubuntu-22.04
-    timeout-minutes: 5
+    timeout-minutes: 15
+    env:
+      SSH_HOST: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_HOST }}
+      SSH_USER: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_USER }}
+      SSH_PRIVATE_KEY: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_KNOWN_HOSTS }}
+      SSH_PORT_SECRET: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_PORT }}
+      TRIGGER_SHA: ${{ github.sha }}
+
     steps:
-      - name: Queue signed production main deploy
-        id: recover
-        env:
-          DEPLOY_WEBHOOK_SECRET: ${{ secrets.METRO_DEPLOY_WEBHOOK_SECRET }}
-          DEPLOY_ENDPOINT: https://metrotherapy-bot.metrotherapy.ru/github-deploy
-          TRIGGER_SHA: ${{ github.sha }}
+      - name: Require dedicated ClientPlatform SSH credentials
         shell: bash
         run: |
           set -Eeuo pipefail
-          if [ -z "$DEPLOY_WEBHOOK_SECRET" ]; then
-            echo "METRO_DEPLOY_WEBHOOK_SECRET is not configured in repository Actions secrets" >&2
+          : "${SSH_HOST:?CLIENTPLATFORM_PRODUCTION_SSH_HOST is required}"
+          : "${SSH_USER:?CLIENTPLATFORM_PRODUCTION_SSH_USER is required}"
+          : "${SSH_PRIVATE_KEY:?CLIENTPLATFORM_PRODUCTION_SSH_PRIVATE_KEY is required}"
+          : "${SSH_KNOWN_HOSTS:?CLIENTPLATFORM_PRODUCTION_SSH_KNOWN_HOSTS is required}"
+          case "$SSH_HOST" in
+            *[!A-Za-z0-9._:-]*|'')
+              echo "CLIENTPLATFORM_PRODUCTION_SSH_HOST has unsupported characters" >&2
+              exit 2
+              ;;
+          esac
+          case "$SSH_USER" in
+            *[!A-Za-z0-9._-]*|'')
+              echo "CLIENTPLATFORM_PRODUCTION_SSH_USER has unsupported characters" >&2
+              exit 2
+              ;;
+          esac
+          SSH_PORT="${SSH_PORT_SECRET:-22}"
+          case "$SSH_PORT" in
+            *[!0-9]*|'')
+              echo "CLIENTPLATFORM_PRODUCTION_SSH_PORT must be numeric" >&2
+              exit 2
+              ;;
+          esac
+          if [ "$SSH_PORT" -lt 1 ] || [ "$SSH_PORT" -gt 65535 ]; then
+            echo "CLIENTPLATFORM_PRODUCTION_SSH_PORT is outside 1..65535" >&2
             exit 2
           fi
           case "$TRIGGER_SHA" in
             ''|*[!0-9a-f]*)
               echo "GitHub recovery trigger SHA is invalid" >&2
-              exit 4
+              exit 3
               ;;
           esac
           if [ "${#TRIGGER_SHA}" -ne 40 ] || [ "$TRIGGER_SHA" = "0000000000000000000000000000000000000000" ]; then
             echo "GitHub recovery trigger SHA is invalid" >&2
-            exit 4
-          fi
-
-          payload="$(printf '{\"ref\":\"refs/heads/main\",\"after\":\"%s\"}' "$TRIGGER_SHA")"
-          signature="$(PAYLOAD="$payload" SECRET="$DEPLOY_WEBHOOK_SECRET" python - <<'PY'
-          import hashlib
-          import hmac
-          import os
-
-          payload = os.environ["PAYLOAD"].encode("utf-8")
-          secret = os.environ["SECRET"].encode("utf-8")
-          print("sha256=" + hmac.new(secret, payload, hashlib.sha256).hexdigest())
-          PY
-          )"
-
-          response="$(curl -fsS --max-time 10 \
-            -X POST "$DEPLOY_ENDPOINT" \
-            -H 'Content-Type: application/json' \
-            -H 'X-GitHub-Event: push' \
-            -H "X-Hub-Signature-256: $signature" \
-            --data "$payload")"
-          echo "DEPLOY_RECOVERY_RESPONSE=$response"
-          if [ "$response" != "deploy queued" ]; then
-            echo "Expected 'deploy queued', got: $response" >&2
             exit 3
           fi
+          echo "SSH_PORT=$SSH_PORT" >> "$GITHUB_ENV"
+
+      - name: Configure pinned production SSH identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          key="$RUNNER_TEMP/clientplatform-production-ssh-key"
+          known_hosts="$RUNNER_TEMP/clientplatform-production-known-hosts"
+          umask 077
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$key"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$known_hosts"
+          chmod 600 "$key" "$known_hosts"
+          ssh-keygen -y -f "$key" >/dev/null
+
+      - name: Fast-forward and recover dedicated ClientPlatform production
+        id: recover
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          key="$RUNNER_TEMP/clientplatform-production-ssh-key"
+          known_hosts="$RUNNER_TEMP/clientplatform-production-known-hosts"
+
+          ssh \
+            -p "$SSH_PORT" \
+            -i "$key" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$known_hosts" \
+            -o ConnectTimeout=10 \
+            "$SSH_USER@$SSH_HOST" "bash -s -- '$TRIGGER_SHA'" <<'REMOTE'
+          set -Eeuo pipefail
+          expected_sha="$1"
+          repo=/opt/clientplatform
+
+          case "$expected_sha" in
+            ''|*[!0-9a-f]*)
+              echo "Expected SHA is invalid" >&2
+              exit 10
+              ;;
+          esac
+          if [ "${#expected_sha}" -ne 40 ]; then
+            echo "Expected SHA is invalid" >&2
+            exit 10
+          fi
+          if [ ! -d "$repo/.git" ]; then
+            echo "ClientPlatform production checkout is not a git worktree: $repo" >&2
+            exit 11
+          fi
+          cd "$repo"
+
+          origin="$(git remote get-url origin 2>/dev/null || true)"
+          case "$origin" in
+            https://github.com/mailsvb2-bot/clientplatform|\
+            https://github.com/mailsvb2-bot/clientplatform.git|\
+            git@github.com:mailsvb2-bot/clientplatform|\
+            git@github.com:mailsvb2-bot/clientplatform.git|\
+            ssh://git@github.com/mailsvb2-bot/clientplatform|\
+            ssh://git@github.com/mailsvb2-bot/clientplatform.git)
+              ;;
+            *)
+              echo "Unexpected production repository origin" >&2
+              exit 12
+              ;;
+          esac
+
+          current_branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+          if [ "$current_branch" != "main" ]; then
+            echo "Expected production checkout on main; got $current_branch" >&2
+            exit 13
+          fi
+          if [ -n "$(git status --porcelain=v1 --untracked-files=no --ignore-submodules=none)" ]; then
+            echo "Tracked ClientPlatform production worktree is dirty" >&2
+            exit 14
+          fi
+
+          git fetch --prune origin main
+          fetched_sha="$(git rev-parse origin/main)"
+          if [ "$fetched_sha" != "$expected_sha" ]; then
+            echo "Fetched origin/main does not match the recovery trigger SHA" >&2
+            exit 15
+          fi
+
+          git merge --ff-only origin/main
+          deployed_source_sha="$(git rev-parse HEAD)"
+          if [ "$deployed_source_sha" != "$expected_sha" ]; then
+            echo "Production source checkout did not reach the recovery trigger SHA" >&2
+            exit 16
+          fi
+
+          if [ "$(id -u)" -eq 0 ]; then
+            python3 scripts/clientplatform_production_deploy.py \
+              --recover-unavailable-baseline \
+              --timeout-seconds 240
+          else
+            sudo -n python3 scripts/clientplatform_production_deploy.py \
+              --recover-unavailable-baseline \
+              --timeout-seconds 240
+          fi
+          REMOTE
 
       - name: Publish deploy recovery status
         if: always()
@@ -77,9 +184,9 @@ jobs:
               repo: context.repo.repo,
               sha: context.sha,
               state: ok ? 'success' : 'failure',
-              context: 'ops/production-deploy-recovery',
+              context: 'ops/clientplatform-production-deploy-recovery',
               description: ok
-                ? 'Signed trigger-bound production deploy queued'
-                : 'Production deploy recovery failed',
+                ? 'Dedicated ClientPlatform production recovery completed'
+                : 'ClientPlatform production deploy recovery failed',
               target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
             });

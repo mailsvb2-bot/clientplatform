@@ -1,7 +1,8 @@
 name: Production server topology probe
 
-# Marker-gated exact read-only audit of /root/metrotherapy refs/heads.
+# Marker-gated or manual read-only audit of the dedicated ClientPlatform production checkout.
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
@@ -10,73 +11,184 @@ permissions:
   contents: read
   statuses: write
 
+concurrency:
+  group: clientplatform-production-server-topology
+  cancel-in-progress: false
+
 jobs:
   probe:
-    if: contains(github.event.head_commit.message, '[probe-server-topology]')
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[probe-server-topology]')
     runs-on: ubuntu-22.04
-    timeout-minutes: 4
+    timeout-minutes: 5
+    env:
+      SSH_HOST: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_HOST }}
+      SSH_USER: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_USER }}
+      SSH_PRIVATE_KEY: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_KNOWN_HOSTS }}
+      SSH_PORT_SECRET: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_PORT }}
+
     steps:
-      - name: Read production topology endpoint
+      - name: Require dedicated ClientPlatform SSH credentials
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          : "${SSH_HOST:?CLIENTPLATFORM_PRODUCTION_SSH_HOST is required}"
+          : "${SSH_USER:?CLIENTPLATFORM_PRODUCTION_SSH_USER is required}"
+          : "${SSH_PRIVATE_KEY:?CLIENTPLATFORM_PRODUCTION_SSH_PRIVATE_KEY is required}"
+          : "${SSH_KNOWN_HOSTS:?CLIENTPLATFORM_PRODUCTION_SSH_KNOWN_HOSTS is required}"
+          case "$SSH_HOST" in
+            *[!A-Za-z0-9._:-]*|'')
+              echo "CLIENTPLATFORM_PRODUCTION_SSH_HOST has unsupported characters" >&2
+              exit 2
+              ;;
+          esac
+          case "$SSH_USER" in
+            *[!A-Za-z0-9._-]*|'')
+              echo "CLIENTPLATFORM_PRODUCTION_SSH_USER has unsupported characters" >&2
+              exit 2
+              ;;
+          esac
+          SSH_PORT="${SSH_PORT_SECRET:-22}"
+          case "$SSH_PORT" in
+            *[!0-9]*|'')
+              echo "CLIENTPLATFORM_PRODUCTION_SSH_PORT must be numeric" >&2
+              exit 2
+              ;;
+          esac
+          if [ "$SSH_PORT" -lt 1 ] || [ "$SSH_PORT" -gt 65535 ]; then
+            echo "CLIENTPLATFORM_PRODUCTION_SSH_PORT is outside 1..65535" >&2
+            exit 2
+          fi
+          echo "SSH_PORT=$SSH_PORT" >> "$GITHUB_ENV"
+
+      - name: Configure pinned production SSH identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          key="$RUNNER_TEMP/clientplatform-production-ssh-key"
+          known_hosts="$RUNNER_TEMP/clientplatform-production-known-hosts"
+          umask 077
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$key"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$known_hosts"
+          chmod 600 "$key" "$known_hosts"
+          ssh-keygen -y -f "$key" >/dev/null
+
+      - name: Read ClientPlatform production git topology
         id: topology
         shell: bash
         run: |
           set -Eeuo pipefail
-          endpoint="https://metrotherapy-bot.metrotherapy.ru/github-deploy"
-          health="https://metrotherapy-bot.metrotherapy.ru/healthz"
-          response=""
-          health_code="000"
+          key="$RUNNER_TEMP/clientplatform-production-ssh-key"
+          known_hosts="$RUNNER_TEMP/clientplatform-production-known-hosts"
 
-          for attempt in $(seq 1 24); do
-            echo "attempt=$attempt"
-            health_code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 "$health" || true)"
-            response="$(curl -fsS --max-time 5 "$endpoint" 2>/dev/null || true)"
-            echo "health_code=$health_code response=$response"
-            if [ "$health_code" = "200" ] && printf '%s' "$response" | grep -q 'local_branch_count='; then
-              break
-            fi
-            sleep 5
-          done
+          response="$(
+            ssh \
+              -p "$SSH_PORT" \
+              -i "$key" \
+              -o BatchMode=yes \
+              -o IdentitiesOnly=yes \
+              -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="$known_hosts" \
+              -o ConnectTimeout=10 \
+              "$SSH_USER@$SSH_HOST" 'bash -s' <<'REMOTE'
+          set -Eeuo pipefail
+          repo=/opt/clientplatform
 
-          count="$(printf '%s' "$response" | sed -n 's/.*local_branch_count=\([0-9][0-9]*\).*/\1/p')"
-          branches="$(printf '%s' "$response" | sed -n 's/.*local_branches=\([^ ]*\).*/\1/p')"
-          echo "SERVER_HEALTH_CODE=$health_code"
-          echo "SERVER_LOCAL_BRANCH_COUNT=$count"
-          echo "SERVER_LOCAL_BRANCHES=$branches"
-          echo "health_code=$health_code" >> "$GITHUB_OUTPUT"
-          echo "count=$count" >> "$GITHUB_OUTPUT"
-          echo "branches=$branches" >> "$GITHUB_OUTPUT"
-
-          if [ "$health_code" != "200" ]; then
-            echo "Expected production health HTTP 200; got $health_code" >&2
-            exit 1
+          if [ ! -d "$repo/.git" ]; then
+            echo "ClientPlatform production checkout is not a git worktree: $repo" >&2
+            exit 10
           fi
-          if [ "$count" != "1" ] || [ "$branches" != "main" ]; then
-            echo "Expected production server local topology 1/main; got count=$count branches=$branches" >&2
-            exit 1
+          cd "$repo"
+
+          origin="$(git remote get-url origin 2>/dev/null || true)"
+          case "$origin" in
+            https://github.com/mailsvb2-bot/clientplatform|\
+            https://github.com/mailsvb2-bot/clientplatform.git|\
+            git@github.com:mailsvb2-bot/clientplatform|\
+            git@github.com:mailsvb2-bot/clientplatform.git|\
+            ssh://git@github.com/mailsvb2-bot/clientplatform|\
+            ssh://git@github.com/mailsvb2-bot/clientplatform.git)
+              ;;
+            *)
+              echo "Unexpected production repository origin" >&2
+              exit 11
+              ;;
+          esac
+
+          branches="$(git for-each-ref --format='%(refname:short)' refs/heads | LC_ALL=C sort)"
+          current_branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+          branch_count="$(printf '%s\n' "$branches" | sed '/^$/d' | wc -l | tr -d '[:space:]')"
+          branch_csv="$(printf '%s\n' "$branches" | sed '/^$/d' | paste -sd, -)"
+          head_sha="$(git rev-parse HEAD)"
+          tracked_dirty_count="$(
+            git status --porcelain=v1 --untracked-files=no --ignore-submodules=none \
+              | sed '/^$/d' | wc -l | tr -d '[:space:]'
+          )"
+
+          if [ "$branch_count" != "1" ] || [ "$branch_csv" != "main" ]; then
+            echo "Expected exactly one local branch main; got count=$branch_count branches=$branch_csv" >&2
+            exit 12
+          fi
+          if [ "$current_branch" != "main" ]; then
+            echo "Expected current production branch main; got $current_branch" >&2
+            exit 13
+          fi
+          if [ "$tracked_dirty_count" != "0" ]; then
+            echo "Tracked ClientPlatform production worktree is dirty" >&2
+            exit 14
           fi
 
-      - name: Publish server topology status
+          printf '%s\n' \
+            "CLIENTPLATFORM_SERVER_TOPOLOGY_OK local_branch_count=$branch_count local_branches=$branch_csv current_branch=$current_branch tracked_dirty_count=$tracked_dirty_count head_sha=$head_sha"
+          REMOTE
+          )"
+
+          echo "$response"
+          count="$(printf '%s\n' "$response" | sed -n 's/.*local_branch_count=\([^ ]*\).*/\1/p')"
+          branches="$(printf '%s\n' "$response" | sed -n 's/.*local_branches=\([^ ]*\).*/\1/p')"
+          current="$(printf '%s\n' "$response" | sed -n 's/.*current_branch=\([^ ]*\).*/\1/p')"
+          dirty="$(printf '%s\n' "$response" | sed -n 's/.*tracked_dirty_count=\([^ ]*\).*/\1/p')"
+          head_sha="$(printf '%s\n' "$response" | sed -n 's/.*head_sha=\([0-9a-f]\{40\}\).*/\1/p')"
+
+          if [ "$count" != "1" ] || [ "$branches" != "main" ] || [ "$current" != "main" ] || [ "$dirty" != "0" ]; then
+            echo "ClientPlatform topology response did not satisfy 1/main/clean policy" >&2
+            exit 20
+          fi
+          if [ "${#head_sha}" -ne 40 ]; then
+            echo "ClientPlatform topology response did not contain a valid HEAD SHA" >&2
+            exit 21
+          fi
+
+          {
+            echo "count=$count"
+            echo "branches=$branches"
+            echo "current=$current"
+            echo "dirty=$dirty"
+            echo "head_sha=$head_sha"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Publish ClientPlatform server topology status
         if: always()
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         env:
           PROBE_OUTCOME: ${{ steps.topology.outcome }}
-          SERVER_HEALTH_CODE: ${{ steps.topology.outputs.health_code }}
           SERVER_BRANCH_COUNT: ${{ steps.topology.outputs.count }}
           SERVER_BRANCHES: ${{ steps.topology.outputs.branches }}
+          SERVER_CURRENT_BRANCH: ${{ steps.topology.outputs.current }}
         with:
           script: |
             const ok = process.env.PROBE_OUTCOME === 'success';
-            const healthCode = process.env.SERVER_HEALTH_CODE || '?';
             const count = process.env.SERVER_BRANCH_COUNT || '?';
             const branches = process.env.SERVER_BRANCHES || '?';
+            const current = process.env.SERVER_CURRENT_BRANCH || '?';
             await github.rest.repos.createCommitStatus({
               owner: context.repo.owner,
               repo: context.repo.repo,
               sha: context.sha,
               state: ok ? 'success' : 'failure',
-              context: 'ops/server-single-main',
+              context: 'ops/clientplatform-server-single-main',
               description: ok
-                ? `Server health=${healthCode}; local branches=${count}: ${branches}`
-                : `Server probe failed: health=${healthCode} topology=${count}/${branches}`,
+                ? `ClientPlatform server local branches=${count}:${branches}; current=${current}`
+                : 'ClientPlatform production topology probe failed',
               target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
             });
