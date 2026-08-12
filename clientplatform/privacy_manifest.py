@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 TenantDisposition = Literal["erase", "retain", "anonymize"]
-CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-08-12.v24-creative-variant-attribution"
+CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-08-13.v25-sales-ai-advisory"
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,6 +83,10 @@ _POLICIES = (
     _required("clientplatform_sales_action_plans", "erase", "customer-linked proposed sales actions and rationales"),
     _required("clientplatform_sales_conversation_state", "erase", "rebuildable customer-linked sales journey projection"),
     _required("clientplatform_sales_handoffs", "erase", "operator takeover context can contain customer conversation metadata"),
+    _required("clientplatform_sales_ai_jobs", "erase", "customer-linked advisory AI queue state and retry evidence"),
+    _required("clientplatform_sales_ai_heads", "erase", "per-lead advisory AI freshness cursor follows customer message processing state"),
+    _required("clientplatform_sales_ai_consents", "retain", "business-owned AI consent target, epoch and data-mode audit state"),
+    _required("clientplatform_sales_ai_analysis_projection", "erase", "latest customer-linked advisory AI analysis and verified offer snapshot"),
     _required("commercial_ladders", "retain", "business-owned commercial ladder configuration"),
     _required("commercial_ladder_steps", "retain", "business-owned commercial offer sequence and approval thresholds"),
 )
