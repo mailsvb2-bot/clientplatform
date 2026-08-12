@@ -1,0 +1,38 @@
+name: ClientPlatform Integrate Sales AI v3
+
+on:
+  push:
+    branches: [agent/integrate-sales-ai-v3]
+    paths:
+      - .github/workflows/clientplatform-integrate-sales-ai-v3.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: clientplatform-integrate-sales-ai-v3
+  cancel-in-progress: false
+
+jobs:
+  integrate:
+    if: github.repository == 'mailsvb2-bot/clientplatform'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout exact integration branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Apply reviewed current-main wiring
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 .github/sales-ai-v3-wire.py
+          git diff --check
+          python -m py_compile app.py clientplatform/runtime/bot_gateway.py handlers/clientplatform_sales.py
+          git config user.name 'ClientPlatform Integration Bot'
+          git config user.email 'mailsvb2@gmail.com'
+          git add app.py clientplatform/runtime/bot_gateway.py handlers/clientplatform_sales.py
+          git rm .github/workflows/clientplatform-integrate-sales-ai-v3.yml .github/sales-ai-v3-wire.py .github/sales-ai-v3-handler-fragment.b64
+          git commit -m 'Wire Sales AI into current runtime and owner flow'
+          git push origin HEAD:agent/integrate-sales-ai-v3
