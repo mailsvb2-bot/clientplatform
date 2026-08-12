@@ -16,7 +16,6 @@ from clientplatform.application.creative_winner import (
 )
 from clientplatform.domain.creative_growth import CreativeTrafficPlan, CreativeTrialStatus
 from clientplatform.domain.creative_winner_policy import (
-    CreativeWinnerDecision,
     CreativeWinnerMetric,
     CreativeWinnerRecommendation,
 )
@@ -155,11 +154,7 @@ async def _send_trial_review(
         trial_id=trial_id,
     )
     recommendation = preview.recommendation
-    plan = await asyncio.to_thread(
-        _load_plan,
-        actor=actor,
-        trial_id=trial_id,
-    )
+    plan = preview.plan
     trial_token = _control()._uuid_token(plan.trial_id)
     business_token = _control()._uuid_token(plan.business_id)
     reason = _REASON_TEXT.get(recommendation.reason, recommendation.reason)
@@ -194,16 +189,6 @@ async def _send_trial_review(
     )
 
 
-def _load_plan(*, actor, trial_id: str) -> CreativeTrafficPlan:
-    # Keep presentation reads behind the same application entry point used by
-    # the list view, avoiding direct database access in Telegram handlers.
-    plans = list_creative_trials(actor=actor)
-    for plan in plans:
-        if plan.trial_id == trial_id:
-            return plan
-    raise LookupError("creative growth trial was not found")
-
-
 @router.callback_query(F.data.startswith("cpw:home:"))
 async def open_creative_trials(callback: CallbackQuery, state: FSMContext) -> None:
     c = _control()
@@ -213,7 +198,7 @@ async def open_creative_trials(callback: CallbackQuery, state: FSMContext) -> No
     try:
         actor = await c._actor(int(callback.from_user.id), business_id)
         plans = await asyncio.to_thread(list_creative_trials, actor=actor)
-    except (TenantPermissionDenied, TenancyError, LookupError, RuntimeError, ValueError):
+    except (TenancyError, LookupError, RuntimeError, ValueError):
         await callback.answer("Не удалось открыть A/B тесты", show_alert=True)
         return
     await callback.answer()
@@ -260,7 +245,7 @@ async def open_creative_trial(callback: CallbackQuery) -> None:
         )
         await callback.answer()
         await _send_trial_review(_message(callback), actor=actor, trial_id=trial_id)
-    except (TenantPermissionDenied, TenancyError, LookupError, RuntimeError, ValueError):
+    except (TenancyError, LookupError, RuntimeError, ValueError):
         await callback.answer("Не удалось открыть рекомендацию", show_alert=True)
 
 
