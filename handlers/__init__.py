@@ -161,6 +161,13 @@ def _load_clientplatform_modules() -> tuple[ModuleType, ModuleType]:
     globals()["clientplatform_ad_spend"] = ad_spend
     ad_spend.install_ad_spend_controls(control, simple_experience)
 
+    creative_winner = importlib.import_module(
+        ".clientplatform_creative_winner",
+        __name__,
+    )
+    globals()["clientplatform_creative_winner"] = creative_winner
+    creative_winner.install_creative_winner_controls(control, simple_experience)
+
     one_click = importlib.import_module(
         ".clientplatform_one_click_experience",
         __name__,
@@ -310,6 +317,9 @@ def __getattr__(name: str) -> ModuleType:
     if name == "clientplatform_ad_spend":
         _load_clientplatform_modules()
         return globals()["clientplatform_ad_spend"]
+    if name == "clientplatform_creative_winner":
+        _load_clientplatform_modules()
+        return globals()["clientplatform_creative_winner"]
     if name == "clientplatform_one_click_experience":
         _load_clientplatform_modules()
         return globals()["clientplatform_one_click_experience"]
@@ -336,6 +346,7 @@ __all__ = [
     "clientplatform_bot_lifecycle",
     "clientplatform_bot_setup",
     "clientplatform_control",
+    "clientplatform_creative_winner",
     "clientplatform_existing_bot_onboarding",
     "clientplatform_first_result",
     "clientplatform_goal_dashboard",
