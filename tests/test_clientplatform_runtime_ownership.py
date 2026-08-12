@@ -19,7 +19,13 @@ class ClientPlatformRuntimeOwnershipTests(unittest.TestCase):
             "ops/deploy_webhook_hardened.py",
             "ops/autodeploy_smoke_marker.md",
             "scripts/install_github_deploy_webhook_service.sh",
+            "scripts/run_deploy_worker.sh",
+            "scripts/run_deploy_worker_observed.sh",
+            "scripts/recover_stale_deploy_worker.sh",
             "tests/test_deploy_webhook_hardening.py",
+            "tests/test_deploy_webhook_worker_isolation.py",
+            "tests/test_github_deploy_webhook_service_installer.py",
+            "tests/test_nginx_runtime_routes_contract.py",
         )
         for relative in legacy_paths:
             with self.subTest(path=relative):
@@ -45,10 +51,10 @@ class ClientPlatformRuntimeOwnershipTests(unittest.TestCase):
                 self.assertTrue((canonical / relative).is_file(), relative)
 
         required_scripts = (
-            "scripts/clientplatform_backup.py",
+            "scripts/clientplatform_postgres_backup.py",
             "scripts/clientplatform_production_deploy.py",
             "scripts/clientplatform_production_preflight.py",
-            "scripts/clientplatform_restore_drill.py",
+            "scripts/clientplatform_postgres_restore_drill.py",
         )
         for relative in required_scripts:
             with self.subTest(path=relative):
@@ -61,6 +67,15 @@ class ClientPlatformRuntimeOwnershipTests(unittest.TestCase):
         self.assertIn("deploy/clientplatform/", contract)
         self.assertNotIn("cd /root/metrotherapy", contract)
         self.assertNotIn("/etc/metrotherapy/metrotherapy.env", contract)
+
+    def test_root_deploy_is_only_a_clientplatform_compatibility_entrypoint(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        wrapper = (root / "deploy.sh").read_text(encoding="utf-8")
+        self.assertIn("scripts/clientplatform_production_deploy.py", wrapper)
+        self.assertNotIn("scripts/immutable_deploy.sh", wrapper)
+        self.assertNotIn("/root/metrotherapy", wrapper)
+        self.assertNotIn("/etc/metrotherapy", wrapper)
+        self.assertNotIn("metrotherapy.service", wrapper)
 
     def test_workflows_cannot_revive_legacy_deploy_webhook(self) -> None:
         root = Path(__file__).resolve().parents[1]
@@ -76,6 +91,9 @@ class ClientPlatformRuntimeOwnershipTests(unittest.TestCase):
             "ops/deploy_webhook_hardened.py",
             "github-deploy-webhook.service",
             "install_github_deploy_webhook_service.sh",
+            "run_deploy_worker.sh",
+            "run_deploy_worker_observed.sh",
+            "recover_stale_deploy_worker.sh",
         )
         found = [value for value in forbidden if value in workflow_text]
         self.assertEqual(found, [])
