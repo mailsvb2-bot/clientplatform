@@ -43,6 +43,14 @@ def _install_managed_campaign_goal_first() -> None:
     if bool(getattr(one_click, "_managed_campaign_goal_first_installed", False)):
         return
 
+    # Preserve the historical composition hook name, but point it at the
+    # canonical tenant-owned managed campaign implementation.
+    setattr(
+        one_click,
+        "create_ad_publication_draft",
+        one_click.create_managed_ad_publication_draft,
+    )
+
     async def prepare_goal_result(event, state, *, data: dict, region_ids: tuple[int, ...]) -> None:
         actor = await control._actor(one_click._user_id(event), str(data["business_id"]))
         try:
@@ -75,7 +83,7 @@ def _install_managed_campaign_goal_first() -> None:
 
         try:
             draft = await asyncio.to_thread(
-                one_click.create_managed_ad_publication_draft,
+                one_click.create_ad_publication_draft,
                 actor=actor,
                 promotion_campaign_id=promotion.campaign.id,
                 connection_id=str(data["connection_id"]),
@@ -94,10 +102,15 @@ def _install_managed_campaign_goal_first() -> None:
             )
             return
 
+        external_campaign_id = str(
+            getattr(draft.job, "external_campaign_id", "")
+            or data.get("external_campaign_id")
+            or ""
+        )
         next_data = {
             **data,
             "promotion_campaign_id": promotion.campaign.id,
-            "external_campaign_id": draft.job.external_campaign_id,
+            "external_campaign_id": external_campaign_id,
             "external_campaign_name": draft.campaign_name,
             "source_url": source_url,
             "job_id": draft.job.id,
@@ -128,11 +141,42 @@ def _install_managed_campaign_goal_first() -> None:
         campaign_name: str = "",
     ) -> None:
         del campaign_id, campaign_name
-        await one_click._choose_connection(
-            callback,
-            state,
-            data=data,
+        actor = await control._actor(
+            int(callback.from_user.id),
+            str(data["business_id"]),
+        )
+        try:
+            jobs = await asyncio.to_thread(one_click.list_ad_publications, actor=actor)
+        except (one_click.AdConnectionError, one_click.TenantPermissionDenied):
+            jobs = []
+        saved = one_click._recent(
+            jobs,
             connection_id=str(data["connection_id"]),
+        )
+        regions = tuple(getattr(saved, "region_ids", ()) or ()) if saved else ()
+        if regions:
+            await prepare_goal_result(
+                callback,
+                state,
+                data=data,
+                region_ids=regions,
+            )
+            return
+
+        await state.set_state(one_click.OneClickOwnerState.waiting_region)
+        await state.set_data(data)
+        await control._callback_message(callback).answer(
+            "Осталось только указать регион: где искать клиентов? Это нужно спросить "
+            "только в первый раз — дальше ClientPlatform запомнит выбор, а рекламную "
+            "кампанию создаст и привяжет сама.",
+            reply_markup=control._keyboard(
+                [
+                    [("Нижний Новгород", "cpo:region:47"), ("Москва", "cpo:region:213")],
+                    [("Санкт-Петербург", "cpo:region:2")],
+                    [("Другой регион", "cpo:region:other")],
+                    [("🏠 Не сейчас", f"cpj:home:{data['business_token']}")],
+                ]
+            ),
         )
 
     setattr(goal_first, "_prepare_goal_result", prepare_goal_result)
