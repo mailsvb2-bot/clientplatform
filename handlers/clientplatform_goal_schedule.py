@@ -261,7 +261,7 @@ async def _create_slot_and_resume(
     except KeyError:
         await state.clear()
         await message.answer(
-            "Этот шаг уже устарел. Нажмите «🚀 Получить клиентов» и я начну заново."
+            "Этот шаг уже устарел. Нажмите «🚀 Найти новых клиентов» и я начну заново."
         )
         return
 
@@ -333,7 +333,7 @@ async def change_goal_offering_page(callback: CallbackQuery) -> None:
         offerings = await _selectable_offerings(actor)
     except (ValueError, TenantPermissionDenied):
         await callback.answer(
-            "Список изменился. Нажмите «Получить клиентов» ещё раз.",
+            "Список изменился. Нажмите «🚀 Найти новых клиентов» ещё раз.",
             show_alert=True,
         )
         return
@@ -389,7 +389,7 @@ async def receive_goal_offering_title(message: Message, state: FSMContext) -> No
     except KeyError:
         await state.clear()
         await message.answer(
-            "Этот шаг уже устарел. Нажмите «🚀 Получить клиентов» и я начну заново."
+            "Этот шаг уже устарел. Нажмите «🚀 Найти новых клиентов» и я начну заново."
         )
         return
     try:
