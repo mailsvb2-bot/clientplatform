@@ -149,7 +149,11 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
             ),
             patch.object(one_click.control, "list_booking_slots", return_value=[slot()]),
             patch.object(one_click.control, "_uuid_token", side_effect=lambda value: value),
-            patch.object(one_click.owner, "_all_offerings", new=AsyncMock(return_value=[])),
+            patch.object(
+                goal.send_goal_dashboard.__globals__["owner"],
+                "_all_offerings",
+                new=AsyncMock(return_value=[]),
+            ),
         ):
             await goal.send_goal_dashboard(
                 out,
