@@ -4,6 +4,7 @@ import sqlite3
 
 from . import clientplatform_activity
 from . import clientplatform_ad_connections
+from . import clientplatform_ad_managed_campaigns
 from . import clientplatform_ad_publication_assets
 from . import clientplatform_creative_experiments
 from . import clientplatform_creative_growth
@@ -47,6 +48,7 @@ PARTS = [
     clientplatform_sales_ai,
     clientplatform_offer_ladders,
     clientplatform_ad_connections,
+    clientplatform_ad_managed_campaigns,
     clientplatform_ad_publication_assets,
     clientplatform_creative_experiments,
     clientplatform_creative_growth,
