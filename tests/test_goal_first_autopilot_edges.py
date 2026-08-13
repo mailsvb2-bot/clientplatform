@@ -62,7 +62,7 @@ class GoalFirstAutopilotEdgeTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch.object(goal.control, "_actor", new=AsyncMock(return_value="actor")),
             patch.object(goal.one_click, "list_ad_publications", return_value=[saved]),
-            patch.object(goal, "_prepare_goal_result", new=prepare),
+            patch.object(goal.one_click, "_prepare_draft", new=prepare),
         ):
             await goal._choose_goal_region(callback, FakeState(data), data=data)
         prepare.assert_awaited_once()
