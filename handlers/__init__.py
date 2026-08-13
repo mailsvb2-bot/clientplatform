@@ -257,9 +257,6 @@ def _load_clientplatform_modules() -> tuple[ModuleType, ModuleType]:
         "clientplatform.runtime.ad_media_monitor"
     )
     if not bool(getattr(entry, "_ad_media_monitor_composed", False)):
-        entry.router.startup.register(entry.register_clientplatform_bot_commands)
-        entry._telegram_commands_startup_composed = True
-    if not bool(getattr(entry, "_ad_media_monitor_composed", False)):
         entry.router.startup.register(ad_media_monitor.start_ad_media_monitor)
         entry.router.shutdown.register(ad_media_monitor.stop_ad_media_monitor)
         entry._ad_media_monitor_composed = True
