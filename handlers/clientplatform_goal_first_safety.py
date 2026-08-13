@@ -119,7 +119,24 @@ def _install_managed_campaign_goal_first() -> None:
             ),
         )
 
+    async def choose_goal_region(
+        callback,
+        state,
+        *,
+        data: dict,
+        campaign_id: str = "",
+        campaign_name: str = "",
+    ) -> None:
+        del campaign_id, campaign_name
+        await one_click._choose_connection(
+            callback,
+            state,
+            data=data,
+            connection_id=str(data["connection_id"]),
+        )
+
     setattr(goal_first, "_prepare_goal_result", prepare_goal_result)
+    setattr(goal_first, "_choose_goal_region", choose_goal_region)
     setattr(one_click, "_prepare_draft", prepare_goal_result)
     if hasattr(one_click, "_choose_campaign"):
         delattr(one_click, "_choose_campaign")
