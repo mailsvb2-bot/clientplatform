@@ -236,7 +236,7 @@ class GoalScheduleTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(schedule.control, "_token_uuid", side_effect=lambda value: value):
             await schedule.change_goal_offering_page(bad)
         bad.answer.assert_awaited_once_with(
-            "Список изменился. Нажмите «Получить клиентов» ещё раз.",
+            "Список изменился. Нажмите «🚀 Найти новых клиентов» ещё раз.",
             show_alert=True,
         )
 
