@@ -2,6 +2,8 @@ from __future__ import annotations
 
 """Canonical goal-first owner action plus its interaction-safety wiring."""
 
+import asyncio
+import sys
 from dataclasses import dataclass
 from types import ModuleType
 from typing import Callable, cast
@@ -30,6 +32,98 @@ ACQUIRE_CLIENTS = OwnerNavigationAction(
 def _extend_tuple(module: ModuleType, name: str, *values: str) -> None:
     current = tuple(getattr(module, name))
     setattr(module, name, tuple(dict.fromkeys((*current, *values))))
+
+
+def _install_managed_campaign_goal_first() -> None:
+    one_click = sys.modules.get("handlers.clientplatform_one_click_experience")
+    goal_first = sys.modules.get("handlers.clientplatform_goal_first_autopilot")
+    control = sys.modules.get("handlers.clientplatform_control")
+    if one_click is None or goal_first is None or control is None:
+        return
+    if bool(getattr(one_click, "_managed_campaign_goal_first_installed", False)):
+        return
+
+    async def prepare_goal_result(event, state, *, data: dict, region_ids: tuple[int, ...]) -> None:
+        actor = await control._actor(one_click._user_id(event), str(data["business_id"]))
+        try:
+            promotion = await asyncio.to_thread(
+                one_click.create_slot_promotion,
+                actor=actor,
+                slot_id=str(data["slot_id"]),
+                channel=one_click.PromotionChannel.WEBSITE,
+            )
+        except (one_click.PromotionError, one_click.TenantPermissionDenied):
+            await one_click._draft_failure(
+                event,
+                state,
+                business_token=str(data["business_token"]),
+            )
+            return
+
+        try:
+            source_url = one_click._link(
+                await one_click._username(event),
+                promotion.campaign.source_token,
+            )
+        except (RuntimeError, ValueError):
+            await one_click._draft_failure(
+                event,
+                state,
+                business_token=str(data["business_token"]),
+            )
+            return
+
+        try:
+            draft = await asyncio.to_thread(
+                one_click.create_managed_ad_publication_draft,
+                actor=actor,
+                promotion_campaign_id=promotion.campaign.id,
+                connection_id=str(data["connection_id"]),
+                region_ids=region_ids,
+                source_url=source_url,
+            )
+        except (
+            one_click.AdConnectionError,
+            one_click.TenantPermissionDenied,
+            one_click.YandexDirectError,
+        ):
+            await one_click._draft_failure(
+                event,
+                state,
+                business_token=str(data["business_token"]),
+            )
+            return
+
+        next_data = {
+            **data,
+            "promotion_campaign_id": promotion.campaign.id,
+            "external_campaign_id": draft.job.external_campaign_id,
+            "external_campaign_name": draft.campaign_name,
+            "source_url": source_url,
+            "job_id": draft.job.id,
+            "creative_title": draft.job.title,
+            "creative_body": draft.job.text,
+            "creative_job_id": "",
+        }
+        await state.set_state(goal_first.GoalFirstAutopilotState.ready)
+        await state.set_data(next_data)
+        await one_click._target(event).answer(
+            "✅ Реклама подготовлена — всё готово\n\n"
+            "ClientPlatform сама выбрала свободное время и выделила этому продвижению "
+            "отдельную кампанию Яндекса. Кампания остаётся выключенной.\n\n"
+            f"{draft.job.title}\n\n{draft.job.text}\n\n"
+            "Можно настроить текст или медиа, либо перейти к отдельной проверке запуска.",
+            reply_markup=goal_first._result_keyboard(
+                str(data["business_token"]),
+                next_data,
+            ),
+        )
+
+    setattr(goal_first, "_prepare_goal_result", prepare_goal_result)
+    setattr(one_click, "_prepare_draft", prepare_goal_result)
+    if hasattr(one_click, "_choose_campaign"):
+        delattr(one_click, "_choose_campaign")
+    setattr(one_click, "_managed_campaign_goal_first_installed", True)
 
 
 def install_goal_first_safety(safety: ModuleType) -> None:
@@ -103,6 +197,7 @@ def install_goal_first_safety(safety: ModuleType) -> None:
 
     setattr(safety, "_state_local_callback_allowed", state_local_callback_allowed)
     setattr(safety, "_callback_can_escape_state", callback_can_escape_state)
+    _install_managed_campaign_goal_first()
     setattr(safety, "_goal_first_safety_installed", True)
 
 
