@@ -153,14 +153,15 @@ def test_promotion_engine_is_composed_without_replacing_booking_core() -> None:
     assert control.book_customer_slot.__module__ == "clientplatform.application.bookings"
 
 
-def test_owner_dashboard_exposes_get_clients_instead_of_abstract_promotion() -> None:
+def test_owner_dashboard_exposes_new_client_acquisition_instead_of_abstract_promotion() -> None:
     business_id = str(uuid4())
     labels = [
         button.text
         for row in owner._owner_keyboard(business_id).inline_keyboard
         for button in row
     ]
-    assert "🚀 Получить клиентов" in labels
+    assert "🚀 Найти новых клиентов" in labels
+    assert "💬 Обращения и продажи" in labels
     assert "📢 Продвижение" not in labels
 
 
