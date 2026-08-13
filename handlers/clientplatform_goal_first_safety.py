@@ -155,7 +155,7 @@ def _install_managed_campaign_goal_first() -> None:
         )
         regions = tuple(getattr(saved, "region_ids", ()) or ()) if saved else ()
         if regions:
-            await prepare_goal_result(
+            await one_click._prepare_draft(
                 callback,
                 state,
                 data=data,
@@ -191,11 +191,7 @@ def install_goal_first_safety(safety: ModuleType) -> None:
     if bool(getattr(safety, "_goal_first_safety_installed", False)):
         return
 
-    _extend_tuple(
-        safety,
-        "_SENSITIVE_STATE_PREFIXES",
-        "GoalFirstAutopilotState:",
-    )
+    _extend_tuple(safety, "_SENSITIVE_STATE_PREFIXES", "GoalFirstAutopilotState:")
     _extend_tuple(
         safety,
         "_ONE_SHOT_PREFIXES",
