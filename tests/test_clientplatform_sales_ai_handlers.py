@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import importlib.util
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
-from handlers import clientplatform_sales as sales
+
+_AIOGRAM_AVAILABLE = importlib.util.find_spec("aiogram") is not None
 
 
 class _State:
@@ -39,16 +41,28 @@ async def _inline_to_thread(func, /, *args, **kwargs):
     return func(*args, **kwargs)
 
 
+@unittest.skipUnless(_AIOGRAM_AVAILABLE, "aiogram is not installed")
 class SalesAIHandlerTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
+        from handlers import clientplatform_sales
+
+        self.sales = clientplatform_sales
         self.business_id = str(uuid4())
         self.lead_id = str(uuid4())
-        self.token = sales._token(self.business_id)
+        self.token = self.sales._token(self.business_id)
         self.actor = SimpleNamespace(business_id=self.business_id)
         self.control_patches = [
-            patch.object(sales.control, "_actor", AsyncMock(return_value=self.actor)),
-            patch.object(sales.control, "_callback_message", lambda callback: callback.message),
-            patch.object(sales.control, "_keyboard", lambda rows: rows),
+            patch.object(
+                self.sales.control,
+                "_actor",
+                AsyncMock(return_value=self.actor),
+            ),
+            patch.object(
+                self.sales.control,
+                "_callback_message",
+                lambda callback: callback.message,
+            ),
+            patch.object(self.sales.control, "_keyboard", lambda rows: rows),
         ]
         for item in self.control_patches:
             item.start()
@@ -59,8 +73,12 @@ class SalesAIHandlerTests(unittest.IsolatedAsyncioTestCase):
         state = _State()
         from clientplatform.application import sales_ai_drafts
 
-        with patch.object(sales_ai_drafts, "sales_ai_runtime_available", return_value=False):
-            await sales.toggle_sales_ai(callback, state)
+        with patch.object(
+            sales_ai_drafts,
+            "sales_ai_runtime_available",
+            return_value=False,
+        ):
+            await self.sales.toggle_sales_ai(callback, state)
 
         self.assertEqual(state.cleared, 0)
         self.assertEqual(
@@ -81,13 +99,25 @@ class SalesAIHandlerTests(unittest.IsolatedAsyncioTestCase):
             return enabled
 
         with (
-            patch.object(sales.asyncio, "to_thread", _inline_to_thread),
-            patch.object(sales, "_send_sales_work", refresh),
-            patch.object(sales_ai_drafts, "sales_ai_runtime_available", return_value=True),
-            patch.object(sales_ai_settings, "get_business_sales_ai_enabled", return_value=True),
-            patch.object(sales_ai_settings, "set_business_sales_ai_enabled", side_effect=change),
+            patch.object(self.sales.asyncio, "to_thread", _inline_to_thread),
+            patch.object(self.sales, "_send_sales_work", refresh),
+            patch.object(
+                sales_ai_drafts,
+                "sales_ai_runtime_available",
+                return_value=True,
+            ),
+            patch.object(
+                sales_ai_settings,
+                "get_business_sales_ai_enabled",
+                return_value=True,
+            ),
+            patch.object(
+                sales_ai_settings,
+                "set_business_sales_ai_enabled",
+                side_effect=change,
+            ),
         ):
-            await sales.toggle_sales_ai(callback, state)
+            await self.sales.toggle_sales_ai(callback, state)
 
         self.assertEqual(state.cleared, 1)
         self.assertEqual(changes, [(self.actor, False)])
@@ -100,17 +130,29 @@ class SalesAIHandlerTests(unittest.IsolatedAsyncioTestCase):
         from clientplatform.application import sales_ai_drafts, sales_ai_settings
 
         with (
-            patch.object(sales.asyncio, "to_thread", _inline_to_thread),
-            patch.object(sales_ai_drafts, "sales_ai_runtime_available", return_value=True),
-            patch.object(sales_ai_drafts, "sales_ai_runtime_provider_label", return_value="DeepSeek"),
+            patch.object(self.sales.asyncio, "to_thread", _inline_to_thread),
+            patch.object(
+                sales_ai_drafts,
+                "sales_ai_runtime_available",
+                return_value=True,
+            ),
+            patch.object(
+                sales_ai_drafts,
+                "sales_ai_runtime_provider_label",
+                return_value="DeepSeek",
+            ),
             patch.object(
                 sales_ai_drafts,
                 "sales_ai_runtime_consent_target",
                 return_value="deepseek:https://api.deepseek.com",
             ),
-            patch.object(sales_ai_settings, "get_business_sales_ai_enabled", return_value=False),
+            patch.object(
+                sales_ai_settings,
+                "get_business_sales_ai_enabled",
+                return_value=False,
+            ),
         ):
-            await sales.toggle_sales_ai(callback, state)
+            await self.sales.toggle_sales_ai(callback, state)
 
         self.assertEqual(state.cleared, 1)
         self.assertEqual(callback.answers[-1], ((), {}))
@@ -133,12 +175,20 @@ class SalesAIHandlerTests(unittest.IsolatedAsyncioTestCase):
             return True
 
         with (
-            patch.object(sales.asyncio, "to_thread", _inline_to_thread),
-            patch.object(sales, "_send_sales_work", refresh),
-            patch.object(sales_ai_drafts, "sales_ai_runtime_available", return_value=True),
-            patch.object(sales_ai_settings, "set_business_sales_ai_enabled", side_effect=enable),
+            patch.object(self.sales.asyncio, "to_thread", _inline_to_thread),
+            patch.object(self.sales, "_send_sales_work", refresh),
+            patch.object(
+                sales_ai_drafts,
+                "sales_ai_runtime_available",
+                return_value=True,
+            ),
+            patch.object(
+                sales_ai_settings,
+                "set_business_sales_ai_enabled",
+                side_effect=enable,
+            ),
         ):
-            await sales.enable_sales_ai(callback, state)
+            await self.sales.enable_sales_ai(callback, state)
 
         self.assertEqual(state.cleared, 1)
         self.assertIs(captured["actor"], self.actor)
@@ -149,7 +199,9 @@ class SalesAIHandlerTests(unittest.IsolatedAsyncioTestCase):
         refresh.assert_awaited_once()
 
     async def test_draft_sales_answer_shows_review_only_draft(self) -> None:
-        callback = _Callback(f"cps:sad:{self.token}:{sales._token(self.lead_id)}")
+        callback = _Callback(
+            f"cps:sad:{self.token}:{self.sales._token(self.lead_id)}"
+        )
         state = _State()
         from clientplatform.application import sales_ai_drafts
 
@@ -158,7 +210,7 @@ class SalesAIHandlerTests(unittest.IsolatedAsyncioTestCase):
             "draft_sales_reply",
             AsyncMock(return_value=SimpleNamespace(text="Предлагаю обсудить аудит.")),
         ):
-            await sales.draft_sales_answer(callback, state)
+            await self.sales.draft_sales_answer(callback, state)
 
         self.assertEqual(state.cleared, 1)
         self.assertEqual(callback.answers[0][0], ("Готовлю черновик…",))
