@@ -130,7 +130,7 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
             patch.object(one_click.control, "_callback_message", return_value=out),
         )
 
-    async def test_dashboard_has_one_primary_action_and_two_secondary_actions(self) -> None:
+    async def test_dashboard_separates_acquisition_sales_and_secondary_actions(self) -> None:
         out = outbound_message()
         snapshot = (
             "actor",
@@ -147,9 +147,11 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
                 "_business_snapshot",
                 new=AsyncMock(return_value=snapshot),
             ),
+            patch.object(one_click.control, "list_booking_slots", return_value=[slot()]),
             patch.object(one_click.control, "_uuid_token", side_effect=lambda value: value),
+            patch.object(one_click.owner, "_all_offerings", new=AsyncMock(return_value=[])),
         ):
-            await one_click.send_one_click_dashboard(
+            await goal.send_goal_dashboard(
                 out,
                 user_id=101,
                 business_id="business-1",
@@ -157,10 +159,16 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
         text = out.answer.await_args.args[0]
         markup = out.answer.await_args.kwargs["reply_markup"]
         labels = [button.text for row in markup.inline_keyboard for button in row]
-        self.assertIn("Нажмите «🚀 Получить клиентов»", text)
+        self.assertIn("🚀 Найти новых клиентов", text)
+        self.assertIn("💬 Обращения и продажи", text)
         self.assertEqual(
             labels,
-            ["🚀 Получить клиентов", "👥 Клиенты и запись", "⚙️ Ещё"],
+            [
+                "🚀 Найти новых клиентов",
+                "💬 Обращения и продажи",
+                "👥 Клиенты и запись",
+                "⚙️ Ещё",
+            ],
         )
 
     async def test_no_open_slot_reduces_flow_to_one_required_next_action(self) -> None:
