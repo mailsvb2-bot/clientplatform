@@ -22,6 +22,7 @@ from clientplatform.domain.bookings import BookingError, BookingSlotStatus
 from clientplatform.domain.tenancy import TenantPermissionDenied
 
 from . import clientplatform_control as control
+from . import clientplatform_goal_first_safety as goal_contract
 from . import clientplatform_one_click_experience as one_click
 
 
@@ -47,7 +48,7 @@ class _ResumeCallback:
 
     @property
     def data(self) -> str:
-        return f"cpo:start:{self.business_token}"
+        return goal_contract.ACQUIRE_CLIENTS.callback(self.business_token)
 
     @property
     def from_user(self):
@@ -261,7 +262,10 @@ async def _create_slot_and_resume(
     except KeyError:
         await state.clear()
         await message.answer(
-            "Этот шаг уже устарел. Нажмите «🚀 Найти новых клиентов» и я начну заново."
+            goal_contract.ACQUIRE_CLIENTS.recovery(
+                "Этот шаг уже устарел.",
+                continuation="и я начну заново.",
+            )
         )
         return
 
@@ -300,7 +304,7 @@ async def _create_slot_and_resume(
     )
 
 
-@router.callback_query(F.data.startswith("cpo:start:"))
+@router.callback_query(F.data.startswith(goal_contract.ACQUIRE_CLIENTS.callback_prefix))
 async def get_clients_goal(callback: CallbackQuery, state: FSMContext) -> None:
     business_token = str(callback.data).split(":", 2)[2]
     business_id = control._token_uuid(business_token)
@@ -333,7 +337,10 @@ async def change_goal_offering_page(callback: CallbackQuery) -> None:
         offerings = await _selectable_offerings(actor)
     except (ValueError, TenantPermissionDenied):
         await callback.answer(
-            "Список изменился. Нажмите «🚀 Найти новых клиентов» ещё раз.",
+            goal_contract.ACQUIRE_CLIENTS.recovery(
+                "Список изменился.",
+                continuation="ещё раз.",
+            ),
             show_alert=True,
         )
         return
@@ -389,7 +396,10 @@ async def receive_goal_offering_title(message: Message, state: FSMContext) -> No
     except KeyError:
         await state.clear()
         await message.answer(
-            "Этот шаг уже устарел. Нажмите «🚀 Найти новых клиентов» и я начну заново."
+            goal_contract.ACQUIRE_CLIENTS.recovery(
+                "Этот шаг уже устарел.",
+                continuation="и я начну заново.",
+            )
         )
         return
     try:
