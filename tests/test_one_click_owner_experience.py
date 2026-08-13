@@ -74,30 +74,10 @@ def connection(*, connection_id="connection-1", login="owner"):
     )
 
 
-def campaign(
-    *,
-    campaign_id="6001",
-    name="Основная кампания",
-    state="ON",
-    status="ACCEPTED",
-):
-    return SimpleNamespace(
-        campaign_id=campaign_id,
-        name=name,
-        state=state,
-        status=status,
-    )
-
-
-def publication_job(
-    *,
-    connection_id="connection-1",
-    campaign_id="6001",
-    regions=(47,),
-):
+def publication_job(*, connection_id="connection-1", regions=(47,)):
     return SimpleNamespace(
         connection_id=connection_id,
-        external_campaign_id=campaign_id,
+        external_campaign_id="historical-provider-id",
         region_ids=regions,
     )
 
@@ -113,6 +93,19 @@ def promotion():
                 description="Запись онлайн",
             ),
         )
+    )
+
+
+def managed_draft():
+    return SimpleNamespace(
+        campaign_name="ClientPlatform managed",
+        job=SimpleNamespace(
+            id="job-2",
+            external_campaign_id="managed-7001",
+            region_ids=(47,),
+            title="Консультация",
+            text="Свободное время для записи",
+        ),
     )
 
 
@@ -155,47 +148,32 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
                 new=AsyncMock(return_value=[]),
             ),
         ):
-            await goal.send_goal_dashboard(
-                out,
-                user_id=101,
-                business_id="business-1",
-            )
-        text = out.answer.await_args.args[0]
-        markup = out.answer.await_args.kwargs["reply_markup"]
-        labels = [button.text for row in markup.inline_keyboard for button in row]
-        self.assertIn("🚀 Найти новых клиентов", text)
-        self.assertIn("💬 Обращения и продажи", text)
-        self.assertEqual(
-            labels,
-            [
-                "🚀 Найти новых клиентов",
-                "💬 Обращения и продажи",
-                "👥 Клиенты и запись",
-                "⚙️ Ещё",
-            ],
-        )
+            await goal.send_goal_dashboard(out, user_id=101, business_id="business-1")
+        labels = [
+            button.text
+            for row in out.answer.await_args.kwargs["reply_markup"].inline_keyboard
+            for button in row
+        ]
+        self.assertIn("🚀 Найти новых клиентов", labels)
+        self.assertIn("💬 Обращения и продажи", labels)
+        self.assertNotIn("🚀 Получить клиентов", labels)
 
     async def test_no_open_slot_reduces_flow_to_one_required_next_action(self) -> None:
         out = outbound_message()
         cb = callback("cpo:start:business-1", out)
-        state = FakeState()
         patches = self.common_patches(out)
         with (
             patches[0], patches[1], patches[2], patches[3], patches[4],
             patch.object(one_click.control, "list_booking_slots", return_value=[]),
         ):
-            await one_click.get_clients_one_click(cb, state)
-        cb.answer.assert_awaited_once_with("Готовлю всё сам…")
-        text = out.answer.await_args.args[0]
-        markup = out.answer.await_args.kwargs["reply_markup"]
-        self.assertIn("Сначала нужно одно свободное время", text)
-        self.assertEqual(markup.inline_keyboard[0][0].text, "➕ Открыть время")
+            await one_click.get_clients_one_click(cb, FakeState())
+        self.assertIn("Сначала нужно одно свободное время", out.answer.await_args.args[0])
         self.assertEqual(
-            markup.inline_keyboard[0][0].callback_data,
-            "cps:firstbook:business-1",
+            out.answer.await_args.kwargs["reply_markup"].inline_keyboard[0][0].text,
+            "➕ Открыть время",
         )
 
-    async def test_unready_campaign_falls_back_to_ready_share(self) -> None:
+    async def test_existing_provider_campaign_is_not_a_selection_step(self) -> None:
         out = outbound_message()
         cb = callback("cpo:start:business-1", out)
         state = FakeState()
@@ -207,27 +185,15 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
             patch.object(one_click, "list_ad_connections", return_value=[connection()]),
             patch.object(one_click.control, "list_booking_slots", return_value=[slot()]),
             patch.object(one_click, "list_ad_publications", return_value=[]),
-            patch.object(
-                one_click,
-                "list_yandex_direct_campaigns",
-                return_value=[campaign(state="OFF")],
-            ),
-            patch.object(one_click, "create_slot_promotion", return_value=promotion()),
         ):
             await one_click.get_clients_one_click(cb, state)
-        text = out.answer.await_args.args[0]
-        markup = out.answer.await_args.kwargs["reply_markup"]
-        self.assertIn("Уже можно привлекать клиентов", text)
-        self.assertIn("оплата, модерация или пауза", text)
-        self.assertEqual(markup.inline_keyboard[0][0].text, "📨 Отправить объявление")
-        self.assertTrue(
-            str(markup.inline_keyboard[0][0].url).startswith("https://t.me/share/url?")
-        )
+        self.assertEqual(state.state, one_click.OneClickOwnerState.waiting_region)
+        self.assertNotIn("external_campaign_id", state.data)
+        self.assertFalse(hasattr(one_click.OneClickOwnerState, "selecting_campaign"))
 
     async def test_manager_without_ad_token_access_still_gets_promotion_result(self) -> None:
         out = outbound_message()
         cb = callback("cpo:start:business-1", out)
-        state = FakeState()
         patches = self.common_patches(out)
         with (
             patches[0], patches[1], patches[2], patches[3], patches[4],
@@ -236,31 +202,21 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 one_click,
                 "list_ad_connections",
-                side_effect=TenantPermissionDenied("ad connections are owner-only"),
+                side_effect=TenantPermissionDenied("owner only"),
             ),
             patch.object(one_click.control, "list_booking_slots", return_value=[slot()]),
             patch.object(one_click, "list_ad_publications", return_value=[]),
             patch.object(one_click, "create_slot_promotion", return_value=promotion()),
         ):
-            await one_click.get_clients_one_click(cb, state)
+            await one_click.get_clients_one_click(cb, FakeState())
         text = out.answer.await_args.args[0]
         self.assertIn("Уже можно привлекать клиентов", text)
         self.assertIn("нет доступа к личному рекламному кабинету", text)
 
-    async def test_previous_safe_choices_make_direct_preparation_one_click(self) -> None:
+    async def test_previous_safe_region_makes_managed_preparation_one_click(self) -> None:
         out = outbound_message()
         cb = callback("cpo:start:business-1", out)
         state = FakeState()
-        recent = publication_job(regions=(47,))
-        draft = SimpleNamespace(
-            campaign_name="Основная кампания",
-            job=SimpleNamespace(
-                id="job-2",
-                region_ids=(47,),
-                title="Консультация",
-                text="Свободное время для записи",
-            ),
-        )
         patches = self.common_patches(out)
         with (
             patches[0], patches[1], patches[2], patches[3], patches[4],
@@ -268,32 +224,24 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
             patch.object(one_click, "yandex_direct_provider_configured", return_value=True),
             patch.object(one_click, "list_ad_connections", return_value=[connection()]),
             patch.object(one_click.control, "list_booking_slots", return_value=[slot()]),
-            patch.object(one_click, "list_ad_publications", return_value=[recent]),
-            patch.object(one_click, "list_yandex_direct_campaigns", return_value=[campaign()]),
+            patch.object(
+                one_click,
+                "list_ad_publications",
+                return_value=[publication_job()],
+            ),
             patch.object(one_click, "create_slot_promotion", return_value=promotion()),
             patch.object(
                 one_click,
                 "create_ad_publication_draft",
-                return_value=draft,
+                return_value=managed_draft(),
             ) as create_draft,
-            patch.object(goal, "ad_spend_mutations_enabled", return_value=False),
         ):
             await one_click.get_clients_one_click(cb, state)
         create_draft.assert_called_once()
+        self.assertNotIn("external_campaign_id", create_draft.call_args.kwargs)
         self.assertEqual(state.state, goal.GoalFirstAutopilotState.ready)
-        self.assertEqual(state.data["job_id"], "job-2")
-        text = out.answer.await_args.args[0]
-        self.assertIn("✅ Реклама подготовлена — всё готово", text)
-        self.assertIn("запуск расходов отключён защитным переключателем", text)
-        labels = [
-            button.text
-            for row in out.answer.await_args.kwargs["reply_markup"].inline_keyboard
-            for button in row
-        ]
-        self.assertEqual(
-            labels,
-            ["🚀 Подготовить в Яндексе", "🎨 Настроить под себя", "🏠 Не запускать"],
-        )
+        self.assertEqual(state.data["external_campaign_id"], "managed-7001")
+        self.assertIn("Реклама подготовлена", out.answer.await_args.args[0])
 
     async def test_first_direct_run_asks_only_for_missing_region(self) -> None:
         out = outbound_message()
@@ -307,26 +255,18 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
             patch.object(one_click, "list_ad_connections", return_value=[connection()]),
             patch.object(one_click.control, "list_booking_slots", return_value=[slot()]),
             patch.object(one_click, "list_ad_publications", return_value=[]),
-            patch.object(one_click, "list_yandex_direct_campaigns", return_value=[campaign()]),
         ):
             await one_click.get_clients_one_click(cb, state)
         self.assertEqual(state.state, one_click.OneClickOwnerState.waiting_region)
         text = out.answer.await_args.args[0]
         self.assertIn("Осталось только указать регион", text)
-        labels = [
-            button.text
-            for row in out.answer.await_args.kwargs["reply_markup"].inline_keyboard
-            for button in row
-        ]
-        self.assertIn("Нижний Новгород", labels)
-        self.assertIn("Москва", labels)
-        self.assertIn("Санкт-Петербург", labels)
+        self.assertIn("создаст и привяжет сам", text)
 
-    async def test_campaign_eligibility_fails_closed_for_off_or_unaccepted(self) -> None:
-        self.assertEqual(one_click._eligible([campaign()]), [campaign()])
-        self.assertEqual(one_click._eligible([campaign(state="SUSPENDED")]), [])
-        self.assertEqual(one_click._eligible([campaign(state="OFF")]), [])
-        self.assertEqual(one_click._eligible([campaign(status="DRAFT")]), [])
+    async def test_manual_campaign_selection_contract_is_absent(self) -> None:
+        self.assertFalse(hasattr(one_click.OneClickOwnerState, "selecting_campaign"))
+        self.assertFalse(hasattr(one_click, "choose_one_click_campaign"))
+        self.assertFalse(hasattr(one_click, "_choose_campaign"))
+        self.assertFalse(hasattr(one_click, "_eligible"))
 
     async def test_multiple_accounts_are_not_guessed_without_history(self) -> None:
         out = outbound_message()
@@ -349,15 +289,14 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
             patch.object(one_click, "list_ad_publications", return_value=[]),
         ):
             await one_click.get_clients_one_click(cb, state)
-        self.assertEqual(
-            state.state,
-            one_click.OneClickOwnerState.selecting_connection,
-        )
-        text = out.answer.await_args.args[0]
-        self.assertIn("несколько кабинетов", text)
-        markup = out.answer.await_args.kwargs["reply_markup"]
-        self.assertEqual(markup.inline_keyboard[0][0].text, "Яндекс · one")
-        self.assertEqual(markup.inline_keyboard[1][0].text, "Яндекс · two")
+        self.assertEqual(state.state, one_click.OneClickOwnerState.selecting_connection)
+        labels = [
+            button.text
+            for row in out.answer.await_args.kwargs["reply_markup"].inline_keyboard
+            for button in row
+        ]
+        self.assertIn("Яндекс · one", labels)
+        self.assertIn("Яндекс · two", labels)
 
     async def test_more_menu_hides_advanced_actions_from_home(self) -> None:
         out = outbound_message()
