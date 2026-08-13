@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 TenantDisposition = Literal["erase", "retain", "anonymize"]
-CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-08-13.v25-sales-ai-advisory"
+CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-08-13.v26-yandex-managed-campaign"
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +53,7 @@ _POLICIES = (
     _required("partner_reply_events", "erase", "partner inbound messages and authenticated provider reply evidence"),
     _required("ad_connections", "erase", "personal advertising account identity and encrypted OAuth material"),
     _required("ad_oauth_sessions", "erase", "short-lived one-time OAuth state and encrypted PKCE verifier"),
+    _required("ad_managed_campaigns", "retain", "business-owned provider campaign binding and provisioning lifecycle without customer identity or credential material"),
     _required("ad_publication_jobs", "retain", "business-owned provider publication intent and bounded delivery evidence"),
     _required("ad_publication_assets", "erase", "user-provided or generated advertising media, local storage references and provider media identifiers"),
     _required("creative_variant_bindings", "anonymize", "business-owned creative selection and generation lineage retained while selecting member linkage is anonymized"),
