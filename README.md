@@ -62,7 +62,7 @@ ClientPlatform **запрещено запускать с production-конфи�
 Для привлечения клиентов обычный путь начинается с понятного действия вроде:
 
 ```text
-🚀 Получить клиентов
+🚀 Найти новых клиентов
 ```
 
 ClientPlatform может самостоятельно использовать безопасно известные настройки, выбрать подходящее свободное время и подготовить следующий шаг, не заставляя владельца выбирать внутренние идентификаторы и механизмы провайдеров.
@@ -74,8 +74,11 @@ ClientPlatform может самостоятельно использовать 
 В кодовой базе реализован защищённый контур Yandex Direct:
 
 - OAuth и tenant-scoped рекламные подключения;
-- выбор/повторное использование допустимых кампаний и регионов;
-- подготовка рекламного DRAFT;
+- durable managed-campaign binding для конкретного бизнеса, внутреннего продвижения и рекламного подключения;
+- exact reconciliation собственных ClientPlatform campaigns по opaque ownership marker;
+- безопасное создание `UNIFIED_CAMPAIGN` через актуальный managed API с Search/Network `SERVING_OFF`;
+- повторная проверка managed campaign перед публикацией объявления;
+- подготовка рекламного DRAFT без ручного CampaignId в каноническом owner-flow;
 - синхронизация пользовательского текста;
 - загрузка и привязка пользовательских изображений;
 - загрузка, ожидание конвертации и привязка видео;
@@ -119,13 +122,23 @@ scripts/          validation, maintenance and deployment tooling
 tests/            regression and integration coverage
 ```
 
-## Канон
+## Канон и исполнительный roadmap
 
 Единственный нормативный документ продукта:
 
 - [`docs/CLIENTPLATFORM_CANON_TZ.md`](docs/CLIENTPLATFORM_CANON_TZ.md)
 
-Перед существенным изменением проекта необходимо сверяться с ним. Если код, README, старый отчёт или комментарий ему противоречит, приоритет имеет канон.
+Обязательный исполнительный roadmap, который переводит Канон в последовательность проверяемых вертикальных slices:
+
+- [`docs/CLIENTPLATFORM_UNICORN_ROADMAP.md`](docs/CLIENTPLATFORM_UNICORN_ROADMAP.md)
+
+Стартовый протокол для следующих AI-чатов/агентов находится в:
+
+- [`AGENTS.md`](AGENTS.md)
+
+Канон определяет, **чем обязан быть продукт**. Roadmap определяет, **что строить дальше, в каком порядке, где в коде и по каким evidence считать работу законченной**. `AGENTS.md` требует сначала проверить актуальный `main`/PR/CI, прочитать Канон и roadmap, а затем закончить один текущий `NEXT` slice до зелёного merge, не создавая параллельный «второй мозг» или веточный зоопарк.
+
+Перед существенным изменением проекта необходимо сверяться с Каноном. Если код, roadmap, README, старый отчёт или комментарий ему противоречит, приоритет имеет Канон.
 
 Проверка канона:
 
@@ -209,16 +222,28 @@ s3-replication -> optional off-site replication profile
 
 ## Product roadmap
 
-Цель ClientPlatform шире текущих production-вертикалей. Канон предусматривает развитие:
+Полный исполнительный roadmap находится в [`docs/CLIENTPLATFORM_UNICORN_ROADMAP.md`](docs/CLIENTPLATFORM_UNICORN_ROADMAP.md). Он содержит North Star, метрики, текущий `NEXT`, ordered queue, конкретные целевые модули/схемы/тесты, milestones и Definition of DONE.
 
+Крупные направления после текущего baseline:
+
+- durable business outcomes и revenue attribution;
+- Yandex campaign analytics и managed activation policy;
+- Growth Cockpit и zero-to-first-outcome onboarding;
+- CRM lead inbox, follow-up и retention/reactivation;
+- commerce, payments и единый customer timeline;
+- безопасный AutomationPolicy/autopilot;
 - Telegram Mini App;
-- автопостинга и готовых воронок;
-- дополнительных каналов, включая VK и MAX;
-- аналитики и автоматизаций;
-- программ, материалов, заявок и продаж;
-- безопасного автопилота в заранее утверждённых владельцем пределах.
+- VK/MAX и другие channel adapters вокруг единой communication model;
+- billing/entitlements/usage metering;
+- partner/agency distribution;
+- public API/webhooks/ecosystem;
+- provider-independent AI operating layer с evals;
+- experimentation и privacy-safe intelligence moat;
+- vertical packs без fork-ов продукта;
+- international/provider portability;
+- evidence-driven scale 10k → 100k businesses.
 
-Roadmap не следует путать с уже активированным production-функционалом. Наличие интеграции в коде и её включение в конкретном production environment — разные состояния.
+Roadmap не следует путать с уже активированным production-функционалом. Наличие integration/code path и его включение в конкретном production environment — разные состояния. Статус `DONE` в roadmap разрешён только после merge в `main` с evidence.
 
 ## Безопасность репозитория
 

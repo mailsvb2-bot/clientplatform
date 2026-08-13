@@ -1,0 +1,7 @@
+# ClientPlatform execution roadmap
+
+Canonical execution roadmap: [`CLIENTPLATFORM_UNICORN_ROADMAP.md`](CLIENTPLATFORM_UNICORN_ROADMAP.md).
+
+Quick navigation: [`CLIENTPLATFORM_UNICORN_ROADMAP_INDEX.md`](CLIENTPLATFORM_UNICORN_ROADMAP_INDEX.md).
+
+The product Canon remains [`CLIENTPLATFORM_CANON_TZ.md`](CLIENTPLATFORM_CANON_TZ.md).
