@@ -42,6 +42,17 @@ class SalesAIWorkInput:
     text_was_redacted: bool
 
 
+@dataclass(frozen=True, slots=True)
+class SalesAIDraftEvidence:
+    lead: SalesLead
+    customer_text: str
+    analysis: SalesAIAnalysis
+    action_kind: str
+    verified_offer: SalesAIVerifiedOffer | None
+    source_order_key: str
+    plan_id: str
+
+
 def _row_value(row: Any, key: str, position: int) -> Any:
     return row[key] if hasattr(row, "keys") else row[position]
 
@@ -377,7 +388,7 @@ def purge_sales_ai_retention(*, raw_message_ttl_hours: int, analysis_ttl_days: i
         return {"raw_messages_redacted": raw, "analysis_projections_deleted": analyses}
 
 
-def _load_latest_evidence_in_conn(conn: Any, *, actor: TenantContext, lead_id: str) -> tuple[SalesLead, str, SalesAIAnalysis, str, SalesAIVerifiedOffer | None]:
+def _load_latest_evidence_in_conn(conn: Any, *, actor: TenantContext, lead_id: str) -> SalesAIDraftEvidence:
     current = TenancyRepository(conn).resolve_context(user_id=actor.user_id, business_id=actor.business_id)
     current.assert_can_view_customer_records()
     lead = SalesRepository(conn).get_lead(actor=current, lead_id=lead_id)
@@ -417,10 +428,18 @@ def _load_latest_evidence_in_conn(conn: Any, *, actor: TenantContext, lead_id: s
         raise ValueError("sales AI source customer message expired or is empty")
     offer_payload = projection.get("verified_offer")
     offer = None if offer_payload is None else SalesAIVerifiedOffer.from_mapping(offer_payload)
-    return lead, message_text, analysis, action_kind, offer
+    return SalesAIDraftEvidence(
+        lead=lead,
+        customer_text=message_text,
+        analysis=analysis,
+        action_kind=action_kind,
+        verified_offer=offer,
+        source_order_key=source_order_key,
+        plan_id=plan_id,
+    )
 
 
-def load_latest_sales_ai_evidence(*, actor: TenantContext, lead_id: str) -> tuple[SalesLead, str, SalesAIAnalysis, str, SalesAIVerifiedOffer | None]:
+def load_latest_sales_ai_evidence(*, actor: TenantContext, lead_id: str) -> SalesAIDraftEvidence:
     with get_db_ro() as conn:
         return _load_latest_evidence_in_conn(conn, actor=actor, lead_id=lead_id)
 
@@ -431,7 +450,7 @@ def _prepare_draft_egress(
     actor: TenantContext,
     lead_id: str,
     consent_target: str,
-) -> tuple[SalesLead, str, SalesAIAnalysis, str, SalesAIVerifiedOffer | None]:
+) -> SalesAIDraftEvidence:
     current = TenancyRepository(conn).resolve_context(
         user_id=actor.user_id,
         business_id=actor.business_id,
@@ -441,13 +460,21 @@ def _prepare_draft_egress(
         business_id=current.business_id,
         consent_target=consent_target,
     )
-    lead, text, analysis, action, offer = _load_latest_evidence_in_conn(
+    evidence = _load_latest_evidence_in_conn(
         conn,
         actor=current,
         lead_id=lead_id,
     )
-    prepared = prepare_sales_ai_text(text, mode=consent.data_mode)
-    return lead, prepared.text, analysis, action, offer
+    prepared = prepare_sales_ai_text(evidence.customer_text, mode=consent.data_mode)
+    return SalesAIDraftEvidence(
+        lead=evidence.lead,
+        customer_text=prepared.text,
+        analysis=evidence.analysis,
+        action_kind=evidence.action_kind,
+        verified_offer=evidence.verified_offer,
+        source_order_key=evidence.source_order_key,
+        plan_id=evidence.plan_id,
+    )
 
 
 @asynccontextmanager
@@ -456,7 +483,7 @@ async def sales_ai_draft_egress_permit(
     actor: TenantContext,
     lead_id: str,
     consent_target: str,
-) -> AsyncIterator[tuple[SalesLead, str, SalesAIAnalysis, str, SalesAIVerifiedOffer | None]]:
+) -> AsyncIterator[SalesAIDraftEvidence]:
     holder = _LockedDBEgress(
         lambda conn: _prepare_draft_egress(
             conn,
@@ -469,7 +496,24 @@ async def sales_ai_draft_egress_permit(
         yield evidence
 
 
+def validate_sales_ai_draft_freshness(
+    *,
+    actor: TenantContext,
+    lead_id: str,
+    expected_source_order_key: str,
+    expected_plan_id: str,
+) -> None:
+    # Fail closed if customer evidence or the canonical plan changed during drafting.
+    with get_db_ro() as conn:
+        current = _load_latest_evidence_in_conn(conn, actor=actor, lead_id=lead_id)
+        if current.source_order_key != expected_source_order_key:
+            raise ValueError("sales AI draft became stale because a newer customer message arrived")
+        if current.plan_id != expected_plan_id:
+            raise ValueError("sales AI draft became stale because the canonical action plan changed")
+
+
 __all__ = [
+    "SalesAIDraftEvidence",
     "SalesAIWorkInput",
     "apply_sales_ai_analysis",
     "cancel_sales_ai_job",
@@ -480,4 +524,5 @@ __all__ = [
     "retry_sales_ai_job",
     "sales_ai_analysis_egress_permit",
     "sales_ai_draft_egress_permit",
+    "validate_sales_ai_draft_freshness",
 ]

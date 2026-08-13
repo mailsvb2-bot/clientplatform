@@ -32,7 +32,7 @@ def _error_code(exc: BaseException) -> str:
 class SalesAIWorkerRuntime:
     """Background advisory model worker; it has no messenger sender."""
 
-    def __init__(self, *, task_manager: TaskManager, config: SalesAIRuntimeConfig, provider: SalesAIProvider) -> None:
+    def __init__(self, *, task_manager: TaskManager, config: SalesAIRuntimeConfig, provider: SalesAIProvider | None) -> None:
         self._task_manager = task_manager
         self.config = config
         self._provider = provider
@@ -46,7 +46,8 @@ class SalesAIWorkerRuntime:
         self.last_error: str | None = None
 
     def start(self) -> bool:
-        if not self.config.enabled or self._running:
+        # Retention must keep running after provider work is disabled.
+        if self._running:
             return False
         self._running = True
         self._task = self._task_manager.create(self._run(), name="clientplatform-sales-ai-worker")
@@ -56,13 +57,14 @@ class SalesAIWorkerRuntime:
         try:
             while self._running:
                 try:
-                    jobs = await asyncio.to_thread(
-                        claim_sales_ai_jobs,
-                        limit=1,
-                        lock_ttl_seconds=self.config.worker_lock_ttl_seconds,
-                    )
-                    for job in jobs:
-                        await self._process(job)
+                    if self.config.enabled:
+                        jobs = await asyncio.to_thread(
+                            claim_sales_ai_jobs,
+                            limit=1,
+                            lock_ttl_seconds=self.config.worker_lock_ttl_seconds,
+                        )
+                        for job in jobs:
+                            await self._process(job)
                     now = time.monotonic()
                     if now - self._last_retention >= 60.0:
                         await asyncio.to_thread(
@@ -85,6 +87,8 @@ class SalesAIWorkerRuntime:
 
     async def _process(self, job: SalesAIJob) -> None:
         try:
+            if self._provider is None:
+                raise RuntimeError("Sales AI provider is unavailable while processing is enabled")
             # Cross-process egress barrier: the consent row remains locked for the
             # entire network request, so disable/provider change cannot return
             # while this request is in flight and no later request can start on the
@@ -158,14 +162,13 @@ class SalesAIWorkerRuntime:
 def bind_sales_ai_worker(task_manager: TaskManager) -> SalesAIWorkerRuntime | None:
     global _RUNTIME
     config = SalesAIRuntimeConfig.from_env()
-    if not config.enabled:
-        _RUNTIME = None
-        return None
     if _RUNTIME is not None and _RUNTIME._running:
         return _RUNTIME
-    credentials = EnvironmentCredentialProvider()
-    credentials.resolve(config.api_key_reference)
-    provider = build_sales_ai_provider(config, credential_provider=credentials)
+    provider: SalesAIProvider | None = None
+    if config.enabled:
+        credentials = EnvironmentCredentialProvider()
+        credentials.resolve(config.api_key_reference)
+        provider = build_sales_ai_provider(config, credential_provider=credentials)
     runtime = SalesAIWorkerRuntime(task_manager=task_manager, config=config, provider=provider)
     runtime.start()
     _RUNTIME = runtime

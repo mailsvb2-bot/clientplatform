@@ -5,9 +5,8 @@ import json
 import ipaddress
 import socket
 from urllib.parse import urlsplit
-from typing import Any, Mapping, Protocol
+from typing import TYPE_CHECKING, Any, Mapping, Protocol
 
-import aiohttp
 
 from clientplatform.domain.sales_intelligence import (
     SalesAIAnalysis,
@@ -17,7 +16,8 @@ from clientplatform.domain.sales_intelligence import (
     sales_ai_draft_json_schema,
 )
 from clientplatform.runtime.sales_ai_config import SalesAIRuntimeConfig
-from clientplatform.runtime.secrets import EnvironmentCredentialProvider
+if TYPE_CHECKING:
+    from clientplatform.runtime.secrets import EnvironmentCredentialProvider
 
 
 class SalesAIProviderError(RuntimeError):
@@ -93,6 +93,13 @@ class AiohttpJSONPostTransport:
         payload: Mapping[str, Any],
         timeout_seconds: float,
     ) -> Mapping[str, Any]:
+        # Provider contracts and fake-transport tests must remain dependency-light.
+        try:
+            import aiohttp
+        except ImportError as exc:
+            raise SalesAIProviderError(
+                "aiohttp is required for Sales AI network transport"
+            ) from exc
         timeout = aiohttp.ClientTimeout(total=float(timeout_seconds))
         await _assert_public_destination(url)
         try:
@@ -220,7 +227,12 @@ class _BaseSalesAIProvider:
         if not config.enabled:
             raise ValueError("sales AI provider cannot start while CLIENTPLATFORM_SALES_AI_ENABLED=0")
         self.config = config
-        self._credentials = credential_provider or EnvironmentCredentialProvider()
+        if credential_provider is None:
+            # Secret/crypto machinery is required only for a real provider call.
+            from clientplatform.runtime.secrets import EnvironmentCredentialProvider
+
+            credential_provider = EnvironmentCredentialProvider()
+        self._credentials = credential_provider
         self._transport = transport or AiohttpJSONPostTransport()
 
     def _headers(self) -> dict[str, str]:
