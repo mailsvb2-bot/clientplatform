@@ -26,6 +26,9 @@ class FakeState:
     async def set_data(self, data):
         self.data = dict(data)
 
+    async def update_data(self, **values):
+        self.data.update(values)
+
     async def set_state(self, state):
         self.state = state
 
@@ -120,7 +123,6 @@ class ManagedGoalFirstSafetyTests(unittest.IsolatedAsyncioTestCase):
     async def test_managed_prepare_fail_closed_for_promotion_source_and_yandex_errors(self):
         target = outbound()
         event = callback(target)
-        state = FakeState(base_data())
         self._reinstall()
 
         for failure_kind in ("promotion", "source", "managed"):
@@ -237,6 +239,106 @@ class ManagedGoalFirstSafetyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state.state, goal.GoalFirstAutopilotState.ready)
         self.assertEqual(state.data["external_campaign_id"], "managed-7001")
         self.assertEqual(state.data["external_campaign_name"], "ClientPlatform managed")
+
+    async def test_generation_confirmation_is_explicit_and_rejects_stale_draft(self):
+        stale = callback()
+        stale.data = "cpo:genask:business-1"
+        stale_state = FakeState({"business_token": "other-business"})
+        await goal.ask_generated_image_confirmation(stale, stale_state)
+        stale.answer.assert_awaited_once_with(
+            "Этот черновик уже устарел", show_alert=True
+        )
+        self.assertIsNone(stale_state.state)
+
+        target = outbound()
+        event = callback(target)
+        event.data = "cpo:genask:business-1"
+        state = FakeState({"business_token": "business-1"})
+        with patch.object(control, "_callback_message", return_value=target):
+            await goal.ask_generated_image_confirmation(event, state)
+        self.assertEqual(
+            state.state, goal.GoalFirstAutopilotState.confirming_generation
+        )
+        event.answer.assert_awaited_once_with()
+        text = target.answer.await_args.args[0]
+        self.assertIn("только после явного выбора", text)
+        labels = [
+            button.text
+            for row in target.answer.await_args.kwargs["reply_markup"].inline_keyboard
+            for button in row
+        ]
+        self.assertEqual(
+            labels,
+            [
+                "✅ Создать 1 картинку",
+                "🎨 Выбрать из 3 концепций",
+                "⬅️ Не создавать",
+            ],
+        )
+
+    async def test_creative_studio_failure_and_three_concept_preview(self):
+        event = callback()
+        event.data = "cpo:genstudio:business-1"
+        state = FakeState(
+            {
+                "business_token": "business-1",
+                "business_id": "business-1",
+                "job_id": "job-1",
+            }
+        )
+        with (
+            patch.object(control, "_actor", new=AsyncMock(return_value="actor")),
+            patch.object(goal.asyncio, "to_thread", new=direct),
+            patch.object(goal, "load_goal_visual_brand", return_value=None),
+            patch.object(
+                goal,
+                "build_goal_image_variants",
+                side_effect=ValueError("invalid"),
+            ),
+        ):
+            await goal.open_generated_image_studio(event, state)
+        event.answer.assert_awaited_once_with(
+            "Не удалось подготовить варианты", show_alert=True
+        )
+        self.assertIsNone(state.state)
+
+        target = outbound()
+        event = callback(target)
+        event.data = "cpo:genstudio:business-1"
+        state = FakeState(
+            {
+                "business_token": "business-1",
+                "business_id": "business-1",
+                "job_id": "job-1",
+                "creative_title": "Консультация",
+                "creative_body": "Свободное время",
+            }
+        )
+        variants = [
+            SimpleNamespace(experiment_id="experiment-1"),
+            SimpleNamespace(experiment_id="experiment-1"),
+            SimpleNamespace(experiment_id="experiment-1"),
+        ]
+        with (
+            patch.object(control, "_actor", new=AsyncMock(return_value="actor")),
+            patch.object(control, "_callback_message", return_value=target),
+            patch.object(goal.asyncio, "to_thread", new=direct),
+            patch.object(goal, "load_goal_visual_brand", return_value=None),
+            patch.object(goal, "build_goal_image_variants", return_value=variants),
+            patch.object(goal, "goal_variant_labels", return_value=("A", "B", "C")),
+        ):
+            await goal.open_generated_image_studio(event, state)
+        self.assertEqual(
+            state.state, goal.GoalFirstAutopilotState.confirming_generation
+        )
+        self.assertEqual(state.data["creative_experiment_id"], "experiment-1")
+        self.assertEqual(state.data["creative_variant_id"], "")
+        labels = [
+            button.text
+            for row in target.answer.await_args.kwargs["reply_markup"].inline_keyboard
+            for button in row
+        ]
+        self.assertEqual(labels, ["A", "B", "C", "⬅️ Назад"])
 
 
 class GoalFirstInteractionSafetyTests(unittest.TestCase):
