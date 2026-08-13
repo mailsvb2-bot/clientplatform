@@ -83,7 +83,7 @@ class GoalFirstAutopilotTests(unittest.IsolatedAsyncioTestCase):
             "cps:s:business-1",
         )
 
-    async def test_first_region_question_is_business_language(self) -> None:
+    async def test_first_region_question_does_not_ask_for_yandex_campaign(self) -> None:
         out = SimpleNamespace(answer=AsyncMock())
         callback = SimpleNamespace(
             from_user=SimpleNamespace(id=101),
@@ -104,27 +104,32 @@ class GoalFirstAutopilotTests(unittest.IsolatedAsyncioTestCase):
             ),
             patch.object(goal.control, "_callback_message", return_value=out),
             patch.object(goal.one_click, "list_ad_publications", return_value=[]),
-            patch.object(goal.asyncio, "to_thread", side_effect=lambda fn, *a, **kw: fn(*a, **kw)),
+            patch.object(
+                goal.one_click.asyncio,
+                "to_thread",
+                side_effect=lambda fn, *a, **kw: fn(*a, **kw),
+            ),
         ):
             await goal._choose_goal_region(
                 callback,
                 state,
                 data=data,
-                campaign_id="6001",
-                campaign_name="Campaign",
+                campaign_id="legacy-ignored",
+                campaign_name="legacy-ignored",
             )
         self.assertEqual(state.state, goal.one_click.OneClickOwnerState.waiting_region)
-        self.assertIn("Осталось только указать регион", out.answer.await_args.args[0])
-        self.assertIn("где искать клиентов", out.answer.await_args.args[0].lower())
+        text = out.answer.await_args.args[0]
+        self.assertIn("Осталось только указать регион", text)
+        self.assertIn("создаст и привяжет сам", text)
         labels = [
             button.text
             for row in out.answer.await_args.kwargs["reply_markup"].inline_keyboard
             for button in row
         ]
-        self.assertIn("Другой город", labels)
-        self.assertNotIn("Другой регион", labels)
+        self.assertIn("Другой регион", labels)
+        self.assertNotIn("Campaign", text)
 
-    async def test_saved_region_skips_question(self) -> None:
+    async def test_saved_region_skips_provider_campaign_selection(self) -> None:
         out = SimpleNamespace(answer=AsyncMock())
         callback = SimpleNamespace(
             from_user=SimpleNamespace(id=101),
@@ -139,9 +144,10 @@ class GoalFirstAutopilotTests(unittest.IsolatedAsyncioTestCase):
         }
         job = SimpleNamespace(
             connection_id="connection-1",
-            external_campaign_id="6001",
+            external_campaign_id="old-campaign",
             region_ids=(47,),
         )
+        prepare = AsyncMock()
         with (
             patch.object(
                 goal.control,
@@ -149,48 +155,28 @@ class GoalFirstAutopilotTests(unittest.IsolatedAsyncioTestCase):
                 new=AsyncMock(return_value="actor"),
             ),
             patch.object(goal.one_click, "list_ad_publications", return_value=[job]),
-            patch.object(goal.asyncio, "to_thread", side_effect=lambda fn, *a, **kw: fn(*a, **kw)),
             patch.object(
-                goal,
-                "_prepare_goal_result",
-                new=AsyncMock(),
-            ) as prepare,
+                goal.one_click.asyncio,
+                "to_thread",
+                side_effect=lambda fn, *a, **kw: fn(*a, **kw),
+            ),
+            patch.object(goal.one_click, "_prepare_draft", new=prepare),
         ):
             await goal._choose_goal_region(
                 callback,
                 state,
                 data=data,
-                campaign_id="6001",
-                campaign_name="Campaign",
+                campaign_id="legacy-ignored",
+                campaign_name="legacy-ignored",
             )
         prepare.assert_awaited_once()
         self.assertEqual(prepare.await_args.kwargs["region_ids"], (47,))
+        self.assertNotIn("external_campaign_id", prepare.await_args.kwargs["data"])
 
-    async def test_install_overlays_existing_orchestration_and_composes_goal_router(self) -> None:
-        owner = SimpleNamespace()
-        simple = SimpleNamespace(
-            router=SimpleNamespace(include_router=lambda _router: None)
-        )
-        control = SimpleNamespace()
-        previous_prepare = goal.one_click._prepare_draft
-        previous_choose = goal.one_click._choose_campaign
-        previous_home = goal.one_click._home_keyboard
-        try:
-            goal.install_goal_first_autopilot(
-                owner_module=owner,
-                simple_module=simple,
-                control_module=control,
-            )
-            self.assertIs(owner.send_owner_dashboard, goal.send_goal_dashboard)
-            self.assertIs(simple.send_simple_dashboard, goal.send_goal_dashboard)
-            self.assertIs(control._send_dashboard, goal.send_goal_dashboard)
-            self.assertIs(goal.one_click._prepare_draft, goal._prepare_goal_result)
-            self.assertIs(goal.one_click._choose_campaign, goal._choose_goal_region)
-            self.assertTrue(simple._goal_first_autopilot_composed)
-        finally:
-            goal.one_click._prepare_draft = previous_prepare
-            goal.one_click._choose_campaign = previous_choose
-            goal.one_click._home_keyboard = previous_home
+    async def test_production_composition_keeps_managed_draft_owner(self) -> None:
+        self.assertIs(goal.one_click._prepare_draft, goal._prepare_goal_result)
+        self.assertFalse(hasattr(goal.one_click, "_choose_campaign"))
+        self.assertTrue(goal.one_click._managed_campaign_goal_first_installed)
 
 
 if __name__ == "__main__":
