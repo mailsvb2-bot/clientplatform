@@ -107,7 +107,7 @@ def test_sales_entry_is_added_to_simple_dashboard_once() -> None:
         button
         for row in markup.inline_keyboard
         for button in row
-        if button.text == "✨ Получать клиентов"
+        if button.text == "💬 Обращения и продажи"
     ]
     assert len(sales_buttons) == 1
     assert sales_buttons[0].callback_data == f"cps:s:{control._uuid_token(business_id)}"
@@ -125,10 +125,16 @@ async def test_sales_home_is_plain_language_and_never_claims_to_auto_send(
     await sales.send_sales_home(message, user_id=101, business_id=business_id)
 
     text, kwargs = message.answers[-1]
-    assert "✨ Получать клиентов" in text
+    assert "💬 Обращения и продажи" in text
     assert "Ничего не отправляется клиенту без Вашего подтверждения" in text
     labels = [button.text for row in kwargs["reply_markup"].inline_keyboard for button in row]
-    assert labels == ["📋 В работе", "🙋 Нужен человек", "📊 Воронка", "🪜 Линейка", "🏠 В кабинет"]
+    assert labels == [
+        "💬 Обращения",
+        "🙋 Нужно подключиться",
+        "📊 Как идут продажи",
+        "🧩 Что предлагать",
+        "🏠 В кабинет",
+    ]
 
 
 @pytest.mark.asyncio
@@ -170,7 +176,7 @@ async def test_work_queue_shows_persisted_plan_candidate_and_approval(
     text, kwargs = callback.message.answers[-1]
     assert "Анна" in text and "Готов к предложению" in text
     assert "Предложить подходящую услугу" in text
-    assert "Подходящий этап: Основная консультация" in text
+    assert "Что можно предложить: Основная консультация" in text
     assert "Борис" in text and "пока не определён" in text
     assert "model_confidence" not in text
     buttons = [button for row in kwargs["reply_markup"].inline_keyboard for button in row]
@@ -182,7 +188,7 @@ async def test_work_queue_shows_persisted_plan_candidate_and_approval(
 
 
 @pytest.mark.asyncio
-async def test_owner_approval_opens_outbound_gate_then_refreshes_work(
+async def test_owner_approval_opens_dispatch_gate_then_refreshes_work(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     business_id, plan_id = str(uuid4()), str(uuid4())
@@ -210,7 +216,7 @@ async def test_owner_approval_opens_outbound_gate_then_refreshes_work(
     assert captured["plan_id"] == plan_id
     assert captured["actor"].business_id == business_id
     assert state.clear_count == 1
-    assert callback.answers[-1][0] == ("Одобрено — outbound разрешён",)
+    assert callback.answers[-1][0] == ("Одобрено — отправка разрешена",)
     refresh.assert_awaited_once()
 
 
@@ -257,7 +263,8 @@ async def test_funnel_renders_only_snapshot_counts(monkeypatch: pytest.MonkeyPat
     assert "Обращений: 8" in text
     assert "Оплатили: 2" in text
     assert "Telegram: 5 обращ. · 2 оплат" in text
-    assert "подтверждённые данные" in text
+    assert "подтверждённые действия клиентов" in text
+    assert "без догадок" in text
 
 
 @pytest.mark.asyncio
