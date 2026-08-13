@@ -4,16 +4,13 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from clientplatform.domain.ad_connections import AdConnectionError
-from clientplatform.domain.promotions import PromotionError
 from handlers import clientplatform_goal_first_autopilot as goal
 
 
 class FakeState:
-    def __init__(self) -> None:
+    def __init__(self, data=None) -> None:
         self.state = None
-        self.data = {}
-        self.cleared = False
+        self.data = dict(data or {})
 
     async def set_state(self, value):
         self.state = value
@@ -21,194 +18,60 @@ class FakeState:
     async def set_data(self, value):
         self.data = dict(value)
 
-    async def update_data(self, **kwargs):
-        self.data.update(kwargs)
-        return dict(self.data)
-
     async def get_data(self):
         return dict(self.data)
 
     async def clear(self):
-        self.cleared = True
+        self.state = None
         self.data.clear()
 
 
-async def direct(function, *args, **kwargs):
-    return function(*args, **kwargs)
-
-
-def event(target):
-    return SimpleNamespace(
-        from_user=SimpleNamespace(id=101),
-        message=target,
-        bot=SimpleNamespace(
-            get_me=AsyncMock(return_value=SimpleNamespace(username="clientplatform_bot"))
-        ),
-    )
-
-
-def base_data():
-    return {
-        "business_id": "business-1",
-        "business_token": "business-1",
-        "slot_id": "slot-1",
-        "connection_id": "connection-1",
-        "external_campaign_id": "6001",
-        "external_campaign_name": "Campaign",
-    }
-
-
-def promotion():
-    return SimpleNamespace(
-        campaign=SimpleNamespace(
-            id="promotion-1",
-            source_token="source-token-123",
-        )
-    )
-
-
-def draft():
-    return SimpleNamespace(
-        campaign_name="Technical campaign name",
-        job=SimpleNamespace(
-            id="job-1",
-            title="Есть свободное время",
-            text="Запишитесь на консультацию",
-        ),
-    )
-
-
 class GoalFirstAutopilotEdgeTests(unittest.IsolatedAsyncioTestCase):
-    async def test_prepared_result_hides_campaign_mechanics_and_shows_exact_spend_boundary(self):
-        target = SimpleNamespace(answer=AsyncMock())
-        state = FakeState()
-        preview = SimpleNamespace(
-            currency="RUB",
-            recommended_hard_cap_minor=10_000,
-            recommended_daily_cap_minor=10_000,
-        )
+    async def test_missing_saved_region_asks_only_for_region(self) -> None:
+        out = SimpleNamespace(answer=AsyncMock())
+        callback = SimpleNamespace(from_user=SimpleNamespace(id=101), message=out)
+        data = {
+            "business_id": "business-1",
+            "business_token": "business-1",
+            "slot_id": "slot-1",
+            "connection_id": "connection-1",
+        }
+        state = FakeState(data)
         with (
-            patch.object(goal.asyncio, "to_thread", new=direct),
             patch.object(goal.control, "_actor", new=AsyncMock(return_value="actor")),
-            patch.object(goal.one_click, "create_slot_promotion", return_value=promotion()),
-            patch.object(goal.one_click, "create_ad_publication_draft", return_value=draft()),
-            patch.object(goal.one_click, "_target", return_value=target),
-            patch.object(goal.one_click, "_username", new=AsyncMock(return_value="clientplatform_bot")),
-            patch.object(goal, "ad_spend_mutations_enabled", return_value=True),
-            patch.object(goal, "preview_goal_spend", return_value=preview),
+            patch.object(goal.control, "_callback_message", return_value=out),
+            patch.object(goal.one_click, "list_ad_publications", return_value=[]),
         ):
-            await goal._prepare_goal_result(
-                event(target),
-                state,
-                data=base_data(),
-                region_ids=(47,),
-            )
-        self.assertEqual(state.state, goal.GoalFirstAutopilotState.ready)
-        self.assertEqual(state.data["job_id"], "job-1")
-        self.assertEqual(state.data["preview_hard_cap_minor"], 10_000)
-        text = target.answer.await_args.args[0]
-        self.assertIn("✅ Реклама подготовлена", text)
-        self.assertIn("единственное подтверждение", text)
-        self.assertNotIn("Technical campaign name", text)
-        labels = [
-            button.text
-            for row in target.answer.await_args.kwargs["reply_markup"].inline_keyboard
-            for button in row
-        ]
-        self.assertEqual(
-            labels,
-            [
-                "🚀 Запустить · максимум 100,00 RUB",
-                "🎨 Настроить под себя",
-                "🏠 Не запускать",
-            ],
-        )
+            await goal._choose_goal_region(callback, state, data=data)
+        self.assertEqual(state.state, goal.one_click.OneClickOwnerState.waiting_region)
+        text = out.answer.await_args.args[0]
+        self.assertIn("где искать клиентов", text.lower())
+        self.assertNotIn("выберите кампанию", text.lower())
 
-    async def test_customization_is_optional_and_contains_own_media_controls(self):
-        target = SimpleNamespace(answer=AsyncMock())
-        callback = SimpleNamespace(
-            data="cpo:custom:business-1",
-            from_user=SimpleNamespace(id=101),
-            message=target,
-            answer=AsyncMock(),
-        )
-        state = FakeState()
-        state.data = {**base_data(), "job_id": "job-1"}
-        with patch.object(goal.control, "_callback_message", return_value=target):
-            await goal.open_customization(callback, state)
-        self.assertEqual(state.state, goal.GoalFirstAutopilotState.customizing)
-        labels = [
-            button.text
-            for row in target.answer.await_args.kwargs["reply_markup"].inline_keyboard
-            for button in row
-        ]
-        self.assertIn("✍️ Свой текст", labels)
-        self.assertIn("🖼 Своя картинка", labels)
-        self.assertIn("🎬 Своё видео", labels)
-        self.assertIn("✨ Сделать картинку автоматически", labels)
-        self.assertIn("✅ Готово", labels)
-
-    async def test_promotion_failure_uses_existing_safe_failure_boundary(self):
-        target = SimpleNamespace(answer=AsyncMock())
-        state = FakeState()
+    async def test_saved_region_reuses_account_level_setting(self) -> None:
+        out = SimpleNamespace(answer=AsyncMock())
+        callback = SimpleNamespace(from_user=SimpleNamespace(id=101), message=out)
+        data = {
+            "business_id": "business-1",
+            "business_token": "business-1",
+            "slot_id": "slot-1",
+            "connection_id": "connection-1",
+        }
+        saved = SimpleNamespace(connection_id="connection-1", region_ids=(47,))
+        prepare = AsyncMock()
         with (
-            patch.object(goal.asyncio, "to_thread", new=direct),
             patch.object(goal.control, "_actor", new=AsyncMock(return_value="actor")),
-            patch.object(
-                goal.one_click,
-                "create_slot_promotion",
-                side_effect=PromotionError("no promotion"),
-            ),
-            patch.object(goal.one_click, "_draft_failure", new=AsyncMock()) as failure,
+            patch.object(goal.one_click, "list_ad_publications", return_value=[saved]),
+            patch.object(goal, "_prepare_goal_result", new=prepare),
         ):
-            await goal._prepare_goal_result(
-                event(target),
-                state,
-                data=base_data(),
-                region_ids=(47,),
-            )
-        failure.assert_awaited_once()
+            await goal._choose_goal_region(callback, FakeState(data), data=data)
+        prepare.assert_awaited_once()
+        self.assertEqual(prepare.await_args.kwargs["region_ids"], (47,))
 
-    async def test_draft_failure_uses_existing_safe_failure_boundary(self):
-        target = SimpleNamespace(answer=AsyncMock())
-        state = FakeState()
-        with (
-            patch.object(goal.asyncio, "to_thread", new=direct),
-            patch.object(goal.control, "_actor", new=AsyncMock(return_value="actor")),
-            patch.object(goal.one_click, "create_slot_promotion", return_value=promotion()),
-            patch.object(
-                goal.one_click,
-                "create_ad_publication_draft",
-                side_effect=AdConnectionError("provider unavailable"),
-            ),
-            patch.object(goal.one_click, "_username", new=AsyncMock(return_value="clientplatform_bot")),
-            patch.object(goal.one_click, "_draft_failure", new=AsyncMock()) as failure,
-        ):
-            await goal._prepare_goal_result(
-                event(target),
-                state,
-                data=base_data(),
-                region_ids=(47,),
-            )
-        failure.assert_awaited_once()
-
-    async def test_invalid_bot_username_uses_safe_failure_boundary(self):
-        target = SimpleNamespace(answer=AsyncMock())
-        state = FakeState()
-        with (
-            patch.object(goal.asyncio, "to_thread", new=direct),
-            patch.object(goal.control, "_actor", new=AsyncMock(return_value="actor")),
-            patch.object(goal.one_click, "create_slot_promotion", return_value=promotion()),
-            patch.object(goal.one_click, "_username", new=AsyncMock(side_effect=RuntimeError("missing"))),
-            patch.object(goal.one_click, "_draft_failure", new=AsyncMock()) as failure,
-        ):
-            await goal._prepare_goal_result(
-                event(target),
-                state,
-                data=base_data(),
-                region_ids=(47,),
-            )
-        failure.assert_awaited_once()
+    async def test_composed_draft_path_has_no_campaign_selector(self) -> None:
+        self.assertIs(goal.one_click._prepare_draft, goal._prepare_goal_result)
+        self.assertFalse(hasattr(goal.one_click, "_choose_campaign"))
+        self.assertTrue(goal.one_click._managed_campaign_goal_first_installed)
 
 
 if __name__ == "__main__":
