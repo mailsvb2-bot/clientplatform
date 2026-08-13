@@ -1,7 +1,30 @@
 from __future__ import annotations
 
+"""Canonical goal-first owner action plus its interaction-safety wiring."""
+
+from dataclasses import dataclass
 from types import ModuleType
 from typing import Callable, cast
+
+
+@dataclass(frozen=True, slots=True)
+class OwnerNavigationAction:
+    """One owner-facing action shared by UI, recovery and callback routing."""
+
+    label: str
+    callback_prefix: str
+
+    def callback(self, business_token: str) -> str:
+        return f"{self.callback_prefix}{business_token}"
+
+    def recovery(self, context: str, *, continuation: str) -> str:
+        return f"{context} Нажмите «{self.label}» {continuation}"
+
+
+ACQUIRE_CLIENTS = OwnerNavigationAction(
+    label="🚀 Найти новых клиентов",
+    callback_prefix="cpo:start:",
+)
 
 
 def _extend_tuple(module: ModuleType, name: str, *values: str) -> None:
@@ -74,7 +97,7 @@ def install_goal_first_safety(safety: ModuleType) -> None:
 
     def callback_can_escape_state(current_state: str, callback_data: str) -> bool:
         if current_state.startswith("GoalFirstAutopilotState:"):
-            if callback_data.startswith(("cpj:home:", "cpo:start:")):
+            if callback_data.startswith(("cpj:home:", ACQUIRE_CLIENTS.callback_prefix)):
                 return True
         return original_escape(current_state, callback_data)
 
@@ -83,4 +106,8 @@ def install_goal_first_safety(safety: ModuleType) -> None:
     setattr(safety, "_goal_first_safety_installed", True)
 
 
-__all__ = ["install_goal_first_safety"]
+__all__ = [
+    "ACQUIRE_CLIENTS",
+    "OwnerNavigationAction",
+    "install_goal_first_safety",
+]
