@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 from dataclasses import dataclass
+from uuid import uuid4
 
 from clientplatform.domain.ad_connections import (
     AdConnection,
@@ -10,8 +12,16 @@ from clientplatform.domain.ad_connections import (
     AdPublicationJob,
     new_oauth_state,
     new_pkce_verifier,
+    normalize_external_campaign_id,
 )
-from clientplatform.domain.tenancy import TenantContext
+from clientplatform.domain.managed_ad_campaigns import (
+    ManagedAdCampaign,
+    ManagedAdCampaignStatus,
+    managed_campaign_name,
+    managed_campaign_provisioning_key,
+    normalize_managed_campaign_error,
+)
+from clientplatform.domain.tenancy import TenantContext, normalize_uuid
 from clientplatform.infrastructure.ad_connection_repository import AdConnectionRepository
 from clientplatform.infrastructure.ad_credential_vault import (
     AdCredentialVault,
@@ -28,6 +38,7 @@ from clientplatform.integrations.yandex_direct import (
     YandexDirectError,
     YandexDirectProvider,
     YandexOAuthConfig,
+    YandexPublicationResult,
     YandexTokenBundle,
 )
 from clientplatform.integrations.yandex_direct_moderation import (
@@ -47,6 +58,12 @@ _ACCOUNT_ATTENTION_ERRORS = {
     "provider_unauthorized",
     "oauth_refresh_token_missing",
 }
+_MANAGED_SELECT = """
+    SELECT id, business_id, promotion_campaign_id, connection_id, provider,
+           provisioning_key, external_campaign_id, external_campaign_name,
+           status, last_error_code, created_by_member_id, created_at, updated_at
+    FROM ad_managed_campaigns
+"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,6 +153,160 @@ def _refresh_token_bundle(
             token_bundle_json=refreshed.to_json(),
         )
     return refreshed
+
+
+def _managed_from_row(row) -> ManagedAdCampaign:
+    return ManagedAdCampaign(
+        id=str(row[0]),
+        business_id=str(row[1]),
+        promotion_campaign_id=str(row[2]),
+        connection_id=str(row[3]),
+        provider=AdProvider(str(row[4])),
+        provisioning_key=str(row[5]),
+        external_campaign_id=None if row[6] is None else str(row[6]),
+        external_campaign_name=str(row[7]),
+        status=ManagedAdCampaignStatus(str(row[8])),
+        last_error_code=None if row[9] is None else str(row[9]),
+        created_by_member_id=str(row[10]),
+        created_at=str(row[11]),
+        updated_at=str(row[12]),
+    )
+
+
+def _managed_get(
+    conn,
+    *,
+    business_id: str,
+    promotion_campaign_id: str,
+    connection_id: str,
+) -> ManagedAdCampaign | None:
+    row = conn.execute(
+        _MANAGED_SELECT
+        + " WHERE business_id=? AND promotion_campaign_id=? AND connection_id=? LIMIT 1",
+        (business_id, promotion_campaign_id, connection_id),
+    ).fetchone()
+    return None if row is None else _managed_from_row(row)
+
+
+def _reserve_managed_campaign(
+    conn,
+    *,
+    actor: TenantContext,
+    promotion_campaign_id: str,
+    connection_id: str,
+) -> tuple[ManagedAdCampaign, bool]:
+    promotion_id = normalize_uuid(
+        promotion_campaign_id,
+        field_name="promotion_campaign_id",
+    )
+    connection_id = normalize_uuid(connection_id, field_name="ad_connection_id")
+    key = managed_campaign_provisioning_key(
+        business_id=actor.business_id,
+        promotion_campaign_id=promotion_id,
+        connection_id=connection_id,
+    )
+    stamp = __import__("datetime").datetime.now(
+        __import__("datetime").timezone.utc
+    ).isoformat(timespec="seconds")
+    cursor = conn.execute(
+        """
+        INSERT INTO ad_managed_campaigns(
+            id, business_id, promotion_campaign_id, connection_id, provider,
+            provisioning_key, external_campaign_id, external_campaign_name,
+            status, last_error_code, created_by_member_id, created_at, updated_at
+        ) VALUES(?, ?, ?, ?, ?, ?, NULL, ?, 'provisioning', NULL, ?, ?, ?)
+        ON CONFLICT(business_id, promotion_campaign_id, connection_id) DO NOTHING
+        """,
+        (
+            str(uuid4()),
+            actor.business_id,
+            promotion_id,
+            connection_id,
+            AdProvider.YANDEX_DIRECT.value,
+            key,
+            managed_campaign_name(key),
+            actor.membership_id,
+            stamp,
+            stamp,
+        ),
+    )
+    managed = _managed_get(
+        conn,
+        business_id=actor.business_id,
+        promotion_campaign_id=promotion_id,
+        connection_id=connection_id,
+    )
+    if managed is None:
+        raise AdConnectionInvariantViolation("managed campaign reservation failed")
+    if managed.provisioning_key != key:
+        raise AdConnectionInvariantViolation("managed campaign ownership marker mismatch")
+    return managed, int(cursor.rowcount or 0) == 1
+
+
+def _bind_managed_campaign(
+    conn,
+    *,
+    managed: ManagedAdCampaign,
+    external_campaign_id: str,
+) -> ManagedAdCampaign:
+    external_id = normalize_external_campaign_id(external_campaign_id)
+    stamp = __import__("datetime").datetime.now(
+        __import__("datetime").timezone.utc
+    ).isoformat(timespec="seconds")
+    try:
+        cursor = conn.execute(
+            """
+            UPDATE ad_managed_campaigns
+            SET external_campaign_id=?, status='ready', last_error_code=NULL,
+                updated_at=?
+            WHERE id=? AND business_id=? AND status IN ('provisioning', 'failed')
+            """,
+            (external_id, stamp, managed.id, managed.business_id),
+        )
+    except sqlite3.IntegrityError as exc:
+        raise AdConnectionInvariantViolation(
+            "external campaign is already bound to another promotion"
+        ) from exc
+    current = _managed_get(
+        conn,
+        business_id=managed.business_id,
+        promotion_campaign_id=managed.promotion_campaign_id,
+        connection_id=managed.connection_id,
+    )
+    if current is None:
+        raise AdConnectionInvariantViolation("managed campaign binding disappeared")
+    if int(cursor.rowcount or 0) != 1 and not (
+        current.status == ManagedAdCampaignStatus.READY
+        and current.external_campaign_id == external_id
+    ):
+        raise AdConnectionInvariantViolation("managed campaign provisioning lease was lost")
+    return current
+
+
+def _mark_managed_failure(
+    *,
+    managed: ManagedAdCampaign,
+    error_code: str,
+    uncertain: bool,
+) -> None:
+    stamp = __import__("datetime").datetime.now(
+        __import__("datetime").timezone.utc
+    ).isoformat(timespec="seconds")
+    with get_db() as conn:
+        conn.execute(
+            """
+            UPDATE ad_managed_campaigns
+            SET status=?, last_error_code=?, updated_at=?
+            WHERE id=? AND business_id=? AND status!='ready'
+            """,
+            (
+                "provisioning" if uncertain else "failed",
+                normalize_managed_campaign_error(error_code),
+                stamp,
+                managed.id,
+                managed.business_id,
+            ),
+        )
 
 
 def start_yandex_direct_oauth(
@@ -265,6 +436,136 @@ def list_yandex_direct_campaigns(
         )
 
 
+def ensure_yandex_managed_campaign(
+    *,
+    actor: TenantContext,
+    promotion_campaign_id: str,
+    connection_id: str,
+    vault: AdCredentialVault | None = None,
+    provider: YandexDirectProvider | None = None,
+) -> ManagedAdCampaign:
+    selected_vault = vault or _vault()
+    selected_provider = provider or _provider()
+    with get_db() as conn:
+        current = TenancyRepository(conn).resolve_context(
+            user_id=actor.user_id,
+            business_id=actor.business_id,
+        )
+        current.assert_can_manage_promotions()
+        promotion = PromotionRepository(conn).get_campaign(
+            actor=current,
+            campaign_id=promotion_campaign_id,
+        )
+        connection = AdConnectionRepository(
+            conn,
+            vault=selected_vault,
+        ).get_connection(actor=current, connection_id=connection_id)
+        if connection.provider != AdProvider.YANDEX_DIRECT:
+            raise AdConnectionInvariantViolation("connection is not a Yandex Direct account")
+        managed, created = _reserve_managed_campaign(
+            conn,
+            actor=current,
+            promotion_campaign_id=promotion.id,
+            connection_id=connection.id,
+        )
+        _connection, token_json = AdWorkerStore(
+            conn,
+            vault=selected_vault,
+        ).load_active(
+            business_id=current.business_id,
+            connection_id=connection.id,
+        )
+    if managed.status == ManagedAdCampaignStatus.READY:
+        return managed
+    bundle = YandexTokenBundle.from_json(token_json)
+
+    try:
+        found = selected_provider.find_managed_campaign(
+            access_token=bundle.access_token,
+            campaign_name=managed.external_campaign_name,
+        )
+    except YandexDirectError as exc:
+        if _auth_error(exc) and bundle.refresh_token:
+            bundle = _refresh_token_bundle(
+                provider=selected_provider,
+                vault=selected_vault,
+                connection=connection,
+                bundle=bundle,
+            )
+            found = selected_provider.find_managed_campaign(
+                access_token=bundle.access_token,
+                campaign_name=managed.external_campaign_name,
+            )
+        else:
+            _mark_managed_failure(
+                managed=managed,
+                error_code=exc.code,
+                uncertain=False,
+            )
+            raise
+    if found is not None:
+        with get_db() as conn:
+            return _bind_managed_campaign(
+                conn,
+                managed=managed,
+                external_campaign_id=found.campaign_id,
+            )
+
+    if not created and managed.status == ManagedAdCampaignStatus.PROVISIONING:
+        raise AdConnectionInvariantViolation(
+            "managed campaign provisioning is unresolved; reconciliation required"
+        )
+
+    try:
+        external_id = selected_provider.create_disabled_managed_campaign(
+            access_token=bundle.access_token,
+            campaign_name=managed.external_campaign_name,
+        )
+    except YandexDirectError as exc:
+        if _auth_error(exc) and bundle.refresh_token:
+            try:
+                bundle = _refresh_token_bundle(
+                    provider=selected_provider,
+                    vault=selected_vault,
+                    connection=connection,
+                    bundle=bundle,
+                )
+                external_id = selected_provider.create_disabled_managed_campaign(
+                    access_token=bundle.access_token,
+                    campaign_name=managed.external_campaign_name,
+                )
+            except YandexDirectError as retry_exc:
+                _mark_managed_failure(
+                    managed=managed,
+                    error_code=retry_exc.code,
+                    uncertain=retry_exc.retryable,
+                )
+                raise
+        else:
+            _mark_managed_failure(
+                managed=managed,
+                error_code=exc.code,
+                uncertain=exc.retryable,
+            )
+            raise
+    except (OSError, RuntimeError, ValueError, TypeError) as exc:
+        _mark_managed_failure(
+            managed=managed,
+            error_code="provider_result_unknown",
+            uncertain=True,
+        )
+        raise AdConnectionInvariantViolation(
+            "managed campaign provider result is unknown"
+        ) from exc
+
+    with get_db() as conn:
+        return _bind_managed_campaign(
+            conn,
+            managed=managed,
+            external_campaign_id=external_id,
+        )
+
+
 def create_ad_publication_draft(
     *,
     actor: TenantContext,
@@ -300,6 +601,37 @@ def create_ad_publication_draft(
             creative_id=creative.creative_id,
         )
         return AdPublicationDraft(job=job, campaign_name=external_campaign_name)
+
+
+def create_managed_ad_publication_draft(
+    *,
+    actor: TenantContext,
+    promotion_campaign_id: str,
+    connection_id: str,
+    region_ids: tuple[int, ...],
+    source_url: str,
+    vault: AdCredentialVault | None = None,
+    provider: YandexDirectProvider | None = None,
+) -> AdPublicationDraft:
+    managed = ensure_yandex_managed_campaign(
+        actor=actor,
+        promotion_campaign_id=promotion_campaign_id,
+        connection_id=connection_id,
+        vault=vault,
+        provider=provider,
+    )
+    if managed.external_campaign_id is None:
+        raise AdConnectionInvariantViolation("managed campaign is not ready")
+    return create_ad_publication_draft(
+        actor=actor,
+        promotion_campaign_id=promotion_campaign_id,
+        connection_id=connection_id,
+        external_campaign_id=managed.external_campaign_id,
+        external_campaign_name=managed.external_campaign_name,
+        region_ids=region_ids,
+        source_url=source_url,
+        vault=vault,
+    )
 
 
 def confirm_ad_publication(
@@ -338,11 +670,6 @@ def disconnect_ad_connection(
     if connection.provider != AdProvider.YANDEX_DIRECT:
         raise AdConnectionInvariantViolation("unsupported advertising provider")
 
-    # begin_disconnect commits the durable barrier first: the connection is now
-    # disabled and all not-yet-started jobs are cancelled. A publishing row owns
-    # an existing provider-call lease and must finish truthfully before token
-    # revocation; otherwise the UI could report cancellation while Yandex still
-    # receives the in-flight request.
     with get_db_ro() as conn:
         if AdWorkerStore(conn, vault=selected_vault).has_publishing_job(
             business_id=connection.business_id,
@@ -403,6 +730,55 @@ def _fail_claimed_job(
         return failed
 
 
+def _managed_name_for_job(job: AdPublicationJob) -> str | None:
+    with get_db_ro() as conn:
+        row = conn.execute(
+            """
+            SELECT external_campaign_name
+            FROM ad_managed_campaigns
+            WHERE business_id=? AND promotion_campaign_id=? AND connection_id=?
+              AND external_campaign_id=? AND status='ready'
+            LIMIT 1
+            """,
+            (
+                job.business_id,
+                job.promotion_campaign_id,
+                job.connection_id,
+                job.external_campaign_id,
+            ),
+        ).fetchone()
+    return None if row is None else str(row[0])
+
+
+def _publish_job(
+    *,
+    provider: YandexDirectProvider,
+    token: str,
+    job: AdPublicationJob,
+    managed_name: str | None,
+) -> YandexPublicationResult:
+    if managed_name is not None:
+        return provider.publish_managed_text_ad(
+            access_token=token,
+            external_campaign_id=job.external_campaign_id,
+            expected_campaign_name=managed_name,
+            region_ids=job.region_ids,
+            title=job.title,
+            text=job.text,
+            href=job.source_url,
+            idempotency_key=job.idempotency_key,
+        )
+    return provider.publish_text_ad(
+        access_token=token,
+        external_campaign_id=job.external_campaign_id,
+        region_ids=job.region_ids,
+        title=job.title,
+        text=job.text,
+        href=job.source_url,
+        idempotency_key=job.idempotency_key,
+    )
+
+
 def process_one_ad_publication(
     *,
     vault: AdCredentialVault | None = None,
@@ -420,6 +796,7 @@ def process_one_ad_publication(
     if claimed is None:
         return None
     job, lock_token = claimed
+    managed_name = _managed_name_for_job(job)
 
     try:
         with get_db_ro() as conn:
@@ -432,14 +809,11 @@ def process_one_ad_publication(
             )
         bundle = YandexTokenBundle.from_json(token_json)
         try:
-            result = selected_provider.publish_text_ad(
-                access_token=bundle.access_token,
-                external_campaign_id=job.external_campaign_id,
-                region_ids=job.region_ids,
-                title=job.title,
-                text=job.text,
-                href=job.source_url,
-                idempotency_key=job.idempotency_key,
+            result = _publish_job(
+                provider=selected_provider,
+                token=bundle.access_token,
+                job=job,
+                managed_name=managed_name,
             )
         except YandexDirectError as exc:
             if not _auth_error(exc) or not bundle.refresh_token:
@@ -450,14 +824,11 @@ def process_one_ad_publication(
                 connection=connection,
                 bundle=bundle,
             )
-            result = selected_provider.publish_text_ad(
-                access_token=refreshed.access_token,
-                external_campaign_id=job.external_campaign_id,
-                region_ids=job.region_ids,
-                title=job.title,
-                text=job.text,
-                href=job.source_url,
-                idempotency_key=job.idempotency_key,
+            result = _publish_job(
+                provider=selected_provider,
+                token=refreshed.access_token,
+                job=job,
+                managed_name=managed_name,
             )
     except YandexDirectError as exc:
         return _fail_claimed_job(
@@ -495,7 +866,9 @@ __all__ = [
     "complete_yandex_direct_oauth",
     "confirm_ad_publication",
     "create_ad_publication_draft",
+    "create_managed_ad_publication_draft",
     "disconnect_ad_connection",
+    "ensure_yandex_managed_campaign",
     "list_ad_connections",
     "list_ad_publications",
     "list_yandex_direct_campaigns",
