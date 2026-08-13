@@ -59,7 +59,7 @@ jobs:
             clientplatform/runtime/sales_ai.py \
             clientplatform/application/sales_ai_orchestration.py \
             clientplatform/application/sales_ai_drafts.py
-          git rm \
+          git rm -f \
             .github/sales-ai-v3-fix-dependency-light.py \
             .github/workflows/clientplatform-sales-ai-dependency-light-fix.yml \
             .github/workflows/clientplatform-sales-ai-canon-diagnostic.yml
