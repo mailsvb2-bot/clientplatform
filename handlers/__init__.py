@@ -196,7 +196,11 @@ def _load_clientplatform_modules() -> tuple[ModuleType, ModuleType]:
         __name__,
     )
     globals()["clientplatform_goal_dashboard"] = goal_dashboard
+    # The information-rich goal dashboard owns the single visible owner-home
+    # navigation. Reuse its keyboard in the goal-first installer so later
+    # composition cannot hide the sales workspace or create a second menu.
     goal_first.send_goal_dashboard = goal_dashboard.send_goal_dashboard
+    goal_first._goal_keyboard = goal_dashboard._goal_keyboard
 
     visual_brand = importlib.import_module(
         ".clientplatform_visual_brand",
@@ -252,6 +256,9 @@ def _load_clientplatform_modules() -> tuple[ModuleType, ModuleType]:
     ad_media_monitor = importlib.import_module(
         "clientplatform.runtime.ad_media_monitor"
     )
+    if not bool(getattr(entry, "_ad_media_monitor_composed", False)):
+        entry.router.startup.register(entry.register_clientplatform_bot_commands)
+        entry._telegram_commands_startup_composed = True
     if not bool(getattr(entry, "_ad_media_monitor_composed", False)):
         entry.router.startup.register(ad_media_monitor.start_ad_media_monitor)
         entry.router.shutdown.register(ad_media_monitor.stop_ad_media_monitor)
