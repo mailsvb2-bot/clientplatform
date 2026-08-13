@@ -232,15 +232,17 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
             patch.object(one_click, "create_slot_promotion", return_value=promotion()),
             patch.object(
                 one_click,
-                "create_ad_publication_draft",
+                "create_managed_ad_publication_draft",
                 return_value=managed_draft(),
             ) as create_draft,
         ):
             await one_click.get_clients_one_click(cb, state)
         create_draft.assert_called_once()
         self.assertNotIn("external_campaign_id", create_draft.call_args.kwargs)
-        self.assertEqual(state.state, goal.GoalFirstAutopilotState.ready)
-        self.assertEqual(state.data["external_campaign_id"], "managed-7001")
+        self.assertEqual(state.state, one_click.ad.AdConnectionState.confirming_publication)
+        self.assertEqual(state.data["promotion_campaign_id"], "promotion-1")
+        self.assertEqual(state.data["job_id"], "job-2")
+        self.assertNotIn("external_campaign_id", state.data)
         self.assertIn("Реклама подготовлена", out.answer.await_args.args[0])
 
     async def test_first_direct_run_asks_only_for_missing_region(self) -> None:
