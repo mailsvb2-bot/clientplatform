@@ -135,7 +135,7 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
         snapshot = (
             "actor",
             SimpleNamespace(business=SimpleNamespace(name="Мой бизнес")),
-            object(),
+            SimpleNamespace(activity_description="Помогаю клиентам решать задачи"),
             [],
             [],
             [],
