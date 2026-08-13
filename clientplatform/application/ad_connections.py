@@ -548,15 +548,6 @@ def ensure_yandex_managed_campaign(
                 uncertain=exc.retryable,
             )
             raise
-    except (OSError, RuntimeError, ValueError, TypeError) as exc:
-        _mark_managed_failure(
-            managed=managed,
-            error_code="provider_result_unknown",
-            uncertain=True,
-        )
-        raise AdConnectionInvariantViolation(
-            "managed campaign provider result is unknown"
-        ) from exc
 
     with get_db() as conn:
         return _bind_managed_campaign(
