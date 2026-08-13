@@ -13,6 +13,7 @@ from clientplatform.domain.ad_connections import (
     normalize_region_ids,
     pkce_challenge,
 )
+from clientplatform.domain.managed_ad_campaigns import normalize_managed_campaign_name
 
 
 class YandexDirectError(RuntimeError):
@@ -140,6 +141,7 @@ class YandexDirectProvider:
     TOKEN_URL = "https://oauth.yandex.com/token"
     PROFILE_URL = "https://login.yandex.ru/info?format=json"
     API_ROOT = "https://api.direct.yandex.com/json/v5"
+    MANAGED_API_ROOT = "https://api.direct.yandex.com/json/v501"
 
     def __init__(
         self,
@@ -274,6 +276,301 @@ class YandexDirectProvider:
                 )
             )
         return campaigns
+
+    def find_managed_campaign(
+        self,
+        *,
+        access_token: str,
+        campaign_name: str,
+    ) -> YandexCampaign | None:
+        expected_name = normalize_managed_campaign_name(campaign_name)
+        result = self._managed_direct_call(
+            service="campaigns",
+            token=access_token,
+            payload={
+                "method": "get",
+                "params": {
+                    "SelectionCriteria": {
+                        "Types": ["UNIFIED_CAMPAIGN"],
+                        "States": ["ON", "OFF", "SUSPENDED"],
+                    },
+                    "FieldNames": ["Id", "Name", "State", "Status", "Type"],
+                },
+            },
+        )
+        matches: list[YandexCampaign] = []
+        for item in result.get("Campaigns") or []:
+            if not isinstance(item, Mapping):
+                continue
+            if str(item.get("Type") or "").strip().upper() != "UNIFIED_CAMPAIGN":
+                continue
+            if " ".join(str(item.get("Name") or "").split()) != expected_name:
+                continue
+            matches.append(
+                YandexCampaign(
+                    campaign_id=normalize_external_campaign_id(item.get("Id")),
+                    name=expected_name,
+                    state=str(item.get("State") or "UNKNOWN").strip().upper(),
+                    status=str(item.get("Status") or "UNKNOWN").strip().upper(),
+                    campaign_type="UNIFIED_CAMPAIGN",
+                )
+            )
+        if len(matches) > 1:
+            raise YandexDirectError("managed_campaign_marker_ambiguous")
+        return matches[0] if matches else None
+
+    def create_disabled_managed_campaign(
+        self,
+        *,
+        access_token: str,
+        campaign_name: str,
+    ) -> str:
+        expected_name = normalize_managed_campaign_name(campaign_name)
+        result = self._managed_direct_call(
+            service="campaigns",
+            token=access_token,
+            payload={
+                "method": "add",
+                "params": {
+                    "Campaigns": [
+                        {
+                            "Name": expected_name,
+                            "UnifiedCampaign": {
+                                "BiddingStrategy": {
+                                    "Search": {"BiddingStrategyType": "SERVING_OFF"},
+                                    "Network": {"BiddingStrategyType": "SERVING_OFF"},
+                                }
+                            },
+                        }
+                    ]
+                },
+            },
+        )
+        return str(
+            _first_add_id(
+                result,
+                key="AddResults",
+                error_code="managed_campaign_creation_failed",
+            )
+        )
+
+    def publish_managed_text_ad(
+        self,
+        *,
+        access_token: str,
+        external_campaign_id: str,
+        expected_campaign_name: str,
+        region_ids: tuple[int, ...],
+        title: str,
+        text: str,
+        href: str,
+        idempotency_key: str,
+    ) -> YandexPublicationResult:
+        campaign_id = int(normalize_external_campaign_id(external_campaign_id))
+        expected_name = normalize_managed_campaign_name(expected_campaign_name)
+        self._assert_managed_campaign_non_serving(
+            access_token=access_token,
+            campaign_id=campaign_id,
+            expected_campaign_name=expected_name,
+        )
+        regions = list(normalize_region_ids(region_ids))
+        destination = str(href or "").strip()
+        if not destination.startswith("https://"):
+            raise YandexDirectError("destination_url_invalid")
+        group_name = f"ClientPlatform {idempotency_key}"[:255]
+        group_id = self._find_managed_group(
+            access_token=access_token,
+            campaign_id=campaign_id,
+            group_name=group_name,
+        ) or self._add_managed_group(
+            access_token=access_token,
+            campaign_id=campaign_id,
+            group_name=group_name,
+            region_ids=regions,
+        )
+        ad_id = self._find_managed_ad(
+            access_token=access_token,
+            ad_group_id=group_id,
+            href=destination,
+        ) or self._add_managed_ad(
+            access_token=access_token,
+            ad_group_id=group_id,
+            title=" ".join(str(title or "").split())[:56],
+            text=" ".join(str(text or "").split())[:75],
+            href=destination,
+        )
+        return YandexPublicationResult(ad_group_id=str(group_id), ad_id=str(ad_id))
+
+    def _assert_managed_campaign_non_serving(
+        self,
+        *,
+        access_token: str,
+        campaign_id: int,
+        expected_campaign_name: str,
+    ) -> None:
+        result = self._managed_direct_call(
+            service="campaigns",
+            token=access_token,
+            payload={
+                "method": "get",
+                "params": {
+                    "SelectionCriteria": {"Ids": [campaign_id]},
+                    "FieldNames": ["Id", "Name", "Type"],
+                    "UnifiedCampaignFieldNames": ["BiddingStrategy"],
+                },
+            },
+        )
+        campaigns = result.get("Campaigns") or []
+        if len(campaigns) != 1 or not isinstance(campaigns[0], Mapping):
+            raise YandexDirectError("managed_campaign_not_found")
+        item = campaigns[0]
+        if normalize_external_campaign_id(item.get("Id")) != str(campaign_id):
+            raise YandexDirectError("managed_campaign_identity_mismatch")
+        if " ".join(str(item.get("Name") or "").split()) != expected_campaign_name:
+            raise YandexDirectError("managed_campaign_name_mismatch")
+        if str(item.get("Type") or "").strip().upper() != "UNIFIED_CAMPAIGN":
+            raise YandexDirectError("managed_campaign_type_mismatch")
+        unified = item.get("UnifiedCampaign")
+        strategy = unified.get("BiddingStrategy") if isinstance(unified, Mapping) else None
+        if not isinstance(strategy, Mapping):
+            raise YandexDirectError("managed_campaign_strategy_missing")
+        for placement in ("Search", "Network"):
+            placement_strategy = strategy.get(placement)
+            if not isinstance(placement_strategy, Mapping):
+                raise YandexDirectError("managed_campaign_strategy_missing")
+            if (
+                str(placement_strategy.get("BiddingStrategyType") or "")
+                .strip()
+                .upper()
+                != "SERVING_OFF"
+            ):
+                raise YandexDirectError("managed_campaign_serving_is_enabled")
+
+    def _find_managed_group(
+        self,
+        *,
+        access_token: str,
+        campaign_id: int,
+        group_name: str,
+    ) -> int | None:
+        result = self._managed_direct_call(
+            service="adgroups",
+            token=access_token,
+            payload={
+                "method": "get",
+                "params": {
+                    "SelectionCriteria": {"CampaignIds": [campaign_id]},
+                    "FieldNames": ["Id", "Name", "CampaignId", "Type"],
+                },
+            },
+        )
+        matches = [
+            int(item["Id"])
+            for item in result.get("AdGroups") or []
+            if isinstance(item, Mapping)
+            and str(item.get("Name") or "") == group_name
+            and str(item.get("Type") or "").strip().upper() == "UNIFIED_AD_GROUP"
+        ]
+        if len(matches) > 1:
+            raise YandexDirectError("managed_ad_group_marker_ambiguous")
+        return matches[0] if matches else None
+
+    def _add_managed_group(
+        self,
+        *,
+        access_token: str,
+        campaign_id: int,
+        group_name: str,
+        region_ids: list[int],
+    ) -> int:
+        result = self._managed_direct_call(
+            service="adgroups",
+            token=access_token,
+            payload={
+                "method": "add",
+                "params": {
+                    "AdGroups": [
+                        {
+                            "Name": group_name,
+                            "CampaignId": campaign_id,
+                            "RegionIds": region_ids,
+                            "UnifiedAdGroup": {"OfferRetargeting": "NO"},
+                        }
+                    ]
+                },
+            },
+        )
+        return _first_add_id(
+            result,
+            key="AddResults",
+            error_code="managed_ad_group_creation_failed",
+        )
+
+    def _find_managed_ad(
+        self,
+        *,
+        access_token: str,
+        ad_group_id: int,
+        href: str,
+    ) -> int | None:
+        result = self._managed_direct_call(
+            service="ads",
+            token=access_token,
+            payload={
+                "method": "get",
+                "params": {
+                    "SelectionCriteria": {"AdGroupIds": [ad_group_id]},
+                    "FieldNames": ["Id", "AdGroupId", "Type"],
+                    "TextAdFieldNames": ["Href", "Title", "Text"],
+                },
+            },
+        )
+        matches = []
+        for item in result.get("Ads") or []:
+            if not isinstance(item, Mapping):
+                continue
+            text_ad = item.get("TextAd") or {}
+            if isinstance(text_ad, Mapping) and str(text_ad.get("Href") or "") == href:
+                matches.append(int(item["Id"]))
+        if len(matches) > 1:
+            raise YandexDirectError("managed_ad_marker_ambiguous")
+        return matches[0] if matches else None
+
+    def _add_managed_ad(
+        self,
+        *,
+        access_token: str,
+        ad_group_id: int,
+        title: str,
+        text: str,
+        href: str,
+    ) -> int:
+        if not title or not text:
+            raise YandexDirectError("ad_copy_empty")
+        result = self._managed_direct_call(
+            service="ads",
+            token=access_token,
+            payload={
+                "method": "add",
+                "params": {
+                    "Ads": [
+                        {
+                            "AdGroupId": ad_group_id,
+                            "TextAd": {
+                                "Title": title,
+                                "Text": text,
+                                "Href": href,
+                            },
+                        }
+                    ]
+                },
+            },
+        )
+        return _first_add_id(
+            result,
+            key="AddResults",
+            error_code="managed_ad_creation_failed",
+        )
 
     def publish_text_ad(
         self,
@@ -419,10 +716,39 @@ class YandexDirectProvider:
         token: str,
         payload: Mapping[str, Any],
     ) -> Mapping[str, Any]:
+        return self._direct_call_at_root(
+            root=self.API_ROOT,
+            service=service,
+            token=token,
+            payload=payload,
+        )
+
+    def _managed_direct_call(
+        self,
+        *,
+        service: str,
+        token: str,
+        payload: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
+        return self._direct_call_at_root(
+            root=self.MANAGED_API_ROOT,
+            service=service,
+            token=token,
+            payload=payload,
+        )
+
+    def _direct_call_at_root(
+        self,
+        *,
+        root: str,
+        service: str,
+        token: str,
+        payload: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         response = self._json_or_error(
             method="POST",
-            url=f"{self.API_ROOT}/{service}",
+            url=f"{root}/{service}",
             headers={
                 "Authorization": f"Bearer {token}",
                 "Accept-Language": "ru",
