@@ -43,14 +43,6 @@ def _install_managed_campaign_goal_first() -> None:
     if bool(getattr(one_click, "_managed_campaign_goal_first_installed", False)):
         return
 
-    # Preserve the historical composition hook name, but point it at the
-    # canonical tenant-owned managed campaign implementation.
-    setattr(
-        one_click,
-        "create_ad_publication_draft",
-        one_click.create_managed_ad_publication_draft,
-    )
-
     async def prepare_goal_result(event, state, *, data: dict, region_ids: tuple[int, ...]) -> None:
         actor = await control._actor(one_click._user_id(event), str(data["business_id"]))
         try:
