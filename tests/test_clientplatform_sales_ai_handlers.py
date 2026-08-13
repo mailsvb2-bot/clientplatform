@@ -1,10 +1,9 @@
 from __future__ import annotations
 
+import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
-
-import pytest
 
 from handlers import clientplatform_sales as sales
 
@@ -36,165 +35,137 @@ class _Callback:
         self.answers.append((args, kwargs))
 
 
-@pytest.fixture
-def ids() -> tuple[str, str, str]:
-    business_id = str(uuid4())
-    lead_id = str(uuid4())
-    return business_id, lead_id, sales._token(business_id)
-
-
-def _patch_control(monkeypatch: pytest.MonkeyPatch, actor: object) -> None:
-    monkeypatch.setattr(sales.control, "_actor", AsyncMock(return_value=actor))
-    monkeypatch.setattr(sales.control, "_callback_message", lambda callback: callback.message)
-    monkeypatch.setattr(sales.control, "_keyboard", lambda rows: rows)
-
-
 async def _inline_to_thread(func, /, *args, **kwargs):
     return func(*args, **kwargs)
 
 
-@pytest.mark.asyncio
-async def test_toggle_sales_ai_fails_closed_when_runtime_is_unavailable(
-    monkeypatch: pytest.MonkeyPatch, ids: tuple[str, str, str]
-) -> None:
-    business_id, _lead_id, token = ids
-    callback = _Callback(f"cps:sat:{token}")
-    state = _State()
-    _patch_control(monkeypatch, SimpleNamespace(business_id=business_id))
+class SalesAIHandlerTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self.business_id = str(uuid4())
+        self.lead_id = str(uuid4())
+        self.token = sales._token(self.business_id)
+        self.actor = SimpleNamespace(business_id=self.business_id)
+        self.control_patches = [
+            patch.object(sales.control, "_actor", AsyncMock(return_value=self.actor)),
+            patch.object(sales.control, "_callback_message", lambda callback: callback.message),
+            patch.object(sales.control, "_keyboard", lambda rows: rows),
+        ]
+        for item in self.control_patches:
+            item.start()
+            self.addCleanup(item.stop)
 
-    from clientplatform.application import sales_ai_drafts
+    async def test_toggle_sales_ai_fails_closed_when_runtime_is_unavailable(self) -> None:
+        callback = _Callback(f"cps:sat:{self.token}")
+        state = _State()
+        from clientplatform.application import sales_ai_drafts
 
-    monkeypatch.setattr(sales_ai_drafts, "sales_ai_runtime_available", lambda: False)
+        with patch.object(sales_ai_drafts, "sales_ai_runtime_available", return_value=False):
+            await sales.toggle_sales_ai(callback, state)
 
-    await sales.toggle_sales_ai(callback, state)
+        self.assertEqual(state.cleared, 0)
+        self.assertEqual(
+            callback.answers[-1],
+            (("ИИ сейчас не настроен на сервере",), {"show_alert": True}),
+        )
 
-    assert state.cleared == 0
-    assert callback.answers[-1] == (("ИИ сейчас не настроен на сервере",), {"show_alert": True})
+    async def test_toggle_sales_ai_disables_existing_consent_and_refreshes_work(self) -> None:
+        callback = _Callback(f"cps:sat:{self.token}")
+        state = _State()
+        refresh = AsyncMock()
+        from clientplatform.application import sales_ai_drafts, sales_ai_settings
 
+        changes: list[tuple[object, bool]] = []
 
-@pytest.mark.asyncio
-async def test_toggle_sales_ai_disables_existing_consent_and_refreshes_work(
-    monkeypatch: pytest.MonkeyPatch, ids: tuple[str, str, str]
-) -> None:
-    business_id, _lead_id, token = ids
-    actor = SimpleNamespace(business_id=business_id)
-    callback = _Callback(f"cps:sat:{token}")
-    state = _State()
-    _patch_control(monkeypatch, actor)
-    monkeypatch.setattr(sales.asyncio, "to_thread", _inline_to_thread)
-    refresh = AsyncMock()
-    monkeypatch.setattr(sales, "_send_sales_work", refresh)
+        def change(*, actor, enabled, **_kwargs):
+            changes.append((actor, enabled))
+            return enabled
 
-    from clientplatform.application import sales_ai_drafts, sales_ai_settings
+        with (
+            patch.object(sales.asyncio, "to_thread", _inline_to_thread),
+            patch.object(sales, "_send_sales_work", refresh),
+            patch.object(sales_ai_drafts, "sales_ai_runtime_available", return_value=True),
+            patch.object(sales_ai_settings, "get_business_sales_ai_enabled", return_value=True),
+            patch.object(sales_ai_settings, "set_business_sales_ai_enabled", side_effect=change),
+        ):
+            await sales.toggle_sales_ai(callback, state)
 
-    monkeypatch.setattr(sales_ai_drafts, "sales_ai_runtime_available", lambda: True)
-    monkeypatch.setattr(sales_ai_settings, "get_business_sales_ai_enabled", lambda *, actor: True)
-    changes: list[tuple[object, bool]] = []
-    monkeypatch.setattr(
-        sales_ai_settings,
-        "set_business_sales_ai_enabled",
-        lambda *, actor, enabled, **_kwargs: changes.append((actor, enabled)) or enabled,
-    )
+        self.assertEqual(state.cleared, 1)
+        self.assertEqual(changes, [(self.actor, False)])
+        self.assertEqual(callback.answers[-1][0], ("ИИ-помощник выключен",))
+        refresh.assert_awaited_once()
 
-    await sales.toggle_sales_ai(callback, state)
+    async def test_toggle_sales_ai_shows_provider_bound_consent_before_enabling(self) -> None:
+        callback = _Callback(f"cps:sat:{self.token}")
+        state = _State()
+        from clientplatform.application import sales_ai_drafts, sales_ai_settings
 
-    assert state.cleared == 1
-    assert changes == [(actor, False)]
-    assert callback.answers[-1][0] == ("ИИ-помощник выключен",)
-    refresh.assert_awaited_once()
+        with (
+            patch.object(sales.asyncio, "to_thread", _inline_to_thread),
+            patch.object(sales_ai_drafts, "sales_ai_runtime_available", return_value=True),
+            patch.object(sales_ai_drafts, "sales_ai_runtime_provider_label", return_value="DeepSeek"),
+            patch.object(
+                sales_ai_drafts,
+                "sales_ai_runtime_consent_target",
+                return_value="deepseek:https://api.deepseek.com",
+            ),
+            patch.object(sales_ai_settings, "get_business_sales_ai_enabled", return_value=False),
+        ):
+            await sales.toggle_sales_ai(callback, state)
 
+        self.assertEqual(state.cleared, 1)
+        self.assertEqual(callback.answers[-1], ((), {}))
+        text, kwargs = callback.message.answers[-1]
+        self.assertIn("DeepSeek", text)
+        self.assertIn("deepseek:https://api.deepseek.com", text)
+        self.assertIn("не получает права отправлять сообщения", text)
+        buttons = kwargs["reply_markup"]
+        self.assertEqual(buttons[0][0][1], f"cps:sae:{self.token}")
 
-@pytest.mark.asyncio
-async def test_toggle_sales_ai_shows_provider_bound_consent_before_enabling(
-    monkeypatch: pytest.MonkeyPatch, ids: tuple[str, str, str]
-) -> None:
-    business_id, _lead_id, token = ids
-    actor = SimpleNamespace(business_id=business_id)
-    callback = _Callback(f"cps:sat:{token}")
-    state = _State()
-    _patch_control(monkeypatch, actor)
-    monkeypatch.setattr(sales.asyncio, "to_thread", _inline_to_thread)
+    async def test_enable_sales_ai_uses_redacted_mode_and_notice_confirmation(self) -> None:
+        callback = _Callback(f"cps:sae:{self.token}")
+        state = _State()
+        refresh = AsyncMock()
+        captured: dict[str, object] = {}
+        from clientplatform.application import sales_ai_drafts, sales_ai_settings
 
-    from clientplatform.application import sales_ai_drafts, sales_ai_settings
+        def enable(**kwargs: object) -> bool:
+            captured.update(kwargs)
+            return True
 
-    monkeypatch.setattr(sales_ai_drafts, "sales_ai_runtime_available", lambda: True)
-    monkeypatch.setattr(sales_ai_drafts, "sales_ai_runtime_provider_label", lambda: "DeepSeek")
-    monkeypatch.setattr(
-        sales_ai_drafts,
-        "sales_ai_runtime_consent_target",
-        lambda: "deepseek:https://api.deepseek.com",
-    )
-    monkeypatch.setattr(sales_ai_settings, "get_business_sales_ai_enabled", lambda *, actor: False)
+        with (
+            patch.object(sales.asyncio, "to_thread", _inline_to_thread),
+            patch.object(sales, "_send_sales_work", refresh),
+            patch.object(sales_ai_drafts, "sales_ai_runtime_available", return_value=True),
+            patch.object(sales_ai_settings, "set_business_sales_ai_enabled", side_effect=enable),
+        ):
+            await sales.enable_sales_ai(callback, state)
 
-    await sales.toggle_sales_ai(callback, state)
+        self.assertEqual(state.cleared, 1)
+        self.assertIs(captured["actor"], self.actor)
+        self.assertIs(captured["enabled"], True)
+        self.assertEqual(captured["data_mode"], "redacted")
+        self.assertIs(captured["customer_notice_confirmed"], True)
+        self.assertEqual(callback.answers[-1][0], ("ИИ-помощник включён",))
+        refresh.assert_awaited_once()
 
-    assert state.cleared == 1
-    assert callback.answers[-1] == ((), {})
-    text, kwargs = callback.message.answers[-1]
-    assert "DeepSeek" in text
-    assert "deepseek:https://api.deepseek.com" in text
-    assert "не получает права отправлять сообщения" in text
-    buttons = kwargs["reply_markup"]
-    assert buttons[0][0][1] == f"cps:sae:{token}"
+    async def test_draft_sales_answer_shows_review_only_draft(self) -> None:
+        callback = _Callback(f"cps:sad:{self.token}:{sales._token(self.lead_id)}")
+        state = _State()
+        from clientplatform.application import sales_ai_drafts
 
+        with patch.object(
+            sales_ai_drafts,
+            "draft_sales_reply",
+            AsyncMock(return_value=SimpleNamespace(text="Предлагаю обсудить аудит.")),
+        ):
+            await sales.draft_sales_answer(callback, state)
 
-@pytest.mark.asyncio
-async def test_enable_sales_ai_uses_redacted_mode_and_notice_confirmation(
-    monkeypatch: pytest.MonkeyPatch, ids: tuple[str, str, str]
-) -> None:
-    business_id, _lead_id, token = ids
-    actor = SimpleNamespace(business_id=business_id)
-    callback = _Callback(f"cps:sae:{token}")
-    state = _State()
-    _patch_control(monkeypatch, actor)
-    monkeypatch.setattr(sales.asyncio, "to_thread", _inline_to_thread)
-    refresh = AsyncMock()
-    monkeypatch.setattr(sales, "_send_sales_work", refresh)
-
-    from clientplatform.application import sales_ai_drafts, sales_ai_settings
-
-    monkeypatch.setattr(sales_ai_drafts, "sales_ai_runtime_available", lambda: True)
-    captured: dict[str, object] = {}
-
-    def enable(**kwargs: object) -> bool:
-        captured.update(kwargs)
-        return True
-
-    monkeypatch.setattr(sales_ai_settings, "set_business_sales_ai_enabled", enable)
-
-    await sales.enable_sales_ai(callback, state)
-
-    assert state.cleared == 1
-    assert captured["actor"] is actor
-    assert captured["enabled"] is True
-    assert captured["data_mode"] == "redacted"
-    assert captured["customer_notice_confirmed"] is True
-    assert callback.answers[-1][0] == ("ИИ-помощник включён",)
-    refresh.assert_awaited_once()
+        self.assertEqual(state.cleared, 1)
+        self.assertEqual(callback.answers[0][0], ("Готовлю черновик…",))
+        text, _kwargs = callback.message.answers[-1]
+        self.assertIn("Предлагаю обсудить аудит.", text)
+        self.assertIn("ничего не отправил клиенту автоматически", text)
 
 
-@pytest.mark.asyncio
-async def test_draft_sales_answer_shows_review_only_draft(
-    monkeypatch: pytest.MonkeyPatch, ids: tuple[str, str, str]
-) -> None:
-    business_id, lead_id, token = ids
-    actor = SimpleNamespace(business_id=business_id)
-    callback = _Callback(f"cps:sad:{token}:{sales._token(lead_id)}")
-    state = _State()
-    _patch_control(monkeypatch, actor)
-
-    from clientplatform.application import sales_ai_drafts
-
-    monkeypatch.setattr(
-        sales_ai_drafts,
-        "draft_sales_reply",
-        AsyncMock(return_value=SimpleNamespace(text="Предлагаю обсудить аудит.")),
-    )
-
-    await sales.draft_sales_answer(callback, state)
-
-    assert state.cleared == 1
-    assert callback.answers[0][0] == ("Готовлю черновик…",)
-    text, _kwargs = callback.message.answers[-1]
-    assert "Предлагаю обсудить аудит." in text
-    assert "ничего не отправил клиенту автоматически" in text
+if __name__ == "__main__":
+    unittest.main()
