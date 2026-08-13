@@ -43,8 +43,8 @@ def _install_managed_campaign_goal_first() -> None:
     if bool(getattr(one_click, "_managed_campaign_goal_first_installed", False)):
         return
 
-    # Preserve the historical composition hook name for goal-first compatibility,
-    # while keeping one-click's own draft orchestration independent.
+    # Preserve the historical composition hook name, but point it at the
+    # canonical tenant-owned managed campaign implementation.
     setattr(
         one_click,
         "create_ad_publication_draft",
@@ -155,7 +155,7 @@ def _install_managed_campaign_goal_first() -> None:
         )
         regions = tuple(getattr(saved, "region_ids", ()) or ()) if saved else ()
         if regions:
-            await prepare_goal_result(
+            await one_click._prepare_draft(
                 callback,
                 state,
                 data=data,
@@ -181,6 +181,7 @@ def _install_managed_campaign_goal_first() -> None:
 
     setattr(goal_first, "_prepare_goal_result", prepare_goal_result)
     setattr(goal_first, "_choose_goal_region", choose_goal_region)
+    setattr(one_click, "_prepare_draft", prepare_goal_result)
     if hasattr(one_click, "_choose_campaign"):
         delattr(one_click, "_choose_campaign")
     setattr(one_click, "_managed_campaign_goal_first_installed", True)
