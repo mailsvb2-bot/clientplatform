@@ -161,7 +161,7 @@ async def test_publishing_time_ends_with_actionable_receipt_not_generic_dashboar
 
 
 @pytest.mark.asyncio
-async def test_owner_dashboard_keeps_status_but_reduces_controls_to_one_click(
+async def test_owner_dashboard_keeps_status_and_separates_acquisition_from_sales(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     business_id = str(uuid4())
@@ -200,7 +200,12 @@ async def test_owner_dashboard_keeps_status_but_reduces_controls_to_one_click(
         for row in kwargs["reply_markup"].inline_keyboard
         for button in row
     ]
-    assert labels == ["🚀 Получить клиентов", "👥 Клиенты и запись", "⚙️ Ещё"]
+    assert labels == [
+        "🚀 Найти новых клиентов",
+        "💬 Обращения и продажи",
+        "👥 Клиенты и запись",
+        "⚙️ Ещё",
+    ]
 
 
 @pytest.mark.asyncio
