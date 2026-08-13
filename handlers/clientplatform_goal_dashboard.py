@@ -9,6 +9,7 @@ from aiogram.types import Message
 from clientplatform.domain.bookings import BookingSlotStatus
 
 from . import clientplatform_control as control
+from . import clientplatform_goal_first_safety as goal_contract
 from . import clientplatform_one_click_experience as one_click
 from . import clientplatform_owner_journey as owner
 
@@ -22,9 +23,10 @@ def _goal_keyboard(business_id: str):
     """
 
     token = control._uuid_token(business_id)
+    action = goal_contract.ACQUIRE_CLIENTS
     return control._keyboard(
         [
-            [("🚀 Найти новых клиентов", f"cpo:start:{token}")],
+            [(action.label, action.callback(token))],
             [("💬 Обращения и продажи", f"cps:s:{token}")],
             [
                 ("👥 Клиенты и запись", f"cpj:bookings:{token}"),
@@ -75,6 +77,7 @@ async def send_goal_dashboard(
         if open_slots
         else "Свободных времён пока нет — если понадобится, я попрошу добавить одно."
     )
+    action = goal_contract.ACQUIRE_CLIENTS
     await message.answer(
         f"🏠 {access.business.name}\n\n"
         f"{profile.activity_description}\n\n"
@@ -84,7 +87,7 @@ async def send_goal_dashboard(
         f"{nearest_line}\n\n"
         f"{readiness}\n\n"
         "Что нужно сделать сейчас:\n"
-        "• «🚀 Найти новых клиентов» — подготовить продвижение и привести новых людей.\n"
+        f"• «{action.label}» — подготовить продвижение и привести новых людей.\n"
         "• «💬 Обращения и продажи» — разобрать тех, кто уже написал: увидеть следующий "
         "шаг, подключить ИИ-помощника и подготовить ответ.\n\n"
         "Технические кабинеты и кампании знать не нужно. Действия с возможными "
