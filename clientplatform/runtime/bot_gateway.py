@@ -443,13 +443,52 @@ class ManagedBotGatewayRuntime:
                 )
             actor = _telegram_actor(payload)
             if actor is not None:
-                await asyncio.to_thread(
+                customer_link = await asyncio.to_thread(
                     ensure_telegram_customer_link,
                     route=item.route,
                     telegram_user_id=actor[0],
                     username=actor[1],
                     display_name=actor[2],
                 )
+                from clientplatform.application.sales_intelligence import (
+                    extract_customer_message_text,
+                    record_managed_bot_customer_message,
+                )
+
+                customer_text = extract_customer_message_text(payload)
+                if customer_text is not None:
+                    ai_enabled = False
+                    ai_target = ""
+                    try:
+                        from clientplatform.runtime.sales_ai_config import SalesAIRuntimeConfig
+
+                        ai_config = SalesAIRuntimeConfig.from_env()
+                        ai_enabled = ai_config.enabled
+                        ai_target = ai_config.consent_target
+                    except (TypeError, ValueError):
+                        log.warning(
+                            "Sales AI configuration is invalid; continuing without AI",
+                            exc_info=True,
+                        )
+                    try:
+                        await asyncio.to_thread(
+                            record_managed_bot_customer_message,
+                            route=item.route,
+                            customer_link=customer_link,
+                            telegram_user_id=actor[0],
+                            provider_update_id=item.event.provider_update_id,
+                            message_text=customer_text,
+                            runtime_ai_enabled=ai_enabled,
+                            runtime_ai_consent_target=ai_target,
+                        )
+                    except Exception:  # validator: allow-wide-except
+                        log.exception(
+                            "Managed bot sales-intelligence side channel failed; dispatch continues",
+                            extra={
+                                "managed_bot_id": item.route.managed_bot_id,
+                                "business_id": item.route.business_id,
+                            },
+                        )
             bot = await self._bot_for(item.route)
             try:
                 update = Update.model_validate(

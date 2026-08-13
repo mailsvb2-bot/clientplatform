@@ -167,6 +167,16 @@ async def _send_sales_work(
     items = await asyncio.to_thread(list_sales_work, actor=actor, limit=12)
     business_token = _token(business_id)
     rows: list[list[tuple[str, str]]] = []
+    from clientplatform.application.sales_ai_drafts import (
+        sales_ai_enabled_for_business,
+        sales_ai_runtime_available,
+    )
+
+    runtime_ai_available = sales_ai_runtime_available()
+    ai_available = (
+        runtime_ai_available
+        and await asyncio.to_thread(sales_ai_enabled_for_business, actor=actor)
+    )
     if not items:
         text = (
             "📋 В работе\n\nПока нет активных обращений. "
@@ -209,8 +219,26 @@ async def _send_sales_work(
                         )
                     ]
                 )
+            if ai_available and plan_id and action not in {None, "human_handoff", "noop"}:
+                rows.append(
+                    [
+                        (
+                            f"🧠 Черновик ответа для {index}",
+                            f"cps:sad:{business_token}:{_token(str(item['id']))}",
+                        )
+                    ]
+                )
             lines.append("")
         text = "\n".join(lines).rstrip()
+    if runtime_ai_available:
+        rows.append(
+            [
+                (
+                    "🧠 ИИ-помощник: включён" if ai_available else "🧠 Подключить ИИ-помощника",
+                    f"cps:sat:{business_token}",
+                )
+            ]
+        )
     rows.append([("← Получать клиентов", f"cps:s:{business_token}")])
     await message.answer(text, reply_markup=control._keyboard(rows))
 
@@ -253,6 +281,127 @@ async def approve_sales_plan(callback: CallbackQuery, state: FSMContext) -> None
         control._callback_message(callback),
         user_id=int(callback.from_user.id),
         business_id=business_id,
+    )
+
+
+@router.callback_query(F.data.startswith("cps:sat:"))
+async def toggle_sales_ai(callback: CallbackQuery, state: FSMContext) -> None:
+    business_id = _uuid(str(callback.data).split(":", 2)[2])
+    actor = await control._actor(int(callback.from_user.id), business_id)
+    from clientplatform.application.sales_ai_drafts import (
+        sales_ai_runtime_available,
+        sales_ai_runtime_consent_target,
+        sales_ai_runtime_provider_label,
+    )
+    from clientplatform.application.sales_ai_settings import (
+        get_business_sales_ai_enabled,
+        set_business_sales_ai_enabled,
+    )
+
+    if not sales_ai_runtime_available():
+        await callback.answer("ИИ сейчас не настроен на сервере", show_alert=True)
+        return
+    enabled = await asyncio.to_thread(get_business_sales_ai_enabled, actor=actor)
+    await state.clear()
+    if enabled:
+        try:
+            await asyncio.to_thread(
+                set_business_sales_ai_enabled, actor=actor, enabled=False
+            )
+        except (PermissionError, ValueError, RuntimeError):
+            await callback.answer(
+                "Недостаточно прав для изменения настроек ИИ", show_alert=True
+            )
+            return
+        await callback.answer("ИИ-помощник выключен")
+        await _send_sales_work(
+            control._callback_message(callback),
+            user_id=int(callback.from_user.id),
+            business_id=business_id,
+        )
+        return
+    await callback.answer()
+    token = _token(business_id)
+    provider_label = sales_ai_runtime_provider_label()
+    consent_target = sales_ai_runtime_consent_target()
+    await control._callback_message(callback).answer(
+        "🧠 Подключить ИИ-помощника?\n\n"
+        f"После включения тексты новых клиентских сообщений этого бизнеса будут "
+        f"передаваться в {provider_label} ({consent_target}) для анализа и подготовки "
+        "черновиков. ИИ не получает права отправлять сообщения и не подтверждает "
+        "оплату или запись.\n\n"
+        "Если администратор сменит AI-провайдера или домен API, это согласие "
+        "автоматически перестанет действовать и ИИ потребуется включить заново.\n\n"
+        "По умолчанию ClientPlatform удаляет из текста очевидные телефоны, e-mail, "
+        "длинные номера и ссылки перед отправкой во внешний AI. Нажимая кнопку ниже, "
+        "Вы также подтверждаете, что уведомили клиентов о применении внешнего AI к "
+        "их сообщениям. Для чувствительных сфер используйте режим no_cloud или отдельную "
+        "согласованную политику обработки данных.",
+        reply_markup=control._keyboard(
+            [
+                [("✅ Включить с маскированием контактов", f"cps:sae:{token}")],
+                [("✖️ Не включать", f"cps:sw:{token}")],
+            ]
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("cps:sae:"))
+async def enable_sales_ai(callback: CallbackQuery, state: FSMContext) -> None:
+    business_id = _uuid(str(callback.data).split(":", 2)[2])
+    actor = await control._actor(int(callback.from_user.id), business_id)
+    from clientplatform.application.sales_ai_drafts import sales_ai_runtime_available
+    from clientplatform.application.sales_ai_settings import set_business_sales_ai_enabled
+
+    if not sales_ai_runtime_available():
+        await callback.answer("ИИ сейчас не настроен на сервере", show_alert=True)
+        return
+    try:
+        await asyncio.to_thread(
+            set_business_sales_ai_enabled,
+            actor=actor,
+            enabled=True,
+            data_mode="redacted",
+            customer_notice_confirmed=True,
+        )
+    except (PermissionError, ValueError, RuntimeError):
+        await callback.answer(
+            "Недостаточно прав для изменения настроек ИИ", show_alert=True
+        )
+        return
+    await state.clear()
+    await callback.answer("ИИ-помощник включён")
+    await _send_sales_work(
+        control._callback_message(callback),
+        user_id=int(callback.from_user.id),
+        business_id=business_id,
+    )
+
+
+@router.callback_query(F.data.startswith("cps:sad:"))
+async def draft_sales_answer(callback: CallbackQuery, state: FSMContext) -> None:
+    parts = str(callback.data).split(":")
+    business_id, lead_id = _uuid(parts[2]), _uuid(parts[3])
+    actor = await control._actor(int(callback.from_user.id), business_id)
+    await state.clear()
+    await callback.answer("Готовлю черновик…")
+    from clientplatform.application.sales_ai_drafts import draft_sales_reply
+    from clientplatform.infrastructure.sales_ai_provider import SalesAIProviderError
+
+    try:
+        draft = await draft_sales_reply(actor=actor, lead_id=lead_id)
+    except (SalesAIProviderError, ValueError, RuntimeError):
+        await control._callback_message(callback).answer(
+            "Не удалось подготовить актуальный черновик. Возможно, новое сообщение "
+            "ещё анализируется или обращение требует человека.",
+            reply_markup=_back_keyboard(business_id),
+        )
+        return
+    await control._callback_message(callback).answer(
+        "🧠 Черновик ИИ — проверьте перед отправкой\n\n"
+        f"{draft.text}\n\n"
+        "ClientPlatform ничего не отправил клиенту автоматически.",
+        reply_markup=_back_keyboard(business_id),
     )
 
 
