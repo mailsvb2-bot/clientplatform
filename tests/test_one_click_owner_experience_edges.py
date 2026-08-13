@@ -7,8 +7,6 @@ from unittest.mock import AsyncMock, patch
 from clientplatform.domain.ad_connections import AdConnectionError, AdConnectionStatus
 from clientplatform.domain.bookings import BookingSlotStatus
 from clientplatform.domain.promotions import PromotionError
-from clientplatform.domain.tenancy import TenantPermissionDenied
-from clientplatform.integrations.yandex_direct import YandexDirectError
 from handlers import clientplatform_one_click_experience as one_click
 
 
@@ -84,12 +82,11 @@ def connection(connection_id="connection-1", login="owner"):
     )
 
 
-def campaign(campaign_id="6001", name="Campaign", state="ON", status="ACCEPTED"):
+def publication(connection_id="connection-1", regions=(47,)):
     return SimpleNamespace(
-        campaign_id=campaign_id,
-        name=name,
-        state=state,
-        status=status,
+        connection_id=connection_id,
+        external_campaign_id="historical-provider-id",
+        region_ids=regions,
     )
 
 
@@ -107,14 +104,24 @@ def promotion():
     )
 
 
+def managed_draft():
+    return SimpleNamespace(
+        campaign_name="ClientPlatform managed",
+        job=SimpleNamespace(
+            id="job-1",
+            external_campaign_id="managed-7001",
+            title="Консультация",
+            text="Свободное время",
+        ),
+    )
+
+
 def base_data():
     return {
         "business_id": "business-1",
         "business_token": "business-1",
         "slot_id": "slot-1",
         "connection_id": "connection-1",
-        "external_campaign_id": "6001",
-        "external_campaign_name": "Campaign",
     }
 
 
@@ -167,11 +174,10 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_fallback_stale_slot(self):
         target = out()
-        cb = callback("cpo:start:business-1", target)
         state = State()
         with patch.object(one_click.control, "_callback_message", return_value=target):
             await one_click._fallback(
-                cb,
+                callback("cpo:start:business-1", target),
                 state,
                 actor="actor",
                 business_token="business-1",
@@ -183,60 +189,61 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_fallback_promotion_and_username_failures(self):
         target = out()
-        state = State()
-        cb = callback("cpo:start:business-1", target)
         with (
             patch.object(one_click.asyncio, "to_thread", new=direct),
             patch.object(one_click.control, "_callback_message", return_value=target),
             patch.object(one_click, "create_slot_promotion", side_effect=PromotionError("fail")),
         ):
             await one_click._fallback(
-                cb, state, actor="actor", business_token="business-1",
+                callback("cpo:start:business-1", target),
+                State(), actor="actor", business_token="business-1",
                 slot=slot(), reason="provider down",
             )
         self.assertIn("Не удалось собрать запасной вариант", target.answer.await_args.args[0])
 
         target.answer.reset_mock()
-        cb = callback("cpo:start:business-1", target, username="")
         with (
             patch.object(one_click.asyncio, "to_thread", new=direct),
             patch.object(one_click.control, "_callback_message", return_value=target),
             patch.object(one_click, "create_slot_promotion", return_value=promotion()),
         ):
             await one_click._fallback(
-                cb, State(), actor="actor", business_token="business-1",
+                callback("cpo:start:business-1", target, username=""),
+                State(), actor="actor", business_token="business-1",
                 slot=slot(), reason="provider down",
             )
         self.assertIn("Не удалось собрать запасной вариант", target.answer.await_args.args[0])
 
     async def test_prepare_draft_promotion_failure(self):
         target = out()
-        cb = callback("cpo:region:47", target)
-        state = State(base_data())
+        data = base_data()
         with (
             patch.object(one_click.asyncio, "to_thread", new=direct),
             patch.object(one_click.control, "_actor", new=AsyncMock(return_value="actor")),
             patch.object(one_click.control, "_callback_message", return_value=target),
             patch.object(one_click, "create_slot_promotion", side_effect=PromotionError("fail")),
         ):
-            await one_click._prepare_draft(cb, state, data=base_data(), region_ids=(47,))
+            await one_click._prepare_draft(
+                callback("cpo:region:47", target), State(data), data=data, region_ids=(47,)
+            )
         self.assertIn("Ничего не запущено", target.answer.await_args.args[0])
 
-    async def test_prepare_draft_username_and_ad_draft_failures(self):
+    async def test_prepare_draft_username_and_managed_draft_failures(self):
         data = base_data()
         target = out()
-        cb = callback("cpo:region:47", target, username="")
         with (
             patch.object(one_click.asyncio, "to_thread", new=direct),
             patch.object(one_click.control, "_actor", new=AsyncMock(return_value="actor")),
             patch.object(one_click.control, "_callback_message", return_value=target),
             patch.object(one_click, "create_slot_promotion", return_value=promotion()),
         ):
-            await one_click._prepare_draft(cb, State(data), data=data, region_ids=(47,))
+            await one_click._prepare_draft(
+                callback("cpo:region:47", target, username=""),
+                State(data), data=data, region_ids=(47,)
+            )
         self.assertIn("Ничего не запущено", target.answer.await_args.args[0])
 
         target.answer.reset_mock()
-        cb = callback("cpo:region:47", target)
         with (
             patch.object(one_click.asyncio, "to_thread", new=direct),
             patch.object(one_click.control, "_actor", new=AsyncMock(return_value="actor")),
@@ -244,53 +251,52 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
             patch.object(one_click, "create_slot_promotion", return_value=promotion()),
             patch.object(one_click, "create_ad_publication_draft", side_effect=AdConnectionError("fail")),
         ):
-            await one_click._prepare_draft(cb, State(data), data=data, region_ids=(47,))
+            await one_click._prepare_draft(
+                callback("cpo:region:47", target), State(data), data=data, region_ids=(47,)
+            )
         self.assertIn("Ничего не запущено", target.answer.await_args.args[0])
 
-    async def test_choose_connection_provider_and_permission_failures(self):
-        data = base_data()
-        for error in (
-            YandexDirectError("temporary", retryable=True),
-            TenantPermissionDenied("owner only"),
-        ):
-            with self.subTest(error=type(error).__name__):
-                fallback = AsyncMock()
-                with (
-                    patch.object(one_click.asyncio, "to_thread", new=direct),
-                    patch.object(one_click.control, "_actor", new=AsyncMock(return_value="actor")),
-                    patch.object(one_click, "list_yandex_direct_campaigns", side_effect=error),
-                    patch.object(one_click, "_reload_slot", new=AsyncMock(return_value=slot())),
-                    patch.object(one_click, "_fallback", new=fallback),
-                ):
-                    await one_click._choose_connection(
-                        callback("cpo:connection:0"), State(data),
-                        data=data, connection_id="connection-1",
-                    )
-                fallback.assert_awaited_once()
-
-    async def test_choose_connection_multiple_campaigns(self):
+    async def test_choose_connection_provider_history_failure_asks_region_safely(self):
         target = out()
         data = base_data()
-        state = State(data)
         with (
             patch.object(one_click.asyncio, "to_thread", new=direct),
             patch.object(one_click.control, "_actor", new=AsyncMock(return_value="actor")),
             patch.object(one_click.control, "_callback_message", return_value=target),
-            patch.object(one_click, "list_yandex_direct_campaigns", return_value=[campaign("1", "One"), campaign("2", "Two")]),
-            patch.object(one_click, "list_ad_publications", return_value=[]),
+            patch.object(one_click, "list_ad_publications", side_effect=AdConnectionError("down")),
         ):
+            state = State(data)
             await one_click._choose_connection(
                 callback("cpo:connection:0", target), state,
                 data=data, connection_id="connection-1",
             )
-        self.assertEqual(state.state, one_click.OneClickOwnerState.selecting_campaign)
-        self.assertEqual(len(state.data["campaigns"]), 2)
+        self.assertEqual(state.state, one_click.OneClickOwnerState.waiting_region)
+        self.assertIn("указать регион", target.answer.await_args.args[0].lower())
+
+    async def test_choose_connection_reuses_matching_account_region(self):
+        data = base_data()
+        prepare = AsyncMock()
+        with (
+            patch.object(one_click.asyncio, "to_thread", new=direct),
+            patch.object(one_click.control, "_actor", new=AsyncMock(return_value="actor")),
+            patch.object(
+                one_click,
+                "list_ad_publications",
+                return_value=[publication("other", (2,)), publication("connection-1", (47,))],
+            ),
+            patch.object(one_click, "_prepare_draft", new=prepare),
+        ):
+            await one_click._choose_connection(
+                callback("cpo:connection:0"), State(data),
+                data=data, connection_id="connection-1",
+            )
+        prepare.assert_awaited_once()
+        self.assertEqual(prepare.await_args.kwargs["region_ids"], (47,))
 
     async def test_no_connection_oauth_success_and_failure(self):
         for fail in (False, True):
             with self.subTest(fail=fail):
                 target = out()
-                cb = callback("cpo:start:business-1", target)
                 common = self.common(target)
                 fallback = AsyncMock()
                 oauth = SimpleNamespace(authorization_url="https://oauth.example")
@@ -305,7 +311,7 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
                     patch.object(one_click, "start_yandex_direct_oauth", return_value=oauth, side_effect=side_effect),
                     patch.object(one_click, "_fallback", new=fallback),
                 ):
-                    await one_click.get_clients_one_click(cb, State())
+                    await one_click.get_clients_one_click(callback("cpo:start:business-1", target), State())
                 if fail:
                     fallback.assert_awaited_once()
                 else:
@@ -322,9 +328,7 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
             patch.object(one_click.control, "list_booking_slots", return_value=[slot()]),
             patch.object(one_click, "_fallback", new=fallback),
         ):
-            await one_click.get_clients_one_click(
-                callback("cpo:start:business-1", target), State()
-            )
+            await one_click.get_clients_one_click(callback("cpo:start:business-1", target), State())
         fallback.assert_awaited_once()
 
         fallback.reset_mock()
@@ -337,51 +341,31 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
             patch.object(one_click, "list_ad_publications", return_value=[]),
             patch.object(one_click, "_fallback", new=fallback),
         ):
-            await one_click.get_clients_one_click(
-                callback("cpo:start:business-1", target), State()
-            )
+            await one_click.get_clients_one_click(callback("cpo:start:business-1", target), State())
         fallback.assert_awaited_once()
 
-    async def test_callback_selection_valid_and_stale(self):
+    async def test_connection_callback_selection_valid_and_stale(self):
         target = out()
-        invalid = callback("cpo:connection:no", target)
         choose = AsyncMock()
         with patch.object(one_click, "_choose_connection", new=choose):
             await one_click.choose_one_click_connection(
-                invalid, State({"connection_ids": ["c1"]})
+                callback("cpo:connection:no", target), State({"connection_ids": ["c1"]})
             )
         choose.assert_not_awaited()
 
-        valid = callback("cpo:connection:0", target)
         choose = AsyncMock()
         with patch.object(one_click, "_choose_connection", new=choose):
             await one_click.choose_one_click_connection(
-                valid, State({"connection_ids": ["c1"]})
+                callback("cpo:connection:0", target), State({"connection_ids": ["c1"]})
             )
         choose.assert_awaited_once()
-
-        bad = callback("cpo:campaign:0", target)
-        choose_campaign = AsyncMock()
-        with patch.object(one_click, "_choose_campaign", new=choose_campaign):
-            await one_click.choose_one_click_campaign(
-                bad, State({"campaigns": [{"id": "", "name": ""}]})
-            )
-        choose_campaign.assert_not_awaited()
-
-        good = callback("cpo:campaign:0", target)
-        choose_campaign = AsyncMock()
-        with patch.object(one_click, "_choose_campaign", new=choose_campaign):
-            await one_click.choose_one_click_campaign(
-                good, State({"campaigns": [{"id": "6001", "name": "Campaign"}]})
-            )
-        choose_campaign.assert_awaited_once()
+        self.assertFalse(hasattr(one_click, "choose_one_click_campaign"))
 
     async def test_region_fast_other_numeric_and_invalid_text(self):
         data = base_data()
         target = out()
-        other = callback("cpo:region:other", target)
         with patch.object(one_click.control, "_callback_message", return_value=target):
-            await one_click.choose_one_click_region(other, State(data))
+            await one_click.choose_one_click_region(callback("cpo:region:other", target), State(data))
         self.assertIn("Напишите город", target.answer.await_args.args[0])
 
         invalid = callback("cpo:region:999", target)
@@ -390,9 +374,7 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
 
         prepare = AsyncMock()
         with patch.object(one_click, "_prepare_draft", new=prepare):
-            await one_click.choose_one_click_region(
-                callback("cpo:region:47", target), State(data)
-            )
+            await one_click.choose_one_click_region(callback("cpo:region:47", target), State(data))
         prepare.assert_awaited_once()
 
         prepare = AsyncMock()
@@ -428,7 +410,8 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
             for row in target.answer.await_args.kwargs["reply_markup"].inline_keyboard
             for button in row
         ]
-        self.assertIn("🚀 Получить клиентов", labels)
+        self.assertIn("🚀 Найти новых клиентов", labels)
+        self.assertNotIn("🚀 Получить клиентов", labels)
         self.assertIn("📣 Яндекс Директ", labels)
 
 
