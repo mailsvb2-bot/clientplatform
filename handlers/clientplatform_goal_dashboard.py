@@ -14,10 +14,18 @@ from . import clientplatform_owner_journey as owner
 
 
 def _goal_keyboard(business_id: str):
+    """Render the single canonical owner-home navigation.
+
+    Acquisition and already-arrived customer conversations are deliberately
+    separate actions.  Keeping both here prevents later presentation layers
+    from hiding the sales workspace again.
+    """
+
     token = control._uuid_token(business_id)
     return control._keyboard(
         [
-            [("🚀 Получить клиентов", f"cpo:start:{token}")],
+            [("🚀 Найти новых клиентов", f"cpo:start:{token}")],
+            [("💬 Обращения и продажи", f"cps:s:{token}")],
             [
                 ("👥 Клиенты и запись", f"cpj:bookings:{token}"),
                 ("⚙️ Ещё", f"cpo:more:{token}"),
@@ -75,15 +83,16 @@ async def send_goal_dashboard(
         f"Материалов и программ: {len(programs)} · клиентов: {len(customers)}\n"
         f"{nearest_line}\n\n"
         f"{readiness}\n\n"
-        "Главное действие — «🚀 Получить клиентов». ClientPlatform сама выберет "
-        "ближайшее свободное время, подходящий рекламный путь и сохранённые "
-        "настройки. Технические кабинеты и кампании знать не нужно.\n\n"
-        "Фирменный стиль доступен в «⚙️ Ещё → ⚙️ Настройки»: там можно "
-        "сохранить Brand DNA бизнеса или безопасно предложить его по сайту.\n\n"
-        "Если захотите, перед запуском можно заменить текст и добавить свою "
-        "картинку или видео. Действия с возможными расходами подтверждаются отдельно.",
+        "Что нужно сделать сейчас:\n"
+        "• «🚀 Найти новых клиентов» — подготовить продвижение и привести новых людей.\n"
+        "• «💬 Обращения и продажи» — разобрать тех, кто уже написал: увидеть следующий "
+        "шаг, подключить ИИ-помощника и подготовить ответ.\n\n"
+        "Технические кабинеты и кампании знать не нужно. Действия с возможными "
+        "расходами подтверждаются отдельно, а сообщения клиентам не отправляются без "
+        "Вашего подтверждения.\n\n"
+        "Остальные функции собраны в «⚙️ Ещё».",
         reply_markup=_goal_keyboard(business_id),
     )
 
 
-__all__ = ["send_goal_dashboard"]
+__all__ = ["_goal_keyboard", "send_goal_dashboard"]

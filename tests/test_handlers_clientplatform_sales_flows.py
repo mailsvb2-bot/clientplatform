@@ -102,7 +102,7 @@ async def test_empty_handoff_queue_has_clear_return_path(monkeypatch: pytest.Mon
     text, kwargs = message.answers[-1]
     assert "нет обращений" in text
     button = kwargs["reply_markup"].inline_keyboard[0][0]
-    assert button.text == "← Получать клиентов"
+    assert button.text == "← Обращения и продажи"
 
 
 @pytest.mark.asyncio
@@ -178,7 +178,7 @@ async def test_handoff_mutation_failure_is_user_safe(monkeypatch: pytest.MonkeyP
 
 
 @pytest.mark.asyncio
-async def test_ladder_list_renders_existing_and_create_actions(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_offer_set_list_renders_existing_and_create_actions(monkeypatch: pytest.MonkeyPatch) -> None:
     business_id, ladder_id = str(uuid4()), str(uuid4())
     monkeypatch.setattr(
         sales,
@@ -193,9 +193,9 @@ async def test_ladder_list_renders_existing_and_create_actions(monkeypatch: pyte
     assert "Основной путь · этапов: 3" in text
     buttons = [button for row in kwargs["reply_markup"].inline_keyboard for button in row]
     assert {button.text for button in buttons} >= {
-        "🪜 Основной путь",
-        "➕ Создать линейку",
-        "← Получать клиентов",
+        "🧩 Основной путь",
+        "➕ Создать набор предложений",
+        "← Обращения и продажи",
     }
     assert all(len(str(button.callback_data).encode("utf-8")) <= 64 for button in buttons)
 
@@ -237,7 +237,7 @@ async def test_ladder_detail_uses_plain_labels_and_approval_marker(
 
 
 @pytest.mark.asyncio
-async def test_begin_and_finish_ladder_creation(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_begin_and_finish_offer_set_creation(monkeypatch: pytest.MonkeyPatch) -> None:
     business_id, ladder_id = str(uuid4()), str(uuid4())
     token = control._uuid_token(business_id)
     callback = FakeCallback(f"cps:sln:{token}")
@@ -246,7 +246,7 @@ async def test_begin_and_finish_ladder_creation(monkeypatch: pytest.MonkeyPatch)
     await sales.begin_ladder_creation(callback, state)
     assert state.states[-1] == sales.ClientPlatformSalesUiState.ladder_name
     assert state.data["business_id"] == business_id
-    assert "Как назвать линейку" in callback.message.answers[-1][0]
+    assert "Как назвать набор предложений" in callback.message.answers[-1][0]
 
     monkeypatch.setattr(sales, "create_commercial_ladder", lambda **_kwargs: ladder_id)
     detail = AsyncMock()
@@ -255,7 +255,7 @@ async def test_begin_and_finish_ladder_creation(monkeypatch: pytest.MonkeyPatch)
     await sales.receive_ladder_name(message, state)
 
     assert state.clear_count >= 2
-    assert "Линейка создана" in message.answers[-1][0]
+    assert "Набор предложений создан" in message.answers[-1][0]
     detail.assert_awaited_once()
     assert detail.await_args.kwargs["ladder_id"] == ladder_id
 

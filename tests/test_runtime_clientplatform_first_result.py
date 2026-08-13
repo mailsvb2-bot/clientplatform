@@ -41,16 +41,22 @@ class _Callback:
 
 
 class ClientPlatformFirstResultUiTests(unittest.IsolatedAsyncioTestCase):
-    def test_composed_owner_dashboard_leads_with_one_click_client_acquisition(self) -> None:
+    def test_composed_owner_dashboard_separates_acquisition_from_existing_sales(self) -> None:
         handlers._load_clientplatform_modules()
         markup = owner._owner_keyboard(_BUSINESS_ID)
         buttons = [button for row in markup.inline_keyboard for button in row]
-        first_button = buttons[0]
-        self.assertEqual(first_button.text, "🚀 Получить клиентов")
-        self.assertTrue(str(first_button.callback_data).startswith("cpo:start:"))
+        self.assertEqual(buttons[0].text, "🚀 Найти новых клиентов")
+        self.assertTrue(str(buttons[0].callback_data).startswith("cpo:start:"))
+        self.assertEqual(buttons[1].text, "💬 Обращения и продажи")
+        self.assertTrue(str(buttons[1].callback_data).startswith("cps:s:"))
         self.assertEqual(
             [button.text for button in buttons],
-            ["🚀 Получить клиентов", "👥 Клиенты и запись", "⚙️ Ещё"],
+            [
+                "🚀 Найти новых клиентов",
+                "💬 Обращения и продажи",
+                "👥 Клиенты и запись",
+                "⚙️ Ещё",
+            ],
         )
         self.assertFalse(
             any(str(button.callback_data or "").startswith("cps:next:") for button in buttons)

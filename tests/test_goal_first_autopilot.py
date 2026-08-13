@@ -25,7 +25,7 @@ class FakeState:
 
 
 class GoalFirstAutopilotTests(unittest.IsolatedAsyncioTestCase):
-    async def test_home_exposes_one_primary_goal_and_optional_secondary_navigation(self) -> None:
+    async def test_home_exposes_acquisition_sales_and_secondary_navigation(self) -> None:
         out = SimpleNamespace(answer=AsyncMock())
         slot = SimpleNamespace(
             slot=SimpleNamespace(
@@ -61,17 +61,26 @@ class GoalFirstAutopilotTests(unittest.IsolatedAsyncioTestCase):
         text = out.answer.await_args.args[0]
         markup = out.answer.await_args.kwargs["reply_markup"]
         labels = [button.text for row in markup.inline_keyboard for button in row]
-        self.assertIn("Главное действие", text)
+        self.assertIn("Что нужно сделать сейчас", text)
         self.assertIn("Технические кабинеты", text)
-        self.assertIn("свою картинку или видео", text)
+        self.assertIn("сообщения клиентам не отправляются без Вашего подтверждения", text)
         self.assertIn("свободных времён: 1", text)
         self.assertEqual(
             labels,
-            ["🚀 Получить клиентов", "👥 Клиенты и запись", "⚙️ Ещё"],
+            [
+                "🚀 Найти новых клиентов",
+                "💬 Обращения и продажи",
+                "👥 Клиенты и запись",
+                "⚙️ Ещё",
+            ],
         )
         self.assertEqual(
             markup.inline_keyboard[0][0].callback_data,
             "cpo:start:business-1",
+        )
+        self.assertEqual(
+            markup.inline_keyboard[1][0].callback_data,
+            "cps:s:business-1",
         )
 
     async def test_first_region_question_is_business_language(self) -> None:

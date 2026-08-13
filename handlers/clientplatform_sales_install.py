@@ -29,7 +29,7 @@ def install_sales_ui(simple_module: _SimpleExperienceModule) -> None:
         token = simple_module.control._uuid_token(business_id)
         sales_row = [
             InlineKeyboardButton(
-                text="✨ Получать клиентов",
+                text="💬 Обращения и продажи",
                 callback_data=f"cps:s:{token}",
             )
         ]

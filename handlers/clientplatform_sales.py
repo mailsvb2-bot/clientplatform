@@ -105,8 +105,8 @@ def _home_keyboard(business_id: str):
     token = _token(business_id)
     return control._keyboard(
         [
-            [("📋 В работе", f"cps:sw:{token}"), ("🙋 Нужен человек", f"cps:sh:{token}")],
-            [("📊 Воронка", f"cps:sf:{token}"), ("🪜 Линейка", f"cps:sl:{token}")],
+            [("💬 Обращения", f"cps:sw:{token}"), ("🙋 Нужно подключиться", f"cps:sh:{token}")],
+            [("📊 Как идут продажи", f"cps:sf:{token}"), ("🧩 Что предлагать", f"cps:sl:{token}")],
             [("🏠 В кабинет", f"cp:business:{token}")],
         ]
     )
@@ -114,7 +114,7 @@ def _home_keyboard(business_id: str):
 
 def _back_keyboard(business_id: str):
     return control._keyboard(
-        [[("← Получать клиентов", f"cps:s:{_token(business_id)}")]]
+        [[("← Обращения и продажи", f"cps:s:{_token(business_id)}")]]
     )
 
 
@@ -134,12 +134,13 @@ async def send_sales_home(
         snapshot.total.discovered - snapshot.total.won - snapshot.total.lost,
     )
     await message.answer(
-        "✨ Получать клиентов\n\n"
-        "ClientPlatform собирает реальные входящие сигналы, определяет следующий шаг "
-        "и подбирает подходящий этап Вашей линейки. Ничего не отправляется клиенту "
-        "без Вашего подтверждения.\n\n"
-        f"Сейчас в работе: {active_count}\n"
-        f"Нужен человек: {len(handoffs)}\n"
+        "💬 Обращения и продажи\n\n"
+        "Здесь собраны люди, которые уже проявили интерес или написали Вам. "
+        "ClientPlatform показывает, что лучше сделать дальше, и может подготовить "
+        "черновик ответа с помощью ИИ. Ничего не отправляется клиенту без Вашего "
+        "подтверждения.\n\n"
+        f"Активных обращений: {active_count}\n"
+        f"Нужно подключиться лично: {len(handoffs)}\n"
         f"Оплатили: {snapshot.total.won}",
         reply_markup=_home_keyboard(business_id),
     )
@@ -179,11 +180,12 @@ async def _send_sales_work(
     )
     if not items:
         text = (
-            "📋 В работе\n\nПока нет активных обращений. "
-            "Когда появятся реальные сигналы от клиентов, система сама создаст следующий шаг."
+            "💬 Обращения\n\nПока нет активных обращений. "
+            "Когда клиент напишет или появится другой реальный сигнал интереса, "
+            "ClientPlatform покажет здесь следующий шаг."
         )
     else:
-        lines = ["📋 В работе", ""]
+        lines = ["💬 Обращения", ""]
         for index, item in enumerate(items, start=1):
             action = item.get("next_action_kind")
             action_text = (
@@ -201,11 +203,11 @@ async def _send_sales_work(
             )
             candidate = str(item.get("commercial_candidate_title") or "").strip()
             if candidate:
-                lines.append(f"   Подходящий этап: {candidate}")
+                lines.append(f"   Что можно предложить: {candidate}")
             plan_id = str(item.get("next_plan_id") or "")
             plan_status = str(item.get("next_plan_status") or "")
             if plan_status == "approved":
-                lines.append("   Разрешение: ✅ outbound разрешён Вами")
+                lines.append("   Разрешение: ✅ отправка разрешена Вами")
             elif (
                 plan_id
                 and plan_status == "planned"
@@ -234,12 +236,12 @@ async def _send_sales_work(
         rows.append(
             [
                 (
-                    "🧠 ИИ-помощник: включён" if ai_available else "🧠 Подключить ИИ-помощника",
+                    "🧠 Выключить ИИ-помощника" if ai_available else "🧠 Подключить ИИ-помощника",
                     f"cps:sat:{business_token}",
                 )
             ]
         )
-    rows.append([("← Получать клиентов", f"cps:s:{business_token}")])
+    rows.append([("← Обращения и продажи", f"cps:s:{business_token}")])
     await message.answer(text, reply_markup=control._keyboard(rows))
 
 
@@ -273,10 +275,10 @@ async def approve_sales_plan(callback: CallbackQuery, state: FSMContext) -> None
         )
         return
     if not bool(authorization.get("dispatch_allowed")):
-        await callback.answer("Outbound не разрешён", show_alert=True)
+        await callback.answer("Отправка не разрешена", show_alert=True)
         return
     await state.clear()
-    await callback.answer("Одобрено — outbound разрешён")
+    await callback.answer("Одобрено — отправка разрешена")
     await _send_sales_work(
         control._callback_message(callback),
         user_id=int(callback.from_user.id),
@@ -415,13 +417,13 @@ async def _send_handoffs(
     items = await asyncio.to_thread(list_sales_handoff_work, actor=actor, limit=12)
     if not items:
         await message.answer(
-            "🙋 Нужен человек\n\nСейчас нет обращений, где требуется Ваше личное участие.",
+            "🙋 Нужно подключиться\n\nСейчас нет обращений, где требуется Ваше личное участие.",
             reply_markup=_back_keyboard(business_id),
         )
         return
 
     rows: list[list[tuple[str, str]]] = []
-    lines = ["🙋 Нужен человек", ""]
+    lines = ["🙋 Нужно подключиться", ""]
     business_token = _token(business_id)
     for index, item in enumerate(items, start=1):
         handoff_token = _token(str(item["id"]))
@@ -437,7 +439,7 @@ async def _send_handoffs(
         if str(item.get("status")) == "open":
             rows.append([("✋ Взять", f"cps:shc:{business_token}:{handoff_token}")])
         rows.append([("✅ Готово", f"cps:shr:{business_token}:{handoff_token}")])
-    rows.append([("← Получать клиентов", f"cps:s:{business_token}")])
+    rows.append([("← Обращения и продажи", f"cps:s:{business_token}")])
     await message.answer("\n".join(lines).rstrip(), reply_markup=control._keyboard(rows))
 
 
@@ -505,9 +507,9 @@ async def open_sales_funnel(callback: CallbackQuery, state: FSMContext) -> None:
     snapshot = await asyncio.to_thread(get_sales_funnel_snapshot, actor=actor)
     total = snapshot.total
     lines = [
-        "📊 Воронка",
+        "📊 Как идут продажи",
         "",
-        "Только подтверждённые данные — без придуманных AI-событий.",
+        "Только подтверждённые действия клиентов — без догадок.",
         "",
         f"Обращений: {total.discovered}",
         f"Вступили в диалог: {total.engaged} ({total.engagement_percent}%)",
@@ -536,29 +538,31 @@ async def _send_ladders(message: Message, *, user_id: int, business_id: str) -> 
     business_token = _token(business_id)
     rows: list[list[tuple[str, str]]] = []
     lines = [
-        "🪜 Линейка",
+        "🧩 Что предлагать",
         "",
-        "Настройте путь клиента от первого шага к основной услуге и сопровождению.",
-        "ClientPlatform может сам выбрать подходящий этап, но outbound откроется только после Вашего подтверждения.",
+        "Здесь можно настроить, что предложить человеку сначала, что — потом, "
+        "и когда переходить к основной услуге или сопровождению.",
+        "ClientPlatform может подобрать подходящий вариант, но внешнее действие "
+        "откроется только после Вашего подтверждения.",
         "",
     ]
     if not ladders:
-        lines.append("Линеек пока нет.")
+        lines.append("Наборов предложений пока нет.")
     else:
         for item in ladders:
             lines.append(f"• {item['name']} · этапов: {int(item['step_count'])}")
             rows.append(
                 [
                     (
-                        f"🪜 {item['name']}",
+                        f"🧩 {item['name']}",
                         f"cps:slv:{business_token}:{_token(str(item['id']))}",
                     )
                 ]
             )
     rows.extend(
         [
-            [("➕ Создать линейку", f"cps:sln:{business_token}")],
-            [("← Получать клиентов", f"cps:s:{business_token}")],
+            [("➕ Создать набор предложений", f"cps:sln:{business_token}")],
+            [("← Обращения и продажи", f"cps:s:{business_token}")],
         ]
     )
     await message.answer("\n".join(lines), reply_markup=control._keyboard(rows))
@@ -595,7 +599,7 @@ async def _send_ladder_detail(
     selected = next((item for item in ladders if str(item["id"]) == ladder_id), None)
     if selected is None:
         raise ValueError("commercial ladder is not available")
-    lines = [f"🪜 {selected['name']}", ""]
+    lines = [f"🧩 {selected['name']}", ""]
     if not steps:
         lines.append("Этапов пока нет.")
     else:
@@ -613,7 +617,7 @@ async def _send_ladder_detail(
         reply_markup=control._keyboard(
             [
                 [("➕ Добавить этап", f"cps:sla:{business_token}:{ladder_token}")],
-                [("← Все линейки", f"cps:sl:{business_token}")],
+                [("← Все предложения", f"cps:sl:{business_token}")],
             ]
         ),
     )
@@ -634,7 +638,7 @@ async def open_ladder_detail(callback: CallbackQuery, state: FSMContext) -> None
         )
     except ValueError:
         await control._callback_message(callback).answer(
-            "Эта линейка больше не доступна.",
+            "Этот набор предложений больше не доступен.",
             reply_markup=_back_keyboard(business_id),
         )
 
@@ -648,7 +652,7 @@ async def begin_ladder_creation(callback: CallbackQuery, state: FSMContext) -> N
     await state.set_state(ClientPlatformSalesUiState.ladder_name)
     await callback.answer()
     await control._callback_message(callback).answer(
-        "Как назвать линейку?\n\nНапример: «Основной путь клиента».",
+        "Как назвать набор предложений?\n\nНапример: «Основной путь клиента».",
         reply_markup=control._keyboard(
             [[("✖️ Отмена", f"cps:sl:{_token(business_id)}")]]
         ),
@@ -672,7 +676,7 @@ async def receive_ladder_name(message: Message, state: FSMContext) -> None:
         await message.answer("Нужно короткое понятное название — от 1 до 160 символов.")
         return
     await state.clear()
-    await message.answer("✅ Линейка создана. Теперь добавьте первый этап.")
+    await message.answer("✅ Набор предложений создан. Теперь добавьте первый этап.")
     await _send_ladder_detail(
         message,
         user_id=user_id,

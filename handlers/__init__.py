@@ -196,7 +196,11 @@ def _load_clientplatform_modules() -> tuple[ModuleType, ModuleType]:
         __name__,
     )
     globals()["clientplatform_goal_dashboard"] = goal_dashboard
+    # The information-rich goal dashboard owns the single visible owner-home
+    # navigation. Reuse its keyboard in the goal-first installer so later
+    # composition cannot hide the sales workspace or create a second menu.
     goal_first.send_goal_dashboard = goal_dashboard.send_goal_dashboard
+    goal_first._goal_keyboard = goal_dashboard._goal_keyboard
 
     visual_brand = importlib.import_module(
         ".clientplatform_visual_brand",
