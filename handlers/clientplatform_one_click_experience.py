@@ -13,10 +13,9 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from clientplatform.application.ad_connections import (
     ad_connections_enabled,
-    create_ad_publication_draft,
+    create_managed_ad_publication_draft,
     list_ad_connections,
     list_ad_publications,
-    list_yandex_direct_campaigns,
     start_yandex_direct_oauth,
     yandex_direct_provider_configured,
 )
@@ -29,6 +28,7 @@ from clientplatform.integrations.yandex_direct import YandexDirectError
 
 from . import clientplatform_ad_connections as ad
 from . import clientplatform_control as control
+from . import clientplatform_goal_first_safety as goal_contract
 from . import clientplatform_simple_experience as simple
 
 router = Router(name="clientplatform_one_click_experience")
@@ -49,7 +49,6 @@ _REGIONS = {
 
 class OneClickOwnerState(StatesGroup):
     selecting_connection = State()
-    selecting_campaign = State()
     waiting_region = State()
 
 
@@ -57,7 +56,7 @@ def _home_keyboard(business_id: str) -> InlineKeyboardMarkup:
     token = control._uuid_token(business_id)
     return control._keyboard(
         [
-            [("🚀 Получить клиентов", f"cpo:start:{token}")],
+            [(goal_contract.ACQUIRE_CLIENTS.label, goal_contract.ACQUIRE_CLIENTS.callback(token))],
             [
                 ("👥 Клиенты и запись", f"cpj:bookings:{token}"),
                 ("⚙️ Ещё", f"cpo:more:{token}"),
@@ -83,7 +82,7 @@ async def send_one_click_dashboard(
     )
     await message.answer(
         f"🏠 {access.business.name}\n\n"
-        "Нажмите «🚀 Получить клиентов». Я сам проверю свободное время, рекламу "
+        f"Нажмите «{goal_contract.ACQUIRE_CLIENTS.label}». Я сам проверю свободное время, рекламу "
         "и прежние настройки. Спрошу только то, что нельзя определить безопасно.\n\n"
         f"{status}",
         reply_markup=_home_keyboard(business_id),
@@ -100,25 +99,12 @@ def _user_id(event: CallbackQuery | Message) -> int:
     return int(event.from_user.id)
 
 
-def _eligible(campaigns):
-    return [
-        item
-        for item in campaigns
-        if str(getattr(item, "state", "")).strip().upper() == "ON"
-        and str(getattr(item, "status", "")).strip().upper() == "ACCEPTED"
-    ]
-
-
-def _recent(jobs, *, connection_id: str, campaign_id: str = ""):
+def _recent(jobs, *, connection_id: str):
     return next(
         (
             item
             for item in jobs
             if str(getattr(item, "connection_id", "")) == connection_id
-            and (
-                not campaign_id
-                or str(getattr(item, "external_campaign_id", "")) == campaign_id
-            )
         ),
         None,
     )
@@ -191,7 +177,7 @@ async def _fallback(
         await control._callback_message(callback).answer(
             "Свободное время уже изменилось. Проверю всё заново по одной кнопке.",
             reply_markup=control._keyboard(
-                [[("🔄 Проверить снова", f"cpo:start:{business_token}")]]
+                [[("🔄 Проверить снова", goal_contract.ACQUIRE_CLIENTS.callback(business_token))]]
             ),
         )
         return
@@ -236,7 +222,7 @@ async def _fallback(
                 [
                     InlineKeyboardButton(
                         text="🔄 Проверить Яндекс",
-                        callback_data=f"cpo:start:{business_token}",
+                        callback_data=goal_contract.ACQUIRE_CLIENTS.callback(business_token),
                     )
                 ],
                 [
@@ -262,7 +248,7 @@ async def _draft_failure(
         "Ничего не запущено и деньги не списывались.",
         reply_markup=control._keyboard(
             [
-                [("🔄 Попробовать снова", f"cpo:start:{business_token}")],
+                [("🔄 Попробовать снова", goal_contract.ACQUIRE_CLIENTS.callback(business_token))],
                 [("🏠 В кабинет", f"cpj:home:{business_token}")],
             ]
         ),
@@ -302,16 +288,14 @@ async def _prepare_draft(
         return
     try:
         draft = await asyncio.to_thread(
-            create_ad_publication_draft,
+            create_managed_ad_publication_draft,
             actor=actor,
             promotion_campaign_id=promotion.campaign.id,
             connection_id=str(data["connection_id"]),
-            external_campaign_id=str(data["external_campaign_id"]),
-            external_campaign_name=str(data["external_campaign_name"]),
             region_ids=region_ids,
             source_url=source_url,
         )
-    except (AdConnectionError, TenantPermissionDenied):
+    except (AdConnectionError, TenantPermissionDenied, YandexDirectError):
         await _draft_failure(
             event,
             state,
@@ -332,9 +316,9 @@ async def _prepare_draft(
     )
     await _target(event).answer(
         "✅ Реклама подготовлена\n\n"
-        f"Кампания: {draft.campaign_name}\n"
         f"Заголовок: {draft.job.title}\n"
         f"Текст: {draft.job.text}\n\n"
+        "ClientPlatform сам выделил этому продвижению отдельную кампанию Яндекса. "
         "Ничего ещё не запущено: показов, модерации и расходов нет.",
         reply_markup=control._keyboard(
             [
@@ -342,49 +326,6 @@ async def _prepare_draft(
                 [(ad._CONFIRM_DRAFT_LABEL, "cpa:confirm")],
                 [("✏️ Изменить вручную", f"cpa:promote:{data['business_token']}")],
                 [("🏠 В кабинет", f"cpj:home:{data['business_token']}")],
-            ]
-        ),
-    )
-
-
-async def _choose_campaign(
-    callback: CallbackQuery,
-    state: FSMContext,
-    *,
-    data: dict,
-    campaign_id: str,
-    campaign_name: str,
-) -> None:
-    actor = await control._actor(int(callback.from_user.id), str(data["business_id"]))
-    try:
-        jobs = await asyncio.to_thread(list_ad_publications, actor=actor)
-    except (AdConnectionError, TenantPermissionDenied):
-        jobs = []
-    saved = _recent(
-        jobs,
-        connection_id=str(data["connection_id"]),
-        campaign_id=campaign_id,
-    )
-    next_data = {
-        **data,
-        "external_campaign_id": campaign_id,
-        "external_campaign_name": campaign_name,
-    }
-    regions = tuple(getattr(saved, "region_ids", ()) or ()) if saved else ()
-    if regions:
-        await _prepare_draft(callback, state, data=next_data, region_ids=regions)
-        return
-    await state.set_state(OneClickOwnerState.waiting_region)
-    await state.set_data(next_data)
-    await control._callback_message(callback).answer(
-        "Осталось только указать регион — это нельзя безопасно угадать. "
-        "В следующий раз ClientPlatform возьмёт прежний выбор сам.",
-        reply_markup=control._keyboard(
-            [
-                [("Нижний Новгород", "cpo:region:47"), ("Москва", "cpo:region:213")],
-                [("Санкт-Петербург", "cpo:region:2")],
-                [("Другой регион", "cpo:region:other")],
-                [("🏠 Отмена", f"cpj:home:{data['business_token']}")],
             ]
         ),
     )
@@ -399,84 +340,28 @@ async def _choose_connection(
 ) -> None:
     actor = await control._actor(int(callback.from_user.id), str(data["business_id"]))
     try:
-        campaigns = await asyncio.wait_for(
-            asyncio.to_thread(
-                list_yandex_direct_campaigns,
-                actor=actor,
-                connection_id=connection_id,
-            ),
-            timeout=25.0,
-        )
-    except (asyncio.TimeoutError, AdConnectionError, YandexDirectError):
-        await _fallback(
-            callback,
-            state,
-            actor=actor,
-            business_token=str(data["business_token"]),
-            slot=await _reload_slot(actor, str(data["slot_id"])),
-            reason="Яндекс сейчас не ответил. Это не должно останавливать работу.",
-        )
-        return
-    except TenantPermissionDenied:
-        await _fallback(
-            callback,
-            state,
-            actor=actor,
-            business_token=str(data["business_token"]),
-            slot=await _reload_slot(actor, str(data["slot_id"])),
-            reason="Для этой роли личный рекламный кабинет недоступен.",
-        )
-        return
-    eligible = _eligible(campaigns)
-    if not eligible:
-        await _fallback(
-            callback,
-            state,
-            actor=actor,
-            business_token=str(data["business_token"]),
-            slot=await _reload_slot(actor, str(data["slot_id"])),
-            reason="Кампания Яндекса пока не готова: возможны оплата, модерация или пауза.",
-        )
-        return
-    try:
         jobs = await asyncio.to_thread(list_ad_publications, actor=actor)
     except (AdConnectionError, TenantPermissionDenied):
         jobs = []
-    previous = _recent(jobs, connection_id=connection_id)
-    previous_id = str(getattr(previous, "external_campaign_id", "")) if previous else ""
-    selected = next(
-        (item for item in eligible if str(item.campaign_id) == previous_id),
-        None,
-    )
-    if selected is None and len(eligible) == 1:
-        selected = eligible[0]
-    next_data = {
-        **data,
-        "connection_id": connection_id,
-        "campaigns": [
-            {"id": str(item.campaign_id), "name": str(item.name)}
-            for item in eligible
-        ],
-    }
-    if selected is not None:
-        await _choose_campaign(
-            callback,
-            state,
-            data=next_data,
-            campaign_id=str(selected.campaign_id),
-            campaign_name=str(selected.name),
-        )
+    saved = _recent(jobs, connection_id=connection_id)
+    next_data = {**data, "connection_id": connection_id}
+    regions = tuple(getattr(saved, "region_ids", ()) or ()) if saved else ()
+    if regions:
+        await _prepare_draft(callback, state, data=next_data, region_ids=regions)
         return
-    await state.set_state(OneClickOwnerState.selecting_campaign)
+    await state.set_state(OneClickOwnerState.waiting_region)
     await state.set_data(next_data)
     await control._callback_message(callback).answer(
-        "Нашёл несколько готовых кампаний. Выберите одну — дальше всё сделаю сам.",
+        "Осталось только указать регион — это нельзя безопасно угадать. "
+        "Рекламную кампанию ClientPlatform создаст и привяжет сам; "
+        "в следующий раз прежний регион тоже возьму автоматически.",
         reply_markup=control._keyboard(
             [
-                [(item.name[:45], f"cpo:campaign:{index}")]
-                for index, item in enumerate(eligible[:20])
+                [("Нижний Новгород", "cpo:region:47"), ("Москва", "cpo:region:213")],
+                [("Санкт-Петербург", "cpo:region:2")],
+                [("Другой регион", "cpo:region:other")],
+                [("🏠 Отмена", f"cpj:home:{data['business_token']}")],
             ]
-            + [[("🏠 Отмена", f"cpj:home:{data['business_token']}")]],
         ),
     )
 
@@ -635,31 +520,6 @@ async def choose_one_click_connection(callback: CallbackQuery, state: FSMContext
 
 
 @router.callback_query(
-    OneClickOwnerState.selecting_campaign,
-    F.data.startswith("cpo:campaign:"),
-)
-async def choose_one_click_campaign(callback: CallbackQuery, state: FSMContext) -> None:
-    data = await state.get_data()
-    selected = _indexed_choice(data, "campaigns", callback.data)
-    if not isinstance(selected, dict):
-        await callback.answer("Кнопка устарела. Начните ещё раз.", show_alert=True)
-        return
-    campaign_id = str(selected.get("id") or "").strip()
-    campaign_name = str(selected.get("name") or "").strip()
-    if not campaign_id or not campaign_name:
-        await callback.answer("Кнопка устарела. Начните ещё раз.", show_alert=True)
-        return
-    await callback.answer("Продолжаю…")
-    await _choose_campaign(
-        callback,
-        state,
-        data=data,
-        campaign_id=campaign_id,
-        campaign_name=campaign_name,
-    )
-
-
-@router.callback_query(
     OneClickOwnerState.waiting_region,
     F.data.startswith("cpo:region:"),
 )
@@ -739,10 +599,10 @@ async def open_ad_tools(callback: CallbackQuery) -> None:
     token = str(callback.data).split(":", 2)[2]
     await control._actor(int(callback.from_user.id), control._token_uuid(token))
     await control._callback_message(callback).answer(
-        "📣 Реклама и продвижение\n\nОбычный путь — «Получить клиентов».",
+        f"📣 Реклама и продвижение\n\nОбычный путь — «{goal_contract.ACQUIRE_CLIENTS.label}».",
         reply_markup=control._keyboard(
             [
-                [("🚀 Получить клиентов", f"cpo:start:{token}")],
+                [(goal_contract.ACQUIRE_CLIENTS.label, goal_contract.ACQUIRE_CLIENTS.callback(token))],
                 [("📣 Яндекс Директ", f"cpa:home:{token}")],
                 [("📊 Результаты Яндекс", f"cpy:a:{token}:30")],
                 [("📣 Партнёрские материалы", f"cpg:materials:{token}")],
