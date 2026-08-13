@@ -31,7 +31,11 @@ def test_retention_runtime_survives_disabled_provider_processing() -> None:
 
 def test_managed_bot_capture_is_a_fail_open_side_channel() -> None:
     text = Path("clientplatform/runtime/bot_gateway.py").read_text(encoding="utf-8")
-    process_body = _function_body(text, "    async def _process(self, item", "    async def _bot_for")
+    process_body = _function_body(
+        text,
+        "    async def _process_item(self, item: ClaimedIngressEvent) -> None:",
+        "    async def _bot_for",
+    )
     assert "record_managed_bot_customer_message" in process_body
     assert "Managed bot sales-intelligence side channel failed; dispatch continues" in process_body
     assert process_body.index("record_managed_bot_customer_message") < process_body.index(
