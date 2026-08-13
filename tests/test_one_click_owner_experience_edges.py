@@ -249,7 +249,7 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
             patch.object(one_click.control, "_actor", new=AsyncMock(return_value="actor")),
             patch.object(one_click.control, "_callback_message", return_value=target),
             patch.object(one_click, "create_slot_promotion", return_value=promotion()),
-            patch.object(one_click, "create_ad_publication_draft", side_effect=AdConnectionError("fail")),
+            patch.object(one_click, "create_managed_ad_publication_draft", side_effect=AdConnectionError("fail")),
         ):
             await one_click._prepare_draft(
                 callback("cpo:region:47", target), State(data), data=data, region_ids=(47,)
