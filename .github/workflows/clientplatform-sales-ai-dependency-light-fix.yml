@@ -30,6 +30,19 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Repair one temporary string-template docstring before parsing the helper.
+          # This edits only the self-deleting helper, never a product file.
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('.github/sales-ai-v3-fix-dependency-light.py')
+          text = path.read_text(encoding='utf-8')
+          old = '    """Fail closed if customer evidence or the canonical plan changed during drafting."""\n'
+          new = '    # Fail closed if customer evidence or the canonical plan changed during drafting.\n'
+          if text.count(old) != 1:
+              raise SystemExit(f'SALES_AI_HELPER_REPAIR_FAILED:count={text.count(old)}')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+
           # Apply the reviewed changes only inside this runner first.
           python3 .github/sales-ai-v3-fix-dependency-light.py
           python -m py_compile \
