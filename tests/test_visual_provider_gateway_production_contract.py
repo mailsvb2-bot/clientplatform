@@ -12,6 +12,7 @@ class VisualProviderGatewayProductionContractTests(unittest.TestCase):
         self.assertIn("  visual-provider-gateway:", compose)
         self.assertIn("dockerfile: visual_provider_gateway/Dockerfile", compose)
         self.assertIn("VCS_REF: ${CLIENTPLATFORM_BUILD_VCS_REF:-unknown}", compose)
+        self.assertIn("pull_policy: build", compose)
         self.assertIn("VISUAL_GATEWAY_UPSTREAM_URL: http://visual-provider-gateway:8097", compose)
         self.assertIn("visual-provider-gateway:\n        condition: service_healthy", compose)
         self.assertIn(
@@ -24,21 +25,28 @@ class VisualProviderGatewayProductionContractTests(unittest.TestCase):
         self.assertNotIn("ports:", provider_section)
         self.assertIn('security_opt: ["no-new-privileges:true"]', provider_section)
 
-    def test_canonical_deploy_entrypoint_health_gates_provider_before_core_deploy(self) -> None:
+    def test_canonical_deploy_owner_recreates_wrapper_with_healthy_provider_dependency(self) -> None:
         root = Path(__file__).resolve().parents[1]
         entrypoint = (root / "deploy.sh").read_text(encoding="utf-8")
-        rollout = (root / "scripts/clientplatform_visual_provider_rollout.py").read_text(encoding="utf-8")
+        deploy = (root / "scripts/clientplatform_production_deploy.py").read_text(encoding="utf-8")
 
-        self.assertIn("clientplatform_visual_provider_rollout.py", entrypoint)
-        self.assertIn('core._run([*compose, "build", PROVIDER_SERVICE])', rollout)
-        self.assertIn("_wait_for_provider(timeout_seconds)", rollout)
-        self.assertIn("evidence = core.deploy(", rollout)
-        self.assertLess(
-            rollout.index('core._run([*compose, "build", PROVIDER_SERVICE])'),
-            rollout.index("evidence = core.deploy("),
+        self.assertIn(
+            'export CLIENTPLATFORM_BUILD_VCS_REF="$(git -C "$ROOT" rev-parse HEAD)"',
+            entrypoint,
         )
-        self.assertIn("release-{target_sha}", rollout)
-        self.assertIn('os.environ["CLIENTPLATFORM_BUILD_VCS_REF"] = target_sha', rollout)
+        self.assertIn(
+            'exec python3 "$ROOT/scripts/clientplatform_production_deploy.py" "$@"',
+            entrypoint,
+        )
+        self.assertNotIn("clientplatform_visual_provider_rollout.py", entrypoint)
+        self.assertIn(
+            '_run([*compose, "up", "-d", "--force-recreate", "visual-gateway"])',
+            deploy,
+        )
+        self.assertNotIn(
+            '_run([*compose, "up", "-d", "--no-deps", "--force-recreate", "visual-gateway"])',
+            deploy,
+        )
 
     def test_provider_image_has_commit_provenance_and_uses_distinct_package_namespace(self) -> None:
         root = Path(__file__).resolve().parents[1]
