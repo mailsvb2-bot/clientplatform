@@ -195,7 +195,7 @@ class VisualGatewayService:
                 error_code="visual_gateway_quota_rejected",
             )
             raise
-        except Exception:
+        except (ValueError, TypeError):
             self.store.update(
                 reserved.id,
                 client_id=client_id,
