@@ -14,6 +14,7 @@ from services.visual_creative_gateway import (
     render_visual_pack,
     submit_visual,
 )
+from services.visual_gateway_contract import require_render_pack_contract
 
 _ANGLES = (
     ("human_trust", "Human trust: credible real-world professional presence, calm eye-level composition, no staged success symbols."),
@@ -172,6 +173,7 @@ def render_idempotency_key(variant: StudioVariant) -> str:
 def submit_studio_variant(variant: StudioVariant, *, wait_seconds: int = 0) -> tuple[VisualCreativeJob, VisualRenderPack | None]:
     if variant.preflight_score < 70 or "risky_claim" in variant.preflight_issues:
         raise ValueError("unsafe_clientplatform_creative_variant")
+    require_render_pack_contract(formats=variant.formats)
     brief = VisualCreativeBrief(
         kind=variant.kind,
         prompt=variant.prompt,

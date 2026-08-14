@@ -154,6 +154,7 @@ def test_country_route_is_bound_into_experiment_and_provider_brief(monkeypatch):
         seen["country"] = brief.country_code
         from services.visual_creative_gateway import VisualCreativeJob
         return VisualCreativeJob("job1", "fake", scope_id, "image", "queued")
+    monkeypatch.setattr(studio, "require_render_pack_contract", lambda **kwargs: object())
     monkeypatch.setattr(studio, "submit_visual", fake_submit)
     submit_studio_variant(ru)
     assert seen["country"] == "RU"
