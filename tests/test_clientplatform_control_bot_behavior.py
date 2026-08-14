@@ -651,8 +651,23 @@ async def test_clients_invites_and_delivery_selection(monkeypatch: pytest.Monkey
     monkeypatch.setattr(handlers, "_actor", fake_actor)
     monkeypatch.setattr(
         handlers,
-        "list_customers",
-        lambda **_kwargs: [SimpleNamespace(id=str(uuid4()), display_name="Иван")],
+        "tenant_customer_activity",
+        lambda **_kwargs: SimpleNamespace(
+            total=1,
+            new_today=1,
+            new_7d=1,
+            active_today=1,
+            by_platform={"telegram": 1},
+            recent=(
+                SimpleNamespace(
+                    display_name="Иван",
+                    username=None,
+                    platforms=("telegram",),
+                    first_contact_at="2026-08-14T08:00:00+00:00",
+                    last_contact_at="2026-08-14T09:00:00+00:00",
+                ),
+            ),
+        ),
     )
     clients = FakeCallback(f"cp:clients:{business_token}")
     await handlers.open_clients(clients)
@@ -662,7 +677,18 @@ async def test_clients_invites_and_delivery_selection(monkeypatch: pytest.Monkey
         == "Подключить клиента"
     )
 
-    monkeypatch.setattr(handlers, "list_customers", lambda **_kwargs: [])
+    monkeypatch.setattr(
+        handlers,
+        "tenant_customer_activity",
+        lambda **_kwargs: SimpleNamespace(
+            total=0,
+            new_today=0,
+            new_7d=0,
+            active_today=0,
+            by_platform={},
+            recent=(),
+        ),
+    )
     empty_clients = FakeCallback(f"cp:clients:{business_token}")
     await handlers.open_clients(empty_clients)
     assert "Пока нет подключённых" in empty_clients.message.answers[-1][0]

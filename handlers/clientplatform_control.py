@@ -173,8 +173,8 @@ async def _touch_customer_callback(callback: CallbackQuery, *, business_id: str)
         business_id=business_id,
         platform="telegram",
         external_subject=str(user.id),
-        username=user.username,
-        display_name=user.full_name,
+        username=getattr(user, "username", None),
+        display_name=getattr(user, "full_name", None),
     )
 
 
@@ -242,7 +242,7 @@ def _dashboard_keyboard(business_id: str, capabilities: list[object]) -> InlineK
     ]
     rows.extend(
         [
-            [("Активность клиентов", f"cp:clients:{token}"), ("Результаты", f"cp:results:{token}")],
+            [("Клиенты", f"cp:clients:{token}"), ("Результаты", f"cp:results:{token}")],
             [("Изменить деятельность", f"cp:editact:{token}")],
         ]
     )
