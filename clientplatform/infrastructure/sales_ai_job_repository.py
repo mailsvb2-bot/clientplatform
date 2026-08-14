@@ -342,9 +342,9 @@ class SalesAIJobRepository:
             UPDATE clientplatform_sales_events
             SET payload_json=?
             WHERE event_type='customer_message' AND occurred_at<?
-              AND payload_json NOT LIKE '%\"redacted\":true%'
+              AND payload_json NOT LIKE ?
             """,
-            (redacted, cutoff),
+            (redacted, cutoff, '%"redacted":true%'),
         )
         return max(int(getattr(cursor, "rowcount", 0) or 0), 0)
 
