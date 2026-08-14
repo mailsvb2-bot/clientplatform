@@ -161,11 +161,11 @@ jobs:
           fi
 
           if [ "$(id -u)" -eq 0 ]; then
-            python3 scripts/clientplatform_production_deploy_with_visual_gateway.py \
+            python3 scripts/clientplatform_production_deploy.py \
               --recover-unavailable-baseline \
               --timeout-seconds 240
           else
-            sudo -n python3 scripts/clientplatform_production_deploy_with_visual_gateway.py \
+            sudo -n python3 scripts/clientplatform_production_deploy.py \
               --recover-unavailable-baseline \
               --timeout-seconds 240
           fi
