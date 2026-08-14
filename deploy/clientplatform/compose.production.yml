@@ -19,6 +19,42 @@ services:
       retries: 20
     networks: [backend]
 
+  visual-gateway:
+    build:
+      context: ../..
+      dockerfile: visual_gateway/Dockerfile
+    image: clientplatform-production-visual-gateway
+    restart: unless-stopped
+    env_file: ./clientplatform.env
+    environment:
+      VISUAL_GATEWAY_UPSTREAM_URL: ${VISUAL_GATEWAY_URL:?set VISUAL_GATEWAY_URL}
+      VISUAL_GATEWAY_UPSTREAM_TOKEN: ${VISUAL_GATEWAY_TOKEN:?set VISUAL_GATEWAY_TOKEN}
+      VISUAL_GATEWAY_STATE_DIR: /var/lib/visual-gateway
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    volumes:
+      - clientplatform-visual-gateway:/var/lib/visual-gateway
+    expose: ["8080"]
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import json,os,urllib.request;
+          token=os.environ['VISUAL_GATEWAY_TOKEN'];
+          request=urllib.request.Request('http://127.0.0.1:8080/v1/capabilities',headers={'Authorization':'Bearer '+token});
+          payload=json.load(urllib.request.urlopen(request,timeout=3));
+          assert payload=={'contract_version':'1.0','capabilities':['generation','render_pack','usage'],'render_formats':['square','feed','story','landscape']}
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    networks: [backend]
+
   app:
     build:
       context: ../..
@@ -35,6 +71,7 @@ services:
       MESSENGER_WEBHOOK_HOST: 0.0.0.0
       HEALTHCHECK_HOST: 0.0.0.0
       CLIENTPLATFORM_MEDIA_GATEWAY_HOST: 0.0.0.0
+      VISUAL_GATEWAY_URL: http://visual-gateway:8080
     # Keep this Telegram route override scoped to the ClientPlatform app
     # container. Operators can replace the address through clientplatform.env
     # without changing application code, the host, or another deployed project.
@@ -42,6 +79,8 @@ services:
       - "api.telegram.org:${CLIENTPLATFORM_TELEGRAM_API_IPV4:-149.154.167.220}"
     depends_on:
       postgres:
+        condition: service_healthy
+      visual-gateway:
         condition: service_healthy
     read_only: true
     tmpfs:
@@ -131,3 +170,4 @@ volumes:
   clientplatform-backups:
   clientplatform-caddy-data:
   clientplatform-caddy-config:
+  clientplatform-visual-gateway:
