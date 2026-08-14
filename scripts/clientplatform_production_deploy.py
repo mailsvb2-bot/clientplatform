@@ -481,15 +481,16 @@ def _rollback(
     *,
     compose: Sequence[str],
     rollback_tag: str,
-    visual_gateway_rollback_tag: str,
     domain: str,
     timeout_seconds: int,
+    visual_gateway_rollback_tag: str | None = None,
 ) -> None:
-    _restore_visual_gateway(
-        compose=compose,
-        rollback_tag=visual_gateway_rollback_tag,
-        timeout_seconds=timeout_seconds,
-    )
+    if visual_gateway_rollback_tag is not None:
+        _restore_visual_gateway(
+            compose=compose,
+            rollback_tag=visual_gateway_rollback_tag,
+            timeout_seconds=timeout_seconds,
+        )
     _run(["docker", "image", "tag", rollback_tag, f"{APP_IMAGE}:latest"])
     _run([*compose, "up", "-d", "--no-build", "--force-recreate", "app", "caddy"])
     try:
@@ -573,7 +574,8 @@ def deploy(
     visual_gateway_changed = False
     app_changed = False
     try:
-        _run([*compose, "build", "visual-gateway", "app", "backup"])
+        _run([*compose, "build", "visual-gateway"])
+        _run([*compose, "build", "app", "backup"])
         _run([*compose, "up", "-d", "--force-recreate", "visual-gateway"])
         visual_gateway_changed = True
         _wait_for_visual_gateway(timeout_seconds)
