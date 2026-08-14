@@ -32,6 +32,10 @@ from clientplatform.application.bookings import (
     list_customer_booking_slots,
     list_customer_businesses,
 )
+from clientplatform.application.customer_activity import (
+    record_customer_contact,
+    tenant_customer_activity,
+)
 from clientplatform.application.pagination import paginate
 from clientplatform.application.control import (
     business_delivery_summary,
@@ -120,6 +124,60 @@ def _start_payload(message: Message) -> str:
     return parts[1].strip() if len(parts) == 2 else ""
 
 
+def _short_contact_time(value: str | None) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return "—"
+    return raw.replace("T", " ")[:16]
+
+
+def _platform_label(value: str) -> str:
+    return {"telegram": "Telegram", "vk": "VK", "max": "MAX"}.get(value, value.upper())
+
+
+def _customer_activity_text(summary) -> str:
+    channels = " · ".join(
+        f"{_platform_label(platform)} {summary.by_platform.get(platform, 0)}"
+        for platform in ("telegram", "vk", "max")
+    )
+    lines = [
+        "Активность клиентов",
+        "",
+        f"Всего клиентов: {summary.total}",
+        f"Новые сегодня: {summary.new_today}",
+        f"Новые за 7 дней: {summary.new_7d}",
+        f"Активны сегодня: {summary.active_today}",
+        f"Каналы: {channels}",
+        "",
+        "Последние контакты:",
+    ]
+    if not summary.recent:
+        lines.append("• Пока нет подключённых клиентов.")
+        return "\n".join(lines)
+    for row in summary.recent:
+        name = row.display_name or "Клиент"
+        handle = f" @{row.username}" if row.username else ""
+        platforms = "/".join(_platform_label(item) for item in row.platforms) or "—"
+        lines.append(
+            f"• {name}{handle}\n"
+            f"  {platforms} · первый {_short_contact_time(row.first_contact_at)} · "
+            f"последний {_short_contact_time(row.last_contact_at)}"
+        )
+    return "\n".join(lines)
+
+
+async def _touch_customer_callback(callback: CallbackQuery, *, business_id: str) -> None:
+    user = callback.from_user
+    await asyncio.to_thread(
+        record_customer_contact,
+        business_id=business_id,
+        platform="telegram",
+        external_subject=str(user.id),
+        username=user.username,
+        display_name=user.full_name,
+    )
+
+
 def _business_choice_keyboard(accesses: list[object]) -> InlineKeyboardMarkup:
     return _keyboard(
         [
@@ -184,7 +242,7 @@ def _dashboard_keyboard(business_id: str, capabilities: list[object]) -> InlineK
     ]
     rows.extend(
         [
-            [("Клиенты", f"cp:clients:{token}"), ("Результаты", f"cp:results:{token}")],
+            [("Активность клиентов", f"cp:clients:{token}"), ("Результаты", f"cp:results:{token}")],
             [("Изменить деятельность", f"cp:editact:{token}")],
         ]
     )
@@ -283,6 +341,14 @@ async def clientplatform_start(message: Message, state: FSMContext) -> None:
             username=None if user is None else user.username,
             display_name=None if user is None else user.full_name,
         )
+        await asyncio.to_thread(
+            record_customer_contact,
+            business_id=claim.business_id,
+            platform="telegram",
+            external_subject=str(user_id),
+            username=None if user is None else user.username,
+            display_name=None if user is None else user.full_name,
+        )
         await state.clear()
         detail = "Вы уже были подключены." if claim.already_connected else "Подключение завершено."
         await message.answer(
@@ -352,8 +418,6 @@ async def receive_activity_description(message: Message, state: FSMContext) -> N
         await _send_dashboard(message, user_id=_user_id(message), business_id=business_id)
         return
 
-    # Первый запуск не перекладывает устройство платформы на владельца.
-    # Подключаем базовые возможности автоматически; их можно изменить позже.
     for connector_key in ("programs", "consultations", "services"):
         await asyncio.to_thread(
             enable_business_capability,
@@ -609,6 +673,7 @@ async def open_customer_programs(callback: CallbackQuery) -> None:
         telegram_user_id=int(callback.from_user.id),
         business_id=business_id,
     )
+    await _touch_customer_callback(callback, business_id=business_id)
     await callback.answer()
     message = _callback_message(callback)
     if not programs:
@@ -646,6 +711,7 @@ async def open_customer_program(callback: CallbackQuery) -> None:
         business_id=business_id,
         enrollment_id=enrollment_id,
     )
+    await _touch_customer_callback(callback, business_id=business_id)
     icons = {
         "pending": "⏳",
         "delivered": "📬",
@@ -680,13 +746,15 @@ async def open_customer_program(callback: CallbackQuery) -> None:
 @router.callback_query(F.data.startswith("cp:done:"))
 async def complete_customer_program_lesson(callback: CallbackQuery) -> None:
     _, _, business_token, enrollment_token, position = str(callback.data).split(":", 4)
+    business_id = _token_uuid(business_token)
     result = await asyncio.to_thread(
         complete_customer_lesson,
         telegram_user_id=int(callback.from_user.id),
-        business_id=_token_uuid(business_token),
+        business_id=business_id,
         enrollment_id=_token_uuid(enrollment_token),
         lesson_position=int(position),
     )
+    await _touch_customer_callback(callback, business_id=business_id)
     await callback.answer("Прогресс сохранён")
     if result.next_material_queued:
         detail = "Следующий материал уже поставлен в отправку."
@@ -758,6 +826,7 @@ async def open_client_booking(callback: CallbackQuery) -> None:
         telegram_user_id=int(callback.from_user.id),
         business_id=business_id,
     )
+    await _touch_customer_callback(callback, business_id=business_id)
     await callback.answer()
     await _send_client_booking_page(
         _callback_message(callback),
@@ -770,12 +839,14 @@ async def open_client_booking(callback: CallbackQuery) -> None:
 @router.callback_query(F.data.startswith("cp:book:"))
 async def book_client_slot(callback: CallbackQuery) -> None:
     _, _, business_token, slot_token = str(callback.data).split(":", 3)
+    business_id = _token_uuid(business_token)
     claim = await asyncio.to_thread(
         book_customer_slot,
         telegram_user_id=int(callback.from_user.id),
-        business_id=_token_uuid(business_token),
+        business_id=business_id,
         slot_id=_token_uuid(slot_token),
     )
+    await _touch_customer_callback(callback, business_id=business_id)
     await callback.answer("Запись подтверждена")
     message = _callback_message(callback)
     await message.answer(
@@ -884,13 +955,10 @@ async def open_clients(callback: CallbackQuery) -> None:
     business_token = str(callback.data).split(":", 2)[2]
     business_id = _token_uuid(business_token)
     actor = await _actor(int(callback.from_user.id), business_id)
-    customers = await asyncio.to_thread(list_customers, actor=actor)
-    lines = "\n".join(
-        f"• {customer.display_name or 'Клиент'}" for customer in customers
-    ) or "Пока нет подключённых клиентов."
+    summary = await asyncio.to_thread(tenant_customer_activity, actor=actor, limit=15)
     await callback.answer()
     await _callback_message(callback).answer(
-        f"Клиенты\n\n{lines}",
+        _customer_activity_text(summary),
         reply_markup=_keyboard([[('Подключить клиента', f"cp:invite:{business_token}")]]),
     )
 
