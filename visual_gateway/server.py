@@ -365,8 +365,6 @@ async def _boundary(request: web.Request, handler):
         return web.json_response({"error_code": exc.code}, status=exc.status)
     except web.HTTPException:
         raise
-    except Exception:
-        return web.json_response({"error_code": "visual_gateway_internal_error"}, status=500)
 
 
 async def _json_body(request: web.Request) -> dict[str, Any]:
@@ -747,7 +745,7 @@ async def create_render_pack(request: web.Request) -> web.Response:
             store.succeed(pack_id, claim, assets)
         except GatewayError as exc:
             store.fail(pack_id, claim, exc.code)
-        except Exception:
+        except (OSError, sqlite3.Error):
             store.fail(pack_id, claim, "render_internal_error")
     return web.json_response(store.pack(pack_id, scope_id))
 
