@@ -43,15 +43,20 @@ def _run(
     capture: bool = False,
     check: bool = True,
 ) -> subprocess.CompletedProcess[str]:
-    completed = subprocess.run(
-        list(command),
-        cwd=cwd,
-        check=False,
-        text=True,
-        capture_output=capture,
-    )
+    executable = Path(command[0]).name if command else "command"
+    try:
+        completed = subprocess.run(
+            list(command),
+            cwd=cwd,
+            check=False,
+            text=True,
+            capture_output=capture,
+        )
+    except OSError as exc:
+        raise VisualGatewayDeploymentError(
+            f"visual_gateway_command_failed:{executable}:exec"
+        ) from exc
     if check and completed.returncode != 0:
-        executable = Path(command[0]).name if command else "command"
         raise VisualGatewayDeploymentError(
             f"visual_gateway_command_failed:{executable}:{completed.returncode}"
         )
@@ -157,7 +162,7 @@ def _deploy_gateway(compose: Sequence[str]) -> str | None:
         _run([*compose, "build", GATEWAY_SERVICE])
         _run([*compose, "up", "-d", "--force-recreate", GATEWAY_SERVICE])
         _wait_for_gateway(compose)
-    except Exception:
+    except VisualGatewayDeploymentError:
         if previous_image:
             _restore_gateway(compose, previous_image)
         raise
@@ -183,11 +188,17 @@ def main() -> int:
     previous_image = _deploy_gateway(compose)
     print("CLIENTPLATFORM_VISUAL_GATEWAY_CAPABILITIES_OK:contract=1.0")
 
-    completed = subprocess.run(
-        [sys.executable, str(CORE_DEPLOY), *sys.argv[1:]],
-        cwd=ROOT,
-        check=False,
-    )
+    try:
+        completed = subprocess.run(
+            [sys.executable, str(CORE_DEPLOY), *sys.argv[1:]],
+            cwd=ROOT,
+            check=False,
+        )
+    except OSError as exc:
+        if previous_image:
+            _restore_gateway(compose, previous_image)
+        raise VisualGatewayDeploymentError("core_deploy_command_failed:exec") from exc
+
     if completed.returncode != 0:
         if previous_image:
             _restore_gateway(compose, previous_image)
