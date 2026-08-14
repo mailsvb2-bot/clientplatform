@@ -230,6 +230,12 @@ def _submit_failure_code(exc: BaseException) -> str:
     return "visual_provider_submit_transport"
 
 
+def _should_stop_after_submit_failure(brief: CreativeBrief) -> bool:
+    allow_failover = _truthy("VISUAL_ALLOW_PROVIDER_FAILOVER_AFTER_ERROR", "0")
+    explicit_fallback = _truthy("VISUAL_EXPLICIT_PROVIDER_FALLBACK", "0")
+    return not allow_failover or bool(brief.preferred_provider and not explicit_fallback)
+
+
 class VisualCreativeEngine:
     def __init__(self, *, enabled: bool | None = None) -> None:
         self.enabled = _truthy("VISUAL_CREATIVE_ENABLED", "0") if enabled is None else bool(enabled)
@@ -250,19 +256,25 @@ class VisualCreativeEngine:
             if not provider.configured(normalized.kind):
                 failures.append(f"{name}:not_configured")
                 continue
+
+            failure: BaseException | None = None
             try:
                 return provider.submit(normalized)
-            except (ProviderTransportError, ValueError, TypeError, OSError) as exc:
-                submit_failure_code = _submit_failure_code(exc)
-                failures.append(f"{name}:{submit_failure_code}")
-                # A timed-out/failed POST can be ambiguous: the provider may have
-                # accepted and billed the job even though we never received its ID.
-                # Default to fail-closed instead of starting another paid provider
-                # request. Operators may explicitly opt into that cost/risk tradeoff.
-                allow_failover = _truthy("VISUAL_ALLOW_PROVIDER_FAILOVER_AFTER_ERROR", "0")
-                explicit_fallback = _truthy("VISUAL_EXPLICIT_PROVIDER_FALLBACK", "0")
-                if not allow_failover or (normalized.preferred_provider and not explicit_fallback):
-                    break
+            except ProviderTransportError as exc:
+                failure = exc
+            except (ValueError, TypeError) as exc:
+                failure = exc
+            except OSError as exc:
+                failure = exc
+
+            submit_failure_code = _submit_failure_code(failure)
+            failures.append(f"{name}:{submit_failure_code}")
+            # A timed-out/failed POST can be ambiguous: the provider may have
+            # accepted and billed the job even though we never received its ID.
+            # Default to fail-closed instead of starting another paid provider
+            # request. Operators may explicitly opt into that cost/risk tradeoff.
+            if _should_stop_after_submit_failure(normalized):
+                break
         return CreativeJob(
             provider="none",
             kind=normalized.kind,
