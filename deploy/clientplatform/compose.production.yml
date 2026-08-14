@@ -50,7 +50,7 @@ services:
           token=os.environ['VISUAL_GATEWAY_UPSTREAM_TOKEN'];
           request=urllib.request.Request('http://127.0.0.1:8097/v1/providers',headers={'Authorization':'Bearer '+token});
           payload=json.load(urllib.request.urlopen(request,timeout=3));
-          assert payload.get('client_id')=='clientplatform' and payload.get('enabled') is True
+          assert payload.get('client_id')=='clientplatform' and payload.get('enabled') is True and bool(payload.get('configured_image'))
       interval: 5s
       timeout: 5s
       retries: 20
