@@ -206,6 +206,16 @@ def prepare(path: Path) -> tuple[str, ...]:
         "CLIENTPLATFORM_AD_SPEND_GUARD_INTERVAL_SEC": "5",
         **_TELEGRAM_STARS_DEFAULTS,
     }
+    legacy_visual_gateway_url = str(values.get("VISUAL_GATEWAY_URL", "") or "").strip()
+    legacy_visual_gateway_token = str(values.get("VISUAL_GATEWAY_TOKEN", "") or "").strip()
+    if legacy_visual_gateway_url and not str(
+        values.get("VISUAL_GATEWAY_UPSTREAM_URL", "") or ""
+    ).strip():
+        defaults["VISUAL_GATEWAY_UPSTREAM_URL"] = legacy_visual_gateway_url
+    if legacy_visual_gateway_token and not str(
+        values.get("VISUAL_GATEWAY_UPSTREAM_TOKEN", "") or ""
+    ).strip():
+        defaults["VISUAL_GATEWAY_UPSTREAM_TOKEN"] = legacy_visual_gateway_token
     if not str(values.get("CLIENTPLATFORM_SECRET_MEDIA_SIGNING_KEY", "")).strip():
         defaults["CLIENTPLATFORM_SECRET_MEDIA_SIGNING_KEY"] = secrets.token_urlsafe(48)
 
