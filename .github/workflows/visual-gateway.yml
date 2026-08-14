@@ -7,7 +7,6 @@ on:
       - "visual_provider_gateway/**"
       - "deploy/clientplatform/compose.production.yml"
       - "deploy.sh"
-      - "scripts/clientplatform_visual_provider_rollout.py"
       - "tests/test_visual_provider_gateway_production_contract.py"
       - ".github/workflows/visual-gateway.yml"
   push:
@@ -17,7 +16,6 @@ on:
       - "visual_provider_gateway/**"
       - "deploy/clientplatform/compose.production.yml"
       - "deploy.sh"
-      - "scripts/clientplatform_visual_provider_rollout.py"
       - "tests/test_visual_provider_gateway_production_contract.py"
       - ".github/workflows/visual-gateway.yml"
 
