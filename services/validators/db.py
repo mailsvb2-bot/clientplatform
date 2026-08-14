@@ -183,6 +183,11 @@ def validate_schema_decomposition(strict: bool = True) -> None:
         "services/schema_tables.py",
         "services/validator.py",
         "services/db/core.py",
+        # visual_gateway is a separately built/deployed service with its own
+        # isolated VISUAL_GATEWAY_STATE_DIR. Its embedded SQLite schema is not
+        # ClientPlatform application DB ownership and remains covered by the
+        # dedicated Visual Gateway contract/image-build workflow.
+        "visual_gateway/server.py",
     }
     allow_sql_prefixes = ("services/db/schema/",)
     ddl_re = re.compile(
