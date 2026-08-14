@@ -46,16 +46,17 @@ def test_recovery_workflow_uses_single_canonical_deploy_entrypoint() -> None:
 
 def test_canonical_deploy_orders_gateway_before_app_and_versions_release() -> None:
     source = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    deploy_body = source.split("\ndef deploy(\n", 1)[1].split("\ndef main()", 1)[0]
 
-    build = source.index('"build", "visual-gateway", "app", "backup"')
-    gateway_up = source.index('"--force-recreate", "visual-gateway"')
-    gateway_ready = source.index("_wait_for_visual_gateway(timeout_seconds)", gateway_up)
-    app_up = source.index('"--force-recreate", "app", "caddy"', gateway_ready)
-    app_ready = source.index("_wait_for_readiness(timeout_seconds)", app_up)
+    build = deploy_body.index('"build", "visual-gateway", "app", "backup"')
+    gateway_up = deploy_body.index('"--force-recreate", "visual-gateway"')
+    gateway_ready = deploy_body.index("_wait_for_visual_gateway(timeout_seconds)", gateway_up)
+    app_up = deploy_body.index('"--force-recreate", "app", "caddy"', gateway_ready)
+    app_ready = deploy_body.index("_wait_for_readiness(timeout_seconds)", app_up)
 
     assert build < gateway_up < gateway_ready < app_up < app_ready
-    assert 'f"{VISUAL_GATEWAY_IMAGE}:release-{target_sha}"' in source
-    assert '"visual_gateway_contract_version": "1.0"' in source
+    assert 'f"{VISUAL_GATEWAY_IMAGE}:release-{target_sha}"' in deploy_body
+    assert '"visual_gateway_contract_version": "1.0"' in deploy_body
 
 
 def test_restore_visual_gateway_uses_previous_image_before_recreate(monkeypatch) -> None:
@@ -82,12 +83,12 @@ def test_restore_visual_gateway_uses_previous_image_before_recreate(monkeypatch)
         "clientplatform-production-visual-gateway:rollback-test",
         "clientplatform-production-visual-gateway:latest",
     ]
-    assert calls[1][-5:] == [
+    assert calls[1][-4:] == [
         "-d",
         "--no-build",
         "--force-recreate",
         "visual-gateway",
-    ][-5:]
+    ]
     assert waits == [77]
 
 
