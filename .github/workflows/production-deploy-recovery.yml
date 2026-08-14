@@ -128,7 +128,7 @@ jobs:
             git@github.com:mailsvb2-bot/clientplatform|\
             git@github.com:mailsvb2-bot/clientplatform.git|\
             ssh://git@github.com/mailsvb2-bot/clientplatform|\
-            ssh://git@github.com/mailsvb2-bot/clientplatform.git)
+            ssh://git@github.com:mailsvb2-bot/clientplatform.git)
               ;;
             *)
               echo "Unexpected production repository origin" >&2
@@ -161,11 +161,11 @@ jobs:
           fi
 
           if [ "$(id -u)" -eq 0 ]; then
-            python3 scripts/clientplatform_production_deploy.py \
+            python3 scripts/clientplatform_production_deploy_with_visual_gateway.py \
               --recover-unavailable-baseline \
               --timeout-seconds 240
           else
-            sudo -n python3 scripts/clientplatform_production_deploy.py \
+            sudo -n python3 scripts/clientplatform_production_deploy_with_visual_gateway.py \
               --recover-unavailable-baseline \
               --timeout-seconds 240
           fi
