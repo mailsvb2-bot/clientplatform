@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .schema_migrations import ensure_schema
+
 _ID_RE = re.compile(r"[A-Za-z0-9_-]{1,128}")
 _CLIENT_RE = re.compile(r"[A-Za-z0-9_.:-]{1,64}")
 _SCOPE_RE = re.compile(r"[A-Za-z0-9_.:@/-]{1,160}")
@@ -69,6 +71,8 @@ class JobStore:
     The store deliberately owns idempotency *before* provider I/O. If a caller
     retries the same request after an ambiguous network timeout, the retry sees
     the existing reservation instead of spending on a second provider job.
+    Schema evolution is isolated in ``schema_migrations.py`` + SQL migration
+    assets so this runtime module remains CRUD-only.
     """
 
     def __init__(self, path: str | None = None) -> None:
@@ -76,59 +80,12 @@ class JobStore:
         self.path = Path(configured).expanduser().resolve()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
-        self._init_schema()
+        ensure_schema(self.path)
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self.path), timeout=30)
         conn.row_factory = sqlite3.Row
         return conn
-
-    def _columns(self, conn: sqlite3.Connection) -> set[str]:
-        return {str(row[1]) for row in conn.execute("PRAGMA table_info(visual_jobs)").fetchall()}
-
-    def _init_schema(self) -> None:
-        with self._lock, self._connect() as conn:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS visual_jobs (
-                    id TEXT PRIMARY KEY,
-                    client_id TEXT NOT NULL DEFAULT 'legacy',
-                    scope_id TEXT NOT NULL DEFAULT 'global',
-                    idempotency_key TEXT NOT NULL DEFAULT '',
-                    request_fingerprint TEXT NOT NULL DEFAULT '',
-                    provider TEXT NOT NULL,
-                    kind TEXT NOT NULL,
-                    status TEXT NOT NULL,
-                    provider_job_id TEXT NOT NULL,
-                    model TEXT NOT NULL,
-                    mime_type TEXT NOT NULL,
-                    asset_path TEXT NOT NULL,
-                    error_code TEXT NOT NULL,
-                    created_at INTEGER NOT NULL,
-                    updated_at INTEGER NOT NULL
-                )
-                """
-            )
-            # Forward-compatible migration from reviewed-v3 gateway databases.
-            columns = self._columns(conn)
-            if "client_id" not in columns:
-                conn.execute("ALTER TABLE visual_jobs ADD COLUMN client_id TEXT NOT NULL DEFAULT 'legacy'")
-            if "scope_id" not in columns:
-                conn.execute("ALTER TABLE visual_jobs ADD COLUMN scope_id TEXT NOT NULL DEFAULT 'global'")
-            if "idempotency_key" not in columns:
-                conn.execute("ALTER TABLE visual_jobs ADD COLUMN idempotency_key TEXT NOT NULL DEFAULT ''")
-            if "request_fingerprint" not in columns:
-                conn.execute("ALTER TABLE visual_jobs ADD COLUMN request_fingerprint TEXT NOT NULL DEFAULT ''")
-            conn.execute(
-                """
-                CREATE UNIQUE INDEX IF NOT EXISTS ux_visual_jobs_client_scope_idempotency
-                ON visual_jobs(client_id, scope_id, idempotency_key)
-                WHERE idempotency_key <> ''
-                """
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS ix_visual_jobs_client_created ON visual_jobs(client_id, created_at)"
-            )
 
     def reserve(
         self,
