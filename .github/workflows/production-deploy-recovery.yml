@@ -128,7 +128,7 @@ jobs:
             git@github.com:mailsvb2-bot/clientplatform|\
             git@github.com:mailsvb2-bot/clientplatform.git|\
             ssh://git@github.com/mailsvb2-bot/clientplatform|\
-            ssh://git@github.com/mailsvb2-bot/clientplatform.git)
+            ssh://git@github.com:mailsvb2-bot/clientplatform.git)
               ;;
             *)
               echo "Unexpected production repository origin" >&2

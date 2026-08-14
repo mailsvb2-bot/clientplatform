@@ -333,6 +333,7 @@ class ProductionDeploymentContractTests(unittest.TestCase):
             ),
             mock.patch.object(production_deploy, "_local_backup", return_value=Path("/backup.dump")),
             mock.patch.object(production_deploy, "_container_image", return_value=previous_image),
+            mock.patch.object(production_deploy, "_wait_for_visual_gateway") as wait_gateway,
             mock.patch.object(production_deploy, "_wait_for_readiness") as wait,
             mock.patch.object(production_deploy, "_external_https") as external,
             mock.patch.object(production_deploy, "_write_evidence", side_effect=write_evidence),
@@ -345,20 +346,26 @@ class ProductionDeploymentContractTests(unittest.TestCase):
             )
 
         self.assertEqual(result, evidence_path)
+        wait_gateway.assert_called_once_with(240)
         wait.assert_called_once_with(240)
         external.assert_called_once_with("clientplatform.example.test")
         rollback.assert_not_called()
         self.assertTrue(evidence_payload["recovery_mode"])
         self.assertFalse(evidence_payload["baseline_ready"])
 
-        rollback_tag_calls = [
+        image_tag_calls = [
             call
             for call in run.call_args_list
             if call.args
             and call.args[0][:3] == ["docker", "image", "tag"]
         ]
-        self.assertEqual(len(rollback_tag_calls), 1)
-        self.assertEqual(rollback_tag_calls[0].args[0][3], previous_image)
+        self.assertEqual(len(image_tag_calls), 2)
+        self.assertEqual(image_tag_calls[0].args[0][3], previous_image)
+        self.assertEqual(image_tag_calls[1].args[0][3], previous_image)
+        self.assertEqual(
+            image_tag_calls[1].args[0][4],
+            "clientplatform-production-visual-gateway:release-" + "a" * 40,
+        )
 
     def test_main_reports_expected_failure_without_traceback(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -393,7 +400,12 @@ class ProductionDeploymentContractTests(unittest.TestCase):
         rollback_tag_index = source.index(
             '_run(["docker", "image", "tag", previous_image, rollback_tag])'
         )
+        gateway_build_index = source.index('_run([*compose, "build", "visual-gateway"])')
         build_index = source.index('_run([*compose, "build", "app", "backup"])')
+        gateway_recreate_index = source.index(
+            '"--force-recreate", "visual-gateway"',
+            gateway_build_index,
+        )
         recreate_index = source.index(
             '"--force-recreate", "app", "caddy"',
             build_index,
@@ -401,8 +413,10 @@ class ProductionDeploymentContractTests(unittest.TestCase):
 
         self.assertLess(baseline_index, backup_index)
         self.assertLess(backup_index, rollback_tag_index)
-        self.assertLess(rollback_tag_index, build_index)
-        self.assertLess(build_index, recreate_index)
+        self.assertLess(rollback_tag_index, gateway_build_index)
+        self.assertLess(gateway_build_index, build_index)
+        self.assertLess(build_index, gateway_recreate_index)
+        self.assertLess(gateway_recreate_index, recreate_index)
         self.assertIn("production_baseline_readiness_timeout", source)
         self.assertIn("production_readiness_timeout", source)
         self.assertIn("production_startup_timeout", source)
