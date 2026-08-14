@@ -23,14 +23,14 @@ Provider credentials, model identifiers, regional routing and provider-transport
 
 ## ClientPlatform production defaults
 
-The canonical production Compose topology supplies the ClientPlatform principal token and mounts the existing durable provider-gateway data directory so idempotency/job history survives migration from the legacy standalone container.
+The canonical production Compose topology uses the existing `VISUAL_GATEWAY_UPSTREAM_TOKEN` as the authenticated `clientplatform` service principal and mounts the existing durable provider-gateway data directory so idempotency/job history survives migration from the legacy standalone container. Optional `VISUAL_GATEWAY_CLIENT_TOKENS_JSON` remains available for explicitly provisioned additional service principals.
 
 Relevant environment variables include:
 
 ```env
 VISUAL_CREATIVE_ENABLED=1
 VISUAL_DEPLOYMENT_COUNTRY=RU
-VISUAL_GATEWAY_CLIENT_TOKENS_JSON={"clientplatform":"<same upstream token used by the canonical wrapper>"}
+VISUAL_GATEWAY_UPSTREAM_TOKEN=...
 VISUAL_GATEWAY_DB=/data/visual_gateway.sqlite3
 VISUAL_CREATIVE_OUTPUT_DIR=/data/output
 
@@ -52,7 +52,7 @@ Authenticated endpoints used by the canonical wrapper:
 - `GET /v1/creative/generations/{id}?scope_id=...`
 - `GET /v1/creative/generations/{id}/content?scope_id=...`
 
-`GET /healthz` is unauthenticated and intended only for the private container health check.
+`GET /healthz` is unauthenticated for basic liveness. Production Compose uses the authenticated `/v1/providers` endpoint as its readiness healthcheck so a missing or mismatched service token fails closed before the wrapper is recreated.
 
 ## Tests
 
