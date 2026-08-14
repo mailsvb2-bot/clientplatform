@@ -25,11 +25,18 @@ from scripts.clientplatform_prepare_production_env import prepare
 DEPLOY_DIR = ROOT / "deploy" / "clientplatform"
 APP_CONTAINER = "clientplatform-production-app-1"
 POSTGRES_CONTAINER = "clientplatform-production-postgres-1"
+VISUAL_GATEWAY_CONTAINER = "clientplatform-production-visual-gateway-1"
 APP_IMAGE = "clientplatform-production-app"
+VISUAL_GATEWAY_IMAGE = "clientplatform-production-visual-gateway"
 LOCK_PATH = Path("/run/lock/clientplatform-production-deploy.lock")
 EVIDENCE_DIR = Path("/var/lib/clientplatform/deploy-evidence")
 LOCAL_BACKUP_DIR = Path("/var/backups/clientplatform/predeploy")
 _DEFAULT_TELEGRAM_WEBHOOK_PREFIX = "/telegram-webhook"
+_VISUAL_GATEWAY_CAPABILITIES = {
+    "contract_version": "1.0",
+    "capabilities": ["generation", "render_pack", "usage"],
+    "render_formats": ["square", "feed", "story", "landscape"],
+}
 
 
 class DeploymentError(RuntimeError):
@@ -163,8 +170,76 @@ def _container_image(container: str) -> str:
     )
     image = completed.stdout.strip()
     if not image.startswith("sha256:"):
-        raise DeploymentError("current_app_image_missing")
+        raise DeploymentError("container_image_missing")
     return image
+
+
+def _optional_container_image(container: str) -> str:
+    completed = _run(
+        ["docker", "inspect", "--format", "{{.Image}}", container],
+        capture=True,
+        check=False,
+    )
+    image = completed.stdout.strip()
+    if completed.returncode != 0 or not image.startswith("sha256:"):
+        return ""
+    return image
+
+
+def _visual_gateway_health() -> str:
+    completed = _run(
+        [
+            "docker",
+            "inspect",
+            "--format",
+            "{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}",
+            VISUAL_GATEWAY_CONTAINER,
+        ],
+        capture=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        return "missing"
+    return completed.stdout.strip() or "missing"
+
+
+def _visual_gateway_capabilities() -> bool:
+    expected = json.dumps(_VISUAL_GATEWAY_CAPABILITIES, ensure_ascii=True, separators=(",", ":"))
+    completed = _run(
+        [
+            "docker",
+            "exec",
+            VISUAL_GATEWAY_CONTAINER,
+            "python",
+            "-c",
+            (
+                "import json,os,urllib.request;"
+                "token=os.environ['VISUAL_GATEWAY_TOKEN'];"
+                "request=urllib.request.Request("
+                "'http://127.0.0.1:8080/v1/capabilities',"
+                "headers={'Authorization':'Bearer '+token});"
+                "payload=json.load(urllib.request.urlopen(request,timeout=3));"
+                f"expected=json.loads({expected!r});"
+                "print('1' if payload==expected else '0')"
+            ),
+        ],
+        capture=True,
+        check=False,
+    )
+    return completed.returncode == 0 and completed.stdout.strip() == "1"
+
+
+def _wait_for_visual_gateway(timeout_seconds: int) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    last = "missing"
+    while time.monotonic() < deadline:
+        last = _visual_gateway_health()
+        if last == "healthy" and _visual_gateway_capabilities():
+            return
+        if last == "unhealthy":
+            raise DeploymentError("visual_gateway_unhealthy")
+        time.sleep(2)
+    raise DeploymentError(f"visual_gateway_readiness_timeout:{last}")
 
 
 def _sha256_stream(handle: BinaryIO) -> str:
@@ -372,13 +447,49 @@ def _write_evidence(payload: dict[str, Any]) -> Path:
     return target
 
 
+def _restore_visual_gateway(
+    *,
+    compose: Sequence[str],
+    rollback_tag: str,
+    timeout_seconds: int,
+) -> None:
+    if rollback_tag:
+        _run(["docker", "image", "tag", rollback_tag, f"{VISUAL_GATEWAY_IMAGE}:latest"])
+        _run(
+            [
+                *compose,
+                "up",
+                "-d",
+                "--no-build",
+                "--force-recreate",
+                "visual-gateway",
+            ]
+        )
+    _wait_for_visual_gateway(timeout_seconds)
+
+
+def _remove_first_rollout_visual_gateway(compose: Sequence[str]) -> None:
+    completed = _run(
+        [*compose, "rm", "--force", "--stop", "visual-gateway"],
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise DeploymentError("visual_gateway_first_rollout_cleanup_failed")
+
+
 def _rollback(
     *,
     compose: Sequence[str],
     rollback_tag: str,
+    visual_gateway_rollback_tag: str,
     domain: str,
     timeout_seconds: int,
 ) -> None:
+    _restore_visual_gateway(
+        compose=compose,
+        rollback_tag=visual_gateway_rollback_tag,
+        timeout_seconds=timeout_seconds,
+    )
     _run(["docker", "image", "tag", rollback_tag, f"{APP_IMAGE}:latest"])
     _run([*compose, "up", "-d", "--no-build", "--force-recreate", "app", "caddy"])
     try:
@@ -441,19 +552,42 @@ def deploy(
     if previous_image:
         _run(["docker", "image", "tag", previous_image, rollback_tag])
 
-    changed = False
+    visual_gateway_exists = _container_exists(VISUAL_GATEWAY_CONTAINER)
+    previous_visual_gateway_image = (
+        _optional_container_image(VISUAL_GATEWAY_CONTAINER) if visual_gateway_exists else ""
+    )
+    visual_gateway_rollback_tag = (
+        f"{VISUAL_GATEWAY_IMAGE}:rollback-{_utc_stamp()}" if previous_visual_gateway_image else ""
+    )
+    if previous_visual_gateway_image:
+        _run(
+            [
+                "docker",
+                "image",
+                "tag",
+                previous_visual_gateway_image,
+                visual_gateway_rollback_tag,
+            ]
+        )
+
+    visual_gateway_changed = False
+    app_changed = False
     try:
-        _run([*compose, "build", "app", "backup"])
-        changed = True
+        _run([*compose, "build", "visual-gateway", "app", "backup"])
+        _run([*compose, "up", "-d", "--force-recreate", "visual-gateway"])
+        visual_gateway_changed = True
+        _wait_for_visual_gateway(timeout_seconds)
         _run([*compose, "up", "-d", "--force-recreate", "app", "caddy"])
+        app_changed = True
         _wait_for_readiness(timeout_seconds)
         _external_https(domain)
     except Exception as deployment_error:  # validator: allow-wide-except - rollback must cover every failed gate
-        if changed and baseline_ready and rollback_tag:
+        if app_changed and baseline_ready and rollback_tag:
             try:
                 _rollback(
                     compose=compose,
                     rollback_tag=rollback_tag,
+                    visual_gateway_rollback_tag=visual_gateway_rollback_tag,
                     domain=domain,
                     timeout_seconds=timeout_seconds,
                 )
@@ -466,6 +600,9 @@ def deploy(
                     "target_sha": target_sha,
                     "previous_image": previous_image,
                     "rollback_tag": rollback_tag,
+                    "previous_visual_gateway_image": previous_visual_gateway_image,
+                    "visual_gateway_rollback_tag": visual_gateway_rollback_tag,
+                    "visual_gateway_contract_version": "1.0",
                     "backup_mode": backup_mode,
                     "backup_reference": backup_reference,
                     "domain": domain,
@@ -474,11 +611,24 @@ def deploy(
                     "telegram_webhook_absent": True,
                     "failure_class": type(deployment_error).__name__,
                     "rollback_full_readiness": _ready(),
+                    "visual_gateway_ready": _visual_gateway_capabilities(),
                     "completed_at": _completed_at(),
                 }
             )
             print(f"CLIENTPLATFORM_PRODUCTION_ROLLBACK_OK:{rollback_evidence}")
-        elif changed and recover_unavailable_baseline and not baseline_ready:
+        elif visual_gateway_changed and not app_changed:
+            try:
+                if visual_gateway_rollback_tag:
+                    _restore_visual_gateway(
+                        compose=compose,
+                        rollback_tag=visual_gateway_rollback_tag,
+                        timeout_seconds=timeout_seconds,
+                    )
+                else:
+                    _remove_first_rollout_visual_gateway(compose)
+            except Exception as rollback_error:  # validator: allow-wide-except - gateway rollback is mandatory
+                raise DeploymentError("visual_gateway_deployment_failed_and_rollback_failed") from rollback_error
+        if app_changed and recover_unavailable_baseline and not baseline_ready:
             recovery_evidence = _write_evidence(
                 {
                     "ok": False,
@@ -486,6 +636,9 @@ def deploy(
                     "target_sha": target_sha,
                     "previous_image": previous_image,
                     "rollback_tag": rollback_tag,
+                    "previous_visual_gateway_image": previous_visual_gateway_image,
+                    "visual_gateway_rollback_tag": visual_gateway_rollback_tag,
+                    "visual_gateway_contract_version": "1.0",
                     "backup_mode": backup_mode,
                     "backup_reference": backup_reference,
                     "domain": domain,
@@ -504,6 +657,16 @@ def deploy(
             raise DeploymentError("production_recovery_failed") from deployment_error
         raise
 
+    visual_gateway_image = _container_image(VISUAL_GATEWAY_CONTAINER)
+    _run(
+        [
+            "docker",
+            "image",
+            "tag",
+            visual_gateway_image,
+            f"{VISUAL_GATEWAY_IMAGE}:release-{target_sha}",
+        ]
+    )
     evidence = _write_evidence(
         {
             "ok": True,
@@ -511,6 +674,11 @@ def deploy(
             "target_sha": target_sha,
             "previous_image": previous_image,
             "rollback_tag": rollback_tag,
+            "previous_visual_gateway_image": previous_visual_gateway_image,
+            "visual_gateway_rollback_tag": visual_gateway_rollback_tag,
+            "visual_gateway_image": visual_gateway_image,
+            "visual_gateway_contract_version": "1.0",
+            "visual_gateway_ready": True,
             "backup_mode": backup_mode,
             "backup_reference": backup_reference,
             "domain": domain,
