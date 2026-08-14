@@ -1,0 +1,61 @@
+name: Agent finish customer activity patch
+
+on:
+  push:
+    branches:
+      - agent/finish-canonical-client-activity
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: agent/finish-canonical-client-activity
+          fetch-depth: 0
+      - name: Apply compatibility fix
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          handler_path = Path('handlers/clientplatform_control.py')
+          handler = handler_path.read_text(encoding='utf-8')
+          old_touch = '''        username=user.username,\n        display_name=user.full_name,\n'''
+          new_touch = '''        username=getattr(user, "username", None),\n        display_name=getattr(user, "full_name", None),\n'''
+          if handler.count(old_touch) != 1:
+              raise SystemExit(f'expected one callback contact block, found {handler.count(old_touch)}')
+          handler = handler.replace(old_touch, new_touch, 1)
+          old_button = '''[("Активность клиентов", f"cp:clients:{token}"), ("Результаты", f"cp:results:{token}")]'''
+          new_button = '''[("Клиенты", f"cp:clients:{token}"), ("Результаты", f"cp:results:{token}")]'''
+          if handler.count(old_button) != 1:
+              raise SystemExit(f'expected one activity dashboard button, found {handler.count(old_button)}')
+          handler = handler.replace(old_button, new_button, 1)
+          handler_path.write_text(handler, encoding='utf-8')
+
+          test_path = Path('tests/test_clientplatform_control_bot_behavior.py')
+          test = test_path.read_text(encoding='utf-8')
+          old_populated = '''    monkeypatch.setattr(\n        handlers,\n        "list_customers",\n        lambda **_kwargs: [SimpleNamespace(id=str(uuid4()), display_name="Иван")],\n    )\n    clients = FakeCallback(f"cp:clients:{business_token}")\n'''
+          new_populated = '''    monkeypatch.setattr(\n        handlers,\n        "tenant_customer_activity",\n        lambda **_kwargs: SimpleNamespace(\n            total=1,\n            new_today=1,\n            new_7d=1,\n            active_today=1,\n            by_platform={"telegram": 1},\n            recent=(\n                SimpleNamespace(\n                    display_name="Иван",\n                    username=None,\n                    platforms=("telegram",),\n                    first_contact_at="2026-08-14T08:00:00+00:00",\n                    last_contact_at="2026-08-14T09:00:00+00:00",\n                ),\n            ),\n        ),\n    )\n    clients = FakeCallback(f"cp:clients:{business_token}")\n'''
+          if test.count(old_populated) != 1:
+              raise SystemExit(f'expected one populated clients mock, found {test.count(old_populated)}')
+          test = test.replace(old_populated, new_populated, 1)
+          old_empty = '''    monkeypatch.setattr(handlers, "list_customers", lambda **_kwargs: [])\n    empty_clients = FakeCallback(f"cp:clients:{business_token}")\n'''
+          new_empty = '''    monkeypatch.setattr(\n        handlers,\n        "tenant_customer_activity",\n        lambda **_kwargs: SimpleNamespace(\n            total=0,\n            new_today=0,\n            new_7d=0,\n            active_today=0,\n            by_platform={},\n            recent=(),\n        ),\n    )\n    empty_clients = FakeCallback(f"cp:clients:{business_token}")\n'''
+          if test.count(old_empty) != 1:
+              raise SystemExit(f'expected one empty clients mock, found {test.count(old_empty)}')
+          test = test.replace(old_empty, new_empty, 1)
+          test_path.write_text(test, encoding='utf-8')
+          PY
+          git rm .github/workflows/agent-finish-customer-activity-patch.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add handlers/clientplatform_control.py tests/test_clientplatform_control_bot_behavior.py
+          git diff --cached --check
+          git commit -m 'fix: preserve customer activity compatibility'
+          git push origin HEAD:agent/finish-canonical-client-activity
