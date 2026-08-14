@@ -4,13 +4,22 @@ import json
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
 
-from visual_provider_gateway import app as app_module
-from visual_provider_gateway.app import GatewayPrincipal, app, require_auth
 from visual_provider_gateway.models import CreativeJob
 from visual_provider_gateway.service import VisualGatewayService
 from visual_provider_gateway.store import JobStore
+
+
+def _api_surface():
+    pytest.importorskip(
+        "fastapi",
+        reason="provider HTTP contract is exercised in the dedicated Visual Gateway Contract profile",
+    )
+    from fastapi.testclient import TestClient
+    from visual_provider_gateway import app as app_module
+    from visual_provider_gateway.app import GatewayPrincipal, app, require_auth
+
+    return TestClient, app_module, GatewayPrincipal, app, require_auth
 
 
 class FakeEngine:
@@ -103,6 +112,7 @@ def test_reference_urls_fail_closed_until_allowlisted(tmp_path, monkeypatch):
 
 
 def test_api_multi_client_tokens_isolate_jobs(tmp_path, monkeypatch):
+    TestClient, app_module, _GatewayPrincipal, app, _require_auth = _api_surface()
     monkeypatch.setenv("VISUAL_GATEWAY_CLIENT_TOKENS_JSON", json.dumps({"businesaios": "a" * 24, "clientplatform": "b" * 24}))
     output = tmp_path / "out"
     output.mkdir()
@@ -132,6 +142,7 @@ def test_api_multi_client_tokens_isolate_jobs(tmp_path, monkeypatch):
 
 
 def test_api_requires_auth(monkeypatch):
+    TestClient, _app_module, _GatewayPrincipal, app, _require_auth = _api_surface()
     monkeypatch.setenv("VISUAL_GATEWAY_TOKEN", "secret")
     monkeypatch.delenv("VISUAL_GATEWAY_CLIENT_TOKENS_JSON", raising=False)
     monkeypatch.delenv("VISUAL_GATEWAY_ALLOW_ANONYMOUS", raising=False)
@@ -140,11 +151,13 @@ def test_api_requires_auth(monkeypatch):
 
 
 def test_api_health_is_unauthenticated():
+    TestClient, _app_module, _GatewayPrincipal, app, _require_auth = _api_surface()
     client = TestClient(app)
     assert client.get("/healthz").json() == {"ok": True}
 
 
 def test_api_validation_rejects_extra_fields():
+    TestClient, _app_module, GatewayPrincipal, app, require_auth = _api_surface()
     app.dependency_overrides[require_auth] = lambda: GatewayPrincipal(client_id="test")
     try:
         client = TestClient(app)
@@ -158,6 +171,7 @@ def test_api_validation_rejects_extra_fields():
 
 
 def test_api_scope_isolates_jobs_within_same_client(tmp_path, monkeypatch):
+    TestClient, app_module, _GatewayPrincipal, app, _require_auth = _api_surface()
     monkeypatch.setenv("VISUAL_GATEWAY_CLIENT_TOKENS_JSON", json.dumps({"clientplatform": "c" * 24}))
     svc = VisualGatewayService(store=JobStore(str(tmp_path / "jobs.sqlite3")), engine=FakeEngine(tmp_path / "asset.png"))
     monkeypatch.setattr(app_module, "service", lambda: svc)
@@ -231,10 +245,7 @@ def test_provider_snapshot_uses_effective_deployment_country(tmp_path, monkeypat
 
 
 def test_usage_endpoint_is_authenticated_and_client_scoped(monkeypatch, tmp_path):
-    from fastapi.testclient import TestClient
-    from visual_provider_gateway import app as app_module
-    from visual_provider_gateway.service import VisualGatewayService
-    from visual_provider_gateway.store import JobStore
+    TestClient, app_module, _GatewayPrincipal, _app, _require_auth = _api_surface()
 
     monkeypatch.setenv(
         "VISUAL_GATEWAY_CLIENT_TOKENS_JSON",
@@ -296,9 +307,6 @@ def test_usage_endpoint_is_authenticated_and_client_scoped(monkeypatch, tmp_path
 
 
 def test_usage_snapshot_reports_quota_rejections_as_reservations(monkeypatch, tmp_path):
-    from visual_provider_gateway.service import VisualGatewayService
-    from visual_provider_gateway.store import JobStore
-
     monkeypatch.setenv("VISUAL_GATEWAY_DAILY_JOB_LIMIT", "1")
     monkeypatch.setenv("VISUAL_GATEWAY_DAILY_IMAGE_LIMIT", "1")
     store = JobStore(str(tmp_path / "quota.sqlite3"))
