@@ -131,9 +131,9 @@ class SalesAIAnalysisRepository:
             UPDATE clientplatform_sales_events
             SET payload_json=?
             WHERE event_type IN ('ai_sales_analysis','ai_sales_analysis_stale')
-              AND occurred_at<? AND payload_json NOT LIKE '%\"redacted\":true%'
+              AND occurred_at<? AND payload_json NOT LIKE ?
             """,
-            (redacted, cutoff),
+            (redacted, cutoff, '%"redacted":true%'),
         )
         event_count = max(int(getattr(event_cursor, "rowcount", 0) or 0), 0)
         return projection_count + event_count
