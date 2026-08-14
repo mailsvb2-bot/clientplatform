@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Canonical production entrypoint. Provider-adapter rollout is staged and health-
-# gated before the existing app/gateway deploy core performs backup, readiness and
-# rollback. The legacy standalone provider container is not removed by this step.
-exec python3 "$ROOT/scripts/clientplatform_visual_provider_rollout.py" "$@"
+# Compatibility entrypoint only. The canonical production deploy implementation is
+# owned by ClientPlatform itself so backup, readiness, rollback and app-state
+# validation cannot drift from the running system.
+exec python3 "$ROOT/scripts/clientplatform_production_deploy.py" "$@"
