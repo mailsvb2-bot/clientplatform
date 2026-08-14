@@ -30,7 +30,6 @@ services:
     restart: unless-stopped
     env_file: ./clientplatform.env
     environment:
-      VISUAL_GATEWAY_CLIENT_TOKENS_JSON: '{"clientplatform":"${VISUAL_GATEWAY_UPSTREAM_TOKEN:?set VISUAL_GATEWAY_UPSTREAM_TOKEN}"}'
       VISUAL_GATEWAY_DB: /data/visual_gateway.sqlite3
       VISUAL_CREATIVE_OUTPUT_DIR: /data/output
       VISUAL_CREATIVE_ENABLED: "1"
@@ -47,9 +46,11 @@ services:
         - python
         - -c
         - >-
-          import json,urllib.request;
-          payload=json.load(urllib.request.urlopen('http://127.0.0.1:8097/healthz',timeout=3));
-          assert payload=={'ok':True}
+          import json,os,urllib.request;
+          token=os.environ['VISUAL_GATEWAY_UPSTREAM_TOKEN'];
+          request=urllib.request.Request('http://127.0.0.1:8097/v1/providers',headers={'Authorization':'Bearer '+token});
+          payload=json.load(urllib.request.urlopen(request,timeout=3));
+          assert payload.get('client_id')=='clientplatform' and payload.get('enabled') is True
       interval: 5s
       timeout: 5s
       retries: 20
@@ -70,7 +71,6 @@ services:
     environment:
       VISUAL_GATEWAY_STATE_DIR: /var/lib/visual-gateway
       VISUAL_GATEWAY_UPSTREAM_URL: http://visual-provider-gateway:8097
-      VISUAL_GATEWAY_UPSTREAM_TOKEN: ${VISUAL_GATEWAY_UPSTREAM_TOKEN:?set VISUAL_GATEWAY_UPSTREAM_TOKEN}
     depends_on:
       visual-provider-gateway:
         condition: service_healthy
