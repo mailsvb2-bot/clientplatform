@@ -1,0 +1,35 @@
+name: Visual Gateway Contract
+
+on:
+  pull_request:
+    paths:
+      - "visual_gateway/**"
+      - ".github/workflows/visual-gateway.yml"
+  push:
+    branches: [main]
+    paths:
+      - "visual_gateway/**"
+      - ".github/workflows/visual-gateway.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: visual_gateway/requirements-test.txt
+      - name: Install gateway test dependencies
+        run: python -m pip install -r visual_gateway/requirements-test.txt
+      - name: Compile gateway source
+        run: python -m py_compile visual_gateway/__init__.py visual_gateway/server.py
+      - name: Run gateway contract tests
+        run: PYTHONPATH=. python -m pytest -q visual_gateway/tests
+      - name: Build versioned gateway image
+        run: docker build -f visual_gateway/Dockerfile --build-arg VCS_REF="${GITHUB_SHA}" -t clientplatform-visual-gateway:"${GITHUB_SHA}" .
