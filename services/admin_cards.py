@@ -1,55 +1,15 @@
 from __future__ import annotations
-import sqlite3
-
-
-from datetime import datetime, timezone
 
 from services.db import db
 
 
-def _today_utc_date() -> str:
-    return datetime.now(timezone.utc).date().isoformat()
-
-
-def users_joined_today_count() -> int:
-    """Сколько пользователей зашло сегодня (по UTC)."""
-    today = _today_utc_date()
-    with db() as conn:
-        row = conn.execute(
-            "SELECT COUNT(1) AS n FROM users WHERE COALESCE(substr(joined_at,1,10),'') = ?",
-            (today,),
-        ).fetchone()
-    # sqlite3.Row не поддерживает .get()
-    if not row:
-        return 0
-    return int(row["n"] or 0)
-
-
-def users_joined_today(limit: int = 30) -> list[dict]:
-    """Список пользователей, зашедших сегодня (UTC)."""
-    today = _today_utc_date()
-    with db() as conn:
-        rows = conn.execute(
-            "SELECT user_id, joined_at, username, first_name FROM users "
-            "WHERE COALESCE(substr(joined_at,1,10),'') = ? "
-            "ORDER BY joined_at DESC LIMIT ?",
-            (today, int(limit)),
-        ).fetchall()
-    out = []
-    for r in rows or []:
-        out.append(
-            {
-                "user_id": int(r["user_id"]),
-                "joined_at": r["joined_at"],
-                "username": r["username"],
-                "first_name": r["first_name"],
-            }
-        )
-    return out
-
-
 def user_card(user_id: int) -> dict:
-    """Карточка пользователя для админки (минимум, но полезно)."""
+    """Карточка пользователя для админки (минимум, но полезно).
+
+    Это legacy-карточка служебного Telegram-пользователя. Клиентская статистика
+    ClientPlatform живёт в каноническом tenant-scoped customers/customer_identities
+    и не должна считаться через таблицу users.
+    """
     user_id = int(user_id)
     with db() as conn:
         u = conn.execute(
