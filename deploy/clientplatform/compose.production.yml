@@ -27,8 +27,6 @@ services:
     restart: unless-stopped
     env_file: ./clientplatform.env
     environment:
-      VISUAL_GATEWAY_UPSTREAM_URL: ${VISUAL_GATEWAY_URL:?set VISUAL_GATEWAY_URL}
-      VISUAL_GATEWAY_UPSTREAM_TOKEN: ${VISUAL_GATEWAY_TOKEN:?set VISUAL_GATEWAY_TOKEN}
       VISUAL_GATEWAY_STATE_DIR: /var/lib/visual-gateway
     read_only: true
     tmpfs:
