@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import sqlite3
+from pathlib import Path
 
 from visual_provider_gateway.store import JobStore
+
+_FIXTURES = Path(__file__).with_name("fixtures")
 
 
 def test_fresh_provider_store_applies_explicit_schema_assets(tmp_path):
@@ -33,29 +36,7 @@ def test_recovered_legacy_provider_database_is_forward_migrated_without_data_los
     path = tmp_path / "legacy.sqlite3"
     with sqlite3.connect(path) as conn:
         conn.executescript(
-            """
-            CREATE TABLE visual_jobs (
-                id TEXT PRIMARY KEY,
-                provider TEXT NOT NULL,
-                kind TEXT NOT NULL,
-                status TEXT NOT NULL,
-                provider_job_id TEXT NOT NULL,
-                model TEXT NOT NULL,
-                mime_type TEXT NOT NULL,
-                asset_path TEXT NOT NULL,
-                error_code TEXT NOT NULL,
-                created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL
-            );
-            INSERT INTO visual_jobs(
-                id, provider, kind, status, provider_job_id, model,
-                mime_type, asset_path, error_code, created_at, updated_at
-            ) VALUES (
-                'legacy-job', 'yandexart', 'image', 'succeeded', 'op-1',
-                'art://folder/yandex-art/latest', 'image/jpeg', '/data/output/a.jpg',
-                '', 1, 2
-            );
-            """
+            (_FIXTURES / "legacy_visual_jobs.sql").read_text(encoding="utf-8")
         )
 
     JobStore(str(path))
