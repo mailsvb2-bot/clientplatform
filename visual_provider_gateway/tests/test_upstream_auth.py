@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+import pytest
+
+pytest.importorskip(
+    "fastapi",
+    reason="provider HTTP contract is exercised in the dedicated Visual Gateway Contract profile",
+)
+
 from fastapi.testclient import TestClient
 
 from visual_provider_gateway.app import app
