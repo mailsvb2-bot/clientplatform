@@ -64,9 +64,10 @@ def _client_tokens() -> dict[str, str]:
 
 def require_auth(authorization: str | None = Header(default=None)) -> GatewayPrincipal:
     clients = _client_tokens()
-    expected = str(os.getenv("VISUAL_GATEWAY_TOKEN", "") or "").strip()
+    upstream_token = str(os.getenv("VISUAL_GATEWAY_UPSTREAM_TOKEN", "") or "").strip()
+    legacy_token = str(os.getenv("VISUAL_GATEWAY_TOKEN", "") or "").strip()
     allow_anonymous = str(os.getenv("VISUAL_GATEWAY_ALLOW_ANONYMOUS", "0") or "0").strip().lower() in {"1", "true", "yes", "on"}
-    if not clients and not expected and allow_anonymous:
+    if not clients and not upstream_token and not legacy_token and allow_anonymous:
         return GatewayPrincipal(client_id="anonymous")
 
     observed = str(authorization or "").strip()
@@ -76,13 +77,18 @@ def require_auth(authorization: str | None = Header(default=None)) -> GatewayPri
     token = observed[len(prefix):]
 
     if clients:
-        for client_id, expected in clients.items():
-            if secrets.compare_digest(token, expected):
+        for client_id, expected_token in clients.items():
+            if secrets.compare_digest(token, expected_token):
                 return GatewayPrincipal(client_id=client_id)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="unauthorized")
 
-    if expected:
-        if secrets.compare_digest(token, expected):
+    if upstream_token:
+        if secrets.compare_digest(token, upstream_token):
+            return GatewayPrincipal(client_id="clientplatform")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="unauthorized")
+
+    if legacy_token:
+        if secrets.compare_digest(token, legacy_token):
             return GatewayPrincipal(client_id="legacy")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="unauthorized")
     raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="gateway_auth_not_configured")
