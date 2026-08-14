@@ -24,6 +24,7 @@ class VisualProviderGatewayProductionContractTests(unittest.TestCase):
         self.assertIn('expose: ["8097"]', provider_section)
         self.assertNotIn("ports:", provider_section)
         self.assertIn('security_opt: ["no-new-privileges:true"]', provider_section)
+        self.assertIn("bool(payload.get('configured_image'))", provider_section)
 
     def test_canonical_deploy_owner_recreates_wrapper_with_healthy_provider_dependency(self) -> None:
         root = Path(__file__).resolve().parents[1]
