@@ -3,6 +3,7 @@ set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Compatibility entrypoint only. ClientPlatform production has exactly one deploy
-# implementation; all locking, backup, readiness and rollback logic lives there.
-exec python3 "$ROOT/scripts/clientplatform_production_deploy.py" "$@"
+# Canonical production entrypoint. Provider-adapter rollout is staged and health-
+# gated before the existing app/gateway deploy core performs backup, readiness and
+# rollback. The legacy standalone provider container is not removed by this step.
+exec python3 "$ROOT/scripts/clientplatform_visual_provider_rollout.py" "$@"
