@@ -67,7 +67,8 @@ def _identity_from_row(row: Any) -> CustomerIdentity:
 
 
 def _route_from_row(row: Any) -> MessengerIngressRoute:
-    revoked_at = _value(row, "revoked_at", 10)
+    confirmation_reference = _value(row, "confirmation_code_reference", 6)
+    revoked_at = _value(row, "revoked_at", 11)
     return MessengerIngressRoute(
         id=str(_value(row, "id", 0)),
         business_id=str(_value(row, "business_id", 1)),
@@ -75,10 +76,13 @@ def _route_from_row(row: Any) -> MessengerIngressRoute:
         platform=ConnectionPlatform(str(_value(row, "platform", 3))),
         external_route_id=str(_value(row, "external_route_id", 4)),
         webhook_secret_reference=str(_value(row, "webhook_secret_reference", 5)),
-        status=str(_value(row, "status", 6)),
-        created_by_member_id=str(_value(row, "created_by_member_id", 7)),
-        created_at=str(_value(row, "created_at", 8)),
-        updated_at=str(_value(row, "updated_at", 9)),
+        confirmation_code_reference=(
+            None if confirmation_reference is None else str(confirmation_reference)
+        ),
+        status=str(_value(row, "status", 7)),
+        created_by_member_id=str(_value(row, "created_by_member_id", 8)),
+        created_at=str(_value(row, "created_at", 9)),
+        updated_at=str(_value(row, "updated_at", 10)),
         revoked_at=None if revoked_at is None else str(revoked_at),
     )
 
@@ -105,6 +109,7 @@ class MessengerChannelRepository:
         connection_id: str,
         external_route_id: str,
         webhook_secret_reference: str,
+        confirmation_code_reference: str | None = None,
         now: datetime | None = None,
     ) -> MessengerIngressRoute:
         current = self._resolve_manager(actor)
@@ -130,12 +135,19 @@ class MessengerChannelRepository:
         expected_route = str(_value(connection, "external_account_id", 1)).strip()
         if expected_route != route_id:
             raise CustomerChannelLinkRejected("provider route does not match the canonical connection")
+        confirmation_ref: str | None = None
+        if platform == ConnectionPlatform.VK:
+            if confirmation_code_reference is None:
+                raise CustomerChannelLinkRejected("VK messenger route requires confirmation code reference")
+            confirmation_ref = normalize_credential_reference(confirmation_code_reference)
+        elif confirmation_code_reference is not None:
+            raise CustomerChannelLinkRejected("MAX messenger route must not define VK confirmation code reference")
         timestamp = _iso(now or _utc_now())
         existing = self._conn.execute(
             """
             SELECT id, business_id, connection_id, platform, external_route_id,
-                   webhook_secret_reference, status, created_by_member_id,
-                   created_at, updated_at, revoked_at
+                   webhook_secret_reference, confirmation_code_reference, status,
+                   created_by_member_id, created_at, updated_at, revoked_at
             FROM messenger_ingress_routes
             WHERE business_id=? AND connection_id=?
             LIMIT 1
@@ -148,6 +160,7 @@ class MessengerChannelRepository:
                 route.platform != platform
                 or route.external_route_id != route_id
                 or route.webhook_secret_reference != secret_ref
+                or route.confirmation_code_reference != confirmation_ref
             ):
                 raise CustomerChannelLinkRejected("existing messenger route has different immutable binding")
             return route
@@ -156,9 +169,9 @@ class MessengerChannelRepository:
             """
             INSERT INTO messenger_ingress_routes(
                 id, business_id, connection_id, platform, external_route_id,
-                webhook_secret_reference, status, created_by_member_id,
-                created_at, updated_at, revoked_at
-            ) VALUES(?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, NULL)
+                webhook_secret_reference, confirmation_code_reference, status,
+                created_by_member_id, created_at, updated_at, revoked_at
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, NULL)
             """,
             (
                 route_uuid,
@@ -167,6 +180,7 @@ class MessengerChannelRepository:
                 platform.value,
                 route_id,
                 secret_ref,
+                confirmation_ref,
                 current.membership_id,
                 timestamp,
                 timestamp,
@@ -185,7 +199,8 @@ class MessengerChannelRepository:
         row = self._conn.execute(
             """
             SELECT r.id, r.business_id, r.connection_id, r.platform,
-                   r.external_route_id, r.webhook_secret_reference, r.status,
+                   r.external_route_id, r.webhook_secret_reference,
+                   r.confirmation_code_reference, r.status,
                    r.created_by_member_id, r.created_at, r.updated_at, r.revoked_at
             FROM messenger_ingress_routes r
             JOIN connections c
