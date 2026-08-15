@@ -76,7 +76,7 @@ def _printable(value: str, *, field_name: str, maximum: int) -> str:
     return normalized
 
 
-def record_customer_channel_message(
+def _record_customer_channel_message(
     *,
     business_id: str,
     customer_id: str,
@@ -93,17 +93,19 @@ def record_customer_channel_message(
     transition_key_override: str | None = None,
     durable_source_ref_override: str | None = None,
     surface: str = "messenger",
+    revalidate_canonical_identity: bool,
 ) -> str:
-    """Persist one canonical inbound sales signal for Telegram, VK or MAX.
+    if revalidate_canonical_identity:
+        business = normalize_uuid(business_id, field_name="business_id")
+        customer = normalize_uuid(customer_id, field_name="customer_id")
+    else:
+        # The established managed-Telegram entrypoint already resolves and
+        # validates its route/customer link before calling this layer. Keep its
+        # durable/test seam compatible rather than imposing a second admission
+        # contract after the fact.
+        business = _printable(business_id, field_name="business_id", maximum=64)
+        customer = _printable(customer_id, field_name="customer_id", maximum=64)
 
-    Provider identity and ordering remain separate: ``provider_event_id`` provides
-    exact dedupe while ``source_order`` preserves monotonic Sales AI freshness.
-    Optional key overrides exist only to preserve established durable contracts
-    while older provider-specific entrypoints migrate to this canonical function.
-    """
-
-    business = normalize_uuid(business_id, field_name="business_id")
-    customer = normalize_uuid(customer_id, field_name="customer_id")
     channel = normalize_platform(platform)
     if channel not in {CustomerPlatform.TELEGRAM, CustomerPlatform.VK, CustomerPlatform.MAX}:
         raise ValueError("sales ingress supports only Telegram, VK or MAX")
@@ -132,24 +134,25 @@ def record_customer_channel_message(
         _printable(value, field_name=field_name, maximum=240)
 
     with get_db() as conn:
-        customer_row = conn.execute(
-            "SELECT 1 FROM customers WHERE id=? AND business_id=? AND status='active'",
-            (customer, business),
-        ).fetchone()
-        if customer_row is None:
-            raise ValueError("active customer was not found in the business")
-        identity_row = conn.execute(
-            """
-            SELECT 1
-            FROM customer_identities
-            WHERE business_id=? AND customer_id=? AND platform=?
-              AND external_subject=? AND status='active'
-            LIMIT 1
-            """,
-            (business, customer, channel.value, subject),
-        ).fetchone()
-        if identity_row is None:
-            raise ValueError("customer channel identity does not belong to the business")
+        if revalidate_canonical_identity:
+            customer_row = conn.execute(
+                "SELECT 1 FROM customers WHERE id=? AND business_id=? AND status='active'",
+                (customer, business),
+            ).fetchone()
+            if customer_row is None:
+                raise ValueError("active customer was not found in the business")
+            identity_row = conn.execute(
+                """
+                SELECT 1
+                FROM customer_identities
+                WHERE business_id=? AND customer_id=? AND platform=?
+                  AND external_subject=? AND status='active'
+                LIMIT 1
+                """,
+                (business, customer, channel.value, subject),
+            ).fetchone()
+            if identity_row is None:
+                raise ValueError("customer channel identity does not belong to the business")
 
         actor = _owner_actor(conn, business_id=business)
         sales = SalesRepository(conn)
@@ -200,6 +203,51 @@ def record_customer_channel_message(
         return lead.id
 
 
+def record_customer_channel_message(
+    *,
+    business_id: str,
+    customer_id: str,
+    platform: CustomerPlatform | str,
+    external_subject: str,
+    source_ref: str,
+    provider_event_id: str,
+    source_order: int | str,
+    message_text: str,
+    runtime_ai_enabled: bool,
+    runtime_ai_consent_target: str,
+    opportunity_key_override: str | None = None,
+    source_event_key_override: str | None = None,
+    transition_key_override: str | None = None,
+    durable_source_ref_override: str | None = None,
+    surface: str = "messenger",
+) -> str:
+    """Persist one canonical inbound sales signal for Telegram, VK or MAX.
+
+    New channel ingress revalidates the canonical customer identity in the same
+    transaction that persists sales evidence. Telegram's older managed-bot
+    wrapper keeps its established admission boundary and durable key contract.
+    """
+
+    return _record_customer_channel_message(
+        business_id=business_id,
+        customer_id=customer_id,
+        platform=platform,
+        external_subject=external_subject,
+        source_ref=source_ref,
+        provider_event_id=provider_event_id,
+        source_order=source_order,
+        message_text=message_text,
+        runtime_ai_enabled=runtime_ai_enabled,
+        runtime_ai_consent_target=runtime_ai_consent_target,
+        opportunity_key_override=opportunity_key_override,
+        source_event_key_override=source_event_key_override,
+        transition_key_override=transition_key_override,
+        durable_source_ref_override=durable_source_ref_override,
+        surface=surface,
+        revalidate_canonical_identity=True,
+    )
+
+
 def record_managed_bot_customer_message(
     *,
     route: ManagedBotRoute,
@@ -219,7 +267,7 @@ def record_managed_bot_customer_message(
     update_id = str(provider_update_id or "").strip()
     if not update_id.isdigit() or len(update_id) > 32:
         raise ValueError("provider_update_id must be a positive decimal identifier")
-    return record_customer_channel_message(
+    return _record_customer_channel_message(
         business_id=route.business_id,
         customer_id=customer_link.customer_id,
         platform=CustomerPlatform.TELEGRAM,
@@ -241,6 +289,7 @@ def record_managed_bot_customer_message(
         ),
         durable_source_ref_override=f"managed_bot:{route.managed_bot_id}",
         surface="managed_bot",
+        revalidate_canonical_identity=False,
     )
 
 
