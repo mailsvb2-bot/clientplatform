@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 TenantDisposition = Literal["erase", "retain", "anonymize"]
-CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-08-13.v26-yandex-managed-campaign"
+CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-08-15.v27-outcome-ledger"
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +42,7 @@ _POLICIES = (
     _required("business_payments", "anonymize", "business financial ledger retained for accounting while customer linkage and free-form personal notes are anonymized"),
     _required("customer_invites", "erase", "expiring customer connection capability and claim routing"),
     _required("booking_slots", "anonymize", "business availability and customer appointment fulfilment"),
+    _required("business_outcome_events", "anonymize", "canonical business outcome ledger retained while customer linkage and free-form metadata are anonymized"),
     _required("promotion_campaigns", "retain", "business-owned advertising copy, source channel and campaign lifecycle without customer identity"),
     _required("promotion_source_aliases", "retain", "business-owned source routing aliases for exact creative and placement attribution without customer identity"),
     _required("promotion_events", "anonymize", "customer-linked campaign and exact-source attribution retained only after customer identity is anonymized"),
