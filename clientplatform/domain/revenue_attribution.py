@@ -28,8 +28,8 @@ class RevenueAttributionRecord:
     outcome_event_id: str
     outcome_type: OutcomeType
     customer_id: str | None
-    touch_id: str
-    attribution_identity_id: str
+    touch_id: str | None
+    attribution_identity_id: str | None
     source: AcquisitionSource
     source_ref_type: str
     source_ref_id: str
@@ -45,14 +45,20 @@ class RevenueAttributionRecord:
             "id",
             "business_id",
             "outcome_event_id",
-            "touch_id",
-            "attribution_identity_id",
             "source_ref_type",
             "source_ref_id",
         ):
             value = str(getattr(self, field_name) or "").strip()
             if not value:
                 raise ValueError(f"{field_name} must not be empty")
+            object.__setattr__(self, field_name, value)
+        for field_name in ("touch_id", "attribution_identity_id"):
+            raw_value = getattr(self, field_name)
+            if raw_value is None:
+                continue
+            value = str(raw_value).strip()
+            if not value:
+                raise ValueError(f"{field_name} must not be blank")
             object.__setattr__(self, field_name, value)
         if not isinstance(self.outcome_type, OutcomeType):
             object.__setattr__(self, "outcome_type", OutcomeType(str(self.outcome_type)))
