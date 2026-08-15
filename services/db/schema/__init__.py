@@ -11,6 +11,7 @@ from . import clientplatform_creative_growth
 from . import clientplatform_ad_spend_operations
 from . import clientplatform_admin_ops
 from . import clientplatform_bookings
+from . import clientplatform_outcomes
 from . import clientplatform_bot_gateway
 from . import clientplatform_bot_provisioning
 from . import clientplatform_connections
@@ -42,6 +43,7 @@ PARTS = [
     clientplatform_customers,
     clientplatform_activity,
     clientplatform_bookings,
+    clientplatform_outcomes,
     clientplatform_promotions,
     clientplatform_partners,
     clientplatform_sales,
