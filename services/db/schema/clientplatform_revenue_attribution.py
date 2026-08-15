@@ -31,13 +31,13 @@ def ensure(c: sqlite3.Connection) -> None:
             FOREIGN KEY(outcome_event_id, business_id)
                 REFERENCES business_outcome_events(id, business_id) ON DELETE CASCADE,
             FOREIGN KEY(customer_id, business_id)
-                REFERENCES customers(id, business_id) ON DELETE SET NULL,
+                REFERENCES customers(id, business_id) ON DELETE RESTRICT,
             FOREIGN KEY(touch_id, business_id)
                 REFERENCES acquisition_touches(id, business_id) ON DELETE RESTRICT,
             FOREIGN KEY(attribution_identity_id, business_id)
                 REFERENCES attribution_identities(id, business_id) ON DELETE RESTRICT,
             FOREIGN KEY(promotion_campaign_id, business_id)
-                REFERENCES promotion_campaigns(id, business_id) ON DELETE SET NULL,
+                REFERENCES promotion_campaigns(id, business_id) ON DELETE RESTRICT,
             CHECK(outcome_type IN ('order_paid', 'refund_recorded', 'outcome_reversal')),
             CHECK(source IN (
                 'organic','referral','telegram','vk','max','website',
