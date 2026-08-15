@@ -15,6 +15,7 @@ def ensure(c: sqlite3.Connection) -> None:
             platform TEXT NOT NULL,
             external_route_id TEXT NOT NULL,
             webhook_secret_reference TEXT NOT NULL,
+            confirmation_code_reference TEXT,
             status TEXT NOT NULL DEFAULT 'active',
             created_by_member_id TEXT NOT NULL,
             created_at TEXT NOT NULL,
@@ -34,6 +35,14 @@ def ensure(c: sqlite3.Connection) -> None:
                 substr(webhook_secret_reference, 1, 9)='secret://'
                 OR substr(webhook_secret_reference, 1, 6)='kms://'
                 OR substr(webhook_secret_reference, 1, 8)='vault://'
+            ),
+            CHECK(
+                (platform='vk' AND confirmation_code_reference IS NOT NULL AND (
+                    substr(confirmation_code_reference, 1, 9)='secret://'
+                    OR substr(confirmation_code_reference, 1, 6)='kms://'
+                    OR substr(confirmation_code_reference, 1, 8)='vault://'
+                ))
+                OR (platform='max' AND confirmation_code_reference IS NULL)
             )
         )
         """
