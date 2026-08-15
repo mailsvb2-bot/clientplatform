@@ -160,7 +160,7 @@ def _materialize_media_sync(reference: str) -> tuple[Path, bool]:
             if size <= 0:
                 raise ValueError("provider media download is empty")
             return path, True
-        except BaseException:
+        except Exception:
             path.unlink(missing_ok=True)
             raise
     if "://" in raw:
