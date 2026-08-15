@@ -13,8 +13,15 @@ from clientplatform.domain.bookings import (
     CustomerBusinessLink,
     normalize_utc_datetime,
 )
+from clientplatform.domain.outcomes import (
+    BusinessOutcomeEvent,
+    OutcomeEventType,
+    OutcomeSource,
+    canonical_metadata_json,
+)
 from clientplatform.domain.tenancy import TenantContext
 from clientplatform.infrastructure.booking_repository import BookingRepository
+from clientplatform.infrastructure.outcome_ledger import OutcomeLedger
 from services.db import get_db, get_db_ro
 
 
@@ -124,8 +131,29 @@ def book_customer_slot(
             telegram_user_id=telegram_user_id,
             business_id=business_id,
         )
-        return BookingRepository(conn).book_slot(
+        claim = BookingRepository(conn).book_slot(
             telegram_user_id=telegram_user_id,
             business_id=business_id,
             slot_id=slot_id,
         )
+        slot = claim.slot.slot
+        OutcomeLedger(conn).append(
+            BusinessOutcomeEvent(
+                business_id=slot.business_id,
+                event_type=OutcomeEventType.BOOKING_CREATED,
+                subject_type="booking_slot",
+                subject_id=slot.id,
+                occurred_at=slot.booked_at or slot.updated_at,
+                idempotency_key=f"booking_created:{slot.id}",
+                source=OutcomeSource.CLIENTPLATFORM,
+                metadata_json=canonical_metadata_json(
+                    {
+                        "duration_minutes": slot.duration_minutes,
+                        "ends_at": slot.ends_at,
+                        "offering_id": slot.offering_id,
+                        "starts_at": slot.starts_at,
+                    }
+                ),
+            )
+        )
+        return claim
