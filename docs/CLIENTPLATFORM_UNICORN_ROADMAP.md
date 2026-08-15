@@ -103,7 +103,7 @@ ClientPlatform строится не как CRM, рекламный кабине
 - Доля предложенных ClientPlatform действий, принятых владельцем.
 - Paid conversion и expansion по тарифам/usage.
 - COGS инфраструктуры, сообщений, AI и внешних провайдеров как доля выручки.
-- Support burden на один активный бизнес.
+- Support burden на один активный business.
 - Критические safety metrics: tenant leak = 0, unauthorized spend = 0, secret exposure = 0.
 
 Нельзя оптимизировать продукт только под клики, количество отправленных сообщений или количество созданных AI-объектов.
@@ -230,7 +230,9 @@ branch coverage:   65.11%
 
 # 7. Immediate execution queue — ближайшие вертикальные slices
 
-## U-001 — `NEXT` — Durable Outcome Ledger
+## U-001 — `DONE` — Durable Outcome Ledger
+
+Evidence: PR #170, merge SHA `85f676db72e57e9281b04dd623291d087c1b4d56`; все PR workflows завершились `success`, включая Canon, CI quality/coverage, static security, PostgreSQL payment/concurrency, booking concurrency, production isolation и pre-deploy gate.
 
 ### Цель
 
@@ -326,7 +328,7 @@ MBMO и все последующие business-result analytics.
 
 ---
 
-## U-002 — `QUEUED` — Acquisition Attribution Spine
+## U-002 — `NEXT` — Acquisition Attribution Spine
 
 ### Цель
 
@@ -1436,8 +1438,8 @@ Duplicate tap, retry, worker restart или uncertain provider response не д�
 | Multitenant / Telegram / production foundations | DONE | baseline до v16.1; фактический current main проверять перед работой |
 | Canonical acquisition navigation | DONE | PR #158–#159, merged before baseline anchor |
 | Yandex managed campaign lifecycle | DONE | PR #160; merge SHA `de0c332e0f4ed3bea408b7da4319cda04da58a69`; all PR and post-merge main gates green |
-| U-001 Durable Outcome Ledger | NEXT | — |
-| U-002 Acquisition Attribution Spine | QUEUED | — |
+| U-001 Durable Outcome Ledger | DONE | PR #170; merge SHA `85f676db72e57e9281b04dd623291d087c1b4d56`; all PR workflows green including Canon, CI quality/coverage, static security, PostgreSQL and booking concurrency, production isolation and pre-deploy |
+| U-002 Acquisition Attribution Spine | NEXT | — |
 | U-003 Revenue Attribution & Unit Economics | QUEUED | — |
 | U-004 Yandex Campaign-level Read Analytics | QUEUED | — |
 | U-005 Managed Yandex Activation Policy | QUEUED | — |
