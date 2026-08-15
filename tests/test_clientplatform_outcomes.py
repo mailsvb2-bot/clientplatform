@@ -392,10 +392,18 @@ class DurableOutcomeLedgerTests(unittest.TestCase):
             def book_slot(inner_self, **_kwargs):
                 return claim
 
+        class NoopAttributionRepository:
+            def __init__(inner_self, _conn):
+                pass
+
+            def link_booking_from_customer(inner_self, **_kwargs):
+                return None
+
         with (
             patch.object(bookings, "get_db", self._transaction),
             patch.object(bookings, "assert_external_customer", lambda *_a, **_k: None),
             patch.object(bookings, "BookingRepository", FakeBookingRepository),
+            patch.object(bookings, "AttributionRepository", NoopAttributionRepository),
         ):
             bookings.book_customer_slot(
                 telegram_user_id=1,
