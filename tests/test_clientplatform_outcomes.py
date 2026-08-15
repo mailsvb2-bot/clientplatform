@@ -13,6 +13,7 @@ from clientplatform.domain.outcomes import (
     BusinessOutcomeEvent,
     OutcomeIdempotencyConflict,
     OutcomeMoney,
+    OutcomeSource,
     OutcomeType,
 )
 from clientplatform.infrastructure.outcome_repository import OutcomeRepository
@@ -51,24 +52,24 @@ class DurableOutcomeLedgerTests(unittest.TestCase):
         money: OutcomeMoney | None = None,
         metadata: dict[str, object] | None = None,
         idempotency_key: str | None = None,
+        subject_ref: str | None = None,
     ) -> BusinessOutcomeEvent:
         business = business_id or self.business_a
         source = source_id or str(uuid4())
         occurred = occurred_at or datetime(2026, 8, 15, 12, 0, tzinfo=timezone.utc)
         return BusinessOutcomeEvent(
-            event_id=str(uuid4()),
+            id=str(uuid4()),
             business_id=business,
-            customer_id=customer_id,
             outcome_type=outcome_type,
-            source_type=source_type,
-            source_id=source,
-            subject_ref=f"{source_type}:{source}",
             occurred_at=occurred,
-            recorded_at=occurred + timedelta(seconds=1),
+            source=OutcomeSource(source_type=source_type, source_id=source),
+            customer_id=customer_id,
+            subject_ref=subject_ref or f"{source_type}:{source}",
             money=money,
+            idempotency_key=idempotency_key or f"{outcome_type.value}:{source}",
             metadata={} if metadata is None else metadata,
             metadata_version=1,
-            idempotency_key=idempotency_key or f"{outcome_type.value}:{source}",
+            created_at=occurred + timedelta(seconds=1),
         )
 
     def test_duplicate_append_returns_original_event_without_duplicate_row(self) -> None:
@@ -76,24 +77,23 @@ class DurableOutcomeLedgerTests(unittest.TestCase):
         first = self._event(customer_id=self.customer_a)
         accepted = repo.append(first)
         replay = BusinessOutcomeEvent(
-            event_id=str(uuid4()),
+            id=str(uuid4()),
             business_id=first.business_id,
-            customer_id=first.customer_id,
             outcome_type=first.outcome_type,
-            source_type=first.source_type,
-            source_id=first.source_id,
-            subject_ref=first.subject_ref,
             occurred_at=first.occurred_at,
-            recorded_at=first.recorded_at + timedelta(minutes=1),
+            source=first.source,
+            customer_id=first.customer_id,
+            subject_ref=first.subject_ref,
             money=first.money,
+            idempotency_key=first.idempotency_key,
             metadata=first.metadata,
             metadata_version=first.metadata_version,
-            idempotency_key=first.idempotency_key,
+            created_at=first.created_at + timedelta(minutes=1),
         )
 
         replayed = repo.append(replay)
 
-        self.assertEqual(accepted.event_id, replayed.event_id)
+        self.assertEqual(accepted.id, replayed.id)
         count = self.conn.execute("SELECT COUNT(*) FROM business_outcome_events").fetchone()[0]
         self.assertEqual(1, count)
 
@@ -136,6 +136,16 @@ class DurableOutcomeLedgerTests(unittest.TestCase):
         self.assertEqual([self.business_a], [item.business_id for item in rows_a])
         self.assertEqual([self.business_b], [item.business_id for item in rows_b])
 
+    def test_write_for_unknown_business_is_rejected(self) -> None:
+        repo = OutcomeRepository(self.conn)
+        with self.assertRaises(sqlite3.IntegrityError):
+            repo.append(
+                self._event(
+                    business_id=str(uuid4()),
+                    customer_id=self.customer_a,
+                )
+            )
+
     def test_filters_are_business_scoped_and_use_half_open_time_range(self) -> None:
         repo = OutcomeRepository(self.conn)
         base = datetime(2026, 8, 15, 10, 0, tzinfo=timezone.utc)
@@ -144,11 +154,11 @@ class DurableOutcomeLedgerTests(unittest.TestCase):
             source_id="slot-a",
             occurred_at=base,
         )
-        payment = self._event(
+        paid = self._event(
             customer_id=self.customer_a,
-            outcome_type=OutcomeType.PAYMENT_RECEIVED,
-            source_type="payment",
-            source_id="payment-a",
+            outcome_type=OutcomeType.ORDER_PAID,
+            source_type="order",
+            source_id="order-a",
             occurred_at=base + timedelta(hours=1),
             money=OutcomeMoney(amount_minor=12500, currency="rub"),
         )
@@ -157,20 +167,61 @@ class DurableOutcomeLedgerTests(unittest.TestCase):
             source_id="slot-b",
             occurred_at=base + timedelta(hours=2),
         )
-        for event in (booking, payment, outside):
+        for event in (booking, paid, outside):
             repo.append(event)
 
         filtered = repo.list_events(
             business_id=self.business_a,
-            outcome_type=OutcomeType.PAYMENT_RECEIVED,
-            source_type="payment",
+            outcome_type=OutcomeType.ORDER_PAID,
+            source_type="order",
             customer_id=self.customer_a,
             occurred_from=base,
             occurred_to=base + timedelta(hours=2),
         )
 
-        self.assertEqual([payment.event_id], [event.event_id for event in filtered])
-        self.assertEqual("RUB", filtered[0].money.currency if filtered[0].money else None)
+        self.assertEqual([paid.id], [event.id for event in filtered])
+        self.assertEqual("RUB", filtered[0].currency)
+        self.assertEqual(12500, filtered[0].amount_minor)
+
+    def test_monetary_outcome_requires_integer_minor_units_and_currency(self) -> None:
+        with self.assertRaises(ValueError):
+            OutcomeMoney(amount_minor=100, currency="")
+        with self.assertRaises(TypeError):
+            OutcomeMoney(amount_minor=True, currency="RUB")
+        with self.assertRaises(ValueError):
+            self._event(outcome_type=OutcomeType.ORDER_PAID, source_id="order-no-money")
+
+    def test_correction_and_reversal_append_new_facts_without_mutating_original(self) -> None:
+        repo = OutcomeRepository(self.conn)
+        original = repo.append(self._event(customer_id=self.customer_a, source_id="slot-original"))
+        correction = repo.append(
+            self._event(
+                customer_id=self.customer_a,
+                outcome_type=OutcomeType.OUTCOME_CORRECTION,
+                source_type="outcome_event",
+                source_id=original.id,
+                subject_ref=f"outcome:{original.id}",
+                metadata={"reason": "canonical correction"},
+            )
+        )
+        reversal = repo.append(
+            self._event(
+                customer_id=self.customer_a,
+                outcome_type=OutcomeType.OUTCOME_REVERSAL,
+                source_type="outcome_event",
+                source_id=original.id,
+                subject_ref=f"outcome:{original.id}",
+                metadata={"reason": "canonical reversal"},
+                idempotency_key=f"outcome_reversal:{original.id}",
+            )
+        )
+
+        rows = repo.list_events(business_id=self.business_a)
+        by_id = {row.id: row for row in rows}
+        self.assertEqual(3, len(rows))
+        self.assertEqual(OutcomeType.BOOKING_CREATED, by_id[original.id].outcome_type)
+        self.assertEqual(OutcomeType.OUTCOME_CORRECTION, by_id[correction.id].outcome_type)
+        self.assertEqual(OutcomeType.OUTCOME_REVERSAL, by_id[reversal.id].outcome_type)
 
     def _claim(self, *, business_id: str, customer_id: str, slot_id: str):
         booked_at = "2026-08-15T12:00:00+00:00"
