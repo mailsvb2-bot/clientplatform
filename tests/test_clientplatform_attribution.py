@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import sqlite3
 import unittest
+from contextlib import nullcontext
 from datetime import datetime, timezone
+from unittest.mock import patch
 
+from clientplatform.application import promotions as promotion_app
 from clientplatform.domain.attribution import (
     AcquisitionSource,
     AttributionInvariantViolation,
@@ -11,6 +14,7 @@ from clientplatform.domain.attribution import (
 from clientplatform.domain.promotions import (
     PromotionChannel,
     PromotionCreative,
+    PromotionNotFound,
     stable_creative_id,
 )
 from clientplatform.infrastructure import TenancyRepository
@@ -255,6 +259,55 @@ class ClientPlatformAttributionRepositoryTests(unittest.TestCase):
         self.assertEqual(booking_trace.touch.id, other_trace.touch.id)
         self.assertEqual(booking_trace.link.booking_slot_id, self.slot.slot.id)
         self.assertNotEqual(booking_trace.touch.id, first.touch.id)
+
+    def test_promoted_booking_writes_customer_and_booking_attribution_end_to_end(self) -> None:
+        customer_id = self._connect_customer(700006)
+        with patch.object(
+            promotion_app,
+            "get_db",
+            side_effect=lambda: nullcontext(self.conn),
+        ):
+            claim, campaign = promotion_app.book_promoted_slot(
+                source_token=self.telegram_campaign.source_token,
+                telegram_user_id=700006,
+            )
+
+        self.assertEqual(claim.customer_id, customer_id)
+        self.assertEqual(campaign.id, self.telegram_campaign.id)
+        customer_trace = self.attribution.get_customer_trace(
+            business_id=self.business.business.id,
+            customer_id=customer_id,
+        )
+        booking_trace = self.attribution.get_booking_trace(
+            business_id=self.business.business.id,
+            booking_slot_id=self.slot.slot.id,
+        )
+        self.assertIsNotNone(customer_trace)
+        self.assertIsNotNone(booking_trace)
+        assert customer_trace is not None and booking_trace is not None
+        self.assertEqual(customer_trace.touch.id, booking_trace.touch.id)
+        self.assertEqual(customer_trace.identity.source, AcquisitionSource.TELEGRAM)
+
+    def test_forged_valid_shape_token_fails_closed_without_attribution(self) -> None:
+        self._connect_customer(700007)
+        with patch.object(
+            promotion_app,
+            "get_db",
+            side_effect=lambda: nullcontext(self.conn),
+        ):
+            with self.assertRaises(PromotionNotFound):
+                promotion_app.book_promoted_slot(
+                    source_token="abcdefghijkl",
+                    telegram_user_id=700007,
+                )
+        self.assertEqual(
+            self.conn.execute("SELECT COUNT(*) FROM acquisition_touches").fetchone()[0],
+            0,
+        )
+        self.assertEqual(
+            self.conn.execute("SELECT COUNT(*) FROM attribution_links").fetchone()[0],
+            0,
+        )
 
     def test_privacy_manifest_covers_attribution_tables(self) -> None:
         report = validate_clientplatform_privacy_manifest(
