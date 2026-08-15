@@ -20,12 +20,13 @@ def list_business_outcomes(
     occurred_to: datetime | None = None,
     limit: int = 100,
 ) -> list[BusinessOutcomeEvent]:
-    """Read outcomes only inside the caller's currently active business context."""
+    """Read raw outcome facts only for an authorized active business member."""
     with get_db_ro() as conn:
         current = TenancyRepository(conn).resolve_context(
             user_id=actor.user_id,
             business_id=actor.business_id,
         )
+        current.assert_can_view_outcome_ledger()
         return OutcomeRepository(conn).list_events(
             business_id=current.business_id,
             outcome_type=outcome_type,
