@@ -36,6 +36,12 @@ def _parse_datetime(value: Any) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
+_OUTCOME_SELECT = """
+    SELECT id, outcome_type, occurred_at, customer_id, subject_ref,
+           amount_minor, currency, source_type, source_id
+    FROM business_outcome_events
+"""
+
 _SELECT = """
     SELECT id, business_id, outcome_event_id, outcome_type, customer_id,
            touch_id, attribution_identity_id, source, source_ref_type,
@@ -98,12 +104,61 @@ _SUPPORTED_MONEY_TYPES = (
 )
 
 
+def _direct_signed_amount(outcome_type: OutcomeType, amount_minor: int) -> int:
+    if outcome_type == OutcomeType.ORDER_PAID:
+        if amount_minor < 0:
+            raise RevenueAttributionInvariantViolation("order_paid amount must not be negative")
+        return amount_minor
+    if outcome_type in {OutcomeType.REFUND_RECORDED, OutcomeType.OUTCOME_REVERSAL}:
+        return -abs(amount_minor)
+    raise RevenueAttributionInvariantViolation("outcome is not a supported monetary fact")
+
+
 class RevenueAttributionRepository:
     """Deterministic first-touch attribution for canonical monetary outcomes."""
 
     def __init__(self, conn: Any):
         self._conn = conn
         self._attribution = AttributionRepository(conn)
+
+    def _resolve_money(
+        self,
+        *,
+        business_id: str,
+        row: Any,
+    ) -> tuple[int, str] | None:
+        outcome_type = OutcomeType(str(_value(row, "outcome_type", 1)))
+        if outcome_type.value not in _SUPPORTED_MONEY_TYPES:
+            return None
+        amount = _value(row, "amount_minor", 5)
+        currency = _value(row, "currency", 6)
+        if (amount is None) != (currency is None):
+            raise RevenueAttributionInvariantViolation("monetary outcome has incomplete money")
+        if amount is not None and currency is not None:
+            return _direct_signed_amount(outcome_type, int(amount)), str(currency)
+        if outcome_type != OutcomeType.OUTCOME_REVERSAL:
+            return None
+        source_type = str(_value(row, "source_type", 7) or "").strip()
+        source_id = str(_value(row, "source_id", 8) or "").strip()
+        if source_type != "outcome_event" or not source_id:
+            return None
+        referenced = self._conn.execute(
+            _OUTCOME_SELECT + " WHERE business_id=? AND id=? LIMIT 1",
+            (str(business_id), source_id),
+        ).fetchone()
+        if referenced is None:
+            return None
+        referenced_type = OutcomeType(str(_value(referenced, "outcome_type", 1)))
+        referenced_amount = _value(referenced, "amount_minor", 5)
+        referenced_currency = _value(referenced, "currency", 6)
+        if (
+            referenced_type.value not in _SUPPORTED_MONEY_TYPES
+            or referenced_amount is None
+            or referenced_currency is None
+        ):
+            return None
+        referenced_signed = _direct_signed_amount(referenced_type, int(referenced_amount))
+        return -referenced_signed, str(referenced_currency)
 
     def get_for_outcome(
         self,
@@ -128,29 +183,19 @@ class RevenueAttributionRepository:
         """Persist the canonical first-touch decision for one monetary outcome, if attributable."""
 
         row = self._conn.execute(
-            """
-            SELECT id, outcome_type, occurred_at, customer_id, subject_ref,
-                   amount_minor, currency
-            FROM business_outcome_events
-            WHERE business_id=? AND id=?
-            LIMIT 1
-            """,
+            _OUTCOME_SELECT + " WHERE business_id=? AND id=? LIMIT 1",
             (str(business_id), str(outcome_event_id)),
         ).fetchone()
         if row is None:
             raise RevenueAttributionInvariantViolation("monetary outcome does not belong to this business")
         outcome_type = OutcomeType(str(_value(row, "outcome_type", 1)))
-        outcome_occurred_at = _parse_datetime(_value(row, "occurred_at", 2))
-        amount = _value(row, "amount_minor", 5)
-        currency = _value(row, "currency", 6)
-        if outcome_type.value not in _SUPPORTED_MONEY_TYPES or amount is None or currency is None:
+        if outcome_type.value not in _SUPPORTED_MONEY_TYPES:
             raise RevenueAttributionInvariantViolation("outcome is not a supported monetary fact")
-        raw_amount = int(amount)
-        if outcome_type == OutcomeType.ORDER_PAID and raw_amount < 0:
-            raise RevenueAttributionInvariantViolation("order_paid amount must not be negative")
-        signed_amount = raw_amount
-        if outcome_type in {OutcomeType.REFUND_RECORDED, OutcomeType.OUTCOME_REVERSAL}:
-            signed_amount = -abs(raw_amount)
+        resolved_money = self._resolve_money(business_id=str(business_id), row=row)
+        if resolved_money is None:
+            return None
+        signed_amount, currency = resolved_money
+        outcome_occurred_at = _parse_datetime(_value(row, "occurred_at", 2))
 
         customer_value = _value(row, "customer_id", 3)
         customer_id = None if customer_value is None else str(customer_value)
@@ -199,7 +244,7 @@ class RevenueAttributionRepository:
             promotion_campaign_id=trace.identity.promotion_campaign_id,
             model_version=RevenueAttributionModel.FIRST_TOUCH_V1,
             amount_minor=signed_amount,
-            currency=str(currency),
+            currency=currency,
             occurred_at=outcome_occurred_at,
             created_at=stamp,
         )
@@ -258,7 +303,6 @@ class RevenueAttributionRepository:
             FROM business_outcome_events
             WHERE business_id=? AND occurred_at>=? AND occurred_at<?
               AND outcome_type IN ('order_paid','refund_recorded','outcome_reversal')
-              AND amount_minor IS NOT NULL AND currency IS NOT NULL
             ORDER BY occurred_at, id
             """,
             (
@@ -293,31 +337,26 @@ class RevenueAttributionRepository:
             occurred_to=occurred_to,
         )
         event_rows = self._conn.execute(
-            """
-            SELECT outcome_type, customer_id, amount_minor, currency
-            FROM business_outcome_events
-            WHERE business_id=? AND occurred_at>=? AND occurred_at<?
-            """,
+            _OUTCOME_SELECT + " WHERE business_id=? AND occurred_at>=? AND occurred_at<?",
             (
                 str(business_id),
                 _serialize_datetime(occurred_from),
                 _serialize_datetime(occurred_to),
             ),
         ).fetchall()
-        event_types = Counter(str(_value(row, "outcome_type", 0)) for row in event_rows)
+        event_types = Counter(str(_value(row, "outcome_type", 1)) for row in event_rows)
         paid_customers = {
-            record.customer_id
-            for record in records
-            if record.outcome_type == OutcomeType.ORDER_PAID
-            and record.amount_minor > 0
-            and record.customer_id is not None
+            str(_value(row, "customer_id", 3))
+            for row in event_rows
+            if str(_value(row, "outcome_type", 1)) == OutcomeType.ORDER_PAID.value
+            and _value(row, "amount_minor", 5) is not None
+            and int(_value(row, "amount_minor", 5)) > 0
+            and _value(row, "customer_id", 3) is not None
         }
         monetary_outcomes = sum(
             1
             for row in event_rows
-            if str(_value(row, "outcome_type", 0)) in _SUPPORTED_MONEY_TYPES
-            and _value(row, "amount_minor", 2) is not None
-            and _value(row, "currency", 3) is not None
+            if self._resolve_money(business_id=str(business_id), row=row) is not None
         )
         revenue_totals: dict[str, int] = defaultdict(int)
         source_counts: Counter[AcquisitionSource] = Counter()
