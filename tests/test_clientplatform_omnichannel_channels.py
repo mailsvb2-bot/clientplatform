@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import socket
 import sqlite3
 import unittest
 from datetime import datetime, timezone
+from unittest.mock import patch
 from uuid import uuid4
 
 from clientplatform.domain.connections import (
@@ -21,6 +23,8 @@ from clientplatform.domain.messenger_channels import (
 from clientplatform.domain.programs import ContentKind
 from clientplatform.domain.tenancy import PlatformRole, TenantContext
 from clientplatform.infrastructure.messenger_channel_repository import MessengerChannelRepository
+from clientplatform.runtime.messenger_channel_ingress import _source_order
+from clientplatform.runtime.messenger_provider_clients import _validate_public_media_url
 from clientplatform.transport.native_messenger import MaxDispatchAdapter, VkDispatchAdapter
 from services.db.schema import (
     clientplatform_connections,
@@ -313,6 +317,7 @@ class OmnichannelIdentityTests(unittest.TestCase):
             connection_id=self.vk_connection,
             external_route_id="vk-group-42",
             webhook_secret_reference="secret://env/VK_WEBHOOK_SECRET_A",
+            confirmation_code_reference="secret://env/VK_CONFIRMATION_CODE_A",
         )
         resolved = self.repo.resolve_route(
             route_id=route.id,
@@ -320,6 +325,10 @@ class OmnichannelIdentityTests(unittest.TestCase):
         )
         self.assertEqual(self.business_a, resolved.business_id)
         self.assertEqual(self.vk_connection, resolved.connection_id)
+        self.assertEqual(
+            "secret://env/VK_CONFIRMATION_CODE_A",
+            resolved.confirmation_code_reference,
+        )
         with self.assertRaises(CustomerChannelLinkRejected):
             self.repo.register_route(
                 actor=self._actor(self.business_a, self.member_a, 101),
@@ -327,6 +336,69 @@ class OmnichannelIdentityTests(unittest.TestCase):
                 external_route_id="wrong-max-bot",
                 webhook_secret_reference="secret://env/MAX_WEBHOOK_SECRET_A",
             )
+
+    def test_vk_route_requires_confirmation_reference_and_max_rejects_one(self) -> None:
+        with self.assertRaises(CustomerChannelLinkRejected):
+            self.repo.register_route(
+                actor=self._actor(self.business_a, self.member_a, 101),
+                connection_id=self.vk_connection,
+                external_route_id="vk-group-42",
+                webhook_secret_reference="secret://env/VK_WEBHOOK_SECRET_A",
+            )
+        with self.assertRaises(CustomerChannelLinkRejected):
+            self.repo.register_route(
+                actor=self._actor(self.business_a, self.member_a, 101),
+                connection_id=self.max_connection,
+                external_route_id="max-bot-77",
+                webhook_secret_reference="secret://env/MAX_WEBHOOK_SECRET_A",
+                confirmation_code_reference="secret://env/SHOULD_NOT_EXIST",
+            )
+
+
+class OmnichannelIngressSafetyTests(unittest.TestCase):
+    def test_vk_source_order_uses_monotonic_conversation_sequence(self) -> None:
+        older = {
+            "object": {
+                "message": {
+                    "date": 1_786_838_400,
+                    "conversation_message_id": 41,
+                    "id": 1001,
+                }
+            }
+        }
+        newer = {
+            "object": {
+                "message": {
+                    "date": 1_786_838_400,
+                    "conversation_message_id": 42,
+                    "id": 1002,
+                }
+            }
+        }
+        self.assertLess(
+            _source_order(older, ConnectionPlatform.VK, "route:event-old"),
+            _source_order(newer, ConnectionPlatform.VK, "route:event-new"),
+        )
+
+    def test_provider_media_rejects_private_literal_and_private_dns(self) -> None:
+        with self.assertRaises(ValueError):
+            _validate_public_media_url("https://127.0.0.1/private")
+
+        private_resolution = [
+            (
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                socket.IPPROTO_TCP,
+                "",
+                ("10.0.0.8", 443),
+            )
+        ]
+        with patch(
+            "clientplatform.runtime.messenger_provider_clients.socket.getaddrinfo",
+            return_value=private_resolution,
+        ):
+            with self.assertRaises(ValueError):
+                _validate_public_media_url("https://media.example/file")
 
 
 class _FakeNativeClient:
