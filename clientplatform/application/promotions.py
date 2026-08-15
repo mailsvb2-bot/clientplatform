@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from clientplatform.application.customer_role_guard import assert_external_customer
+from clientplatform.application.bookings import book_customer_slot_in_transaction
 from clientplatform.application.owner_booking_journey import (
     connect_public_storefront_customer,
 )
@@ -221,19 +221,15 @@ def book_promoted_slot(
     source_token: str,
     telegram_user_id: int,
 ) -> tuple[BookingClaim, PromotionCampaign]:
-    """Book canonically and persist exact source attribution in one transaction."""
+    """Book, emit the outcome and persist attribution in one transaction."""
 
     token = normalize_source_token(source_token)
     with get_db() as conn:
         promotions = PromotionRepository(conn)
         resolution = promotions.resolve_public_source(source_token=token)
         campaign = resolution.campaign
-        assert_external_customer(
+        claim = book_customer_slot_in_transaction(
             conn,
-            telegram_user_id=telegram_user_id,
-            business_id=campaign.business_id,
-        )
-        claim = BookingRepository(conn).book_slot(
             telegram_user_id=telegram_user_id,
             business_id=campaign.business_id,
             slot_id=campaign.booking_slot_id,
