@@ -17,6 +17,7 @@ from clientplatform.domain.bookings import (
 )
 from clientplatform.domain.outcomes import BusinessOutcomeEvent, OutcomeSource, OutcomeType
 from clientplatform.domain.tenancy import TenantContext
+from clientplatform.infrastructure.attribution_repository import AttributionRepository
 from clientplatform.infrastructure.booking_repository import BookingRepository
 from clientplatform.infrastructure.outcome_repository import OutcomeRepository
 from services.db import get_db, get_db_ro
@@ -159,6 +160,15 @@ def book_customer_slot_in_transaction(
             metadata_version=1,
             created_at=datetime.now(timezone.utc),
         )
+    )
+    # Any canonical booking path must inherit an already-established customer
+    # acquisition first touch. If the customer has no attribution yet, this is
+    # a no-op. The promoted-booking path intentionally repeats this link after
+    # capturing its verified token so direct cpa_* booking remains atomic too.
+    AttributionRepository(conn).link_booking_from_customer(
+        business_id=claim.slot.slot.business_id,
+        customer_id=claim.customer_id,
+        booking_slot_id=claim.slot.slot.id,
     )
     return claim
 
