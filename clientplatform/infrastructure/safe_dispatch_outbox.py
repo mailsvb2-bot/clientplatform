@@ -5,6 +5,7 @@ from typing import Any
 
 from clientplatform.domain.connections import (
     ClaimedDispatch,
+    ConnectionPlatform,
     Dispatch,
     DispatchLeaseLost,
     DispatchStatus,
@@ -15,8 +16,48 @@ from clientplatform.infrastructure.dispatch_outbox import (
 )
 
 
+_MAX_PROVIDER_BOUNDARY_MARKER = "max_provider_call_started_non_idempotent"
+_MAX_AMBIGUOUS_ERROR = "max_delivery_outcome_ambiguous_manual_reconciliation_required"
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc).replace(microsecond=0)
+
+
+def _row_value(row: Any, key: str, index: int) -> Any:
+    if hasattr(row, "keys"):
+        return row[key]
+    return row[index]
+
+
+def mark_non_replay_safe_dispatch_boundary(conn: Any, item: ClaimedDispatch) -> None:
+    """Durably mark a MAX dispatch immediately before crossing the provider boundary.
+
+    MAX does not expose a documented provider idempotency key for message creation.
+    Once this marker is persisted, a crash cannot turn the stale lease into an
+    automatic replay. The next claimant quarantines it as ambiguous instead.
+    """
+
+    if item.dispatch.platform != ConnectionPlatform.MAX:
+        return
+    timestamp = _utc_now().isoformat()
+    cursor = conn.execute(
+        """
+        UPDATE delivery_dispatch_outbox
+        SET last_error=?, updated_at=?
+        WHERE id=? AND business_id=? AND platform='max'
+          AND status='sending' AND lock_token=?
+        """,
+        (
+            _MAX_PROVIDER_BOUNDARY_MARKER,
+            timestamp,
+            item.dispatch.id,
+            item.dispatch.business_id,
+            item.dispatch.lock_token,
+        ),
+    )
+    if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+        raise DispatchLeaseLost("MAX dispatch lease was lost before provider boundary")
 
 
 class DispatchOutboxRepository(_BaseDispatchOutboxRepository):
@@ -72,6 +113,108 @@ class DispatchOutboxRepository(_BaseDispatchOutboxRepository):
                 dispatch_id=dispatch.id,
             )
         return dispatch
+
+    def _quarantine_stale_max_boundaries(
+        self,
+        *,
+        lock_ttl_seconds: int,
+        now: datetime | None = None,
+    ) -> int:
+        current = (now or _utc_now()).replace(microsecond=0)
+        current_iso = current.isoformat()
+        stale_before = (
+            current - timedelta(seconds=max(1, int(lock_ttl_seconds)))
+        ).isoformat()
+        rows = self._conn.execute(
+            """
+            SELECT id,business_id,logical_delivery_id,connection_id,attempts
+            FROM delivery_dispatch_outbox
+            WHERE platform='max' AND status='sending'
+              AND locked_at IS NOT NULL AND locked_at<=?
+              AND last_error=?
+            ORDER BY locked_at,id
+            """,
+            (stale_before, _MAX_PROVIDER_BOUNDARY_MARKER),
+        ).fetchall()
+        quarantined = 0
+        for row in rows:
+            dispatch_id = str(_row_value(row, "id", 0))
+            business_id = str(_row_value(row, "business_id", 1))
+            logical_delivery_id = str(_row_value(row, "logical_delivery_id", 2))
+            connection_id = str(_row_value(row, "connection_id", 3))
+            attempts = int(_row_value(row, "attempts", 4) or 0) + 1
+            cursor = self._conn.execute(
+                """
+                UPDATE delivery_dispatch_outbox
+                SET status='dead', attempts=?, updated_at=?, dead_at=?,
+                    locked_at=NULL, lock_token=NULL, last_error=?
+                WHERE id=? AND business_id=? AND platform='max'
+                  AND status='sending' AND locked_at<=? AND last_error=?
+                """,
+                (
+                    attempts,
+                    current_iso,
+                    current_iso,
+                    _MAX_AMBIGUOUS_ERROR,
+                    dispatch_id,
+                    business_id,
+                    stale_before,
+                    _MAX_PROVIDER_BOUNDARY_MARKER,
+                ),
+            )
+            if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+                continue
+            quarantined += 1
+            self._conn.execute(
+                """
+                UPDATE lesson_deliveries
+                SET status='failed', attempts=?, failed_at=?, last_error=?,
+                    updated_at=?
+                WHERE id=? AND business_id=? AND status IN ('pending','failed')
+                """,
+                (
+                    attempts,
+                    current_iso,
+                    _MAX_AMBIGUOUS_ERROR,
+                    current_iso,
+                    logical_delivery_id,
+                    business_id,
+                ),
+            )
+            self._conn.execute(
+                """
+                UPDATE connections
+                SET status='attention', last_error_at=?, last_error_code=?,
+                    updated_at=?
+                WHERE id=? AND business_id=? AND status='active'
+                """,
+                (
+                    current_iso,
+                    _MAX_AMBIGUOUS_ERROR[:240],
+                    current_iso,
+                    connection_id,
+                    business_id,
+                ),
+            )
+        return quarantined
+
+    def claim_due(
+        self,
+        *,
+        limit: int = 10,
+        lock_ttl_seconds: int = 900,
+        now: datetime | None = None,
+    ) -> list[ClaimedDispatch]:
+        self._quarantine_stale_max_boundaries(
+            lock_ttl_seconds=lock_ttl_seconds,
+            now=now,
+        )
+        return _BaseDispatchOutboxRepository.claim_due(
+            self,
+            limit=limit,
+            lock_ttl_seconds=lock_ttl_seconds,
+            now=now,
+        )
 
     def reschedule(
         self,
@@ -162,3 +305,6 @@ class DispatchOutboxRepository(_BaseDispatchOutboxRepository):
             business_id=item.dispatch.business_id,
             dispatch_id=item.dispatch.id,
         )
+
+
+__all__ = ["DispatchOutboxRepository", "mark_non_replay_safe_dispatch_boundary"]
