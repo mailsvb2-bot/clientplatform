@@ -2,11 +2,7 @@ from __future__ import annotations
 
 from clientplatform.domain.connections import ConnectionPlatform
 from clientplatform.domain.customers import CustomerIdentity, CustomerPlatform
-from clientplatform.domain.messenger_channels import (
-    CustomerIngressContext,
-    IssuedCustomerLink,
-    MessengerIngressRoute,
-)
+from clientplatform.domain.messenger_channels import IssuedCustomerLink, MessengerIngressRoute
 from clientplatform.domain.tenancy import TenantContext
 from clientplatform.infrastructure.messenger_channel_repository import MessengerChannelRepository
 from services.db import get_db, get_db_ro
@@ -43,15 +39,21 @@ def resolve_messenger_ingress_route(
 
 def ensure_channel_customer(
     *,
-    context: CustomerIngressContext,
+    route: MessengerIngressRoute,
     external_subject: str,
     username: str | None = None,
     display_name: str | None = None,
 ) -> CustomerIdentity:
-    """Resolve/create the canonical customer behind a provider-authenticated ingress."""
+    """Resolve/create a customer only behind a previously resolved server route."""
     with get_db() as conn:
+        current_route = MessengerChannelRepository(conn).resolve_route(
+            route_id=route.id,
+            expected_platform=route.platform,
+        )
+        if current_route != route:
+            raise ValueError("messenger route changed before customer admission")
         return MessengerChannelRepository(conn).ensure_customer_identity(
-            context=context,
+            context=current_route.customer_context,
             external_subject=external_subject,
             username=username,
             display_name=display_name,
@@ -76,16 +78,22 @@ def issue_customer_channel_link(
 
 def consume_customer_channel_link(
     *,
-    context: CustomerIngressContext,
+    route: MessengerIngressRoute,
     token: str,
     external_subject: str,
     username: str | None = None,
     display_name: str | None = None,
 ) -> CustomerIdentity:
-    """Atomically consume one token and bind this channel to the same customer."""
+    """Atomically bind a channel after revalidating the active server-owned route."""
     with get_db() as conn:
+        current_route = MessengerChannelRepository(conn).resolve_route(
+            route_id=route.id,
+            expected_platform=route.platform,
+        )
+        if current_route != route:
+            raise ValueError("messenger route changed before customer link consume")
         return MessengerChannelRepository(conn).consume_customer_link(
-            context=context,
+            context=current_route.customer_context,
             token=token,
             external_subject=external_subject,
             username=username,
