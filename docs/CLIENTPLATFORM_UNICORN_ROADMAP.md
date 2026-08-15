@@ -103,7 +103,7 @@ ClientPlatform строится не как CRM, рекламный кабине
 - Доля предложенных ClientPlatform действий, принятых владельцем.
 - Paid conversion и expansion по тарифам/usage.
 - COGS инфраструктуры, сообщений, AI и внешних провайдеров как доля выручки.
-- Support burden на один активный business.
+- Support burden на один активный бизнес.
 - Критические safety metrics: tenant leak = 0, unauthorized spend = 0, secret exposure = 0.
 
 Нельзя оптимизировать продукт только под клики, количество отправленных сообщений или количество созданных AI-объектов.
