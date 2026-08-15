@@ -9,6 +9,11 @@ from clientplatform.transport.media import (
     MediaReferenceResolver,
     SafeMediaReferenceResolver,
 )
+from clientplatform.transport.native_messenger import (
+    MaxDispatchAdapter,
+    NativeMessengerClient,
+    VkDispatchAdapter,
+)
 from clientplatform.transport.telegram import TelegramBotClient, TelegramDispatchAdapter
 from clientplatform.transport.telegram_http import (
     AiohttpTelegramBotClient,
@@ -21,10 +26,13 @@ __all__ = [
     "CredentialProvider",
     "DispatchAdapter",
     "HmacMediaGatewayResolver",
+    "MaxDispatchAdapter",
     "MediaReferenceError",
     "MediaReferenceResolver",
+    "NativeMessengerClient",
     "SafeMediaReferenceResolver",
     "TelegramBotApiError",
     "TelegramBotClient",
     "TelegramDispatchAdapter",
+    "VkDispatchAdapter",
 ]
