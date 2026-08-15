@@ -2,19 +2,33 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import os
+import ipaddress
+import socket
 import tempfile
+import urllib.error
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
-from urllib.request import Request, urlopen
+from urllib.parse import urljoin, urlsplit
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from clientplatform.domain.programs import ContentKind
 from runtime.messenger_max_sender import MaxBotSender
 from runtime.messenger_vk_sender import VkBotSender
+from services.messenger.provider_transport import (
+    ProviderUploadURLRejected,
+    validate_provider_upload_url,
+)
 
 
 _MAX_MEDIA_BYTES = 20_000_000
+_MAX_MEDIA_REDIRECTS = 5
+_REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
+
+
+class _NoRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001, ANN201
+        del req, fp, code, msg, headers, newurl
+        return None
 
 
 def _provider_message_id(value: Any) -> str:
@@ -52,16 +66,74 @@ def _safe_suffix(reference: str) -> str:
     return suffix
 
 
+def _validate_public_media_url(url: str) -> str:
+    try:
+        parsed = validate_provider_upload_url(url)
+    except ProviderUploadURLRejected as exc:
+        raise ValueError(f"provider media URL rejected: {exc.code}") from exc
+    host = str(parsed.hostname or "").strip()
+    if not host:
+        raise ValueError("provider media URL host is required")
+    try:
+        addresses = {
+            item[4][0]
+            for item in socket.getaddrinfo(
+                host,
+                parsed.port or 443,
+                type=socket.SOCK_STREAM,
+            )
+        }
+    except OSError as exc:
+        raise ValueError("provider media DNS resolution failed") from exc
+    if not addresses:
+        raise ValueError("provider media DNS resolution returned no addresses")
+    for address in addresses:
+        try:
+            if not ipaddress.ip_address(address).is_global:
+                raise ValueError("provider media URL resolves to a non-public address")
+        except ValueError as exc:
+            if "non-public" in str(exc):
+                raise
+            raise ValueError("provider media URL resolved to an invalid address") from exc
+    return str(url).strip()
+
+
+def _open_public_media_url(raw_url: str):  # noqa: ANN201
+    current = str(raw_url or "").strip()
+    opener = build_opener(_NoRedirectHandler())
+    for redirect_count in range(_MAX_MEDIA_REDIRECTS + 1):
+        _validate_public_media_url(current)
+        request = Request(
+            current,
+            headers={"User-Agent": "ClientPlatform/1.0", "Accept": "*/*"},
+            method="GET",
+        )
+        try:
+            response = opener.open(request, timeout=30.0)
+        except urllib.error.HTTPError as exc:
+            if int(exc.code) not in _REDIRECT_STATUSES:
+                raise
+            location = str(exc.headers.get("Location") or "").strip()
+            exc.close()
+            if not location:
+                raise ValueError("provider media redirect has no Location") from None
+            if redirect_count >= _MAX_MEDIA_REDIRECTS:
+                raise ValueError("provider media redirect limit exceeded") from None
+            current = urljoin(current, location)
+            continue
+        observed = str(response.geturl() or "").strip()
+        if observed != current:
+            response.close()
+            raise ValueError("provider media transport followed an unvalidated redirect")
+        return response
+    raise ValueError("provider media redirect limit exceeded")
+
+
 def _materialize_media_sync(reference: str) -> tuple[Path, bool]:
     raw = str(reference or "").strip()
     if not raw:
         raise ValueError("media reference must not be empty")
     if raw.startswith("https://"):
-        request = Request(
-            raw,
-            headers={"User-Agent": "ClientPlatform/1.0", "Accept": "*/*"},
-            method="GET",
-        )
         tmp = tempfile.NamedTemporaryFile(
             prefix="clientplatform-provider-media-",
             suffix=_safe_suffix(raw),
@@ -71,13 +143,15 @@ def _materialize_media_sync(reference: str) -> tuple[Path, bool]:
         size = 0
         try:
             with tmp:
-                with urlopen(request, timeout=30.0) as response:  # nosec B310 - HTTPS checked below
-                    final_url = str(response.geturl() or "")
-                    if not final_url.startswith("https://"):
-                        raise ValueError("media redirect must remain HTTPS")
+                with _open_public_media_url(raw) as response:
                     declared = response.headers.get("Content-Length")
-                    if declared is not None and int(declared) > _MAX_MEDIA_BYTES:
-                        raise ValueError("provider media exceeds size limit")
+                    if declared is not None:
+                        try:
+                            declared_size = int(declared)
+                        except (TypeError, ValueError) as exc:
+                            raise ValueError("provider media Content-Length is invalid") from exc
+                        if declared_size > _MAX_MEDIA_BYTES:
+                            raise ValueError("provider media exceeds size limit")
                     while True:
                         chunk = response.read(64 * 1024)
                         if not chunk:
