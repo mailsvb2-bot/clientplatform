@@ -12,8 +12,6 @@ from urllib.parse import urljoin, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from clientplatform.domain.programs import ContentKind
-from runtime.messenger_max_sender import MaxBotSender
-from runtime.messenger_vk_sender import VkBotSender
 from services.messenger.provider_transport import (
     ProviderUploadURLRejected,
     validate_provider_upload_url,
@@ -89,12 +87,11 @@ def _validate_public_media_url(url: str) -> str:
         raise ValueError("provider media DNS resolution returned no addresses")
     for address in addresses:
         try:
-            if not ipaddress.ip_address(address).is_global:
-                raise ValueError("provider media URL resolves to a non-public address")
+            parsed_address = ipaddress.ip_address(address)
         except ValueError as exc:
-            if "non-public" in str(exc):
-                raise
             raise ValueError("provider media URL resolved to an invalid address") from exc
+        if not parsed_address.is_global:
+            raise ValueError("provider media URL resolves to a non-public address")
     return str(url).strip()
 
 
@@ -180,8 +177,23 @@ async def _materialize_media(reference: str) -> tuple[Path, bool]:
     return await asyncio.to_thread(_materialize_media_sync, reference)
 
 
+def _vk_sender(token: str):  # noqa: ANN202
+    # Retained provider transport is imported only at the actual provider
+    # boundary. Importing canonical ClientPlatform runtime must never pull
+    # Metrotherapy presentation dependencies into dependency-light domains.
+    from runtime.messenger_vk_sender import VkBotSender
+
+    return VkBotSender(token=token)
+
+
+def _max_sender(token: str):  # noqa: ANN202
+    from runtime.messenger_max_sender import MaxBotSender
+
+    return MaxBotSender(token=token)
+
+
 class VkRuntimeClient:
-    """Canonical VK client backed by the already hardened provider sender."""
+    """Canonical VK client backed by the retained low-level provider transport."""
 
     async def send_text(
         self,
@@ -191,7 +203,7 @@ class VkRuntimeClient:
         text: str,
         idempotency_key: str,
     ) -> str:
-        result = await VkBotSender(token=token).send_text(
+        result = await _vk_sender(token).send_text(
             external_subject,
             text,
             random_id=_vk_random_id(idempotency_key),
@@ -211,7 +223,7 @@ class VkRuntimeClient:
         idempotency_key: str,
     ) -> str:
         path, temporary = await _materialize_media(media)
-        sender = VkBotSender(token=token)
+        sender = _vk_sender(token)
         kwargs = {"random_id": _vk_random_id(idempotency_key)}
         try:
             if kind == ContentKind.IMAGE:
@@ -232,7 +244,7 @@ class VkRuntimeClient:
 
 
 class MaxRuntimeClient:
-    """Canonical MAX client backed by the official HTTPS-only provider sender."""
+    """Canonical MAX client backed by the official HTTPS-only provider transport."""
 
     async def send_text(
         self,
@@ -243,7 +255,11 @@ class MaxRuntimeClient:
         idempotency_key: str,
     ) -> str:
         del idempotency_key
-        result = await MaxBotSender(token=token).send_text(external_subject, text)
+        result = await _max_sender(token).send_text(
+            external_subject,
+            text,
+            legacy_ui=False,
+        )
         message_id = _provider_message_id(result)
         if not message_id:
             raise ValueError("MAX provider response has no message id")
@@ -260,7 +276,7 @@ class MaxRuntimeClient:
     ) -> str:
         del idempotency_key
         path, temporary = await _materialize_media(media)
-        sender = MaxBotSender(token=token)
+        sender = _max_sender(token)
         try:
             if kind == ContentKind.IMAGE:
                 result = await sender.send_image_file(external_subject, path)
