@@ -14,8 +14,8 @@ def ensure(c: sqlite3.Connection) -> None:
             outcome_event_id TEXT NOT NULL,
             outcome_type TEXT NOT NULL,
             customer_id TEXT,
-            touch_id TEXT NOT NULL,
-            attribution_identity_id TEXT NOT NULL,
+            touch_id TEXT,
+            attribution_identity_id TEXT,
             source TEXT NOT NULL,
             source_ref_type TEXT NOT NULL,
             source_ref_id TEXT NOT NULL,
@@ -30,14 +30,10 @@ def ensure(c: sqlite3.Connection) -> None:
             FOREIGN KEY(business_id) REFERENCES businesses(id) ON DELETE CASCADE,
             FOREIGN KEY(business_id, outcome_event_id)
                 REFERENCES business_outcome_events(business_id, id) ON DELETE CASCADE,
-            FOREIGN KEY(customer_id, business_id)
-                REFERENCES customers(id, business_id) ON DELETE RESTRICT,
-            FOREIGN KEY(touch_id, business_id)
-                REFERENCES acquisition_touches(id, business_id) ON DELETE RESTRICT,
-            FOREIGN KEY(attribution_identity_id, business_id)
-                REFERENCES attribution_identities(id, business_id) ON DELETE RESTRICT,
-            FOREIGN KEY(promotion_campaign_id, business_id)
-                REFERENCES promotion_campaigns(id, business_id) ON DELETE RESTRICT,
+            FOREIGN KEY(customer_id) REFERENCES customers(id) ON DELETE SET NULL,
+            FOREIGN KEY(touch_id) REFERENCES acquisition_touches(id) ON DELETE SET NULL,
+            FOREIGN KEY(attribution_identity_id) REFERENCES attribution_identities(id) ON DELETE SET NULL,
+            FOREIGN KEY(promotion_campaign_id) REFERENCES promotion_campaigns(id) ON DELETE SET NULL,
             CHECK(outcome_type IN ('order_paid', 'refund_recorded', 'outcome_reversal')),
             CHECK(source IN (
                 'organic','referral','telegram','vk','max','website',
