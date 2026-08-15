@@ -14,6 +14,7 @@ def register_messenger_ingress_route(
     connection_id: str,
     external_route_id: str,
     webhook_secret_reference: str,
+    confirmation_code_reference: str | None = None,
 ) -> MessengerIngressRoute:
     with get_db() as conn:
         return MessengerChannelRepository(conn).register_route(
@@ -21,6 +22,7 @@ def register_messenger_ingress_route(
             connection_id=connection_id,
             external_route_id=external_route_id,
             webhook_secret_reference=webhook_secret_reference,
+            confirmation_code_reference=confirmation_code_reference,
         )
 
 
