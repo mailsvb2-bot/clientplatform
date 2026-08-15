@@ -189,7 +189,7 @@ class DurableOutcomeLedgerTests(unittest.TestCase):
         self.conn.execute("BEGIN")
         try:
             yield self.conn
-        except Exception:
+        except RuntimeError:
             self.conn.rollback()
             raise
         else:
