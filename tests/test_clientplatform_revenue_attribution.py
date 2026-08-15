@@ -334,6 +334,84 @@ class ClientPlatformRevenueAttributionTests(unittest.TestCase):
         self.assertEqual(snapshot.monetary_outcomes, 2)
         self.assertEqual(snapshot.attributed_monetary_outcomes, 2)
 
+    def test_future_touch_is_never_used_for_earlier_money(self) -> None:
+        paid = self._append(
+            OutcomeType.ORDER_PAID,
+            event_id="paid-before-touch",
+            money=OutcomeMoney(amount_minor=1_500, currency="RUB"),
+            occurred_at=_NOW - timedelta(seconds=1),
+            subject_ref="order:before-touch",
+        )
+        self.assertIsNone(
+            self.revenue.materialize_outcome(
+                business_id=self.business_id,
+                outcome_event_id=paid.id,
+            )
+        )
+        self.assertIsNone(
+            self.revenue.get_for_outcome(
+                business_id=self.business_id,
+                outcome_event_id=paid.id,
+            )
+        )
+
+    def test_amountless_reversal_is_not_counted_as_money(self) -> None:
+        self._append(
+            OutcomeType.OUTCOME_REVERSAL,
+            event_id="amountless-reversal",
+            money=None,
+            occurred_at=_NOW + timedelta(minutes=4),
+        )
+        snapshot = self.revenue.snapshot(
+            business_id=self.business_id,
+            occurred_from=_NOW,
+            occurred_to=_NOW + timedelta(hours=1),
+        )
+        self.assertEqual(snapshot.monetary_outcomes, 0)
+        self.assertEqual(snapshot.attributed_monetary_outcomes, 0)
+        self.assertEqual(snapshot.unattributed_monetary_outcomes, 0)
+        self.assertTrue(snapshot.attribution_complete)
+        self.assertNotIn("attribution_incomplete", snapshot.limitations)
+
+    def test_negative_verified_spend_is_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            self.revenue.snapshot(
+                business_id=self.business_id,
+                occurred_from=_NOW,
+                occurred_to=_NOW + timedelta(hours=1),
+                verified_spend=OutcomeMoney(amount_minor=-1, currency="RUB"),
+            )
+
+    def test_financial_evidence_survives_source_privacy_detach(self) -> None:
+        paid = self._append(
+            OutcomeType.ORDER_PAID,
+            event_id="privacy-paid",
+            money=OutcomeMoney(amount_minor=5_000, currency="RUB"),
+            occurred_at=_NOW + timedelta(minutes=4),
+        )
+        record = self.revenue.materialize_outcome(
+            business_id=self.business_id,
+            outcome_event_id=paid.id,
+        )
+        self.assertIsNotNone(record)
+
+        self.conn.execute(
+            "DELETE FROM promotion_campaigns WHERE id=? AND business_id=?",
+            (self.campaign.id, self.business_id),
+        )
+        retained = self.revenue.get_for_outcome(
+            business_id=self.business_id,
+            outcome_event_id=paid.id,
+        )
+        self.assertIsNotNone(retained)
+        assert retained is not None
+        self.assertIsNone(retained.touch_id)
+        self.assertIsNone(retained.attribution_identity_id)
+        self.assertIsNone(retained.promotion_campaign_id)
+        self.assertEqual(retained.amount_minor, 5_000)
+        self.assertEqual(retained.currency, "RUB")
+        self.assertEqual(retained.source_ref_id, record.source_ref_id if record is not None else "")
+
 
 if __name__ == "__main__":
     unittest.main()
