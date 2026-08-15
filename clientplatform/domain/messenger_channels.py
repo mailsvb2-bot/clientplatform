@@ -14,7 +14,7 @@ from clientplatform.domain.tenancy import normalize_uuid
 
 
 class MessengerChannelError(RuntimeError):
-    """Base error for canonical non-Telegram channel ingress/linking."""
+    """Base error for canonical messenger ingress/linking."""
 
 
 class MessengerRouteNotFound(MessengerChannelError):
@@ -31,6 +31,10 @@ class CustomerChannelIdentityConflict(CustomerChannelLinkRejected):
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_-]{24,160}")
 _DIGEST_RE = re.compile(r"[0-9a-f]{64}")
+_LINK_COMMAND_RE = re.compile(
+    r"^(?:(?:/start|start)\s+)?cplink_(?P<token>[A-Za-z0-9_-]{24,160})$",
+    re.IGNORECASE,
+)
 
 
 def normalize_customer_link_token(value: str) -> str:
@@ -38,6 +42,14 @@ def normalize_customer_link_token(value: str) -> str:
     if not _TOKEN_RE.fullmatch(token):
         raise CustomerChannelLinkRejected("customer link token is invalid")
     return token
+
+
+def extract_customer_link_token(text: str | None) -> str | None:
+    normalized = " ".join(str(text or "").strip().split())
+    match = _LINK_COMMAND_RE.fullmatch(normalized)
+    if match is None:
+        return None
+    return normalize_customer_link_token(match.group("token"))
 
 
 def normalize_token_digest(value: str) -> str:
