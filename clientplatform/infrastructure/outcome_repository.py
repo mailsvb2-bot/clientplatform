@@ -8,6 +8,7 @@ from clientplatform.domain.outcomes import (
     BusinessOutcomeEvent,
     OutcomeIdempotencyConflict,
     OutcomeMoney,
+    OutcomeSource,
     OutcomeType,
 )
 
@@ -42,57 +43,58 @@ def _metadata_json(metadata: Any) -> str:
 
 
 _EVENT_SELECT = """
-    SELECT event_id, business_id, customer_id, outcome_type,
-           source_type, source_id, subject_ref, occurred_at, recorded_at,
-           amount_minor, currency, metadata_json, metadata_version,
-           idempotency_key
+    SELECT id, business_id, outcome_type, occurred_at,
+           source_type, source_id, customer_id, subject_ref,
+           amount_minor, currency, idempotency_key, metadata_json,
+           metadata_version, created_at
     FROM business_outcome_events
 """
 
 
 def _event_from_row(row: Any) -> BusinessOutcomeEvent:
-    amount_minor = _value(row, "amount_minor", 9)
-    currency = _value(row, "currency", 10)
+    amount_minor = _value(row, "amount_minor", 8)
+    currency = _value(row, "currency", 9)
     money = None
     if amount_minor is not None:
         money = OutcomeMoney(amount_minor=int(amount_minor), currency=str(currency))
     metadata = json.loads(str(_value(row, "metadata_json", 11)))
     if not isinstance(metadata, dict):
         raise ValueError("outcome metadata must decode to a JSON object")
-    customer_id = _value(row, "customer_id", 2)
-    subject_ref = _value(row, "subject_ref", 6)
+    customer_id = _value(row, "customer_id", 6)
+    subject_ref = _value(row, "subject_ref", 7)
     return BusinessOutcomeEvent(
-        event_id=str(_value(row, "event_id", 0)),
+        id=str(_value(row, "id", 0)),
         business_id=str(_value(row, "business_id", 1)),
+        outcome_type=OutcomeType(str(_value(row, "outcome_type", 2))),
+        occurred_at=_parse_datetime(_value(row, "occurred_at", 3)),
+        source=OutcomeSource(
+            source_type=str(_value(row, "source_type", 4)),
+            source_id=str(_value(row, "source_id", 5)),
+        ),
         customer_id=None if customer_id is None else str(customer_id),
-        outcome_type=OutcomeType(str(_value(row, "outcome_type", 3))),
-        source_type=str(_value(row, "source_type", 4)),
-        source_id=str(_value(row, "source_id", 5)),
         subject_ref=None if subject_ref is None else str(subject_ref),
-        occurred_at=_parse_datetime(_value(row, "occurred_at", 7)),
-        recorded_at=_parse_datetime(_value(row, "recorded_at", 8)),
         money=money,
+        idempotency_key=str(_value(row, "idempotency_key", 10)),
         metadata=metadata,
         metadata_version=int(_value(row, "metadata_version", 12)),
-        idempotency_key=str(_value(row, "idempotency_key", 13)),
+        created_at=_parse_datetime(_value(row, "created_at", 13)),
     )
 
 
 def _semantic_identity(event: BusinessOutcomeEvent) -> tuple[Any, ...]:
-    money = event.money
     return (
         event.business_id,
-        event.customer_id,
         event.outcome_type.value,
+        _serialize_datetime(event.occurred_at),
         event.source_type,
         event.source_id,
+        event.customer_id,
         event.subject_ref,
-        _serialize_datetime(event.occurred_at),
-        None if money is None else money.amount_minor,
-        None if money is None else money.currency,
+        event.amount_minor,
+        event.currency,
+        event.idempotency_key,
         _metadata_json(event.metadata),
         event.metadata_version,
-        event.idempotency_key,
     )
 
 
@@ -103,31 +105,30 @@ class OutcomeRepository:
         self._conn = conn
 
     def append(self, event: BusinessOutcomeEvent) -> BusinessOutcomeEvent:
-        money = event.money
         self._conn.execute(
             """
             INSERT OR IGNORE INTO business_outcome_events(
-                event_id, business_id, customer_id, outcome_type,
-                source_type, source_id, subject_ref, occurred_at, recorded_at,
-                amount_minor, currency, metadata_json, metadata_version,
-                idempotency_key
+                id, business_id, outcome_type, occurred_at,
+                source_type, source_id, customer_id, subject_ref,
+                amount_minor, currency, idempotency_key, metadata_json,
+                metadata_version, created_at
             ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                event.event_id,
+                event.id,
                 event.business_id,
-                event.customer_id,
                 event.outcome_type.value,
+                _serialize_datetime(event.occurred_at),
                 event.source_type,
                 event.source_id,
+                event.customer_id,
                 event.subject_ref,
-                _serialize_datetime(event.occurred_at),
-                _serialize_datetime(event.recorded_at),
-                None if money is None else money.amount_minor,
-                None if money is None else money.currency,
+                event.amount_minor,
+                event.currency,
+                event.idempotency_key,
                 _metadata_json(event.metadata),
                 event.metadata_version,
-                event.idempotency_key,
+                _serialize_datetime(event.created_at),
             ),
         )
         accepted = self.get_by_idempotency_key(
@@ -198,7 +199,7 @@ class OutcomeRepository:
             _EVENT_SELECT
             + " WHERE "
             + " AND ".join(where)
-            + " ORDER BY occurred_at DESC, recorded_at DESC, event_id DESC LIMIT ?",
+            + " ORDER BY occurred_at DESC, created_at DESC, id DESC LIMIT ?",
             tuple(params),
         ).fetchall()
         return [_event_from_row(row) for row in rows]
