@@ -39,6 +39,7 @@ def ensure(c: sqlite3.Connection) -> None:
             PRIMARY KEY(business_id, id),
             UNIQUE(business_id, idempotency_key),
             FOREIGN KEY(business_id) REFERENCES businesses(id),
+            FOREIGN KEY(customer_id, business_id) REFERENCES customers(id, business_id),
             CHECK(outcome_type IN ({_OUTCOME_TYPES_SQL})),
             CHECK(length(trim(source_type)) > 0),
             CHECK(length(trim(source_id)) > 0),
