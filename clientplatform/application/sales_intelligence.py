@@ -88,13 +88,18 @@ def record_customer_channel_message(
     message_text: str,
     runtime_ai_enabled: bool,
     runtime_ai_consent_target: str,
+    opportunity_key_override: str | None = None,
+    source_event_key_override: str | None = None,
+    transition_key_override: str | None = None,
+    durable_source_ref_override: str | None = None,
+    surface: str = "messenger",
 ) -> str:
     """Persist one canonical inbound sales signal for Telegram, VK or MAX.
 
     Provider identity and ordering remain separate: ``provider_event_id`` provides
     exact dedupe while ``source_order`` preserves monotonic Sales AI freshness.
-    No provider-specific account becomes business truth; the durable customer_id
-    is always the canonical identity anchor.
+    Optional key overrides exist only to preserve established durable contracts
+    while older provider-specific entrypoints migrate to this canonical function.
     """
 
     business = normalize_uuid(business_id, field_name="business_id")
@@ -112,12 +117,19 @@ def record_customer_channel_message(
     if not isinstance(runtime_ai_enabled, bool):
         raise ValueError("runtime_ai_enabled must be a boolean")
     consent_target = str(runtime_ai_consent_target or "").strip()
+    surface_name = _printable(surface, field_name="surface", maximum=80)
 
-    opportunity_key = f"channel:{channel.value}:{source}:{subject}"
-    source_event_key = f"customer-message:{channel.value}:{source}:{event_id}"
-    transition_key = f"inbound:{channel.value}:{source}:{event_id}"
-    if len(opportunity_key) > 240 or len(source_event_key) > 240 or len(transition_key) > 240:
-        raise ValueError("channel identity is too long for durable sales dedupe keys")
+    opportunity_key = opportunity_key_override or f"channel:{channel.value}:{source}:{subject}"
+    source_event_key = source_event_key_override or f"customer-message:{channel.value}:{source}:{event_id}"
+    transition_key = transition_key_override or f"inbound:{channel.value}:{source}:{event_id}"
+    durable_source_ref = durable_source_ref_override or f"{channel.value}:{source}"
+    for field_name, value in (
+        ("opportunity_key", opportunity_key),
+        ("source_event_key", source_event_key),
+        ("transition_key", transition_key),
+        ("durable_source_ref", durable_source_ref),
+    ):
+        _printable(value, field_name=field_name, maximum=240)
 
     with get_db() as conn:
         customer_row = conn.execute(
@@ -147,7 +159,7 @@ def record_customer_channel_message(
             customer_id=customer,
             source_kind=channel.value,
             contact_basis=ContactBasis.INBOUND,
-            source_ref=f"{channel.value}:{source}",
+            source_ref=durable_source_ref,
         )
 
         ai_allowed = runtime_ai_enabled and business_sales_ai_enabled_in_conn(
@@ -164,7 +176,7 @@ def record_customer_channel_message(
                 payload={
                     "text": text,
                     "channel": channel.value,
-                    "surface": "messenger",
+                    "surface": surface_name,
                 },
             )
             if inserted:
@@ -181,7 +193,7 @@ def record_customer_channel_message(
             lead_id=lead.id,
             event=SalesConversationEvent.INBOUND_RECEIVED,
             dedupe_key=transition_key,
-            metadata={"channel": channel.value, "surface": "messenger"},
+            metadata={"channel": channel.value, "surface": surface_name},
             model_confidence=1.0,
             unanswered_inbound=True,
         )
@@ -198,7 +210,7 @@ def record_managed_bot_customer_message(
     runtime_ai_enabled: bool,
     runtime_ai_consent_target: str,
 ) -> str:
-    """Backward-compatible Telegram wrapper over canonical channel evidence."""
+    """Backward-compatible Telegram wrapper preserving all existing durable keys."""
 
     if route.business_id != customer_link.business_id:
         raise ValueError("managed bot route and customer link belong to different businesses")
@@ -218,6 +230,17 @@ def record_managed_bot_customer_message(
         message_text=message_text,
         runtime_ai_enabled=runtime_ai_enabled,
         runtime_ai_consent_target=runtime_ai_consent_target,
+        opportunity_key_override=(
+            f"managed-bot:{route.managed_bot_id}:telegram:{telegram_user_id}"
+        ),
+        source_event_key_override=(
+            f"managed-bot-message:{route.managed_bot_id}:{update_id}"
+        ),
+        transition_key_override=(
+            f"managed-bot-inbound:{route.managed_bot_id}:{update_id}"
+        ),
+        durable_source_ref_override=f"managed_bot:{route.managed_bot_id}",
+        surface="managed_bot",
     )
 
 
