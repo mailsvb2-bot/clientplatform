@@ -3,7 +3,6 @@ from __future__ import annotations
 import sqlite3
 import unittest
 from datetime import datetime, timedelta, timezone
-from uuid import uuid4
 
 from clientplatform.domain.outcomes import (
     BusinessOutcomeEvent,
@@ -164,6 +163,8 @@ class ClientPlatformRevenueAttributionTests(unittest.TestCase):
         occurred_at: datetime,
         customer_id: str | None = None,
         subject_ref: str | None = None,
+        source_type: str = "test",
+        source_id: str | None = None,
     ) -> BusinessOutcomeEvent:
         return self.outcomes.append(
             BusinessOutcomeEvent(
@@ -171,7 +172,10 @@ class ClientPlatformRevenueAttributionTests(unittest.TestCase):
                 business_id=self.business_id,
                 outcome_type=outcome_type,
                 occurred_at=occurred_at,
-                source=OutcomeSource(source_type="test", source_id=event_id),
+                source=OutcomeSource(
+                    source_type=source_type,
+                    source_id=event_id if source_id is None else source_id,
+                ),
                 customer_id=self.customer_id if customer_id is None else customer_id,
                 subject_ref=(
                     f"booking_slot:{self.slot.slot.id}"
@@ -298,6 +302,26 @@ class ClientPlatformRevenueAttributionTests(unittest.TestCase):
         self.assertIn("attribution_incomplete", snapshot.limitations)
         self.assertIn("spend_unavailable", snapshot.limitations)
 
+    def test_paid_customers_and_cac_do_not_depend_on_attribution_success(self) -> None:
+        other_customer_id = self._connect_customer(77003)
+        self._append(
+            OutcomeType.ORDER_PAID,
+            event_id="unattributed-cac-paid",
+            money=OutcomeMoney(amount_minor=6_000, currency="RUB"),
+            occurred_at=_NOW + timedelta(minutes=4),
+            customer_id=other_customer_id,
+            subject_ref="order:unattributed-cac",
+        )
+        snapshot = self.revenue.snapshot(
+            business_id=self.business_id,
+            occurred_from=_NOW,
+            occurred_to=_NOW + timedelta(hours=1),
+            verified_spend=OutcomeMoney(amount_minor=2_500, currency="RUB"),
+        )
+        self.assertEqual(snapshot.paid_customers, 1)
+        self.assertEqual(snapshot.cac_minor, 2_500)
+        self.assertFalse(snapshot.attribution_complete)
+
     def test_cross_tenant_outcome_lookup_fails_closed(self) -> None:
         paid = self._append(
             OutcomeType.ORDER_PAID,
@@ -334,6 +358,32 @@ class ClientPlatformRevenueAttributionTests(unittest.TestCase):
         self.assertEqual(snapshot.monetary_outcomes, 2)
         self.assertEqual(snapshot.attributed_monetary_outcomes, 2)
 
+    def test_amountless_canonical_reversal_resolves_referenced_money(self) -> None:
+        paid = self._append(
+            OutcomeType.ORDER_PAID,
+            event_id="paid-for-canonical-reversal",
+            money=OutcomeMoney(amount_minor=7_000, currency="RUB"),
+            occurred_at=_NOW + timedelta(minutes=4),
+        )
+        self._append(
+            OutcomeType.OUTCOME_REVERSAL,
+            event_id="canonical-reversal",
+            money=None,
+            occurred_at=_NOW + timedelta(minutes=5),
+            source_type="outcome_event",
+            source_id=paid.id,
+            subject_ref=f"outcome:{paid.id}",
+        )
+        snapshot = self.revenue.snapshot(
+            business_id=self.business_id,
+            occurred_from=_NOW,
+            occurred_to=_NOW + timedelta(hours=1),
+        )
+        self.assertEqual(snapshot.attributed_revenue.amount_minor, 0)
+        self.assertEqual(snapshot.monetary_outcomes, 2)
+        self.assertEqual(snapshot.attributed_monetary_outcomes, 2)
+        self.assertTrue(snapshot.attribution_complete)
+
     def test_future_touch_is_never_used_for_earlier_money(self) -> None:
         paid = self._append(
             OutcomeType.ORDER_PAID,
@@ -355,7 +405,7 @@ class ClientPlatformRevenueAttributionTests(unittest.TestCase):
             )
         )
 
-    def test_amountless_reversal_is_not_counted_as_money(self) -> None:
+    def test_genuinely_non_monetary_amountless_reversal_is_not_counted(self) -> None:
         self._append(
             OutcomeType.OUTCOME_REVERSAL,
             event_id="amountless-reversal",
@@ -394,6 +444,7 @@ class ClientPlatformRevenueAttributionTests(unittest.TestCase):
             outcome_event_id=paid.id,
         )
         self.assertIsNotNone(record)
+        assert record is not None
 
         self.conn.execute(
             "DELETE FROM promotion_campaigns WHERE id=? AND business_id=?",
@@ -410,7 +461,7 @@ class ClientPlatformRevenueAttributionTests(unittest.TestCase):
         self.assertIsNone(retained.promotion_campaign_id)
         self.assertEqual(retained.amount_minor, 5_000)
         self.assertEqual(retained.currency, "RUB")
-        self.assertEqual(retained.source_ref_id, record.source_ref_id if record is not None else "")
+        self.assertEqual(retained.source_ref_id, record.source_ref_id)
 
 
 if __name__ == "__main__":
