@@ -9,6 +9,7 @@ from uuid import uuid4
 from clientplatform.domain.connections import ConnectionPlatform
 from clientplatform.domain.messenger_channels import MessengerIngressRoute
 from clientplatform.runtime.messenger_provider_clients import MaxRuntimeClient
+from runtime.messenger_max_sender import MAX_API2_BASE_URL, MaxBotSender
 
 _AIOHTTP_AVAILABLE = importlib.util.find_spec("aiohttp") is not None
 
@@ -106,6 +107,66 @@ class OmnichannelRuntimeTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("max-message-1", message_id)
         self.assertEqual("1", sender.text)
         self.assertIs(sender.legacy_ui, False)
+
+    async def test_raw_max_sender_preserves_plain_text_without_legacy_ui(self) -> None:
+        sender = MaxBotSender(
+            token="provider-token",
+            api_base_url=MAX_API2_BASE_URL,
+        )
+        with patch(
+            "runtime.messenger_max_sender.json_request",
+            return_value={"message": {"message_id": "max-raw-1"}},
+        ) as request:
+            result = await sender.send_text(
+                "max-user-1",
+                "1",
+                legacy_ui=False,
+            )
+
+        self.assertEqual({"message_id": "max-raw-1"}, result)
+        call = request.call_args
+        self.assertIsNotNone(call)
+        self.assertEqual({"text": "1"}, call.kwargs["payload"])
+        self.assertIn("user_id=max-user-1", call.args[0])
+
+    async def test_raw_max_sender_passes_provider_options_without_legacy_ui(self) -> None:
+        sender = MaxBotSender(
+            token="provider-token",
+            api_base_url=MAX_API2_BASE_URL,
+        )
+        attachments = [
+            {
+                "type": "inline_keyboard",
+                "payload": {"buttons": []},
+            }
+        ]
+        with patch(
+            "runtime.messenger_max_sender.json_request",
+            return_value={"message": {"message_id": "max-raw-2"}},
+        ) as request:
+            result = await sender.send_text(
+                "max-user-2",
+                "Текст без подмены",
+                legacy_ui=False,
+                attachments=attachments,
+                disable_link_preview=True,
+                format="markdown",
+                notify=False,
+            )
+
+        self.assertEqual({"message_id": "max-raw-2"}, result)
+        call = request.call_args
+        self.assertIsNotNone(call)
+        self.assertIn("disable_link_preview=true", call.args[0])
+        self.assertEqual(
+            {
+                "text": "Текст без подмены",
+                "attachments": attachments,
+                "format": "markdown",
+                "notify": False,
+            },
+            call.kwargs["payload"],
+        )
 
 
 if __name__ == "__main__":
