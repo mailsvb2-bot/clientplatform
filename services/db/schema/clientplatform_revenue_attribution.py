@@ -28,8 +28,8 @@ def ensure(c: sqlite3.Connection) -> None:
             UNIQUE(id, business_id),
             UNIQUE(business_id, outcome_event_id, model_version),
             FOREIGN KEY(business_id) REFERENCES businesses(id) ON DELETE CASCADE,
-            FOREIGN KEY(outcome_event_id, business_id)
-                REFERENCES business_outcome_events(id, business_id) ON DELETE CASCADE,
+            FOREIGN KEY(business_id, outcome_event_id)
+                REFERENCES business_outcome_events(business_id, id) ON DELETE CASCADE,
             FOREIGN KEY(customer_id, business_id)
                 REFERENCES customers(id, business_id) ON DELETE RESTRICT,
             FOREIGN KEY(touch_id, business_id)
