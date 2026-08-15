@@ -21,9 +21,9 @@ from clientplatform.domain.messenger_channels import (
     CustomerIngressContext,
 )
 from clientplatform.domain.programs import ContentKind
+from clientplatform.domain.sales_ai_jobs import messenger_source_order
 from clientplatform.domain.tenancy import PlatformRole, TenantContext
 from clientplatform.infrastructure.messenger_channel_repository import MessengerChannelRepository
-from clientplatform.runtime.messenger_channel_ingress import _source_order
 from clientplatform.runtime.messenger_provider_clients import _validate_public_media_url
 from clientplatform.transport.native_messenger import MaxDispatchAdapter, VkDispatchAdapter
 from services.db.schema import (
@@ -376,9 +376,16 @@ class OmnichannelIngressSafetyTests(unittest.TestCase):
             }
         }
         self.assertLess(
-            _source_order(older, ConnectionPlatform.VK, "route:event-old"),
-            _source_order(newer, ConnectionPlatform.VK, "route:event-new"),
+            messenger_source_order(older, ConnectionPlatform.VK),
+            messenger_source_order(newer, ConnectionPlatform.VK),
         )
+
+    def test_source_order_rejects_missing_provider_sequence(self) -> None:
+        with self.assertRaises(ValueError):
+            messenger_source_order(
+                {"object": {"message": {"date": 1_786_838_400}}},
+                ConnectionPlatform.VK,
+            )
 
     def test_provider_media_rejects_private_literal_and_private_dns(self) -> None:
         with self.assertRaises(ValueError):
