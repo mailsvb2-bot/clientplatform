@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any
 from uuid import uuid4
 
 from clientplatform.application.customer_role_guard import (
@@ -115,6 +116,53 @@ def get_customer_booking(
     return claim
 
 
+def book_customer_slot_in_transaction(
+    conn: Any,
+    *,
+    telegram_user_id: int,
+    business_id: str,
+    slot_id: str,
+) -> BookingClaim:
+    """Canonical booking mutation for callers that already own the transaction."""
+
+    assert_external_customer(
+        conn,
+        telegram_user_id=telegram_user_id,
+        business_id=business_id,
+    )
+    claim = BookingRepository(conn).book_slot(
+        telegram_user_id=telegram_user_id,
+        business_id=business_id,
+        slot_id=slot_id,
+    )
+    booked_at = claim.slot.slot.booked_at
+    if booked_at is None:
+        raise RuntimeError("booked slot is missing booked_at")
+    occurred_at = datetime.fromisoformat(
+        normalize_utc_datetime(booked_at, field_name="booked_at")
+    )
+    OutcomeRepository(conn).append(
+        BusinessOutcomeEvent(
+            id=str(uuid4()),
+            business_id=claim.slot.slot.business_id,
+            outcome_type=OutcomeType.BOOKING_CREATED,
+            occurred_at=occurred_at,
+            source=OutcomeSource(
+                source_type="booking_slot",
+                source_id=claim.slot.slot.id,
+            ),
+            customer_id=claim.customer_id,
+            subject_ref=f"booking_slot:{claim.slot.slot.id}",
+            money=None,
+            idempotency_key=f"booking_created:{claim.slot.slot.id}",
+            metadata={},
+            metadata_version=1,
+            created_at=datetime.now(timezone.utc),
+        )
+    )
+    return claim
+
+
 def book_customer_slot(
     *,
     telegram_user_id: int,
@@ -122,40 +170,11 @@ def book_customer_slot(
     slot_id: str,
 ) -> BookingClaim:
     """Book a slot and append its canonical outcome in the same transaction."""
+
     with get_db() as conn:
-        assert_external_customer(
+        return book_customer_slot_in_transaction(
             conn,
-            telegram_user_id=telegram_user_id,
-            business_id=business_id,
-        )
-        claim = BookingRepository(conn).book_slot(
             telegram_user_id=telegram_user_id,
             business_id=business_id,
             slot_id=slot_id,
         )
-        booked_at = claim.slot.slot.booked_at
-        if booked_at is None:
-            raise RuntimeError("booked slot is missing booked_at")
-        occurred_at = datetime.fromisoformat(
-            normalize_utc_datetime(booked_at, field_name="booked_at")
-        )
-        OutcomeRepository(conn).append(
-            BusinessOutcomeEvent(
-                id=str(uuid4()),
-                business_id=claim.slot.slot.business_id,
-                outcome_type=OutcomeType.BOOKING_CREATED,
-                occurred_at=occurred_at,
-                source=OutcomeSource(
-                    source_type="booking_slot",
-                    source_id=claim.slot.slot.id,
-                ),
-                customer_id=claim.customer_id,
-                subject_ref=f"booking_slot:{claim.slot.slot.id}",
-                money=None,
-                idempotency_key=f"booking_created:{claim.slot.slot.id}",
-                metadata={},
-                metadata_version=1,
-                created_at=datetime.now(timezone.utc),
-            )
-        )
-        return claim
