@@ -11,9 +11,12 @@ from clientplatform.domain.bot_gateway import (
     IngressEvent,
     ManagedBotRoute,
 )
+from clientplatform.domain.customers import CustomerPlatform
+from clientplatform.domain.messenger_channels import CustomerIngressContext
 from clientplatform.infrastructure.managed_bot_polling_repository import (
     ManagedBotPollingRepository,
 )
+from clientplatform.infrastructure.messenger_channel_repository import MessengerChannelRepository
 from clientplatform.infrastructure.safe_bot_gateway_repository import BotGatewayRepository
 from services.db import get_db, get_db_ro
 
@@ -39,12 +42,7 @@ def admit_telegram_update(
     queue_limit: int,
     max_payload_bytes: int,
 ) -> AdmittedIngressEvent:
-    """Admit only while the polled route is still active.
-
-    Disable/revoke may race with a long-running getUpdates request. Re-resolving
-    inside the write transaction prevents a stale poller from inserting new work
-    after the local route has been closed.
-    """
+    """Admit only while the polled route is still active."""
 
     with get_db() as conn:
         repository = BotGatewayRepository(conn)
@@ -111,6 +109,56 @@ def ensure_telegram_customer_link(
             username=username,
             display_name=display_name,
             now=now,
+        )
+
+
+def consume_telegram_customer_channel_link(
+    *,
+    route: ManagedBotRoute,
+    token: str,
+    telegram_user_id: int,
+    username: str | None,
+    display_name: str | None,
+    now: datetime | None = None,
+) -> CustomerBusinessLink:
+    """Atomically bind this Telegram identity to an existing canonical customer.
+
+    The managed route is re-resolved inside the same transaction before the link
+    token is consumed, so disable/revoke cannot race a stale polling work item.
+    """
+
+    with get_db() as conn:
+        bot_repository = BotGatewayRepository(conn)
+        current = bot_repository.resolve_telegram_route(
+            external_bot_id=route.external_bot_id
+        )
+        if current.managed_bot_id != route.managed_bot_id or current.business_id != route.business_id:
+            raise BotGatewayAdmissionRejected(
+                "managed Telegram route changed before customer link consume"
+            )
+        identity = MessengerChannelRepository(conn).consume_customer_link(
+            context=CustomerIngressContext(
+                business_id=current.business_id,
+                connection_id=current.connection_id,
+                platform=CustomerPlatform.TELEGRAM,
+            ),
+            token=token,
+            external_subject=str(telegram_user_id),
+            username=username,
+            display_name=display_name,
+            now=now,
+        )
+        business = conn.execute(
+            "SELECT name FROM businesses WHERE id=? AND status='active' LIMIT 1",
+            (current.business_id,),
+        ).fetchone()
+        if business is None:
+            raise BotGatewayAdmissionRejected("managed Telegram business is not active")
+        business_name = str(business["name"] if hasattr(business, "keys") else business[0])
+        return CustomerBusinessLink(
+            business_id=current.business_id,
+            business_name=business_name,
+            customer_id=identity.customer_id,
         )
 
 
