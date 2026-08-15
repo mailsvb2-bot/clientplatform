@@ -97,6 +97,7 @@ class MessengerIngressRoute:
     created_by_member_id: str
     created_at: str
     updated_at: str
+    confirmation_code_reference: str | None = None
     revoked_at: str | None = None
 
     def __post_init__(self) -> None:
@@ -126,6 +127,17 @@ class MessengerIngressRoute:
             "webhook_secret_reference",
             normalize_credential_reference(self.webhook_secret_reference),
         )
+        confirmation_reference = self.confirmation_code_reference
+        if platform == ConnectionPlatform.VK:
+            if confirmation_reference is None:
+                raise ValueError("VK messenger ingress route requires confirmation code reference")
+            object.__setattr__(
+                self,
+                "confirmation_code_reference",
+                normalize_credential_reference(confirmation_reference),
+            )
+        elif confirmation_reference is not None:
+            raise ValueError("MAX messenger ingress route must not define VK confirmation code reference")
         status = str(self.status or "").strip().lower()
         if status not in {"active", "disabled", "revoked"}:
             raise ValueError("unsupported messenger ingress route status")
