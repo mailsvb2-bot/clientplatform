@@ -14,7 +14,7 @@ from clientplatform.domain.bookings import (
     CustomerBusinessLink,
     normalize_utc_datetime,
 )
-from clientplatform.domain.outcomes import BusinessOutcomeEvent, OutcomeType
+from clientplatform.domain.outcomes import BusinessOutcomeEvent, OutcomeSource, OutcomeType
 from clientplatform.domain.tenancy import TenantContext
 from clientplatform.infrastructure.booking_repository import BookingRepository
 from clientplatform.infrastructure.outcome_repository import OutcomeRepository
@@ -141,19 +141,21 @@ def book_customer_slot(
         )
         OutcomeRepository(conn).append(
             BusinessOutcomeEvent(
-                event_id=str(uuid4()),
+                id=str(uuid4()),
                 business_id=claim.slot.slot.business_id,
-                customer_id=claim.customer_id,
                 outcome_type=OutcomeType.BOOKING_CREATED,
-                source_type="booking_slot",
-                source_id=claim.slot.slot.id,
-                subject_ref=f"booking_slot:{claim.slot.slot.id}",
                 occurred_at=occurred_at,
-                recorded_at=datetime.now(timezone.utc),
+                source=OutcomeSource(
+                    source_type="booking_slot",
+                    source_id=claim.slot.slot.id,
+                ),
+                customer_id=claim.customer_id,
+                subject_ref=f"booking_slot:{claim.slot.slot.id}",
                 money=None,
+                idempotency_key=f"booking_created:{claim.slot.slot.id}",
                 metadata={},
                 metadata_version=1,
-                idempotency_key=f"booking_created:{claim.slot.slot.id}",
+                created_at=datetime.now(timezone.utc),
             )
         )
         return claim
