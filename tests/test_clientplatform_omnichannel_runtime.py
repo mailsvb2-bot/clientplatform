@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import unittest
 from unittest.mock import patch
@@ -7,8 +8,9 @@ from uuid import uuid4
 
 from clientplatform.domain.connections import ConnectionPlatform
 from clientplatform.domain.messenger_channels import MessengerIngressRoute
-from clientplatform.runtime.messenger_channel_ingress import canonical_vk_webhook
 from clientplatform.runtime.messenger_provider_clients import MaxRuntimeClient
+
+_AIOHTTP_AVAILABLE = importlib.util.find_spec("aiohttp") is not None
 
 
 class _FakeRequest:
@@ -21,8 +23,11 @@ class _FakeRequest:
         return self._raw
 
 
+@unittest.skipUnless(_AIOHTTP_AVAILABLE, "aiohttp runtime dependency is not installed in dependency-light Canon")
 class OmnichannelRuntimeIngressTests(unittest.IsolatedAsyncioTestCase):
     async def test_vk_confirmation_returns_route_scoped_secret_before_customer_extraction(self) -> None:
+        from clientplatform.runtime.messenger_channel_ingress import canonical_vk_webhook
+
         route = MessengerIngressRoute(
             id=str(uuid4()),
             business_id=str(uuid4()),
