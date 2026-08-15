@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from uuid import uuid4
 
 from clientplatform.application.customer_role_guard import (
     active_member_business_ids,
@@ -13,8 +14,10 @@ from clientplatform.domain.bookings import (
     CustomerBusinessLink,
     normalize_utc_datetime,
 )
+from clientplatform.domain.outcomes import BusinessOutcomeEvent, OutcomeType
 from clientplatform.domain.tenancy import TenantContext
 from clientplatform.infrastructure.booking_repository import BookingRepository
+from clientplatform.infrastructure.outcome_repository import OutcomeRepository
 from services.db import get_db, get_db_ro
 
 
@@ -118,14 +121,39 @@ def book_customer_slot(
     business_id: str,
     slot_id: str,
 ) -> BookingClaim:
+    """Book a slot and append its canonical outcome in the same transaction."""
     with get_db() as conn:
         assert_external_customer(
             conn,
             telegram_user_id=telegram_user_id,
             business_id=business_id,
         )
-        return BookingRepository(conn).book_slot(
+        claim = BookingRepository(conn).book_slot(
             telegram_user_id=telegram_user_id,
             business_id=business_id,
             slot_id=slot_id,
         )
+        booked_at = claim.slot.slot.booked_at
+        if booked_at is None:
+            raise RuntimeError("booked slot is missing booked_at")
+        occurred_at = datetime.fromisoformat(
+            normalize_utc_datetime(booked_at, field_name="booked_at")
+        )
+        OutcomeRepository(conn).append(
+            BusinessOutcomeEvent(
+                event_id=str(uuid4()),
+                business_id=claim.slot.slot.business_id,
+                customer_id=claim.customer_id,
+                outcome_type=OutcomeType.BOOKING_CREATED,
+                source_type="booking_slot",
+                source_id=claim.slot.slot.id,
+                subject_ref=f"booking_slot:{claim.slot.slot.id}",
+                occurred_at=occurred_at,
+                recorded_at=datetime.now(timezone.utc),
+                money=None,
+                metadata={},
+                metadata_version=1,
+                idempotency_key=f"booking_created:{claim.slot.slot.id}",
+            )
+        )
+        return claim
