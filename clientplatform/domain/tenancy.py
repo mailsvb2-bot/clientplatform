@@ -75,6 +75,14 @@ _CUSTOMER_RECORD_ROLES = frozenset(
     }
 )
 
+_OUTCOME_LEDGER_READ_ROLES = frozenset(
+    {
+        PlatformRole.OWNER,
+        PlatformRole.ADMINISTRATOR,
+        PlatformRole.MANAGER,
+    }
+)
+
 _PROGRAM_MANAGEMENT_ROLES = frozenset(
     {
         PlatformRole.OWNER,
@@ -241,6 +249,13 @@ class TenantContext:
 
     def assert_can_manage_customer_records(self) -> None:
         self.assert_can_view_customer_records()
+
+    def assert_can_view_outcome_ledger(self) -> None:
+        """Protect raw customer-linked and monetary business outcome facts."""
+        if self.role not in _OUTCOME_LEDGER_READ_ROLES:
+            raise TenantPermissionDenied(
+                "outcome ledger requires owner, administrator or manager role"
+            )
 
     def assert_can_view_programs(self) -> None:
         if self.role not in BUSINESS_MEMBER_ROLES:
