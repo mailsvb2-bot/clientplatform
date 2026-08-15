@@ -17,6 +17,7 @@ from clientplatform.domain.promotions import (
     PromotionNotFound,
     stable_creative_id,
 )
+from clientplatform.domain.tenancy import PlatformRole, TenantPermissionDenied
 from clientplatform.infrastructure import TenancyRepository
 from clientplatform.infrastructure.activity_repository import ActivityRepository
 from clientplatform.infrastructure.attribution_repository import AttributionRepository
@@ -28,6 +29,7 @@ from services.db.schema import (
     clientplatform_attribution,
     clientplatform_bookings,
     clientplatform_customers,
+    clientplatform_outcomes,
     clientplatform_promotions,
     clientplatform_tenancy,
 )
@@ -45,6 +47,7 @@ class ClientPlatformAttributionRepositoryTests(unittest.TestCase):
         clientplatform_customers.ensure(self.conn)
         clientplatform_activity.ensure(self.conn)
         clientplatform_bookings.ensure(self.conn)
+        clientplatform_outcomes.ensure(self.conn)
         clientplatform_promotions.ensure(self.conn)
         clientplatform_attribution.ensure(self.conn)
 
@@ -260,7 +263,7 @@ class ClientPlatformAttributionRepositoryTests(unittest.TestCase):
         self.assertEqual(booking_trace.link.booking_slot_id, self.slot.slot.id)
         self.assertNotEqual(booking_trace.touch.id, first.touch.id)
 
-    def test_promoted_booking_writes_customer_and_booking_attribution_end_to_end(self) -> None:
+    def test_promoted_booking_writes_outcome_and_attribution_end_to_end(self) -> None:
         customer_id = self._connect_customer(700006)
         with patch.object(
             promotion_app,
@@ -287,6 +290,22 @@ class ClientPlatformAttributionRepositoryTests(unittest.TestCase):
         assert customer_trace is not None and booking_trace is not None
         self.assertEqual(customer_trace.touch.id, booking_trace.touch.id)
         self.assertEqual(customer_trace.identity.source, AcquisitionSource.TELEGRAM)
+        outcome = self.conn.execute(
+            """
+            SELECT outcome_type, customer_id, source_id
+            FROM business_outcome_events
+            WHERE business_id=? AND idempotency_key=?
+            """,
+            (
+                self.business.business.id,
+                f"booking_created:{self.slot.slot.id}",
+            ),
+        ).fetchone()
+        self.assertIsNotNone(outcome)
+        assert outcome is not None
+        self.assertEqual(outcome["outcome_type"], "booking_created")
+        self.assertEqual(outcome["customer_id"], customer_id)
+        self.assertEqual(outcome["source_id"], self.slot.slot.id)
 
     def test_forged_valid_shape_token_fails_closed_without_attribution(self) -> None:
         self._connect_customer(700007)
@@ -308,6 +327,25 @@ class ClientPlatformAttributionRepositoryTests(unittest.TestCase):
             self.conn.execute("SELECT COUNT(*) FROM attribution_links").fetchone()[0],
             0,
         )
+        self.assertEqual(
+            self.conn.execute("SELECT COUNT(*) FROM business_outcome_events").fetchone()[0],
+            0,
+        )
+
+    def test_raw_attribution_permission_is_strict(self) -> None:
+        self.owner.assert_can_view_attribution_spine()
+        self.tenancy.grant_member(
+            actor=self.owner,
+            user_id=303,
+            role=PlatformRole.MARKETER,
+            now="2026-08-01T10:00:00+00:00",
+        )
+        marketer = self.tenancy.resolve_context(
+            user_id=303,
+            business_id=self.business.business.id,
+        )
+        with self.assertRaises(TenantPermissionDenied):
+            marketer.assert_can_view_attribution_spine()
 
     def test_privacy_manifest_covers_attribution_tables(self) -> None:
         report = validate_clientplatform_privacy_manifest(
