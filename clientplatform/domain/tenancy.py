@@ -83,6 +83,14 @@ _OUTCOME_LEDGER_READ_ROLES = frozenset(
     }
 )
 
+_ATTRIBUTION_READ_ROLES = frozenset(
+    {
+        PlatformRole.OWNER,
+        PlatformRole.ADMINISTRATOR,
+        PlatformRole.MANAGER,
+    }
+)
+
 _PROGRAM_MANAGEMENT_ROLES = frozenset(
     {
         PlatformRole.OWNER,
@@ -255,6 +263,13 @@ class TenantContext:
         if self.role not in _OUTCOME_LEDGER_READ_ROLES:
             raise TenantPermissionDenied(
                 "outcome ledger requires owner, administrator or manager role"
+            )
+
+    def assert_can_view_attribution_spine(self) -> None:
+        """Protect raw customer-linked acquisition provenance."""
+        if self.role not in _ATTRIBUTION_READ_ROLES:
+            raise TenantPermissionDenied(
+                "attribution spine requires owner, administrator or manager role"
             )
 
     def assert_can_view_programs(self) -> None:
