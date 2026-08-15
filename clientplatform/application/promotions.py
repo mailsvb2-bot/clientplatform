@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from clientplatform.application.customer_role_guard import assert_external_customer
+from clientplatform.application.bookings import book_customer_slot_in_transaction
 from clientplatform.application.owner_booking_journey import (
     connect_public_storefront_customer,
 )
@@ -19,11 +19,13 @@ from clientplatform.domain.promotions import (
     PromotionCampaign,
     PromotionChannel,
     PromotionEventType,
+    PromotionSourceResolution,
     PromotionStats,
     normalize_source_token,
 )
 from clientplatform.domain.tenancy import TenantContext
 from clientplatform.infrastructure.activity_repository import ActivityRepository
+from clientplatform.infrastructure.attribution_repository import AttributionRepository
 from clientplatform.infrastructure.booking_repository import BookingRepository
 from clientplatform.infrastructure.promotion_repository import PromotionRepository
 from clientplatform.infrastructure.tenancy_repository import TenancyRepository
@@ -49,6 +51,26 @@ class PromotionLanding:
             "attribution_token",
             normalize_source_token(self.attribution_token or self.campaign.source_token),
         )
+
+
+def _capture_verified_promotion_touch(
+    *,
+    conn: object,
+    resolution: PromotionSourceResolution,
+    customer_id: str,
+) -> None:
+    """Persist first-party attribution only after PromotionRepository verified the token."""
+
+    campaign = resolution.campaign
+    AttributionRepository(conn).capture_promotion_touch(
+        business_id=campaign.business_id,
+        source_token=resolution.attribution_token,
+        campaign_id=campaign.id,
+        channel=campaign.channel,
+        source_kind=resolution.source_kind,
+        source_key=resolution.source_key,
+        customer_id=customer_id,
+    )
 
 
 def promotion_start_payload(source_token: str) -> str:
@@ -181,6 +203,11 @@ def open_promotion_link(
             event_type=PromotionEventType.OPENED,
             source_token=resolution.attribution_token,
         )
+        _capture_verified_promotion_touch(
+            conn=conn,
+            resolution=resolution,
+            customer_id=link.customer_id,
+        )
         return PromotionLanding(
             campaign=campaign,
             slot=slot,
@@ -194,19 +221,15 @@ def book_promoted_slot(
     source_token: str,
     telegram_user_id: int,
 ) -> tuple[BookingClaim, PromotionCampaign]:
-    """Book canonically and persist exact source attribution in one transaction."""
+    """Book, emit the outcome and persist attribution in one transaction."""
 
     token = normalize_source_token(source_token)
     with get_db() as conn:
         promotions = PromotionRepository(conn)
         resolution = promotions.resolve_public_source(source_token=token)
         campaign = resolution.campaign
-        assert_external_customer(
+        claim = book_customer_slot_in_transaction(
             conn,
-            telegram_user_id=telegram_user_id,
-            business_id=campaign.business_id,
-        )
-        claim = BookingRepository(conn).book_slot(
             telegram_user_id=telegram_user_id,
             business_id=campaign.business_id,
             slot_id=campaign.booking_slot_id,
@@ -222,6 +245,16 @@ def book_promoted_slot(
             customer_id=claim.customer_id,
             event_type=PromotionEventType.BOOKED,
             source_token=resolution.attribution_token,
+        )
+        _capture_verified_promotion_touch(
+            conn=conn,
+            resolution=resolution,
+            customer_id=claim.customer_id,
+        )
+        AttributionRepository(conn).link_booking_from_customer(
+            business_id=campaign.business_id,
+            customer_id=claim.customer_id,
+            booking_slot_id=campaign.booking_slot_id,
         )
         return claim, campaign
 

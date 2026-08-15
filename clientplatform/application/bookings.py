@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any
 from uuid import uuid4
 
 from clientplatform.application.customer_role_guard import (
@@ -16,6 +17,7 @@ from clientplatform.domain.bookings import (
 )
 from clientplatform.domain.outcomes import BusinessOutcomeEvent, OutcomeSource, OutcomeType
 from clientplatform.domain.tenancy import TenantContext
+from clientplatform.infrastructure.attribution_repository import AttributionRepository
 from clientplatform.infrastructure.booking_repository import BookingRepository
 from clientplatform.infrastructure.outcome_repository import OutcomeRepository
 from services.db import get_db, get_db_ro
@@ -115,6 +117,62 @@ def get_customer_booking(
     return claim
 
 
+def book_customer_slot_in_transaction(
+    conn: Any,
+    *,
+    telegram_user_id: int,
+    business_id: str,
+    slot_id: str,
+) -> BookingClaim:
+    """Canonical booking mutation for callers that already own the transaction."""
+
+    assert_external_customer(
+        conn,
+        telegram_user_id=telegram_user_id,
+        business_id=business_id,
+    )
+    claim = BookingRepository(conn).book_slot(
+        telegram_user_id=telegram_user_id,
+        business_id=business_id,
+        slot_id=slot_id,
+    )
+    booked_at = claim.slot.slot.booked_at
+    if booked_at is None:
+        raise RuntimeError("booked slot is missing booked_at")
+    occurred_at = datetime.fromisoformat(
+        normalize_utc_datetime(booked_at, field_name="booked_at")
+    )
+    OutcomeRepository(conn).append(
+        BusinessOutcomeEvent(
+            id=str(uuid4()),
+            business_id=claim.slot.slot.business_id,
+            outcome_type=OutcomeType.BOOKING_CREATED,
+            occurred_at=occurred_at,
+            source=OutcomeSource(
+                source_type="booking_slot",
+                source_id=claim.slot.slot.id,
+            ),
+            customer_id=claim.customer_id,
+            subject_ref=f"booking_slot:{claim.slot.slot.id}",
+            money=None,
+            idempotency_key=f"booking_created:{claim.slot.slot.id}",
+            metadata={},
+            metadata_version=1,
+            created_at=datetime.now(timezone.utc),
+        )
+    )
+    # Any canonical booking path must inherit an already-established customer
+    # acquisition first touch. If the customer has no attribution yet, this is
+    # a no-op. The promoted-booking path intentionally repeats this link after
+    # capturing its verified token so direct cpa_* booking remains atomic too.
+    AttributionRepository(conn).link_booking_from_customer(
+        business_id=claim.slot.slot.business_id,
+        customer_id=claim.customer_id,
+        booking_slot_id=claim.slot.slot.id,
+    )
+    return claim
+
+
 def book_customer_slot(
     *,
     telegram_user_id: int,
@@ -122,40 +180,11 @@ def book_customer_slot(
     slot_id: str,
 ) -> BookingClaim:
     """Book a slot and append its canonical outcome in the same transaction."""
+
     with get_db() as conn:
-        assert_external_customer(
+        return book_customer_slot_in_transaction(
             conn,
-            telegram_user_id=telegram_user_id,
-            business_id=business_id,
-        )
-        claim = BookingRepository(conn).book_slot(
             telegram_user_id=telegram_user_id,
             business_id=business_id,
             slot_id=slot_id,
         )
-        booked_at = claim.slot.slot.booked_at
-        if booked_at is None:
-            raise RuntimeError("booked slot is missing booked_at")
-        occurred_at = datetime.fromisoformat(
-            normalize_utc_datetime(booked_at, field_name="booked_at")
-        )
-        OutcomeRepository(conn).append(
-            BusinessOutcomeEvent(
-                id=str(uuid4()),
-                business_id=claim.slot.slot.business_id,
-                outcome_type=OutcomeType.BOOKING_CREATED,
-                occurred_at=occurred_at,
-                source=OutcomeSource(
-                    source_type="booking_slot",
-                    source_id=claim.slot.slot.id,
-                ),
-                customer_id=claim.customer_id,
-                subject_ref=f"booking_slot:{claim.slot.slot.id}",
-                money=None,
-                idempotency_key=f"booking_created:{claim.slot.slot.id}",
-                metadata={},
-                metadata_version=1,
-                created_at=datetime.now(timezone.utc),
-            )
-        )
-        return claim
