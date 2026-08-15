@@ -5,7 +5,6 @@ import hashlib
 import hmac
 import json
 import logging
-import time
 from typing import Any, Mapping
 
 from aiohttp import web
@@ -25,6 +24,7 @@ from clientplatform.domain.messenger_channels import (
     MessengerRouteNotFound,
     extract_customer_link_token,
 )
+from clientplatform.domain.sales_ai_jobs import messenger_source_order
 from clientplatform.runtime.sales_ai_config import SalesAIRuntimeConfig
 from clientplatform.runtime.secrets import EnvironmentCredentialProvider, SecretReferenceError
 from runtime.messenger_payloads import max_event_key, text_from_max_payload, text_from_vk_payload, vk_event_key
@@ -98,101 +98,6 @@ def _safe_provider_event_id(raw_key: str) -> str:
     if raw and len(raw) <= 150 and all(ord(char) >= 32 and ord(char) != 127 for char in raw):
         return raw
     return "sha256:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
-
-
-def _timestamp_candidate(payload: Mapping[str, Any], platform: ConnectionPlatform) -> int | None:
-    candidates: list[Any] = []
-    if platform == ConnectionPlatform.VK:
-        obj = _mapping(payload.get("object"))
-        message = _mapping(obj.get("message") or obj)
-        candidates.extend((message.get("date"), obj.get("date"), payload.get("timestamp")))
-    else:
-        message = _mapping(payload.get("message"))
-        candidates.extend(
-            (
-                message.get("timestamp"),
-                message.get("created_at"),
-                payload.get("timestamp"),
-                payload.get("created_at"),
-            )
-        )
-    for candidate in candidates:
-        if candidate is None or isinstance(candidate, bool):
-            continue
-        try:
-            if isinstance(candidate, str) and not candidate.strip().isdigit():
-                from datetime import datetime
-
-                parsed = datetime.fromisoformat(candidate.strip().replace("Z", "+00:00"))
-                value = int(parsed.timestamp() * 1000)
-            else:
-                numeric = int(str(candidate).strip())
-                if numeric <= 0:
-                    continue
-                if numeric < 10_000_000_000:
-                    value = numeric * 1000
-                elif numeric > 9_999_999_999_999:
-                    value = numeric // 1000
-                else:
-                    value = numeric
-            if 1 <= value <= 9_999_999_999_999:
-                return value
-        except (TypeError, ValueError, OverflowError):
-            continue
-    return None
-
-
-def _positive_sequence(value: Any) -> int | None:
-    if value is None or isinstance(value, bool):
-        return None
-    try:
-        candidate = int(str(value).strip())
-    except (TypeError, ValueError):
-        return None
-    if 0 < candidate < 10**19:
-        return candidate
-    return None
-
-
-def _provider_sequence_candidate(payload: Mapping[str, Any], platform: ConnectionPlatform) -> int | None:
-    candidates: list[Any]
-    if platform == ConnectionPlatform.VK:
-        obj = _mapping(payload.get("object"))
-        message = _mapping(obj.get("message") or obj)
-        candidates = [
-            message.get("conversation_message_id"),
-            message.get("id"),
-            obj.get("conversation_message_id"),
-            obj.get("id"),
-            payload.get("ts"),
-        ]
-    else:
-        message = _mapping(payload.get("message"))
-        body = _mapping(message.get("body"))
-        candidates = [
-            payload.get("update_id"),
-            body.get("mid"),
-            message.get("message_id"),
-            message.get("id"),
-        ]
-    for candidate in candidates:
-        sequence = _positive_sequence(candidate)
-        if sequence is not None:
-            return sequence
-    return None
-
-
-def _source_order(payload: Mapping[str, Any], platform: ConnectionPlatform, scoped_event_key: str) -> str:
-    millis = _timestamp_candidate(payload, platform)
-    if millis is None:
-        millis = min(int(time.time() * 1000), 9_999_999_999_999)
-    sequence = _provider_sequence_candidate(payload, platform)
-    if sequence is None:
-        sequence = int.from_bytes(
-            hashlib.sha256(scoped_event_key.encode("utf-8")).digest()[:8],
-            "big",
-        ) % (10**19)
-    return f"{millis:013d}{sequence:019d}"
 
 
 def _sales_ai_runtime() -> tuple[bool, str]:
@@ -334,7 +239,7 @@ async def _process_business_event(
                 external_subject=identity.external_subject,
                 source_ref=f"route:{route.id}",
                 provider_event_id=_safe_provider_event_id(raw_event_key),
-                source_order=_source_order(payload, platform, scoped_event_key),
+                source_order=messenger_source_order(payload, platform),
                 message_text=message_text,
                 runtime_ai_enabled=ai_enabled,
                 runtime_ai_consent_target=consent_target,
