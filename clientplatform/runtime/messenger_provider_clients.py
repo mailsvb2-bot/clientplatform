@@ -138,6 +138,7 @@ def _materialize_media_sync(reference: str) -> tuple[Path, bool]:
         )
         path = Path(tmp.name)
         size = 0
+        materialized = False
         try:
             with tmp:
                 with _open_public_media_url(raw) as response:
@@ -159,10 +160,11 @@ def _materialize_media_sync(reference: str) -> tuple[Path, bool]:
                         tmp.write(chunk)
             if size <= 0:
                 raise ValueError("provider media download is empty")
-            return path, True
-        except Exception:
-            path.unlink(missing_ok=True)
-            raise
+            materialized = True
+        finally:
+            if not materialized:
+                path.unlink(missing_ok=True)
+        return path, True
     if "://" in raw:
         raise ValueError("provider media reference must be HTTPS or a local resolved path")
     path = Path(raw)
