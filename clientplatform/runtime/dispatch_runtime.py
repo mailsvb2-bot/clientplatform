@@ -8,8 +8,14 @@ from dataclasses import dataclass
 from clientplatform.application.dispatch_worker import DispatchBatchResult, run_dispatch_batch
 from clientplatform.application.program_media import run_program_media_cleanup_batch
 from clientplatform.runtime.control_bot import control_bot_enabled
+from clientplatform.runtime.messenger_provider_clients import MaxRuntimeClient, VkRuntimeClient
 from clientplatform.runtime.secrets import EnvironmentCredentialProvider
-from clientplatform.transport import AdapterRegistry, TelegramDispatchAdapter
+from clientplatform.transport import (
+    AdapterRegistry,
+    MaxDispatchAdapter,
+    TelegramDispatchAdapter,
+    VkDispatchAdapter,
+)
 from clientplatform.transport.media import (
     HmacMediaGatewayResolver,
     MediaReferenceResolver,
@@ -164,7 +170,15 @@ def build_dispatch_runtime(
             TelegramDispatchAdapter(
                 telegram_client,
                 media_resolver=media_resolver,
-            )
+            ),
+            VkDispatchAdapter(
+                VkRuntimeClient(),
+                media_resolver=media_resolver,
+            ),
+            MaxDispatchAdapter(
+                MaxRuntimeClient(),
+                media_resolver=media_resolver,
+            ),
         ]
     )
     return DispatchRuntime(
