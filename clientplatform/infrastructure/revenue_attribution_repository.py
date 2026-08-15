@@ -47,6 +47,8 @@ _SELECT = """
 
 def _record_from_row(row: Any) -> RevenueAttributionRecord:
     customer_id = _value(row, "customer_id", 4)
+    touch_id = _value(row, "touch_id", 5)
+    attribution_identity_id = _value(row, "attribution_identity_id", 6)
     campaign_id = _value(row, "promotion_campaign_id", 10)
     return RevenueAttributionRecord(
         id=str(_value(row, "id", 0)),
@@ -54,8 +56,10 @@ def _record_from_row(row: Any) -> RevenueAttributionRecord:
         outcome_event_id=str(_value(row, "outcome_event_id", 2)),
         outcome_type=OutcomeType(str(_value(row, "outcome_type", 3))),
         customer_id=None if customer_id is None else str(customer_id),
-        touch_id=str(_value(row, "touch_id", 5)),
-        attribution_identity_id=str(_value(row, "attribution_identity_id", 6)),
+        touch_id=None if touch_id is None else str(touch_id),
+        attribution_identity_id=(
+            None if attribution_identity_id is None else str(attribution_identity_id)
+        ),
         source=AcquisitionSource(str(_value(row, "source", 7))),
         source_ref_type=str(_value(row, "source_ref_type", 8)),
         source_ref_id=str(_value(row, "source_ref_id", 9)),
@@ -136,6 +140,7 @@ class RevenueAttributionRepository:
         if row is None:
             raise RevenueAttributionInvariantViolation("monetary outcome does not belong to this business")
         outcome_type = OutcomeType(str(_value(row, "outcome_type", 1)))
+        outcome_occurred_at = _parse_datetime(_value(row, "occurred_at", 2))
         amount = _value(row, "amount_minor", 5)
         currency = _value(row, "currency", 6)
         if outcome_type.value not in _SUPPORTED_MONEY_TYPES or amount is None or currency is None:
@@ -158,6 +163,8 @@ class RevenueAttributionRepository:
                 business_id=str(business_id),
                 customer_id=customer_id,
             )
+            if customer_trace is not None and customer_trace.touch.occurred_at > outcome_occurred_at:
+                customer_trace = None
         booking_trace = None
         if subject_ref and subject_ref.startswith("booking_slot:"):
             booking_slot_id = subject_ref.removeprefix("booking_slot:").strip()
@@ -167,6 +174,8 @@ class RevenueAttributionRepository:
                 business_id=str(business_id),
                 booking_slot_id=booking_slot_id,
             )
+            if booking_trace is not None and booking_trace.touch.occurred_at > outcome_occurred_at:
+                booking_trace = None
         trace = booking_trace or customer_trace
         if trace is None:
             return None
@@ -191,7 +200,7 @@ class RevenueAttributionRepository:
             model_version=RevenueAttributionModel.FIRST_TOUCH_V1,
             amount_minor=signed_amount,
             currency=str(currency),
-            occurred_at=_parse_datetime(_value(row, "occurred_at", 2)),
+            occurred_at=outcome_occurred_at,
             created_at=stamp,
         )
         self._conn.execute(
@@ -276,6 +285,8 @@ class RevenueAttributionRepository:
         occurred_to: datetime,
         verified_spend: OutcomeMoney | None = None,
     ) -> UnitEconomicsSnapshot:
+        if verified_spend is not None and verified_spend.amount_minor < 0:
+            raise ValueError("verified_spend amount_minor must be non-negative")
         records = self.reconcile_window(
             business_id=business_id,
             occurred_from=occurred_from,
@@ -283,7 +294,7 @@ class RevenueAttributionRepository:
         )
         event_rows = self._conn.execute(
             """
-            SELECT outcome_type, customer_id
+            SELECT outcome_type, customer_id, amount_minor, currency
             FROM business_outcome_events
             WHERE business_id=? AND occurred_at>=? AND occurred_at<?
             """,
@@ -305,6 +316,8 @@ class RevenueAttributionRepository:
             1
             for row in event_rows
             if str(_value(row, "outcome_type", 0)) in _SUPPORTED_MONEY_TYPES
+            and _value(row, "amount_minor", 2) is not None
+            and _value(row, "currency", 3) is not None
         )
         revenue_totals: dict[str, int] = defaultdict(int)
         source_counts: Counter[AcquisitionSource] = Counter()
