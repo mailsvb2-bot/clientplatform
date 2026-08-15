@@ -1,0 +1,468 @@
+from __future__ import annotations
+
+import sqlite3
+import unittest
+from datetime import datetime, timedelta, timezone
+
+from clientplatform.domain.outcomes import (
+    BusinessOutcomeEvent,
+    OutcomeMoney,
+    OutcomeSource,
+    OutcomeType,
+)
+from clientplatform.domain.promotions import PromotionChannel, PromotionCreative, stable_creative_id
+from clientplatform.domain.revenue_attribution import RevenueAttributionInvariantViolation
+from clientplatform.infrastructure.activity_repository import ActivityRepository
+from clientplatform.infrastructure.attribution_repository import AttributionRepository
+from clientplatform.infrastructure.booking_repository import BookingRepository
+from clientplatform.infrastructure.outcome_repository import OutcomeRepository
+from clientplatform.infrastructure.promotion_repository import PromotionRepository
+from clientplatform.infrastructure.revenue_attribution_repository import RevenueAttributionRepository
+from clientplatform.infrastructure.tenancy_repository import TenancyRepository
+from services.db.schema import (
+    clientplatform_activity,
+    clientplatform_attribution,
+    clientplatform_bookings,
+    clientplatform_customers,
+    clientplatform_outcomes,
+    clientplatform_promotions,
+    clientplatform_revenue_attribution,
+    clientplatform_tenancy,
+)
+
+
+_NOW = datetime(2026, 8, 15, 20, 0, tzinfo=timezone.utc)
+
+
+class ClientPlatformRevenueAttributionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.row_factory = sqlite3.Row
+        self.conn.execute("PRAGMA foreign_keys=ON")
+        clientplatform_tenancy.ensure(self.conn)
+        clientplatform_customers.ensure(self.conn)
+        clientplatform_activity.ensure(self.conn)
+        clientplatform_bookings.ensure(self.conn)
+        clientplatform_outcomes.ensure(self.conn)
+        clientplatform_promotions.ensure(self.conn)
+        clientplatform_attribution.ensure(self.conn)
+        clientplatform_revenue_attribution.ensure(self.conn)
+
+        self.tenancy = TenancyRepository(self.conn)
+        self.activity = ActivityRepository(self.conn)
+        self.bookings = BookingRepository(self.conn)
+        self.outcomes = OutcomeRepository(self.conn)
+        self.promotions = PromotionRepository(self.conn)
+        self.attribution = AttributionRepository(self.conn)
+        self.revenue = RevenueAttributionRepository(self.conn)
+
+        access = self.tenancy.create_business(owner_user_id=7001, name="Revenue test")
+        self.business_id = access.business.id
+        self.owner = self.tenancy.resolve_context(user_id=7001, business_id=self.business_id)
+        self.activity.upsert_profile(
+            actor=self.owner,
+            activity_description="Revenue attribution regression",
+            timezone_name="Europe/Amsterdam",
+            now=_NOW.isoformat(),
+        )
+        capability = self.activity.enable_capability(
+            actor=self.owner,
+            connector_key="services",
+            now=_NOW.isoformat(),
+        )
+        offering = self.activity.create_offering(
+            actor=self.owner,
+            capability_id=capability.id,
+            title="Service",
+            description="Revenue attribution service",
+            now=_NOW.isoformat(),
+        )
+        self.slot = self.bookings.create_slot(
+            actor=self.owner,
+            offering_id=offering.id,
+            local_start="20.08.2026 12:00",
+            duration_minutes=60,
+            now=_NOW.isoformat(),
+        )
+        creative = PromotionCreative(
+            creative_id=stable_creative_id("revenue", "attribution"),
+            headline="Revenue attribution",
+            primary_text="Book now",
+            description="Test",
+        )
+        self.campaign, _ = self.promotions.create_or_refresh_campaign(
+            actor=self.owner,
+            slot_id=self.slot.slot.id,
+            channel=PromotionChannel.TELEGRAM,
+            creative=creative,
+            now=_NOW.isoformat(),
+        )
+        self.customer_id = self._connect_customer(77001)
+        self.trace = self.attribution.capture_promotion_touch(
+            business_id=self.business_id,
+            source_token=self.campaign.source_token,
+            campaign_id=self.campaign.id,
+            channel=self.campaign.channel,
+            source_kind="campaign",
+            source_key=self.campaign.id,
+            customer_id=self.customer_id,
+            occurred_at=_NOW,
+        )
+        claim = self.bookings.book_slot(
+            telegram_user_id=77001,
+            business_id=self.business_id,
+            slot_id=self.slot.slot.id,
+            now=(_NOW + timedelta(minutes=1)).isoformat(),
+        )
+        self.assertEqual(claim.customer_id, self.customer_id)
+        self.attribution.link_booking_from_customer(
+            business_id=self.business_id,
+            customer_id=self.customer_id,
+            booking_slot_id=self.slot.slot.id,
+            created_at=_NOW + timedelta(minutes=1),
+        )
+        self._append(
+            OutcomeType.LEAD_CREATED,
+            event_id="lead-1",
+            money=None,
+            occurred_at=_NOW + timedelta(minutes=1),
+        )
+        self._append(
+            OutcomeType.LEAD_QUALIFIED,
+            event_id="qualified-1",
+            money=None,
+            occurred_at=_NOW + timedelta(minutes=2),
+        )
+        self._append(
+            OutcomeType.BOOKING_CREATED,
+            event_id="booking-1",
+            money=None,
+            occurred_at=_NOW + timedelta(minutes=3),
+        )
+
+    def tearDown(self) -> None:
+        self.conn.close()
+
+    def _connect_customer(self, telegram_user_id: int) -> str:
+        invite = self.activity.issue_customer_invite(actor=self.owner, now=_NOW.isoformat())
+        claim = self.activity.claim_customer_invite(
+            token=invite.token,
+            telegram_user_id=telegram_user_id,
+            username=f"u{telegram_user_id}",
+            display_name="Customer",
+            now=(_NOW + timedelta(seconds=1)).isoformat(),
+        )
+        return claim.customer_id
+
+    def _append(
+        self,
+        outcome_type: OutcomeType,
+        *,
+        event_id: str,
+        money: OutcomeMoney | None,
+        occurred_at: datetime,
+        customer_id: str | None = None,
+        subject_ref: str | None = None,
+        source_type: str = "test",
+        source_id: str | None = None,
+    ) -> BusinessOutcomeEvent:
+        return self.outcomes.append(
+            BusinessOutcomeEvent(
+                id=event_id,
+                business_id=self.business_id,
+                outcome_type=outcome_type,
+                occurred_at=occurred_at,
+                source=OutcomeSource(
+                    source_type=source_type,
+                    source_id=event_id if source_id is None else source_id,
+                ),
+                customer_id=self.customer_id if customer_id is None else customer_id,
+                subject_ref=(
+                    f"booking_slot:{self.slot.slot.id}"
+                    if subject_ref is None
+                    else subject_ref
+                ),
+                money=money,
+                idempotency_key=f"test:{event_id}",
+                metadata={},
+                metadata_version=1,
+                created_at=occurred_at,
+            )
+        )
+
+    def test_touch_booking_payment_and_refund_are_reproducibly_attributed(self) -> None:
+        paid = self._append(
+            OutcomeType.ORDER_PAID,
+            event_id="paid-1",
+            money=OutcomeMoney(amount_minor=10_000, currency="RUB"),
+            occurred_at=_NOW + timedelta(minutes=4),
+        )
+        refund = self._append(
+            OutcomeType.REFUND_RECORDED,
+            event_id="refund-1",
+            money=OutcomeMoney(amount_minor=2_000, currency="RUB"),
+            occurred_at=_NOW + timedelta(minutes=5),
+        )
+
+        first = self.revenue.materialize_outcome(
+            business_id=self.business_id,
+            outcome_event_id=paid.id,
+        )
+        replay = self.revenue.materialize_outcome(
+            business_id=self.business_id,
+            outcome_event_id=paid.id,
+        )
+        refunded = self.revenue.materialize_outcome(
+            business_id=self.business_id,
+            outcome_event_id=refund.id,
+        )
+
+        self.assertIsNotNone(first)
+        self.assertIsNotNone(refunded)
+        assert first is not None and replay is not None and refunded is not None
+        self.assertEqual(replay.id, first.id)
+        self.assertEqual(first.touch_id, self.trace.touch.id)
+        self.assertEqual(first.promotion_campaign_id, self.campaign.id)
+        self.assertEqual(first.amount_minor, 10_000)
+        self.assertEqual(refunded.amount_minor, -2_000)
+        self.assertEqual(
+            self.conn.execute("SELECT COUNT(*) FROM revenue_attributions").fetchone()[0],
+            2,
+        )
+
+        snapshot = self.revenue.snapshot(
+            business_id=self.business_id,
+            occurred_from=_NOW,
+            occurred_to=_NOW + timedelta(hours=1),
+            verified_spend=OutcomeMoney(amount_minor=4_000, currency="RUB"),
+        )
+        self.assertTrue(snapshot.attribution_complete)
+        self.assertEqual(snapshot.leads, 1)
+        self.assertEqual(snapshot.qualified_leads, 1)
+        self.assertEqual(snapshot.bookings, 1)
+        self.assertEqual(snapshot.paid_customers, 1)
+        self.assertEqual(snapshot.attributed_revenue.amount_minor, 8_000)
+        self.assertEqual(snapshot.attributed_revenue.currency, "RUB")
+        self.assertEqual(snapshot.cpl_minor, 4_000)
+        self.assertEqual(snapshot.cost_per_booking_minor, 4_000)
+        self.assertEqual(snapshot.cac_minor, 4_000)
+        self.assertEqual(snapshot.roas_basis_points, 20_000)
+
+    def test_mixed_currency_is_never_summed_and_roas_is_suppressed(self) -> None:
+        self._append(
+            OutcomeType.ORDER_PAID,
+            event_id="paid-rub",
+            money=OutcomeMoney(amount_minor=5_000, currency="RUB"),
+            occurred_at=_NOW + timedelta(minutes=4),
+        )
+        self._append(
+            OutcomeType.ORDER_PAID,
+            event_id="paid-usd",
+            money=OutcomeMoney(amount_minor=2_000, currency="USD"),
+            occurred_at=_NOW + timedelta(minutes=5),
+        )
+
+        snapshot = self.revenue.snapshot(
+            business_id=self.business_id,
+            occurred_from=_NOW,
+            occurred_to=_NOW + timedelta(hours=1),
+            verified_spend=OutcomeMoney(amount_minor=1_000, currency="RUB"),
+        )
+        self.assertIsNone(snapshot.attributed_revenue)
+        self.assertEqual({item.currency for item in snapshot.revenue_by_currency}, {"RUB", "USD"})
+        self.assertIsNone(snapshot.roas_basis_points)
+        self.assertIn("revenue_mixed_currency", snapshot.limitations)
+        self.assertIn("roas_revenue_unavailable", snapshot.limitations)
+
+    def test_unattributed_money_is_explicit_and_never_assigned_by_guess(self) -> None:
+        other_customer_id = self._connect_customer(77002)
+        paid = self._append(
+            OutcomeType.ORDER_PAID,
+            event_id="unattributed-paid",
+            money=OutcomeMoney(amount_minor=3_000, currency="RUB"),
+            occurred_at=_NOW + timedelta(minutes=4),
+            customer_id=other_customer_id,
+            subject_ref="order:unattributed",
+        )
+        self.assertIsNone(
+            self.revenue.materialize_outcome(
+                business_id=self.business_id,
+                outcome_event_id=paid.id,
+            )
+        )
+        snapshot = self.revenue.snapshot(
+            business_id=self.business_id,
+            occurred_from=_NOW,
+            occurred_to=_NOW + timedelta(hours=1),
+        )
+        self.assertFalse(snapshot.attribution_complete)
+        self.assertEqual(snapshot.monetary_outcomes, 1)
+        self.assertEqual(snapshot.attributed_monetary_outcomes, 0)
+        self.assertEqual(snapshot.unattributed_monetary_outcomes, 1)
+        self.assertIn("attribution_incomplete", snapshot.limitations)
+        self.assertIn("spend_unavailable", snapshot.limitations)
+
+    def test_paid_customers_and_cac_do_not_depend_on_attribution_success(self) -> None:
+        other_customer_id = self._connect_customer(77003)
+        self._append(
+            OutcomeType.ORDER_PAID,
+            event_id="unattributed-cac-paid",
+            money=OutcomeMoney(amount_minor=6_000, currency="RUB"),
+            occurred_at=_NOW + timedelta(minutes=4),
+            customer_id=other_customer_id,
+            subject_ref="order:unattributed-cac",
+        )
+        snapshot = self.revenue.snapshot(
+            business_id=self.business_id,
+            occurred_from=_NOW,
+            occurred_to=_NOW + timedelta(hours=1),
+            verified_spend=OutcomeMoney(amount_minor=2_500, currency="RUB"),
+        )
+        self.assertEqual(snapshot.paid_customers, 1)
+        self.assertEqual(snapshot.cac_minor, 2_500)
+        self.assertFalse(snapshot.attribution_complete)
+
+    def test_cross_tenant_outcome_lookup_fails_closed(self) -> None:
+        paid = self._append(
+            OutcomeType.ORDER_PAID,
+            event_id="tenant-paid",
+            money=OutcomeMoney(amount_minor=3_000, currency="RUB"),
+            occurred_at=_NOW + timedelta(minutes=4),
+        )
+        other = self.tenancy.create_business(owner_user_id=9001, name="Other tenant")
+        with self.assertRaises(RevenueAttributionInvariantViolation):
+            self.revenue.materialize_outcome(
+                business_id=other.business.id,
+                outcome_event_id=paid.id,
+            )
+
+    def test_reversal_reduces_economics_as_a_new_outcome(self) -> None:
+        self._append(
+            OutcomeType.ORDER_PAID,
+            event_id="paid-before-reversal",
+            money=OutcomeMoney(amount_minor=7_000, currency="RUB"),
+            occurred_at=_NOW + timedelta(minutes=4),
+        )
+        self._append(
+            OutcomeType.OUTCOME_REVERSAL,
+            event_id="reversal-1",
+            money=OutcomeMoney(amount_minor=7_000, currency="RUB"),
+            occurred_at=_NOW + timedelta(minutes=5),
+        )
+        snapshot = self.revenue.snapshot(
+            business_id=self.business_id,
+            occurred_from=_NOW,
+            occurred_to=_NOW + timedelta(hours=1),
+        )
+        self.assertEqual(snapshot.attributed_revenue.amount_minor, 0)
+        self.assertEqual(snapshot.monetary_outcomes, 2)
+        self.assertEqual(snapshot.attributed_monetary_outcomes, 2)
+
+    def test_amountless_canonical_reversal_resolves_referenced_money(self) -> None:
+        paid = self._append(
+            OutcomeType.ORDER_PAID,
+            event_id="paid-for-canonical-reversal",
+            money=OutcomeMoney(amount_minor=7_000, currency="RUB"),
+            occurred_at=_NOW + timedelta(minutes=4),
+        )
+        self._append(
+            OutcomeType.OUTCOME_REVERSAL,
+            event_id="canonical-reversal",
+            money=None,
+            occurred_at=_NOW + timedelta(minutes=5),
+            source_type="outcome_event",
+            source_id=paid.id,
+            subject_ref=f"outcome:{paid.id}",
+        )
+        snapshot = self.revenue.snapshot(
+            business_id=self.business_id,
+            occurred_from=_NOW,
+            occurred_to=_NOW + timedelta(hours=1),
+        )
+        self.assertEqual(snapshot.attributed_revenue.amount_minor, 0)
+        self.assertEqual(snapshot.monetary_outcomes, 2)
+        self.assertEqual(snapshot.attributed_monetary_outcomes, 2)
+        self.assertTrue(snapshot.attribution_complete)
+
+    def test_future_touch_is_never_used_for_earlier_money(self) -> None:
+        paid = self._append(
+            OutcomeType.ORDER_PAID,
+            event_id="paid-before-touch",
+            money=OutcomeMoney(amount_minor=1_500, currency="RUB"),
+            occurred_at=_NOW - timedelta(seconds=1),
+            subject_ref="order:before-touch",
+        )
+        self.assertIsNone(
+            self.revenue.materialize_outcome(
+                business_id=self.business_id,
+                outcome_event_id=paid.id,
+            )
+        )
+        self.assertIsNone(
+            self.revenue.get_for_outcome(
+                business_id=self.business_id,
+                outcome_event_id=paid.id,
+            )
+        )
+
+    def test_genuinely_non_monetary_amountless_reversal_is_not_counted(self) -> None:
+        self._append(
+            OutcomeType.OUTCOME_REVERSAL,
+            event_id="amountless-reversal",
+            money=None,
+            occurred_at=_NOW + timedelta(minutes=4),
+        )
+        snapshot = self.revenue.snapshot(
+            business_id=self.business_id,
+            occurred_from=_NOW,
+            occurred_to=_NOW + timedelta(hours=1),
+        )
+        self.assertEqual(snapshot.monetary_outcomes, 0)
+        self.assertEqual(snapshot.attributed_monetary_outcomes, 0)
+        self.assertEqual(snapshot.unattributed_monetary_outcomes, 0)
+        self.assertTrue(snapshot.attribution_complete)
+        self.assertNotIn("attribution_incomplete", snapshot.limitations)
+
+    def test_negative_verified_spend_is_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            self.revenue.snapshot(
+                business_id=self.business_id,
+                occurred_from=_NOW,
+                occurred_to=_NOW + timedelta(hours=1),
+                verified_spend=OutcomeMoney(amount_minor=-1, currency="RUB"),
+            )
+
+    def test_financial_evidence_survives_source_privacy_detach(self) -> None:
+        paid = self._append(
+            OutcomeType.ORDER_PAID,
+            event_id="privacy-paid",
+            money=OutcomeMoney(amount_minor=5_000, currency="RUB"),
+            occurred_at=_NOW + timedelta(minutes=4),
+        )
+        record = self.revenue.materialize_outcome(
+            business_id=self.business_id,
+            outcome_event_id=paid.id,
+        )
+        self.assertIsNotNone(record)
+        assert record is not None
+
+        self.conn.execute(
+            "DELETE FROM promotion_campaigns WHERE id=? AND business_id=?",
+            (self.campaign.id, self.business_id),
+        )
+        retained = self.revenue.get_for_outcome(
+            business_id=self.business_id,
+            outcome_event_id=paid.id,
+        )
+        self.assertIsNotNone(retained)
+        assert retained is not None
+        self.assertIsNone(retained.touch_id)
+        self.assertIsNone(retained.attribution_identity_id)
+        self.assertIsNone(retained.promotion_campaign_id)
+        self.assertEqual(retained.amount_minor, 5_000)
+        self.assertEqual(retained.currency, "RUB")
+        self.assertEqual(retained.source_ref_id, record.source_ref_id)
+
+
+if __name__ == "__main__":
+    unittest.main()

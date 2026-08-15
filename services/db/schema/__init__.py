@@ -23,6 +23,7 @@ from . import clientplatform_program_media
 from . import clientplatform_programs
 from . import clientplatform_promotions
 from . import clientplatform_attribution
+from . import clientplatform_revenue_attribution
 from . import clientplatform_sales
 from . import clientplatform_sales_ai
 from . import clientplatform_tenancy
@@ -47,6 +48,7 @@ PARTS = [
     clientplatform_outcomes,
     clientplatform_promotions,
     clientplatform_attribution,
+    clientplatform_revenue_attribution,
     clientplatform_partners,
     clientplatform_sales,
     clientplatform_sales_ai,

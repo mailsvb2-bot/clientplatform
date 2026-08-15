@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 TenantDisposition = Literal["erase", "retain", "anonymize"]
-CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-08-15.v28-attribution-spine"
+CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-08-15.v29-revenue-attribution"
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +49,7 @@ _POLICIES = (
     _required("attribution_identities", "retain", "business-owned opaque acquisition identities retain source lineage without storing raw public tokens or customer identity"),
     _required("acquisition_touches", "erase", "customer-linked first-party acquisition touch provenance"),
     _required("attribution_links", "erase", "customer and booking links to first-party acquisition provenance"),
+    _required("revenue_attributions", "anonymize", "versioned financial attribution evidence retained while direct customer linkage is anonymized"),
     _required("partner_campaigns", "retain", "business-owned partner acquisition goal and preparation policy"),
     _required("partner_candidates", "erase", "partner profiles can contain public business contact and relationship evidence"),
     _required("partner_content_packs", "erase", "candidate-specific prepared outreach and collaboration copy"),
