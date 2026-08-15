@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from unittest.mock import patch
 
 from clientplatform.application import promotions as promotion_app
+from clientplatform.application.bookings import book_customer_slot_in_transaction
 from clientplatform.domain.attribution import (
     AcquisitionSource,
     AttributionInvariantViolation,
@@ -262,6 +263,30 @@ class ClientPlatformAttributionRepositoryTests(unittest.TestCase):
         self.assertEqual(booking_trace.touch.id, other_trace.touch.id)
         self.assertEqual(booking_trace.link.booking_slot_id, self.slot.slot.id)
         self.assertNotEqual(booking_trace.touch.id, first.touch.id)
+
+    def test_canonical_booking_path_inherits_existing_first_touch(self) -> None:
+        customer_id = self._connect_customer(700008)
+        customer_trace = self._capture(
+            campaign=self.telegram_campaign,
+            customer_id=customer_id,
+        )
+
+        claim = book_customer_slot_in_transaction(
+            self.conn,
+            telegram_user_id=700008,
+            business_id=self.business.business.id,
+            slot_id=self.slot.slot.id,
+        )
+
+        self.assertEqual(claim.customer_id, customer_id)
+        booking_trace = self.attribution.get_booking_trace(
+            business_id=self.business.business.id,
+            booking_slot_id=self.slot.slot.id,
+        )
+        self.assertIsNotNone(booking_trace)
+        assert booking_trace is not None
+        self.assertEqual(booking_trace.touch.id, customer_trace.touch.id)
+        self.assertEqual(booking_trace.identity.id, customer_trace.identity.id)
 
     def test_promoted_booking_writes_outcome_and_attribution_end_to_end(self) -> None:
         customer_id = self._connect_customer(700006)
