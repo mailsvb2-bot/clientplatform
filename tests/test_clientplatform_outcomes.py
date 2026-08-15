@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 from uuid import uuid4
 
-from clientplatform.application import bookings
+from clientplatform.application import bookings, outcomes
 from clientplatform.domain.outcomes import (
     BusinessOutcomeEvent,
     OutcomeIdempotencyConflict,
@@ -16,6 +16,7 @@ from clientplatform.domain.outcomes import (
     OutcomeSource,
     OutcomeType,
 )
+from clientplatform.domain.tenancy import PlatformRole, TenantContext, TenantPermissionDenied
 from clientplatform.infrastructure.outcome_repository import OutcomeRepository
 from services.db.schema import clientplatform_outcomes
 
@@ -26,6 +27,16 @@ class DurableOutcomeLedgerTests(unittest.TestCase):
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys=ON")
         self.conn.execute("CREATE TABLE businesses(id TEXT PRIMARY KEY)")
+        self.conn.execute(
+            """
+            CREATE TABLE customers(
+                id TEXT PRIMARY KEY,
+                business_id TEXT NOT NULL,
+                UNIQUE(id, business_id),
+                FOREIGN KEY(business_id) REFERENCES businesses(id)
+            )
+            """
+        )
         self.business_a = str(uuid4())
         self.business_b = str(uuid4())
         self.customer_a = str(uuid4())
@@ -33,6 +44,13 @@ class DurableOutcomeLedgerTests(unittest.TestCase):
         self.conn.executemany(
             "INSERT INTO businesses(id) VALUES(?)",
             ((self.business_a,), (self.business_b,)),
+        )
+        self.conn.executemany(
+            "INSERT INTO customers(id, business_id) VALUES(?, ?)",
+            (
+                (self.customer_a, self.business_a),
+                (self.customer_b, self.business_b),
+            ),
         )
         clientplatform_outcomes.ensure(self.conn)
         self.conn.commit()
@@ -70,6 +88,14 @@ class DurableOutcomeLedgerTests(unittest.TestCase):
             metadata={} if metadata is None else metadata,
             metadata_version=1,
             created_at=occurred + timedelta(seconds=1),
+        )
+
+    def _actor(self, role: PlatformRole) -> TenantContext:
+        return TenantContext(
+            business_id=self.business_a,
+            user_id=1,
+            membership_id=str(uuid4()),
+            role=role,
         )
 
     def test_duplicate_append_returns_original_event_without_duplicate_row(self) -> None:
@@ -142,7 +168,18 @@ class DurableOutcomeLedgerTests(unittest.TestCase):
             repo.append(
                 self._event(
                     business_id=str(uuid4()),
-                    customer_id=self.customer_a,
+                    customer_id=None,
+                )
+            )
+
+    def test_customer_reference_cannot_cross_business_boundary(self) -> None:
+        repo = OutcomeRepository(self.conn)
+        with self.assertRaises(sqlite3.IntegrityError):
+            repo.append(
+                self._event(
+                    business_id=self.business_a,
+                    customer_id=self.customer_b,
+                    source_id="cross-tenant-slot",
                 )
             )
 
@@ -163,6 +200,7 @@ class DurableOutcomeLedgerTests(unittest.TestCase):
             money=OutcomeMoney(amount_minor=12500, currency="rub"),
         )
         outside = self._event(
+            business_id=self.business_b,
             customer_id=self.customer_b,
             source_id="slot-b",
             occurred_at=base + timedelta(hours=2),
@@ -222,6 +260,51 @@ class DurableOutcomeLedgerTests(unittest.TestCase):
         self.assertEqual(OutcomeType.BOOKING_CREATED, by_id[original.id].outcome_type)
         self.assertEqual(OutcomeType.OUTCOME_CORRECTION, by_id[correction.id].outcome_type)
         self.assertEqual(OutcomeType.OUTCOME_REVERSAL, by_id[reversal.id].outcome_type)
+
+    def test_raw_outcome_ledger_read_requires_privileged_business_role(self) -> None:
+        for role in (
+            PlatformRole.CONTENT_MANAGER,
+            PlatformRole.MARKETER,
+            PlatformRole.ANALYST,
+            PlatformRole.SUPPORT,
+        ):
+            with self.subTest(role=role):
+                with self.assertRaises(TenantPermissionDenied):
+                    self._actor(role).assert_can_view_outcome_ledger()
+
+        for role in (
+            PlatformRole.OWNER,
+            PlatformRole.ADMINISTRATOR,
+            PlatformRole.MANAGER,
+        ):
+            with self.subTest(role=role):
+                self._actor(role).assert_can_view_outcome_ledger()
+
+    @contextmanager
+    def _read_context(self):
+        yield self.conn
+
+    def test_application_outcome_read_enforces_rbac_before_repository_query(self) -> None:
+        actor = self._actor(PlatformRole.SUPPORT)
+
+        class FakeTenancyRepository:
+            def __init__(inner_self, _conn):
+                pass
+
+            def resolve_context(inner_self, **_kwargs):
+                return actor
+
+        class ForbiddenOutcomeRepository:
+            def __init__(inner_self, _conn):
+                raise AssertionError("outcome repository must not be opened for forbidden role")
+
+        with (
+            patch.object(outcomes, "get_db_ro", self._read_context),
+            patch.object(outcomes, "TenancyRepository", FakeTenancyRepository),
+            patch.object(outcomes, "OutcomeRepository", ForbiddenOutcomeRepository),
+        ):
+            with self.assertRaises(TenantPermissionDenied):
+                outcomes.list_business_outcomes(actor=actor)
 
     def _claim(self, *, business_id: str, customer_id: str, slot_id: str):
         booked_at = "2026-08-15T12:00:00+00:00"
