@@ -105,7 +105,7 @@ def _timestamp_candidate(payload: Mapping[str, Any], platform: ConnectionPlatfor
     if platform == ConnectionPlatform.VK:
         obj = _mapping(payload.get("object"))
         message = _mapping(obj.get("message") or obj)
-        candidates.extend((message.get("date"), obj.get("date"), payload.get("timestamp"), payload.get("ts")))
+        candidates.extend((message.get("date"), obj.get("date"), payload.get("timestamp")))
     else:
         message = _mapping(payload.get("message"))
         candidates.extend(
@@ -114,7 +114,6 @@ def _timestamp_candidate(payload: Mapping[str, Any], platform: ConnectionPlatfor
                 message.get("created_at"),
                 payload.get("timestamp"),
                 payload.get("created_at"),
-                payload.get("update_id"),
             )
         )
     for candidate in candidates:
@@ -143,15 +142,57 @@ def _timestamp_candidate(payload: Mapping[str, Any], platform: ConnectionPlatfor
     return None
 
 
+def _positive_sequence(value: Any) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        candidate = int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    if 0 < candidate < 10**19:
+        return candidate
+    return None
+
+
+def _provider_sequence_candidate(payload: Mapping[str, Any], platform: ConnectionPlatform) -> int | None:
+    candidates: list[Any]
+    if platform == ConnectionPlatform.VK:
+        obj = _mapping(payload.get("object"))
+        message = _mapping(obj.get("message") or obj)
+        candidates = [
+            message.get("conversation_message_id"),
+            message.get("id"),
+            obj.get("conversation_message_id"),
+            obj.get("id"),
+            payload.get("ts"),
+        ]
+    else:
+        message = _mapping(payload.get("message"))
+        body = _mapping(message.get("body"))
+        candidates = [
+            payload.get("update_id"),
+            body.get("mid"),
+            message.get("message_id"),
+            message.get("id"),
+        ]
+    for candidate in candidates:
+        sequence = _positive_sequence(candidate)
+        if sequence is not None:
+            return sequence
+    return None
+
+
 def _source_order(payload: Mapping[str, Any], platform: ConnectionPlatform, scoped_event_key: str) -> str:
     millis = _timestamp_candidate(payload, platform)
     if millis is None:
         millis = min(int(time.time() * 1000), 9_999_999_999_999)
-    tail = int.from_bytes(
-        hashlib.sha256(scoped_event_key.encode("utf-8")).digest()[:8],
-        "big",
-    ) % (10**19)
-    return f"{millis:013d}{tail:019d}"
+    sequence = _provider_sequence_candidate(payload, platform)
+    if sequence is None:
+        sequence = int.from_bytes(
+            hashlib.sha256(scoped_event_key.encode("utf-8")).digest()[:8],
+            "big",
+        ) % (10**19)
+    return f"{millis:013d}{sequence:019d}"
 
 
 def _sales_ai_runtime() -> tuple[bool, str]:
@@ -195,9 +236,10 @@ async def _process_business_event(
     except (MessengerRouteNotFound, ValueError):
         raise web.HTTPNotFound(text="not found") from None
 
+    credential_provider = EnvironmentCredentialProvider()
     try:
         expected_secret = await asyncio.to_thread(
-            EnvironmentCredentialProvider().resolve,
+            credential_provider.resolve,
             route.webhook_secret_reference,
         )
     except SecretReferenceError:
@@ -214,6 +256,24 @@ async def _process_business_event(
     if platform == ConnectionPlatform.VK:
         if not _verify_vk(payload, expected_secret=expected_secret, external_route_id=route.external_route_id):
             return web.Response(status=403, text="forbidden")
+        if str(payload.get("type") or "").strip() == "confirmation":
+            reference = route.confirmation_code_reference
+            if reference is None:
+                return web.Response(status=503, text="unavailable")
+            try:
+                confirmation_code = str(
+                    await asyncio.to_thread(credential_provider.resolve, reference)
+                    or ""
+                ).strip()
+            except SecretReferenceError:
+                log.error(
+                    "Canonical VK confirmation code is unavailable",
+                    extra={"route_id": route.id},
+                )
+                return web.Response(status=503, text="unavailable")
+            if not confirmation_code:
+                return web.Response(status=503, text="unavailable")
+            return web.Response(text=confirmation_code)
         raw_event_key = vk_event_key(payload)
         extracted = _vk_raw_message(payload)
     else:
