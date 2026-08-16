@@ -19,6 +19,7 @@ from clientplatform.application.ad_connections import (
     ad_connections_enabled,
     confirm_ad_publication,
     create_ad_publication_draft,
+    create_managed_ad_publication_draft,
     list_ad_connections,
     list_ad_publications,
     list_yandex_direct_campaigns,
@@ -51,6 +52,7 @@ from . import clientplatform_simple_experience as simple
 
 class AdConnectionState(StatesGroup):
     selecting_connection = State()
+    selecting_campaign_mode = State()
     selecting_campaign = State()
     waiting_regions = State()
     confirming_publication = State()
@@ -73,6 +75,8 @@ _JOB_LABELS = {
     AdPublicationStatus.CANCELLED: "отменено",
 }
 _CONFIRM_DRAFT_LABEL = "✅ Создать черновик в Яндекс Директе"
+_MANAGED_MODE_CALLBACK = "cpa:campaign-mode:managed"
+_EXISTING_MODE_CALLBACK = "cpa:campaign-mode:existing"
 
 
 def _message(callback: CallbackQuery) -> Message:
@@ -229,8 +233,8 @@ async def open_ad_promotion_slots(callback: CallbackQuery) -> None:
     await _message(callback).answer(
         "🎯 Создать рекламу\n\n"
         "Выберите, какое свободное время рекламировать. Следующим шагом ClientPlatform "
-        "предложит кабинет, кампанию и регион, а перед созданием покажет полный "
-        "черновик для подтверждения.\n\n"
+        "предложит кабинет и способ публикации, затем регион, а перед созданием покажет "
+        "полный черновик для подтверждения.\n\n"
         "Свободное время:",
         reply_markup=control._keyboard(rows),
     )
@@ -325,6 +329,74 @@ async def choose_ad_connection(
     AdConnectionState.selecting_connection,
     F.data.startswith("cpa:conn:"),
 )
+async def choose_yandex_publication_mode(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    data = await state.get_data()
+    try:
+        index = int(str(callback.data).split(":", 2)[2])
+        connection_id = list(data["connection_ids"])[index]
+    except (IndexError, KeyError, TypeError, ValueError):
+        await callback.answer("Кабинет больше не найден", show_alert=True)
+        return
+    await state.update_data(connection_id=str(connection_id))
+    await state.set_state(AdConnectionState.selecting_campaign_mode)
+    await callback.answer()
+    await _message(callback).answer(
+        "Как использовать Яндекс Директ?\n\n"
+        "Рекомендуемый вариант — отдельная управляемая кампания ClientPlatform в "
+        "Вашем кабинете. Она создаётся отключённой: показы и расходы автоматически "
+        "не запускаются.\n\n"
+        "Если у Вас уже есть подходящая текстовая кампания, её по-прежнему можно "
+        "выбрать вручную.",
+        reply_markup=control._keyboard(
+            [
+                [("✨ Кампания ClientPlatform", _MANAGED_MODE_CALLBACK)],
+                [("📂 Выбрать существующую", _EXISTING_MODE_CALLBACK)],
+                [("Отмена", f"cpa:home:{data['business_token']}")],
+            ]
+        ),
+    )
+
+
+async def _request_ad_regions_screen(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    await state.set_state(AdConnectionState.waiting_regions)
+    await callback.answer()
+    await _message(callback).answer(
+        "Укажите регион показа — один или несколько ID через запятую.\n\n"
+        "Частые варианты:\n"
+        "• Нижний Новгород — 47\n"
+        "• Москва — 213\n"
+        "• Санкт-Петербург — 2\n\n"
+        "Показы по всей стране автоматически не включаются: география должна быть "
+        "задана явно."
+    )
+
+
+@simple.router.callback_query(
+    AdConnectionState.selecting_campaign_mode,
+    F.data == _MANAGED_MODE_CALLBACK,
+)
+async def choose_managed_yandex_campaign(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    data = await state.get_data()
+    if not str(data.get("connection_id") or "").strip():
+        await callback.answer("Кабинет больше не найден", show_alert=True)
+        return
+    await state.update_data(publication_mode="managed")
+    await _request_ad_regions_screen(callback, state)
+
+
+@simple.router.callback_query(
+    AdConnectionState.selecting_campaign_mode,
+    F.data == _EXISTING_MODE_CALLBACK,
+)
 async def choose_yandex_campaign(
     callback: CallbackQuery,
     state: FSMContext,
@@ -332,8 +404,11 @@ async def choose_yandex_campaign(
     await callback.answer("Загружаю кампании…")
     data = await state.get_data()
     try:
-        index = int(str(callback.data).split(":", 2)[2])
-        connection_id = list(data["connection_ids"])[index]
+        if str(callback.data or "").startswith("cpa:conn:"):
+            index = int(str(callback.data).split(":", 2)[2])
+            connection_id = list(data["connection_ids"])[index]
+        else:
+            connection_id = str(data["connection_id"])
         actor = await control._actor(
             int(callback.from_user.id),
             str(data["business_id"]),
@@ -355,7 +430,12 @@ async def choose_yandex_campaign(
         AdConnectionError,
         YandexDirectError,
     ):
-        rows = [[("🔄 Повторить", str(callback.data or "cpa:conn:0"))]]
+        retry_callback = (
+            str(callback.data or "")
+            if str(callback.data or "").startswith("cpa:conn:")
+            else _EXISTING_MODE_CALLBACK
+        )
+        rows = [[("🔄 Повторить", retry_callback)]]
         business_token = str(data.get("business_token") or "").strip()
         if business_token:
             rows.append(
@@ -370,18 +450,20 @@ async def choose_yandex_campaign(
     eligible = [item for item in campaigns if item.state != "ARCHIVED"][:20]
     if not eligible:
         business_token = str(data.get("business_token") or "").strip()
-        rows = []
+        rows = [[("✨ Кампания ClientPlatform", _MANAGED_MODE_CALLBACK)]]
         if business_token:
             rows.append(
                 [("⬅️ К рекламному кабинету", f"cpa:home:{business_token}")]
             )
         await _message(callback).answer(
-            "В кабинете нет подходящей активной текстовой кампании.",
+            "В кабинете нет подходящей активной текстовой кампании. "
+            "Можно использовать отдельную управляемую кампанию ClientPlatform.",
             reply_markup=control._keyboard(rows),
         )
         return
     await state.update_data(
-        connection_id=connection_id,
+        connection_id=str(connection_id),
+        publication_mode="existing",
         yandex_campaigns=[
             {"id": item.campaign_id, "name": item.name} for item in eligible
         ],
@@ -413,20 +495,11 @@ async def request_ad_regions(callback: CallbackQuery, state: FSMContext) -> None
         await callback.answer("Кампания больше не найдена", show_alert=True)
         return
     await state.update_data(
+        publication_mode="existing",
         external_campaign_id=str(selected["id"]),
         external_campaign_name=str(selected["name"]),
     )
-    await state.set_state(AdConnectionState.waiting_regions)
-    await callback.answer()
-    await _message(callback).answer(
-        "Укажите регион показа — один или несколько ID через запятую.\n\n"
-        "Частые варианты:\n"
-        "• Нижний Новгород — 47\n"
-        "• Москва — 213\n"
-        "• Санкт-Петербург — 2\n\n"
-        "Показы по всей стране автоматически не включаются: география должна быть "
-        "задана явно."
-    )
+    await _request_ad_regions_screen(callback, state)
 
 
 @simple.router.message(AdConnectionState.waiting_regions)
@@ -434,26 +507,60 @@ async def prepare_ad_publication(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     try:
         regions = normalize_region_ids(str(message.text or ""))
-        actor = await control._actor(
-            control._user_id(message),
-            str(data["business_id"]),
-        )
-        draft = await asyncio.to_thread(
-            create_ad_publication_draft,
-            actor=actor,
-            promotion_campaign_id=str(data["promotion_campaign_id"]),
-            connection_id=str(data["connection_id"]),
-            external_campaign_id=str(data["external_campaign_id"]),
-            external_campaign_name=str(data["external_campaign_name"]),
-            region_ids=regions,
-            source_url=str(data["source_url"]),
-        )
-    except (KeyError, TypeError, ValueError, AdConnectionError):
+    except (TypeError, ValueError):
         await message.answer(
             "Не удалось распознать регион. Введите положительный ID, например 47, "
             "или несколько ID через запятую."
         )
         return
+
+    publication_mode = str(data.get("publication_mode") or "").strip()
+    if publication_mode not in {"managed", "existing"}:
+        await state.clear()
+        await message.answer(
+            "Сценарий публикации устарел или повреждён. Начните создание рекламы "
+            "заново — никаких действий в Яндекс Директе не выполнено."
+        )
+        return
+
+    try:
+        actor = await control._actor(
+            control._user_id(message),
+            str(data["business_id"]),
+        )
+        common = {
+            "actor": actor,
+            "promotion_campaign_id": str(data["promotion_campaign_id"]),
+            "connection_id": str(data["connection_id"]),
+            "region_ids": regions,
+            "source_url": str(data["source_url"]),
+        }
+        if publication_mode == "managed":
+            draft = await asyncio.to_thread(
+                create_managed_ad_publication_draft,
+                **common,
+            )
+        else:
+            draft = await asyncio.to_thread(
+                create_ad_publication_draft,
+                **common,
+                external_campaign_id=str(data["external_campaign_id"]),
+                external_campaign_name=str(data["external_campaign_name"]),
+            )
+    except (
+        KeyError,
+        TypeError,
+        ValueError,
+        AdConnectionError,
+        YandexDirectError,
+        RuntimeError,
+    ):
+        await message.answer(
+            "Не удалось подготовить рекламный черновик. Проверьте подключение Яндекс "
+            "Директа и повторите попытку. Показы и расходы не запускались."
+        )
+        return
+
     await state.update_data(
         job_id=draft.job.id,
         creative_title=draft.job.title,
@@ -461,6 +568,12 @@ async def prepare_ad_publication(message: Message, state: FSMContext) -> None:
         creative_job_id="",
     )
     await state.set_state(AdConnectionState.confirming_publication)
+    managed_note = (
+        "ClientPlatform использует отдельную отключённую управляемую кампанию в "
+        "Вашем кабинете. "
+        if publication_mode == "managed"
+        else ""
+    )
     await message.answer(
         "Проверьте рекламный черновик:\n\n"
         f"Кампания: {draft.campaign_name}\n"
@@ -468,7 +581,8 @@ async def prepare_ad_publication(message: Message, state: FSMContext) -> None:
         f"Заголовок: {draft.job.title}\n"
         f"Текст: {draft.job.text}\n"
         f"Ссылка: {draft.job.source_url}\n\n"
-        "После подтверждения ClientPlatform создаст группу и объявление со статусом "
+        + managed_note
+        + "После подтверждения ClientPlatform создаст группу и объявление со статусом "
         "DRAFT в Вашем кабинете. Показов, модерации и расходов автоматически не будет.",
         reply_markup=control._keyboard(
             [
@@ -714,6 +828,9 @@ async def confirm_yandex_publication(
 
 __all__ = [
     "AdConnectionState",
+    "choose_managed_yandex_campaign",
+    "choose_yandex_campaign",
+    "choose_yandex_publication_mode",
     "confirm_yandex_publication",
     "connect_yandex_direct",
     "generate_ad_visual",
@@ -721,5 +838,6 @@ __all__ = [
     "open_ad_promotion_slots",
     "prepare_ad_publication",
     "refresh_ad_visual",
+    "request_ad_regions",
     "skip_ad_visual",
 ]
