@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, patch
 
 from clientplatform.domain.ad_connections import AdPublicationStatus
 from handlers import clientplatform_ad_connections as ad_handlers
