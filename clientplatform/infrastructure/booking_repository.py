@@ -21,7 +21,7 @@ from clientplatform.domain.bookings import (
     normalize_utc_datetime,
     parse_local_booking_start,
 )
-from clientplatform.domain.customers import CustomerPlatform
+from clientplatform.domain.customers import CustomerPlatform, normalize_platform
 from clientplatform.domain.tenancy import TenantContext, normalize_uuid
 from clientplatform.infrastructure.activity_repository import ActivityRepository
 from clientplatform.infrastructure.tenancy_repository import TenancyRepository
@@ -238,7 +238,7 @@ class BookingRepository:
         platform: CustomerPlatform | str,
         external_subject: str,
     ) -> list[CustomerBusinessLink]:
-        normalized_platform = CustomerPlatform(str(platform).strip().lower()).value
+        normalized_platform = normalize_platform(platform).value
         subject = str(external_subject or "").strip()
         if not subject:
             raise ValueError("external_subject is required")
@@ -424,7 +424,7 @@ class BookingRepository:
             """
             UPDATE booking_slots
             SET status='booked', booked_customer_id=?, booked_at=?, updated_at=?
-            WHERE id=? AND business_id=? AND status='open'
+            WHERE id=? AND business_id=? AND status='open' AND booked_customer_id IS NULL
             """,
             (
                 link.customer_id,
