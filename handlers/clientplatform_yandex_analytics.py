@@ -8,6 +8,10 @@ from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 
+from clientplatform.application.yandex_campaign_diagnostics import (
+    YandexCampaignDiagnosticsSnapshot,
+    get_yandex_campaign_diagnostics,
+)
 from clientplatform.application.yandex_growth_analytics import (
     YandexGrowthSnapshot,
     get_yandex_growth_snapshot,
@@ -43,6 +47,7 @@ def _keyboard(
     *,
     connected_accounts: int,
     connect_available: bool,
+    campaign_mode: bool = False,
 ) -> InlineKeyboardMarkup:
     token = control._uuid_token(business_id)
     rows: list[list[tuple[str, str]]] = []
@@ -52,18 +57,27 @@ def _keyboard(
                 [("➕ Подключить Яндекс Директ", f"cpa:connect:{token}")]
             )
     else:
+        prefix = "c" if campaign_mode else "a"
         rows.append(
             [
                 (
                     "7 дней" if period_days != 7 else "✅ 7 дней",
-                    f"cpy:a:{token}:7",
+                    f"cpy:{prefix}:{token}:7",
                 ),
                 (
                     "30 дней" if period_days != 30 else "✅ 30 дней",
-                    f"cpy:a:{token}:30",
+                    f"cpy:{prefix}:{token}:30",
                 ),
             ]
         )
+        if campaign_mode:
+            rows.append(
+                [("🎯 Exact AdId + результаты", f"cpy:a:{token}:{period_days}")]
+            )
+        else:
+            rows.append(
+                [("📈 Кампании по CampaignId", f"cpy:c:{token}:{period_days}")]
+            )
     rows.extend(
         [
             [("📣 Рекламные кабинеты", f"cpa:home:{token}")],
@@ -153,6 +167,66 @@ def _format_snapshot(
     return "\n".join(lines)
 
 
+def _format_campaign_snapshot(snapshot: YandexCampaignDiagnosticsSnapshot) -> str:
+    if snapshot.connected_accounts == 0:
+        return (
+            "📈 Яндекс Директ — кампании\n\n"
+            "Рекламный кабинет ещё не подключён."
+        )
+    if snapshot.managed_campaigns == 0:
+        return (
+            "📈 Яндекс Директ — кампании\n\n"
+            f"Подключённых кабинетов: {snapshot.connected_accounts}\n\n"
+            "Пока нет кампаний, которыми ClientPlatform уже управляет или для "
+            "которых готовил публикацию."
+        )
+
+    lines = [
+        "📈 Яндекс Директ — CampaignId диагностика",
+        "",
+        f"Период: {snapshot.date_from} — {snapshot.date_to}",
+        "Read-only статистика Yandex Reports по управляемым CampaignId.",
+        "Это диагностика рекламной кампании, а не атрибуция лидов, записей или выручки.",
+        "",
+        f"Кампаний: {snapshot.managed_campaigns}",
+        f"Показы: {snapshot.impressions}",
+        f"Клики: {snapshot.clicks}",
+        f"CTR: {snapshot.ctr_percent:.1f}%",
+        f"Расход: {_money(snapshot.cost_micros)} в валюте кабинета",
+        _metric("Средний CPC", snapshot.cpc_micros),
+        "",
+        "По CampaignId:",
+    ]
+    for campaign in snapshot.campaigns[:12]:
+        provider_note = "" if campaign.has_provider_row else " · пока 0 строк в отчёте"
+        lines.append(
+            f"• {campaign.campaign_name[:34]} [{campaign.campaign_id}] — "
+            f"{campaign.impressions} показов · {campaign.clicks} кликов · "
+            f"{_money(campaign.cost_micros)} в валюте кабинета{provider_note}"
+        )
+    if snapshot.cost_micros is None:
+        lines.extend(
+            [
+                "",
+                "Общий денежный итог скрыт: кампании относятся к нескольким "
+                "рекламным кабинетам, а подтверждённая валюта подключения пока "
+                "не хранится. Показы и клики можно суммировать; деньги между "
+                "кабинетами — нельзя.",
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "Кампания остаётся видимой даже до появления AdId: отсутствие строки "
+            "в отчёте означает нулевую наблюдаемую доставку, а не исчезновение "
+            "управляемого CampaignId.",
+            "Для CPL/CAC и бизнес-результатов используется отдельный точный AdId "
+            "контур; CampaignId-расход к выручке автоматически не приписывается.",
+        ]
+    )
+    return "\n".join(lines)
+
+
 async def _answer_feedback(
     callback: CallbackQuery,
     text: str,
@@ -197,16 +271,21 @@ async def _replace_panel(
     await message.answer(text, reply_markup=reply_markup)
 
 
+def _parse_callback(callback: CallbackQuery, *, expected_mode: str) -> tuple[str, int]:
+    parts = str(callback.data).split(":")
+    if len(parts) != 4 or parts[1] != expected_mode:
+        raise ValueError("malformed Yandex analytics callback")
+    business_id = control._token_uuid(parts[2])
+    period_days = int(parts[3])
+    if period_days not in {7, 30}:
+        raise ValueError("unsupported Yandex analytics period")
+    return business_id, period_days
+
+
 @router.callback_query(F.data.startswith("cpy:a:"))
 async def open_yandex_analytics(callback: CallbackQuery, state: FSMContext) -> None:
-    parts = str(callback.data).split(":")
     try:
-        if len(parts) != 4:
-            raise ValueError("malformed Yandex analytics callback")
-        business_id = control._token_uuid(parts[2])
-        period_days = int(parts[3])
-        if period_days not in {7, 30}:
-            raise ValueError("unsupported Yandex analytics period")
+        business_id, period_days = _parse_callback(callback, expected_mode="a")
     except (IndexError, TypeError, ValueError):
         await _answer_unavailable(callback)
         return
@@ -256,4 +335,59 @@ async def open_yandex_analytics(callback: CallbackQuery, state: FSMContext) -> N
     )
 
 
-__all__ = ["open_yandex_analytics", "router"]
+@router.callback_query(F.data.startswith("cpy:c:"))
+async def open_yandex_campaign_diagnostics(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    try:
+        business_id, period_days = _parse_callback(callback, expected_mode="c")
+    except (IndexError, TypeError, ValueError):
+        await _answer_unavailable(callback)
+        return
+
+    await state.clear()
+    try:
+        actor = await control._actor(int(callback.from_user.id), business_id)
+        snapshot = await asyncio.to_thread(
+            get_yandex_campaign_diagnostics,
+            actor=actor,
+            period_days=period_days,
+        )
+    except YandexDirectError as exc:
+        if exc.code == "analytics_report_pending":
+            await _answer_feedback(
+                callback,
+                "Яндекс готовит отчёт по кампаниям. Нажмите ещё раз через несколько секунд.",
+                show_alert=True,
+            )
+        else:
+            await _answer_feedback(
+                callback,
+                "Не удалось прочитать CampaignId-статистику Яндекса. Проверьте подключение кабинета.",
+                show_alert=True,
+            )
+        return
+    except (PermissionError, RuntimeError, ValueError):
+        await _answer_unavailable(callback)
+        return
+
+    connect_available = screen_code_configuration_available()
+    await _replace_panel(
+        control._callback_message(callback),
+        text=_format_campaign_snapshot(snapshot),
+        reply_markup=_keyboard(
+            business_id,
+            period_days,
+            connected_accounts=snapshot.connected_accounts,
+            connect_available=connect_available,
+            campaign_mode=True,
+        ),
+    )
+
+
+__all__ = [
+    "open_yandex_analytics",
+    "open_yandex_campaign_diagnostics",
+    "router",
+]
