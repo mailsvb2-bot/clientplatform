@@ -21,6 +21,7 @@ from clientplatform.domain.bookings import (
     normalize_utc_datetime,
     parse_local_booking_start,
 )
+from clientplatform.domain.customers import CustomerPlatform
 from clientplatform.domain.tenancy import TenantContext, normalize_uuid
 from clientplatform.infrastructure.activity_repository import ActivityRepository
 from clientplatform.infrastructure.tenancy_repository import TenancyRepository
@@ -117,7 +118,7 @@ _SLOT_SELECT = """
 
 
 class BookingRepository:
-    """Tenant-safe availability and customer self-booking repository."""
+    """Tenant-safe availability and channel-neutral customer self-booking repository."""
 
     def __init__(self, conn: Any):
         self._conn = conn
@@ -231,8 +232,16 @@ class BookingRepository:
         ).fetchall()
         return [_view_from_row(row) for row in rows]
 
-    def list_customer_businesses(self, *, telegram_user_id: int) -> list[CustomerBusinessLink]:
-        principal = normalize_telegram_principal(telegram_user_id)
+    def list_customer_businesses_by_identity(
+        self,
+        *,
+        platform: CustomerPlatform | str,
+        external_subject: str,
+    ) -> list[CustomerBusinessLink]:
+        normalized_platform = CustomerPlatform(str(platform).strip().lower()).value
+        subject = str(external_subject or "").strip()
+        if not subject:
+            raise ValueError("external_subject is required")
         rows = self._conn.execute(
             """
             SELECT ci.business_id, b.name AS business_name, ci.customer_id
@@ -241,10 +250,10 @@ class BookingRepository:
               ON c.id=ci.customer_id AND c.business_id=ci.business_id AND c.status='active'
             JOIN businesses b
               ON b.id=ci.business_id AND b.status='active'
-            WHERE ci.platform='telegram' AND ci.external_subject=? AND ci.status='active'
+            WHERE ci.platform=? AND ci.external_subject=? AND ci.status='active'
             ORDER BY b.name, ci.business_id
             """,
-            (str(principal),),
+            (normalized_platform, subject),
         ).fetchall()
         return [
             CustomerBusinessLink(
@@ -254,6 +263,34 @@ class BookingRepository:
             )
             for row in rows
         ]
+
+    def list_customer_businesses(self, *, telegram_user_id: int) -> list[CustomerBusinessLink]:
+        principal = normalize_telegram_principal(telegram_user_id)
+        return self.list_customer_businesses_by_identity(
+            platform=CustomerPlatform.TELEGRAM,
+            external_subject=str(principal),
+        )
+
+    def _customer_link_by_id(self, *, customer_id: str, business_id: str) -> CustomerBusinessLink:
+        normalized_business = normalize_uuid(business_id, field_name="business_id")
+        normalized_customer = normalize_uuid(customer_id, field_name="customer_id")
+        row = self._conn.execute(
+            """
+            SELECT c.business_id, b.name AS business_name, c.id AS customer_id
+            FROM customers c
+            JOIN businesses b ON b.id=c.business_id AND b.status='active'
+            WHERE c.id=? AND c.business_id=? AND c.status='active'
+            LIMIT 1
+            """,
+            (normalized_customer, normalized_business),
+        ).fetchone()
+        if row is None:
+            raise BookingNotFound("Вы не подключены к этому бизнесу")
+        return CustomerBusinessLink(
+            business_id=str(_value(row, "business_id", 0)),
+            business_name=str(_value(row, "business_name", 1)),
+            customer_id=str(_value(row, "customer_id", 2)),
+        )
 
     def _customer_link(self, *, telegram_user_id: int, business_id: str) -> CustomerBusinessLink:
         normalized_business = normalize_uuid(business_id, field_name="business_id")
@@ -266,17 +303,14 @@ class BookingRepository:
             raise BookingNotFound("Вы не подключены к этому бизнесу")
         return matches[0]
 
-    def get_customer_booking(
+    def get_customer_booking_by_customer(
         self,
         *,
-        telegram_user_id: int,
+        customer_id: str,
         business_id: str,
         slot_id: str,
     ) -> BookingClaim:
-        link = self._customer_link(
-            telegram_user_id=telegram_user_id,
-            business_id=business_id,
-        )
+        link = self._customer_link_by_id(customer_id=customer_id, business_id=business_id)
         normalized_slot = normalize_uuid(slot_id, field_name="booking_slot_id")
         row = self._conn.execute(
             _SLOT_SELECT
@@ -290,14 +324,28 @@ class BookingRepository:
             raise BookingNotFound("запись больше не активна")
         return BookingClaim(slot=view, customer_id=link.customer_id)
 
-    def list_open_slots_for_customer(
+    def get_customer_booking(
         self,
         *,
         telegram_user_id: int,
         business_id: str,
+        slot_id: str,
+    ) -> BookingClaim:
+        link = self._customer_link(telegram_user_id=telegram_user_id, business_id=business_id)
+        return self.get_customer_booking_by_customer(
+            customer_id=link.customer_id,
+            business_id=link.business_id,
+            slot_id=slot_id,
+        )
+
+    def list_open_slots_for_customer_id(
+        self,
+        *,
+        customer_id: str,
+        business_id: str,
         now: str | None = None,
     ) -> list[BookingSlotView]:
-        link = self._customer_link(telegram_user_id=telegram_user_id, business_id=business_id)
+        link = self._customer_link_by_id(customer_id=customer_id, business_id=business_id)
         timestamp = normalize_utc_datetime(str(now or _utc_now()), field_name="now")
         rows = self._conn.execute(
             _SLOT_SELECT
@@ -310,15 +358,29 @@ class BookingRepository:
         ).fetchall()
         return [_view_from_row(row) for row in rows]
 
-    def book_slot(
+    def list_open_slots_for_customer(
         self,
         *,
         telegram_user_id: int,
         business_id: str,
+        now: str | None = None,
+    ) -> list[BookingSlotView]:
+        link = self._customer_link(telegram_user_id=telegram_user_id, business_id=business_id)
+        return self.list_open_slots_for_customer_id(
+            customer_id=link.customer_id,
+            business_id=link.business_id,
+            now=now,
+        )
+
+    def book_slot_for_customer(
+        self,
+        *,
+        customer_id: str,
+        business_id: str,
         slot_id: str,
         now: str | None = None,
     ) -> BookingClaim:
-        link = self._customer_link(telegram_user_id=telegram_user_id, business_id=business_id)
+        link = self._customer_link_by_id(customer_id=customer_id, business_id=business_id)
         normalized_slot = normalize_uuid(slot_id, field_name="booking_slot_id")
         timestamp = normalize_utc_datetime(str(now or _utc_now()), field_name="now")
         _serialize_booking_write(
@@ -381,3 +443,19 @@ class BookingRepository:
         if booked is None:
             raise BookingNotFound("забронированное время не найдено")
         return BookingClaim(slot=_view_from_row(booked), customer_id=link.customer_id)
+
+    def book_slot(
+        self,
+        *,
+        telegram_user_id: int,
+        business_id: str,
+        slot_id: str,
+        now: str | None = None,
+    ) -> BookingClaim:
+        link = self._customer_link(telegram_user_id=telegram_user_id, business_id=business_id)
+        return self.book_slot_for_customer(
+            customer_id=link.customer_id,
+            business_id=link.business_id,
+            slot_id=slot_id,
+            now=now,
+        )
