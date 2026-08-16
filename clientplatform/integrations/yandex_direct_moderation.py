@@ -15,6 +15,7 @@ from clientplatform.integrations.yandex_direct import (
 
 
 _SUPPORTED_CAMPAIGN_TYPE = "TEXT_CAMPAIGN"
+_SUPPORTED_ADVERTISER_TYPES = {"CLIENT", "SUBCLIENT"}
 _PERMISSION_ERROR_CODES = {
     "provider_54": "direct_permission_denied",
     "provider_55": "direct_account_access_denied",
@@ -68,7 +69,7 @@ class ModeratingYandexDirectProvider(YandexDirectProvider):
             raise YandexDirectError(safe_code, retryable=False) from exc
 
     def account_identity(self, *, access_token: str) -> YandexAccountIdentity:
-        """Resolve and authorize the connected Direct account."""
+        """Resolve one concrete advertiser from Direct, never from OAuth login."""
 
         result = self._direct_call(
             service="clients",
@@ -80,6 +81,7 @@ class ModeratingYandexDirectProvider(YandexDirectProvider):
                         "ClientId",
                         "ClientInfo",
                         "Login",
+                        "Type",
                         "Archived",
                         "Grants",
                     ]
@@ -92,6 +94,11 @@ class ModeratingYandexDirectProvider(YandexDirectProvider):
         client = clients[0]
         if str(client.get("Archived") or "NO").strip().upper() == "YES":
             raise YandexDirectError("direct_account_archived")
+        account_type = str(client.get("Type") or "").strip().upper()
+        if account_type == "AGENCY":
+            raise YandexDirectError("direct_agency_account_ambiguous")
+        if account_type not in _SUPPORTED_ADVERTISER_TYPES:
+            raise YandexDirectError("direct_account_type_unsupported")
         client_id = normalize_external_campaign_id(client.get("ClientId"))
         login = " ".join(str(client.get("Login") or "").split())
         if not login:
