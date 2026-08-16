@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import socket
 from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Mapping, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -14,6 +15,9 @@ from clientplatform.domain.ad_connections import (
     pkce_challenge,
 )
 from clientplatform.domain.managed_ad_campaigns import normalize_managed_campaign_name
+
+
+_YANDEX_MOSCOW = timezone(timedelta(hours=3))
 
 
 class YandexDirectError(RuntimeError):
@@ -134,6 +138,20 @@ class YandexCampaign:
 class YandexPublicationResult:
     ad_group_id: str
     ad_id: str
+
+
+def _campaign_start_date(value: date | str | None) -> str:
+    if value is None:
+        return datetime.now(_YANDEX_MOSCOW).date().isoformat()
+    if isinstance(value, datetime):
+        value = value.date()
+    if isinstance(value, date):
+        return value.isoformat()
+    raw = str(value or "").strip()
+    try:
+        return date.fromisoformat(raw).isoformat()
+    except ValueError as exc:
+        raise ValueError("Yandex campaign start_date must use YYYY-MM-DD") from exc
 
 
 class YandexDirectProvider:
@@ -324,6 +342,7 @@ class YandexDirectProvider:
         *,
         access_token: str,
         campaign_name: str,
+        start_date: date | str | None = None,
     ) -> str:
         expected_name = normalize_managed_campaign_name(campaign_name)
         result = self._managed_direct_call(
@@ -335,6 +354,7 @@ class YandexDirectProvider:
                     "Campaigns": [
                         {
                             "Name": expected_name,
+                            "StartDate": _campaign_start_date(start_date),
                             "UnifiedCampaign": {
                                 "BiddingStrategy": {
                                     "Search": {"BiddingStrategyType": "SERVING_OFF"},
@@ -560,6 +580,7 @@ class YandexDirectProvider:
                                 "Title": title,
                                 "Text": text,
                                 "Href": href,
+                                "Mobile": "NO",
                             },
                         }
                     ]
