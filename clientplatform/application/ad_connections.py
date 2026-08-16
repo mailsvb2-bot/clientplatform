@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sqlite3
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from clientplatform.domain.ad_connections import (
@@ -58,6 +59,7 @@ _ACCOUNT_ATTENTION_ERRORS = {
     "provider_unauthorized",
     "oauth_refresh_token_missing",
 }
+_MANAGED_PROVISIONING_LEASE_SECONDS = 120
 _MANAGED_SELECT = """
     SELECT id, business_id, promotion_campaign_id, connection_id, provider,
            provisioning_key, external_campaign_id, external_campaign_name,
@@ -205,9 +207,7 @@ def _reserve_managed_campaign(
         promotion_campaign_id=promotion_id,
         connection_id=connection_id,
     )
-    stamp = __import__("datetime").datetime.now(
-        __import__("datetime").timezone.utc
-    ).isoformat(timespec="seconds")
+    stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
     cursor = conn.execute(
         """
         INSERT INTO ad_managed_campaigns(
@@ -243,6 +243,60 @@ def _reserve_managed_campaign(
     return managed, int(cursor.rowcount or 0) == 1
 
 
+def _managed_updated_at(value: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except ValueError as exc:
+        raise AdConnectionInvariantViolation(
+            "managed campaign provisioning timestamp is invalid"
+        ) from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _claim_managed_creation(
+    conn,
+    *,
+    managed: ManagedAdCampaign,
+    now: datetime | None = None,
+) -> bool:
+    """Atomically acquire one provider-create attempt for an existing binding."""
+
+    if managed.status == ManagedAdCampaignStatus.READY:
+        return False
+    current_time = now or datetime.now(timezone.utc)
+    if current_time.tzinfo is None:
+        current_time = current_time.replace(tzinfo=timezone.utc)
+    current_time = current_time.astimezone(timezone.utc)
+
+    if managed.status == ManagedAdCampaignStatus.PROVISIONING:
+        lease_deadline = current_time - timedelta(
+            seconds=_MANAGED_PROVISIONING_LEASE_SECONDS
+        )
+        if _managed_updated_at(managed.updated_at) > lease_deadline:
+            return False
+    elif managed.status != ManagedAdCampaignStatus.FAILED:
+        return False
+
+    stamp = current_time.isoformat(timespec="seconds")
+    cursor = conn.execute(
+        """
+        UPDATE ad_managed_campaigns
+        SET status='provisioning', last_error_code=NULL, updated_at=?
+        WHERE id=? AND business_id=? AND status=? AND updated_at=?
+        """,
+        (
+            stamp,
+            managed.id,
+            managed.business_id,
+            managed.status.value,
+            managed.updated_at,
+        ),
+    )
+    return int(cursor.rowcount or 0) == 1
+
+
 def _bind_managed_campaign(
     conn,
     *,
@@ -250,9 +304,7 @@ def _bind_managed_campaign(
     external_campaign_id: str,
 ) -> ManagedAdCampaign:
     external_id = normalize_external_campaign_id(external_campaign_id)
-    stamp = __import__("datetime").datetime.now(
-        __import__("datetime").timezone.utc
-    ).isoformat(timespec="seconds")
+    stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
     try:
         cursor = conn.execute(
             """
@@ -289,9 +341,7 @@ def _mark_managed_failure(
     error_code: str,
     uncertain: bool,
 ) -> None:
-    stamp = __import__("datetime").datetime.now(
-        __import__("datetime").timezone.utc
-    ).isoformat(timespec="seconds")
+    stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
     with get_db() as conn:
         conn.execute(
             """
@@ -486,16 +536,29 @@ def ensure_yandex_managed_campaign(
         )
     except YandexDirectError as exc:
         if _auth_error(exc) and bundle.refresh_token:
-            bundle = _refresh_token_bundle(
-                provider=selected_provider,
-                vault=selected_vault,
-                connection=connection,
-                bundle=bundle,
-            )
-            found = selected_provider.find_managed_campaign(
-                access_token=bundle.access_token,
-                campaign_name=managed.external_campaign_name,
-            )
+            try:
+                bundle = _refresh_token_bundle(
+                    provider=selected_provider,
+                    vault=selected_vault,
+                    connection=connection,
+                    bundle=bundle,
+                )
+                found = selected_provider.find_managed_campaign(
+                    access_token=bundle.access_token,
+                    campaign_name=managed.external_campaign_name,
+                )
+            except (YandexDirectError, OSError, RuntimeError, ValueError) as retry_exc:
+                error_code = (
+                    retry_exc.code
+                    if isinstance(retry_exc, YandexDirectError)
+                    else "provider_refresh_failure"
+                )
+                _mark_managed_failure(
+                    managed=managed,
+                    error_code=error_code,
+                    uncertain=False,
+                )
+                raise
         else:
             _mark_managed_failure(
                 managed=managed,
@@ -511,9 +574,29 @@ def ensure_yandex_managed_campaign(
                 external_campaign_id=found.campaign_id,
             )
 
-    if not created and managed.status == ManagedAdCampaignStatus.PROVISIONING:
+    owns_creation = created
+    if not owns_creation:
+        with get_db() as conn:
+            current_managed = _managed_get(
+                conn,
+                business_id=managed.business_id,
+                promotion_campaign_id=managed.promotion_campaign_id,
+                connection_id=managed.connection_id,
+            )
+            if current_managed is None:
+                raise AdConnectionInvariantViolation(
+                    "managed campaign reservation disappeared"
+                )
+            if current_managed.status == ManagedAdCampaignStatus.READY:
+                return current_managed
+            owns_creation = _claim_managed_creation(
+                conn,
+                managed=current_managed,
+            )
+            managed = current_managed
+    if not owns_creation:
         raise AdConnectionInvariantViolation(
-            "managed campaign provisioning is unresolved; reconciliation required"
+            "managed campaign provisioning is already in progress"
         )
 
     try:
@@ -530,6 +613,19 @@ def ensure_yandex_managed_campaign(
                     connection=connection,
                     bundle=bundle,
                 )
+            except (YandexDirectError, OSError, RuntimeError, ValueError) as refresh_exc:
+                error_code = (
+                    refresh_exc.code
+                    if isinstance(refresh_exc, YandexDirectError)
+                    else "provider_refresh_failure"
+                )
+                _mark_managed_failure(
+                    managed=managed,
+                    error_code=error_code,
+                    uncertain=False,
+                )
+                raise
+            try:
                 external_id = selected_provider.create_disabled_managed_campaign(
                     access_token=bundle.access_token,
                     campaign_name=managed.external_campaign_name,
