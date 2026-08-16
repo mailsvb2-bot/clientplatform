@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from urllib.parse import parse_qs
 
+from clientplatform.domain.ad_connections import AdConnectionInvariantViolation
 from clientplatform.integrations.yandex_direct import YandexOAuthConfig
 from clientplatform.integrations.yandex_screen_code import (
     YANDEX_SCREEN_CODE_REDIRECT_URI,
@@ -250,6 +251,40 @@ class YandexScreenCodeTelegramTests(unittest.IsolatedAsyncioTestCase):
         rendered = failed.answer.await_args.args[0]
         self.assertIn("Начните подключение", rendered)
         self.assertNotIn("secret", rendered)
+
+    async def test_completion_explains_cross_tenant_ownership_and_clears_fsm(self) -> None:
+        state = FakeState(
+            {
+                "business_token": "business-1",
+                "oauth_state": "oauth-state",
+                "oauth_user_id": 101,
+            }
+        )
+        incoming = message(OFFICIAL_STYLE_CODE)
+        with (
+            patch.object(screen_code.asyncio, "to_thread", new=immediate_to_thread),
+            patch.object(screen_code.control, "_user_id", return_value=101),
+            patch.object(
+                screen_code,
+                "screen_code_provider_from_environment",
+                return_value=object(),
+            ),
+            patch.object(
+                screen_code,
+                "complete_yandex_direct_oauth",
+                side_effect=AdConnectionInvariantViolation(
+                    "direct_account_owned_by_another_business"
+                ),
+            ),
+        ):
+            await screen_code.complete_yandex_direct_screen_code(incoming, state)
+
+        incoming.delete.assert_awaited_once()
+        self.assertTrue(state.cleared)
+        rendered = incoming.answer.await_args.args[0]
+        self.assertIn("уже подключён к другому рабочему пространству", rendered)
+        self.assertIn("полностью отзовите подключение", rendered)
+        self.assertNotIn("direct_account_owned_by_another_business", rendered)
 
     async def test_completion_saves_connection_and_returns_to_workspace(self) -> None:
         state = FakeState(
