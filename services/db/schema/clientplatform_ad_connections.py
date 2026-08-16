@@ -14,6 +14,7 @@ def ensure(c: sqlite3.Connection) -> None:
             provider TEXT NOT NULL,
             external_account_id TEXT NOT NULL,
             external_login TEXT NOT NULL,
+            identity_source TEXT NOT NULL DEFAULT 'direct_client_id',
             credential_ciphertext TEXT NOT NULL,
             permissions_json TEXT NOT NULL DEFAULT '[]',
             status TEXT NOT NULL DEFAULT 'pending',
@@ -29,6 +30,7 @@ def ensure(c: sqlite3.Connection) -> None:
             FOREIGN KEY(created_by_member_id, business_id)
                 REFERENCES business_members(id, business_id),
             CHECK(provider IN ('yandex_direct')),
+            CHECK(identity_source IN ('legacy_oauth', 'direct_client_id')),
             CHECK(status IN ('pending', 'active', 'attention', 'disabled', 'revoked'))
         )
         """
