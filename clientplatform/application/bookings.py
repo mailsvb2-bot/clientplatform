@@ -15,6 +15,7 @@ from clientplatform.domain.bookings import (
     CustomerBusinessLink,
     normalize_utc_datetime,
 )
+from clientplatform.domain.customers import CustomerPlatform
 from clientplatform.domain.outcomes import BusinessOutcomeEvent, OutcomeSource, OutcomeType
 from clientplatform.domain.tenancy import TenantContext
 from clientplatform.infrastructure.attribution_repository import AttributionRepository
@@ -53,6 +54,18 @@ def list_booking_slots(
         )
 
 
+def list_customer_businesses_by_identity(
+    *,
+    platform: CustomerPlatform | str,
+    external_subject: str,
+) -> list[CustomerBusinessLink]:
+    with get_db_ro() as conn:
+        return BookingRepository(conn).list_customer_businesses_by_identity(
+            platform=platform,
+            external_subject=external_subject,
+        )
+
+
 def list_customer_businesses(*, telegram_user_id: int) -> list[CustomerBusinessLink]:
     with get_db_ro() as conn:
         member_businesses = active_member_business_ids(
@@ -63,6 +76,18 @@ def list_customer_businesses(*, telegram_user_id: int) -> list[CustomerBusinessL
             telegram_user_id=telegram_user_id,
         )
         return [link for link in links if link.business_id not in member_businesses]
+
+
+def list_customer_booking_slots_for_customer(
+    *,
+    customer_id: str,
+    business_id: str,
+) -> list[BookingSlotView]:
+    with get_db_ro() as conn:
+        return BookingRepository(conn).list_open_slots_for_customer_id(
+            customer_id=customer_id,
+            business_id=business_id,
+        )
 
 
 def list_customer_booking_slots(
@@ -82,6 +107,28 @@ def list_customer_booking_slots(
         )
 
 
+def get_customer_booking_for_customer(
+    *,
+    customer_id: str,
+    business_id: str,
+    slot_id: str,
+    now: datetime | str | None = None,
+) -> BookingClaim:
+    with get_db_ro() as conn:
+        claim = BookingRepository(conn).get_customer_booking_by_customer(
+            customer_id=customer_id,
+            business_id=business_id,
+            slot_id=slot_id,
+        )
+    current = normalize_utc_datetime(
+        str(now or datetime.now(timezone.utc).isoformat(timespec="seconds")),
+        field_name="now",
+    )
+    if datetime.fromisoformat(claim.slot.slot.starts_at) <= datetime.fromisoformat(current):
+        raise BookingNotFound("запись уже началась")
+    return claim
+
+
 def get_customer_booking(
     *,
     telegram_user_id: int,
@@ -89,13 +136,7 @@ def get_customer_booking(
     slot_id: str,
     now: datetime | str | None = None,
 ) -> BookingClaim:
-    """Return a booked customer appointment only while its start is still future.
-
-    Scheduler reminders use this application boundary. Booking rows remain
-    readable in the repository for historical/reporting use, but an overdue job
-    after process downtime must not treat a meeting that already started as an
-    active reminder target.
-    """
+    """Compatibility boundary for existing Telegram customer flows."""
 
     with get_db_ro() as conn:
         assert_external_customer(
@@ -117,25 +158,7 @@ def get_customer_booking(
     return claim
 
 
-def book_customer_slot_in_transaction(
-    conn: Any,
-    *,
-    telegram_user_id: int,
-    business_id: str,
-    slot_id: str,
-) -> BookingClaim:
-    """Canonical booking mutation for callers that already own the transaction."""
-
-    assert_external_customer(
-        conn,
-        telegram_user_id=telegram_user_id,
-        business_id=business_id,
-    )
-    claim = BookingRepository(conn).book_slot(
-        telegram_user_id=telegram_user_id,
-        business_id=business_id,
-        slot_id=slot_id,
-    )
+def _append_booking_outcome_and_attribution(conn: Any, claim: BookingClaim) -> BookingClaim:
     booked_at = claim.slot.slot.booked_at
     if booked_at is None:
         raise RuntimeError("booked slot is missing booked_at")
@@ -161,10 +184,6 @@ def book_customer_slot_in_transaction(
             created_at=datetime.now(timezone.utc),
         )
     )
-    # Any canonical booking path must inherit an already-established customer
-    # acquisition first touch. If the customer has no attribution yet, this is
-    # a no-op. The promoted-booking path intentionally repeats this link after
-    # capturing its verified token so direct cpa_* booking remains atomic too.
     AttributionRepository(conn).link_booking_from_customer(
         business_id=claim.slot.slot.business_id,
         customer_id=claim.customer_id,
@@ -173,13 +192,69 @@ def book_customer_slot_in_transaction(
     return claim
 
 
+def book_customer_slot_for_customer_in_transaction(
+    conn: Any,
+    *,
+    customer_id: str,
+    business_id: str,
+    slot_id: str,
+) -> BookingClaim:
+    """Canonical channel-neutral booking mutation inside an owned transaction."""
+
+    claim = BookingRepository(conn).book_slot_for_customer(
+        customer_id=customer_id,
+        business_id=business_id,
+        slot_id=slot_id,
+    )
+    return _append_booking_outcome_and_attribution(conn, claim)
+
+
+def book_customer_slot_in_transaction(
+    conn: Any,
+    *,
+    telegram_user_id: int,
+    business_id: str,
+    slot_id: str,
+) -> BookingClaim:
+    """Compatibility booking mutation for existing Telegram callers."""
+
+    assert_external_customer(
+        conn,
+        telegram_user_id=telegram_user_id,
+        business_id=business_id,
+    )
+    claim = BookingRepository(conn).book_slot(
+        telegram_user_id=telegram_user_id,
+        business_id=business_id,
+        slot_id=slot_id,
+    )
+    return _append_booking_outcome_and_attribution(conn, claim)
+
+
+def book_customer_slot_for_customer(
+    *,
+    customer_id: str,
+    business_id: str,
+    slot_id: str,
+) -> BookingClaim:
+    """Book a slot by canonical customer id and append the outcome atomically."""
+
+    with get_db() as conn:
+        return book_customer_slot_for_customer_in_transaction(
+            conn,
+            customer_id=customer_id,
+            business_id=business_id,
+            slot_id=slot_id,
+        )
+
+
 def book_customer_slot(
     *,
     telegram_user_id: int,
     business_id: str,
     slot_id: str,
 ) -> BookingClaim:
-    """Book a slot and append its canonical outcome in the same transaction."""
+    """Compatibility entry point for Telegram; delegates to the same booking core."""
 
     with get_db() as conn:
         return book_customer_slot_in_transaction(
