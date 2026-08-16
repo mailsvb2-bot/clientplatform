@@ -49,6 +49,61 @@ def _confirmation_code(value: str | None) -> str:
 
 
 @simple.router.callback_query(F.data.startswith("cpa:connect:"))
+async def yandex_direct_onboarding(callback: CallbackQuery) -> None:
+    business_token = str(callback.data).split(":", 2)[2]
+    control._token_uuid(business_token)
+    await callback.answer()
+    await _message(callback).answer(
+        "📣 Яндекс Директ\n\n"
+        "Подключается только Ваш собственный рекламный кабинет. Общего кабинета "
+        "ClientPlatform нет: доступ и ownership всегда привязаны к конкретному "
+        "advertiser в Яндекс Директе.",
+        reply_markup=control._keyboard(
+            [
+                [("🔐 Подключить мой кабинет", f"cpa:connect-mine:{business_token}")],
+                [("🆕 У меня ещё нет кабинета", f"cpa:no-account:{business_token}")],
+                [("⬅️ Назад", f"cpa:home:{business_token}")],
+            ]
+        ),
+    )
+
+
+@simple.router.callback_query(F.data.startswith("cpa:no-account:"))
+async def yandex_direct_no_account(callback: CallbackQuery) -> None:
+    business_token = str(callback.data).split(":", 2)[2]
+    control._token_uuid(business_token)
+    await callback.answer()
+    await _message(callback).answer(
+        "🆕 У Вас ещё нет кабинета\n\n"
+        "Создайте собственный кабинет на официальном сайте Яндекс Директа. После "
+        "создания вернитесь сюда и подключите именно его — ClientPlatform не "
+        "подставляет общий или чужой рекламный аккаунт.",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="Создать кабинет в Яндекс Директе",
+                        url="https://direct.yandex.ru/",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="🔐 Подключить мой кабинет",
+                        callback_data=f"cpa:connect-mine:{business_token}",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="⬅️ Назад",
+                        callback_data=f"cpa:home:{business_token}",
+                    )
+                ],
+            ]
+        ),
+    )
+
+
+@simple.router.callback_query(F.data.startswith("cpa:connect-mine:"))
 async def connect_yandex_direct_screen_code(
     callback: CallbackQuery,
     state: FSMContext,
@@ -226,4 +281,6 @@ __all__ = [
     "cancel_yandex_direct_screen_code",
     "complete_yandex_direct_screen_code",
     "connect_yandex_direct_screen_code",
+    "yandex_direct_no_account",
+    "yandex_direct_onboarding",
 ]
