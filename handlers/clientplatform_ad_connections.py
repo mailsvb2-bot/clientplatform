@@ -19,6 +19,7 @@ from clientplatform.application.ad_connections import (
     ad_connections_enabled,
     confirm_ad_publication,
     create_ad_publication_draft,
+    create_managed_ad_publication_draft,
     list_ad_connections,
     list_ad_publications,
     list_yandex_direct_campaigns,
@@ -51,6 +52,8 @@ from . import clientplatform_simple_experience as simple
 
 class AdConnectionState(StatesGroup):
     selecting_connection = State()
+    # Compatibility state for sessions that selected a legacy campaign before
+    # the managed UNIFIED_CAMPAIGN flow became canonical.
     selecting_campaign = State()
     waiting_regions = State()
     confirming_publication = State()
@@ -229,8 +232,9 @@ async def open_ad_promotion_slots(callback: CallbackQuery) -> None:
     await _message(callback).answer(
         "🎯 Создать рекламу\n\n"
         "Выберите, какое свободное время рекламировать. Следующим шагом ClientPlatform "
-        "предложит кабинет, кампанию и регион, а перед созданием покажет полный "
-        "черновик для подтверждения.\n\n"
+        "предложит личный кабинет и регион. Управляемую кампанию ClientPlatform "
+        "создаст или переиспользует внутри этого кабинета, а перед созданием объявления "
+        "покажет полный черновик для подтверждения.\n\n"
         "Свободное время:",
         reply_markup=control._keyboard(rows),
     )
@@ -325,10 +329,41 @@ async def choose_ad_connection(
     AdConnectionState.selecting_connection,
     F.data.startswith("cpa:conn:"),
 )
+async def choose_managed_yandex_connection(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    data = await state.get_data()
+    try:
+        index = int(str(callback.data).split(":", 2)[2])
+        connection_id = list(data["connection_ids"])[index]
+    except (IndexError, KeyError, TypeError, ValueError):
+        await callback.answer("Рекламный кабинет больше не найден", show_alert=True)
+        return
+
+    await state.update_data(connection_id=connection_id)
+    await state.set_state(AdConnectionState.waiting_regions)
+    await callback.answer()
+    await _message(callback).answer(
+        "Укажите регион показа — один или несколько ID через запятую.\n\n"
+        "ClientPlatform использует свою управляемую кампанию в выбранном личном "
+        "кабинете: при необходимости создаст её отключённой и затем будет "
+        "переиспользовать. Бюджет, показы и модерация автоматически не запускаются.\n\n"
+        "Частые варианты:\n"
+        "• Нижний Новгород — 47\n"
+        "• Москва — 213\n"
+        "• Санкт-Петербург — 2\n\n"
+        "Показы по всей стране автоматически не включаются: география должна быть "
+        "задана явно."
+    )
+
+
 async def choose_yandex_campaign(
     callback: CallbackQuery,
     state: FSMContext,
 ) -> None:
+    """Legacy helper for pre-managed tests; new callbacks never enter this path."""
+
     await callback.answer("Загружаю кампании…")
     data = await state.get_data()
     try:
@@ -405,6 +440,8 @@ async def choose_yandex_campaign(
     F.data.startswith("cpa:campaign:"),
 )
 async def request_ad_regions(callback: CallbackQuery, state: FSMContext) -> None:
+    """Finish an already-started legacy picker session after a rolling deploy."""
+
     data = await state.get_data()
     try:
         index = int(str(callback.data).split(":", 2)[2])
@@ -438,20 +475,34 @@ async def prepare_ad_publication(message: Message, state: FSMContext) -> None:
             control._user_id(message),
             str(data["business_id"]),
         )
-        draft = await asyncio.to_thread(
-            create_ad_publication_draft,
-            actor=actor,
-            promotion_campaign_id=str(data["promotion_campaign_id"]),
-            connection_id=str(data["connection_id"]),
-            external_campaign_id=str(data["external_campaign_id"]),
-            external_campaign_name=str(data["external_campaign_name"]),
-            region_ids=regions,
-            source_url=str(data["source_url"]),
-        )
-    except (KeyError, TypeError, ValueError, AdConnectionError):
+        legacy_campaign_id = str(data.get("external_campaign_id") or "").strip()
+        legacy_campaign_name = str(data.get("external_campaign_name") or "").strip()
+        if legacy_campaign_id and legacy_campaign_name:
+            # Rolling-deploy compatibility only. New sessions never populate these
+            # fields and therefore always use the managed campaign path below.
+            draft = await asyncio.to_thread(
+                create_ad_publication_draft,
+                actor=actor,
+                promotion_campaign_id=str(data["promotion_campaign_id"]),
+                connection_id=str(data["connection_id"]),
+                external_campaign_id=legacy_campaign_id,
+                external_campaign_name=legacy_campaign_name,
+                region_ids=regions,
+                source_url=str(data["source_url"]),
+            )
+        else:
+            draft = await asyncio.to_thread(
+                create_managed_ad_publication_draft,
+                actor=actor,
+                promotion_campaign_id=str(data["promotion_campaign_id"]),
+                connection_id=str(data["connection_id"]),
+                region_ids=regions,
+                source_url=str(data["source_url"]),
+            )
+    except (KeyError, TypeError, ValueError, AdConnectionError, YandexDirectError):
         await message.answer(
-            "Не удалось распознать регион. Введите положительный ID, например 47, "
-            "или несколько ID через запятую."
+            "Не удалось подготовить рекламный черновик. Проверьте ID региона "
+            "(например, 47) и состояние подключения Яндекс Директа."
         )
         return
     await state.update_data(
@@ -714,6 +765,7 @@ async def confirm_yandex_publication(
 
 __all__ = [
     "AdConnectionState",
+    "choose_managed_yandex_connection",
     "confirm_yandex_publication",
     "connect_yandex_direct",
     "generate_ad_visual",
