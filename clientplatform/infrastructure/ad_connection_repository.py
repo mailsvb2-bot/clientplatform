@@ -97,7 +97,7 @@ def _job_from_row(row: Any) -> AdPublicationJob:
     )
 
 
-def _translate_direct_identity_integrity_error(exc: sqlite3.IntegrityError) -> None:
+def _translate_direct_identity_database_error(exc: sqlite3.Error) -> None:
     text = str(exc).strip().lower()
     if (
         "uq_ad_connections_direct_global_owner" in text
@@ -296,8 +296,8 @@ class AdConnectionRepository:
                     timestamp,
                 ),
             )
-        except sqlite3.IntegrityError as exc:
-            _translate_direct_identity_integrity_error(exc)
+        except sqlite3.Error as exc:
+            _translate_direct_identity_database_error(exc)
         connection = self._find_connection(
             business_id=session.business_id,
             provider=session.provider,
