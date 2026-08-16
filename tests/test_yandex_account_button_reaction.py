@@ -87,6 +87,7 @@ class YandexAccountButtonReactionTests(unittest.IsolatedAsyncioTestCase):
         cb.answer.assert_awaited_once_with("Загружаю кампании…")
         st.update_data.assert_awaited_once_with(
             connection_id="connection-id",
+            publication_mode="existing",
             yandex_campaigns=[{"id": "123", "name": "Test campaign"}],
         )
         st.set_state.assert_awaited_once_with(ui.AdConnectionState.selecting_campaign)

@@ -345,6 +345,7 @@ class ClientPlatformVisualCreativeUiTests(unittest.IsolatedAsyncioTestCase):
                 "business_token": "business-token",
                 "promotion_campaign_id": "promotion-id",
                 "connection_id": "connection-id",
+                "publication_mode": "existing",
                 "external_campaign_id": "campaign-id",
                 "external_campaign_name": "Campaign",
                 "source_url": "https://t.me/bot?start=token",
