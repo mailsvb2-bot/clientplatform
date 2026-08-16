@@ -48,6 +48,32 @@ def _confirmation_code(value: str | None) -> str:
         raise ValueError("Yandex OAuth confirmation code is invalid") from exc
 
 
+def _ad_connection_failure_reason(exc: AdConnectionError) -> str:
+    code = str(exc).strip()
+    if code == "direct_account_owned_by_another_business":
+        return (
+            "Этот рекламный кабинет уже подключён к другому рабочему пространству "
+            "ClientPlatform. Чтобы перенести кабинет, сначала полностью отзовите "
+            "подключение в прежнем пространстве."
+        )
+    if code == "direct_identity_reverification_pending":
+        return (
+            "Идёт безопасная переверификация ранее подключённых кабинетов. "
+            "Новый кабинет пока нельзя закрепить за другим пространством."
+        )
+    if code == "direct_identity_reverification_ambiguous":
+        return (
+            "Найдено несколько старых подключений, поэтому кабинет нельзя выбрать "
+            "однозначно. Сначала завершите переверификацию старых подключений."
+        )
+    if code == "direct_identity_reverification_required":
+        return (
+            "Это старое подключение нужно подтвердить заново через Яндекс Директ, "
+            "чтобы определить реальный рекламный кабинет."
+        )
+    return "Код мог истечь или уже быть использован."
+
+
 @simple.router.callback_query(F.data.startswith("cpa:connect:"))
 async def yandex_direct_onboarding(callback: CallbackQuery) -> None:
     business_token = str(callback.data).split(":", 2)[2]
@@ -253,7 +279,14 @@ async def complete_yandex_direct_screen_code(
             code=code,
             provider=provider,
         )
-    except (AdConnectionError, YandexDirectError, RuntimeError, ValueError):
+    except AdConnectionError as exc:
+        await _restart_message(
+            message,
+            state,
+            reason=_ad_connection_failure_reason(exc),
+        )
+        return
+    except (YandexDirectError, RuntimeError, ValueError):
         await _restart_message(
             message,
             state,
