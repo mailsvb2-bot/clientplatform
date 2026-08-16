@@ -48,7 +48,88 @@ def _confirmation_code(value: str | None) -> str:
         raise ValueError("Yandex OAuth confirmation code is invalid") from exc
 
 
+def _ad_connection_failure_reason(exc: AdConnectionError) -> str:
+    code = str(exc).strip()
+    if code == "direct_account_owned_by_another_business":
+        return (
+            "Этот рекламный кабинет уже подключён к другому рабочему пространству "
+            "ClientPlatform. Чтобы перенести кабинет, сначала полностью отзовите "
+            "подключение в прежнем пространстве."
+        )
+    if code == "direct_identity_reverification_pending":
+        return (
+            "Идёт безопасная переверификация ранее подключённых кабинетов. "
+            "Новый кабинет пока нельзя закрепить за другим пространством."
+        )
+    if code == "direct_identity_reverification_ambiguous":
+        return (
+            "Найдено несколько старых подключений, поэтому кабинет нельзя выбрать "
+            "однозначно. Сначала завершите переверификацию старых подключений."
+        )
+    if code == "direct_identity_reverification_required":
+        return (
+            "Это старое подключение нужно подтвердить заново через Яндекс Директ, "
+            "чтобы определить реальный рекламный кабинет."
+        )
+    return "Код мог истечь или уже быть использован."
+
+
 @simple.router.callback_query(F.data.startswith("cpa:connect:"))
+async def yandex_direct_onboarding(callback: CallbackQuery) -> None:
+    business_token = str(callback.data).split(":", 2)[2]
+    control._token_uuid(business_token)
+    await callback.answer()
+    await _message(callback).answer(
+        "📣 Яндекс Директ\n\n"
+        "Подключается только Ваш собственный рекламный кабинет. Общего кабинета "
+        "ClientPlatform нет: доступ и ownership всегда привязаны к конкретному "
+        "advertiser в Яндекс Директе.",
+        reply_markup=control._keyboard(
+            [
+                [("🔐 Подключить мой кабинет", f"cpa:connect-mine:{business_token}")],
+                [("🆕 У меня ещё нет кабинета", f"cpa:no-account:{business_token}")],
+                [("⬅️ Назад", f"cpa:home:{business_token}")],
+            ]
+        ),
+    )
+
+
+@simple.router.callback_query(F.data.startswith("cpa:no-account:"))
+async def yandex_direct_no_account(callback: CallbackQuery) -> None:
+    business_token = str(callback.data).split(":", 2)[2]
+    control._token_uuid(business_token)
+    await callback.answer()
+    await _message(callback).answer(
+        "🆕 У Вас ещё нет кабинета\n\n"
+        "Создайте собственный кабинет на официальном сайте Яндекс Директа. После "
+        "создания вернитесь сюда и подключите именно его — ClientPlatform не "
+        "подставляет общий или чужой рекламный аккаунт.",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="Создать кабинет в Яндекс Директе",
+                        url="https://direct.yandex.ru/",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="🔐 Подключить мой кабинет",
+                        callback_data=f"cpa:connect-mine:{business_token}",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="⬅️ Назад",
+                        callback_data=f"cpa:home:{business_token}",
+                    )
+                ],
+            ]
+        ),
+    )
+
+
+@simple.router.callback_query(F.data.startswith("cpa:connect-mine:"))
 async def connect_yandex_direct_screen_code(
     callback: CallbackQuery,
     state: FSMContext,
@@ -198,7 +279,14 @@ async def complete_yandex_direct_screen_code(
             code=code,
             provider=provider,
         )
-    except (AdConnectionError, YandexDirectError, RuntimeError, ValueError):
+    except AdConnectionError as exc:
+        await _restart_message(
+            message,
+            state,
+            reason=_ad_connection_failure_reason(exc),
+        )
+        return
+    except (YandexDirectError, RuntimeError, ValueError):
         await _restart_message(
             message,
             state,
@@ -226,4 +314,6 @@ __all__ = [
     "cancel_yandex_direct_screen_code",
     "complete_yandex_direct_screen_code",
     "connect_yandex_direct_screen_code",
+    "yandex_direct_no_account",
+    "yandex_direct_onboarding",
 ]

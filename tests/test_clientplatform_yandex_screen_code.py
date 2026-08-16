@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from urllib.parse import parse_qs
 
+from clientplatform.domain.ad_connections import AdConnectionInvariantViolation
 from clientplatform.integrations.yandex_direct import YandexOAuthConfig
 from clientplatform.integrations.yandex_screen_code import (
     YANDEX_SCREEN_CODE_REDIRECT_URI,
@@ -170,6 +171,37 @@ class YandexScreenCodeTelegramTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             screen_code._confirmation_code("not a code")
 
+    def test_ad_connection_failure_reason_maps_all_safe_ownership_states(self) -> None:
+        cases = (
+            (
+                "direct_account_owned_by_another_business",
+                "уже подключён к другому рабочему пространству",
+            ),
+            (
+                "direct_identity_reverification_pending",
+                "безопасная переверификация",
+            ),
+            (
+                "direct_identity_reverification_ambiguous",
+                "несколько старых подключений",
+            ),
+            (
+                "direct_identity_reverification_required",
+                "подтвердить заново",
+            ),
+            (
+                "unexpected_internal_code",
+                "Код мог истечь или уже быть использован",
+            ),
+        )
+        for code, expected in cases:
+            with self.subTest(code=code):
+                rendered = screen_code._ad_connection_failure_reason(
+                    AdConnectionInvariantViolation(code)
+                )
+                self.assertIn(expected, rendered)
+                self.assertNotIn(code, rendered)
+
     async def test_connect_stores_one_time_state_and_explains_manual_code(self) -> None:
         cb = callback("cpa:connect:business-1")
         state = FakeState()
@@ -250,6 +282,40 @@ class YandexScreenCodeTelegramTests(unittest.IsolatedAsyncioTestCase):
         rendered = failed.answer.await_args.args[0]
         self.assertIn("Начните подключение", rendered)
         self.assertNotIn("secret", rendered)
+
+    async def test_completion_explains_cross_tenant_ownership_and_clears_fsm(self) -> None:
+        state = FakeState(
+            {
+                "business_token": "business-1",
+                "oauth_state": "oauth-state",
+                "oauth_user_id": 101,
+            }
+        )
+        incoming = message(OFFICIAL_STYLE_CODE)
+        with (
+            patch.object(screen_code.asyncio, "to_thread", new=immediate_to_thread),
+            patch.object(screen_code.control, "_user_id", return_value=101),
+            patch.object(
+                screen_code,
+                "screen_code_provider_from_environment",
+                return_value=object(),
+            ),
+            patch.object(
+                screen_code,
+                "complete_yandex_direct_oauth",
+                side_effect=AdConnectionInvariantViolation(
+                    "direct_account_owned_by_another_business"
+                ),
+            ),
+        ):
+            await screen_code.complete_yandex_direct_screen_code(incoming, state)
+
+        incoming.delete.assert_awaited_once()
+        self.assertTrue(state.cleared)
+        rendered = incoming.answer.await_args.args[0]
+        self.assertIn("уже подключён к другому рабочему пространству", rendered)
+        self.assertIn("полностью отзовите подключение", rendered)
+        self.assertNotIn("direct_account_owned_by_another_business", rendered)
 
     async def test_completion_saves_connection_and_returns_to_workspace(self) -> None:
         state = FakeState(
