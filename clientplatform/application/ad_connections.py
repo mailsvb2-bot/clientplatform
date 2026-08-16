@@ -359,6 +359,19 @@ def _mark_managed_failure(
         )
 
 
+def _mark_managed_refresh_failure(
+    *,
+    managed: ManagedAdCampaign,
+    exc: BaseException,
+) -> None:
+    error_code = exc.code if isinstance(exc, YandexDirectError) else "provider_refresh_failure"
+    _mark_managed_failure(
+        managed=managed,
+        error_code=error_code,
+        uncertain=False,
+    )
+
+
 def start_yandex_direct_oauth(
     *,
     actor: TenantContext,
@@ -547,17 +560,17 @@ def ensure_yandex_managed_campaign(
                     access_token=bundle.access_token,
                     campaign_name=managed.external_campaign_name,
                 )
-            except (YandexDirectError, OSError, RuntimeError, ValueError) as retry_exc:
-                error_code = (
-                    retry_exc.code
-                    if isinstance(retry_exc, YandexDirectError)
-                    else "provider_refresh_failure"
-                )
-                _mark_managed_failure(
-                    managed=managed,
-                    error_code=error_code,
-                    uncertain=False,
-                )
+            except YandexDirectError as retry_exc:
+                _mark_managed_refresh_failure(managed=managed, exc=retry_exc)
+                raise
+            except OSError as retry_exc:
+                _mark_managed_refresh_failure(managed=managed, exc=retry_exc)
+                raise
+            except RuntimeError as retry_exc:
+                _mark_managed_refresh_failure(managed=managed, exc=retry_exc)
+                raise
+            except ValueError as retry_exc:
+                _mark_managed_refresh_failure(managed=managed, exc=retry_exc)
                 raise
         else:
             _mark_managed_failure(
@@ -613,17 +626,17 @@ def ensure_yandex_managed_campaign(
                     connection=connection,
                     bundle=bundle,
                 )
-            except (YandexDirectError, OSError, RuntimeError, ValueError) as refresh_exc:
-                error_code = (
-                    refresh_exc.code
-                    if isinstance(refresh_exc, YandexDirectError)
-                    else "provider_refresh_failure"
-                )
-                _mark_managed_failure(
-                    managed=managed,
-                    error_code=error_code,
-                    uncertain=False,
-                )
+            except YandexDirectError as refresh_exc:
+                _mark_managed_refresh_failure(managed=managed, exc=refresh_exc)
+                raise
+            except OSError as refresh_exc:
+                _mark_managed_refresh_failure(managed=managed, exc=refresh_exc)
+                raise
+            except RuntimeError as refresh_exc:
+                _mark_managed_refresh_failure(managed=managed, exc=refresh_exc)
+                raise
+            except ValueError as refresh_exc:
+                _mark_managed_refresh_failure(managed=managed, exc=refresh_exc)
                 raise
             try:
                 external_id = selected_provider.create_disabled_managed_campaign(
