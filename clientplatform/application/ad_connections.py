@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sqlite3
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from uuid import uuid4
 
 from clientplatform.domain.ad_connections import (
@@ -205,9 +206,7 @@ def _reserve_managed_campaign(
         promotion_campaign_id=promotion_id,
         connection_id=connection_id,
     )
-    stamp = __import__("datetime").datetime.now(
-        __import__("datetime").timezone.utc
-    ).isoformat(timespec="seconds")
+    stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
     cursor = conn.execute(
         """
         INSERT INTO ad_managed_campaigns(
@@ -243,6 +242,32 @@ def _reserve_managed_campaign(
     return managed, int(cursor.rowcount or 0) == 1
 
 
+def _claim_failed_managed_creation(
+    conn,
+    *,
+    managed: ManagedAdCampaign,
+) -> bool:
+    """Atomically reacquire only a provider-confirmed failed creation attempt."""
+
+    if managed.status != ManagedAdCampaignStatus.FAILED:
+        return False
+    stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    cursor = conn.execute(
+        """
+        UPDATE ad_managed_campaigns
+        SET status='provisioning', last_error_code=NULL, updated_at=?
+        WHERE id=? AND business_id=? AND status='failed' AND updated_at=?
+        """,
+        (
+            stamp,
+            managed.id,
+            managed.business_id,
+            managed.updated_at,
+        ),
+    )
+    return int(cursor.rowcount or 0) == 1
+
+
 def _bind_managed_campaign(
     conn,
     *,
@@ -250,9 +275,7 @@ def _bind_managed_campaign(
     external_campaign_id: str,
 ) -> ManagedAdCampaign:
     external_id = normalize_external_campaign_id(external_campaign_id)
-    stamp = __import__("datetime").datetime.now(
-        __import__("datetime").timezone.utc
-    ).isoformat(timespec="seconds")
+    stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
     try:
         cursor = conn.execute(
             """
@@ -289,9 +312,7 @@ def _mark_managed_failure(
     error_code: str,
     uncertain: bool,
 ) -> None:
-    stamp = __import__("datetime").datetime.now(
-        __import__("datetime").timezone.utc
-    ).isoformat(timespec="seconds")
+    stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
     with get_db() as conn:
         conn.execute(
             """
@@ -307,6 +328,19 @@ def _mark_managed_failure(
                 managed.business_id,
             ),
         )
+
+
+def _mark_managed_refresh_failure(
+    *,
+    managed: ManagedAdCampaign,
+    exc: BaseException,
+) -> None:
+    error_code = exc.code if isinstance(exc, YandexDirectError) else "provider_refresh_failure"
+    _mark_managed_failure(
+        managed=managed,
+        error_code=error_code,
+        uncertain=False,
+    )
 
 
 def start_yandex_direct_oauth(
@@ -486,16 +520,29 @@ def ensure_yandex_managed_campaign(
         )
     except YandexDirectError as exc:
         if _auth_error(exc) and bundle.refresh_token:
-            bundle = _refresh_token_bundle(
-                provider=selected_provider,
-                vault=selected_vault,
-                connection=connection,
-                bundle=bundle,
-            )
-            found = selected_provider.find_managed_campaign(
-                access_token=bundle.access_token,
-                campaign_name=managed.external_campaign_name,
-            )
+            try:
+                bundle = _refresh_token_bundle(
+                    provider=selected_provider,
+                    vault=selected_vault,
+                    connection=connection,
+                    bundle=bundle,
+                )
+                found = selected_provider.find_managed_campaign(
+                    access_token=bundle.access_token,
+                    campaign_name=managed.external_campaign_name,
+                )
+            except YandexDirectError as retry_exc:
+                _mark_managed_refresh_failure(managed=managed, exc=retry_exc)
+                raise
+            except OSError as retry_exc:
+                _mark_managed_refresh_failure(managed=managed, exc=retry_exc)
+                raise
+            except RuntimeError as retry_exc:
+                _mark_managed_refresh_failure(managed=managed, exc=retry_exc)
+                raise
+            except ValueError as retry_exc:
+                _mark_managed_refresh_failure(managed=managed, exc=retry_exc)
+                raise
         else:
             _mark_managed_failure(
                 managed=managed,
@@ -511,9 +558,29 @@ def ensure_yandex_managed_campaign(
                 external_campaign_id=found.campaign_id,
             )
 
-    if not created and managed.status == ManagedAdCampaignStatus.PROVISIONING:
+    owns_creation = created
+    if not owns_creation:
+        with get_db() as conn:
+            current_managed = _managed_get(
+                conn,
+                business_id=managed.business_id,
+                promotion_campaign_id=managed.promotion_campaign_id,
+                connection_id=managed.connection_id,
+            )
+            if current_managed is None:
+                raise AdConnectionInvariantViolation(
+                    "managed campaign reservation disappeared"
+                )
+            if current_managed.status == ManagedAdCampaignStatus.READY:
+                return current_managed
+            owns_creation = _claim_failed_managed_creation(
+                conn,
+                managed=current_managed,
+            )
+            managed = current_managed
+    if not owns_creation:
         raise AdConnectionInvariantViolation(
-            "managed campaign provisioning is unresolved; reconciliation required"
+            "managed campaign provisioning is already in progress"
         )
 
     try:
@@ -530,6 +597,19 @@ def ensure_yandex_managed_campaign(
                     connection=connection,
                     bundle=bundle,
                 )
+            except YandexDirectError as refresh_exc:
+                _mark_managed_refresh_failure(managed=managed, exc=refresh_exc)
+                raise
+            except OSError as refresh_exc:
+                _mark_managed_refresh_failure(managed=managed, exc=refresh_exc)
+                raise
+            except RuntimeError as refresh_exc:
+                _mark_managed_refresh_failure(managed=managed, exc=refresh_exc)
+                raise
+            except ValueError as refresh_exc:
+                _mark_managed_refresh_failure(managed=managed, exc=refresh_exc)
+                raise
+            try:
                 external_id = selected_provider.create_disabled_managed_campaign(
                     access_token=bundle.access_token,
                     campaign_name=managed.external_campaign_name,
