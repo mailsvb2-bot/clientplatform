@@ -443,7 +443,9 @@ ROAS/ROMI only when valid
 
 ---
 
-## U-004 — `NEXT` — Yandex Campaign-level Read Analytics
+## U-004 — `DONE` — Yandex Campaign-level Read Analytics
+
+Evidence: PR #177, merge SHA `c5ad2187402593152688cc90a60f559830f148f6`; все 15 PR workflows завершились `success`, включая Canon, CI quality/coverage, static security, booking/ad-spend/partner concurrency, production isolation, user scenario matrix и pre-deploy gate; coverage baseline повышен до 74.16% combined / 65.22% branch.
 
 ### Цель
 
@@ -484,7 +486,7 @@ Owner UI способен показать честный read-only campaign per
 
 ---
 
-## U-005 — `QUEUED` — Managed Yandex Activation Policy
+## U-005 — `NEXT` — Managed Yandex Activation Policy
 
 ### Цель
 
@@ -1445,8 +1447,8 @@ Duplicate tap, retry, worker restart или uncertain provider response не д�
 | U-001 Durable Outcome Ledger | DONE | PR #170; merge SHA `85f676db72e57e9281b04dd623291d087c1b4d56`; all PR workflows green including Canon, CI quality/coverage, static security, PostgreSQL and booking concurrency, production isolation and pre-deploy |
 | U-002 Acquisition Attribution Spine | DONE | PR #172; merge SHA `c7f85182e3d100c82de87c996b34ab5e71fbf31b`; all 15 PR workflows green including Canon, CI quality/coverage, static security, booking/ad-spend/partner concurrency, production isolation, user scenario matrix and pre-deploy |
 | U-003 Revenue Attribution & Unit Economics | DONE | PR #174; merge SHA `148bc3ba1732cbe530973d20284308cc16b6df70`; all 15 PR workflows green including Canon, CI quality/coverage, static security, booking/ad-spend/partner concurrency, production isolation, user scenario matrix and pre-deploy |
-| U-004 Yandex Campaign-level Read Analytics | NEXT | — |
-| U-005 Managed Yandex Activation Policy | QUEUED | — |
+| U-004 Yandex Campaign-level Read Analytics | DONE | PR #177; merge SHA `c5ad2187402593152688cc90a60f559830f148f6`; all 15 PR workflows green including Canon, CI quality/coverage, static security, booking/ad-spend/partner concurrency, production isolation, user scenario matrix and pre-deploy; coverage baseline 74.16% combined / 65.22% branch |
+| U-005 Managed Yandex Activation Policy | NEXT | — |
 | U-006 Growth Cockpit | QUEUED | — |
 | U-007 Zero-to-First-Outcome Onboarding | QUEUED | — |
 | U-008 CRM Lead Inbox | QUEUED | — |
