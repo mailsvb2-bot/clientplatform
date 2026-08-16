@@ -62,6 +62,7 @@ class DirectIdentitySafetyTests(unittest.TestCase):
                                 {
                                     "ClientId": 100500,
                                     "Login": "master-login",
+                                    "Type": "CLIENT",
                                     "ClientInfo": "Мастер",
                                     "Archived": "NO",
                                     "Grants": [
@@ -92,6 +93,7 @@ class DirectIdentitySafetyTests(unittest.TestCase):
         self.assertTrue(str(transport.calls[0]["url"]).endswith("/clients"))
         request = json.loads(transport.calls[0]["body"])
         self.assertEqual(request["method"], "get")
+        self.assertIn("Type", request["params"]["FieldNames"])
         self.assertIn("Grants", request["params"]["FieldNames"])
 
     def test_denied_edit_grant_is_rejected_before_activation(self) -> None:
@@ -106,6 +108,7 @@ class DirectIdentitySafetyTests(unittest.TestCase):
                                 {
                                     "ClientId": 100500,
                                     "Login": "denied-login",
+                                    "Type": "CLIENT",
                                     "Archived": "NO",
                                     "Grants": [
                                         {
@@ -142,6 +145,7 @@ class DirectIdentitySafetyTests(unittest.TestCase):
                                 {
                                     "ClientId": 100500,
                                     "Login": "readonly-login",
+                                    "Type": "CLIENT",
                                     "Archived": "NO",
                                     "Grants": [],
                                 }
