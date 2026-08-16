@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import sqlite3
 import unittest
-from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
@@ -105,7 +104,7 @@ class YandexManagedProviderContractTests(unittest.TestCase):
         self.assertEqual(transport.calls, [])
 
 
-class ManagedProvisioningLeaseTests(unittest.TestCase):
+class ManagedProvisioningClaimTests(unittest.TestCase):
     def setUp(self) -> None:
         self.business_id = str(uuid4())
         self.promotion_id = str(uuid4())
@@ -135,7 +134,7 @@ class ManagedProvisioningLeaseTests(unittest.TestCase):
         )
 
     @staticmethod
-    def connection(*, status: str, updated_at: str) -> sqlite3.Connection:
+    def connection() -> sqlite3.Connection:
         conn = sqlite3.connect(":memory:")
         conn.execute(
             """
@@ -166,44 +165,43 @@ class ManagedProvisioningLeaseTests(unittest.TestCase):
         )
 
     def test_failed_binding_is_claimed_once_with_compare_and_swap(self) -> None:
-        now = datetime(2026, 8, 16, 16, 0, tzinfo=timezone.utc)
         managed = self.managed(
             status=ManagedAdCampaignStatus.FAILED,
-            updated_at=(now - timedelta(seconds=5)).isoformat(timespec="seconds"),
+            updated_at="2026-08-16T15:59:55+00:00",
         )
-        conn = self.connection(status="failed", updated_at=managed.updated_at)
+        conn = self.connection()
         self.insert(conn, managed)
 
-        self.assertTrue(app._claim_managed_creation(conn, managed=managed, now=now))
-        self.assertFalse(app._claim_managed_creation(conn, managed=managed, now=now))
+        self.assertTrue(app._claim_failed_managed_creation(conn, managed=managed))
+        self.assertFalse(app._claim_failed_managed_creation(conn, managed=managed))
         row = conn.execute(
             "SELECT status, last_error_code FROM ad_managed_campaigns WHERE id=?",
             (managed.id,),
         ).fetchone()
         self.assertEqual(row, ("provisioning", None))
 
-    def test_fresh_provisioning_binding_is_not_stolen(self) -> None:
-        now = datetime(2026, 8, 16, 16, 0, tzinfo=timezone.utc)
+    def test_fresh_provisioning_binding_is_never_stolen(self) -> None:
         managed = self.managed(
             status=ManagedAdCampaignStatus.PROVISIONING,
-            updated_at=(now - timedelta(seconds=30)).isoformat(timespec="seconds"),
+            updated_at="2026-08-16T15:59:30+00:00",
         )
-        conn = self.connection(status="provisioning", updated_at=managed.updated_at)
+        conn = self.connection()
         self.insert(conn, managed)
 
-        self.assertFalse(app._claim_managed_creation(conn, managed=managed, now=now))
+        self.assertFalse(app._claim_failed_managed_creation(conn, managed=managed))
 
-    def test_stale_provisioning_binding_can_be_recovered_once(self) -> None:
-        now = datetime(2026, 8, 16, 16, 0, tzinfo=timezone.utc)
+    def test_old_provisioning_binding_is_never_reclaimed_by_wall_clock(self) -> None:
         managed = self.managed(
             status=ManagedAdCampaignStatus.PROVISIONING,
-            updated_at=(now - timedelta(minutes=5)).isoformat(timespec="seconds"),
+            updated_at="2026-08-16T12:00:00+00:00",
         )
-        conn = self.connection(status="provisioning", updated_at=managed.updated_at)
+        conn = self.connection()
         self.insert(conn, managed)
 
-        self.assertTrue(app._claim_managed_creation(conn, managed=managed, now=now))
-        self.assertFalse(app._claim_managed_creation(conn, managed=managed, now=now))
+        # Elapsed time cannot prove that the original provider write is dead.
+        # Reconciliation by the immutable provider marker must happen first;
+        # this local claim must therefore remain fail-closed indefinitely.
+        self.assertFalse(app._claim_failed_managed_creation(conn, managed=managed))
 
 
 class ManagedProvisioningRefreshFailureTests(unittest.TestCase):
