@@ -1,0 +1,288 @@
+name: Agent Yandex Direct live probe
+
+# Temporary branch-triggered, read-only production verification.
+# It never prints OAuth material, Direct logins, business IDs, connection IDs,
+# campaign IDs or campaign names.
+on:
+  push:
+    branches:
+      - agent/direct-global-ownership
+
+permissions:
+  contents: read
+
+concurrency:
+  group: clientplatform-yandex-direct-live-probe
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    env:
+      SSH_HOST: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_HOST }}
+      SSH_USER: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_USER }}
+      SSH_PRIVATE_KEY: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_KNOWN_HOSTS }}
+      SSH_PORT_SECRET: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_PORT }}
+
+    steps:
+      - name: Require dedicated ClientPlatform SSH credentials
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          : "${SSH_HOST:?CLIENTPLATFORM_PRODUCTION_SSH_HOST is required}"
+          : "${SSH_USER:?CLIENTPLATFORM_PRODUCTION_SSH_USER is required}"
+          : "${SSH_PRIVATE_KEY:?CLIENTPLATFORM_PRODUCTION_SSH_PRIVATE_KEY is required}"
+          : "${SSH_KNOWN_HOSTS:?CLIENTPLATFORM_PRODUCTION_SSH_KNOWN_HOSTS is required}"
+          SSH_PORT="${SSH_PORT_SECRET:-22}"
+          case "$SSH_PORT" in
+            *[!0-9]*|'') echo "CLIENTPLATFORM_PRODUCTION_SSH_PORT must be numeric" >&2; exit 2 ;;
+          esac
+          if [ "$SSH_PORT" -lt 1 ] || [ "$SSH_PORT" -gt 65535 ]; then
+            echo "CLIENTPLATFORM_PRODUCTION_SSH_PORT is outside 1..65535" >&2
+            exit 2
+          fi
+          echo "SSH_PORT=$SSH_PORT" >> "$GITHUB_ENV"
+
+      - name: Configure pinned production SSH identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          key="$RUNNER_TEMP/clientplatform-production-ssh-key"
+          known_hosts="$RUNNER_TEMP/clientplatform-production-known-hosts"
+          umask 077
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$key"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$known_hosts"
+          chmod 600 "$key" "$known_hosts"
+          ssh-keygen -y -f "$key" >/dev/null
+
+      - name: Verify Yandex Direct production connection read-only
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          key="$RUNNER_TEMP/clientplatform-production-ssh-key"
+          known_hosts="$RUNNER_TEMP/clientplatform-production-known-hosts"
+          ssh \
+            -p "$SSH_PORT" \
+            -i "$key" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$known_hosts" \
+            -o ConnectTimeout=10 \
+            "$SSH_USER@$SSH_HOST" 'bash -s' <<'REMOTE'
+          set -Eeuo pipefail
+          repo=/opt/clientplatform
+          app=clientplatform-production-app-1
+
+          if [ ! -d "$repo/.git" ]; then
+            echo "YANDEX_PROBE_FAIL production_checkout_missing"
+            exit 10
+          fi
+          printf 'PRODUCTION_SOURCE_SHA=%s\n' "$(git -C "$repo" rev-parse HEAD)"
+          if ! docker inspect "$app" >/dev/null 2>&1; then
+            echo "YANDEX_PROBE_FAIL app_container_missing"
+            exit 11
+          fi
+
+          docker exec -i "$app" python - <<'PY'
+          from __future__ import annotations
+
+          from collections import Counter, defaultdict
+
+          from clientplatform.application.ad_connections import _provider
+          from clientplatform.infrastructure.ad_credential_vault import AgeAdCredentialVault
+          from clientplatform.infrastructure.ad_worker_store import AdWorkerStore
+          from clientplatform.integrations.yandex_direct import YandexDirectError, YandexTokenBundle
+          from services.db import get_db_ro
+
+          def value(row, position):
+              return row[position]
+
+          with get_db_ro() as conn:
+              connections = conn.execute(
+                  """
+                  SELECT id, business_id, status, external_account_id, last_error_code
+                  FROM ad_connections
+                  WHERE provider='yandex_direct'
+                    AND status IN ('active', 'attention')
+                  ORDER BY created_at, id
+                  """
+              ).fetchall()
+              managed_rows = conn.execute(
+                  """
+                  SELECT connection_id, external_campaign_id, status
+                  FROM ad_managed_campaigns
+                  WHERE provider='yandex_direct'
+                  ORDER BY created_at, id
+                  """
+              ).fetchall()
+              publication_rows = conn.execute(
+                  """
+                  SELECT connection_id, external_campaign_id
+                  FROM ad_publication_jobs
+                  ORDER BY created_at, id
+                  """
+              ).fetchall()
+              authorization_rows = conn.execute(
+                  """
+                  SELECT connection_id, external_campaign_id
+                  FROM ad_spend_authorizations
+                  ORDER BY created_at, id
+                  """
+              ).fetchall()
+
+          known_campaigns = defaultdict(set)
+          managed_statuses = Counter()
+          for row in managed_rows:
+              connection_id = str(value(row, 0))
+              campaign_id = value(row, 1)
+              managed_statuses[str(value(row, 2))] += 1
+              if campaign_id:
+                  known_campaigns[connection_id].add(str(campaign_id))
+          for rows in (publication_rows, authorization_rows):
+              for row in rows:
+                  campaign_id = value(row, 1)
+                  if campaign_id:
+                      known_campaigns[str(value(row, 0))].add(str(campaign_id))
+
+          print(f"YANDEX_CONNECTION_COUNT={len(connections)}")
+          print(
+              "YANDEX_CONNECTION_STATUS="
+              + ",".join(
+                  f"{key}:{count}"
+                  for key, count in sorted(
+                      Counter(str(value(row, 2)) for row in connections).items()
+                  )
+              )
+          )
+          print(
+              "YANDEX_MANAGED_STATUS="
+              + ",".join(f"{key}:{count}" for key, count in sorted(managed_statuses.items()))
+          )
+
+          if not connections:
+              print("YANDEX_PROBE_VERDICT=no_available_connection")
+              raise SystemExit(20)
+
+          provider = _provider()
+          vault = AgeAdCredentialVault()
+          verified_connections = 0
+          identity_matches = 0
+          total_visible_campaigns = 0
+          total_known_campaign_refs = 0
+          visible_known_campaign_refs = 0
+          campaign_types = Counter()
+          campaign_states = Counter()
+          failures = Counter()
+
+          for row in connections:
+              connection_id = str(value(row, 0))
+              business_id = str(value(row, 1))
+              stored_account_id = str(value(row, 3))
+              try:
+                  with get_db_ro() as conn:
+                      _connection, token_json = AdWorkerStore(
+                          conn,
+                          vault=vault,
+                      ).load_active(
+                          business_id=business_id,
+                          connection_id=connection_id,
+                      )
+                  bundle = YandexTokenBundle.from_json(token_json)
+                  identity_result = provider._direct_call(
+                      service="clients",
+                      token=bundle.access_token,
+                      payload={
+                          "method": "get",
+                          "params": {
+                              "FieldNames": ["ClientId", "Login", "Type", "Archived"]
+                          },
+                      },
+                  )
+                  clients = identity_result.get("Clients") or []
+                  if len(clients) != 1 or not isinstance(clients[0], dict):
+                      failures["identity_ambiguous"] += 1
+                      continue
+                  client = clients[0]
+                  if str(client.get("Archived") or "NO").upper() == "YES":
+                      failures["identity_archived"] += 1
+                      continue
+                  direct_client_id = str(client.get("ClientId") or "").strip()
+                  if not direct_client_id:
+                      failures["identity_missing"] += 1
+                      continue
+                  verified_connections += 1
+                  if direct_client_id == stored_account_id:
+                      identity_matches += 1
+
+                  campaign_result = provider._direct_call(
+                      service="campaigns",
+                      token=bundle.access_token,
+                      payload={
+                          "method": "get",
+                          "params": {
+                              "SelectionCriteria": {},
+                              "FieldNames": [
+                                  "Id",
+                                  "State",
+                                  "Status",
+                                  "StatusPayment",
+                                  "Type",
+                              ],
+                              "Page": {"Limit": 10000},
+                          },
+                      },
+                  )
+                  campaigns = [
+                      item
+                      for item in (campaign_result.get("Campaigns") or [])
+                      if isinstance(item, dict) and item.get("Id")
+                  ]
+                  total_visible_campaigns += len(campaigns)
+                  visible_ids = {str(item.get("Id")) for item in campaigns}
+                  refs = known_campaigns.get(connection_id, set())
+                  total_known_campaign_refs += len(refs)
+                  visible_known_campaign_refs += len(refs & visible_ids)
+                  for item in campaigns:
+                      campaign_types[str(item.get("Type") or "UNKNOWN").upper()] += 1
+                      campaign_states[str(item.get("State") or "UNKNOWN").upper()] += 1
+              except YandexDirectError as exc:
+                  failures[str(exc.code)] += 1
+              except Exception as exc:
+                  failures[type(exc).__name__] += 1
+
+          print(f"YANDEX_VERIFIED_CONNECTIONS={verified_connections}")
+          print(f"YANDEX_STORED_IDENTITY_MATCHES={identity_matches}")
+          print(f"YANDEX_VISIBLE_CAMPAIGN_COUNT={total_visible_campaigns}")
+          print(f"YANDEX_KNOWN_CAMPAIGN_REFS={total_known_campaign_refs}")
+          print(f"YANDEX_VISIBLE_KNOWN_CAMPAIGN_REFS={visible_known_campaign_refs}")
+          print(
+              "YANDEX_CAMPAIGN_TYPES="
+              + ",".join(f"{key}:{count}" for key, count in sorted(campaign_types.items()))
+          )
+          print(
+              "YANDEX_CAMPAIGN_STATES="
+              + ",".join(f"{key}:{count}" for key, count in sorted(campaign_states.items()))
+          )
+          print(
+              "YANDEX_PROBE_FAILURES="
+              + ",".join(f"{key}:{count}" for key, count in sorted(failures.items()))
+          )
+
+          if verified_connections != len(connections):
+              print("YANDEX_PROBE_VERDICT=provider_verification_failed")
+              raise SystemExit(21)
+          if identity_matches != len(connections):
+              print("YANDEX_PROBE_VERDICT=stored_identity_mismatch")
+              raise SystemExit(22)
+          if total_visible_campaigns == 0:
+              print("YANDEX_PROBE_VERDICT=no_visible_campaigns")
+              raise SystemExit(23)
+          if total_known_campaign_refs and visible_known_campaign_refs != total_known_campaign_refs:
+              print("YANDEX_PROBE_VERDICT=known_campaign_not_visible")
+              raise SystemExit(24)
+          print("YANDEX_PROBE_VERDICT=connected_and_campaigns_visible")
+          PY
+          REMOTE
