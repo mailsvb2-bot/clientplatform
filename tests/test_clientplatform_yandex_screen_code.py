@@ -171,6 +171,37 @@ class YandexScreenCodeTelegramTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             screen_code._confirmation_code("not a code")
 
+    def test_ad_connection_failure_reason_maps_all_safe_ownership_states(self) -> None:
+        cases = (
+            (
+                "direct_account_owned_by_another_business",
+                "уже подключён к другому рабочему пространству",
+            ),
+            (
+                "direct_identity_reverification_pending",
+                "безопасная переверификация",
+            ),
+            (
+                "direct_identity_reverification_ambiguous",
+                "несколько старых подключений",
+            ),
+            (
+                "direct_identity_reverification_required",
+                "подтвердить заново",
+            ),
+            (
+                "unexpected_internal_code",
+                "Код мог истечь или уже быть использован",
+            ),
+        )
+        for code, expected in cases:
+            with self.subTest(code=code):
+                rendered = screen_code._ad_connection_failure_reason(
+                    AdConnectionInvariantViolation(code)
+                )
+                self.assertIn(expected, rendered)
+                self.assertNotIn(code, rendered)
+
     async def test_connect_stores_one_time_state_and_explains_manual_code(self) -> None:
         cb = callback("cpa:connect:business-1")
         state = FakeState()
