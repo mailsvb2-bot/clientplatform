@@ -337,7 +337,10 @@ async def choose_yandex_publication_mode(
     try:
         index = int(str(callback.data).split(":", 2)[2])
         connection_id = list(data["connection_ids"])[index]
-    except (IndexError, KeyError, TypeError, ValueError):
+    except (IndexError, KeyError, TypeError):
+        await callback.answer("Кабинет больше не найден", show_alert=True)
+        return
+    except ValueError:
         await callback.answer("Кабинет больше не найден", show_alert=True)
         return
     await state.update_data(connection_id=str(connection_id))
