@@ -44,6 +44,9 @@ from services.migrations.postgres_identity_bigint_v1 import apply as _apply_post
 from services.migrations.clientplatform_managed_bot_provider_v1 import (
     apply as _apply_clientplatform_managed_bot_provider_v1,
 )
+from services.migrations.clientplatform_direct_global_ownership_v1 import (
+    apply as _apply_clientplatform_direct_global_ownership_v1,
+)
 
 
 def apply_all_migrations(conn: sqlite3.Connection) -> None:
@@ -89,4 +92,5 @@ def apply_all_migrations(conn: sqlite3.Connection) -> None:
     _apply_payment_reconciliation_retry_v1(conn)
     _apply_postgres_identity_bigint_v1(conn)
     _apply_clientplatform_managed_bot_provider_v1(conn)
+    _apply_clientplatform_direct_global_ownership_v1(conn)
     _apply_price(conn)
