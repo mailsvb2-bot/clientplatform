@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from uuid import uuid4
 
 from clientplatform.domain.ad_connections import (
@@ -59,7 +59,6 @@ _ACCOUNT_ATTENTION_ERRORS = {
     "provider_unauthorized",
     "oauth_refresh_token_missing",
 }
-_MANAGED_PROVISIONING_LEASE_SECONDS = 120
 _MANAGED_SELECT = """
     SELECT id, business_id, promotion_campaign_id, connection_id, provider,
            provisioning_key, external_campaign_id, external_campaign_name,
@@ -243,54 +242,26 @@ def _reserve_managed_campaign(
     return managed, int(cursor.rowcount or 0) == 1
 
 
-def _managed_updated_at(value: str) -> datetime:
-    try:
-        parsed = datetime.fromisoformat(str(value))
-    except ValueError as exc:
-        raise AdConnectionInvariantViolation(
-            "managed campaign provisioning timestamp is invalid"
-        ) from exc
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
-
-
-def _claim_managed_creation(
+def _claim_failed_managed_creation(
     conn,
     *,
     managed: ManagedAdCampaign,
-    now: datetime | None = None,
 ) -> bool:
-    """Atomically acquire one provider-create attempt for an existing binding."""
+    """Atomically reacquire only a provider-confirmed failed creation attempt."""
 
-    if managed.status == ManagedAdCampaignStatus.READY:
+    if managed.status != ManagedAdCampaignStatus.FAILED:
         return False
-    current_time = now or datetime.now(timezone.utc)
-    if current_time.tzinfo is None:
-        current_time = current_time.replace(tzinfo=timezone.utc)
-    current_time = current_time.astimezone(timezone.utc)
-
-    if managed.status == ManagedAdCampaignStatus.PROVISIONING:
-        lease_deadline = current_time - timedelta(
-            seconds=_MANAGED_PROVISIONING_LEASE_SECONDS
-        )
-        if _managed_updated_at(managed.updated_at) > lease_deadline:
-            return False
-    elif managed.status != ManagedAdCampaignStatus.FAILED:
-        return False
-
-    stamp = current_time.isoformat(timespec="seconds")
+    stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
     cursor = conn.execute(
         """
         UPDATE ad_managed_campaigns
         SET status='provisioning', last_error_code=NULL, updated_at=?
-        WHERE id=? AND business_id=? AND status=? AND updated_at=?
+        WHERE id=? AND business_id=? AND status='failed' AND updated_at=?
         """,
         (
             stamp,
             managed.id,
             managed.business_id,
-            managed.status.value,
             managed.updated_at,
         ),
     )
@@ -602,7 +573,7 @@ def ensure_yandex_managed_campaign(
                 )
             if current_managed.status == ManagedAdCampaignStatus.READY:
                 return current_managed
-            owns_creation = _claim_managed_creation(
+            owns_creation = _claim_failed_managed_creation(
                 conn,
                 managed=current_managed,
             )
