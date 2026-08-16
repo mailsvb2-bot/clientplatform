@@ -336,8 +336,12 @@ async def choose_managed_yandex_connection(
     data = await state.get_data()
     try:
         index = int(str(callback.data).split(":", 2)[2])
+    except (TypeError, ValueError):
+        await callback.answer("Рекламный кабинет больше не найден", show_alert=True)
+        return
+    try:
         connection_id = list(data["connection_ids"])[index]
-    except (IndexError, KeyError, TypeError, ValueError):
+    except (IndexError, KeyError):
         await callback.answer("Рекламный кабинет больше не найден", show_alert=True)
         return
 
@@ -499,10 +503,16 @@ async def prepare_ad_publication(message: Message, state: FSMContext) -> None:
                 region_ids=regions,
                 source_url=str(data["source_url"]),
             )
-    except (KeyError, TypeError, ValueError, AdConnectionError, YandexDirectError):
+    except (KeyError, TypeError, ValueError):
         await message.answer(
-            "Не удалось подготовить рекламный черновик. Проверьте ID региона "
-            "(например, 47) и состояние подключения Яндекс Директа."
+            "Не удалось распознать регион. Введите положительный ID, например 47, "
+            "или несколько ID через запятую."
+        )
+        return
+    except (AdConnectionError, YandexDirectError):
+        await message.answer(
+            "Не удалось подготовить рекламный черновик в Яндекс Директе. "
+            "Проверьте состояние подключения кабинета и попробуйте ещё раз."
         )
         return
     await state.update_data(
