@@ -390,7 +390,9 @@ Provider-specific refs могут включать `promotion_campaign_id`, mana
 
 ---
 
-## U-003 — `NEXT` — Revenue Attribution & Unit Economics
+## U-003 — `DONE` — Revenue Attribution & Unit Economics
+
+Evidence: PR #174, merge SHA `148bc3ba1732cbe530973d20284308cc16b6df70`; все 15 PR workflows завершились `success`, включая Canon, CI quality/coverage, static security, booking/ad-spend/partner concurrency, production isolation, user scenario matrix и pre-deploy gate.
 
 ### Цель
 
@@ -441,7 +443,7 @@ ROAS/ROMI only when valid
 
 ---
 
-## U-004 — `QUEUED` — Yandex Campaign-level Read Analytics
+## U-004 — `NEXT` — Yandex Campaign-level Read Analytics
 
 ### Цель
 
@@ -1442,8 +1444,8 @@ Duplicate tap, retry, worker restart или uncertain provider response не д�
 | Yandex managed campaign lifecycle | DONE | PR #160; merge SHA `de0c332e0f4ed3bea408b7da4319cda04da58a69`; all PR and post-merge main gates green |
 | U-001 Durable Outcome Ledger | DONE | PR #170; merge SHA `85f676db72e57e9281b04dd623291d087c1b4d56`; all PR workflows green including Canon, CI quality/coverage, static security, PostgreSQL and booking concurrency, production isolation and pre-deploy |
 | U-002 Acquisition Attribution Spine | DONE | PR #172; merge SHA `c7f85182e3d100c82de87c996b34ab5e71fbf31b`; all 15 PR workflows green including Canon, CI quality/coverage, static security, booking/ad-spend/partner concurrency, production isolation, user scenario matrix and pre-deploy |
-| U-003 Revenue Attribution & Unit Economics | NEXT | — |
-| U-004 Yandex Campaign-level Read Analytics | QUEUED | — |
+| U-003 Revenue Attribution & Unit Economics | DONE | PR #174; merge SHA `148bc3ba1732cbe530973d20284308cc16b6df70`; all 15 PR workflows green including Canon, CI quality/coverage, static security, booking/ad-spend/partner concurrency, production isolation, user scenario matrix and pre-deploy |
+| U-004 Yandex Campaign-level Read Analytics | NEXT | — |
 | U-005 Managed Yandex Activation Policy | QUEUED | — |
 | U-006 Growth Cockpit | QUEUED | — |
 | U-007 Zero-to-First-Outcome Onboarding | QUEUED | — |
