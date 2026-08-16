@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
@@ -24,6 +25,14 @@ from clientplatform.domain.ad_connections import (
 from clientplatform.domain.tenancy import TenantContext, normalize_uuid
 from clientplatform.infrastructure.ad_credential_vault import AdCredentialVault
 from clientplatform.infrastructure.tenancy_repository import TenancyRepository
+
+
+_DIRECT_OWNER_CONFLICT = "direct_account_owned_by_another_business"
+_EXPECTED_DIRECT_IDENTITY_ERRORS = {
+    "direct_identity_reverification_pending",
+    "direct_identity_reverification_ambiguous",
+    "direct_identity_reverification_required",
+}
 
 
 def _utc_now() -> datetime:
@@ -86,6 +95,19 @@ def _job_from_row(row: Any) -> AdPublicationJob:
         updated_at=str(_value(row, "updated_at", 18)),
         submitted_at=_optional(row, "submitted_at", 19),
     )
+
+
+def _translate_direct_identity_integrity_error(exc: sqlite3.IntegrityError) -> None:
+    text = str(exc).strip().lower()
+    if (
+        "uq_ad_connections_direct_global_owner" in text
+        or "unique constraint failed: ad_connections.provider, ad_connections.external_account_id" in text
+    ):
+        raise AdConnectionInvariantViolation(_DIRECT_OWNER_CONFLICT) from exc
+    for code in _EXPECTED_DIRECT_IDENTITY_ERRORS:
+        if code in text:
+            raise AdConnectionInvariantViolation(code) from exc
+    raise exc
 
 
 _CONNECTION_SELECT = """
@@ -240,38 +262,42 @@ class AdConnectionRepository:
         timestamp = _iso(now or _utc_now())
         connection_id = str(uuid4())
         encoded_permissions = json.dumps(sorted(set(permissions)), ensure_ascii=False)
-        self._conn.execute(
-            """
-            INSERT INTO ad_connections(
-                id, business_id, provider, external_account_id, external_login,
-                credential_ciphertext, permissions_json, status,
-                created_by_member_id, created_at, updated_at,
-                last_success_at, last_error_at, last_error_code
-            ) VALUES(?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, NULL, NULL)
-            ON CONFLICT(business_id, provider, external_account_id) DO UPDATE SET
-                external_login=excluded.external_login,
-                credential_ciphertext=excluded.credential_ciphertext,
-                permissions_json=excluded.permissions_json,
-                status='active',
-                updated_at=excluded.updated_at,
-                last_success_at=excluded.last_success_at,
-                last_error_at=NULL,
-                last_error_code=NULL
-            """,
-            (
-                connection_id,
-                session.business_id,
-                session.provider.value,
-                account_id,
-                login,
-                ciphertext,
-                encoded_permissions,
-                session.membership_id,
-                timestamp,
-                timestamp,
-                timestamp,
-            ),
-        )
+        try:
+            self._conn.execute(
+                """
+                INSERT INTO ad_connections(
+                    id, business_id, provider, external_account_id, external_login,
+                    identity_source, credential_ciphertext, permissions_json, status,
+                    created_by_member_id, created_at, updated_at,
+                    last_success_at, last_error_at, last_error_code
+                ) VALUES(?, ?, ?, ?, ?, 'direct_client_id', ?, ?, 'active', ?, ?, ?, ?, NULL, NULL)
+                ON CONFLICT(business_id, provider, external_account_id) DO UPDATE SET
+                    external_login=excluded.external_login,
+                    identity_source='direct_client_id',
+                    credential_ciphertext=excluded.credential_ciphertext,
+                    permissions_json=excluded.permissions_json,
+                    status='active',
+                    updated_at=excluded.updated_at,
+                    last_success_at=excluded.last_success_at,
+                    last_error_at=NULL,
+                    last_error_code=NULL
+                """,
+                (
+                    connection_id,
+                    session.business_id,
+                    session.provider.value,
+                    account_id,
+                    login,
+                    ciphertext,
+                    encoded_permissions,
+                    session.membership_id,
+                    timestamp,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            _translate_direct_identity_integrity_error(exc)
         connection = self._find_connection(
             business_id=session.business_id,
             provider=session.provider,
