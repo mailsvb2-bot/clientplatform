@@ -9,6 +9,10 @@ from uuid import uuid4
 import pytest
 from aiogram.methods import AnswerCallbackQuery
 
+from clientplatform.application.yandex_campaign_diagnostics import (
+    YandexCampaignDiagnosticsRow,
+    YandexCampaignDiagnosticsSnapshot,
+)
 from clientplatform.application.yandex_growth_analytics import (
     YandexGrowthCampaignSnapshot,
     YandexGrowthSnapshot,
@@ -107,6 +111,29 @@ def _snapshot(*, connected_accounts: int = 1, tracked_ads: int = 2) -> YandexGro
     )
 
 
+def _campaign_snapshot() -> YandexCampaignDiagnosticsSnapshot:
+    row = YandexCampaignDiagnosticsRow(
+        connection_id=str(uuid4()),
+        campaign_id="6001",
+        campaign_name="Консультация — август",
+        impressions=800,
+        clicks=40,
+        cost_micros=20_000_000,
+        has_provider_row=True,
+    )
+    return YandexCampaignDiagnosticsSnapshot(
+        date_from="2026-07-11",
+        date_to="2026-08-09",
+        period_days=30,
+        connected_accounts=1,
+        managed_campaigns=1,
+        impressions=800,
+        clicks=40,
+        cost_micros=20_000_000,
+        campaigns=(row,),
+    )
+
+
 def test_owner_dashboard_exposes_yandex_analytics() -> None:
     business_id = str(uuid4())
     markup = promotion_install._owner_keyboard(control, business_id)
@@ -130,6 +157,17 @@ def test_snapshot_copy_is_evidence_only_and_no_romi_guess() -> None:
     assert "CAC: 25.00" in text
     assert "Консультация — август" in text
     assert "Выручка и ROMI не показываются" in text
+
+
+def test_campaign_copy_is_explicitly_diagnostics_not_attribution() -> None:
+    text = yandex._format_campaign_snapshot(_campaign_snapshot())
+    assert "CampaignId диагностика" in text
+    assert "[6001]" in text
+    assert "800 показов" in text
+    assert "40 кликов" in text
+    assert "20.00 в валюте кабинета" in text
+    assert "не атрибуция лидов, записей или выручки" in text
+    assert "CampaignId-расход к выручке автоматически не приписывается" in text
 
 
 def test_empty_states_do_not_invent_provider_metrics() -> None:
@@ -234,6 +272,39 @@ async def test_owner_can_open_30_day_snapshot(monkeypatch: pytest.MonkeyPatch) -
     assert labels == [
         "7 дней",
         "✅ 30 дней",
+        "📈 Кампании по CampaignId",
+        "📣 Рекламные кабинеты",
+        "← Получать клиентов",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_owner_can_open_campaign_diagnostics(monkeypatch: pytest.MonkeyPatch) -> None:
+    business_id = str(uuid4())
+    token = control._uuid_token(business_id)
+    monkeypatch.setattr(
+        yandex,
+        "get_yandex_campaign_diagnostics",
+        lambda **_kwargs: _campaign_snapshot(),
+    )
+    callback = FakeCallback(f"cpy:c:{token}:30")
+    state = FakeState()
+
+    await yandex.open_yandex_campaign_diagnostics(callback, state)
+
+    assert state.clear_count == 1
+    assert callback.answers == []
+    text, kwargs = callback.message.edits[-1]
+    assert "CampaignId диагностика" in text
+    labels = [
+        button.text
+        for row in kwargs["reply_markup"].inline_keyboard
+        for button in row
+    ]
+    assert labels == [
+        "7 дней",
+        "✅ 30 дней",
+        "🎯 Exact AdId + результаты",
         "📣 Рекламные кабинеты",
         "← Получать клиентов",
     ]
