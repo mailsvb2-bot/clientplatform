@@ -3,8 +3,11 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 
-from clientplatform.domain.connections import ClaimedDispatch, DispatchStatus
+from clientplatform.domain.connections import ClaimedDispatch, ConnectionPlatform, DispatchStatus
 from clientplatform.infrastructure import DispatchOutboxRepository
+from clientplatform.infrastructure.safe_dispatch_outbox import (
+    mark_non_replay_safe_dispatch_boundary,
+)
 from clientplatform.infrastructure.unified_dispatch_outbox import ClaimedProviderDispatch
 from clientplatform.transport.base import AdapterRegistry, CredentialProvider
 from services.db import get_db
@@ -28,9 +31,16 @@ def _sanitize_error(exc: BaseException, *, credential: str = "") -> str:
     return f"{exc.__class__.__name__}: {message}"[:1000]
 
 
-def _effective_max_attempts(exc: BaseException, configured: int) -> int:
-    """Terminal transport/media failures must not consume the retry budget."""
+def _effective_max_attempts(
+    exc: BaseException,
+    configured: int,
+    *,
+    non_replay_boundary_crossed: bool = False,
+) -> int:
+    """Terminal or non-replay-safe failures must not consume a retry budget."""
 
+    if non_replay_boundary_crossed:
+        return 1
     retryable = getattr(exc, "retryable", True)
     return max(1, int(configured)) if retryable is not False else 1
 
@@ -72,6 +82,16 @@ def _partner_claim_can_cross_provider_boundary(item: object) -> bool:
         return repository.partner_dispatch_still_authorized(item)
 
 
+def _mark_non_replay_boundary(item: object) -> bool:
+    if not isinstance(item, ClaimedDispatch):
+        return False
+    if item.dispatch.platform != ConnectionPlatform.MAX:
+        return False
+    with get_db() as conn:
+        mark_non_replay_safe_dispatch_boundary(conn, item)
+    return True
+
+
 async def run_dispatch_batch(
     *,
     credential_provider: CredentialProvider,
@@ -87,6 +107,12 @@ async def run_dispatch_batch(
     holds an open database transaction. Partner work is revalidated once more
     after claim and before credential resolution/provider I/O so an operator's
     latest contact revocation is honored at the send boundary.
+
+    MAX message creation has no documented provider idempotency key. Its
+    customer-dispatch lease is therefore durably marked immediately before the
+    provider call; once that boundary is crossed, automatic replay is forbidden
+    and any ambiguous result is terminal/manual-reconciliation instead of a
+    duplicate customer message.
     """
 
     with get_db() as conn:
@@ -101,6 +127,7 @@ async def run_dispatch_batch(
 
     for index, item in enumerate(claimed):
         credential = ""
+        non_replay_boundary_crossed = False
         try:
             allowed = await asyncio.to_thread(
                 _partner_claim_can_cross_provider_boundary,
@@ -120,6 +147,10 @@ async def run_dispatch_batch(
                 raise ValueError("credential provider returned an empty secret")
 
             adapter = adapters.get(item.dispatch.platform)
+            non_replay_boundary_crossed = await asyncio.to_thread(
+                _mark_non_replay_boundary,
+                item,
+            )
             provider_message_id = await adapter.send(item, credential)
             with get_db() as conn:
                 DispatchOutboxRepository(conn).mark_sent(
@@ -139,7 +170,11 @@ async def run_dispatch_batch(
                 updated = DispatchOutboxRepository(conn).reschedule(
                     item,
                     error=error,
-                    max_attempts=_effective_max_attempts(exc, max_attempts),
+                    max_attempts=_effective_max_attempts(
+                        exc,
+                        max_attempts,
+                        non_replay_boundary_crossed=non_replay_boundary_crossed,
+                    ),
                 )
             if updated.status == DispatchStatus.DEAD:
                 dead += 1

@@ -7,6 +7,7 @@ import logging
 from aiogram.types import Update
 
 from clientplatform.application.bot_gateway import (
+    consume_telegram_customer_channel_link,
     ensure_telegram_customer_link,
     mark_ingress_event_processed,
     reschedule_ingress_event,
@@ -15,10 +16,12 @@ from clientplatform.application.partner_runtime import (
     record_partner_reply_if_expected,
 )
 from clientplatform.domain.bot_gateway import ClaimedIngressEvent
+from clientplatform.domain.messenger_channels import extract_customer_link_token
 from clientplatform.runtime.bot_gateway import (
     ManagedBotGatewayRuntime as _ManagedBotGatewayRuntime,
     _safe_error_code,
     _telegram_actor,
+    _telegram_message_text,
 )
 
 log = logging.getLogger(__name__)
@@ -52,29 +55,44 @@ class ManagedBotGatewayRuntime(_ManagedBotGatewayRuntime):
                 raise ValueError("managed bot ingress payload must be an object")
 
             actor = _telegram_actor(payload)
-            reply_text = _partner_reply_text(payload)
-            if actor is not None and reply_text is not None:
-                candidate_id = await asyncio.to_thread(
-                    record_partner_reply_if_expected,
-                    business_id=item.route.business_id,
-                    connection_id=item.route.connection_id,
-                    external_subject=str(actor[0]),
-                    provider_event_key=item.event.provider_update_id,
-                    reply_text=reply_text,
-                )
-                if candidate_id is not None:
-                    await asyncio.to_thread(mark_ingress_event_processed, item)
-                    self._processed += 1
-                    return
-
-            if actor is not None:
+            link_token = (
+                extract_customer_link_token(_telegram_message_text(payload))
+                if actor is not None
+                else None
+            )
+            if actor is not None and link_token is not None:
                 await asyncio.to_thread(
-                    ensure_telegram_customer_link,
+                    consume_telegram_customer_channel_link,
                     route=item.route,
+                    token=link_token,
                     telegram_user_id=actor[0],
                     username=actor[1],
                     display_name=actor[2],
                 )
+            else:
+                reply_text = _partner_reply_text(payload)
+                if actor is not None and reply_text is not None:
+                    candidate_id = await asyncio.to_thread(
+                        record_partner_reply_if_expected,
+                        business_id=item.route.business_id,
+                        connection_id=item.route.connection_id,
+                        external_subject=str(actor[0]),
+                        provider_event_key=item.event.provider_update_id,
+                        reply_text=reply_text,
+                    )
+                    if candidate_id is not None:
+                        await asyncio.to_thread(mark_ingress_event_processed, item)
+                        self._processed += 1
+                        return
+
+                if actor is not None:
+                    await asyncio.to_thread(
+                        ensure_telegram_customer_link,
+                        route=item.route,
+                        telegram_user_id=actor[0],
+                        username=actor[1],
+                        display_name=actor[2],
+                    )
             bot = await self._bot_for(item.route)
             try:
                 update = Update.model_validate(payload, context={"bot": bot})

@@ -7,8 +7,11 @@ from clientplatform.application.sales_ai_settings import business_sales_ai_enabl
 from clientplatform.application.sales_orchestration import orchestrate_sales_signal_in_transaction
 from clientplatform.domain.bookings import CustomerBusinessLink
 from clientplatform.domain.bot_gateway import ManagedBotRoute
+from clientplatform.domain.customers import CustomerPlatform, normalize_platform
 from clientplatform.domain.sales import ContactBasis
+from clientplatform.domain.sales_ai_jobs import normalize_sales_ai_source_order
 from clientplatform.domain.sales_state_machine import SalesConversationEvent
+from clientplatform.domain.tenancy import normalize_uuid
 from clientplatform.infrastructure.sales_ai_job_repository import SalesAIJobRepository
 from clientplatform.infrastructure.sales_repository import SalesRepository
 from clientplatform.infrastructure.tenancy_repository import TenancyRepository
@@ -19,12 +22,7 @@ _MAX_CAPTURED_MESSAGE_CHARS = 12_000
 
 
 def extract_customer_message_text(payload: Mapping[str, Any]) -> str | None:
-    """Extract bounded human text from one Telegram update.
-
-    Commands are routing instructions, not sales language, so they deliberately do
-    not enter the advisory model queue. Text/captions remain customer evidence only
-    when the business has current consent for the configured AI target.
-    """
+    """Extract bounded human text from one Telegram update."""
 
     message: Mapping[str, Any] | None = None
     for key in ("message", "edited_message"):
@@ -37,7 +35,11 @@ def extract_customer_message_text(payload: Mapping[str, Any]) -> str | None:
     raw = message.get("text")
     if raw is None:
         raw = message.get("caption")
-    normalized = re.sub(r"\s+", " ", str(raw or "").replace("\x00", " ")).strip()
+    return normalize_customer_message_text(raw)
+
+
+def normalize_customer_message_text(value: object) -> str | None:
+    normalized = re.sub(r"\s+", " ", str(value or "").replace("\x00", " ")).strip()
     if not normalized or normalized.startswith("/"):
         return None
     if len(normalized) > _MAX_CAPTURED_MESSAGE_CHARS:
@@ -65,6 +67,187 @@ def _owner_actor(conn: Any, *, business_id: str):
     )
 
 
+def _printable(value: str, *, field_name: str, maximum: int) -> str:
+    normalized = str(value or "").strip()
+    if not normalized or len(normalized) > maximum:
+        raise ValueError(f"{field_name} must be 1..{maximum} characters")
+    if any(ord(char) < 32 or ord(char) == 127 for char in normalized):
+        raise ValueError(f"{field_name} contains control characters")
+    return normalized
+
+
+def _record_customer_channel_message(
+    *,
+    business_id: str,
+    customer_id: str,
+    platform: CustomerPlatform | str,
+    external_subject: str,
+    source_ref: str,
+    provider_event_id: str,
+    source_order: int | str,
+    message_text: str,
+    runtime_ai_enabled: bool,
+    runtime_ai_consent_target: str,
+    opportunity_key_override: str | None = None,
+    source_event_key_override: str | None = None,
+    transition_key_override: str | None = None,
+    durable_source_ref_override: str | None = None,
+    surface: str = "messenger",
+    revalidate_canonical_identity: bool,
+) -> str:
+    if revalidate_canonical_identity:
+        business = normalize_uuid(business_id, field_name="business_id")
+        customer = normalize_uuid(customer_id, field_name="customer_id")
+    else:
+        # The established managed-Telegram entrypoint already resolves and
+        # validates its route/customer link before calling this layer. Keep its
+        # durable/test seam compatible rather than imposing a second admission
+        # contract after the fact.
+        business = _printable(business_id, field_name="business_id", maximum=64)
+        customer = _printable(customer_id, field_name="customer_id", maximum=64)
+
+    channel = normalize_platform(platform)
+    if channel not in {CustomerPlatform.TELEGRAM, CustomerPlatform.VK, CustomerPlatform.MAX}:
+        raise ValueError("sales ingress supports only Telegram, VK or MAX")
+    subject = _printable(external_subject, field_name="external_subject", maximum=512)
+    source = _printable(source_ref, field_name="source_ref", maximum=200)
+    event_id = _printable(provider_event_id, field_name="provider_event_id", maximum=160)
+    order_key = normalize_sales_ai_source_order(source_order)
+    text = normalize_customer_message_text(message_text)
+    if text is None:
+        raise ValueError("message_text must contain non-command customer text")
+    if not isinstance(runtime_ai_enabled, bool):
+        raise ValueError("runtime_ai_enabled must be a boolean")
+    consent_target = str(runtime_ai_consent_target or "").strip()
+    surface_name = _printable(surface, field_name="surface", maximum=80)
+
+    opportunity_key = opportunity_key_override or f"channel:{channel.value}:{source}:{subject}"
+    source_event_key = source_event_key_override or f"customer-message:{channel.value}:{source}:{event_id}"
+    transition_key = transition_key_override or f"inbound:{channel.value}:{source}:{event_id}"
+    durable_source_ref = durable_source_ref_override or f"{channel.value}:{source}"
+    for field_name, value in (
+        ("opportunity_key", opportunity_key),
+        ("source_event_key", source_event_key),
+        ("transition_key", transition_key),
+        ("durable_source_ref", durable_source_ref),
+    ):
+        _printable(value, field_name=field_name, maximum=240)
+
+    with get_db() as conn:
+        if revalidate_canonical_identity:
+            customer_row = conn.execute(
+                "SELECT 1 FROM customers WHERE id=? AND business_id=? AND status='active'",
+                (customer, business),
+            ).fetchone()
+            if customer_row is None:
+                raise ValueError("active customer was not found in the business")
+            identity_row = conn.execute(
+                """
+                SELECT 1
+                FROM customer_identities
+                WHERE business_id=? AND customer_id=? AND platform=?
+                  AND external_subject=? AND status='active'
+                LIMIT 1
+                """,
+                (business, customer, channel.value, subject),
+            ).fetchone()
+            if identity_row is None:
+                raise ValueError("customer channel identity does not belong to the business")
+
+        actor = _owner_actor(conn, business_id=business)
+        sales = SalesRepository(conn)
+        lead = sales.create_or_refresh_lead(
+            actor=actor,
+            opportunity_key=opportunity_key,
+            customer_id=customer,
+            source_kind=channel.value,
+            contact_basis=ContactBasis.INBOUND,
+            source_ref=durable_source_ref,
+        )
+
+        ai_allowed = runtime_ai_enabled and business_sales_ai_enabled_in_conn(
+            conn,
+            business_id=business,
+            consent_target=consent_target,
+        )
+        if ai_allowed:
+            inserted = sales.record_event(
+                actor=actor,
+                lead_id=lead.id,
+                event_type="customer_message",
+                dedupe_key=source_event_key,
+                payload={
+                    "text": text,
+                    "channel": channel.value,
+                    "surface": surface_name,
+                },
+            )
+            if inserted:
+                SalesAIJobRepository(conn).enqueue(
+                    business_id=business,
+                    lead_id=lead.id,
+                    source_event_dedupe_key=source_event_key,
+                    source_order=order_key,
+                )
+
+        orchestrate_sales_signal_in_transaction(
+            conn=conn,
+            actor=actor,
+            lead_id=lead.id,
+            event=SalesConversationEvent.INBOUND_RECEIVED,
+            dedupe_key=transition_key,
+            metadata={"channel": channel.value, "surface": surface_name},
+            model_confidence=1.0,
+            unanswered_inbound=True,
+        )
+        return lead.id
+
+
+def record_customer_channel_message(
+    *,
+    business_id: str,
+    customer_id: str,
+    platform: CustomerPlatform | str,
+    external_subject: str,
+    source_ref: str,
+    provider_event_id: str,
+    source_order: int | str,
+    message_text: str,
+    runtime_ai_enabled: bool,
+    runtime_ai_consent_target: str,
+    opportunity_key_override: str | None = None,
+    source_event_key_override: str | None = None,
+    transition_key_override: str | None = None,
+    durable_source_ref_override: str | None = None,
+    surface: str = "messenger",
+) -> str:
+    """Persist one canonical inbound sales signal for Telegram, VK or MAX.
+
+    New channel ingress revalidates the canonical customer identity in the same
+    transaction that persists sales evidence. Telegram's older managed-bot
+    wrapper keeps its established admission boundary and durable key contract.
+    """
+
+    return _record_customer_channel_message(
+        business_id=business_id,
+        customer_id=customer_id,
+        platform=platform,
+        external_subject=external_subject,
+        source_ref=source_ref,
+        provider_event_id=provider_event_id,
+        source_order=source_order,
+        message_text=message_text,
+        runtime_ai_enabled=runtime_ai_enabled,
+        runtime_ai_consent_target=runtime_ai_consent_target,
+        opportunity_key_override=opportunity_key_override,
+        source_event_key_override=source_event_key_override,
+        transition_key_override=transition_key_override,
+        durable_source_ref_override=durable_source_ref_override,
+        surface=surface,
+        revalidate_canonical_identity=True,
+    )
+
+
 def record_managed_bot_customer_message(
     *,
     route: ManagedBotRoute,
@@ -75,13 +258,7 @@ def record_managed_bot_customer_message(
     runtime_ai_enabled: bool,
     runtime_ai_consent_target: str,
 ) -> str:
-    """Persist deterministic inbound sales evidence and optionally queue AI.
-
-    The sales funnel must work even with AI disabled. Raw message text is persisted
-    into the longer-lived sales event store only when both the deployment and the
-    tenant have current consent for the configured provider target. No model/network
-    call happens in this critical Managed Bot Gateway transaction.
-    """
+    """Backward-compatible Telegram wrapper preserving all existing durable keys."""
 
     if route.business_id != customer_link.business_id:
         raise ValueError("managed bot route and customer link belong to different businesses")
@@ -90,68 +267,35 @@ def record_managed_bot_customer_message(
     update_id = str(provider_update_id or "").strip()
     if not update_id.isdigit() or len(update_id) > 32:
         raise ValueError("provider_update_id must be a positive decimal identifier")
-    text = re.sub(r"\s+", " ", str(message_text or "").replace("\x00", " ")).strip()
-    if not text or len(text) > _MAX_CAPTURED_MESSAGE_CHARS:
-        raise ValueError("message_text must be 1..12000 characters")
-    if not isinstance(runtime_ai_enabled, bool):
-        raise ValueError("runtime_ai_enabled must be a boolean")
-    consent_target = str(runtime_ai_consent_target or "").strip()
-
-    opportunity_key = f"managed-bot:{route.managed_bot_id}:telegram:{telegram_user_id}"
-    source_event_key = f"managed-bot-message:{route.managed_bot_id}:{update_id}"
-    transition_key = f"managed-bot-inbound:{route.managed_bot_id}:{update_id}"
-
-    with get_db() as conn:
-        actor = _owner_actor(conn, business_id=route.business_id)
-        sales = SalesRepository(conn)
-        lead = sales.create_or_refresh_lead(
-            actor=actor,
-            opportunity_key=opportunity_key,
-            customer_id=customer_link.customer_id,
-            source_kind="telegram",
-            contact_basis=ContactBasis.INBOUND,
-            source_ref=f"managed_bot:{route.managed_bot_id}",
-        )
-
-        ai_allowed = runtime_ai_enabled and business_sales_ai_enabled_in_conn(
-            conn,
-            business_id=route.business_id,
-            consent_target=consent_target,
-        )
-        if ai_allowed:
-            inserted = sales.record_event(
-                actor=actor,
-                lead_id=lead.id,
-                event_type="customer_message",
-                dedupe_key=source_event_key,
-                payload={"text": text, "channel": "telegram", "surface": "managed_bot"},
-            )
-            if inserted:
-                # Advance/lock freshness before canonical planning. If an older AI
-                # result is committing, enqueue waits; once it owns the head, the
-                # deterministic plan below supersedes whatever the old worker wrote.
-                SalesAIJobRepository(conn).enqueue(
-                    business_id=route.business_id,
-                    lead_id=lead.id,
-                    source_event_dedupe_key=source_event_key,
-                    source_order=update_id,
-                )
-
-        # Always keep deterministic sales behaviour alive, irrespective of AI.
-        # This creates the immediate safe RESPOND plan for a real inbound message;
-        # a later fresh AI analysis may refine it through the same canonical #120
-        # orchestrator and therefore atomically supersede this plan.
-        orchestrate_sales_signal_in_transaction(
-            conn=conn,
-            actor=actor,
-            lead_id=lead.id,
-            event=SalesConversationEvent.INBOUND_RECEIVED,
-            dedupe_key=transition_key,
-            metadata={"channel": "telegram", "surface": "managed_bot"},
-            model_confidence=1.0,
-            unanswered_inbound=True,
-        )
-        return lead.id
+    return _record_customer_channel_message(
+        business_id=route.business_id,
+        customer_id=customer_link.customer_id,
+        platform=CustomerPlatform.TELEGRAM,
+        external_subject=str(telegram_user_id),
+        source_ref=f"managed-bot:{route.managed_bot_id}",
+        provider_event_id=update_id,
+        source_order=update_id,
+        message_text=message_text,
+        runtime_ai_enabled=runtime_ai_enabled,
+        runtime_ai_consent_target=runtime_ai_consent_target,
+        opportunity_key_override=(
+            f"managed-bot:{route.managed_bot_id}:telegram:{telegram_user_id}"
+        ),
+        source_event_key_override=(
+            f"managed-bot-message:{route.managed_bot_id}:{update_id}"
+        ),
+        transition_key_override=(
+            f"managed-bot-inbound:{route.managed_bot_id}:{update_id}"
+        ),
+        durable_source_ref_override=f"managed_bot:{route.managed_bot_id}",
+        surface="managed_bot",
+        revalidate_canonical_identity=False,
+    )
 
 
-__all__ = ["extract_customer_message_text", "record_managed_bot_customer_message"]
+__all__ = [
+    "extract_customer_message_text",
+    "normalize_customer_message_text",
+    "record_customer_channel_message",
+    "record_managed_bot_customer_message",
+]

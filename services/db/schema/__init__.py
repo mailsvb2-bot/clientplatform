@@ -15,6 +15,7 @@ from . import clientplatform_outcomes
 from . import clientplatform_bot_gateway
 from . import clientplatform_bot_provisioning
 from . import clientplatform_connections
+from . import clientplatform_messenger_channels
 from . import clientplatform_provider_dispatch
 from . import clientplatform_offer_ladders
 from . import clientplatform_customers
@@ -62,6 +63,7 @@ PARTS = [
     clientplatform_programs,
     clientplatform_program_media,
     clientplatform_connections,
+    clientplatform_messenger_channels,
     clientplatform_provider_dispatch,
     clientplatform_bot_gateway,
     clientplatform_bot_provisioning,

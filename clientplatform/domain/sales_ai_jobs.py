@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
+from typing import Any, Mapping
 
+from clientplatform.domain.connections import ConnectionPlatform, normalize_connection_platform
 from clientplatform.domain.tenancy import normalize_uuid
 
 
@@ -28,6 +32,120 @@ def normalize_sales_ai_source_order(value: int | str) -> str:
     if not raw.isdigit() or len(raw) > 32:
         raise ValueError("source order must be a decimal identifier of at most 32 digits")
     return raw.lstrip("0").zfill(32)
+
+
+def _mapping(value: Any) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
+
+
+def _timestamp_candidate(
+    payload: Mapping[str, Any],
+    platform: ConnectionPlatform,
+) -> int | None:
+    candidates: list[Any] = []
+    if platform == ConnectionPlatform.VK:
+        obj = _mapping(payload.get("object"))
+        message = _mapping(obj.get("message") or obj)
+        candidates.extend((message.get("date"), obj.get("date"), payload.get("timestamp")))
+    else:
+        message = _mapping(payload.get("message"))
+        candidates.extend(
+            (
+                message.get("timestamp"),
+                message.get("created_at"),
+                payload.get("timestamp"),
+                payload.get("created_at"),
+            )
+        )
+    for candidate in candidates:
+        if candidate is None or isinstance(candidate, bool):
+            continue
+        try:
+            if isinstance(candidate, str) and not candidate.strip().isdigit():
+                parsed = datetime.fromisoformat(candidate.strip().replace("Z", "+00:00"))
+                value = int(parsed.timestamp() * 1000)
+            else:
+                numeric = int(str(candidate).strip())
+                if numeric <= 0:
+                    continue
+                if numeric < 10_000_000_000:
+                    value = numeric * 1000
+                elif numeric > 9_999_999_999_999:
+                    value = numeric // 1000
+                else:
+                    value = numeric
+            if 1 <= value <= 9_999_999_999_999:
+                return value
+        except (TypeError, ValueError, OverflowError):
+            continue
+    return None
+
+
+def _positive_sequence(value: Any) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        candidate = int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    if 0 < candidate < 10**19:
+        return candidate
+    return None
+
+
+def _provider_sequence_candidate(
+    payload: Mapping[str, Any],
+    platform: ConnectionPlatform,
+) -> int | None:
+    if platform == ConnectionPlatform.VK:
+        obj = _mapping(payload.get("object"))
+        message = _mapping(obj.get("message") or obj)
+        candidates = (
+            message.get("conversation_message_id"),
+            message.get("id"),
+            obj.get("conversation_message_id"),
+            obj.get("id"),
+            payload.get("ts"),
+        )
+    elif platform == ConnectionPlatform.MAX:
+        message = _mapping(payload.get("message"))
+        body = _mapping(message.get("body"))
+        candidates = (
+            payload.get("update_id"),
+            body.get("mid"),
+            message.get("message_id"),
+            message.get("id"),
+        )
+    else:
+        raise ValueError("messenger source ordering supports only VK or MAX")
+    for candidate in candidates:
+        sequence = _positive_sequence(candidate)
+        if sequence is not None:
+            return sequence
+    return None
+
+
+def messenger_source_order(
+    payload: Mapping[str, Any],
+    platform: ConnectionPlatform | str,
+) -> str:
+    """Build a 32-digit provider-monotonic Sales AI order key for VK/MAX.
+
+    Normal provider events must expose a numeric provider-side message/update
+    sequence. A hash fallback is deliberately forbidden: hashes are stable but
+    not monotonic and can invert two messages sharing a coarse timestamp.
+    """
+
+    normalized_platform = normalize_connection_platform(platform)
+    if normalized_platform not in {ConnectionPlatform.VK, ConnectionPlatform.MAX}:
+        raise ValueError("messenger source ordering supports only VK or MAX")
+    sequence = _provider_sequence_candidate(payload, normalized_platform)
+    if sequence is None:
+        raise ValueError("provider event has no monotonic message/update sequence")
+    millis = _timestamp_candidate(payload, normalized_platform)
+    if millis is None:
+        millis = min(int(time.time() * 1000), 9_999_999_999_999)
+    return f"{millis:013d}{sequence:019d}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,5 +190,6 @@ __all__ = [
     "SalesAIJob",
     "SalesAIJobLeaseLost",
     "SalesAIJobStatus",
+    "messenger_source_order",
     "normalize_sales_ai_source_order",
 ]

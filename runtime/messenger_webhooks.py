@@ -14,6 +14,10 @@ from clientplatform.application.ad_connections import (
 )
 from clientplatform.runtime.ad_publication_worker import AdPublicationWorker
 from clientplatform.runtime.bot_gateway import bot_gateway_runtime_config
+from clientplatform.runtime.messenger_channel_ingress import (
+    canonical_max_webhook,
+    canonical_vk_webhook,
+)
 from clientplatform.runtime.partner_aware_bot_gateway import ManagedBotGatewayRuntime
 from config.settings import settings
 from core.task_manager import TaskManager
@@ -99,6 +103,8 @@ async def _health(request: web.Request) -> web.Response:
         payload["managed_bot_gateway"] = gateway.health_snapshot()
     if request.app.get("clientplatform_ad_oauth_bot") is not None:
         payload["ad_oauth"] = True
+    if request.app.get("clientplatform_omnichannel_ingress") is True:
+        payload["omnichannel_ingress"] = True
     return web.json_response(payload)
 
 
@@ -117,8 +123,12 @@ def _deployed_env() -> bool:
     }
 
 
+def _omnichannel_ingress_enabled() -> bool:
+    return _truthy_env("CLIENTPLATFORM_OMNICHANNEL_INGRESS_ENABLED")
+
+
 async def _max_webhook_with_official_secret(request: web.Request) -> web.Response:
-    """Map MAX's official secret header onto the stable ingress contract."""
+    """Map MAX's official secret header onto the stable legacy ingress contract."""
 
     official = (request.headers.get("X-Max-Bot-Api-Secret") or "").strip()
     legacy_present = any(
@@ -137,7 +147,7 @@ async def _max_webhook_with_official_secret(request: web.Request) -> web.Respons
 
 
 def _vk_group_ok(payload: dict[str, Any]) -> bool:
-    """Fail closed when a callback belongs to another VK community."""
+    """Fail closed when a legacy callback belongs to another VK community."""
 
     expected_raw = str(getattr(settings, "VK_GROUP_ID", "") or "").strip()
     if not expected_raw:
@@ -189,6 +199,18 @@ def _register_vk_routes(app: web.Application) -> None:
     app.router.add_post("/webhooks/vk", _vk_webhook_with_group_guard)
 
 
+def _register_clientplatform_omnichannel_routes(app: web.Application) -> None:
+    app.router.add_post(
+        "/clientplatform/webhooks/vk/{route_id}",
+        canonical_vk_webhook,
+    )
+    app.router.add_post(
+        "/clientplatform/webhooks/max/{route_id}",
+        canonical_max_webhook,
+    )
+    app["clientplatform_omnichannel_ingress"] = True
+
+
 def _register_audio_routes(app: web.Application) -> None:
     app.router.add_get(f"{AUDIO_MEDIA_PREFIX}{{filename}}", audio_media)
     app.router.add_get(f"{AUDIO_ACCESS_PREFIX}{{token}}", audio_access)
@@ -202,11 +224,7 @@ def _resolve_ingress_bind() -> tuple[str, int]:
 
 
 def _ad_publication_worker_enabled() -> bool:
-    """Run durable ad work whenever the provider connection is configured.
-
-    Screen-code OAuth intentionally has no HTTP callback route, so worker
-    lifecycle must not depend on ``ad_oauth_http_enabled()``.
-    """
+    """Run durable ad work whenever the provider connection is configured."""
 
     return ad_connections_enabled() and yandex_direct_provider_configured()
 
@@ -221,6 +239,7 @@ async def start_messenger_webhook_runtime(
     privacy_export_enabled = privacy_export_http_enabled()
     max_enabled = max_webhook_enabled()
     vk_enabled = vk_webhook_enabled()
+    omnichannel_enabled = _omnichannel_ingress_enabled()
     ad_oauth_enabled = ad_oauth_http_enabled()
     ad_worker_enabled = _ad_publication_worker_enabled()
     gateway_config = bot_gateway_runtime_config()
@@ -230,6 +249,7 @@ async def start_messenger_webhook_runtime(
         or gateway_enabled
         or ad_oauth_enabled
         or ad_worker_enabled
+        or omnichannel_enabled
     )
     if not ingress_enabled:
         return None
@@ -248,6 +268,8 @@ async def start_messenger_webhook_runtime(
         _register_max_routes(app)
     if vk_enabled:
         _register_vk_routes(app)
+    if omnichannel_enabled:
+        _register_clientplatform_omnichannel_routes(app)
     if max_enabled or vk_enabled:
         _register_audio_routes(app)
     if ad_oauth_enabled:
@@ -300,7 +322,7 @@ async def start_messenger_webhook_runtime(
 
         log.info(
             "HTTP ingress started on %s:%s payment=%s privacy_export=%s "
-            "max=%s vk=%s durable_delivery=%s managed_bot_polling=%s "
+            "max=%s vk=%s omnichannel=%s durable_delivery=%s managed_bot_polling=%s "
             "ad_oauth=%s ad_publication_worker=%s",
             host,
             port,
@@ -308,10 +330,11 @@ async def start_messenger_webhook_runtime(
             privacy_export_enabled,
             max_enabled,
             vk_enabled,
+            omnichannel_enabled,
             delivery_worker_started,
             gateway_started,
             ad_oauth_enabled,
-            ad_worker_started,
+            ad_worker_enabled,
         )
         return MessengerWebhookRuntime(
             runner=runner,

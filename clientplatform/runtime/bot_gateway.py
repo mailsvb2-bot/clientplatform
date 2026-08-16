@@ -19,6 +19,7 @@ from clientplatform.application.bot_gateway import (
     admit_telegram_update,
     bot_gateway_health_snapshot,
     claim_due_ingress_events,
+    consume_telegram_customer_channel_link,
     ensure_telegram_customer_link,
     list_active_telegram_routes,
     mark_ingress_event_processed,
@@ -31,6 +32,7 @@ from clientplatform.domain.bot_gateway import (
     ClaimedIngressEvent,
     ManagedBotRoute,
 )
+from clientplatform.domain.messenger_channels import extract_customer_link_token
 from clientplatform.runtime.secrets import (
     EnvironmentCredentialProvider,
     SecretReferenceError,
@@ -443,20 +445,31 @@ class ManagedBotGatewayRuntime:
                 )
             actor = _telegram_actor(payload)
             if actor is not None:
-                customer_link = await asyncio.to_thread(
-                    ensure_telegram_customer_link,
-                    route=item.route,
-                    telegram_user_id=actor[0],
-                    username=actor[1],
-                    display_name=actor[2],
-                )
+                link_token = extract_customer_link_token(_telegram_message_text(payload))
+                if link_token is not None:
+                    customer_link = await asyncio.to_thread(
+                        consume_telegram_customer_channel_link,
+                        route=item.route,
+                        token=link_token,
+                        telegram_user_id=actor[0],
+                        username=actor[1],
+                        display_name=actor[2],
+                    )
+                else:
+                    customer_link = await asyncio.to_thread(
+                        ensure_telegram_customer_link,
+                        route=item.route,
+                        telegram_user_id=actor[0],
+                        username=actor[1],
+                        display_name=actor[2],
+                    )
                 from clientplatform.application.sales_intelligence import (
                     extract_customer_message_text,
                     record_managed_bot_customer_message,
                 )
 
                 customer_text = extract_customer_message_text(payload)
-                if customer_text is not None:
+                if customer_text is not None and link_token is None:
                     ai_enabled = False
                     ai_target = ""
                     try:
@@ -580,6 +593,20 @@ def _update_payload(update: Any) -> dict[str, Any]:
     if isinstance(update_id, bool) or not isinstance(update_id, int):
         raise ValueError("Telegram polling update_id is required")
     return payload
+
+
+def _telegram_message_text(payload: Mapping[str, Any]) -> str | None:
+    for key in ("message", "edited_message"):
+        candidate = payload.get(key)
+        if not isinstance(candidate, Mapping):
+            continue
+        raw = candidate.get("text")
+        if raw is None:
+            raw = candidate.get("caption")
+        text = str(raw or "").strip()
+        if text:
+            return text
+    return None
 
 
 def _telegram_actor(

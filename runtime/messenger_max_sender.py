@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any
 
 from config.settings import settings
-from runtime import messenger_max_ui as max_ui
 from runtime.messenger_transport_errors import (
     MessengerMediaNotReadyError,
     MessengerMediaTokenRejectedError,
@@ -87,14 +86,34 @@ def _max_error(operation: str, code: str) -> MessengerTransportError:
     )
 
 
+def _legacy_max_ui():
+    """Load Metrotherapy presentation helpers only for legacy UI calls.
+
+    Canonical ClientPlatform transport must remain dependency-light and must not
+    inherit Metrotherapy menus/text normalization merely by importing the sender.
+    """
+
+    from runtime import messenger_max_ui
+
+    return messenger_max_ui
+
+
 @dataclass
 class MaxBotSender:
     token: str | None = None
     api_base_url: str | None = None
 
-    _main_menu_attachment = staticmethod(max_ui.main_menu_attachment)
-    _demo_kind_attachment = staticmethod(max_ui.demo_kind_attachment)
-    _score_scale_attachment = staticmethod(max_ui.score_scale_attachment)
+    @staticmethod
+    def _main_menu_attachment(*args: Any, **kwargs: Any):
+        return _legacy_max_ui().main_menu_attachment(*args, **kwargs)
+
+    @staticmethod
+    def _demo_kind_attachment(*args: Any, **kwargs: Any):
+        return _legacy_max_ui().demo_kind_attachment(*args, **kwargs)
+
+    @staticmethod
+    def _score_scale_attachment(*args: Any, **kwargs: Any):
+        return _legacy_max_ui().score_scale_attachment(*args, **kwargs)
 
     def _token(self) -> str:
         token = (self.token or settings.MAX_BOT_TOKEN or "").strip()
@@ -173,8 +192,15 @@ class MaxBotSender:
     async def send_text(self, external_user_id: str, text: str, **kwargs: Any):
         token = self._token()
         url = f"{self._api_base()}/messages?user_id={urllib.parse.quote(str(external_user_id))}"
-        attachments = list(kwargs.get("attachments") or max_ui.native_keyboard_attachments(str(text or "")))
-        payload: dict[str, Any] = {"text": max_ui.prepare_text(text, has_native_keyboard=bool(attachments))}
+        use_legacy_ui = bool(kwargs.pop("legacy_ui", True))
+        if use_legacy_ui:
+            max_ui = _legacy_max_ui()
+            attachments = list(kwargs.get("attachments") or max_ui.native_keyboard_attachments(str(text or "")))
+            prepared_text = max_ui.prepare_text(text, has_native_keyboard=bool(attachments))
+        else:
+            attachments = list(kwargs.get("attachments") or [])
+            prepared_text = str(text or "")
+        payload: dict[str, Any] = {"text": prepared_text}
         if attachments:
             payload["attachments"] = attachments
         if kwargs.get("disable_link_preview") is not None:
@@ -378,4 +404,3 @@ class MaxBotSender:
             caption=caption or "",
             notify=kwargs.get("notify"),
         )
-
