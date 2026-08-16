@@ -8,6 +8,12 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from uuid import uuid4
 
+from clientplatform.domain.ad_connections import (
+    AdConnectionInvariantViolation,
+    AdOAuthSession,
+    AdProvider,
+)
+from clientplatform.infrastructure.ad_connection_repository import AdConnectionRepository
 from clientplatform.integrations.yandex_direct import YandexDirectError
 from clientplatform.integrations.yandex_direct_moderation import ModeratingYandexDirectProvider
 from services.db.schema import clientplatform_ad_connections
@@ -15,6 +21,14 @@ from services.migrations.clientplatform_direct_global_ownership_v1 import apply
 
 
 _ACCOUNT_ID = "123456789"
+
+
+class _Vault:
+    def seal(self, value: str) -> str:
+        return f"sealed:{value}"
+
+    def open(self, value: str) -> str:
+        return value.removeprefix("sealed:")
 
 
 def _insert_connection(
@@ -110,6 +124,33 @@ class DirectOwnershipDatabaseTests(unittest.TestCase):
 
         with self.assertRaises(sqlite3.IntegrityError):
             _insert_connection(conn, business_id="tenant-b")
+
+    def test_repository_maps_cross_tenant_claim_to_domain_error(self) -> None:
+        conn = _fresh_db()
+        self.addCleanup(conn.close)
+        _insert_connection(conn, business_id="tenant-a")
+        session = AdOAuthSession(
+            state_hash="state-hash",
+            business_id="tenant-b",
+            user_id=200,
+            membership_id=str(uuid4()),
+            provider=AdProvider.YANDEX_DIRECT,
+            verifier_ciphertext="sealed-verifier",
+            expires_at="2026-08-16T23:00:00+00:00",
+            created_at="2026-08-16T22:00:00+00:00",
+        )
+
+        with self.assertRaisesRegex(
+            AdConnectionInvariantViolation,
+            "direct_account_owned_by_another_business",
+        ):
+            AdConnectionRepository(conn, vault=_Vault()).activate_oauth_connection(
+                session=session,
+                external_account_id=_ACCOUNT_ID,
+                external_login="tenant-b-login",
+                token_bundle_json='{"access_token":"secret"}',
+                permissions=("campaigns.read",),
+            )
 
     def test_attention_and_disabled_keep_ownership_until_revoked(self) -> None:
         conn = _fresh_db()
@@ -226,8 +267,6 @@ class DirectOwnershipDatabaseTests(unittest.TestCase):
         ).fetchone()
         self.assertEqual(tuple(verified), ("424242", "direct_client_id", "active"))
 
-        # Once the last legacy row is retired, unrelated tenants may connect their
-        # own different Direct cabinets.
         _insert_connection(conn, business_id="tenant-b", account_id="900001")
 
     def test_ambiguous_legacy_rows_fail_closed(self) -> None:
