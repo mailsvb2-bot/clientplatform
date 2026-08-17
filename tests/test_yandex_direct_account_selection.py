@@ -253,6 +253,75 @@ class YandexDirectAccountSelectionTelegramTests(unittest.IsolatedAsyncioTestCase
         self.assertIn("cpa:yandex-account-auto:business-token", callbacks)
         self.assertIn("cpa:yandex-account-hint:business-token", callbacks)
 
+    async def test_connect_mine_rejects_actor_failure_before_account_selection(self) -> None:
+        cb = callback("cpa:connect-mine:business-token")
+        state = FakeState()
+        with (
+            patch.object(screen_code.control, "_token_uuid", return_value="business-id"),
+            patch.object(
+                screen_code.control,
+                "_actor",
+                new=AsyncMock(side_effect=RuntimeError("actor unavailable")),
+            ),
+        ):
+            await screen_code.choose_yandex_account_mode(cb, state)
+
+        self.assertFalse(state.cleared)
+        cb.answer.assert_awaited_once_with("Не удалось открыть подключение", show_alert=True)
+
+    async def test_account_picker_delegates_to_screen_code_start(self) -> None:
+        cb = callback("cpa:yandex-account-auto:business-token")
+        state = FakeState()
+        connect = AsyncMock()
+        with patch.object(screen_code, "connect_yandex_direct_screen_code", new=connect):
+            await screen_code.connect_yandex_direct_account_picker(cb, state)
+        connect.assert_awaited_once_with(cb, state)
+
+    async def test_request_login_hint_sets_ephemeral_selection_state(self) -> None:
+        cb = callback("cpa:yandex-account-hint:business-token")
+        state = FakeState()
+        outbound = SimpleNamespace(answer=AsyncMock())
+        with (
+            patch.object(screen_code.control, "_token_uuid", return_value="business-id"),
+            patch.object(
+                screen_code.control,
+                "_actor",
+                new=AsyncMock(return_value="actor"),
+            ),
+            patch.object(screen_code, "_message", return_value=outbound),
+        ):
+            await screen_code.request_yandex_account_hint(cb, state)
+
+        self.assertEqual(state.state, screen_code.YandexScreenCodeState.waiting_login_hint)
+        self.assertEqual(
+            state.data,
+            {
+                "business_id": "business-id",
+                "business_token": "business-token",
+                "oauth_user_id": 101,
+            },
+        )
+        rendered = outbound.answer.await_args.args[0]
+        self.assertIn("логин Яндекса", rendered)
+        self.assertNotIn("oauth_state", state.data)
+
+    async def test_request_login_hint_rejects_actor_failure(self) -> None:
+        cb = callback("cpa:yandex-account-hint:business-token")
+        state = FakeState()
+        with (
+            patch.object(screen_code.control, "_token_uuid", return_value="business-id"),
+            patch.object(
+                screen_code.control,
+                "_actor",
+                new=AsyncMock(side_effect=RuntimeError("actor unavailable")),
+            ),
+        ):
+            await screen_code.request_yandex_account_hint(cb, state)
+
+        self.assertIsNone(state.state)
+        self.assertEqual(state.data, {})
+        cb.answer.assert_awaited_once_with("Не удалось открыть подключение", show_alert=True)
+
     async def test_explicit_login_hint_starts_targeted_oauth_and_is_not_kept_in_fsm(self) -> None:
         state = FakeState(
             {
@@ -299,6 +368,124 @@ class YandexDirectAccountSelectionTelegramTests(unittest.IsolatedAsyncioTestCase
         incoming.delete.assert_awaited_once()
         rendered = incoming.answer.await_args.args[0]
         self.assertIn("получил указанный", rendered)
+
+    async def test_invalid_login_hint_is_rejected_without_starting_oauth(self) -> None:
+        state = FakeState(
+            {
+                "business_id": "business-id",
+                "business_token": "business-token",
+                "oauth_user_id": 101,
+            }
+        )
+        incoming = message("two accounts")
+        with (
+            patch.object(screen_code.control, "_user_id", return_value=101),
+            patch.object(screen_code.control, "_token_uuid", return_value="business-id"),
+            patch.object(screen_code, "start_yandex_direct_oauth") as start_oauth,
+        ):
+            await screen_code.receive_yandex_account_hint(incoming, state)
+
+        self.assertFalse(state.cleared)
+        start_oauth.assert_not_called()
+        incoming.delete.assert_not_awaited()
+        self.assertIn("без пробелов", incoming.answer.await_args.args[0])
+
+    async def test_lost_login_hint_state_aborts_safely(self) -> None:
+        state = FakeState({"business_token": "business-token"})
+        incoming = message("wanted-account@yandex.ru")
+
+        await screen_code.receive_yandex_account_hint(incoming, state)
+
+        self.assertTrue(state.cleared)
+        self.assertIn("Не удалось начать подключение", incoming.answer.await_args.args[0])
+
+    async def test_login_hint_from_another_user_aborts_safely(self) -> None:
+        state = FakeState(
+            {
+                "business_token": "business-token",
+                "oauth_user_id": 101,
+            }
+        )
+        incoming = message("wanted-account@yandex.ru")
+        with (
+            patch.object(screen_code.control, "_user_id", return_value=202),
+            patch.object(screen_code.control, "_token_uuid", return_value="business-id"),
+        ):
+            await screen_code.receive_yandex_account_hint(incoming, state)
+
+        self.assertTrue(state.cleared)
+        self.assertIn("Не удалось начать подключение", incoming.answer.await_args.args[0])
+
+    async def test_cancel_before_oauth_state_clears_without_provider_cancel(self) -> None:
+        cb = callback("cpa:yandex-cancel:business-token")
+        state = FakeState(
+            {
+                "business_id": "business-id",
+                "business_token": "business-token",
+                "oauth_user_id": 101,
+            }
+        )
+        outbound = SimpleNamespace(answer=AsyncMock())
+        cancel = AsyncMock()
+        with (
+            patch.object(screen_code, "cancel_yandex_direct_oauth", new=cancel),
+            patch.object(screen_code.control, "_keyboard", side_effect=lambda rows: rows),
+            patch.object(screen_code, "_message", return_value=outbound),
+        ):
+            await screen_code.cancel_yandex_direct_screen_code(cb, state)
+
+        self.assertTrue(state.cleared)
+        cancel.assert_not_awaited()
+        cb.answer.assert_awaited_once_with("Подключение отменено")
+        self.assertIn("отменено", outbound.answer.await_args.args[0])
+
+    async def test_completion_distinguishes_oauth_and_direct_identity_failures(self) -> None:
+        cases = (
+            (
+                YandexDirectError("oauth_invalid_grant"),
+                "Яндекс OAuth",
+                "token_exchange",
+            ),
+            (
+                YandexDirectError("direct_identity_direct_account_agency_not_supported"),
+                "Яндекс Директа",
+                "direct_identity",
+            ),
+        )
+        for exc, expected_text, expected_stage in cases:
+            with self.subTest(stage=expected_stage):
+                state = FakeState(
+                    {
+                        "business_token": "business-token",
+                        "oauth_state": "oauth-state",
+                        "oauth_user_id": 101,
+                    }
+                )
+                incoming = message("secret-confirmation-code")
+                warning = unittest.mock.Mock()
+                with (
+                    patch.object(screen_code.asyncio, "to_thread", new=immediate_to_thread),
+                    patch.object(screen_code.control, "_user_id", return_value=101),
+                    patch.object(
+                        screen_code,
+                        "screen_code_provider_from_environment",
+                        return_value=object(),
+                    ),
+                    patch.object(
+                        screen_code,
+                        "complete_yandex_direct_oauth",
+                        side_effect=exc,
+                    ),
+                    patch.object(screen_code.logger, "warning", new=warning),
+                ):
+                    await screen_code.complete_yandex_direct_screen_code(incoming, state)
+
+                incoming.delete.assert_awaited_once()
+                self.assertTrue(state.cleared)
+                self.assertIn(expected_text, incoming.answer.await_args.args[0])
+                warning.assert_called_once()
+                self.assertEqual(warning.call_args.args[1], expected_stage)
+                self.assertNotIn("secret-confirmation-code", repr(warning.call_args))
 
     def test_provider_failure_is_classified_without_exposing_provider_code(self) -> None:
         direct_exc = YandexDirectError("direct_identity_provider_error_53")
