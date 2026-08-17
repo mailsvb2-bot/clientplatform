@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import unicodedata
 from urllib.parse import urlencode
 
 from clientplatform.integrations.yandex_direct import (
@@ -19,17 +20,33 @@ _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 _MAX_CONFIRMATION_CODE_LENGTH = 1024
 
 
+def _without_clipboard_format_controls(value: str) -> str:
+    """Drop invisible Unicode formatting marks without rewriting visible code data."""
+
+    return "".join(
+        character
+        for character in value
+        if unicodedata.category(character) != "Cf"
+    )
+
+
 def normalize_yandex_confirmation_code(value: str | None) -> str:
     """Normalize the opaque confirmation code rendered by Yandex OAuth.
 
     Yandex currently renders an opaque alphanumeric authorization code for the
     ``verification_code`` redirect flow. OAuth authorization codes are opaque
     to the client, so we must not impose a legacy seven-digit/device-code
-    format. A leading ``# `` is tolerated because users commonly copy the
-    visual fragment marker together with the displayed code.
+    format. Browser/mobile copy-paste can carry invisible Unicode format marks;
+    those marks are presentation metadata rather than code data and are removed
+    before the strict printable-ASCII validation. A leading ``# `` is tolerated
+    because users commonly copy the visual fragment marker together with the
+    displayed code.
     """
 
-    code = str(value or "").strip()
+    raw = str(value or "")
+    if len(raw) > _MAX_CONFIRMATION_CODE_LENGTH:
+        raise YandexDirectError("oauth_code_invalid")
+    code = _without_clipboard_format_controls(raw).strip()
     if code.startswith("# "):
         code = code[2:].strip()
     if (
