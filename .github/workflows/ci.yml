@@ -49,6 +49,7 @@ jobs:
         if: always()
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         with:
+          retries: 3
           script: |
             const outcome = '${{ steps.regression.outcome }}';
             const state = outcome === 'success' ? 'success' : 'failure';
@@ -65,6 +66,7 @@ jobs:
             });
 
       - name: Coverage ratchet
+        if: ${{ always() && steps.regression.outcome == 'success' }}
         id: coverage
         env:
           COVERAGE_ARTIFACT_DIR: ${{ runner.temp }}/coverage
@@ -95,6 +97,7 @@ jobs:
           COVERAGE_SUMMARY_PATH: ${{ runner.temp }}/coverage/coverage-summary.json
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         with:
+          retries: 3
           script: |
             const fs = require('fs');
             const summaryPath = process.env.COVERAGE_SUMMARY_PATH;
@@ -129,6 +132,7 @@ jobs:
           COVERAGE_SUMMARY_PATH: ${{ runner.temp }}/coverage/coverage-summary.json
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         with:
+          retries: 3
           script: |
             const fs = require('fs');
             const summaryPath = process.env.COVERAGE_SUMMARY_PATH;
