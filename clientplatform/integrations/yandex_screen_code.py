@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import unicodedata
 from urllib.parse import urlencode
 
 from clientplatform.integrations.yandex_direct import (
@@ -20,42 +19,25 @@ _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 _MAX_CONFIRMATION_CODE_LENGTH = 1024
 
 
-def _normalize_clipboard_text(value: str) -> str:
-    """Normalize presentation-only clipboard variants without guessing code content."""
-
-    compatibility_normalized = unicodedata.normalize("NFKC", value)
-    return "".join(
-        character
-        for character in compatibility_normalized
-        if unicodedata.category(character) != "Cf"
-    )
-
-
 def normalize_yandex_confirmation_code(value: str | None) -> str:
-    """Normalize the opaque confirmation code rendered by Yandex OAuth.
+    """Return the bounded opaque confirmation code rendered by Yandex OAuth.
 
-    The confirmation code is provider-owned opaque data: ClientPlatform must not
-    impose a legacy numeric/device-code format. Mobile/browser copy-paste may
-    carry Unicode compatibility forms or invisible format controls even when the
-    visible code represents printable ASCII. We canonicalize only those
-    presentation variants, then keep the fail-closed single-token ASCII boundary
-    required by the form-encoded provider request. A leading ``# `` fragment
-    marker is tolerated because users commonly copy it together with the code.
+    The confirmation code belongs to the OAuth provider. ClientPlatform must not
+    guess its alphabet, Unicode form, whitespace rules, or any other internal
+    syntax before the provider sees it. We only remove presentation envelope that
+    can be introduced around a copied Telegram message: outer whitespace and the
+    optional leading ``# `` marker already supported by the owner flow. The raw
+    message is bounded before trimming so an oversized payload cannot be
+    sanitized into acceptance. Yandex OAuth remains the authority for whether the
+    resulting code is valid, expired, malformed, or already used.
     """
 
-    raw = str(value or "")
-    if len(raw) > _MAX_CONFIRMATION_CODE_LENGTH:
+    if not isinstance(value, str) or len(value) > _MAX_CONFIRMATION_CODE_LENGTH:
         raise YandexDirectError("oauth_code_invalid")
-    code = _normalize_clipboard_text(raw).strip()
+    code = value.strip()
     if code.startswith("# "):
         code = code[2:].strip()
-    if (
-        not code
-        or len(code) > _MAX_CONFIRMATION_CODE_LENGTH
-        or not code.isascii()
-        or any(character.isspace() for character in code)
-        or any(ord(character) < 33 or ord(character) > 126 for character in code)
-    ):
+    if not code or len(code) > _MAX_CONFIRMATION_CODE_LENGTH:
         raise YandexDirectError("oauth_code_invalid")
     return code
 
