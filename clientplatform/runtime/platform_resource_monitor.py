@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 from datetime import datetime, timezone
 from typing import Any, Iterable
@@ -23,6 +24,7 @@ from services.platform_resource_limits import (
 
 log = logging.getLogger(__name__)
 _STATE_KEY = "clientplatform:platform_resource_monitor:visual_gateway"
+_OPERATOR_ALERT_CHAT_IDS_ENV = "CLIENTPLATFORM_RESOURCE_ALERT_CHAT_IDS"
 _task_manager = TaskManager()
 _task: asyncio.Task[None] | None = None
 _last_tick_monotonic: float | None = None
@@ -40,6 +42,30 @@ def _interval_seconds() -> int:
 
 def _superadmin_ids() -> tuple[int, ...]:
     return tuple(sorted({int(value) for value in ADMIN_IDS or []}))
+
+
+def _resource_alert_chat_ids() -> tuple[int, ...]:
+    """Return explicit operator chats for forced infrastructure telemetry alerts.
+
+    Resource telemetry failures are operational events, not product messages. They
+    must never fall back to ``ADMIN_IDS`` because an administrator can use the same
+    private chat as an ordinary ClientPlatform customer. Positive private chat IDs
+    and negative Telegram group/channel IDs are both valid destinations.
+    """
+
+    raw = str(os.getenv(_OPERATOR_ALERT_CHAT_IDS_ENV) or "")
+    targets: set[int] = set()
+    for item in raw.split(","):
+        normalized = item.strip()
+        if not normalized:
+            continue
+        try:
+            chat_id = int(normalized)
+        except ValueError:
+            continue
+        if chat_id != 0:
+            targets.add(chat_id)
+    return tuple(sorted(targets))
 
 
 def _load_state() -> dict[str, Any]:
@@ -86,6 +112,19 @@ def _recipient_ids(values: Iterable[object]) -> tuple[int, ...]:
     return tuple(sorted(recipients))
 
 
+def _resource_alert_recipient_ids(values: Iterable[object]) -> tuple[int, ...]:
+    configured = set(_resource_alert_chat_ids())
+    recipients: set[int] = set()
+    for value in values:
+        try:
+            candidate = int(value)
+        except (TypeError, ValueError):
+            continue
+        if candidate in configured:
+            recipients.add(candidate)
+    return tuple(sorted(recipients))
+
+
 async def _send_superadmins(
     bot: Any,
     text: str,
@@ -118,6 +157,42 @@ async def _send_superadmins(
     return delivered, failed
 
 
+async def _send_resource_operators(
+    bot: Any,
+    text: str,
+    *,
+    recipient_ids: Iterable[object] | None = None,
+) -> tuple[set[int], set[int]]:
+    targets = (
+        _resource_alert_chat_ids()
+        if recipient_ids is None
+        else _resource_alert_recipient_ids(recipient_ids)
+    )
+    delivered: set[int] = set()
+    failed: set[int] = set()
+    for chat_id in targets:
+        try:
+            await bot.send_message(chat_id, text)
+        except TelegramAPIError:
+            log.warning(
+                "Failed to send platform resource telemetry alert to operator chat=%s",
+                chat_id,
+                exc_info=True,
+            )
+            failed.add(chat_id)
+            continue
+        except asyncio.TimeoutError:
+            log.warning(
+                "Timed out sending platform resource telemetry alert to operator chat=%s",
+                chat_id,
+                exc_info=True,
+            )
+            failed.add(chat_id)
+            continue
+        delivered.add(chat_id)
+    return delivered, failed
+
+
 def _telemetry_warning(error_code: str) -> str:
     return (
         "⚠️ ClientPlatform: контроль лимитов Visual Creative недоступен\n\n"
@@ -144,7 +219,7 @@ async def _deliver_telemetry_warning(
     )
     if same_pending:
         message = str(pending.get("message") or _telemetry_warning(error_code))
-        recipients = _recipient_ids(pending.get("pending_admin_ids") or [])
+        recipients = _resource_alert_recipient_ids(pending.get("pending_chat_ids") or [])
     else:
         already_reported = (
             str(state.get("telemetry_day") or "") == today
@@ -153,10 +228,15 @@ async def _deliver_telemetry_warning(
         if already_reported:
             return
         message = _telemetry_warning(error_code)
-        recipients = _superadmin_ids()
+        recipients = _resource_alert_chat_ids()
+        log.warning(
+            "Visual Creative resource telemetry unavailable code=%s operator_alert_chat_count=%s",
+            error_code,
+            len(recipients),
+        )
 
     if recipients:
-        _delivered, failed = await _send_superadmins(
+        _delivered, failed = await _send_resource_operators(
             bot,
             message,
             recipient_ids=recipients,
@@ -166,11 +246,13 @@ async def _deliver_telemetry_warning(
                 "day": today,
                 "error": error_code,
                 "message": message,
-                "pending_admin_ids": sorted(failed),
+                "pending_chat_ids": sorted(failed),
             }
             await asyncio.to_thread(_save_state, state)
             return
 
+    # Do not retry legacy pending_admin_ids after upgrade: forced infrastructure
+    # telemetry is no longer allowed to fall back to personal ADMIN_IDS chats.
     state.pop("telemetry_pending", None)
     state["telemetry_day"] = today
     state["telemetry_error"] = error_code

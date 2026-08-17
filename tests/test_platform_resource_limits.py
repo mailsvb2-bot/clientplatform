@@ -197,7 +197,7 @@ def test_threshold_alert_retries_only_failed_superadmin(monkeypatch):
     assert saved["levels"]["image"] == 85
 
 
-def test_telemetry_alert_retries_only_failed_superadmin(monkeypatch):
+def test_telemetry_alert_retries_only_failed_operator_chat(monkeypatch):
     snapshot = limits.PlatformResourceSnapshot(
         configured=True,
         telemetry_available=False,
@@ -207,13 +207,14 @@ def test_telemetry_alert_retries_only_failed_superadmin(monkeypatch):
     )
     saved: dict[str, object] = {}
     calls: list[int] = []
+    operator_chat = -100777
 
     class Bot:
         failed_once = False
 
-        async def send_message(self, admin_id: int, _text: str) -> None:
-            calls.append(admin_id)
-            if admin_id == 202 and not self.failed_once:
+        async def send_message(self, chat_id: int, _text: str) -> None:
+            calls.append(chat_id)
+            if not self.failed_once:
                 self.failed_once = True
                 raise asyncio.TimeoutError
 
@@ -221,19 +222,65 @@ def test_telemetry_alert_retries_only_failed_superadmin(monkeypatch):
     monkeypatch.setattr(monitor, "_load_state", lambda: dict(saved))
     monkeypatch.setattr(monitor, "_save_state", lambda value: _replace_saved(saved, value))
     monkeypatch.setattr(monitor, "_superadmin_ids", lambda: (101, 202))
+    monkeypatch.setattr(monitor, "_resource_alert_chat_ids", lambda: (operator_chat,))
 
     bot = Bot()
     asyncio.run(monitor._tick(bot))
-    assert calls == [101, 202]
-    assert saved["telemetry_pending"]["pending_admin_ids"] == [202]
+    assert calls == [operator_chat]
+    assert saved["telemetry_pending"]["pending_chat_ids"] == [operator_chat]
+    assert "pending_admin_ids" not in saved["telemetry_pending"]
 
     asyncio.run(monitor._tick(bot))
-    assert calls == [101, 202, 202]
+    assert calls == [operator_chat, operator_chat]
     assert "telemetry_pending" not in saved
     assert saved["telemetry_error"] == "visual_gateway_http_404"
 
     asyncio.run(monitor._tick(bot))
-    assert calls == [101, 202, 202]
+    assert calls == [operator_chat, operator_chat]
+
+
+def test_telemetry_without_operator_chat_never_falls_back_to_admin_ids(monkeypatch):
+    snapshot = limits.PlatformResourceSnapshot(
+        configured=True,
+        telemetry_available=False,
+        base_url="http://visual-creative-gateway:8097",
+        token_configured=True,
+        error_code="visual_gateway_http_502",
+    )
+    saved: dict[str, object] = {
+        "telemetry_pending": {
+            "day": "2026-08-11",
+            "error": "visual_gateway_http_502",
+            "message": "legacy operator message",
+            "pending_admin_ids": [101],
+        }
+    }
+    calls: list[int] = []
+
+    class Bot:
+        async def send_message(self, chat_id: int, _text: str) -> None:
+            calls.append(chat_id)
+
+    monkeypatch.setattr(monitor, "get_platform_resource_snapshot", lambda: snapshot)
+    monkeypatch.setattr(monitor, "_load_state", lambda: dict(saved))
+    monkeypatch.setattr(monitor, "_save_state", lambda value: _replace_saved(saved, value))
+    monkeypatch.setattr(monitor, "_superadmin_ids", lambda: (101,))
+    monkeypatch.setattr(monitor, "_resource_alert_chat_ids", lambda: ())
+
+    asyncio.run(monitor._tick(Bot()))
+
+    assert calls == []
+    assert "telemetry_pending" not in saved
+    assert saved["telemetry_error"] == "visual_gateway_http_502"
+
+
+def test_resource_operator_chat_ids_accept_private_and_group_ids(monkeypatch):
+    monkeypatch.setenv(
+        "CLIENTPLATFORM_RESOURCE_ALERT_CHAT_IDS",
+        "123, -100987654321, invalid, 0, 123",
+    )
+
+    assert monitor._resource_alert_chat_ids() == (-100987654321, 123)
 
 
 def test_monitor_loop_survives_database_driver_error(monkeypatch):
