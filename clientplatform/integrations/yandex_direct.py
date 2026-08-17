@@ -357,7 +357,7 @@ class YandexDirectProvider:
                             "StartDate": _campaign_start_date(start_date),
                             "UnifiedCampaign": {
                                 "BiddingStrategy": {
-                                    "Search": {"BiddingStrategyType": "SERVING_OFF"},
+                                    "Search": {"BiddingStrategyType": "HIGHEST_POSITION"},
                                     "Network": {"BiddingStrategyType": "SERVING_OFF"},
                                 }
                             },
@@ -435,7 +435,7 @@ class YandexDirectProvider:
                 "method": "get",
                 "params": {
                     "SelectionCriteria": {"Ids": [campaign_id]},
-                    "FieldNames": ["Id", "Name", "Type"],
+                    "FieldNames": ["Id", "Name", "State", "Status", "Type"],
                     "UnifiedCampaignFieldNames": ["BiddingStrategy"],
                 },
             },
@@ -450,21 +450,28 @@ class YandexDirectProvider:
             raise YandexDirectError("managed_campaign_name_mismatch")
         if str(item.get("Type") or "").strip().upper() != "UNIFIED_CAMPAIGN":
             raise YandexDirectError("managed_campaign_type_mismatch")
+        if str(item.get("State") or "").strip().upper() != "OFF":
+            raise YandexDirectError("managed_campaign_state_not_off")
+        if str(item.get("Status") or "").strip().upper() != "DRAFT":
+            raise YandexDirectError("managed_campaign_not_draft")
         unified = item.get("UnifiedCampaign")
         strategy = unified.get("BiddingStrategy") if isinstance(unified, Mapping) else None
         if not isinstance(strategy, Mapping):
             raise YandexDirectError("managed_campaign_strategy_missing")
-        for placement in ("Search", "Network"):
-            placement_strategy = strategy.get(placement)
-            if not isinstance(placement_strategy, Mapping):
-                raise YandexDirectError("managed_campaign_strategy_missing")
-            if (
-                str(placement_strategy.get("BiddingStrategyType") or "")
-                .strip()
-                .upper()
-                != "SERVING_OFF"
-            ):
-                raise YandexDirectError("managed_campaign_serving_is_enabled")
+        search = strategy.get("Search")
+        network = strategy.get("Network")
+        if not isinstance(search, Mapping) or not isinstance(network, Mapping):
+            raise YandexDirectError("managed_campaign_strategy_missing")
+        if (
+            str(search.get("BiddingStrategyType") or "").strip().upper()
+            != "HIGHEST_POSITION"
+        ):
+            raise YandexDirectError("managed_campaign_search_strategy_mismatch")
+        if (
+            str(network.get("BiddingStrategyType") or "").strip().upper()
+            != "SERVING_OFF"
+        ):
+            raise YandexDirectError("managed_campaign_serving_is_enabled")
 
     def _find_managed_group(
         self,
