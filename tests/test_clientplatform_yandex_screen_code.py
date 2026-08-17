@@ -335,7 +335,7 @@ class YandexScreenCodeTelegramTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("полностью отзовите подключение", rendered)
         self.assertNotIn("direct_account_owned_by_another_business", rendered)
 
-    async def test_completion_saves_connection_and_returns_to_workspace(self) -> None:
+    async def test_completion_saves_connection_and_routes_to_client_acquisition(self) -> None:
         state = FakeState(
             {
                 "business_token": "business-1",
@@ -375,7 +375,10 @@ class YandexScreenCodeTelegramTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("direct-login", incoming.answer.await_args.args[0])
         self.assertEqual(
             incoming.answer.await_args.kwargs["reply_markup"],
-            [[("Вернуться к рекламным кабинетам", "cpa:home:business-1")]],
+            [
+                [("🚀 Найти новых клиентов", "cpo:start:business-1")],
+                [("⚙️ Управление Яндекс Директом", "cpa:home:business-1")],
+            ],
         )
 
 
