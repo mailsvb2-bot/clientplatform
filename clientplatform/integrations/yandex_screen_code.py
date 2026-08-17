@@ -3,8 +3,10 @@ from __future__ import annotations
 import os
 from urllib.parse import urlencode
 
+from clientplatform.domain.ad_connections import pkce_challenge
 from clientplatform.integrations.yandex_direct import (
     JsonHttpTransport,
+    YandexAccountIdentity,
     YandexDirectError,
     YandexOAuthConfig,
     YandexTokenBundle,
@@ -17,6 +19,7 @@ from clientplatform.integrations.yandex_direct_moderation import (
 YANDEX_SCREEN_CODE_REDIRECT_URI = "https://oauth.yandex.ru/verification_code"
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 _MAX_CONFIRMATION_CODE_LENGTH = 1024
+_MAX_LOGIN_HINT_LENGTH = 320
 
 
 def normalize_yandex_confirmation_code(value: str | None) -> str:
@@ -40,6 +43,21 @@ def normalize_yandex_confirmation_code(value: str | None) -> str:
     if not code or len(code) > _MAX_CONFIRMATION_CODE_LENGTH:
         raise YandexDirectError("oauth_code_invalid")
     return code
+
+
+def normalize_yandex_login_hint(value: str | None) -> str:
+    """Normalize a user-selected Yandex login/email used only as an OAuth hint."""
+
+    if not isinstance(value, str) or len(value) > _MAX_LOGIN_HINT_LENGTH:
+        raise YandexDirectError("oauth_login_hint_invalid")
+    hint = value.strip()
+    if (
+        not hint
+        or len(hint) > _MAX_LOGIN_HINT_LENGTH
+        or any(character.isspace() for character in hint)
+    ):
+        raise YandexDirectError("oauth_login_hint_invalid")
+    return hint
 
 
 def screen_code_configuration_available() -> bool:
@@ -76,10 +94,28 @@ class YandexScreenCodeDirectProvider(ModeratingYandexDirectProvider):
         *,
         oauth: YandexOAuthConfig,
         transport: JsonHttpTransport | None = None,
+        login_hint: str | None = None,
     ) -> None:
         if oauth.redirect_uri != YANDEX_SCREEN_CODE_REDIRECT_URI:
             raise ValueError("Yandex screen-code redirect URI is invalid")
         super().__init__(oauth=oauth, transport=transport)
+        self._login_hint = (
+            None if login_hint is None else normalize_yandex_login_hint(login_hint)
+        )
+
+    def authorization_url(self, *, state: str, verifier: str) -> str:
+        params = {
+            "response_type": "code",
+            "client_id": self._oauth.client_id,
+            "redirect_uri": self._oauth.redirect_uri,
+            "force_confirm": "yes",
+            "state": state,
+            "code_challenge": pkce_challenge(verifier),
+            "code_challenge_method": "S256",
+        }
+        if self._login_hint:
+            params["login_hint"] = self._login_hint
+        return self.AUTHORIZE_URL + "?" + urlencode(params)
 
     def exchange_code(self, *, code: str, verifier: str) -> YandexTokenBundle:
         confirmation_code = normalize_yandex_confirmation_code(code)
@@ -115,8 +151,22 @@ class YandexScreenCodeDirectProvider(ModeratingYandexDirectProvider):
             scope=scope,
         )
 
+    def account_identity(self, *, access_token: str) -> YandexAccountIdentity:
+        """Reuse the canonical Direct identity proof and only namespace its failures."""
 
-def screen_code_provider_from_environment() -> YandexScreenCodeDirectProvider:
+        try:
+            return super().account_identity(access_token=access_token)
+        except YandexDirectError as exc:
+            raise YandexDirectError(
+                f"direct_identity_{exc.code}",
+                retryable=exc.retryable,
+            ) from exc
+
+
+def screen_code_provider_from_environment(
+    *,
+    login_hint: str | None = None,
+) -> YandexScreenCodeDirectProvider:
     connections_enabled = str(
         os.getenv("CLIENTPLATFORM_AD_CONNECTIONS_ENABLED") or ""
     ).strip().lower() in _TRUE_VALUES
@@ -142,7 +192,8 @@ def screen_code_provider_from_environment() -> YandexScreenCodeDirectProvider:
             client_id=client_id,
             client_secret=client_secret,
             redirect_uri=redirect_uri,
-        )
+        ),
+        login_hint=login_hint,
     )
 
 
@@ -150,6 +201,7 @@ __all__ = [
     "YANDEX_SCREEN_CODE_REDIRECT_URI",
     "YandexScreenCodeDirectProvider",
     "normalize_yandex_confirmation_code",
+    "normalize_yandex_login_hint",
     "screen_code_configuration_available",
     "screen_code_provider_from_environment",
 ]
