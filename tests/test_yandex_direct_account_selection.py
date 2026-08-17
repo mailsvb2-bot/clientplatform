@@ -117,7 +117,7 @@ class YandexDirectAccountSelectionProviderTests(unittest.TestCase):
                 with self.assertRaisesRegex(YandexDirectError, "oauth_login_hint_invalid"):
                     normalize_yandex_login_hint(value)
 
-    def test_direct_identity_comes_from_clients_get_not_generic_yandex_id(self) -> None:
+    def test_screen_flow_reuses_canonical_direct_identity_contract(self) -> None:
         transport = FakeTransport(
             [
                 (
@@ -126,7 +126,16 @@ class YandexDirectAccountSelectionProviderTests(unittest.TestCase):
                     {
                         "result": {
                             "Clients": [
-                                {"ClientId": 123456789, "Login": "direct-owner"}
+                                {
+                                    "ClientId": 123456789,
+                                    "ClientInfo": "Owner",
+                                    "Login": "direct-owner",
+                                    "Type": "CLIENT",
+                                    "Archived": "NO",
+                                    "Grants": [
+                                        {"Privilege": "EDIT_CAMPAIGNS", "Value": "YES"}
+                                    ],
+                                }
                             ]
                         }
                     },
@@ -142,11 +151,14 @@ class YandexDirectAccountSelectionProviderTests(unittest.TestCase):
         self.assertEqual(len(transport.calls), 1)
         call = transport.calls[0]
         self.assertEqual(call["method"], "POST")
-        self.assertEqual(call["url"], "https://api.direct.yandex.com/json/v5/clients")
+        self.assertEqual(call["url"], "https://api.direct.yandex.com/json/v501/clients")
         self.assertEqual(call["headers"]["Authorization"], "Bearer opaque-access-token")
         payload = json.loads(call["body"].decode("utf-8"))
         self.assertEqual(payload["method"], "get")
-        self.assertEqual(payload["params"]["FieldNames"], ["ClientId", "Login"])
+        self.assertEqual(
+            payload["params"]["FieldNames"],
+            ["ClientId", "ClientInfo", "Login", "Type", "Archived", "Grants"],
+        )
         self.assertNotIn("login.yandex.ru", str(call["url"]))
 
     def test_direct_identity_failure_is_stage_namespaced_and_fail_closed(self) -> None:
@@ -166,7 +178,7 @@ class YandexDirectAccountSelectionProviderTests(unittest.TestCase):
 
         self.assertTrue(raised.exception.code.startswith("direct_identity_"))
 
-    def test_ambiguous_or_missing_direct_identity_is_never_auto_selected(self) -> None:
+    def test_ambiguous_or_unsupported_direct_identity_is_never_auto_selected(self) -> None:
         for payload in (
             {"result": {"Clients": []}},
             {
@@ -177,7 +189,32 @@ class YandexDirectAccountSelectionProviderTests(unittest.TestCase):
                     ]
                 }
             },
-            {"result": {"Clients": [{"ClientId": "", "Login": "missing"}]}},
+            {
+                "result": {
+                    "Clients": [
+                        {
+                            "ClientId": 3,
+                            "Login": "agency-owner",
+                            "Type": "AGENCY",
+                            "Archived": "NO",
+                            "Grants": [{"Privilege": "EDIT_CAMPAIGNS", "Value": "YES"}],
+                        }
+                    ]
+                }
+            },
+            {
+                "result": {
+                    "Clients": [
+                        {
+                            "ClientId": 4,
+                            "Login": "read-only",
+                            "Type": "CLIENT",
+                            "Archived": "NO",
+                            "Grants": [],
+                        }
+                    ]
+                }
+            },
         ):
             with self.subTest(payload=payload):
                 provider = self._provider(transport=FakeTransport([(200, {}, payload)]))
