@@ -130,7 +130,8 @@ async def _send_authorization_prompt(
     targeted_account: bool,
 ) -> None:
     account_note = (
-        "Яндекс откроет именно указанный Вами логин/e-mail. Проверьте аккаунт перед разрешением доступа.\n\n"
+        "Яндекс получил указанный Вами логин/e-mail как подсказку выбора аккаунта. "
+        "Перед разрешением доступа всё равно проверьте выбранный аккаунт.\n\n"
         if targeted_account
         else "На экране Яндекса обязательно проверьте, какой аккаунт выбран. Если он не тот — отмените попытку и используйте «Указать другой логин / e-mail».\n\n"
     )
@@ -321,6 +322,17 @@ async def request_yandex_account_hint(
     )
 
 
+async def _abort_account_hint(
+    message: Message,
+    state: FSMContext,
+) -> None:
+    await state.clear()
+    await message.answer(
+        "Не удалось начать подключение для выбранного аккаунта. "
+        "Вернитесь в рекламные кабинеты и повторите попытку."
+    )
+
+
 @simple.router.message(YandexScreenCodeState.waiting_login_hint)
 async def receive_yandex_account_hint(
     message: Message,
@@ -345,11 +357,11 @@ async def receive_yandex_account_hint(
     except YandexDirectError:
         await message.answer("Введите один логин Яндекса или e-mail без пробелов.")
         return
-    except (AdConnectionError, KeyError, RuntimeError, TypeError, ValueError):
-        await state.clear()
-        await message.answer(
-            "Не удалось начать подключение для выбранного аккаунта. Вернитесь в рекламные кабинеты и повторите попытку."
-        )
+    except (AdConnectionError, RuntimeError, ValueError):
+        await _abort_account_hint(message, state)
+        return
+    except (KeyError, TypeError):
+        await _abort_account_hint(message, state)
         return
 
     await state.set_state(YandexScreenCodeState.waiting_code)
