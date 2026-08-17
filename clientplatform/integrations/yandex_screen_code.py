@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import unicodedata
 from urllib.parse import urlencode
 
 from clientplatform.domain.ad_connections import pkce_challenge
@@ -22,22 +23,44 @@ _MAX_CONFIRMATION_CODE_LENGTH = 1024
 _MAX_LOGIN_HINT_LENGTH = 320
 
 
-def normalize_yandex_confirmation_code(value: str | None) -> str:
-    """Return the bounded opaque confirmation code rendered by Yandex OAuth.
+def _normalize_yandex_clipboard_presentation(value: str) -> str:
+    """Remove browser/clipboard presentation artifacts without guessing provider syntax.
 
-    The confirmation code belongs to the OAuth provider. ClientPlatform must not
-    guess its alphabet, Unicode form, whitespace rules, or any other internal
-    syntax before the provider sees it. We only remove presentation envelope that
-    can be introduced around a copied Telegram message: outer whitespace and the
+    Browser-rendered OAuth codes can carry invisible Unicode format controls when
+    copied even though those controls are not part of the code the user sees.
+    Compatibility glyphs such as fullwidth Latin letters/digits can likewise
+    represent the same visible token with different code points. Strip only
+    Unicode ``Cf`` controls and use NFKC when it turns compatibility forms into an
+    ASCII representation. Other visible provider-owned Unicode stays untouched.
+    """
+
+    without_format_controls = "".join(
+        character
+        for character in value
+        if unicodedata.category(character) != "Cf"
+    )
+    compatibility_normalized = unicodedata.normalize("NFKC", without_format_controls)
+    if not without_format_controls.isascii() and compatibility_normalized.isascii():
+        return compatibility_normalized
+    return without_format_controls
+
+
+def normalize_yandex_confirmation_code(value: str | None) -> str:
+    """Return a bounded Yandex code with copy/paste presentation artifacts removed.
+
+    The confirmation code remains provider-owned opaque data: ClientPlatform does
+    not impose an alphabet, whitespace grammar, or legacy numeric format. It only
+    removes presentation-only Unicode controls and canonicalizes compatibility
+    glyphs that resolve to ASCII, then removes the outer message envelope and the
     optional leading ``# `` marker already supported by the owner flow. The raw
-    message is bounded before trimming so an oversized payload cannot be
-    sanitized into acceptance. Yandex OAuth remains the authority for whether the
-    resulting code is valid, expired, malformed, or already used.
+    Telegram message is bounded before normalization so an oversized payload
+    cannot be sanitized into acceptance. Yandex OAuth remains the authority for
+    whether the resulting code is valid, expired, malformed, or already used.
     """
 
     if not isinstance(value, str) or len(value) > _MAX_CONFIRMATION_CODE_LENGTH:
         raise YandexDirectError("oauth_code_invalid")
-    code = value.strip()
+    code = _normalize_yandex_clipboard_presentation(value).strip()
     if code.startswith("# "):
         code = code[2:].strip()
     if not code or len(code) > _MAX_CONFIRMATION_CODE_LENGTH:
