@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-from typing import Mapping
 from urllib.parse import urlencode
 
 from clientplatform.domain.ad_connections import pkce_challenge
@@ -153,36 +152,15 @@ class YandexScreenCodeDirectProvider(ModeratingYandexDirectProvider):
         )
 
     def account_identity(self, *, access_token: str) -> YandexAccountIdentity:
-        """Prove the connected advertising identity with Direct, not generic Yandex ID."""
+        """Reuse the canonical Direct identity proof and only namespace its failures."""
 
         try:
-            result = self._direct_call(
-                service="clients",
-                token=access_token,
-                payload={
-                    "method": "get",
-                    "params": {"FieldNames": ["ClientId", "Login"]},
-                },
-            )
+            return super().account_identity(access_token=access_token)
         except YandexDirectError as exc:
             raise YandexDirectError(
                 f"direct_identity_{exc.code}",
                 retryable=exc.retryable,
             ) from exc
-
-        clients = result.get("Clients")
-        if (
-            not isinstance(clients, list)
-            or len(clients) != 1
-            or not isinstance(clients[0], Mapping)
-        ):
-            raise YandexDirectError("direct_identity_response_invalid")
-        item = clients[0]
-        account_id = str(item.get("ClientId") or "").strip()
-        login = str(item.get("Login") or "").strip()
-        if not account_id or not login:
-            raise YandexDirectError("direct_identity_missing")
-        return YandexAccountIdentity(account_id=account_id, login=login)
 
 
 def screen_code_provider_from_environment(
