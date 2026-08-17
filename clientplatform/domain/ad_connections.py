@@ -177,7 +177,41 @@ def normalize_external_campaign_id(value: object) -> str:
     return normalized
 
 
+_ADVERTISING_REGION_ALIASES = {
+    "nn": 47,
+    "нижний новгород": 47,
+    "н. новгород": 47,
+    "н новгород": 47,
+    "moscow": 213,
+    "москва": 213,
+    "г. москва": 213,
+    "г москва": 213,
+    "spb": 2,
+    "спб": 2,
+    "санкт-петербург": 2,
+    "санкт петербург": 2,
+    "с.-петербург": 2,
+    "с петербург": 2,
+}
+
+
+def _advertising_region_alias(value: object) -> int | None:
+    if not isinstance(value, str):
+        return None
+    normalized = " ".join(value.strip().lower().replace("ё", "е").split())
+    return _ADVERTISING_REGION_ALIASES.get(normalized)
+
+
 def normalize_region_ids(values: object) -> tuple[int, ...]:
+    """Normalize explicit Yandex region IDs or supported human region names.
+
+    Provider-facing state remains a tuple of numeric RegionId values. Human-facing
+    boundaries may also pass the canonical city aliases used by ClientPlatform's
+    goal-first advertising flow. This keeps one normalization contract for manual
+    and goal-first advertising instead of teaching individual Telegram handlers
+    different meanings for the same region.
+    """
+
     if isinstance(values, str):
         raw_items = [item.strip() for item in values.split(",")]
     else:
@@ -191,10 +225,14 @@ def normalize_region_ids(values: object) -> tuple[int, ...]:
             continue
         if isinstance(raw, bool):
             raise ValueError("region id must be a positive integer")
-        try:
-            item = int(raw)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("region id must be a positive integer") from exc
+        alias = _advertising_region_alias(raw)
+        if alias is not None:
+            item = alias
+        else:
+            try:
+                item = int(raw)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("region id or supported region name is invalid") from exc
         if item <= 0 or item > 2_147_483_647:
             raise ValueError("region id must be a positive integer")
         normalized.add(item)
