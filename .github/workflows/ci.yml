@@ -47,6 +47,7 @@ jobs:
 
       - name: Publish regression contour status
         if: always()
+        continue-on-error: true
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         with:
           retries: 3
@@ -93,6 +94,7 @@ jobs:
 
       - name: Publish coverage ratchet status
         if: always()
+        continue-on-error: true
         env:
           COVERAGE_SUMMARY_PATH: ${{ runner.temp }}/coverage/coverage-summary.json
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
@@ -128,6 +130,7 @@ jobs:
 
       - name: Publish branch coverage ratchet status
         if: always()
+        continue-on-error: true
         env:
           COVERAGE_SUMMARY_PATH: ${{ runner.temp }}/coverage/coverage-summary.json
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
