@@ -55,7 +55,7 @@ def provider(transport: RecordingTransport) -> YandexDirectProvider:
 
 
 class YandexManagedProviderContractTests(unittest.TestCase):
-    def test_managed_campaign_add_has_required_start_date_and_serving_off(self) -> None:
+    def test_managed_campaign_add_has_required_start_date_and_draft_safe_strategy(self) -> None:
         transport = RecordingTransport({"result": {"AddResults": [{"Id": 7001}]}})
         direct = provider(transport)
         name = "ClientPlatform · cpmc_0123456789abcdef0123456789abcdef"
@@ -73,7 +73,7 @@ class YandexManagedProviderContractTests(unittest.TestCase):
         self.assertEqual(item["Name"], name)
         self.assertEqual(item["StartDate"], "2026-08-16")
         strategy = item["UnifiedCampaign"]["BiddingStrategy"]
-        self.assertEqual(strategy["Search"], {"BiddingStrategyType": "SERVING_OFF"})
+        self.assertEqual(strategy["Search"], {"BiddingStrategyType": "HIGHEST_POSITION"})
         self.assertEqual(strategy["Network"], {"BiddingStrategyType": "SERVING_OFF"})
 
     def test_managed_text_ad_has_required_mobile_flag(self) -> None:
