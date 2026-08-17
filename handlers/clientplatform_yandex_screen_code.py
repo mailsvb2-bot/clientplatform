@@ -24,6 +24,7 @@ from clientplatform.integrations.yandex_screen_code import (
 )
 
 from . import clientplatform_control as control
+from . import clientplatform_goal_first_safety as goal_contract
 from . import clientplatform_simple_experience as simple
 
 
@@ -119,6 +120,33 @@ def _account_mode_keyboard(business_token: str) -> InlineKeyboardMarkup:
                 )
             ],
         ]
+    )
+
+
+def _connected_account_keyboard(business_token: str) -> InlineKeyboardMarkup:
+    return control._keyboard(
+        [
+            [
+                (
+                    goal_contract.ACQUIRE_CLIENTS.label,
+                    goal_contract.ACQUIRE_CLIENTS.callback(business_token),
+                )
+            ],
+            [("⚙️ Управление Яндекс Директом", f"cpa:home:{business_token}")],
+        ]
+    )
+
+
+def _connected_account_message(external_login: str) -> str:
+    return (
+        "✅ Яндекс Директ подключён\n\n"
+        f"Кабинет: {external_login}\n\n"
+        "Что делать дальше:\n"
+        f"1. Нажмите «{goal_contract.ACQUIRE_CLIENTS.label}».\n"
+        "2. ClientPlatform проверит свободное время и спросит только то, чего нельзя "
+        "определить безопасно — например, где искать клиентов и какой бюджет допустим.\n"
+        "3. Вы увидите подготовленную рекламу и условия до запуска.\n\n"
+        "Без отдельного подтверждения запуск с расходами не выполняется."
     )
 
 
@@ -510,16 +538,11 @@ async def complete_yandex_direct_screen_code(
 
     business_token = str(data.get("business_token") or "").strip()
     await state.clear()
-    rows = []
-    if business_token:
-        rows.append(
-            [("Вернуться к рекламным кабинетам", f"cpa:home:{business_token}")]
-        )
     await message.answer(
-        "✅ Яндекс Директ подключён\n\n"
-        f"Кабинет: {completion.connection.external_login}\n"
-        "Теперь ClientPlatform может безопасно читать кампании и готовить рекламные действия в пределах Ваших подтверждений.",
-        reply_markup=control._keyboard(rows) if rows else None,
+        _connected_account_message(completion.connection.external_login),
+        reply_markup=(
+            _connected_account_keyboard(business_token) if business_token else None
+        ),
     )
 
 
