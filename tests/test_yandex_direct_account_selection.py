@@ -261,7 +261,7 @@ class YandexDirectAccountSelectionTelegramTests(unittest.IsolatedAsyncioTestCase
         self.assertNotIn("login_hint", state.data)
         incoming.delete.assert_awaited_once()
         rendered = incoming.answer.await_args.args[0]
-        self.assertIn("именно указанный", rendered)
+        self.assertIn("получил указанный", rendered)
 
     def test_provider_failure_is_classified_without_exposing_provider_code(self) -> None:
         direct_exc = YandexDirectError("direct_identity_provider_error_53")
