@@ -358,6 +358,189 @@ class ClientPlatformZeroToFirstOutcomeTests(unittest.TestCase):
         self.assertEqual(enabled, ["programs"])
         self.assertEqual(completed, [actor])
 
+    def test_booking_first_result_activates_service_and_asks_for_offering(self) -> None:
+        assert first_result is not None
+        assert control is not None
+        business_id = str(uuid4())
+        token = control._uuid_token(business_id)
+        actor = object()
+        capability = SimpleNamespace(id="cap-services", connector_key="services", status=CapabilityStatus.ACTIVE)
+        message = _Message()
+        callback = _Callback(data=f"cps:firstbook:{token}", message=message)
+        state = _State()
+        active_calls = 0
+        prepared: list[str] = []
+
+        async def fake_actor(_user_id: int, selected_business_id: str):
+            self.assertEqual(selected_business_id, business_id)
+            return actor
+
+        async def active_service(_actor):
+            nonlocal active_calls
+            active_calls += 1
+            return None if active_calls == 1 else capability
+
+        async def prepare(selected_actor, *, connector_key: str):
+            self.assertIs(selected_actor, actor)
+            prepared.append(connector_key)
+
+        with (
+            patch.object(first_result.control, "_actor", fake_actor),
+            patch.object(first_result, "_active_service_capability", active_service),
+            patch.object(first_result, "_prepare_first_result", prepare),
+            patch.object(first_result.control, "list_business_offerings", lambda **_kwargs: []),
+            patch.object(first_result.control, "list_booking_slots", lambda **_kwargs: []),
+            patch.object(first_result.control, "_callback_message", lambda _callback: message),
+        ):
+            asyncio.run(first_result.setup_first_booking(callback, state))
+
+        self.assertEqual(prepared, ["services"])
+        self.assertEqual(active_calls, 2)
+        self.assertEqual(state.state, control.ClientPlatformControlState.offering_title)
+        self.assertEqual(state.data["business_id"], business_id)
+        self.assertEqual(state.data["capability_id"], capability.id)
+        self.assertTrue(message.answers[-1][0].startswith("Сначала добавим то"))
+        self.assertEqual(callback.answers, [(None, False)])
+
+    def test_booking_first_result_with_service_asks_for_first_open_time(self) -> None:
+        assert first_result is not None
+        assert control is not None
+        business_id = str(uuid4())
+        token = control._uuid_token(business_id)
+        actor = object()
+        capability = SimpleNamespace(id="cap-services", connector_key="services", status=CapabilityStatus.ACTIVE)
+        offering = SimpleNamespace(id="offer-1", title="Консультация 60 минут")
+        message = _Message()
+        callback = _Callback(data=f"cps:firstbook:{token}", message=message)
+        state = _State()
+
+        async def fake_actor(_user_id: int, selected_business_id: str):
+            self.assertEqual(selected_business_id, business_id)
+            return actor
+
+        async def active_service(_actor):
+            return capability
+
+        with (
+            patch.object(first_result.control, "_actor", fake_actor),
+            patch.object(first_result, "_active_service_capability", active_service),
+            patch.object(
+                first_result.control,
+                "get_business_profile",
+                lambda **_kwargs: _profile(status=BusinessProfileStatus.READY),
+            ),
+            patch.object(first_result.control, "list_business_offerings", lambda **_kwargs: [offering]),
+            patch.object(first_result.control, "list_booking_slots", lambda **_kwargs: []),
+            patch.object(first_result.control, "_callback_message", lambda _callback: message),
+        ):
+            asyncio.run(first_result.setup_first_booking(callback, state))
+
+        self.assertEqual(state.state, control.ClientPlatformControlState.booking_start)
+        self.assertEqual(state.data["business_id"], business_id)
+        self.assertEqual(state.data["offering_id"], offering.id)
+        self.assertIn("Теперь откроем первое время", message.answers[-1][0])
+
+    def test_material_first_result_without_program_starts_builder(self) -> None:
+        assert first_result is not None
+        assert control is not None
+        business_id = str(uuid4())
+        token = control._uuid_token(business_id)
+        actor = object()
+        message = _Message()
+        callback = _Callback(data=f"cps:firstmat:{token}", message=message)
+        state = _State({"stale": "data"})
+        prepared: list[str] = []
+
+        async def fake_actor(_user_id: int, selected_business_id: str):
+            self.assertEqual(selected_business_id, business_id)
+            return actor
+
+        async def prepare(selected_actor, *, connector_key: str):
+            self.assertIs(selected_actor, actor)
+            prepared.append(connector_key)
+
+        with (
+            patch.object(first_result.control, "_actor", fake_actor),
+            patch.object(first_result, "_prepare_first_result", prepare),
+            patch.object(first_result.control, "list_programs", lambda **_kwargs: []),
+            patch.object(first_result.control, "list_customers", lambda **_kwargs: []),
+            patch.object(first_result.control, "_callback_message", lambda _callback: message),
+        ):
+            asyncio.run(first_result.setup_first_material(callback, state))
+
+        self.assertEqual(prepared, ["programs"])
+        self.assertTrue(state.cleared)
+        self.assertEqual(state.state, first_result.builder.ClientPlatformProgramBuilderState.program_title)
+        self.assertEqual(state.data, {"business_id": business_id})
+        self.assertTrue(message.answers[-1][0].startswith("Создадим первый материал"))
+
+    def test_material_first_result_with_program_invites_first_customer(self) -> None:
+        assert first_result is not None
+        assert control is not None
+        business_id = str(uuid4())
+        token = control._uuid_token(business_id)
+        actor = object()
+        message = _Message()
+        callback = _Callback(data=f"cps:firstmat:{token}", message=message)
+        state = _State()
+        invitations: list[str] = []
+
+        async def fake_actor(_user_id: int, selected_business_id: str):
+            self.assertEqual(selected_business_id, business_id)
+            return actor
+
+        async def prepare(_actor, *, connector_key: str):
+            self.assertEqual(connector_key, "programs")
+
+        async def invite(_callback, *, actor: object, business_id: str):
+            self.assertIs(actor, actor_ref)
+            invitations.append(business_id)
+
+        actor_ref = actor
+        with (
+            patch.object(first_result.control, "_actor", fake_actor),
+            patch.object(first_result, "_prepare_first_result", prepare),
+            patch.object(first_result.control, "list_programs", lambda **_kwargs: [SimpleNamespace(id="p-1")]),
+            patch.object(first_result.control, "list_customers", lambda **_kwargs: []),
+            patch.object(first_result.control, "_callback_message", lambda _callback: message),
+            patch.object(first_result.simple, "_invite_customer", invite),
+        ):
+            asyncio.run(first_result.setup_first_material(callback, state))
+
+        self.assertTrue(state.cleared)
+        self.assertEqual(invitations, [business_id])
+        self.assertEqual(callback.answers, [(None, False)])
+
+    def test_first_client_is_tenant_checked_and_routes_to_existing_invite_flow(self) -> None:
+        assert first_result is not None
+        assert control is not None
+        business_id = str(uuid4())
+        token = control._uuid_token(business_id)
+        actor = object()
+        message = _Message()
+        callback = _Callback(data=f"cps:firstclient:{token}", message=message)
+        state = _State({"stale": "data"})
+        invitations: list[str] = []
+
+        async def fake_actor(_user_id: int, selected_business_id: str):
+            self.assertEqual(selected_business_id, business_id)
+            return actor
+
+        async def invite(_callback, *, actor: object, business_id: str):
+            self.assertIs(actor, actor_ref)
+            invitations.append(business_id)
+
+        actor_ref = actor
+        with (
+            patch.object(first_result.control, "_actor", fake_actor),
+            patch.object(first_result.simple, "_invite_customer", invite),
+        ):
+            asyncio.run(first_result.setup_first_client(callback, state))
+
+        self.assertTrue(state.cleared)
+        self.assertEqual(callback.answers, [(None, False)])
+        self.assertEqual(invitations, [business_id])
+
     def test_ready_business_keeps_existing_first_result_behavior(self) -> None:
         assert first_result is not None
         actor = object()
