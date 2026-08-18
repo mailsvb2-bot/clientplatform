@@ -18,14 +18,16 @@ def _goal_keyboard(business_id: str):
     """Render the single canonical owner-home navigation.
 
     Acquisition and already-arrived customer conversations are deliberately
-    separate actions.  Keeping both here prevents later presentation layers
-    from hiding the sales workspace again.
+    separate actions. Keeping both here prevents later presentation layers
+    from hiding the sales workspace again. Growth Cockpit is a read-only
+    projection over those same canonical facts, not another business brain.
     """
 
     token = control._uuid_token(business_id)
     action = goal_contract.ACQUIRE_CLIENTS
     return control._keyboard(
         [
+            [("📈 Что сегодня", f"cpg:period:{token}:7")],
             [(action.label, action.callback(token))],
             [("💬 Обращения и продажи", f"cps:s:{token}")],
             [
@@ -87,6 +89,7 @@ async def send_goal_dashboard(
         f"{nearest_line}\n\n"
         f"{readiness}\n\n"
         "Что нужно сделать сейчас:\n"
+        "• «📈 Что сегодня» — увидеть лиды, записи, оплаты, рекламу и следующий шаг.\n"
         f"• «{action.label}» — подготовить продвижение и привести новых людей.\n"
         "• «💬 Обращения и продажи» — разобрать тех, кто уже написал: увидеть следующий "
         "шаг, подключить ИИ-помощника и подготовить ответ.\n\n"
