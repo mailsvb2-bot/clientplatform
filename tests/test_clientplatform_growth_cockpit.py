@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import unittest
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -14,9 +15,9 @@ from clientplatform.domain.revenue_attribution import (
 )
 from clientplatform.domain.tenancy import TenantContext
 from dashboard.growth_cockpit import growth_cockpit_payload, telegram_growth_summary
-from handlers.clientplatform_growth import _cockpit_keyboard
 
 
+_AIOGRAM_AVAILABLE = importlib.util.find_spec("aiogram") is not None
 _NOW = datetime(2026, 8, 18, 12, 0, tzinfo=timezone.utc)
 _ACTOR = TenantContext(
     user_id=7001,
@@ -175,15 +176,20 @@ class GrowthCockpitTests(unittest.TestCase):
         self.assertEqual(result.next_action.source, "sales_action_plan")
         self.assertIn("Мария", result.next_action.title)
 
-    def test_provider_failure_degrades_advertising_without_hiding_business_facts(self) -> None:
-        def unavailable(**_kwargs):
-            raise RuntimeError("provider unavailable")
+    def test_provider_failures_degrade_advertising_without_hiding_business_facts(self) -> None:
+        for error_type in (RuntimeError, ValueError, OSError):
+            with self.subTest(error_type=error_type.__name__):
+                def unavailable(**_kwargs):
+                    raise error_type("provider unavailable")
 
-        result, _ = self._build(advertising_loader=unavailable)
+                result, _ = self._build(advertising_loader=unavailable)
 
-        self.assertIsNone(result.advertising)
-        self.assertIn("advertising_unavailable", result.limitations)
-        self.assertEqual({item.key: item.value for item in result.period_metrics}["leads"], 18)
+                self.assertIsNone(result.advertising)
+                self.assertIn("advertising_unavailable", result.limitations)
+                self.assertEqual(
+                    {item.key: item.value for item in result.period_metrics}["leads"],
+                    18,
+                )
 
     def test_summary_hides_provider_money_without_verified_iso_currency(self) -> None:
         result, _ = self._build()
@@ -214,7 +220,10 @@ class GrowthCockpitTests(unittest.TestCase):
         self.assertNotIn("cost_micros", payload["advertising"])
         self.assertIn("meaning", payload["advertising"])
 
+    @unittest.skipUnless(_AIOGRAM_AVAILABLE, "aiogram is not installed")
     def test_actionable_alerts_link_to_existing_canonical_workflows(self) -> None:
+        from handlers.clientplatform_growth import _cockpit_keyboard
+
         handoff = _cockpit_keyboard(
             business_id=_ACTOR.business_id,
             period_days=7,
@@ -237,7 +246,13 @@ class GrowthCockpitTests(unittest.TestCase):
         self.assertTrue(any(str(value).startswith("cps:sh:") for value in handoff_callbacks))
         self.assertTrue(any(str(value).startswith("cps:sw:") for value in plan_callbacks))
         self.assertTrue(any(str(value).startswith("cpy:a:") for value in attribution_callbacks))
-        self.assertTrue(any(str(value).endswith(":7") for value in attribution_callbacks if str(value).startswith("cpg:attention:")))
+        self.assertTrue(
+            any(
+                str(value).endswith(":7")
+                for value in attribution_callbacks
+                if str(value).startswith("cpg:attention:")
+            )
+        )
 
 
 if __name__ == "__main__":
