@@ -10,6 +10,8 @@ from clientplatform.application.control_callbacks import token_uuid, uuid_token
 from clientplatform.application.growth_cockpit import get_growth_cockpit
 from clientplatform.application.sales_ui import list_sales_handoff_work, list_sales_work
 from clientplatform.application.tenancy import list_accessible_businesses, resolve_tenant_context
+from clientplatform.domain.activity import ActivityError
+from clientplatform.domain.tenancy import TenancyError
 from clientplatform.runtime.control_bot import control_bot_enabled
 from dashboard.growth_cockpit import telegram_growth_summary
 
@@ -61,7 +63,7 @@ def _cockpit_keyboard(*, business_id: str, period_days: int, action_key: str) ->
     elif action_key.startswith("sales_plan:"):
         rows.append([("Открыть следующий шаг", f"cps:sw:{token}")])
     elif action_key == "attribution_review":
-        rows.append([("Посмотреть результаты", f"cp:results:{token}")])
+        rows.append([("Проверить рекламу и источники", f"cpy:a:{token}:{period_days}")])
     if action_key != "none":
         rows.append([("Почему это важно", f"cpg:attention:{token}")])
     rows.append([("Клиенты", f"cp:clients:{token}"), ("Результаты", f"cp:results:{token}")])
@@ -190,12 +192,12 @@ async def growth_attention(callback: CallbackQuery) -> None:
 async def clientplatform_growth_error(event: object) -> bool:
     exception = getattr(event, "exception", None)
     update = getattr(event, "update", None)
-    if not isinstance(exception, (ValueError, RuntimeError)):
+    if not isinstance(exception, (ValueError, TenancyError, ActivityError)):
         return False
     message = getattr(update, "message", None)
     callback = getattr(update, "callback_query", None)
     if isinstance(message, Message):
-        await message.answer(f"Не получилось показать состояние бизнеса: {exception}")
+        await message.answer("Не получилось показать состояние этого бизнеса.")
         return True
     if isinstance(callback, CallbackQuery):
         await callback.answer("Не получилось обновить данные бизнеса.", show_alert=True)
