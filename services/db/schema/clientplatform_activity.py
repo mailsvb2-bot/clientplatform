@@ -17,6 +17,8 @@ def ensure(c: sqlite3.Connection) -> None:
             created_by_member_id TEXT NOT NULL,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
+            profile_details_json TEXT NOT NULL DEFAULT '{}',
+            profile_confirmed_at TEXT,
             brand_display_name TEXT,
             brand_tone_json TEXT,
             brand_visual_keywords_json TEXT,
@@ -32,9 +34,13 @@ def ensure(c: sqlite3.Connection) -> None:
         )
         """
     )
-    # Additive migration for profiles created before Visual Creative Studio.
+    # Additive migration for profiles created before structured onboarding and
+    # Visual Creative Studio. Structured details stay in the canonical profile
+    # row instead of introducing a second business-memory table.
     have_profile = _cols(c, "business_profiles")
     for column, ddl in {
+        "profile_details_json": "profile_details_json TEXT NOT NULL DEFAULT '{}'",
+        "profile_confirmed_at": "profile_confirmed_at TEXT",
         "brand_display_name": "brand_display_name TEXT",
         "brand_tone_json": "brand_tone_json TEXT",
         "brand_visual_keywords_json": "brand_visual_keywords_json TEXT",
