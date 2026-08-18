@@ -22,6 +22,10 @@ from clientplatform.runtime.partner_aware_bot_gateway import ManagedBotGatewayRu
 from config.settings import settings
 from core.task_manager import TaskManager
 from runtime.ad_oauth_http import ad_oauth_http_enabled, register_ad_oauth_routes
+from runtime.growth_cockpit_http import (
+    growth_cockpit_http_enabled,
+    register_growth_cockpit_routes,
+)
 from runtime.ingress_flags import (
     http_ingress_enabled,
     max_webhook_enabled,
@@ -242,6 +246,7 @@ async def start_messenger_webhook_runtime(
     omnichannel_enabled = _omnichannel_ingress_enabled()
     ad_oauth_enabled = ad_oauth_http_enabled()
     ad_worker_enabled = _ad_publication_worker_enabled()
+    growth_cockpit_enabled = growth_cockpit_http_enabled()
     gateway_config = bot_gateway_runtime_config()
     gateway_enabled = gateway_config.enabled
     ingress_enabled = (
@@ -250,6 +255,7 @@ async def start_messenger_webhook_runtime(
         or ad_oauth_enabled
         or ad_worker_enabled
         or omnichannel_enabled
+        or growth_cockpit_enabled
     )
     if not ingress_enabled:
         return None
@@ -260,6 +266,8 @@ async def start_messenger_webhook_runtime(
     )
     _register_health_routes(app)
 
+    if growth_cockpit_enabled:
+        register_growth_cockpit_routes(app)
     if payment_enabled:
         _register_payment_routes(app)
     if privacy_export_enabled:
@@ -323,7 +331,7 @@ async def start_messenger_webhook_runtime(
         log.info(
             "HTTP ingress started on %s:%s payment=%s privacy_export=%s "
             "max=%s vk=%s omnichannel=%s durable_delivery=%s managed_bot_polling=%s "
-            "ad_oauth=%s ad_publication_worker=%s",
+            "ad_oauth=%s ad_publication_worker=%s growth_cockpit=%s",
             host,
             port,
             payment_enabled,
@@ -335,6 +343,7 @@ async def start_messenger_webhook_runtime(
             gateway_started,
             ad_oauth_enabled,
             ad_worker_enabled,
+            growth_cockpit_enabled,
         )
         return MessengerWebhookRuntime(
             runner=runner,
