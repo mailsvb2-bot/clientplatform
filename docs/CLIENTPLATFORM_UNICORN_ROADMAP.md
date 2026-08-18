@@ -486,7 +486,9 @@ Owner UI способен показать честный read-only campaign per
 
 ---
 
-## U-005 — `NEXT` — Managed Yandex Activation Policy
+## U-005 — `DONE` — Managed Yandex Activation Policy
+
+Evidence: PR #194, merge SHA `d5a518167515df1cab5086f24aaf2eddcff1f1ff`; все 15 PR workflows завершились `success`, включая Canon, CI quality/coverage, static security, ad-spend/booking/partner concurrency, production isolation, user scenario matrix и pre-deploy gate.
 
 ### Цель
 
@@ -532,7 +534,7 @@ managed campaign exists SERVING_OFF
 
 ---
 
-## U-006 — `QUEUED` — Growth Cockpit: «что сегодня происходит с бизнесом»
+## U-006 — `NEXT` — Growth Cockpit: «что сегодня происходит с бизнесом»
 
 ### Цель
 
@@ -1448,8 +1450,8 @@ Duplicate tap, retry, worker restart или uncertain provider response не д�
 | U-002 Acquisition Attribution Spine | DONE | PR #172; merge SHA `c7f85182e3d100c82de87c996b34ab5e71fbf31b`; all 15 PR workflows green including Canon, CI quality/coverage, static security, booking/ad-spend/partner concurrency, production isolation, user scenario matrix and pre-deploy |
 | U-003 Revenue Attribution & Unit Economics | DONE | PR #174; merge SHA `148bc3ba1732cbe530973d20284308cc16b6df70`; all 15 PR workflows green including Canon, CI quality/coverage, static security, booking/ad-spend/partner concurrency, production isolation, user scenario matrix and pre-deploy |
 | U-004 Yandex Campaign-level Read Analytics | DONE | PR #177; merge SHA `c5ad2187402593152688cc90a60f559830f148f6`; all 15 PR workflows green including Canon, CI quality/coverage, static security, booking/ad-spend/partner concurrency, production isolation, user scenario matrix and pre-deploy; coverage baseline 74.16% combined / 65.22% branch |
-| U-005 Managed Yandex Activation Policy | NEXT | — |
-| U-006 Growth Cockpit | QUEUED | — |
+| U-005 Managed Yandex Activation Policy | DONE | PR #194; merge SHA `d5a518167515df1cab5086f24aaf2eddcff1f1ff`; all 15 PR workflows green including Canon, CI quality/coverage, static security, ad-spend/booking/partner concurrency, production isolation, user scenario matrix and pre-deploy |
+| U-006 Growth Cockpit | NEXT | — |
 | U-007 Zero-to-First-Outcome Onboarding | QUEUED | — |
 | U-008 CRM Lead Inbox | QUEUED | — |
 | U-009 Follow-up Employee | QUEUED | — |
