@@ -23,16 +23,18 @@ from clientplatform.integrations.yandex_direct_moderation import (
 )
 
 _REPORTS_URL = "https://api.direct.yandex.com/json/v501/reports"
+_MICROS_PER_MINOR = 10_000
 _SUPPORTED_CURRENCY_MICRO_TO_MINOR = {
-    "BYN": 10_000,
-    "CHF": 10_000,
-    "EUR": 10_000,
-    "KZT": 10_000,
-    "RUB": 10_000,
-    "TRY": 10_000,
-    "UAH": 10_000,
-    "USD": 10_000,
+    "BYN": _MICROS_PER_MINOR,
+    "CHF": _MICROS_PER_MINOR,
+    "EUR": _MICROS_PER_MINOR,
+    "KZT": _MICROS_PER_MINOR,
+    "RUB": _MICROS_PER_MINOR,
+    "TRY": _MICROS_PER_MINOR,
+    "UAH": _MICROS_PER_MINOR,
+    "USD": _MICROS_PER_MINOR,
 }
+_MANAGED_STRATEGY_PREFIX = "search=HIGHEST_POSITION;network=SERVING_OFF;weekly_spend_limit_micros="
 
 
 def _canonical_json(value: object) -> str:
@@ -107,16 +109,65 @@ def _nonnegative_int(value: object, name: str) -> int:
     return parsed
 
 
+def _positive_int(value: object, name: str) -> int:
+    parsed = _nonnegative_int(value, name)
+    if parsed <= 0:
+        raise YandexDirectError(f"{name}_invalid")
+    return parsed
+
+
 def _optional_nonnegative_int(value: object, name: str) -> int | None:
     if value in (None, ""):
         return None
     return _nonnegative_int(value, name)
 
 
+def _optional_positive_int(value: object, name: str) -> int | None:
+    if value in (None, ""):
+        return None
+    return _positive_int(value, name)
+
+
 def _mapping(value: object, error_code: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
         raise YandexDirectError(error_code)
     return value
+
+
+def managed_weekly_spend_limit_micros(*, hard_cap_minor: int, daily_cap_minor: int) -> int:
+    hard_cap = _positive_int(hard_cap_minor, "hard_cap_minor")
+    daily_cap = _positive_int(daily_cap_minor, "daily_cap_minor")
+    return min(hard_cap, daily_cap * 7) * _MICROS_PER_MINOR
+
+
+def managed_strategy_string(*, weekly_spend_limit_micros: int | None) -> str:
+    value = "none" if weekly_spend_limit_micros is None else str(
+        _positive_int(weekly_spend_limit_micros, "weekly_spend_limit_micros")
+    )
+    return _MANAGED_STRATEGY_PREFIX + value
+
+
+def managed_strategy_matches_authorization(
+    *,
+    consented_strategy: str,
+    current_strategy: str,
+    hard_cap_minor: int,
+    daily_cap_minor: int,
+    require_applied_limit: bool,
+) -> bool:
+    consented = str(consented_strategy or "").strip()
+    current = str(current_strategy or "").strip()
+    if not consented.startswith(_MANAGED_STRATEGY_PREFIX):
+        return True
+    target = managed_strategy_string(
+        weekly_spend_limit_micros=managed_weekly_spend_limit_micros(
+            hard_cap_minor=hard_cap_minor,
+            daily_cap_minor=daily_cap_minor,
+        )
+    )
+    if require_applied_limit:
+        return current == target
+    return current in {consented, target}
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,6 +186,7 @@ class YandexCampaignBudgetReadout:
     network_strategy: str
     captured_at: str
     provider_version: str
+    weekly_spend_limit_micros: int | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -166,6 +218,14 @@ class YandexCampaignBudgetReadout:
                 name,
                 _optional_nonnegative_int(getattr(self, name), name),
             )
+        object.__setattr__(
+            self,
+            "weekly_spend_limit_micros",
+            _optional_positive_int(
+                self.weekly_spend_limit_micros,
+                "weekly_spend_limit_micros",
+            ),
+        )
         object.__setattr__(self, "captured_at", _iso(self.captured_at, "captured_at"))
         version = str(self.provider_version or "").strip()
         if not version.startswith("ycamp_") or len(version) != 70:
@@ -174,8 +234,7 @@ class YandexCampaignBudgetReadout:
     @property
     def launch_eligible(self) -> bool:
         funded = (
-            self.status_payment == "ALLOWED"
-            and self.funds_mode == "CAMPAIGN_FUNDS"
+            self.funds_mode == "CAMPAIGN_FUNDS"
             and self.available_budget_micros is not None
             and self.available_budget_micros > 0
             and self.search_strategy != "UNKNOWN"
@@ -185,15 +244,27 @@ class YandexCampaignBudgetReadout:
             self.campaign_type == "TEXT_CAMPAIGN"
             and self.state == "ON"
             and self.status == "ACCEPTED"
+            and self.status_payment == "ALLOWED"
         )
-        managed_draft_ready = (
+        managed_strategy_safe = (
             self.campaign_type == "UNIFIED_CAMPAIGN"
-            and self.state == "OFF"
-            and self.status == "DRAFT"
             and self.search_strategy == "HIGHEST_POSITION"
             and self.network_strategy == "SERVING_OFF"
         )
-        return funded and (legacy_ready or managed_draft_ready)
+        managed_pre_review = (
+            self.state == "OFF"
+            and self.status in {"DRAFT", "MODERATION"}
+            and self.status_payment in {"DISALLOWED", "ALLOWED"}
+        )
+        managed_accepted = (
+            self.state in {"OFF", "ON"}
+            and self.status == "ACCEPTED"
+            and self.status_payment == "ALLOWED"
+        )
+        return funded and (
+            legacy_ready
+            or (managed_strategy_safe and (managed_pre_review or managed_accepted))
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -228,11 +299,7 @@ class YandexDailySpendReadout:
 
 
 class ReadOnlyYandexDirectBudgetProvider(ModeratingYandexDirectProvider):
-    """Read-only financial adapter for consent-bound Yandex Direct spending.
-
-    It uses only Campaigns.get and the Reports service. It never calls provider
-    mutation methods and never turns a DRAFT into an active advertisement.
-    """
+    """Read-only financial adapter for consent-bound Yandex Direct spending."""
 
     def __init__(
         self,
@@ -370,6 +437,26 @@ class ReadOnlyYandexDirectBudgetProvider(ModeratingYandexDirectProvider):
             bidding.get("Network"),
             "campaign_network_strategy_missing",
         )
+        search_strategy = _token(
+            search.get("BiddingStrategyType") or "UNKNOWN",
+            "campaign_search_strategy",
+        )
+        network_strategy = _token(
+            network.get("BiddingStrategyType") or "UNKNOWN",
+            "campaign_network_strategy",
+        )
+        weekly_spend_limit = None
+        if campaign_type == "UNIFIED_CAMPAIGN" and search_strategy == "HIGHEST_POSITION":
+            highest = search.get("HighestPosition")
+            if highest not in (None, ""):
+                highest_mapping = _mapping(
+                    highest,
+                    "campaign_highest_position_invalid",
+                )
+                weekly_spend_limit = _optional_positive_int(
+                    highest_mapping.get("WeeklySpendLimit"),
+                    "campaign_weekly_spend_limit_micros",
+                )
         selected = {
             "Id": item.get("Id"),
             "Type": item.get("Type"),
@@ -395,16 +482,11 @@ class ReadOnlyYandexDirectBudgetProvider(ModeratingYandexDirectProvider):
                 item.get("StatusPayment"),
                 "campaign_status_payment",
             ),
-            search_strategy=_token(
-                search.get("BiddingStrategyType") or "UNKNOWN",
-                "campaign_search_strategy",
-            ),
-            network_strategy=_token(
-                network.get("BiddingStrategyType") or "UNKNOWN",
-                "campaign_network_strategy",
-            ),
+            search_strategy=search_strategy,
+            network_strategy=network_strategy,
             captured_at=captured_at,
             provider_version=_hash("ycamp_", selected),
+            weekly_spend_limit_micros=weekly_spend_limit,
         )
 
     def daily_spend_readout(
@@ -580,6 +662,18 @@ def reconcile_yandex_budget_snapshot(
             "expected_report_date": expected_day,
         },
     )
+    strategy = (
+        managed_strategy_string(
+            weekly_spend_limit_micros=campaign.weekly_spend_limit_micros
+        )
+        if campaign.campaign_type == "UNIFIED_CAMPAIGN"
+        and campaign.search_strategy == "HIGHEST_POSITION"
+        and campaign.network_strategy == "SERVING_OFF"
+        else (
+            f"search={campaign.search_strategy};"
+            f"network={campaign.network_strategy}"
+        )
+    )
     return ProviderBudgetSnapshot(
         provider=AdProvider.YANDEX_DIRECT,
         connection_id=normalized_connection,
@@ -592,10 +686,7 @@ def reconcile_yandex_budget_snapshot(
             f"{campaign.campaign_type}:{campaign.state}:"
             f"{campaign.status}:{campaign.status_payment}"
         ),
-        strategy=(
-            f"search={campaign.search_strategy};"
-            f"network={campaign.network_strategy}"
-        ),
+        strategy=strategy,
         launch_eligible=campaign.launch_eligible,
         provider_version=combined_version,
         captured_at=current,
@@ -618,5 +709,8 @@ __all__ = [
     "ReadOnlyYandexDirectBudgetProvider",
     "YandexCampaignBudgetReadout",
     "YandexDailySpendReadout",
+    "managed_strategy_matches_authorization",
+    "managed_strategy_string",
+    "managed_weekly_spend_limit_micros",
     "reconcile_yandex_budget_snapshot",
 ]
