@@ -8,7 +8,6 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from clientplatform.application.control_callbacks import token_uuid, uuid_token
 from clientplatform.application.growth_cockpit import get_growth_cockpit
-from clientplatform.application.sales_ui import list_sales_handoff_work, list_sales_work
 from clientplatform.application.tenancy import list_accessible_businesses, resolve_tenant_context
 from clientplatform.domain.activity import ActivityError
 from clientplatform.domain.tenancy import TenancyError
@@ -65,7 +64,7 @@ def _cockpit_keyboard(*, business_id: str, period_days: int, action_key: str) ->
     elif action_key == "attribution_review":
         rows.append([("Проверить рекламу и источники", f"cpy:a:{token}:{period_days}")])
     if action_key != "none":
-        rows.append([("Почему это важно", f"cpg:attention:{token}")])
+        rows.append([("Почему это важно", f"cpg:attention:{token}:{period_days}")])
     rows.append([("Клиенты", f"cp:clients:{token}"), ("Результаты", f"cp:results:{token}")])
     return _keyboard(rows)
 
@@ -153,37 +152,36 @@ async def growth_change_period(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("cpg:attention:"))
 async def growth_attention(callback: CallbackQuery) -> None:
-    business_token = str(callback.data).split(":", 2)[2]
+    _, _, business_token, raw_period = str(callback.data).split(":", 3)
+    try:
+        period_days = int(raw_period)
+    except ValueError as exc:
+        raise ValueError("growth cockpit period is invalid") from exc
+    if period_days not in {7, 30}:
+        raise ValueError("growth cockpit period must be 7 or 30 days")
     business_id = token_uuid(business_token)
     actor = await _actor(int(callback.from_user.id), business_id)
-    handoffs, sales_work = await asyncio.gather(
-        asyncio.to_thread(list_sales_handoff_work, actor=actor, limit=12),
-        asyncio.to_thread(list_sales_work, actor=actor, limit=12),
+    snapshot = await asyncio.to_thread(
+        get_growth_cockpit,
+        actor=actor,
+        period_days=period_days,
     )
-
-    lines: list[str] = []
-    if handoffs:
-        lines.append("Нужен ответ или решение владельца:")
-        for item in handoffs[:8]:
-            lines.append(f"• {item.get('customer_name') or 'Клиент'}")
-    planned = [item for item in sales_work if str(item.get("next_action_kind") or "").strip()]
-    if planned:
-        if lines:
-            lines.append("")
-        lines.append("Уже подготовлен следующий шаг:")
-        for item in planned[:8]:
-            lines.append(
-                f"• {item.get('customer_name') or 'Клиент'} — "
-                "ClientPlatform продолжит по существующему плану продаж."
-            )
-    if not lines:
-        lines.append("Сейчас нет клиентских ситуаций, требующих отдельного действия.")
-
+    lines = list(snapshot.attention) or ["Сейчас нет сигналов, требующих отдельного решения."]
+    lines.extend(
+        [
+            "",
+            "Следующий шаг:",
+            f"• {snapshot.next_action.title}",
+            f"  {snapshot.next_action.reason}",
+        ]
+    )
     await callback.answer()
     await _message(callback).answer(
-        "Что требует решения\n\n" + "\n".join(lines),
-        reply_markup=_keyboard(
-            [[("Открыть обращения и продажи", f"cps:s:{business_token}")]]
+        "Почему это важно\n\n" + "\n".join(lines),
+        reply_markup=_cockpit_keyboard(
+            business_id=snapshot.business_id,
+            period_days=snapshot.period_days,
+            action_key=snapshot.next_action.action_key,
         ),
     )
 
