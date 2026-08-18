@@ -13,8 +13,11 @@ from clientplatform.integrations.yandex_direct import (
     YandexDirectProvider,
     YandexOAuthConfig,
 )
+from clientplatform.integrations.yandex_direct_budget import (
+    managed_strategy_string,
+    managed_weekly_spend_limit_micros,
+)
 
-_YANDEX_MICROS_PER_MINOR = 10_000
 _SUPPORTED_CURRENCIES = {"BYN", "CHF", "EUR", "KZT", "RUB", "TRY", "UAH", "USD"}
 
 
@@ -43,18 +46,6 @@ def _positive_id(value: object, name: str) -> str:
     if not raw.isdigit() or int(raw) <= 0:
         raise YandexDirectError(f"{name}_invalid")
     return raw
-
-
-def _positive_minor(value: object, name: str) -> int:
-    if isinstance(value, (bool, float)):
-        raise YandexDirectError(f"{name}_invalid")
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError) as exc:
-        raise YandexDirectError(f"{name}_invalid") from exc
-    if parsed <= 0 or parsed > 900_000_000_000_000:
-        raise YandexDirectError(f"{name}_invalid")
-    return parsed
 
 
 def _token(value: object, name: str) -> str:
@@ -176,8 +167,6 @@ class YandexDirectAdActions(YandexDirectProvider):
         payload: Mapping[str, Any],
         client_login: str = "",
     ) -> Mapping[str, Any]:
-        # v501 is required for unified campaigns and remains the canonical
-        # endpoint for exact-ID ad state/moderation in the managed lifecycle.
         return self._call_at_root(
             root=self.MANAGED_API_ROOT,
             service="ads",
@@ -267,15 +256,10 @@ class YandexDirectAdActions(YandexDirectProvider):
         hard_cap_minor: int,
         daily_cap_minor: int,
         currency: str,
+        expected_snapshot_strategy: str,
         client_login: str = "",
     ) -> YandexManagedActivationResult:
-        """Apply a consent-bounded provider budget to a managed draft.
-
-        Legacy TEXT_CAMPAIGN objects are deliberately left unchanged. A unified
-        campaign is accepted only from the exact non-serving baseline created by
-        the managed publication flow. The provider weekly cap can never exceed
-        either the total hard cap or seven approved daily caps.
-        """
+        """Apply only the budget transition covered by the immutable consent snapshot."""
         campaign_id = normalize_external_campaign_id(external_campaign_id)
         item = self._managed_campaign_state(
             access_token=access_token,
@@ -294,18 +278,28 @@ class YandexDirectAdActions(YandexDirectProvider):
             raise YandexDirectError("managed_campaign_not_draft_off")
         if _token(item.get("Status"), "campaign_status") != "DRAFT":
             raise YandexDirectError("managed_campaign_not_draft_off")
-        if _token(item.get("StatusPayment"), "campaign_status_payment") != "ALLOWED":
-            raise YandexDirectError("managed_campaign_payment_not_allowed")
+        if _token(item.get("StatusPayment"), "campaign_status_payment") not in {
+            "DISALLOWED",
+            "ALLOWED",
+        }:
+            raise YandexDirectError("managed_campaign_payment_status_unknown")
         provider_currency = _token(item.get("Currency"), "campaign_currency")
         expected_currency = _token(currency, "authorization_currency")
         if provider_currency != expected_currency or provider_currency not in _SUPPORTED_CURRENCIES:
             raise YandexDirectError("managed_campaign_currency_mismatch")
 
-        hard_cap = _positive_minor(hard_cap_minor, "hard_cap_minor")
-        daily_cap = _positive_minor(daily_cap_minor, "daily_cap_minor")
-        weekly_minor = min(hard_cap, daily_cap * 7)
-        weekly_micros = weekly_minor * _YANDEX_MICROS_PER_MINOR
+        weekly_micros = managed_weekly_spend_limit_micros(
+            hard_cap_minor=hard_cap_minor,
+            daily_cap_minor=daily_cap_minor,
+        )
         observed_limit = self._managed_weekly_limit(item)
+        current_strategy = managed_strategy_string(
+            weekly_spend_limit_micros=observed_limit
+        )
+        target_strategy = managed_strategy_string(
+            weekly_spend_limit_micros=weekly_micros
+        )
+        consented_strategy = str(expected_snapshot_strategy or "").strip()
         if observed_limit == weekly_micros:
             return YandexManagedActivationResult(
                 campaign_id=campaign_id,
@@ -313,8 +307,10 @@ class YandexDirectAdActions(YandexDirectProvider):
                 weekly_spend_limit_micros=weekly_micros,
                 reconciled_without_mutation=True,
             )
-        if observed_limit is not None:
+        if current_strategy != consented_strategy:
             raise YandexDirectError("managed_campaign_budget_drift")
+        if target_strategy == consented_strategy:
+            raise YandexDirectError("managed_campaign_budget_transition_invalid")
 
         result = self._call_at_root(
             root=self.MANAGED_API_ROOT,
