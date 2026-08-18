@@ -54,9 +54,18 @@ def _economics(*, start: datetime, end: datetime, today: bool = False) -> UnitEc
 
 
 class GrowthCockpitTests(unittest.TestCase):
-    def _build(self, *, period_days: int = 7, handoffs=None, sales=None, advertising_loader=None):
+    def _build(
+        self,
+        *,
+        period_days: int = 7,
+        handoffs=None,
+        handoff_count: int | None = None,
+        sales=None,
+        advertising_loader=None,
+    ):
         handoffs = [] if handoffs is None else handoffs
         sales = [] if sales is None else sales
+        exact_handoff_count = len(handoffs) if handoff_count is None else int(handoff_count)
         economics_calls: list[tuple[datetime, datetime]] = []
 
         def fake_economics(*, actor, occurred_from, occurred_to, verified_spend=None):
@@ -94,12 +103,16 @@ class GrowthCockpitTests(unittest.TestCase):
                 side_effect=fake_economics,
             ),
             patch(
+                "clientplatform.application.growth_cockpit.count_sales_handoff_work",
+                side_effect=lambda *, actor: exact_handoff_count,
+            ),
+            patch(
                 "clientplatform.application.growth_cockpit.list_sales_handoff_work",
-                side_effect=lambda *, actor, limit: handoffs,
+                side_effect=lambda *, actor, limit: handoffs[:limit],
             ),
             patch(
                 "clientplatform.application.growth_cockpit.list_sales_work",
-                side_effect=lambda *, actor, limit: sales,
+                side_effect=lambda *, actor, limit: sales[:limit],
             ),
         ):
             result = get_growth_cockpit(
@@ -137,6 +150,16 @@ class GrowthCockpitTests(unittest.TestCase):
         self.assertIn("ответ", result.next_action.title.lower())
         self.assertTrue(any("требуют ответа" in item for item in result.attention))
 
+    def test_reply_metric_uses_exact_count_not_detail_limit(self) -> None:
+        result, _ = self._build(
+            handoffs=[{"lead_id": "lead-1", "customer_name": "Анна", "status": "open"}],
+            handoff_count=87,
+        )
+
+        self.assertEqual(result.needs_reply, 87)
+        self.assertTrue(any("87 клиент" in item for item in result.attention))
+        self.assertEqual(result.next_action.action_key, "sales_handoff")
+
     def test_existing_sales_plan_is_reused_instead_of_inventing_second_brain(self) -> None:
         result, _ = self._build(
             sales=[
@@ -162,21 +185,22 @@ class GrowthCockpitTests(unittest.TestCase):
         self.assertIn("advertising_unavailable", result.limitations)
         self.assertEqual({item.key: item.value for item in result.period_metrics}["leads"], 18)
 
-    def test_summary_shows_provider_cost_without_inventing_its_currency(self) -> None:
+    def test_summary_hides_provider_money_without_verified_iso_currency(self) -> None:
         result, _ = self._build()
         text = telegram_growth_summary(result)
 
         self.assertIn("Что происходит с бизнесом", text)
         self.assertIn("Новые лиды: 3", text)
         self.assertIn("Подтверждённая выручка: 48 000.00 RUB", text)
-        self.assertIn("расход 9.00 в валюте рекламного кабинета", text)
+        self.assertIn("стоимость скрыта до подтверждения валюты", text)
         self.assertIn("Часть оплат пока нельзя надёжно связать", text)
+        self.assertIn("advertising_currency_unverified", result.limitations)
         self.assertNotIn("CampaignId", text)
         self.assertNotIn("OAuth", text)
         self.assertNotIn("cost_micros", text)
-        self.assertNotIn("9.00 RUB", text)
+        self.assertNotIn("9.00", text)
 
-    def test_full_payload_keeps_source_meaning_and_unverified_ad_currency_explicit(self) -> None:
+    def test_full_payload_keeps_unverified_ad_money_unavailable(self) -> None:
         result, _ = self._build(period_days=30)
         payload = growth_cockpit_payload(result)
 
@@ -186,7 +210,8 @@ class GrowthCockpitTests(unittest.TestCase):
             self.assertTrue(metric["source"])
             self.assertTrue(metric["meaning"])
         self.assertEqual(payload["advertising"]["source"], "verified_yandex_direct_report")
-        self.assertIsNone(payload["advertising"]["cost_currency"])
+        self.assertIsNone(payload["advertising"]["cost"])
+        self.assertNotIn("cost_micros", payload["advertising"])
         self.assertIn("meaning", payload["advertising"])
 
     def test_actionable_alerts_link_to_existing_canonical_workflows(self) -> None:
@@ -212,6 +237,7 @@ class GrowthCockpitTests(unittest.TestCase):
         self.assertTrue(any(str(value).startswith("cps:sh:") for value in handoff_callbacks))
         self.assertTrue(any(str(value).startswith("cps:sw:") for value in plan_callbacks))
         self.assertTrue(any(str(value).startswith("cpy:a:") for value in attribution_callbacks))
+        self.assertTrue(any(str(value).endswith(":7") for value in attribution_callbacks if str(value).startswith("cpg:attention:")))
 
 
 if __name__ == "__main__":
