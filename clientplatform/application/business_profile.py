@@ -23,12 +23,13 @@ def save_business_profile_details(
     *,
     actor: TenantContext,
     details: BusinessProfileDetails,
+    reset_confirmation: bool = True,
 ) -> StoredBusinessProfileDetails:
     with get_db() as conn:
         return BusinessProfileDetailsRepository(conn).save(
             actor=actor,
             details=details,
-            reset_confirmation=True,
+            reset_confirmation=reset_confirmation,
         )
 
 
