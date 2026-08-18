@@ -534,7 +534,7 @@ managed campaign exists SERVING_OFF
 
 ---
 
-## U-006 — `NEXT` — Growth Cockpit: «что сегодня происходит с бизнесом»
+## U-006 — `DONE` — Growth Cockpit: «что сегодня происходит с бизнесом»
 
 ### Цель
 
@@ -572,9 +572,16 @@ managed campaign exists SERVING_OFF
 
 Владелец за один экран понимает: что получил, сколько это стоило, где деньги/лиды и что делать дальше.
 
+### Evidence
+
+- PR #196 (`U-006: add canonical Growth Cockpit`) merged в `main` как `65472747f9b0ed6f2941b21309a16f4f6c426c5d`.
+- Все 15 обязательных PR workflows на точном head `dc83b988b33b933d3a248d2b16ab0cc71ebe8217` завершились `success`, включая Canon, CI, pre-deploy, production isolation, scenario matrix и concurrency contours.
+- Coverage-ratchets сохранены без снижения baseline: combined `74.21% / 74.21%`, branch `65.28% / 65.28%`; full coverage run: `3616 passed, 7 skipped`.
+- Acceptance закреплён canonical Growth Cockpit domain/dashboard/handler tests, dependency-light Canon, owner navigation contracts и существующими sales/attribution command routes без второго business brain.
+
 ---
 
-## U-007 — `QUEUED` — Zero-to-First-Outcome Onboarding
+## U-007 — `NEXT` — Zero-to-First-Outcome Onboarding
 
 ### Цель
 
@@ -1451,8 +1458,8 @@ Duplicate tap, retry, worker restart или uncertain provider response не д�
 | U-003 Revenue Attribution & Unit Economics | DONE | PR #174; merge SHA `148bc3ba1732cbe530973d20284308cc16b6df70`; all 15 PR workflows green including Canon, CI quality/coverage, static security, booking/ad-spend/partner concurrency, production isolation, user scenario matrix and pre-deploy |
 | U-004 Yandex Campaign-level Read Analytics | DONE | PR #177; merge SHA `c5ad2187402593152688cc90a60f559830f148f6`; all 15 PR workflows green including Canon, CI quality/coverage, static security, booking/ad-spend/partner concurrency, production isolation, user scenario matrix and pre-deploy; coverage baseline 74.16% combined / 65.22% branch |
 | U-005 Managed Yandex Activation Policy | DONE | PR #194; merge SHA `d5a518167515df1cab5086f24aaf2eddcff1f1ff`; all 15 PR workflows green including Canon, CI quality/coverage, static security, ad-spend/booking/partner concurrency, production isolation, user scenario matrix and pre-deploy |
-| U-006 Growth Cockpit | NEXT | — |
-| U-007 Zero-to-First-Outcome Onboarding | QUEUED | — |
+| U-006 Growth Cockpit | DONE | PR #196; merge SHA `65472747f9b0ed6f2941b21309a16f4f6c426c5d`; all 15 required PR workflows success on `dc83b988b33b933d3a248d2b16ab0cc71ebe8217`; coverage ratchets preserved at 74.21% combined / 65.28% branch |
+| U-007 Zero-to-First-Outcome Onboarding | NEXT | — |
 | U-008 CRM Lead Inbox | QUEUED | — |
 | U-009 Follow-up Employee | QUEUED | — |
 | U-010 Retention & Reactivation Engine | QUEUED | — |
