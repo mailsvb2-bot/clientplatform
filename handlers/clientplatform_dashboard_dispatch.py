@@ -12,20 +12,16 @@ from clientplatform.domain.activity import BusinessProfileStatus
 
 
 def install_dynamic_dashboard_dispatch(control_module: ModuleType) -> None:
-    """Preserve profile onboarding before rendering the current dashboard.
+    """Route DRAFT onboarding explicitly while preserving READY safety behavior.
 
     The interaction-safety layer owns command-like-name repair and the optimized
-    READY dashboard. U-007 adds a richer DRAFT lifecycle, so this composition
-    boundary keeps the original onboarding resume callable for a valid DRAFT
-    while delegating READY and malformed-name handling to the safety wrapper.
+    READY dashboard. U-007 owns the DRAFT confirmation/first-result lifecycle.
+    The two boundaries are composed by state, not by relying on import/install
+    order or a previously captured resume callable.
     """
 
     if bool(getattr(control_module, "_dynamic_dashboard_dispatch_installed", False)):
         return
-
-    # Keep the onboarding implementation before interaction safety replaces the
-    # public resume callable with its optimized dashboard wrapper.
-    onboarding_resume = control_module._resume_business
 
     # Interaction safety is installed before optional lesson/media and managed
     # bot lifecycle routers. Compose their callback namespaces into the same
@@ -80,12 +76,23 @@ def install_dynamic_dashboard_dispatch(control_module: ModuleType) -> None:
                     state=state,
                 )
                 return
-            await onboarding_resume(
-                message,
-                user_id=user_id,
-                business_id=business_id,
-                state=state,
+
+            await state.clear()
+            structured = await asyncio.to_thread(
+                control_module.get_business_profile_details,
+                actor=actor,
             )
+            if structured.confirmed:
+                await control_module._send_onboarding_first_result(
+                    message,
+                    business_id=business_id,
+                )
+            else:
+                await control_module._send_onboarding_review(
+                    message,
+                    actor=actor,
+                    business_id=business_id,
+                )
             return
 
         await guarded_resume(
