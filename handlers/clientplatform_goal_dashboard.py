@@ -10,8 +10,16 @@ from clientplatform.domain.bookings import BookingSlotStatus
 
 from . import clientplatform_control as control
 from . import clientplatform_goal_first_safety as goal_contract
+from . import clientplatform_growth as growth
 from . import clientplatform_one_click_experience as one_click
 from . import clientplatform_owner_journey as owner
+
+# This module is imported by the single canonical handler composition path in
+# handlers.__init__. Compose the Growth Cockpit there as a child of the existing
+# simple owner experience instead of registering a second top-level bot brain.
+if not bool(getattr(one_click.simple, "_growth_cockpit_composed", False)):
+    one_click.simple.router.include_router(growth.router)
+    one_click.simple._growth_cockpit_composed = True
 
 
 def _goal_keyboard(business_id: str):
