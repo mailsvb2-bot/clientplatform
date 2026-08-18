@@ -29,6 +29,7 @@ from clientplatform.integrations.yandex_direct import YandexDirectError, YandexT
 from clientplatform.integrations.yandex_direct_budget import (
     YandexCampaignBudgetReadout,
     YandexDailySpendReadout,
+    managed_weekly_spend_limit_micros,
     reconcile_yandex_budget_snapshot,
 )
 from services.db import get_db_ro
@@ -36,6 +37,7 @@ from services.db import get_db_ro
 
 _DEFAULT_MAX_SPEND_MINOR = 10_000
 _DEFAULT_TTL_SECONDS = 240
+_MICROS_PER_MINOR = 10_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,19 +72,71 @@ def _configured_minor(name: str, default: int) -> int:
     return value
 
 
-def _caps(available_budget_minor: int) -> tuple[int, int]:
+def _minimum_weekly_minor(minimum_weekly_spend_micros: int) -> int:
+    if isinstance(minimum_weekly_spend_micros, (bool, float)):
+        raise AdSpendInvariantViolation("Yandex minimum weekly budget is invalid")
+    try:
+        micros = int(minimum_weekly_spend_micros)
+    except (TypeError, ValueError) as exc:
+        raise AdSpendInvariantViolation("Yandex minimum weekly budget is invalid") from exc
+    if micros <= 0:
+        raise AdSpendInvariantViolation("Yandex minimum weekly budget is invalid")
+    minor, remainder = divmod(micros, _MICROS_PER_MINOR)
+    if remainder or minor <= 0:
+        raise AdSpendInvariantViolation(
+            "Yandex minimum weekly budget cannot be represented in minor currency units"
+        )
+    return minor
+
+
+def _caps(
+    available_budget_minor: int,
+    *,
+    minimum_weekly_spend_micros: int,
+) -> tuple[int, int]:
+    minimum_weekly_minor = _minimum_weekly_minor(minimum_weekly_spend_micros)
+    hard_raw = str(os.getenv("CLIENTPLATFORM_GOAL_MAX_SPEND_MINOR") or "").strip()
     configured_hard = _configured_minor(
         "CLIENTPLATFORM_GOAL_MAX_SPEND_MINOR",
         _DEFAULT_MAX_SPEND_MINOR,
     )
+    if hard_raw and configured_hard < minimum_weekly_minor:
+        raise AdSpendInvariantViolation(
+            "configured goal spend maximum is below Yandex minimum weekly budget"
+        )
+    # When no operator maximum is configured, the provider's published minimum
+    # is a floor for the recommendation shown to the owner, not a hidden spend.
+    # The owner still sees and explicitly approves this exact cap.
+    recommended_hard = (
+        configured_hard
+        if hard_raw
+        else max(configured_hard, minimum_weekly_minor)
+    )
+    hard_cap = min(recommended_hard, int(available_budget_minor))
+    if hard_cap < minimum_weekly_minor:
+        raise AdSpendInvariantViolation(
+            "available Yandex budget is below the minimum weekly budget"
+        )
+
+    daily_raw = str(os.getenv("CLIENTPLATFORM_GOAL_DAILY_SPEND_MINOR") or "").strip()
     configured_daily = _configured_minor(
         "CLIENTPLATFORM_GOAL_DAILY_SPEND_MINOR",
-        configured_hard,
+        hard_cap,
     )
-    hard_cap = min(configured_hard, int(available_budget_minor))
     daily_cap = min(configured_daily, hard_cap)
-    if hard_cap <= 0 or daily_cap <= 0:
+    if daily_cap <= 0:
         raise AdSpendInvariantViolation("goal-first spend cap is unavailable")
+    target_weekly_micros = managed_weekly_spend_limit_micros(
+        hard_cap_minor=hard_cap,
+        daily_cap_minor=daily_cap,
+    )
+    if target_weekly_micros < minimum_weekly_spend_micros:
+        reason = (
+            "configured goal daily spend maximum is below Yandex minimum weekly budget"
+            if daily_raw
+            else "goal-first spend cap is below Yandex minimum weekly budget"
+        )
+        raise AdSpendInvariantViolation(reason)
     return hard_cap, daily_cap
 
 
@@ -91,7 +145,7 @@ def _read_goal_evidence(
     actor: TenantContext,
     publication_job_id: str,
     now: datetime,
-) -> tuple[YandexCampaignBudgetReadout, YandexDailySpendReadout, str]:
+) -> tuple[YandexCampaignBudgetReadout, YandexDailySpendReadout, str, int]:
     selected_vault = spend._vault()
     selected_provider = spend._provider()
     report_date = provider_report_date(now=now)
@@ -115,15 +169,24 @@ def _read_goal_evidence(
             "advertising account changed during goal preparation"
         )
 
-    bundle = YandexTokenBundle.from_json(token_json)
-    try:
+    def read(active_bundle: YandexTokenBundle):
         campaign, daily_spend = spend._read_provider_evidence(
             provider=selected_provider,
             target=target,
-            bundle=bundle,
+            bundle=active_bundle,
             report_date=report_date,
             captured_at=now,
         )
+        minimum_weekly = selected_provider.minimum_weekly_spend_limit_micros(
+            access_token=active_bundle.access_token,
+            currency=campaign.currency,
+            client_login=target.external_login,
+        )
+        return campaign, daily_spend, minimum_weekly
+
+    bundle = YandexTokenBundle.from_json(token_json)
+    try:
+        campaign, daily_spend, minimum_weekly = read(bundle)
     except YandexDirectError as exc:
         if exc.code not in spend._AUTH_ERRORS or not bundle.refresh_token:
             raise
@@ -134,14 +197,8 @@ def _read_goal_evidence(
             bundle=bundle,
             now=now,
         )
-        campaign, daily_spend = spend._read_provider_evidence(
-            provider=selected_provider,
-            target=target,
-            bundle=refreshed,
-            report_date=report_date,
-            captured_at=now,
-        )
-    return campaign, daily_spend, report_date
+        campaign, daily_spend, minimum_weekly = read(refreshed)
+    return campaign, daily_spend, report_date, minimum_weekly
 
 
 def preview_goal_spend(
@@ -198,10 +255,15 @@ def preview_goal_spend(
             captured_at=current,
             client_login=connection.external_login,
         )
-        return campaign, daily
+        minimum_weekly = selected_provider.minimum_weekly_spend_limit_micros(
+            access_token=active_bundle.access_token,
+            currency=campaign.currency,
+            client_login=connection.external_login,
+        )
+        return campaign, daily, minimum_weekly
 
     try:
-        campaign, daily_spend = read(bundle)
+        campaign, daily_spend, minimum_weekly = read(bundle)
     except YandexDirectError as exc:
         if exc.code not in spend._AUTH_ERRORS or not bundle.refresh_token:
             raise
@@ -212,7 +274,7 @@ def preview_goal_spend(
             bundle=bundle,
             now=current,
         )
-        campaign, daily_spend = read(bundle)
+        campaign, daily_spend, minimum_weekly = read(bundle)
 
     snapshot = reconcile_yandex_budget_snapshot(
         connection_id=connection.id,
@@ -228,7 +290,10 @@ def preview_goal_spend(
         raise AdSpendInvariantViolation(
             "provider evidence is not eligible for goal-first advertising spend"
         )
-    hard_cap, daily_cap = _caps(snapshot.available_budget_minor)
+    hard_cap, daily_cap = _caps(
+        snapshot.available_budget_minor,
+        minimum_weekly_spend_micros=minimum_weekly,
+    )
     return GoalSpendPreview(
         connection_id=connection.id,
         external_campaign_id=snapshot.external_campaign_id,
@@ -251,7 +316,7 @@ def prepare_goal_spend_consent(
     current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).replace(
         microsecond=0
     )
-    campaign, daily_spend, report_date = _read_goal_evidence(
+    campaign, daily_spend, report_date, minimum_weekly = _read_goal_evidence(
         actor=actor,
         publication_job_id=publication_job_id,
         now=current,
@@ -277,7 +342,10 @@ def prepare_goal_spend_consent(
             "provider evidence is not eligible for goal-first advertising spend"
         )
 
-    hard_cap, daily_cap = _caps(snapshot.available_budget_minor)
+    hard_cap, daily_cap = _caps(
+        snapshot.available_budget_minor,
+        minimum_weekly_spend_micros=minimum_weekly,
+    )
     prepared = spend.prepare_ad_spend_authorization(
         actor=actor,
         publication_job_id=publication_job_id,
