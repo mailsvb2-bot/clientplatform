@@ -133,7 +133,25 @@ def process_one_ad_spend_operation(
                     "fresh server-side spend guard rejected launch"
                 )
         bundle = YandexTokenBundle.from_json(token_json)
+        activation = None
         if operation.operation_type == AdSpendOperationType.LAUNCH:
+            activation = selected_provider.configure_managed_launch_budget(
+                access_token=bundle.access_token,
+                external_campaign_id=context.external_campaign_id,
+                hard_cap_minor=context.hard_cap_minor,
+                daily_cap_minor=context.daily_cap_minor,
+                currency=context.currency,
+                client_login=context.external_login,
+            )
+            # The budget write itself is spend-capable. Re-check the canonical
+            # authorization after the fresh provider readback and before
+            # submitting the ad for moderation.
+            second_now = datetime.now(timezone.utc)
+            if pre_mutation_guard is None or not pre_mutation_guard(context, second_now):
+                raise AdSpendInvariantViolation(
+                    "fresh server-side spend guard rejected launch after budget reconciliation"
+                )
+            now = second_now
             result = selected_provider.moderate_ad(
                 access_token=bundle.access_token,
                 external_ad_id=context.external_ad_id,
@@ -158,6 +176,16 @@ def process_one_ad_spend_operation(
             "provider_version": result.after.provider_version,
             "reconciled_without_mutation": result.reconciled_without_mutation,
         }
+        if activation is not None:
+            provider_evidence.update(
+                {
+                    "campaign_type": activation.campaign_type,
+                    "weekly_spend_limit_micros": activation.weekly_spend_limit_micros,
+                    "budget_reconciled_without_mutation": (
+                        activation.reconciled_without_mutation
+                    ),
+                }
+            )
         with get_db() as conn:
             return AdSpendOperationRepository(
                 conn,
