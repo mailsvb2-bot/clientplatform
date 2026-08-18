@@ -20,7 +20,7 @@ _NOW = datetime(2026, 8, 18, 12, 0, tzinfo=timezone.utc)
 _ACTOR = TenantContext(
     user_id=7001,
     business_id="11111111-1111-4111-8111-111111111111",
-    member_id="22222222-2222-4222-8222-222222222222",
+    membership_id="22222222-2222-4222-8222-222222222222",
     role="owner",
 )
 
