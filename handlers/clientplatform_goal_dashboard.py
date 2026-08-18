@@ -10,8 +10,16 @@ from clientplatform.domain.bookings import BookingSlotStatus
 
 from . import clientplatform_control as control
 from . import clientplatform_goal_first_safety as goal_contract
+from . import clientplatform_growth_cockpit as growth_cockpit
 from . import clientplatform_one_click_experience as one_click
 from . import clientplatform_owner_journey as owner
+
+# Goal dashboard is the canonical owner-home composition point. Keep Growth
+# Cockpit on the same already-included router instead of introducing a second
+# owner navigation tree.
+if not bool(getattr(one_click, "_growth_cockpit_composed", False)):
+    one_click.router.include_router(growth_cockpit.router)
+    one_click._growth_cockpit_composed = True
 
 
 def _goal_keyboard(business_id: str):
@@ -26,6 +34,7 @@ def _goal_keyboard(business_id: str):
     action = goal_contract.ACQUIRE_CLIENTS
     return control._keyboard(
         [
+            [("📈 Бизнес сегодня", f"cpg:v:{token}:7")],
             [(action.label, action.callback(token))],
             [("💬 Обращения и продажи", f"cps:s:{token}")],
             [
@@ -87,6 +96,8 @@ async def send_goal_dashboard(
         f"{nearest_line}\n\n"
         f"{readiness}\n\n"
         "Что нужно сделать сейчас:\n"
+        "• «📈 Бизнес сегодня» — увидеть лиды, записи, оплаты, рекламу и следующий шаг "
+        "в одном Growth Cockpit.\n"
         f"• «{action.label}» — подготовить продвижение и привести новых людей.\n"
         "• «💬 Обращения и продажи» — разобрать тех, кто уже написал: увидеть следующий "
         "шаг, подключить ИИ-помощника и подготовить ответ.\n\n"
