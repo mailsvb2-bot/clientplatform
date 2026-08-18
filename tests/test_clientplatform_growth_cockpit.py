@@ -4,7 +4,7 @@ import importlib.util
 import unittest
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from clientplatform.application.growth_cockpit import get_growth_cockpit
 from clientplatform.domain.attribution import AcquisitionSource
@@ -253,6 +253,160 @@ class GrowthCockpitTests(unittest.TestCase):
                 if str(value).startswith("cpg:attention:")
             )
         )
+
+
+@unittest.skipUnless(_AIOGRAM_AVAILABLE, "aiogram is not installed")
+class GrowthCockpitHandlerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_today_requires_user_and_handles_empty_business_list(self) -> None:
+        from handlers import clientplatform_growth as growth
+
+        missing_user = SimpleNamespace(from_user=None, answer=AsyncMock())
+        with self.assertRaisesRegex(ValueError, "Telegram user"):
+            await growth.growth_today(missing_user)
+
+        message = SimpleNamespace(
+            from_user=SimpleNamespace(id=7001),
+            answer=AsyncMock(),
+        )
+        with patch.object(growth.asyncio, "to_thread", new=AsyncMock(return_value=[])):
+            await growth.growth_today(message)
+
+        message.answer.assert_awaited_once_with(
+            "Сначала создайте бизнес в ClientPlatform через /start."
+        )
+
+    async def test_today_single_business_reuses_canonical_cockpit_sender(self) -> None:
+        from handlers import clientplatform_growth as growth
+
+        access = SimpleNamespace(
+            business=SimpleNamespace(id=_ACTOR.business_id, name="Бизнес один")
+        )
+        message = SimpleNamespace(
+            from_user=SimpleNamespace(id=7001),
+            answer=AsyncMock(),
+        )
+        sender = AsyncMock()
+        with (
+            patch.object(growth.asyncio, "to_thread", new=AsyncMock(return_value=[access])),
+            patch.object(growth, "_send_cockpit", new=sender),
+        ):
+            await growth.growth_today(message)
+
+        sender.assert_awaited_once_with(
+            message,
+            user_id=7001,
+            business_id=_ACTOR.business_id,
+            period_days=7,
+        )
+        message.answer.assert_not_awaited()
+
+    async def test_today_multiple_businesses_offers_tenant_scoped_choice(self) -> None:
+        from handlers import clientplatform_growth as growth
+
+        other_business_id = "33333333-3333-4333-8333-333333333333"
+        accesses = [
+            SimpleNamespace(
+                business=SimpleNamespace(id=_ACTOR.business_id, name="Первый бизнес")
+            ),
+            SimpleNamespace(
+                business=SimpleNamespace(id=other_business_id, name="Второй бизнес")
+            ),
+        ]
+        message = SimpleNamespace(
+            from_user=SimpleNamespace(id=7001),
+            answer=AsyncMock(),
+        )
+        with patch.object(growth.asyncio, "to_thread", new=AsyncMock(return_value=accesses)):
+            await growth.growth_today(message)
+
+        text = message.answer.await_args.args[0]
+        markup = message.answer.await_args.kwargs["reply_markup"]
+        self.assertIn("Для какого бизнеса", text)
+        labels = [button.text for row in markup.inline_keyboard for button in row]
+        callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
+        self.assertEqual(labels, ["Первый бизнес", "Второй бизнес"])
+        self.assertTrue(all(str(value).startswith("cpg:business:") for value in callbacks))
+
+    async def test_business_and_period_callbacks_keep_existing_sender_contract(self) -> None:
+        from handlers import clientplatform_growth as growth
+
+        token = growth.uuid_token(_ACTOR.business_id)
+        message = SimpleNamespace(answer=AsyncMock())
+        sender = AsyncMock()
+        chooser = SimpleNamespace(
+            data=f"cpg:business:{token}",
+            from_user=SimpleNamespace(id=7001),
+            answer=AsyncMock(),
+        )
+        changer = SimpleNamespace(
+            data=f"cpg:period:{token}:30",
+            from_user=SimpleNamespace(id=7001),
+            answer=AsyncMock(),
+        )
+        with (
+            patch.object(growth, "_message", return_value=message),
+            patch.object(growth, "_send_cockpit", new=sender),
+        ):
+            await growth.growth_choose_business(chooser)
+            await growth.growth_change_period(changer)
+
+        self.assertEqual(sender.await_count, 2)
+        self.assertEqual(sender.await_args_list[0].kwargs["business_id"], _ACTOR.business_id)
+        self.assertEqual(sender.await_args_list[0].kwargs["period_days"], 7)
+        self.assertEqual(sender.await_args_list[1].kwargs["business_id"], _ACTOR.business_id)
+        self.assertEqual(sender.await_args_list[1].kwargs["period_days"], 30)
+        chooser.answer.assert_awaited_once()
+        changer.answer.assert_awaited_once()
+
+    async def test_period_callback_rejects_malformed_and_unsupported_values(self) -> None:
+        from handlers import clientplatform_growth as growth
+
+        for raw_period, expected in (("bad", "period is invalid"), ("14", "7 or 30")):
+            with self.subTest(raw_period=raw_period):
+                callback = SimpleNamespace(
+                    data=f"cpg:period:token:{raw_period}",
+                    from_user=SimpleNamespace(id=7001),
+                    answer=AsyncMock(),
+                )
+                with self.assertRaisesRegex(ValueError, expected):
+                    await growth.growth_change_period(callback)
+                callback.answer.assert_not_awaited()
+
+    async def test_attention_explains_empty_signal_set_and_keeps_navigation(self) -> None:
+        from handlers import clientplatform_growth as growth
+
+        token = growth.uuid_token(_ACTOR.business_id)
+        snapshot = SimpleNamespace(
+            business_id=_ACTOR.business_id,
+            period_days=7,
+            attention=(),
+            next_action=SimpleNamespace(
+                title="Ничего срочного",
+                reason="Нет обязательного действия.",
+                action_key="none",
+            ),
+        )
+        callback = SimpleNamespace(
+            data=f"cpg:attention:{token}:7",
+            from_user=SimpleNamespace(id=7001),
+            answer=AsyncMock(),
+        )
+        message = SimpleNamespace(answer=AsyncMock())
+        with (
+            patch.object(growth, "_message", return_value=message),
+            patch.object(growth, "_actor", new=AsyncMock(return_value=_ACTOR)),
+            patch.object(growth.asyncio, "to_thread", new=AsyncMock(return_value=snapshot)),
+        ):
+            await growth.growth_attention(callback)
+
+        callback.answer.assert_awaited_once()
+        text = message.answer.await_args.args[0]
+        markup = message.answer.await_args.kwargs["reply_markup"]
+        self.assertIn("Сейчас нет сигналов", text)
+        self.assertIn("Ничего срочного", text)
+        callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
+        self.assertFalse(any(str(value).startswith("cpg:attention:") for value in callbacks))
+        self.assertTrue(any(str(value).startswith("cp:clients:") for value in callbacks))
 
 
 if __name__ == "__main__":
