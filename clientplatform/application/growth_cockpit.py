@@ -7,7 +7,11 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from clientplatform.application.activity import get_business_profile
 from clientplatform.application.revenue_attribution import get_business_unit_economics
-from clientplatform.application.sales_ui import list_sales_handoff_work, list_sales_work
+from clientplatform.application.sales_ui import (
+    count_sales_handoff_work,
+    list_sales_handoff_work,
+    list_sales_work,
+)
 from clientplatform.application.yandex_growth_analytics import (
     YandexGrowthSnapshot,
     get_yandex_growth_snapshot,
@@ -172,31 +176,34 @@ def _what_worked(snapshot: UnitEconomicsSnapshot) -> tuple[GrowthSourceResult, .
 def _attention(
     *,
     economics: UnitEconomicsSnapshot,
-    handoffs: list[dict[str, object]],
+    needs_reply: int,
     advertising: YandexGrowthSnapshot | None,
     advertising_error: bool,
 ) -> tuple[str, ...]:
     items: list[str] = []
-    if handoffs:
-        items.append(f"{len(handoffs)} клиент(ов) требуют ответа или решения владельца.")
+    if needs_reply > 0:
+        items.append(f"{needs_reply} клиент(ов) требуют ответа или решения владельца.")
     if not economics.attribution_complete:
         items.append("Часть денежных результатов пока нельзя надёжно связать с источником клиента.")
     if len(economics.revenue_by_currency) > 1:
         items.append("Выручка есть в нескольких валютах; суммы не объединяются.")
     if advertising_error:
         items.append("Данные рекламы сейчас недоступны; бизнес-результаты показаны без них.")
-    elif advertising is not None and advertising.connected_accounts > 0 and advertising.cost_micros is None:
-        items.append("Стоимость рекламы не объединяется: валюта рекламных кабинетов не подтверждена.")
+    elif advertising is not None and advertising.connected_accounts > 0:
+        items.append(
+            "Стоимость рекламы не включается в денежные итоги Growth Cockpit: "
+            "ISO-валюта рекламного подключения пока не подтверждена."
+        )
     return tuple(items)
 
 
 def _next_action(
     *,
-    handoffs: list[dict[str, object]],
+    has_handoff: bool,
     sales_work: list[dict[str, object]],
     economics: UnitEconomicsSnapshot,
 ) -> GrowthAction:
-    if handoffs:
+    if has_handoff:
         return GrowthAction(
             title="Ответить клиентам, которым нужен человек",
             reason="Есть открытые обращения, переданные владельцу или сотруднику.",
@@ -238,8 +245,8 @@ def get_growth_cockpit(
     """Build the owner growth view from existing canonical facts only.
 
     This projection deliberately owns no business facts and makes no provider
-    mutations. Money remains currency-safe; advertising spend is not injected
-    into unit economics until a provider source can prove its currency.
+    mutations. Money remains currency-safe; provider cost never becomes
+    business money until the provider source proves its ISO currency.
     """
 
     if int(period_days) not in _ALLOWED_PERIODS:
@@ -257,7 +264,8 @@ def get_growth_cockpit(
         occurred_from=period_from,
         occurred_to=period_to,
     )
-    handoffs = list_sales_handoff_work(actor=actor, limit=50)
+    needs_reply = count_sales_handoff_work(actor=actor)
+    handoffs = list_sales_handoff_work(actor=actor, limit=1) if needs_reply else []
     sales_work = list_sales_work(actor=actor, limit=50)
 
     advertising: YandexGrowthSnapshot | None = None
@@ -275,7 +283,7 @@ def get_growth_cockpit(
     limitations = list(period.limitations)
     if advertising_error:
         limitations.append("advertising_unavailable")
-    elif advertising is not None and advertising.connected_accounts > 0 and advertising.cost_micros is None:
+    elif advertising is not None and advertising.connected_accounts > 0:
         limitations.append("advertising_currency_unverified")
 
     return GrowthCockpitSnapshot(
@@ -290,17 +298,17 @@ def get_growth_cockpit(
         today_metrics=_metrics(today),
         period_metrics=_metrics(period),
         revenue=_revenue(period),
-        needs_reply=len(handoffs),
+        needs_reply=needs_reply,
         advertising=advertising,
         what_worked=_what_worked(period),
         attention=_attention(
             economics=period,
-            handoffs=handoffs,
+            needs_reply=needs_reply,
             advertising=advertising,
             advertising_error=advertising_error,
         ),
         next_action=_next_action(
-            handoffs=handoffs,
+            has_handoff=bool(handoffs),
             sales_work=sales_work,
             economics=period,
         ),
