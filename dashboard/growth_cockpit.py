@@ -12,7 +12,9 @@ _LIMITATION_LABELS = {
     "roas_revenue_unavailable": "ROAS не рассчитывается без однозначной выручки.",
     "spend_currency_mismatch": "Валюта рекламных расходов и выручки не совпадает.",
     "advertising_unavailable": "Данные рекламы сейчас временно недоступны.",
-    "advertising_currency_unverified": "Стоимость рекламы не суммируется без подтверждённой валюты кабинета.",
+    "advertising_currency_unverified": (
+        "Стоимость рекламы скрыта до подтверждения ISO-валюты рекламного подключения."
+    ),
 }
 
 
@@ -22,17 +24,6 @@ def _minor_money_text(amount_minor: int, currency: str) -> str:
     sign = "-" if amount_minor < 0 else ""
     absolute = abs(int(amount_minor))
     return f"{sign}{absolute // 100:,}.{absolute % 100:02d} {currency}".replace(",", " ")
-
-
-def _provider_cost_text(cost_micros: int | None) -> str:
-    """Render provider cost without assigning an unverified ISO currency."""
-
-    if cost_micros is None:
-        return "расход нельзя безопасно объединить между кабинетами"
-    whole, fraction = divmod(abs(int(cost_micros)), 1_000_000)
-    sign = "-" if int(cost_micros) < 0 else ""
-    amount = f"{sign}{whole:,}.{fraction // 10_000:02d}".replace(",", " ")
-    return f"расход {amount} в валюте рекламного кабинета"
 
 
 def _metric_map(snapshot: GrowthCockpitSnapshot, *, today: bool) -> dict[str, int]:
@@ -58,7 +49,7 @@ def telegram_growth_summary(snapshot: GrowthCockpitSnapshot) -> str:
             f"{snapshot.advertising.leads} лидов · "
             f"{snapshot.advertising.bookings} записей · "
             f"{snapshot.advertising.won} продаж · "
-            f"{_provider_cost_text(snapshot.advertising.cost_micros)}"
+            "стоимость скрыта до подтверждения валюты"
         )
 
     attention = "\n".join(f"• {item}" for item in snapshot.attention) or "• Срочных сигналов нет."
@@ -117,12 +108,11 @@ def growth_cockpit_payload(snapshot: GrowthCockpitSnapshot) -> dict[str, Any]:
             "leads": snapshot.advertising.leads,
             "bookings": snapshot.advertising.bookings,
             "won": snapshot.advertising.won,
-            "cost_micros": snapshot.advertising.cost_micros,
-            "cost_currency": None,
+            "cost": None,
             "source": "verified_yandex_direct_report",
             "meaning": (
                 "Read-only рекламные факты и локально подтверждённые результаты; "
-                "стоимость остаётся в валюте кабинета до подтверждения ISO-валюты подключения."
+                "денежная стоимость не публикуется до подтверждения ISO-валюты подключения."
             ),
         }
     payload["limitations_human"] = [
