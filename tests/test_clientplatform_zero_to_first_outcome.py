@@ -73,6 +73,10 @@ def _structured(*, confirmed: bool):
     )
 
 
+def _business_access(business_id: str):
+    return SimpleNamespace(business=SimpleNamespace(id=business_id, name="Практика"))
+
+
 def _button_callbacks(markup) -> set[str]:
     return {
         str(button.callback_data)
@@ -148,6 +152,11 @@ class ClientPlatformZeroToFirstOutcomeTests(unittest.TestCase):
                 "get_business_profile_details",
                 lambda **_kwargs: _structured(confirmed=False),
             ),
+            patch.object(
+                control,
+                "list_accessible_businesses",
+                lambda **_kwargs: [_business_access(business_id)],
+            ),
         ):
             asyncio.run(
                 control._resume_business(
@@ -181,6 +190,11 @@ class ClientPlatformZeroToFirstOutcomeTests(unittest.TestCase):
                 control,
                 "get_business_profile_details",
                 lambda **_kwargs: _structured(confirmed=True),
+            ),
+            patch.object(
+                control,
+                "list_accessible_businesses",
+                lambda **_kwargs: [_business_access(business_id)],
             ),
         ):
             asyncio.run(
