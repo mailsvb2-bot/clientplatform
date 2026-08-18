@@ -6,10 +6,10 @@ from aiogram import F, Router
 from aiogram.filters import BaseFilter, Command
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
+from clientplatform.application.control_callbacks import token_uuid, uuid_token
 from clientplatform.application.growth_cockpit import get_growth_cockpit
 from clientplatform.application.sales_ui import list_sales_handoff_work, list_sales_work
 from clientplatform.application.tenancy import list_accessible_businesses, resolve_tenant_context
-from clientplatform.application.control_callbacks import token_uuid, uuid_token
 from clientplatform.runtime.control_bot import control_bot_enabled
 from dashboard.growth_cockpit import telegram_growth_summary
 
@@ -56,8 +56,14 @@ def _cockpit_keyboard(*, business_id: str, period_days: int, action_key: str) ->
             ("30 дней" if period_days != 30 else "✓ 30 дней", f"cpg:period:{token}:30"),
         ]
     ]
+    if action_key == "sales_handoff":
+        rows.append([("Подключиться лично", f"cps:sh:{token}")])
+    elif action_key.startswith("sales_plan:"):
+        rows.append([("Открыть следующий шаг", f"cps:sw:{token}")])
+    elif action_key == "attribution_review":
+        rows.append([("Посмотреть результаты", f"cp:results:{token}")])
     if action_key != "none":
-        rows.append([("Что требует моего действия", f"cpg:attention:{token}")])
+        rows.append([("Почему это важно", f"cpg:attention:{token}")])
     rows.append([("Клиенты", f"cp:clients:{token}"), ("Результаты", f"cp:results:{token}")])
     return _keyboard(rows)
 
@@ -175,7 +181,7 @@ async def growth_attention(callback: CallbackQuery) -> None:
     await _message(callback).answer(
         "Что требует решения\n\n" + "\n".join(lines),
         reply_markup=_keyboard(
-            [[("Открыть клиентов", f"cp:clients:{business_token}")]]
+            [[("Открыть обращения и продажи", f"cps:s:{business_token}")]]
         ),
     )
 
