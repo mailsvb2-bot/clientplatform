@@ -17,6 +17,13 @@
         reverse_proxy {$CLIENTPLATFORM_INGRESS_UPSTREAM:127.0.0.1:8181}
     }
 
+    # U-006 Growth Cockpit is authenticated by Telegram initData on the app
+    # ingress.  Keep the public surface explicit instead of exposing 8181.
+    @growth_cockpit path /dashboard/growth /api/clientplatform/growth-cockpit
+    handle @growth_cockpit {
+        reverse_proxy {$CLIENTPLATFORM_INGRESS_UPSTREAM:127.0.0.1:8181}
+    }
+
     @media path /clientplatform/*
     handle @media {
         reverse_proxy {$CLIENTPLATFORM_MEDIA_UPSTREAM:127.0.0.1:8191}
