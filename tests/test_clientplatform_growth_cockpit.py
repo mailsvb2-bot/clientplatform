@@ -14,6 +14,7 @@ from clientplatform.domain.revenue_attribution import (
 )
 from clientplatform.domain.tenancy import TenantContext
 from dashboard.growth_cockpit import growth_cockpit_payload, telegram_growth_summary
+from handlers.clientplatform_growth import _cockpit_keyboard
 
 
 _NOW = datetime(2026, 8, 18, 12, 0, tzinfo=timezone.utc)
@@ -161,19 +162,21 @@ class GrowthCockpitTests(unittest.TestCase):
         self.assertIn("advertising_unavailable", result.limitations)
         self.assertEqual({item.key: item.value for item in result.period_metrics}["leads"], 18)
 
-    def test_summary_hides_provider_jargon_and_exposes_attribution_limit(self) -> None:
+    def test_summary_shows_provider_cost_without_inventing_its_currency(self) -> None:
         result, _ = self._build()
         text = telegram_growth_summary(result)
 
         self.assertIn("Что происходит с бизнесом", text)
         self.assertIn("Новые лиды: 3", text)
         self.assertIn("Подтверждённая выручка: 48 000.00 RUB", text)
+        self.assertIn("расход 9.00 в валюте рекламного кабинета", text)
         self.assertIn("Часть оплат пока нельзя надёжно связать", text)
         self.assertNotIn("CampaignId", text)
         self.assertNotIn("OAuth", text)
         self.assertNotIn("cost_micros", text)
+        self.assertNotIn("9.00 RUB", text)
 
-    def test_full_payload_keeps_source_and_meaning_for_every_business_metric(self) -> None:
+    def test_full_payload_keeps_source_meaning_and_unverified_ad_currency_explicit(self) -> None:
         result, _ = self._build(period_days=30)
         payload = growth_cockpit_payload(result)
 
@@ -183,7 +186,32 @@ class GrowthCockpitTests(unittest.TestCase):
             self.assertTrue(metric["source"])
             self.assertTrue(metric["meaning"])
         self.assertEqual(payload["advertising"]["source"], "verified_yandex_direct_report")
+        self.assertIsNone(payload["advertising"]["cost_currency"])
         self.assertIn("meaning", payload["advertising"])
+
+    def test_actionable_alerts_link_to_existing_canonical_workflows(self) -> None:
+        handoff = _cockpit_keyboard(
+            business_id=_ACTOR.business_id,
+            period_days=7,
+            action_key="sales_handoff",
+        )
+        plan = _cockpit_keyboard(
+            business_id=_ACTOR.business_id,
+            period_days=30,
+            action_key="sales_plan:plan-1",
+        )
+        attribution = _cockpit_keyboard(
+            business_id=_ACTOR.business_id,
+            period_days=7,
+            action_key="attribution_review",
+        )
+
+        handoff_callbacks = [button.callback_data for row in handoff.inline_keyboard for button in row]
+        plan_callbacks = [button.callback_data for row in plan.inline_keyboard for button in row]
+        attribution_callbacks = [button.callback_data for row in attribution.inline_keyboard for button in row]
+        self.assertTrue(any(str(value).startswith("cps:sh:") for value in handoff_callbacks))
+        self.assertTrue(any(str(value).startswith("cps:sw:") for value in plan_callbacks))
+        self.assertTrue(any(str(value).startswith("cpy:a:") for value in attribution_callbacks))
 
 
 if __name__ == "__main__":
