@@ -173,17 +173,27 @@ class YandexCampaignBudgetReadout:
 
     @property
     def launch_eligible(self) -> bool:
-        return (
-            self.campaign_type == "TEXT_CAMPAIGN"
-            and self.state == "ON"
-            and self.status == "ACCEPTED"
-            and self.status_payment == "ALLOWED"
+        funded = (
+            self.status_payment == "ALLOWED"
             and self.funds_mode == "CAMPAIGN_FUNDS"
             and self.available_budget_micros is not None
             and self.available_budget_micros > 0
             and self.search_strategy != "UNKNOWN"
             and self.network_strategy != "UNKNOWN"
         )
+        legacy_ready = (
+            self.campaign_type == "TEXT_CAMPAIGN"
+            and self.state == "ON"
+            and self.status == "ACCEPTED"
+        )
+        managed_draft_ready = (
+            self.campaign_type == "UNIFIED_CAMPAIGN"
+            and self.state == "OFF"
+            and self.status == "DRAFT"
+            and self.search_strategy == "HIGHEST_POSITION"
+            and self.network_strategy == "SERVING_OFF"
+        )
+        return funded and (legacy_ready or managed_draft_ready)
 
 
 @dataclass(frozen=True, slots=True)
@@ -250,7 +260,7 @@ class ReadOnlyYandexDirectBudgetProvider(ModeratingYandexDirectProvider):
             headers["Client-Login"] = normalized_login
         response = self._json_or_error(
             method="POST",
-            url=f"{self.API_ROOT}/{service}",
+            url=f"{self.MANAGED_API_ROOT}/{service}",
             headers=headers,
             body=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
         )
@@ -287,6 +297,7 @@ class ReadOnlyYandexDirectBudgetProvider(ModeratingYandexDirectProvider):
                         "DailyBudget",
                     ],
                     "TextCampaignFieldNames": ["BiddingStrategy"],
+                    "UnifiedCampaignFieldNames": ["BiddingStrategy"],
                 },
             },
         )
@@ -297,6 +308,7 @@ class ReadOnlyYandexDirectBudgetProvider(ModeratingYandexDirectProvider):
         if normalize_external_campaign_id(item.get("Id")) != campaign_id:
             raise YandexDirectError("campaign_budget_identity_mismatch")
 
+        campaign_type = _token(item.get("Type"), "campaign_type")
         funds = _mapping(item.get("Funds"), "campaign_funds_missing")
         mode = _token(funds.get("Mode"), "campaign_funds_mode")
         available: int | None = None
@@ -334,12 +346,20 @@ class ReadOnlyYandexDirectBudgetProvider(ModeratingYandexDirectProvider):
                 "campaign_daily_budget_micros",
             )
 
-        text_campaign = _mapping(
-            item.get("TextCampaign"),
-            "text_campaign_settings_missing",
-        )
+        if campaign_type == "TEXT_CAMPAIGN":
+            campaign_settings = _mapping(
+                item.get("TextCampaign"),
+                "text_campaign_settings_missing",
+            )
+        elif campaign_type == "UNIFIED_CAMPAIGN":
+            campaign_settings = _mapping(
+                item.get("UnifiedCampaign"),
+                "unified_campaign_settings_missing",
+            )
+        else:
+            raise YandexDirectError("campaign_type_unsupported")
         bidding = _mapping(
-            text_campaign.get("BiddingStrategy"),
+            campaign_settings.get("BiddingStrategy"),
             "campaign_bidding_strategy_missing",
         )
         search = _mapping(
@@ -359,7 +379,7 @@ class ReadOnlyYandexDirectBudgetProvider(ModeratingYandexDirectProvider):
             "Currency": item.get("Currency"),
             "Funds": item.get("Funds"),
             "DailyBudget": item.get("DailyBudget"),
-            "BiddingStrategy": text_campaign.get("BiddingStrategy"),
+            "BiddingStrategy": campaign_settings.get("BiddingStrategy"),
         }
         return YandexCampaignBudgetReadout(
             campaign_id=campaign_id,
@@ -368,7 +388,7 @@ class ReadOnlyYandexDirectBudgetProvider(ModeratingYandexDirectProvider):
             available_budget_micros=available,
             total_spend_micros=total_spend,
             daily_budget_micros=daily_budget,
-            campaign_type=_token(item.get("Type"), "campaign_type"),
+            campaign_type=campaign_type,
             state=_token(item.get("State"), "campaign_state"),
             status=_token(item.get("Status"), "campaign_status"),
             status_payment=_token(
