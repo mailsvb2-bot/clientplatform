@@ -35,6 +35,7 @@ from clientplatform.integrations.yandex_direct import (
 )
 from clientplatform.integrations.yandex_direct_budget import (
     ReadOnlyYandexDirectBudgetProvider,
+    managed_strategy_matches_authorization,
     reconcile_yandex_budget_snapshot,
 )
 from services.db import get_db, get_db_ro
@@ -138,6 +139,7 @@ def _read_provider_evidence(
         access_token=access_token,
         external_campaign_id=authorization.external_campaign_id,
         captured_at=now,
+        client_login=external_login,
     )
     daily_spend = provider.daily_spend_readout(
         access_token=access_token,
@@ -234,6 +236,16 @@ def evaluate_runtime_spend_guard(
     if consent_day != current_day:
         return AdSpendGuardDecision(False, AdSpendStopReason.PROVIDER_INELIGIBLE)
     if provider_snapshot.spent_today_minor < authorization.snapshot.spent_today_minor:
+        return AdSpendGuardDecision(False, AdSpendStopReason.PROVIDER_INELIGIBLE)
+    if not managed_strategy_matches_authorization(
+        consented_strategy=authorization.snapshot.strategy,
+        current_strategy=provider_snapshot.strategy,
+        hard_cap_minor=authorization.hard_cap_minor,
+        daily_cap_minor=authorization.daily_cap_minor,
+        require_applied_limit=(
+            authorization.status == AdSpendAuthorizationStatus.ACTIVE
+        ),
+    ):
         return AdSpendGuardDecision(False, AdSpendStopReason.PROVIDER_INELIGIBLE)
 
     total_spent_minor = (
