@@ -32,6 +32,13 @@ from clientplatform.application.bookings import (
     list_customer_booking_slots,
     list_customer_businesses,
 )
+from clientplatform.application.business_profile import (
+    confirm_business_profile_details,
+    get_business_profile_details,
+    profile_review_text,
+    save_business_profile_details,
+    suggest_business_profile_details,
+)
 from clientplatform.application.customer_activity import (
     record_customer_contact,
     tenant_customer_activity,
@@ -60,6 +67,7 @@ from clientplatform.domain.activity import (
     ACTIVITY_CONNECTORS,
     ActivityError,
     ActivityNotFound,
+    BusinessProfileStatus,
     CapabilityStatus,
 )
 from clientplatform.domain.booking_calendar import (
@@ -209,6 +217,27 @@ def _capability_setup_keyboard(business_id: str, active_keys: set[str]) -> Inlin
     return _keyboard(rows)
 
 
+def _onboarding_review_keyboard(business_id: str) -> InlineKeyboardMarkup:
+    token = _uuid_token(business_id)
+    return _keyboard(
+        [
+            [("✅ Всё верно", f"cp:onboardconfirm:{token}")],
+            [("✏️ Изменить", f"cp:onboardedit:{token}")],
+        ]
+    )
+
+
+def _onboarding_first_result_keyboard(business_id: str) -> InlineKeyboardMarkup:
+    token = _uuid_token(business_id)
+    return _keyboard(
+        [
+            [("📅 Принимать записи", f"cps:firstbook:{token}")],
+            [("📚 Выдавать материалы", f"cps:firstmat:{token}")],
+            [("Другой формат", f"cp:onboardmore:{token}")],
+        ]
+    )
+
+
 def _client_business_keyboard(links: list[object]) -> InlineKeyboardMarkup:
     return _keyboard(
         [
@@ -276,6 +305,26 @@ async def _send_capability_setup(message: Message, *, user_id: int, business_id:
     )
 
 
+async def _send_onboarding_review(message: Message, *, actor, business_id: str) -> None:
+    profile = await asyncio.to_thread(get_business_profile, actor=actor)
+    structured = await asyncio.to_thread(get_business_profile_details, actor=actor)
+    await message.answer(
+        profile_review_text(
+            activity_description=profile.activity_description,
+            details=structured.details,
+        ),
+        reply_markup=_onboarding_review_keyboard(business_id),
+    )
+
+
+async def _send_onboarding_first_result(message: Message, *, business_id: str) -> None:
+    await message.answer(
+        "Что Вы хотите получить первым?\n\n"
+        "Выберите результат — ClientPlatform сам подготовит следующий шаг.",
+        reply_markup=_onboarding_first_result_keyboard(business_id),
+    )
+
+
 async def _send_client_portal(message: Message, *, links: list[object]) -> None:
     if len(links) == 1:
         link = links[0]
@@ -313,7 +362,7 @@ async def _send_dashboard(message: Message, *, user_id: int, business_id: str) -
 async def _resume_business(message: Message, *, user_id: int, business_id: str, state: FSMContext) -> None:
     actor = await _actor(user_id, business_id)
     try:
-        await asyncio.to_thread(get_business_profile, actor=actor)
+        profile = await asyncio.to_thread(get_business_profile, actor=actor)
     except ActivityNotFound:
         await state.set_state(ClientPlatformControlState.activity_description)
         await state.update_data(business_id=business_id, editing_activity=False)
@@ -324,6 +373,13 @@ async def _resume_business(message: Message, *, user_id: int, business_id: str, 
         )
         return
     await state.clear()
+    if profile.status == BusinessProfileStatus.DRAFT:
+        structured = await asyncio.to_thread(get_business_profile_details, actor=actor)
+        if structured.confirmed:
+            await _send_onboarding_first_result(message, business_id=business_id)
+        else:
+            await _send_onboarding_review(message, actor=actor, business_id=business_id)
+        return
     await _send_dashboard(message, user_id=user_id, business_id=business_id)
 
 
@@ -406,33 +462,74 @@ async def receive_activity_description(message: Message, state: FSMContext) -> N
     data = await state.get_data()
     business_id = str(data["business_id"])
     actor = await _actor(_user_id(message), business_id)
-    await asyncio.to_thread(
+    description = str(message.text or "")
+    profile = await asyncio.to_thread(
         save_business_profile,
         actor=actor,
-        activity_description=str(message.text or ""),
+        activity_description=description,
         timezone_name=settings.TIMEZONE,
     )
-    if bool(data.get("editing_activity")):
+    editing_activity = bool(data.get("editing_activity"))
+    details = suggest_business_profile_details(description)
+    await asyncio.to_thread(
+        save_business_profile_details,
+        actor=actor,
+        details=details,
+        reset_confirmation=not editing_activity,
+    )
+    if editing_activity:
         await state.clear()
         await message.answer("Описание деятельности обновлено.")
         await _send_dashboard(message, user_id=_user_id(message), business_id=business_id)
         return
 
-    for connector_key in ("programs", "consultations", "services"):
-        await asyncio.to_thread(
-            enable_business_capability,
-            actor=actor,
-            connector_key=connector_key,
-        )
-    await asyncio.to_thread(complete_business_profile, actor=actor)
     await state.clear()
     await message.answer(
-        "✅ Всё готово.\n\n"
-        "Я создал рабочее пространство, где можно подключать клиентов, "
-        "назначать встречи, выдавать материалы и видеть результат. "
-        "Технические настройки Вам не понадобятся."
+        profile_review_text(
+            activity_description=profile.activity_description,
+            details=details,
+        ),
+        reply_markup=_onboarding_review_keyboard(business_id),
     )
-    await _send_dashboard(message, user_id=_user_id(message), business_id=business_id)
+
+
+@router.callback_query(F.data.startswith("cp:onboardconfirm:"))
+async def confirm_onboarding_profile(callback: CallbackQuery, state: FSMContext) -> None:
+    business_id = _token_uuid(str(callback.data).split(":", 2)[2])
+    actor = await _actor(int(callback.from_user.id), business_id)
+    await asyncio.to_thread(confirm_business_profile_details, actor=actor)
+    await state.clear()
+    await callback.answer("Подтверждено")
+    await _send_onboarding_first_result(
+        _callback_message(callback),
+        business_id=business_id,
+    )
+
+
+@router.callback_query(F.data.startswith("cp:onboardedit:"))
+async def edit_onboarding_profile(callback: CallbackQuery, state: FSMContext) -> None:
+    business_id = _token_uuid(str(callback.data).split(":", 2)[2])
+    await _actor(int(callback.from_user.id), business_id)
+    await state.set_state(ClientPlatformControlState.activity_description)
+    await state.update_data(business_id=business_id, editing_activity=False)
+    await callback.answer()
+    await _callback_message(callback).answer(
+        "Напишите описание заново своими словами. Если важно, добавьте цену, "
+        "город или онлайн-формат, контакт и правила записи."
+    )
+
+
+@router.callback_query(F.data.startswith("cp:onboardmore:"))
+async def onboarding_more(callback: CallbackQuery, state: FSMContext) -> None:
+    business_id = _token_uuid(str(callback.data).split(":", 2)[2])
+    await _actor(int(callback.from_user.id), business_id)
+    await state.clear()
+    await callback.answer()
+    await _send_capability_setup(
+        _callback_message(callback),
+        user_id=int(callback.from_user.id),
+        business_id=business_id,
+    )
 
 
 @router.callback_query(F.data.startswith("cp:business:"))
@@ -507,6 +604,12 @@ async def receive_custom_capability_title(message: Message, state: FSMContext) -
 async def finish_profile(callback: CallbackQuery, state: FSMContext) -> None:
     business_id = _token_uuid(str(callback.data).split(":", 2)[2])
     actor = await _actor(int(callback.from_user.id), business_id)
+    profile = await asyncio.to_thread(get_business_profile, actor=actor)
+    if profile.status == BusinessProfileStatus.DRAFT:
+        structured = await asyncio.to_thread(get_business_profile_details, actor=actor)
+        if not structured.confirmed:
+            await callback.answer("Сначала подтвердите данные о бизнесе.", show_alert=True)
+            return
     try:
         await asyncio.to_thread(complete_business_profile, actor=actor)
     except ActivityError as exc:
