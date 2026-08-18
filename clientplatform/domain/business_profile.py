@@ -150,7 +150,7 @@ def business_profile_details_from_json(raw: object) -> BusinessProfileDetails:
 def _labeled_items(text: str, *labels: str) -> tuple[str, ...]:
     label_pattern = "|".join(re.escape(label) for label in labels)
     match = re.search(
-        rf"(?im)(?:^|[;\n])\s*(?:{label_pattern})\s*:\s*([^;\n]+)",
+        rf"(?im)(?:^|[;.\n])\s*(?:{label_pattern})\s*:\s*([^;\n]+)",
         text,
     )
     if match is None:
