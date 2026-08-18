@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import inspect
 import json
+import os
 import unittest
 from datetime import datetime, timezone
+from unittest.mock import patch
 
+from clientplatform.application import ad_goal_autopilot as goal
 from clientplatform.application.ad_spend_operations import process_one_ad_spend_operation
+from clientplatform.domain.ad_spend import AdSpendInvariantViolation
 from clientplatform.integrations.yandex_direct import YandexDirectError, YandexOAuthConfig
 from clientplatform.integrations.yandex_direct_actions import YandexDirectAdActions
 from clientplatform.integrations.yandex_direct_budget import (
@@ -179,6 +183,110 @@ class ManagedBudgetSnapshotTests(unittest.TestCase):
                 require_applied_limit=True,
             )
         )
+
+
+class ProviderMinimumBudgetTests(unittest.TestCase):
+    def test_dictionary_reads_exact_minimum_weekly_budget_via_v501(self) -> None:
+        transport = FakeTransport(
+            [
+                _response(
+                    {
+                        "result": {
+                            "Currencies": [
+                                {
+                                    "Currency": "RUB",
+                                    "Properties": [
+                                        {"Name": "MinimumBid", "Value": "300000"},
+                                        {
+                                            "Name": "MinimumWeeklySpendLimit",
+                                            "Value": "300000000",
+                                        },
+                                    ],
+                                },
+                                {
+                                    "Currency": "USD",
+                                    "Properties": [
+                                        {
+                                            "Name": "MinimumWeeklySpendLimit",
+                                            "Value": "5000000",
+                                        }
+                                    ],
+                                },
+                            ]
+                        }
+                    }
+                )
+            ]
+        )
+        provider = ReadOnlyYandexDirectBudgetProvider(
+            oauth=_oauth(), transport=transport
+        )
+        minimum = provider.minimum_weekly_spend_limit_micros(
+            access_token="token",
+            currency="RUB",
+            client_login="owner-login",
+        )
+
+        self.assertEqual(minimum, 300_000_000)
+        self.assertEqual(len(transport.calls), 1)
+        call = transport.calls[0]
+        self.assertIn("/json/v501/dictionaries", str(call["url"]))
+        body = json.loads(call["body"])
+        self.assertEqual(body["method"], "get")
+        self.assertEqual(body["params"]["DictionaryNames"], ["Currencies"])
+
+    def test_default_goal_cap_uses_provider_minimum_visible_to_owner(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            hard_cap, daily_cap = goal._caps(
+                100_000,
+                minimum_weekly_spend_micros=300_000_000,
+            )
+        self.assertEqual(hard_cap, 30_000)
+        self.assertEqual(daily_cap, 30_000)
+
+    def test_explicit_operator_max_below_provider_minimum_fails_closed(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"CLIENTPLATFORM_GOAL_MAX_SPEND_MINOR": "10000"},
+            clear=True,
+        ):
+            with self.assertRaisesRegex(
+                AdSpendInvariantViolation,
+                "configured goal spend maximum",
+            ):
+                goal._caps(
+                    100_000,
+                    minimum_weekly_spend_micros=300_000_000,
+                )
+
+    def test_explicit_daily_cap_cannot_make_weekly_budget_too_small(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "CLIENTPLATFORM_GOAL_MAX_SPEND_MINOR": "50000",
+                "CLIENTPLATFORM_GOAL_DAILY_SPEND_MINOR": "4000",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(
+                AdSpendInvariantViolation,
+                "daily spend maximum",
+            ):
+                goal._caps(
+                    100_000,
+                    minimum_weekly_spend_micros=300_000_000,
+                )
+
+    def test_available_balance_below_provider_minimum_fails_closed(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            with self.assertRaisesRegex(
+                AdSpendInvariantViolation,
+                "available Yandex budget",
+            ):
+                goal._caps(
+                    20_000,
+                    minimum_weekly_spend_micros=300_000_000,
+                )
 
 
 class ManagedActivationTests(unittest.TestCase):
