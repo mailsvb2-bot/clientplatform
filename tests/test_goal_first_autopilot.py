@@ -68,6 +68,7 @@ class GoalFirstAutopilotTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             labels,
             [
+                "📈 Что сегодня",
                 "🚀 Найти новых клиентов",
                 "💬 Обращения и продажи",
                 "👥 Клиенты и запись",
@@ -76,10 +77,14 @@ class GoalFirstAutopilotTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             markup.inline_keyboard[0][0].callback_data,
-            "cpo:start:business-1",
+            "cpg:period:business-1:7",
         )
         self.assertEqual(
             markup.inline_keyboard[1][0].callback_data,
+            "cpo:start:business-1",
+        )
+        self.assertEqual(
+            markup.inline_keyboard[2][0].callback_data,
             "cps:s:business-1",
         )
 
