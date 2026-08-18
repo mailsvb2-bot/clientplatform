@@ -7,16 +7,20 @@ from types import SimpleNamespace
 from unittest.mock import patch
 from uuid import uuid4
 
-from clientplatform.domain.activity import BusinessProfileStatus, CapabilityStatus
+from clientplatform.domain.activity import ActivityNotFound, BusinessProfileStatus, CapabilityStatus
 from clientplatform.domain.business_profile import BusinessProfileDetails
 
 
 _AIOGRAM_AVAILABLE = importlib.util.find_spec("aiogram") is not None
 if _AIOGRAM_AVAILABLE:
+    from handlers import clientplatform_button_surface_contract as button_surface_contract
     from handlers import clientplatform_control as control
+    from handlers import clientplatform_dashboard_dispatch as dashboard_dispatch
     from handlers import clientplatform_first_result as first_result
 else:  # pragma: no cover - dependency-light Canon intentionally has no aiogram
+    button_surface_contract = None
     control = None
+    dashboard_dispatch = None
     first_result = None
 
 
@@ -172,6 +176,58 @@ class ClientPlatformZeroToFirstOutcomeTests(unittest.TestCase):
         self.assertTrue(
             any(item.startswith("cp:onboardconfirm:") for item in _button_callbacks(markup))
         )
+
+    def test_composed_resume_keeps_draft_in_u007_review_after_safety_wrapper(self) -> None:
+        assert dashboard_dispatch is not None
+        assert button_surface_contract is not None
+        business_id = str(uuid4())
+        actor = object()
+        message = _Message(text="/start")
+        state = _State({"stale": "wizard"})
+        guarded_calls: list[str] = []
+        review_calls: list[str] = []
+
+        async def guarded_resume(*_args, **_kwargs):
+            guarded_calls.append("guarded")
+
+        async def fake_actor(_user_id: int, selected_business_id: str):
+            self.assertEqual(selected_business_id, business_id)
+            return actor
+
+        async def send_review(_message, *, actor: object, business_id: str):
+            self.assertIs(actor, actor_ref)
+            review_calls.append(business_id)
+
+        actor_ref = actor
+        fake_control = SimpleNamespace(
+            _resume_business=guarded_resume,
+            _actor=fake_actor,
+            get_business_profile=lambda **_kwargs: _profile(),
+            get_business_profile_details=lambda **_kwargs: _structured(confirmed=False),
+            list_accessible_businesses=lambda **_kwargs: [_business_access(business_id)],
+            _send_onboarding_review=send_review,
+            _send_onboarding_first_result=lambda *_args, **_kwargs: None,
+            ActivityNotFound=ActivityNotFound,
+        )
+
+        with patch.object(
+            button_surface_contract,
+            "install_button_surface_contract",
+            lambda _module: None,
+        ):
+            dashboard_dispatch.install_dynamic_dashboard_dispatch(fake_control)
+            asyncio.run(
+                fake_control._resume_business(
+                    message,
+                    user_id=101,
+                    business_id=business_id,
+                    state=state,
+                )
+            )
+
+        self.assertTrue(state.cleared)
+        self.assertEqual(review_calls, [business_id])
+        self.assertEqual(guarded_calls, [])
 
     def test_resume_confirmed_draft_returns_to_first_result(self) -> None:
         assert control is not None
