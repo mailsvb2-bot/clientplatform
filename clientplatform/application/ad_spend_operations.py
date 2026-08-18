@@ -4,7 +4,11 @@ import os
 from collections.abc import Callable
 from datetime import datetime, timezone
 
-from clientplatform.domain.ad_spend import AdSpendInvariantViolation
+from clientplatform.domain.ad_spend import (
+    AdSpendAuthorization,
+    AdSpendAuthorizationStatus,
+    AdSpendInvariantViolation,
+)
 from clientplatform.domain.ad_spend_operations import (
     AdSpendOperation,
     AdSpendOperationType,
@@ -22,6 +26,7 @@ from clientplatform.infrastructure.ad_spend_operation_supersession import (
     complete_superseded_launch,
     launch_is_superseded_by_stop,
 )
+from clientplatform.infrastructure.ad_spend_repository import AdSpendRepository
 from clientplatform.integrations.yandex_direct import (
     YandexDirectError,
     YandexOAuthConfig,
@@ -54,6 +59,34 @@ def _provider() -> YandexDirectAdActions:
             redirect_uri=redirect_uri,
         )
     )
+
+
+def _current_launch_authorization(
+    context: AdSpendOperationContext,
+) -> AdSpendAuthorization:
+    with get_db_ro() as conn:
+        authorization, _version = AdSpendRepository(conn)._get_with_version(  # noqa: SLF001
+            business_id=context.operation.business_id,
+            authorization_id=context.operation.authorization_id,
+        )
+    if authorization.status != AdSpendAuthorizationStatus.LAUNCHING:
+        raise AdSpendInvariantViolation("launch authorization is no longer current")
+    receipt = authorization.consent_receipt
+    if receipt is None or receipt.receipt_hash != context.receipt_hash:
+        raise AdSpendInvariantViolation("launch consent receipt changed")
+    if authorization.connection_id != context.connection_id:
+        raise AdSpendInvariantViolation("launch connection changed")
+    if authorization.external_campaign_id != context.external_campaign_id:
+        raise AdSpendInvariantViolation("launch campaign changed")
+    if authorization.currency != context.currency:
+        raise AdSpendInvariantViolation("launch currency changed")
+    if authorization.hard_cap_minor != context.hard_cap_minor:
+        raise AdSpendInvariantViolation("launch hard cap changed")
+    if authorization.daily_cap_minor != context.daily_cap_minor:
+        raise AdSpendInvariantViolation("launch daily cap changed")
+    if authorization.authorization_expires_at != context.authorization_expires_at:
+        raise AdSpendInvariantViolation("launch expiry changed")
+    return authorization
 
 
 def queue_ad_spend_launch(
@@ -123,6 +156,7 @@ def process_one_ad_spend_operation(
                 vault=selected_vault,
             ).load_claimed_context(operation=operation)
         now = datetime.now(timezone.utc)
+        authorization = None
         if operation.operation_type == AdSpendOperationType.LAUNCH:
             if not ad_spend_mutations_enabled():
                 raise AdSpendInvariantViolation(
@@ -132,26 +166,25 @@ def process_one_ad_spend_operation(
                 raise AdSpendInvariantViolation(
                     "fresh server-side spend guard rejected launch"
                 )
+            authorization = _current_launch_authorization(context)
         bundle = YandexTokenBundle.from_json(token_json)
         activation = None
         if operation.operation_type == AdSpendOperationType.LAUNCH:
+            if authorization is None:
+                raise AdSpendInvariantViolation("launch authorization is missing")
             activation = selected_provider.configure_managed_launch_budget(
                 access_token=bundle.access_token,
                 external_campaign_id=context.external_campaign_id,
                 hard_cap_minor=context.hard_cap_minor,
                 daily_cap_minor=context.daily_cap_minor,
                 currency=context.currency,
+                expected_snapshot_strategy=authorization.snapshot.strategy,
                 client_login=context.external_login,
             )
-            # The budget write itself is spend-capable. Re-check the canonical
-            # authorization after the fresh provider readback and before
-            # submitting the ad for moderation.
-            second_now = datetime.now(timezone.utc)
-            if pre_mutation_guard is None or not pre_mutation_guard(context, second_now):
-                raise AdSpendInvariantViolation(
-                    "fresh server-side spend guard rejected launch after budget reconciliation"
-                )
-            now = second_now
+            # A revocation/stop may race the provider budget write. Re-load the
+            # immutable consent state before the spend-capable moderation call.
+            _current_launch_authorization(context)
+            now = datetime.now(timezone.utc)
             result = selected_provider.moderate_ad(
                 access_token=bundle.access_token,
                 external_ad_id=context.external_ad_id,
