@@ -2,24 +2,30 @@ from __future__ import annotations
 
 """Keep the optimized owner resume path compatible with dashboard overrides."""
 
+import asyncio
 from types import ModuleType
 
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
+from clientplatform.domain.activity import BusinessProfileStatus
+
 
 def install_dynamic_dashboard_dispatch(control_module: ModuleType) -> None:
     """Preserve profile onboarding before rendering the current dashboard.
 
-    The original resume function validates that the business profile exists,
-    restores the activity-description step when it does not, clears the FSM for
-    ready businesses and then resolves ``_send_dashboard`` dynamically from the
-    control module. A later simple or test dashboard override is therefore
-    honored without bypassing the required onboarding guard.
+    The interaction-safety layer owns command-like-name repair and the optimized
+    READY dashboard. U-007 adds a richer DRAFT lifecycle, so this composition
+    boundary keeps the original onboarding resume callable for a valid DRAFT
+    while delegating READY and malformed-name handling to the safety wrapper.
     """
 
     if bool(getattr(control_module, "_dynamic_dashboard_dispatch_installed", False)):
         return
+
+    # Keep the onboarding implementation before interaction safety replaces the
+    # public resume callable with its optimized dashboard wrapper.
+    onboarding_resume = control_module._resume_business
 
     # Interaction safety is installed before optional lesson/media and managed
     # bot lifecycle routers. Compose their callback namespaces into the same
@@ -38,6 +44,50 @@ def install_dynamic_dashboard_dispatch(control_module: ModuleType) -> None:
         business_id: str,
         state: FSMContext,
     ) -> None:
+        actor = await control_module._actor(user_id, business_id)
+        try:
+            profile = await asyncio.to_thread(
+                control_module.get_business_profile,
+                actor=actor,
+            )
+        except control_module.ActivityNotFound:
+            await guarded_resume(
+                message,
+                user_id=user_id,
+                business_id=business_id,
+                state=state,
+            )
+            return
+
+        if getattr(profile, "status", BusinessProfileStatus.READY) == BusinessProfileStatus.DRAFT:
+            accesses = await asyncio.to_thread(
+                control_module.list_accessible_businesses,
+                user_id=user_id,
+            )
+            access = next(
+                (
+                    item
+                    for item in accesses
+                    if str(item.business.id) == str(business_id)
+                ),
+                None,
+            )
+            if access is not None and interaction_safety._command_like(str(access.business.name)):
+                await guarded_resume(
+                    message,
+                    user_id=user_id,
+                    business_id=business_id,
+                    state=state,
+                )
+                return
+            await onboarding_resume(
+                message,
+                user_id=user_id,
+                business_id=business_id,
+                state=state,
+            )
+            return
+
         await guarded_resume(
             message,
             user_id=user_id,
