@@ -134,6 +134,40 @@ def _mapping(value: object, error_code: str) -> Mapping[str, Any]:
     return value
 
 
+def minimum_weekly_spend_limit_from_result(
+    *,
+    result: Mapping[str, Any],
+    currency: str,
+) -> int:
+    """Extract the exact provider weekly-budget floor for one currency."""
+    expected_currency = _token(currency, "currency")
+    if expected_currency not in _SUPPORTED_CURRENCY_MICRO_TO_MINOR:
+        raise YandexDirectError("campaign_currency_unsupported")
+    currencies = result.get("Currencies") or []
+    if not isinstance(currencies, list):
+        raise YandexDirectError("currency_dictionary_invalid")
+    matches = [
+        item
+        for item in currencies
+        if isinstance(item, Mapping)
+        and str(item.get("Currency") or "").strip().upper() == expected_currency
+    ]
+    if len(matches) != 1:
+        raise YandexDirectError("currency_dictionary_identity_ambiguous")
+    properties = matches[0].get("Properties") or []
+    if not isinstance(properties, list):
+        raise YandexDirectError("currency_dictionary_invalid")
+    minimums = [
+        item.get("Value")
+        for item in properties
+        if isinstance(item, Mapping)
+        and str(item.get("Name") or "").strip() == "MinimumWeeklySpendLimit"
+    ]
+    if len(minimums) != 1:
+        raise YandexDirectError("minimum_weekly_spend_limit_missing")
+    return _positive_int(minimums[0], "minimum_weekly_spend_limit_micros")
+
+
 def managed_weekly_spend_limit_micros(*, hard_cap_minor: int, daily_cap_minor: int) -> int:
     hard_cap = _positive_int(hard_cap_minor, "hard_cap_minor")
     daily_cap = _positive_int(daily_cap_minor, "daily_cap_minor")
@@ -335,6 +369,27 @@ class ReadOnlyYandexDirectBudgetProvider(ModeratingYandexDirectProvider):
         if not isinstance(result, Mapping):
             raise YandexDirectError("provider_result_missing")
         return result
+
+    def minimum_weekly_spend_limit_micros(
+        self,
+        *,
+        access_token: str,
+        currency: str,
+        client_login: str = "",
+    ) -> int:
+        result = self._client_scoped_direct_call(
+            service="dictionaries",
+            token=access_token,
+            client_login=client_login,
+            payload={
+                "method": "get",
+                "params": {"DictionaryNames": ["Currencies"]},
+            },
+        )
+        return minimum_weekly_spend_limit_from_result(
+            result=result,
+            currency=currency,
+        )
 
     def campaign_budget_readout(
         self,
@@ -712,5 +767,6 @@ __all__ = [
     "managed_strategy_matches_authorization",
     "managed_strategy_string",
     "managed_weekly_spend_limit_micros",
+    "minimum_weekly_spend_limit_from_result",
     "reconcile_yandex_budget_snapshot",
 ]
