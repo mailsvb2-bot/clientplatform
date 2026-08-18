@@ -16,6 +16,11 @@ def list_sales_work(
         return SalesUiRepository(conn).list_open_work(actor=actor, limit=limit)
 
 
+def count_sales_handoff_work(*, actor: TenantContext) -> int:
+    with get_db_ro() as conn:
+        return SalesUiRepository(conn).count_handoff_work(actor=actor)
+
+
 def list_sales_handoff_work(
     *,
     actor: TenantContext,

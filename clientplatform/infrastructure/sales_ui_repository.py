@@ -157,6 +157,28 @@ class SalesUiRepository:
             result.append(item)
         return result
 
+    def count_handoff_work(self, *, actor: TenantContext) -> int:
+        """Return the complete actionable handoff backlog for the active business."""
+
+        current = self._customer_context(actor)
+        row = self._conn.execute(
+            """
+            SELECT COUNT(*) AS c
+            FROM clientplatform_sales_handoffs h
+            JOIN clientplatform_sales_leads l
+              ON l.id=h.lead_id AND l.business_id=h.business_id
+            JOIN customers c
+              ON c.id=l.customer_id AND c.business_id=l.business_id
+            WHERE h.business_id=?
+              AND h.status IN ('open','claimed')
+            """,
+            (current.business_id,),
+        ).fetchone()
+        if row is None:
+            return 0
+        value = row["c"] if hasattr(row, "keys") else row[0]
+        return max(0, int(value or 0))
+
     def list_handoff_work(
         self,
         *,

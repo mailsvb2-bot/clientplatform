@@ -195,17 +195,17 @@ async def test_owner_dashboard_keeps_status_and_separates_acquisition_from_sales
     assert "Ремонтирую сантехнику" in text
     assert "Услуг: 1" in text
     assert "свободных времён: 1" in text
-    labels = [
-        button.text
-        for row in kwargs["reply_markup"].inline_keyboard
-        for button in row
-    ]
+    markup = kwargs["reply_markup"]
+    labels = [button.text for row in markup.inline_keyboard for button in row]
     assert labels == [
+        "📈 Что сегодня",
         "🚀 Найти новых клиентов",
         "💬 Обращения и продажи",
         "👥 Клиенты и запись",
         "⚙️ Ещё",
     ]
+    assert str(markup.inline_keyboard[0][0].callback_data).startswith("cpg:period:")
+    assert str(markup.inline_keyboard[0][0].callback_data).endswith(":7")
 
 
 @pytest.mark.asyncio

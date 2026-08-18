@@ -10,22 +10,32 @@ from clientplatform.domain.bookings import BookingSlotStatus
 
 from . import clientplatform_control as control
 from . import clientplatform_goal_first_safety as goal_contract
+from . import clientplatform_growth as growth
 from . import clientplatform_one_click_experience as one_click
 from . import clientplatform_owner_journey as owner
+
+# This module is imported by the single canonical handler composition path in
+# handlers.__init__. Compose the Growth Cockpit there as a child of the existing
+# simple owner experience instead of registering a second top-level bot brain.
+if not bool(getattr(one_click.simple, "_growth_cockpit_composed", False)):
+    one_click.simple.router.include_router(growth.router)
+    one_click.simple._growth_cockpit_composed = True
 
 
 def _goal_keyboard(business_id: str):
     """Render the single canonical owner-home navigation.
 
     Acquisition and already-arrived customer conversations are deliberately
-    separate actions.  Keeping both here prevents later presentation layers
-    from hiding the sales workspace again.
+    separate actions. Keeping both here prevents later presentation layers
+    from hiding the sales workspace again. Growth Cockpit is a read-only
+    projection over those same canonical facts, not another business brain.
     """
 
     token = control._uuid_token(business_id)
     action = goal_contract.ACQUIRE_CLIENTS
     return control._keyboard(
         [
+            [("📈 Что сегодня", f"cpg:period:{token}:7")],
             [(action.label, action.callback(token))],
             [("💬 Обращения и продажи", f"cps:s:{token}")],
             [
@@ -87,6 +97,7 @@ async def send_goal_dashboard(
         f"{nearest_line}\n\n"
         f"{readiness}\n\n"
         "Что нужно сделать сейчас:\n"
+        "• «📈 Что сегодня» — увидеть лиды, записи, оплаты, рекламу и следующий шаг.\n"
         f"• «{action.label}» — подготовить продвижение и привести новых людей.\n"
         "• «💬 Обращения и продажи» — разобрать тех, кто уже написал: увидеть следующий "
         "шаг, подключить ИИ-помощника и подготовить ответ.\n\n"
