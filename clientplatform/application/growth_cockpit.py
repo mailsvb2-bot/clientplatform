@@ -277,7 +277,9 @@ def get_growth_cockpit(
             period_days=int(period_days),
             now=local_now,
         )
-    except (RuntimeError, ValueError, OSError):  # validator: allow-wide-except
+    except (RuntimeError, ValueError):
+        advertising_error = True
+    except OSError:
         advertising_error = True
 
     limitations = list(period.limitations)
