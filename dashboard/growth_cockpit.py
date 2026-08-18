@@ -5,13 +5,6 @@ from typing import Any
 
 from clientplatform.application.growth_cockpit import GrowthCockpitSnapshot
 
-_METRIC_LABELS = {
-    "leads": "Новые лиды",
-    "qualified_leads": "Квалифицированные лиды",
-    "bookings": "Записи",
-    "paid_customers": "Оплатившие клиенты",
-}
-
 _LIMITATION_LABELS = {
     "attribution_incomplete": "Часть оплат пока нельзя надёжно связать с источником клиента.",
     "revenue_mixed_currency": "Выручка есть в нескольких валютах и показывается раздельно.",
@@ -23,10 +16,23 @@ _LIMITATION_LABELS = {
 }
 
 
-def _money_text(amount_minor: int, currency: str) -> str:
+def _minor_money_text(amount_minor: int, currency: str) -> str:
+    """Render canonical minor-unit money using the established two-decimal UI convention."""
+
     sign = "-" if amount_minor < 0 else ""
     absolute = abs(int(amount_minor))
     return f"{sign}{absolute // 100:,}.{absolute % 100:02d} {currency}".replace(",", " ")
+
+
+def _provider_cost_text(cost_micros: int | None) -> str:
+    """Render provider cost without assigning an unverified ISO currency."""
+
+    if cost_micros is None:
+        return "расход нельзя безопасно объединить между кабинетами"
+    whole, fraction = divmod(abs(int(cost_micros)), 1_000_000)
+    sign = "-" if int(cost_micros) < 0 else ""
+    amount = f"{sign}{whole:,}.{fraction // 10_000:02d}".replace(",", " ")
+    return f"расход {amount} в валюте рекламного кабинета"
 
 
 def _metric_map(snapshot: GrowthCockpitSnapshot, *, today: bool) -> dict[str, int]:
@@ -40,7 +46,7 @@ def telegram_growth_summary(snapshot: GrowthCockpitSnapshot) -> str:
     today = _metric_map(snapshot, today=True)
     period = _metric_map(snapshot, today=False)
     revenue = ", ".join(
-        _money_text(item.amount_minor, item.currency) for item in snapshot.revenue
+        _minor_money_text(item.amount_minor, item.currency) for item in snapshot.revenue
     ) or "пока нет подтверждённой выручки"
     worked = ", ".join(
         f"{item.label}: {item.outcomes}" for item in snapshot.what_worked[:3]
@@ -51,7 +57,8 @@ def telegram_growth_summary(snapshot: GrowthCockpitSnapshot) -> str:
         advertising = (
             f"{snapshot.advertising.leads} лидов · "
             f"{snapshot.advertising.bookings} записей · "
-            f"{snapshot.advertising.won} продаж"
+            f"{snapshot.advertising.won} продаж · "
+            f"{_provider_cost_text(snapshot.advertising.cost_micros)}"
         )
 
     attention = "\n".join(f"• {item}" for item in snapshot.attention) or "• Срочных сигналов нет."
@@ -111,8 +118,12 @@ def growth_cockpit_payload(snapshot: GrowthCockpitSnapshot) -> dict[str, Any]:
             "bookings": snapshot.advertising.bookings,
             "won": snapshot.advertising.won,
             "cost_micros": snapshot.advertising.cost_micros,
+            "cost_currency": None,
             "source": "verified_yandex_direct_report",
-            "meaning": "Read-only рекламные факты и локально подтверждённые результаты.",
+            "meaning": (
+                "Read-only рекламные факты и локально подтверждённые результаты; "
+                "стоимость остаётся в валюте кабинета до подтверждения ISO-валюты подключения."
+            ),
         }
     payload["limitations_human"] = [
         _LIMITATION_LABELS.get(item, item) for item in snapshot.limitations
