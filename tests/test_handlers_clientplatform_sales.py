@@ -133,6 +133,7 @@ async def test_sales_home_is_plain_language_and_never_claims_to_auto_send(
         "🙋 Нужно подключиться",
         "📊 Как идут продажи",
         "🧩 Что предлагать",
+        "🛠 Управлять обращениями",
         "🏠 В кабинет",
     ]
 

@@ -261,12 +261,12 @@ class SalesRepository:
         normalized_reason = normalize_closure_reason(reason)
         if selected in {SalesLeadStage.WON, SalesLeadStage.LOST}:
             durable_reason = normalized_reason or selected.value
-            self._conn.execute(
+            cursor = self._conn.execute(
                 """
                 UPDATE clientplatform_sales_leads
                 SET stage=?, closure_reason=?, next_action=NULL, due_at=NULL,
                     last_signal_at=?, updated_at=?
-                WHERE id=? AND business_id=?
+                WHERE id=? AND business_id=? AND stage=?
                 """,
                 (
                     selected.value,
@@ -275,15 +275,16 @@ class SalesRepository:
                     timestamp,
                     lead.id,
                     current.business_id,
+                    lead.stage.value,
                 ),
             )
         else:
             durable_reason = None
-            self._conn.execute(
+            cursor = self._conn.execute(
                 """
                 UPDATE clientplatform_sales_leads
                 SET stage=?, closure_reason=NULL, last_signal_at=?, updated_at=?
-                WHERE id=? AND business_id=?
+                WHERE id=? AND business_id=? AND stage=?
                 """,
                 (
                     selected.value,
@@ -291,7 +292,12 @@ class SalesRepository:
                     timestamp,
                     lead.id,
                     current.business_id,
+                    lead.stage.value,
                 ),
+            )
+        if int(getattr(cursor, "rowcount", 1) or 0) != 1:
+            raise SalesInvariantViolation(
+                "sales lead stage changed concurrently; refresh and retry"
             )
         self.record_event(
             actor=current,

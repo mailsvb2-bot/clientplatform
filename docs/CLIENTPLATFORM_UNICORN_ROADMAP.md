@@ -634,43 +634,56 @@ AI может извлекать/предлагать структуру, но �
 
 ---
 
-## U-008 — `NEXT` — CRM Lead Inbox / Sales Desk
+## U-008 — `DONE` — CRM Lead Inbox / Sales Desk
 
 ### Цель
 
 Ни один полученный лид не должен теряться после привлечения.
 
-### Предпочтительная структура
+### Каноническая реализация
+
+Current `main` уже содержит sales-domain, поэтому U-008 реализован расширением существующего контура, без нового `crm.py`, отдельного CRM storage или второго источника истины:
 
 ```text
-clientplatform/domain/crm.py
-clientplatform/application/crm.py
-clientplatform/infrastructure/crm_repository.py
-services/db/schema/clientplatform_crm.py
-handlers/clientplatform_crm.py
+clientplatform/domain/sales.py
+clientplatform/application/sales_operations.py
+clientplatform/infrastructure/sales_repository.py
+clientplatform/infrastructure/sales_ui_repository.py
+services/db/schema/clientplatform_sales.py
+handlers/clientplatform_sales.py
 ```
 
-Перед созданием обязательно проверить, не покрывает ли это текущая Customer/booking domain-модель.
+Legacy `services/sales_desk*` допускается только как источник поведения, которое нужно сохранить; storage и decision authority остаются в каноническом `clientplatform` sales-контуре.
 
 ### Возможности
 
-- lead/customer unified identity;
-- stage/status;
-- source/attribution;
-- owner/assignee;
-- next action + due time;
-- notes/audit;
-- booking/order links;
-- «нужен ответ сегодня»;
-- no-show / lost / won reason.
+- lead/customer unified identity через существующий customer/sales контур;
+- durable stage/status;
+- source + canonical first-touch attribution;
+- owner/assignee + assignment/unassignment;
+- durable next action + timezone-aware due time;
+- notes/audit через существующие `clientplatform_sales_events` с business/lead-scoped dedupe;
+- booking/order links через существующие canonical boundaries;
+- owner projection для «нужен ответ сегодня» / due work;
+- нормализованный WON/LOST closure reason;
+- WON необратим;
+- LOST перед дальнейшим progression обязан пройти explicit reopen `LOST → NEW`;
+- tenant-crossing reads/writes/mutations fail closed.
 
 ### DONE когда
 
 Лид от acquisition попадает в понятный owner inbox, проходит stage до booking/payment и сохраняет attribution.
 
+### Evidence
+
+- PR #203 (`U-008: durable sales operations and owner projection`) merged в `main` как `7492ca6f1ac6bd3e00526dac80c6d0cba32ad2cd`.
+- Все 15 обязательных PR workflows на точном head `8d46867f2ce0a176b26e8af53e3d2dcea26362b5` завершились `success`, включая Canon, CI quality/coverage, Critical Static Surface, Pre-deploy Release Gate, Production Isolation, Encrypted Backup, User Scenario Matrix и concurrency contours.
+- Coverage-ratchet не ослаблен: combined baseline сохранён на `74.30%`, branch baseline повышен до `65.35%`.
+- Regression coverage закрепляет tenant crossing, assignment/unassignment, durable next-action/due, lifecycle close/reopen, запрет прямого `LOST → WON`, notes/dedupe и attribution-aware owner projection.
+
 ---
 
-## U-009 — `QUEUED` — Follow-up Employee
+## U-009 — `NEXT` — Follow-up Employee
 
 ### Цель
 
@@ -1466,8 +1479,8 @@ Duplicate tap, retry, worker restart или uncertain provider response не д�
 | U-005 Managed Yandex Activation Policy | DONE | PR #194; merge SHA `d5a518167515df1cab5086f24aaf2eddcff1f1ff`; all 15 PR workflows green including Canon, CI quality/coverage, static security, ad-spend/booking/partner concurrency, production isolation, user scenario matrix and pre-deploy |
 | U-006 Growth Cockpit | DONE | PR #196; merge SHA `65472747f9b0ed6f2941b21309a16f4f6c426c5d`; all 15 required PR workflows success on `dc83b988b33b933d3a248d2b16ab0cc71ebe8217`; coverage ratchets preserved at 74.21% combined / 65.28% branch |
 | U-007 Zero-to-First-Outcome Onboarding | DONE | PR #198; merge SHA `26ea24496ebcca37c5e6e0f04ac4814d5175d965`; all 15 required PR workflows success on `25de33dc42b5a97475bb12c306e925628d88d576`; coverage ratchets raised to 74.30% combined / 65.33% branch |
-| U-008 CRM Lead Inbox | NEXT | — |
-| U-009 Follow-up Employee | QUEUED | — |
+| U-008 CRM Lead Inbox | DONE | PR #203; merge SHA `7492ca6f1ac6bd3e00526dac80c6d0cba32ad2cd`; all 15 required PR workflows success on `8d46867f2ce0a176b26e8af53e3d2dcea26362b5`; combined coverage baseline 74.30%, branch baseline raised to 65.35%; canonical sales contour extended without `crm.py` or second sales storage |
+| U-009 Follow-up Employee | NEXT | — |
 | U-010 Retention & Reactivation Engine | QUEUED | — |
 
 ---
