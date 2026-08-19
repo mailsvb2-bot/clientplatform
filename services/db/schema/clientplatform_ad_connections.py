@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import sqlite3
 
+from services.schema_core import _add_col, _cols
+
 
 def ensure(c: sqlite3.Connection) -> None:
     """Create provider-neutral advertising account, consent and outbox boundaries."""
@@ -47,6 +49,8 @@ def ensure(c: sqlite3.Connection) -> None:
             expires_at TEXT NOT NULL,
             consumed_at TEXT,
             created_at TEXT NOT NULL,
+            completion_attempt_id TEXT,
+            completion_attempt_expires_at TEXT,
             FOREIGN KEY(business_id) REFERENCES businesses(id) ON DELETE CASCADE,
             FOREIGN KEY(membership_id, business_id)
                 REFERENCES business_members(id, business_id),
@@ -54,6 +58,14 @@ def ensure(c: sqlite3.Connection) -> None:
         )
         """
     )
+    have_oauth = _cols(c, "ad_oauth_sessions")
+    for column, ddl in {
+        "completion_attempt_id": "completion_attempt_id TEXT",
+        "completion_attempt_expires_at": "completion_attempt_expires_at TEXT",
+    }.items():
+        if column not in have_oauth:
+            _add_col(c, "ad_oauth_sessions", ddl)
+
     c.execute(
         """
         CREATE TABLE IF NOT EXISTS ad_publication_jobs(
@@ -200,6 +212,12 @@ def ensure(c: sqlite3.Connection) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_ad_oauth_sessions_expiry
         ON ad_oauth_sessions(expires_at, consumed_at)
+        """
+    )
+    c.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_ad_oauth_sessions_completion_lease
+        ON ad_oauth_sessions(completion_attempt_expires_at, consumed_at)
         """
     )
     c.execute(
