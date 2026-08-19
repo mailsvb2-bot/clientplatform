@@ -219,8 +219,6 @@ class SalesUiRepository:
             WHERE l.business_id=?
               AND l.stage IN ('new','contacted','qualified','checkout')
             ORDER BY
-                CASE WHEN l.due_at IS NOT NULL AND l.due_at <= CURRENT_TIMESTAMP
-                    THEN 0 ELSE 1 END,
                 l.due_at IS NULL,
                 l.due_at,
                 l.updated_at DESC,
