@@ -363,12 +363,25 @@ async def test_business_and_activity_input_paths(monkeypatch: pytest.MonkeyPatch
     assert state.data == {"business_id": business_id, "editing_activity": False}
     assert "готового списка профессий нет" in message.answers[-1][0]
 
+    actor = object()
+
     async def fake_actor(_uid: int, _bid: str) -> object:
-        return object()
+        return actor
 
     monkeypatch.setattr(handlers, "_actor", fake_actor)
     saved: list[dict[str, Any]] = []
-    monkeypatch.setattr(handlers, "save_business_profile", lambda **kwargs: saved.append(kwargs))
+
+    def save_profile(**kwargs: Any) -> Any:
+        saved.append(kwargs)
+        return SimpleNamespace(activity_description=kwargs["activity_description"])
+
+    structured: list[dict[str, Any]] = []
+    monkeypatch.setattr(handlers, "save_business_profile", save_profile)
+    monkeypatch.setattr(
+        handlers,
+        "save_business_profile_details",
+        lambda **kwargs: structured.append(kwargs),
+    )
     enabled: list[str] = []
     completed: list[object] = []
     monkeypatch.setattr(
@@ -391,10 +404,19 @@ async def test_business_and_activity_input_paths(monkeypatch: pytest.MonkeyPatch
     activity = FakeMessage(text="Консультирую и провожу занятия")
     await handlers.receive_activity_description(activity, state)
     assert saved[0]["activity_description"] == "Консультирую и провожу занятия"
-    assert enabled == ["programs", "consultations", "services"]
-    assert completed == [saved[0]["actor"]]
-    assert dashboard_calls == [business_id]
-    assert "Всё готово" in activity.answers[-1][0]
+    assert structured[0]["reset_confirmation"] is True
+    assert enabled == []
+    assert completed == []
+    assert dashboard_calls == []
+    assert "Я правильно понял?" in activity.answers[-1][0]
+    review_markup = activity.answers[-1][1]["reply_markup"]
+    review_callbacks = {
+        button.callback_data
+        for row in review_markup.inline_keyboard
+        for button in row
+    }
+    assert any(value.startswith("cp:onboardconfirm:") for value in review_callbacks)
+    assert any(value.startswith("cp:onboardedit:") for value in review_callbacks)
     assert state.clear_count == 1
 
     dashboard_calls.clear()
@@ -402,6 +424,7 @@ async def test_business_and_activity_input_paths(monkeypatch: pytest.MonkeyPatch
     editing = FakeMessage(text="Ремонтирую автомобили")
     edit_state = FakeState({"business_id": business_id, "editing_activity": True})
     await handlers.receive_activity_description(editing, edit_state)
+    assert structured[-1]["reset_confirmation"] is False
     assert "Описание деятельности обновлено" in editing.answers[-1][0]
     assert dashboard_calls == [business_id]
 
@@ -486,6 +509,9 @@ async def test_custom_finish_and_edit_activity(monkeypatch: pytest.MonkeyPatch) 
     assert enabled[0]["connector_key"] == "custom"
     assert enabled[0]["title"] == "Диагностика"
 
+    # This regression exercises the legacy READY finish path. U-007 adds a
+    # confirmation guard only for DRAFT profiles, so READY remains unchanged.
+    monkeypatch.setattr(handlers, "get_business_profile", lambda **_kwargs: SimpleNamespace(status="ready"))
     monkeypatch.setattr(
         handlers,
         "complete_business_profile",

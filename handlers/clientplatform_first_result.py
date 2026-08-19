@@ -8,7 +8,8 @@ from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 
-from clientplatform.domain.activity import CapabilityStatus
+from clientplatform.application.business_profile import get_business_profile_details
+from clientplatform.domain.activity import BusinessProfileStatus, CapabilityStatus
 from clientplatform.domain.bookings import BookingSlotStatus
 
 control = importlib.import_module(".clientplatform_control", __package__)
@@ -71,6 +72,30 @@ def install_first_result(owner_module: ModuleType) -> None:
     owner_module._first_result_installed = True
 
 
+async def _prepare_first_result(actor, *, connector_key: str) -> None:
+    """Activate only the explicitly chosen capability and complete a confirmed draft."""
+
+    profile = await asyncio.to_thread(control.get_business_profile, actor=actor)
+    if profile.status == BusinessProfileStatus.DRAFT:
+        structured = await asyncio.to_thread(get_business_profile_details, actor=actor)
+        if not structured.confirmed:
+            raise ValueError("Сначала подтвердите данные о бизнесе.")
+    capabilities = await asyncio.to_thread(
+        control.list_business_capabilities,
+        actor=actor,
+        include_disabled=True,
+    )
+    selected = next((item for item in capabilities if item.connector_key == connector_key), None)
+    if selected is None or selected.status != CapabilityStatus.ACTIVE:
+        await asyncio.to_thread(
+            control.enable_business_capability,
+            actor=actor,
+            connector_key=connector_key,
+        )
+    if profile.status == BusinessProfileStatus.DRAFT:
+        await asyncio.to_thread(control.complete_business_profile, actor=actor)
+
+
 @router.callback_query(F.data.startswith("cps:firstgoal:"))
 async def choose_first_result(callback: CallbackQuery, state: FSMContext) -> None:
     business_token = str(callback.data).split(":", 2)[2]
@@ -129,20 +154,20 @@ async def setup_first_booking(callback: CallbackQuery, state: FSMContext) -> Non
     business_id = control._token_uuid(business_token)
     actor = await control._actor(int(callback.from_user.id), business_id)
     capability = await _active_service_capability(actor)
+    if capability is None:
+        await _prepare_first_result(actor, connector_key="services")
+        capability = await _active_service_capability(actor)
+    else:
+        profile = await asyncio.to_thread(control.get_business_profile, actor=actor)
+        if profile.status == BusinessProfileStatus.DRAFT:
+            structured = await asyncio.to_thread(get_business_profile_details, actor=actor)
+            if not structured.confirmed:
+                raise ValueError("Сначала подтвердите данные о бизнесе.")
+            await asyncio.to_thread(control.complete_business_profile, actor=actor)
     await callback.answer()
     message = control._callback_message(callback)
-    if capability is None:
-        await message.answer(
-            "Для записи сначала нужно включить консультации или услуги. "
-            "Откройте «Все возможности» и включите нужный формат.",
-            reply_markup=control._keyboard(
-                [
-                    [("⚙️ Все возможности", f"cps:advanced:{business_token}")],
-                    [("🏠 В кабинет", f"cpj:home:{business_token}")],
-                ]
-            ),
-        )
-        return
+    if capability is None:  # pragma: no cover - repository invariant
+        raise RuntimeError("first booking capability activation was lost")
 
     offerings, slots = await asyncio.gather(
         asyncio.to_thread(
@@ -198,6 +223,7 @@ async def setup_first_material(callback: CallbackQuery, state: FSMContext) -> No
     business_token = str(callback.data).split(":", 2)[2]
     business_id = control._token_uuid(business_token)
     actor = await control._actor(int(callback.from_user.id), business_id)
+    await _prepare_first_result(actor, connector_key="programs")
     programs, customers = await asyncio.gather(
         asyncio.to_thread(control.list_programs, actor=actor),
         asyncio.to_thread(control.list_customers, actor=actor),
