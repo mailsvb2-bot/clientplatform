@@ -57,9 +57,16 @@ class ClientPlatformSalesOwnerOperationsContractTests(unittest.TestCase):
         install_source = _INSTALL.read_text(encoding="utf-8")
         init_source = _HANDLERS_INIT.read_text(encoding="utf-8")
 
-        self.assertIn("simple_module.router.include_router(operations.router)", install_source)
-        install_call = init_source.index("sales_install.install_sales_ui(simple_experience)")
-        existing_router = init_source.index("simple_experience.router.include_router(sales.router)")
+        self.assertIn(
+            "simple_module.router.include_router(operations.router)",
+            install_source,
+        )
+        install_call = init_source.index(
+            "sales_install.install_sales_ui(simple_experience)"
+        )
+        existing_router = init_source.index(
+            "simple_experience.router.include_router(sales.router)"
+        )
         self.assertLess(install_call, existing_router)
 
     def test_sales_home_keeps_existing_ai_surface_while_exposing_mutations(self) -> None:
