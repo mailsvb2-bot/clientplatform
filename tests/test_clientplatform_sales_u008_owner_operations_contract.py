@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import unittest
 from pathlib import Path
 
@@ -13,15 +14,36 @@ _HANDLERS_INIT = _ROOT / "handlers" / "__init__.py"
 class ClientPlatformSalesOwnerOperationsContractTests(unittest.TestCase):
     def test_owner_surface_calls_every_u008_mutation_boundary(self) -> None:
         source = _OPERATIONS.read_text(encoding="utf-8")
-        for operation in (
+        tree = ast.parse(source)
+        expected = {
             "assign_sales_lead",
             "unassign_sales_lead",
             "transition_sales_lead",
             "set_sales_next_action",
             "clear_sales_next_action",
             "add_sales_note",
-        ):
-            self.assertGreaterEqual(source.count(f"{operation}("), 1, operation)
+        }
+        imported: set[str] = set()
+        thread_targets: set[str] = set()
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.ImportFrom)
+                and node.module == "clientplatform.application.sales_operations"
+            ):
+                imported.update(alias.asname or alias.name for alias in node.names)
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "asyncio"
+                and node.func.attr == "to_thread"
+                and node.args
+                and isinstance(node.args[0], ast.Name)
+            ):
+                thread_targets.add(node.args[0].id)
+
+        self.assertTrue(expected <= imported, expected - imported)
+        self.assertTrue(expected <= thread_targets, expected - thread_targets)
 
         for callback_prefix in (
             "cps:swme:",
