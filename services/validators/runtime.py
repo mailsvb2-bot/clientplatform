@@ -233,7 +233,13 @@ def validate_wide_except_policy(*, strict: bool = True) -> None:
             "confirm_yandex_publication",
         },
         "handlers/clientplatform_ad_disconnect.py": {"revoke_ad_connection"},
-        "clientplatform/application/ad_connections.py": {"process_one_ad_publication"},
+        # OAuth completion is a reviewed fail-closed cleanup boundary: every
+        # unexpected provider/local failure must settle the durable completion
+        # lease and then be re-raised. Keep this allowance function-scoped.
+        "clientplatform/application/ad_connections.py": {
+            "complete_yandex_direct_oauth",
+            "process_one_ad_publication",
+        },
         "handlers/clientplatform_yandex_screen_code.py": {
             "connect_yandex_direct_screen_code",
             "cancel_yandex_direct_screen_code",

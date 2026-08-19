@@ -21,6 +21,9 @@ YANDEX_SCREEN_CODE_REDIRECT_URI = "https://oauth.yandex.ru/verification_code"
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 _MAX_CONFIRMATION_CODE_LENGTH = 1024
 _MAX_LOGIN_HINT_LENGTH = 320
+_CLIPBOARD_RETRY_ERRORS = frozenset(
+    {"provider_invalid_grant", "provider_bad_verification_code"}
+)
 
 
 def _is_invisible_clipboard_artifact(character: str) -> bool:
@@ -67,14 +70,14 @@ def _normalize_yandex_clipboard_presentation(value: str) -> str:
 
 
 def _clipboard_retry_candidate(value: str) -> str | None:
-    """Build one stricter clipboard candidate for provider-side invalid_grant retry.
+    """Build one stricter clipboard candidate after a provider code rejection.
 
     The first token request keeps provider-owned visible content intact. Only after
-    Yandex explicitly rejects that value as ``invalid_grant`` may ClientPlatform
-    try one additional candidate that removes whitespace plus invisible clipboard
-    presentation artifacts after NFKC normalization. Yandex remains the authority
-    that accepts or rejects the candidate; ClientPlatform never guesses a token
-    alphabet and never loops over multiple variants.
+    Yandex explicitly rejects that value as an invalid authorization/verification
+    code may ClientPlatform try one additional candidate that removes whitespace
+    plus invisible clipboard presentation artifacts after NFKC normalization.
+    Yandex remains the authority that accepts or rejects the candidate;
+    ClientPlatform never guesses a token alphabet and never loops over variants.
     """
 
     normalized = unicodedata.normalize("NFKC", value)
@@ -236,7 +239,7 @@ class YandexScreenCodeDirectProvider(ModeratingYandexDirectProvider):
                 verifier=verifier,
             )
         except YandexDirectError as exc:
-            if exc.code != "provider_invalid_grant" or retry_candidate is None:
+            if exc.code not in _CLIPBOARD_RETRY_ERRORS or retry_candidate is None:
                 raise
         return self._exchange_confirmation_code(
             confirmation_code=retry_candidate,

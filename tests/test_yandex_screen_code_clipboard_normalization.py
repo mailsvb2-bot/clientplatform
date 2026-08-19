@@ -151,7 +151,19 @@ class YandexScreenCodeClipboardNormalizationTests(unittest.TestCase):
         self.assertEqual(_request_code(transport.bodies[0]), _CODE[:4] + " " + _CODE[4:])
         self.assertEqual(_request_code(transport.bodies[1]), _CODE)
 
-    def test_non_grant_oauth_failure_is_never_retried(self) -> None:
+    def test_bad_verification_code_retries_once_with_stricter_clipboard_candidate(self) -> None:
+        transport = _SequencedOAuthTransport(first_error="bad_verification_code")
+        provider = _provider(transport)
+        copied = _CODE[:4] + "\u00a0" + _CODE[4:]
+
+        token = provider.exchange_code(code=copied, verifier="test-verifier")
+
+        self.assertEqual(token.access_token, "fallback-access-token")
+        self.assertEqual(len(transport.bodies), 2)
+        self.assertEqual(_request_code(transport.bodies[0]), _CODE[:4] + " " + _CODE[4:])
+        self.assertEqual(_request_code(transport.bodies[1]), _CODE)
+
+    def test_non_code_oauth_failure_is_never_retried(self) -> None:
         transport = _SequencedOAuthTransport(first_error="invalid_client")
         provider = _provider(transport)
         copied = _CODE[:4] + "\u00a0" + _CODE[4:]
