@@ -28,6 +28,10 @@ from clientplatform.infrastructure.ad_credential_vault import (
     AdCredentialVault,
     AgeAdCredentialVault,
 )
+from clientplatform.infrastructure.ad_oauth_completion_store import (
+    AdOAuthCompletionReservation,
+    AdOAuthCompletionStore,
+)
 from clientplatform.infrastructure.ad_worker_store import (
     AdConnectionLifecycleStore,
     AdWorkerStore,
@@ -59,6 +63,9 @@ _ACCOUNT_ATTENTION_ERRORS = {
     "provider_unauthorized",
     "oauth_refresh_token_missing",
 }
+_REUSABLE_OAUTH_CODE_ERRORS = frozenset(
+    {"provider_invalid_grant", "provider_bad_verification_code"}
+)
 _MANAGED_SELECT = """
     SELECT id, business_id, promotion_campaign_id, connection_id, provider,
            provisioning_key, external_campaign_id, external_campaign_name,
@@ -343,6 +350,20 @@ def _mark_managed_refresh_failure(
     )
 
 
+def _settle_failed_oauth_completion(
+    *,
+    reservation: AdOAuthCompletionReservation,
+    vault: AdCredentialVault,
+    reusable: bool,
+) -> None:
+    with get_db() as conn:
+        store = AdOAuthCompletionStore(conn, vault=vault)
+        if reusable:
+            store.release(reservation=reservation)
+        else:
+            store.consume(reservation=reservation)
+
+
 def start_yandex_direct_oauth(
     *,
     actor: TenantContext,
@@ -384,34 +405,83 @@ def complete_yandex_direct_oauth(
 ) -> AdOAuthCompletion:
     selected_vault = vault or _vault()
     selected_provider = provider or _provider()
-    # Keep the one-time state consumption and connection activation in the same
-    # transaction as provider proof. get_db() rolls this consumption back if
-    # Yandex rejects the submitted code or identity lookup fails, so the still-
-    # valid 10-minute state is not destroyed by a recoverable first attempt.
-    # The row update also serializes competing completions for the same state.
+
+    # Reserve the one-time OAuth state in a short committed transaction. The
+    # provider token and identity requests below must never hold a DB connection
+    # or transaction; a bounded durable lease prevents concurrent completion and
+    # is reclaimable after a crashed worker.
     with get_db() as conn:
-        repository = AdConnectionRepository(conn, vault=selected_vault)
-        session, verifier = repository.consume_oauth_session(state=state)
-        if session.provider != AdProvider.YANDEX_DIRECT:
-            raise AdConnectionInvariantViolation("OAuth provider does not match the callback")
-        token = selected_provider.exchange_code(code=code, verifier=verifier)
+        reservation = AdOAuthCompletionStore(
+            conn,
+            vault=selected_vault,
+        ).reserve(state=state)
+    session = reservation.session
+    if session.provider != AdProvider.YANDEX_DIRECT:
+        _settle_failed_oauth_completion(
+            reservation=reservation,
+            vault=selected_vault,
+            reusable=False,
+        )
+        raise AdConnectionInvariantViolation("OAuth provider does not match the callback")
+
+    try:
+        token = selected_provider.exchange_code(
+            code=code,
+            verifier=reservation.verifier,
+        )
         identity = selected_provider.account_identity(access_token=token.access_token)
-        current = TenancyRepository(conn).resolve_context(
-            user_id=session.user_id,
-            business_id=session.business_id,
+    except YandexDirectError as exc:
+        _settle_failed_oauth_completion(
+            reservation=reservation,
+            vault=selected_vault,
+            reusable=exc.code in _REUSABLE_OAUTH_CODE_ERRORS,
         )
-        current.assert_can_manage_ad_connections()
-        if current.membership_id != session.membership_id:
-            raise AdConnectionInvariantViolation(
-                "OAuth membership changed before the callback completed"
+        raise
+    except Exception:
+        _settle_failed_oauth_completion(
+            reservation=reservation,
+            vault=selected_vault,
+            reusable=False,
+        )
+        raise
+
+    try:
+        with get_db() as conn:
+            repository = AdConnectionRepository(conn, vault=selected_vault)
+            current = TenancyRepository(conn).resolve_context(
+                user_id=session.user_id,
+                business_id=session.business_id,
             )
-        connection = repository.activate_oauth_connection(
-            session=session,
-            external_account_id=identity.account_id,
-            external_login=identity.login,
-            token_bundle_json=token.to_json(),
-            permissions=("campaigns.read", "adgroups.write", "ads.write"),
-        )
+            current.assert_can_manage_ad_connections()
+            if current.membership_id != session.membership_id:
+                raise AdConnectionInvariantViolation(
+                    "OAuth membership changed before the callback completed"
+                )
+            consumed_session = AdOAuthCompletionStore(
+                conn,
+                vault=selected_vault,
+            ).consume(reservation=reservation)
+            connection = repository.activate_oauth_connection(
+                session=consumed_session,
+                external_account_id=identity.account_id,
+                external_login=identity.login,
+                token_bundle_json=token.to_json(),
+                permissions=("campaigns.read", "adgroups.write", "ads.write"),
+            )
+    except Exception:
+        # The final local transaction rolled back, so burn the reservation in a
+        # separate short transaction when it is still ours. If another worker
+        # reclaimed an expired lease, the lease-lost invariant is safer than
+        # overwriting that worker's ownership.
+        try:
+            _settle_failed_oauth_completion(
+                reservation=reservation,
+                vault=selected_vault,
+                reusable=False,
+            )
+        except AdConnectionInvariantViolation:
+            pass
+        raise
     return AdOAuthCompletion(connection=connection, user_id=session.user_id)
 
 
