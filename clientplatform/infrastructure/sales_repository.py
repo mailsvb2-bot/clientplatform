@@ -253,10 +253,7 @@ class SalesRepository:
             return lead
         if lead.stage == SalesLeadStage.WON and selected != SalesLeadStage.WON:
             raise SalesInvariantViolation("won sales lead cannot regress")
-        if (
-            lead.stage == SalesLeadStage.LOST
-            and selected not in {SalesLeadStage.NEW, SalesLeadStage.WON}
-        ):
+        if lead.stage == SalesLeadStage.LOST and selected != SalesLeadStage.NEW:
             raise SalesInvariantViolation(
                 "lost sales lead must be reopened before progressing"
             )
