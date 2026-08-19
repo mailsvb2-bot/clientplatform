@@ -40,7 +40,7 @@ async def _immediate_to_thread(function, *args, **kwargs):
 
 
 class YandexCodeRetryFsmTests(unittest.IsolatedAsyncioTestCase):
-    async def test_provider_code_rejections_keep_live_fsm_for_resubmission(self) -> None:
+    async def test_provider_code_rejections_keep_fsm_for_resubmission(self) -> None:
         for provider_code in ("provider_invalid_grant", "provider_bad_verification_code"):
             with self.subTest(provider_code=provider_code):
                 state = _State()
