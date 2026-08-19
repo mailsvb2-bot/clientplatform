@@ -72,12 +72,7 @@ _CLOSE_CODES = {
     "w": SalesLeadStage.WON,
     "l": SalesLeadStage.LOST,
 }
-_DUE_HOURS = {
-    "1": 1,
-    "24": 24,
-    "72": 72,
-    "168": 168,
-}
+_DUE_HOURS = {"1": 1, "24": 24, "72": 72, "168": 168}
 
 
 class _SalesModule(Protocol):
@@ -192,6 +187,18 @@ def _detail_keyboard(
             ]
         )
         if item.get("next_action"):
+            rows.append(
+                [
+                    ("⏱ +1 час", f"cps:swmd:{business_token}:{lead_token}:1"),
+                    ("🌅 Завтра", f"cps:swmd:{business_token}:{lead_token}:24"),
+                ]
+            )
+            rows.append(
+                [
+                    ("📅 +3 дня", f"cps:swmd:{business_token}:{lead_token}:72"),
+                    ("Без срока", f"cps:swmd:{business_token}:{lead_token}:n"),
+                ]
+            )
             rows.append([("Очистить следующий шаг", f"cps:swmx:{business_token}:{lead_token}")])
         rows.append(
             [
@@ -434,7 +441,8 @@ async def begin_sales_next_action(callback: CallbackQuery, state: FSMContext) ->
     await state.update_data(sales_business_id=business_id, sales_lead_id=lead_id)
     await callback.answer()
     await control._callback_message(callback).answer(
-        "Напишите следующим сообщением конкретное следующее действие по этому клиенту."
+        "Напишите следующим сообщением конкретное следующее действие по этому клиенту. "
+        "После сохранения срок можно выбрать кнопкой в карточке."
     )
 
 
@@ -454,38 +462,38 @@ async def capture_sales_next_action(message: Message, state: FSMContext) -> None
         await state.clear()
         await message.answer("Карточка устарела. Откройте обращения заново.")
         return
-    await state.update_data(pending_next_action=action)
-    business_token, lead_token = _token(business_id), _token(lead_id)
-    await message.answer(
-        "Когда нужно выполнить это действие?",
-        reply_markup=control._keyboard(
-            [
-                [
-                    ("Без срока", f"cps:swmd:{business_token}:{lead_token}:n"),
-                    ("Через час", f"cps:swmd:{business_token}:{lead_token}:1"),
-                ],
-                [
-                    ("Завтра", f"cps:swmd:{business_token}:{lead_token}:24"),
-                    ("Через 3 дня", f"cps:swmd:{business_token}:{lead_token}:72"),
-                ],
-                [("Через неделю", f"cps:swmd:{business_token}:{lead_token}:168")],
-            ]
-        ),
+    actor = await control._actor(int(message.from_user.id), business_id)
+    try:
+        await asyncio.to_thread(
+            set_sales_next_action,
+            actor=actor,
+            lead_id=lead_id,
+            next_action=action,
+            due_at=None,
+        )
+    except (SalesError, PermissionError, ValueError):
+        await state.clear()
+        await message.answer("Не удалось сохранить следующий шаг. Откройте карточку и попробуйте ещё раз.")
+        return
+    await state.clear()
+    await message.answer("Следующий шаг сохранён. При необходимости выберите срок в карточке.")
+    await _send_detail(
+        message,
+        user_id=int(message.from_user.id),
+        business_id=business_id,
+        lead_id=lead_id,
     )
 
 
 @router.callback_query(F.data.startswith("cps:swmd:"))
-async def save_sales_next_action(callback: CallbackQuery, state: FSMContext) -> None:
+async def set_sales_due_owner(callback: CallbackQuery, state: FSMContext) -> None:
     parts = str(callback.data).split(":")
     business_id, lead_id, due_code = _uuid(parts[2]), _uuid(parts[3]), parts[4]
-    data = await state.get_data()
-    if (
-        data.get("sales_business_id") != business_id
-        or data.get("sales_lead_id") != lead_id
-        or not data.get("pending_next_action")
-    ):
-        await state.clear()
-        await callback.answer("Этот шаг уже устарел. Откройте карточку заново.", show_alert=True)
+    actor = await control._actor(int(callback.from_user.id), business_id)
+    item = await _load_item(actor=actor, lead_id=lead_id)
+    next_action = "" if item is None else str(item.get("next_action") or "").strip()
+    if not next_action or item is None or str(item.get("stage")) in {"won", "lost"}:
+        await callback.answer("Следующий шаг уже изменился. Обновите карточку.", show_alert=True)
         return
     due_at = None
     if due_code != "n":
@@ -496,20 +504,19 @@ async def save_sales_next_action(callback: CallbackQuery, state: FSMContext) -> 
         due_at = (datetime.now(timezone.utc) + timedelta(hours=hours)).isoformat(
             timespec="seconds"
         )
-    actor = await control._actor(int(callback.from_user.id), business_id)
     try:
         await asyncio.to_thread(
             set_sales_next_action,
             actor=actor,
             lead_id=lead_id,
-            next_action=str(data["pending_next_action"]),
+            next_action=next_action,
             due_at=due_at,
         )
     except (SalesError, PermissionError, ValueError):
-        await callback.answer("Не удалось сохранить следующий шаг.", show_alert=True)
+        await callback.answer("Не удалось сохранить срок. Обновите карточку.", show_alert=True)
         return
     await state.clear()
-    await callback.answer("Следующий шаг сохранён")
+    await callback.answer("Срок обновлён")
     await _send_detail(
         control._callback_message(callback),
         user_id=int(callback.from_user.id),
