@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from enum import StrEnum
 
 from clientplatform.domain.tenancy import normalize_uuid
@@ -56,6 +57,23 @@ def _text(value: object, *, field_name: str, maximum: int) -> str:
     return normalized
 
 
+def _optional_text(
+    value: object | None,
+    *,
+    field_name: str,
+    maximum: int,
+) -> str | None:
+    if value is None:
+        return None
+    raw = str(value).replace("\x00", " ")
+    normalized = re.sub(r"\s+", " ", raw).strip()
+    if not normalized:
+        return None
+    if len(normalized) > maximum:
+        raise ValueError(f"{field_name} must be at most {maximum} characters")
+    return normalized
+
+
 def normalize_opportunity_key(value: object) -> str:
     return _text(value, field_name="opportunity_key", maximum=240)
 
@@ -68,14 +86,30 @@ def normalize_source_kind(value: object) -> str:
 
 
 def normalize_source_ref(value: object | None) -> str | None:
+    return _optional_text(value, field_name="source_ref", maximum=240)
+
+
+def normalize_next_action(value: object | None) -> str | None:
+    return _optional_text(value, field_name="next_action", maximum=500)
+
+
+def normalize_closure_reason(value: object | None) -> str | None:
+    return _optional_text(value, field_name="closure_reason", maximum=500)
+
+
+def normalize_due_at(value: object | None) -> str | None:
     if value is None:
         return None
-    normalized = re.sub(r"\s+", " ", str(value).replace("\x00", " ")).strip()
-    if not normalized:
+    raw = str(value).strip()
+    if not raw:
         return None
-    if len(normalized) > 240:
-        raise ValueError("source_ref must be at most 240 characters")
-    return normalized
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("due_at must be an ISO-8601 timestamp") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("due_at must be timezone-aware")
+    return parsed.astimezone(timezone.utc).isoformat(timespec="seconds")
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,14 +127,21 @@ class SalesLead:
     last_signal_at: str
     created_at: str
     updated_at: str
+    next_action: str | None = None
+    due_at: str | None = None
+    closure_reason: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "id", normalize_uuid(self.id, field_name="sales_lead_id"))
         object.__setattr__(
-            self, "business_id", normalize_uuid(self.business_id, field_name="business_id")
+            self,
+            "business_id",
+            normalize_uuid(self.business_id, field_name="business_id"),
         )
         object.__setattr__(
-            self, "customer_id", normalize_uuid(self.customer_id, field_name="customer_id")
+            self,
+            "customer_id",
+            normalize_uuid(self.customer_id, field_name="customer_id"),
         )
         if self.offering_id is not None:
             object.__setattr__(
@@ -115,10 +156,19 @@ class SalesLead:
                 normalize_uuid(self.assigned_member_id, field_name="assigned_member_id"),
             )
         object.__setattr__(
-            self, "opportunity_key", normalize_opportunity_key(self.opportunity_key)
+            self,
+            "opportunity_key",
+            normalize_opportunity_key(self.opportunity_key),
         )
         object.__setattr__(self, "source_kind", normalize_source_kind(self.source_kind))
         object.__setattr__(self, "source_ref", normalize_source_ref(self.source_ref))
+        object.__setattr__(self, "next_action", normalize_next_action(self.next_action))
+        object.__setattr__(self, "due_at", normalize_due_at(self.due_at))
+        object.__setattr__(
+            self,
+            "closure_reason",
+            normalize_closure_reason(self.closure_reason),
+        )
         object.__setattr__(
             self,
             "contact_basis",
@@ -133,6 +183,13 @@ class SalesLead:
             if isinstance(self.stage, SalesLeadStage)
             else SalesLeadStage(str(self.stage)),
         )
+        if self.stage in {SalesLeadStage.WON, SalesLeadStage.LOST}:
+            if self.next_action is not None or self.due_at is not None:
+                raise SalesInvariantViolation("closed sales lead cannot keep a next action")
+        elif self.closure_reason is not None:
+            raise SalesInvariantViolation("open sales lead cannot keep a closure reason")
+        if self.due_at is not None and self.next_action is None:
+            raise SalesInvariantViolation("due_at requires a durable next action")
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,7 +201,9 @@ class SalesActionPlan:
 
     def __post_init__(self) -> None:
         object.__setattr__(
-            self, "lead_id", normalize_uuid(self.lead_id, field_name="sales_lead_id")
+            self,
+            "lead_id",
+            normalize_uuid(self.lead_id, field_name="sales_lead_id"),
         )
         action_kind = (
             self.action_kind
@@ -255,7 +314,8 @@ def plan_sales_action(
         lead_id=lead.id,
         action_kind=kind,
         rationale=f"stage:{lead.stage.value};basis:{lead.contact_basis.value}",
-        requires_approval=kind not in {SalesActionKind.NOOP, SalesActionKind.HUMAN_HANDOFF},
+        requires_approval=kind
+        not in {SalesActionKind.NOOP, SalesActionKind.HUMAN_HANDOFF},
     )
 
 
@@ -269,5 +329,8 @@ __all__ = [
     "SalesLeadNotFound",
     "SalesLeadStage",
     "can_contact",
+    "normalize_closure_reason",
+    "normalize_due_at",
+    "normalize_next_action",
     "plan_sales_action",
 ]

@@ -16,6 +16,15 @@ def list_sales_work(
         return SalesUiRepository(conn).list_open_work(actor=actor, limit=limit)
 
 
+def list_recent_closed_sales_work(
+    *,
+    actor: TenantContext,
+    limit: int = 12,
+) -> list[dict[str, Any]]:
+    with get_db_ro() as conn:
+        return SalesUiRepository(conn).list_recent_closed(actor=actor, limit=limit)
+
+
 def count_sales_handoff_work(*, actor: TenantContext) -> int:
     with get_db_ro() as conn:
         return SalesUiRepository(conn).count_handoff_work(actor=actor)

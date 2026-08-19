@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
@@ -13,6 +15,9 @@ from clientplatform.domain.sales import (
     SalesInvariantViolation,
     SalesLeadNotFound,
     SalesLeadStage,
+    normalize_closure_reason,
+    normalize_due_at,
+    normalize_next_action,
     normalize_opportunity_key,
     normalize_source_kind,
     normalize_source_ref,
@@ -51,6 +56,21 @@ def _value(row: Any, key: str, position: int) -> Any:
     return row[key] if hasattr(row, "keys") else row[position]
 
 
+def _operation_dedupe(prefix: str, *parts: object) -> str:
+    material = "\x1f".join(str(part or "") for part in parts).encode("utf-8")
+    digest = hashlib.sha256(material).hexdigest()
+    return f"{prefix}:{digest}"
+
+
+def _normalize_note(value: object) -> str:
+    normalized = re.sub(r"\s+", " ", str(value or "").replace("\x00", " ")).strip()
+    if not normalized:
+        raise ValueError("note must not be empty")
+    if len(normalized) > 4000:
+        raise ValueError("note must be at most 4000 characters")
+    return normalized
+
+
 def _lead_from_row(row: Any) -> SalesLead:
     offering_id = _value(row, "offering_id", 4)
     assigned_member_id = _value(row, "assigned_member_id", 9)
@@ -67,15 +87,19 @@ def _lead_from_row(row: Any) -> SalesLead:
         assigned_member_id=(
             None if assigned_member_id is None else str(assigned_member_id)
         ),
-        last_signal_at=str(_value(row, "last_signal_at", 10)),
-        created_at=str(_value(row, "created_at", 11)),
-        updated_at=str(_value(row, "updated_at", 12)),
+        next_action=_value(row, "next_action", 10),
+        due_at=_value(row, "due_at", 11),
+        closure_reason=_value(row, "closure_reason", 12),
+        last_signal_at=str(_value(row, "last_signal_at", 13)),
+        created_at=str(_value(row, "created_at", 14)),
+        updated_at=str(_value(row, "updated_at", 15)),
     )
 
 
 _LEAD_SELECT = """
     SELECT id, business_id, opportunity_key, customer_id, offering_id,
            source_kind, source_ref, contact_basis, stage, assigned_member_id,
+           next_action, due_at, closure_reason,
            last_signal_at, created_at, updated_at
     FROM clientplatform_sales_leads
 """
@@ -159,17 +183,22 @@ class SalesRepository:
             INSERT INTO clientplatform_sales_leads(
                 id, business_id, opportunity_key, customer_id, offering_id,
                 source_kind, source_ref, contact_basis, stage, assigned_member_id,
+                next_action, due_at, closure_reason,
                 last_signal_at, created_at, updated_at
-            ) VALUES(?,?,?,?,?,?,?,?,'new',NULL,?,?,?)
+            ) VALUES(?,?,?,?,?,?,?,?,'new',NULL,NULL,NULL,NULL,?,?,?)
             ON CONFLICT(business_id, opportunity_key) DO UPDATE SET
                 source_kind=excluded.source_kind,
-                source_ref=COALESCE(excluded.source_ref, clientplatform_sales_leads.source_ref),
+                source_ref=COALESCE(
+                    excluded.source_ref, clientplatform_sales_leads.source_ref
+                ),
                 contact_basis=CASE
                     WHEN clientplatform_sales_leads.contact_basis='none'
                     THEN excluded.contact_basis
                     ELSE clientplatform_sales_leads.contact_basis
                 END,
-                offering_id=COALESCE(excluded.offering_id, clientplatform_sales_leads.offering_id),
+                offering_id=COALESCE(
+                    excluded.offering_id, clientplatform_sales_leads.offering_id
+                ),
                 last_signal_at=excluded.last_signal_at,
                 updated_at=excluded.updated_at
             """,
@@ -212,26 +241,76 @@ class SalesRepository:
         actor: TenantContext,
         lead_id: str,
         stage: SalesLeadStage | str,
+        reason: str | None = None,
         now: str | None = None,
     ) -> SalesLead:
         current = self._current(actor, manage=True)
         lead = self.get_lead(actor=current, lead_id=lead_id)
-        selected = stage if isinstance(stage, SalesLeadStage) else SalesLeadStage(str(stage))
+        selected = (
+            stage if isinstance(stage, SalesLeadStage) else SalesLeadStage(str(stage))
+        )
+        if lead.stage == selected:
+            return lead
         if lead.stage == SalesLeadStage.WON and selected != SalesLeadStage.WON:
             raise SalesInvariantViolation("won sales lead cannot regress")
-        if (
-            lead.stage == SalesLeadStage.LOST
-            and selected not in {SalesLeadStage.LOST, SalesLeadStage.NEW, SalesLeadStage.WON}
-        ):
-            raise SalesInvariantViolation("lost sales lead must be reopened before progressing")
+        if lead.stage == SalesLeadStage.LOST and selected != SalesLeadStage.NEW:
+            raise SalesInvariantViolation(
+                "lost sales lead must be reopened before progressing"
+            )
         timestamp = str(now or _utc_now())
-        self._conn.execute(
-            """
-            UPDATE clientplatform_sales_leads
-            SET stage=?, last_signal_at=?, updated_at=?
-            WHERE id=? AND business_id=?
-            """,
-            (selected.value, timestamp, timestamp, lead.id, current.business_id),
+        normalized_reason = normalize_closure_reason(reason)
+        if selected in {SalesLeadStage.WON, SalesLeadStage.LOST}:
+            durable_reason = normalized_reason or selected.value
+            self._conn.execute(
+                """
+                UPDATE clientplatform_sales_leads
+                SET stage=?, closure_reason=?, next_action=NULL, due_at=NULL,
+                    last_signal_at=?, updated_at=?
+                WHERE id=? AND business_id=?
+                """,
+                (
+                    selected.value,
+                    durable_reason,
+                    timestamp,
+                    timestamp,
+                    lead.id,
+                    current.business_id,
+                ),
+            )
+        else:
+            durable_reason = None
+            self._conn.execute(
+                """
+                UPDATE clientplatform_sales_leads
+                SET stage=?, closure_reason=NULL, last_signal_at=?, updated_at=?
+                WHERE id=? AND business_id=?
+                """,
+                (
+                    selected.value,
+                    timestamp,
+                    timestamp,
+                    lead.id,
+                    current.business_id,
+                ),
+            )
+        self.record_event(
+            actor=current,
+            lead_id=lead.id,
+            event_type="stage_changed",
+            dedupe_key=_operation_dedupe(
+                "stage",
+                lead.stage.value,
+                selected.value,
+                durable_reason or normalized_reason,
+                timestamp,
+            ),
+            payload={
+                "actor_member_id": current.membership_id,
+                "from_stage": lead.stage.value,
+                "to_stage": selected.value,
+                "reason": durable_reason or normalized_reason,
+            },
+            now=timestamp,
         )
         return self.get_lead(actor=current, lead_id=lead.id)
 
@@ -255,6 +334,8 @@ class SalesRepository:
         ).fetchone()
         if row is None:
             raise ValueError("sales assignee was not found in the active business")
+        if lead.assigned_member_id == normalized_member:
+            return lead
         timestamp = str(now or _utc_now())
         self._conn.execute(
             """
@@ -264,7 +345,154 @@ class SalesRepository:
             """,
             (normalized_member, timestamp, lead.id, current.business_id),
         )
+        self.record_event(
+            actor=current,
+            lead_id=lead.id,
+            event_type="assignee_changed",
+            dedupe_key=_operation_dedupe(
+                "assignee",
+                lead.assigned_member_id,
+                normalized_member,
+                timestamp,
+            ),
+            payload={
+                "actor_member_id": current.membership_id,
+                "from_member_id": lead.assigned_member_id,
+                "to_member_id": normalized_member,
+            },
+            now=timestamp,
+        )
         return self.get_lead(actor=current, lead_id=lead.id)
+
+    def unassign_member(
+        self,
+        *,
+        actor: TenantContext,
+        lead_id: str,
+        now: str | None = None,
+    ) -> SalesLead:
+        current = self._current(actor, manage=True)
+        lead = self.get_lead(actor=current, lead_id=lead_id)
+        if lead.assigned_member_id is None:
+            return lead
+        timestamp = str(now or _utc_now())
+        previous_member_id = lead.assigned_member_id
+        self._conn.execute(
+            """
+            UPDATE clientplatform_sales_leads
+            SET assigned_member_id=NULL, updated_at=?
+            WHERE id=? AND business_id=?
+            """,
+            (timestamp, lead.id, current.business_id),
+        )
+        self.record_event(
+            actor=current,
+            lead_id=lead.id,
+            event_type="assignee_changed",
+            dedupe_key=_operation_dedupe(
+                "assignee", previous_member_id, "unassigned", timestamp
+            ),
+            payload={
+                "actor_member_id": current.membership_id,
+                "from_member_id": previous_member_id,
+                "to_member_id": None,
+            },
+            now=timestamp,
+        )
+        return self.get_lead(actor=current, lead_id=lead.id)
+
+    def set_next_action(
+        self,
+        *,
+        actor: TenantContext,
+        lead_id: str,
+        next_action: str | None,
+        due_at: str | None = None,
+        now: str | None = None,
+    ) -> SalesLead:
+        current = self._current(actor, manage=True)
+        lead = self.get_lead(actor=current, lead_id=lead_id)
+        if lead.stage in {SalesLeadStage.WON, SalesLeadStage.LOST}:
+            raise SalesInvariantViolation("closed sales lead cannot receive a next action")
+        normalized_action = normalize_next_action(next_action)
+        normalized_due = normalize_due_at(due_at)
+        if normalized_due is not None and normalized_action is None:
+            raise SalesInvariantViolation("due_at requires a durable next action")
+        if lead.next_action == normalized_action and lead.due_at == normalized_due:
+            return lead
+        timestamp = str(now or _utc_now())
+        self._conn.execute(
+            """
+            UPDATE clientplatform_sales_leads
+            SET next_action=?, due_at=?, updated_at=?
+            WHERE id=? AND business_id=?
+            """,
+            (
+                normalized_action,
+                normalized_due,
+                timestamp,
+                lead.id,
+                current.business_id,
+            ),
+        )
+        self.record_event(
+            actor=current,
+            lead_id=lead.id,
+            event_type="next_action_changed",
+            dedupe_key=_operation_dedupe(
+                "next_action", normalized_action, normalized_due, timestamp
+            ),
+            payload={
+                "actor_member_id": current.membership_id,
+                "from_next_action": lead.next_action,
+                "from_due_at": lead.due_at,
+                "next_action": normalized_action,
+                "due_at": normalized_due,
+            },
+            now=timestamp,
+        )
+        return self.get_lead(actor=current, lead_id=lead.id)
+
+    def clear_next_action(
+        self,
+        *,
+        actor: TenantContext,
+        lead_id: str,
+        now: str | None = None,
+    ) -> SalesLead:
+        return self.set_next_action(
+            actor=actor,
+            lead_id=lead_id,
+            next_action=None,
+            due_at=None,
+            now=now,
+        )
+
+    def add_note(
+        self,
+        *,
+        actor: TenantContext,
+        lead_id: str,
+        note: str,
+        dedupe_key: str,
+        now: str | None = None,
+    ) -> bool:
+        current = self._current(actor, manage=True)
+        normalized_note = _normalize_note(note)
+        normalized_dedupe = str(dedupe_key or "").strip()
+        if not normalized_dedupe:
+            raise ValueError("dedupe_key must not be empty")
+        return self.record_event(
+            actor=current,
+            lead_id=lead_id,
+            event_type="note_added",
+            dedupe_key=_operation_dedupe("note", normalized_dedupe),
+            payload={
+                "actor_member_id": current.membership_id,
+                "note": normalized_note,
+            },
+            now=now,
+        )
 
     def record_event(
         self,

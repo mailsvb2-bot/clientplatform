@@ -19,6 +19,7 @@ from clientplatform.infrastructure.sales_repository import SalesRepository
 from clientplatform.infrastructure.sales_ui_repository import SalesUiRepository
 from services.db.schema import (
     clientplatform_activity,
+    clientplatform_attribution,
     clientplatform_customers,
     clientplatform_offer_ladders,
     clientplatform_sales,
@@ -35,6 +36,7 @@ class ClientPlatformSalesUiRepositoryTests(unittest.TestCase):
         clientplatform_customers.ensure(self.conn)
         clientplatform_activity.ensure(self.conn)
         clientplatform_sales.ensure(self.conn)
+        clientplatform_attribution.ensure(self.conn)
         clientplatform_offer_ladders.ensure(self.conn)
 
         tenancy = TenancyRepository(self.conn)
@@ -75,6 +77,10 @@ class ClientPlatformSalesUiRepositoryTests(unittest.TestCase):
         self.assertEqual(items[0]["customer_name"], "Анна")
         self.assertEqual(items[0]["stage"], "qualified")
         self.assertEqual(items[0]["next_action_kind"], "present_offer")
+        self.assertIn("assigned_member_id", items[0])
+        self.assertIn("next_action", items[0])
+        self.assertIn("due_at", items[0])
+        self.assertIn("attribution_source", items[0])
 
     def test_won_or_lost_work_is_not_in_active_queue(self) -> None:
         lead = self.sales.create_or_refresh_lead(
@@ -90,6 +96,9 @@ class ClientPlatformSalesUiRepositoryTests(unittest.TestCase):
             stage=SalesLeadStage.WON,
         )
         self.assertEqual(self.ui.list_open_work(actor=self.owner), [])
+        closed = self.ui.list_recent_closed(actor=self.owner)
+        self.assertEqual(closed[0]["stage"], "won")
+        self.assertEqual(closed[0]["closure_reason"], "won")
 
     def test_handoff_projection_contains_customer_but_not_context_payload(self) -> None:
         lead = self.sales.create_or_refresh_lead(
@@ -133,7 +142,10 @@ class ClientPlatformSalesUiRepositoryTests(unittest.TestCase):
         listed = self.ui.list_ladders(actor=self.owner)
         steps = self.ui.list_ladder_steps(actor=self.owner, ladder_id=ladder_id)
 
-        self.assertEqual([(item["name"], item["step_count"]) for item in listed], [("Основной путь", 1)])
+        self.assertEqual(
+            [(item["name"], item["step_count"]) for item in listed],
+            [("Основной путь", 1)],
+        )
         self.assertEqual(steps[0]["title"], "Первая встреча")
         self.assertEqual(steps[0]["kind"], "diagnostic")
         self.assertEqual(steps[0]["requires_human_approval"], 1)
@@ -160,6 +172,7 @@ class ClientPlatformSalesUiRepositoryTests(unittest.TestCase):
         )
 
         self.assertEqual(self.ui.list_open_work(actor=other_owner), [])
+        self.assertEqual(self.ui.list_recent_closed(actor=other_owner), [])
         self.assertEqual(self.ui.list_handoff_work(actor=other_owner), [])
         self.assertEqual(self.ui.list_ladders(actor=other_owner), [])
         with self.assertRaisesRegex(ValueError, "active business"):
@@ -169,6 +182,8 @@ class ClientPlatformSalesUiRepositoryTests(unittest.TestCase):
         for value in (0, -1, True):
             with self.assertRaisesRegex(ValueError, "positive integer"):
                 self.ui.list_open_work(actor=self.owner, limit=value)
+            with self.assertRaisesRegex(ValueError, "positive integer"):
+                self.ui.list_recent_closed(actor=self.owner, limit=value)
 
 
 if __name__ == "__main__":

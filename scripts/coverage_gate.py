@@ -343,6 +343,10 @@ def main() -> int:
             "-q",
             "-p",
             "no:cacheprovider",
+            # PostgreSQL parity/concurrency tests create a transient copy of the
+            # repository under this path. It is coverage input, not a second test
+            # tree; collecting it again causes duplicate-module import collisions.
+            "--ignore=_coverage_pg_data",
         ],
         env=env,
     )

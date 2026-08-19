@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import sqlite3
 
+from services.schema_core import _add_col, _cols
+
 
 def ensure(c: sqlite3.Connection) -> None:
     """Create the canonical tenant-scoped sales opportunity boundary."""
@@ -19,6 +21,9 @@ def ensure(c: sqlite3.Connection) -> None:
             contact_basis TEXT NOT NULL,
             stage TEXT NOT NULL DEFAULT 'new',
             assigned_member_id TEXT,
+            next_action TEXT,
+            due_at TEXT,
+            closure_reason TEXT,
             last_signal_at TEXT NOT NULL,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
@@ -38,6 +43,15 @@ def ensure(c: sqlite3.Connection) -> None:
         )
         """
     )
+    have_leads = _cols(c, "clientplatform_sales_leads")
+    for column, ddl in {
+        "next_action": "next_action TEXT",
+        "due_at": "due_at TEXT",
+        "closure_reason": "closure_reason TEXT",
+    }.items():
+        if column not in have_leads:
+            _add_col(c, "clientplatform_sales_leads", ddl)
+
     c.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_cp_sales_leads_business_stage
@@ -48,6 +62,13 @@ def ensure(c: sqlite3.Connection) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_cp_sales_leads_customer
         ON clientplatform_sales_leads(business_id, customer_id, updated_at)
+        """
+    )
+    c.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_cp_sales_leads_due
+        ON clientplatform_sales_leads(business_id, due_at, updated_at)
+        WHERE due_at IS NOT NULL AND stage NOT IN ('won','lost')
         """
     )
 

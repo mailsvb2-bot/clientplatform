@@ -3,7 +3,11 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from clientplatform.domain.tenancy import TenantContext, normalize_uuid
+from clientplatform.domain.tenancy import (
+    TenantContext,
+    TenantPermissionDenied,
+    normalize_uuid,
+)
 from clientplatform.infrastructure.tenancy_repository import TenancyRepository
 
 
@@ -43,6 +47,70 @@ class SalesUiRepository:
         )
         current.assert_can_view_promotion_analytics()
         return current
+
+    @staticmethod
+    def _can_view_attribution(current: TenantContext) -> bool:
+        try:
+            current.assert_can_view_attribution_spine()
+        except TenantPermissionDenied:
+            return False
+        return True
+
+    def _attribution_for_customer(
+        self,
+        *,
+        current: TenantContext,
+        customer_id: str,
+    ) -> dict[str, Any]:
+        fallback = {
+            "attribution_source": None,
+            "attribution_source_ref_type": None,
+            "attribution_source_ref_id": None,
+            "attribution_promotion_campaign_id": None,
+            "attribution_model_version": None,
+        }
+        if not self._can_view_attribution(current):
+            return fallback
+        row = self._conn.execute(
+            """
+            SELECT
+                t.source AS attribution_source,
+                i.source_ref_type AS attribution_source_ref_type,
+                i.source_ref_id AS attribution_source_ref_id,
+                i.promotion_campaign_id AS attribution_promotion_campaign_id,
+                l.model_version AS attribution_model_version
+            FROM attribution_links l
+            JOIN acquisition_touches t
+              ON t.id=l.touch_id AND t.business_id=l.business_id
+            JOIN attribution_identities i
+              ON i.id=t.attribution_identity_id AND i.business_id=t.business_id
+            WHERE l.business_id=?
+              AND l.customer_id=?
+              AND l.model_version='first_touch_v1'
+            LIMIT 1
+            """,
+            (current.business_id, customer_id),
+        ).fetchone()
+        if row is None:
+            return fallback
+        return _rowdict(row)
+
+    def _decorate_attribution(
+        self,
+        *,
+        current: TenantContext,
+        item: dict[str, Any],
+    ) -> dict[str, Any]:
+        attribution = self._attribution_for_customer(
+            current=current,
+            customer_id=str(item["customer_id"]),
+        )
+        if not attribution.get("attribution_source"):
+            attribution["attribution_source"] = item.get("source_kind")
+        if not attribution.get("attribution_source_ref_id"):
+            attribution["attribution_source_ref_id"] = item.get("source_ref")
+        item.update(attribution)
+        return item
 
     def _commercial_candidate_for_plan(
         self,
@@ -94,7 +162,20 @@ class SalesUiRepository:
                 l.customer_id,
                 COALESCE(c.display_name, 'Клиент') AS customer_name,
                 l.source_kind,
+                l.source_ref,
                 l.stage,
+                l.assigned_member_id,
+                (
+                    SELECT bm.user_id
+                    FROM business_members bm
+                    WHERE bm.id=l.assigned_member_id
+                      AND bm.business_id=l.business_id
+                      AND bm.status='active'
+                    LIMIT 1
+                ) AS assigned_user_id,
+                l.next_action,
+                l.due_at,
+                l.closure_reason,
                 l.updated_at,
                 (
                     SELECT p.id
@@ -137,14 +218,21 @@ class SalesUiRepository:
               ON c.id=l.customer_id AND c.business_id=l.business_id
             WHERE l.business_id=?
               AND l.stage IN ('new','contacted','qualified','checkout')
-            ORDER BY l.updated_at DESC, l.id DESC
+            ORDER BY
+                l.due_at IS NULL,
+                l.due_at,
+                l.updated_at DESC,
+                l.id DESC
             LIMIT ?
             """,
             (current.business_id, selected_limit),
         ).fetchall()
         result: list[dict[str, Any]] = []
         for row in rows:
-            item = _rowdict(row)
+            item = self._decorate_attribution(
+                current=current,
+                item=_rowdict(row),
+            )
             plan_id = str(item.get("next_plan_id") or "")
             if plan_id:
                 candidate = self._commercial_candidate_for_plan(
@@ -156,6 +244,51 @@ class SalesUiRepository:
                     item.update(candidate)
             result.append(item)
         return result
+
+    def list_recent_closed(
+        self,
+        *,
+        actor: TenantContext,
+        limit: int = 12,
+    ) -> list[dict[str, Any]]:
+        current = self._customer_context(actor)
+        selected_limit = _bounded_limit(limit)
+        rows = self._conn.execute(
+            """
+            SELECT
+                l.id,
+                l.customer_id,
+                COALESCE(c.display_name, 'Клиент') AS customer_name,
+                l.source_kind,
+                l.source_ref,
+                l.stage,
+                l.assigned_member_id,
+                (
+                    SELECT bm.user_id
+                    FROM business_members bm
+                    WHERE bm.id=l.assigned_member_id
+                      AND bm.business_id=l.business_id
+                      AND bm.status='active'
+                    LIMIT 1
+                ) AS assigned_user_id,
+                l.next_action,
+                l.due_at,
+                l.closure_reason,
+                l.updated_at
+            FROM clientplatform_sales_leads l
+            JOIN customers c
+              ON c.id=l.customer_id AND c.business_id=l.business_id
+            WHERE l.business_id=?
+              AND l.stage IN ('won','lost')
+            ORDER BY l.updated_at DESC, l.id DESC
+            LIMIT ?
+            """,
+            (current.business_id, selected_limit),
+        ).fetchall()
+        return [
+            self._decorate_attribution(current=current, item=_rowdict(row))
+            for row in rows
+        ]
 
     def count_handoff_work(self, *, actor: TenantContext) -> int:
         """Return the complete actionable handoff backlog for the active business."""
