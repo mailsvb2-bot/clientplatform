@@ -384,14 +384,18 @@ def complete_yandex_direct_oauth(
 ) -> AdOAuthCompletion:
     selected_vault = vault or _vault()
     selected_provider = provider or _provider()
+    # Keep the one-time state consumption and connection activation in the same
+    # transaction as provider proof. get_db() rolls this consumption back if
+    # Yandex rejects the submitted code or identity lookup fails, so the still-
+    # valid 10-minute state is not destroyed by a recoverable first attempt.
+    # The row update also serializes competing completions for the same state.
     with get_db() as conn:
         repository = AdConnectionRepository(conn, vault=selected_vault)
         session, verifier = repository.consume_oauth_session(state=state)
-    if session.provider != AdProvider.YANDEX_DIRECT:
-        raise AdConnectionInvariantViolation("OAuth provider does not match the callback")
-    token = selected_provider.exchange_code(code=code, verifier=verifier)
-    identity = selected_provider.account_identity(access_token=token.access_token)
-    with get_db() as conn:
+        if session.provider != AdProvider.YANDEX_DIRECT:
+            raise AdConnectionInvariantViolation("OAuth provider does not match the callback")
+        token = selected_provider.exchange_code(code=code, verifier=verifier)
+        identity = selected_provider.account_identity(access_token=token.access_token)
         current = TenancyRepository(conn).resolve_context(
             user_id=session.user_id,
             business_id=session.business_id,
@@ -401,10 +405,7 @@ def complete_yandex_direct_oauth(
             raise AdConnectionInvariantViolation(
                 "OAuth membership changed before the callback completed"
             )
-        connection = AdConnectionRepository(
-            conn,
-            vault=selected_vault,
-        ).activate_oauth_connection(
+        connection = repository.activate_oauth_connection(
             session=session,
             external_account_id=identity.account_id,
             external_login=identity.login,
