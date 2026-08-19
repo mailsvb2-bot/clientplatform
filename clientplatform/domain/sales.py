@@ -124,12 +124,12 @@ class SalesLead:
     contact_basis: ContactBasis
     stage: SalesLeadStage
     assigned_member_id: str | None
-    next_action: str | None
-    due_at: str | None
-    closure_reason: str | None
     last_signal_at: str
     created_at: str
     updated_at: str
+    next_action: str | None = None
+    due_at: str | None = None
+    closure_reason: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "id", normalize_uuid(self.id, field_name="sales_lead_id"))
