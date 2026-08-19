@@ -581,7 +581,7 @@ managed campaign exists SERVING_OFF
 
 ---
 
-## U-007 — `NEXT` — Zero-to-First-Outcome Onboarding
+## U-007 — `DONE` — Zero-to-First-Outcome Onboarding
 
 ### Цель
 
@@ -612,23 +612,31 @@ preferred conversion action
 ### UX
 
 1. коротко рассказать о бизнесе;
-2. ClientPlatform строит структурированный паспорт;
-3. владелец подтверждает/правит только существенное;
-4. подключает нужный канал/рекламу/оплату;
-5. получает готовый стартовый вариант: offer + booking path + creative/content/action;
-6. запускает первое действие.
+2. ClientPlatform извлекает только явно сообщённые факты и показывает понятные структурированные данные о бизнесе;
+3. владелец подтверждает их через «Всё верно» или исправляет через «Изменить»;
+4. ClientPlatform предлагает выбрать первый полезный результат без provider/API terminology;
+5. активируется только необходимая для выбранного результата capability, а существующие booking/program/customer flows переиспользуются;
+6. прерванный DRAFT onboarding корректно продолжается после `/start`/повторного входа без возврата в legacy setup.
 
 ### AI
 
-AI может извлекать/предлагать структуру, но подтверждённый `BusinessProfile` — durable domain state, а не prompt memory.
+AI может извлекать/предлагать структуру, но подтверждённый `BusinessProfile` — durable domain state, а не prompt memory. Неизвестные цены, аудитория, legal/qualification claims и conversion action не выдумываются.
 
 ### DONE когда
 
 Нетехнический пользователь может пройти onboarding без API/provider terminology и получить готовый первый action.
 
+### Evidence
+
+- PR #198 (`U-007: zero-to-first-outcome onboarding`) merged в `main` как `26ea24496ebcca37c5e6e0f04ac4814d5175d965`.
+- Все 15 обязательных PR workflows на точном head `25de33dc42b5a97475bb12c306e925628d88d576` завершились `success`, включая Canon, CI, pre-deploy, production isolation, scenario matrix, backup и concurrency contours.
+- Coverage-ratchets не снижены, а повышены и зафиксированы на combined `74.30%` и branch `65.33%`; full coverage run: `3638 passed, 7 skipped`.
+- P1 restart/resume regression закрыт на composed production router: DRAFT продолжает U-007 review/first-result flow после interaction-safety wrapper, а не уходит в legacy capability setup.
+- Production 2026-08-19 обновлён exact merge SHA `26ea24496ebcca37c5e6e0f04ac4814d5175d965`: fail-closed preflight и deploy завершились успешно, encrypted pre-deploy backup создан, internal health/readiness `ok=true`, public `/healthz`/`/readyz` и Telegram webhook-prefix остаются закрыты `404` при polling-only transport.
+
 ---
 
-## U-008 — `QUEUED` — CRM Lead Inbox / Sales Desk
+## U-008 — `NEXT` — CRM Lead Inbox / Sales Desk
 
 ### Цель
 
@@ -1459,8 +1467,8 @@ Duplicate tap, retry, worker restart или uncertain provider response не д�
 | U-004 Yandex Campaign-level Read Analytics | DONE | PR #177; merge SHA `c5ad2187402593152688cc90a60f559830f148f6`; all 15 PR workflows green including Canon, CI quality/coverage, static security, booking/ad-spend/partner concurrency, production isolation, user scenario matrix and pre-deploy; coverage baseline 74.16% combined / 65.22% branch |
 | U-005 Managed Yandex Activation Policy | DONE | PR #194; merge SHA `d5a518167515df1cab5086f24aaf2eddcff1f1ff`; all 15 PR workflows green including Canon, CI quality/coverage, static security, ad-spend/booking/partner concurrency, production isolation, user scenario matrix and pre-deploy |
 | U-006 Growth Cockpit | DONE | PR #196; merge SHA `65472747f9b0ed6f2941b21309a16f4f6c426c5d`; all 15 required PR workflows success on `dc83b988b33b933d3a248d2b16ab0cc71ebe8217`; coverage ratchets preserved at 74.21% combined / 65.28% branch |
-| U-007 Zero-to-First-Outcome Onboarding | NEXT | — |
-| U-008 CRM Lead Inbox | QUEUED | — |
+| U-007 Zero-to-First-Outcome Onboarding | DONE | PR #198; merge SHA `26ea24496ebcca37c5e6e0f04ac4814d5175d965`; all 15 required PR workflows success on `25de33dc42b5a97475bb12c306e925628d88d576`; coverage ratchets raised to 74.30% combined / 65.33% branch; exact merge SHA deployed to production with fail-closed preflight/deploy and healthy internal probes |
+| U-008 CRM Lead Inbox | NEXT | — |
 | U-009 Follow-up Employee | QUEUED | — |
 | U-010 Retention & Reactivation Engine | QUEUED | — |
 
