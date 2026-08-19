@@ -18,6 +18,7 @@ from clientplatform.infrastructure.tenancy_repository import TenancyRepository
 from services.db.schema import (
     clientplatform_activity,
     clientplatform_attribution,
+    clientplatform_bookings,
     clientplatform_customers,
     clientplatform_promotions,
     clientplatform_sales,
@@ -33,6 +34,7 @@ class ClientPlatformSalesU008Tests(unittest.TestCase):
         clientplatform_tenancy.ensure(self.conn)
         clientplatform_customers.ensure(self.conn)
         clientplatform_activity.ensure(self.conn)
+        clientplatform_bookings.ensure(self.conn)
         clientplatform_sales.ensure(self.conn)
         clientplatform_promotions.ensure(self.conn)
         clientplatform_attribution.ensure(self.conn)
