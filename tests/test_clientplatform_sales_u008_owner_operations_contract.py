@@ -21,7 +21,7 @@ class ClientPlatformSalesOwnerOperationsContractTests(unittest.TestCase):
             "clear_sales_next_action",
             "add_sales_note",
         ):
-            self.assertGreaterEqual(source.count(f"{operation}(") , 1, operation)
+            self.assertGreaterEqual(source.count(f"{operation}("), 1, operation)
 
         for callback_prefix in (
             "cps:swme:",
