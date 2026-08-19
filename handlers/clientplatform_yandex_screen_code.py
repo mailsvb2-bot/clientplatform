@@ -29,6 +29,9 @@ from . import clientplatform_simple_experience as simple
 
 
 logger = logging.getLogger(__name__)
+_RETRYABLE_CONFIRMATION_CODE_ERRORS = frozenset(
+    {"provider_invalid_grant", "provider_bad_verification_code"}
+)
 
 
 class YandexScreenCodeState(StatesGroup):
@@ -53,6 +56,14 @@ def _confirmation_code(value: str | None) -> str:
         return normalize_yandex_confirmation_code(value)
     except YandexDirectError as exc:
         raise ValueError("Yandex OAuth confirmation code is invalid") from exc
+
+
+def _incoming_confirmation_code(message: Message) -> str | None:
+    text = getattr(message, "text", None)
+    if isinstance(text, str):
+        return text
+    caption = getattr(message, "caption", None)
+    return caption if isinstance(caption, str) else None
 
 
 def _ad_connection_failure_reason(exc: AdConnectionError) -> str:
@@ -454,6 +465,15 @@ async def _restart_message(message: Message, state: FSMContext, *, reason: str) 
     )
 
 
+async def _retry_confirmation_code_message(message: Message) -> None:
+    await message.answer(
+        "Яндекс не принял этот код подтверждения. Скопируйте код со страницы Яндекса "
+        "ещё раз и отправьте сюда одним сообщением. Если код истёк, снова откройте "
+        "кнопку «Открыть Яндекс и получить код» в предыдущем сообщении. "
+        "Текущая сессия подключения пока сохранена."
+    )
+
+
 async def _erase_confirmation_code_message(message: Message) -> None:
     delete = getattr(message, "delete", None)
     if not callable(delete):
@@ -488,7 +508,7 @@ async def complete_yandex_direct_screen_code(
         )
         return
     try:
-        code = _confirmation_code(message.text)
+        code = _confirmation_code(_incoming_confirmation_code(message))
     except ValueError:
         await message.answer(
             "Отправьте только код подтверждения со страницы Яндекса одним сообщением, без пояснений."
@@ -518,6 +538,9 @@ async def complete_yandex_direct_screen_code(
             exc.code,
             exc.retryable,
         )
+        if exc.code in _RETRYABLE_CONFIRMATION_CODE_ERRORS:
+            await _retry_confirmation_code_message(message)
+            return
         await _restart_message(
             message,
             state,
