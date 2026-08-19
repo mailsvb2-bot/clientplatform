@@ -19,6 +19,7 @@ from services.db.schema import (
     clientplatform_activity,
     clientplatform_attribution,
     clientplatform_customers,
+    clientplatform_promotions,
     clientplatform_sales,
     clientplatform_tenancy,
 )
@@ -33,6 +34,7 @@ class ClientPlatformSalesU008Tests(unittest.TestCase):
         clientplatform_customers.ensure(self.conn)
         clientplatform_activity.ensure(self.conn)
         clientplatform_sales.ensure(self.conn)
+        clientplatform_promotions.ensure(self.conn)
         clientplatform_attribution.ensure(self.conn)
 
         self.tenancy = TenancyRepository(self.conn)
@@ -84,7 +86,10 @@ class ClientPlatformSalesU008Tests(unittest.TestCase):
             event for event in events if event["event_type"] == "next_action_changed"
         ]
         self.assertEqual(len(next_action_events), 1)
-        self.assertEqual(next_action_events[0]["payload"]["next_action"], "Позвонить клиенту")
+        self.assertEqual(
+            next_action_events[0]["payload"]["next_action"],
+            "Позвонить клиенту",
+        )
 
     def test_assignment_unassignment_is_tenant_scoped_and_audited(self) -> None:
         lead = self._lead()
@@ -180,7 +185,10 @@ class ClientPlatformSalesU008Tests(unittest.TestCase):
             for event in self.sales.list_events(actor=self.owner, lead_id=lead.id)
             if event["event_type"] == "stage_changed"
         ]
-        self.assertEqual([event["payload"]["to_stage"] for event in stage_events], ["lost", "new", "won"])
+        self.assertEqual(
+            [event["payload"]["to_stage"] for event in stage_events],
+            ["lost", "new", "won"],
+        )
 
     def test_notes_use_existing_sales_events_and_dedupe(self) -> None:
         lead = self._lead()
@@ -211,9 +219,15 @@ class ClientPlatformSalesU008Tests(unittest.TestCase):
             notes[0]["payload"]["note"],
             "Клиент попросил перезвонить после 18:00.",
         )
-        self.assertEqual(notes[0]["payload"]["actor_member_id"], self.owner.membership_id)
+        self.assertEqual(
+            notes[0]["payload"]["actor_member_id"],
+            self.owner.membership_id,
+        )
         table = self.conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='clientplatform_sales_notes'"
+            """
+            SELECT name FROM sqlite_master
+            WHERE type='table' AND name='clientplatform_sales_notes'
+            """
         ).fetchone()
         self.assertIsNone(table)
 
@@ -341,7 +355,10 @@ class ClientPlatformSalesU008Tests(unittest.TestCase):
         owner_item = self.ui.list_open_work(actor=self.owner)[0]
         self.assertEqual(owner_item["id"], lead.id)
         self.assertEqual(owner_item["attribution_source"], "yandex_direct")
-        self.assertEqual(owner_item["attribution_source_ref_type"], "creative_variant")
+        self.assertEqual(
+            owner_item["attribution_source_ref_type"],
+            "creative_variant",
+        )
         self.assertEqual(owner_item["attribution_source_ref_id"], "creative-42")
         self.assertEqual(owner_item["attribution_model_version"], "first_touch_v1")
 
@@ -356,7 +373,10 @@ class ClientPlatformSalesU008Tests(unittest.TestCase):
         )
         support_item = self.ui.list_open_work(actor=support)[0]
         self.assertEqual(support_item["attribution_source"], "website")
-        self.assertEqual(support_item["attribution_source_ref_id"], "landing-main")
+        self.assertEqual(
+            support_item["attribution_source_ref_id"],
+            "landing-main",
+        )
         self.assertIsNone(support_item["attribution_source_ref_type"])
         self.assertIsNone(support_item["attribution_model_version"])
 
