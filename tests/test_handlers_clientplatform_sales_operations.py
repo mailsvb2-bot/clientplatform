@@ -526,7 +526,7 @@ async def test_note_prompt_and_capture_paths(
     await operations.capture_sales_note(message, success_state)
     assert captured["note"] == "Перезвонить после 18:00"
     assert captured["dedupe_key"] == "telegram:500:700"
-    assert "Заметка сохранена" in message.answers[-2][0]
+    assert "Заметка сохранена" in message.answers[-1][0]
 
     def fail(**_kwargs: Any) -> None:
         raise ValueError("duplicate")
