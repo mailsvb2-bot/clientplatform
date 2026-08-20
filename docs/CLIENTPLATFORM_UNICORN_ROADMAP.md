@@ -683,7 +683,7 @@ Legacy `services/sales_desk*` допускается только как ист�
 
 ---
 
-## U-009 — `NEXT` — Follow-up Employee
+## U-009 — `DONE` — Follow-up Employee
 
 ### Цель
 
@@ -712,9 +712,17 @@ ClientPlatform напоминает и возвращает лидов, не п�
 
 Безопасный follow-up работает end-to-end и автоматически прекращается при достижении результата или запрета.
 
+### Evidence
+
+- PR #207 (`U-009: safe follow-up employee`) squash-merged в `main` как `6436e88de24b5b9caa9e06182ff1b190bfb91865`.
+- Все 15 PR workflows на точном head `41cf7ecb16f22aca034c9ca1b61a0237ed018d7c` завершились `success`, включая Canon, CI quality/coverage, Critical Static Surface, Pre-deploy Release Gate, Production Isolation, Encrypted Backup, User Scenario Matrix и concurrency contours.
+- Coverage ratchets повышены и зафиксированы на `74.56%` combined / `65.58%` branch.
+- Canonical production deploy подтверждён на exact SHA `6436e88de24b5b9caa9e06182ff1b190bfb91865`: encrypted backup, `/healthz` + `/readyz`, polling/webhook contract и visual gateway readiness прошли.
+- Единый production sales smoke `u008-u009-sales-operations-v2` прошёл U-008 + U-009 checks на PostgreSQL с `rollback_clean=true` и нулевым residue во всех synthetic tables.
+
 ---
 
-## U-010 — `QUEUED` — Retention & Reactivation Engine
+## U-010 — `NEXT` — Retention & Reactivation Engine
 
 ### Цель
 
@@ -1480,8 +1488,8 @@ Duplicate tap, retry, worker restart или uncertain provider response не д�
 | U-006 Growth Cockpit | DONE | PR #196; merge SHA `65472747f9b0ed6f2941b21309a16f4f6c426c5d`; all 15 required PR workflows success on `dc83b988b33b933d3a248d2b16ab0cc71ebe8217`; coverage ratchets preserved at 74.21% combined / 65.28% branch |
 | U-007 Zero-to-First-Outcome Onboarding | DONE | PR #198; merge SHA `26ea24496ebcca37c5e6e0f04ac4814d5175d965`; all 15 required PR workflows success on `25de33dc42b5a97475bb12c306e925628d88d576`; coverage ratchets raised to 74.30% combined / 65.33% branch |
 | U-008 CRM Lead Inbox | DONE | PR #203; merge SHA `7492ca6f1ac6bd3e00526dac80c6d0cba32ad2cd`; all 15 required PR workflows success on `8d46867f2ce0a176b26e8af53e3d2dcea26362b5`; combined coverage baseline 74.30%, branch baseline raised to 65.35%; canonical sales contour extended without `crm.py` or second sales storage |
-| U-009 Follow-up Employee | NEXT | — |
-| U-010 Retention & Reactivation Engine | QUEUED | — |
+| U-009 Follow-up Employee | DONE | PR #207; merge SHA `6436e88de24b5b9caa9e06182ff1b190bfb91865`; all 15 PR workflows green; production smoke `u008-u009-sales-operations-v2` rollback-clean |
+| U-010 Retention & Reactivation Engine | NEXT | deterministic cohort/read-model implementation started from production SHA `6436e88de24b5b9caa9e06182ff1b190bfb91865` |
 
 ---
 
