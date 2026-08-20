@@ -12,6 +12,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     VISUAL_GATEWAY_PORT=8097
 
 WORKDIR /app
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ffmpeg \
+ && rm -rf /var/lib/apt/lists/*
 COPY visual_provider_gateway/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 COPY visual_provider_gateway /app/visual_provider_gateway

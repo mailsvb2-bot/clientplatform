@@ -599,7 +599,9 @@ async def _render_ad_visual(
             return
         await state.update_data(creative_job_id="")
         caption = (
-            f"Готовый рекламный визуал · {job.provider} · {job.model or 'default'}"
+            "Готовое рекламное видео"
+            if job.kind == "video"
+            else "Готовое рекламное изображение"
         )
         if job.kind == "video":
             await target.answer_video(FSInputFile(path), caption=caption)
@@ -628,8 +630,8 @@ async def _render_ad_visual(
         return
     await state.update_data(creative_job_id="")
     await target.answer(
-        "Визуал сейчас недоступен. Текстовый рекламный черновик остаётся готовым; "
-        "провайдер изображений/видео переключается конфигурацией."
+        "Не удалось создать визуал. Текстовый рекламный черновик уже готов — "
+        "можно повторить попытку позже или продолжить без визуала."
     )
 
 
@@ -680,7 +682,9 @@ async def refresh_ad_visual(callback: CallbackQuery, state: FSMContext) -> None:
             return
         await state.update_data(creative_job_id="")
         caption = (
-            f"Готовый рекламный визуал · {job.provider} · {job.model or 'default'}"
+            "Готовое рекламное видео"
+            if job.kind == "video"
+            else "Готовое рекламное изображение"
         )
         if job.kind == "video":
             await target.answer_video(FSInputFile(path), caption=caption)

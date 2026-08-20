@@ -132,6 +132,44 @@ class JobStore:
             conn.commit()
         return self.get(gateway_id, client_id=client, scope_id=scope), True
 
+    def rearm_failed(
+        self,
+        gateway_id: str,
+        *,
+        client_id: str,
+        scope_id: str,
+        allowed_error_codes: frozenset[str],
+    ) -> bool:
+        """Atomically reopen a terminal non-billing failure for an explicit retry."""
+        token = _job_id(gateway_id)
+        client = _client(client_id)
+        scope = _scope(scope_id)
+        now = int(time.time())
+        with self._lock, self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT status,error_code FROM visual_jobs WHERE id=? AND client_id=? AND scope_id=?",
+                (token, client, scope),
+            ).fetchone()
+            if (
+                row is None
+                or str(row["status"] or "") != "failed"
+                or str(row["error_code"] or "") not in allowed_error_codes
+            ):
+                conn.commit()
+                return False
+            cur = conn.execute(
+                """
+                UPDATE visual_jobs
+                SET provider='', status='running', provider_job_id='', model='',
+                    mime_type='', asset_path='', error_code='', updated_at=?
+                WHERE id=? AND client_id=? AND scope_id=? AND status='failed'
+                """,
+                (now, token, client, scope),
+            )
+            conn.commit()
+            return cur.rowcount == 1
+
     def update(
         self,
         gateway_id: str,

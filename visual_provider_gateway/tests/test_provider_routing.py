@@ -25,7 +25,7 @@ def _clear_provider_routing(monkeypatch):
 def test_ru_defaults_keep_global_clouds_out(monkeypatch):
     _clear_provider_routing(monkeypatch)
     assert provider_order("image", "RU") == ("yandexart", "gigachat", "selfhosted")
-    assert provider_order("video", "RU") == ("selfhosted",)
+    assert provider_order("video", "RU") == ("yandexart_motion", "selfhosted")
 
 
 def test_global_defaults_prefer_runway_for_video(monkeypatch):
@@ -115,7 +115,7 @@ def test_yandexart_can_use_explicit_model_uri_without_separate_folder():
     provider = YandexArtProvider(
         ProviderConfig(
             name="yandexart",
-            base_url="https://llm.api.cloud.yandex.net:443",
+            base_url="https://ai.api.cloud.yandex.net:443",
             api_key="test",
             model_image="art://folder/yandex-art/latest",
         )
@@ -229,7 +229,8 @@ def test_provider_defaults_use_current_yandex_and_gigachat_endpoints(monkeypatch
     ):
         monkeypatch.delenv(name, raising=False)
     configs = provider_configs()
-    assert configs["yandexart"].base_url == "https://llm.api.cloud.yandex.net:443"
+    assert configs["yandexart"].base_url == "https://ai.api.cloud.yandex.net:443"
+    assert configs["yandexart_motion"].base_url == "https://ai.api.cloud.yandex.net:443"
     assert configs["gigachat"].base_url == "https://api.giga.chat/v1"
     assert configs["gigachat"].oauth_url == "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
 
@@ -321,3 +322,86 @@ def test_submit_never_exposes_unstructured_transport_error_text(monkeypatch):
 
     assert job.error_code == "visual_provider_submit_transport"
     assert secret_marker not in rendered
+
+
+def test_yandexart_motion_video_uses_image_operation_and_preserves_video_contract(monkeypatch):
+    from visual_provider_gateway.providers import YandexArtMotionVideoProvider
+
+    observed = {}
+
+    def fake_json_request(method, url, *, headers=None, payload=None, timeout=30, max_bytes=0):
+        observed.update({"method": method, "url": url, "headers": headers, "payload": payload})
+        return {"id": "operation-1"}
+
+    monkeypatch.setattr(providers, "_json_request", fake_json_request)
+    provider = YandexArtMotionVideoProvider(
+        ProviderConfig(
+            name="yandexart_motion",
+            base_url="https://ai.api.cloud.yandex.net:443",
+            api_key="test",
+            model_image="art://folder/yandex-art/latest",
+        )
+    )
+    job = provider.submit(
+        CreativeBrief(
+            kind="video",
+            prompt="new sink advertising keyframe",
+            duration_seconds=7,
+            aspect_ratio="16:9",
+        )
+    )
+    assert observed["url"].endswith("/foundationModels/v1/imageGenerationAsync")
+    assert job.provider == "yandexart_motion"
+    assert job.kind == "video"
+    assert job.status == "queued"
+    assert job.provider_payload["duration_seconds"] == 7
+    assert job.provider_payload["aspect_ratio"] == "16:9"
+
+
+def test_yandexart_motion_poll_converts_keyframe_and_removes_source(monkeypatch, tmp_path):
+    from visual_provider_gateway.models import CreativeJob
+    from visual_provider_gateway.providers import YandexArtMotionVideoProvider, YandexArtProvider
+
+    source = tmp_path / "keyframe.jpg"
+    source.write_bytes(b"jpeg")
+    target = tmp_path / "motion.mp4"
+
+    def fake_image_poll(_self, job):
+        job.status = "succeeded"
+        job.mime_type = "image/jpeg"
+        job.asset_path = str(source)
+        return job
+
+    def fake_render(_config, **kwargs):
+        assert kwargs["image_path"] == str(source)
+        assert kwargs["duration_seconds"] == 5
+        assert kwargs["aspect_ratio"] == "1:1"
+        target.write_bytes(b"mp4")
+        return str(target)
+
+    monkeypatch.setattr(YandexArtProvider, "poll", fake_image_poll)
+    monkeypatch.setattr(providers, "_render_motion_video", fake_render)
+    provider = YandexArtMotionVideoProvider(
+        ProviderConfig(name="yandexart_motion", api_key="test", model_image="art://folder/model")
+    )
+    job = CreativeJob(
+        provider="yandexart_motion",
+        kind="video",
+        status="running",
+        external_id="operation-1",
+        provider_payload={"duration_seconds": 5, "aspect_ratio": "1:1"},
+    )
+    result = provider.poll(job)
+    assert result.status == "succeeded"
+    assert result.kind == "video"
+    assert result.provider == "yandexart_motion"
+    assert result.mime_type == "video/mp4"
+    assert result.asset_path == str(target)
+    assert source.exists() is False
+
+
+def test_visual_provider_gateway_image_contains_ffmpeg_contract():
+    from pathlib import Path
+
+    dockerfile = Path("visual_provider_gateway/Dockerfile").read_text(encoding="utf-8")
+    assert "apt-get install -y --no-install-recommends ffmpeg" in dockerfile
