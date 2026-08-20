@@ -1,0 +1,323 @@
+name: Independent AI Review
+
+on:
+  pull_request_target:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+  statuses: write
+
+concurrency:
+  group: independent-ai-review-${{ github.event.pull_request.number }}
+  # Do not cancel an in-flight paid provider call before its cost record is uploaded.
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    outputs:
+      risk: ${{ steps.classify.outputs.risk }}
+      base_sha: ${{ steps.classify.outputs.base_sha }}
+      head_sha: ${{ steps.classify.outputs.head_sha }}
+      draft: ${{ steps.metadata.outputs.draft }}
+    steps:
+      - name: Checkout trusted base implementation
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+
+      - name: Fetch untrusted PR head as data only
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin \
+            "refs/pull/${PR_NUMBER}/head:refs/remotes/pull/${PR_NUMBER}/head"
+          ACTUAL_HEAD_SHA="$(git rev-parse "refs/remotes/pull/${PR_NUMBER}/head^{commit}")"
+          test "$ACTUAL_HEAD_SHA" = "$EXPECTED_HEAD_SHA"
+          git cat-file -e "${EXPECTED_HEAD_SHA}^{commit}"
+
+      - name: Record pull request metadata
+        id: metadata
+        env:
+          IS_DRAFT: ${{ github.event.pull_request.draft }}
+        run: echo "draft=$IS_DRAFT" >> "$GITHUB_OUTPUT"
+
+      - name: Classify deterministic review risk
+        id: classify
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python scripts/ai_review_gate.py classify \
+            --base "$BASE_SHA" \
+            --head "$HEAD_SHA"
+
+      - name: Publish pending exact-head status
+        if: ${{ github.event.pull_request.draft == false }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          TARGET_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python scripts/ai_review_gate.py status \
+            --repository "$REPOSITORY" \
+            --sha "$HEAD_SHA" \
+            --state pending \
+            --description 'Independent AI review is running' \
+            --target-url "$TARGET_URL"
+
+  claude-adversarial:
+    needs: prepare
+    if: >-
+      ${{
+        needs.prepare.result == 'success' &&
+        needs.prepare.outputs.draft == 'false' &&
+        needs.prepare.outputs.risk != 'L0'
+      }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    concurrency:
+      group: independent-ai-review-claude-budget-${{ github.repository }}
+      cancel-in-progress: false
+      queue: max
+    env:
+      AI_MODEL: ${{
+        vars.ANTHROPIC_REVIEW_MODEL != '' && vars.ANTHROPIC_REVIEW_MODEL ||
+        (needs.prepare.outputs.risk == 'L3' && 'claude-opus-5' || 'claude-sonnet-5')
+        }}
+      AI_REVIEW_MAX_CONTEXT_BYTES: ${{ vars.AI_REVIEW_MAX_CONTEXT_BYTES || '700000' }}
+      AI_MONTHLY_BUDGET_USD: ${{ vars.AI_CLAUDE_MONTHLY_BUDGET_USD || '20' }}
+      AI_MAX_REVIEW_USD: ${{ vars.AI_CLAUDE_MAX_REVIEW_USD || '4' }}
+    steps:
+      - name: Checkout trusted base implementation
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ needs.prepare.outputs.base_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+
+      - name: Fetch untrusted PR head as data only
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          EXPECTED_HEAD_SHA: ${{ needs.prepare.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin \
+            "refs/pull/${PR_NUMBER}/head:refs/remotes/pull/${PR_NUMBER}/head"
+          test "$(git rev-parse "refs/remotes/pull/${PR_NUMBER}/head^{commit}")" = "$EXPECTED_HEAD_SHA"
+
+      - name: Claude adversarial review with financial guard
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          TARGET_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          BASE_SHA: ${{ needs.prepare.outputs.base_sha }}
+          HEAD_SHA: ${{ needs.prepare.outputs.head_sha }}
+          RISK: ${{ needs.prepare.outputs.risk }}
+        run: |
+          python scripts/ai_review_gate.py review \
+            --reviewer claude \
+            --base "$BASE_SHA" \
+            --head "$HEAD_SHA" \
+            --expected-risk "$RISK" \
+            --model "$AI_MODEL" \
+            --api-key-env ANTHROPIC_API_KEY \
+            --repository "$REPOSITORY" \
+            --pull-number "${{ github.event.pull_request.number }}" \
+            --github-token-env GITHUB_TOKEN \
+            --target-url "$TARGET_URL" \
+            --monthly-budget-usd "$AI_MONTHLY_BUDGET_USD" \
+            --max-review-usd "$AI_MAX_REVIEW_USD" \
+            --max-context-bytes "$AI_REVIEW_MAX_CONTEXT_BYTES" \
+            --cost-output artifacts/ai-review/claude-cost.json \
+            --output artifacts/ai-review/claude.json
+
+      - name: Upload Claude review evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: claude-review-${{ needs.prepare.outputs.base_sha }}-${{ needs.prepare.outputs.head_sha }}-attempt-${{ github.run_attempt }}
+          path: artifacts/ai-review/claude.json
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload Claude cost ledger
+        if: ${{ always() && hashFiles('artifacts/ai-review/claude-cost.json') != '' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ai-review-cost-claude
+          path: artifacts/ai-review/claude-cost.json
+          overwrite: true
+          retention-days: 35
+
+  gemini-system:
+    needs: prepare
+    if: >-
+      ${{
+        needs.prepare.result == 'success' &&
+        needs.prepare.outputs.draft == 'false' &&
+        (needs.prepare.outputs.risk == 'L2' || needs.prepare.outputs.risk == 'L3')
+      }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    concurrency:
+      group: independent-ai-review-gemini-budget-${{ github.repository }}
+      cancel-in-progress: false
+      queue: max
+    env:
+      AI_MODEL: ${{ vars.GEMINI_REVIEW_MODEL || 'gemini-3.7-flash' }}
+      AI_REVIEW_MAX_CONTEXT_BYTES: ${{ vars.AI_REVIEW_MAX_CONTEXT_BYTES || '700000' }}
+      AI_MONTHLY_BUDGET_USD: ${{ vars.AI_GEMINI_MONTHLY_BUDGET_USD || '10' }}
+      AI_MAX_REVIEW_USD: ${{ vars.AI_GEMINI_MAX_REVIEW_USD || '1' }}
+    steps:
+      - name: Checkout trusted base implementation
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ needs.prepare.outputs.base_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+
+      - name: Fetch untrusted PR head as data only
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          EXPECTED_HEAD_SHA: ${{ needs.prepare.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin \
+            "refs/pull/${PR_NUMBER}/head:refs/remotes/pull/${PR_NUMBER}/head"
+          test "$(git rev-parse "refs/remotes/pull/${PR_NUMBER}/head^{commit}")" = "$EXPECTED_HEAD_SHA"
+
+      - name: Gemini system review with financial guard
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          TARGET_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          BASE_SHA: ${{ needs.prepare.outputs.base_sha }}
+          HEAD_SHA: ${{ needs.prepare.outputs.head_sha }}
+          RISK: ${{ needs.prepare.outputs.risk }}
+        run: |
+          python scripts/ai_review_gate.py review \
+            --reviewer gemini \
+            --base "$BASE_SHA" \
+            --head "$HEAD_SHA" \
+            --expected-risk "$RISK" \
+            --model "$AI_MODEL" \
+            --api-key-env GEMINI_API_KEY \
+            --repository "$REPOSITORY" \
+            --pull-number "${{ github.event.pull_request.number }}" \
+            --github-token-env GITHUB_TOKEN \
+            --target-url "$TARGET_URL" \
+            --monthly-budget-usd "$AI_MONTHLY_BUDGET_USD" \
+            --max-review-usd "$AI_MAX_REVIEW_USD" \
+            --max-context-bytes "$AI_REVIEW_MAX_CONTEXT_BYTES" \
+            --cost-output artifacts/ai-review/gemini-cost.json \
+            --output artifacts/ai-review/gemini.json
+
+      - name: Upload Gemini review evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: gemini-review-${{ needs.prepare.outputs.base_sha }}-${{ needs.prepare.outputs.head_sha }}-attempt-${{ github.run_attempt }}
+          path: artifacts/ai-review/gemini.json
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload Gemini cost ledger
+        if: ${{ always() && hashFiles('artifacts/ai-review/gemini-cost.json') != '' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ai-review-cost-gemini
+          path: artifacts/ai-review/gemini-cost.json
+          overwrite: true
+          retention-days: 35
+
+  gate:
+    needs: [prepare, claude-adversarial, gemini-system]
+    if: always()
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout trusted base implementation
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+
+      - name: Resolve and publish exact-head verdict
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          TARGET_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          IS_DRAFT: ${{ github.event.pull_request.draft }}
+          PREPARE_RESULT: ${{ needs.prepare.result }}
+          RISK: ${{ needs.prepare.outputs.risk }}
+          CLAUDE_RESULT: ${{ needs.claude-adversarial.result }}
+          GEMINI_RESULT: ${{ needs.gemini-system.result }}
+        run: |
+          set -euo pipefail
+
+          STATE=failure
+          DESCRIPTION='Independent AI review failed closed'
+
+          if [ "$IS_DRAFT" = 'true' ]; then
+            STATE=success
+            DESCRIPTION='Draft PR: review deferred until ready-for-review'
+          elif [ "$PREPARE_RESULT" != 'success' ]; then
+            DESCRIPTION='AI review prepare/classification did not succeed'
+          elif [ "$RISK" = 'L0' ]; then
+            STATE=success
+            DESCRIPTION='L0 docs-only change: model review not required'
+          elif [ "$CLAUDE_RESULT" != 'success' ]; then
+            DESCRIPTION='Claude adversarial review did not pass'
+          elif [ "$RISK" = 'L1' ]; then
+            STATE=success
+            DESCRIPTION='L1 passed Claude adversarial review'
+          elif [ "$GEMINI_RESULT" != 'success' ]; then
+            DESCRIPTION='Gemini system review did not pass'
+          else
+            STATE=success
+            DESCRIPTION="$RISK passed Claude + Gemini for current base+head"
+          fi
+
+          python scripts/ai_review_gate.py status \
+            --repository "$REPOSITORY" \
+            --sha "$HEAD_SHA" \
+            --state "$STATE" \
+            --description "$DESCRIPTION" \
+            --target-url "$TARGET_URL"
+
+          echo "$DESCRIPTION"
+          test "$STATE" = 'success'

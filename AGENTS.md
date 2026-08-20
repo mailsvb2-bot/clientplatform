@@ -41,6 +41,20 @@ Before editing code:
 - Do not use Metrotherapy, BusinessAIOS or another product as a production runtime dependency unless the owner explicitly approves a separate architectural decision.
 - Do not production-deploy without a separate direct owner instruction.
 
+## Independent AI review discipline
+
+- AI review is evidence, never a competing source of truth. It cannot override the Canon, deterministic tests, security gates or release evidence.
+- One branch has one active writer. Independent reviewers are read-only for that branch; they report findings instead of silently rewriting the author's implementation.
+- Every blocking AI review is bound to the exact PR base SHA and head SHA. Any new head commit invalidates the prior PASS and requires a fresh review.
+- The trusted `main` version of this protocol governs review of proposed changes to `AGENTS.md`, the Canon, review code and workflows; a PR cannot weaken the rules that judge itself.
+- A reviewer may block only on a demonstrated critical/high defect with concrete repository evidence and a reproducible scenario or precise proof path. Style preference is not a blocker.
+- Reviewer disagreement is resolved by evidence, not model voting. Confirmed defects should become deterministic regression tests or explicit invariants whenever technically possible.
+- No model may infer production readiness from repository inspection. Production readiness still requires the canonical deterministic gates and exact deployed-SHA evidence.
+- `AI Review / gate` is a stable head-SHA status whose underlying reviewer evidence is bound to exact base+head SHAs. Enabling it as a required check must also require the PR branch to be up to date with `main`; do not use this status as a merge-queue requirement until an explicit `merge_group`-compatible wrapper exists.
+- AI reviewer API keys are CI-only secrets. Untrusted PR code must never execute in a job that can read those secrets.
+- Independent AI review is cost-bounded: exact base+head reviews are deduplicated, provider usage is recorded in short-lived CI cost-ledger artifacts, and the gate fails closed before another paid call when its configured monthly or per-review budget would be exceeded.
+- The CI budget guard is a repository-side safety layer, not an absolute billing guarantee. Provider-side account/project spend limits should also be configured whenever an absolute monetary ceiling is required.
+
 ## Definition of DONE for a roadmap slice
 
 A slice is `DONE` only when all applicable items are true:
