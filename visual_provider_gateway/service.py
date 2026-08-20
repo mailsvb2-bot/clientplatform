@@ -15,6 +15,20 @@ from .models import CreativeBrief, CreativeJob
 from .store import JobStore, StoredJob
 
 
+
+_SAFE_EXPLICIT_RETRY_ERRORS = frozenset(
+    {
+        "no_visual_provider_available",
+        "visual_creative_disabled",
+        "visual_provider_submit_invalid_request",
+        "visual_provider_submit_http_400",
+        "visual_provider_submit_http_401",
+        "visual_provider_submit_http_403",
+        "visual_provider_submit_http_404",
+        "visual_provider_submit_http_422",
+    }
+)
+
 class VisualGatewayService:
     def __init__(self, *, store: JobStore | None = None, engine: VisualCreativeEngine | None = None) -> None:
         self.store = store or JobStore()
@@ -165,7 +179,24 @@ class VisualGatewayService:
             kind=kind,
         )
         if not created:
-            return self._response(reserved)
+            if not self.store.rearm_failed(
+                reserved.id,
+                client_id=client_id,
+                scope_id=scope_id,
+                allowed_error_codes=_SAFE_EXPLICIT_RETRY_ERRORS,
+            ):
+                return self._response(
+                    self.store.get(
+                        reserved.id,
+                        client_id=client_id,
+                        scope_id=scope_id,
+                    )
+                )
+            reserved = self.store.get(
+                reserved.id,
+                client_id=client_id,
+                scope_id=scope_id,
+            )
 
         try:
             self._assert_capacity(client_id=client_id, kind=kind)

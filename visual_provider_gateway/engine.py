@@ -13,6 +13,7 @@ from .providers import (
     ProviderTransportError,
     RunwayVisualProvider,
     SelfHostedVisualProvider,
+    YandexArtMotionVideoProvider,
     YandexArtProvider,
 )
 
@@ -56,7 +57,18 @@ def provider_configs() -> dict[str, ProviderConfig]:
     return {
         "yandexart": ProviderConfig(
             name="yandexart",
-            base_url=_env("YANDEX_ART_BASE_URL", "https://llm.api.cloud.yandex.net:443"),
+            base_url=_env("YANDEX_ART_BASE_URL", "https://ai.api.cloud.yandex.net:443"),
+            api_key=_env("YANDEX_ART_IAM_TOKEN", _env("YANDEX_API_KEY", "")),
+            model_image=_env("YANDEX_ART_MODEL_URI", f"art://{yandex_folder}/yandex-art/latest" if yandex_folder else ""),
+            folder_id=yandex_folder,
+            timeout_seconds=timeout,
+            max_json_bytes=max_json,
+            max_media_bytes=max_media,
+            output_dir=output_dir,
+        ),
+        "yandexart_motion": ProviderConfig(
+            name="yandexart_motion",
+            base_url=_env("YANDEX_ART_BASE_URL", "https://ai.api.cloud.yandex.net:443"),
             api_key=_env("YANDEX_ART_IAM_TOKEN", _env("YANDEX_API_KEY", "")),
             model_image=_env("YANDEX_ART_MODEL_URI", f"art://{yandex_folder}/yandex-art/latest" if yandex_folder else ""),
             folder_id=yandex_folder,
@@ -122,6 +134,8 @@ def build_provider(name: str) -> CreativeProvider:
     cfg = configs[normalized]
     if normalized == "yandexart":
         return YandexArtProvider(cfg)
+    if normalized == "yandexart_motion":
+        return YandexArtMotionVideoProvider(cfg)
     if normalized == "gigachat":
         return GigaChatImageProvider(cfg)
     if normalized == "openai":
@@ -158,7 +172,7 @@ def _policy_order(kind: str, country_code: str = "") -> tuple[str, ...]:
         if kind == "image":
             order = _csv("VISUAL_RU_IMAGE_ORDER", "yandexart,gigachat,selfhosted")
         else:
-            order = _csv("VISUAL_RU_VIDEO_ORDER", "selfhosted")
+            order = _csv("VISUAL_RU_VIDEO_ORDER", "yandexart_motion,selfhosted")
         if _truthy("VISUAL_ALLOW_GLOBAL_PROVIDERS_IN_RU", "0"):
             global_order = _csv(
                 "VISUAL_GLOBAL_IMAGE_ORDER" if kind == "image" else "VISUAL_GLOBAL_VIDEO_ORDER",

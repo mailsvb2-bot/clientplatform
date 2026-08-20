@@ -9,6 +9,7 @@ import os
 import re
 import socket
 import ssl
+import subprocess
 import time
 import urllib.error
 import urllib.parse
@@ -275,6 +276,155 @@ class YandexArtProvider:
         job.status = "succeeded"
         job.mime_type = "image/jpeg"
         return _store_asset(self.config, job, raw)
+
+
+def _motion_dimensions(ratio: str) -> tuple[int, int]:
+    normalized = str(ratio or "1:1").strip()
+    return {
+        "16:9": (1280, 720),
+        "9:16": (720, 1280),
+        "4:5": (864, 1080),
+        "1:1": (1080, 1080),
+    }.get(normalized, (1080, 1080))
+
+
+def _render_motion_video(
+    config: ProviderConfig,
+    *,
+    image_path: str,
+    operation_id: str,
+    duration_seconds: int,
+    aspect_ratio: str,
+) -> str:
+    source = Path(image_path)
+    if not source.is_file():
+        raise ProviderTransportError("motion_source_missing")
+    root = ensure_output_dir(config.output_dir)
+    width, height = _motion_dimensions(aspect_ratio)
+    duration = max(2, min(int(duration_seconds or 5), 15))
+    frames = duration * 25
+    token = re.sub(r"[^a-zA-Z0-9_.-]+", "-", operation_id or uuid.uuid4().hex)[:80]
+    target = root / f"video-yandexart-motion-{token}.mp4"
+    temporary = target.with_suffix(".mp4.tmp")
+    filter_graph = (
+        f"scale={width}:{height}:force_original_aspect_ratio=increase,"
+        f"crop={width}:{height},"
+        f"zoompan=z='min(zoom+0.0012,1.08)':d={frames}:s={width}x{height}:fps=25,"
+        "format=yuv420p"
+    )
+    command = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-loop",
+        "1",
+        "-i",
+        str(source),
+        "-vf",
+        filter_graph,
+        "-frames:v",
+        str(frames),
+        "-an",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-movflags",
+        "+faststart",
+        "-f",
+        "mp4",
+        str(temporary),
+    ]
+    try:
+        completed = subprocess.run(
+            command,
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            timeout=max(30, duration * 12),
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        temporary.unlink(missing_ok=True)
+        raise ProviderTransportError("motion_render_failed") from exc
+    if completed.returncode != 0 or not temporary.is_file() or temporary.stat().st_size <= 0:
+        temporary.unlink(missing_ok=True)
+        raise ProviderTransportError("motion_render_failed")
+    os.replace(temporary, target)
+    return str(target)
+
+
+class YandexArtMotionVideoProvider(YandexArtProvider):
+    """Create a short motion MP4 from a YandexART advertising keyframe."""
+
+    def supports(self, kind: str) -> bool:
+        return kind == "video"
+
+    def configured(self, kind: str) -> bool:
+        return self.supports(kind) and bool(
+            self.config.api_key and (self.config.folder_id or self.config.model_image)
+        )
+
+    def submit(self, brief: CreativeBrief) -> CreativeJob:
+        if not self.configured(brief.kind):
+            raise ProviderTransportError("provider_not_configured")
+        image_provider = YandexArtProvider(self.config)
+        image_job = image_provider.submit(
+            CreativeBrief(
+                kind="image",
+                prompt=brief.prompt,
+                country_code=brief.country_code,
+                aspect_ratio=brief.aspect_ratio,
+                negative_prompt=brief.negative_prompt,
+                reference_url=brief.reference_url,
+                brand_context=brief.brand_context,
+                seed=brief.seed,
+                metadata=dict(brief.metadata or {}),
+            )
+        )
+        image_job.provider = "yandexart_motion"
+        image_job.kind = "video"
+        image_job.model = f"{image_job.model}+motion"
+        image_job.provider_payload["duration_seconds"] = max(
+            2, min(int(brief.duration_seconds or 5), 15)
+        )
+        image_job.provider_payload["aspect_ratio"] = str(brief.aspect_ratio or "1:1")
+        return image_job
+
+    def poll(self, job: CreativeJob) -> CreativeJob:
+        image_job = YandexArtProvider(self.config).poll(job)
+        if image_job.status != "succeeded":
+            return image_job
+        image_path = image_job.asset_path
+        duration = int(image_job.provider_payload.get("duration_seconds") or 5)
+        aspect_ratio = str(image_job.provider_payload.get("aspect_ratio") or "1:1")
+        try:
+            video_path = _render_motion_video(
+                self.config,
+                image_path=image_path,
+                operation_id=image_job.external_id,
+                duration_seconds=duration,
+                aspect_ratio=aspect_ratio,
+            )
+        except ProviderTransportError:
+            image_job.kind = "video"
+            image_job.provider = "yandexart_motion"
+            image_job.status = "failed"
+            image_job.error_code = "motion_render_failed"
+            image_job.mime_type = ""
+            image_job.asset_path = ""
+            return image_job
+        finally:
+            if image_path:
+                Path(image_path).unlink(missing_ok=True)
+        image_job.kind = "video"
+        image_job.provider = "yandexart_motion"
+        image_job.mime_type = "video/mp4"
+        image_job.asset_path = video_path
+        image_job.error_code = ""
+        image_job.status = "succeeded"
+        return image_job
 
 
 class GigaChatImageProvider:

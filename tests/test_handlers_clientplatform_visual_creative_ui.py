@@ -184,6 +184,10 @@ class ClientPlatformVisualCreativeUiTests(unittest.IsolatedAsyncioTestCase):
                 await ui._render_ad_visual(cb, st, kind="image")
         target.answer_photo.assert_awaited_once()
         target.answer_video.assert_not_awaited()
+        self.assertEqual(
+            target.answer_photo.await_args.kwargs["caption"],
+            "Готовое рекламное изображение",
+        )
         st.update_data.assert_awaited_with(creative_job_id="")
         self.assertIn("текстовый DRAFT", target.answer.await_args.args[0])
 
@@ -212,6 +216,10 @@ class ClientPlatformVisualCreativeUiTests(unittest.IsolatedAsyncioTestCase):
                 await ui.generate_ad_visual(cb, st)
         target.answer_video.assert_awaited_once()
         target.answer_photo.assert_not_awaited()
+        self.assertEqual(
+            target.answer_video.await_args.kwargs["caption"],
+            "Готовое рекламное видео",
+        )
 
     async def test_ready_visual_materialization_failure_keeps_text_draft(self) -> None:
         cb = callback()
@@ -246,7 +254,10 @@ class ClientPlatformVisualCreativeUiTests(unittest.IsolatedAsyncioTestCase):
         ):
             await ui._render_ad_visual(cb, st, kind="image")
         st.update_data.assert_awaited_with(creative_job_id="")
-        self.assertIn("Текстовый рекламный черновик", target.answer.await_args.args[0])
+        message = target.answer.await_args.args[0]
+        self.assertIn("Текстовый рекламный черновик", message)
+        self.assertNotIn("провайдер", message.casefold())
+        self.assertNotIn("конфигурац", message.casefold())
 
     async def test_refresh_ready_visual_uses_original_business_scope(self) -> None:
         cb = callback("cpa:creative:refresh")

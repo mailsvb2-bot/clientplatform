@@ -42,6 +42,33 @@ class FakeEngine:
         return job
 
 
+
+class SequencedFailureEngine:
+    def __init__(self, first_error: str) -> None:
+        self.first_error = first_error
+        self.generations = 0
+
+    def generate(self, brief, *, wait_seconds=0):
+        del wait_seconds
+        self.generations += 1
+        if self.generations == 1:
+            return CreativeJob(
+                provider="none",
+                kind=brief.kind,
+                status="failed",
+                error_code=self.first_error,
+            )
+        return CreativeJob(
+            provider="fake",
+            kind=brief.kind,
+            status="queued",
+            external_id="provider-retry-1",
+            model="m2",
+        )
+
+    def poll(self, job):
+        return job
+
 def payload(**updates):
     base = {
         "kind": "image",
@@ -334,3 +361,72 @@ def test_usage_snapshot_reports_quota_rejections_as_reservations(monkeypatch, tm
     assert payload["jobs"]["remaining"] == 0
     assert payload["image"]["used"] == 2
     assert payload["usage_semantics"] == "gateway_reservations_not_provider_billing"
+
+
+def test_safe_terminal_failure_can_be_explicitly_retried_with_same_idempotency_key(tmp_path):
+    engine = SequencedFailureEngine("visual_provider_submit_http_400")
+    svc = VisualGatewayService(
+        store=JobStore(str(tmp_path / "jobs.sqlite3")),
+        engine=engine,
+    )
+    first = svc.submit(payload(), client_id="client-a")
+    second = svc.submit(payload(), client_id="client-a")
+    assert first["id"] == second["id"]
+    assert first["status"] == "failed"
+    assert second["status"] == "queued"
+    assert second["error_code"] == ""
+    assert engine.generations == 2
+
+
+def test_no_provider_failure_can_be_retried_after_configuration_changes(tmp_path):
+    engine = SequencedFailureEngine("no_visual_provider_available")
+    svc = VisualGatewayService(
+        store=JobStore(str(tmp_path / "jobs.sqlite3")),
+        engine=engine,
+    )
+    assert svc.submit(payload(kind="video"), client_id="client-a")["status"] == "failed"
+    assert svc.submit(payload(kind="video"), client_id="client-a")["status"] == "queued"
+    assert engine.generations == 2
+
+
+def test_ambiguous_provider_failure_never_retries_paid_submit(tmp_path):
+    engine = SequencedFailureEngine("visual_provider_submit_timeout")
+    svc = VisualGatewayService(
+        store=JobStore(str(tmp_path / "jobs.sqlite3")),
+        engine=engine,
+    )
+    first = svc.submit(payload(), client_id="client-a")
+    second = svc.submit(payload(), client_id="client-a")
+    assert first == second
+    assert first["status"] == "failed"
+    assert engine.generations == 1
+
+
+def test_store_rearm_failed_is_atomic_and_error_allowlisted(tmp_path):
+    store = JobStore(str(tmp_path / "jobs.sqlite3"))
+    job, _ = store.reserve(
+        client_id="client-a",
+        scope_id="tenant-a",
+        idempotency_key="request-rearm-1",
+        request_fingerprint="c" * 64,
+        kind="image",
+    )
+    store.update(
+        job.id,
+        client_id="client-a",
+        scope_id="tenant-a",
+        provider="none",
+        kind="image",
+        status="failed",
+        error_code="visual_provider_submit_http_400",
+    )
+    allowed = frozenset({"visual_provider_submit_http_400"})
+    assert store.rearm_failed(
+        job.id, client_id="client-a", scope_id="tenant-a", allowed_error_codes=allowed
+    ) is True
+    assert store.rearm_failed(
+        job.id, client_id="client-a", scope_id="tenant-a", allowed_error_codes=allowed
+    ) is False
+    refreshed = store.get(job.id, client_id="client-a", scope_id="tenant-a")
+    assert refreshed.status == "running"
+    assert refreshed.error_code == ""
