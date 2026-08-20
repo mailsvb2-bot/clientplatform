@@ -827,3 +827,124 @@ async def test_followup_owner_fail_closed_edges(
     failed_opt_out = FakeCallback(f"cps:swfoc:{bt}:{lt}")
     await operations.apply_sales_followup_opt_out(failed_opt_out, FakeState())
     assert failed_opt_out.answers[-1][1]["show_alert"] is True
+
+
+def _reactivation_lead(*, stage: str = "qualified") -> dict[str, Any]:
+    item = _lead(stage=stage)
+    item.update(
+        customer_id=str(uuid4()),
+        contact_basis="existing_customer",
+        source_kind="telegram",
+        source_ref="reactivation:inactive_customer",
+    )
+    return item
+
+
+def test_reactivation_detail_requires_result_specific_payment_action() -> None:
+    business_id = str(uuid4())
+    item = _reactivation_lead()
+    markup = operations._detail_keyboard(business_id, item, user_id=101)
+    labels = _labels(markup)
+
+    assert "✅ Клиент вернулся и оплатил" in labels
+    assert "✅ Выиграно" not in labels
+    button = next(
+        button
+        for row in markup.inline_keyboard
+        for button in row
+        if button.text == "✅ Клиент вернулся и оплатил"
+    )
+    assert str(button.callback_data).startswith("cps:swrr:")
+    assert len(str(button.callback_data).encode("utf-8")) <= 64
+
+
+@pytest.mark.asyncio
+async def test_begin_reactivation_result_revalidates_current_card(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    business_id = str(uuid4())
+    item = _reactivation_lead()
+    lead_id = str(item["id"])
+    bt, lt = operations._token(business_id), operations._token(lead_id)
+    monkeypatch.setattr(operations, "_load_item", AsyncMock(return_value=item))
+    state = FakeState()
+    callback = FakeCallback(f"cps:swrr:{bt}:{lt}")
+
+    await operations.begin_reactivation_result(callback, state)
+
+    assert state.states[-1] == operations.ClientPlatformSalesOperationsState.reactivation_revenue
+    assert state.data["sales_business_id"] == business_id
+    assert state.data["sales_lead_id"] == lead_id
+    assert "фактической повторной оплаты" in callback.message.answers[-1][0]
+
+    monkeypatch.setattr(operations, "_load_item", AsyncMock(return_value=_lead()))
+    stale = FakeCallback(f"cps:swrr:{bt}:{lt}")
+    stale_state = FakeState()
+    await operations.begin_reactivation_result(stale, stale_state)
+    assert stale_state.states == []
+    assert stale.answers[-1][1]["show_alert"] is True
+
+
+@pytest.mark.asyncio
+async def test_capture_reactivation_result_records_exact_rub_minor_units(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    business_id, lead_id = str(uuid4()), str(uuid4())
+    state = FakeState(
+        {
+            "sales_business_id": business_id,
+            "sales_lead_id": lead_id,
+        }
+    )
+    captured: dict[str, Any] = {}
+
+    def record(**kwargs: Any) -> SimpleNamespace:
+        captured.update(kwargs)
+        return SimpleNamespace()
+
+    monkeypatch.setattr(operations, "record_reactivation_result", record)
+    monkeypatch.setattr(operations, "_send_detail", AsyncMock())
+    message = FakeMessage(text="2 500,50")
+
+    await operations.capture_reactivation_result(message, state)
+
+    assert captured["lead_id"] == lead_id
+    assert captured["amount_minor"] == 2500_50
+    assert captured["currency"] == "RUB"
+    assert state.clear_count == 1
+    assert "2 500,50 ₽" in message.answers[-1][0]
+    operations._send_detail.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw", ["", "0", "-10", "10,001", "не сумма", "NaN", "Infinity"])
+async def test_capture_reactivation_result_rejects_invalid_money_without_write(
+    monkeypatch: pytest.MonkeyPatch,
+    raw: str,
+) -> None:
+    business_id, lead_id = str(uuid4()), str(uuid4())
+    state = FakeState(
+        {
+            "sales_business_id": business_id,
+            "sales_lead_id": lead_id,
+        }
+    )
+    record = AsyncMock()
+    monkeypatch.setattr(operations, "record_reactivation_result", record)
+    message = FakeMessage(text=raw)
+
+    await operations.capture_reactivation_result(message, state)
+
+    record.assert_not_awaited()
+    assert state.clear_count == 0
+    assert "положительную сумму" in message.answers[-1][0]
+
+
+def test_reactivation_money_parser_is_exact_and_bounded() -> None:
+    assert operations._parse_rub_minor("2500") == 2500_00
+    assert operations._parse_rub_minor("2 500,50") == 2500_50
+    assert operations._parse_rub_minor("0.01") == 1
+    assert operations._format_rub_minor(2500_00) == "2 500 ₽"
+    assert operations._format_rub_minor(2500_50) == "2 500,50 ₽"
+    with pytest.raises(ValueError):
+        operations._parse_rub_minor("1.001")
