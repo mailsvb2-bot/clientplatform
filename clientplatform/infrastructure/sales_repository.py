@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import sqlite3
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
@@ -28,6 +29,16 @@ from clientplatform.infrastructure.tenancy_repository import TenancyRepository
 
 
 _MAX_EVENT_PAYLOAD_BYTES = 32 * 1024
+
+
+def _optional_followup_state_available(conn: Any) -> bool:
+    try:
+        conn.execute("SELECT 1 FROM clientplatform_sales_followups WHERE 1=0").fetchone()
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc).lower():
+            return False
+        raise
+    return True
 
 
 def _event_payload_json(payload: dict[str, Any] | None) -> str:
@@ -318,6 +329,34 @@ class SalesRepository:
             },
             now=timestamp,
         )
+        if (
+            selected in {SalesLeadStage.WON, SalesLeadStage.LOST}
+            and _optional_followup_state_available(self._conn)
+        ):
+            self._conn.execute(
+                """
+                UPDATE clientplatform_sales_followups
+                SET status='stopped',stopped_at=?,stop_reason='lead_closed',updated_at=?
+                WHERE business_id=? AND lead_id=? AND status IN ('scheduled','queued')
+                """,
+                (timestamp, timestamp, current.business_id, lead.id),
+            )
+            try:
+                self._conn.execute(
+                    """
+                    UPDATE provider_dispatch_outbox
+                    SET status='cancelled',updated_at=?,locked_at=NULL,lock_token=NULL,
+                        last_error='sales_followup_lead_closed'
+                    WHERE business_id=? AND source_kind='sales_followup' AND source_id IN (
+                        SELECT id FROM clientplatform_sales_followups
+                        WHERE business_id=? AND lead_id=?
+                    ) AND status IN ('pending','retry')
+                    """,
+                    (timestamp, current.business_id, current.business_id, lead.id),
+                )
+            except sqlite3.OperationalError as exc:
+                if "no such table: provider_dispatch_outbox" not in str(exc):
+                    raise
         return self.get_lead(actor=current, lead_id=lead.id)
 
     def assign_member(

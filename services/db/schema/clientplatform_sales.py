@@ -98,6 +98,86 @@ def ensure(c: sqlite3.Connection) -> None:
 
     c.execute(
         """
+        CREATE TABLE IF NOT EXISTS clientplatform_sales_contact_suppressions(
+            business_id TEXT NOT NULL,
+            customer_id TEXT NOT NULL,
+            platform TEXT NOT NULL,
+            reason TEXT NOT NULL DEFAULT 'opt_out',
+            updated_by_member_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(business_id, customer_id, platform),
+            FOREIGN KEY(customer_id, business_id)
+                REFERENCES customers(id, business_id) ON DELETE CASCADE,
+            FOREIGN KEY(updated_by_member_id, business_id)
+                REFERENCES business_members(id, business_id),
+            CHECK(platform IN ('telegram','vk','max')),
+            CHECK(reason IN ('opt_out','do_not_contact'))
+        )
+        """
+    )
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS clientplatform_sales_followups(
+            id TEXT PRIMARY KEY,
+            business_id TEXT NOT NULL,
+            lead_id TEXT NOT NULL,
+            customer_id TEXT NOT NULL,
+            platform TEXT NOT NULL,
+            customer_identity_id TEXT NOT NULL,
+            connection_id TEXT NOT NULL,
+            message_text TEXT NOT NULL,
+            scheduled_at TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'scheduled',
+            idempotency_key TEXT NOT NULL,
+            created_by_member_id TEXT NOT NULL,
+            provider_dispatch_id TEXT,
+            queued_at TEXT,
+            sent_at TEXT,
+            stopped_at TEXT,
+            stop_reason TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(id, business_id),
+            UNIQUE(business_id, idempotency_key),
+            FOREIGN KEY(lead_id, business_id)
+                REFERENCES clientplatform_sales_leads(id, business_id) ON DELETE CASCADE,
+            FOREIGN KEY(customer_id, business_id)
+                REFERENCES customers(id, business_id) ON DELETE CASCADE,
+            FOREIGN KEY(customer_identity_id, business_id, platform)
+                REFERENCES customer_identities(id, business_id, platform),
+            FOREIGN KEY(created_by_member_id, business_id)
+                REFERENCES business_members(id, business_id),
+            CHECK(platform IN ('telegram','vk','max')),
+            CHECK(status IN ('scheduled','queued','sent','stopped','cancelled','dead')),
+            CHECK(length(message_text) > 0),
+            CHECK(length(idempotency_key) > 0),
+            CHECK(length(connection_id) > 0)
+        )
+        """
+    )
+    c.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_cp_sales_followup_active
+        ON clientplatform_sales_followups(business_id, lead_id)
+        WHERE status IN ('scheduled','queued')
+        """
+    )
+    c.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_cp_sales_followup_due
+        ON clientplatform_sales_followups(status, scheduled_at, business_id)
+        """
+    )
+    c.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_cp_sales_followup_customer
+        ON clientplatform_sales_followups(business_id, customer_id, status, created_at)
+        """
+    )
+
+    c.execute(
+        """
         CREATE TABLE IF NOT EXISTS clientplatform_sales_action_plans(
             id TEXT PRIMARY KEY,
             business_id TEXT NOT NULL,

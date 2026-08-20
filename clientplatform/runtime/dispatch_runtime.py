@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 from clientplatform.application.dispatch_worker import DispatchBatchResult, run_dispatch_batch
 from clientplatform.application.program_media import run_program_media_cleanup_batch
+from clientplatform.application.sales_followups import run_sales_followup_maintenance_batch
 from clientplatform.runtime.control_bot import control_bot_enabled
 from clientplatform.runtime.messenger_provider_clients import MaxRuntimeClient, VkRuntimeClient
 from clientplatform.runtime.secrets import EnvironmentCredentialProvider
@@ -194,6 +195,13 @@ async def run_configured_dispatch_tick(
     selected = runtime or build_dispatch_runtime()
     if not selected.config.enabled:
         return DispatchBatchResult(claimed=0, sent=0, retried=0, dead=0)
+    try:
+        await asyncio.to_thread(
+            run_sales_followup_maintenance_batch,
+            limit=max(10, selected.config.batch_size * 5),
+        )
+    except Exception:  # validator: allow-wide-except - reminder maintenance must not block delivery
+        log.exception("Sales follow-up maintenance tick failed")
     try:
         await asyncio.to_thread(
             run_program_media_cleanup_batch,

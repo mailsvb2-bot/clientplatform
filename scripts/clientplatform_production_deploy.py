@@ -37,7 +37,7 @@ _VISUAL_GATEWAY_CAPABILITIES = {
     "capabilities": ["generation", "render_pack", "usage"],
     "render_formats": ["square", "feed", "story", "landscape"],
 }
-_SALES_SMOKE_CONTRACT_VERSION = "u008-sales-operations-v1"
+_SALES_SMOKE_CONTRACT_VERSION = "u008-u009-sales-operations-v2"
 _SALES_SMOKE_REQUIRED_CHECKS = frozenset(
     {
         "owner_projection",
@@ -51,6 +51,11 @@ _SALES_SMOKE_REQUIRED_CHECKS = frozenset(
         "won_terminal",
         "cross_tenant_fail_closed",
         "audit_events",
+        "u009_owner_approved_same_channel",
+        "u009_outbox_idempotency",
+        "u009_send_eligibility",
+        "u009_opt_out_suppression",
+        "u009_audit_events",
     }
 )
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Transactional production proof for the canonical U-008 sales operations contour."""
+"""Transactional production proof for the canonical U-008/U-009 sales contour."""
 
 import json
 import sys
@@ -21,14 +21,18 @@ from clientplatform.domain.sales import (
     SalesLeadStage,
 )
 from clientplatform.domain.tenancy import PlatformRole
+from clientplatform.infrastructure.activity_repository import ActivityRepository
+from clientplatform.infrastructure.connection_repository import ConnectionRepository
 from clientplatform.infrastructure.customer_repository import CustomerRepository
+from clientplatform.infrastructure.safe_unified_dispatch_outbox import DispatchOutboxRepository
+from clientplatform.infrastructure.sales_followup_repository import SalesFollowupRepository
 from clientplatform.infrastructure.sales_repository import SalesRepository
 from clientplatform.infrastructure.sales_ui_repository import SalesUiRepository
 from clientplatform.infrastructure.tenancy_repository import TenancyRepository
 from services.db import get_db, get_db_ro
 from services.db.runtime import is_postgres_enabled
 
-CONTRACT_VERSION = "u008-sales-operations-v1"
+CONTRACT_VERSION = "u008-u009-sales-operations-v2"
 SUCCESS_MARKER = "CLIENTPLATFORM_SALES_PRODUCTION_SMOKE_OK:"
 FAILURE_MARKER = "CLIENTPLATFORM_SALES_PRODUCTION_SMOKE_FAILED:"
 
@@ -70,6 +74,18 @@ def _residue_counts(conn: Any, business_ids: tuple[str, str]) -> dict[str, int]:
         "clientplatform_sales_events": (
             "SELECT COUNT(*) AS c FROM clientplatform_sales_events "
             "WHERE business_id IN (?, ?)"
+        ),
+        "customer_identities": "SELECT COUNT(*) AS c FROM customer_identities WHERE business_id IN (?, ?)",
+        "business_profiles": "SELECT COUNT(*) AS c FROM business_profiles WHERE business_id IN (?, ?)",
+        "connections": "SELECT COUNT(*) AS c FROM connections WHERE business_id IN (?, ?)",
+        "clientplatform_sales_followups": (
+            "SELECT COUNT(*) AS c FROM clientplatform_sales_followups WHERE business_id IN (?, ?)"
+        ),
+        "clientplatform_sales_contact_suppressions": (
+            "SELECT COUNT(*) AS c FROM clientplatform_sales_contact_suppressions WHERE business_id IN (?, ?)"
+        ),
+        "provider_dispatch_outbox": (
+            "SELECT COUNT(*) AS c FROM provider_dispatch_outbox WHERE business_id IN (?, ?)"
         ),
     }
     counts: dict[str, int] = {}
@@ -290,6 +306,130 @@ def _exercise(
     _require(event_types.count("note_added") == 1, "note_audit_count")
     _require(event_types.count("stage_changed") == 3, "stage_audit_count")
     checks["audit_events"] = True
+
+    ActivityRepository(conn).upsert_profile(
+        actor=owner,
+        activity_description="Synthetic U009 service business",
+        timezone_name="Europe/Moscow",
+        now="2026-08-20T00:00:13+00:00",
+    )
+    followup_customer = CustomerRepository(conn).create_customer(
+        actor=owner,
+        display_name="Synthetic Follow-up Customer",
+        now="2026-08-20T00:00:14+00:00",
+    )
+    identity = CustomerRepository(conn).attach_identity(
+        actor=owner,
+        customer_id=followup_customer.id,
+        platform="telegram",
+        external_subject=str(owner_user_id + 100_000_000),
+        now="2026-08-20T00:00:15+00:00",
+    )
+    connections = ConnectionRepository(conn)
+    connection = connections.create_connection(
+        actor=owner,
+        platform="telegram",
+        connection_type="telegram_shared_bot",
+        external_account_id="synthetic-u009-bot",
+        credential_reference="secret://clientplatform/production-smoke/u009",
+        permissions=("send_messages",),
+        now="2026-08-20T00:00:16+00:00",
+    )
+    connection = connections.activate_connection(
+        actor=owner,
+        connection_id=connection.id,
+        now="2026-08-20T00:00:17+00:00",
+    )
+    followup_lead = sales.create_or_refresh_lead(
+        actor=owner,
+        opportunity_key="production-smoke:u009",
+        customer_id=followup_customer.id,
+        source_kind="telegram",
+        source_ref="synthetic-u009-production-smoke",
+        contact_basis=ContactBasis.INBOUND,
+        now="2026-08-20T00:00:18+00:00",
+    )
+    followups = SalesFollowupRepository(conn)
+    followup = followups.schedule(
+        actor=owner,
+        lead_id=followup_lead.id,
+        message_text="  Добрый день!   Подсказать по вашему вопросу? ",
+        scheduled_at="2026-08-20T10:00:00+00:00",
+        request_key="production-smoke-u009-followup",
+        now="2026-08-20T08:00:00+00:00",
+    )
+    dispatches = DispatchOutboxRepository(conn)
+    dispatch = dispatches.materialize_sales_followup(
+        actor=owner,
+        followup_id=followup.id,
+        now="2026-08-20T08:00:01+00:00",
+    )
+    queued = followups.get(actor=owner, followup_id=followup.id)
+    _require(queued.status.value == "queued", "u009_followup_not_queued")
+    _require(queued.platform == "telegram", "u009_wrong_channel")
+    _require(queued.customer_identity_id == identity.id, "u009_wrong_identity")
+    _require(queued.connection_id == connection.id, "u009_wrong_connection")
+    _require(
+        queued.message_text == "Добрый день! Подсказать по вашему вопросу?",
+        "u009_message_normalization",
+    )
+    _require(dispatch.source_kind == "sales_followup", "u009_wrong_outbox_source")
+    _require(dispatch.source_id == queued.id, "u009_wrong_outbox_binding")
+    _require(dispatch.platform.value == "telegram", "u009_wrong_outbox_channel")
+    checks["u009_owner_approved_same_channel"] = True
+
+    replay = dispatches.materialize_sales_followup(
+        actor=owner,
+        followup_id=queued.id,
+        now="2026-08-20T08:00:02+00:00",
+    )
+    _require(replay.id == dispatch.id, "u009_dispatch_replay_created_duplicate")
+    checks["u009_outbox_idempotency"] = True
+
+    decision = followups.decision_for_send(
+        business_id=owner.business_id,
+        followup_id=queued.id,
+        now="2026-08-20T10:00:00+00:00",
+    )
+    _require(decision.allowed, "u009_send_eligibility_failed")
+    checks["u009_send_eligibility"] = True
+
+    stopped = followups.suppress_channel(
+        actor=owner,
+        lead_id=followup_lead.id,
+        now="2026-08-20T08:05:00+00:00",
+    )
+    _require(stopped == 1, "u009_opt_out_stop_count")
+    stopped_followup = followups.get(actor=owner, followup_id=queued.id)
+    _require(stopped_followup.status.value == "stopped", "u009_opt_out_status")
+    _require(stopped_followup.stop_reason == "opt_out", "u009_opt_out_reason")
+    dispatch_row = conn.execute(
+        "SELECT status FROM provider_dispatch_outbox WHERE id=? AND business_id=?",
+        (dispatch.id, owner.business_id),
+    ).fetchone()
+    _require(dispatch_row is not None, "u009_dispatch_missing_after_opt_out")
+    dispatch_status = dispatch_row["status"] if hasattr(dispatch_row, "keys") else dispatch_row[0]
+    _require(str(dispatch_status) == "cancelled", "u009_opt_out_dispatch_not_cancelled")
+    try:
+        followups.schedule(
+            actor=owner,
+            lead_id=followup_lead.id,
+            message_text="Повтор после запрета",
+            scheduled_at="2026-08-21T10:00:00+00:00",
+            request_key="production-smoke-u009-after-opt-out",
+            now="2026-08-20T08:06:00+00:00",
+        )
+    except SalesInvariantViolation:
+        checks["u009_opt_out_suppression"] = True
+    else:
+        raise ProductionSalesSmokeError("u009_followup_allowed_after_opt_out")
+
+    followup_events = sales.list_events(actor=owner, lead_id=followup_lead.id)
+    followup_event_types = [event["event_type"] for event in followup_events]
+    _require(followup_event_types.count("followup_scheduled") == 1, "u009_schedule_audit_count")
+    _require(followup_event_types.count("followup_stopped") == 1, "u009_stop_audit_count")
+    _require(followup_event_types.count("followup_opt_out") == 1, "u009_opt_out_audit_count")
+    checks["u009_audit_events"] = True
 
     return {
         "contract_version": CONTRACT_VERSION,

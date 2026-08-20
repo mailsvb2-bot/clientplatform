@@ -23,6 +23,7 @@ from clientplatform.domain.tenancy import TenantContext, normalize_uuid
 from clientplatform.infrastructure.booking_repository import BookingRepository
 from clientplatform.infrastructure.customer_repository import CustomerRepository
 from clientplatform.infrastructure.sales_repository import SalesRepository
+from clientplatform.infrastructure.sales_followup_repository import SalesFollowupRepository
 from clientplatform.infrastructure.tenancy_repository import TenancyRepository
 from services.db import get_db, get_db_ro
 
@@ -224,6 +225,10 @@ def connect_public_storefront_customer(
             source_kind="telegram",
             contact_basis=ContactBasis.INBOUND,
             source_ref="public_storefront",
+        )
+        SalesFollowupRepository(conn).stop_for_inbound(
+            business_id=normalized_business_id,
+            lead_id=lead.id,
         )
         orchestrate_sales_signal_in_transaction(
             conn=conn,

@@ -16,10 +16,12 @@ from clientplatform.domain.bookings import (
     normalize_utc_datetime,
 )
 from clientplatform.domain.outcomes import BusinessOutcomeEvent, OutcomeSource, OutcomeType
+from clientplatform.domain.sales_followup import SalesFollowupStopReason
 from clientplatform.domain.tenancy import TenantContext
 from clientplatform.infrastructure.attribution_repository import AttributionRepository
 from clientplatform.infrastructure.booking_repository import BookingRepository
 from clientplatform.infrastructure.outcome_repository import OutcomeRepository
+from clientplatform.infrastructure.sales_followup_repository import SalesFollowupRepository
 from services.db import get_db, get_db_ro
 
 
@@ -169,6 +171,12 @@ def book_customer_slot_in_transaction(
         business_id=claim.slot.slot.business_id,
         customer_id=claim.customer_id,
         booking_slot_id=claim.slot.slot.id,
+    )
+    SalesFollowupRepository(conn).stop_for_customer_conversion(
+        business_id=claim.slot.slot.business_id,
+        customer_id=claim.customer_id,
+        reason=SalesFollowupStopReason.BOOKING,
+        now=booked_at,
     )
     return claim
 

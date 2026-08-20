@@ -13,6 +13,7 @@ from clientplatform.domain.sales_ai_jobs import normalize_sales_ai_source_order
 from clientplatform.domain.sales_state_machine import SalesConversationEvent
 from clientplatform.domain.tenancy import normalize_uuid
 from clientplatform.infrastructure.sales_ai_job_repository import SalesAIJobRepository
+from clientplatform.infrastructure.sales_followup_repository import SalesFollowupRepository
 from clientplatform.infrastructure.sales_repository import SalesRepository
 from clientplatform.infrastructure.tenancy_repository import TenancyRepository
 from services.db import get_db
@@ -164,6 +165,22 @@ def _record_customer_channel_message(
             contact_basis=ContactBasis.INBOUND,
             source_ref=durable_source_ref,
         )
+        if revalidate_canonical_identity:
+            SalesFollowupRepository(conn).stop_for_inbound(
+                business_id=business,
+                lead_id=lead.id,
+            )
+        else:
+            try:
+                normalize_uuid(business, field_name="business_id")
+                normalize_uuid(lead.id, field_name="lead_id")
+            except ValueError:
+                pass
+            else:
+                SalesFollowupRepository(conn).stop_for_inbound(
+                    business_id=business,
+                    lead_id=lead.id,
+                )
 
         ai_allowed = runtime_ai_enabled and business_sales_ai_enabled_in_conn(
             conn,

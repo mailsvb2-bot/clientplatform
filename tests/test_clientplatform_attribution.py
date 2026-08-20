@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 import unittest
 from contextlib import nullcontext
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 from clientplatform.application import promotions as promotion_app
@@ -37,6 +37,7 @@ from services.db.schema import (
 
 
 _NOW = datetime(2026, 8, 15, 18, 0, tzinfo=timezone.utc)
+_FUTURE_SLOT_LOCAL = (datetime.now(timezone.utc) + timedelta(days=30)).strftime("%d.%m.%Y 12:00")
 
 
 class ClientPlatformAttributionRepositoryTests(unittest.TestCase):
@@ -84,7 +85,7 @@ class ClientPlatformAttributionRepositoryTests(unittest.TestCase):
         self.slot = self.bookings.create_slot(
             actor=self.owner,
             offering_id=self.offering.id,
-            local_start="20.08.2026 12:00",
+            local_start=_FUTURE_SLOT_LOCAL,
             duration_minutes=60,
             now="2026-08-01T10:00:00+00:00",
         )

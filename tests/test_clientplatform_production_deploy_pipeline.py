@@ -340,7 +340,7 @@ class ProductionDeploymentContractTests(unittest.TestCase):
                 production_deploy,
                 "_sales_operations_smoke",
                 return_value={
-                    "contract_version": "u008-sales-operations-v1",
+                    "contract_version": "u008-u009-sales-operations-v2",
                     "ok": True,
                     "rollback_clean": True,
                     "checks": {name: True for name in production_deploy._SALES_SMOKE_REQUIRED_CHECKS},
@@ -365,7 +365,7 @@ class ProductionDeploymentContractTests(unittest.TestCase):
         self.assertTrue(evidence_payload["recovery_mode"])
         self.assertEqual(
             evidence_payload["sales_operations_smoke"]["contract_version"],
-            "u008-sales-operations-v1",
+            "u008-u009-sales-operations-v2",
         )
         self.assertFalse(evidence_payload["baseline_ready"])
 
@@ -452,7 +452,7 @@ class ProductionDeploymentContractTests(unittest.TestCase):
 
     def test_sales_operations_smoke_requires_complete_rollback_clean_contract(self) -> None:
         payload = {
-            "contract_version": "u008-sales-operations-v1",
+            "contract_version": "u008-u009-sales-operations-v2",
             "ok": True,
             "rollback_clean": True,
             "checks": {name: True for name in production_deploy._SALES_SMOKE_REQUIRED_CHECKS},
@@ -474,7 +474,7 @@ class ProductionDeploymentContractTests(unittest.TestCase):
 
     def test_sales_operations_smoke_rejects_rollback_residue(self) -> None:
         payload = {
-            "contract_version": "u008-sales-operations-v1",
+            "contract_version": "u008-u009-sales-operations-v2",
             "ok": True,
             "rollback_clean": True,
             "checks": {name: True for name in production_deploy._SALES_SMOKE_REQUIRED_CHECKS},
