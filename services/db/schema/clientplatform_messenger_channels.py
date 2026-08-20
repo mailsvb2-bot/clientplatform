@@ -49,6 +49,36 @@ def ensure(c: sqlite3.Connection) -> None:
     )
     c.execute(
         """
+        CREATE TABLE IF NOT EXISTS messenger_connection_setup_sessions(
+            id TEXT PRIMARY KEY,
+            business_id TEXT NOT NULL,
+            platform TEXT NOT NULL,
+            token_digest TEXT NOT NULL,
+            created_by_member_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            consumed_at TEXT,
+            UNIQUE(id, business_id),
+            UNIQUE(token_digest),
+            FOREIGN KEY(business_id) REFERENCES businesses(id) ON DELETE CASCADE,
+            FOREIGN KEY(created_by_member_id, business_id)
+                REFERENCES business_members(id, business_id),
+            CHECK(platform IN ('vk','max')),
+            CHECK(length(token_digest)=64)
+        )
+        """
+    )
+    c.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_messenger_setup_business_platform
+        ON messenger_connection_setup_sessions(
+            business_id, platform, consumed_at, expires_at
+        )
+        """
+    )
+
+    c.execute(
+        """
         CREATE TABLE IF NOT EXISTS customer_channel_link_tokens(
             id TEXT PRIMARY KEY,
             business_id TEXT NOT NULL,

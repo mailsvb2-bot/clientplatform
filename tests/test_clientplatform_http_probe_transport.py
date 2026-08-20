@@ -102,7 +102,8 @@ class ClientPlatformHttpProbeTransportTests(unittest.TestCase):
         )
         canonical_matcher = (
             "@clientplatform_messenger_webhooks path "
-            "/clientplatform/webhooks/vk/* /clientplatform/webhooks/max/*"
+            "/clientplatform/webhooks/vk/* /clientplatform/webhooks/max/* "
+            "/clientplatform/connect/*"
         )
         canonical_handler = (
             "handle @clientplatform_messenger_webhooks {\n"

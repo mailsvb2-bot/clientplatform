@@ -24,6 +24,9 @@ from clientplatform.application.activity import (
 from clientplatform.application.bookings import list_booking_slots
 from clientplatform.application.connections import list_connections
 from clientplatform.application.control import business_delivery_summary
+from clientplatform.application.native_messenger_setup import (
+    issue_native_messenger_setup,
+)
 from clientplatform.application.customers import get_customer, list_customers
 from clientplatform.application.programs import list_programs
 from clientplatform.application.progress import list_business_program_progress
@@ -41,6 +44,7 @@ from clientplatform.domain.tenancy import (
     TenancyError,
 )
 from clientplatform.infrastructure import TenancyRepository
+from config.settings import settings
 from services.db import get_db_ro
 
 control = importlib.import_module(".clientplatform_control", __package__)
@@ -147,6 +151,7 @@ _SECTION_ROLES = {
     "customer": _SUPPORT_ROLES,
     "behavior": _SUPPORT_ROLES,
     "messengers": _SUPPORT_ROLES,
+    "messenger-connect": _ADMIN_ROLES,
     "attention": _SUPPORT_ROLES,
     "autopilot": _AUTOMATION_ROLES,
     "publications": _CONTENT_ROLES,
@@ -638,12 +643,73 @@ async def _render_messengers(callback: CallbackQuery, state: FSMContext, ctx: Ad
             "если у бизнеса есть однозначное активное подключение.",
         ]
     )
-    keyboard = _back_keyboard(
-        ctx,
-        ("🤖 Мой Telegram-бот", f"cpb:o:{ctx.business_token}"),
-    )
-    await _safe_edit(callback, "\n".join(lines), keyboard)
+    extras: list[tuple[str, str]] = []
+    if ctx.role in _ADMIN_ROLES:
+        extras.extend(
+            [
+                ("🔵 Подключить ВКонтакте", _callback(ctx, "messenger-connect", "vk")),
+                ("🟣 Подключить MAX", _callback(ctx, "messenger-connect", "max")),
+            ]
+        )
+    extras.append(("🤖 Мой Telegram-бот", f"cpb:o:{ctx.business_token}"))
+    await _safe_edit(callback, "\n".join(lines), _back_keyboard(ctx, *extras))
     await _set_current_section(state, action="messengers", push=True)
+
+
+async def _render_messenger_connect(
+    callback: CallbackQuery,
+    state: FSMContext,
+    ctx: AdminContext,
+    platform: str,
+) -> None:
+    normalized = str(platform or "").strip().lower()
+    if normalized not in {"vk", "max"}:
+        raise ValueError("unsupported messenger setup platform")
+    public_base = str(
+        getattr(settings, "MESSENGER_PUBLIC_BASE_URL", "") or ""
+    ).strip().rstrip("/")
+    if not public_base.startswith("https://"):
+        await _safe_edit(
+            callback,
+            "Безопасное подключение временно недоступно: публичный HTTPS-адрес ClientPlatform не настроен.",
+            _back_keyboard(ctx),
+        )
+        return
+    issued = await asyncio.to_thread(
+        issue_native_messenger_setup,
+        actor=ctx.actor,
+        platform=normalized,
+        ttl_seconds=600,
+    )
+    label = "ВКонтакте" if normalized == "vk" else "MAX"
+    setup_url = f"{public_base}/clientplatform/connect/{issued.token}"
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=f"🔐 Открыть подключение {label}",
+                    url=setup_url,
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="⬅️ Назад",
+                    callback_data=_callback(ctx, "messengers"),
+                )
+            ],
+        ]
+    )
+    await _safe_edit(
+        callback,
+        (
+            f"Подключение {label}\n\n"
+            "Откройте одноразовую защищённую страницу ниже. "
+            "Токен мессенджера вводится только на HTTPS-странице и не отправляется сообщением в Telegram.\n\n"
+            "Ссылка действует 10 минут и перестаёт работать после первой отправки формы."
+        ),
+        keyboard,
+    )
+    await _set_current_section(state, action="messenger-connect", push=True)
 
 
 async def _render_attention(callback: CallbackQuery, state: FSMContext, ctx: AdminContext) -> None:
@@ -1120,6 +1186,8 @@ async def admin_gate(callback: CallbackQuery, state: FSMContext) -> None:
             await _render_behavior(callback, state, ctx)
         elif action == "messengers":
             await _render_messengers(callback, state, ctx)
+        elif action == "messenger-connect":
+            await _render_messenger_connect(callback, state, ctx, payload[0])
         elif action == "attention":
             await _render_attention(callback, state, ctx)
         elif action in {
