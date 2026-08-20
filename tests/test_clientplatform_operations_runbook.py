@@ -105,3 +105,8 @@ def test_runbook_orders_prepare_preflight_deploy_and_evidence() -> None:
     assert "CLIENTPLATFORM_PRODUCTION_PREFLIGHT_OK" in runbook
     assert "CLIENTPLATFORM_PRODUCTION_DEPLOY_OK:<evidence-path>" in runbook
     assert '"telegram_webhook_absent": true' in runbook
+    assert "старые rollback/release Docker-теги" in runbook
+    assert "legacy `recovered-*`" in runbook
+    assert "использовании от 75%" in runbook
+    assert "свободном месте менее 7 GiB" in runbook
+    assert "два последних rollback-поколения" in runbook

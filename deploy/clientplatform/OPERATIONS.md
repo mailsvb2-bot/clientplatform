@@ -91,14 +91,18 @@ sudo python3 scripts/clientplatform_production_deploy.py \
 1. блокирует параллельный deploy;
 2. подготавливает и проверяет `clientplatform.env`;
 3. проверяет текущую baseline-версию без требования нового route contract;
-4. создаёт pre-deploy backup;
-5. собирает `app` и `backup`;
-6. пересоздаёт только `app` и `caddy`;
-7. ждёт внутренние health/readiness/runtime markers;
-8. проверяет точный публичный ответ `ClientPlatform`;
-9. требует HTTP 404 на фактическом Telegram webhook-prefix;
-10. пишет evidence в `/var/lib/clientplatform/deploy-evidence/latest.json`;
-11. при неудаче автоматически восстанавливает предыдущий app image и повторно проверяет полный внешний контракт.
+4. удаляет старые rollback/release Docker-теги и legacy `recovered-*`, сохраняя одно историческое поколение до создания нового rollback;
+5. ограничивает весь неиспользуемый build-cache, сохраняя не более 2 GB для ускорения следующей сборки;
+6. fail-closed проверяет диск: deploy запрещён при использовании от 75% или свободном месте менее 7 GiB; от 70% пишет предупреждение;
+7. создаёт pre-deploy backup;
+8. создаёт новый rollback, поэтому после успешного переключения доступны два последних rollback-поколения;
+9. собирает `visual-gateway`, `app` и `backup`;
+10. пересоздаёт `visual-gateway`, затем только `app` и `caddy`;
+11. ждёт внутренние health/readiness/runtime markers;
+12. проверяет точный публичный ответ `ClientPlatform`;
+13. требует HTTP 404 на фактическом Telegram webhook-prefix;
+14. пишет evidence в `/var/lib/clientplatform/deploy-evidence/latest.json`, включая disk/retention summary;
+15. при неудаче автоматически восстанавливает предыдущий app image и повторно проверяет полный внешний контракт.
 
 Успех:
 

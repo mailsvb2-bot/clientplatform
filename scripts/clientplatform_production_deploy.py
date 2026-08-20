@@ -7,6 +7,7 @@ import fcntl
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -28,6 +29,11 @@ POSTGRES_CONTAINER = "clientplatform-production-postgres-1"
 VISUAL_GATEWAY_CONTAINER = "clientplatform-production-visual-gateway-1"
 APP_IMAGE = "clientplatform-production-app"
 VISUAL_GATEWAY_IMAGE = "clientplatform-production-visual-gateway"
+_ROLLBACK_HISTORY_BEFORE_DEPLOY = 1
+_BUILD_CACHE_KEEP_STORAGE = "2GB"
+_DEPLOY_DISK_WARN_USED_PERCENT = 70.0
+_DEPLOY_DISK_MAX_USED_PERCENT = 75.0
+_DEPLOY_DISK_MIN_FREE_BYTES = 7 * 1024**3
 LOCK_PATH = Path("/run/lock/clientplatform-production-deploy.lock")
 EVIDENCE_DIR = Path("/var/lib/clientplatform/deploy-evidence")
 LOCAL_BACKUP_DIR = Path("/var/backups/clientplatform/predeploy")
@@ -164,6 +170,175 @@ def _assert_tracked_worktree_clean() -> None:
         raise DeploymentError("tracked_worktree_check_failed")
     if any(line.strip() for line in completed.stdout.splitlines()):
         raise DeploymentError("tracked_worktree_dirty")
+
+
+def _disk_capacity() -> dict[str, int | float]:
+    usage = shutil.disk_usage("/")
+    used_percent = (usage.used / usage.total * 100.0) if usage.total else 100.0
+    return {
+        "total_bytes": int(usage.total),
+        "used_bytes": int(usage.used),
+        "free_bytes": int(usage.free),
+        "used_percent": round(used_percent, 2),
+    }
+
+
+def _assert_deploy_disk_capacity() -> dict[str, int | float]:
+    capacity = _disk_capacity()
+    used_percent = float(capacity["used_percent"])
+    free_bytes = int(capacity["free_bytes"])
+    if (
+        used_percent >= _DEPLOY_DISK_MAX_USED_PERCENT
+        or free_bytes < _DEPLOY_DISK_MIN_FREE_BYTES
+    ):
+        raise DeploymentError("insufficient_disk_capacity_before_deploy")
+    if used_percent >= _DEPLOY_DISK_WARN_USED_PERCENT:
+        print(
+            "CLIENTPLATFORM_PRODUCTION_DEPLOY_WARNING:"
+            f"disk_usage_high:{used_percent:.2f}"
+        )
+    return capacity
+
+
+def _image_tags(repository: str) -> list[str]:
+    completed = _run(
+        [
+            "docker",
+            "image",
+            "ls",
+            repository,
+            "--format",
+            "{{.Repository}}:{{.Tag}}",
+        ],
+        capture=True,
+    )
+    prefix = f"{repository}:"
+    return sorted(
+        {
+            line.strip()
+            for line in completed.stdout.splitlines()
+            if line.strip().startswith(prefix) and not line.strip().endswith(":<none>")
+        }
+    )
+
+
+def _image_id(reference: str) -> str:
+    completed = _run(
+        ["docker", "image", "inspect", "--format", "{{.Id}}", reference],
+        capture=True,
+        check=False,
+    )
+    image_id = completed.stdout.strip()
+    if completed.returncode != 0 or not image_id.startswith("sha256:"):
+        return ""
+    return image_id
+
+
+def _running_image_ids() -> set[str]:
+    completed = _run(["docker", "ps", "--format", "{{.ID}}"], capture=True)
+    result: set[str] = set()
+    for container_id in completed.stdout.splitlines():
+        container_id = container_id.strip()
+        if not container_id:
+            continue
+        inspected = _run(
+            ["docker", "inspect", "--format", "{{.Image}}", container_id],
+            capture=True,
+            check=False,
+        )
+        image_id = inspected.stdout.strip()
+        if inspected.returncode == 0 and image_id.startswith("sha256:"):
+            result.add(image_id)
+    return result
+
+
+def _prune_deploy_image_history(target_sha: str) -> dict[str, int]:
+    running_image_ids = _running_image_ids()
+    removed_tags: list[str] = []
+
+    app_rollbacks = sorted(
+        (
+            tag
+            for tag in _image_tags(APP_IMAGE)
+            if tag.startswith(f"{APP_IMAGE}:rollback-")
+        ),
+        reverse=True,
+    )
+    protected_app = set(app_rollbacks[:_ROLLBACK_HISTORY_BEFORE_DEPLOY])
+    for tag in app_rollbacks[_ROLLBACK_HISTORY_BEFORE_DEPLOY:]:
+        if tag in protected_app or _image_id(tag) in running_image_ids:
+            continue
+        _run(["docker", "image", "rm", tag])
+        removed_tags.append(tag)
+
+    legacy_recovered = sorted(
+        tag
+        for tag in _image_tags(APP_IMAGE)
+        if tag.startswith(f"{APP_IMAGE}:recovered-")
+    )
+    for tag in legacy_recovered:
+        if _image_id(tag) in running_image_ids:
+            continue
+        _run(["docker", "image", "rm", tag])
+        removed_tags.append(tag)
+
+    visual_tags = _image_tags(VISUAL_GATEWAY_IMAGE)
+    visual_rollbacks = sorted(
+        (
+            tag
+            for tag in visual_tags
+            if tag.startswith(f"{VISUAL_GATEWAY_IMAGE}:rollback-")
+        ),
+        reverse=True,
+    )
+    protected_visual_rollbacks = set(
+        visual_rollbacks[:_ROLLBACK_HISTORY_BEFORE_DEPLOY]
+    )
+    protected_visual_ids = set(running_image_ids)
+    for tag in protected_visual_rollbacks:
+        image_id = _image_id(tag)
+        if image_id:
+            protected_visual_ids.add(image_id)
+
+    for tag in visual_rollbacks[_ROLLBACK_HISTORY_BEFORE_DEPLOY:]:
+        if _image_id(tag) in protected_visual_ids:
+            continue
+        _run(["docker", "image", "rm", tag])
+        removed_tags.append(tag)
+
+    target_release = f"{VISUAL_GATEWAY_IMAGE}:release-{target_sha}"
+    visual_releases = sorted(
+        tag
+        for tag in visual_tags
+        if tag.startswith(f"{VISUAL_GATEWAY_IMAGE}:release-")
+    )
+    for tag in visual_releases:
+        if tag == target_release or _image_id(tag) in protected_visual_ids:
+            continue
+        _run(["docker", "image", "rm", tag])
+        removed_tags.append(tag)
+
+    _run(["docker", "image", "prune", "--force"])
+    return {
+        "removed_tags": len(removed_tags),
+        "app_rollbacks_retained_before_deploy": len(protected_app),
+        "visual_rollbacks_retained_before_deploy": len(protected_visual_rollbacks),
+    }
+
+
+def _prune_build_cache() -> dict[str, str]:
+    _run(
+        [
+            "docker",
+            "builder",
+            "prune",
+            "--force",
+            "--all",
+            "--keep-storage",
+            _BUILD_CACHE_KEEP_STORAGE,
+        ]
+    )
+    return {"keep_storage": _BUILD_CACHE_KEEP_STORAGE}
 
 
 def _container_exists(container: str) -> bool:
@@ -610,6 +785,10 @@ def deploy(
             if not recover_unavailable_baseline:
                 raise DeploymentError("production_not_ready_before_deploy") from exc
 
+    image_retention = _prune_deploy_image_history(target_sha)
+    build_cache_retention = _prune_build_cache()
+    disk_before_deploy = _assert_deploy_disk_capacity()
+
     _run([*compose, "up", "-d", "postgres"])
 
     age_recipient = str(values.get("CLIENTPLATFORM_BACKUP_AGE_RECIPIENT", "") or "").strip()
@@ -769,6 +948,10 @@ def deploy(
             "baseline_ready": baseline_ready,
             "recovery_mode": bool(app_exists and not baseline_ready),
             "sales_operations_smoke": sales_operations_smoke,
+            "image_retention": image_retention,
+            "build_cache_retention": build_cache_retention,
+            "disk_before_deploy": disk_before_deploy,
+            "disk_after_deploy": _disk_capacity(),
             "completed_at": _completed_at(),
         }
     )
