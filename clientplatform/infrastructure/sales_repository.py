@@ -41,6 +41,39 @@ def _optional_followup_state_available(conn: Any) -> bool:
     return True
 
 
+def _is_canonical_reactivation_lead(lead: SalesLead) -> bool:
+    source_ref = str(lead.source_ref or "")
+    return (
+        lead.contact_basis == ContactBasis.EXISTING_CUSTOMER
+        and source_ref.startswith("reactivation:")
+        and lead.opportunity_key.startswith(f"reactivation:{lead.customer_id}:")
+    )
+
+
+def _has_canonical_reactivation_result(conn: Any, *, business_id: str, lead_id: str) -> bool:
+    row = conn.execute(
+        """
+        SELECT 1
+        FROM business_outcome_events r
+        JOIN business_outcome_events p
+          ON p.id=r.source_id AND p.business_id=r.business_id
+        WHERE r.business_id=?
+          AND r.outcome_type='customer_reactivated'
+          AND r.source_type='outcome_event'
+          AND r.subject_ref=?
+          AND p.outcome_type='order_paid'
+          AND p.source_type='sales_reactivation'
+          AND p.source_id=?
+          AND p.customer_id=r.customer_id
+          AND p.amount_minor=r.amount_minor
+          AND p.currency=r.currency
+        LIMIT 1
+        """,
+        (business_id, f"sales_lead:{lead_id}", lead_id),
+    ).fetchone()
+    return row is not None
+
+
 def _event_payload_json(payload: dict[str, Any] | None) -> str:
     if payload is not None and not isinstance(payload, dict):
         raise ValueError("sales event payload must be an object")
@@ -267,6 +300,16 @@ class SalesRepository:
         if lead.stage == SalesLeadStage.LOST and selected != SalesLeadStage.NEW:
             raise SalesInvariantViolation(
                 "lost sales lead must be reopened before progressing"
+            )
+        if (
+            selected == SalesLeadStage.WON
+            and _is_canonical_reactivation_lead(lead)
+            and not _has_canonical_reactivation_result(
+                self._conn, business_id=current.business_id, lead_id=lead.id
+            )
+        ):
+            raise SalesInvariantViolation(
+                "reactivation lead requires canonical payment and reactivation outcome before WON"
             )
         timestamp = str(now or _utc_now())
         normalized_reason = normalize_closure_reason(reason)

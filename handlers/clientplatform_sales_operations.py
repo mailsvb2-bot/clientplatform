@@ -9,6 +9,7 @@ This module is presentation only. Business invariants and persistence remain in
 import asyncio
 import importlib
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
 from typing import Any, Protocol
 
 from aiogram import F, Router
@@ -16,6 +17,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
+from clientplatform.application.retention import record_reactivation_result
 from clientplatform.application.sales_followups import (
     cancel_sales_followup,
     schedule_sales_followup,
@@ -48,6 +50,7 @@ class ClientPlatformSalesOperationsState(StatesGroup):
     note = State()
     followup_text = State()
     followup_when = State()
+    reactivation_revenue = State()
 
 
 _STAGE_LABELS = {
@@ -118,6 +121,38 @@ def _assignee_label(item: dict[str, Any], *, user_id: int) -> str:
     if assigned_user_id is not None and int(assigned_user_id) == int(user_id):
         return "Вы"
     return "другой участник команды"
+
+
+def _is_reactivation_item(item: dict[str, Any]) -> bool:
+    return (
+        str(item.get("contact_basis") or "") == "existing_customer"
+        and str(item.get("source_ref") or "").startswith("reactivation:")
+    )
+
+
+def _parse_rub_minor(value: object) -> int:
+    raw = str(value or "").strip().replace(" ", "").replace(",", ".")
+    if not raw or len(raw) > 32:
+        raise ValueError("payment amount is invalid")
+    try:
+        amount = Decimal(raw)
+    except InvalidOperation as exc:
+        raise ValueError("payment amount is invalid") from exc
+    if not amount.is_finite() or amount <= 0:
+        raise ValueError("payment amount must be positive")
+    minor = amount * 100
+    if minor != minor.to_integral_value():
+        raise ValueError("payment amount must have at most two decimal places")
+    result = int(minor)
+    if result > 10**17:
+        raise ValueError("payment amount is too large")
+    return result
+
+
+def _format_rub_minor(amount_minor: int) -> str:
+    major, minor = divmod(int(amount_minor), 100)
+    grouped = f"{major:,}".replace(",", " ")
+    return f"{grouped} ₽" if minor == 0 else f"{grouped},{minor:02d} ₽"
 
 
 def _attribution_line(item: dict[str, Any]) -> str:
@@ -239,13 +274,27 @@ def _detail_keyboard(
                 ("Квалифицирован", f"cps:swms:{business_token}:{lead_token}:q"),
             ]
         )
-        rows.append(
-            [
-                ("Оформление", f"cps:swms:{business_token}:{lead_token}:k"),
-                ("✅ Выиграно", f"cps:swmc:{business_token}:{lead_token}:w"),
-                ("❌ Потеряно", f"cps:swmc:{business_token}:{lead_token}:l"),
-            ]
-        )
+        if _is_reactivation_item(item):
+            rows.append(
+                [
+                    ("Оформление", f"cps:swms:{business_token}:{lead_token}:k"),
+                    (
+                        "✅ Клиент вернулся и оплатил",
+                        f"cps:swrr:{business_token}:{lead_token}",
+                    ),
+                ]
+            )
+            rows.append(
+                [("❌ Потеряно", f"cps:swmc:{business_token}:{lead_token}:l")]
+            )
+        else:
+            rows.append(
+                [
+                    ("Оформление", f"cps:swms:{business_token}:{lead_token}:k"),
+                    ("✅ Выиграно", f"cps:swmc:{business_token}:{lead_token}:w"),
+                    ("❌ Потеряно", f"cps:swmc:{business_token}:{lead_token}:l"),
+                ]
+            )
     else:
         rows.append([("📝 Заметка", f"cps:swmo:{business_token}:{lead_token}")])
         if stage == "lost":
@@ -652,6 +701,81 @@ async def set_sales_stage_owner(callback: CallbackQuery, state: FSMContext) -> N
     await _send_detail(
         control._callback_message(callback),
         user_id=int(callback.from_user.id),
+        business_id=business_id,
+        lead_id=lead_id,
+    )
+
+
+@router.callback_query(F.data.startswith("cps:swrr:"))
+async def begin_reactivation_result(callback: CallbackQuery, state: FSMContext) -> None:
+    parts = str(callback.data).split(":")
+    if len(parts) != 4:
+        await callback.answer("Карточка устарела. Откройте обращения заново.", show_alert=True)
+        return
+    business_id, lead_id = _uuid(parts[2]), _uuid(parts[3])
+    actor = await control._actor(int(callback.from_user.id), business_id)
+    item = await _load_item(actor=actor, lead_id=lead_id)
+    if (
+        item is None
+        or str(item.get("stage") or "") in {"won", "lost"}
+        or not _is_reactivation_item(item)
+    ):
+        await callback.answer(
+            "Карточка уже изменилась. Обновите её перед фиксацией результата.",
+            show_alert=True,
+        )
+        return
+    await state.set_state(ClientPlatformSalesOperationsState.reactivation_revenue)
+    await state.update_data(sales_business_id=business_id, sales_lead_id=lead_id)
+    await callback.answer()
+    await control._callback_message(callback).answer(
+        "Введите сумму фактической повторной оплаты в рублях, например 2500 или "
+        "2500,50. ClientPlatform запишет её как подтверждённый результат возврата "
+        "этого клиента."
+    )
+
+
+@router.message(ClientPlatformSalesOperationsState.reactivation_revenue)
+async def capture_reactivation_result(message: Message, state: FSMContext) -> None:
+    try:
+        amount_minor = _parse_rub_minor(message.text)
+    except ValueError:
+        await message.answer(
+            "Введите положительную сумму в рублях, не более двух знаков после запятой. "
+            "Например: 2500 или 2500,50."
+        )
+        return
+    data = await state.get_data()
+    business_id = str(data.get("sales_business_id") or "")
+    lead_id = str(data.get("sales_lead_id") or "")
+    if not business_id or not lead_id:
+        await state.clear()
+        await message.answer("Карточка устарела. Откройте обращения заново.")
+        return
+    actor = await control._actor(int(message.from_user.id), business_id)
+    try:
+        await asyncio.to_thread(
+            record_reactivation_result,
+            actor=actor,
+            lead_id=lead_id,
+            amount_minor=amount_minor,
+            currency="RUB",
+        )
+    except (SalesError, PermissionError, ValueError):
+        await state.clear()
+        await message.answer(
+            "Не удалось зафиксировать возврат: карточка или подтверждённый результат "
+            "уже изменились. Откройте обращение заново."
+        )
+        return
+    await state.clear()
+    await message.answer(
+        "✅ Возврат клиента подтверждён. Повторная оплата "
+        f"{_format_rub_minor(amount_minor)} записана в результатах бизнеса."
+    )
+    await _send_detail(
+        message,
+        user_id=int(message.from_user.id),
         business_id=business_id,
         lead_id=lead_id,
     )
