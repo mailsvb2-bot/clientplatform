@@ -79,6 +79,7 @@ RUN set -eu; \
     test -r /app/scripts/clientplatform_program_media_preflight.py; \
     test -r /app/scripts/clientplatform_bot_gateway_preflight.py; \
     test -r /app/scripts/clientplatform_ad_connections_preflight.py; \
+    test -r /app/scripts/clientplatform_sales_production_smoke.py; \
     test -r /app/scripts/clientplatform_container_audio_assets.py; \
     test -r /app/deploy/clientplatform/container-entrypoint.sh; \
     python -m py_compile \
@@ -87,6 +88,7 @@ RUN set -eu; \
        /app/scripts/clientplatform_program_media_preflight.py \
        /app/scripts/clientplatform_bot_gateway_preflight.py \
        /app/scripts/clientplatform_ad_connections_preflight.py \
+       /app/scripts/clientplatform_sales_production_smoke.py \
        /app/scripts/clientplatform_container_audio_assets.py; \
     chmod 0555 /app/deploy/clientplatform/container-entrypoint.sh
 

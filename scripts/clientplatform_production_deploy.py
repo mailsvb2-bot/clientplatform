@@ -37,6 +37,22 @@ _VISUAL_GATEWAY_CAPABILITIES = {
     "capabilities": ["generation", "render_pack", "usage"],
     "render_formats": ["square", "feed", "story", "landscape"],
 }
+_SALES_SMOKE_CONTRACT_VERSION = "u008-sales-operations-v1"
+_SALES_SMOKE_REQUIRED_CHECKS = frozenset(
+    {
+        "owner_projection",
+        "assignment_projection",
+        "cross_tenant_assignee_blocked",
+        "unassignment",
+        "next_action_due",
+        "note_dedupe",
+        "lost_closure",
+        "lost_reopen",
+        "won_terminal",
+        "cross_tenant_fail_closed",
+        "audit_events",
+    }
+)
 
 
 class DeploymentError(RuntimeError):
@@ -428,6 +444,59 @@ def _external_https(domain: str) -> None:
     _external_polling_absence(domain, _telegram_webhook_prefix())
 
 
+def _sales_operations_smoke() -> dict[str, Any]:
+    completed = _run(
+        [
+            "docker",
+            "exec",
+            APP_CONTAINER,
+            "python",
+            "-m",
+            "scripts.clientplatform_sales_production_smoke",
+        ],
+        capture=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise DeploymentError("sales_production_smoke_failed")
+    marker = "CLIENTPLATFORM_SALES_PRODUCTION_SMOKE_OK:"
+    marker_lines = [
+        line.removeprefix(marker).strip()
+        for line in completed.stdout.splitlines()
+        if line.startswith(marker)
+    ]
+    if len(marker_lines) != 1:
+        raise DeploymentError("sales_production_smoke_marker_missing")
+    try:
+        payload = json.loads(marker_lines[0])
+    except (TypeError, ValueError) as exc:
+        raise DeploymentError("sales_production_smoke_payload_invalid") from exc
+    if not isinstance(payload, dict):
+        raise DeploymentError("sales_production_smoke_payload_invalid")
+    if (
+        payload.get("contract_version") != _SALES_SMOKE_CONTRACT_VERSION
+        or payload.get("ok") is not True
+        or payload.get("rollback_clean") is not True
+    ):
+        raise DeploymentError("sales_production_smoke_contract_failed")
+    checks = payload.get("checks")
+    if not isinstance(checks, dict) or any(
+        checks.get(name) is not True for name in _SALES_SMOKE_REQUIRED_CHECKS
+    ):
+        raise DeploymentError("sales_production_smoke_checks_incomplete")
+    residue = payload.get("residue")
+    if (
+        not isinstance(residue, dict)
+        or not residue
+        or any(
+            not isinstance(value, int) or isinstance(value, bool) or value != 0
+            for value in residue.values()
+        )
+    ):
+        raise DeploymentError("sales_production_smoke_rollback_not_clean")
+    return payload
+
+
 def _write_evidence(payload: dict[str, Any]) -> Path:
     EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
     os.chmod(EVIDENCE_DIR, 0o700)
@@ -573,6 +642,7 @@ def deploy(
 
     visual_gateway_changed = False
     app_changed = False
+    sales_operations_smoke: dict[str, Any] | None = None
     try:
         _run([*compose, "build", "visual-gateway"])
         _run([*compose, "build", "app", "backup"])
@@ -583,6 +653,7 @@ def deploy(
         app_changed = True
         _wait_for_readiness(timeout_seconds)
         _external_https(domain)
+        sales_operations_smoke = _sales_operations_smoke()
     except Exception as deployment_error:  # validator: allow-wide-except - rollback must cover every failed gate
         if app_changed and baseline_ready and rollback_tag:
             try:
@@ -659,6 +730,9 @@ def deploy(
             raise DeploymentError("production_recovery_failed") from deployment_error
         raise
 
+    if sales_operations_smoke is None:
+        raise DeploymentError("sales_production_smoke_missing_after_success")
+
     visual_gateway_image = _container_image(VISUAL_GATEWAY_CONTAINER)
     _run(
         [
@@ -689,6 +763,7 @@ def deploy(
             "telegram_webhook_absent": True,
             "baseline_ready": baseline_ready,
             "recovery_mode": bool(app_exists and not baseline_ready),
+            "sales_operations_smoke": sales_operations_smoke,
             "completed_at": _completed_at(),
         }
     )

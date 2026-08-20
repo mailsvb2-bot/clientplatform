@@ -336,6 +336,17 @@ class ProductionDeploymentContractTests(unittest.TestCase):
             mock.patch.object(production_deploy, "_wait_for_visual_gateway") as wait_gateway,
             mock.patch.object(production_deploy, "_wait_for_readiness") as wait,
             mock.patch.object(production_deploy, "_external_https") as external,
+            mock.patch.object(
+                production_deploy,
+                "_sales_operations_smoke",
+                return_value={
+                    "contract_version": "u008-sales-operations-v1",
+                    "ok": True,
+                    "rollback_clean": True,
+                    "checks": {name: True for name in production_deploy._SALES_SMOKE_REQUIRED_CHECKS},
+                    "residue": {"businesses": 0},
+                },
+            ) as sales_smoke,
             mock.patch.object(production_deploy, "_write_evidence", side_effect=write_evidence),
             mock.patch.object(production_deploy, "_rollback") as rollback,
         ):
@@ -349,8 +360,13 @@ class ProductionDeploymentContractTests(unittest.TestCase):
         wait_gateway.assert_called_once_with(240)
         wait.assert_called_once_with(240)
         external.assert_called_once_with("clientplatform.example.test")
+        sales_smoke.assert_called_once_with()
         rollback.assert_not_called()
         self.assertTrue(evidence_payload["recovery_mode"])
+        self.assertEqual(
+            evidence_payload["sales_operations_smoke"]["contract_version"],
+            "u008-sales-operations-v1",
+        )
         self.assertFalse(evidence_payload["baseline_ready"])
 
         image_tag_calls = [
@@ -421,6 +437,8 @@ class ProductionDeploymentContractTests(unittest.TestCase):
         self.assertIn("production_readiness_timeout", source)
         self.assertIn("production_startup_timeout", source)
         self.assertIn("external_https_proof_failed", source)
+        self.assertIn("sales_operations_smoke = _sales_operations_smoke()", source)
+        self.assertIn('"sales_operations_smoke": sales_operations_smoke', source)
         self.assertIn("rollback_tag", source)
         self.assertIn('"--no-build", "--force-recreate"', source)
         self.assertIn("CLIENTPLATFORM_PRODUCTION_ROLLBACK_OK", source)
@@ -430,6 +448,50 @@ class ProductionDeploymentContractTests(unittest.TestCase):
         self.assertIn("CLIENTPLATFORM_PRODUCTION_DEPLOY_OK", source)
         self.assertIn("--recover-unavailable-baseline", source)
         self.assertNotIn("shell=True", source)
+
+
+    def test_sales_operations_smoke_requires_complete_rollback_clean_contract(self) -> None:
+        payload = {
+            "contract_version": "u008-sales-operations-v1",
+            "ok": True,
+            "rollback_clean": True,
+            "checks": {name: True for name in production_deploy._SALES_SMOKE_REQUIRED_CHECKS},
+            "residue": {"businesses": 0, "clientplatform_sales_leads": 0},
+        }
+        completed = __import__("subprocess").CompletedProcess(
+            args=["docker", "exec"],
+            returncode=0,
+            stdout=(
+                "noise before marker\n"
+                "CLIENTPLATFORM_SALES_PRODUCTION_SMOKE_OK:"
+                + __import__("json").dumps(payload)
+                + "\n"
+            ),
+            stderr="",
+        )
+        with mock.patch.object(production_deploy, "_run", return_value=completed):
+            self.assertEqual(production_deploy._sales_operations_smoke(), payload)
+
+    def test_sales_operations_smoke_rejects_rollback_residue(self) -> None:
+        payload = {
+            "contract_version": "u008-sales-operations-v1",
+            "ok": True,
+            "rollback_clean": True,
+            "checks": {name: True for name in production_deploy._SALES_SMOKE_REQUIRED_CHECKS},
+            "residue": {"businesses": 1},
+        }
+        completed = __import__("subprocess").CompletedProcess(
+            args=["docker", "exec"],
+            returncode=0,
+            stdout="CLIENTPLATFORM_SALES_PRODUCTION_SMOKE_OK:" + __import__("json").dumps(payload),
+            stderr="",
+        )
+        with mock.patch.object(production_deploy, "_run", return_value=completed):
+            with self.assertRaisesRegex(
+                production_deploy.DeploymentError,
+                "sales_production_smoke_rollback_not_clean",
+            ):
+                production_deploy._sales_operations_smoke()
 
     def test_source_updater_preserves_env_and_requires_expected_sha_when_set(self) -> None:
         updater = (
@@ -464,6 +526,7 @@ class ProductionDeploymentContractTests(unittest.TestCase):
         self.assertIn("Acquire::Retries=5", dockerfile)
         self.assertIn("ARG CLIENTPLATFORM_REQUIRE_AUDIO_ASSETS=0", dockerfile)
         self.assertIn("python -m scripts.clientplatform_container_audio_assets", dockerfile)
+        self.assertIn("clientplatform_sales_production_smoke.py", dockerfile)
         self.assertIn("test -L /app/audio", dockerfile)
         self.assertIn("test -r /app/.audio-assets.json", dockerfile)
         self.assertNotIn("apt.postgresql.org", dockerfile)
