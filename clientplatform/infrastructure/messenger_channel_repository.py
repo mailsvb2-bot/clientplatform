@@ -32,6 +32,10 @@ from clientplatform.domain.messenger_channels import (
     normalize_customer_platform,
 )
 from clientplatform.domain.tenancy import TenantContext, normalize_uuid
+from clientplatform.infrastructure.connection_credentials import (
+    ConnectionCredentialError,
+    assert_connection_credential_reference_business,
+)
 from clientplatform.infrastructure.tenancy_repository import TenancyRepository
 
 
@@ -116,6 +120,12 @@ class MessengerChannelRepository:
         normalized_connection_id = normalize_uuid(connection_id, field_name="connection_id")
         route_id = normalize_external_account_id(external_route_id)
         secret_ref = normalize_credential_reference(webhook_secret_reference)
+        try:
+            assert_connection_credential_reference_business(
+                secret_ref, current.business_id
+            )
+        except ConnectionCredentialError as exc:
+            raise CustomerChannelLinkRejected(str(exc)) from None
         connection = self._conn.execute(
             """
             SELECT platform, external_account_id, status
@@ -140,6 +150,12 @@ class MessengerChannelRepository:
             if confirmation_code_reference is None:
                 raise CustomerChannelLinkRejected("VK messenger route requires confirmation code reference")
             confirmation_ref = normalize_credential_reference(confirmation_code_reference)
+            try:
+                assert_connection_credential_reference_business(
+                    confirmation_ref, current.business_id
+                )
+            except ConnectionCredentialError as exc:
+                raise CustomerChannelLinkRejected(str(exc)) from None
         elif confirmation_code_reference is not None:
             raise CustomerChannelLinkRejected("MAX messenger route must not define VK confirmation code reference")
         timestamp = _iso(now or _utc_now())
@@ -187,6 +203,80 @@ class MessengerChannelRepository:
             ),
         )
         return self.resolve_route(route_id=route_uuid, expected_platform=platform)
+
+    def activate_route(
+        self,
+        *,
+        actor: TenantContext,
+        route_id: str,
+        now: datetime | None = None,
+    ) -> MessengerIngressRoute:
+        current = self._resolve_manager(actor)
+        normalized_route_id = normalize_uuid(
+            route_id, field_name="messenger_route_id"
+        )
+        timestamp = _iso(now or _utc_now())
+        cursor = self._conn.execute(
+            """
+            UPDATE messenger_ingress_routes
+            SET status='active', updated_at=?, revoked_at=NULL
+            WHERE id=? AND business_id=? AND status IN ('active','disabled')
+            """,
+            (timestamp, normalized_route_id, current.business_id),
+        )
+        if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+            raise MessengerRouteNotFound("messenger route cannot be activated")
+        row = self._conn.execute(
+            """
+            SELECT id, business_id, connection_id, platform, external_route_id,
+                   webhook_secret_reference, confirmation_code_reference, status,
+                   created_by_member_id, created_at, updated_at, revoked_at
+            FROM messenger_ingress_routes
+            WHERE id=? AND business_id=?
+            LIMIT 1
+            """,
+            (normalized_route_id, current.business_id),
+        ).fetchone()
+        if row is None:
+            raise MessengerRouteNotFound("messenger route was not found")
+        return _route_from_row(row)
+
+    def disable_route(
+        self,
+        *,
+        actor: TenantContext,
+        route_id: str,
+        now: datetime | None = None,
+    ) -> MessengerIngressRoute:
+        current = self._resolve_manager(actor)
+        normalized_route_id = normalize_uuid(
+            route_id, field_name="messenger_route_id"
+        )
+        timestamp = _iso(now or _utc_now())
+        cursor = self._conn.execute(
+            """
+            UPDATE messenger_ingress_routes
+            SET status='disabled', updated_at=?
+            WHERE id=? AND business_id=? AND status!='revoked'
+            """,
+            (timestamp, normalized_route_id, current.business_id),
+        )
+        if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+            raise MessengerRouteNotFound("messenger route cannot be disabled")
+        row = self._conn.execute(
+            """
+            SELECT id, business_id, connection_id, platform, external_route_id,
+                   webhook_secret_reference, confirmation_code_reference, status,
+                   created_by_member_id, created_at, updated_at, revoked_at
+            FROM messenger_ingress_routes
+            WHERE id=? AND business_id=?
+            LIMIT 1
+            """,
+            (normalized_route_id, current.business_id),
+        ).fetchone()
+        if row is None:
+            raise MessengerRouteNotFound("messenger route was not found")
+        return _route_from_row(row)
 
     def resolve_route(
         self,

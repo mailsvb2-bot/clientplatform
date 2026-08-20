@@ -454,6 +454,7 @@ class ClientPlatformConnectionsDispatchOutboxTests(unittest.TestCase):
             set(report.discovered_business_tables),
             {
                 "business_members",
+                "connection_credentials",
                 "connections",
                 "customer_identities",
                 "customers",

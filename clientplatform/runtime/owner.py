@@ -35,6 +35,7 @@ _CLIENTPLATFORM_REQUIRED_TABLES = frozenset(
         "lesson_deliveries",
         "lesson_progress",
         "connections",
+        "connection_credentials",
         "managed_bots",
         "delivery_dispatch_outbox",
     }

@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from clientplatform.domain.connections import (
     Connection,
+    ConnectionInvariantViolation,
     ConnectionNotFound,
     ConnectionPlatform,
     ConnectionStatus,
@@ -21,6 +22,10 @@ from clientplatform.domain.connections import (
 )
 from clientplatform.domain.tenancy import TenantContext, normalize_uuid
 from clientplatform.infrastructure import TenancyRepository
+from clientplatform.infrastructure.connection_credentials import (
+    ConnectionCredentialError,
+    assert_connection_credential_reference_business,
+)
 
 
 def _utc_now() -> str:
@@ -106,6 +111,12 @@ class ConnectionRepository:
         )
         normalized_external_id = normalize_external_account_id(external_account_id)
         normalized_secret_ref = normalize_credential_reference(credential_reference)
+        try:
+            assert_connection_credential_reference_business(
+                normalized_secret_ref, current.business_id
+            )
+        except ConnectionCredentialError as exc:
+            raise ConnectionInvariantViolation(str(exc)) from None
         encoded_permissions = encode_permissions(permissions)
         timestamp = str(now or _utc_now())
         connection_id = str(uuid4())
@@ -145,6 +156,46 @@ class ConnectionRepository:
         return self._get_connection(
             business_id=current.business_id,
             connection_id=connection_id,
+        )
+
+    def replace_credential_reference(
+        self,
+        *,
+        actor: TenantContext,
+        connection_id: str,
+        credential_reference: str,
+        now: str | None = None,
+    ) -> Connection:
+        current = self._resolve_actor(actor)
+        normalized_connection_id = normalize_uuid(
+            connection_id, field_name="connection_id"
+        )
+        normalized_reference = normalize_credential_reference(credential_reference)
+        try:
+            assert_connection_credential_reference_business(
+                normalized_reference, current.business_id
+            )
+        except ConnectionCredentialError as exc:
+            raise ConnectionInvariantViolation(str(exc)) from None
+        timestamp = str(now or _utc_now())
+        cursor = self._conn.execute(
+            """
+            UPDATE connections
+            SET credential_reference=?, updated_at=?
+            WHERE id=? AND business_id=? AND status!='revoked'
+            """,
+            (
+                normalized_reference,
+                timestamp,
+                normalized_connection_id,
+                current.business_id,
+            ),
+        )
+        if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+            raise ConnectionNotFound("connection was not found in the business")
+        return self._get_connection(
+            business_id=current.business_id,
+            connection_id=normalized_connection_id,
         )
 
     def activate_connection(
