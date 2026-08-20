@@ -100,11 +100,24 @@ class ClientPlatformHttpProbeTransportTests(unittest.TestCase):
             "handle @messenger_webhooks {\n"
             "        reverse_proxy {$CLIENTPLATFORM_INGRESS_UPSTREAM:127.0.0.1:8181}"
         )
+        canonical_matcher = (
+            "@clientplatform_messenger_webhooks path "
+            "/clientplatform/webhooks/vk/* /clientplatform/webhooks/max/*"
+        )
+        canonical_handler = (
+            "handle @clientplatform_messenger_webhooks {\n"
+            "        reverse_proxy {$CLIENTPLATFORM_INGRESS_UPSTREAM:127.0.0.1:8181}"
+        )
+        media_matcher = "@media path /clientplatform/*"
         root_handler = 'handle / {\n        respond "ClientPlatform" 200'
         fallback_handler = 'handle {\n        respond "not found" 404'
 
         self.assertIn(webhook_matcher, caddy)
         self.assertIn(webhook_handler, caddy)
+        self.assertIn(canonical_matcher, caddy)
+        self.assertIn(canonical_handler, caddy)
+        self.assertIn(media_matcher, caddy)
+        self.assertLess(caddy.index(canonical_matcher), caddy.index(media_matcher))
         self.assertIn(root_handler, caddy)
         self.assertIn(fallback_handler, caddy)
         self.assertIn('handle /healthz {\n        respond "not public" 404', caddy)

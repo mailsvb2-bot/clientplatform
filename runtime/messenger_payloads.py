@@ -253,7 +253,7 @@ def max_event_key(payload: dict[str, Any]) -> str:
     message = _dict_or_empty(payload.get("message"))
     body = _dict_or_empty(message.get("body"))
     callback = _dict_or_empty(payload.get("callback") or payload.get("button") or payload.get("payload"))
-    sender = _dict_or_empty(message.get("sender") or payload.get("sender") or callback.get("sender"))
+    sender = _dict_or_empty(message.get("sender") or payload.get("sender") or payload.get("user") or callback.get("sender"))
     parts = [
         str(payload.get("update_id") or payload.get("event_id") or payload.get("timestamp") or ""),
         str(message.get("message_id") or message.get("id") or body.get("mid") or callback.get("id") or ""),
@@ -309,7 +309,7 @@ def extract_max_message(payload: dict[str, Any]) -> dict[str, Any] | None:
     body = _dict_or_empty(message.get("body"))
     callback = _dict_or_empty(payload.get("callback") or payload.get("button") or payload.get("payload"))
 
-    sender = _dict_or_empty(message.get("sender") or payload.get("sender") or callback.get("sender"))
+    sender = _dict_or_empty(message.get("sender") or payload.get("sender") or payload.get("user") or callback.get("sender"))
 
     user_id = _first_int_from_dict(
         {"message": message, "sender": sender, "payload": payload, "callback": callback, "body": body},
@@ -321,6 +321,8 @@ def extract_max_message(payload: dict[str, Any]) -> dict[str, Any] | None:
         ("callback", "sender", "id"),
         ("callback", "user", "user_id"),
         ("callback", "user", "id"),
+        ("payload", "user", "user_id"),
+        ("payload", "user", "id"),
         ("payload", "user_id"),
         ("payload", "chat_id"),
         ("body", "user_id"),

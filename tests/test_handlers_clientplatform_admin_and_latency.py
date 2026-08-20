@@ -505,6 +505,20 @@ async def test_customer_behavior_messenger_and_format_screens_render(
     monkeypatch.setattr(admin, "list_business_capabilities", lambda **_kwargs: capabilities)
     monkeypatch.setattr(
         admin,
+        "list_connections",
+        lambda **_kwargs: [
+            SimpleNamespace(
+                platform=SimpleNamespace(value="vk"),
+                status=SimpleNamespace(value="active"),
+            ),
+            SimpleNamespace(
+                platform=SimpleNamespace(value="max"),
+                status=SimpleNamespace(value="attention"),
+            ),
+        ],
+    )
+    monkeypatch.setattr(
+        admin,
         "get_customer",
         lambda **_kwargs: SimpleNamespace(
             customer=SimpleNamespace(
@@ -543,6 +557,9 @@ async def test_customer_behavior_messenger_and_format_screens_render(
     assert "🔎 Карточка клиента" in rendered
     assert "🧠 Поведение" in rendered
     assert "💬 Мессенджеры" in rendered
+    assert "ВКонтакте: ✅ работает" in rendered
+    assert "MAX: ⚠️ требует внимания" in rendered
+    assert "Telegram: не подключён" in rendered
     assert "🧩 Форматы работы" in rendered
 
 

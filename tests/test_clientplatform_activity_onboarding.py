@@ -17,7 +17,7 @@ from clientplatform.domain.activity import (
     CapabilityKind,
     CapabilityStatus,
 )
-from clientplatform.infrastructure import TenancyRepository
+from clientplatform.infrastructure import ConnectionRepository, TenancyRepository
 from clientplatform.infrastructure.activity_repository import ActivityRepository
 from clientplatform.infrastructure.customer_repository import CustomerRepository
 from clientplatform.privacy_manifest import validate_clientplatform_privacy_manifest
@@ -244,6 +244,125 @@ class ClientPlatformActivityOnboardingTests(unittest.TestCase):
         )
         self.assertEqual(prepared.dispatch.payload_ref, "telegram-file-id")
         self.assertEqual(prepared.dispatch.status.value, "pending")
+
+    def test_program_delivery_prefers_most_recent_active_vk_channel(self) -> None:
+        customers = CustomerRepository(self.conn)
+        customer = customers.create_customer(actor=self.owner_a, display_name="Клиент VK")
+        customers.attach_identity(
+            actor=self.owner_a, customer_id=customer.id, platform="telegram",
+            external_subject="700010", now="2026-08-20T10:00:00+00:00",
+        )
+        vk_identity = customers.attach_identity(
+            actor=self.owner_a, customer_id=customer.id, platform="vk",
+            external_subject="880010", now="2026-08-20T11:00:00+00:00",
+        )
+        self.conn.execute(
+            "UPDATE customer_identities SET last_contact_at=? WHERE id=?",
+            ("2026-08-20T11:30:00+00:00", vk_identity.id),
+        )
+        connections = ConnectionRepository(self.conn)
+        vk = connections.create_connection(
+            actor=self.owner_a, platform="vk", connection_type="vk_community",
+            external_account_id="441001",
+            credential_reference="secret://env/CLIENTPLATFORM_SECRET_TEST_VK",
+            permissions=("send_message", "send_media"),
+        )
+        vk = connections.activate_connection(actor=self.owner_a, connection_id=vk.id)
+
+        @contextmanager
+        def local_db():
+            yield self.conn
+
+        with patch("clientplatform.application.control.get_db", local_db):
+            program = create_single_lesson_program(
+                actor=self.owner_a, program_title="VK программа", lesson_title="Шаг",
+                content_kind="text", content_ref="Привет VK",
+            )
+            prepared = prepare_program_delivery(
+                actor=self.owner_a, program_id=program.program.id,
+                customer_id=customer.id, bot_id=900001,
+            )
+
+        self.assertEqual(prepared.connection.id, vk.id)
+        self.assertEqual(prepared.connection.platform.value, "vk")
+        self.assertEqual(prepared.dispatch.customer_identity_id, vk_identity.id)
+        self.assertEqual(prepared.dispatch.platform.value, "vk")
+
+    def test_program_delivery_uses_max_without_telegram_identity(self) -> None:
+        customers = CustomerRepository(self.conn)
+        customer = customers.create_customer(actor=self.owner_a, display_name="Клиент MAX")
+        max_identity = customers.attach_identity(
+            actor=self.owner_a, customer_id=customer.id, platform="max",
+            external_subject="990010", now="2026-08-20T12:00:00+00:00",
+        )
+        connections = ConnectionRepository(self.conn)
+        max_connection = connections.create_connection(
+            actor=self.owner_a, platform="max", connection_type="max_personal_bot",
+            external_account_id="551001",
+            credential_reference="secret://env/CLIENTPLATFORM_SECRET_TEST_MAX",
+            permissions=("send_message", "send_media"),
+        )
+        max_connection = connections.activate_connection(
+            actor=self.owner_a, connection_id=max_connection.id
+        )
+
+        @contextmanager
+        def local_db():
+            yield self.conn
+
+        with patch("clientplatform.application.control.get_db", local_db):
+            program = create_single_lesson_program(
+                actor=self.owner_a, program_title="MAX программа", lesson_title="Шаг",
+                content_kind="text", content_ref="Привет MAX",
+            )
+            prepared = prepare_program_delivery(
+                actor=self.owner_a, program_id=program.program.id,
+                customer_id=customer.id, bot_id=900001,
+            )
+
+        self.assertEqual(prepared.connection.id, max_connection.id)
+        self.assertEqual(prepared.dispatch.customer_identity_id, max_identity.id)
+        self.assertEqual(prepared.dispatch.platform.value, "max")
+
+    def test_program_delivery_fails_before_enrollment_on_ambiguous_native_connection(self) -> None:
+        customers = CustomerRepository(self.conn)
+        customer = customers.create_customer(actor=self.owner_a, display_name="Два VK")
+        customers.attach_identity(
+            actor=self.owner_a, customer_id=customer.id, platform="vk",
+            external_subject="880099", now="2026-08-20T13:00:00+00:00",
+        )
+        connections = ConnectionRepository(self.conn)
+        for external_id in ("441099", "441100"):
+            created = connections.create_connection(
+                actor=self.owner_a, platform="vk", connection_type="vk_community",
+                external_account_id=external_id,
+                credential_reference=(
+                    "secret://env/CLIENTPLATFORM_SECRET_TEST_VK_" + external_id
+                ),
+                permissions=("send_message",),
+            )
+            connections.activate_connection(actor=self.owner_a, connection_id=created.id)
+
+        @contextmanager
+        def local_db():
+            yield self.conn
+
+        with patch("clientplatform.application.control.get_db", local_db):
+            program = create_single_lesson_program(
+                actor=self.owner_a, program_title="Не угадывать канал", lesson_title="Шаг",
+                content_kind="text", content_ref="test",
+            )
+            with self.assertRaisesRegex(ValueError, "multiple active vk connections"):
+                prepare_program_delivery(
+                    actor=self.owner_a, program_id=program.program.id,
+                    customer_id=customer.id, bot_id=900001,
+                )
+
+        row = self.conn.execute(
+            "SELECT COUNT(*) AS c FROM enrollments WHERE business_id=? AND customer_id=?",
+            (self.owner_a.business_id, customer.id),
+        ).fetchone()
+        self.assertEqual(int(row["c"]), 0)
 
     def test_privacy_manifest_covers_every_new_business_table(self) -> None:
         report = validate_clientplatform_privacy_manifest(self.conn, require_complete=False)

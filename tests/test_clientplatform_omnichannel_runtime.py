@@ -3,11 +3,13 @@ from __future__ import annotations
 import importlib.util
 import json
 import unittest
-from unittest.mock import patch
+from pathlib import Path
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 from clientplatform.domain.connections import ConnectionPlatform
 from clientplatform.domain.messenger_channels import MessengerIngressRoute
+from clientplatform.runtime.messenger_channel_ingress import _max_raw_message
 from clientplatform.runtime.messenger_provider_clients import MaxRuntimeClient
 from runtime.messenger_max_sender import MAX_API2_BASE_URL, MaxBotSender
 
@@ -91,6 +93,26 @@ class _FakeMaxSender:
 
 
 class OmnichannelRuntimeTransportTests(unittest.IsolatedAsyncioTestCase):
+    def test_official_max_message_callback_top_level_user_is_extracted(self) -> None:
+        extracted = _max_raw_message(
+            {
+                "update_type": "message_callback",
+                "timestamp": 1787259600000,
+                "user": {
+                    "user_id": 778899,
+                    "first_name": "Анна",
+                    "last_name": "Иванова",
+                    "is_bot": False,
+                },
+                "callback": {
+                    "callback_id": "callback-1",
+                    "payload": "book_now",
+                },
+            }
+        )
+
+        self.assertEqual(("778899", "book_now", "Анна Иванова"), extracted)
+
     async def test_canonical_max_text_explicitly_disables_legacy_metrotherapy_ui(self) -> None:
         sender = _FakeMaxSender()
         with patch(
@@ -107,6 +129,38 @@ class OmnichannelRuntimeTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("max-message-1", message_id)
         self.assertEqual("1", sender.text)
         self.assertIs(sender.legacy_ui, False)
+
+    async def test_canonical_max_video_uses_native_video_provider_method(self) -> None:
+        class Sender:
+            def __init__(self) -> None:
+                self.calls: list[tuple[str, Path]] = []
+
+            async def send_video_file(self, external_subject: str, path: Path):
+                self.calls.append((external_subject, path))
+                return {"message_id": "max-video-1"}
+
+        sender = Sender()
+        materialized = Path("/tmp/clientplatform-max-video-test.mp4")
+        with (
+            patch(
+                "clientplatform.runtime.messenger_provider_clients._max_sender",
+                return_value=sender,
+            ),
+            patch(
+                "clientplatform.runtime.messenger_provider_clients._materialize_media",
+                new=AsyncMock(return_value=(materialized, False)),
+            ),
+        ):
+            message_id = await MaxRuntimeClient().send_media(
+                token="provider-token",
+                external_subject="max-user-video",
+                kind=__import__("clientplatform.domain.programs", fromlist=["ContentKind"]).ContentKind.VIDEO,
+                media="https://media.example/video.mp4",
+                idempotency_key="dispatch:max:video:1",
+            )
+
+        self.assertEqual("max-video-1", message_id)
+        self.assertEqual([("max-user-video", materialized)], sender.calls)
 
     async def test_raw_max_sender_preserves_plain_text_without_legacy_ui(self) -> None:
         sender = MaxBotSender(

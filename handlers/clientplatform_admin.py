@@ -22,6 +22,7 @@ from clientplatform.application.activity import (
     list_business_capabilities,
 )
 from clientplatform.application.bookings import list_booking_slots
+from clientplatform.application.connections import list_connections
 from clientplatform.application.control import business_delivery_summary
 from clientplatform.application.customers import get_customer, list_customers
 from clientplatform.application.programs import list_programs
@@ -607,17 +608,41 @@ async def _render_behavior(callback: CallbackQuery, state: FSMContext, ctx: Admi
 
 
 async def _render_messengers(callback: CallbackQuery, state: FSMContext, ctx: AdminContext) -> None:
-    text = (
-        "💬 Мессенджеры\n\n"
-        "Центральный бот ClientPlatform: подключён.\n"
-        "Персональный Telegram-бот: откройте управление ниже.\n\n"
-        "VK и MAX появятся здесь после подключения соответствующих каналов."
+    connections = await asyncio.to_thread(list_connections, actor=ctx.actor)
+    labels = {"telegram": "Telegram", "vk": "ВКонтакте", "max": "MAX"}
+    status_labels = {
+        "active": "✅ работает",
+        "pending": "⏳ настройка",
+        "attention": "⚠️ требует внимания",
+        "disabled": "⏸ отключён",
+        "revoked": "⛔ отозван",
+    }
+    by_platform: dict[str, list[Any]] = {"telegram": [], "vk": [], "max": []}
+    for connection in connections:
+        platform = str(connection.platform.value)
+        if platform in by_platform:
+            by_platform[platform].append(connection)
+
+    lines = ["💬 Мессенджеры", "", "Клиентские каналы этого бизнеса:"]
+    for platform in ("vk", "max", "telegram"):
+        items = by_platform[platform]
+        if not items:
+            lines.append(f"• {labels[platform]}: не подключён")
+            continue
+        states = [status_labels.get(item.status.value, item.status.value) for item in items]
+        lines.append(f"• {labels[platform]}: {', '.join(states)}")
+    lines.extend(
+        [
+            "",
+            "ClientPlatform отправляет клиенту в его последний активный канал, "
+            "если у бизнеса есть однозначное активное подключение.",
+        ]
     )
     keyboard = _back_keyboard(
         ctx,
         ("🤖 Мой Telegram-бот", f"cpb:o:{ctx.business_token}"),
     )
-    await _safe_edit(callback, text, keyboard)
+    await _safe_edit(callback, "\n".join(lines), keyboard)
     await _set_current_section(state, action="messengers", push=True)
 
 

@@ -284,9 +284,9 @@ class MaxRuntimeClient:
                 result = await sender.send_image_file(external_subject, path)
             elif kind == ContentKind.AUDIO:
                 result = await sender.send_audio_file(external_subject, path)
+            elif kind == ContentKind.VIDEO:
+                result = await sender.send_video_file(external_subject, path)
             else:
-                # Current MAX retained sender exposes file, image and audio. Video
-                # is therefore sent as a file until native-video capability exists.
                 result = await sender.send_document_file(external_subject, path)
         finally:
             if temporary:
