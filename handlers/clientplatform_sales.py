@@ -18,7 +18,15 @@ from clientplatform.application.sales_handoff import (
     claim_sales_handoff,
     resolve_sales_handoff,
 )
+from clientplatform.application.retention import (
+    RetentionCandidateUnavailable,
+    list_retention_candidates,
+    prepare_reactivation_sales_lead,
+)
 from clientplatform.application.sales_metrics import get_sales_funnel_snapshot
+from clientplatform.domain.retention import RetentionCohort
+from clientplatform.domain.sales import SalesInvariantViolation
+from clientplatform.domain.tenancy import TenantAccessDenied, TenantPermissionDenied
 from clientplatform.application.sales_orchestration import (
     approve_and_authorize_sales_outbound,
 )
@@ -82,10 +90,25 @@ _KIND_CODES = {
 }
 _SOURCE_LABELS = {
     "telegram": "Telegram",
+    "vk": "VK",
+    "max": "MAX",
     "website": "Сайт",
     "referral": "Рекомендации",
     "manual": "Вручную",
 }
+_RETENTION_COHORT_LABELS = {
+    RetentionCohort.ONE_TIME_CUSTOMER: "Покупал один раз",
+    RetentionCohort.INACTIVE_CUSTOMER: "Давно не возвращался",
+}
+_RETENTION_ACTION_LABELS = {
+    "review_repeat_offer": "Подготовить повторное предложение",
+    "review_reactivation_offer": "Подготовить предложение для возврата",
+}
+_RETENTION_COHORT_CODES = {
+    RetentionCohort.ONE_TIME_CUSTOMER: "o",
+    RetentionCohort.INACTIVE_CUSTOMER: "i",
+}
+_RETENTION_CODE_COHORTS = {value: key for key, value in _RETENTION_COHORT_CODES.items()}
 
 
 def _token(value: str) -> str:
@@ -107,6 +130,7 @@ def _home_keyboard(business_id: str):
         [
             [("💬 Обращения", f"cps:sw:{token}"), ("🙋 Нужно подключиться", f"cps:sh:{token}")],
             [("📊 Как идут продажи", f"cps:sf:{token}"), ("🧩 Что предлагать", f"cps:sl:{token}")],
+            [("♻️ Вернуть клиентов", f"cps:sr:{token}")],
             [("🏠 В кабинет", f"cp:business:{token}")],
         ]
     )
@@ -155,6 +179,125 @@ async def open_sales_home(callback: CallbackQuery, state: FSMContext) -> None:
         control._callback_message(callback),
         user_id=int(callback.from_user.id),
         business_id=business_id,
+    )
+
+
+async def _send_retention_candidates(
+    message: Message,
+    *,
+    user_id: int,
+    business_id: str,
+) -> None:
+    actor = await control._actor(user_id, business_id)
+    candidates = await asyncio.to_thread(
+        list_retention_candidates,
+        actor=actor,
+        limit=8,
+    )
+    business_token = _token(business_id)
+    rows: list[list[tuple[str, str]]] = []
+    if not candidates:
+        text = (
+            "♻️ Вернуть клиентов\n\n"
+            "Сейчас нет клиентов, которых ClientPlatform может обоснованно предложить "
+            "для возврата по подтверждённой истории покупок и активности."
+        )
+    else:
+        lines = [
+            "♻️ Вернуть клиентов",
+            "",
+            "Здесь только клиенты с подтверждённой историей. Система ничего не отправляет "
+            "сама: сначала Вы выбираете, кого взять в работу.",
+            "",
+        ]
+        for index, candidate in enumerate(candidates, start=1):
+            cohort_label = _RETENTION_COHORT_LABELS[candidate.cohort]
+            action_label = _RETENTION_ACTION_LABELS[candidate.suggested_action.value]
+            lines.extend(
+                [
+                    f"{index}. {candidate.display_name or 'Клиент'}",
+                    f"   Почему здесь: {cohort_label}",
+                    f"   Без активности: {candidate.inactive_days} дн.",
+                    f"   Предлагаемый шаг: {action_label}",
+                    "",
+                ]
+            )
+            code = _RETENTION_COHORT_CODES[candidate.cohort]
+            rows.append(
+                [
+                    (
+                        f"✅ Взять в работу {index}",
+                        f"cps:srr:{business_token}:{_token(candidate.customer_id)}:{code}",
+                    )
+                ]
+            )
+        text = "\n".join(lines).rstrip()
+    rows.append([("← Обращения и продажи", f"cps:s:{business_token}")])
+    await message.answer(text, reply_markup=control._keyboard(rows))
+
+
+@router.callback_query(F.data.startswith("cps:sr:"))
+async def open_retention_candidates(callback: CallbackQuery, state: FSMContext) -> None:
+    business_id = _uuid(str(callback.data).split(":", 2)[2])
+    await state.clear()
+    await callback.answer()
+    await _send_retention_candidates(
+        control._callback_message(callback),
+        user_id=int(callback.from_user.id),
+        business_id=business_id,
+    )
+
+
+@router.callback_query(F.data.startswith("cps:srr:"))
+async def approve_retention_candidate(callback: CallbackQuery, state: FSMContext) -> None:
+    parts = str(callback.data).split(":")
+    if len(parts) != 5 or parts[4] not in _RETENTION_CODE_COHORTS:
+        await callback.answer("Список изменился — обновите его.", show_alert=True)
+        return
+    business_id = _uuid(parts[2])
+    customer_id = _uuid(parts[3])
+    cohort = _RETENTION_CODE_COHORTS[parts[4]]
+    actor = await control._actor(int(callback.from_user.id), business_id)
+    try:
+        prepared = await asyncio.to_thread(
+            prepare_reactivation_sales_lead,
+            actor=actor,
+            customer_id=customer_id,
+            expected_cohort=cohort,
+        )
+    except (
+        RetentionCandidateUnavailable,
+        SalesInvariantViolation,
+        TenantAccessDenied,
+        TenantPermissionDenied,
+    ):
+        await callback.answer(
+            "Список изменился — обновите его перед действием.",
+            show_alert=True,
+        )
+        return
+    await state.clear()
+    await callback.answer("Добавлено в работу")
+    if prepared.route_platform is None:
+        route_text = (
+            "Безопасный канал для сообщения сейчас недоступен, поэтому это добавлено "
+            "как ручная работа."
+        )
+    else:
+        route_text = (
+            "Можно продолжить через существующий канал клиента. Сообщение всё равно "
+            "потребует отдельного подтверждения перед отправкой."
+        )
+    await control._callback_message(callback).answer(
+        "✅ Клиент добавлен в Обращения.\n\n"
+        f"{route_text}\n\n"
+        "Клиенту сейчас ничего не отправлено.",
+        reply_markup=control._keyboard(
+            [
+                [("🛠 Открыть обращения", f"cps:swm:{_token(business_id)}")],
+                [("♻️ К списку возврата", f"cps:sr:{_token(business_id)}")],
+            ]
+        ),
     )
 
 
