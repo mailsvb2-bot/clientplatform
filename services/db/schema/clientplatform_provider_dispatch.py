@@ -23,6 +23,7 @@ def ensure(c: sqlite3.Connection) -> None:
             logical_delivery_id TEXT NULL,
             partner_campaign_id TEXT NULL,
             partner_candidate_id TEXT NULL,
+            sales_followup_id TEXT NULL,
             connection_id TEXT NOT NULL,
             recipient_kind TEXT NOT NULL,
             customer_identity_id TEXT NULL,
@@ -54,7 +55,7 @@ def ensure(c: sqlite3.Connection) -> None:
                 REFERENCES partner_candidates(id, business_id, campaign_id)
                 ON DELETE CASCADE,
             CHECK(platform IN ('telegram', 'vk', 'max')),
-            CHECK(source_kind IN ('lesson_delivery', 'partner_outreach')),
+            CHECK(source_kind IN ('lesson_delivery', 'partner_outreach', 'sales_followup')),
             CHECK(recipient_kind IN ('customer_identity', 'external_subject')),
             CHECK(payload_kind IN (
                 'audio', 'video', 'text', 'document', 'image',
@@ -70,13 +71,22 @@ def ensure(c: sqlite3.Connection) -> None:
                     AND logical_delivery_id IS NOT NULL
                     AND partner_campaign_id IS NULL
                     AND partner_candidate_id IS NULL
+                    AND sales_followup_id IS NULL
                     AND source_id=logical_delivery_id)
                 OR
                 (source_kind='partner_outreach'
                     AND logical_delivery_id IS NULL
                     AND partner_campaign_id IS NOT NULL
                     AND partner_candidate_id IS NOT NULL
+                    AND sales_followup_id IS NULL
                     AND source_id=partner_candidate_id)
+                OR
+                (source_kind='sales_followup'
+                    AND logical_delivery_id IS NULL
+                    AND partner_campaign_id IS NULL
+                    AND partner_candidate_id IS NULL
+                    AND sales_followup_id IS NOT NULL
+                    AND source_id=sales_followup_id)
             ),
             CHECK(
                 (recipient_kind='customer_identity'

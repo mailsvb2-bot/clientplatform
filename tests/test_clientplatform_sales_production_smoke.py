@@ -7,15 +7,7 @@ from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from unittest import mock
 
 from scripts import clientplatform_sales_production_smoke as smoke
-from services.db.schema import (
-    clientplatform_activity,
-    clientplatform_attribution,
-    clientplatform_bookings,
-    clientplatform_customers,
-    clientplatform_promotions,
-    clientplatform_sales,
-    clientplatform_tenancy,
-)
+from services.db.schema import create_or_update_tables
 
 
 class ClientPlatformSalesProductionSmokeTests(unittest.TestCase):
@@ -23,13 +15,7 @@ class ClientPlatformSalesProductionSmokeTests(unittest.TestCase):
         self.conn = sqlite3.connect(":memory:")
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys=ON")
-        clientplatform_tenancy.ensure(self.conn)
-        clientplatform_customers.ensure(self.conn)
-        clientplatform_activity.ensure(self.conn)
-        clientplatform_bookings.ensure(self.conn)
-        clientplatform_sales.ensure(self.conn)
-        clientplatform_promotions.ensure(self.conn)
-        clientplatform_attribution.ensure(self.conn)
+        create_or_update_tables(self.conn)
         self.conn.commit()
 
     def tearDown(self) -> None:
@@ -51,7 +37,7 @@ class ClientPlatformSalesProductionSmokeTests(unittest.TestCase):
             require_postgres=False,
         )
 
-    def test_complete_u008_contract_is_proven_then_rolled_back(self) -> None:
+    def test_complete_u008_u009_contract_is_proven_then_rolled_back(self) -> None:
         payload = self._run()
         self.assertTrue(payload["ok"])
         self.assertTrue(payload["rollback_clean"])
@@ -68,6 +54,11 @@ class ClientPlatformSalesProductionSmokeTests(unittest.TestCase):
             "won_terminal",
             "cross_tenant_fail_closed",
             "audit_events",
+            "u009_owner_approved_same_channel",
+            "u009_outbox_idempotency",
+            "u009_send_eligibility",
+            "u009_opt_out_suppression",
+            "u009_audit_events",
         }
         self.assertEqual(set(payload["checks"]), expected_checks)
         self.assertTrue(all(payload["checks"].values()))
@@ -78,6 +69,14 @@ class ClientPlatformSalesProductionSmokeTests(unittest.TestCase):
         )
         self.assertEqual(
             self.conn.execute("SELECT COUNT(*) FROM clientplatform_sales_leads").fetchone()[0],
+            0,
+        )
+        self.assertEqual(
+            self.conn.execute("SELECT COUNT(*) FROM clientplatform_sales_followups").fetchone()[0],
+            0,
+        )
+        self.assertEqual(
+            self.conn.execute("SELECT COUNT(*) FROM provider_dispatch_outbox").fetchone()[0],
             0,
         )
 

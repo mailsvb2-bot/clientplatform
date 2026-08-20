@@ -163,6 +163,7 @@ class SalesUiRepository:
                 COALESCE(c.display_name, 'Клиент') AS customer_name,
                 l.source_kind,
                 l.source_ref,
+                l.contact_basis,
                 l.stage,
                 l.assigned_member_id,
                 (
@@ -177,6 +178,25 @@ class SalesUiRepository:
                 l.due_at,
                 l.closure_reason,
                 l.updated_at,
+                (
+                    SELECT f.id
+                    FROM clientplatform_sales_followups f
+                    WHERE f.business_id=l.business_id AND f.lead_id=l.id
+                      AND f.status IN ('scheduled','queued')
+                    ORDER BY f.created_at DESC,f.id DESC LIMIT 1
+                ) AS active_followup_id,
+                (
+                    SELECT f.scheduled_at
+                    FROM clientplatform_sales_followups f
+                    WHERE f.business_id=l.business_id AND f.lead_id=l.id
+                      AND f.status IN ('scheduled','queued')
+                    ORDER BY f.created_at DESC,f.id DESC LIMIT 1
+                ) AS active_followup_scheduled_at,
+                EXISTS(
+                    SELECT 1 FROM clientplatform_sales_contact_suppressions s
+                    WHERE s.business_id=l.business_id AND s.customer_id=l.customer_id
+                      AND s.platform=l.source_kind
+                ) AS followup_suppressed,
                 (
                     SELECT p.id
                     FROM clientplatform_sales_action_plans p

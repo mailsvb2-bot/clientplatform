@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import sqlite3
 import uuid
 from datetime import datetime, timedelta
 from typing import Any
 
+from clientplatform.domain.connections import DispatchLeaseLost
 from clientplatform.domain.partners import (
     PartnerChannel,
     PartnerInvariantViolation,
 )
 from clientplatform.domain.tenancy import TenantContext, normalize_uuid
 from clientplatform.infrastructure.partner_repository import PartnerRepository
+from clientplatform.infrastructure.sales_followup_repository import SalesFollowupRepository
 from clientplatform.infrastructure.safe_dispatch_outbox import (
     DispatchOutboxRepository as _LessonDispatchOutboxRepository,
 )
@@ -32,6 +36,11 @@ d.status, d.attempts, d.available_at, d.locked_at, d.lock_token,
 d.provider_message_id, d.last_error, d.created_at, d.updated_at, d.sent_at,
 d.dead_at
 """.strip()
+
+_FOLLOWUP_NON_REPLAY_PLATFORMS = frozenset({"telegram", "max"})
+_FOLLOWUP_PROVIDER_BOUNDARY_MARKER = "sales_followup_provider_call_started_non_idempotent"
+_FOLLOWUP_AMBIGUOUS_ERROR = "sales_followup_delivery_outcome_ambiguous_manual_reconciliation_required"
+
 
 _RETURNING_PROVIDER_COLUMNS = """
 id, business_id, platform, source_kind, source_id, connection_id,
@@ -187,6 +196,96 @@ class DispatchOutboxRepository(_UnifiedDispatchOutboxRepository):
             )
         return persisted
 
+    def materialize_sales_followup(
+        self,
+        *,
+        actor: TenantContext,
+        followup_id: str,
+        now: str | None = None,
+    ) -> ProviderDispatch:
+        current = self._tenancy.resolve_context(
+            user_id=actor.user_id,
+            business_id=actor.business_id,
+        )
+        current.assert_can_manage_customer_records()
+        followups = SalesFollowupRepository(self._conn)
+        followup = followups.get(actor=current, followup_id=followup_id)
+        if followup.status.value not in {"scheduled", "queued"}:
+            raise ValueError("sales follow-up is not queueable")
+        identity = self._conn.execute(
+            """
+            SELECT external_subject
+            FROM customer_identities
+            WHERE id=? AND business_id=? AND platform=? AND status='active'
+            LIMIT 1
+            """,
+            (followup.customer_identity_id, current.business_id, followup.platform),
+        ).fetchone()
+        if identity is None:
+            raise ValueError("sales follow-up customer identity is no longer active")
+        connection = self._conn.execute(
+            """
+            SELECT 1 FROM connections
+            WHERE id=? AND business_id=? AND platform=? AND status='active'
+            LIMIT 1
+            """,
+            (followup.connection_id, current.business_id, followup.platform),
+        ).fetchone()
+        if connection is None:
+            raise ValueError("sales follow-up connection is no longer active")
+        external_subject = str(_value(identity, "external_subject", 0))
+        timestamp = str(now or _utc_now().isoformat())
+        dispatch_id = str(uuid.uuid4())
+        idempotency_key = f"sales-followup:{followup.id}"
+        row = self._conn.execute(
+            f"""
+            INSERT INTO provider_dispatch_outbox(
+                id,business_id,platform,source_kind,source_id,logical_delivery_id,
+                partner_campaign_id,partner_candidate_id,sales_followup_id,
+                connection_id,recipient_kind,customer_identity_id,external_subject,
+                payload_kind,payload_ref,idempotency_key,status,attempts,available_at,
+                locked_at,lock_token,provider_message_id,last_error,created_at,updated_at,
+                sent_at,dead_at
+            ) VALUES(
+                ?,?,?, 'sales_followup', ?,NULL,NULL,NULL,?,?,
+                'customer_identity',?,?,'text',?,?,'pending',0,?,
+                NULL,NULL,NULL,NULL,?,?,NULL,NULL
+            )
+            ON CONFLICT(business_id,idempotency_key) DO UPDATE
+            SET idempotency_key=excluded.idempotency_key
+            RETURNING {_RETURNING_PROVIDER_COLUMNS}
+            """,  # nosec B608 - static returning column list
+            (
+                dispatch_id,
+                current.business_id,
+                followup.platform,
+                followup.id,
+                followup.id,
+                followup.connection_id,
+                followup.customer_identity_id,
+                external_subject,
+                followup.message_text,
+                idempotency_key,
+                followup.scheduled_at,
+                timestamp,
+                timestamp,
+            ),
+        ).fetchone()
+        if row is None:
+            raise RuntimeError("sales_followup_dispatch_atomic_upsert_unavailable")
+        persisted = _provider_dispatch_from_row(row)
+        if persisted.source_id != followup.id:
+            raise ValueError("sales follow-up idempotency belongs to different work")
+        self._conn.execute(
+            """
+            UPDATE clientplatform_sales_followups
+            SET status='queued',provider_dispatch_id=?,queued_at=COALESCE(queued_at,?),updated_at=?
+            WHERE id=? AND business_id=? AND status IN ('scheduled','queued')
+            """,
+            (persisted.id, timestamp, timestamp, followup.id, current.business_id),
+        )
+        return persisted
+
     def cancel_not_started_partner_outreach(
         self,
         *,
@@ -318,6 +417,234 @@ class DispatchOutboxRepository(_UnifiedDispatchOutboxRepository):
         )
         return int(getattr(cursor, "rowcount", 0) or 0) == 1
 
+    def sales_followup_claim_can_cross_provider_boundary(
+        self,
+        item: ClaimedProviderDispatch,
+        *,
+        now: str | None = None,
+    ) -> bool:
+        if item.dispatch.source_kind != "sales_followup":
+            return True
+        timestamp = str(now or _utc_now().isoformat())
+        decision = SalesFollowupRepository(self._conn).decision_for_send(
+            business_id=item.dispatch.business_id,
+            followup_id=item.dispatch.source_id,
+            now=timestamp,
+        )
+        if decision.allowed:
+            return True
+        if decision.defer_until:
+            cursor = self._conn.execute(
+                """
+                UPDATE provider_dispatch_outbox
+                SET status='retry',available_at=?,updated_at=?,locked_at=NULL,lock_token=NULL,
+                    last_error='sales_followup_quiet_hours'
+                WHERE id=? AND business_id=? AND source_kind='sales_followup'
+                  AND status='sending' AND lock_token=?
+                """,
+                (
+                    decision.defer_until,
+                    timestamp,
+                    item.dispatch.id,
+                    item.dispatch.business_id,
+                    item.dispatch.lock_token,
+                ),
+            )
+            if int(getattr(cursor, "rowcount", 0) or 0) == 1:
+                self._conn.execute(
+                    """
+                    UPDATE clientplatform_sales_followups
+                    SET scheduled_at=?,updated_at=?
+                    WHERE id=? AND business_id=? AND status='queued'
+                    """,
+                    (decision.defer_until, timestamp, item.dispatch.source_id, item.dispatch.business_id),
+                )
+            return False
+        reason = "contact_forbidden" if decision.stop_reason is None else decision.stop_reason.value
+        cursor = self._conn.execute(
+            """
+            UPDATE provider_dispatch_outbox
+            SET status='cancelled',updated_at=?,locked_at=NULL,lock_token=NULL,last_error=?
+            WHERE id=? AND business_id=? AND source_kind='sales_followup'
+              AND status='sending' AND lock_token=?
+            """,
+            (
+                timestamp,
+                f"sales_followup_{reason}",
+                item.dispatch.id,
+                item.dispatch.business_id,
+                item.dispatch.lock_token,
+            ),
+        )
+        if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+            return False
+        self._conn.execute(
+            """
+            UPDATE clientplatform_sales_followups
+            SET status='stopped',stopped_at=?,stop_reason=?,updated_at=?
+            WHERE id=? AND business_id=? AND status='queued'
+            """,
+            (timestamp, reason, timestamp, item.dispatch.source_id, item.dispatch.business_id),
+        )
+        lead = self._conn.execute(
+            "SELECT lead_id FROM clientplatform_sales_followups WHERE id=? AND business_id=? LIMIT 1",
+            (item.dispatch.source_id, item.dispatch.business_id),
+        ).fetchone()
+        if lead is not None:
+            lead_id = str(_value(lead, "lead_id", 0))
+            self._conn.execute(
+                """
+                INSERT INTO clientplatform_sales_events(
+                    id,business_id,lead_id,event_type,dedupe_key,payload_json,occurred_at
+                ) VALUES(?,?,?,?,?,?,?)
+                ON CONFLICT(business_id,lead_id,dedupe_key) DO NOTHING
+                """,
+                (
+                    str(uuid.uuid4()),
+                    item.dispatch.business_id,
+                    lead_id,
+                    "followup_stopped",
+                    f"followup-stop:{item.dispatch.source_id}:{reason}",
+                    json.dumps({"followup_id": item.dispatch.source_id, "reason": reason}, sort_keys=True),
+                    timestamp,
+                ),
+            )
+        return False
+
+    def mark_sales_followup_non_replay_boundary(
+        self,
+        item: ClaimedProviderDispatch,
+        *,
+        now: str | None = None,
+    ) -> bool:
+        if item.dispatch.source_kind != "sales_followup":
+            return False
+        if item.dispatch.platform.value not in _FOLLOWUP_NON_REPLAY_PLATFORMS:
+            return False
+        timestamp = str(now or _utc_now().isoformat())
+        cursor = self._conn.execute(
+            """
+            UPDATE provider_dispatch_outbox
+            SET last_error=?,updated_at=?
+            WHERE id=? AND business_id=? AND source_kind='sales_followup'
+              AND status='sending' AND lock_token=?
+            """,
+            (
+                _FOLLOWUP_PROVIDER_BOUNDARY_MARKER,
+                timestamp,
+                item.dispatch.id,
+                item.dispatch.business_id,
+                item.dispatch.lock_token,
+            ),
+        )
+        if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+            raise DispatchLeaseLost(
+                "sales follow-up lease was lost before provider boundary"
+            )
+        return True
+
+    def mark_sent(
+        self,
+        item: Any,
+        *,
+        provider_message_id: str,
+        now: datetime | None = None,
+    ) -> Any:
+        result = super().mark_sent(
+            item,
+            provider_message_id=provider_message_id,
+            now=now,
+        )
+        if not isinstance(item, ClaimedProviderDispatch) or item.dispatch.source_kind != "sales_followup":
+            return result
+        stamp = (now or _utc_now()).replace(microsecond=0).isoformat()
+        cursor = self._conn.execute(
+            """
+            UPDATE clientplatform_sales_followups
+            SET status='sent',sent_at=?,updated_at=?
+            WHERE id=? AND business_id=? AND status IN ('queued','stopped','cancelled')
+            """,
+            (stamp, stamp, item.dispatch.source_id, item.dispatch.business_id),
+        )
+        if int(getattr(cursor, "rowcount", 0) or 0) == 1:
+            row = self._conn.execute(
+                "SELECT lead_id FROM clientplatform_sales_followups WHERE id=? AND business_id=? LIMIT 1",
+                (item.dispatch.source_id, item.dispatch.business_id),
+            ).fetchone()
+            if row is not None:
+                lead_id = str(_value(row, "lead_id", 0))
+                self._conn.execute(
+                    """
+                    INSERT INTO clientplatform_sales_events(
+                        id,business_id,lead_id,event_type,dedupe_key,payload_json,occurred_at
+                    ) VALUES(?,?,?,?,?,?,?)
+                    ON CONFLICT(business_id,lead_id,dedupe_key) DO NOTHING
+                    """,
+                    (
+                        str(uuid.uuid4()),
+                        item.dispatch.business_id,
+                        lead_id,
+                        "followup_sent",
+                        f"followup-sent:{item.dispatch.source_id}",
+                        json.dumps({"followup_id": item.dispatch.source_id, "platform": item.dispatch.platform.value}, sort_keys=True),
+                        stamp,
+                    ),
+                )
+        return result
+
+    def reschedule(
+        self,
+        item: Any,
+        *,
+        error: str,
+        max_attempts: int = 8,
+        now: datetime | None = None,
+    ) -> Any:
+        result = super().reschedule(
+            item,
+            error=error,
+            max_attempts=max_attempts,
+            now=now,
+        )
+        if not isinstance(item, ClaimedProviderDispatch) or item.dispatch.source_kind != "sales_followup":
+            return result
+        if str(getattr(result.status, "value", result.status)) != "dead":
+            return result
+        stamp = (now or _utc_now()).replace(microsecond=0).isoformat()
+        cursor = self._conn.execute(
+            """
+            UPDATE clientplatform_sales_followups
+            SET status='dead',stopped_at=?,stop_reason='delivery_failed',updated_at=?
+            WHERE id=? AND business_id=? AND status IN ('queued','stopped','cancelled')
+            """,
+            (stamp, stamp, item.dispatch.source_id, item.dispatch.business_id),
+        )
+        if int(getattr(cursor, "rowcount", 0) or 0) == 1:
+            row = self._conn.execute(
+                "SELECT lead_id FROM clientplatform_sales_followups WHERE id=? AND business_id=? LIMIT 1",
+                (item.dispatch.source_id, item.dispatch.business_id),
+            ).fetchone()
+            if row is not None:
+                lead_id = str(_value(row, "lead_id", 0))
+                self._conn.execute(
+                    """
+                    INSERT INTO clientplatform_sales_events(
+                        id,business_id,lead_id,event_type,dedupe_key,payload_json,occurred_at
+                    ) VALUES(?,?,?,?,?,?,?)
+                    ON CONFLICT(business_id,lead_id,dedupe_key) DO NOTHING
+                    """,
+                    (
+                        str(uuid.uuid4()),
+                        item.dispatch.business_id,
+                        lead_id,
+                        "followup_delivery_failed",
+                        f"followup-dead:{item.dispatch.source_id}",
+                        json.dumps({"followup_id": item.dispatch.source_id}, sort_keys=True),
+                        stamp,
+                    ),
+                )
+        return result
+
     def claim_due(
         self,
         *,
@@ -362,6 +689,93 @@ class DispatchOutboxRepository(_UnifiedDispatchOutboxRepository):
             )
         return [*lesson, *partner]
 
+    def _sales_followup_table_available(self) -> bool:
+        try:
+            self._conn.execute(
+                "SELECT 1 FROM clientplatform_sales_followups WHERE 1=0"
+            ).fetchone()
+        except sqlite3.OperationalError as exc:
+            if "no such table" in str(exc).lower():
+                return False
+            raise
+        return True
+
+    def _quarantine_stale_sales_followup_boundaries(
+        self,
+        *,
+        stale_before: str,
+        now: str,
+    ) -> int:
+        if not self._sales_followup_table_available():
+            return 0
+        rows = self._conn.execute(
+            """
+            SELECT d.id,d.business_id,d.source_id,f.lead_id
+            FROM provider_dispatch_outbox d
+            JOIN clientplatform_sales_followups f
+              ON f.id=d.sales_followup_id AND f.business_id=d.business_id
+            WHERE d.source_kind='sales_followup'
+              AND d.platform IN ('telegram','max')
+              AND d.status='sending' AND d.locked_at IS NOT NULL
+              AND d.locked_at<=? AND d.last_error=?
+            ORDER BY d.locked_at,d.id
+            """,
+            (stale_before, _FOLLOWUP_PROVIDER_BOUNDARY_MARKER),
+        ).fetchall()
+        quarantined = 0
+        for row in rows:
+            dispatch_id = str(_value(row, "id", 0))
+            business_id = str(_value(row, "business_id", 1))
+            followup_id = str(_value(row, "source_id", 2))
+            lead_id = str(_value(row, "lead_id", 3))
+            cursor = self._conn.execute(
+                """
+                UPDATE provider_dispatch_outbox
+                SET status='dead',dead_at=?,updated_at=?,locked_at=NULL,
+                    lock_token=NULL,last_error=?
+                WHERE id=? AND business_id=? AND status='sending'
+                  AND locked_at IS NOT NULL AND locked_at<=? AND last_error=?
+                """,
+                (
+                    now,
+                    now,
+                    _FOLLOWUP_AMBIGUOUS_ERROR,
+                    dispatch_id,
+                    business_id,
+                    stale_before,
+                    _FOLLOWUP_PROVIDER_BOUNDARY_MARKER,
+                ),
+            )
+            if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+                continue
+            quarantined += 1
+            self._conn.execute(
+                """
+                UPDATE clientplatform_sales_followups
+                SET status='dead',stopped_at=?,stop_reason='delivery_failed',updated_at=?
+                WHERE id=? AND business_id=? AND status IN ('queued','stopped','cancelled')
+                """,
+                (now, now, followup_id, business_id),
+            )
+            self._conn.execute(
+                """
+                INSERT INTO clientplatform_sales_events(
+                    id,business_id,lead_id,event_type,dedupe_key,payload_json,occurred_at
+                ) VALUES(?,?,?,?,?,?,?)
+                ON CONFLICT(business_id,lead_id,dedupe_key) DO NOTHING
+                """,
+                (
+                    str(uuid.uuid4()),
+                    business_id,
+                    lead_id,
+                    "followup_delivery_ambiguous",
+                    f"followup-ambiguous:{followup_id}",
+                    json.dumps({"followup_id": followup_id}, sort_keys=True),
+                    now,
+                ),
+            )
+        return quarantined
+
     def _claim_provider_due(
         self,
         *,
@@ -374,6 +788,10 @@ class DispatchOutboxRepository(_UnifiedDispatchOutboxRepository):
         stale_before = (
             claim_now - timedelta(seconds=max(1, int(lock_ttl_seconds)))
         ).isoformat()
+        self._quarantine_stale_sales_followup_boundaries(
+            stale_before=stale_before,
+            now=now_iso,
+        )
         self.cancel_invalid_pending_partner_outreach(now=now_iso)
         token = uuid.uuid4().hex
         if isinstance(self._conn, PostgresCompatConnection):

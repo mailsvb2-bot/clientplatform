@@ -63,7 +63,7 @@ def _release_claims(
             continue
 
 
-def _partner_claim_can_cross_provider_boundary(item: object) -> bool:
+def _provider_claim_can_cross_provider_boundary(item: object) -> bool:
     """Atomically honor a last-moment partner contact revocation.
 
     Claiming commits before network I/O by design. That leaves a deliberate
@@ -77,12 +77,21 @@ def _partner_claim_can_cross_provider_boundary(item: object) -> bool:
         return True
     with get_db() as conn:
         repository = DispatchOutboxRepository(conn)
-        if repository.cancel_revoked_leased_partner_outreach(item):
-            return False
-        return repository.partner_dispatch_still_authorized(item)
+        if item.dispatch.source_kind == "partner_outreach":
+            if repository.cancel_revoked_leased_partner_outreach(item):
+                return False
+            return repository.partner_dispatch_still_authorized(item)
+        if item.dispatch.source_kind == "sales_followup":
+            return repository.sales_followup_claim_can_cross_provider_boundary(item)
+        return True
 
 
 def _mark_non_replay_boundary(item: object) -> bool:
+    if isinstance(item, ClaimedProviderDispatch):
+        with get_db() as conn:
+            return DispatchOutboxRepository(
+                conn
+            ).mark_sales_followup_non_replay_boundary(item)
     if not isinstance(item, ClaimedDispatch):
         return False
     if item.dispatch.platform != ConnectionPlatform.MAX:
@@ -104,7 +113,7 @@ async def run_dispatch_batch(
 
     Database leases are committed before any credential lookup or network I/O.
     Each settlement uses a new short transaction, so a slow provider never
-    holds an open database transaction. Partner work is revalidated once more
+    holds an open database transaction. Partner and sales follow-up work are revalidated once more
     after claim and before credential resolution/provider I/O so an operator's
     latest contact revocation is honored at the send boundary.
 
@@ -130,7 +139,7 @@ async def run_dispatch_batch(
         non_replay_boundary_crossed = False
         try:
             allowed = await asyncio.to_thread(
-                _partner_claim_can_cross_provider_boundary,
+                _provider_claim_can_cross_provider_boundary,
                 item,
             )
             if not allowed:

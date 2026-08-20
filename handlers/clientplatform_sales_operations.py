@@ -16,6 +16,11 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
+from clientplatform.application.sales_followups import (
+    cancel_sales_followup,
+    schedule_sales_followup,
+    suppress_sales_followup_channel,
+)
 from clientplatform.application.sales_operations import (
     add_sales_note,
     assign_sales_lead,
@@ -41,6 +46,8 @@ class ClientPlatformSalesOperationsState(StatesGroup):
     next_action = State()
     close_reason = State()
     note = State()
+    followup_text = State()
+    followup_when = State()
 
 
 _STAGE_LABELS = {
@@ -73,6 +80,8 @@ _CLOSE_CODES = {
     "l": SalesLeadStage.LOST,
 }
 _DUE_HOURS = {"1": 1, "24": 24, "72": 72, "168": 168}
+_FOLLOWUP_DUE_HOURS = {"1": 1, "24": 24, "72": 72}
+_FOLLOWUP_CHANNELS = frozenset({"telegram", "vk", "max"})
 
 
 class _SalesModule(Protocol):
@@ -141,6 +150,12 @@ def _item_text(item: dict[str, Any], *, user_id: int) -> str:
     if source_ref:
         lines.append(f"Метка источника: {source_ref}")
     lines.append(f"Атрибуция: {_attribution_line(item)}")
+    if item.get("followup_suppressed"):
+        lines.append("Follow-up: не отправлять — клиент попросил больше не писать")
+    elif item.get("active_followup_id"):
+        lines.append(
+            f"Follow-up: запланирован на {_short_time(item.get('active_followup_scheduled_at'))}"
+        )
     if closure_reason:
         lines.append(f"Причина закрытия: {closure_reason}")
     return "\n".join(lines)
@@ -186,6 +201,24 @@ def _detail_keyboard(
                 ("📝 Заметка", f"cps:swmo:{business_token}:{lead_token}"),
             ]
         )
+        followup_channel = str(item.get("source_kind") or "").strip().lower()
+        followup_allowed = (
+            followup_channel in _FOLLOWUP_CHANNELS
+            and str(item.get("contact_basis") or "") != "none"
+            and not bool(item.get("followup_suppressed"))
+        )
+        if item.get("active_followup_id"):
+            rows.append(
+                [("✖️ Отменить follow-up", f"cps:swfz:{business_token}:{lead_token}")]
+            )
+        elif followup_allowed:
+            rows.append(
+                [("✉️ Напомнить клиенту", f"cps:swff:{business_token}:{lead_token}")]
+            )
+        if followup_allowed:
+            rows.append(
+                [("🚫 Клиент просит не писать", f"cps:swfoq:{business_token}:{lead_token}")]
+            )
         if item.get("next_action"):
             rows.append(
                 [
@@ -705,6 +738,177 @@ async def reopen_lost_sales_lead(callback: CallbackQuery, state: FSMContext) -> 
         return
     await state.clear()
     await callback.answer("Обращение возвращено в работу")
+    await _send_detail(
+        control._callback_message(callback),
+        user_id=int(callback.from_user.id),
+        business_id=business_id,
+        lead_id=lead_id,
+    )
+
+
+@router.callback_query(F.data.startswith("cps:swff:"))
+async def begin_sales_followup(callback: CallbackQuery, state: FSMContext) -> None:
+    parts = str(callback.data).split(":")
+    business_id, lead_id = _uuid(parts[2]), _uuid(parts[3])
+    actor = await control._actor(int(callback.from_user.id), business_id)
+    item = await _load_item(actor=actor, lead_id=lead_id)
+    if (
+        item is None
+        or str(item.get("stage") or "") in {"won", "lost"}
+        or str(item.get("source_kind") or "").lower() not in _FOLLOWUP_CHANNELS
+        or bool(item.get("followup_suppressed"))
+        or item.get("active_followup_id")
+    ):
+        await callback.answer("Follow-up сейчас недоступен. Обновите карточку.", show_alert=True)
+        return
+    await state.set_state(ClientPlatformSalesOperationsState.followup_text)
+    await state.update_data(sales_business_id=business_id, sales_lead_id=lead_id)
+    await callback.answer()
+    await control._callback_message(callback).answer(
+        "Напишите сообщение, которое ClientPlatform отправит этому клиенту после "
+        "Вашего подтверждения времени. Сообщение уйдёт только по исходному каналу."
+    )
+
+
+@router.message(ClientPlatformSalesOperationsState.followup_text)
+async def capture_sales_followup_text(message: Message, state: FSMContext) -> None:
+    text = " ".join(str(message.text or "").replace("\x00", " ").split()).strip()
+    if not text:
+        await message.answer("Сообщение не может быть пустым.")
+        return
+    if len(text) > 4000:
+        await message.answer("Сократите сообщение до 4000 символов.")
+        return
+    data = await state.get_data()
+    business_id = str(data.get("sales_business_id") or "")
+    lead_id = str(data.get("sales_lead_id") or "")
+    if not business_id or not lead_id:
+        await state.clear()
+        await message.answer("Карточка устарела. Откройте обращения заново.")
+        return
+    await state.set_state(ClientPlatformSalesOperationsState.followup_when)
+    await state.update_data(sales_followup_text=text)
+    business_token, lead_token = _token(business_id), _token(lead_id)
+    await message.answer(
+        "Когда отправить? Ночное время ClientPlatform автоматически перенесёт на "
+        "ближайшее разрешённое утро по часовому поясу бизнеса.",
+        reply_markup=control._keyboard(
+            [
+                [("Через 1 час", f"cps:swft:{business_token}:{lead_token}:1")],
+                [("Завтра", f"cps:swft:{business_token}:{lead_token}:24")],
+                [("Через 3 дня", f"cps:swft:{business_token}:{lead_token}:72")],
+                [("Отмена", f"cps:swv:{business_token}:{lead_token}")],
+            ]
+        ),
+    )
+
+
+@router.callback_query(
+    ClientPlatformSalesOperationsState.followup_when,
+    F.data.startswith("cps:swft:"),
+)
+async def schedule_sales_followup_owner(callback: CallbackQuery, state: FSMContext) -> None:
+    parts = str(callback.data).split(":")
+    business_id, lead_id, due_code = _uuid(parts[2]), _uuid(parts[3]), parts[4]
+    hours = _FOLLOWUP_DUE_HOURS.get(due_code)
+    data = await state.get_data()
+    text = str(data.get("sales_followup_text") or "").strip()
+    if (
+        hours is None
+        or str(data.get("sales_business_id") or "") != business_id
+        or str(data.get("sales_lead_id") or "") != lead_id
+        or not text
+    ):
+        await state.clear()
+        await callback.answer("Карточка follow-up устарела. Начните заново.", show_alert=True)
+        return
+    actor = await control._actor(int(callback.from_user.id), business_id)
+    due_at = datetime.now(timezone.utc) + timedelta(hours=hours)
+    try:
+        followup = await asyncio.to_thread(
+            schedule_sales_followup,
+            actor=actor,
+            lead_id=lead_id,
+            message_text=text,
+            scheduled_at=due_at,
+            request_key=f"telegram-callback:{callback.id}",
+        )
+    except (SalesError, PermissionError, ValueError):
+        await state.clear()
+        await callback.answer(
+            "Не удалось запланировать follow-up: проверьте канал, согласие клиента и актуальность обращения.",
+            show_alert=True,
+        )
+        return
+    await state.clear()
+    await callback.answer("Follow-up запланирован")
+    await control._callback_message(callback).answer(
+        f"Сообщение запланировано на {_short_time(followup.scheduled_at)}. "
+        "Если клиент ответит, запишется, оплатит или попросит не писать, отправка будет остановлена."
+    )
+    await _send_detail(
+        control._callback_message(callback),
+        user_id=int(callback.from_user.id),
+        business_id=business_id,
+        lead_id=lead_id,
+    )
+
+
+@router.callback_query(F.data.startswith("cps:swfz:"))
+async def cancel_sales_followup_owner(callback: CallbackQuery, state: FSMContext) -> None:
+    parts = str(callback.data).split(":")
+    business_id, lead_id = _uuid(parts[2]), _uuid(parts[3])
+    actor = await control._actor(int(callback.from_user.id), business_id)
+    try:
+        await asyncio.to_thread(cancel_sales_followup, actor=actor, lead_id=lead_id)
+    except (SalesError, PermissionError, ValueError):
+        await callback.answer("Не удалось отменить follow-up. Обновите карточку.", show_alert=True)
+        return
+    await state.clear()
+    await callback.answer("Follow-up отменён")
+    await _send_detail(
+        control._callback_message(callback),
+        user_id=int(callback.from_user.id),
+        business_id=business_id,
+        lead_id=lead_id,
+    )
+
+
+@router.callback_query(F.data.startswith("cps:swfoq:"))
+async def confirm_sales_followup_opt_out(callback: CallbackQuery, state: FSMContext) -> None:
+    parts = str(callback.data).split(":")
+    business_id, lead_id = _uuid(parts[2]), _uuid(parts[3])
+    await state.clear()
+    await callback.answer()
+    await control._callback_message(callback).answer(
+        "Клиент действительно попросил больше не писать ему по этому каналу? "
+        "После подтверждения активный follow-up будет остановлен.",
+        reply_markup=control._keyboard(
+            [
+                [("Да, больше не писать", f"cps:swfoc:{parts[2]}:{parts[3]}")],
+                [("Нет, вернуться", f"cps:swv:{parts[2]}:{parts[3]}")],
+            ]
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("cps:swfoc:"))
+async def apply_sales_followup_opt_out(callback: CallbackQuery, state: FSMContext) -> None:
+    parts = str(callback.data).split(":")
+    business_id, lead_id = _uuid(parts[2]), _uuid(parts[3])
+    actor = await control._actor(int(callback.from_user.id), business_id)
+    try:
+        await asyncio.to_thread(
+            suppress_sales_followup_channel,
+            actor=actor,
+            lead_id=lead_id,
+            reason="opt_out",
+        )
+    except (SalesError, PermissionError, ValueError):
+        await callback.answer("Не удалось сохранить запрет. Обновите карточку.", show_alert=True)
+        return
+    await state.clear()
+    await callback.answer("Запрет на follow-up сохранён")
     await _send_detail(
         control._callback_message(callback),
         user_id=int(callback.from_user.id),

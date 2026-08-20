@@ -37,6 +37,7 @@ class FakeMessage:
 class FakeCallback:
     def __init__(self, data: str, *, user_id: int = 101) -> None:
         self.data = data
+        self.id = "callback-1"
         self.from_user = FakeUser(user_id)
         self.message = FakeMessage(user_id=user_id)
         self.answers: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
@@ -633,3 +634,196 @@ async def test_stage_close_and_reopen_lifecycle_paths(
     failed_reopen = FakeCallback(f"cps:swmr:{bt}:{lt}")
     await operations.reopen_lost_sales_lead(failed_reopen, FakeState())
     assert failed_reopen.answers[-1][1]["show_alert"] is True
+
+
+@pytest.mark.asyncio
+async def test_followup_owner_prompt_schedule_and_keyboard(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    business_id, lead_id = str(uuid4()), str(uuid4())
+    bt, lt = operations._token(business_id), operations._token(lead_id)
+    item = _lead()
+    item.update(
+        id=lead_id,
+        source_kind="telegram",
+        contact_basis="inbound",
+        followup_suppressed=False,
+        active_followup_id=None,
+        active_followup_scheduled_at=None,
+    )
+    labels = _labels(operations._detail_keyboard(business_id, item, user_id=101))
+    assert "✉️ Напомнить клиенту" in labels
+    assert "🚫 Клиент просит не писать" in labels
+
+    async def loaded(**_kwargs: Any) -> dict[str, Any]:
+        return item
+
+    monkeypatch.setattr(operations, "_load_item", loaded)
+    state = FakeState()
+    begin = FakeCallback(f"cps:swff:{bt}:{lt}")
+    await operations.begin_sales_followup(begin, state)
+    assert state.data["sales_business_id"] == business_id
+    assert state.data["sales_lead_id"] == lead_id
+    assert "исходному каналу" in begin.message.answers[-1][0]
+
+    message = FakeMessage(text="  Анна, добрый день.  Подсказать?  ")
+    await operations.capture_sales_followup_text(message, state)
+    assert state.data["sales_followup_text"] == "Анна, добрый день. Подсказать?"
+    assert "Когда отправить?" in message.answers[-1][0]
+    assert "Завтра" in _labels(message.answers[-1][1]["reply_markup"])
+
+    captured: dict[str, Any] = {}
+
+    def schedule(**kwargs: Any) -> SimpleNamespace:
+        captured.update(kwargs)
+        return SimpleNamespace(scheduled_at="2026-08-21T09:00:00+00:00")
+
+    monkeypatch.setattr(operations, "schedule_sales_followup", schedule)
+    monkeypatch.setattr(operations, "_send_detail", AsyncMock())
+    callback = FakeCallback(f"cps:swft:{bt}:{lt}:24")
+    await operations.schedule_sales_followup_owner(callback, state)
+    assert captured["lead_id"] == lead_id
+    assert captured["message_text"] == "Анна, добрый день. Подсказать?"
+    assert captured["request_key"] == "telegram-callback:callback-1"
+    assert callback.answers[-1][0][0] == "Follow-up запланирован"
+    assert state.clear_count == 1
+
+    active = dict(item)
+    active["active_followup_id"] = str(uuid4())
+    active_labels = _labels(
+        operations._detail_keyboard(business_id, active, user_id=101)
+    )
+    assert "✖️ Отменить follow-up" in active_labels
+    assert "✉️ Напомнить клиенту" not in active_labels
+
+    suppressed = dict(item)
+    suppressed["followup_suppressed"] = True
+    suppressed_labels = _labels(
+        operations._detail_keyboard(business_id, suppressed, user_id=101)
+    )
+    assert "✉️ Напомнить клиенту" not in suppressed_labels
+    assert "🚫 Клиент просит не писать" not in suppressed_labels
+
+
+@pytest.mark.asyncio
+async def test_followup_cancel_and_opt_out_callbacks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    business_id, lead_id = str(uuid4()), str(uuid4())
+    bt, lt = operations._token(business_id), operations._token(lead_id)
+    monkeypatch.setattr(operations, "_send_detail", AsyncMock())
+    calls: dict[str, dict[str, Any]] = {}
+
+    def cancel(**kwargs: Any) -> int:
+        calls["cancel"] = kwargs
+        return 1
+
+    def suppress(**kwargs: Any) -> int:
+        calls["suppress"] = kwargs
+        return 1
+
+    monkeypatch.setattr(operations, "cancel_sales_followup", cancel)
+    monkeypatch.setattr(operations, "suppress_sales_followup_channel", suppress)
+
+    cancel_callback = FakeCallback(f"cps:swfz:{bt}:{lt}")
+    await operations.cancel_sales_followup_owner(cancel_callback, FakeState())
+    assert calls["cancel"]["lead_id"] == lead_id
+    assert cancel_callback.answers[-1][0][0] == "Follow-up отменён"
+
+    confirm = FakeCallback(f"cps:swfoq:{bt}:{lt}")
+    await operations.confirm_sales_followup_opt_out(confirm, FakeState())
+    confirm_labels = _labels(confirm.message.answers[-1][1]["reply_markup"])
+    assert "Да, больше не писать" in confirm_labels
+    assert "Нет, вернуться" in confirm_labels
+
+    apply_callback = FakeCallback(f"cps:swfoc:{bt}:{lt}")
+    await operations.apply_sales_followup_opt_out(apply_callback, FakeState())
+    assert calls["suppress"]["lead_id"] == lead_id
+    assert calls["suppress"]["reason"] == "opt_out"
+    assert apply_callback.answers[-1][0][0] == "Запрет на follow-up сохранён"
+
+
+@pytest.mark.asyncio
+async def test_followup_owner_fail_closed_edges(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    business_id, lead_id = str(uuid4()), str(uuid4())
+    bt, lt = operations._token(business_id), operations._token(lead_id)
+    blocked = _lead()
+    blocked.update(
+        id=lead_id,
+        source_kind="telegram",
+        followup_suppressed=False,
+        active_followup_id=str(uuid4()),
+        active_followup_scheduled_at="2026-08-21T09:00:00+00:00",
+    )
+
+    async def loaded(**_kwargs: Any) -> dict[str, Any]:
+        return blocked
+
+    monkeypatch.setattr(operations, "_load_item", loaded)
+    begin = FakeCallback(f"cps:swff:{bt}:{lt}")
+    await operations.begin_sales_followup(begin, FakeState())
+    assert begin.answers[-1][1]["show_alert"] is True
+    assert "недоступен" in begin.answers[-1][0][0]
+    assert "запланирован" in operations._item_text(blocked, user_id=101)
+
+    suppressed = dict(blocked)
+    suppressed["active_followup_id"] = None
+    suppressed["followup_suppressed"] = True
+    assert "не отправлять" in operations._item_text(suppressed, user_id=101)
+
+    empty = FakeMessage(text=" \x00 ")
+    await operations.capture_sales_followup_text(empty, FakeState())
+    assert "не может быть пустым" in empty.answers[-1][0]
+
+    oversized = FakeMessage(text="x" * 4001)
+    await operations.capture_sales_followup_text(oversized, FakeState())
+    assert "4000" in oversized.answers[-1][0]
+
+    stale_message = FakeMessage(text="Нормальный текст")
+    stale_state = FakeState()
+    await operations.capture_sales_followup_text(stale_message, stale_state)
+    assert stale_state.clear_count == 1
+    assert "устарела" in stale_message.answers[-1][0]
+
+    invalid_state = FakeState(
+        {
+            "sales_business_id": business_id,
+            "sales_lead_id": lead_id,
+            "sales_followup_text": "Напоминание",
+        }
+    )
+    invalid_due = FakeCallback(f"cps:swft:{bt}:{lt}:999")
+    await operations.schedule_sales_followup_owner(invalid_due, invalid_state)
+    assert invalid_state.clear_count == 1
+    assert invalid_due.answers[-1][1]["show_alert"] is True
+
+    def fail_schedule(**_kwargs: Any) -> None:
+        raise ValueError("stale")
+
+    monkeypatch.setattr(operations, "schedule_sales_followup", fail_schedule)
+    failed_state = FakeState(
+        {
+            "sales_business_id": business_id,
+            "sales_lead_id": lead_id,
+            "sales_followup_text": "Напоминание",
+        }
+    )
+    failed_schedule = FakeCallback(f"cps:swft:{bt}:{lt}:1")
+    await operations.schedule_sales_followup_owner(failed_schedule, failed_state)
+    assert failed_state.clear_count == 1
+    assert failed_schedule.answers[-1][1]["show_alert"] is True
+
+    def fail_operation(**_kwargs: Any) -> None:
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(operations, "cancel_sales_followup", fail_operation)
+    failed_cancel = FakeCallback(f"cps:swfz:{bt}:{lt}")
+    await operations.cancel_sales_followup_owner(failed_cancel, FakeState())
+    assert failed_cancel.answers[-1][1]["show_alert"] is True
+
+    monkeypatch.setattr(operations, "suppress_sales_followup_channel", fail_operation)
+    failed_opt_out = FakeCallback(f"cps:swfoc:{bt}:{lt}")
+    await operations.apply_sales_followup_opt_out(failed_opt_out, FakeState())
+    assert failed_opt_out.answers[-1][1]["show_alert"] is True
