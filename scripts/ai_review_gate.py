@@ -647,7 +647,13 @@ def _read_cost_record_from_zip(data: bytes) -> dict[str, Any]:
             if len(candidates) != 1:
                 raise ReviewError("cost artifact must contain exactly one *-cost.json record")
             decoded = json.loads(archive.read(candidates[0]).decode("utf-8"))
-    except (zipfile.BadZipFile, KeyError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except zipfile.BadZipFile as exc:
+        raise ReviewError(f"invalid cost artifact: {exc}") from exc
+    except KeyError as exc:
+        raise ReviewError(f"invalid cost artifact: {exc}") from exc
+    except UnicodeDecodeError as exc:
+        raise ReviewError(f"invalid cost artifact: {exc}") from exc
+    except json.JSONDecodeError as exc:
         raise ReviewError(f"invalid cost artifact: {exc}") from exc
     if not isinstance(decoded, dict):
         raise ReviewError("cost artifact JSON must be an object")
