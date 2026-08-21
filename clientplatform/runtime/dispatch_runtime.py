@@ -37,6 +37,10 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return str(raw).strip().lower() in _TRUE_VALUES
 
 
+def _canonical_omnichannel_enabled() -> bool:
+    return _env_bool("CLIENTPLATFORM_OMNICHANNEL_INGRESS_ENABLED", False)
+
+
 @dataclass(frozen=True, slots=True)
 class DispatchRuntimeConfig:
     enabled: bool
@@ -63,8 +67,9 @@ class DispatchRuntime:
 
 
 def dispatch_runtime_config() -> DispatchRuntimeConfig:
+    default_enabled = bool(control_bot_enabled() or _canonical_omnichannel_enabled())
     return DispatchRuntimeConfig(
-        enabled=_env_bool("CLIENTPLATFORM_DISPATCH_RUNTIME_ENABLED", control_bot_enabled()),
+        enabled=_env_bool("CLIENTPLATFORM_DISPATCH_RUNTIME_ENABLED", default_enabled),
         interval_seconds=env_float(
             "CLIENTPLATFORM_DISPATCH_INTERVAL_SEC",
             5.0,
