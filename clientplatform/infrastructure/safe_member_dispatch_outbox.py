@@ -58,9 +58,13 @@ class DispatchOutboxRepository(_SafeUnifiedDispatchOutboxRepository):
 
         subject = str(external_subject or "").strip()
         if not subject or len(subject) > 512:
-            raise ValueError("member interaction external_subject must be 1..512 characters")
+            raise ValueError(
+                "member interaction external_subject must be 1..512 characters"
+            )
         if any(ord(char) < 32 or ord(char) == 127 for char in subject):
-            raise ValueError("member interaction external_subject contains control characters")
+            raise ValueError(
+                "member interaction external_subject contains control characters"
+            )
 
         message = (
             interaction
@@ -95,7 +99,8 @@ class DispatchOutboxRepository(_SafeUnifiedDispatchOutboxRepository):
         ).fetchone()
         if recipient is None:
             raise ValueError(
-                "member interaction requires an active tenant member, account identity and connection"
+                "member interaction requires an active tenant member, "
+                "account identity and connection"
             )
 
         digest = hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
@@ -217,6 +222,12 @@ class DispatchOutboxRepository(_SafeUnifiedDispatchOutboxRepository):
         now: datetime | None = None,
     ) -> list[Any]:
         claim_now = (now or _utc_now()).replace(microsecond=0)
+        if not self._provider_table_available():
+            return super().claim_due(
+                limit=limit,
+                lock_ttl_seconds=lock_ttl_seconds,
+                now=claim_now,
+            )
         stale_before = (
             claim_now - timedelta(seconds=max(1, int(lock_ttl_seconds)))
         ).isoformat()
