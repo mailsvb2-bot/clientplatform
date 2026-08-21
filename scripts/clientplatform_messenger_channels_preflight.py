@@ -7,12 +7,13 @@ import os
 from dataclasses import asdict, dataclass
 
 from runtime.ingress_flags import max_webhook_enabled, vk_webhook_enabled
-from runtime.telegram_transport import telegram_transport
+from runtime.telegram_transport import telegram_runtime_enabled, telegram_transport
 from services.messenger.setup import build_setup_status
 
 
 @dataclass(frozen=True, slots=True)
 class MessengerChannelPreflight:
+    telegram_runtime_enabled: bool
     telegram_transport: str
     omnichannel_enabled: bool
     omnichannel_ready: bool
@@ -44,26 +45,23 @@ def _deployed_env() -> bool:
 
 def inspect_messenger_channels() -> MessengerChannelPreflight:
     status = build_setup_status()
+    telegram_enabled = telegram_runtime_enabled()
     omnichannel_enabled = _truthy_env("CLIENTPLATFORM_OMNICHANNEL_INGRESS_ENABLED")
     public_base = str(status.public_base_url or "").strip().rstrip("/")
     omnichannel_ready = bool(
         not omnichannel_enabled
         or (public_base and (not _deployed_env() or public_base.startswith("https://")))
     )
-    # Canonical tenant-scoped VK/MAX uses encrypted per-business credentials and
-    # must not depend on the Telegram control bot merely to pass its own gate.
+    # Canonical tenant-scoped VK/MAX uses encrypted per-business credentials.
     # Legacy MAX/VK flags remain fully validated by build_setup_status() when an
     # operator explicitly enables those old global ingress paths.
-    missing = [
-        item
-        for item in status.missing
-        if not (omnichannel_enabled and item == "TELEGRAM_BOT_USERNAME")
-    ]
+    missing = list(status.missing)
     if omnichannel_enabled and not public_base:
         missing.append("MESSENGER_PUBLIC_BASE_URL")
     elif omnichannel_enabled and _deployed_env() and not public_base.startswith("https://"):
         missing.append("MESSENGER_PUBLIC_BASE_URL must use https://")
     return MessengerChannelPreflight(
+        telegram_runtime_enabled=telegram_enabled,
         telegram_transport=telegram_transport(),
         omnichannel_enabled=omnichannel_enabled,
         omnichannel_ready=omnichannel_ready,
