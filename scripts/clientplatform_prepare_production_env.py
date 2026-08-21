@@ -164,6 +164,7 @@ def prepare(path: Path) -> tuple[str, ...]:
 
     defaults = {
         "CLIENTPLATFORM_PUBLIC_BASE_URL": expected_public,
+        "CLIENTPLATFORM_TELEGRAM_RUNTIME_ENABLED": "1",
         "CLIENTPLATFORM_MEDIA_GATEWAY_ENABLED": "1",
         "CLIENTPLATFORM_MEDIA_GATEWAY_BASE_URL": expected_media,
         "CLIENTPLATFORM_MEDIA_GATEWAY_STORAGE_MODE": "s3",
