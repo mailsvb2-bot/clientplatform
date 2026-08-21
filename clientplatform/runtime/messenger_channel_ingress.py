@@ -9,6 +9,10 @@ from typing import Any, Mapping
 
 from aiohttp import web
 
+from clientplatform.application.activity import (
+    claim_customer_invite_identity,
+    extract_customer_invite_token,
+)
 from clientplatform.application.messenger_channels import (
     consume_customer_channel_link,
     ensure_channel_customer,
@@ -27,6 +31,7 @@ from clientplatform.application.sales_intelligence import (
     normalize_customer_message_text,
     record_customer_channel_message,
 )
+from clientplatform.domain.activity import ActivityInvariantViolation
 from clientplatform.domain.connections import ConnectionPlatform
 from clientplatform.domain.messenger_channels import (
     CustomerChannelLinkRejected,
@@ -399,8 +404,30 @@ async def _process_business_event(
                 payload=payload,
             )
 
+        invite_token = extract_customer_invite_token(raw_text)
         link_token = extract_customer_link_token(raw_text)
-        if link_token is not None:
+        invite_claim = None
+        if invite_token is not None:
+            invite_claim = await asyncio.to_thread(
+                claim_customer_invite_identity,
+                token=invite_token,
+                platform=platform.value,
+                external_subject=external_subject,
+                username=None,
+                display_name=display_name,
+                expected_business_id=route.business_id,
+            )
+            identity = await asyncio.to_thread(
+                ensure_channel_customer,
+                route=route,
+                external_subject=external_subject,
+                display_name=display_name,
+            )
+            if str(invite_claim.customer_id) != str(identity.customer_id):
+                raise CustomerChannelLinkRejected(
+                    "customer invite resolved to a different customer identity"
+                )
+        elif link_token is not None:
             identity = await asyncio.to_thread(
                 consume_customer_channel_link,
                 route=route,
@@ -420,6 +447,7 @@ async def _process_business_event(
         message_text = normalize_customer_message_text(raw_text)
         if (
             message_text is not None
+            and invite_token is None
             and link_token is None
             and not interaction_input
         ):
@@ -437,14 +465,14 @@ async def _process_business_event(
                 runtime_ai_enabled=ai_enabled,
                 runtime_ai_consent_target=consent_target,
             )
-        if interaction_input or link_token is not None:
+        if interaction_input or link_token is not None or invite_token is not None:
             await asyncio.to_thread(
                 process_native_customer_interaction,
                 route=route,
                 identity=identity,
-                raw_text=raw_text,
+                raw_text=("cpi:menu" if invite_token is not None else raw_text),
                 provider_event_id=provider_event_id,
-                linked=link_token is not None,
+                linked=(link_token is not None or invite_token is not None),
             )
         return await _complete_event(
             platform=platform,
@@ -460,6 +488,15 @@ async def _process_business_event(
             "member_channel_link_rejected",
         )
         return web.Response(status=409, text="member_link_rejected")
+    except ActivityInvariantViolation:
+        await asyncio.to_thread(
+            fail_inbound_event,
+            platform.value,
+            scoped_event_key,
+            payload,
+            "customer_invite_rejected",
+        )
+        return web.Response(status=409, text="invite_rejected")
     except CustomerChannelLinkRejected:
         await asyncio.to_thread(
             fail_inbound_event,
