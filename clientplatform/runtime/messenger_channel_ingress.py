@@ -18,6 +18,11 @@ from clientplatform.application.native_customer_interactions import (
     is_native_customer_interaction_input,
     process_native_customer_interaction,
 )
+from clientplatform.application.native_member_interactions import (
+    NativeMemberBridgeRejected,
+    process_native_member_interaction,
+    resolve_native_member,
+)
 from clientplatform.application.sales_intelligence import (
     normalize_customer_message_text,
     record_customer_channel_message,
@@ -31,7 +36,12 @@ from clientplatform.domain.messenger_channels import (
 from clientplatform.domain.sales_ai_jobs import messenger_source_order
 from clientplatform.runtime.sales_ai_config import SalesAIRuntimeConfig
 from clientplatform.runtime.secrets import EnvironmentCredentialProvider, SecretReferenceError
-from runtime.messenger_payloads import max_event_key, text_from_max_payload, text_from_vk_payload, vk_event_key
+from runtime.messenger_payloads import (
+    max_event_key,
+    text_from_max_payload,
+    text_from_vk_payload,
+    vk_event_key,
+)
 from runtime.messenger_vk_sender import VkBotSender
 from services.db import get_db_ro
 from services.messenger.webhook_dedupe import (
@@ -60,22 +70,37 @@ def _mapping(value: Any) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
 
 
-def _vk_raw_message(payload: Mapping[str, Any]) -> tuple[str, str | None, str | None] | None:
+def _vk_raw_message(
+    payload: Mapping[str, Any],
+) -> tuple[str, str | None, str | None] | None:
     obj = _mapping(payload.get("object"))
     message = _mapping(obj.get("message") or obj)
-    external = message.get("from_id") or message.get("user_id") or obj.get("from_id") or obj.get("user_id")
+    external = (
+        message.get("from_id")
+        or message.get("user_id")
+        or obj.get("from_id")
+        or obj.get("user_id")
+    )
     subject = str(external or "").strip()
     if not subject:
         return None
-    payload_text = text_from_vk_payload(message.get("payload") or obj.get("payload") or payload.get("payload"))
-    text = str(payload_text or message.get("text") or obj.get("text") or "").strip()
+    payload_text = text_from_vk_payload(
+        message.get("payload") or obj.get("payload") or payload.get("payload")
+    )
+    text = str(
+        payload_text or message.get("text") or obj.get("text") or ""
+    ).strip()
     return subject, text, None
 
 
-def _max_raw_message(payload: Mapping[str, Any]) -> tuple[str, str | None, str | None] | None:
+def _max_raw_message(
+    payload: Mapping[str, Any],
+) -> tuple[str, str | None, str | None] | None:
     message = _mapping(payload.get("message"))
     body = _mapping(message.get("body"))
-    callback = _mapping(payload.get("callback") or payload.get("button") or payload.get("payload"))
+    callback = _mapping(
+        payload.get("callback") or payload.get("button") or payload.get("payload")
+    )
     sender = _mapping(
         message.get("sender")
         or payload.get("sender")
@@ -100,22 +125,39 @@ def _max_raw_message(payload: Mapping[str, Any]) -> tuple[str, str | None, str |
         or text_from_max_payload(message.get("payload"))
         or text_from_max_payload(payload.get("payload"))
     )
-    text = str(payload_text or message.get("text") or body.get("text") or payload.get("text") or "").strip()
-    display_name = str(
-        sender.get("display_name")
-        or sender.get("name")
-        or " ".join(
-            part for part in (str(sender.get("first_name") or "").strip(), str(sender.get("last_name") or "").strip())
-            if part
-        )
+    text = str(
+        payload_text
+        or message.get("text")
+        or body.get("text")
+        or payload.get("text")
         or ""
-    ).strip() or None
+    ).strip()
+    display_name = (
+        str(
+            sender.get("display_name")
+            or sender.get("name")
+            or " ".join(
+                part
+                for part in (
+                    str(sender.get("first_name") or "").strip(),
+                    str(sender.get("last_name") or "").strip(),
+                )
+                if part
+            )
+            or ""
+        ).strip()
+        or None
+    )
     return subject, text, display_name
 
 
 def _safe_provider_event_id(raw_key: str) -> str:
     raw = str(raw_key or "").strip()
-    if raw and len(raw) <= 150 and all(ord(char) >= 32 and ord(char) != 127 for char in raw):
+    if (
+        raw
+        and len(raw) <= 150
+        and all(ord(char) >= 32 and ord(char) != 127 for char in raw)
+    ):
         return raw
     return "sha256:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
@@ -124,12 +166,20 @@ def _sales_ai_runtime() -> tuple[bool, str]:
     try:
         config = SalesAIRuntimeConfig.from_env()
     except (TypeError, ValueError):
-        log.warning("Sales AI configuration is invalid; channel ingress continues without AI", exc_info=True)
+        log.warning(
+            "Sales AI configuration is invalid; channel ingress continues without AI",
+            exc_info=True,
+        )
         return False, ""
     return config.enabled, config.consent_target
 
 
-def _verify_vk(payload: Mapping[str, Any], *, expected_secret: str, external_route_id: str) -> bool:
+def _verify_vk(
+    payload: Mapping[str, Any],
+    *,
+    expected_secret: str,
+    external_route_id: str,
+) -> bool:
     supplied = str(payload.get("secret") or "").strip()
     if not supplied or not hmac.compare_digest(supplied, expected_secret):
         return False
@@ -158,7 +208,9 @@ def _connection_credential_reference(route: Any) -> str:
             (route.connection_id, route.business_id),
         ).fetchone()
     if row is None:
-        raise ValueError("active VK connection was not found for callback acknowledgement")
+        raise ValueError(
+            "active VK connection was not found for callback acknowledgement"
+        )
     return str(row["credential_reference"] if hasattr(row, "keys") else row[0])
 
 
@@ -191,6 +243,21 @@ async def _ack_vk_message_event(
             extra={"route_id": route.id, "business_id": route.business_id},
             exc_info=True,
         )
+
+
+async def _complete_event(
+    *,
+    platform: ConnectionPlatform,
+    scoped_event_key: str,
+    payload: dict[str, Any],
+) -> web.Response:
+    await asyncio.to_thread(
+        complete_inbound_event,
+        platform.value,
+        scoped_event_key,
+        payload,
+    )
+    return web.Response(text="ok")
 
 
 async def _process_business_event(
@@ -226,7 +293,11 @@ async def _process_business_event(
     if payload is None:
         return web.Response(status=400, text="invalid")
     if platform == ConnectionPlatform.VK:
-        if not _verify_vk(payload, expected_secret=expected_secret, external_route_id=route.external_route_id):
+        if not _verify_vk(
+            payload,
+            expected_secret=expected_secret,
+            external_route_id=route.external_route_id,
+        ):
             return web.Response(status=403, text="forbidden")
         if str(payload.get("type") or "").strip() == "confirmation":
             reference = route.confirmation_code_reference
@@ -234,7 +305,10 @@ async def _process_business_event(
                 return web.Response(status=503, text="unavailable")
             try:
                 confirmation_code = str(
-                    await asyncio.to_thread(credential_provider.resolve, reference)
+                    await asyncio.to_thread(
+                        credential_provider.resolve,
+                        reference,
+                    )
                     or ""
                 ).strip()
             except SecretReferenceError:
@@ -247,7 +321,9 @@ async def _process_business_event(
                 return web.Response(status=503, text="unavailable")
             return web.Response(text=confirmation_code)
         await _ack_vk_message_event(
-            payload, route=route, credential_provider=credential_provider
+            payload,
+            route=route,
+            credential_provider=credential_provider,
         )
         raw_event_key = vk_event_key(payload)
         extracted = _vk_raw_message(payload)
@@ -280,7 +356,30 @@ async def _process_business_event(
         return web.Response(text="ok")
 
     external_subject, raw_text, display_name = extracted
+    provider_event_id = _safe_provider_event_id(raw_event_key)
     try:
+        member = await asyncio.to_thread(
+            resolve_native_member,
+            route=route,
+            external_subject=external_subject,
+            raw_text=raw_text,
+            display_name=display_name,
+        )
+        if member is not None:
+            await asyncio.to_thread(
+                process_native_member_interaction,
+                route=route,
+                resolution=member,
+                external_subject=external_subject,
+                raw_text=raw_text,
+                provider_event_id=provider_event_id,
+            )
+            return await _complete_event(
+                platform=platform,
+                scoped_event_key=scoped_event_key,
+                payload=payload,
+            )
+
         link_token = extract_customer_link_token(raw_text)
         if link_token is not None:
             identity = await asyncio.to_thread(
@@ -298,7 +397,6 @@ async def _process_business_event(
                 display_name=display_name,
             )
 
-        provider_event_id = _safe_provider_event_id(raw_event_key)
         interaction_input = is_native_customer_interaction_input(raw_text)
         message_text = normalize_customer_message_text(raw_text)
         if (
@@ -329,13 +427,20 @@ async def _process_business_event(
                 provider_event_id=provider_event_id,
                 linked=link_token is not None,
             )
+        return await _complete_event(
+            platform=platform,
+            scoped_event_key=scoped_event_key,
+            payload=payload,
+        )
+    except NativeMemberBridgeRejected:
         await asyncio.to_thread(
-            complete_inbound_event,
+            fail_inbound_event,
             platform.value,
             scoped_event_key,
             payload,
+            "member_channel_link_rejected",
         )
-        return web.Response(text="ok")
+        return web.Response(status=409, text="member_link_rejected")
     except CustomerChannelLinkRejected:
         await asyncio.to_thread(
             fail_inbound_event,

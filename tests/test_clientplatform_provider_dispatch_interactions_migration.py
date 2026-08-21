@@ -36,7 +36,7 @@ def _legacy_row() -> tuple[object, ...]:
     )
 
 
-def test_sqlite_upgrade_preserves_u009_work_and_adds_customer_interaction() -> None:
+def test_sqlite_upgrade_preserves_u009_work_and_adds_native_interactions() -> None:
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     conn.execute(_POST_U009_TABLE)
@@ -65,6 +65,7 @@ def test_sqlite_upgrade_preserves_u009_work_and_adds_customer_interaction() -> N
         ).fetchone()["sql"]
     )
     assert "customer_interaction" in sql
+    assert "member_interaction" in sql
 
     with patch.object(migration, "is_postgres_enabled", return_value=False):
         migration.apply(conn)
