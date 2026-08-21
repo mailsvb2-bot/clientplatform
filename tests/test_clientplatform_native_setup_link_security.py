@@ -176,6 +176,32 @@ class NativeSetupLinkSecurityTests(unittest.TestCase):
         self.assertRegex(str(row["token_digest"]), r"^[0-9a-f]{64}$")
         self.assertNotIn(str(row["token_digest"]), command)
 
+    def test_same_idempotency_key_reuses_one_unconsumed_session(self) -> None:
+        service = self._service()
+        with patch.object(setup_links, "get_db", return_value=self.conn):
+            first = service.issue_command(
+                actor=self.actor,
+                platform=ConnectionPlatform.MAX,
+                idempotency_key="route:r1:event:e1:member:1001:connect-max",
+            )
+            second = service.issue_command(
+                actor=self.actor,
+                platform=ConnectionPlatform.MAX,
+                idempotency_key="route:r1:event:e1:member:1001:connect-max",
+            )
+
+        self.assertEqual(first, second)
+        rows = self.conn.execute(
+            """
+            SELECT id,consumed_at
+            FROM messenger_connection_setup_sessions
+            WHERE business_id=? AND platform='max'
+            """,
+            (self.business_id,),
+        ).fetchall()
+        self.assertEqual(1, len(rows))
+        self.assertIsNone(rows[0]["consumed_at"])
+
     def test_resolve_materializes_https_url_only_for_exact_business(self) -> None:
         command = self._issue_command()
 
