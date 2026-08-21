@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from clientplatform.domain.connections import DispatchLeaseLost
+from clientplatform.domain.customer_interactions import CustomerInteractionMessage
 from clientplatform.domain.partners import (
     PartnerChannel,
     PartnerInvariantViolation,
@@ -40,6 +41,12 @@ d.dead_at
 _FOLLOWUP_NON_REPLAY_PLATFORMS = frozenset({"telegram", "max"})
 _FOLLOWUP_PROVIDER_BOUNDARY_MARKER = "sales_followup_provider_call_started_non_idempotent"
 _FOLLOWUP_AMBIGUOUS_ERROR = "sales_followup_delivery_outcome_ambiguous_manual_reconciliation_required"
+_CUSTOMER_INTERACTION_PROVIDER_BOUNDARY_MARKER = (
+    "customer_interaction_provider_call_started_non_idempotent"
+)
+_CUSTOMER_INTERACTION_AMBIGUOUS_ERROR = (
+    "customer_interaction_delivery_outcome_ambiguous_manual_reconciliation_required"
+)
 
 
 _RETURNING_PROVIDER_COLUMNS = """
@@ -284,6 +291,119 @@ class DispatchOutboxRepository(_UnifiedDispatchOutboxRepository):
             """,
             (persisted.id, timestamp, timestamp, followup.id, current.business_id),
         )
+        return persisted
+
+    def materialize_customer_interaction(
+        self,
+        *,
+        business_id: str,
+        connection_id: str,
+        customer_identity_id: str,
+        customer_id: str,
+        platform: str,
+        interaction: CustomerInteractionMessage,
+        interaction_key: str,
+        now: str | None = None,
+    ) -> ProviderDispatch:
+        """Queue one deterministic VK/MAX customer UI response in the canonical outbox."""
+
+        business = normalize_uuid(business_id, field_name="business_id")
+        connection = normalize_uuid(connection_id, field_name="connection_id")
+        identity = normalize_uuid(
+            customer_identity_id, field_name="customer_identity_id"
+        )
+        customer = normalize_uuid(customer_id, field_name="customer_id")
+        channel = str(platform or "").strip().lower()
+        if channel not in {"vk", "max"}:
+            raise ValueError("customer interaction supports only VK or MAX")
+        message = (
+            interaction
+            if isinstance(interaction, CustomerInteractionMessage)
+            else CustomerInteractionMessage(**dict(interaction))
+        )
+        raw_key = str(interaction_key or "").strip()
+        if not raw_key or len(raw_key) > 500:
+            raise ValueError("interaction_key must be 1..500 characters")
+        if any(ord(char) < 32 or ord(char) == 127 for char in raw_key):
+            raise ValueError("interaction_key contains control characters")
+
+        recipient = self._conn.execute(
+            """
+            SELECT ci.external_subject
+            FROM customer_identities ci
+            JOIN customers c
+              ON c.id=ci.customer_id AND c.business_id=ci.business_id
+             AND c.status='active'
+            JOIN connections cn
+              ON cn.id=? AND cn.business_id=ci.business_id
+             AND cn.platform=ci.platform AND cn.status='active'
+            WHERE ci.id=? AND ci.business_id=? AND ci.customer_id=?
+              AND ci.platform=? AND ci.status='active'
+            LIMIT 1
+            """,
+            (connection, identity, business, customer, channel),
+        ).fetchone()
+        if recipient is None:
+            raise ValueError(
+                "customer interaction requires an active tenant-scoped identity and connection"
+            )
+        external_subject = str(_value(recipient, "external_subject", 0)).strip()
+        if not external_subject:
+            raise ValueError("customer interaction recipient is empty")
+
+        digest = hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
+        source_id = f"interaction:{digest[:40]}"
+        idempotency_key = f"customer-interaction:{digest}"
+        payload = message.to_json()
+        timestamp = str(now or _utc_now().isoformat())
+        dispatch_id = str(uuid.uuid4())
+        row = self._conn.execute(
+            f"""
+            INSERT INTO provider_dispatch_outbox(
+                id,business_id,platform,source_kind,source_id,logical_delivery_id,
+                partner_campaign_id,partner_candidate_id,sales_followup_id,
+                connection_id,recipient_kind,customer_identity_id,external_subject,
+                payload_kind,payload_ref,idempotency_key,status,attempts,available_at,
+                locked_at,lock_token,provider_message_id,last_error,created_at,updated_at,
+                sent_at,dead_at
+            ) VALUES(
+                ?,?,?,'customer_interaction',?,NULL,NULL,NULL,NULL,?,
+                'customer_identity',?,?,'mixed',?,?,'pending',0,?,
+                NULL,NULL,NULL,NULL,?,?,NULL,NULL
+            )
+            ON CONFLICT(business_id,idempotency_key) DO UPDATE
+            SET idempotency_key=excluded.idempotency_key
+            RETURNING {_RETURNING_PROVIDER_COLUMNS}
+            """,  # nosec B608 - static returning column list
+            (
+                dispatch_id,
+                business,
+                channel,
+                source_id,
+                connection,
+                identity,
+                external_subject,
+                payload,
+                idempotency_key,
+                timestamp,
+                timestamp,
+                timestamp,
+            ),
+        ).fetchone()
+        if row is None:
+            raise RuntimeError("customer_interaction_atomic_upsert_unavailable")
+        persisted = _provider_dispatch_from_row(row)
+        if (
+            persisted.source_kind != "customer_interaction"
+            or persisted.source_id != source_id
+            or persisted.connection_id != connection
+            or persisted.platform.value != channel
+            or persisted.external_subject != external_subject
+            or persisted.payload_ref != payload
+        ):
+            raise ValueError(
+                "customer interaction idempotency belongs to different work"
+            )
         return persisted
 
     def cancel_not_started_partner_outreach(
@@ -543,6 +663,41 @@ class DispatchOutboxRepository(_UnifiedDispatchOutboxRepository):
             )
         return True
 
+    def mark_provider_non_replay_boundary(
+        self,
+        item: ClaimedProviderDispatch,
+        *,
+        now: str | None = None,
+    ) -> bool:
+        if item.dispatch.source_kind == "sales_followup":
+            return self.mark_sales_followup_non_replay_boundary(item, now=now)
+        if (
+            item.dispatch.source_kind != "customer_interaction"
+            or item.dispatch.platform.value != "max"
+        ):
+            return False
+        timestamp = str(now or _utc_now().isoformat())
+        cursor = self._conn.execute(
+            """
+            UPDATE provider_dispatch_outbox
+            SET last_error=?,updated_at=?
+            WHERE id=? AND business_id=? AND source_kind='customer_interaction'
+              AND platform='max' AND status='sending' AND lock_token=?
+            """,
+            (
+                _CUSTOMER_INTERACTION_PROVIDER_BOUNDARY_MARKER,
+                timestamp,
+                item.dispatch.id,
+                item.dispatch.business_id,
+                item.dispatch.lock_token,
+            ),
+        )
+        if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+            raise DispatchLeaseLost(
+                "customer interaction lease was lost before provider boundary"
+            )
+        return True
+
     def mark_sent(
         self,
         item: Any,
@@ -776,6 +931,31 @@ class DispatchOutboxRepository(_UnifiedDispatchOutboxRepository):
             )
         return quarantined
 
+    def _quarantine_stale_customer_interaction_boundaries(
+        self,
+        *,
+        stale_before: str,
+        now: str,
+    ) -> int:
+        cursor = self._conn.execute(
+            """
+            UPDATE provider_dispatch_outbox
+            SET status='dead',dead_at=?,updated_at=?,locked_at=NULL,lock_token=NULL,
+                last_error=?
+            WHERE source_kind='customer_interaction' AND platform='max'
+              AND status='sending' AND locked_at IS NOT NULL AND locked_at<=?
+              AND last_error=?
+            """,
+            (
+                now,
+                now,
+                _CUSTOMER_INTERACTION_AMBIGUOUS_ERROR,
+                stale_before,
+                _CUSTOMER_INTERACTION_PROVIDER_BOUNDARY_MARKER,
+            ),
+        )
+        return max(0, int(getattr(cursor, "rowcount", 0) or 0))
+
     def _claim_provider_due(
         self,
         *,
@@ -789,6 +969,10 @@ class DispatchOutboxRepository(_UnifiedDispatchOutboxRepository):
             claim_now - timedelta(seconds=max(1, int(lock_ttl_seconds)))
         ).isoformat()
         self._quarantine_stale_sales_followup_boundaries(
+            stale_before=stale_before,
+            now=now_iso,
+        )
+        self._quarantine_stale_customer_interaction_boundaries(
             stale_before=stale_before,
             now=now_iso,
         )

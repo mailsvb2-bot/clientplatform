@@ -14,6 +14,10 @@ from clientplatform.application.messenger_channels import (
     ensure_channel_customer,
     resolve_messenger_ingress_route,
 )
+from clientplatform.application.native_customer_interactions import (
+    is_native_customer_interaction_input,
+    process_native_customer_interaction,
+)
 from clientplatform.application.sales_intelligence import (
     normalize_customer_message_text,
     record_customer_channel_message,
@@ -28,6 +32,8 @@ from clientplatform.domain.sales_ai_jobs import messenger_source_order
 from clientplatform.runtime.sales_ai_config import SalesAIRuntimeConfig
 from clientplatform.runtime.secrets import EnvironmentCredentialProvider, SecretReferenceError
 from runtime.messenger_payloads import max_event_key, text_from_max_payload, text_from_vk_payload, vk_event_key
+from runtime.messenger_vk_sender import VkBotSender
+from services.db import get_db_ro
 from services.messenger.webhook_dedupe import (
     claim_inbound_event,
     complete_inbound_event,
@@ -140,6 +146,53 @@ def _verify_max(request: web.Request, *, expected_secret: str) -> bool:
     return bool(supplied and hmac.compare_digest(supplied, expected_secret))
 
 
+def _connection_credential_reference(route: Any) -> str:
+    with get_db_ro() as conn:
+        row = conn.execute(
+            """
+            SELECT credential_reference
+            FROM connections
+            WHERE id=? AND business_id=? AND platform='vk' AND status='active'
+            LIMIT 1
+            """,
+            (route.connection_id, route.business_id),
+        ).fetchone()
+    if row is None:
+        raise ValueError("active VK connection was not found for callback acknowledgement")
+    return str(row["credential_reference"] if hasattr(row, "keys") else row[0])
+
+
+async def _ack_vk_message_event(
+    payload: Mapping[str, Any],
+    *,
+    route: Any,
+    credential_provider: EnvironmentCredentialProvider,
+) -> None:
+    if str(payload.get("type") or "").strip() != "message_event":
+        return
+    obj = _mapping(payload.get("object"))
+    event_id = str(obj.get("event_id") or "").strip()
+    user_id = str(obj.get("user_id") or "").strip()
+    peer_id = str(obj.get("peer_id") or user_id).strip()
+    if not event_id or not user_id:
+        return
+    try:
+        reference = await asyncio.to_thread(_connection_credential_reference, route)
+        token = await asyncio.to_thread(credential_provider.resolve, reference)
+        await VkBotSender(token=token).answer_message_event(
+            event_id=event_id,
+            user_id=user_id,
+            peer_id=peer_id,
+            text="Открываю…",
+        )
+    except Exception:  # validator: allow-wide-except - acknowledgement is best effort only
+        log.warning(
+            "Canonical VK message_event acknowledgement failed",
+            extra={"route_id": route.id, "business_id": route.business_id},
+            exc_info=True,
+        )
+
+
 async def _process_business_event(
     *,
     platform: ConnectionPlatform,
@@ -193,6 +246,9 @@ async def _process_business_event(
             if not confirmation_code:
                 return web.Response(status=503, text="unavailable")
             return web.Response(text=confirmation_code)
+        await _ack_vk_message_event(
+            payload, route=route, credential_provider=credential_provider
+        )
         raw_event_key = vk_event_key(payload)
         extracted = _vk_raw_message(payload)
     else:
@@ -242,8 +298,14 @@ async def _process_business_event(
                 display_name=display_name,
             )
 
+        provider_event_id = _safe_provider_event_id(raw_event_key)
+        interaction_input = is_native_customer_interaction_input(raw_text)
         message_text = normalize_customer_message_text(raw_text)
-        if message_text is not None and link_token is None:
+        if (
+            message_text is not None
+            and link_token is None
+            and not interaction_input
+        ):
             ai_enabled, consent_target = _sales_ai_runtime()
             await asyncio.to_thread(
                 record_customer_channel_message,
@@ -252,11 +314,20 @@ async def _process_business_event(
                 platform=platform.value,
                 external_subject=identity.external_subject,
                 source_ref=f"route:{route.id}",
-                provider_event_id=_safe_provider_event_id(raw_event_key),
+                provider_event_id=provider_event_id,
                 source_order=messenger_source_order(payload, platform),
                 message_text=message_text,
                 runtime_ai_enabled=ai_enabled,
                 runtime_ai_consent_target=consent_target,
+            )
+        if interaction_input or link_token is not None:
+            await asyncio.to_thread(
+                process_native_customer_interaction,
+                route=route,
+                identity=identity,
+                raw_text=raw_text,
+                provider_event_id=provider_event_id,
+                linked=link_token is not None,
             )
         await asyncio.to_thread(
             complete_inbound_event,

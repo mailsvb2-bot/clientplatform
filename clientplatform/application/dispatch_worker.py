@@ -89,9 +89,7 @@ def _provider_claim_can_cross_provider_boundary(item: object) -> bool:
 def _mark_non_replay_boundary(item: object) -> bool:
     if isinstance(item, ClaimedProviderDispatch):
         with get_db() as conn:
-            return DispatchOutboxRepository(
-                conn
-            ).mark_sales_followup_non_replay_boundary(item)
+            return DispatchOutboxRepository(conn).mark_provider_non_replay_boundary(item)
     if not isinstance(item, ClaimedDispatch):
         return False
     if item.dispatch.platform != ConnectionPlatform.MAX:
