@@ -6,7 +6,7 @@ import hmac
 import os
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
-from uuid import UUID, uuid4
+from uuid import UUID, uuid4, uuid5
 
 from clientplatform.domain.connections import ConnectionPlatform
 from clientplatform.domain.tenancy import TenantContext
@@ -21,6 +21,7 @@ from services.db import get_db, get_db_ro
 _COMMAND_PREFIX = "cpm:setup:"
 _DOMAIN = b"clientplatform/native-messenger-setup/v1\x00"
 _DEFAULT_SIGNING_REFERENCE = "secret://env/CLIENTPLATFORM_SECRET_MEDIA_SIGNING_KEY"
+_IDEMPOTENCY_NAMESPACE = UUID("ed2c55fb-eacd-41d2-82b5-31f332379c19")
 
 
 class NativeMessengerSetupLinkRejected(RuntimeError):
@@ -40,6 +41,33 @@ def _session_id(value: str) -> str:
         return str(UUID(str(value or "").strip()))
     except (ValueError, AttributeError) as exc:
         raise NativeMessengerSetupLinkRejected("setup session reference is invalid") from exc
+
+
+def _platform(value: ConnectionPlatform | str) -> ConnectionPlatform:
+    try:
+        platform = (
+            value
+            if isinstance(value, ConnectionPlatform)
+            else ConnectionPlatform(str(value or "").strip().lower())
+        )
+    except ValueError as exc:
+        raise NativeMessengerSetupLinkRejected("unsupported setup platform") from exc
+    if platform not in {ConnectionPlatform.VK, ConnectionPlatform.MAX}:
+        raise NativeMessengerSetupLinkRejected("setup supports only VK or MAX")
+    return platform
+
+
+def _idempotency_key(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw or len(raw) > 500:
+        raise NativeMessengerSetupLinkRejected(
+            "setup idempotency key must be 1..500 characters"
+        )
+    if any(ord(char) < 32 or ord(char) == 127 for char in raw):
+        raise NativeMessengerSetupLinkRejected(
+            "setup idempotency key contains control characters"
+        )
+    return raw
 
 
 def _secret_bytes(value: str) -> bytes:
@@ -139,30 +167,55 @@ class NativeMessengerSetupLinkService:
         actor: TenantContext,
         platform: ConnectionPlatform | str,
         ttl_seconds: int = 600,
+        idempotency_key: str | None = None,
     ) -> str:
-        """Create a digest-only setup session and return a non-secret outbox command."""
+        """Create a digest-only setup session and return a non-secret outbox command.
+
+        When an idempotency key is supplied, the session UUID is stable for that
+        exact tenant/member/platform work item. Webhook replay therefore cannot
+        invalidate a setup command that was already materialized in the outbox.
+        """
 
         self._base_url()
         secret = self._signing_secret()
+        selected_platform = _platform(platform)
         now = _utc_now()
         lifetime = max(60, min(int(ttl_seconds), 1800))
         expires_at = _iso(now + timedelta(seconds=lifetime))
-        session_id = str(uuid4())
+        if idempotency_key is None:
+            session_id = str(uuid4())
+        else:
+            raw_key = _idempotency_key(idempotency_key)
+            session_id = str(
+                uuid5(
+                    _IDEMPOTENCY_NAMESPACE,
+                    "|".join(
+                        (
+                            actor.business_id,
+                            str(actor.user_id),
+                            selected_platform.value,
+                            raw_key,
+                        )
+                    ),
+                )
+            )
         token = derive_native_setup_token(
             signing_secret=secret,
             session_id=session_id,
             expires_at=expires_at,
         )
         with get_db() as conn:
-            issued = NativeMessengerSetupRepository(conn).issue(
+            reference = NativeMessengerSetupRepository(
+                conn
+            ).ensure_recoverable_reference(
                 actor=actor,
-                platform=platform,
+                platform=selected_platform,
                 ttl_seconds=lifetime,
                 now=now,
                 session_id=session_id,
                 token=token,
             )
-        if issued.expires_at != expires_at or issued.session_id != session_id:
+        if reference.session_id != session_id:
             raise NativeMessengerSetupLinkRejected(
                 "setup session materialization invariant failed"
             )
