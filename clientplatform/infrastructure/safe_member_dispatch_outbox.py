@@ -231,7 +231,7 @@ class DispatchOutboxRepository(_SafeUnifiedDispatchOutboxRepository):
             return True
 
         timestamp = str(now or _utc_now().isoformat())
-        cursor = self._conn.execute(
+        self._conn.execute(
             """
             UPDATE provider_dispatch_outbox
             SET status='cancelled',updated_at=?,locked_at=NULL,lock_token=NULL,
@@ -248,7 +248,7 @@ class DispatchOutboxRepository(_SafeUnifiedDispatchOutboxRepository):
                 item.dispatch.lock_token,
             ),
         )
-        return int(getattr(cursor, "rowcount", 0) or 0) != 0 and False
+        return False
 
     def mark_provider_non_replay_boundary(
         self,
