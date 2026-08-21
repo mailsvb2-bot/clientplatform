@@ -35,7 +35,10 @@ def _truthy_env(name: str) -> bool:
 
 def _deployed_env() -> bool:
     return str(os.getenv("APP_ENV") or "dev").strip().lower() in {
-        "prod", "production", "stage", "staging"
+        "prod",
+        "production",
+        "stage",
+        "staging",
     }
 
 
@@ -47,7 +50,15 @@ def inspect_messenger_channels() -> MessengerChannelPreflight:
         not omnichannel_enabled
         or (public_base and (not _deployed_env() or public_base.startswith("https://")))
     )
-    missing = list(status.missing)
+    # Canonical tenant-scoped VK/MAX uses encrypted per-business credentials and
+    # must not depend on the Telegram control bot merely to pass its own gate.
+    # Legacy MAX/VK flags remain fully validated by build_setup_status() when an
+    # operator explicitly enables those old global ingress paths.
+    missing = [
+        item
+        for item in status.missing
+        if not (omnichannel_enabled and item == "TELEGRAM_BOT_USERNAME")
+    ]
     if omnichannel_enabled and not public_base:
         missing.append("MESSENGER_PUBLIC_BASE_URL")
     elif omnichannel_enabled and _deployed_env() and not public_base.startswith("https://"):
