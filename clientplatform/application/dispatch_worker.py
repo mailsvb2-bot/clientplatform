@@ -2,8 +2,13 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from typing import Any
 
-from clientplatform.domain.connections import ClaimedDispatch, ConnectionPlatform, DispatchStatus
+from clientplatform.domain.connections import (
+    ClaimedDispatch,
+    ConnectionPlatform,
+    DispatchStatus,
+)
 from clientplatform.infrastructure import DispatchOutboxRepository
 from clientplatform.infrastructure.safe_dispatch_outbox import (
     mark_non_replay_safe_dispatch_boundary,
@@ -46,7 +51,7 @@ def _effective_max_attempts(
 
 
 def _release_claims(
-    items: list[ClaimedDispatch],
+    items: list[Any],
     *,
     reason: str,
 ) -> None:
@@ -61,6 +66,18 @@ def _release_claims(
             # The lease can already be stale or completed. Cancellation must not
             # be masked by a best-effort cleanup failure.
             continue
+
+
+def _claims_releasable_after_cancel(
+    items: list[Any],
+    *,
+    current_index: int,
+    non_replay_boundary_crossed: bool,
+) -> list[Any]:
+    """Never requeue the current send after a non-replay provider call began."""
+
+    start = current_index + 1 if non_replay_boundary_crossed else current_index
+    return items[start:]
 
 
 def _provider_claim_can_cross_provider_boundary(item: object) -> bool:
@@ -111,15 +128,15 @@ async def run_dispatch_batch(
 
     Database leases are committed before any credential lookup or network I/O.
     Each settlement uses a new short transaction, so a slow provider never
-    holds an open database transaction. Partner and sales follow-up work are revalidated once more
-    after claim and before credential resolution/provider I/O so an operator's
-    latest contact revocation is honored at the send boundary.
+    holds an open database transaction. Partner and sales follow-up work are
+    revalidated once more after claim and before credential resolution/provider
+    I/O so an operator's latest contact revocation is honored at the send
+    boundary.
 
-    MAX message creation has no documented provider idempotency key. Its
-    customer-dispatch lease is therefore durably marked immediately before the
-    provider call; once that boundary is crossed, automatic replay is forbidden
-    and any ambiguous result is terminal/manual-reconciliation instead of a
-    duplicate customer message.
+    Non-idempotent provider calls are durably marked immediately before network
+    I/O. Once that boundary is crossed, failure or worker cancellation must never
+    return the current work to automatic retry; stale ownership is quarantined by
+    the canonical outbox as ambiguous/manual-reconciliation work instead.
     """
 
     with get_db() as conn:
@@ -167,7 +184,11 @@ async def run_dispatch_batch(
             sent += 1
         except asyncio.CancelledError:
             _release_claims(
-                claimed[index:],
+                _claims_releasable_after_cancel(
+                    claimed,
+                    current_index=index,
+                    non_replay_boundary_crossed=non_replay_boundary_crossed,
+                ),
                 reason="worker_cancelled",
             )
             raise
