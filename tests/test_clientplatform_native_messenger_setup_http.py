@@ -1,15 +1,14 @@
 from __future__ import annotations
 
+import importlib.util
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from clientplatform.domain.connections import ConnectionPlatform
-from clientplatform.runtime.native_messenger_setup_http import (
-    native_messenger_setup_get,
-    native_messenger_setup_post,
-)
 from config.settings import settings
+
+_AIOHTTP_AVAILABLE = importlib.util.find_spec("aiohttp") is not None
 
 
 class _Request:
@@ -22,8 +21,14 @@ class _Request:
         return self._form
 
 
+@unittest.skipUnless(
+    _AIOHTTP_AVAILABLE,
+    "aiohttp runtime dependency is not installed in dependency-light Canon",
+)
 class NativeMessengerSetupHttpTests(unittest.IsolatedAsyncioTestCase):
     async def test_get_renders_password_form_with_no_store_headers(self) -> None:
+        from clientplatform.runtime.native_messenger_setup_http import native_messenger_setup_get
+
         grant = SimpleNamespace(
             business_name="Практика",
             platform=ConnectionPlatform.VK,
@@ -41,6 +46,8 @@ class NativeMessengerSetupHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.headers["Referrer-Policy"], "no-referrer")
 
     async def test_post_consumes_capability_and_never_echoes_provider_token(self) -> None:
+        from clientplatform.runtime.native_messenger_setup_http import native_messenger_setup_post
+
         preview = SimpleNamespace(
             business_name="Практика",
             platform=ConnectionPlatform.MAX,

@@ -17,7 +17,6 @@ from runtime.messenger_transport_errors import (
     MessengerMediaTokenRejectedError,
     MessengerTransportError,
 )
-from runtime.messenger_vk_ui import prepare_vk_keyboard_json
 from services.messenger.media_assets import (
     get_cached_media_token,
     invalidate_media_token,
@@ -412,6 +411,8 @@ class VkBotSender:
         }
 
         if kwargs.get("keyboard_json"):
+            from runtime.messenger_vk_ui import prepare_vk_keyboard_json
+
             keyboard_json = prepare_vk_keyboard_json(
                 str(kwargs["keyboard_json"]),
                 external_user_id=str(external_user_id),

@@ -13,7 +13,6 @@ from services.messenger.setup import build_setup_status
 
 @dataclass(frozen=True, slots=True)
 class MessengerChannelPreflight:
-    telegram_runtime_enabled: bool
     telegram_transport: str
     omnichannel_enabled: bool
     omnichannel_ready: bool
@@ -24,6 +23,7 @@ class MessengerChannelPreflight:
     webhook_runtime_ready: bool
     missing: tuple[str, ...]
     warnings: tuple[str, ...]
+    telegram_runtime_enabled: bool = True
 
     @property
     def ok(self) -> bool:

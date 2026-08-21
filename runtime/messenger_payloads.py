@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any
+from typing import Any, Mapping
 
 from services.messenger.menu_contract import normalize_menu_command
 
@@ -220,6 +220,91 @@ def text_from_vk_payload(raw: Any) -> str:
 
 def text_from_max_payload(raw: Any) -> str:
     return _payload_text(raw, prefer_command=True)
+
+
+def _mapping(value: Any) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
+
+
+def vk_raw_message(
+    payload: Mapping[str, Any],
+) -> tuple[str, str | None, str | None] | None:
+    obj = _mapping(payload.get("object"))
+    message = _mapping(obj.get("message") or obj)
+    external = (
+        message.get("from_id")
+        or message.get("user_id")
+        or obj.get("from_id")
+        or obj.get("user_id")
+    )
+    subject = str(external or "").strip()
+    if not subject:
+        return None
+    payload_text = text_from_vk_payload(
+        message.get("payload") or obj.get("payload") or payload.get("payload")
+    )
+    text = str(
+        payload_text or message.get("text") or obj.get("text") or ""
+    ).strip()
+    return subject, text, None
+
+
+def max_raw_message(
+    payload: Mapping[str, Any],
+) -> tuple[str, str | None, str | None] | None:
+    message = _mapping(payload.get("message"))
+    body = _mapping(message.get("body"))
+    callback = _mapping(
+        payload.get("callback") or payload.get("button") or payload.get("payload")
+    )
+    sender = _mapping(
+        message.get("sender")
+        or payload.get("sender")
+        or payload.get("user")
+        or callback.get("sender")
+        or callback.get("user")
+    )
+    external = (
+        sender.get("user_id")
+        or sender.get("id")
+        or callback.get("user_id")
+        or payload.get("user_id")
+        or body.get("user_id")
+    )
+    subject = str(external or "").strip()
+    if not subject:
+        return None
+    callback_text = text_from_max_payload(callback)
+    payload_text = (
+        callback_text
+        or text_from_max_payload(body.get("payload"))
+        or text_from_max_payload(message.get("payload"))
+        or text_from_max_payload(payload.get("payload"))
+    )
+    text = str(
+        payload_text
+        or message.get("text")
+        or body.get("text")
+        or payload.get("text")
+        or ""
+    ).strip()
+    display_name = (
+        str(
+            sender.get("display_name")
+            or sender.get("name")
+            or " ".join(
+                part
+                for part in (
+                    str(sender.get("first_name") or "").strip(),
+                    str(sender.get("last_name") or "").strip(),
+                )
+                if part
+            )
+            or ""
+        ).strip()
+        or None
+    )
+    return subject, text, display_name
 
 
 def _first_int_from_dict(payload: dict[str, Any], *paths: tuple[str, ...]) -> int | None:
