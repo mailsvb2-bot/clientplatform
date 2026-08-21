@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from clientplatform.application.dispatch_worker import DispatchBatchResult, run_dispatch_batch
@@ -10,6 +11,7 @@ from clientplatform.application.program_media import run_program_media_cleanup_b
 from clientplatform.application.sales_followups import run_sales_followup_maintenance_batch
 from clientplatform.runtime.control_bot import control_bot_enabled
 from clientplatform.runtime.messenger_provider_clients import MaxRuntimeClient, VkRuntimeClient
+from clientplatform.runtime.native_messenger_setup_links import NativeMessengerSetupLinkService
 from clientplatform.runtime.secrets import EnvironmentCredentialProvider
 from clientplatform.transport import (
     AdapterRegistry,
@@ -64,6 +66,7 @@ class DispatchRuntime:
     config: DispatchRuntimeConfig
     credential_provider: EnvironmentCredentialProvider
     adapters: AdapterRegistry
+    interaction_link_resolver: Callable[..., str | None] | None = None
 
 
 def dispatch_runtime_config() -> DispatchRuntimeConfig:
@@ -171,6 +174,9 @@ def build_dispatch_runtime(
         multipart_max_bytes=selected.media_multipart_max_bytes,
     )
     media_resolver = _build_media_resolver(selected, credential_provider)
+    setup_link_service = NativeMessengerSetupLinkService(
+        credential_provider=credential_provider,
+    )
     adapters = AdapterRegistry(
         [
             TelegramDispatchAdapter(
@@ -191,6 +197,7 @@ def build_dispatch_runtime(
         config=selected,
         credential_provider=credential_provider,
         adapters=adapters,
+        interaction_link_resolver=setup_link_service.resolve_command_url,
     )
 
 
@@ -222,4 +229,5 @@ async def run_configured_dispatch_tick(
         limit=selected.config.batch_size,
         max_attempts=selected.config.max_attempts,
         lock_ttl_seconds=selected.config.lock_ttl_seconds,
+        interaction_link_resolver=selected.interaction_link_resolver,
     )
