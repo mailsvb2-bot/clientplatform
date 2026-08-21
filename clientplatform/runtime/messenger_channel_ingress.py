@@ -34,6 +34,9 @@ from clientplatform.domain.messenger_channels import (
     extract_customer_link_token,
 )
 from clientplatform.domain.sales_ai_jobs import messenger_source_order
+from clientplatform.runtime.native_messenger_setup_links import (
+    NativeMessengerSetupLinkService,
+)
 from clientplatform.runtime.sales_ai_config import SalesAIRuntimeConfig
 from clientplatform.runtime.secrets import EnvironmentCredentialProvider, SecretReferenceError
 from runtime.messenger_payloads import (
@@ -366,6 +369,21 @@ async def _process_business_event(
             display_name=display_name,
         )
         if member is not None:
+            setup_links = NativeMessengerSetupLinkService(
+                credential_provider=credential_provider,
+            )
+
+            def _issue_setup_command(
+                actor: Any,
+                target_platform: ConnectionPlatform,
+                setup_key: str,
+            ) -> str:
+                return setup_links.issue_command(
+                    actor=actor,
+                    platform=target_platform,
+                    idempotency_key=setup_key,
+                )
+
             await asyncio.to_thread(
                 process_native_member_interaction,
                 route=route,
@@ -373,6 +391,7 @@ async def _process_business_event(
                 external_subject=external_subject,
                 raw_text=raw_text,
                 provider_event_id=provider_event_id,
+                setup_issuer=_issue_setup_command,
             )
             return await _complete_event(
                 platform=platform,
