@@ -359,9 +359,10 @@ class VkBotSender:
                 raw_server_id = created_response.get("server_id") or created_response.get("id")
             else:
                 raw_server_id = created_response
-            if not str(raw_server_id or "").isdigit():
+            raw_server_id_text = str(raw_server_id or "")
+            if not raw_server_id_text.isdigit():
                 raise _vk_error("callback_server", "server_id_missing")
-            server_id = int(raw_server_id)
+            server_id = int(raw_server_id_text)
         await self._vk_method(
             "groups.setCallbackSettings",
             {

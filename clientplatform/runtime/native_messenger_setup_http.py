@@ -17,7 +17,6 @@ from clientplatform.infrastructure.native_messenger_setup_repository import (
     NativeMessengerSetupRejected,
 )
 from config.settings import settings
-from runtime.messenger_transport_errors import MessengerTransportError
 
 
 _SECURITY_HEADERS = {
@@ -50,6 +49,18 @@ button{{margin-top:22px;padding:12px 18px;font-size:16px}}.note{{color:#555}}.ok
 
 def _token(request: web.Request) -> str:
     return str(request.match_info.get("token") or "").strip()
+
+
+def _provider_setup_failure_page() -> web.Response:
+    return _page(
+        title="Не удалось подключить",
+        body=(
+            "<h1>Не удалось подключить мессенджер</h1>"
+            "<p>ClientPlatform не смог подтвердить аккаунт или настроить Webhook. "
+            "Вернитесь в раздел «Мессенджеры» и создайте новую одноразовую ссылку.</p>"
+        ),
+        status=502,
+    )
 
 
 def _setup_form(*, business_name: str, platform: ConnectionPlatform) -> str:
@@ -159,16 +170,10 @@ async def native_messenger_setup_post(request: web.Request) -> web.Response:
             body="<h1>Ссылка уже использована</h1><p>Создайте новую ссылку в ClientPlatform.</p>",
             status=409,
         )
-    except (MessengerTransportError, ValueError, RuntimeError, OSError):
-        return _page(
-            title="Не удалось подключить",
-            body=(
-                "<h1>Не удалось подключить мессенджер</h1>"
-                "<p>ClientPlatform не смог подтвердить аккаунт или настроить Webhook. "
-                "Вернитесь в раздел «Мессенджеры» и создайте новую одноразовую ссылку.</p>"
-            ),
-            status=502,
-        )
+    except (ValueError, OSError):
+        return _provider_setup_failure_page()
+    except RuntimeError:
+        return _provider_setup_failure_page()
 
     return _page(
         title=f"{label} подключён",

@@ -173,7 +173,14 @@ async def provision_max_channel(
             url=webhook_url,
             secret=webhook_secret,
         )
-    except Exception:
+    except (ValueError, OSError):
+        _disable_after_provider_failure(
+            actor=actor,
+            connection_id=connection.id,
+            route_id=route.id,
+        )
+        raise
+    except RuntimeError:
         _disable_after_provider_failure(
             actor=actor,
             connection_id=connection.id,
@@ -230,7 +237,14 @@ async def provision_vk_channel(
             url=webhook_url,
             secret=webhook_secret,
         )
-    except Exception:
+    except (ValueError, OSError):
+        _disable_after_provider_failure(
+            actor=actor,
+            connection_id=connection.id,
+            route_id=route.id,
+        )
+        raise
+    except RuntimeError:
         _disable_after_provider_failure(
             actor=actor,
             connection_id=connection.id,
