@@ -77,7 +77,11 @@ def _session_id(value: str) -> str:
 
 
 def _platform(value: ConnectionPlatform | str) -> ConnectionPlatform:
-    platform = value if isinstance(value, ConnectionPlatform) else ConnectionPlatform(str(value).strip().lower())
+    platform = (
+        value
+        if isinstance(value, ConnectionPlatform)
+        else ConnectionPlatform(str(value).strip().lower())
+    )
     if platform not in _SETUP_PLATFORMS:
         raise ValueError("messenger setup supports only VK or MAX")
     return platform
@@ -92,6 +96,28 @@ class NativeMessengerSetupRepository:
         self._conn = conn
         self._tenancy = TenancyRepository(conn)
 
+    def _current_actor(self, actor: TenantContext) -> TenantContext:
+        current = self._tenancy.resolve_context(
+            user_id=actor.user_id,
+            business_id=actor.business_id,
+        )
+        current.assert_can_manage_business()
+        return current
+
+    def _lock_issue_boundary(self, business_id: str) -> None:
+        """Serialize setup replacement for one business across DB dialects."""
+
+        cursor = self._conn.execute(
+            """
+            UPDATE businesses
+            SET updated_at=updated_at
+            WHERE id=? AND status='active'
+            """,
+            (business_id,),
+        )
+        if int(getattr(cursor, "rowcount", 1) or 0) != 1:
+            raise NativeMessengerSetupRejected("active business is unavailable")
+
     def issue(
         self,
         *,
@@ -102,19 +128,9 @@ class NativeMessengerSetupRepository:
         session_id: str | None = None,
         token: str | None = None,
     ) -> IssuedNativeMessengerSetup:
-        """Issue a single-use setup capability while persisting only its digest.
+        """Issue a single-use setup capability while persisting only its digest."""
 
-        Existing callers keep the cryptographically-random token path. Native
-        staff delivery may supply a pre-derived token and session id so the raw
-        token can be reconstructed only at the provider boundary instead of being
-        stored in the durable dispatch outbox.
-        """
-
-        current = self._tenancy.resolve_context(
-            user_id=actor.user_id,
-            business_id=actor.business_id,
-        )
-        current.assert_can_manage_business()
+        current = self._current_actor(actor)
         selected_platform = _platform(platform)
         lifetime = max(60, min(int(ttl_seconds), 1800))
         created = (now or _utc_now()).astimezone(timezone.utc).replace(microsecond=0)
@@ -123,6 +139,7 @@ class NativeMessengerSetupRepository:
         selected_session_id = _session_id(session_id or str(uuid4()))
         raw_token = _token(token) if token is not None else secrets.token_urlsafe(32)
         digest = _digest(raw_token)
+        self._lock_issue_boundary(current.business_id)
         self._conn.execute(
             """
             UPDATE messenger_connection_setup_sessions
@@ -154,6 +171,98 @@ class NativeMessengerSetupRepository:
             business_id=current.business_id,
             platform=selected_platform,
             expires_at=expires_at,
+        )
+
+    def ensure_recoverable_reference(
+        self,
+        *,
+        actor: TenantContext,
+        platform: ConnectionPlatform | str,
+        session_id: str,
+        token: str,
+        ttl_seconds: int = 600,
+        now: datetime | None = None,
+    ) -> NativeMessengerSetupReference:
+        """Create one replay-stable digest-only session or reuse the exact prior one.
+
+        The deterministic session id is non-secret. An exact replay never
+        invalidates the previously materialized outbox command. A new session id
+        still invalidates an older setup capability for the same business/channel.
+        """
+
+        current = self._current_actor(actor)
+        selected_platform = _platform(platform)
+        selected_session_id = _session_id(session_id)
+        lifetime = max(60, min(int(ttl_seconds), 1800))
+        created = (now or _utc_now()).astimezone(timezone.utc).replace(microsecond=0)
+        created_iso = _iso(created)
+        expires_at = _iso(created + timedelta(seconds=lifetime))
+        digest = _digest(token)
+
+        self._lock_issue_boundary(current.business_id)
+        cursor = self._conn.execute(
+            """
+            INSERT INTO messenger_connection_setup_sessions(
+                id,business_id,platform,token_digest,created_by_member_id,
+                created_at,expires_at,consumed_at
+            ) VALUES(?,?,?,?,?,?,?,NULL)
+            ON CONFLICT(id) DO NOTHING
+            """,
+            (
+                selected_session_id,
+                current.business_id,
+                selected_platform.value,
+                digest,
+                current.membership_id,
+                created_iso,
+                expires_at,
+            ),
+        )
+        inserted = int(getattr(cursor, "rowcount", 0) or 0) == 1
+        row = self._conn.execute(
+            """
+            SELECT id,business_id,platform,token_digest,expires_at,
+                   created_by_member_id
+            FROM messenger_connection_setup_sessions
+            WHERE id=?
+            LIMIT 1
+            """,
+            (selected_session_id,),
+        ).fetchone()
+        if row is None:
+            raise NativeMessengerSetupRejected(
+                "recoverable messenger setup session was not persisted"
+            )
+        if (
+            str(_value(row, "business_id", 1)) != current.business_id
+            or _platform(str(_value(row, "platform", 2))) != selected_platform
+            or str(_value(row, "created_by_member_id", 5)) != current.membership_id
+        ):
+            raise NativeMessengerSetupRejected(
+                "messenger setup idempotency key belongs to different work"
+            )
+        if inserted:
+            self._conn.execute(
+                """
+                UPDATE messenger_connection_setup_sessions
+                SET consumed_at=?
+                WHERE business_id=? AND platform=? AND id<>?
+                  AND consumed_at IS NULL
+                """,
+                (
+                    created_iso,
+                    current.business_id,
+                    selected_platform.value,
+                    selected_session_id,
+                ),
+            )
+        return NativeMessengerSetupReference(
+            session_id=str(_value(row, "id", 0)),
+            business_id=current.business_id,
+            platform=selected_platform,
+            token_digest=str(_value(row, "token_digest", 3)),
+            expires_at=str(_value(row, "expires_at", 4)),
+            actor=current,
         )
 
     def inspect_reference(
