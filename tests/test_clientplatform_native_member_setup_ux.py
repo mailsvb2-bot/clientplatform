@@ -105,16 +105,19 @@ class NativeMemberSetupUxTests(unittest.TestCase):
         ) -> str:
             raise RuntimeError("secret://env/SHOULD_NOT_LEAK")
 
-        message = member_ui._render(
-            actor,
-            member_ui.ParsedMemberInteraction("connect-max"),
-            linked=False,
-            setup_issuer=issuer,
-            setup_key="route:r:event:e:member:1001:action:connect-max",
-        )
+        with self.assertLogs(member_ui.log, level="ERROR") as captured:
+            message = member_ui._render(
+                actor,
+                member_ui.ParsedMemberInteraction("connect-max"),
+                linked=False,
+                setup_issuer=issuer,
+                setup_key="route:r:event:e:member:1001:action:connect-max",
+            )
 
         self.assertIn("Не удалось подготовить", message.text)
         self.assertNotIn("SHOULD_NOT_LEAK", message.to_json())
+        self.assertNotIn("SHOULD_NOT_LEAK", "\n".join(captured.output))
+        self.assertNotIn("secret://env/", "\n".join(captured.output))
 
 
 if __name__ == "__main__":

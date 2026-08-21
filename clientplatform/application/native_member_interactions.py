@@ -421,7 +421,10 @@ def _setup_message(
     try:
         command = setup_issuer(actor, platform, setup_key)
     except (RuntimeError, ValueError):
-        log.exception(
+        # The exception may contain a provider token, secret reference or raw
+        # capability. Log only stable context; never serialize exception text
+        # or traceback across this credential-adjacent boundary.
+        log.error(
             "Native messenger setup command issuance failed",
             extra={
                 "business_id": actor.business_id,
