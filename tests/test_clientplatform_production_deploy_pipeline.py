@@ -274,10 +274,135 @@ class ProductionDeploymentContractTests(unittest.TestCase):
                 )
         external.assert_not_called()
 
+    def test_disk_guard_fails_closed_on_critical_usage_or_low_free_space(self) -> None:
+        critical = {
+            "total_bytes": 30 * 1024**3,
+            "used_bytes": 24 * 1024**3,
+            "free_bytes": 6 * 1024**3,
+            "used_percent": 75.0,
+        }
+        low_free = {
+            "total_bytes": 100 * 1024**3,
+            "used_bytes": 95 * 1024**3,
+            "free_bytes": 5 * 1024**3,
+            "used_percent": 95.0,
+        }
+        for capacity in (critical, low_free):
+            with (
+                self.subTest(capacity=capacity),
+                mock.patch.object(production_deploy, "_disk_capacity", return_value=capacity),
+            ):
+                with self.assertRaisesRegex(
+                    production_deploy.DeploymentError,
+                    "insufficient_disk_capacity_before_deploy",
+                ):
+                    production_deploy._assert_deploy_disk_capacity()
+
+    def test_disk_guard_allows_healthy_capacity(self) -> None:
+        capacity = {
+            "total_bytes": 30 * 1024**3,
+            "used_bytes": 18 * 1024**3,
+            "free_bytes": 12 * 1024**3,
+            "used_percent": 60.0,
+        }
+        with mock.patch.object(production_deploy, "_disk_capacity", return_value=capacity):
+            self.assertEqual(production_deploy._assert_deploy_disk_capacity(), capacity)
+
+    def test_deploy_image_retention_keeps_running_and_recent_rollback_images(self) -> None:
+        app_rollbacks = [
+            f"{production_deploy.APP_IMAGE}:rollback-20260820T200000Z",
+            f"{production_deploy.APP_IMAGE}:rollback-20260819T200000Z",
+            f"{production_deploy.APP_IMAGE}:rollback-20260818T200000Z",
+        ]
+        recovered = f"{production_deploy.APP_IMAGE}:recovered-legacy"
+        visual_rollbacks = [
+            f"{production_deploy.VISUAL_GATEWAY_IMAGE}:rollback-20260820T200000Z",
+            f"{production_deploy.VISUAL_GATEWAY_IMAGE}:rollback-20260819T200000Z",
+        ]
+        target_sha = "f" * 40
+        target_release = f"{production_deploy.VISUAL_GATEWAY_IMAGE}:release-{target_sha}"
+        current_release = f"{production_deploy.VISUAL_GATEWAY_IMAGE}:release-current"
+        previous_release = f"{production_deploy.VISUAL_GATEWAY_IMAGE}:release-previous"
+        ancient_release = f"{production_deploy.VISUAL_GATEWAY_IMAGE}:release-ancient"
+        tags = {
+            production_deploy.APP_IMAGE: [*app_rollbacks, recovered],
+            production_deploy.VISUAL_GATEWAY_IMAGE: [
+                *visual_rollbacks,
+                target_release,
+                current_release,
+                previous_release,
+                ancient_release,
+            ],
+        }
+        image_ids = {
+            app_rollbacks[0]: "sha256:app-recent",
+            app_rollbacks[1]: "sha256:app-running",
+            app_rollbacks[2]: "sha256:app-old",
+            recovered: "sha256:app-recovered-old",
+            visual_rollbacks[0]: "sha256:visual-previous",
+            visual_rollbacks[1]: "sha256:visual-old",
+            target_release: "sha256:target-retry",
+            current_release: "sha256:visual-running",
+            previous_release: "sha256:visual-previous",
+            ancient_release: "sha256:visual-old",
+        }
+
+        with (
+            mock.patch.object(
+                production_deploy,
+                "_running_image_ids",
+                return_value={"sha256:app-running", "sha256:visual-running"},
+            ),
+            mock.patch.object(
+                production_deploy,
+                "_image_tags",
+                side_effect=lambda repository: tags[repository],
+            ),
+            mock.patch.object(
+                production_deploy,
+                "_image_id",
+                side_effect=lambda reference: image_ids[reference],
+            ),
+            mock.patch.object(production_deploy, "_run") as run,
+        ):
+            result = production_deploy._prune_deploy_image_history(target_sha)
+
+        removed = [
+            call.args[0][-1]
+            for call in run.call_args_list
+            if call.args and call.args[0][:3] == ["docker", "image", "rm"]
+        ]
+        self.assertEqual(
+            removed,
+            [app_rollbacks[2], recovered, visual_rollbacks[1], ancient_release],
+        )
+        self.assertEqual(result["removed_tags"], 4)
+        self.assertEqual(result["app_rollbacks_retained_before_deploy"], 1)
+        self.assertEqual(result["visual_rollbacks_retained_before_deploy"], 1)
+        self.assertIn(mock.call(["docker", "image", "prune", "--force"]), run.call_args_list)
+
+    def test_build_cache_retention_is_bounded(self) -> None:
+        with mock.patch.object(production_deploy, "_run") as run:
+            result = production_deploy._prune_build_cache()
+
+        run.assert_called_once_with(
+            [
+                "docker",
+                "builder",
+                "prune",
+                "--force",
+                "--all",
+                "--keep-storage",
+                "2GB",
+            ]
+        )
+        self.assertEqual(result, {"keep_storage": "2GB"})
+
     def test_existing_unready_production_aborts_before_any_container_change(self) -> None:
         compose = ["docker", "compose", "--env-file", "clientplatform.env"]
         with (
             mock.patch.object(production_deploy.os, "geteuid", return_value=0),
+            mock.patch.object(production_deploy, "_assert_tracked_worktree_clean"),
             mock.patch.object(production_deploy, "prepare"),
             mock.patch.object(
                 production_deploy,
@@ -316,6 +441,7 @@ class ProductionDeploymentContractTests(unittest.TestCase):
 
         with (
             mock.patch.object(production_deploy.os, "geteuid", return_value=0),
+            mock.patch.object(production_deploy, "_assert_tracked_worktree_clean"),
             mock.patch.object(production_deploy, "prepare"),
             mock.patch.object(
                 production_deploy,
@@ -326,6 +452,30 @@ class ProductionDeploymentContractTests(unittest.TestCase):
             mock.patch.object(production_deploy, "_compose", return_value=compose),
             mock.patch.object(production_deploy, "_run") as run,
             mock.patch.object(production_deploy, "_container_exists", return_value=True),
+            mock.patch.object(
+                production_deploy,
+                "_prune_deploy_image_history",
+                return_value={
+                    "removed_tags": 7,
+                    "app_rollbacks_retained_before_deploy": 1,
+                    "visual_rollbacks_retained_before_deploy": 1,
+                },
+            ) as image_retention,
+            mock.patch.object(
+                production_deploy,
+                "_prune_build_cache",
+                return_value={"keep_storage": "2GB"},
+            ) as cache_retention,
+            mock.patch.object(
+                production_deploy,
+                "_disk_capacity",
+                return_value={
+                    "total_bytes": 30 * 1024**3,
+                    "used_bytes": 18 * 1024**3,
+                    "free_bytes": 12 * 1024**3,
+                    "used_percent": 60.0,
+                },
+            ),
             mock.patch.object(
                 production_deploy,
                 "_wait_for_baseline_readiness",
@@ -361,7 +511,13 @@ class ProductionDeploymentContractTests(unittest.TestCase):
         wait.assert_called_once_with(240)
         external.assert_called_once_with("clientplatform.example.test")
         sales_smoke.assert_called_once_with()
+        image_retention.assert_called_once_with("a" * 40)
+        cache_retention.assert_called_once_with()
         rollback.assert_not_called()
+        self.assertEqual(evidence_payload["image_retention"]["removed_tags"], 7)
+        self.assertEqual(evidence_payload["build_cache_retention"]["keep_storage"], "2GB")
+        self.assertEqual(evidence_payload["disk_before_deploy"]["used_percent"], 60.0)
+        self.assertEqual(evidence_payload["disk_after_deploy"]["free_bytes"], 12 * 1024**3)
         self.assertTrue(evidence_payload["recovery_mode"])
         self.assertEqual(
             evidence_payload["sales_operations_smoke"]["contract_version"],
@@ -412,6 +568,11 @@ class ProductionDeploymentContractTests(unittest.TestCase):
     def test_deploy_contract_orders_baseline_backup_build_and_recreate(self) -> None:
         source = Path(production_deploy.__file__).read_text(encoding="utf-8")
         baseline_index = source.index("production_not_ready_before_deploy")
+        retention_index = source.index(
+            "image_retention = _prune_deploy_image_history(target_sha)"
+        )
+        cache_retention_index = source.index("build_cache_retention = _prune_build_cache()")
+        disk_guard_index = source.index("disk_before_deploy = _assert_deploy_disk_capacity()")
         backup_index = source.index("backup_reference =")
         rollback_tag_index = source.index(
             '_run(["docker", "image", "tag", previous_image, rollback_tag])'
@@ -427,7 +588,10 @@ class ProductionDeploymentContractTests(unittest.TestCase):
             build_index,
         )
 
-        self.assertLess(baseline_index, backup_index)
+        self.assertLess(baseline_index, retention_index)
+        self.assertLess(retention_index, cache_retention_index)
+        self.assertLess(cache_retention_index, disk_guard_index)
+        self.assertLess(disk_guard_index, backup_index)
         self.assertLess(backup_index, rollback_tag_index)
         self.assertLess(rollback_tag_index, gateway_build_index)
         self.assertLess(gateway_build_index, build_index)
