@@ -81,14 +81,7 @@ def _claims_releasable_after_cancel(
 
 
 def _provider_claim_can_cross_provider_boundary(item: object) -> bool:
-    """Atomically honor a last-moment partner contact revocation.
-
-    Claiming commits before network I/O by design. That leaves a deliberate
-    boundary where an owner may revoke contact after claim but before a provider
-    call starts. Revalidate the lease in a fresh transaction and convert a
-    revoked partner lease to ``cancelled`` instead of resolving credentials or
-    calling the adapter.
-    """
+    """Revalidate live authority after claim and immediately before provider I/O."""
 
     if not isinstance(item, ClaimedProviderDispatch):
         return True
@@ -100,6 +93,11 @@ def _provider_claim_can_cross_provider_boundary(item: object) -> bool:
             return repository.partner_dispatch_still_authorized(item)
         if item.dispatch.source_kind == "sales_followup":
             return repository.sales_followup_claim_can_cross_provider_boundary(item)
+        if item.dispatch.source_kind in {
+            "customer_interaction",
+            "member_interaction",
+        }:
+            return repository.native_interaction_claim_can_cross_provider_boundary(item)
         return True
 
 
@@ -128,9 +126,9 @@ async def run_dispatch_batch(
 
     Database leases are committed before any credential lookup or network I/O.
     Each settlement uses a new short transaction, so a slow provider never
-    holds an open database transaction. Partner and sales follow-up work are
-    revalidated once more after claim and before credential resolution/provider
-    I/O so an operator's latest contact revocation is honored at the send
+    holds an open database transaction. Partner, sales follow-up and native
+    customer/staff work are revalidated once more after claim and before
+    credential resolution/provider I/O so revocation is honored at the send
     boundary.
 
     Non-idempotent provider calls are durably marked immediately before network

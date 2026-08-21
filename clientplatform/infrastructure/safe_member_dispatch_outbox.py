@@ -32,6 +32,9 @@ _MEMBER_INTERACTION_PROVIDER_BOUNDARY_MARKER = (
 _MEMBER_INTERACTION_AMBIGUOUS_ERROR = (
     "member_interaction_delivery_outcome_ambiguous_manual_reconciliation_required"
 )
+_NATIVE_INTERACTION_SOURCE_KINDS = frozenset(
+    {"customer_interaction", "member_interaction"}
+)
 
 
 class DispatchOutboxRepository(_SafeUnifiedDispatchOutboxRepository):
@@ -155,6 +158,97 @@ class DispatchOutboxRepository(_SafeUnifiedDispatchOutboxRepository):
         ):
             raise ValueError("member interaction idempotency belongs to different work")
         return persisted
+
+    def native_interaction_claim_can_cross_provider_boundary(
+        self,
+        item: ClaimedProviderDispatch,
+        *,
+        now: str | None = None,
+    ) -> bool:
+        """Revalidate customer/staff recipient authority immediately before provider I/O."""
+
+        source_kind = item.dispatch.source_kind
+        if source_kind not in _NATIVE_INTERACTION_SOURCE_KINDS:
+            return True
+        if source_kind == "customer_interaction":
+            row = self._conn.execute(
+                """
+                SELECT 1
+                FROM provider_dispatch_outbox d
+                JOIN connections cn
+                  ON cn.id=d.connection_id AND cn.business_id=d.business_id
+                 AND cn.platform=d.platform AND cn.status='active'
+                JOIN customer_identities ci
+                  ON ci.id=d.customer_identity_id AND ci.business_id=d.business_id
+                 AND ci.platform=d.platform AND ci.status='active'
+                 AND ci.external_subject=d.external_subject
+                JOIN customers c
+                  ON c.id=ci.customer_id AND c.business_id=ci.business_id
+                 AND c.status='active'
+                WHERE d.id=? AND d.business_id=?
+                  AND d.source_kind='customer_interaction'
+                  AND d.status='sending' AND d.lock_token=?
+                LIMIT 1
+                """,
+                (
+                    item.dispatch.id,
+                    item.dispatch.business_id,
+                    item.dispatch.lock_token,
+                ),
+            ).fetchone()
+            reason = "customer_interaction_recipient_revoked"
+        else:
+            row = self._conn.execute(
+                """
+                SELECT 1
+                FROM provider_dispatch_outbox d
+                JOIN businesses b
+                  ON b.id=d.business_id AND b.status='active'
+                JOIN connections cn
+                  ON cn.id=d.connection_id AND cn.business_id=d.business_id
+                 AND cn.platform=d.platform AND cn.status='active'
+                JOIN account_channel_identities aci
+                  ON aci.platform=d.platform
+                 AND aci.external_user_id=d.external_subject
+                JOIN accounts a
+                  ON a.account_id=aci.account_id AND a.status='active'
+                JOIN business_members bm
+                  ON bm.business_id=d.business_id AND bm.user_id=aci.account_id
+                 AND bm.status='active'
+                WHERE d.id=? AND d.business_id=?
+                  AND d.source_kind='member_interaction'
+                  AND d.status='sending' AND d.lock_token=?
+                LIMIT 1
+                """,
+                (
+                    item.dispatch.id,
+                    item.dispatch.business_id,
+                    item.dispatch.lock_token,
+                ),
+            ).fetchone()
+            reason = "member_interaction_recipient_revoked"
+        if row is not None:
+            return True
+
+        timestamp = str(now or _utc_now().isoformat())
+        cursor = self._conn.execute(
+            """
+            UPDATE provider_dispatch_outbox
+            SET status='cancelled',updated_at=?,locked_at=NULL,lock_token=NULL,
+                last_error=?
+            WHERE id=? AND business_id=? AND source_kind=?
+              AND status='sending' AND lock_token=?
+            """,
+            (
+                timestamp,
+                reason,
+                item.dispatch.id,
+                item.dispatch.business_id,
+                source_kind,
+                item.dispatch.lock_token,
+            ),
+        )
+        return int(getattr(cursor, "rowcount", 0) or 0) != 0 and False
 
     def mark_provider_non_replay_boundary(
         self,
