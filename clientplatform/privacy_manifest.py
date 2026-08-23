@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 TenantDisposition = Literal["erase", "retain", "anonymize"]
-CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-08-20.v31-followup-employee"
+CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-08-24.v32-payment-evidence"
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,6 +40,7 @@ _POLICIES = (
     _required("business_publications", "retain", "business-owned publication drafts, schedules and delivery state"),
     _required("business_subscription_state", "retain", "business subscription plan, limits and renewal state"),
     _required("business_payments", "anonymize", "business financial ledger retained for accounting while customer linkage and free-form personal notes are anonymized"),
+    _required("business_payment_outcome_evidence", "anonymize", "idempotent payment-to-outcome evidence retained for accounting while provider references are anonymized"),
     _required("customer_invites", "erase", "expiring customer connection capability and claim routing"),
     _required("booking_slots", "anonymize", "business availability and customer appointment fulfilment"),
     _required("business_outcome_events", "anonymize", "canonical business outcome ledger retained while customer linkage and free-form metadata are anonymized"),

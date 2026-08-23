@@ -156,6 +156,18 @@ class OutcomeRepository:
         ).fetchone()
         return None if row is None else _event_from_row(row)
 
+    def get(
+        self,
+        *,
+        business_id: str,
+        event_id: str,
+    ) -> BusinessOutcomeEvent | None:
+        row = self._conn.execute(
+            _EVENT_SELECT + " WHERE business_id=? AND id=? LIMIT 1",
+            (str(business_id), str(event_id)),
+        ).fetchone()
+        return None if row is None else _event_from_row(row)
+
     def list_events(
         self,
         *,

@@ -77,6 +77,7 @@ def test_admin_operations_are_real_and_tenant_isolated() -> None:
         actor=actor,
         customer_id=customer.id,
         amount_minor=350_000,
+        idempotency_key="admin-runtime-first-payment",
         currency="RUB",
         note="Консультация",
     )
@@ -123,6 +124,7 @@ def test_role_permissions_remain_fail_closed() -> None:
         record_payment(
             actor=content_actor,
             amount_minor=100_00,
+            idempotency_key="admin-runtime-denied-payment",
             currency="RUB",
         )
 

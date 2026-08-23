@@ -211,6 +211,13 @@ def _finance_write_buttons(
     return []
 
 
+def _telegram_payment_idempotency_key(message: Message) -> str:
+    user_id = int(message.from_user.id)
+    chat_id = int(getattr(getattr(message, "chat", None), "id", user_id))
+    message_id = int(getattr(message, "message_id", 0) or 0)
+    return f"telegram-payment:{chat_id}:{message_id}"
+
+
 async def _all_offerings(actor: Any, capabilities: list[Any]) -> list[Any]:
     active_ids = [
         item.id
@@ -433,6 +440,20 @@ async def _enhanced_marketing(
             f"{recent}"
         )
         extra = _finance_write_buttons(admin, ctx, action=action, offerings=offerings)
+        if _can_write_finance(ctx):
+            extra.extend(
+                (
+                    f"↩️ Возврат · {_money(item.amount_minor, item.currency)}",
+                    _ops_callback(
+                        ctx,
+                        "pay-refund",
+                        admin.control._uuid_token(item.id),
+                    ),
+                )
+                for item in payments[:10]
+                if item.status == "paid"
+                and getattr(item, "outcome_event_id", None) is not None
+            )
     elif action == "segments":
         without_program = max(0, insights.active_customers - len(enrolled_ids))
         text = (
@@ -739,6 +760,35 @@ async def _context_from_state(message: Message, state: FSMContext) -> Any:
     )
 
 
+async def _open_payment_value_step(
+    callback: CallbackQuery,
+    state: FSMContext,
+    *,
+    admin: ModuleType,
+    ctx: Any,
+    customer_id: str | None,
+    offering_id: str | None,
+) -> None:
+    await state.set_state(ClientPlatformAdminOpsState.payment_value)
+    await state.update_data(
+        cpao_business_id=ctx.business_id,
+        cpao_payment_customer_id=customer_id,
+        cpao_payment_offering_id=offering_id,
+    )
+    await admin._safe_edit(
+        callback,
+        "💰 Зафиксировать оплату вручную\n\n"
+        "Отправьте: сумма, валюта и комментарий.\n"
+        "Например: 3500 RUB консультация.\n"
+        "Для отмены отправьте /cancel.",
+        _flow_keyboard(
+            admin,
+            ctx,
+            return_action="return-payments",
+        ),
+    )
+
+
 @router.callback_query(F.data.startswith("cpao:"))
 async def admin_ops_gate(callback: CallbackQuery, state: FSMContext) -> None:
     admin = importlib.import_module(".clientplatform_admin", __package__)
@@ -754,7 +804,15 @@ async def admin_ops_gate(callback: CallbackQuery, state: FSMContext) -> None:
         business_id=business_id,
     )
 
-    if action in {"payment-new", "payment-customer", "price-set"} and not _can_write_finance(ctx):
+    if action in {
+        "payment-new",
+        "payment-customer",
+        "pay-customer",
+        "pay-offer",
+        "pay-refund",
+        "pay-refund-ok",
+        "price-set",
+    } and not _can_write_finance(ctx):
         await callback.answer(
             "Для вашей роли финансовые данные доступны только для просмотра.",
             show_alert=True,
@@ -832,6 +890,45 @@ async def admin_ops_gate(callback: CallbackQuery, state: FSMContext) -> None:
         )
         await _enhanced_marketing(callback, state, ctx, "publications")
         return
+    if action == "pay-refund":
+        payment_id = admin.control._token_uuid(payload[0])
+        await admin._safe_edit(
+            callback,
+            "↩️ Полный возврат\n\n"
+            "Подтвердите возврат. Он изменит статус оплаты и создаст "
+            "отдельный канонический факт возврата; повторное нажатие "
+            "не создаст дубль.",
+            _flow_keyboard(
+                admin,
+                ctx,
+                return_action="return-payments",
+                extra=[
+                    (
+                        "Подтвердить возврат",
+                        _ops_callback(
+                            ctx,
+                            "pay-refund-ok",
+                            admin.control._uuid_token(payment_id),
+                        ),
+                    )
+                ],
+            ),
+        )
+        return
+    if action == "pay-refund-ok":
+        payment_id = admin.control._token_uuid(payload[0])
+        refunded = await asyncio.to_thread(
+            admin_ops.refund_payment,
+            actor=ctx.actor,
+            payment_id=payment_id,
+            idempotency_key=f"telegram-refund:{payment_id}",
+            reason="owner_confirmed_full_refund",
+        )
+        await callback.answer(
+            f"Возврат {_money(refunded.amount_minor, refunded.currency)} сохранён"
+        )
+        await _enhanced_marketing(callback, state, ctx, "payments")
+        return
     if action == "payment-new":
         customers = await _optional_thread(
             list_customers,
@@ -846,14 +943,14 @@ async def admin_ops_gate(callback: CallbackQuery, state: FSMContext) -> None:
                 f"👤 {item.display_name or 'Клиент'}",
                 _ops_callback(
                     ctx,
-                    "payment-customer",
+                    "pay-customer",
                     admin.control._uuid_token(item.id),
                 ),
             )
             for item in customers[:20]
         ]
         customer_buttons.append(
-            ("Без привязки к клиенту", _ops_callback(ctx, "payment-customer", "none"))
+            ("Без привязки к клиенту", _ops_callback(ctx, "pay-customer", "none"))
         )
         await admin._safe_edit(
             callback,
@@ -867,29 +964,80 @@ async def admin_ops_gate(callback: CallbackQuery, state: FSMContext) -> None:
             ),
         )
         return
-    if action == "payment-customer":
+    if action in {"payment-customer", "pay-customer"}:
         raw_customer = payload[0] if payload else "none"
         customer_id = (
             None
             if raw_customer == "none"
             else admin.control._token_uuid(raw_customer)
         )
-        await state.set_state(ClientPlatformAdminOpsState.payment_value)
+        await state.clear()
         await state.update_data(
             cpao_business_id=ctx.business_id,
             cpao_payment_customer_id=customer_id,
         )
-        await admin._safe_edit(
+        prices = await _optional_thread(
+            admin_ops.list_offering_prices,
+            default=[],
+            actor=ctx.actor,
+        )
+        if prices:
+            buttons = [
+                (
+                    f"{item.offering_title[:24]} · "
+                    f"{_money(item.amount_minor, item.currency)}",
+                    _ops_callback(
+                        ctx,
+                        "pay-offer",
+                        admin.control._uuid_token(item.offering_id),
+                    ),
+                )
+                for item in prices[:10]
+                if item.status == "active"
+            ]
+            buttons.append(
+                ("Без предложения", _ops_callback(ctx, "pay-offer", "none"))
+            )
+            await admin._safe_edit(
+                callback,
+                "💰 Зафиксировать оплату вручную\n\n"
+                "Выберите предложение. Его активная цена проверит валюту "
+                "перед сохранением факта оплаты.",
+                _flow_keyboard(
+                    admin,
+                    ctx,
+                    return_action="return-payments",
+                    extra=buttons,
+                ),
+            )
+            return
+        await _open_payment_value_step(
             callback,
-            "💰 Зафиксировать оплату вручную\n\n"
-            "Отправьте: сумма, валюта и комментарий.\n"
-            "Например: 3500 RUB консультация.\n"
-            "Для отмены отправьте /cancel.",
-            _flow_keyboard(
-                admin,
-                ctx,
-                return_action="return-payments",
-            ),
+            state,
+            admin=admin,
+            ctx=ctx,
+            customer_id=customer_id,
+            offering_id=None,
+        )
+        return
+    if action == "pay-offer":
+        data = await state.get_data()
+        if "cpao_payment_customer_id" not in data:
+            await callback.answer("Сценарий оплаты устарел", show_alert=True)
+            return
+        raw_offering = payload[0] if payload else "none"
+        offering_id = (
+            None
+            if raw_offering == "none"
+            else admin.control._token_uuid(raw_offering)
+        )
+        await _open_payment_value_step(
+            callback,
+            state,
+            admin=admin,
+            ctx=ctx,
+            customer_id=data.get("cpao_payment_customer_id"),
+            offering_id=offering_id,
         )
         return
     if action == "price-set":
@@ -976,8 +1124,10 @@ async def receive_payment_value(message: Message, state: FSMContext) -> None:
             admin_ops.record_payment,
             actor=ctx.actor,
             amount_minor=amount_minor,
+            idempotency_key=_telegram_payment_idempotency_key(message),
             currency=currency,
             customer_id=data.get("cpao_payment_customer_id"),
+            offering_id=data.get("cpao_payment_offering_id"),
             note=note,
         )
     except TenantPermissionDenied:
@@ -987,8 +1137,15 @@ async def receive_payment_value(message: Message, state: FSMContext) -> None:
         )
         return
     await state.clear()
+    outcome_id = getattr(payment, "outcome_event_id", None)
+    evidence = (
+        " Канонический факт выручки подтверждён."
+        if outcome_id is not None
+        else ""
+    )
     await message.answer(
         f"✅ Оплата сохранена: {_money(payment.amount_minor, payment.currency)}."
+        f"{evidence}"
     )
     admin = importlib.import_module(".clientplatform_admin", __package__)
     await admin.send_admin_panel(

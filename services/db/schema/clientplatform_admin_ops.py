@@ -102,6 +102,39 @@ def ensure(c: sqlite3.Connection) -> None:
     )
     c.execute(
         """
+        CREATE TABLE IF NOT EXISTS business_payment_outcome_evidence(
+            business_id TEXT NOT NULL,
+            payment_id TEXT NOT NULL,
+            operation TEXT NOT NULL,
+            idempotency_key TEXT NOT NULL,
+            request_fingerprint TEXT NOT NULL,
+            outcome_event_id TEXT NOT NULL,
+            offering_id TEXT,
+            provider TEXT NOT NULL,
+            external_reference TEXT,
+            recorded_by_member_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY(business_id, idempotency_key),
+            UNIQUE(business_id, payment_id, operation),
+            UNIQUE(business_id, outcome_event_id),
+            UNIQUE(business_id, operation, provider, external_reference),
+            FOREIGN KEY(payment_id, business_id)
+                REFERENCES business_payments(id, business_id) ON DELETE CASCADE,
+            FOREIGN KEY(business_id, outcome_event_id)
+                REFERENCES business_outcome_events(business_id, id) ON DELETE RESTRICT,
+            FOREIGN KEY(offering_id, business_id)
+                REFERENCES business_offerings(id, business_id),
+            FOREIGN KEY(recorded_by_member_id, business_id)
+                REFERENCES business_members(id, business_id),
+            CHECK(operation IN ('paid', 'refund')),
+            CHECK(length(trim(idempotency_key)) BETWEEN 1 AND 200),
+            CHECK(length(request_fingerprint) = 64),
+            CHECK(length(trim(provider)) BETWEEN 1 AND 40)
+        )
+        """
+    )
+    c.execute(
+        """
         CREATE TABLE IF NOT EXISTS business_subscription_state(
             business_id TEXT PRIMARY KEY,
             plan_key TEXT NOT NULL,
@@ -205,6 +238,12 @@ def ensure(c: sqlite3.Connection) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_business_prices_status
         ON business_offering_prices(business_id, status, updated_at)
+        """
+    )
+    c.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_business_payment_evidence_payment
+        ON business_payment_outcome_evidence(business_id, payment_id, operation)
         """
     )
     c.execute(
