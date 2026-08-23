@@ -722,32 +722,44 @@ ClientPlatform напоминает и возвращает лидов, не п�
 
 ---
 
-## U-010 — `NEXT` — Retention & Reactivation Engine
+## U-010 — `DONE` — Retention & Reactivation Engine
 
 ### Цель
 
 ClientPlatform должен зарабатывать владельцу не только первым лидом, но и повторными продажами.
 
-### Cohorts
+### Каноническая реализация первого vertical
+
+U-010 завершён расширением существующих customer, sales, follow-up, outcome и revenue-attribution контуров, без отдельной CRM, sender, outcome ledger или второго retention brain:
 
 ```text
-no-show
-stale lead
+clientplatform/domain/retention.py
+clientplatform/application/retention.py
+clientplatform/infrastructure/retention_repository.py
+clientplatform/infrastructure/sales_repository.py
+handlers/clientplatform_sales.py
+handlers/clientplatform_sales_operations.py
+```
+
+### Cohorts первого vertical
+
+```text
 one-time customer
 inactive customer
-program dropped
-subscription/payment lapsed
-high-value returning customer
 ```
+
+`no-show`, `stale lead`, `program dropped`, `subscription/payment lapsed` и `high-value returning customer` остаются последующими расширениями только после появления достаточных канонических фактов. Они не должны вычисляться из догадок, prompt memory или параллельного хранилища.
 
 ### Возможности
 
-- deterministic cohort builder;
-- suggested reactivation action;
-- owner approval/autopilot policy;
-- message/content/offer variants;
-- reactivation outcome + revenue attribution;
-- stop rules.
+- deterministic cohort builder на canonical customer/outcome facts;
+- понятное suggested reactivation action в owner UI;
+- повторная server-side проверка exact cohort перед owner-approved mutation;
+- materialization в существующий sales lead с `contact_basis=existing_customer` и stable evidence cycle;
+- выбор только безопасного активного Telegram/VK/MAX route либо честная ручная работа;
+- approval сам ничего не отправляет: внешнее сообщение остаётся за U-009 follow-up/outbox и AutomationPolicy boundary;
+- атомарные `order_paid` + `customer_reactivated` outcomes, exact money/currency и существующая revenue attribution;
+- business-scoped idempotency, tenant isolation, LOST reopen/WON terminal и stop/cancel follow-up rules.
 
 ### Метрики
 
@@ -761,6 +773,14 @@ incremental reactivation revenue
 ### DONE когда
 
 Можно доказать реальный цикл `inactive customer → action → return → outcome/revenue`.
+
+### Evidence
+
+- PR #208 (`U-010: add deterministic retention cohorts`) merged в `main` как `c87a4de62b6ef931686b39a7bb891fa394d0fa7d`.
+- PR #209 (`U-010: add owner-approved reactivation work`) merged в `main` как `6ba76983c255ed70486ce38803c4f3dfd002aa3d`; exact head `8922e217dbfd7a61bb922f3b8a0753344cce2745` включает owner action, outcome/revenue loop и coverage ratchet.
+- Все 15 обязательных PR workflows на exact head завершились `success`, включая Canon, CI quality/coverage, Critical Static Surface, Pre-deploy Release Gate, Production Isolation, Encrypted Backup, User Scenario Matrix и concurrency contours.
+- Coverage ratchets повышены и зафиксированы на `74.61%` combined / `65.62%` branch.
+- Regression coverage доказывает deterministic cohorts, stale/cross-tenant rejection, replay/conflicting-money semantics, exact RUB minor units, atomic rollback, canonical WON evidence и остановку уже запланированного follow-up/outbox после подтверждённого возврата.
 
 ---
 
@@ -808,7 +828,51 @@ Exit criteria:
 
 После M1–M3 ClientPlatform должен стать системой ежедневного управления доходом малого бизнеса.
 
-## 9.1. Commerce / Orders / Payments
+## 9.1. M4-001 — `NEXT` — Customer Payment Evidence Bridge
+
+### Цель
+
+Устранить разрыв между существующим tenant-scoped `business_payments` owner-контуром и каноническим outcome/revenue spine. Подтверждённая оплата клиента специалисту должна становиться одним воспроизводимым денежным фактом, а не отдельной цифрой в админке.
+
+### Первый vertical
+
+```text
+active business customer
+→ owner/provider payment confirmation
+→ one durable business payment
+→ one order_paid outcome
+→ existing revenue attribution when evidence permits
+→ explicit refund_recorded/reversal path
+→ owner sees an explainable result
+```
+
+### Границы
+
+- расширить существующие `business_payments`, `business_offering_prices` и outcome/revenue modules; перед созданием новых файлов повторно проверить current `main`;
+- не смешивать оплату клиента специалисту с legacy/platform subscription payments в `services/payments/*`;
+- деньги только integer minor units + ISO currency;
+- business-scoped idempotency обязателен для owner retry и provider callback;
+- повтор exact request возвращает тот же результат, conflicting replay fail-closed;
+- payment/refund state и outcome evidence меняются атомарно либо не меняются совсем;
+- customer/offering/payment всегда разрешаются внутри server-authorized business scope;
+- provider подтверждает внешний факт, но не становится источником внутренней order/payment policy.
+
+### Tests / gates
+
+- payment happy path и exact replay;
+- conflicting replay;
+- refund/reversal и запрет double refund;
+- transaction rollback without orphan payment/outcome;
+- cross-tenant customer/offering/payment rejection;
+- concurrent duplicate owner/provider confirmation;
+- mixed/unknown currency fail-closed;
+- existing U-001/U-003/U-008/U-010 и payment regression contours green.
+
+### DONE когда
+
+Одна подтверждённая клиентская оплата создаёт ровно один tenant-scoped payment и ровно один связанный `order_paid` outcome, безопасно переживает retry/concurrency/restart, а возврат отражается отдельным каноническим денежным фактом без двойного учёта.
+
+### Последующие Commerce / Orders / Payments capabilities
 
 Перед добавлением новых файлов найти current canonical payment/order modules и расширять их.
 
@@ -1489,7 +1553,8 @@ Duplicate tap, retry, worker restart или uncertain provider response не д�
 | U-007 Zero-to-First-Outcome Onboarding | DONE | PR #198; merge SHA `26ea24496ebcca37c5e6e0f04ac4814d5175d965`; all 15 required PR workflows success on `25de33dc42b5a97475bb12c306e925628d88d576`; coverage ratchets raised to 74.30% combined / 65.33% branch |
 | U-008 CRM Lead Inbox | DONE | PR #203; merge SHA `7492ca6f1ac6bd3e00526dac80c6d0cba32ad2cd`; all 15 required PR workflows success on `8d46867f2ce0a176b26e8af53e3d2dcea26362b5`; combined coverage baseline 74.30%, branch baseline raised to 65.35%; canonical sales contour extended without `crm.py` or second sales storage |
 | U-009 Follow-up Employee | DONE | PR #207; merge SHA `6436e88de24b5b9caa9e06182ff1b190bfb91865`; all 15 PR workflows green; production smoke `u008-u009-sales-operations-v2` rollback-clean |
-| U-010 Retention & Reactivation Engine | NEXT | deterministic cohort/read-model implementation started from production SHA `6436e88de24b5b9caa9e06182ff1b190bfb91865` |
+| U-010 Retention & Reactivation Engine | DONE | PR #208 merge SHA `c87a4de62b6ef931686b39a7bb891fa394d0fa7d`; PR #209 merge SHA `6ba76983c255ed70486ce38803c4f3dfd002aa3d`; all 15 required workflows success on exact head `8922e217dbfd7a61bb922f3b8a0753344cce2745`; coverage raised to 74.61% combined / 65.62% branch; canonical sales/follow-up/outcome/revenue contours extended without a second retention brain |
+| M4-001 Customer Payment Evidence Bridge | NEXT | extend the existing tenant payment + outcome/revenue spine; do not merge customer commerce with ClientPlatform subscription billing |
 
 ---
 
