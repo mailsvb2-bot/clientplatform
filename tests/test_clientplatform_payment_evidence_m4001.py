@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import threading
+from unittest import TestCase, mock
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
-
-import pytest
 
 from clientplatform.application import admin_ops
 from clientplatform.application.activity import (
@@ -35,6 +34,7 @@ from services.db import get_db, get_db_ro
 
 
 _NOW = datetime(2026, 8, 23, 12, 0, tzinfo=timezone.utc)
+_ASSERTIONS = TestCase()
 
 
 def _business(user_id: int, name: str):
@@ -205,9 +205,9 @@ def test_provider_confirmation_exact_replay_and_revenue_bridge() -> None:
     }
     assert dict(revenue) == {"amount_minor": 50_000, "currency": "RUB"}
 
-    with pytest.raises(PaymentIdempotencyConflict):
+    with _ASSERTIONS.assertRaises(PaymentIdempotencyConflict):
         record_payment(**{**request, "amount_minor": 50_001})
-    with pytest.raises(PaymentIdempotencyConflict):
+    with _ASSERTIONS.assertRaises(PaymentIdempotencyConflict):
         record_payment(
             **{
                 **request,
@@ -241,14 +241,14 @@ def test_provider_evidence_mismatch_fails_closed() -> None:
             (actor.business_id, payment.id),
         )
 
-    with pytest.raises(
+    with _ASSERTIONS.assertRaisesRegex(
         PaymentEvidenceInvariantViolation,
-        match="provider evidence disagrees",
+        "provider evidence disagrees",
     ):
         record_payment(**request)
-    with pytest.raises(
+    with _ASSERTIONS.assertRaisesRegex(
         PaymentEvidenceInvariantViolation,
-        match="provider evidence disagrees",
+        "provider evidence disagrees",
     ):
         refund_payment(
             actor=actor,
@@ -305,9 +305,9 @@ def test_refund_is_separate_money_fact_and_double_refund_fails_closed() -> None:
         ("refund_recorded", -25_000),
     ]
 
-    with pytest.raises(PaymentIdempotencyConflict):
+    with _ASSERTIONS.assertRaises(PaymentIdempotencyConflict):
         refund_payment(**{**request, "reason": "Changed reason"})
-    with pytest.raises(PaymentStateConflict):
+    with _ASSERTIONS.assertRaises(PaymentStateConflict):
         refund_payment(
             **{
                 **request,
@@ -317,29 +317,26 @@ def test_refund_is_separate_money_fact_and_double_refund_fails_closed() -> None:
     assert _business_payment_counts(actor.business_id) == (1, 2, 2, 2)
 
 
-def test_payment_outcome_and_audit_roll_back_together(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_payment_outcome_and_audit_roll_back_together() -> None:
     actor, _offering, customer = _business(840003, "rollback")
-    original = admin_ops.RevenueAttributionRepository.materialize_outcome
 
     def fail_materialization(*_args, **_kwargs):
         raise RuntimeError("forced revenue materialization failure")
 
-    monkeypatch.setattr(
+    with mock.patch.object(
         admin_ops.RevenueAttributionRepository,
         "materialize_outcome",
         fail_materialization,
-    )
-    with pytest.raises(RuntimeError, match="forced revenue"):
-        record_payment(
-            actor=actor,
-            customer_id=customer.id,
-            amount_minor=11_000,
-            currency="RUB",
-            idempotency_key="rollback-payment-840003",
-            now=_NOW,
-        )
+    ):
+        with _ASSERTIONS.assertRaisesRegex(RuntimeError, "forced revenue"):
+            record_payment(
+                actor=actor,
+                customer_id=customer.id,
+                amount_minor=11_000,
+                currency="RUB",
+                idempotency_key="rollback-payment-840003",
+                now=_NOW,
+            )
 
     assert _business_payment_counts(actor.business_id) == (0, 0, 0, 0)
     with get_db_ro() as conn:
@@ -353,11 +350,6 @@ def test_payment_outcome_and_audit_roll_back_together(
         ).fetchone()["c"]
     assert audit_count == 0
 
-    monkeypatch.setattr(
-        admin_ops.RevenueAttributionRepository,
-        "materialize_outcome",
-        original,
-    )
     recovered = record_payment(
         actor=actor,
         customer_id=customer.id,
@@ -374,7 +366,7 @@ def test_customer_offering_payment_and_idempotency_are_tenant_scoped() -> None:
     first, first_offering, first_customer = _business(840004, "first-tenant")
     second, _second_offering, second_customer = _business(840005, "second-tenant")
 
-    with pytest.raises(ValueError, match="active customer"):
+    with _ASSERTIONS.assertRaisesRegex(ValueError, "active customer"):
         record_payment(
             actor=second,
             customer_id=first_customer.id,
@@ -382,7 +374,7 @@ def test_customer_offering_payment_and_idempotency_are_tenant_scoped() -> None:
             currency="RUB",
             idempotency_key="shared-business-key",
         )
-    with pytest.raises(ValueError, match="active offering"):
+    with _ASSERTIONS.assertRaisesRegex(ValueError, "active offering"):
         record_payment(
             actor=second,
             customer_id=second_customer.id,
@@ -410,7 +402,7 @@ def test_customer_offering_payment_and_idempotency_are_tenant_scoped() -> None:
     assert len(list_payments(actor=first)) == 1
     assert len(list_payments(actor=second)) == 1
 
-    with pytest.raises(ValueError, match="not found in this business"):
+    with _ASSERTIONS.assertRaisesRegex(ValueError, "not found in this business"):
         refund_payment(
             actor=second,
             payment_id=first_payment.id,
@@ -429,7 +421,7 @@ def test_offering_currency_and_unknown_currency_fail_closed_without_orphans() ->
         currency="RUB",
     )
 
-    with pytest.raises(PaymentStateConflict, match="offering price"):
+    with _ASSERTIONS.assertRaisesRegex(PaymentStateConflict, "offering price"):
         record_payment(
             actor=actor,
             customer_id=customer.id,
@@ -438,7 +430,7 @@ def test_offering_currency_and_unknown_currency_fail_closed_without_orphans() ->
             currency="USD",
             idempotency_key="mixed-currency-payment",
         )
-    with pytest.raises(ValueError, match="known ISO 4217"):
+    with _ASSERTIONS.assertRaisesRegex(ValueError, "known ISO 4217"):
         record_payment(
             actor=actor,
             customer_id=customer.id,
@@ -446,7 +438,7 @@ def test_offering_currency_and_unknown_currency_fail_closed_without_orphans() ->
             currency="ZZZ",
             idempotency_key="unknown-currency-payment",
         )
-    with pytest.raises(ValueError, match="known ISO 4217"):
+    with _ASSERTIONS.assertRaisesRegex(ValueError, "known ISO 4217"):
         record_payment(
             actor=actor,
             customer_id=customer.id,
@@ -454,7 +446,7 @@ def test_offering_currency_and_unknown_currency_fail_closed_without_orphans() ->
             currency="XXX",
             idempotency_key="no-currency-payment",
         )
-    with pytest.raises(ValueError, match="three Latin"):
+    with _ASSERTIONS.assertRaisesRegex(ValueError, "three Latin"):
         record_payment(
             actor=actor,
             customer_id=customer.id,
@@ -462,7 +454,7 @@ def test_offering_currency_and_unknown_currency_fail_closed_without_orphans() ->
             currency="",
             idempotency_key="missing-currency-payment",
         )
-    with pytest.raises(ValueError, match="amount_minor"):
+    with _ASSERTIONS.assertRaisesRegex(ValueError, "amount_minor"):
         record_payment(
             actor=actor,
             customer_id=customer.id,
@@ -470,7 +462,7 @@ def test_offering_currency_and_unknown_currency_fail_closed_without_orphans() ->
             currency="RUB",
             idempotency_key="fractional-minor-units",
         )
-    with pytest.raises(ValueError, match="external_reference"):
+    with _ASSERTIONS.assertRaisesRegex(ValueError, "external_reference"):
         record_payment(
             actor=actor,
             customer_id=customer.id,
@@ -552,7 +544,10 @@ def test_legacy_payment_without_outcome_cannot_be_silently_refunded() -> None:
             ),
         )
 
-    with pytest.raises(PaymentEvidenceInvariantViolation, match="no canonical"):
+    with _ASSERTIONS.assertRaisesRegex(
+        PaymentEvidenceInvariantViolation,
+        "no canonical",
+    ):
         refund_payment(
             actor=actor,
             payment_id=payment_id,
