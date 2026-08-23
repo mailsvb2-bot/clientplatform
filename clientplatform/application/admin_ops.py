@@ -75,6 +75,7 @@ _KNOWN_ISO_CURRENCIES = frozenset(
     XPD XPF XPT XSU XTS XUA XXX YER ZAR ZMW ZWG
     """.split()
 )
+_NON_SETTLEMENT_ISO_CODES = frozenset({"XTS", "XXX"})
 _IDEMPOTENCY_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$")
 _PROVIDER_RE = re.compile(r"^[a-z][a-z0-9._-]{0,39}$")
 
@@ -264,7 +265,10 @@ def _currency(value: object) -> str:
     normalized = str(value or "").strip().upper()
     if not _CURRENCY_RE.fullmatch(normalized):
         raise ValueError("currency must contain exactly three Latin letters")
-    if normalized not in _KNOWN_ISO_CURRENCIES:
+    if (
+        normalized not in _KNOWN_ISO_CURRENCIES
+        or normalized in _NON_SETTLEMENT_ISO_CODES
+    ):
         raise ValueError("currency must be a known ISO 4217 code")
     return normalized
 
@@ -761,6 +765,13 @@ def _validate_payment_outcome(
     payment: PaymentRecord,
     evidence: _PaymentEvidence,
 ) -> None:
+    if evidence.operation == "paid" and (
+        evidence.provider != payment.provider
+        or evidence.external_reference != payment.external_reference
+    ):
+        raise PaymentEvidenceInvariantViolation(
+            "payment provider evidence disagrees with the durable payment"
+        )
     event = OutcomeRepository(conn).get(
         business_id=evidence.business_id,
         event_id=evidence.outcome_event_id,

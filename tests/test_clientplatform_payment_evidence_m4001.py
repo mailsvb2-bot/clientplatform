@@ -217,6 +217,47 @@ def test_provider_confirmation_exact_replay_and_revenue_bridge() -> None:
     assert _business_payment_counts(actor.business_id) == (1, 1, 1, 1)
 
 
+def test_provider_evidence_mismatch_fails_closed() -> None:
+    actor, _offering, customer = _business(840009, "provider-invariant")
+    request = {
+        "actor": actor,
+        "customer_id": customer.id,
+        "amount_minor": 12_000,
+        "currency": "RUB",
+        "provider": "customer_acquirer",
+        "external_reference": "payment-event-840009",
+        "idempotency_key": "provider-payment-event-840009",
+        "now": _NOW,
+    }
+    payment = record_payment(**request)
+
+    with get_db() as conn:
+        conn.execute(
+            """
+            UPDATE business_payments
+            SET provider='tampered_provider'
+            WHERE business_id=? AND id=?
+            """,
+            (actor.business_id, payment.id),
+        )
+
+    with pytest.raises(
+        PaymentEvidenceInvariantViolation,
+        match="provider evidence disagrees",
+    ):
+        record_payment(**request)
+    with pytest.raises(
+        PaymentEvidenceInvariantViolation,
+        match="provider evidence disagrees",
+    ):
+        refund_payment(
+            actor=actor,
+            payment_id=payment.id,
+            idempotency_key="provider-invariant-refund",
+        )
+    assert _business_payment_counts(actor.business_id)[:3] == (1, 1, 1)
+
+
 def test_refund_is_separate_money_fact_and_double_refund_fails_closed() -> None:
     actor, _offering, customer = _business(840002, "refund")
     _attach_first_touch(
@@ -405,6 +446,14 @@ def test_offering_currency_and_unknown_currency_fail_closed_without_orphans() ->
             currency="ZZZ",
             idempotency_key="unknown-currency-payment",
         )
+    with pytest.raises(ValueError, match="known ISO 4217"):
+        record_payment(
+            actor=actor,
+            customer_id=customer.id,
+            amount_minor=18_000,
+            currency="XXX",
+            idempotency_key="no-currency-payment",
+        )
     with pytest.raises(ValueError, match="three Latin"):
         record_payment(
             actor=actor,
@@ -420,6 +469,15 @@ def test_offering_currency_and_unknown_currency_fail_closed_without_orphans() ->
             amount_minor=18_000.5,  # type: ignore[arg-type]
             currency="RUB",
             idempotency_key="fractional-minor-units",
+        )
+    with pytest.raises(ValueError, match="external_reference"):
+        record_payment(
+            actor=actor,
+            customer_id=customer.id,
+            amount_minor=18_000,
+            currency="RUB",
+            provider="customer_acquirer",
+            idempotency_key="provider-without-reference",
         )
     assert _business_payment_counts(actor.business_id) == (0, 0, 0, 0)
 

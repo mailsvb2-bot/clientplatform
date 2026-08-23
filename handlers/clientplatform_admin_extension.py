@@ -917,13 +917,20 @@ async def admin_ops_gate(callback: CallbackQuery, state: FSMContext) -> None:
         return
     if action == "pay-refund-ok":
         payment_id = admin.control._token_uuid(payload[0])
-        refunded = await asyncio.to_thread(
-            admin_ops.refund_payment,
-            actor=ctx.actor,
-            payment_id=payment_id,
-            idempotency_key=f"telegram-refund:{payment_id}",
-            reason="owner_confirmed_full_refund",
-        )
+        try:
+            refunded = await asyncio.to_thread(
+                admin_ops.refund_payment,
+                actor=ctx.actor,
+                payment_id=payment_id,
+                idempotency_key=f"telegram-refund:{payment_id}",
+                reason="owner_confirmed_full_refund",
+            )
+        except (admin_ops.PaymentIdempotencyConflict, admin_ops.PaymentStateConflict):
+            await callback.answer(
+                "Возврат уже выполнен или больше недоступен",
+                show_alert=True,
+            )
+            return
         await callback.answer(
             f"Возврат {_money(refunded.amount_minor, refunded.currency)} сохранён"
         )
@@ -1136,6 +1143,9 @@ async def receive_payment_value(message: Message, state: FSMContext) -> None:
             "Для вашей роли финансовые данные доступны только для просмотра."
         )
         return
+    except ValueError as exc:
+        await message.answer(f"Оплата не сохранена: {exc}.")
+        return
     await state.clear()
     outcome_id = getattr(payment, "outcome_event_id", None)
     evidence = (
@@ -1177,6 +1187,9 @@ async def receive_price_value(message: Message, state: FSMContext) -> None:
         await message.answer(
             "Для вашей роли финансовые данные доступны только для просмотра."
         )
+        return
+    except ValueError as exc:
+        await message.answer(f"Цена не сохранена: {exc}.")
         return
     await state.clear()
     await message.answer(

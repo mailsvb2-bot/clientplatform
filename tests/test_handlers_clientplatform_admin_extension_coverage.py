@@ -516,6 +516,44 @@ async def test_payment_and_price_input_handlers_cover_invalid_and_success(
 
 
 @pytest.mark.asyncio
+async def test_payment_and_price_input_handlers_explain_domain_validation(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_admin: FakeAdmin,
+    ctx: Any,
+) -> None:
+    async def context_from_state(*_args: Any) -> Any:
+        return ctx
+
+    def reject_payment(**_kwargs: Any) -> None:
+        raise ValueError("currency must be a known ISO 4217 code")
+
+    def reject_price(**_kwargs: Any) -> None:
+        raise ValueError("offering is archived")
+
+    monkeypatch.setattr(extension, "_context_from_state", context_from_state)
+    monkeypatch.setattr(extension.admin_ops, "record_payment", reject_payment)
+    payment_state = FakeState({"cpao_business_id": "business-id"})
+    payment = FakeMessage("3500 XXX")
+    await extension.receive_payment_value(payment, payment_state)
+    assert payment.answers == [
+        "Оплата не сохранена: currency must be a known ISO 4217 code."
+    ]
+    assert payment_state.clear_count == 0
+
+    monkeypatch.setattr(extension.admin_ops, "set_offering_price", reject_price)
+    price_state = FakeState(
+        {
+            "cpao_business_id": "business-id",
+            "cpao_offering_id": "offering-id",
+        }
+    )
+    price = FakeMessage("5000 RUB")
+    await extension.receive_price_value(price, price_state)
+    assert price.answers == ["Цена не сохранена: offering is archived."]
+    assert price_state.clear_count == 0
+
+
+@pytest.mark.asyncio
 async def test_payment_refund_requires_confirmation_and_is_idempotent(
     monkeypatch: pytest.MonkeyPatch,
     fake_admin: FakeAdmin,
@@ -551,6 +589,21 @@ async def test_payment_refund_requires_confirmation_and_is_idempotent(
         }
     ]
     assert callback.answers == [("Возврат 350,00 RUB сохранён", False)]
+    assert rendered == ["payments"]
+
+    def reject_second_refund(**_kwargs: Any) -> None:
+        raise extension.admin_ops.PaymentStateConflict("payment is not refundable")
+
+    monkeypatch.setattr(
+        extension.admin_ops,
+        "refund_payment",
+        reject_second_refund,
+    )
+    second_callback = _callback("pay-refund-ok", "payment")
+    await extension.admin_ops_gate(second_callback, state)
+    assert second_callback.answers == [
+        ("Возврат уже выполнен или больше недоступен", True)
+    ]
     assert rendered == ["payments"]
 
 
