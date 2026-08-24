@@ -206,7 +206,9 @@ class MaxBotSender:
                 code="max.config.ca_bundle_missing",
             )
         try:
-            return ssl.create_default_context(cafile=str(path))
+            context = ssl.create_default_context()
+            context.load_verify_locations(cafile=str(path))
+            return context
         except (OSError, ssl.SSLError) as exc:
             raise MessengerTransportError(
                 f"MAX_CA_BUNDLE is invalid: {type(exc).__name__}",
