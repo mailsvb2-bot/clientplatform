@@ -77,6 +77,7 @@ _POLICIES = (
     _required("connections", "retain", "business integration ownership, permissions and secret references"),
     _required("connection_credentials", "erase", "tenant-scoped encrypted VK/MAX provider and webhook credential material"),
     _required("messenger_ingress_routes", "erase", "tenant messenger callback route, connection binding and secret references"),
+    _required("native_messenger_provisioning_leases", "erase", "short-lived tenant provider-account setup serialization state"),
     _required("customer_channel_link_tokens", "erase", "short-lived customer-linked cross-channel identity grant digest and routing metadata"),
     _required("managed_bots", "retain", "business-owned bot identity and webhook secret reference"),
     _required("managed_bot_credentials", "erase", "tenant-scoped encrypted Telegram bot credential material"),

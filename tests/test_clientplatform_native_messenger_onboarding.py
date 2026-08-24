@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 import unittest
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 from clientplatform.application.native_messenger_onboarding import (
@@ -10,6 +12,11 @@ from clientplatform.application.native_messenger_onboarding import (
     provision_vk_channel,
 )
 from clientplatform.infrastructure.managed_bot_credentials import InMemoryManagedBotCredentialVault
+from clientplatform.infrastructure.native_messenger_provisioning_repository import (
+    NativeMessengerProvisioningBusy,
+    NativeMessengerProvisioningLeaseLost,
+    NativeMessengerProvisioningRepository,
+)
 from clientplatform.infrastructure.safe_tenancy_repository import TenancyRepository
 from services.db.schema import (
     clientplatform_connections,
@@ -52,6 +59,25 @@ class _FakeVkSender:
     async def ensure_callback_server(self, *, group_id: str, url: str, secret: str):
         self.callback = (str(group_id), url, secret)
         return 77
+
+
+class _BlockingVkSender(_FakeVkSender):
+    def __init__(self, *, started: asyncio.Event, release: asyncio.Event) -> None:
+        super().__init__()
+        self.started = started
+        self.release = release
+        self.callback_calls = 0
+
+    async def ensure_callback_server(self, *, group_id: str, url: str, secret: str):
+        self.callback_calls += 1
+        self.started.set()
+        await self.release.wait()
+        return await super().ensure_callback_server(
+            group_id=group_id,
+            url=url,
+            secret=secret,
+        )
+
 
 class NativeMessengerOnboardingTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
@@ -131,6 +157,28 @@ class NativeMessengerOnboardingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(connection["status"], "disabled")
         self.assertEqual(route["status"], "disabled")
 
+    async def test_max_reprovisioning_preserves_registered_webhook_secret(self) -> None:
+        first_sender = _FakeMaxSender()
+        second_sender = _FakeMaxSender()
+        with self._db_patch():
+            first = await provision_max_channel(
+                actor=self.actor,
+                provider_token="first-max-token",
+                public_base_url="https://client.example.test",
+                sender=first_sender,
+                credential_vault=self.vault,
+            )
+            second = await provision_max_channel(
+                actor=self.actor,
+                provider_token="second-max-token",
+                public_base_url="https://client.example.test",
+                sender=second_sender,
+                credential_vault=self.vault,
+            )
+
+        self.assertEqual(first.route.id, second.route.id)
+        self.assertEqual(first_sender.subscription[1], second_sender.subscription[1])
+
     async def test_vk_verifies_group_and_configures_tenant_scoped_callback(self) -> None:
         sender = _FakeVkSender()
         with self._db_patch():
@@ -159,6 +207,102 @@ class NativeMessengerOnboardingTests(unittest.IsolatedAsyncioTestCase):
             purposes,
             {"provider_token", "webhook_secret", "confirmation_code"},
         )
+
+    async def test_vk_reprovisioning_reuses_secret_instead_of_rotating_it(self) -> None:
+        first_sender = _FakeVkSender()
+        second_sender = _FakeVkSender()
+        with self._db_patch():
+            first = await provision_vk_channel(
+                actor=self.actor,
+                group_id="238191212",
+                provider_token="first-vk-token",
+                public_base_url="https://client.example.test",
+                sender=first_sender,
+                credential_vault=self.vault,
+            )
+            second = await provision_vk_channel(
+                actor=self.actor,
+                group_id="238191212",
+                provider_token="second-vk-token",
+                public_base_url="https://client.example.test",
+                sender=second_sender,
+                credential_vault=self.vault,
+            )
+
+        self.assertEqual(first.route.id, second.route.id)
+        self.assertEqual(first_sender.callback[2], second_sender.callback[2])
+        self.assertEqual(
+            self.conn.execute(
+                "SELECT COUNT(*) FROM native_messenger_provisioning_leases"
+            ).fetchone()[0],
+            0,
+        )
+
+    async def test_parallel_vk_provisioning_is_rejected_before_provider_mutation(self) -> None:
+        started = asyncio.Event()
+        release = asyncio.Event()
+        first_sender = _BlockingVkSender(started=started, release=release)
+        competing_sender = _FakeVkSender()
+        with self._db_patch():
+            first_task = asyncio.get_running_loop().create_task(
+                provision_vk_channel(
+                    actor=self.actor,
+                    group_id="238191212",
+                    provider_token="first-vk-token",
+                    public_base_url="https://client.example.test",
+                    sender=first_sender,
+                    credential_vault=self.vault,
+                )
+            )
+            await started.wait()
+            try:
+                with self.assertRaisesRegex(
+                    NativeMessengerProvisioningBusy,
+                    "already in progress",
+                ):
+                    await provision_vk_channel(
+                        actor=self.actor,
+                        group_id="238191212",
+                        provider_token="competing-vk-token",
+                        public_base_url="https://client.example.test",
+                        sender=competing_sender,
+                        credential_vault=self.vault,
+                    )
+            finally:
+                release.set()
+            await first_task
+
+        self.assertEqual(first_sender.callback_calls, 1)
+        self.assertIsNone(competing_sender.callback)
+
+    def test_expired_provisioning_lease_is_recoverable_and_fenced(self) -> None:
+        repository = NativeMessengerProvisioningRepository(self.conn)
+        clock = datetime(2026, 8, 24, 8, 0, tzinfo=timezone.utc)
+        first = repository.acquire(
+            actor=self.actor,
+            platform="max",
+            external_account_id="880001",
+            now=clock,
+            lease_seconds=60,
+        )
+        with self.assertRaises(NativeMessengerProvisioningBusy):
+            repository.acquire(
+                actor=self.actor,
+                platform="max",
+                external_account_id="880001",
+                now=clock + timedelta(seconds=59),
+                lease_seconds=60,
+            )
+        recovered = repository.acquire(
+            actor=self.actor,
+            platform="max",
+            external_account_id="880001",
+            now=clock + timedelta(seconds=60),
+            lease_seconds=60,
+        )
+        with self.assertRaises(NativeMessengerProvisioningLeaseLost):
+            repository.release(first)
+        repository.release(recovered)
 
 
 if __name__ == "__main__":

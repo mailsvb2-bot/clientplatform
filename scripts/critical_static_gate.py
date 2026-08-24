@@ -78,7 +78,9 @@ _CLIENTPLATFORM_YANDEX_ANALYTICS_FILES = (
 TYPE_CONTRACT_FILES = (
     "check_db.py",
     "clientplatform/application/ad_oauth_sessions.py",
+    "clientplatform/application/native_messenger_onboarding.py",
     "clientplatform/infrastructure/ad_oauth_session_store.py",
+    "clientplatform/infrastructure/native_messenger_provisioning_repository.py",
     "dashboard/sla_dashboard.py",
     "dashboard/sla_retention_money.py",
     "handlers/clientplatform_booking_wizard_ux.py",
@@ -135,7 +137,9 @@ TYPE_CONTRACT_FILES = (
 SECURITY_SCAN_PATHS = (
     "check_db.py",
     "clientplatform/application/ad_oauth_sessions.py",
+    "clientplatform/application/native_messenger_onboarding.py",
     "clientplatform/infrastructure/ad_oauth_session_store.py",
+    "clientplatform/infrastructure/native_messenger_provisioning_repository.py",
     "clientplatform/integrations/yandex_screen_code.py",
     "dashboard/sla_dashboard.py",
     "dashboard/sla_retention_money.py",

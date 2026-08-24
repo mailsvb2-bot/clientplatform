@@ -85,6 +85,30 @@ def ensure(c: sqlite3.Connection) -> None:
     )
     c.execute(
         """
+        CREATE TABLE IF NOT EXISTS native_messenger_provisioning_leases(
+            business_id TEXT NOT NULL,
+            platform TEXT NOT NULL,
+            external_account_id TEXT NOT NULL,
+            lease_token TEXT NOT NULL,
+            acquired_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            PRIMARY KEY(business_id, platform, external_account_id),
+            FOREIGN KEY(business_id) REFERENCES businesses(id) ON DELETE CASCADE,
+            CHECK(platform IN ('vk','max')),
+            CHECK(length(external_account_id)>0),
+            CHECK(length(lease_token)=36),
+            CHECK(expires_at>=acquired_at)
+        )
+        """
+    )
+    c.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_native_messenger_provisioning_expiry
+        ON native_messenger_provisioning_leases(expires_at)
+        """
+    )
+    c.execute(
+        """
         CREATE INDEX IF NOT EXISTS idx_customer_channel_links_business_customer
         ON customer_channel_link_tokens(business_id, customer_id, expires_at)
         """

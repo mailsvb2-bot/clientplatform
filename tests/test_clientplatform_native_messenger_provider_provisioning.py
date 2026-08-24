@@ -30,22 +30,68 @@ class NativeMessengerProviderProvisioningTests(unittest.IsolatedAsyncioTestCase)
 
     async def test_max_subscription_uses_secret_and_customer_event_types(self) -> None:
         sender = MaxBotSender(token="provider-token", api_base_url=MAX_API2_BASE_URL)
+        target = "https://client.example.test/clientplatform/webhooks/max/route"
         with patch(
             "runtime.messenger_max_sender.json_request",
-            return_value={"success": True},
+            side_effect=[
+                {"subscriptions": []},
+                {"success": True},
+                {"subscriptions": [{"url": target}]},
+            ],
         ) as request:
             await sender.ensure_webhook_subscription(
-                url="https://client.example.test/clientplatform/webhooks/max/route",
+                url=target,
                 secret="safe_secret-12345",
             )
 
-        payload = request.call_args.kwargs["payload"]
+        calls = request.call_args_list
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(calls[0].kwargs["method"], "GET")
+        self.assertEqual(calls[2].kwargs["method"], "GET")
+        payload = calls[1].kwargs["payload"]
         self.assertEqual(payload["secret"], "safe_secret-12345")
         self.assertEqual(
             payload["update_types"],
             ["message_created", "message_callback", "bot_started"],
         )
-        self.assertEqual(request.call_args.kwargs["headers"], {"Authorization": "provider-token"})
+        self.assertEqual(calls[1].kwargs["headers"], {"Authorization": "provider-token"})
+
+    async def test_max_subscription_reuses_existing_url_without_duplicate_post(self) -> None:
+        sender = MaxBotSender(token="provider-token", api_base_url=MAX_API2_BASE_URL)
+        target = "https://client.example.test/clientplatform/webhooks/max/route"
+        with patch(
+            "runtime.messenger_max_sender.json_request",
+            return_value={"subscriptions": [{"url": target + "/"}]},
+        ) as request:
+            result = await sender.ensure_webhook_subscription(
+                url=target,
+                secret="safe_secret-12345",
+            )
+
+        self.assertTrue(result["already_present"])
+        request.assert_called_once()
+        self.assertEqual(request.call_args.kwargs["method"], "GET")
+        self.assertIsNone(request.call_args.kwargs["payload"])
+
+    async def test_max_subscription_reconciliation_accepts_provider_list_shapes(self) -> None:
+        sender = MaxBotSender(token="provider-token", api_base_url=MAX_API2_BASE_URL)
+        target = "https://client.example.test/clientplatform/webhooks/max/route"
+        payloads = (
+            [{"url": target}],
+            {"items": [{"url": target}]},
+            {"data": [{"url": target}]},
+        )
+        for payload in payloads:
+            with self.subTest(payload=payload), patch(
+                "runtime.messenger_max_sender.json_request",
+                return_value=payload,
+            ) as request:
+                result = await sender.ensure_webhook_subscription(
+                    url=target,
+                    secret="safe_secret-12345",
+                )
+            self.assertTrue(result["already_present"])
+            request.assert_called_once()
 
     async def test_max_provisioning_rejects_invalid_local_and_provider_contracts(self) -> None:
         sender = MaxBotSender(token="provider-token", api_base_url=MAX_API2_BASE_URL)
@@ -81,9 +127,26 @@ class NativeMessengerProviderProvisioningTests(unittest.IsolatedAsyncioTestCase)
                 await sender.get_me()
         with patch(
             "runtime.messenger_max_sender.json_request",
-            return_value={"success": False, "code": "rejected"},
+            side_effect=[
+                {"subscriptions": []},
+                {"success": False, "code": "rejected"},
+            ],
         ):
             with self.assertRaisesRegex(MessengerTransportError, "subscription"):
+                await sender.ensure_webhook_subscription(
+                    url="https://client.example.test/hook",
+                    secret="safe_secret-12345",
+                )
+
+        with patch(
+            "runtime.messenger_max_sender.json_request",
+            side_effect=[
+                {"subscriptions": []},
+                {"success": True},
+                {"subscriptions": []},
+            ],
+        ):
+            with self.assertRaisesRegex(MessengerTransportError, "subscription_verify"):
                 await sender.ensure_webhook_subscription(
                     url="https://client.example.test/hook",
                     secret="safe_secret-12345",

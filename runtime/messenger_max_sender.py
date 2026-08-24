@@ -87,6 +87,32 @@ def _max_error(operation: str, code: str) -> MessengerTransportError:
     )
 
 
+def _max_subscription_urls(data: Any) -> tuple[str, ...] | None:
+    subscriptions: Any
+    if isinstance(data, list):
+        subscriptions = data
+    elif isinstance(data, dict):
+        if data.get("error"):
+            return None
+        subscriptions = data.get("subscriptions")
+        if subscriptions is None:
+            subscriptions = data.get("items")
+        if subscriptions is None:
+            subscriptions = data.get("data")
+    else:
+        return None
+    if not isinstance(subscriptions, list):
+        return None
+    urls: list[str] = []
+    for item in subscriptions:
+        if not isinstance(item, dict):
+            return None
+        url = str(item.get("url") or "").strip().rstrip("/")
+        if url:
+            urls.append(url)
+    return tuple(urls)
+
+
 def _legacy_max_ui():
     """Load Metrotherapy presentation helpers only for legacy UI calls.
 
@@ -233,19 +259,44 @@ class MaxBotSender:
         if not events or any(not item for item in events):
             raise ValueError("MAX webhook update types must not be empty")
         token = self._token()
+        headers = {"Authorization": token}
+        subscriptions_url = f"{self._api_base()}/subscriptions"
+        ssl_context = self._ssl_context()
+        try:
+            existing = await asyncio.to_thread(
+                json_request,
+                subscriptions_url,
+                method="GET",
+                headers=headers,
+                payload=None,
+                retries=1,
+                ssl_context=ssl_context,
+            )
+        except ProviderPermanentHTTPError as exc:
+            raise self._permanent_http_error(exc) from exc
+        existing_urls = _max_subscription_urls(existing)
+        if existing_urls is None:
+            raise _max_error(
+                "subscription_list",
+                _max_error_code(existing) or "provider_response_invalid",
+            )
+        normalized_target = target.rstrip("/")
+        if normalized_target in existing_urls:
+            return {"success": True, "already_present": True}
+
         try:
             data = await asyncio.to_thread(
                 json_request,
-                f"{self._api_base()}/subscriptions",
+                subscriptions_url,
                 method="POST",
-                headers={"Authorization": token},
+                headers=headers,
                 payload={
                     "url": target,
                     "update_types": list(events),
                     "secret": clean_secret,
                 },
                 retries=1,
-                ssl_context=self._ssl_context(),
+                ssl_context=ssl_context,
             )
         except ProviderPermanentHTTPError as exc:
             raise self._permanent_http_error(exc) from exc
@@ -253,6 +304,24 @@ class MaxBotSender:
             raise _max_error(
                 "subscription",
                 _max_error_code(data) or "provider_rejected",
+            )
+        try:
+            verified = await asyncio.to_thread(
+                json_request,
+                subscriptions_url,
+                method="GET",
+                headers=headers,
+                payload=None,
+                retries=1,
+                ssl_context=ssl_context,
+            )
+        except ProviderPermanentHTTPError as exc:
+            raise self._permanent_http_error(exc) from exc
+        verified_urls = _max_subscription_urls(verified)
+        if verified_urls is None or normalized_target not in verified_urls:
+            raise _max_error(
+                "subscription_verify",
+                _max_error_code(verified) or "subscription_not_visible",
             )
         return data
 

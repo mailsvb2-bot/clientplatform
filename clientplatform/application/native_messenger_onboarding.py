@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import secrets
 from dataclasses import dataclass
+from typing import Any
 from urllib.parse import urlsplit
 
 from clientplatform.domain.connections import (
@@ -21,6 +22,10 @@ from clientplatform.infrastructure.managed_bot_credentials import (
 )
 from clientplatform.infrastructure.messenger_channel_repository import (
     MessengerChannelRepository,
+)
+from clientplatform.infrastructure.native_messenger_provisioning_repository import (
+    NativeMessengerProvisioningLease,
+    NativeMessengerProvisioningRepository,
 )
 from runtime.messenger_max_sender import MaxBotSender
 from runtime.messenger_vk_sender import VkBotSender
@@ -53,6 +58,36 @@ def _webhook_secret() -> str:
 def _webhook_url(base_url: str, platform: ConnectionPlatform, route_id: str) -> str:
     return f"{base_url}/clientplatform/webhooks/{platform.value}/{route_id}"
 
+
+def _existing_webhook_secret(
+    *,
+    conn: Any,
+    credentials: ConnectionCredentialStore,
+    actor: TenantContext,
+    platform: ConnectionPlatform,
+    external_account_id: str,
+) -> str | None:
+    row = conn.execute(
+        """
+        SELECT r.webhook_secret_reference
+        FROM messenger_ingress_routes r
+        JOIN connections c
+          ON c.id=r.connection_id AND c.business_id=r.business_id
+         AND c.platform=r.platform
+        WHERE r.business_id=? AND r.platform=? AND r.external_route_id=?
+          AND r.status!='revoked' AND c.status!='revoked'
+        LIMIT 1
+        """,
+        (actor.business_id, platform.value, external_account_id),
+    ).fetchone()
+    if row is None:
+        return None
+    reference = str(
+        row["webhook_secret_reference"] if hasattr(row, "keys") else row[0]
+    )
+    return credentials.resolve(reference)
+
+
 def _persist_native_connection(
     *,
     actor: TenantContext,
@@ -63,7 +98,7 @@ def _persist_native_connection(
     webhook_secret: str,
     confirmation_code: str | None,
     credential_vault: ManagedBotCredentialVault | None,
-) -> tuple[Connection, MessengerIngressRoute]:
+) -> tuple[Connection, MessengerIngressRoute, str]:
     with get_db() as conn:
         credentials = ConnectionCredentialStore(conn, vault=credential_vault)
         token_reference = credentials.put(
@@ -73,12 +108,19 @@ def _persist_native_connection(
             purpose="provider_token",
             plaintext=provider_token,
         )
+        persisted_webhook_secret = _existing_webhook_secret(
+            conn=conn,
+            credentials=credentials,
+            actor=actor,
+            platform=platform,
+            external_account_id=external_account_id,
+        ) or webhook_secret
         webhook_reference = credentials.put(
             actor=actor,
             platform=platform,
             external_account_id=external_account_id,
             purpose="webhook_secret",
-            plaintext=webhook_secret,
+            plaintext=persisted_webhook_secret,
         )
         confirmation_reference = None
         if confirmation_code is not None:
@@ -121,7 +163,35 @@ def _persist_native_connection(
         )
         if route.status != "active":
             route = routes.activate_route(actor=actor, route_id=route.id)
-        return connection, route
+        return connection, route, persisted_webhook_secret
+
+
+def _acquire_provisioning_lease(
+    *,
+    actor: TenantContext,
+    platform: ConnectionPlatform,
+    external_account_id: str,
+) -> NativeMessengerProvisioningLease:
+    with get_db() as conn:
+        return NativeMessengerProvisioningRepository(conn).acquire(
+            actor=actor,
+            platform=platform,
+            external_account_id=external_account_id,
+        )
+
+
+def _release_provisioning_lease(
+    lease: NativeMessengerProvisioningLease,
+) -> None:
+    with get_db() as conn:
+        NativeMessengerProvisioningRepository(conn).release(lease)
+
+
+def _release_provisioning_lease_if_owned(
+    lease: NativeMessengerProvisioningLease,
+) -> None:
+    with get_db() as conn:
+        NativeMessengerProvisioningRepository(conn).release_if_owned(lease)
 
 
 def _disable_after_provider_failure(
@@ -129,8 +199,10 @@ def _disable_after_provider_failure(
     actor: TenantContext,
     connection_id: str,
     route_id: str,
+    lease: NativeMessengerProvisioningLease,
 ) -> None:
     with get_db() as conn:
+        NativeMessengerProvisioningRepository(conn).assert_owned(lease)
         routes = MessengerChannelRepository(conn)
         connections = ConnectionRepository(conn)
         try:
@@ -140,6 +212,7 @@ def _disable_after_provider_failure(
                 actor=actor,
                 connection_id=connection_id,
             )
+
 
 async def provision_max_channel(
     *,
@@ -156,46 +229,62 @@ async def provision_max_channel(
     provider = sender or MaxBotSender(token=token)
     identity = await provider.get_me()
     external_account_id = str(identity.get("user_id") or "").strip()
-    webhook_secret = _webhook_secret()
-    connection, route = _persist_native_connection(
+    lease = _acquire_provisioning_lease(
         actor=actor,
         platform=ConnectionPlatform.MAX,
-        connection_type=ConnectionType.MAX_PERSONAL_BOT,
         external_account_id=external_account_id,
-        provider_token=token,
-        webhook_secret=webhook_secret,
-        confirmation_code=None,
-        credential_vault=credential_vault,
     )
-    webhook_url = _webhook_url(base_url, ConnectionPlatform.MAX, route.id)
+    released = False
     try:
-        await provider.ensure_webhook_subscription(
-            url=webhook_url,
-            secret=webhook_secret,
-        )
-    except (OSError, ValueError):
-        _disable_after_provider_failure(
+        connection, route, webhook_secret = _persist_native_connection(
             actor=actor,
-            connection_id=connection.id,
-            route_id=route.id,
+            platform=ConnectionPlatform.MAX,
+            connection_type=ConnectionType.MAX_PERSONAL_BOT,
+            external_account_id=external_account_id,
+            provider_token=token,
+            webhook_secret=_webhook_secret(),
+            confirmation_code=None,
+            credential_vault=credential_vault,
         )
-        raise
-    except RuntimeError:
-        _disable_after_provider_failure(
-            actor=actor,
-            connection_id=connection.id,
-            route_id=route.id,
+        webhook_url = _webhook_url(base_url, ConnectionPlatform.MAX, route.id)
+        try:
+            await provider.ensure_webhook_subscription(
+                url=webhook_url,
+                secret=webhook_secret,
+            )
+        except (OSError, ValueError):
+            _disable_after_provider_failure(
+                actor=actor,
+                connection_id=connection.id,
+                route_id=route.id,
+                lease=lease,
+            )
+            raise
+        except RuntimeError:
+            _disable_after_provider_failure(
+                actor=actor,
+                connection_id=connection.id,
+                route_id=route.id,
+                lease=lease,
+            )
+            raise
+        _release_provisioning_lease(lease)
+        released = True
+        display_name = (
+            str(identity.get("first_name") or identity.get("name") or "").strip()
+            or None
         )
-        raise
-    display_name = str(identity.get("first_name") or identity.get("name") or "").strip() or None
-    username = str(identity.get("username") or "").strip() or None
-    return NativeMessengerConnection(
-        connection=connection,
-        route=route,
-        webhook_url=webhook_url,
-        display_name=display_name,
-        username=username,
-    )
+        username = str(identity.get("username") or "").strip() or None
+        return NativeMessengerConnection(
+            connection=connection,
+            route=route,
+            webhook_url=webhook_url,
+            display_name=display_name,
+            username=username,
+        )
+    finally:
+        if not released:
+            _release_provisioning_lease_if_owned(lease)
 
 
 async def provision_vk_channel(
@@ -219,45 +308,58 @@ async def provision_vk_channel(
     confirmation_code = await provider.get_callback_confirmation_code(
         normalized_group_id
     )
-    webhook_secret = _webhook_secret()
-    connection, route = _persist_native_connection(
+    lease = _acquire_provisioning_lease(
         actor=actor,
         platform=ConnectionPlatform.VK,
-        connection_type=ConnectionType.VK_COMMUNITY,
         external_account_id=normalized_group_id,
-        provider_token=token,
-        webhook_secret=webhook_secret,
-        confirmation_code=confirmation_code,
-        credential_vault=credential_vault,
     )
-    webhook_url = _webhook_url(base_url, ConnectionPlatform.VK, route.id)
+    released = False
     try:
-        await provider.ensure_callback_server(
-            group_id=normalized_group_id,
-            url=webhook_url,
-            secret=webhook_secret,
-        )
-    except (OSError, ValueError):
-        _disable_after_provider_failure(
+        connection, route, webhook_secret = _persist_native_connection(
             actor=actor,
-            connection_id=connection.id,
-            route_id=route.id,
+            platform=ConnectionPlatform.VK,
+            connection_type=ConnectionType.VK_COMMUNITY,
+            external_account_id=normalized_group_id,
+            provider_token=token,
+            webhook_secret=_webhook_secret(),
+            confirmation_code=confirmation_code,
+            credential_vault=credential_vault,
         )
-        raise
-    except RuntimeError:
-        _disable_after_provider_failure(
-            actor=actor,
-            connection_id=connection.id,
-            route_id=route.id,
+        webhook_url = _webhook_url(base_url, ConnectionPlatform.VK, route.id)
+        try:
+            await provider.ensure_callback_server(
+                group_id=normalized_group_id,
+                url=webhook_url,
+                secret=webhook_secret,
+            )
+        except (OSError, ValueError):
+            _disable_after_provider_failure(
+                actor=actor,
+                connection_id=connection.id,
+                route_id=route.id,
+                lease=lease,
+            )
+            raise
+        except RuntimeError:
+            _disable_after_provider_failure(
+                actor=actor,
+                connection_id=connection.id,
+                route_id=route.id,
+                lease=lease,
+            )
+            raise
+        _release_provisioning_lease(lease)
+        released = True
+        display_name = str(group.get("name") or "").strip() or None
+        return NativeMessengerConnection(
+            connection=connection,
+            route=route,
+            webhook_url=webhook_url,
+            display_name=display_name,
         )
-        raise
-    display_name = str(group.get("name") or "").strip() or None
-    return NativeMessengerConnection(
-        connection=connection,
-        route=route,
-        webhook_url=webhook_url,
-        display_name=display_name,
-    )
+    finally:
+        if not released:
+            _release_provisioning_lease_if_owned(lease)
 
 
 __all__ = [
