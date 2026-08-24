@@ -52,21 +52,21 @@ def _reserve_max_provider_slot(item: Any, *, now: float | None = None) -> float:
 
         # Keep long-lived workers bounded without deleting an active reservation.
         if len(_next_dialog_write_at) > 4096:
-            expired = [
-                key
-                for key, value in _next_dialog_write_at.items()
-                if value <= observed and key != dialog_key
+            expired_dialog_keys = [
+                candidate_dialog_key
+                for candidate_dialog_key, value in _next_dialog_write_at.items()
+                if value <= observed and candidate_dialog_key != dialog_key
             ]
-            for key in expired[:2048]:
-                _next_dialog_write_at.pop(key, None)
+            for expired_dialog_key in expired_dialog_keys[:2048]:
+                _next_dialog_write_at.pop(expired_dialog_key, None)
         if len(_next_connection_write_at) > 1024:
-            expired_connections = [
-                key
-                for key, value in _next_connection_write_at.items()
-                if value <= observed and key != connection_id
+            expired_connection_ids = [
+                candidate_connection_id
+                for candidate_connection_id, value in _next_connection_write_at.items()
+                if value <= observed and candidate_connection_id != connection_id
             ]
-            for key in expired_connections[:512]:
-                _next_connection_write_at.pop(key, None)
+            for expired_connection_id in expired_connection_ids[:512]:
+                _next_connection_write_at.pop(expired_connection_id, None)
 
     return max(0.0, target - observed)
 
