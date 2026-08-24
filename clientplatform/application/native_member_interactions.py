@@ -4,15 +4,22 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from clientplatform.application.activity import (
+    get_business_profile,
+    list_business_capabilities,
+)
 from clientplatform.application.bookings import list_booking_slots
 from clientplatform.application.connections import list_connections
 from clientplatform.application.control import business_delivery_summary
-from clientplatform.application.customers import list_customers
+from clientplatform.application.customers import get_customer, list_customers
 from clientplatform.application.programs import list_programs
+from clientplatform.application.progress import list_business_program_progress
 from clientplatform.application.tenancy import (
     list_accessible_businesses,
     resolve_tenant_context,
 )
+from clientplatform.domain.activity import CapabilityStatus
+from clientplatform.domain.bookings import BookingSlotStatus
 from clientplatform.domain.connections import ConnectionPlatform
 from clientplatform.domain.customer_interactions import (
     CustomerInteractionButton,
@@ -25,7 +32,7 @@ from clientplatform.domain.tenancy import (
     TenantContext,
     TenantPermissionDenied,
 )
-from clientplatform.infrastructure import DispatchOutboxRepository
+from clientplatform.infrastructure import DispatchOutboxRepository, TenancyRepository
 from services.accounts.identity import resolve_account_for_identity
 from services.db import get_db, get_db_ro
 from services.messenger.bridge import (
@@ -37,7 +44,7 @@ from services.messenger.entrypoints import parse_start_payload
 
 log = logging.getLogger(__name__)
 
-_CUSTOMER_RECORD_ROLES = frozenset(
+_SUPPORT_ROLES = frozenset(
     {
         PlatformRole.OWNER,
         PlatformRole.ADMINISTRATOR,
@@ -45,7 +52,34 @@ _CUSTOMER_RECORD_ROLES = frozenset(
         PlatformRole.SUPPORT,
     }
 )
+_MARKETING_ROLES = frozenset(
+    {
+        PlatformRole.OWNER,
+        PlatformRole.ADMINISTRATOR,
+        PlatformRole.MANAGER,
+        PlatformRole.MARKETER,
+        PlatformRole.ANALYST,
+    }
+)
+_CONTENT_ROLES = frozenset(
+    {
+        PlatformRole.OWNER,
+        PlatformRole.ADMINISTRATOR,
+        PlatformRole.MANAGER,
+        PlatformRole.CONTENT_MANAGER,
+        PlatformRole.MARKETER,
+    }
+)
+_AUTOMATION_ROLES = frozenset(
+    {
+        PlatformRole.OWNER,
+        PlatformRole.ADMINISTRATOR,
+        PlatformRole.MANAGER,
+        PlatformRole.MARKETER,
+    }
+)
 _CONNECTION_ROLES = frozenset({PlatformRole.OWNER, PlatformRole.ADMINISTRATOR})
+_OWNER_ROLES = frozenset({PlatformRole.OWNER})
 _ROLE_LABELS = {
     PlatformRole.OWNER: "Владелец",
     PlatformRole.ADMINISTRATOR: "Администратор",
@@ -62,6 +96,10 @@ _ALIASES = {
     "кабинет": "menu",
     "админ": "menu",
     "/admin": "menu",
+    "работа": "work",
+    "рост": "growth",
+    "управление": "manage",
+    "команда": "team",
     "сегодня": "today",
     "клиенты": "customers",
     "записи": "bookings",
@@ -89,6 +127,7 @@ class NativeMemberResolution:
 @dataclass(frozen=True, slots=True)
 class ParsedMemberInteraction:
     action: str
+    args: tuple[str, ...] = ()
 
 
 def _compact(value: object) -> str:
@@ -222,18 +261,47 @@ def parse_native_member_interaction(value: object) -> ParsedMemberInteraction:
     if alias is not None:
         return ParsedMemberInteraction(alias)
     if raw.casefold().startswith(_COMMAND_PREFIX):
-        action = raw[len(_COMMAND_PREFIX) :].split(":", 1)[0].strip().casefold()
+        parts = raw[len(_COMMAND_PREFIX) :].split(":")
+        action = parts[0].strip().casefold()
+        args = tuple(part.strip() for part in parts[1:] if part.strip())
         if action in {
             "menu",
+            "work",
+            "growth",
+            "manage",
+            "team",
             "today",
+            "today-full",
             "customers",
+            "customer",
             "bookings",
             "programs",
+            "behavior",
+            "attention",
             "messengers",
+            "autopilot",
+            "publications",
+            "funnel",
+            "money",
+            "payments",
+            "segments",
+            "offers",
+            "copy",
+            "prices",
+            "release",
+            "funnel2",
+            "retention",
+            "recent",
+            "system",
+            "formats",
+            "tariff",
+            "members",
+            "member",
+            "permissions",
             "connect-vk",
             "connect-max",
         }:
-            return ParsedMemberInteraction(action)
+            return ParsedMemberInteraction(action, args)
     return ParsedMemberInteraction("menu")
 
 
@@ -242,18 +310,15 @@ def _button(label: str, command: str) -> CustomerInteractionButton:
 
 
 def _menu_rows(role: PlatformRole) -> tuple[tuple[CustomerInteractionButton, ...], ...]:
-    rows: list[tuple[CustomerInteractionButton, ...]] = []
-    if role in _CUSTOMER_RECORD_ROLES:
-        rows.extend(
-            [
-                (_button("📊 Сегодня", "cpm:today"),),
-                (_button("👥 Клиенты", "cpm:customers"),),
-                (_button("📅 Записи", "cpm:bookings"),),
-            ]
-        )
-    rows.append((_button("📚 Программы", "cpm:programs"),))
+    rows: list[tuple[CustomerInteractionButton, ...]] = [
+        (_button("📊 Работа", "cpm:work"),),
+    ]
+    if role in (_MARKETING_ROLES | _CONTENT_ROLES | _AUTOMATION_ROLES):
+        rows.append((_button("📈 Рост", "cpm:growth"),))
     if role in _CONNECTION_ROLES:
-        rows.append((_button("💬 Мессенджеры", "cpm:messengers"),))
+        rows.append((_button("🛡 Управление", "cpm:manage"),))
+    if role in _OWNER_ROLES:
+        rows.append((_button("👥 Команда", "cpm:team"),))
     return tuple(rows)
 
 
@@ -303,6 +368,475 @@ def _permission_message() -> CustomerInteractionMessage:
     )
 
 
+def _stale_message() -> CustomerInteractionMessage:
+    return CustomerInteractionMessage(
+        text="Эта кнопка уже неактуальна. Откройте нужный раздел заново.",
+        rows=(_back_row(),),
+    )
+
+
+
+def _work_message(actor: TenantContext) -> CustomerInteractionMessage:
+    rows: list[tuple[CustomerInteractionButton, ...]] = []
+    if actor.role in _SUPPORT_ROLES:
+        rows.extend(
+            [
+                (_button("📊 Сегодня", "cpm:today"),),
+                (_button("📈 Сегодня подробно", "cpm:today-full"),),
+                (_button("👥 Клиенты", "cpm:customers:0"),),
+                (_button("📅 Записи", "cpm:bookings"),),
+                (_button("🧠 Поведение", "cpm:behavior"),),
+                (_button("⚠️ Требуют внимания", "cpm:attention"),),
+            ]
+        )
+    rows.append((_button("📚 Программы", "cpm:programs"),))
+    rows.append(_back_row())
+    return CustomerInteractionMessage(
+        text="Работа · ClientPlatform\n\nОперационные разделы бизнеса:",
+        rows=tuple(rows),
+    )
+
+
+def _growth_message(actor: TenantContext) -> CustomerInteractionMessage:
+    if actor.role not in (_MARKETING_ROLES | _CONTENT_ROLES | _AUTOMATION_ROLES):
+        return _permission_message()
+    rows: list[tuple[CustomerInteractionButton, ...]] = []
+    if actor.role in _AUTOMATION_ROLES:
+        rows.append((_button("🤖 Growth Autopilot", "cpm:autopilot"),))
+    if actor.role in _CONTENT_ROLES:
+        rows.append((_button("📣 Публикации", "cpm:publications"),))
+    if actor.role in _MARKETING_ROLES:
+        rows.extend(
+            [
+                (_button("📉 Путь до заявки", "cpm:funnel"),),
+                (_button("💰 Деньги и клиенты", "cpm:money"),),
+                (_button("💳 Оплаты", "cpm:payments"),),
+                (_button("🧲 Группы клиентов", "cpm:segments"),),
+            ]
+        )
+    if actor.role in (_CONTENT_ROLES | _MARKETING_ROLES):
+        rows.append((_button("🧪 Предложения", "cpm:offers"),))
+        rows.append((_button("✍️ Тексты", "cpm:copy"),))
+    if actor.role in _MARKETING_ROLES:
+        rows.append((_button("💡 Подсказка по ценам", "cpm:prices"),))
+    rows.append(_back_row())
+    return CustomerInteractionMessage(
+        text="Рост · ClientPlatform\n\nМаркетинг, воронка и удержание:",
+        rows=tuple(rows[:10]),
+    )
+
+
+def _manage_message(actor: TenantContext) -> CustomerInteractionMessage:
+    if actor.role not in _CONNECTION_ROLES:
+        return _permission_message()
+    rows: list[tuple[CustomerInteractionButton, ...]] = [
+        (_button("💬 Мессенджеры", "cpm:messengers"),),
+        (_button("🚦 Release gate", "cpm:release"),),
+        (_button("🧲 Воронка 2.0", "cpm:funnel2"),),
+        (_button("🧩 Удержание", "cpm:retention"),),
+        (_button("🧾 Последние действия", "cpm:recent"),),
+        (_button("🧪 Системные проверки", "cpm:system"),),
+        (_button("🧩 Форматы работы", "cpm:formats"),),
+    ]
+    if actor.role in _OWNER_ROLES:
+        rows.append((_button("💳 Тариф", "cpm:tariff"),))
+    rows.append(_back_row())
+    return CustomerInteractionMessage(
+        text="Управление · ClientPlatform\n\nСостояние, каналы и системные настройки:",
+        rows=tuple(rows),
+    )
+
+
+def _team_message(actor: TenantContext) -> CustomerInteractionMessage:
+    if actor.role not in _OWNER_ROLES:
+        return _permission_message()
+    return CustomerInteractionMessage(
+        text="Команда · ClientPlatform\n\nСотрудники, роли и доступы:",
+        rows=(
+            (_button("👥 Роли команды", "cpm:members:0"),),
+            (_button("🔐 Доступы сотрудников", "cpm:permissions"),),
+            _back_row(),
+        ),
+    )
+
+
+def _today_full_message(actor: TenantContext) -> CustomerInteractionMessage:
+    if actor.role not in _SUPPORT_ROLES:
+        return _permission_message()
+    profile = get_business_profile(actor=actor)
+    summary = business_delivery_summary(actor=actor)
+    capabilities = list_business_capabilities(actor=actor)
+    slots = list_booking_slots(actor=actor, include_unavailable=True)
+    progress = list_business_program_progress(actor=actor, limit=100)
+    active_capabilities = sum(item.status == CapabilityStatus.ACTIVE for item in capabilities)
+    open_slots = sum(item.slot.status == BookingSlotStatus.OPEN for item in slots)
+    completed = sum(item.completed_lessons for item in progress)
+    total = sum(item.total_lessons for item in progress)
+    return CustomerInteractionMessage(
+        text=(
+            "Сегодня · подробно\n\n"
+            f"Бизнес: {_business_name(actor)}\n"
+            f"Профиль: {profile.status.value}\n"
+            f"Клиентов: {summary.customers}\n"
+            f"Программ: {summary.programs}\n"
+            f"Форматов работы: {active_capabilities}\n"
+            f"Свободных времён: {open_slots}\n\n"
+            f"В очереди: {summary.dispatch_pending}\n"
+            f"Отправлено: {summary.dispatch_sent}\n"
+            f"Требуют внимания: {summary.dispatch_attention}\n"
+            f"Прохождение материалов: {completed}/{total}"
+        ),
+        rows=((_button("📊 Кратко", "cpm:today"),), _back_row()),
+    )
+
+
+def _page_number(args: tuple[str, ...], *, default: int = 0) -> int:
+    if not args:
+        return default
+    raw = args[0]
+    if not raw.isdigit():
+        raise ValueError("invalid native page")
+    page = int(raw)
+    if page < 0 or page > 10000:
+        raise ValueError("native page is outside range")
+    return page
+
+
+def _customer_message(actor: TenantContext, customer_id: str) -> CustomerInteractionMessage:
+    if actor.role not in _SUPPORT_ROLES:
+        return _permission_message()
+    record = get_customer(actor=actor, customer_id=customer_id)
+    identity_lines = [
+        (
+            f"• {item.platform.value}: @{item.username}"
+            if item.username
+            else f"• {item.platform.value}: {item.display_name or item.external_subject}"
+        )
+        for item in record.identities
+    ]
+    return CustomerInteractionMessage(
+        text=(
+            "Карточка клиента\n\n"
+            f"Имя: {record.customer.display_name or 'не указано'}\n"
+            f"Статус: {record.customer.status.value}\n"
+            f"Создан: {record.customer.created_at}\n\n"
+            "Контакты:\n"
+            + ("\n".join(identity_lines) if identity_lines else "• не подключены")
+        ),
+        rows=((_button("👥 К списку", "cpm:customers:0"),), _back_row()),
+    )
+
+
+def _behavior_message(actor: TenantContext) -> CustomerInteractionMessage:
+    if actor.role not in _SUPPORT_ROLES:
+        return _permission_message()
+    progress = list_business_program_progress(actor=actor, limit=25)
+    if not progress:
+        text = "Поведение\n\nПрохождение программ ещё не началось."
+    else:
+        lines = []
+        for item in progress[:15]:
+            name = item.customer_display_name or f"Клиент {item.customer_id[:8]}"
+            lines.append(
+                f"• {name}: «{item.program_title}» — "
+                f"{item.completed_lessons}/{item.total_lessons} ({item.percent_complete}%)"
+            )
+        text = "Поведение\n\n" + "\n".join(lines)
+    return CustomerInteractionMessage(text=text, rows=(_back_row(),))
+
+
+def _attention_message(actor: TenantContext) -> CustomerInteractionMessage:
+    if actor.role not in _SUPPORT_ROLES:
+        return _permission_message()
+    summary = business_delivery_summary(actor=actor)
+    text = (
+        "Требуют внимания\n\n"
+        f"Ошибки отправки: {summary.dispatch_attention}\n"
+        f"Ожидают отправки: {summary.dispatch_pending}\n\n"
+    )
+    text += (
+        "Нужно проверить неотправленные материалы и подключения."
+        if summary.dispatch_attention or summary.dispatch_pending
+        else "Сейчас критических задач нет."
+    )
+    return CustomerInteractionMessage(text=text, rows=(_back_row(),))
+
+
+def _growth_report_message(actor: TenantContext, action: str) -> CustomerInteractionMessage:
+    allowed = {
+        "autopilot": _AUTOMATION_ROLES,
+        "publications": _CONTENT_ROLES,
+        "funnel": _MARKETING_ROLES,
+        "money": _MARKETING_ROLES,
+        "payments": _MARKETING_ROLES,
+        "segments": _MARKETING_ROLES,
+        "offers": _CONTENT_ROLES | _MARKETING_ROLES,
+        "copy": _CONTENT_ROLES | _MARKETING_ROLES,
+        "prices": _MARKETING_ROLES,
+    }
+    if actor.role not in allowed[action]:
+        return _permission_message()
+    profile = get_business_profile(actor=actor)
+    summary = business_delivery_summary(actor=actor)
+    capabilities = list_business_capabilities(actor=actor)
+    slots = list_booking_slots(actor=actor, include_unavailable=True)
+    progress = list_business_program_progress(actor=actor, limit=100)
+    active = [item for item in capabilities if item.status == CapabilityStatus.ACTIVE]
+    enrolled = len({item.customer_id for item in progress})
+    completed = sum(
+        item.total_lessons > 0 and item.completed_lessons >= item.total_lessons
+        for item in progress
+    )
+    stalled = sum(item.total_lessons > item.completed_lessons for item in progress)
+    open_slots = sum(item.slot.status == BookingSlotStatus.OPEN for item in slots)
+    sections = {
+        "autopilot": (
+            "Growth Autopilot\n\n"
+            f"Форматов: {len(active)}\nПрограмм: {summary.programs}\n"
+            f"Очередь отправки: {summary.dispatch_pending}\n\n"
+            "Автопилот работает только в подтверждённых владельцем границах."
+        ),
+        "publications": (
+            "Публикации\n\nПубликационный контур ещё не подключён к этому бизнесу."
+        ),
+        "funnel": (
+            "Путь до заявки\n\n"
+            f"Клиенты: {summary.customers}\nВ программах: {enrolled}\n"
+            f"Завершили: {completed}\nСвободных записей: {open_slots}"
+        ),
+        "money": (
+            "Деньги и клиенты\n\n"
+            f"Активных клиентов: {summary.customers}\n"
+            f"Активных программ: {summary.programs}\n"
+            "Заказы и выручка появятся после подключения платёжного модуля."
+        ),
+        "payments": "Оплаты\n\nПлатёжная система бизнеса ещё не подключена.",
+        "segments": (
+            "Группы клиентов\n\n"
+            f"Все клиенты: {summary.customers}\nВ программах: {enrolled}\n"
+            f"Завершили: {completed}\nОстановились: {stalled}\n"
+            f"Без программы: {max(0, summary.customers - enrolled)}"
+        ),
+        "offers": (
+            "Проверка предложений\n\n"
+            f"Форматов работы: {len(active)}\nПрограмм: {summary.programs}\n\n"
+            "Сравнение предложений станет точнее после накопления заявок и оплат."
+        ),
+        "copy": (
+            "Подготовить тексты\n\n"
+            f"Описание бизнеса:\n{profile.activity_description}"
+        ),
+        "prices": (
+            "Подсказка по ценам\n\n"
+            "В предложениях пока нет структурированного поля цены."
+        ),
+    }
+    return CustomerInteractionMessage(
+        text=sections[action],
+        rows=((_button("📈 Рост", "cpm:growth"),), _back_row()),
+    )
+
+
+def _admin_report_message(actor: TenantContext, action: str) -> CustomerInteractionMessage:
+    if actor.role not in _CONNECTION_ROLES:
+        return _permission_message()
+    profile = get_business_profile(actor=actor)
+    summary = business_delivery_summary(actor=actor)
+    capabilities = list_business_capabilities(actor=actor)
+    slots = list_booking_slots(actor=actor, include_unavailable=True)
+    customers = list_customers(actor=actor)
+    programs = list_programs(actor=actor)
+    progress = list_business_program_progress(actor=actor, limit=100)
+    active = sum(item.status == CapabilityStatus.ACTIVE for item in capabilities)
+    open_slots = sum(item.slot.status == BookingSlotStatus.OPEN for item in slots)
+    enrolled = len({item.customer_id for item in progress})
+    complete = sum(
+        item.total_lessons > 0 and item.completed_lessons >= item.total_lessons
+        for item in progress
+    )
+    incomplete = [item for item in progress if item.completed_lessons < item.total_lessons]
+    recent_items = sorted(
+        [
+            (str(item.created_at), f"Клиент: {item.display_name or item.id[:8]}")
+            for item in customers
+        ]
+        + [(str(item.created_at), f"Программа: {item.title}") for item in programs]
+        + [(str(item.updated_at), f"Прогресс: {item.program_title}") for item in progress],
+        reverse=True,
+    )[:10]
+    release_ok = (
+        profile.status.value == "ready"
+        and active > 0
+        and summary.dispatch_attention == 0
+    )
+    sections = {
+        "release": (
+            "Release gate\n\n"
+            f"Профиль бизнеса: {'✅' if profile.status.value == 'ready' else '❌'}\n"
+            f"Форматы работы: {'✅' if active else '❌'}\n"
+            f"Ошибки отправки: {'✅' if summary.dispatch_attention == 0 else '❌'}\n\n"
+            f"Итог: {'ГОТОВО' if release_ok else 'ТРЕБУЕТ НАСТРОЙКИ'}"
+        ),
+        "funnel2": (
+            "Воронка 2.0\n\n"
+            f"Клиенты: {summary.customers}\nВ программах: {enrolled}\n"
+            f"Завершили: {complete}\nДоступных записей: {open_slots}\n"
+            f"Отправлено материалов: {summary.dispatch_sent}"
+        ),
+        "retention": (
+            "Удержание\n\n"
+            f"Клиентов всего: {summary.customers}\n"
+            f"Незавершённых прохождений: {len(incomplete)}\n"
+            f"Без активной программы: {max(0, summary.customers - enrolled)}"
+        ),
+        "recent": (
+            "Последние действия\n\n"
+            + (
+                "\n".join(f"• {label} — {stamp}" for stamp, label in recent_items)
+                if recent_items
+                else "Действий пока нет."
+            )
+        ),
+        "system": (
+            "Системные проверки\n\n"
+            "Tenant-доступ: ✅\nPostgreSQL-чтение: ✅\n"
+            f"Профиль бизнеса: {'✅' if profile.status.value == 'ready' else '⚠️'}\n"
+            f"Очередь отправки: {'✅' if summary.dispatch_attention == 0 else '⚠️'}\n"
+            f"Программы: {summary.programs}\nКлиенты: {summary.customers}"
+        ),
+    }
+    return CustomerInteractionMessage(
+        text=sections[action],
+        rows=((_button("🛡 Управление", "cpm:manage"),), _back_row()),
+    )
+
+
+def _formats_message(actor: TenantContext) -> CustomerInteractionMessage:
+    if actor.role not in _CONNECTION_ROLES:
+        return _permission_message()
+    capabilities = list_business_capabilities(actor=actor, include_disabled=True)
+    lines = [
+        f"{'✅' if item.status == CapabilityStatus.ACTIVE else '➖'} {item.title}"
+        for item in capabilities
+    ]
+    return CustomerInteractionMessage(
+        text="Форматы работы\n\n" + ("\n".join(lines) if lines else "Форматы ещё не выбраны."),
+        rows=((_button("🛡 Управление", "cpm:manage"),), _back_row()),
+    )
+
+
+def _tariff_message(actor: TenantContext) -> CustomerInteractionMessage:
+    if actor.role not in _OWNER_ROLES:
+        return _permission_message()
+    return CustomerInteractionMessage(
+        text=(
+            "Тариф ClientPlatform\n\n"
+            "Тарифный модуль пока не активирован для этого бизнеса. "
+            "Текущие данные и настройки продолжают работать."
+        ),
+        rows=((_button("🛡 Управление", "cpm:manage"),), _back_row()),
+    )
+
+
+def _list_members(actor: TenantContext) -> list[dict[str, Any]]:
+    if actor.role not in _OWNER_ROLES:
+        raise TenantPermissionDenied("team section is owner-only")
+    with get_db_ro() as conn:
+        current = TenancyRepository(conn).resolve_context(
+            user_id=actor.user_id,
+            business_id=actor.business_id,
+        )
+        current.assert_can_manage_business()
+        rows = conn.execute(
+            """
+            SELECT user_id, role, status
+            FROM business_members
+            WHERE business_id=?
+            ORDER BY CASE WHEN role='owner' THEN 0 ELSE 1 END, created_at, id
+            """,
+            (current.business_id,),
+        ).fetchall()
+    return [
+        {
+            "user_id": int(row["user_id"] if hasattr(row, "keys") else row[0]),
+            "role": str(row["role"] if hasattr(row, "keys") else row[1]),
+            "status": str(row["status"] if hasattr(row, "keys") else row[2]),
+        }
+        for row in rows
+    ]
+
+
+def _members_message(actor: TenantContext, page: int) -> CustomerInteractionMessage:
+    members = _list_members(actor)
+    page_size = 7
+    count = max(1, (len(members) + page_size - 1) // page_size)
+    if page >= count:
+        raise ValueError("member page is outside result set")
+    current = members[page * page_size : (page + 1) * page_size]
+    rows: list[tuple[CustomerInteractionButton, ...]] = []
+    lines: list[str] = []
+    for item in current:
+        role = PlatformRole(item["role"])
+        marker = "✅" if item["status"] == "active" else "➖"
+        label = f"{marker} {item['user_id']} · {_ROLE_LABELS.get(role, role.value)}"
+        lines.append(f"• {label}")
+        rows.append((_button(label, f"cpm:member:{item['user_id']}"),))
+    navigation: list[CustomerInteractionButton] = []
+    if page > 0:
+        navigation.append(_button("⬅️ Назад", f"cpm:members:{page - 1}"))
+    if page + 1 < count:
+        navigation.append(_button("Вперёд ➡️", f"cpm:members:{page + 1}"))
+    if navigation:
+        rows.append(tuple(navigation))
+    rows.append((_button("👥 Команда", "cpm:team"),))
+    rows.append(_back_row())
+    return CustomerInteractionMessage(
+        text=(
+            "Роли команды\n\n"
+            + ("\n".join(lines) if lines else "Сотрудников пока нет.")
+            + f"\n\nСтраница {page + 1}/{count}"
+        ),
+        rows=tuple(rows),
+    )
+
+
+def _member_message(actor: TenantContext, user_id: int) -> CustomerInteractionMessage:
+    member = next((item for item in _list_members(actor) if item["user_id"] == user_id), None)
+    if member is None:
+        raise ValueError("member was not found")
+    role = PlatformRole(member["role"])
+    return CustomerInteractionMessage(
+        text=(
+            "Сотрудник\n\n"
+            f"Account ID: {user_id}\n"
+            f"Роль: {_ROLE_LABELS.get(role, role.value)}\n"
+            f"Статус: {member['status']}"
+        ),
+        rows=((_button("👥 К команде", "cpm:members:0"),), _back_row()),
+    )
+
+
+def _permissions_message(actor: TenantContext) -> CustomerInteractionMessage:
+    if actor.role not in _OWNER_ROLES:
+        return _permission_message()
+    permissions = {
+        PlatformRole.OWNER: "Все разделы, сотрудники, клиенты, подключения",
+        PlatformRole.ADMINISTRATOR: "Бизнес, клиенты, аналитика, подключения",
+        PlatformRole.MANAGER: "Клиенты, записи, программы, операционная аналитика",
+        PlatformRole.CONTENT_MANAGER: "Программы, материалы, публикации",
+        PlatformRole.MARKETER: "Воронки, сегменты, предложения, маркетинг",
+        PlatformRole.ANALYST: "Отчёты, воронки, удержание",
+        PlatformRole.SUPPORT: "Клиенты, проблемные отправки, поддержка",
+    }
+    lines = [
+        f"{_ROLE_LABELS[role]}: {text}"
+        for role, text in permissions.items()
+    ]
+    return CustomerInteractionMessage(
+        text="Доступы сотрудников\n\n" + "\n\n".join(lines),
+        rows=((_button("👥 Команда", "cpm:team"),), _back_row()),
+    )
+
 def _today_message(actor: TenantContext) -> CustomerInteractionMessage:
     summary = business_delivery_summary(actor=actor)
     return CustomerInteractionMessage(
@@ -315,29 +849,45 @@ def _today_message(actor: TenantContext) -> CustomerInteractionMessage:
             + f"Требуют внимания: {summary.dispatch_attention}"
         ),
         rows=(
-            (_button("👥 Клиенты", "cpm:customers"),),
+            (_button("👥 Клиенты", "cpm:customers:0"),),
             (_button("📅 Записи", "cpm:bookings"),),
             _back_row(),
         ),
     )
 
 
-def _customers_message(actor: TenantContext) -> CustomerInteractionMessage:
+def _customers_message(actor: TenantContext, page: int = 0) -> CustomerInteractionMessage:
+    if actor.role not in _SUPPORT_ROLES:
+        return _permission_message()
     customers = list_customers(actor=actor)
-    if not customers:
-        text = "Активных клиентов пока нет."
-    else:
-        lines = []
-        for customer in customers[:12]:
-            name = str(customer.display_name or "").strip() or f"Клиент {customer.id[:8]}"
-            lines.append(f"• {name}")
-        suffix = (
-            f"\n\nПоказаны первые 12 из {len(customers)}."
-            if len(customers) > 12
-            else ""
-        )
-        text = "Клиенты\n\n" + "\n".join(lines) + suffix
-    return CustomerInteractionMessage(text=text, rows=(_back_row(),))
+    page_size = 7
+    count = max(1, (len(customers) + page_size - 1) // page_size)
+    if page >= count:
+        raise ValueError("customer page is outside result set")
+    current = customers[page * page_size : (page + 1) * page_size]
+    rows: list[tuple[CustomerInteractionButton, ...]] = []
+    lines: list[str] = []
+    for customer in current:
+        name = str(customer.display_name or "").strip() or f"Клиент {customer.id[:8]}"
+        lines.append(f"• {name}")
+        rows.append((_button(name, f"cpm:customer:{customer.id}"),))
+    navigation: list[CustomerInteractionButton] = []
+    if page > 0:
+        navigation.append(_button("⬅️ Назад", f"cpm:customers:{page - 1}"))
+    if page + 1 < count:
+        navigation.append(_button("Вперёд ➡️", f"cpm:customers:{page + 1}"))
+    if navigation:
+        rows.append(tuple(navigation))
+    rows.append((_button("📊 Работа", "cpm:work"),))
+    rows.append(_back_row())
+    return CustomerInteractionMessage(
+        text=(
+            "Клиенты\n\n"
+            + ("\n".join(lines) if lines else "Активных клиентов пока нет.")
+            + f"\n\nСтраница {page + 1}/{count}"
+        ),
+        rows=tuple(rows),
+    )
 
 
 def _bookings_message(actor: TenantContext) -> CustomerInteractionMessage:
@@ -465,19 +1015,67 @@ def _render(
     if parsed.action == "menu":
         return _menu_message(actor, linked=linked)
     try:
+        if parsed.action == "work":
+            return _work_message(actor)
+        if parsed.action == "growth":
+            return _growth_message(actor)
+        if parsed.action == "manage":
+            return _manage_message(actor)
+        if parsed.action == "team":
+            return _team_message(actor)
         if parsed.action == "today":
+            if actor.role not in _SUPPORT_ROLES:
+                return _permission_message()
             return _today_message(actor)
+        if parsed.action == "today-full":
+            return _today_full_message(actor)
         if parsed.action == "customers":
-            return _customers_message(actor)
+            return _customers_message(actor, _page_number(parsed.args))
+        if parsed.action == "customer":
+            if len(parsed.args) != 1:
+                return _stale_message()
+            return _customer_message(actor, parsed.args[0])
         if parsed.action == "bookings":
+            if actor.role not in _SUPPORT_ROLES:
+                return _permission_message()
             return _bookings_message(actor)
         if parsed.action == "programs":
             return _programs_message(actor)
+        if parsed.action == "behavior":
+            return _behavior_message(actor)
+        if parsed.action == "attention":
+            return _attention_message(actor)
         if parsed.action == "messengers":
             return _messengers_message(
                 actor,
                 setup_available=setup_issuer is not None,
             )
+        if parsed.action in {
+            "autopilot",
+            "publications",
+            "funnel",
+            "money",
+            "payments",
+            "segments",
+            "offers",
+            "copy",
+            "prices",
+        }:
+            return _growth_report_message(actor, parsed.action)
+        if parsed.action in {"release", "funnel2", "retention", "recent", "system"}:
+            return _admin_report_message(actor, parsed.action)
+        if parsed.action == "formats":
+            return _formats_message(actor)
+        if parsed.action == "tariff":
+            return _tariff_message(actor)
+        if parsed.action == "members":
+            return _members_message(actor, _page_number(parsed.args))
+        if parsed.action == "member":
+            if len(parsed.args) != 1 or not parsed.args[0].isdigit():
+                return _stale_message()
+            return _member_message(actor, int(parsed.args[0]))
+        if parsed.action == "permissions":
+            return _permissions_message(actor)
         if parsed.action == "connect-vk":
             return _setup_message(
                 actor,
@@ -494,6 +1092,8 @@ def _render(
             )
     except TenantPermissionDenied:
         return _permission_message()
+    except ValueError:
+        return _stale_message()
     return _menu_message(actor, linked=linked)
 
 
@@ -511,9 +1111,10 @@ def process_native_member_interaction(
         business_id=route.business_id,
     )
     parsed = parse_native_member_interaction(raw_text)
+    action_key = ":".join((parsed.action, *parsed.args))
     interaction_key = (
         f"route:{route.id}:event:{provider_event_id}:"
-        + f"member:{actor.user_id}:action:{parsed.action}"
+        + f"member:{actor.user_id}:action:{action_key}"
     )
     interaction = _render(
         actor,

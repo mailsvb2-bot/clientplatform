@@ -174,7 +174,7 @@ def _materialize_native_interaction_links(
             )
         except NativeInteractionLinkResolutionError:
             raise
-        except Exception as exc:  # validator: allow-wide-except - resolver failures are sanitized
+        except (RuntimeError, ValueError) as exc:
             raise NativeInteractionLinkResolutionError(
                 "native setup link is expired, revoked or unavailable"
             ) from exc

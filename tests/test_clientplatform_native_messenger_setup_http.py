@@ -27,9 +27,7 @@ class _Request:
 )
 class NativeMessengerSetupHttpTests(unittest.IsolatedAsyncioTestCase):
     async def test_get_renders_password_form_with_no_store_headers(self) -> None:
-        from clientplatform.runtime.native_messenger_setup_http import (
-            native_messenger_setup_get,
-        )
+        from clientplatform.runtime.native_messenger_setup_http import native_messenger_setup_get
 
         grant = SimpleNamespace(
             business_name="Практика",
@@ -48,9 +46,7 @@ class NativeMessengerSetupHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.headers["Referrer-Policy"], "no-referrer")
 
     async def test_post_consumes_capability_and_never_echoes_provider_token(self) -> None:
-        from clientplatform.runtime.native_messenger_setup_http import (
-            native_messenger_setup_post,
-        )
+        from clientplatform.runtime.native_messenger_setup_http import native_messenger_setup_post
 
         preview = SimpleNamespace(
             business_name="Практика",
