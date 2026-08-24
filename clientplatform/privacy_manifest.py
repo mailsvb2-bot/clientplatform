@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 TenantDisposition = Literal["erase", "retain", "anonymize"]
-CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-08-21.v32-native-messenger-credentials"
+CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-08-21.v33-native-messenger-setup"
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,6 +78,7 @@ _POLICIES = (
     _required("connection_credentials", "erase", "tenant-scoped encrypted VK/MAX provider and webhook credential material"),
     _required("messenger_ingress_routes", "erase", "tenant messenger callback route, connection binding and secret references"),
     _required("native_messenger_provisioning_leases", "erase", "short-lived tenant provider-account setup serialization state"),
+    _required("messenger_connection_setup_sessions", "erase", "short-lived owner capability for secure VK/MAX connection setup"),
     _required("customer_channel_link_tokens", "erase", "short-lived customer-linked cross-channel identity grant digest and routing metadata"),
     _required("managed_bots", "retain", "business-owned bot identity and webhook secret reference"),
     _required("managed_bot_credentials", "erase", "tenant-scoped encrypted Telegram bot credential material"),

@@ -18,6 +18,10 @@ from clientplatform.runtime.messenger_channel_ingress import (
     canonical_max_webhook,
     canonical_vk_webhook,
 )
+from clientplatform.runtime.native_messenger_setup_http import (
+    native_messenger_setup_get,
+    native_messenger_setup_post,
+)
 from clientplatform.runtime.partner_aware_bot_gateway import ManagedBotGatewayRuntime
 from config.settings import settings
 from core.task_manager import TaskManager
@@ -207,6 +211,14 @@ def _register_clientplatform_omnichannel_routes(app: web.Application) -> None:
     app.router.add_post(
         "/clientplatform/webhooks/max/{route_id}",
         canonical_max_webhook,
+    )
+    app.router.add_get(
+        "/clientplatform/connect/{token}",
+        native_messenger_setup_get,
+    )
+    app.router.add_post(
+        "/clientplatform/connect/{token}",
+        native_messenger_setup_post,
     )
     app["clientplatform_omnichannel_ingress"] = True
 

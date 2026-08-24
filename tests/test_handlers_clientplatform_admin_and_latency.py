@@ -820,3 +820,93 @@ def test_dashboard_button_uses_same_panel_entry_as_admin_command() -> None:
     assert labels(markup) == ["🛠 Панель"]
     assert callbacks(markup) == ["cpa:business-token:menu"]
     assert module._admin_dashboard_installed is True
+
+
+@pytest.mark.asyncio
+async def test_messenger_owner_gets_secure_vk_max_setup_links(
+    monkeypatch: pytest.MonkeyPatch,
+    capture_edits: list[tuple[str, InlineKeyboardMarkup]],
+) -> None:
+    monkeypatch.setenv("CLIENTPLATFORM_OMNICHANNEL_INGRESS_ENABLED", "1")
+    monkeypatch.setattr(admin, "business_connection_statuses", lambda **_kwargs: [])
+    monkeypatch.setattr(
+        admin,
+        "issue_native_messenger_setup",
+        lambda **_kwargs: SimpleNamespace(token="S" * 43),
+    )
+    monkeypatch.setattr(
+        admin.settings,
+        "MESSENGER_PUBLIC_BASE_URL",
+        "https://client.example.test",
+    )
+    ctx = admin_context(PlatformRole.OWNER)
+    state = fsm_context()
+    callback = telegram_callback()
+
+    await admin._render_messengers(callback, state, ctx)
+    messenger_markup = capture_edits[-1][1]
+    assert "🔵 Подключить ВКонтакте" in labels(messenger_markup)
+    assert "🟣 Подключить MAX" in labels(messenger_markup)
+
+    await admin._render_messenger_connect(callback, state, ctx, "vk")
+    text, markup = capture_edits[-1]
+    assert "не отправляется сообщением в Telegram" in text
+    url_buttons = [
+        button
+        for row in markup.inline_keyboard
+        for button in row
+        if button.url
+    ]
+    assert len(url_buttons) == 1
+    assert url_buttons[0].url == (
+        "https://client.example.test/clientplatform/connect/" + "S" * 43
+    )
+
+
+@pytest.mark.asyncio
+async def test_messenger_setup_actions_are_hidden_when_omnichannel_ingress_is_off(
+    monkeypatch: pytest.MonkeyPatch,
+    capture_edits: list[tuple[str, InlineKeyboardMarkup]],
+) -> None:
+    monkeypatch.setenv("CLIENTPLATFORM_OMNICHANNEL_INGRESS_ENABLED", "0")
+    monkeypatch.setattr(admin, "business_connection_statuses", lambda **_kwargs: [])
+    issued: list[object] = []
+    monkeypatch.setattr(
+        admin,
+        "issue_native_messenger_setup",
+        lambda **kwargs: issued.append(kwargs),
+    )
+    monkeypatch.setattr(
+        admin.settings,
+        "MESSENGER_PUBLIC_BASE_URL",
+        "https://client.example.test",
+    )
+    ctx = admin_context(PlatformRole.OWNER)
+
+    await admin._render_messengers(telegram_callback(), fsm_context(), ctx)
+    visible = set(labels(capture_edits[-1][1]))
+    assert "🔵 Подключить ВКонтакте" not in visible
+    assert "🟣 Подключить MAX" not in visible
+
+    await admin._render_messenger_connect(
+        telegram_callback(),
+        fsm_context(),
+        ctx,
+        "vk",
+    )
+    text, _markup = capture_edits[-1]
+    assert "временно недоступно" in text
+    assert issued == []
+
+
+@pytest.mark.asyncio
+async def test_support_can_view_messengers_but_cannot_create_setup_link(
+    monkeypatch: pytest.MonkeyPatch,
+    capture_edits: list[tuple[str, InlineKeyboardMarkup]],
+) -> None:
+    monkeypatch.setattr(admin, "business_connection_statuses", lambda **_kwargs: [])
+    ctx = admin_context(PlatformRole.SUPPORT)
+    await admin._render_messengers(telegram_callback(), fsm_context(), ctx)
+    visible = set(labels(capture_edits[-1][1]))
+    assert "🔵 Подключить ВКонтакте" not in visible
+    assert "🟣 Подключить MAX" not in visible
