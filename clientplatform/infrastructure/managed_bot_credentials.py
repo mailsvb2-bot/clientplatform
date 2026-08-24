@@ -73,6 +73,11 @@ class AgeManagedBotCredentialVault:
     def identity_path(self) -> Path:
         return self._identity_path
 
+    def validate_identity(self) -> None:
+        """Verify that the configured age identity is safe and usable."""
+
+        self._ensure_identity()
+
     def seal(self, plaintext: str) -> str:
         value = str(plaintext)
         if not value:

@@ -15,6 +15,7 @@ from clientplatform.domain.messenger_channels import MessengerIngressRoute
 from clientplatform.domain.tenancy import TenantContext
 from clientplatform.infrastructure import ConnectionRepository
 from clientplatform.infrastructure.connection_credentials import (
+    ConnectionCredentialError,
     ConnectionCredentialStore,
 )
 from clientplatform.infrastructure.managed_bot_credentials import (
@@ -48,6 +49,12 @@ def _public_base_url(value: str) -> str:
         raise ValueError("messenger public base URL must use HTTPS")
     if parsed.username or parsed.password or parsed.query or parsed.fragment:
         raise ValueError("messenger public base URL is invalid")
+    try:
+        explicit_port = parsed.port
+    except ValueError as exc:
+        raise ValueError("messenger public base URL is invalid") from exc
+    if explicit_port is not None or parsed.path not in {"", "/"}:
+        raise ValueError("messenger public base URL must be an HTTPS origin")
     return normalized
 
 
@@ -85,7 +92,13 @@ def _existing_webhook_secret(
     reference = str(
         row["webhook_secret_reference"] if hasattr(row, "keys") else row[0]
     )
-    return credentials.resolve(reference)
+    try:
+        return credentials.resolve(reference)
+    except ConnectionCredentialError:
+        # A failed prior provisioning attempt revokes every persisted secret.
+        # A later fenced retry must rotate the unusable webhook secret instead
+        # of making the disabled route impossible to recover.
+        return None
 
 
 def _persist_native_connection(
@@ -197,21 +210,35 @@ def _release_provisioning_lease_if_owned(
 def _disable_after_provider_failure(
     *,
     actor: TenantContext,
-    connection_id: str,
-    route_id: str,
+    connection: Connection,
+    route: MessengerIngressRoute,
     lease: NativeMessengerProvisioningLease,
 ) -> None:
     with get_db() as conn:
         NativeMessengerProvisioningRepository(conn).assert_owned(lease)
         routes = MessengerChannelRepository(conn)
         connections = ConnectionRepository(conn)
-        try:
-            routes.disable_route(actor=actor, route_id=route_id)
-        finally:
-            connections.disable_connection(
-                actor=actor,
-                connection_id=connection_id,
+        credentials = ConnectionCredentialStore(conn)
+        references = tuple(
+            reference
+            for reference in (
+                connection.credential_reference,
+                route.webhook_secret_reference,
+                route.confirmation_code_reference,
             )
+            if reference is not None
+        )
+        try:
+            routes.disable_route(actor=actor, route_id=route.id)
+        finally:
+            try:
+                connections.disable_connection(
+                    actor=actor,
+                    connection_id=connection.id,
+                )
+            finally:
+                for reference in references:
+                    credentials.revoke(actor=actor, reference=reference)
 
 
 async def provision_max_channel(
@@ -255,16 +282,16 @@ async def provision_max_channel(
         except (OSError, ValueError):
             _disable_after_provider_failure(
                 actor=actor,
-                connection_id=connection.id,
-                route_id=route.id,
+                connection=connection,
+                route=route,
                 lease=lease,
             )
             raise
         except RuntimeError:
             _disable_after_provider_failure(
                 actor=actor,
-                connection_id=connection.id,
-                route_id=route.id,
+                connection=connection,
+                route=route,
                 lease=lease,
             )
             raise
@@ -335,16 +362,16 @@ async def provision_vk_channel(
         except (OSError, ValueError):
             _disable_after_provider_failure(
                 actor=actor,
-                connection_id=connection.id,
-                route_id=route.id,
+                connection=connection,
+                route=route,
                 lease=lease,
             )
             raise
         except RuntimeError:
             _disable_after_provider_failure(
                 actor=actor,
-                connection_id=connection.id,
-                route_id=route.id,
+                connection=connection,
+                route=route,
                 lease=lease,
             )
             raise

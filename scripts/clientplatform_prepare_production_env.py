@@ -135,6 +135,44 @@ def _validate_managed_bot_auto_provisioning(values: dict[str, str]) -> None:
         )
 
 
+def _validate_native_omnichannel_security(values: dict[str, str]) -> None:
+    if not _enabled(values, "CLIENTPLATFORM_OMNICHANNEL_INGRESS_ENABLED"):
+        return
+    if _required(
+        values,
+        "CLIENTPLATFORM_MANAGED_BOT_CREDENTIAL_IDENTITY_FILE",
+    ) != _MANAGED_BOT_IDENTITY_FILE:
+        raise EnvironmentPreparationError(
+            "mismatched_clientplatform_managed_bot_credential_identity_file"
+        )
+    if _required(
+        values,
+        "CLIENTPLATFORM_MANAGED_BOT_CREDENTIAL_HOST_DIR",
+    ) != _MANAGED_BOT_HOST_DIR:
+        raise EnvironmentPreparationError(
+            "mismatched_clientplatform_managed_bot_credential_host_dir"
+        )
+    if _enabled(values, "CLIENTPLATFORM_MANAGED_BOT_CREDENTIAL_ALLOW_GENERATE"):
+        raise EnvironmentPreparationError(
+            "managed_bot_credential_generation_forbidden_in_production"
+        )
+    if _required(
+        values,
+        "CLIENTPLATFORM_MEDIA_SIGNING_SECRET_REFERENCE",
+    ) != "secret://env/CLIENTPLATFORM_SECRET_MEDIA_SIGNING_KEY":
+        raise EnvironmentPreparationError(
+            "mismatched_clientplatform_media_signing_secret_reference"
+        )
+    if len(
+        _required(values, "CLIENTPLATFORM_SECRET_MEDIA_SIGNING_KEY").encode(
+            "utf-8"
+        )
+    ) < 32:
+        raise EnvironmentPreparationError(
+            "clientplatform_secret_media_signing_key_too_short"
+        )
+
+
 def prepare(path: Path) -> tuple[str, ...]:
     expanded = path.expanduser()
     if expanded.is_symlink():
@@ -230,6 +268,7 @@ def prepare(path: Path) -> tuple[str, ...]:
         values[key] = value
 
     _validate_managed_bot_auto_provisioning(values)
+    _validate_native_omnichannel_security(values)
     _validate_ad_connections(values, domain=domain)
 
     backup = resolved.with_name(resolved.name + ".before-current-main")

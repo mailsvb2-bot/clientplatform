@@ -46,6 +46,11 @@ class NativeOnlyMessengerStatusTests(unittest.TestCase):
                 clear=False,
             ),
             self._settings(),
+            patch.object(
+                preflight,
+                "_native_security_missing",
+                return_value=(),
+            ),
         ):
             status = build_setup_status()
             inspected = preflight.inspect_messenger_channels()

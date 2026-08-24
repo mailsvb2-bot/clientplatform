@@ -70,7 +70,11 @@ class MessengerChannelPreflightTests(unittest.TestCase):
                 "VK_WEBHOOK_ENABLED": "0",
             },
             clear=False,
-        ), self._settings(MESSENGER_PUBLIC_BASE_URL="https://client.example.test"):
+        ), self._settings(MESSENGER_PUBLIC_BASE_URL="https://client.example.test"), patch.object(
+            preflight,
+            "_native_security_missing",
+            return_value=(),
+        ):
             inspected = preflight.inspect_messenger_channels()
 
         self.assertTrue(inspected.omnichannel_enabled)
@@ -78,6 +82,60 @@ class MessengerChannelPreflightTests(unittest.TestCase):
         self.assertTrue(inspected.webhook_runtime_ready)
         self.assertEqual(inspected.missing, ())
         self.assertTrue(inspected.ok)
+
+    def test_canonical_omnichannel_fails_closed_without_native_security(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "APP_ENV": "production",
+                "CLIENTPLATFORM_OMNICHANNEL_INGRESS_ENABLED": "1",
+                "MAX_WEBHOOK_ENABLED": "0",
+                "VK_WEBHOOK_ENABLED": "0",
+            },
+            clear=False,
+        ), self._settings(), patch.object(
+            preflight,
+            "_native_security_missing",
+            return_value=("CLIENTPLATFORM managed credential age identity",),
+        ):
+            inspected = preflight.inspect_messenger_channels()
+
+        self.assertFalse(inspected.omnichannel_ready)
+        self.assertFalse(inspected.webhook_runtime_ready)
+        self.assertFalse(inspected.ok)
+        self.assertIn(
+            "CLIENTPLATFORM managed credential age identity",
+            inspected.missing,
+        )
+
+    def test_native_security_check_validates_signing_secret_identity_and_age_tools(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "CLIENTPLATFORM_MANAGED_BOT_CREDENTIAL_IDENTITY_FILE": (
+                    "/run/secrets/clientplatform-managed-bot/identity.txt"
+                ),
+                "CLIENTPLATFORM_MEDIA_SIGNING_SECRET_REFERENCE": (
+                    "secret://env/CLIENTPLATFORM_SECRET_MEDIA_SIGNING_KEY"
+                ),
+            },
+            clear=False,
+        ), patch.object(
+            preflight.EnvironmentCredentialProvider,
+            "resolve",
+            return_value="s" * 48,
+        ), patch.object(
+            preflight.AgeManagedBotCredentialVault,
+            "validate_identity",
+        ) as validate_identity, patch.object(
+            preflight.shutil,
+            "which",
+            return_value="/usr/bin/age",
+        ):
+            missing = preflight._native_security_missing()
+
+        self.assertEqual((), missing)
+        validate_identity.assert_called_once_with()
 
     def test_canonical_omnichannel_ingress_rejects_insecure_production_url(self) -> None:
         with patch.dict(

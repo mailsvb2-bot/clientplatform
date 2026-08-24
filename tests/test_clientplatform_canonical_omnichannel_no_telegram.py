@@ -41,7 +41,11 @@ def test_canonical_vk_max_preflight_does_not_require_telegram_control_bot() -> N
             "VK_WEBHOOK_ENABLED": "0",
         },
         clear=False,
-    ), _canonical_only_settings():
+    ), _canonical_only_settings(), patch.object(
+        preflight,
+        "_native_security_missing",
+        return_value=(),
+    ):
         inspected = preflight.inspect_messenger_channels()
 
     assert inspected.omnichannel_enabled
