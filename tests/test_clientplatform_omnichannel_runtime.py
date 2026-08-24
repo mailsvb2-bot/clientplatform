@@ -136,6 +136,10 @@ class OmnichannelRuntimeIngressTests(unittest.IsolatedAsyncioTestCase):
                 return_value=True,
             ) as record_contact,
             patch(
+                "clientplatform.runtime.messenger_channel_ingress.process_native_customer_interaction",
+                return_value=True,
+            ) as product_ui,
+            patch(
                 "clientplatform.runtime.messenger_channel_ingress.record_customer_channel_message",
             ) as record_sales,
             patch(
@@ -152,6 +156,216 @@ class OmnichannelRuntimeIngressTests(unittest.IsolatedAsyncioTestCase):
             display_name="Анна",
         )
         record_sales.assert_not_called()
+        product_ui.assert_called_once()
+
+
+    async def test_vk_product_callback_routes_to_customer_ui_not_sales(self) -> None:
+        from types import SimpleNamespace
+        from clientplatform.runtime.messenger_channel_ingress import canonical_vk_webhook
+
+        route = MessengerIngressRoute(
+            id=str(uuid4()), business_id=str(uuid4()), connection_id=str(uuid4()),
+            platform=ConnectionPlatform.VK, external_route_id="424242",
+            webhook_secret_reference="secret://env/CLIENTPLATFORM_SECRET_VK_WEBHOOK_TEST",
+            confirmation_code_reference="secret://env/CLIENTPLATFORM_SECRET_VK_CONFIRMATION_TEST",
+            status="active", created_by_member_id=str(uuid4()),
+            created_at="2026-08-21T00:00:00+00:00",
+            updated_at="2026-08-21T00:00:00+00:00",
+        )
+        request = _FakeRequest(
+            {
+                "type": "message_event", "group_id": "424242",
+                "secret": "route-webhook-secret",
+                "object": {
+                    "event_id": "evt-ui-1", "user_id": 700001, "peer_id": 700001,
+                    "payload": {"command": "cpi:programs:0"},
+                },
+            },
+            route_id=route.id,
+        )
+        identity = SimpleNamespace(
+            id=str(uuid4()), customer_id=str(uuid4()),
+            external_subject="700001",
+        )
+        with (
+            patch(
+                "clientplatform.runtime.messenger_channel_ingress.resolve_messenger_ingress_route",
+                return_value=route,
+            ),
+            patch(
+                "clientplatform.runtime.messenger_channel_ingress.EnvironmentCredentialProvider.resolve",
+                return_value="route-webhook-secret",
+            ),
+            patch(
+                "clientplatform.runtime.messenger_channel_ingress._ack_vk_message_event",
+                new=AsyncMock(),
+            ),
+            patch(
+                "clientplatform.runtime.messenger_channel_ingress.claim_inbound_event",
+                return_value=True,
+            ),
+            patch(
+                "clientplatform.runtime.messenger_channel_ingress.ensure_channel_customer",
+                return_value=identity,
+            ),
+            patch(
+                "clientplatform.runtime.messenger_channel_ingress.record_customer_contact",
+                return_value=True,
+            ),
+            patch(
+                "clientplatform.runtime.messenger_channel_ingress.process_native_customer_interaction",
+                return_value=True,
+            ) as product_ui,
+            patch(
+                "clientplatform.runtime.messenger_channel_ingress.record_customer_channel_message"
+            ) as sales,
+            patch(
+                "clientplatform.runtime.messenger_channel_ingress.complete_inbound_event"
+            ) as complete,
+        ):
+            response = await canonical_vk_webhook(request)  # type: ignore[arg-type]
+
+        self.assertEqual(200, response.status)
+        sales.assert_not_called()
+        product_ui.assert_called_once()
+        self.assertEqual(
+            product_ui.call_args.kwargs["raw_text"], "cpi:programs:0"
+        )
+        complete.assert_called_once()
+
+    async def test_max_free_text_remains_sales_signal_without_product_reply(self) -> None:
+        from types import SimpleNamespace
+        from clientplatform.runtime.messenger_channel_ingress import canonical_max_webhook
+
+        route = MessengerIngressRoute(
+            id=str(uuid4()), business_id=str(uuid4()), connection_id=str(uuid4()),
+            platform=ConnectionPlatform.MAX, external_route_id="551001",
+            webhook_secret_reference="secret://env/CLIENTPLATFORM_SECRET_MAX_WEBHOOK_TEST",
+            confirmation_code_reference=None, status="active",
+            created_by_member_id=str(uuid4()),
+            created_at="2026-08-21T00:00:00+00:00",
+            updated_at="2026-08-21T00:00:00+00:00",
+        )
+        request = _FakeRequest(
+            {
+                "update_type": "message_created", "update_id": 81001,
+                "timestamp": 1787265000000,
+                "message": {
+                    "body": {"mid": "m-1", "text": "Хочу узнать стоимость"},
+                    "sender": {"user_id": 700001, "first_name": "Анна"},
+                },
+            },
+            route_id=route.id, headers={"X-Max-Bot-Api-Secret": "route-webhook-secret"},
+        )
+        identity = SimpleNamespace(
+            id=str(uuid4()), customer_id=str(uuid4()), external_subject="700001"
+        )
+        with (
+            patch(
+                "clientplatform.runtime.messenger_channel_ingress.resolve_messenger_ingress_route",
+                return_value=route,
+            ),
+            patch(
+                "clientplatform.runtime.messenger_channel_ingress.EnvironmentCredentialProvider.resolve",
+                return_value="route-webhook-secret",
+            ),
+            patch(
+                "clientplatform.runtime.messenger_channel_ingress.claim_inbound_event",
+                return_value=True,
+            ),
+            patch(
+                "clientplatform.runtime.messenger_channel_ingress.ensure_channel_customer",
+                return_value=identity,
+            ),
+            patch(
+                "clientplatform.runtime.messenger_channel_ingress.record_customer_contact",
+                return_value=True,
+            ),
+            patch(
+                "clientplatform.runtime.messenger_channel_ingress.record_customer_channel_message",
+                return_value="lead-1",
+            ) as sales,
+            patch(
+                "clientplatform.runtime.messenger_channel_ingress.process_native_customer_interaction"
+            ) as product_ui,
+            patch(
+                "clientplatform.runtime.messenger_channel_ingress.complete_inbound_event"
+            ),
+        ):
+            response = await canonical_max_webhook(request)  # type: ignore[arg-type]
+
+        self.assertEqual(200, response.status)
+        sales.assert_called_once()
+        self.assertEqual(
+            sales.call_args.kwargs["message_text"], "Хочу узнать стоимость"
+        )
+        product_ui.assert_not_called()
+
+    async def test_max_customer_link_success_queues_linked_menu_without_sales_capture(self) -> None:
+        from types import SimpleNamespace
+        from clientplatform.runtime.messenger_channel_ingress import canonical_max_webhook
+
+        route = MessengerIngressRoute(
+            id=str(uuid4()), business_id=str(uuid4()), connection_id=str(uuid4()),
+            platform=ConnectionPlatform.MAX, external_route_id="551002",
+            webhook_secret_reference="secret://env/CLIENTPLATFORM_SECRET_MAX_WEBHOOK_TEST",
+            confirmation_code_reference=None, status="active",
+            created_by_member_id=str(uuid4()),
+            created_at="2026-08-21T00:00:00+00:00",
+            updated_at="2026-08-21T00:00:00+00:00",
+        )
+        token = "A" * 32
+        request = _FakeRequest(
+            {
+                "update_type": "message_created", "timestamp": 1787265001000,
+                "message": {
+                    "body": {"mid": "m-link", "text": f"cplink_{token}"},
+                    "sender": {"user_id": 700002, "first_name": "Иван"},
+                },
+            },
+            route_id=route.id, headers={"X-Max-Bot-Api-Secret": "route-webhook-secret"},
+        )
+        identity = SimpleNamespace(
+            id=str(uuid4()), customer_id=str(uuid4()), external_subject="700002"
+        )
+        with (
+            patch(
+                "clientplatform.runtime.messenger_channel_ingress.resolve_messenger_ingress_route",
+                return_value=route,
+            ),
+            patch(
+                "clientplatform.runtime.messenger_channel_ingress.EnvironmentCredentialProvider.resolve",
+                return_value="route-webhook-secret",
+            ),
+            patch(
+                "clientplatform.runtime.messenger_channel_ingress.claim_inbound_event",
+                return_value=True,
+            ),
+            patch(
+                "clientplatform.runtime.messenger_channel_ingress.consume_customer_channel_link",
+                return_value=identity,
+            ),
+            patch(
+                "clientplatform.runtime.messenger_channel_ingress.record_customer_contact",
+                return_value=True,
+            ),
+            patch(
+                "clientplatform.runtime.messenger_channel_ingress.process_native_customer_interaction",
+                return_value=True,
+            ) as product_ui,
+            patch(
+                "clientplatform.runtime.messenger_channel_ingress.record_customer_channel_message"
+            ) as sales,
+            patch(
+                "clientplatform.runtime.messenger_channel_ingress.complete_inbound_event"
+            ),
+        ):
+            response = await canonical_max_webhook(request)  # type: ignore[arg-type]
+
+        self.assertEqual(200, response.status)
+        sales.assert_not_called()
+        product_ui.assert_called_once()
+        self.assertTrue(product_ui.call_args.kwargs["linked"])
 
 
 class _FakeMaxSender:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import asyncio
 import hashlib
 import ipaddress
@@ -11,6 +12,7 @@ from typing import Any
 from urllib.parse import urljoin, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
+from clientplatform.domain.customer_interactions import CustomerInteractionMessage
 from clientplatform.domain.programs import ContentKind
 from services.messenger.provider_transport import (
     ProviderUploadURLRejected,
@@ -215,6 +217,49 @@ class VkRuntimeClient:
             raise ValueError("VK provider response has no message id")
         return message_id
 
+    async def send_interaction(
+        self,
+        *,
+        token: str,
+        external_subject: str,
+        interaction: CustomerInteractionMessage,
+        idempotency_key: str,
+    ) -> str:
+        keyboard = {
+            "one_time": True,
+            "inline": True,
+            "buttons": [
+                [
+                    {
+                        "action": {
+                            "type": "text",
+                            "label": button.label,
+                            "payload": json.dumps(
+                                {"command": button.command},
+                                ensure_ascii=False,
+                                separators=(",", ":"),
+                            ),
+                        },
+                        "color": "secondary",
+                    }
+                    for button in row
+                ]
+                for row in interaction.rows
+            ],
+        }
+        result = await _vk_sender(token).send_text(
+            external_subject,
+            interaction.text,
+            random_id=_vk_random_id(idempotency_key),
+            keyboard_json=json.dumps(
+                keyboard, ensure_ascii=False, separators=(",", ":")
+            ),
+        )
+        message_id = _provider_message_id(result)
+        if not message_id:
+            raise ValueError("VK provider response has no message id")
+        return message_id
+
     async def send_media(
         self,
         *,
@@ -261,6 +306,46 @@ class MaxRuntimeClient:
             external_subject,
             text,
             legacy_ui=False,
+        )
+        message_id = _provider_message_id(result)
+        if not message_id:
+            raise ValueError("MAX provider response has no message id")
+        return message_id
+
+    async def send_interaction(
+        self,
+        *,
+        token: str,
+        external_subject: str,
+        interaction: CustomerInteractionMessage,
+        idempotency_key: str,
+    ) -> str:
+        del idempotency_key
+        attachments = []
+        if interaction.rows:
+            attachments.append(
+                {
+                    "type": "inline_keyboard",
+                    "payload": {
+                        "buttons": [
+                            [
+                                {
+                                    "type": "message",
+                                    "text": button.label,
+                                    "payload": {"command": button.command},
+                                }
+                                for button in row
+                            ]
+                            for row in interaction.rows
+                        ]
+                    },
+                }
+            )
+        result = await _max_sender(token).send_text(
+            external_subject,
+            interaction.text,
+            legacy_ui=False,
+            attachments=attachments,
         )
         message_id = _provider_message_id(result)
         if not message_id:

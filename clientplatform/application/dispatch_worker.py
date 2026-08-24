@@ -64,13 +64,13 @@ def _release_claims(
 
 
 def _provider_claim_can_cross_provider_boundary(item: object) -> bool:
-    """Atomically honor a last-moment partner contact revocation.
+    """Honor a last-moment recipient or partner revocation.
 
     Claiming commits before network I/O by design. That leaves a deliberate
     boundary where an owner may revoke contact after claim but before a provider
     call starts. Revalidate the lease in a fresh transaction and convert a
-    revoked partner lease to ``cancelled`` instead of resolving credentials or
-    calling the adapter.
+    revoked lease to ``cancelled`` instead of resolving credentials or calling
+    the adapter.
     """
 
     if not isinstance(item, ClaimedProviderDispatch):
@@ -83,15 +83,15 @@ def _provider_claim_can_cross_provider_boundary(item: object) -> bool:
             return repository.partner_dispatch_still_authorized(item)
         if item.dispatch.source_kind == "sales_followup":
             return repository.sales_followup_claim_can_cross_provider_boundary(item)
+        if item.dispatch.source_kind == "customer_interaction":
+            return repository.customer_interaction_claim_can_cross_provider_boundary(item)
         return True
 
 
 def _mark_non_replay_boundary(item: object) -> bool:
     if isinstance(item, ClaimedProviderDispatch):
         with get_db() as conn:
-            return DispatchOutboxRepository(
-                conn
-            ).mark_sales_followup_non_replay_boundary(item)
+            return DispatchOutboxRepository(conn).mark_provider_non_replay_boundary(item)
     if not isinstance(item, ClaimedDispatch):
         return False
     if item.dispatch.platform != ConnectionPlatform.MAX:

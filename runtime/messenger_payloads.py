@@ -325,7 +325,7 @@ def vk_event_key(payload: dict[str, Any]) -> str:
     obj = _dict_or_empty(payload.get("object"))
     message = _dict_or_empty(obj.get("message") or obj)
     parts = [
-        str(payload.get("event_id") or ""),
+        str(payload.get("event_id") or obj.get("event_id") or ""),
         str(message.get("id") or message.get("conversation_message_id") or ""),
         str(message.get("from_id") or message.get("user_id") or ""),
         str(message.get("date") or ""),

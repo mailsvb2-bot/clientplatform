@@ -119,25 +119,7 @@ def get_customer_booking(
     return claim
 
 
-def book_customer_slot_in_transaction(
-    conn: Any,
-    *,
-    telegram_user_id: int,
-    business_id: str,
-    slot_id: str,
-) -> BookingClaim:
-    """Canonical booking mutation for callers that already own the transaction."""
-
-    assert_external_customer(
-        conn,
-        telegram_user_id=telegram_user_id,
-        business_id=business_id,
-    )
-    claim = BookingRepository(conn).book_slot(
-        telegram_user_id=telegram_user_id,
-        business_id=business_id,
-        slot_id=slot_id,
-    )
+def _finalize_customer_booking_claim(conn: Any, claim: BookingClaim) -> BookingClaim:
     booked_at = claim.slot.slot.booked_at
     if booked_at is None:
         raise RuntimeError("booked slot is missing booked_at")
@@ -179,6 +161,45 @@ def book_customer_slot_in_transaction(
         now=booked_at,
     )
     return claim
+
+
+def book_customer_slot_in_transaction(
+    conn: Any,
+    *,
+    telegram_user_id: int,
+    business_id: str,
+    slot_id: str,
+) -> BookingClaim:
+    """Canonical booking mutation for callers that already own the transaction."""
+
+    assert_external_customer(
+        conn,
+        telegram_user_id=telegram_user_id,
+        business_id=business_id,
+    )
+    claim = BookingRepository(conn).book_slot(
+        telegram_user_id=telegram_user_id,
+        business_id=business_id,
+        slot_id=slot_id,
+    )
+    return _finalize_customer_booking_claim(conn, claim)
+
+
+def book_customer_slot_by_customer_in_transaction(
+    conn: Any,
+    *,
+    business_id: str,
+    customer_id: str,
+    slot_id: str,
+) -> BookingClaim:
+    """Canonical booking mutation for a server-resolved non-Telegram customer."""
+
+    claim = BookingRepository(conn).book_slot_for_customer_id(
+        business_id=business_id,
+        customer_id=customer_id,
+        slot_id=slot_id,
+    )
+    return _finalize_customer_booking_claim(conn, claim)
 
 
 def book_customer_slot(

@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Protocol
 
 from clientplatform.domain.connections import ClaimedDispatch, ConnectionPlatform
+from clientplatform.domain.customer_interactions import CustomerInteractionMessage
 from clientplatform.domain.programs import ContentKind
 from clientplatform.transport.media import MediaReferenceResolver
 
@@ -26,6 +27,15 @@ class NativeMessengerClient(Protocol):
         external_subject: str,
         kind: ContentKind,
         media: str,
+        idempotency_key: str,
+    ) -> str: ...
+
+    async def send_interaction(
+        self,
+        *,
+        token: str,
+        external_subject: str,
+        interaction: CustomerInteractionMessage,
         idempotency_key: str,
     ) -> str: ...
 
@@ -69,7 +79,18 @@ class _NativeMessengerDispatchAdapter:
 
         kind = item.dispatch.payload_kind
         payload = item.dispatch.payload_ref
-        if kind in _MEDIA_KINDS:
+        if (
+            str(getattr(item.dispatch, "source_kind", "")) == "customer_interaction"
+            and kind == ContentKind.MIXED
+        ):
+            interaction = CustomerInteractionMessage.from_json(payload)
+            result = await self._client.send_interaction(
+                token=token,
+                external_subject=item.external_subject,
+                interaction=interaction,
+                idempotency_key=item.dispatch.idempotency_key,
+            )
+        elif kind in _MEDIA_KINDS:
             if self._media_resolver is not None:
                 payload = await self._media_resolver.resolve(payload, kind)
             result = await self._client.send_media(

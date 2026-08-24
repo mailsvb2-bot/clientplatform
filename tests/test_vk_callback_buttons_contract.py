@@ -12,7 +12,7 @@ from runtime.messenger_ingress import (
     _vk_event_context,
     _vk_score_route_text,
 )
-from runtime.messenger_payloads import extract_vk_message
+from runtime.messenger_payloads import extract_vk_message, vk_event_key
 from runtime.messenger_transport_errors import MessengerTransportError
 from runtime.messenger_vk_sender import VkBotSender, _callback_keyboard_json, _strip_raw_vk_payment_links
 from runtime.messenger_vk_ui import vk_clear_keyboard_json, vk_score_scale_keyboard_json, with_vk_keyboard
@@ -106,6 +106,7 @@ def test_vk_message_event_dedupe_key_uses_event_id_not_only_user_id() -> None:
     first = {"type": "message_event", "object": {"event_id": "evt-1", "user_id": 123, "payload": {"command": "start"}}}
     second = {"type": "message_event", "object": {"event_id": "evt-2", "user_id": 123, "payload": {"command": "start"}}}
     assert _vk_dedupe_key(first) != _vk_dedupe_key(second)
+    assert vk_event_key(first) != vk_event_key(second)
 
 
 def test_vk_audio_upload_does_not_fall_back_to_doc_when_audio_message_scope_denied(monkeypatch, tmp_path) -> None:
