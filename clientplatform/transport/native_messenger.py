@@ -56,6 +56,12 @@ _TEXT_KINDS = frozenset(
         ContentKind.MIXED,
     }
 )
+_INTERACTION_SOURCE_KINDS = frozenset(
+    {
+        "customer_interaction",
+        "member_interaction",
+    }
+)
 
 
 class _NativeMessengerDispatchAdapter:
@@ -80,7 +86,8 @@ class _NativeMessengerDispatchAdapter:
         kind = item.dispatch.payload_kind
         payload = item.dispatch.payload_ref
         if (
-            str(getattr(item.dispatch, "source_kind", "")) == "customer_interaction"
+            str(getattr(item.dispatch, "source_kind", ""))
+            in _INTERACTION_SOURCE_KINDS
             and kind == ContentKind.MIXED
         ):
             interaction = CustomerInteractionMessage.from_json(payload)
@@ -108,11 +115,15 @@ class _NativeMessengerDispatchAdapter:
                 idempotency_key=item.dispatch.idempotency_key,
             )
         else:  # pragma: no cover - enum exhaustiveness guard
-            raise ValueError(f"unsupported {self.platform.value} content kind: {kind.value}")
+            raise ValueError(
+                f"unsupported {self.platform.value} content kind: {kind.value}"
+            )
 
         provider_message_id = str(result or "").strip()
         if not provider_message_id:
-            raise ValueError(f"{self.platform.value} sender returned an empty message id")
+            raise ValueError(
+                f"{self.platform.value} sender returned an empty message id"
+            )
         return provider_message_id
 
 

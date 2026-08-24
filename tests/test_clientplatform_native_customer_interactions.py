@@ -175,7 +175,7 @@ class NativeCustomerInteractionOutboxTests(unittest.TestCase):
             now="2026-08-21T00:00:02+00:00",
         )
 
-        allowed = self.fx.outbox.customer_interaction_claim_can_cross_provider_boundary(
+        allowed = self.fx.outbox.native_interaction_claim_can_cross_provider_boundary(
             claimed[0],
             now="2026-08-21T00:00:03+00:00",
         )

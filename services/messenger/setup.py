@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 from config.settings import settings
 from runtime.ingress_flags import max_webhook_enabled, vk_webhook_enabled
-from runtime.telegram_transport import telegram_transport
+from runtime.telegram_transport import telegram_runtime_enabled, telegram_transport
 from services.messenger.bridge import issue_bridge_token
 from services.messenger.links import build_switch_targets, build_messenger_targets
 
@@ -54,9 +54,13 @@ def build_setup_status() -> MessengerSetupStatus:
     deployed = _deployed_env()
     max_enabled = max_webhook_enabled()
     vk_enabled = vk_webhook_enabled()
+    telegram_enabled = telegram_runtime_enabled()
     telegram_transport_mode = telegram_transport()
-    telegram_webhook_enabled = telegram_transport_mode == 'webhook'
-    telegram_ok = bool(_strip(getattr(settings, 'TELEGRAM_BOT_USERNAME', '')))
+    telegram_webhook_enabled = telegram_enabled and telegram_transport_mode == 'webhook'
+    telegram_ok = bool(
+        not telegram_enabled
+        or _strip(getattr(settings, 'TELEGRAM_BOT_USERNAME', ''))
+    )
 
     max_link = _strip(getattr(settings, 'MAX_BOT_LINK_BASE', ''))
     max_token = _strip(getattr(settings, 'MAX_BOT_TOKEN', ''))
@@ -110,7 +114,7 @@ def build_setup_status() -> MessengerSetupStatus:
 
     missing: list[str] = []
     warnings: list[str] = []
-    if not telegram_ok:
+    if telegram_enabled and not telegram_ok:
         missing.append('TELEGRAM_BOT_USERNAME')
 
     if max_enabled:
@@ -159,7 +163,7 @@ def build_setup_status() -> MessengerSetupStatus:
 
     if telegram_webhook_enabled and not telegram_public:
         missing.append('TELEGRAM_WEBHOOK_PUBLIC_BASE_URL')
-    if telegram_public and not telegram_public_https:
+    if telegram_enabled and telegram_public and not telegram_public_https:
         if deployed and telegram_webhook_enabled:
             missing.append('TELEGRAM_WEBHOOK_PUBLIC_BASE_URL must use https://')
         elif telegram_webhook_enabled:
@@ -186,15 +190,19 @@ def render_setup_text() -> str:
     status = build_setup_status()
     max_enabled = max_webhook_enabled()
     vk_enabled = vk_webhook_enabled()
+    telegram_enabled = telegram_runtime_enabled()
     lines = ['🔧 Настройка multi-messenger', '']
-    lines.append(f"Telegram referral/switch links: {'✅' if status.telegram_ok else '❌'}")
+    if telegram_enabled:
+        lines.append(f"Telegram runtime/referral links: {'✅' if status.telegram_ok else '❌'}")
+    else:
+        lines.append('Telegram runtime: выключен (native-only VK/MAX)')
     lines.append(
-        'MAX webhook: '
+        'MAX legacy webhook: '
         + ('✅' if status.max_ok else '❌')
         + (' включён' if max_enabled else ' выключен')
     )
     lines.append(
-        'VK webhook: '
+        'VK legacy webhook: '
         + ('✅' if status.vk_ok else '❌')
         + (' включён' if vk_enabled else ' выключен')
     )
@@ -208,11 +216,11 @@ def render_setup_text() -> str:
             lines.append(f'MAX webhook URL: {status.max_webhook_url}')
         lines.append('')
     lines.append('Как это работает:')
-    lines.append('1) Пользователь в Telegram нажимает переход в VK/MAX.')
-    lines.append('2) Открывается ссылка с start-параметром bridge/ref.')
-    lines.append('3) Включённый VK/MAX webhook получает входящее сообщение и фиксирует внешний user id.')
+    lines.append('1) Пользователь открывает ClientPlatform в подключённом мессенджере.')
+    lines.append('2) Bridge/ref payload связывает канал с канонической учётной записью, когда связь нужна.')
+    lines.append('3) VK/MAX webhook фиксирует внешний user id на server-resolved tenant route.')
     lines.append('4) Ручной ввод VK ID / MAX ID пользователю не нужен.')
-    lines.append('5) Для новых VK callback-кнопок в Callback API должен быть включён тип события message_event.')
+    lines.append('5) Для VK callback-кнопок в Callback API должен быть включён тип события message_event.')
     lines.append('')
     if status.missing:
         lines.append('Не хватает переменных для включённых каналов:')

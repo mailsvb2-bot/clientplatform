@@ -14,6 +14,18 @@ def _truthy_env(name: str, default: str = "0") -> bool:
     return (os.getenv(name, default) or default).strip().lower() in {"1", "true", "yes", "on", "webhook"}
 
 
+def _telegram_runtime_enabled() -> bool:
+    raw = (os.getenv("CLIENTPLATFORM_TELEGRAM_RUNTIME_ENABLED") or "1").strip().lower()
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    raise StartupCheckError(
+        "CLIENTPLATFORM_TELEGRAM_RUNTIME_ENABLED must be one of "
+        "1/0, true/false, yes/no, on/off"
+    )
+
+
 def _int_env(name: str, default: int) -> int:
     raw = (os.getenv(name, str(default)) or str(default)).strip()
     try:
@@ -45,14 +57,17 @@ def _resolved_db_engine() -> str:
 
 def _prod_ingress_checks() -> None:
     app_env = (os.getenv("APP_ENV", "dev") or "dev").strip().lower()
+    telegram_enabled = _telegram_runtime_enabled()
     telegram_transport = (os.getenv("TELEGRAM_TRANSPORT", os.getenv("RUN_MODE", "polling")) or "polling").strip().lower()
-    telegram_webhook = telegram_transport == "webhook" or _truthy_env("TELEGRAM_WEBHOOK_ENABLED")
+    telegram_webhook = telegram_enabled and (
+        telegram_transport == "webhook" or _truthy_env("TELEGRAM_WEBHOOK_ENABLED")
+    )
     messenger_webhook = _truthy_env("MESSENGER_WEBHOOK_ENABLED")
     any_webhook = messenger_webhook
 
     if app_env in {"prod", "production"}:
-        if not (os.getenv("ADMIN_IDS") or os.getenv("ADMIN_ID") or "").strip():
-            raise StartupCheckError("ADMIN_IDS or ADMIN_ID is required in prod")
+        if telegram_enabled and not (os.getenv("ADMIN_IDS") or os.getenv("ADMIN_ID") or "").strip():
+            raise StartupCheckError("ADMIN_IDS or ADMIN_ID is required in prod when Telegram runtime is enabled")
         if not _truthy_env("HEALTHCHECK_ENABLED", "1"):
             raise StartupCheckError("HEALTHCHECK_ENABLED must be 1 in prod; readiness is part of the deployment contract")
         if telegram_webhook:
@@ -130,5 +145,9 @@ def run_startup_checks(project_root: Path) -> None:
 
     _prod_ingress_checks()
 
-    if not _env_any("BOT_TOKEN", "TELEGRAM_BOT_TOKEN"):
-        raise StartupCheckError("BOT_TOKEN is empty. Set BOT_TOKEN or TELEGRAM_BOT_TOKEN (see deploy/metrotherapy.env.example)")
+    if _telegram_runtime_enabled() and not _env_any("BOT_TOKEN", "TELEGRAM_BOT_TOKEN"):
+        raise StartupCheckError(
+            "BOT_TOKEN is empty while Telegram runtime is enabled. "
+            "Set BOT_TOKEN or TELEGRAM_BOT_TOKEN, or explicitly disable "
+            "CLIENTPLATFORM_TELEGRAM_RUNTIME_ENABLED for a native-only deployment."
+        )
