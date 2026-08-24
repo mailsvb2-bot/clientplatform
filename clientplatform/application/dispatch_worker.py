@@ -5,6 +5,7 @@ import json
 from dataclasses import dataclass, replace
 from typing import Any, Protocol
 
+from clientplatform.application.max_dispatch_pacing import pace_max_provider_boundary
 from clientplatform.domain.connections import (
     ClaimedDispatch,
     ConnectionPlatform,
@@ -244,6 +245,11 @@ async def run_dispatch_batch(
     authority check and only in the in-memory claimed item. They never replace
     the digest/session reference stored in the durable outbox.
 
+    MAX provider pacing also happens before the non-replay boundary. If a worker
+    is cancelled while waiting for a documented provider rate-limit slot, the
+    current lease is still replay-safe and can be released normally. A wait is
+    followed by one more live-authority revalidation before provider I/O.
+
     Non-idempotent provider calls are durably marked immediately before network
     I/O. Once that boundary is crossed, failure or worker cancellation must never
     return the current work to automatic retry; stale ownership is quarantined by
@@ -285,6 +291,15 @@ async def run_dispatch_batch(
             ).strip()
             if not credential:
                 raise ValueError("credential provider returned an empty secret")
+
+            waited_for_max_slot = await pace_max_provider_boundary(send_item)
+            if waited_for_max_slot:
+                allowed = await asyncio.to_thread(
+                    _provider_claim_can_cross_provider_boundary,
+                    item,
+                )
+                if not allowed:
+                    continue
 
             adapter = adapters.get(item.dispatch.platform)
             non_replay_boundary_crossed = await asyncio.to_thread(
