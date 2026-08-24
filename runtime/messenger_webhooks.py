@@ -18,6 +18,9 @@ from clientplatform.runtime.messenger_channel_ingress import (
     canonical_max_webhook,
     canonical_vk_webhook,
 )
+from clientplatform.runtime.native_messenger_http_admission import (
+    native_messenger_http_admission_middleware,
+)
 from clientplatform.runtime.native_messenger_setup_http import (
     native_messenger_setup_get,
     native_messenger_setup_post,
@@ -268,7 +271,10 @@ async def start_messenger_webhook_runtime(
 
     app = web.Application(
         client_max_size=ingress_body_limit(),
-        middlewares=[payment_webhook_admission_middleware],
+        middlewares=[
+            native_messenger_http_admission_middleware,
+            payment_webhook_admission_middleware,
+        ],
     )
     _register_health_routes(app)
 

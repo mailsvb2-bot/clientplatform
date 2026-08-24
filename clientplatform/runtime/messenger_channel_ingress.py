@@ -51,12 +51,13 @@ from runtime.messenger_payloads import (
     vk_event_key,
     vk_raw_message as _vk_raw_message,
 )
+from runtime.messenger_max_sender import MaxBotSender
 from runtime.messenger_vk_sender import VkBotSender
 from services.db import get_db_ro
 from services.messenger.webhook_dedupe import (
     claim_inbound_event,
     complete_inbound_event,
-    fail_inbound_event,
+    fail_claimed_inbound_event,
     record_inbound_failure,
 )
 
@@ -124,20 +125,23 @@ def _verify_max(request: web.Request, *, expected_secret: str) -> bool:
     return bool(supplied and hmac.compare_digest(supplied, expected_secret))
 
 
-def _connection_credential_reference(route: Any) -> str:
+def _connection_credential_reference(
+    route: Any,
+    platform: ConnectionPlatform,
+) -> str:
     with get_db_ro() as conn:
         row = conn.execute(
             """
             SELECT credential_reference
             FROM connections
-            WHERE id=? AND business_id=? AND platform='vk' AND status='active'
+            WHERE id=? AND business_id=? AND platform=? AND status='active'
             LIMIT 1
             """,
-            (route.connection_id, route.business_id),
+            (route.connection_id, route.business_id, platform.value),
         ).fetchone()
     if row is None:
         raise ValueError(
-            "active VK connection was not found for callback acknowledgement"
+            "active messenger connection was not found for callback acknowledgement"
         )
     return str(row["credential_reference"] if hasattr(row, "keys") else row[0])
 
@@ -157,7 +161,11 @@ async def _ack_vk_message_event(
     if not event_id or not user_id:
         return
     try:
-        reference = await asyncio.to_thread(_connection_credential_reference, route)
+        reference = await asyncio.to_thread(
+            _connection_credential_reference,
+            route,
+            ConnectionPlatform.VK,
+        )
         token = await asyncio.to_thread(credential_provider.resolve, reference)
         await VkBotSender(token=token).answer_message_event(
             event_id=event_id,
@@ -168,6 +176,34 @@ async def _ack_vk_message_event(
     except Exception:  # validator: allow-wide-except - acknowledgement is best effort only
         log.warning(
             "Canonical VK message_event acknowledgement failed",
+            extra={"route_id": route.id, "business_id": route.business_id},
+            exc_info=True,
+        )
+
+
+async def _ack_max_message_callback(
+    payload: Mapping[str, Any],
+    *,
+    route: Any,
+    credential_provider: EnvironmentCredentialProvider,
+) -> None:
+    if str(payload.get("update_type") or "").strip() != "message_callback":
+        return
+    callback = _mapping(payload.get("callback"))
+    callback_id = str(callback.get("callback_id") or "").strip()
+    if not callback_id:
+        return
+    try:
+        reference = await asyncio.to_thread(
+            _connection_credential_reference,
+            route,
+            ConnectionPlatform.MAX,
+        )
+        token = await asyncio.to_thread(credential_provider.resolve, reference)
+        await MaxBotSender(token=token).answer_callback(callback_id=callback_id)
+    except Exception:  # validator: allow-wide-except - acknowledgement is best effort only
+        log.warning(
+            "Canonical MAX message_callback acknowledgement failed",
             extra={"route_id": route.id, "business_id": route.business_id},
             exc_info=True,
         )
@@ -258,6 +294,11 @@ async def _process_business_event(
     else:
         if not _verify_max(request, expected_secret=expected_secret):
             return web.Response(status=403, text="forbidden")
+        await _ack_max_message_callback(
+            payload,
+            route=route,
+            credential_provider=credential_provider,
+        )
         raw_event_key = max_event_key(payload)
         extracted = _max_raw_message(payload)
 
@@ -411,34 +452,37 @@ async def _process_business_event(
         )
     except NativeMemberBridgeRejected:
         await asyncio.to_thread(
-            fail_inbound_event,
+            fail_claimed_inbound_event,
             platform.value,
             scoped_event_key,
             payload,
             "member_channel_link_rejected",
+            permanent=True,
         )
-        return web.Response(status=409, text="member_link_rejected")
+        return web.Response(text="ok")
     except ActivityInvariantViolation:
         await asyncio.to_thread(
-            fail_inbound_event,
+            fail_claimed_inbound_event,
             platform.value,
             scoped_event_key,
             payload,
             "customer_invite_rejected",
+            permanent=True,
         )
-        return web.Response(status=409, text="invite_rejected")
+        return web.Response(text="ok")
     except CustomerChannelLinkRejected:
         await asyncio.to_thread(
-            fail_inbound_event,
+            fail_claimed_inbound_event,
             platform.value,
             scoped_event_key,
             payload,
             "customer_channel_link_rejected",
+            permanent=True,
         )
-        return web.Response(status=409, text="link_rejected")
+        return web.Response(text="ok")
     except Exception as exc:  # validator: allow-wide-except - provider must retry durable ingress
-        await asyncio.to_thread(
-            fail_inbound_event,
+        failure = await asyncio.to_thread(
+            fail_claimed_inbound_event,
             platform.value,
             scoped_event_key,
             payload,
@@ -452,7 +496,9 @@ async def _process_business_event(
                 "platform": platform.value,
             },
         )
-        return web.Response(status=503, text="retry")
+        if failure.retryable:
+            return web.Response(status=503, text="retry")
+        return web.Response(text="ok")
 
 
 async def canonical_vk_webhook(request: web.Request) -> web.Response:

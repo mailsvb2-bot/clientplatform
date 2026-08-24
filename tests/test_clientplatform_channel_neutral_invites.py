@@ -328,17 +328,18 @@ class NativeInviteIngressTests(unittest.IsolatedAsyncioTestCase):
                 "clientplatform.runtime.messenger_channel_ingress.record_customer_channel_message"
             ) as sales,
             patch(
-                "clientplatform.runtime.messenger_channel_ingress.fail_inbound_event"
+                "clientplatform.runtime.messenger_channel_ingress.fail_claimed_inbound_event"
             ) as failed,
         ):
             response = await canonical_max_webhook(self._request(route, f"cpj_{token}"))  # type: ignore[arg-type]
 
-        self.assertEqual(409, response.status)
-        self.assertEqual("invite_rejected", response.text)
+        self.assertEqual(200, response.status)
+        self.assertEqual("ok", response.text)
         ensure_customer.assert_not_called()
         sales.assert_not_called()
         failed.assert_called_once()
         self.assertEqual("customer_invite_rejected", failed.call_args.args[3])
+        self.assertTrue(failed.call_args.kwargs["permanent"])
 
 
 if __name__ == "__main__":

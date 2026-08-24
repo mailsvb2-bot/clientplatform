@@ -12,7 +12,12 @@ from clientplatform.domain.connections import ConnectionPlatform
 from clientplatform.domain.messenger_channels import MessengerIngressRoute
 from clientplatform.runtime.messenger_provider_clients import MaxRuntimeClient
 from runtime.messenger_max_sender import MAX_API2_BASE_URL, MaxBotSender
-from runtime.messenger_payloads import max_raw_message, vk_raw_message
+from runtime.messenger_payloads import (
+    max_event_key,
+    max_raw_message,
+    vk_event_key,
+    vk_raw_message,
+)
 
 _AIOHTTP_AVAILABLE = importlib.util.find_spec("aiohttp") is not None
 
@@ -29,6 +34,43 @@ class _FakeRequest:
 
 @unittest.skipUnless(_AIOHTTP_AVAILABLE, "aiohttp runtime dependency is not installed in dependency-light Canon")
 class OmnichannelRuntimeIngressTests(unittest.IsolatedAsyncioTestCase):
+    async def test_max_callback_is_acknowledged_with_route_token(self) -> None:
+        from clientplatform.runtime.messenger_channel_ingress import (
+            _ack_max_message_callback,
+        )
+
+        route = SimpleNamespace(
+            id=str(uuid4()),
+            business_id=str(uuid4()),
+            connection_id=str(uuid4()),
+        )
+        sender = SimpleNamespace(answer_callback=AsyncMock())
+        credential_provider = SimpleNamespace(resolve=lambda reference: "max-token")
+        with (
+            patch(
+                "clientplatform.runtime.messenger_channel_ingress._connection_credential_reference",
+                return_value="vault://max-token",
+            ) as credential_reference,
+            patch(
+                "clientplatform.runtime.messenger_channel_ingress.MaxBotSender",
+                return_value=sender,
+            ) as sender_factory,
+        ):
+            await _ack_max_message_callback(
+                {
+                    "update_type": "message_callback",
+                    "callback": {"callback_id": "callback-81001"},
+                },
+                route=route,
+                credential_provider=credential_provider,
+            )
+
+        credential_reference.assert_called_once_with(route, ConnectionPlatform.MAX)
+        sender_factory.assert_called_once_with(token="max-token")
+        sender.answer_callback.assert_awaited_once_with(
+            callback_id="callback-81001"
+        )
+
     async def test_vk_confirmation_returns_route_scoped_secret_before_customer_extraction(self) -> None:
         from clientplatform.runtime.messenger_channel_ingress import canonical_vk_webhook
 
@@ -396,6 +438,31 @@ class OmnichannelRuntimeTransportTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
         self.assertIsNone(vk_raw_message({"object": {"message": {}}}))
+
+    def test_native_callback_event_keys_include_provider_callback_identity(self) -> None:
+        vk_first = {
+            "type": "message_event",
+            "object": {"event_id": "vk-event-1", "user_id": 778899},
+        }
+        vk_second = {
+            "type": "message_event",
+            "object": {"event_id": "vk-event-2", "user_id": 778899},
+        }
+        max_first = {
+            "update_type": "message_callback",
+            "timestamp": 1787259600000,
+            "user": {"user_id": 778899},
+            "callback": {"callback_id": "max-callback-1", "payload": "one"},
+        }
+        max_second = {
+            "update_type": "message_callback",
+            "timestamp": 1787259600000,
+            "user": {"user_id": 778899},
+            "callback": {"callback_id": "max-callback-2", "payload": "two"},
+        }
+
+        self.assertNotEqual(vk_event_key(vk_first), vk_event_key(vk_second))
+        self.assertNotEqual(max_event_key(max_first), max_event_key(max_second))
 
     def test_official_max_message_callback_top_level_user_is_extracted(self) -> None:
         extracted = max_raw_message(

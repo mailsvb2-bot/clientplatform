@@ -430,7 +430,8 @@ class NativeCustomerInteractionProviderTests(unittest.IsolatedAsyncioTestCase):
         kwargs = sender.send_text.await_args.kwargs
         self.assertFalse(kwargs["legacy_ui"])
         button = kwargs["attachments"][0]["payload"]["buttons"][0][0]
-        self.assertEqual(button["payload"]["command"], "cpi:slots:0")
+        self.assertEqual(button["type"], "callback")
+        self.assertEqual(button["payload"], "cpi:slots:0")
 
 
 if __name__ == "__main__":

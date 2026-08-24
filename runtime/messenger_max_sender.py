@@ -43,6 +43,13 @@ _MEDIA_TOKEN_REJECT_CODES = {
 }
 
 
+class MaxProviderRateLimitError(MessengerTransportError):
+    """MAX explicitly rejected a message before creating it due to rate limits."""
+
+    retryable = True
+    provider_write_definitely_rejected = True
+
+
 def _attachment_retry_delays() -> tuple[float, ...]:
     raw = (os.getenv("MAX_ATTACHMENT_RETRY_DELAYS_SEC") or "0.5,1,2,4,8,16").strip()
     values: list[float] = []
@@ -111,6 +118,22 @@ def _max_subscription_urls(data: Any) -> tuple[str, ...] | None:
         if url:
             urls.append(url)
     return tuple(urls)
+
+
+def _max_retryable_http_error(
+    operation: str,
+    exc: BaseException,
+) -> MessengerTransportError | None:
+    try:
+        status_code = int(getattr(exc, "code", 0) or 0)
+    except (TypeError, ValueError):
+        status_code = 0
+    if status_code != 429:
+        return None
+    return MaxProviderRateLimitError(
+        f"MAX provider {operation} was rate limited",
+        code=f"max.{operation}.http_429",
+    )
 
 
 def _legacy_max_ui():
@@ -252,6 +275,12 @@ class MaxBotSender:
         parsed = urllib.parse.urlsplit(target)
         if parsed.scheme.lower() != "https" or not parsed.hostname:
             raise ValueError("MAX webhook URL must use HTTPS")
+        try:
+            explicit_port = parsed.port
+        except ValueError as exc:
+            raise ValueError("MAX webhook URL port is invalid") from exc
+        if explicit_port is not None:
+            raise ValueError("MAX webhook URL must use the default HTTPS port")
         clean_secret = str(secret or "").strip()
         if re.fullmatch(r"[A-Za-z0-9_-]{5,256}", clean_secret) is None:
             raise ValueError("MAX webhook secret format is invalid")
@@ -325,6 +354,35 @@ class MaxBotSender:
             )
         return data
 
+    async def answer_callback(self, *, callback_id: str) -> dict[str, Any]:
+        """Acknowledge one official ``message_callback`` update."""
+
+        clean_callback_id = str(callback_id or "").strip()
+        if not clean_callback_id or len(clean_callback_id) > 512:
+            raise ValueError("MAX callback id format is invalid")
+        if any(ord(char) < 32 or ord(char) == 127 for char in clean_callback_id):
+            raise ValueError("MAX callback id format is invalid")
+        token = self._token()
+        try:
+            data = await asyncio.to_thread(
+                json_request,
+                f"{self._api_base()}/answers?callback_id="
+                f"{urllib.parse.quote(clean_callback_id, safe='')}",
+                method="POST",
+                headers={"Authorization": token},
+                payload={},
+                retries=1,
+                ssl_context=self._ssl_context(),
+            )
+        except ProviderPermanentHTTPError as exc:
+            raise self._permanent_http_error(exc) from exc
+        if not isinstance(data, dict) or data.get("success") is not True:
+            raise _max_error(
+                "answer_callback",
+                _max_error_code(data) or "provider_rejected",
+            )
+        return data
+
     async def send_text(self, external_user_id: str, text: str, **kwargs: Any):
         token = self._token()
         url = f"{self._api_base()}/messages?user_id={urllib.parse.quote(str(external_user_id))}"
@@ -357,6 +415,11 @@ class MaxBotSender:
             )
         except ProviderPermanentHTTPError as exc:
             raise self._permanent_http_error(exc) from exc
+        except OSError as exc:
+            rate_limited = _max_retryable_http_error("send_text", exc)
+            if rate_limited is not None:
+                raise rate_limited from exc
+            raise
         if isinstance(data, dict) and data.get("error"):
             raise _max_error("send_text", _max_error_code(data) or "provider_error")
         return data["message"] if isinstance(data, dict) and data.get("message") is not None else data
@@ -435,9 +498,19 @@ class MaxBotSender:
                 )
             except ProviderPermanentHTTPError as exc:
                 raise self._permanent_http_error(exc) from exc
-            except (OSError, ValueError, TypeError) as exc:  # pragma: no cover
-                last_error = exc
-                continue
+            except OSError as exc:
+                rate_limited = _max_retryable_http_error(
+                    f"send_{media_type}",
+                    exc,
+                )
+                if rate_limited is not None:
+                    raise rate_limited from exc
+                raise
+            except (ValueError, TypeError):
+                # A connection failure after POST begins has an ambiguous write
+                # outcome. Never repeat the message inside the provider adapter;
+                # the durable MAX boundary will quarantine it for reconciliation.
+                raise
             code = _max_error_code(data)
             if code == "attachment.not.ready":
                 last_error = MessengerMediaNotReadyError(
