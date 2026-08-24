@@ -61,22 +61,33 @@ class NativeMessengerProviderProvisioningTests(unittest.IsolatedAsyncioTestCase)
         )
         self.assertEqual(calls[1].kwargs["headers"], {"Authorization": "provider-token"})
 
-    async def test_max_subscription_reuses_existing_url_without_duplicate_post(self) -> None:
+    async def test_max_subscription_reconciles_existing_url_with_current_secret(self) -> None:
         sender = MaxBotSender(token="provider-token", api_base_url=MAX_API2_BASE_URL)
         target = "https://client.example.test/clientplatform/webhooks/max/route"
         with patch(
             "runtime.messenger_max_sender.json_request",
-            return_value={"subscriptions": [{"url": target + "/"}]},
+            side_effect=[
+                {"subscriptions": [{"url": target + "/"}]},
+                {"success": True},
+                {"subscriptions": [{"url": target}]},
+            ],
         ) as request:
             result = await sender.ensure_webhook_subscription(
                 url=target,
-                secret="safe_secret-12345",
+                secret="rotated_secret-67890",
             )
 
-        self.assertTrue(result["already_present"])
-        request.assert_called_once()
-        self.assertEqual(request.call_args.kwargs["method"], "GET")
-        self.assertIsNone(request.call_args.kwargs["payload"])
+        self.assertTrue(result["success"])
+        calls = request.call_args_list
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(calls[0].kwargs["method"], "GET")
+        self.assertEqual(calls[1].kwargs["method"], "POST")
+        self.assertEqual(calls[2].kwargs["method"], "GET")
+        self.assertEqual(calls[1].kwargs["payload"]["url"], target)
+        self.assertEqual(
+            calls[1].kwargs["payload"]["secret"],
+            "rotated_secret-67890",
+        )
 
     async def test_max_subscription_reconciliation_accepts_provider_list_shapes(self) -> None:
         sender = MaxBotSender(token="provider-token", api_base_url=MAX_API2_BASE_URL)
@@ -89,14 +100,19 @@ class NativeMessengerProviderProvisioningTests(unittest.IsolatedAsyncioTestCase)
         for payload in payloads:
             with self.subTest(payload=payload), patch(
                 "runtime.messenger_max_sender.json_request",
-                return_value=payload,
+                side_effect=[
+                    payload,
+                    {"success": True},
+                    payload,
+                ],
             ) as request:
                 result = await sender.ensure_webhook_subscription(
                     url=target,
                     secret="safe_secret-12345",
                 )
-            self.assertTrue(result["already_present"])
-            request.assert_called_once()
+            self.assertTrue(result["success"])
+            self.assertEqual(len(request.call_args_list), 3)
+            self.assertEqual(request.call_args_list[1].kwargs["method"], "POST")
 
     async def test_max_provisioning_rejects_invalid_local_and_provider_contracts(self) -> None:
         sender = MaxBotSender(token="provider-token", api_base_url=MAX_API2_BASE_URL)
