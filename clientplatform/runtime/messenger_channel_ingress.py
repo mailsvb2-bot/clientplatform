@@ -27,7 +27,12 @@ from clientplatform.domain.messenger_channels import (
 from clientplatform.domain.sales_ai_jobs import messenger_source_order
 from clientplatform.runtime.sales_ai_config import SalesAIRuntimeConfig
 from clientplatform.runtime.secrets import EnvironmentCredentialProvider, SecretReferenceError
-from runtime.messenger_payloads import max_event_key, text_from_max_payload, text_from_vk_payload, vk_event_key
+from runtime.messenger_payloads import (
+    max_event_key,
+    max_raw_message as _max_raw_message,
+    vk_event_key,
+    vk_raw_message as _vk_raw_message,
+)
 from services.messenger.webhook_dedupe import (
     claim_inbound_event,
     complete_inbound_event,
@@ -52,59 +57,6 @@ def _json_body(raw: bytes) -> dict[str, Any] | None:
 
 def _mapping(value: Any) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
-
-
-def _vk_raw_message(payload: Mapping[str, Any]) -> tuple[str, str | None, str | None] | None:
-    obj = _mapping(payload.get("object"))
-    message = _mapping(obj.get("message") or obj)
-    external = message.get("from_id") or message.get("user_id") or obj.get("from_id") or obj.get("user_id")
-    subject = str(external or "").strip()
-    if not subject:
-        return None
-    payload_text = text_from_vk_payload(message.get("payload") or obj.get("payload") or payload.get("payload"))
-    text = str(payload_text or message.get("text") or obj.get("text") or "").strip()
-    return subject, text, None
-
-
-def _max_raw_message(payload: Mapping[str, Any]) -> tuple[str, str | None, str | None] | None:
-    message = _mapping(payload.get("message"))
-    body = _mapping(message.get("body"))
-    callback = _mapping(payload.get("callback") or payload.get("button") or payload.get("payload"))
-    sender = _mapping(
-        message.get("sender")
-        or payload.get("sender")
-        or payload.get("user")
-        or callback.get("sender")
-        or callback.get("user")
-    )
-    external = (
-        sender.get("user_id")
-        or sender.get("id")
-        or callback.get("user_id")
-        or payload.get("user_id")
-        or body.get("user_id")
-    )
-    subject = str(external or "").strip()
-    if not subject:
-        return None
-    callback_text = text_from_max_payload(callback)
-    payload_text = (
-        callback_text
-        or text_from_max_payload(body.get("payload"))
-        or text_from_max_payload(message.get("payload"))
-        or text_from_max_payload(payload.get("payload"))
-    )
-    text = str(payload_text or message.get("text") or body.get("text") or payload.get("text") or "").strip()
-    display_name = str(
-        sender.get("display_name")
-        or sender.get("name")
-        or " ".join(
-            part for part in (str(sender.get("first_name") or "").strip(), str(sender.get("last_name") or "").strip())
-            if part
-        )
-        or ""
-    ).strip() or None
-    return subject, text, display_name
 
 
 def _safe_provider_event_id(raw_key: str) -> str:

@@ -9,9 +9,9 @@ from uuid import uuid4
 
 from clientplatform.domain.connections import ConnectionPlatform
 from clientplatform.domain.messenger_channels import MessengerIngressRoute
-from clientplatform.runtime.messenger_channel_ingress import _max_raw_message
 from clientplatform.runtime.messenger_provider_clients import MaxRuntimeClient
 from runtime.messenger_max_sender import MAX_API2_BASE_URL, MaxBotSender
+from runtime.messenger_payloads import max_raw_message, vk_raw_message
 
 _AIOHTTP_AVAILABLE = importlib.util.find_spec("aiohttp") is not None
 
@@ -93,8 +93,24 @@ class _FakeMaxSender:
 
 
 class OmnichannelRuntimeTransportTests(unittest.IsolatedAsyncioTestCase):
+    def test_vk_message_parser_is_dependency_light_and_fail_closed(self) -> None:
+        self.assertEqual(
+            ("778899", "book_now", None),
+            vk_raw_message(
+                {
+                    "object": {
+                        "message": {
+                            "from_id": 778899,
+                            "payload": {"command": "book_now"},
+                        }
+                    }
+                }
+            ),
+        )
+        self.assertIsNone(vk_raw_message({"object": {"message": {}}}))
+
     def test_official_max_message_callback_top_level_user_is_extracted(self) -> None:
-        extracted = _max_raw_message(
+        extracted = max_raw_message(
             {
                 "update_type": "message_callback",
                 "timestamp": 1787259600000,
