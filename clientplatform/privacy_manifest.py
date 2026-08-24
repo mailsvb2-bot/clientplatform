@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 TenantDisposition = Literal["erase", "retain", "anonymize"]
-CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-08-20.v31-followup-employee"
+CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-08-21.v32-native-messenger-credentials"
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +75,7 @@ _POLICIES = (
     _required("lesson_deliveries", "anonymize", "customer delivery attempts and fulfilment evidence"),
     _required("lesson_progress", "anonymize", "customer lesson progress state"),
     _required("connections", "retain", "business integration ownership, permissions and secret references"),
+    _required("connection_credentials", "erase", "tenant-scoped encrypted VK/MAX provider and webhook credential material"),
     _required("messenger_ingress_routes", "erase", "tenant messenger callback route, connection binding and secret references"),
     _required("customer_channel_link_tokens", "erase", "short-lived customer-linked cross-channel identity grant digest and routing metadata"),
     _required("managed_bots", "retain", "business-owned bot identity and webhook secret reference"),

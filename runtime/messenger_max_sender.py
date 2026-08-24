@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import math
 import os
+import re
 import ssl
 import urllib.parse
 from dataclasses import dataclass
@@ -188,6 +189,72 @@ class MaxBotSender:
         if isinstance(upload_meta, dict) and upload_meta.get("token"):
             return {"token": str(upload_meta["token"])}
         raise _max_error(f"{media_type}_upload", "token_missing")
+
+    async def get_me(self) -> dict[str, Any]:
+        token = self._token()
+        try:
+            data = await asyncio.to_thread(
+                json_request,
+                f"{self._api_base()}/me",
+                method="GET",
+                headers={"Authorization": token},
+                payload=None,
+                retries=1,
+                ssl_context=self._ssl_context(),
+            )
+        except ProviderPermanentHTTPError as exc:
+            raise self._permanent_http_error(exc) from exc
+        if not isinstance(data, dict) or data.get("error"):
+            raise _max_error("get_me", _max_error_code(data) or "provider_error")
+        user_id = str(data.get("user_id") or "").strip()
+        if not user_id.isdigit() or int(user_id) <= 0 or data.get("is_bot") is not True:
+            raise _max_error("get_me", "invalid_bot_identity")
+        return data
+
+    async def ensure_webhook_subscription(
+        self,
+        *,
+        url: str,
+        secret: str,
+        update_types: tuple[str, ...] = (
+            "message_created",
+            "message_callback",
+            "bot_started",
+        ),
+    ) -> dict[str, Any]:
+        target = str(url or "").strip()
+        parsed = urllib.parse.urlsplit(target)
+        if parsed.scheme.lower() != "https" or not parsed.hostname:
+            raise ValueError("MAX webhook URL must use HTTPS")
+        clean_secret = str(secret or "").strip()
+        if re.fullmatch(r"[A-Za-z0-9_-]{5,256}", clean_secret) is None:
+            raise ValueError("MAX webhook secret format is invalid")
+        events = tuple(dict.fromkeys(str(item or "").strip() for item in update_types))
+        if not events or any(not item for item in events):
+            raise ValueError("MAX webhook update types must not be empty")
+        token = self._token()
+        try:
+            data = await asyncio.to_thread(
+                json_request,
+                f"{self._api_base()}/subscriptions",
+                method="POST",
+                headers={"Authorization": token},
+                payload={
+                    "url": target,
+                    "update_types": list(events),
+                    "secret": clean_secret,
+                },
+                retries=1,
+                ssl_context=self._ssl_context(),
+            )
+        except ProviderPermanentHTTPError as exc:
+            raise self._permanent_http_error(exc) from exc
+        if not isinstance(data, dict) or data.get("success") is not True:
+            raise _max_error(
+                "subscription",
+                _max_error_code(data) or "provider_rejected",
+            )
+        return data
 
     async def send_text(self, external_user_id: str, text: str, **kwargs: Any):
         token = self._token()

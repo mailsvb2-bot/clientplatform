@@ -17,7 +17,6 @@ from runtime.messenger_transport_errors import (
     MessengerMediaTokenRejectedError,
     MessengerTransportError,
 )
-from runtime.messenger_vk_ui import prepare_vk_keyboard_json
 from services.messenger.media_assets import (
     get_cached_media_token,
     invalidate_media_token,
@@ -262,6 +261,119 @@ class VkBotSender:
             raise _vk_error(method.replace(".", "_"), code)
         return data
 
+    async def verify_community(self, group_id: str | int) -> dict[str, Any]:
+        normalized_group_id = str(group_id or "").strip()
+        if not normalized_group_id.isdigit() or int(normalized_group_id) <= 0:
+            raise ValueError("VK group id must be a positive integer")
+        data = await self._vk_method(
+            "groups.getById",
+            {"group_id": int(normalized_group_id)},
+        )
+        response = data.get("response") if isinstance(data, dict) else None
+        if isinstance(response, dict):
+            candidates = response.get("groups") or response.get("items") or []
+        else:
+            candidates = response or []
+        if isinstance(candidates, dict):
+            candidates = [candidates]
+        group = next(
+            (
+                item
+                for item in candidates
+                if isinstance(item, dict)
+                and str(item.get("id") or "").strip() == normalized_group_id
+            ),
+            None,
+        )
+        if group is None:
+            raise _vk_error("groups_getbyid", "community_mismatch")
+        return group
+
+    async def get_callback_confirmation_code(self, group_id: str | int) -> str:
+        normalized_group_id = str(group_id or "").strip()
+        if not normalized_group_id.isdigit() or int(normalized_group_id) <= 0:
+            raise ValueError("VK group id must be a positive integer")
+        data = await self._vk_method(
+            "groups.getCallbackConfirmationCode",
+            {"group_id": int(normalized_group_id)},
+        )
+        response = data.get("response") if isinstance(data, dict) else None
+        code = str(response.get("code") or "").strip() if isinstance(response, dict) else ""
+        if not code:
+            raise _vk_error("callback_confirmation", "code_missing")
+        return code
+
+    async def ensure_callback_server(
+        self,
+        *,
+        group_id: str | int,
+        url: str,
+        secret: str,
+        title: str = "ClientPlatform",
+    ) -> int:
+        normalized_group_id = str(group_id or "").strip()
+        if not normalized_group_id.isdigit() or int(normalized_group_id) <= 0:
+            raise ValueError("VK group id must be a positive integer")
+        target = str(url or "").strip()
+        if not target.startswith("https://"):
+            raise ValueError("VK callback URL must use HTTPS")
+        clean_secret = str(secret or "").strip()
+        if not clean_secret or len(clean_secret) > 255:
+            raise ValueError("VK callback secret format is invalid")
+        clean_title = str(title or "ClientPlatform").strip()[:14] or "ClientPlatform"
+        servers = await self._vk_method(
+            "groups.getCallbackServers",
+            {"group_id": int(normalized_group_id)},
+        )
+        response = servers.get("response") if isinstance(servers, dict) else None
+        items = response.get("items") if isinstance(response, dict) else []
+        existing = next(
+            (item for item in (items or []) if isinstance(item, dict) and str(item.get("url") or "").strip() == target),
+            None,
+        )
+        if existing is not None and str(existing.get("id") or "").isdigit():
+            server_id = int(existing["id"])
+            await self._vk_method(
+                "groups.editCallbackServer",
+                {
+                    "group_id": int(normalized_group_id),
+                    "server_id": server_id,
+                    "url": target,
+                    "title": clean_title,
+                    "secret_key": clean_secret,
+                },
+            )
+        else:
+            created = await self._vk_method(
+                "groups.addCallbackServer",
+                {
+                    "group_id": int(normalized_group_id),
+                    "url": target,
+                    "title": clean_title,
+                    "secret_key": clean_secret,
+                },
+            )
+            created_response = created.get("response") if isinstance(created, dict) else None
+            if isinstance(created_response, dict):
+                raw_server_id = created_response.get("server_id") or created_response.get("id")
+            else:
+                raw_server_id = created_response
+            normalized_server_id = str(raw_server_id or "")
+            if not normalized_server_id.isdigit():
+                raise _vk_error("callback_server", "server_id_missing")
+            server_id = int(normalized_server_id)
+        await self._vk_method(
+            "groups.setCallbackSettings",
+            {
+                "group_id": int(normalized_group_id),
+                "server_id": server_id,
+                "api_version": self._api_version(),
+                "message_new": 1,
+                "message_event": 1,
+            },
+        )
+        return server_id
+
     async def answer_message_event(
         self,
         *,
@@ -299,6 +411,8 @@ class VkBotSender:
         }
 
         if kwargs.get("keyboard_json"):
+            from runtime.messenger_vk_ui import prepare_vk_keyboard_json
+
             keyboard_json = prepare_vk_keyboard_json(
                 str(kwargs["keyboard_json"]),
                 external_user_id=str(external_user_id),
