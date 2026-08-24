@@ -4,8 +4,18 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from dataclasses import asdict, dataclass
+from pathlib import Path
 
+from clientplatform.infrastructure.managed_bot_credentials import (
+    AgeManagedBotCredentialVault,
+    ManagedBotCredentialError,
+)
+from clientplatform.runtime.secrets import (
+    EnvironmentCredentialProvider,
+    SecretReferenceError,
+)
 from runtime.ingress_flags import max_webhook_enabled, vk_webhook_enabled
 from runtime.telegram_transport import telegram_runtime_enabled, telegram_transport
 from services.messenger.setup import build_setup_status
@@ -43,14 +53,53 @@ def _deployed_env() -> bool:
     }
 
 
+def _native_security_missing() -> tuple[str, ...]:
+    """Return only sanitized prerequisite names, never secret material."""
+
+    missing: list[str] = []
+    signing_reference = str(
+        os.getenv("CLIENTPLATFORM_MEDIA_SIGNING_SECRET_REFERENCE")
+        or "secret://env/CLIENTPLATFORM_SECRET_MEDIA_SIGNING_KEY"
+    ).strip()
+    try:
+        signing_secret = EnvironmentCredentialProvider().resolve(signing_reference)
+        if len(signing_secret.encode("utf-8")) < 32:
+            raise SecretReferenceError("setup signing secret is too short")
+    except (SecretReferenceError, ValueError):
+        missing.append("CLIENTPLATFORM native setup signing secret")
+
+    identity_raw = str(
+        os.getenv("CLIENTPLATFORM_MANAGED_BOT_CREDENTIAL_IDENTITY_FILE") or ""
+    ).strip()
+    identity_path = Path(identity_raw) if identity_raw else None
+    if identity_path is None or not identity_path.is_absolute():
+        missing.append("CLIENTPLATFORM_MANAGED_BOT_CREDENTIAL_IDENTITY_FILE")
+    else:
+        try:
+            AgeManagedBotCredentialVault(identity_path).validate_identity()
+        except ManagedBotCredentialError:
+            missing.append("CLIENTPLATFORM managed credential age identity")
+
+    if shutil.which("age") is None or shutil.which("age-keygen") is None:
+        missing.append("age and age-keygen executables")
+    return tuple(missing)
+
+
 def inspect_messenger_channels() -> MessengerChannelPreflight:
     status = build_setup_status()
     telegram_enabled = telegram_runtime_enabled()
     omnichannel_enabled = _truthy_env("CLIENTPLATFORM_OMNICHANNEL_INGRESS_ENABLED")
     public_base = str(status.public_base_url or "").strip().rstrip("/")
+    native_security_missing = (
+        _native_security_missing() if omnichannel_enabled and _deployed_env() else ()
+    )
     omnichannel_ready = bool(
         not omnichannel_enabled
-        or (public_base and (not _deployed_env() or public_base.startswith("https://")))
+        or (
+            public_base
+            and (not _deployed_env() or public_base.startswith("https://"))
+            and not native_security_missing
+        )
     )
     # Canonical tenant-scoped VK/MAX uses encrypted per-business credentials.
     # Legacy MAX/VK flags remain fully validated by build_setup_status() when an
@@ -60,6 +109,7 @@ def inspect_messenger_channels() -> MessengerChannelPreflight:
         missing.append("MESSENGER_PUBLIC_BASE_URL")
     elif omnichannel_enabled and _deployed_env() and not public_base.startswith("https://"):
         missing.append("MESSENGER_PUBLIC_BASE_URL must use https://")
+    missing.extend(native_security_missing)
     return MessengerChannelPreflight(
         telegram_runtime_enabled=telegram_enabled,
         telegram_transport=telegram_transport(),

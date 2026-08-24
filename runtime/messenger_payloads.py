@@ -325,7 +325,7 @@ def vk_event_key(payload: dict[str, Any]) -> str:
     obj = _dict_or_empty(payload.get("object"))
     message = _dict_or_empty(obj.get("message") or obj)
     parts = [
-        str(payload.get("event_id") or ""),
+        str(payload.get("event_id") or obj.get("event_id") or ""),
         str(message.get("id") or message.get("conversation_message_id") or ""),
         str(message.get("from_id") or message.get("user_id") or ""),
         str(message.get("date") or ""),
@@ -340,7 +340,13 @@ def max_event_key(payload: dict[str, Any]) -> str:
     callback = _dict_or_empty(payload.get("callback") or payload.get("button") or payload.get("payload"))
     sender = _dict_or_empty(message.get("sender") or payload.get("sender") or payload.get("user") or callback.get("sender"))
     parts = [
-        str(payload.get("update_id") or payload.get("event_id") or payload.get("timestamp") or ""),
+        str(
+            payload.get("update_id")
+            or payload.get("event_id")
+            or callback.get("callback_id")
+            or payload.get("timestamp")
+            or ""
+        ),
         str(message.get("message_id") or message.get("id") or body.get("mid") or callback.get("id") or ""),
         str(sender.get("user_id") or sender.get("id") or payload.get("user_id") or payload.get("chat_id") or ""),
         str(message.get("created_at") or payload.get("created_at") or payload.get("timestamp") or ""),

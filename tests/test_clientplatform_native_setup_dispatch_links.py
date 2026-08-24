@@ -236,7 +236,7 @@ class NativeSetupProviderButtonTests(unittest.IsolatedAsyncioTestCase):
             {"command": "cpm:menu"},
         )
 
-    async def test_max_setup_button_is_link_while_regular_button_stays_message(self) -> None:
+    async def test_max_setup_button_is_link_while_regular_button_uses_callback(self) -> None:
         sender = _MaxSender()
         with mock.patch(
             "clientplatform.runtime.messenger_provider_clients._max_sender",
@@ -259,9 +259,9 @@ class NativeSetupProviderButtonTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             buttons[1],
             {
-                "type": "message",
+                "type": "callback",
                 "text": "Назад",
-                "payload": {"command": "cpm:menu"},
+                "payload": "cpm:menu",
             },
         )
 

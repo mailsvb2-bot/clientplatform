@@ -61,7 +61,9 @@ def _effective_max_attempts(
 ) -> int:
     """Terminal or non-replay-safe failures must not consume a retry budget."""
 
-    if non_replay_boundary_crossed:
+    if non_replay_boundary_crossed and not bool(
+        getattr(exc, "provider_write_definitely_rejected", False)
+    ):
         return 1
     retryable = getattr(exc, "retryable", True)
     return max(1, int(configured)) if retryable is not False else 1

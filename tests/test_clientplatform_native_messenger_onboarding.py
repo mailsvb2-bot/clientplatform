@@ -110,6 +110,30 @@ class NativeMessengerOnboardingTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(ciphertexts)
         self.assertTrue(all("raw-max-token" not in item for item in ciphertexts))
 
+    async def test_public_base_must_be_default_https_origin_before_provider_io(self) -> None:
+        sender = _FakeMaxSender()
+        for public_base_url in (
+            "https://client.example.test:8443",
+            "https://client.example.test/prefix",
+        ):
+            with self.subTest(public_base_url=public_base_url), self.assertRaisesRegex(
+                ValueError,
+                "HTTPS origin",
+            ):
+                await provision_max_channel(
+                    actor=self.actor,
+                    provider_token="raw-max-token",
+                    public_base_url=public_base_url,
+                    sender=sender,
+                    credential_vault=self.vault,
+                )
+
+        self.assertIsNone(sender.subscription)
+        stored = self.conn.execute(
+            "SELECT COUNT(*) AS c FROM connection_credentials"
+        ).fetchone()
+        self.assertEqual(0, int(stored["c"]))
+
     async def test_max_provider_failure_disables_route_and_connection(self) -> None:
         with self._db_patch(), self.assertRaisesRegex(RuntimeError, "provider unavailable"):
             await provision_max_channel(
@@ -128,8 +152,20 @@ class NativeMessengerOnboardingTests(unittest.IsolatedAsyncioTestCase):
             "SELECT status FROM messenger_ingress_routes WHERE business_id=? AND platform='max'",
             (self.actor.business_id,),
         ).fetchone()
+        credentials = self.conn.execute(
+            "SELECT status,ciphertext FROM connection_credentials "
+            "WHERE business_id=? AND platform='max'",
+            (self.actor.business_id,),
+        ).fetchall()
         self.assertEqual(connection["status"], "disabled")
         self.assertEqual(route["status"], "disabled")
+        self.assertTrue(credentials)
+        self.assertTrue(
+            all(
+                row["status"] == "revoked" and row["ciphertext"] == "revoked"
+                for row in credentials
+            )
+        )
 
     async def test_vk_verifies_group_and_configures_tenant_scoped_callback(self) -> None:
         sender = _FakeVkSender()

@@ -43,6 +43,12 @@ def _public_base_url(value: str) -> str:
         raise ValueError("messenger public base URL must use HTTPS")
     if parsed.username or parsed.password or parsed.query or parsed.fragment:
         raise ValueError("messenger public base URL is invalid")
+    try:
+        explicit_port = parsed.port
+    except ValueError as exc:
+        raise ValueError("messenger public base URL is invalid") from exc
+    if explicit_port is not None or parsed.path not in {"", "/"}:
+        raise ValueError("messenger public base URL must be an HTTPS origin")
     return normalized
 
 
@@ -127,19 +133,33 @@ def _persist_native_connection(
 def _disable_after_provider_failure(
     *,
     actor: TenantContext,
-    connection_id: str,
-    route_id: str,
+    connection: Connection,
+    route: MessengerIngressRoute,
 ) -> None:
     with get_db() as conn:
         routes = MessengerChannelRepository(conn)
         connections = ConnectionRepository(conn)
-        try:
-            routes.disable_route(actor=actor, route_id=route_id)
-        finally:
-            connections.disable_connection(
-                actor=actor,
-                connection_id=connection_id,
+        credentials = ConnectionCredentialStore(conn)
+        references = tuple(
+            reference
+            for reference in (
+                connection.credential_reference,
+                route.webhook_secret_reference,
+                route.confirmation_code_reference,
             )
+            if reference is not None
+        )
+        try:
+            routes.disable_route(actor=actor, route_id=route.id)
+        finally:
+            try:
+                connections.disable_connection(
+                    actor=actor,
+                    connection_id=connection.id,
+                )
+            finally:
+                for reference in references:
+                    credentials.revoke(actor=actor, reference=reference)
 
 async def provision_max_channel(
     *,
@@ -176,15 +196,15 @@ async def provision_max_channel(
     except (ValueError, OSError):
         _disable_after_provider_failure(
             actor=actor,
-            connection_id=connection.id,
-            route_id=route.id,
+            connection=connection,
+            route=route,
         )
         raise
     except RuntimeError:
         _disable_after_provider_failure(
             actor=actor,
-            connection_id=connection.id,
-            route_id=route.id,
+            connection=connection,
+            route=route,
         )
         raise
     display_name = str(identity.get("first_name") or identity.get("name") or "").strip() or None
@@ -240,15 +260,15 @@ async def provision_vk_channel(
     except (ValueError, OSError):
         _disable_after_provider_failure(
             actor=actor,
-            connection_id=connection.id,
-            route_id=route.id,
+            connection=connection,
+            route=route,
         )
         raise
     except RuntimeError:
         _disable_after_provider_failure(
             actor=actor,
-            connection_id=connection.id,
-            route_id=route.id,
+            connection=connection,
+            route=route,
         )
         raise
     display_name = str(group.get("name") or "").strip() or None

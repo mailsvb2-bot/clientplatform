@@ -223,6 +223,110 @@ def fail_inbound_event(platform: str, event_key: str | None, payload: dict[str, 
             )
 
 
+def fail_claimed_inbound_event(
+    platform: str,
+    event_key: str | None,
+    payload: dict[str, Any],
+    error: str,
+    *,
+    max_attempts: int = 5,
+    permanent: bool = False,
+) -> InboundFailureResult:
+    """Settle a claimed processing attempt without double-counting it.
+
+    ``claim_inbound_event`` increments the attempt counter when it grants a
+    lease. A failure settlement must therefore reuse that counter instead of
+    incrementing it a second time. Permanent domain rejections are dead-lettered
+    immediately so webhook providers receive HTTP 200 and do not amplify an
+    unrecoverable user action through repeated delivery.
+    """
+
+    key = _event_key(event_key, payload)
+    norm = normalize_platform(platform)
+    limit = max(1, int(max_attempts))
+    now = utc_now().replace(microsecond=0).isoformat()
+    payload_hash = _stable_hash(payload)
+    last_error = str(error or "unknown inbound failure")[:500]
+
+    with db() as conn:
+        with tx(conn):
+            _lock_event(conn, platform=norm, event_key=key)
+            row = conn.execute(
+                """
+                SELECT status, attempts
+                FROM messenger_webhook_events
+                WHERE platform=? AND event_key=?
+                LIMIT 1
+                """.strip(),
+                (norm, key),
+            ).fetchone()
+            if row is not None:
+                current_status = str(
+                    _row_value(row, "status", 0) or ""
+                ).strip().lower()
+                attempts = max(1, int(_row_value(row, "attempts", 1) or 0))
+                if current_status in {"completed", "dead_letter"}:
+                    return InboundFailureResult(
+                        event_key=key,
+                        attempts=attempts,
+                        retryable=False,
+                        dead_lettered=current_status == "dead_letter",
+                        recorded=False,
+                    )
+            else:
+                attempts = 1
+
+            dead_lettered = bool(permanent or attempts >= limit)
+            status = "dead_letter" if dead_lettered else "failed"
+            completed_at = now if dead_lettered else None
+            if row is None:
+                conn.execute(
+                    """
+                    INSERT INTO messenger_webhook_events(
+                        platform, event_key, received_at, payload_hash,
+                        status, attempts, updated_at, completed_at, last_error
+                    ) VALUES(?,?,?,?,?,?,?,?,?)
+                    """.strip(),
+                    (
+                        norm,
+                        key,
+                        now,
+                        payload_hash,
+                        status,
+                        attempts,
+                        now,
+                        completed_at,
+                        last_error,
+                    ),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE messenger_webhook_events
+                    SET status=?, updated_at=?, payload_hash=?, completed_at=?,
+                        last_error=?
+                    WHERE platform=? AND event_key=?
+                    """.strip(),
+                    (
+                        status,
+                        now,
+                        payload_hash,
+                        completed_at,
+                        last_error,
+                        norm,
+                        key,
+                    ),
+                )
+
+    return InboundFailureResult(
+        event_key=key,
+        attempts=attempts,
+        retryable=not dead_lettered,
+        dead_lettered=dead_lettered,
+        recorded=True,
+    )
+
+
 def register_inbound_event(platform: str, event_key: str | None, payload: dict[str, Any]) -> bool:
     """Compatibility API: claim and immediately complete a dedupe-only event."""
 

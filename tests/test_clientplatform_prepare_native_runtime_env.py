@@ -48,6 +48,38 @@ class NativeRuntimeProductionEnvPreparationTests(unittest.TestCase):
         self.assertIn("CLIENTPLATFORM_TELEGRAM_RUNTIME_ENABLED=0\n", prepared)
         self.assertNotIn("CLIENTPLATFORM_TELEGRAM_RUNTIME_ENABLED=1\n", prepared)
 
+    def test_enabled_omnichannel_receives_secure_vault_and_signing_defaults(self) -> None:
+        path = self._write_env(
+            _BASE_ENV + "CLIENTPLATFORM_OMNICHANNEL_INGRESS_ENABLED=1\n"
+        )
+
+        prepare(path)
+        prepared = path.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "CLIENTPLATFORM_MANAGED_BOT_CREDENTIAL_IDENTITY_FILE="
+            "/run/secrets/clientplatform-managed-bot/identity.txt\n",
+            prepared,
+        )
+        self.assertIn(
+            "CLIENTPLATFORM_MEDIA_SIGNING_SECRET_REFERENCE="
+            "secret://env/CLIENTPLATFORM_SECRET_MEDIA_SIGNING_KEY\n",
+            prepared,
+        )
+
+    def test_enabled_omnichannel_rejects_unsafe_identity_override(self) -> None:
+        path = self._write_env(
+            _BASE_ENV
+            + "CLIENTPLATFORM_OMNICHANNEL_INGRESS_ENABLED=1\n"
+            + "CLIENTPLATFORM_MANAGED_BOT_CREDENTIAL_IDENTITY_FILE=/tmp/identity.txt\n"
+        )
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "mismatched_clientplatform_managed_bot_credential_identity_file",
+        ):
+            prepare(path)
+
 
 if __name__ == "__main__":
     unittest.main()

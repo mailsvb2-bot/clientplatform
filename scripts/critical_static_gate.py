@@ -75,6 +75,17 @@ _CLIENTPLATFORM_YANDEX_ANALYTICS_FILES = (
     "handlers/clientplatform_yandex_analytics.py",
 )
 
+_CLIENTPLATFORM_NATIVE_MESSENGER_FILES = (
+    "clientplatform/application/native_messenger_onboarding.py",
+    "clientplatform/runtime/messenger_channel_ingress.py",
+    "clientplatform/runtime/messenger_provider_clients.py",
+    "clientplatform/runtime/native_messenger_http_admission.py",
+    "clientplatform/runtime/native_messenger_setup_http.py",
+    "clientplatform/runtime/native_messenger_setup_links.py",
+    "clientplatform/transport/native_messenger.py",
+    "scripts/clientplatform_messenger_channels_preflight.py",
+)
+
 TYPE_CONTRACT_FILES = (
     "check_db.py",
     "clientplatform/application/ad_oauth_sessions.py",
@@ -126,6 +137,7 @@ TYPE_CONTRACT_FILES = (
     "services/sales_desk_repository.py",
     "services/sales_desk_sync.py",
     *_CLIENTPLATFORM_MANAGED_BOT_TYPE_FILES,
+    *_CLIENTPLATFORM_NATIVE_MESSENGER_FILES,
     *_CLIENTPLATFORM_SALES_UI_FILES,
     *_CLIENTPLATFORM_YANDEX_ANALYTICS_FILES,
     *_REWARD_HARDENING_FILES,
@@ -181,6 +193,7 @@ SECURITY_SCAN_PATHS = (
     "services/sales_desk_repository.py",
     "services/sales_desk_sync.py",
     *_CLIENTPLATFORM_MANAGED_BOT_SECURITY_FILES,
+    *_CLIENTPLATFORM_NATIVE_MESSENGER_FILES,
     *_CLIENTPLATFORM_SALES_UI_FILES,
     *_CLIENTPLATFORM_YANDEX_ANALYTICS_FILES,
     *_REWARD_HARDENING_FILES,

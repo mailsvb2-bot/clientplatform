@@ -246,9 +246,9 @@ def _max_interaction_button(
             "url": link,
         }
     return {
-        "type": "message",
+        "type": "callback",
         "text": label,
-        "payload": {"command": command},
+        "payload": command,
     }
 
 
