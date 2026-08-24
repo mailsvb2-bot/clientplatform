@@ -9,8 +9,10 @@ from clientplatform.domain.activity import (
     InviteClaim,
     IssuedCustomerInvite,
 )
+from clientplatform.domain.customers import CustomerPlatform, normalize_identity_subject
 from clientplatform.domain.tenancy import TenantContext
 from clientplatform.infrastructure.postgres_safe_activity_repository import ActivityRepository
+from services.accounts.identity import resolve_account_for_identity
 from services.db import get_db, get_db_ro
 
 _REPOSITORY_INVITE_EXPIRED_ERROR = "customer invite has expired"
@@ -178,6 +180,61 @@ def claim_customer_invite(
                 # The repository has already transitioned the invite to `expired`.
                 # Swallow only this specific signal until get_db() commits that
                 # transition; re-raise a user-facing error after the transaction.
+                expired_error = exc
+    except (ActivityError, ValueError) as exc:
+        raise ActivityInvariantViolation(customer_invite_error_message(exc)) from exc
+
+    if expired_error is None:  # pragma: no cover - defensive invariant
+        raise RuntimeError("customer invite expiration signal was lost")
+    raise ActivityInvariantViolation(_CUSTOMER_INVITE_EXPIRED_MESSAGE) from expired_error
+
+
+
+def extract_customer_invite_token(value: object) -> str | None:
+    raw = " ".join(str(value or "").strip().split())
+    payload = raw
+    lowered = raw.casefold()
+    if lowered.startswith("/start ") or lowered.startswith("start "):
+        payload = raw.split(maxsplit=1)[1].strip()
+    if not payload.casefold().startswith("cpj_"):
+        return None
+    return payload[4:].strip()
+
+def claim_customer_invite_identity(
+    *,
+    token: str,
+    platform: CustomerPlatform | str,
+    external_subject: str,
+    username: str | None,
+    display_name: str | None,
+    expected_business_id: str | None = None,
+) -> InviteClaim:
+    normalized_platform, normalized_subject = normalize_identity_subject(
+        platform, external_subject
+    )
+    claiming_account_id = resolve_account_for_identity(
+        normalized_platform.value,
+        normalized_subject,
+        username=username,
+        display_name=display_name,
+        allow_create=False,
+    )
+    expired_error: ActivityInvariantViolation | None = None
+    try:
+        with get_db() as conn:
+            try:
+                return ActivityRepository(conn).claim_customer_invite_identity(
+                    token=token,
+                    platform=normalized_platform,
+                    external_subject=normalized_subject,
+                    username=username,
+                    display_name=display_name,
+                    claiming_account_id=claiming_account_id,
+                    expected_business_id=expected_business_id,
+                )
+            except ActivityInvariantViolation as exc:
+                if str(exc) != _REPOSITORY_INVITE_EXPIRED_ERROR:
+                    raise
                 expired_error = exc
     except (ActivityError, ValueError) as exc:
         raise ActivityInvariantViolation(customer_invite_error_message(exc)) from exc

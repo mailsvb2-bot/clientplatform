@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 from clientplatform.application.bookings import list_booking_slots
 from clientplatform.application.connections import list_connections
@@ -12,6 +13,7 @@ from clientplatform.application.tenancy import (
     list_accessible_businesses,
     resolve_tenant_context,
 )
+from clientplatform.domain.connections import ConnectionPlatform
 from clientplatform.domain.customer_interactions import (
     CustomerInteractionButton,
     CustomerInteractionMessage,
@@ -32,6 +34,8 @@ from services.messenger.bridge import (
 )
 from services.messenger.entrypoints import parse_start_payload
 
+
+log = logging.getLogger(__name__)
 
 _CUSTOMER_RECORD_ROLES = frozenset(
     {
@@ -65,6 +69,10 @@ _ALIASES = {
     "мессенджеры": "messengers",
 }
 _COMMAND_PREFIX = "cpm:"
+NativeSetupCommandIssuer = Callable[
+    [TenantContext, ConnectionPlatform, str],
+    str,
+]
 
 
 class NativeMemberBridgeRejected(RuntimeError):
@@ -222,6 +230,8 @@ def parse_native_member_interaction(value: object) -> ParsedMemberInteraction:
             "bookings",
             "programs",
             "messengers",
+            "connect-vk",
+            "connect-max",
         }:
             return ParsedMemberInteraction(action)
     return ParsedMemberInteraction("menu")
@@ -366,7 +376,11 @@ def _programs_message(actor: TenantContext) -> CustomerInteractionMessage:
     return CustomerInteractionMessage(text=text, rows=(_back_row(),))
 
 
-def _messengers_message(actor: TenantContext) -> CustomerInteractionMessage:
+def _messengers_message(
+    actor: TenantContext,
+    *,
+    setup_available: bool,
+) -> CustomerInteractionMessage:
     connections = list_connections(actor=actor)
     if not connections:
         text = "Подключённых мессенджеров пока нет."
@@ -378,7 +392,66 @@ def _messengers_message(actor: TenantContext) -> CustomerInteractionMessage:
             for item in connections
         ]
         text = "Мессенджеры\n\n" + "\n".join(lines)
-    return CustomerInteractionMessage(text=text, rows=(_back_row(),))
+    rows: list[tuple[CustomerInteractionButton, ...]] = []
+    if actor.role in _CONNECTION_ROLES and setup_available:
+        rows.extend(
+            [
+                (_button("🔵 Подключить ВКонтакте", "cpm:connect-vk"),),
+                (_button("🟣 Подключить MAX", "cpm:connect-max"),),
+            ]
+        )
+    rows.append(_back_row())
+    return CustomerInteractionMessage(text=text, rows=tuple(rows))
+
+
+def _setup_message(
+    actor: TenantContext,
+    *,
+    platform: ConnectionPlatform,
+    setup_issuer: NativeSetupCommandIssuer | None,
+    setup_key: str,
+) -> CustomerInteractionMessage:
+    if actor.role not in _CONNECTION_ROLES:
+        return _permission_message()
+    if setup_issuer is None:
+        return CustomerInteractionMessage(
+            text="Защищённая настройка мессенджера сейчас недоступна.",
+            rows=(_back_row(),),
+        )
+    try:
+        command = setup_issuer(actor, platform, setup_key)
+    except (RuntimeError, ValueError):
+        # The exception may contain a provider token, secret reference or raw
+        # capability. Log only stable context; never serialize exception text
+        # or traceback across this credential-adjacent boundary.
+        log.error(
+            "Native messenger setup command issuance failed",
+            extra={
+                "business_id": actor.business_id,
+                "member_user_id": actor.user_id,
+                "platform": platform.value,
+            },
+        )
+        return CustomerInteractionMessage(
+            text=(
+                "Не удалось подготовить защищённую настройку. "
+                "Повторите попытку позже."
+            ),
+            rows=(_back_row(),),
+        )
+    channel_name = "ВКонтакте" if platform == ConnectionPlatform.VK else "MAX"
+    return CustomerInteractionMessage(
+        text=(
+            f"Подключение {channel_name}\n\n"
+            "Кнопка ниже откроет защищённую HTTPS-страницу ClientPlatform. "
+            "Ссылка действует ограниченное время и предназначена только для этого бизнеса.\n\n"
+            "Токен провайдера вводите только на этой странице — не отправляйте его сообщением в мессенджере."
+        ),
+        rows=(
+            (_button("🔐 Открыть защищённую настройку", command),),
+            _back_row(),
+        ),
+    )
 
 
 def _render(
@@ -386,6 +459,8 @@ def _render(
     parsed: ParsedMemberInteraction,
     *,
     linked: bool,
+    setup_issuer: NativeSetupCommandIssuer | None,
+    setup_key: str,
 ) -> CustomerInteractionMessage:
     if parsed.action == "menu":
         return _menu_message(actor, linked=linked)
@@ -399,7 +474,24 @@ def _render(
         if parsed.action == "programs":
             return _programs_message(actor)
         if parsed.action == "messengers":
-            return _messengers_message(actor)
+            return _messengers_message(
+                actor,
+                setup_available=setup_issuer is not None,
+            )
+        if parsed.action == "connect-vk":
+            return _setup_message(
+                actor,
+                platform=ConnectionPlatform.VK,
+                setup_issuer=setup_issuer,
+                setup_key=setup_key,
+            )
+        if parsed.action == "connect-max":
+            return _setup_message(
+                actor,
+                platform=ConnectionPlatform.MAX,
+                setup_issuer=setup_issuer,
+                setup_key=setup_key,
+            )
     except TenantPermissionDenied:
         return _permission_message()
     return _menu_message(actor, linked=linked)
@@ -412,13 +504,24 @@ def process_native_member_interaction(
     external_subject: str,
     raw_text: object,
     provider_event_id: str,
+    setup_issuer: NativeSetupCommandIssuer | None = None,
 ) -> Any:
     actor = resolve_tenant_context(
         user_id=resolution.actor.user_id,
         business_id=route.business_id,
     )
     parsed = parse_native_member_interaction(raw_text)
-    interaction = _render(actor, parsed, linked=resolution.linked)
+    interaction_key = (
+        f"route:{route.id}:event:{provider_event_id}:"
+        + f"member:{actor.user_id}:action:{parsed.action}"
+    )
+    interaction = _render(
+        actor,
+        parsed,
+        linked=resolution.linked,
+        setup_issuer=setup_issuer,
+        setup_key=interaction_key,
+    )
     with get_db() as conn:
         return DispatchOutboxRepository(conn).materialize_member_interaction(
             business_id=route.business_id,
@@ -427,16 +530,14 @@ def process_native_member_interaction(
             platform=route.platform.value,
             external_subject=external_subject,
             interaction=interaction,
-            interaction_key=(
-                f"route:{route.id}:event:{provider_event_id}:"
-                + f"member:{actor.user_id}:action:{parsed.action}"
-            ),
+            interaction_key=interaction_key,
         )
 
 
 __all__ = [
     "NativeMemberBridgeRejected",
     "NativeMemberResolution",
+    "NativeSetupCommandIssuer",
     "parse_native_member_interaction",
     "process_native_member_interaction",
     "resolve_native_member",

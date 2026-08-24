@@ -1,11 +1,15 @@
 from __future__ import annotations
 
-from typing import Protocol
+import json
+from typing import Mapping, Protocol
 
 from clientplatform.domain.connections import ClaimedDispatch, ConnectionPlatform
 from clientplatform.domain.customer_interactions import CustomerInteractionMessage
 from clientplatform.domain.programs import ContentKind
 from clientplatform.transport.media import MediaReferenceResolver
+
+
+_RUNTIME_LINKS_KEY = "_runtime_link_buttons"
 
 
 class NativeMessengerClient(Protocol):
@@ -37,6 +41,7 @@ class NativeMessengerClient(Protocol):
         external_subject: str,
         interaction: CustomerInteractionMessage,
         idempotency_key: str,
+        button_links: Mapping[str, str] | None = None,
     ) -> str: ...
 
 
@@ -62,6 +67,43 @@ _INTERACTION_SOURCE_KINDS = frozenset(
         "member_interaction",
     }
 )
+
+
+def _runtime_button_links(
+    payload: str,
+    interaction: CustomerInteractionMessage,
+) -> dict[str, str]:
+    try:
+        raw = json.loads(str(payload or ""))
+    except json.JSONDecodeError as exc:
+        raise ValueError("native interaction runtime payload is invalid") from exc
+    if not isinstance(raw, dict):
+        raise ValueError("native interaction runtime payload is invalid")
+    value = raw.get(_RUNTIME_LINKS_KEY)
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError("native interaction runtime links are invalid")
+
+    allowed_commands = {
+        button.command
+        for row in interaction.rows
+        for button in row
+    }
+    links: dict[str, str] = {}
+    for command, raw_url in value.items():
+        normalized_command = str(command or "").strip()
+        url = str(raw_url or "").strip()
+        if normalized_command not in allowed_commands:
+            raise ValueError("native interaction runtime link command is not in payload")
+        if (
+            not url.startswith("https://")
+            or len(url) > 2048
+            or any(ord(char) < 32 or ord(char) == 127 for char in url)
+        ):
+            raise ValueError("native interaction runtime link URL is invalid")
+        links[normalized_command] = url
+    return links
 
 
 class _NativeMessengerDispatchAdapter:
@@ -91,12 +133,19 @@ class _NativeMessengerDispatchAdapter:
             and kind == ContentKind.MIXED
         ):
             interaction = CustomerInteractionMessage.from_json(payload)
-            result = await self._client.send_interaction(
-                token=token,
-                external_subject=item.external_subject,
-                interaction=interaction,
-                idempotency_key=item.dispatch.idempotency_key,
-            )
+            button_links = _runtime_button_links(payload, interaction)
+            kwargs = {
+                "token": token,
+                "external_subject": item.external_subject,
+                "interaction": interaction,
+                "idempotency_key": item.dispatch.idempotency_key,
+            }
+            if button_links:
+                # Existing injected test/legacy clients keep the historical
+                # signature for ordinary interactions. The extra argument is
+                # passed only when the worker materialized an ephemeral link.
+                kwargs["button_links"] = button_links
+            result = await self._client.send_interaction(**kwargs)
         elif kind in _MEDIA_KINDS:
             if self._media_resolver is not None:
                 payload = await self._media_resolver.resolve(payload, kind)

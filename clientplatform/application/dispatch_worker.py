@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
-from typing import Any
+import json
+from dataclasses import dataclass, replace
+from typing import Any, Protocol
 
 from clientplatform.domain.connections import (
     ClaimedDispatch,
     ConnectionPlatform,
     DispatchStatus,
 )
+from clientplatform.domain.customer_interactions import CustomerInteractionMessage
+from clientplatform.domain.programs import ContentKind
 from clientplatform.infrastructure import DispatchOutboxRepository
 from clientplatform.infrastructure.safe_dispatch_outbox import (
     mark_non_replay_safe_dispatch_boundary,
@@ -16,6 +19,20 @@ from clientplatform.infrastructure.safe_dispatch_outbox import (
 from clientplatform.infrastructure.unified_dispatch_outbox import ClaimedProviderDispatch
 from clientplatform.transport.base import AdapterRegistry, CredentialProvider
 from services.db import get_db
+
+
+_RUNTIME_LINKS_KEY = "_runtime_link_buttons"
+_SETUP_COMMAND_PREFIX = "cpm:setup:"
+
+
+class InteractionLinkResolver(Protocol):
+    def __call__(self, *, command: str, business_id: str) -> str | None: ...
+
+
+class NativeInteractionLinkResolutionError(RuntimeError):
+    """A short-lived native interaction link could not be prepared safely."""
+
+    retryable = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,6 +118,95 @@ def _provider_claim_can_cross_provider_boundary(item: object) -> bool:
         return True
 
 
+def _validated_runtime_link(value: object) -> str:
+    url = str(value or "").strip()
+    if (
+        not url.startswith("https://")
+        or len(url) > 2048
+        or any(ord(char) < 32 or ord(char) == 127 for char in url)
+    ):
+        raise NativeInteractionLinkResolutionError(
+            "native interaction link resolver returned an invalid HTTPS URL"
+        )
+    return url
+
+
+def _materialize_native_interaction_links(
+    item: object,
+    resolver: InteractionLinkResolver | None,
+) -> object:
+    """Resolve short-lived staff links only in memory before provider I/O.
+
+    The durable outbox keeps only the non-secret ``cpm:setup:<session UUID>``
+    command. The bearer URL is inserted into a transient payload copy after
+    live-recipient revalidation and before credential lookup/non-replay marking.
+    """
+
+    if not isinstance(item, ClaimedProviderDispatch):
+        return item
+    dispatch = item.dispatch
+    if (
+        dispatch.source_kind != "member_interaction"
+        or dispatch.payload_kind != ContentKind.MIXED
+    ):
+        return item
+
+    interaction = CustomerInteractionMessage.from_json(dispatch.payload_ref)
+    setup_commands = {
+        button.command
+        for row in interaction.rows
+        for button in row
+        if button.command.startswith(_SETUP_COMMAND_PREFIX)
+    }
+    if not setup_commands:
+        return item
+    if resolver is None:
+        raise NativeInteractionLinkResolutionError(
+            "native setup link resolver is unavailable"
+        )
+
+    links: dict[str, str] = {}
+    for command in sorted(setup_commands):
+        try:
+            resolved = resolver(
+                command=command,
+                business_id=dispatch.business_id,
+            )
+        except NativeInteractionLinkResolutionError:
+            raise
+        except Exception as exc:  # validator: allow-wide-except - resolver failures are sanitized
+            raise NativeInteractionLinkResolutionError(
+                "native setup link is expired, revoked or unavailable"
+            ) from exc
+        if resolved is None:
+            raise NativeInteractionLinkResolutionError(
+                "native setup command was not resolved"
+            )
+        links[command] = _validated_runtime_link(resolved)
+
+    try:
+        raw_payload = json.loads(dispatch.payload_ref)
+    except json.JSONDecodeError as exc:  # pragma: no cover - domain parser already guards this
+        raise NativeInteractionLinkResolutionError(
+            "native interaction payload is invalid"
+        ) from exc
+    if not isinstance(raw_payload, dict):  # pragma: no cover - domain parser already guards this
+        raise NativeInteractionLinkResolutionError(
+            "native interaction payload is invalid"
+        )
+    raw_payload[_RUNTIME_LINKS_KEY] = links
+    runtime_payload = json.dumps(
+        raw_payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return replace(
+        item,
+        dispatch=replace(dispatch, payload_ref=runtime_payload),
+    )
+
+
 def _mark_non_replay_boundary(item: object) -> bool:
     if isinstance(item, ClaimedProviderDispatch):
         with get_db() as conn:
@@ -121,6 +227,7 @@ async def run_dispatch_batch(
     limit: int = 10,
     max_attempts: int = 8,
     lock_ttl_seconds: int = 900,
+    interaction_link_resolver: InteractionLinkResolver | None = None,
 ) -> DispatchBatchResult:
     """Claim, send and settle a bounded batch.
 
@@ -130,6 +237,10 @@ async def run_dispatch_batch(
     customer/staff work are revalidated once more after claim and before
     credential resolution/provider I/O so revocation is honored at the send
     boundary.
+
+    Short-lived native staff setup URLs are reconstructed only after that live
+    authority check and only in the in-memory claimed item. They never replace
+    the digest/session reference stored in the durable outbox.
 
     Non-idempotent provider calls are durably marked immediately before network
     I/O. Once that boundary is crossed, failure or worker cancellation must never
@@ -158,6 +269,11 @@ async def run_dispatch_batch(
             if not allowed:
                 continue
 
+            send_item = await asyncio.to_thread(
+                _materialize_native_interaction_links,
+                item,
+                interaction_link_resolver,
+            )
             credential = str(
                 await asyncio.to_thread(
                     credential_provider.resolve,
@@ -173,7 +289,7 @@ async def run_dispatch_batch(
                 _mark_non_replay_boundary,
                 item,
             )
-            provider_message_id = await adapter.send(item, credential)
+            provider_message_id = await adapter.send(send_item, credential)
             with get_db() as conn:
                 DispatchOutboxRepository(conn).mark_sent(
                     item,

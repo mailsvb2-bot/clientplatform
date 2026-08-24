@@ -36,6 +36,7 @@ def test_canonical_vk_max_preflight_does_not_require_telegram_control_bot() -> N
             "CLIENTPLATFORM_TELEGRAM_RUNTIME_ENABLED": "0",
             "TELEGRAM_TRANSPORT": "polling",
             "CLIENTPLATFORM_OMNICHANNEL_INGRESS_ENABLED": "1",
+            "CLIENTPLATFORM_TELEGRAM_RUNTIME_ENABLED": "0",
             "MAX_WEBHOOK_ENABLED": "0",
             "VK_WEBHOOK_ENABLED": "0",
         },

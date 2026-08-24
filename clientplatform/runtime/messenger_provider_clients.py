@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-import json
 import asyncio
 import hashlib
 import ipaddress
+import json
 import socket
 import tempfile
 import urllib.error
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 from urllib.parse import urljoin, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
@@ -61,7 +61,9 @@ def _vk_random_id(idempotency_key: str) -> int:
 
 def _safe_suffix(reference: str) -> str:
     suffix = Path(urlsplit(reference).path).suffix.lower()
-    if not suffix or len(suffix) > 10 or any(char not in ".abcdefghijklmnopqrstuvwxyz0123456789" for char in suffix):
+    if not suffix or len(suffix) > 10 or any(
+        char not in ".abcdefghijklmnopqrstuvwxyz0123456789" for char in suffix
+    ):
         return ".bin"
     return suffix
 
@@ -149,7 +151,9 @@ def _materialize_media_sync(reference: str) -> tuple[Path, bool]:
                         try:
                             declared_size = int(declared)
                         except (TypeError, ValueError) as exc:
-                            raise ValueError("provider media Content-Length is invalid") from exc
+                            raise ValueError(
+                                "provider media Content-Length is invalid"
+                            ) from exc
                         if declared_size > _MAX_MEDIA_BYTES:
                             raise ValueError("provider media exceeds size limit")
                     while True:
@@ -196,6 +200,58 @@ def _max_sender(token: str):  # noqa: ANN202
     return MaxBotSender(token=token)
 
 
+def _vk_interaction_button(
+    *,
+    label: str,
+    command: str,
+    button_links: Mapping[str, str],
+) -> dict[str, Any]:
+    link = button_links.get(command)
+    if link is not None:
+        # VK open_link buttons deliberately have no color. VK documents color
+        # for text/callback controls; retained clients accept open_link as the
+        # native URL action without sending a message back to the bot.
+        return {
+            "action": {
+                "type": "open_link",
+                "link": link,
+                "label": label,
+            }
+        }
+    return {
+        "action": {
+            "type": "text",
+            "label": label,
+            "payload": json.dumps(
+                {"command": command},
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+        },
+        "color": "secondary",
+    }
+
+
+def _max_interaction_button(
+    *,
+    label: str,
+    command: str,
+    button_links: Mapping[str, str],
+) -> dict[str, Any]:
+    link = button_links.get(command)
+    if link is not None:
+        return {
+            "type": "link",
+            "text": label,
+            "url": link,
+        }
+    return {
+        "type": "message",
+        "text": label,
+        "payload": {"command": command},
+    }
+
+
 class VkRuntimeClient:
     """Canonical VK client backed by the retained low-level provider transport."""
 
@@ -224,24 +280,19 @@ class VkRuntimeClient:
         external_subject: str,
         interaction: CustomerInteractionMessage,
         idempotency_key: str,
+        button_links: Mapping[str, str] | None = None,
     ) -> str:
+        links = dict(button_links or {})
         keyboard = {
             "one_time": True,
             "inline": True,
             "buttons": [
                 [
-                    {
-                        "action": {
-                            "type": "text",
-                            "label": button.label,
-                            "payload": json.dumps(
-                                {"command": button.command},
-                                ensure_ascii=False,
-                                separators=(",", ":"),
-                            ),
-                        },
-                        "color": "secondary",
-                    }
+                    _vk_interaction_button(
+                        label=button.label,
+                        command=button.command,
+                        button_links=links,
+                    )
                     for button in row
                 ]
                 for row in interaction.rows
@@ -319,8 +370,10 @@ class MaxRuntimeClient:
         external_subject: str,
         interaction: CustomerInteractionMessage,
         idempotency_key: str,
+        button_links: Mapping[str, str] | None = None,
     ) -> str:
         del idempotency_key
+        links = dict(button_links or {})
         attachments = []
         if interaction.rows:
             attachments.append(
@@ -329,11 +382,11 @@ class MaxRuntimeClient:
                     "payload": {
                         "buttons": [
                             [
-                                {
-                                    "type": "message",
-                                    "text": button.label,
-                                    "payload": {"command": button.command},
-                                }
+                                _max_interaction_button(
+                                    label=button.label,
+                                    command=button.command,
+                                    button_links=links,
+                                )
                                 for button in row
                             ]
                             for row in interaction.rows
