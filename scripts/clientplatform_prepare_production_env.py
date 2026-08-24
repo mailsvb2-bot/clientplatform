@@ -17,6 +17,7 @@ _AD_OAUTH_REDIRECT_URI = "https://oauth.yandex.ru/verification_code"
 _MANAGED_BOT_IDENTITY_FILE = "/run/secrets/clientplatform-managed-bot/identity.txt"
 _MANAGED_BOT_HOST_DIR = "/var/lib/clientplatform/managed-bot-secrets"
 _MAX_API2_BASE_URL = "https://platform-api2.max.ru"
+_MAX_CA_BUNDLE_FILE = "/run/secrets/clientplatform-managed-bot/max-ca.pem"
 _TELEGRAM_STARS_DEFAULTS = {
     "TELEGRAM_STARS_PRICING_MODE": "explicit",
     "TELEGRAM_STARS_PRICE_PRACTICE_START_7": "1500",
@@ -171,6 +172,9 @@ def _validate_native_omnichannel_security(values: dict[str, str]) -> None:
         raise EnvironmentPreparationError(
             "clientplatform_secret_media_signing_key_too_short"
         )
+    max_ca_bundle = str(values.get("MAX_CA_BUNDLE", "") or "").strip()
+    if max_ca_bundle and max_ca_bundle != _MAX_CA_BUNDLE_FILE:
+        raise EnvironmentPreparationError("mismatched_max_ca_bundle")
 
 
 def prepare(path: Path) -> tuple[str, ...]:
@@ -233,6 +237,9 @@ def prepare(path: Path) -> tuple[str, ...]:
         "CLIENTPLATFORM_MANAGED_BOT_CREDENTIAL_HOST_DIR": _MANAGED_BOT_HOST_DIR,
         "CLIENTPLATFORM_MANAGED_BOT_CREDENTIAL_ALLOW_GENERATE": "0",
         "CLIENTPLATFORM_OMNICHANNEL_INGRESS_ENABLED": "0",
+        "CLIENTPLATFORM_MAX_WEBHOOK_RECONCILE_INTERVAL_SEC": "21600",
+        "CLIENTPLATFORM_MAX_WEBHOOK_RECONCILE_RETRY_SEC": "900",
+        "CLIENTPLATFORM_MAX_WEBHOOK_RECONCILE_BATCH_SIZE": "100",
         "MAX_WEBHOOK_ENABLED": "0",
         "MAX_API_BASE_URL": _MAX_API2_BASE_URL,
         "VK_WEBHOOK_ENABLED": "0",
