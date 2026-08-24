@@ -48,7 +48,9 @@ class NativeRuntimeProductionEnvPreparationTests(unittest.TestCase):
         self.assertIn("CLIENTPLATFORM_TELEGRAM_RUNTIME_ENABLED=0\n", prepared)
         self.assertNotIn("CLIENTPLATFORM_TELEGRAM_RUNTIME_ENABLED=1\n", prepared)
 
-    def test_enabled_omnichannel_receives_secure_vault_and_signing_defaults(self) -> None:
+    def test_enabled_omnichannel_receives_secure_vault_signing_and_recovery_defaults(
+        self,
+    ) -> None:
         path = self._write_env(
             _BASE_ENV + "CLIENTPLATFORM_OMNICHANNEL_INGRESS_ENABLED=1\n"
         )
@@ -66,6 +68,18 @@ class NativeRuntimeProductionEnvPreparationTests(unittest.TestCase):
             "secret://env/CLIENTPLATFORM_SECRET_MEDIA_SIGNING_KEY\n",
             prepared,
         )
+        self.assertIn(
+            "CLIENTPLATFORM_MAX_WEBHOOK_RECONCILE_INTERVAL_SEC=21600\n",
+            prepared,
+        )
+        self.assertIn(
+            "CLIENTPLATFORM_MAX_WEBHOOK_RECONCILE_RETRY_SEC=900\n",
+            prepared,
+        )
+        self.assertIn(
+            "CLIENTPLATFORM_MAX_WEBHOOK_RECONCILE_BATCH_SIZE=100\n",
+            prepared,
+        )
 
     def test_enabled_omnichannel_rejects_unsafe_identity_override(self) -> None:
         path = self._write_env(
@@ -79,6 +93,34 @@ class NativeRuntimeProductionEnvPreparationTests(unittest.TestCase):
             "mismatched_clientplatform_managed_bot_credential_identity_file",
         ):
             prepare(path)
+
+    def test_enabled_omnichannel_rejects_max_ca_outside_read_only_security_mount(
+        self,
+    ) -> None:
+        path = self._write_env(
+            _BASE_ENV
+            + "CLIENTPLATFORM_OMNICHANNEL_INGRESS_ENABLED=1\n"
+            + "MAX_CA_BUNDLE=/tmp/max-ca.pem\n"
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "mismatched_max_ca_bundle"):
+            prepare(path)
+
+    def test_enabled_omnichannel_preserves_reviewed_max_ca_mount_path(self) -> None:
+        path = self._write_env(
+            _BASE_ENV
+            + "CLIENTPLATFORM_OMNICHANNEL_INGRESS_ENABLED=1\n"
+            + "MAX_CA_BUNDLE=/run/secrets/clientplatform-managed-bot/max-ca.pem\n"
+        )
+
+        added = prepare(path)
+        prepared = path.read_text(encoding="utf-8")
+
+        self.assertNotIn("MAX_CA_BUNDLE", added)
+        self.assertIn(
+            "MAX_CA_BUNDLE=/run/secrets/clientplatform-managed-bot/max-ca.pem\n",
+            prepared,
+        )
 
 
 if __name__ == "__main__":
