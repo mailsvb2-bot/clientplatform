@@ -7,6 +7,14 @@
         reverse_proxy {$CLIENTPLATFORM_INGRESS_UPSTREAM:127.0.0.1:8181}
     }
 
+    # Canonical tenant-scoped VK/MAX ingress must win over the broad
+    # /clientplatform/* media matcher below. Route UUID + provider secret are
+    # resolved by the application; no business_id is trusted from the request.
+    @clientplatform_messenger_webhooks path /clientplatform/webhooks/vk/* /clientplatform/webhooks/max/*
+    handle @clientplatform_messenger_webhooks {
+        reverse_proxy {$CLIENTPLATFORM_INGRESS_UPSTREAM:127.0.0.1:8181}
+    }
+
     @ad_oauth path /oauth/yandex-direct/callback
     handle @ad_oauth {
         reverse_proxy {$CLIENTPLATFORM_INGRESS_UPSTREAM:127.0.0.1:8181}

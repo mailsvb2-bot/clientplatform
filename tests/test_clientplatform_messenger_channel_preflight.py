@@ -59,6 +59,46 @@ class MessengerChannelPreflightTests(unittest.TestCase):
         self.assertFalse(inspected.max_enabled)
         self.assertFalse(inspected.vk_enabled)
 
+    def test_canonical_omnichannel_ingress_needs_https_not_legacy_global_tokens(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "APP_ENV": "production",
+                "TELEGRAM_TRANSPORT": "polling",
+                "CLIENTPLATFORM_OMNICHANNEL_INGRESS_ENABLED": "1",
+                "MAX_WEBHOOK_ENABLED": "0",
+                "VK_WEBHOOK_ENABLED": "0",
+            },
+            clear=False,
+        ), self._settings(MESSENGER_PUBLIC_BASE_URL="https://client.example.test"):
+            inspected = preflight.inspect_messenger_channels()
+
+        self.assertTrue(inspected.omnichannel_enabled)
+        self.assertTrue(inspected.omnichannel_ready)
+        self.assertTrue(inspected.webhook_runtime_ready)
+        self.assertEqual(inspected.missing, ())
+        self.assertTrue(inspected.ok)
+
+    def test_canonical_omnichannel_ingress_rejects_insecure_production_url(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "APP_ENV": "production",
+                "TELEGRAM_TRANSPORT": "polling",
+                "CLIENTPLATFORM_OMNICHANNEL_INGRESS_ENABLED": "1",
+                "MAX_WEBHOOK_ENABLED": "0",
+                "VK_WEBHOOK_ENABLED": "0",
+            },
+            clear=False,
+        ), self._settings(MESSENGER_PUBLIC_BASE_URL="http://client.example.test"):
+            inspected = preflight.inspect_messenger_channels()
+
+        self.assertTrue(inspected.omnichannel_enabled)
+        self.assertFalse(inspected.omnichannel_ready)
+        self.assertFalse(inspected.webhook_runtime_ready)
+        self.assertIn("MESSENGER_PUBLIC_BASE_URL must use https://", inspected.missing)
+        self.assertFalse(inspected.ok)
+
     def test_partial_disabled_channel_is_warning_not_startup_failure(self) -> None:
         with patch.dict(
             os.environ,
@@ -224,6 +264,8 @@ class MessengerChannelPreflightTests(unittest.TestCase):
     def test_cli_success_emits_safe_json_and_success_marker(self) -> None:
         result = preflight.MessengerChannelPreflight(
             telegram_transport="polling",
+            omnichannel_enabled=False,
+            omnichannel_ready=True,
             max_enabled=False,
             max_ready=True,
             vk_enabled=False,
@@ -251,6 +293,8 @@ class MessengerChannelPreflightTests(unittest.TestCase):
     def test_cli_failure_emits_only_missing_names_and_nonzero_exit(self) -> None:
         result = preflight.MessengerChannelPreflight(
             telegram_transport="polling",
+            omnichannel_enabled=False,
+            omnichannel_ready=True,
             max_enabled=True,
             max_ready=False,
             vk_enabled=False,

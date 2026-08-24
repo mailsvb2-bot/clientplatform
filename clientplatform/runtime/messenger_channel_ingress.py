@@ -70,7 +70,13 @@ def _max_raw_message(payload: Mapping[str, Any]) -> tuple[str, str | None, str |
     message = _mapping(payload.get("message"))
     body = _mapping(message.get("body"))
     callback = _mapping(payload.get("callback") or payload.get("button") or payload.get("payload"))
-    sender = _mapping(message.get("sender") or payload.get("sender") or callback.get("sender"))
+    sender = _mapping(
+        message.get("sender")
+        or payload.get("sender")
+        or payload.get("user")
+        or callback.get("sender")
+        or callback.get("user")
+    )
     external = (
         sender.get("user_id")
         or sender.get("id")
@@ -89,7 +95,15 @@ def _max_raw_message(payload: Mapping[str, Any]) -> tuple[str, str | None, str |
         or text_from_max_payload(payload.get("payload"))
     )
     text = str(payload_text or message.get("text") or body.get("text") or payload.get("text") or "").strip()
-    display_name = str(sender.get("name") or sender.get("display_name") or "").strip() or None
+    display_name = str(
+        sender.get("display_name")
+        or sender.get("name")
+        or " ".join(
+            part for part in (str(sender.get("first_name") or "").strip(), str(sender.get("last_name") or "").strip())
+            if part
+        )
+        or ""
+    ).strip() or None
     return subject, text, display_name
 
 
