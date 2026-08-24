@@ -5,7 +5,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from clientplatform.application import max_dispatch_pacing
+from clientplatform.application.dispatch_worker import _effective_max_attempts
 from clientplatform.domain.connections import ConnectionPlatform
+from runtime.messenger_max_sender import MaxProviderRateLimitError
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -93,6 +95,37 @@ class MaxDispatchPacingTests(unittest.TestCase):
         self.assertGreaterEqual(
             body.count("_provider_claim_can_cross_provider_boundary"),
             2,
+        )
+
+    def test_max_429_remains_replay_safe_after_non_replay_marker(self) -> None:
+        # After a process restart the in-memory pacing reservations are empty, so
+        # a boundary request can still race an existing provider window. MAX 429
+        # explicitly means the provider rejected the write before creating the
+        # message; keep the durable retry budget even though the non-replay marker
+        # was already committed immediately before network I/O.
+        rate_limited = MaxProviderRateLimitError(
+            "MAX rate limited",
+            code="max.http_429",
+        )
+
+        self.assertTrue(rate_limited.provider_write_definitely_rejected)
+        self.assertEqual(
+            _effective_max_attempts(
+                rate_limited,
+                8,
+                non_replay_boundary_crossed=True,
+            ),
+            8,
+        )
+
+    def test_unknown_post_boundary_failure_is_not_automatically_replayed(self) -> None:
+        self.assertEqual(
+            _effective_max_attempts(
+                RuntimeError("ambiguous provider outcome"),
+                8,
+                non_replay_boundary_crossed=True,
+            ),
+            1,
         )
 
 
