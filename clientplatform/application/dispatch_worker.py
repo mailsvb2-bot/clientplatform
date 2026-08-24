@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from dataclasses import dataclass, replace
 from typing import Any, Protocol
 
@@ -22,6 +23,7 @@ from clientplatform.transport.base import AdapterRegistry, CredentialProvider
 from services.db import get_db
 
 
+LOGGER = logging.getLogger(__name__)
 _RUNTIME_LINKS_KEY = "_runtime_link_buttons"
 _SETUP_COMMAND_PREFIX = "cpm:setup:"
 
@@ -84,8 +86,14 @@ def _release_claims(
                 )
         except Exception:
             # The lease can already be stale or completed. Cancellation must not
-            # be masked by a best-effort cleanup failure.
-            continue
+            # be masked by a best-effort cleanup failure, but the failure must be
+            # observable so operators can distinguish normal TTL recovery from a
+            # persistent database/lease defect.
+            LOGGER.warning(
+                "dispatch lease cleanup failed during %s; lease will recover by TTL",
+                reason,
+                exc_info=True,
+            )
 
 
 def _claims_releasable_after_cancel(
