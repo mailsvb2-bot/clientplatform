@@ -76,10 +76,13 @@ _CLIENTPLATFORM_YANDEX_ANALYTICS_FILES = (
 )
 
 _CLIENTPLATFORM_NATIVE_MESSENGER_FILES = (
+    "clientplatform/application/dispatch_worker.py",
+    "clientplatform/application/max_dispatch_pacing.py",
     "clientplatform/application/native_messenger_onboarding.py",
     "clientplatform/runtime/messenger_channel_ingress.py",
     "clientplatform/runtime/messenger_provider_clients.py",
     "clientplatform/runtime/native_messenger_http_admission.py",
+    "clientplatform/runtime/native_messenger_reconciliation.py",
     "clientplatform/runtime/native_messenger_setup_http.py",
     "clientplatform/runtime/native_messenger_setup_links.py",
     "clientplatform/transport/native_messenger.py",
