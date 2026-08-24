@@ -303,16 +303,19 @@ class MaxBotSender:
             )
         except ProviderPermanentHTTPError as exc:
             raise self._permanent_http_error(exc) from exc
-        existing_urls = _max_subscription_urls(existing)
-        if existing_urls is None:
+        if _max_subscription_urls(existing) is None:
             raise _max_error(
                 "subscription_list",
                 _max_error_code(existing) or "provider_response_invalid",
             )
         normalized_target = target.rstrip("/")
-        if normalized_target in existing_urls:
-            return {"success": True, "already_present": True}
 
+        # MAX uses POST /subscriptions both to create and to update an existing
+        # webhook subscription. Reconcile the desired secret and update_types on
+        # every provisioning attempt, even when GET already reports the same URL.
+        # Otherwise a retry after locally rotating/revoking the secret can leave
+        # MAX delivering the old X-Max-Bot-Api-Secret to a route expecting a new
+        # value, producing a permanently broken but apparently healthy channel.
         try:
             data = await asyncio.to_thread(
                 json_request,
