@@ -92,12 +92,17 @@ def test_max_ca_bundle_is_used_by_api_and_upload(monkeypatch, tmp_path: Path) ->
     source.write_bytes(b"audio")
     bundle = tmp_path / "ca.pem"
     bundle.write_text("test-ca", encoding="utf-8")
-    sentinel = object()
     captured: dict[str, object] = {}
+
+    class FakeSslContext:
+        def load_verify_locations(self, *, cafile=None, capath=None, cadata=None) -> None:
+            captured["loaded_cafile"] = cafile
+
+    sentinel = FakeSslContext()
 
     monkeypatch.setenv("APP_ENV", "dev")
     monkeypatch.setenv("MAX_CA_BUNDLE", str(bundle))
-    monkeypatch.setattr("runtime.messenger_max_sender.ssl.create_default_context", lambda *, cafile: sentinel)
+    monkeypatch.setattr("runtime.messenger_max_sender.ssl.create_default_context", lambda: sentinel)
     monkeypatch.setattr("runtime.messenger_max_sender.get_cached_media_token", lambda *args, **kwargs: None)
     monkeypatch.setattr("runtime.messenger_max_sender.store_media_token", lambda *args, **kwargs: None)
 
@@ -114,6 +119,7 @@ def test_max_ca_bundle_is_used_by_api_and_upload(monkeypatch, tmp_path: Path) ->
 
     asyncio.run(MaxBotSender(token="bot-secret")._ensure_media_token(source, media_type="audio"))
 
+    assert captured["loaded_cafile"] == str(bundle)
     assert captured["api_ssl_context"] is sentinel
     assert captured["upload_ssl_context"] is sentinel
 
