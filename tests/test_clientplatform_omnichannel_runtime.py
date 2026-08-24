@@ -4,6 +4,7 @@ import importlib.util
 import json
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
@@ -78,6 +79,79 @@ class OmnichannelRuntimeIngressTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(200, response.status)
         self.assertEqual("vk-confirmation-code", response.text)
+
+    async def test_accepted_vk_command_refreshes_latest_channel_activity(self) -> None:
+        from clientplatform.runtime.messenger_channel_ingress import canonical_vk_webhook
+
+        route = MessengerIngressRoute(
+            id=str(uuid4()),
+            business_id=str(uuid4()),
+            connection_id=str(uuid4()),
+            platform=ConnectionPlatform.VK,
+            external_route_id="424242",
+            webhook_secret_reference="secret://env/CLIENTPLATFORM_SECRET_VK_WEBHOOK_TEST",
+            confirmation_code_reference="secret://env/CLIENTPLATFORM_SECRET_VK_CONFIRMATION_TEST",
+            status="active",
+            created_by_member_id=str(uuid4()),
+            created_at="2026-08-16T00:00:00+00:00",
+            updated_at="2026-08-16T00:00:00+00:00",
+        )
+        request = _FakeRequest(
+            {
+                "type": "message_new",
+                "event_id": "vk-event-1",
+                "group_id": "424242",
+                "secret": "route-webhook-secret",
+            },
+            route_id=route.id,
+        )
+        identity = SimpleNamespace(
+            customer_id=str(uuid4()),
+            external_subject="778899",
+        )
+
+        with (
+            patch(
+                "clientplatform.runtime.messenger_channel_ingress.resolve_messenger_ingress_route",
+                return_value=route,
+            ),
+            patch(
+                "clientplatform.runtime.messenger_channel_ingress.EnvironmentCredentialProvider.resolve",
+                return_value="route-webhook-secret",
+            ),
+            patch(
+                "clientplatform.runtime.messenger_channel_ingress._vk_raw_message",
+                return_value=("778899", "/start", "Анна"),
+            ),
+            patch(
+                "clientplatform.runtime.messenger_channel_ingress.claim_inbound_event",
+                return_value=True,
+            ),
+            patch(
+                "clientplatform.runtime.messenger_channel_ingress.ensure_channel_customer",
+                return_value=identity,
+            ),
+            patch(
+                "clientplatform.runtime.messenger_channel_ingress.record_customer_contact",
+                return_value=True,
+            ) as record_contact,
+            patch(
+                "clientplatform.runtime.messenger_channel_ingress.record_customer_channel_message",
+            ) as record_sales,
+            patch(
+                "clientplatform.runtime.messenger_channel_ingress.complete_inbound_event",
+            ),
+        ):
+            response = await canonical_vk_webhook(request)  # type: ignore[arg-type]
+
+        self.assertEqual(200, response.status)
+        record_contact.assert_called_once_with(
+            business_id=route.business_id,
+            platform="vk",
+            external_subject="778899",
+            display_name="Анна",
+        )
+        record_sales.assert_not_called()
 
 
 class _FakeMaxSender:

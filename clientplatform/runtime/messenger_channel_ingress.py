@@ -14,6 +14,7 @@ from clientplatform.application.messenger_channels import (
     ensure_channel_customer,
     resolve_messenger_ingress_route,
 )
+from clientplatform.application.customer_activity import record_customer_contact
 from clientplatform.application.sales_intelligence import (
     normalize_customer_message_text,
     record_customer_channel_message,
@@ -193,6 +194,16 @@ async def _process_business_event(
                 external_subject=external_subject,
                 display_name=display_name,
             )
+
+        contact_recorded = await asyncio.to_thread(
+            record_customer_contact,
+            business_id=route.business_id,
+            platform=platform.value,
+            external_subject=identity.external_subject,
+            display_name=display_name,
+        )
+        if not contact_recorded:
+            raise ValueError("accepted messenger identity disappeared before activity update")
 
         message_text = normalize_customer_message_text(raw_text)
         if message_text is not None and link_token is None:

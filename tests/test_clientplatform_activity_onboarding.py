@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from unittest.mock import patch
 
 from clientplatform.application.control import (
+    business_connection_statuses,
     create_single_lesson_program,
     prepare_program_delivery,
 )
@@ -244,6 +245,37 @@ class ClientPlatformActivityOnboardingTests(unittest.TestCase):
         )
         self.assertEqual(prepared.dispatch.payload_ref, "telegram-file-id")
         self.assertEqual(prepared.dispatch.status.value, "pending")
+
+    def test_operational_staff_reads_only_tenant_connection_statuses(self) -> None:
+        connections = ConnectionRepository(self.conn)
+        connection = connections.create_connection(
+            actor=self.owner_a,
+            platform="vk",
+            connection_type="vk_community",
+            external_account_id="441002",
+            credential_reference="secret://env/CLIENTPLATFORM_SECRET_TEST_VK_STATUS",
+        )
+        self.tenancy.grant_member(
+            actor=self.owner_a,
+            user_id=303,
+            role="support",
+        )
+        support = self.tenancy.resolve_context(
+            user_id=303,
+            business_id=self.business_a.business.id,
+        )
+
+        @contextmanager
+        def local_db():
+            yield self.conn
+
+        with patch("clientplatform.application.control.get_db", local_db):
+            statuses = business_connection_statuses(actor=support)
+
+        self.assertEqual(
+            statuses,
+            [(connection.platform, connection.status)],
+        )
 
     def test_program_delivery_prefers_most_recent_active_vk_channel(self) -> None:
         customers = CustomerRepository(self.conn)

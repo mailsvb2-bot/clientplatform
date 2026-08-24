@@ -505,15 +505,15 @@ async def test_customer_behavior_messenger_and_format_screens_render(
     monkeypatch.setattr(admin, "list_business_capabilities", lambda **_kwargs: capabilities)
     monkeypatch.setattr(
         admin,
-        "list_connections",
+        "business_connection_statuses",
         lambda **_kwargs: [
-            SimpleNamespace(
-                platform=SimpleNamespace(value="vk"),
-                status=SimpleNamespace(value="active"),
+            (
+                SimpleNamespace(value="vk"),
+                SimpleNamespace(value="active"),
             ),
-            SimpleNamespace(
-                platform=SimpleNamespace(value="max"),
-                status=SimpleNamespace(value="attention"),
+            (
+                SimpleNamespace(value="max"),
+                SimpleNamespace(value="attention"),
             ),
         ],
     )

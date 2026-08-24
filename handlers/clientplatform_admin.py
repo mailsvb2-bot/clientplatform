@@ -22,8 +22,10 @@ from clientplatform.application.activity import (
     list_business_capabilities,
 )
 from clientplatform.application.bookings import list_booking_slots
-from clientplatform.application.connections import list_connections
-from clientplatform.application.control import business_delivery_summary
+from clientplatform.application.control import (
+    business_connection_statuses,
+    business_delivery_summary,
+)
 from clientplatform.application.customers import get_customer, list_customers
 from clientplatform.application.programs import list_programs
 from clientplatform.application.progress import list_business_program_progress
@@ -608,7 +610,10 @@ async def _render_behavior(callback: CallbackQuery, state: FSMContext, ctx: Admi
 
 
 async def _render_messengers(callback: CallbackQuery, state: FSMContext, ctx: AdminContext) -> None:
-    connections = await asyncio.to_thread(list_connections, actor=ctx.actor)
+    connection_statuses = await asyncio.to_thread(
+        business_connection_statuses,
+        actor=ctx.actor,
+    )
     labels = {"telegram": "Telegram", "vk": "ВКонтакте", "max": "MAX"}
     status_labels = {
         "active": "✅ работает",
@@ -618,10 +623,10 @@ async def _render_messengers(callback: CallbackQuery, state: FSMContext, ctx: Ad
         "revoked": "⛔ отозван",
     }
     by_platform: dict[str, list[Any]] = {"telegram": [], "vk": [], "max": []}
-    for connection in connections:
-        platform = str(connection.platform.value)
+    for connection_platform, connection_status in connection_statuses:
+        platform = str(connection_platform.value)
         if platform in by_platform:
-            by_platform[platform].append(connection)
+            by_platform[platform].append(connection_status)
 
     lines = ["💬 Мессенджеры", "", "Клиентские каналы этого бизнеса:"]
     for platform in ("vk", "max", "telegram"):
@@ -629,7 +634,7 @@ async def _render_messengers(callback: CallbackQuery, state: FSMContext, ctx: Ad
         if not items:
             lines.append(f"• {labels[platform]}: не подключён")
             continue
-        states = [status_labels.get(item.status.value, item.status.value) for item in items]
+        states = [status_labels.get(item.value, item.value) for item in items]
         lines.append(f"• {labels[platform]}: {', '.join(states)}")
     lines.extend(
         [

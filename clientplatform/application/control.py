@@ -266,6 +266,38 @@ class BusinessDeliverySummary:
     dispatch_attention: int
 
 
+def business_connection_statuses(
+    *,
+    actor: TenantContext,
+) -> list[tuple[ConnectionPlatform, ConnectionStatus]]:
+    """Return a tenant-scoped status projection without credential metadata."""
+
+    with get_db() as conn:
+        from clientplatform.infrastructure import TenancyRepository
+
+        current = TenancyRepository(conn).resolve_context(
+            user_id=actor.user_id,
+            business_id=actor.business_id,
+        )
+        current.assert_can_view_customer_records()
+        rows = conn.execute(
+            """
+            SELECT platform, status
+            FROM connections
+            WHERE business_id=?
+            ORDER BY created_at, id
+            """,
+            (current.business_id,),
+        ).fetchall()
+        return [
+            (
+                ConnectionPlatform(str(row["platform"] if hasattr(row, "keys") else row[0])),
+                ConnectionStatus(str(row["status"] if hasattr(row, "keys") else row[1])),
+            )
+            for row in rows
+        ]
+
+
 def business_delivery_summary(*, actor: TenantContext) -> BusinessDeliverySummary:
     with get_db() as conn:
         # Live membership resolution is mandatory before aggregate tenant queries.
