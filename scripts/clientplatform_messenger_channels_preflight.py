@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import ssl
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -85,13 +86,42 @@ def _native_security_missing() -> tuple[str, ...]:
     return tuple(missing)
 
 
+def _max_tls_configuration() -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Validate an explicit MAX CA extension without assuming MAX is active.
+
+    MAX currently requires clients of platform-api2.max.ru to trust the Russian
+    MinDigital CA. Some production images may already carry that CA in their
+    system trust store, so absence of MAX_CA_BUNDLE is a warning rather than a
+    hard failure. Once an operator configures an explicit bundle, however, the
+    path and PEM contents must be usable before readiness may pass.
+    """
+
+    raw = str(os.getenv("MAX_CA_BUNDLE") or "").strip()
+    if not raw:
+        return (), (
+            "MAX_CA_BUNDLE is not configured; verify the system trust store includes the MinDigital CA required by platform-api2.max.ru",
+        )
+
+    path = Path(raw)
+    if not path.is_absolute() or not path.is_file():
+        return ("MAX_CA_BUNDLE must be an absolute readable CA file",), ()
+    try:
+        context = ssl.create_default_context()
+        context.load_verify_locations(cafile=str(path))
+    except (OSError, ssl.SSLError):
+        return ("MAX_CA_BUNDLE must contain a valid CA certificate",), ()
+    return (), ()
+
+
 def inspect_messenger_channels() -> MessengerChannelPreflight:
     status = build_setup_status()
     telegram_enabled = telegram_runtime_enabled()
     omnichannel_enabled = _truthy_env("CLIENTPLATFORM_OMNICHANNEL_INGRESS_ENABLED")
     public_base = str(status.public_base_url or "").strip().rstrip("/")
-    native_security_missing = (
-        _native_security_missing() if omnichannel_enabled and _deployed_env() else ()
+    deployed_native = omnichannel_enabled and _deployed_env()
+    native_security_missing = _native_security_missing() if deployed_native else ()
+    max_tls_missing, max_tls_warnings = (
+        _max_tls_configuration() if deployed_native else ((), ())
     )
     omnichannel_ready = bool(
         not omnichannel_enabled
@@ -99,6 +129,7 @@ def inspect_messenger_channels() -> MessengerChannelPreflight:
             public_base
             and (not _deployed_env() or public_base.startswith("https://"))
             and not native_security_missing
+            and not max_tls_missing
         )
     )
     # Canonical tenant-scoped VK/MAX uses encrypted per-business credentials.
@@ -110,6 +141,8 @@ def inspect_messenger_channels() -> MessengerChannelPreflight:
     elif omnichannel_enabled and _deployed_env() and not public_base.startswith("https://"):
         missing.append("MESSENGER_PUBLIC_BASE_URL must use https://")
     missing.extend(native_security_missing)
+    missing.extend(max_tls_missing)
+    warnings = tuple(dict.fromkeys((*status.warnings, *max_tls_warnings)))
     return MessengerChannelPreflight(
         telegram_runtime_enabled=telegram_enabled,
         telegram_transport=telegram_transport(),
@@ -121,7 +154,7 @@ def inspect_messenger_channels() -> MessengerChannelPreflight:
         vk_ready=status.vk_ok,
         webhook_runtime_ready=bool(status.webhook_runtime_ok and omnichannel_ready),
         missing=tuple(dict.fromkeys(missing)),
-        warnings=status.warnings,
+        warnings=warnings,
     )
 
 
