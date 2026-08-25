@@ -142,9 +142,6 @@ class _NativeMessengerDispatchAdapter:
                 "idempotency_key": item.dispatch.idempotency_key,
             }
             if button_links:
-                # Existing injected test/legacy clients keep the historical
-                # signature for ordinary interactions. The extra argument is
-                # passed only when the worker materialized an ephemeral link.
                 kwargs["button_links"] = button_links
             result = await self._client.send_interaction(**kwargs)
         elif kind in _MEDIA_KINDS:
@@ -237,7 +234,10 @@ class MaxDispatchAdapter(_NativeMessengerDispatchAdapter):
         send_prepared_media = getattr(self._client, "send_prepared_media", None)
         if not callable(send_prepared_media):
             raise ValueError("MAX media client does not support prepared final write")
-        result = await send_prepared_media(prepared.prepared_media)
+        result = await send_prepared_media(
+            token=prepared.credential,
+            prepared=prepared.prepared_media,
+        )
         provider_message_id = str(result or "").strip()
         if not provider_message_id:
             raise ValueError("max sender returned an empty message id")
