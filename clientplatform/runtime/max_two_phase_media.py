@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import urllib.parse
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -12,10 +13,11 @@ from clientplatform.runtime.messenger_provider_clients import (
 )
 from runtime.messenger_max_sender import (
     MaxBotSender,
-    MaxProviderRateLimitError,
     _MEDIA_TOKEN_REJECT_CODES,
     _attachment_retry_delays,
+    _max_error,
     _max_error_code,
+    _max_retryable_http_error,
 )
 from runtime.messenger_transport_errors import (
     MessengerMediaNotReadyError,
@@ -25,6 +27,10 @@ from runtime.messenger_transport_errors import (
 from services.messenger.media_assets import (
     get_cached_media_token,
     invalidate_media_token,
+)
+from services.messenger.provider_transport import (
+    ProviderPermanentHTTPError,
+    json_request,
 )
 
 
@@ -86,6 +92,55 @@ async def _explicit_media_rejection(
     return None
 
 
+async def _post_prepared_media_once(
+    *,
+    sender: MaxBotSender,
+    prepared: PreparedMaxRuntimeMedia,
+) -> dict[str, object]:
+    """Perform the single raw POST /messages after the durable boundary.
+
+    This intentionally uses the shared provider transport rather than
+    ``MaxBotSender.send_text`` so the raw error ``code`` is inspected before the
+    response's ``message`` field. MAX documents error responses such as
+    ``attachment.not.ready`` with both fields, while successful responses expose
+    a Message object under ``message``.
+    """
+
+    url = (
+        f"{sender._api_base()}/messages?user_id="  # noqa: SLF001 - canonical retained provider origin
+        f"{urllib.parse.quote(prepared.external_subject)}"
+    )
+    payload = {
+        "text": "",
+        "attachments": [
+            {
+                "type": prepared.media_type,
+                "payload": {"token": prepared.media_token},
+            }
+        ],
+    }
+    try:
+        data = await asyncio.to_thread(
+            json_request,
+            url,
+            method="POST",
+            headers={"Authorization": sender._token()},  # noqa: SLF001 - final boundary credential
+            payload=payload,
+            retries=1,
+            ssl_context=sender._ssl_context(),  # noqa: SLF001 - retained MAX TLS policy
+        )
+    except ProviderPermanentHTTPError as exc:
+        raise sender._permanent_http_error(exc) from exc  # noqa: SLF001 - retained error policy
+    except OSError as exc:
+        rate_limited = _max_retryable_http_error("send_text", exc)
+        if rate_limited is not None:
+            raise rate_limited from exc
+        raise
+    if not isinstance(data, dict):
+        raise ValueError("MAX provider response is not an object")
+    return data
+
+
 class TwoPhaseMaxRuntimeClient(MaxRuntimeClient):
     """MAX runtime client with replay-safe preparation and one final message write.
 
@@ -113,12 +168,6 @@ class TwoPhaseMaxRuntimeClient(MaxRuntimeClient):
         path, temporary = await _materialize_media(media)
         sender = MaxBotSender(token=token)
         try:
-            # MAX documents that freshly uploaded attachments can require a
-            # short processing pause before the first POST /messages attempt.
-            # Detect a pre-existing reusable token before _ensure_media_token so
-            # only a fresh upload pays that delay. The delay belongs to prepare,
-            # therefore cancellation here remains replay-safe and happens before
-            # the worker's durable non-replay marker.
             cached_before_prepare = await asyncio.to_thread(
                 get_cached_media_token,
                 "max",
@@ -134,9 +183,6 @@ class TwoPhaseMaxRuntimeClient(MaxRuntimeClient):
                 if first_ready_delay:
                     await asyncio.sleep(first_ready_delay)
             if temporary:
-                # Temporary download paths are unique per attempt and therefore
-                # must not leave useless durable cache rows behind. The provider
-                # token remains in this transient object for the final write.
                 await asyncio.to_thread(
                     invalidate_media_token,
                     "max",
@@ -171,37 +217,21 @@ class TwoPhaseMaxRuntimeClient(MaxRuntimeClient):
         if not isinstance(prepared, PreparedMaxRuntimeMedia):
             raise ValueError("MAX prepared media has an invalid type")
 
-        sender = MaxBotSender(token=token)
-        attachment = {
-            "type": prepared.media_type,
-            "payload": {"token": prepared.media_token},
-        }
-        try:
-            # Retained send_text uses one provider attempt (retries=1). With the
-            # upload already complete, this call is the only message-write
-            # boundary after the worker's durable non-replay marker.
-            result = await sender.send_text(
-                prepared.external_subject,
-                "",
-                legacy_ui=False,
-                attachments=[attachment],
-            )
-        except MaxProviderRateLimitError:
-            raise
-        except MessengerTransportError as exc:
-            mapped = await _explicit_media_rejection(
-                str(getattr(exc, "safe_code", "") or ""),
-                prepared,
-            )
-            if mapped is not None:
-                raise mapped from exc
-            raise
-
-        mapped = await _explicit_media_rejection(_max_error_code(result), prepared)
+        data = await _post_prepared_media_once(
+            sender=MaxBotSender(token=token),
+            prepared=prepared,
+        )
+        code = _max_error_code(data)
+        mapped = await _explicit_media_rejection(code, prepared)
         if mapped is not None:
             raise mapped
+        if data.get("error") or code:
+            raise _max_error("send_text", code or "provider_error")
 
-        message_id = _provider_message_id(result)
+        message = data.get("message")
+        if not isinstance(message, dict):
+            raise ValueError("MAX provider response has no message object")
+        message_id = _provider_message_id(message)
         if not message_id:
             raise ValueError("MAX provider response has no message id")
         return message_id
