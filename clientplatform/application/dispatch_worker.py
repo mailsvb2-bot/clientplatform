@@ -89,10 +89,6 @@ def _release_claims(
                     reason=reason,
                 )
         except Exception:
-            # The lease can already be stale or completed. Cancellation must not
-            # be masked by a best-effort cleanup failure, but the failure must be
-            # observable so operators can distinguish normal TTL recovery from a
-            # persistent database/lease defect.
             LOGGER.warning(
                 "dispatch lease cleanup failed during %s; lease will recover by TTL",
                 reason,
@@ -216,11 +212,11 @@ def _materialize_native_interaction_links(
 
     try:
         raw_payload = json.loads(dispatch.payload_ref)
-    except json.JSONDecodeError as exc:  # pragma: no cover - domain parser already guards this
+    except json.JSONDecodeError as exc:
         raise NativeInteractionLinkResolutionError(
             "native interaction payload is invalid"
         ) from exc
-    if not isinstance(raw_payload, dict):  # pragma: no cover - domain parser already guards this
+    if not isinstance(raw_payload, dict):
         raise NativeInteractionLinkResolutionError(
             "native interaction payload is invalid"
         )
@@ -275,7 +271,8 @@ async def run_dispatch_batch(
     Two-phase adapters perform replay-safe preparation before MAX pacing and
     before the durable non-replay marker. For MAX media this includes resolving
     the source, validating/downloading bytes and obtaining the provider upload
-    token. Preparation must not create a user-visible provider message.
+    token. Preparation must not create a user-visible provider message and does
+    not retain a copy of the raw provider credential in prepared state.
 
     MAX provider pacing then happens immediately before the non-replay boundary.
     A wait is followed by one more live-authority revalidation, so access revoked
@@ -283,10 +280,11 @@ async def run_dispatch_batch(
     provider write boundary.
 
     Only after preparation, pacing and revalidation does the worker durably mark
-    a non-idempotent provider boundary. ``send_prepared`` then performs the final
-    provider message write. Explicit provider rejections may keep the durable
-    retry budget; unknown timeout/connection outcomes after that marker remain
-    quarantined as ambiguous/manual-reconciliation work instead of being replayed.
+    a non-idempotent provider boundary. ``send_prepared`` then receives the
+    worker-held credential and performs the final provider message write.
+    Explicit provider rejections may keep the durable retry budget; unknown
+    timeout/connection outcomes after that marker remain quarantined as
+    ambiguous/manual-reconciliation work instead of being replayed.
     """
 
     with get_db() as conn:
@@ -348,7 +346,10 @@ async def run_dispatch_batch(
             if two_phase_adapter is not None:
                 if prepared is None:
                     raise RuntimeError("two-phase adapter returned no prepared dispatch")
-                provider_message_id = await two_phase_adapter.send_prepared(prepared)
+                provider_message_id = await two_phase_adapter.send_prepared(
+                    prepared,
+                    credential,
+                )
             else:
                 provider_message_id = await adapter.send(send_item, credential)
             with get_db() as conn:
