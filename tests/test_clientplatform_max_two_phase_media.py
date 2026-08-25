@@ -4,6 +4,7 @@ import asyncio
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
@@ -121,12 +122,25 @@ class MaxTwoPhaseRuntimeTests(unittest.TestCase):
             temporary=temporary,
         )
 
-    def test_prepare_uploads_token_but_never_creates_message(self) -> None:
+    def test_fresh_upload_waits_readiness_before_any_message_write(self) -> None:
         client = TwoPhaseMaxRuntimeClient()
+        sleep = AsyncMock()
         with (
             patch(
                 "clientplatform.runtime.max_two_phase_media._materialize_media",
                 new=AsyncMock(return_value=(Path("/tmp/source.mp4"), False)),
+            ),
+            patch(
+                "clientplatform.runtime.max_two_phase_media.get_cached_media_token",
+                return_value=None,
+            ) as cached,
+            patch(
+                "clientplatform.runtime.max_two_phase_media._attachment_retry_delays",
+                return_value=(0.5, 1.0, 2.0),
+            ),
+            patch(
+                "clientplatform.runtime.max_two_phase_media.asyncio.sleep",
+                new=sleep,
             ),
             patch.object(
                 MaxBotSender,
@@ -150,10 +164,52 @@ class MaxTwoPhaseRuntimeTests(unittest.TestCase):
             )
 
         self.assertEqual("upload-token-prepared", prepared.media_token)
+        self.assertEqual(1, cached.call_count)
         self.assertEqual(1, upload.await_count)
+        sleep.assert_awaited_once_with(0.5)
         self.assertEqual(0, final_write.await_count)
         self.assertNotIn("secret-token", repr(prepared))
         self.assertNotIn("upload-token-prepared", repr(prepared))
+
+    def test_cached_token_skips_fresh_upload_readiness_wait(self) -> None:
+        client = TwoPhaseMaxRuntimeClient()
+        sleep = AsyncMock()
+        with (
+            patch(
+                "clientplatform.runtime.max_two_phase_media._materialize_media",
+                new=AsyncMock(return_value=(Path("/tmp/source.mp4"), False)),
+            ),
+            patch(
+                "clientplatform.runtime.max_two_phase_media.get_cached_media_token",
+                return_value=SimpleNamespace(remote_token="cached-token"),
+            ),
+            patch(
+                "clientplatform.runtime.max_two_phase_media._attachment_retry_delays",
+                return_value=(0.5, 1.0, 2.0),
+            ),
+            patch(
+                "clientplatform.runtime.max_two_phase_media.asyncio.sleep",
+                new=sleep,
+            ),
+            patch.object(
+                MaxBotSender,
+                "_ensure_media_token",
+                new=AsyncMock(return_value="cached-token"),
+            ) as ensure,
+        ):
+            prepared = asyncio.run(
+                client.prepare_media(
+                    token="secret-token",
+                    external_subject="max-user-88",
+                    kind=ContentKind.VIDEO,
+                    media="https://media.example/video.mp4",
+                    idempotency_key="delivery:max:video:cached",
+                )
+            )
+
+        self.assertEqual("cached-token", prepared.media_token)
+        self.assertEqual(1, ensure.await_count)
+        self.assertEqual(0, sleep.await_count)
 
     def test_final_phase_is_exactly_one_message_write(self) -> None:
         client = TwoPhaseMaxRuntimeClient()
