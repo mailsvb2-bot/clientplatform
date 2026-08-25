@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import urllib.parse
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -34,6 +35,7 @@ from services.messenger.provider_transport import (
 )
 
 
+LOGGER = logging.getLogger(__name__)
 _MEDIA_TYPE_BY_KIND = {
     ContentKind.IMAGE: "image",
     ContentKind.AUDIO: "audio",
@@ -65,6 +67,23 @@ class PreparedMaxRuntimeMedia:
     media_token: str = field(repr=False)
     source_path: Path = field(repr=False)
     temporary: bool = field(repr=False)
+
+
+async def _discard_temporary_token_cache(path: Path, *, media_type: str) -> None:
+    """Best-effort cache cleanup that never masks send/cancellation truth."""
+
+    try:
+        await asyncio.to_thread(
+            invalidate_media_token,
+            "max",
+            path,
+            media_type=media_type,
+        )
+    except (Exception, asyncio.CancelledError):
+        LOGGER.warning(
+            "temporary MAX media-token cache cleanup failed; delivery state is unchanged",
+            exc_info=True,
+        )
 
 
 async def _explicit_media_rejection(
@@ -183,14 +202,10 @@ class TwoPhaseMaxRuntimeClient(MaxRuntimeClient):
                 if first_ready_delay:
                     await asyncio.sleep(first_ready_delay)
             if temporary:
-                await asyncio.to_thread(
-                    invalidate_media_token,
-                    "max",
-                    path,
-                    media_type=media_type,
-                )
+                await _discard_temporary_token_cache(path, media_type=media_type)
         except (Exception, asyncio.CancelledError):
             if temporary:
+                await _discard_temporary_token_cache(path, media_type=media_type)
                 path.unlink(missing_ok=True)
             raise
 
@@ -198,6 +213,7 @@ class TwoPhaseMaxRuntimeClient(MaxRuntimeClient):
         clean_token = str(media_token or "").strip()
         if not clean_subject or not clean_token:
             if temporary:
+                await _discard_temporary_token_cache(path, media_type=media_type)
                 path.unlink(missing_ok=True)
             raise ValueError("MAX prepared media is incomplete")
         return PreparedMaxRuntimeMedia(
@@ -240,6 +256,10 @@ class TwoPhaseMaxRuntimeClient(MaxRuntimeClient):
         if not isinstance(prepared, PreparedMaxRuntimeMedia):
             return
         if prepared.temporary:
+            await _discard_temporary_token_cache(
+                prepared.source_path,
+                media_type=prepared.media_type,
+            )
             prepared.source_path.unlink(missing_ok=True)
 
 
