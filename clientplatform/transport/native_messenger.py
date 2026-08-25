@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from typing import Mapping, Protocol
 
 from clientplatform.domain.connections import ClaimedDispatch, ConnectionPlatform
@@ -180,5 +181,74 @@ class VkDispatchAdapter(_NativeMessengerDispatchAdapter):
     platform = ConnectionPlatform.VK
 
 
+@dataclass(frozen=True, slots=True)
+class _PreparedMaxDispatch:
+    item: ClaimedDispatch
+    credential: str
+    prepared_media: object | None = None
+
+
 class MaxDispatchAdapter(_NativeMessengerDispatchAdapter):
+    """MAX adapter with an explicit replay-safe media preparation phase."""
+
     platform = ConnectionPlatform.MAX
+
+    async def prepare(self, item: ClaimedDispatch, credential: str) -> object:
+        token = str(credential or "").strip()
+        if not token:
+            raise ValueError("resolved max credential must not be empty")
+        if item.dispatch.platform != self.platform:
+            raise ValueError("dispatch platform does not match adapter")
+
+        kind = item.dispatch.payload_kind
+        if kind not in _MEDIA_KINDS:
+            return _PreparedMaxDispatch(item=item, credential=token)
+
+        payload = item.dispatch.payload_ref
+        if self._media_resolver is not None:
+            payload = await self._media_resolver.resolve(payload, kind)
+
+        prepare_media = getattr(self._client, "prepare_media", None)
+        if not callable(prepare_media):
+            raise ValueError("MAX media client does not support two-phase preparation")
+        prepared_media = await prepare_media(
+            token=token,
+            external_subject=item.external_subject,
+            kind=kind,
+            media=payload,
+            idempotency_key=item.dispatch.idempotency_key,
+        )
+        return _PreparedMaxDispatch(
+            item=item,
+            credential=token,
+            prepared_media=prepared_media,
+        )
+
+    async def send_prepared(self, prepared: object) -> str:
+        if not isinstance(prepared, _PreparedMaxDispatch):
+            raise ValueError("MAX prepared dispatch has an invalid type")
+        item = prepared.item
+        if item.dispatch.platform != self.platform:
+            raise ValueError("dispatch platform does not match adapter")
+
+        if prepared.prepared_media is None:
+            return await super().send(item, prepared.credential)
+
+        send_prepared_media = getattr(self._client, "send_prepared_media", None)
+        if not callable(send_prepared_media):
+            raise ValueError("MAX media client does not support prepared final write")
+        result = await send_prepared_media(prepared.prepared_media)
+        provider_message_id = str(result or "").strip()
+        if not provider_message_id:
+            raise ValueError("max sender returned an empty message id")
+        return provider_message_id
+
+    async def release_prepared(self, prepared: object) -> None:
+        if not isinstance(prepared, _PreparedMaxDispatch):
+            return
+        if prepared.prepared_media is None:
+            return
+        release_prepared_media = getattr(self._client, "release_prepared_media", None)
+        if not callable(release_prepared_media):
+            raise ValueError("MAX media client does not support prepared cleanup")
+        await release_prepared_media(prepared.prepared_media)
