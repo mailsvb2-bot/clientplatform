@@ -98,8 +98,9 @@ class MaxTwoPhaseAdapterTests(unittest.TestCase):
         self.assertEqual(["resolve"], events)
         self.assertEqual(["prepare"], client.events)
         self.assertTrue(client.asserted_media.startswith("https://media.example/video/"))
+        self.assertNotIn("secret-token", repr(prepared))
 
-        result = asyncio.run(adapter.send_prepared(prepared))
+        result = asyncio.run(adapter.send_prepared(prepared, "secret-token"))
         self.assertEqual("provider-media-1", result)
         self.assertEqual(["prepare", "final-write"], client.events)
 
@@ -148,6 +149,8 @@ class MaxTwoPhaseRuntimeTests(unittest.TestCase):
         self.assertEqual("upload-token-prepared", prepared.media_token)
         self.assertEqual(1, upload.await_count)
         self.assertEqual(0, final_write.await_count)
+        self.assertNotIn("secret-token", repr(prepared))
+        self.assertNotIn("upload-token-prepared", repr(prepared))
 
     def test_final_phase_is_exactly_one_message_write(self) -> None:
         client = TwoPhaseMaxRuntimeClient()
