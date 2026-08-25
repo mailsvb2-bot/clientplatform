@@ -302,6 +302,15 @@ async def provision_max_channel(
             or None
         )
         username = str(identity.get("username") or "").strip() or None
+        with get_db() as conn:
+            ConnectionRepository(conn).register_managed_bot(
+                actor=actor,
+                connection_id=connection.id,
+                external_bot_id=external_account_id,
+                webhook_secret_reference=route.webhook_secret_reference,
+                username=username,
+                display_name=display_name,
+            )
         return NativeMessengerConnection(
             connection=connection,
             route=route,

@@ -823,7 +823,7 @@ def test_dashboard_button_uses_same_panel_entry_as_admin_command() -> None:
 
 
 @pytest.mark.asyncio
-async def test_messenger_owner_gets_secure_vk_max_setup_links(
+async def test_messenger_owner_gets_secure_telegram_vk_max_setup_links(
     monkeypatch: pytest.MonkeyPatch,
     capture_edits: list[tuple[str, InlineKeyboardMarkup]],
 ) -> None:
@@ -845,6 +845,7 @@ async def test_messenger_owner_gets_secure_vk_max_setup_links(
 
     await admin._render_messengers(callback, state, ctx)
     messenger_markup = capture_edits[-1][1]
+    assert "✈️ Подключить Telegram" in labels(messenger_markup)
     assert "🔵 Подключить ВКонтакте" in labels(messenger_markup)
     assert "🟣 Подключить MAX" in labels(messenger_markup)
 
@@ -861,6 +862,11 @@ async def test_messenger_owner_gets_secure_vk_max_setup_links(
     assert url_buttons[0].url == (
         "https://client.example.test/clientplatform/connect/" + "S" * 43
     )
+
+    await admin._render_messenger_connect(callback, state, ctx, "telegram")
+    text, markup = capture_edits[-1]
+    assert "Подключение Telegram" in text
+    assert any(button.url for row in markup.inline_keyboard for button in row)
 
 
 @pytest.mark.asyncio
@@ -885,6 +891,7 @@ async def test_messenger_setup_actions_are_hidden_when_omnichannel_ingress_is_of
 
     await admin._render_messengers(telegram_callback(), fsm_context(), ctx)
     visible = set(labels(capture_edits[-1][1]))
+    assert "✈️ Подключить Telegram" not in visible
     assert "🔵 Подключить ВКонтакте" not in visible
     assert "🟣 Подключить MAX" not in visible
 
@@ -908,5 +915,6 @@ async def test_support_can_view_messengers_but_cannot_create_setup_link(
     ctx = admin_context(PlatformRole.SUPPORT)
     await admin._render_messengers(telegram_callback(), fsm_context(), ctx)
     visible = set(labels(capture_edits[-1][1]))
+    assert "✈️ Подключить Telegram" not in visible
     assert "🔵 Подключить ВКонтакте" not in visible
     assert "🟣 Подключить MAX" not in visible

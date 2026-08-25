@@ -63,7 +63,7 @@ def ensure(c: sqlite3.Connection) -> None:
             FOREIGN KEY(business_id) REFERENCES businesses(id) ON DELETE CASCADE,
             FOREIGN KEY(created_by_member_id, business_id)
                 REFERENCES business_members(id, business_id),
-            CHECK(platform IN ('vk','max')),
+            CHECK(platform IN ('telegram','vk','max')),
             CHECK(length(token_digest)=64)
         )
         """

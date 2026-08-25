@@ -9,6 +9,10 @@ from clientplatform.application.activity import (
     list_business_capabilities,
 )
 from clientplatform.application.bookings import list_booking_slots
+from clientplatform.application.messenger_switching import (
+    available_staff_messenger_switches,
+    build_staff_switch_command,
+)
 from clientplatform.application.connections import list_connections
 from clientplatform.application.control import business_delivery_summary
 from clientplatform.application.customers import get_customer, list_customers
@@ -298,6 +302,7 @@ def parse_native_member_interaction(value: object) -> ParsedMemberInteraction:
             "members",
             "member",
             "permissions",
+            "connect-telegram",
             "connect-vk",
             "connect-max",
         }:
@@ -930,28 +935,76 @@ def _messengers_message(
     actor: TenantContext,
     *,
     setup_available: bool,
+    current_platform: ConnectionPlatform,
 ) -> CustomerInteractionMessage:
     connections = list_connections(actor=actor)
-    if not connections:
-        text = "Подключённых мессенджеров пока нет."
-    else:
-        icons = {"telegram": "✈️", "vk": "🔵", "max": "🟣"}
-        lines = [
-            f"{icons.get(item.platform.value, '•')} "
-            + f"{item.platform.value.upper()} — {item.status.value}"
-            for item in connections
-        ]
-        text = "Мессенджеры\n\n" + "\n".join(lines)
+    labels = {
+        ConnectionPlatform.TELEGRAM: ("✈️", "Telegram"),
+        ConnectionPlatform.VK: ("🔵", "ВКонтакте"),
+        ConnectionPlatform.MAX: ("🟣", "MAX"),
+    }
+    by_platform = {platform: [] for platform in labels}
+    for item in connections:
+        by_platform[item.platform].append(item.status.value)
+    lines = ["Мессенджеры", ""]
+    active: set[ConnectionPlatform] = set()
+    for platform in (
+        ConnectionPlatform.VK,
+        ConnectionPlatform.MAX,
+        ConnectionPlatform.TELEGRAM,
+    ):
+        icon, title = labels[platform]
+        statuses = by_platform[platform]
+        if "active" in statuses:
+            active.add(platform)
+        state = ", ".join(statuses) if statuses else "не подключён"
+        current = " · сейчас здесь" if platform == current_platform else ""
+        lines.append(f"{icon} {title} — {state}{current}")
+
     rows: list[tuple[CustomerInteractionButton, ...]] = []
     if actor.role in _CONNECTION_ROLES and setup_available:
-        rows.extend(
-            [
-                (_button("🔵 Подключить ВКонтакте", "cpm:connect-vk"),),
-                (_button("🟣 Подключить MAX", "cpm:connect-max"),),
-            ]
+        connect_labels = {
+            ConnectionPlatform.TELEGRAM: "✈️ Подключить Telegram",
+            ConnectionPlatform.VK: "🔵 Подключить ВКонтакте",
+            ConnectionPlatform.MAX: "🟣 Подключить MAX",
+        }
+        for platform in (
+            ConnectionPlatform.TELEGRAM,
+            ConnectionPlatform.VK,
+            ConnectionPlatform.MAX,
+        ):
+            if platform not in active:
+                rows.append(
+                    (
+                        _button(
+                            connect_labels[platform],
+                            f"cpm:connect-{platform.value}",
+                        ),
+                    )
+                )
+
+    switch_labels = {
+        ConnectionPlatform.TELEGRAM: "✈️ Перейти в Telegram",
+        ConnectionPlatform.VK: "🔵 Перейти во ВКонтакте",
+        ConnectionPlatform.MAX: "🟣 Перейти в MAX",
+    }
+    try:
+        switchable = available_staff_messenger_switches(actor)
+    except (RuntimeError, ValueError):
+        switchable = ()
+    for platform in switchable:
+        if platform == current_platform:
+            continue
+        rows.append(
+            (
+                _button(
+                    switch_labels[platform],
+                    build_staff_switch_command(actor, platform),
+                ),
+            )
         )
     rows.append(_back_row())
-    return CustomerInteractionMessage(text=text, rows=tuple(rows))
+    return CustomerInteractionMessage(text="\n".join(lines), rows=tuple(rows))
 
 
 def _setup_message(
@@ -989,7 +1042,11 @@ def _setup_message(
             ),
             rows=(_back_row(),),
         )
-    channel_name = "ВКонтакте" if platform == ConnectionPlatform.VK else "MAX"
+    channel_name = {
+        ConnectionPlatform.TELEGRAM: "Telegram",
+        ConnectionPlatform.VK: "ВКонтакте",
+        ConnectionPlatform.MAX: "MAX",
+    }[platform]
     return CustomerInteractionMessage(
         text=(
             f"Подключение {channel_name}\n\n"
@@ -1011,6 +1068,7 @@ def _render(
     linked: bool,
     setup_issuer: NativeSetupCommandIssuer | None,
     setup_key: str,
+    current_platform: ConnectionPlatform = ConnectionPlatform.TELEGRAM,
 ) -> CustomerInteractionMessage:
     if parsed.action == "menu":
         return _menu_message(actor, linked=linked)
@@ -1049,6 +1107,7 @@ def _render(
             return _messengers_message(
                 actor,
                 setup_available=setup_issuer is not None,
+                current_platform=current_platform,
             )
         if parsed.action in {
             "autopilot",
@@ -1076,6 +1135,13 @@ def _render(
             return _member_message(actor, int(parsed.args[0]))
         if parsed.action == "permissions":
             return _permissions_message(actor)
+        if parsed.action == "connect-telegram":
+            return _setup_message(
+                actor,
+                platform=ConnectionPlatform.TELEGRAM,
+                setup_issuer=setup_issuer,
+                setup_key=setup_key,
+            )
         if parsed.action == "connect-vk":
             return _setup_message(
                 actor,
@@ -1122,6 +1188,7 @@ def process_native_member_interaction(
         linked=resolution.linked,
         setup_issuer=setup_issuer,
         setup_key=interaction_key,
+        current_platform=route.platform,
     )
     with get_db() as conn:
         return DispatchOutboxRepository(conn).materialize_member_interaction(

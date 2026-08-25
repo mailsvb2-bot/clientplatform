@@ -29,7 +29,7 @@ from services.db import get_db
 
 LOGGER = logging.getLogger(__name__)
 _RUNTIME_LINKS_KEY = "_runtime_link_buttons"
-_SETUP_COMMAND_PREFIX = "cpm:setup:"
+_INTERACTION_LINK_PREFIXES = ("cpm:setup:", "cpm:switch:")
 
 
 class InteractionLinkResolver(Protocol):
@@ -180,21 +180,21 @@ def _materialize_native_interaction_links(
         return item
 
     interaction = CustomerInteractionMessage.from_json(dispatch.payload_ref)
-    setup_commands = {
+    link_commands = {
         button.command
         for row in interaction.rows
         for button in row
-        if button.command.startswith(_SETUP_COMMAND_PREFIX)
+        if button.command.startswith(_INTERACTION_LINK_PREFIXES)
     }
-    if not setup_commands:
+    if not link_commands:
         return item
     if resolver is None:
         raise NativeInteractionLinkResolutionError(
-            "native setup link resolver is unavailable"
+            "native interaction link resolver is unavailable"
         )
 
     links: dict[str, str] = {}
-    for command in sorted(setup_commands):
+    for command in sorted(link_commands):
         try:
             resolved = resolver(
                 command=command,
@@ -204,11 +204,11 @@ def _materialize_native_interaction_links(
             raise
         except (RuntimeError, ValueError) as exc:
             raise NativeInteractionLinkResolutionError(
-                "native setup link is expired, revoked or unavailable"
+                "native interaction link is expired, revoked or unavailable"
             ) from exc
         if resolved is None:
             raise NativeInteractionLinkResolutionError(
-                "native setup command was not resolved"
+                "native interaction link command was not resolved"
             )
         links[command] = _validated_runtime_link(resolved)
 
@@ -266,7 +266,7 @@ async def run_dispatch_batch(
     credential resolution/provider I/O so revocation is honored at the send
     boundary.
 
-    Short-lived native staff setup URLs are reconstructed only after that live
+    Short-lived native staff setup/switch URLs are reconstructed only after that live
     authority check and only in the in-memory claimed item. They never replace
     the digest/session reference stored in the durable outbox.
 

@@ -23,6 +23,10 @@ from clientplatform.application.activity import (
     list_business_capabilities,
 )
 from clientplatform.application.bookings import list_booking_slots
+from clientplatform.application.messenger_switching import (
+    available_staff_messenger_switches,
+    build_staff_switch_command,
+)
 from clientplatform.application.control import (
     business_connection_statuses,
     business_delivery_summary,
@@ -40,6 +44,7 @@ from clientplatform.application.tenancy import (
 )
 from clientplatform.domain.activity import CapabilityStatus
 from clientplatform.domain.bookings import BookingSlotStatus
+from clientplatform.domain.connections import ConnectionPlatform
 from clientplatform.domain.tenancy import (
     PlatformRole,
     TenantContext,
@@ -47,6 +52,7 @@ from clientplatform.domain.tenancy import (
     TenancyError,
 )
 from clientplatform.infrastructure import TenancyRepository
+from clientplatform.runtime.messenger_switch_links import StaffMessengerSwitchLinkService
 from config.settings import settings
 from services.db import get_db_ro
 
@@ -623,8 +629,7 @@ async def _render_behavior(callback: CallbackQuery, state: FSMContext, ctx: Admi
 
 async def _render_messengers(callback: CallbackQuery, state: FSMContext, ctx: AdminContext) -> None:
     connection_statuses = await asyncio.to_thread(
-        business_connection_statuses,
-        actor=ctx.actor,
+        business_connection_statuses, actor=ctx.actor
     )
     labels = {"telegram": "Telegram", "vk": "ВКонтакте", "max": "MAX"}
     status_labels = {
@@ -640,31 +645,68 @@ async def _render_messengers(callback: CallbackQuery, state: FSMContext, ctx: Ad
         if platform in by_platform:
             by_platform[platform].append(connection_status)
 
-    lines = ["💬 Мессенджеры", "", "Клиентские каналы этого бизнеса:"]
+    lines = ["💬 Мессенджеры", "", "Каналы этого бизнеса:"]
+    active: set[str] = set()
     for platform in ("vk", "max", "telegram"):
         items = by_platform[platform]
+        if any(item.value == "active" for item in items):
+            active.add(platform)
         if not items:
             lines.append(f"• {labels[platform]}: не подключён")
             continue
         states = [status_labels.get(item.value, item.value) for item in items]
         lines.append(f"• {labels[platform]}: {', '.join(states)}")
-    lines.extend(
-        [
-            "",
-            "ClientPlatform отправляет клиенту в его последний активный канал, "
-            "если у бизнеса есть однозначное активное подключение.",
-        ]
-    )
-    extras: list[tuple[str, str]] = []
+    lines.extend([
+        "",
+        "Можно подключить дополнительный мессенджер или продолжить работу "
+        "в уже подключённом канале под тем же аккаунтом.",
+    ])
+
+    rows: list[list[InlineKeyboardButton]] = []
     if ctx.role in _ADMIN_ROLES and _native_messenger_setup_ingress_enabled():
-        extras.extend(
-            [
-                ("🔵 Подключить ВКонтакте", _callback(ctx, "messenger-connect", "vk")),
-                ("🟣 Подключить MAX", _callback(ctx, "messenger-connect", "max")),
-            ]
-        )
-    extras.append(("🤖 Мой Telegram-бот", f"cpb:o:{ctx.business_token}"))
-    await _safe_edit(callback, "\n".join(lines), _back_keyboard(ctx, *extras))
+        connect = {
+            "telegram": "✈️ Подключить Telegram",
+            "vk": "🔵 Подключить ВКонтакте",
+            "max": "🟣 Подключить MAX",
+        }
+        for platform in ("telegram", "vk", "max"):
+            if platform not in active:
+                rows.append([InlineKeyboardButton(
+                    text=connect[platform],
+                    callback_data=_callback(ctx, "messenger-connect", platform),
+                )])
+
+    switch_labels = {
+        ConnectionPlatform.VK: "🔵 Перейти во ВКонтакте",
+        ConnectionPlatform.MAX: "🟣 Перейти в MAX",
+    }
+    try:
+        switchable = available_staff_messenger_switches(ctx.actor)
+    except (RuntimeError, ValueError):
+        switchable = ()
+    switch_links = StaffMessengerSwitchLinkService()
+    for platform in switchable:
+        if platform == ConnectionPlatform.TELEGRAM or platform not in switch_labels:
+            continue
+        try:
+            url = switch_links.resolve_command_url(
+                command=build_staff_switch_command(ctx.actor, platform),
+                business_id=ctx.business_id,
+            )
+        except (RuntimeError, ValueError):
+            continue
+        if url:
+            rows.append([InlineKeyboardButton(text=switch_labels[platform], url=url)])
+
+    rows.append([InlineKeyboardButton(
+        text="🤖 Мой Telegram-бот", callback_data=f"cpb:o:{ctx.business_token}"
+    )])
+    rows.append([InlineKeyboardButton(
+        text="⬅️ Назад", callback_data=_callback(ctx, "back")
+    )])
+    await _safe_edit(
+        callback, "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
+    )
     await _set_current_section(state, action="messengers", push=True)
 
 
@@ -675,12 +717,12 @@ async def _render_messenger_connect(
     platform: str,
 ) -> None:
     normalized = str(platform or "").strip().lower()
-    if normalized not in {"vk", "max"}:
+    if normalized not in {"telegram", "vk", "max"}:
         raise ValueError("unsupported messenger setup platform")
     if not _native_messenger_setup_ingress_enabled():
         await _safe_edit(
             callback,
-            "Безопасное подключение временно недоступно: входящие каналы ВКонтакте и MAX не включены.",
+            "Безопасное подключение временно недоступно: multi-messenger ingress не включён.",
             _back_keyboard(ctx),
         )
         return
@@ -700,7 +742,7 @@ async def _render_messenger_connect(
         platform=normalized,
         ttl_seconds=600,
     )
-    label = "ВКонтакте" if normalized == "vk" else "MAX"
+    label = {"telegram": "Telegram", "vk": "ВКонтакте", "max": "MAX"}[normalized]
     setup_url = f"{public_base}/clientplatform/connect/{issued.token}"
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
@@ -1161,7 +1203,11 @@ async def admin_gate(callback: CallbackQuery, state: FSMContext) -> None:
     try:
         business_id, action, payload = _parse_callback(str(callback.data or ""))
         ctx = await _load_admin_context(
-            user_id=int(callback.from_user.id),
+            user_id=control._canonical_telegram_user_id(
+                int(callback.from_user.id),
+                username=getattr(callback.from_user, "username", None),
+                display_name=getattr(callback.from_user, "full_name", None),
+            ),
             business_id=business_id,
         )
         if action not in {"menu", "back", "leave"}:

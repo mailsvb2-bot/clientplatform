@@ -16,7 +16,9 @@ from services.db.core import PostgresCompatConnection
 
 
 _SETUP_TOKEN_RE = re.compile(r"[A-Za-z0-9_-]{32,160}")
-_SETUP_PLATFORMS = frozenset({ConnectionPlatform.VK, ConnectionPlatform.MAX})
+_SETUP_PLATFORMS = frozenset(
+    {ConnectionPlatform.TELEGRAM, ConnectionPlatform.VK, ConnectionPlatform.MAX}
+)
 
 
 class NativeMessengerSetupRejected(RuntimeError):
@@ -112,7 +114,7 @@ def _platform(value: ConnectionPlatform | str) -> ConnectionPlatform:
         else ConnectionPlatform(str(value).strip().lower())
     )
     if platform not in _SETUP_PLATFORMS:
-        raise ValueError("messenger setup supports only VK or MAX")
+        raise ValueError("messenger setup supports only Telegram, VK or MAX")
     return platform
 
 

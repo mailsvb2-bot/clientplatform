@@ -11,6 +11,7 @@ from clientplatform.application.program_media import run_program_media_cleanup_b
 from clientplatform.application.sales_followups import run_sales_followup_maintenance_batch
 from clientplatform.runtime.control_bot import control_bot_enabled
 from clientplatform.runtime.max_two_phase_media import TwoPhaseMaxRuntimeClient
+from clientplatform.runtime.messenger_switch_links import StaffMessengerSwitchLinkService
 from clientplatform.runtime.messenger_provider_clients import VkRuntimeClient
 from clientplatform.runtime.native_messenger_setup_links import NativeMessengerSetupLinkService
 from clientplatform.runtime.secrets import EnvironmentCredentialProvider
@@ -178,6 +179,19 @@ def build_dispatch_runtime(
     setup_link_service = NativeMessengerSetupLinkService(
         credential_provider=credential_provider,
     )
+    switch_link_service = StaffMessengerSwitchLinkService()
+
+    def _resolve_interaction_link(*, command: str, business_id: str) -> str | None:
+        setup_url = setup_link_service.resolve_command_url(
+            command=command,
+            business_id=business_id,
+        )
+        if setup_url is not None:
+            return setup_url
+        return switch_link_service.resolve_command_url(
+            command=command,
+            business_id=business_id,
+        )
     adapters = AdapterRegistry(
         [
             TelegramDispatchAdapter(
@@ -198,7 +212,7 @@ def build_dispatch_runtime(
         config=selected,
         credential_provider=credential_provider,
         adapters=adapters,
-        interaction_link_resolver=setup_link_service.resolve_command_url,
+        interaction_link_resolver=_resolve_interaction_link,
     )
 
 

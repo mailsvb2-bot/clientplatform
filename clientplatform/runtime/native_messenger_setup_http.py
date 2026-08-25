@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 import html
 
 from aiohttp import web
 
+from clientplatform.application.existing_bot_onboarding import (
+    connect_existing_telegram_bot,
+)
 from clientplatform.application.native_messenger_onboarding import (
     provision_max_channel,
     provision_vk_channel,
@@ -64,7 +68,12 @@ def _provider_setup_failure_page() -> web.Response:
 
 
 def _setup_form(*, business_name: str, platform: ConnectionPlatform) -> str:
-    label = "ВКонтакте" if platform == ConnectionPlatform.VK else "MAX"
+    labels = {
+        ConnectionPlatform.TELEGRAM: "Telegram",
+        ConnectionPlatform.VK: "ВКонтакте",
+        ConnectionPlatform.MAX: "MAX",
+    }
+    label = labels[platform]
     group_field = ""
     if platform == ConnectionPlatform.VK:
         group_field = (
@@ -157,13 +166,26 @@ async def native_messenger_setup_post(request: web.Request) -> web.Response:
                 public_base_url=public_base,
             )
             label = "ВКонтакте"
-        else:
+            ready_name = result.display_name or result.username or "Канал"
+        elif grant.platform == ConnectionPlatform.MAX:
             result = await provision_max_channel(
                 actor=grant.actor,
                 provider_token=provider_token,
                 public_base_url=public_base,
             )
             label = "MAX"
+            ready_name = result.display_name or result.username or "Канал"
+        else:
+            telegram_result = await connect_existing_telegram_bot(
+                actor=grant.actor,
+                token=provider_token,
+                idempotency_key=(
+                    "secure-setup:"
+                    + hashlib.sha256(token.encode("utf-8")).hexdigest()[:32]
+                ),
+            )
+            label = "Telegram"
+            ready_name = telegram_result.verified_username or "Бот"
     except NativeMessengerSetupRejected:
         return _page(
             title="Ссылка уже использована",
@@ -179,7 +201,7 @@ async def native_messenger_setup_post(request: web.Request) -> web.Response:
         title=f"{label} подключён",
         body=(
             f'<h1 class="ok">{label} подключён ✅</h1>'
-            f"<p>{html.escape(result.display_name or result.username or 'Канал')} готов к работе.</p>"
+            f"<p>{html.escape(ready_name)} готов к работе.</p>"
             "<p>Можно закрыть эту страницу и вернуться в ClientPlatform.</p>"
         ),
     )

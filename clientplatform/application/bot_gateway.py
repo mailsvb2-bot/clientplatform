@@ -18,7 +18,12 @@ from clientplatform.infrastructure.managed_bot_polling_repository import (
 )
 from clientplatform.infrastructure.messenger_channel_repository import MessengerChannelRepository
 from clientplatform.infrastructure.safe_bot_gateway_repository import BotGatewayRepository
+from clientplatform.infrastructure.safe_tenancy_repository import TenancyRepository
 from services.db import get_db, get_db_ro
+from services.messenger.bridge import (
+    consume_bridge_token_and_link_in_conn,
+    resolve_bridge_token_in_conn,
+)
 
 
 def resolve_telegram_route(*, external_bot_id: int | str) -> ManagedBotRoute:
@@ -110,6 +115,75 @@ def ensure_telegram_customer_link(
             display_name=display_name,
             now=now,
         )
+
+
+def consume_telegram_staff_bridge(
+    *,
+    route: ManagedBotRoute,
+    token: str,
+    telegram_user_id: int,
+    username: str | None,
+    display_name: str | None,
+) -> int:
+    """Atomically bind Telegram to authorized staff for this business."""
+
+    with get_db() as conn:
+        current = BotGatewayRepository(conn).resolve_telegram_route(
+            external_bot_id=route.external_bot_id
+        )
+        if (
+            current.managed_bot_id != route.managed_bot_id
+            or current.business_id != route.business_id
+        ):
+            raise BotGatewayAdmissionRejected(
+                "managed Telegram route changed before staff bridge consume"
+            )
+        preview = resolve_bridge_token_in_conn(conn, token)
+        if (
+            preview is None
+            or preview.consumed
+            or preview.target_platform not in {None, "telegram"}
+        ):
+            raise BotGatewayAdmissionRejected(
+                "staff messenger switch link is expired, used or targets another platform"
+            )
+        actor = TenancyRepository(conn).resolve_context(
+            user_id=int(preview.canonical_user_id),
+            business_id=current.business_id,
+        )
+        customer = conn.execute(
+            """
+            SELECT 1
+            FROM customer_identities ci
+            JOIN customers c
+              ON c.id=ci.customer_id AND c.business_id=ci.business_id
+             AND c.status='active'
+            WHERE ci.business_id=? AND ci.platform='telegram'
+              AND ci.external_subject=? AND ci.status='active'
+            LIMIT 1
+            """,
+            (current.business_id, str(telegram_user_id)),
+        ).fetchone()
+        if customer is not None:
+            raise BotGatewayAdmissionRejected(
+                "this Telegram identity is already an active customer of the business"
+            )
+        consumed = consume_bridge_token_and_link_in_conn(
+            conn,
+            token,
+            platform="telegram",
+            external_user_id=str(telegram_user_id),
+            username=username,
+            display_name=display_name,
+        )
+        if (
+            consumed is None
+            or int(consumed.canonical_user_id) != int(actor.user_id)
+        ):
+            raise BotGatewayAdmissionRejected(
+                "staff messenger switch link was already consumed"
+            )
+        return int(actor.user_id)
 
 
 def consume_telegram_customer_channel_link(

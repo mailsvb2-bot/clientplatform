@@ -52,8 +52,14 @@ def _platform(value: ConnectionPlatform | str) -> ConnectionPlatform:
         )
     except ValueError as exc:
         raise NativeMessengerSetupLinkRejected("unsupported setup platform") from exc
-    if platform not in {ConnectionPlatform.VK, ConnectionPlatform.MAX}:
-        raise NativeMessengerSetupLinkRejected("setup supports only VK or MAX")
+    if platform not in {
+        ConnectionPlatform.TELEGRAM,
+        ConnectionPlatform.VK,
+        ConnectionPlatform.MAX,
+    }:
+        raise NativeMessengerSetupLinkRejected(
+            "setup supports only Telegram, VK or MAX"
+        )
     return platform
 
 

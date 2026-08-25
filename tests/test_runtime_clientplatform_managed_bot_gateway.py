@@ -1,14 +1,21 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from uuid import uuid4
+from unittest.mock import AsyncMock, patch
 
 from aiogram import Dispatcher
 
 from clientplatform.application.control import _managed_telegram_connection
-from clientplatform.domain.bot_gateway import ManagedBotRoute
+from clientplatform.domain.bot_gateway import (
+    ClaimedIngressEvent,
+    IngressEvent,
+    IngressEventStatus,
+    ManagedBotRoute,
+)
 from clientplatform.domain.connections import ConnectionType
 from clientplatform.infrastructure import ConnectionRepository, TenancyRepository
 from clientplatform.runtime.bot_gateway import (
@@ -183,6 +190,45 @@ class ClientPlatformManagedBotGatewayRuntimeTests(unittest.IsolatedAsyncioTestCa
         self.assertEqual(admit.call_args.kwargs["payload"]["message"]["text"], "/start")
         self.assertEqual(runtime.health_snapshot()["admitted"], 1)
         await runtime._stop_poller(route.managed_bot_id)
+
+    async def test_staff_bridge_bypasses_customer_and_sales_paths(self) -> None:
+        route = self.route()
+        payload = _FakeUpdate().model_dump()
+        payload["message"]["text"] = "/start bridge_staff-token"
+        item = ClaimedIngressEvent(
+            event=IngressEvent(
+                id=str(uuid4()),
+                business_id=route.business_id,
+                managed_bot_id=route.managed_bot_id,
+                provider_update_id="41",
+                payload_sha256="0" * 64,
+                payload_json=json.dumps(payload),
+                status=IngressEventStatus.PROCESSING,
+                attempts=1,
+                available_at="2026-08-25T00:00:00+00:00",
+                created_at="2026-08-25T00:00:00+00:00",
+                updated_at="2026-08-25T00:00:00+00:00",
+            ),
+            route=route,
+        )
+        runtime = ManagedBotGatewayRuntime(dispatcher=Dispatcher())
+        runtime._bot_for = AsyncMock(return_value=SimpleNamespace())  # type: ignore[method-assign]
+        runtime._dispatcher.feed_webhook_update = AsyncMock()  # type: ignore[method-assign]
+        with (
+            patch("clientplatform.runtime.bot_gateway.consume_telegram_staff_bridge", return_value=101) as staff,
+            patch("clientplatform.runtime.bot_gateway.ensure_telegram_customer_link") as ensure_customer,
+            patch("clientplatform.runtime.bot_gateway.consume_telegram_customer_channel_link") as customer_bridge,
+            patch("clientplatform.runtime.bot_gateway.mark_ingress_event_processed") as mark,
+            patch("clientplatform.runtime.bot_gateway.Update.model_validate", return_value=SimpleNamespace()),
+        ):
+            await runtime._process_item(item)
+        staff.assert_called_once_with(
+            route=route, token="staff-token", telegram_user_id=5001,
+            username=None, display_name="Иван",
+        )
+        ensure_customer.assert_not_called()
+        customer_bridge.assert_not_called()
+        mark.assert_called_once_with(item)
 
     async def test_disabled_runtime_has_no_background_owner(self) -> None:
         with patch.dict("os.environ", {}, clear=True):
