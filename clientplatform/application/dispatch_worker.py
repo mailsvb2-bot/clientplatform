@@ -19,7 +19,11 @@ from clientplatform.infrastructure.safe_dispatch_outbox import (
     mark_non_replay_safe_dispatch_boundary,
 )
 from clientplatform.infrastructure.unified_dispatch_outbox import ClaimedProviderDispatch
-from clientplatform.transport.base import AdapterRegistry, CredentialProvider
+from clientplatform.transport.base import (
+    AdapterRegistry,
+    CredentialProvider,
+    TwoPhaseDispatchAdapter,
+)
 from services.db import get_db
 
 
@@ -106,6 +110,21 @@ def _claims_releasable_after_cancel(
 
     start = current_index + 1 if non_replay_boundary_crossed else current_index
     return items[start:]
+
+
+async def _release_prepared_dispatch(
+    adapter: TwoPhaseDispatchAdapter,
+    prepared: object,
+) -> None:
+    """Best-effort cleanup of transient preparation state without masking send truth."""
+
+    try:
+        await adapter.release_prepared(prepared)
+    except Exception:
+        LOGGER.warning(
+            "prepared dispatch cleanup failed; durable delivery state is unchanged",
+            exc_info=True,
+        )
 
 
 def _provider_claim_can_cross_provider_boundary(item: object) -> bool:
@@ -240,7 +259,7 @@ async def run_dispatch_batch(
     lock_ttl_seconds: int = 900,
     interaction_link_resolver: InteractionLinkResolver | None = None,
 ) -> DispatchBatchResult:
-    """Claim, send and settle a bounded batch.
+    """Claim, prepare, send and settle a bounded batch.
 
     Database leases are committed before any credential lookup or network I/O.
     Each settlement uses a new short transaction, so a slow provider never
@@ -253,15 +272,21 @@ async def run_dispatch_batch(
     authority check and only in the in-memory claimed item. They never replace
     the digest/session reference stored in the durable outbox.
 
-    MAX provider pacing also happens before the non-replay boundary. If a worker
-    is cancelled while waiting for a documented provider rate-limit slot, the
-    current lease is still replay-safe and can be released normally. A wait is
-    followed by one more live-authority revalidation before provider I/O.
+    Two-phase adapters perform replay-safe preparation before MAX pacing and
+    before the durable non-replay marker. For MAX media this includes resolving
+    the source, validating/downloading bytes and obtaining the provider upload
+    token. Preparation must not create a user-visible provider message.
 
-    Non-idempotent provider calls are durably marked immediately before network
-    I/O. Once that boundary is crossed, failure or worker cancellation must never
-    return the current work to automatic retry; stale ownership is quarantined by
-    the canonical outbox as ambiguous/manual-reconciliation work instead.
+    MAX provider pacing then happens immediately before the non-replay boundary.
+    A wait is followed by one more live-authority revalidation, so access revoked
+    while media was prepared or while the rate slot was pending cannot cross the
+    provider write boundary.
+
+    Only after preparation, pacing and revalidation does the worker durably mark
+    a non-idempotent provider boundary. ``send_prepared`` then performs the final
+    provider message write. Explicit provider rejections may keep the durable
+    retry budget; unknown timeout/connection outcomes after that marker remain
+    quarantined as ambiguous/manual-reconciliation work instead of being replayed.
     """
 
     with get_db() as conn:
@@ -277,6 +302,8 @@ async def run_dispatch_batch(
     for index, item in enumerate(claimed):
         credential = ""
         non_replay_boundary_crossed = False
+        two_phase_adapter: TwoPhaseDispatchAdapter | None = None
+        prepared: object | None = None
         try:
             allowed = await asyncio.to_thread(
                 _provider_claim_can_cross_provider_boundary,
@@ -300,8 +327,13 @@ async def run_dispatch_batch(
             if not credential:
                 raise ValueError("credential provider returned an empty secret")
 
+            adapter = adapters.get(item.dispatch.platform)
+            if isinstance(adapter, TwoPhaseDispatchAdapter):
+                two_phase_adapter = adapter
+                prepared = await adapter.prepare(send_item, credential)
+
             waited_for_max_slot = await pace_max_provider_boundary(send_item)
-            if waited_for_max_slot:
+            if waited_for_max_slot or prepared is not None:
                 allowed = await asyncio.to_thread(
                     _provider_claim_can_cross_provider_boundary,
                     item,
@@ -309,12 +341,16 @@ async def run_dispatch_batch(
                 if not allowed:
                     continue
 
-            adapter = adapters.get(item.dispatch.platform)
             non_replay_boundary_crossed = await asyncio.to_thread(
                 _mark_non_replay_boundary,
                 item,
             )
-            provider_message_id = await adapter.send(send_item, credential)
+            if two_phase_adapter is not None:
+                if prepared is None:
+                    raise RuntimeError("two-phase adapter returned no prepared dispatch")
+                provider_message_id = await two_phase_adapter.send_prepared(prepared)
+            else:
+                provider_message_id = await adapter.send(send_item, credential)
             with get_db() as conn:
                 DispatchOutboxRepository(conn).mark_sent(
                     item,
@@ -347,6 +383,9 @@ async def run_dispatch_batch(
                 dead += 1
             else:
                 retried += 1
+        finally:
+            if two_phase_adapter is not None and prepared is not None:
+                await _release_prepared_dispatch(two_phase_adapter, prepared)
 
     return DispatchBatchResult(
         claimed=len(claimed),
