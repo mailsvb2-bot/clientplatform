@@ -5,7 +5,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from clientplatform.application import max_dispatch_pacing
-from clientplatform.application.dispatch_worker import _effective_max_attempts
+from clientplatform.application.dispatch_worker import (
+    _claims_releasable_after_cancel,
+    _effective_max_attempts,
+)
 from clientplatform.domain.connections import ConnectionPlatform
 from runtime.messenger_max_sender import MaxProviderRateLimitError
 
@@ -102,6 +105,26 @@ class MaxDispatchPacingTests(unittest.TestCase):
         )
         self.assertIn("await _release_prepared_dispatch", body)
         self.assertIn("prepared,\n                    credential,", body)
+
+    def test_cancellation_requeues_current_only_before_non_replay_marker(self) -> None:
+        claimed = ["current", "next", "later"]
+
+        self.assertEqual(
+            claimed,
+            _claims_releasable_after_cancel(
+                claimed,
+                current_index=0,
+                non_replay_boundary_crossed=False,
+            ),
+        )
+        self.assertEqual(
+            ["next", "later"],
+            _claims_releasable_after_cancel(
+                claimed,
+                current_index=0,
+                non_replay_boundary_crossed=True,
+            ),
+        )
 
     def test_max_429_remains_replay_safe_after_non_replay_marker(self) -> None:
         rate_limited = MaxProviderRateLimitError(
