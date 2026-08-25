@@ -178,10 +178,9 @@ class VkDispatchAdapter(_NativeMessengerDispatchAdapter):
     platform = ConnectionPlatform.VK
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class _PreparedMaxDispatch:
     item: ClaimedDispatch
-    credential: str
     prepared_media: object | None = None
 
 
@@ -199,7 +198,7 @@ class MaxDispatchAdapter(_NativeMessengerDispatchAdapter):
 
         kind = item.dispatch.payload_kind
         if kind not in _MEDIA_KINDS:
-            return _PreparedMaxDispatch(item=item, credential=token)
+            return _PreparedMaxDispatch(item=item)
 
         payload = item.dispatch.payload_ref
         if self._media_resolver is not None:
@@ -217,25 +216,27 @@ class MaxDispatchAdapter(_NativeMessengerDispatchAdapter):
         )
         return _PreparedMaxDispatch(
             item=item,
-            credential=token,
             prepared_media=prepared_media,
         )
 
-    async def send_prepared(self, prepared: object) -> str:
+    async def send_prepared(self, prepared: object, credential: str) -> str:
         if not isinstance(prepared, _PreparedMaxDispatch):
             raise ValueError("MAX prepared dispatch has an invalid type")
+        token = str(credential or "").strip()
+        if not token:
+            raise ValueError("resolved max credential must not be empty")
         item = prepared.item
         if item.dispatch.platform != self.platform:
             raise ValueError("dispatch platform does not match adapter")
 
         if prepared.prepared_media is None:
-            return await super().send(item, prepared.credential)
+            return await super().send(item, token)
 
         send_prepared_media = getattr(self._client, "send_prepared_media", None)
         if not callable(send_prepared_media):
             raise ValueError("MAX media client does not support prepared final write")
         result = await send_prepared_media(
-            token=prepared.credential,
+            token=token,
             prepared=prepared.prepared_media,
         )
         provider_message_id = str(result or "").strip()
