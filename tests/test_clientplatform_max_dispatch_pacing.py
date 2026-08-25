@@ -89,7 +89,7 @@ class MaxDispatchPacingTests(unittest.TestCase):
         pace = body.index("await pace_max_provider_boundary(send_item)")
         non_replay = body.index("_mark_non_replay_boundary")
         final_write = body.index(
-            "provider_message_id = await two_phase_adapter.send_prepared(prepared)"
+            "provider_message_id = await two_phase_adapter.send_prepared("
         )
 
         self.assertLess(prepare, pace)
@@ -101,6 +101,7 @@ class MaxDispatchPacingTests(unittest.TestCase):
             2,
         )
         self.assertIn("await _release_prepared_dispatch", body)
+        self.assertIn("prepared,\n                    credential,", body)
 
     def test_max_429_remains_replay_safe_after_non_replay_marker(self) -> None:
         rate_limited = MaxProviderRateLimitError(
