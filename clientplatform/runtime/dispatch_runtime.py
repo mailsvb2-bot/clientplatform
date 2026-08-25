@@ -10,7 +10,8 @@ from clientplatform.application.dispatch_worker import DispatchBatchResult, run_
 from clientplatform.application.program_media import run_program_media_cleanup_batch
 from clientplatform.application.sales_followups import run_sales_followup_maintenance_batch
 from clientplatform.runtime.control_bot import control_bot_enabled
-from clientplatform.runtime.messenger_provider_clients import MaxRuntimeClient, VkRuntimeClient
+from clientplatform.runtime.max_two_phase_media import TwoPhaseMaxRuntimeClient
+from clientplatform.runtime.messenger_provider_clients import VkRuntimeClient
 from clientplatform.runtime.native_messenger_setup_links import NativeMessengerSetupLinkService
 from clientplatform.runtime.secrets import EnvironmentCredentialProvider
 from clientplatform.transport import (
@@ -188,7 +189,7 @@ def build_dispatch_runtime(
                 media_resolver=media_resolver,
             ),
             MaxDispatchAdapter(
-                MaxRuntimeClient(),
+                TwoPhaseMaxRuntimeClient(),
                 media_resolver=media_resolver,
             ),
         ]
