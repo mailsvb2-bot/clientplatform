@@ -50,6 +50,13 @@ class MaxProviderRateLimitError(MessengerTransportError):
     provider_write_definitely_rejected = True
 
 
+class MaxProviderRejectedError(MessengerTransportError):
+    """MAX returned an explicit application-level rejection for a message write."""
+
+    retryable = False
+    provider_write_definitely_rejected = True
+
+
 def _attachment_retry_delays() -> tuple[float, ...]:
     raw = (os.getenv("MAX_ATTACHMENT_RETRY_DELAYS_SEC") or "0.5,1,2,4,8,16").strip()
     values: list[float] = []
@@ -134,6 +141,38 @@ def _max_retryable_http_error(
         f"MAX provider {operation} was rate limited",
         code=f"max.{operation}.http_429",
     )
+
+
+def _max_message_write_result(data: Any, *, operation: str) -> dict[str, Any]:
+    """Return only an official MAX Message object, never an error string.
+
+    MAX documents successful ``POST /messages`` responses as ``{"message": Message}``,
+    while application-level rejections may use top-level ``code`` + ``message``.
+    Treat explicit provider rejections as known non-writes, but keep malformed
+    success-shaped responses ambiguous so the dispatch worker never replays them
+    after the durable non-replay boundary.
+    """
+
+    if not isinstance(data, dict):
+        raise MessengerTransportError(
+            f"MAX provider {operation} returned an invalid response",
+            code=f"max.{operation}.provider_response_invalid",
+        )
+
+    error_code = _max_error_code(data)
+    if error_code or data.get("error"):
+        raise MaxProviderRejectedError(
+            f"MAX provider {operation} rejected the message",
+            code=f"max.{operation}.{error_code or 'provider_rejected'}",
+        )
+
+    message = data.get("message")
+    if not isinstance(message, dict):
+        raise MessengerTransportError(
+            f"MAX provider {operation} returned no message object",
+            code=f"max.{operation}.provider_response_invalid",
+        )
+    return message
 
 
 def _legacy_max_ui():
@@ -425,9 +464,7 @@ class MaxBotSender:
             if rate_limited is not None:
                 raise rate_limited from exc
             raise
-        if isinstance(data, dict) and data.get("error"):
-            raise _max_error("send_text", _max_error_code(data) or "provider_error")
-        return data["message"] if isinstance(data, dict) and data.get("message") is not None else data
+        return _max_message_write_result(data, operation="send_text")
 
     async def _ensure_media_token(self, file_path: Path, *, media_type: str) -> str:
         cached = get_cached_media_token("max", file_path, media_type=media_type)
