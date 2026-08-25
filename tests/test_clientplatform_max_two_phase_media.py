@@ -24,7 +24,6 @@ from clientplatform.runtime.max_two_phase_media import (
 )
 from clientplatform.transport.native_messenger import MaxDispatchAdapter
 from runtime.messenger_max_sender import MaxBotSender
-from runtime.messenger_transport_errors import MessengerTransportError
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -147,10 +146,9 @@ class MaxTwoPhaseRuntimeTests(unittest.TestCase):
                 "_ensure_media_token",
                 new=AsyncMock(return_value="upload-token-prepared"),
             ) as upload,
-            patch.object(
-                MaxBotSender,
-                "send_text",
-                new=AsyncMock(return_value={"message_id": "must-not-run"}),
+            patch(
+                "clientplatform.runtime.max_two_phase_media.json_request",
+                return_value={"message": {"id": "must-not-run"}},
             ) as final_write,
         ):
             prepared = asyncio.run(
@@ -167,7 +165,7 @@ class MaxTwoPhaseRuntimeTests(unittest.TestCase):
         self.assertEqual(1, cached.call_count)
         self.assertEqual(1, upload.await_count)
         sleep.assert_awaited_once_with(0.5)
-        self.assertEqual(0, final_write.await_count)
+        self.assertEqual(0, final_write.call_count)
         self.assertNotIn("secret-token", repr(prepared))
         self.assertNotIn("upload-token-prepared", repr(prepared))
 
@@ -211,10 +209,18 @@ class MaxTwoPhaseRuntimeTests(unittest.TestCase):
         self.assertEqual(1, ensure.await_count)
         self.assertEqual(0, sleep.await_count)
 
-    def test_final_phase_is_exactly_one_message_write(self) -> None:
+    def test_final_phase_is_exactly_one_raw_message_write(self) -> None:
         client = TwoPhaseMaxRuntimeClient()
-        send = AsyncMock(return_value={"message_id": "max-message-1"})
-        with patch.object(MaxBotSender, "send_text", new=send):
+        post = patch(
+            "clientplatform.runtime.max_two_phase_media.json_request",
+            return_value={"message": {"id": "max-message-1"}},
+        )
+        legacy = patch.object(
+            MaxBotSender,
+            "send_text",
+            new=AsyncMock(side_effect=AssertionError("legacy send_text must not run")),
+        )
+        with post as raw_post, legacy as legacy_send:
             result = asyncio.run(
                 client.send_prepared_media(
                     token="secret-token",
@@ -223,26 +229,30 @@ class MaxTwoPhaseRuntimeTests(unittest.TestCase):
             )
 
         self.assertEqual("max-message-1", result)
-        self.assertEqual(1, send.await_count)
-        args, kwargs = send.await_args
-        self.assertEqual("max-user-88", args[0])
-        self.assertEqual("", args[1])
-        self.assertFalse(kwargs["legacy_ui"])
+        self.assertEqual(1, raw_post.call_count)
+        self.assertEqual(0, legacy_send.await_count)
+        args, kwargs = raw_post.call_args
+        self.assertIn("/messages?user_id=max-user-88", args[0])
+        self.assertEqual("POST", kwargs["method"])
+        self.assertEqual(1, kwargs["retries"])
         self.assertEqual(
-            [{"type": "video", "payload": {"token": "upload-token-1"}}],
-            kwargs["attachments"],
+            {
+                "text": "",
+                "attachments": [
+                    {"type": "video", "payload": {"token": "upload-token-1"}}
+                ],
+            },
+            kwargs["payload"],
         )
 
-    def test_explicit_attachment_not_ready_keeps_durable_retry_budget(self) -> None:
+    def test_nested_attachment_not_ready_keeps_durable_retry_budget(self) -> None:
         client = TwoPhaseMaxRuntimeClient()
-        provider_error = MessengerTransportError(
-            "not ready",
-            code="max.send_text.attachment.not.ready",
-        )
-        with patch.object(
-            MaxBotSender,
-            "send_text",
-            new=AsyncMock(side_effect=provider_error),
+        with patch(
+            "clientplatform.runtime.max_two_phase_media.json_request",
+            return_value={
+                "error": {"code": "attachment.not.ready"},
+                "message": "Key: errors.process.attachment.file.not.processed",
+            },
         ):
             with self.assertRaises(MaxPreparedMediaNotReadyError) as raised:
                 asyncio.run(
@@ -262,10 +272,16 @@ class MaxTwoPhaseRuntimeTests(unittest.TestCase):
             ),
         )
 
-    def test_top_level_attachment_not_ready_response_is_explicit_rejection(self) -> None:
+    def test_top_level_code_plus_message_is_never_mistaken_for_success(self) -> None:
         client = TwoPhaseMaxRuntimeClient()
-        send = AsyncMock(return_value={"code": "attachment.not.ready"})
-        with patch.object(MaxBotSender, "send_text", new=send):
+        raw_post = patch(
+            "clientplatform.runtime.max_two_phase_media.json_request",
+            return_value={
+                "code": "attachment.not.ready",
+                "message": "Key: errors.process.attachment.file.not.processed",
+            },
+        )
+        with raw_post as post:
             with self.assertRaises(MaxPreparedMediaNotReadyError) as raised:
                 asyncio.run(
                     client.send_prepared_media(
@@ -274,7 +290,7 @@ class MaxTwoPhaseRuntimeTests(unittest.TestCase):
                     )
                 )
 
-        self.assertEqual(1, send.await_count)
+        self.assertEqual(1, post.call_count)
         self.assertTrue(raised.exception.provider_write_definitely_rejected)
         self.assertEqual(
             8,
@@ -287,15 +303,13 @@ class MaxTwoPhaseRuntimeTests(unittest.TestCase):
 
     def test_explicit_token_rejection_invalidates_cache_and_retries_durably(self) -> None:
         client = TwoPhaseMaxRuntimeClient()
-        provider_error = MessengerTransportError(
-            "invalid token",
-            code="max.send_text.invalid_token",
-        )
         with (
-            patch.object(
-                MaxBotSender,
-                "send_text",
-                new=AsyncMock(side_effect=provider_error),
+            patch(
+                "clientplatform.runtime.max_two_phase_media.json_request",
+                return_value={
+                    "code": "invalid_token",
+                    "message": "invalid attachment token",
+                },
             ),
             patch(
                 "clientplatform.runtime.max_two_phase_media.invalidate_media_token",
@@ -324,10 +338,9 @@ class MaxTwoPhaseRuntimeTests(unittest.TestCase):
     def test_unknown_connection_loss_after_final_write_stays_ambiguous(self) -> None:
         client = TwoPhaseMaxRuntimeClient()
         failure = OSError("connection lost after POST")
-        with patch.object(
-            MaxBotSender,
-            "send_text",
-            new=AsyncMock(side_effect=failure),
+        with patch(
+            "clientplatform.runtime.max_two_phase_media.json_request",
+            side_effect=failure,
         ):
             with self.assertRaises(OSError) as raised:
                 asyncio.run(
@@ -345,6 +358,20 @@ class MaxTwoPhaseRuntimeTests(unittest.TestCase):
                 non_replay_boundary_crossed=True,
             ),
         )
+
+    def test_malformed_success_message_string_is_never_marked_sent(self) -> None:
+        client = TwoPhaseMaxRuntimeClient()
+        with patch(
+            "clientplatform.runtime.max_two_phase_media.json_request",
+            return_value={"message": "not-a-message-object"},
+        ):
+            with self.assertRaisesRegex(ValueError, "no message object"):
+                asyncio.run(
+                    client.send_prepared_media(
+                        token="secret-token",
+                        prepared=self._prepared(),
+                    )
+                )
 
     def test_temporary_preparation_is_cleaned_after_final_phase(self) -> None:
         client = TwoPhaseMaxRuntimeClient()
