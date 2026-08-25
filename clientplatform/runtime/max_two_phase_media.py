@@ -14,6 +14,7 @@ from runtime.messenger_max_sender import (
     MaxBotSender,
     MaxProviderRateLimitError,
     _MEDIA_TOKEN_REJECT_CODES,
+    _attachment_retry_delays,
     _max_error_code,
 )
 from runtime.messenger_transport_errors import (
@@ -21,7 +22,10 @@ from runtime.messenger_transport_errors import (
     MessengerMediaTokenRejectedError,
     MessengerTransportError,
 )
-from services.messenger.media_assets import invalidate_media_token
+from services.messenger.media_assets import (
+    get_cached_media_token,
+    invalidate_media_token,
+)
 
 
 _MEDIA_TYPE_BY_KIND = {
@@ -85,10 +89,11 @@ async def _explicit_media_rejection(
 class TwoPhaseMaxRuntimeClient(MaxRuntimeClient):
     """MAX runtime client with replay-safe preparation and one final message write.
 
-    Phase 1 may resolve/download the source and upload bytes to MAX, but it never
-    calls ``POST /messages``. Phase 2 receives only the prepared provider token
-    and performs exactly one message creation request. The durable worker places
-    its non-replay marker between those phases.
+    Phase 1 resolves/downloads the source, uploads bytes to MAX when needed and,
+    for a fresh upload, waits the first bounded attachment-readiness interval.
+    It never calls ``POST /messages``. Phase 2 receives only the prepared
+    provider token and performs exactly one message creation request. The durable
+    worker places its non-replay marker between those phases.
     """
 
     async def prepare_media(
@@ -108,10 +113,26 @@ class TwoPhaseMaxRuntimeClient(MaxRuntimeClient):
         path, temporary = await _materialize_media(media)
         sender = MaxBotSender(token=token)
         try:
+            # MAX documents that freshly uploaded attachments can require a
+            # short processing pause before the first POST /messages attempt.
+            # Detect a pre-existing reusable token before _ensure_media_token so
+            # only a fresh upload pays that delay. The delay belongs to prepare,
+            # therefore cancellation here remains replay-safe and happens before
+            # the worker's durable non-replay marker.
+            cached_before_prepare = await asyncio.to_thread(
+                get_cached_media_token,
+                "max",
+                path,
+                media_type=media_type,
+            )
             media_token = await sender._ensure_media_token(  # noqa: SLF001 - canonical split of retained provider primitive
                 path,
                 media_type=media_type,
             )
+            if cached_before_prepare is None:
+                first_ready_delay = _attachment_retry_delays()[0]
+                if first_ready_delay:
+                    await asyncio.sleep(first_ready_delay)
             if temporary:
                 # Temporary download paths are unique per attempt and therefore
                 # must not leave useless durable cache rows behind. The provider
