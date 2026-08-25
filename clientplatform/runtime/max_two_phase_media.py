@@ -14,6 +14,7 @@ from runtime.messenger_max_sender import (
     MaxBotSender,
     MaxProviderRateLimitError,
     _MEDIA_TOKEN_REJECT_CODES,
+    _max_error_code,
 )
 from runtime.messenger_transport_errors import (
     MessengerMediaNotReadyError,
@@ -54,6 +55,31 @@ class PreparedMaxRuntimeMedia:
     media_token: str = field(repr=False)
     source_path: Path = field(repr=False)
     temporary: bool = field(repr=False)
+
+
+async def _explicit_media_rejection(
+    code: str,
+    prepared: PreparedMaxRuntimeMedia,
+) -> MessengerTransportError | None:
+    normalized = str(code or "").strip().casefold()
+    provider_code = normalized.removeprefix("max.send_text.")
+    if provider_code == "attachment.not.ready":
+        return MaxPreparedMediaNotReadyError(
+            "MAX attachment is not ready",
+            code="max.attachment.not_ready",
+        )
+    if provider_code in _MEDIA_TOKEN_REJECT_CODES:
+        await asyncio.to_thread(
+            invalidate_media_token,
+            "max",
+            prepared.source_path,
+            media_type=prepared.media_type,
+        )
+        return MaxPreparedMediaTokenRejectedError(
+            "MAX media token rejected",
+            code=f"max.send_text.{provider_code}",
+        )
+    return None
 
 
 class TwoPhaseMaxRuntimeClient(MaxRuntimeClient):
@@ -142,28 +168,17 @@ class TwoPhaseMaxRuntimeClient(MaxRuntimeClient):
         except MaxProviderRateLimitError:
             raise
         except MessengerTransportError as exc:
-            code = str(getattr(exc, "safe_code", "") or "").strip().casefold()
-            if code == "max.send_text.attachment.not.ready":
-                raise MaxPreparedMediaNotReadyError(
-                    "MAX attachment is not ready",
-                    code="max.attachment.not_ready",
-                ) from exc
-            rejected_codes = {
-                f"max.send_text.{provider_code}"
-                for provider_code in _MEDIA_TOKEN_REJECT_CODES
-            }
-            if code in rejected_codes:
-                await asyncio.to_thread(
-                    invalidate_media_token,
-                    "max",
-                    prepared.source_path,
-                    media_type=prepared.media_type,
-                )
-                raise MaxPreparedMediaTokenRejectedError(
-                    "MAX media token rejected",
-                    code=code,
-                ) from exc
+            mapped = await _explicit_media_rejection(
+                str(getattr(exc, "safe_code", "") or ""),
+                prepared,
+            )
+            if mapped is not None:
+                raise mapped from exc
             raise
+
+        mapped = await _explicit_media_rejection(_max_error_code(result), prepared)
+        if mapped is not None:
+            raise mapped
 
         message_id = _provider_message_id(result)
         if not message_id:
