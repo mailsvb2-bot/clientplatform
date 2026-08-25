@@ -26,6 +26,9 @@ from runtime.messenger_max_sender import MaxBotSender
 from runtime.messenger_transport_errors import MessengerTransportError
 
 
+ROOT = Path(__file__).resolve().parents[1]
+
+
 class _Resolver:
     def __init__(self, events: list[str]) -> None:
         self.events = events
@@ -302,6 +305,28 @@ class MaxTwoPhaseRuntimeTests(unittest.TestCase):
         asyncio.run(client.release_prepared_media(prepared))
 
         self.assertFalse(path.exists())
+
+
+class MaxTwoPhaseCompositionTests(unittest.TestCase):
+    def test_production_runtime_uses_two_phase_max_client(self) -> None:
+        source = (
+            ROOT / "clientplatform" / "runtime" / "dispatch_runtime.py"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            "MaxDispatchAdapter(\n                TwoPhaseMaxRuntimeClient(),",
+            source,
+        )
+        self.assertNotIn("MaxDispatchAdapter(\n                MaxRuntimeClient(),", source)
+
+    def test_two_phase_boundary_is_mandatory_static_surface(self) -> None:
+        source = (ROOT / "scripts" / "critical_static_gate.py").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn('"clientplatform/runtime/max_two_phase_media.py"', source)
+        self.assertIn('"clientplatform/transport/base.py"', source)
+        self.assertIn('"clientplatform/transport/native_messenger.py"', source)
 
 
 if __name__ == "__main__":
