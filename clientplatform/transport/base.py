@@ -39,6 +39,10 @@ class TwoPhaseDispatchAdapter(DispatchAdapter, Protocol):
     all replay-safe preparation first, durably mark a non-idempotent boundary,
     and call ``send_prepared`` only for the final provider message write.
 
+    Raw provider credentials are deliberately not part of prepared state. The
+    worker retains the resolved credential and passes it only to the final-write
+    call, preventing an avoidable secret copy in transient prepared objects.
+
     ``release_prepared`` is best-effort transient cleanup. It must never create
     provider-visible work or change durable dispatch state.
     """
@@ -46,7 +50,7 @@ class TwoPhaseDispatchAdapter(DispatchAdapter, Protocol):
     async def prepare(self, item: ClaimedDispatch, credential: str) -> object:
         """Prepare transient provider state without creating the message."""
 
-    async def send_prepared(self, prepared: object) -> str:
+    async def send_prepared(self, prepared: object, credential: str) -> str:
         """Cross only the final provider message-write boundary."""
 
     async def release_prepared(self, prepared: object) -> None:
