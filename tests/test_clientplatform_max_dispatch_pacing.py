@@ -79,30 +79,30 @@ class MaxDispatchPacingTests(unittest.TestCase):
         self.assertEqual(max_dispatch_pacing._next_connection_write_at, {})
         self.assertEqual(max_dispatch_pacing._next_dialog_write_at, {})
 
-    def test_max_pacing_stays_before_non_replay_boundary(self) -> None:
+    def test_max_media_prepare_pace_marker_and_final_write_order_is_locked(self) -> None:
         source = (
             ROOT / "clientplatform" / "application" / "dispatch_worker.py"
         ).read_text(encoding="utf-8")
         body = source.split("async def run_dispatch_batch", 1)[1]
 
+        prepare = body.index("prepared = await adapter.prepare(send_item, credential)")
         pace = body.index("await pace_max_provider_boundary(send_item)")
         non_replay = body.index("_mark_non_replay_boundary")
-        provider_send = body.index("provider_message_id = await adapter.send")
+        final_write = body.index(
+            "provider_message_id = await two_phase_adapter.send_prepared(prepared)"
+        )
 
+        self.assertLess(prepare, pace)
         self.assertLess(pace, non_replay)
-        self.assertLess(non_replay, provider_send)
-        self.assertIn("if waited_for_max_slot:", body)
+        self.assertLess(non_replay, final_write)
+        self.assertIn("if waited_for_max_slot or prepared is not None:", body)
         self.assertGreaterEqual(
             body.count("_provider_claim_can_cross_provider_boundary"),
             2,
         )
+        self.assertIn("await _release_prepared_dispatch", body)
 
     def test_max_429_remains_replay_safe_after_non_replay_marker(self) -> None:
-        # After a process restart the in-memory pacing reservations are empty, so
-        # a boundary request can still race an existing provider window. MAX 429
-        # explicitly means the provider rejected the write before creating the
-        # message; keep the durable retry budget even though the non-replay marker
-        # was already committed immediately before network I/O.
         rate_limited = MaxProviderRateLimitError(
             "MAX rate limited",
             code="max.http_429",
