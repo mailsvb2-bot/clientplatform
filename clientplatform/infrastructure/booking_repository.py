@@ -436,7 +436,7 @@ class BookingRepository:
             """
             UPDATE booking_slots
             SET status='booked', booked_customer_id=?, booked_at=?, updated_at=?
-            WHERE id=? AND business_id=? AND status='open'
+            WHERE id=? AND business_id=? AND status='open' AND booked_customer_id IS NULL
             """,
             (
                 link.customer_id,
