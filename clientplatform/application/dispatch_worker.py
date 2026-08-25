@@ -116,7 +116,9 @@ async def _release_prepared_dispatch(
 
     try:
         await adapter.release_prepared(prepared)
-    except Exception:
+    except Exception:  # validator: allow-wide-except
+        # Reviewed cleanup boundary: adapter cleanup must never overwrite the
+        # already-known durable/provider outcome of the dispatch itself.
         LOGGER.warning(
             "prepared dispatch cleanup failed; durable delivery state is unchanged",
             exc_info=True,
