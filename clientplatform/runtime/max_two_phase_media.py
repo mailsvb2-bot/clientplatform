@@ -69,6 +69,18 @@ class PreparedMaxRuntimeMedia:
     temporary: bool = field(repr=False)
 
 
+def _discard_temporary_file(path: Path) -> None:
+    """Best-effort temp-file cleanup that never masks delivery truth."""
+
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        LOGGER.warning(
+            "temporary MAX media file cleanup failed; delivery state is unchanged",
+            exc_info=True,
+        )
+
+
 async def _discard_temporary_token_cache(path: Path, *, media_type: str) -> None:
     """Best-effort cache cleanup that never masks send/cancellation truth."""
 
@@ -79,7 +91,11 @@ async def _discard_temporary_token_cache(path: Path, *, media_type: str) -> None
             path,
             media_type=media_type,
         )
-    except (Exception, asyncio.CancelledError):
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # validator: allow-wide-except
+        # Reviewed cleanup boundary: cache deletion must never overwrite the
+        # already-known provider/durable delivery outcome.
         LOGGER.warning(
             "temporary MAX media-token cache cleanup failed; delivery state is unchanged",
             exc_info=True,
@@ -186,6 +202,7 @@ class TwoPhaseMaxRuntimeClient(MaxRuntimeClient):
 
         path, temporary = await _materialize_media(media)
         sender = MaxBotSender(token=token)
+        preparation_succeeded = False
         try:
             cached_before_prepare = await asyncio.to_thread(
                 get_cached_media_token,
@@ -203,26 +220,27 @@ class TwoPhaseMaxRuntimeClient(MaxRuntimeClient):
                     await asyncio.sleep(first_ready_delay)
             if temporary:
                 await _discard_temporary_token_cache(path, media_type=media_type)
-        except (Exception, asyncio.CancelledError):
-            if temporary:
-                await _discard_temporary_token_cache(path, media_type=media_type)
-                path.unlink(missing_ok=True)
-            raise
 
-        clean_subject = str(external_subject or "").strip()
-        clean_token = str(media_token or "").strip()
-        if not clean_subject or not clean_token:
-            if temporary:
-                await _discard_temporary_token_cache(path, media_type=media_type)
-                path.unlink(missing_ok=True)
-            raise ValueError("MAX prepared media is incomplete")
-        return PreparedMaxRuntimeMedia(
-            external_subject=clean_subject,
-            media_type=media_type,
-            media_token=clean_token,
-            source_path=path,
-            temporary=temporary,
-        )
+            clean_subject = str(external_subject or "").strip()
+            clean_token = str(media_token or "").strip()
+            if not clean_subject or not clean_token:
+                raise ValueError("MAX prepared media is incomplete")
+
+            prepared = PreparedMaxRuntimeMedia(
+                external_subject=clean_subject,
+                media_type=media_type,
+                media_token=clean_token,
+                source_path=path,
+                temporary=temporary,
+            )
+            preparation_succeeded = True
+            return prepared
+        finally:
+            if temporary and not preparation_succeeded:
+                try:
+                    await _discard_temporary_token_cache(path, media_type=media_type)
+                finally:
+                    _discard_temporary_file(path)
 
     async def send_prepared_media(
         self,
@@ -260,7 +278,7 @@ class TwoPhaseMaxRuntimeClient(MaxRuntimeClient):
                 prepared.source_path,
                 media_type=prepared.media_type,
             )
-            prepared.source_path.unlink(missing_ok=True)
+            _discard_temporary_file(prepared.source_path)
 
 
 __all__ = [
