@@ -200,6 +200,29 @@ class MaxTwoPhaseRuntimeTests(unittest.TestCase):
             ),
         )
 
+    def test_top_level_attachment_not_ready_response_is_explicit_rejection(self) -> None:
+        client = TwoPhaseMaxRuntimeClient()
+        send = AsyncMock(return_value={"code": "attachment.not.ready"})
+        with patch.object(MaxBotSender, "send_text", new=send):
+            with self.assertRaises(MaxPreparedMediaNotReadyError) as raised:
+                asyncio.run(
+                    client.send_prepared_media(
+                        token="secret-token",
+                        prepared=self._prepared(),
+                    )
+                )
+
+        self.assertEqual(1, send.await_count)
+        self.assertTrue(raised.exception.provider_write_definitely_rejected)
+        self.assertEqual(
+            8,
+            _effective_max_attempts(
+                raised.exception,
+                8,
+                non_replay_boundary_crossed=True,
+            ),
+        )
+
     def test_explicit_token_rejection_invalidates_cache_and_retries_durably(self) -> None:
         client = TwoPhaseMaxRuntimeClient()
         provider_error = MessengerTransportError(
