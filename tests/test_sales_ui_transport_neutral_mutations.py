@@ -10,7 +10,8 @@ from clientplatform.domain.tenancy import TenantContext
 def _actor() -> TenantContext:
     return TenantContext(
         business_id=str(uuid4()),
-        member_id=str(uuid4()),
+        user_id=101,
+        membership_id=str(uuid4()),
         role="owner",
     )
 
