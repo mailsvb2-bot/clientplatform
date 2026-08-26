@@ -10,6 +10,9 @@ from clientplatform.application.activity import (
     get_business_profile,
     list_business_capabilities,
 )
+from clientplatform.application.acquisition_destination import (
+    prepare_nearest_acquisition_destination,
+)
 from clientplatform.application.bookings import list_booking_slots
 from clientplatform.application.messenger_switching import (
     available_staff_messenger_switches,
@@ -42,6 +45,7 @@ from clientplatform.domain.customer_interactions import (
     CustomerInteractionMessage,
 )
 from clientplatform.domain.messenger_channels import MessengerIngressRoute
+from clientplatform.domain.promotions import PromotionChannel, PromotionError
 from clientplatform.domain.sales import SalesError, SalesLeadStage
 from clientplatform.domain.tenancy import (
     PlatformRole,
@@ -50,6 +54,7 @@ from clientplatform.domain.tenancy import (
     TenantPermissionDenied,
 )
 from clientplatform.infrastructure import DispatchOutboxRepository, TenancyRepository
+from config.settings import settings
 from services.accounts.identity import resolve_account_for_identity
 from services.db import get_db, get_db_ro
 from services.messenger.bridge import (
@@ -92,6 +97,15 @@ _AUTOMATION_ROLES = frozenset(
         PlatformRole.OWNER,
         PlatformRole.ADMINISTRATOR,
         PlatformRole.MANAGER,
+        PlatformRole.MARKETER,
+    }
+)
+_ACQUISITION_ROLES = frozenset(
+    {
+        PlatformRole.OWNER,
+        PlatformRole.ADMINISTRATOR,
+        PlatformRole.MANAGER,
+        PlatformRole.CONTENT_MANAGER,
         PlatformRole.MARKETER,
     }
 )
@@ -362,6 +376,7 @@ def parse_native_member_interaction(value: object) -> ParsedMemberInteraction:
             "sales-note-help",
             "sales-next-help",
             "sales-close-help",
+            "acquire",
         }:
             return ParsedMemberInteraction(action, args)
     return ParsedMemberInteraction("menu")
@@ -663,6 +678,8 @@ def _growth_message(actor: TenantContext) -> CustomerInteractionMessage:
     if actor.role not in (_MARKETING_ROLES | _CONTENT_ROLES | _AUTOMATION_ROLES):
         return _permission_message()
     rows: list[tuple[CustomerInteractionButton, ...]] = []
+    if actor.role in _ACQUISITION_ROLES:
+        rows.append((_button("🚀 Найти новых клиентов", "cpm:acquire"),))
     if actor.role in _AUTOMATION_ROLES:
         rows.append((_button("🤖 Growth Autopilot", "cpm:autopilot"),))
     if actor.role in _CONTENT_ROLES:
@@ -681,10 +698,74 @@ def _growth_message(actor: TenantContext) -> CustomerInteractionMessage:
         rows.append((_button("✍️ Тексты", "cpm:copy"),))
     if actor.role in _MARKETING_ROLES:
         rows.append((_button("💡 Подсказка по ценам", "cpm:prices"),))
+    # Native interaction messages allow at most ten buttons. Keep the primary
+    # acquisition action and navigation invariant when all tools are available.
+    rows = rows[:9]
     rows.append(_back_row())
     return CustomerInteractionMessage(
         text="Рост · ClientPlatform\n\nМаркетинг, воронка и удержание:",
-        rows=tuple(rows[:10]),
+        rows=tuple(rows),
+    )
+
+
+def _acquisition_message(actor: TenantContext) -> CustomerInteractionMessage:
+    if actor.role not in _ACQUISITION_ROLES:
+        return _permission_message()
+    public_base = str(getattr(settings, "MESSENGER_PUBLIC_BASE_URL", "") or "").strip()
+    if not public_base:
+        return CustomerInteractionMessage(
+            text=(
+                "Найти новых клиентов\n\nПубличная ссылка ClientPlatform пока не настроена. "
+                "Ничего не опубликовано и расходы не запущены."
+            ),
+            rows=((_button("📈 Рост", "cpm:growth"),), _back_row()),
+        )
+    try:
+        prepared = prepare_nearest_acquisition_destination(
+            actor=actor,
+            public_base_url=public_base,
+            attribution_channel=PromotionChannel.WEBSITE,
+        )
+    except (PromotionError, TenantPermissionDenied, ValueError):
+        return CustomerInteractionMessage(
+            text=(
+                "Найти новых клиентов\n\nНе удалось безопасно подготовить ссылку. "
+                "Ничего не опубликовано и расходы не запущены."
+            ),
+            rows=((_button("🔄 Проверить снова", "cpm:acquire"),), (_button("📈 Рост", "cpm:growth"),), _back_row()),
+        )
+    if prepared is None:
+        return CustomerInteractionMessage(
+            text=(
+                "Найти новых клиентов\n\nСначала нужно открыть хотя бы одно будущее "
+                "время для записи. После этого ClientPlatform сама выберет ближайшее."
+            ),
+            rows=((_button("📅 Записи", "cpm:bookings"),), (_button("📈 Рост", "cpm:growth"),), _back_row()),
+        )
+    destination = prepared.destination
+    if not destination.has_native_messenger_destination:
+        return CustomerInteractionMessage(
+            text=(
+                "Найти новых клиентов\n\nПредложение подготовлено, но у бизнеса пока "
+                "нет публичного Telegram, ВКонтакте или MAX. Ссылку не публикую, "
+                "чтобы не вести клиента в тупик."
+            ),
+            rows=((_button("💬 Мессенджеры", "cpm:messengers"),), (_button("📈 Рост", "cpm:growth"),), _back_row()),
+        )
+    names = {ConnectionPlatform.TELEGRAM: "Telegram", ConnectionPlatform.VK: "ВКонтакте", ConnectionPlatform.MAX: "MAX"}
+    channels = ", ".join(names[item.platform] for item in destination.messenger_destinations)
+    creative = prepared.promotion.campaign.creative
+    slot = prepared.promotion.slot
+    return CustomerInteractionMessage(
+        text=(
+            "🚀 Найти новых клиентов\n\n"
+            f"Ближайшее свободное время: {slot.local_start} · {slot.offering_title}.\n"
+            f"{creative.headline}\n\n{creative.primary_text}\n\n"
+            f"Записаться: {destination.public_url}\n\nДоступно клиенту: {channels}. "
+            "Источник сохранится независимо от выбранного мессенджера. Это только "
+            "готовый материал и измеряемая ссылка — платная реклама не запускается."
+        ),
+        rows=((_button("🔄 Обновить", "cpm:acquire"),), (_button("📈 Рост", "cpm:growth"),), _back_row()),
     )
 
 
@@ -1334,6 +1415,8 @@ def _render(
             return _work_message(actor)
         if parsed.action == "growth":
             return _growth_message(actor)
+        if parsed.action == "acquire":
+            return _acquisition_message(actor)
         if parsed.action == "manage":
             return _manage_message(actor)
         if parsed.action == "team":

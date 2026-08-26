@@ -16,10 +16,13 @@ from clientplatform.application.messenger_switching import (
 )
 from clientplatform.application.promotions import (
     PromotionCampaignView,
+    create_slot_promotion,
+    list_promotable_slots,
     promotion_public_url,
     promotion_start_payload,
 )
 from clientplatform.domain.promotions import PromotionChannel
+from clientplatform.domain.tenancy import TenantContext
 from clientplatform.infrastructure.promotion_repository import PromotionRepository
 from services.db import get_db_ro
 
@@ -36,6 +39,14 @@ class AcquisitionDestination:
     @property
     def has_native_messenger_destination(self) -> bool:
         return bool(self.messenger_destinations)
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedAcquisitionDestination:
+    """One safe nearest-slot acquisition result shared by staff transports."""
+
+    promotion: PromotionCampaignView
+    destination: AcquisitionDestination
 
 
 def build_acquisition_destination(
@@ -65,6 +76,32 @@ def build_acquisition_destination(
     )
 
 
+def prepare_nearest_acquisition_destination(
+    *,
+    actor: TenantContext,
+    public_base_url: object,
+    attribution_channel: PromotionChannel = PromotionChannel.WEBSITE,
+) -> PreparedAcquisitionDestination | None:
+    """Prepare the nearest promotable slot without coupling to staff transport."""
+
+    slots = list_promotable_slots(actor=actor)
+    if not slots:
+        return None
+    slot = min(slots, key=lambda item: item.slot.starts_at)
+    promotion = create_slot_promotion(
+        actor=actor,
+        slot_id=slot.slot.id,
+        channel=attribution_channel,
+    )
+    return PreparedAcquisitionDestination(
+        promotion=promotion,
+        destination=build_acquisition_destination(
+            promotion=promotion,
+            public_base_url=public_base_url,
+        ),
+    )
+
+
 def resolve_acquisition_destination(
     *,
     source_token: str,
@@ -89,6 +126,8 @@ def resolve_acquisition_destination(
 
 __all__ = [
     "AcquisitionDestination",
+    "PreparedAcquisitionDestination",
     "build_acquisition_destination",
+    "prepare_nearest_acquisition_destination",
     "resolve_acquisition_destination",
 ]

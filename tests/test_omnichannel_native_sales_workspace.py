@@ -112,3 +112,77 @@ def test_native_close_reason_reaches_canonical_transition(monkeypatch) -> None:
             "reason": "бюджет выше ожиданий",
         }
     ]
+
+
+def test_growth_keeps_acquisition_and_navigation_with_button_limit() -> None:
+    message = ui._growth_message(_actor())
+    commands = [button.command for row in message.rows for button in row]
+    assert "cpm:acquire" in commands
+    assert "cpm:menu" in commands
+    assert len(commands) <= 10
+
+
+def _prepared_acquisition() -> SimpleNamespace:
+    destinations = (
+        SimpleNamespace(platform=ConnectionPlatform.VK),
+        SimpleNamespace(platform=ConnectionPlatform.MAX),
+    )
+    destination = SimpleNamespace(
+        public_url="https://client.example.test/clientplatform/acquire?source=cpa_source123",
+        messenger_destinations=destinations,
+        has_native_messenger_destination=True,
+    )
+    creative = SimpleNamespace(
+        headline="Консультация",
+        primary_text="Есть свободное время.",
+    )
+    promotion = SimpleNamespace(
+        campaign=SimpleNamespace(creative=creative),
+        slot=SimpleNamespace(local_start="27.08.2026 12:00", offering_title="Встреча"),
+    )
+    return SimpleNamespace(promotion=promotion, destination=destination)
+
+
+def test_native_acquisition_is_same_for_vk_and_max(monkeypatch) -> None:
+    actor = _actor()
+    monkeypatch.setattr(
+        ui.settings,
+        "MESSENGER_PUBLIC_BASE_URL",
+        "https://client.example.test",
+    )
+    monkeypatch.setattr(
+        ui,
+        "prepare_nearest_acquisition_destination",
+        lambda **_: _prepared_acquisition(),
+    )
+    messages = []
+    for platform in (ConnectionPlatform.VK, ConnectionPlatform.MAX):
+        messages.append(
+            ui._render(
+                actor,
+                ui.ParsedMemberInteraction("acquire"),
+                linked=False,
+                setup_issuer=None,
+                setup_key=f"acquire:{platform.value}",
+                current_platform=platform,
+            )
+        )
+    assert messages[0].text == messages[1].text
+    assert "https://client.example.test/clientplatform/acquire?source=cpa_source123" in messages[0].text
+    assert "Доступно клиенту: ВКонтакте, MAX" in messages[0].text
+    assert "платная реклама не запускается" in messages[0].text
+
+
+def test_native_acquisition_without_slot_is_fail_safe(monkeypatch) -> None:
+    actor = _actor()
+    monkeypatch.setattr(
+        ui.settings,
+        "MESSENGER_PUBLIC_BASE_URL",
+        "https://client.example.test",
+    )
+    monkeypatch.setattr(ui, "prepare_nearest_acquisition_destination", lambda **_: None)
+    message = ui._acquisition_message(actor)
+    assert "Сначала нужно открыть хотя бы одно будущее время" in message.text
+    commands = [button.command for row in message.rows for button in row]
+    assert "cpm:bookings" in commands
+    assert "cpm:growth" in commands
