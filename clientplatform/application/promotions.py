@@ -21,7 +21,9 @@ from clientplatform.domain.promotions import (
     PromotionEventType,
     PromotionSourceResolution,
     PromotionStats,
+    build_public_promotion_url,
     normalize_source_token,
+    promotion_source_payload,
 )
 from clientplatform.domain.tenancy import TenantContext
 from clientplatform.infrastructure.activity_repository import ActivityRepository
@@ -74,7 +76,15 @@ def _capture_verified_promotion_touch(
 
 
 def promotion_start_payload(source_token: str) -> str:
-    return PUBLIC_PROMOTION_PREFIX + normalize_source_token(source_token)
+    """Provider start/ref payload retained for native messenger deep links."""
+
+    return promotion_source_payload(source_token)
+
+
+def promotion_public_url(*, base_url: object, source_token: str) -> str:
+    """Return the canonical channel-neutral acquisition URL for advertising."""
+
+    return build_public_promotion_url(base_url, source_token=source_token)
 
 
 def parse_promotion_start_payload(payload: str) -> str | None:
@@ -269,6 +279,7 @@ __all__ = [
     "list_promotion_campaigns",
     "open_promotion_link",
     "parse_promotion_start_payload",
+    "promotion_public_url",
     "promotion_start_payload",
     "promotion_stats",
 ]
