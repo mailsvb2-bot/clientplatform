@@ -56,6 +56,9 @@ from services.migrations.clientplatform_provider_dispatch_interactions_v1 import
 from services.migrations.clientplatform_messenger_setup_telegram_v1 import (
     apply as _apply_clientplatform_messenger_setup_telegram_v1,
 )
+from services.migrations.clientplatform_business_payment_outcomes_v1 import (
+    apply as _apply_clientplatform_business_payment_outcomes_v1,
+)
 
 
 def apply_all_migrations(conn: sqlite3.Connection) -> None:
@@ -105,4 +108,5 @@ def apply_all_migrations(conn: sqlite3.Connection) -> None:
     _apply_clientplatform_provider_dispatch_sales_followup_v1(conn)
     _apply_clientplatform_provider_dispatch_interactions_v1(conn)
     _apply_clientplatform_messenger_setup_telegram_v1(conn)
+    _apply_clientplatform_business_payment_outcomes_v1(conn)
     _apply_price(conn)
