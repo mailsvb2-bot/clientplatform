@@ -47,6 +47,26 @@ class CustomerProgressRepository:
             telegram_user_id=telegram_user_id,
             business_id=business_id,
         )
+        return self.complete_lesson_by_customer(
+            business_id=scoped_business,
+            customer_id=customer_id,
+            enrollment_id=enrollment_id,
+            lesson_position=lesson_position,
+            now=now,
+        )
+
+    def complete_lesson_by_customer(
+        self,
+        *,
+        business_id: str,
+        customer_id: str,
+        enrollment_id: str,
+        lesson_position: int,
+        now: str | None = None,
+    ) -> CustomerLessonCompletion:
+        scoped_business, customer_id = self._read.resolve_customer_id_scope(
+            business_id=business_id, customer_id=customer_id
+        )
         enrollment_id = normalize_uuid(enrollment_id, field_name="enrollment_id")
         position = normalize_position(lesson_position)
         timestamp = str(now or _utc_now())
@@ -78,9 +98,9 @@ class CustomerProgressRepository:
         delivery_id = str(_value(row, "delivery_id", 5))
         if progress_status == ProgressStatus.COMPLETED:
             return CustomerLessonCompletion(
-                program=self._read.get_customer_program(
-                    telegram_user_id=telegram_user_id,
+                program=self._read.get_customer_program_by_customer(
                     business_id=scoped_business,
+                    customer_id=customer_id,
                     enrollment_id=enrollment_id,
                 ),
                 next_material_queued=self._has_next_dispatch(
@@ -155,9 +175,9 @@ class CustomerProgressRepository:
             )
             queued = True
         return CustomerLessonCompletion(
-            program=self._read.get_customer_program(
-                telegram_user_id=telegram_user_id,
+            program=self._read.get_customer_program_by_customer(
                 business_id=scoped_business,
+                customer_id=customer_id,
                 enrollment_id=enrollment_id,
             ),
             next_material_queued=queued,

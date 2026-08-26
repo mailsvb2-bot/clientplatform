@@ -27,7 +27,11 @@ from clientplatform.domain.activity import (
     normalize_offering_title,
     resolve_activity_connector,
 )
-from clientplatform.domain.customers import CustomerNotFound, CustomerPlatform
+from clientplatform.domain.customers import (
+    CustomerNotFound,
+    CustomerPlatform,
+    normalize_identity_subject,
+)
 from clientplatform.domain.tenancy import TenantContext, normalize_user_id, normalize_uuid
 from clientplatform.infrastructure.customer_repository import CustomerRepository
 from clientplatform.infrastructure.tenancy_repository import TenancyRepository
@@ -445,6 +449,29 @@ class ActivityRepository:
         now: str | None = None,
     ) -> InviteClaim:
         principal_id = normalize_user_id(telegram_user_id)
+        return self.claim_customer_invite_identity(
+            token=token,
+            platform=CustomerPlatform.TELEGRAM,
+            external_subject=str(principal_id),
+            username=username,
+            display_name=display_name,
+            now=now,
+        )
+
+    def claim_customer_invite_identity(
+        self,
+        *,
+        token: str,
+        platform: CustomerPlatform | str,
+        external_subject: str,
+        username: str | None,
+        display_name: str | None,
+        expected_business_id: str | None = None,
+        now: str | None = None,
+    ) -> InviteClaim:
+        normalized_platform, normalized_subject = normalize_identity_subject(
+            platform, external_subject
+        )
         timestamp = str(now or _utc_now())
         row = self._conn.execute(
             """
@@ -464,6 +491,15 @@ class ActivityRepository:
         ).fetchone()
         if row is None:
             raise ActivityNotFound("customer invite was not found")
+        business_id = str(_value(row, "business_id", 1))
+        if expected_business_id is not None:
+            expected = normalize_uuid(
+                expected_business_id, field_name="expected_business_id"
+            )
+            if business_id != expected:
+                raise ActivityInvariantViolation(
+                    "customer invite belongs to another business"
+                )
         status = InviteStatus(str(_value(row, "status", 2)))
         expires_at = datetime.fromisoformat(str(_value(row, "expires_at", 3)).replace("Z", "+00:00"))
         current_time = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
@@ -478,14 +514,15 @@ class ActivityRepository:
             identity_row = self._conn.execute(
                 """
                 SELECT 1 FROM customer_identities
-                WHERE business_id=? AND customer_id=? AND platform='telegram'
+                WHERE business_id=? AND customer_id=? AND platform=?
                   AND external_subject=? AND status='active'
                 LIMIT 1
                 """,
                 (
                     str(_value(row, "business_id", 1)),
                     str(claimed_customer_id),
-                    str(principal_id),
+                    normalized_platform.value,
+                    normalized_subject,
                 ),
             ).fetchone()
             if identity_row is None:
@@ -505,15 +542,14 @@ class ActivityRepository:
             )
             raise ActivityInvariantViolation("customer invite has expired")
 
-        business_id = str(_value(row, "business_id", 1))
         creator_user_id = int(_value(row, "creator_user_id", 7))
         actor = self._tenancy.resolve_context(user_id=creator_user_id, business_id=business_id)
         customers = CustomerRepository(self._conn)
         try:
             record = customers.find_by_identity(
                 actor=actor,
-                platform=CustomerPlatform.TELEGRAM,
-                external_subject=str(principal_id),
+                platform=normalized_platform,
+                external_subject=normalized_subject,
             )
             customer_id = record.customer.id
             already_connected = True
@@ -522,8 +558,8 @@ class ActivityRepository:
             customers.attach_identity(
                 actor=actor,
                 customer_id=customer.id,
-                platform=CustomerPlatform.TELEGRAM,
-                external_subject=str(principal_id),
+                platform=normalized_platform,
+                external_subject=normalized_subject,
                 username=username,
                 display_name=display_name,
             )

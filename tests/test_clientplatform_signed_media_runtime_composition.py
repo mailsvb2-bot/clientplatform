@@ -6,6 +6,7 @@ from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
 
 from clientplatform.application.dispatch_worker import _effective_max_attempts
+from runtime.messenger_max_sender import MaxProviderRateLimitError
 from clientplatform.domain.connections import (
     ClaimedDispatch,
     ConnectionPlatform,
@@ -222,6 +223,14 @@ class TerminalRetryPolicyTests(unittest.TestCase):
         )
         self.assertEqual(_effective_max_attempts(MediaReferenceError("bad_media"), 8), 1)
         self.assertEqual(_effective_max_attempts(OSError("temporary"), 8), 8)
+        self.assertEqual(
+            _effective_max_attempts(
+                MaxProviderRateLimitError("rate limited"),
+                8,
+                non_replay_boundary_crossed=True,
+            ),
+            8,
+        )
 
 
 class RuntimeLifecycleTests(unittest.IsolatedAsyncioTestCase):

@@ -80,6 +80,7 @@ from clientplatform.domain.programs import ContentKind, ProgramError
 from clientplatform.domain.tenancy import TenancyError
 from clientplatform.runtime.control_bot import control_bot_enabled
 from config.settings import settings
+from services.accounts.identity import resolve_account_for_identity
 
 router = Router(name="clientplatform_control")
 
@@ -115,10 +116,43 @@ def _keyboard(rows: list[list[tuple[str, str]]]) -> InlineKeyboardMarkup:
     )
 
 
+def _canonical_telegram_user_id(
+    user_id: int,
+    *,
+    username: str | None = None,
+    display_name: str | None = None,
+) -> int:
+    raw = int(user_id)
+    account_id = resolve_account_for_identity(
+        "telegram",
+        str(raw),
+        proposed_user_id=raw,
+        username=username,
+        display_name=display_name,
+        allow_create=True,
+    )
+    if account_id is None:
+        raise ValueError("clientplatform could not resolve Telegram account")
+    return int(account_id)
+
+
 def _user_id(message: Message) -> int:
     if message.from_user is None:
         raise ValueError("clientplatform requires a Telegram user")
-    return int(message.from_user.id)
+    return _canonical_telegram_user_id(
+        int(message.from_user.id),
+        username=getattr(message.from_user, "username", None),
+        display_name=getattr(message.from_user, "full_name", None),
+    )
+
+
+def _callback_actor_user_id(callback: CallbackQuery) -> int:
+    user = callback.from_user
+    return _canonical_telegram_user_id(
+        int(user.id),
+        username=getattr(user, "username", None),
+        display_name=getattr(user, "full_name", None),
+    )
 
 
 def _callback_message(callback: CallbackQuery) -> Message:
@@ -281,7 +315,7 @@ def _dashboard_keyboard(business_id: str, capabilities: list[object]) -> InlineK
 async def _actor(user_id: int, business_id: str):
     return await asyncio.to_thread(
         resolve_tenant_context,
-        user_id=user_id,
+        user_id=int(user_id),
         business_id=business_id,
     )
 
@@ -496,7 +530,7 @@ async def receive_activity_description(message: Message, state: FSMContext) -> N
 @router.callback_query(F.data.startswith("cp:onboardconfirm:"))
 async def confirm_onboarding_profile(callback: CallbackQuery, state: FSMContext) -> None:
     business_id = _token_uuid(str(callback.data).split(":", 2)[2])
-    actor = await _actor(int(callback.from_user.id), business_id)
+    actor = await _actor(_callback_actor_user_id(callback), business_id)
     await asyncio.to_thread(confirm_business_profile_details, actor=actor)
     await state.clear()
     await callback.answer("Подтверждено")
@@ -509,7 +543,7 @@ async def confirm_onboarding_profile(callback: CallbackQuery, state: FSMContext)
 @router.callback_query(F.data.startswith("cp:onboardedit:"))
 async def edit_onboarding_profile(callback: CallbackQuery, state: FSMContext) -> None:
     business_id = _token_uuid(str(callback.data).split(":", 2)[2])
-    await _actor(int(callback.from_user.id), business_id)
+    await _actor(_callback_actor_user_id(callback), business_id)
     await state.set_state(ClientPlatformControlState.activity_description)
     await state.update_data(business_id=business_id, editing_activity=False)
     await callback.answer()
@@ -522,7 +556,7 @@ async def edit_onboarding_profile(callback: CallbackQuery, state: FSMContext) ->
 @router.callback_query(F.data.startswith("cp:onboardmore:"))
 async def onboarding_more(callback: CallbackQuery, state: FSMContext) -> None:
     business_id = _token_uuid(str(callback.data).split(":", 2)[2])
-    await _actor(int(callback.from_user.id), business_id)
+    await _actor(_callback_actor_user_id(callback), business_id)
     await state.clear()
     await callback.answer()
     await _send_capability_setup(
@@ -548,7 +582,7 @@ async def choose_business(callback: CallbackQuery, state: FSMContext) -> None:
 async def toggle_capability(callback: CallbackQuery, state: FSMContext) -> None:
     _, _, business_token, connector_key = str(callback.data).split(":", 3)
     business_id = _token_uuid(business_token)
-    actor = await _actor(int(callback.from_user.id), business_id)
+    actor = await _actor(_callback_actor_user_id(callback), business_id)
     capabilities = await asyncio.to_thread(
         list_business_capabilities,
         actor=actor,
@@ -603,7 +637,7 @@ async def receive_custom_capability_title(message: Message, state: FSMContext) -
 @router.callback_query(F.data.startswith("cp:finish:"))
 async def finish_profile(callback: CallbackQuery, state: FSMContext) -> None:
     business_id = _token_uuid(str(callback.data).split(":", 2)[2])
-    actor = await _actor(int(callback.from_user.id), business_id)
+    actor = await _actor(_callback_actor_user_id(callback), business_id)
     profile = await asyncio.to_thread(get_business_profile, actor=actor)
     if profile.status == BusinessProfileStatus.DRAFT:
         structured = await asyncio.to_thread(get_business_profile_details, actor=actor)
@@ -637,7 +671,7 @@ async def edit_activity(callback: CallbackQuery, state: FSMContext) -> None:
 async def open_capability(callback: CallbackQuery, state: FSMContext) -> None:
     _, _, business_token, connector_key = str(callback.data).split(":", 3)
     business_id = _token_uuid(business_token)
-    actor = await _actor(int(callback.from_user.id), business_id)
+    actor = await _actor(_callback_actor_user_id(callback), business_id)
     capabilities = await asyncio.to_thread(list_business_capabilities, actor=actor)
     capability = next(item for item in capabilities if item.connector_key == connector_key)
     await state.update_data(business_id=business_id, capability_id=capability.id)
@@ -1057,7 +1091,7 @@ async def receive_lesson_content(message: Message, state: FSMContext) -> None:
 async def open_clients(callback: CallbackQuery) -> None:
     business_token = str(callback.data).split(":", 2)[2]
     business_id = _token_uuid(business_token)
-    actor = await _actor(int(callback.from_user.id), business_id)
+    actor = await _actor(_callback_actor_user_id(callback), business_id)
     summary = await asyncio.to_thread(tenant_customer_activity, actor=actor, limit=15)
     await callback.answer()
     await _callback_message(callback).answer(
@@ -1069,7 +1103,7 @@ async def open_clients(callback: CallbackQuery) -> None:
 @router.callback_query(F.data.startswith("cp:invite:"))
 async def create_invite(callback: CallbackQuery) -> None:
     business_id = _token_uuid(str(callback.data).split(":", 2)[2])
-    actor = await _actor(int(callback.from_user.id), business_id)
+    actor = await _actor(_callback_actor_user_id(callback), business_id)
     issued = await asyncio.to_thread(issue_customer_invite, actor=actor)
     bot = await callback.bot.get_me()
     if not bot.username:
@@ -1086,7 +1120,7 @@ async def create_invite(callback: CallbackQuery) -> None:
 async def choose_program_for_delivery(callback: CallbackQuery, state: FSMContext) -> None:
     business_token = str(callback.data).split(":", 2)[2]
     business_id = _token_uuid(business_token)
-    actor = await _actor(int(callback.from_user.id), business_id)
+    actor = await _actor(_callback_actor_user_id(callback), business_id)
     programs = await asyncio.to_thread(list_programs, actor=actor)
     await state.update_data(business_id=business_id)
     await callback.answer()
@@ -1109,7 +1143,7 @@ async def choose_customer_for_delivery(callback: CallbackQuery, state: FSMContex
     _, _, business_token, program_token = str(callback.data).split(":", 3)
     business_id = _token_uuid(business_token)
     program_id = _token_uuid(program_token)
-    actor = await _actor(int(callback.from_user.id), business_id)
+    actor = await _actor(_callback_actor_user_id(callback), business_id)
     customers = await asyncio.to_thread(list_customers, actor=actor)
     await state.update_data(business_id=business_id, selected_program_id=program_id)
     await callback.answer()
@@ -1142,7 +1176,7 @@ async def send_program_to_customer(callback: CallbackQuery, state: FSMContext) -
     if not program_id:
         await callback.answer("Выберите программу заново", show_alert=True)
         return
-    actor = await _actor(int(callback.from_user.id), business_id)
+    actor = await _actor(_callback_actor_user_id(callback), business_id)
     prepared = await asyncio.to_thread(
         prepare_program_delivery,
         actor=actor,
@@ -1160,7 +1194,7 @@ async def send_program_to_customer(callback: CallbackQuery, state: FSMContext) -
 @router.callback_query(F.data.startswith("cp:results:"))
 async def show_results(callback: CallbackQuery) -> None:
     business_id = _token_uuid(str(callback.data).split(":", 2)[2])
-    actor = await _actor(int(callback.from_user.id), business_id)
+    actor = await _actor(_callback_actor_user_id(callback), business_id)
     summary = await asyncio.to_thread(business_delivery_summary, actor=actor)
     progress = await asyncio.to_thread(list_business_program_progress, actor=actor, limit=15)
     progress_lines = "\n".join(

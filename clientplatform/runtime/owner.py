@@ -11,7 +11,10 @@ from clientplatform.runtime.dispatch_runtime import (
     build_dispatch_runtime,
     dispatch_runtime_config,
 )
-from clientplatform.runtime.lifecycle import start_clientplatform_runtime, stop_clientplatform_runtime
+from clientplatform.runtime.lifecycle import (
+    start_clientplatform_runtime,
+    stop_clientplatform_runtime,
+)
 from core.runtime_env import env_float
 from services.db import get_connection
 from services.db.runtime import CONFIG
@@ -20,6 +23,8 @@ log = logging.getLogger(__name__)
 
 _CLIENTPLATFORM_REQUIRED_TABLES = frozenset(
     {
+        "accounts",
+        "account_channel_identities",
         "businesses",
         "business_members",
         "customers",
@@ -35,8 +40,13 @@ _CLIENTPLATFORM_REQUIRED_TABLES = frozenset(
         "lesson_deliveries",
         "lesson_progress",
         "connections",
+        "connection_credentials",
+        "messenger_ingress_routes",
+        "messenger_connection_setup_sessions",
+        "customer_channel_link_tokens",
         "managed_bots",
         "delivery_dispatch_outbox",
+        "provider_dispatch_outbox",
     }
 )
 
@@ -123,9 +133,9 @@ async def run_clientplatform_runtime_owner(
 
     The owner is created by the canonical ``TaskManager``. It remains completely
     dormant unless clientplatform dispatch is explicitly enabled, waits for all
-    additive clientplatform tables, periodically reports schema-readiness delays,
-    starts exactly one scheduler and guarantees a matching stop on cancellation
-    during graceful shutdown or self-heal restart.
+    additive ClientPlatform and account-identity tables, periodically reports
+    schema-readiness delays, starts exactly one scheduler and guarantees a
+    matching stop on cancellation during graceful shutdown or self-heal restart.
     """
 
     selected = config or dispatch_runtime_config()

@@ -229,6 +229,9 @@ class ClientPlatformProductionIsolationTests(unittest.TestCase):
         self.assertIn("TELEGRAM_TRANSPORT=polling", env_example)
         self.assertIn("TELEGRAM_WEBHOOK_ENABLED=0", env_example)
         self.assertIn("MESSENGER_WEBHOOK_ENABLED=1", env_example)
+        self.assertIn("CLIENTPLATFORM_OMNICHANNEL_INGRESS_ENABLED=0", env_example)
+        self.assertIn("/clientplatform/webhooks/vk/*", caddy)
+        self.assertIn("/clientplatform/webhooks/max/*", caddy)
         self.assertIn("CLIENTPLATFORM_BOT_GATEWAY_ENABLED=1", env_example)
         self.assertIn("CLIENTPLATFORM_BOT_GATEWAY_POLL_TIMEOUT_SEC=20", env_example)
         self.assertNotIn(

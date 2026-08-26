@@ -3,13 +3,17 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from clientplatform.application.dispatch_worker import DispatchBatchResult, run_dispatch_batch
 from clientplatform.application.program_media import run_program_media_cleanup_batch
 from clientplatform.application.sales_followups import run_sales_followup_maintenance_batch
 from clientplatform.runtime.control_bot import control_bot_enabled
-from clientplatform.runtime.messenger_provider_clients import MaxRuntimeClient, VkRuntimeClient
+from clientplatform.runtime.max_two_phase_media import TwoPhaseMaxRuntimeClient
+from clientplatform.runtime.messenger_switch_links import StaffMessengerSwitchLinkService
+from clientplatform.runtime.messenger_provider_clients import VkRuntimeClient
+from clientplatform.runtime.native_messenger_setup_links import NativeMessengerSetupLinkService
 from clientplatform.runtime.secrets import EnvironmentCredentialProvider
 from clientplatform.transport import (
     AdapterRegistry,
@@ -37,6 +41,10 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return str(raw).strip().lower() in _TRUE_VALUES
 
 
+def _canonical_omnichannel_enabled() -> bool:
+    return _env_bool("CLIENTPLATFORM_OMNICHANNEL_INGRESS_ENABLED", False)
+
+
 @dataclass(frozen=True, slots=True)
 class DispatchRuntimeConfig:
     enabled: bool
@@ -60,11 +68,13 @@ class DispatchRuntime:
     config: DispatchRuntimeConfig
     credential_provider: EnvironmentCredentialProvider
     adapters: AdapterRegistry
+    interaction_link_resolver: Callable[..., str | None] | None = None
 
 
 def dispatch_runtime_config() -> DispatchRuntimeConfig:
+    default_enabled = bool(control_bot_enabled() or _canonical_omnichannel_enabled())
     return DispatchRuntimeConfig(
-        enabled=_env_bool("CLIENTPLATFORM_DISPATCH_RUNTIME_ENABLED", control_bot_enabled()),
+        enabled=_env_bool("CLIENTPLATFORM_DISPATCH_RUNTIME_ENABLED", default_enabled),
         interval_seconds=env_float(
             "CLIENTPLATFORM_DISPATCH_INTERVAL_SEC",
             5.0,
@@ -166,6 +176,22 @@ def build_dispatch_runtime(
         multipart_max_bytes=selected.media_multipart_max_bytes,
     )
     media_resolver = _build_media_resolver(selected, credential_provider)
+    setup_link_service = NativeMessengerSetupLinkService(
+        credential_provider=credential_provider,
+    )
+    switch_link_service = StaffMessengerSwitchLinkService()
+
+    def _resolve_interaction_link(*, command: str, business_id: str) -> str | None:
+        setup_url = setup_link_service.resolve_command_url(
+            command=command,
+            business_id=business_id,
+        )
+        if setup_url is not None:
+            return setup_url
+        return switch_link_service.resolve_command_url(
+            command=command,
+            business_id=business_id,
+        )
     adapters = AdapterRegistry(
         [
             TelegramDispatchAdapter(
@@ -177,7 +203,7 @@ def build_dispatch_runtime(
                 media_resolver=media_resolver,
             ),
             MaxDispatchAdapter(
-                MaxRuntimeClient(),
+                TwoPhaseMaxRuntimeClient(),
                 media_resolver=media_resolver,
             ),
         ]
@@ -186,6 +212,7 @@ def build_dispatch_runtime(
         config=selected,
         credential_provider=credential_provider,
         adapters=adapters,
+        interaction_link_resolver=_resolve_interaction_link,
     )
 
 
@@ -217,4 +244,5 @@ async def run_configured_dispatch_tick(
         limit=selected.config.batch_size,
         max_attempts=selected.config.max_attempts,
         lock_ttl_seconds=selected.config.lock_ttl_seconds,
+        interaction_link_resolver=selected.interaction_link_resolver,
     )

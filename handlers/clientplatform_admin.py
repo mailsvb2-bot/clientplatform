@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import logging
+import os
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from types import ModuleType
@@ -22,7 +23,17 @@ from clientplatform.application.activity import (
     list_business_capabilities,
 )
 from clientplatform.application.bookings import list_booking_slots
-from clientplatform.application.control import business_delivery_summary
+from clientplatform.application.messenger_switching import (
+    available_staff_messenger_switches,
+    build_staff_switch_command,
+)
+from clientplatform.application.control import (
+    business_connection_statuses,
+    business_delivery_summary,
+)
+from clientplatform.application.native_messenger_setup import (
+    issue_native_messenger_setup,
+)
 from clientplatform.application.customers import get_customer, list_customers
 from clientplatform.application.programs import list_programs
 from clientplatform.application.progress import list_business_program_progress
@@ -33,6 +44,7 @@ from clientplatform.application.tenancy import (
 )
 from clientplatform.domain.activity import CapabilityStatus
 from clientplatform.domain.bookings import BookingSlotStatus
+from clientplatform.domain.connections import ConnectionPlatform
 from clientplatform.domain.tenancy import (
     PlatformRole,
     TenantContext,
@@ -40,6 +52,8 @@ from clientplatform.domain.tenancy import (
     TenancyError,
 )
 from clientplatform.infrastructure import TenancyRepository
+from clientplatform.runtime.messenger_switch_links import StaffMessengerSwitchLinkService
+from config.settings import settings
 from services.db import get_db_ro
 
 control = importlib.import_module(".clientplatform_control", __package__)
@@ -49,6 +63,12 @@ router.message.filter(control.ClientPlatformControlEnabled())
 router.callback_query.filter(control.ClientPlatformControlEnabled())
 
 log = logging.getLogger(__name__)
+
+
+def _native_messenger_setup_ingress_enabled() -> bool:
+    return (
+        os.getenv("CLIENTPLATFORM_OMNICHANNEL_INGRESS_ENABLED") or ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
 
 _ROLE_LABELS = {
     PlatformRole.OWNER: "Владелец",
@@ -146,6 +166,7 @@ _SECTION_ROLES = {
     "customer": _SUPPORT_ROLES,
     "behavior": _SUPPORT_ROLES,
     "messengers": _SUPPORT_ROLES,
+    "messenger-connect": _ADMIN_ROLES,
     "attention": _SUPPORT_ROLES,
     "autopilot": _AUTOMATION_ROLES,
     "publications": _CONTENT_ROLES,
@@ -607,18 +628,149 @@ async def _render_behavior(callback: CallbackQuery, state: FSMContext, ctx: Admi
 
 
 async def _render_messengers(callback: CallbackQuery, state: FSMContext, ctx: AdminContext) -> None:
-    text = (
-        "💬 Мессенджеры\n\n"
-        "Центральный бот ClientPlatform: подключён.\n"
-        "Персональный Telegram-бот: откройте управление ниже.\n\n"
-        "VK и MAX появятся здесь после подключения соответствующих каналов."
+    connection_statuses = await asyncio.to_thread(
+        business_connection_statuses, actor=ctx.actor
     )
-    keyboard = _back_keyboard(
-        ctx,
-        ("🤖 Мой Telegram-бот", f"cpb:o:{ctx.business_token}"),
+    labels = {"telegram": "Telegram", "vk": "ВКонтакте", "max": "MAX"}
+    status_labels = {
+        "active": "✅ работает",
+        "pending": "⏳ настройка",
+        "attention": "⚠️ требует внимания",
+        "disabled": "⏸ отключён",
+        "revoked": "⛔ отозван",
+    }
+    by_platform: dict[str, list[Any]] = {"telegram": [], "vk": [], "max": []}
+    for connection_platform, connection_status in connection_statuses:
+        platform = str(connection_platform.value)
+        if platform in by_platform:
+            by_platform[platform].append(connection_status)
+
+    lines = ["💬 Мессенджеры", "", "Каналы этого бизнеса:"]
+    active: set[str] = set()
+    for platform in ("vk", "max", "telegram"):
+        items = by_platform[platform]
+        if any(item.value == "active" for item in items):
+            active.add(platform)
+        if not items:
+            lines.append(f"• {labels[platform]}: не подключён")
+            continue
+        states = [status_labels.get(item.value, item.value) for item in items]
+        lines.append(f"• {labels[platform]}: {', '.join(states)}")
+    lines.extend([
+        "",
+        "Можно подключить дополнительный мессенджер или продолжить работу "
+        "в уже подключённом канале под тем же аккаунтом.",
+    ])
+
+    rows: list[list[InlineKeyboardButton]] = []
+    if ctx.role in _ADMIN_ROLES and _native_messenger_setup_ingress_enabled():
+        connect = {
+            "telegram": "✈️ Подключить Telegram",
+            "vk": "🔵 Подключить ВКонтакте",
+            "max": "🟣 Подключить MAX",
+        }
+        for platform in ("telegram", "vk", "max"):
+            if platform not in active:
+                rows.append([InlineKeyboardButton(
+                    text=connect[platform],
+                    callback_data=_callback(ctx, "messenger-connect", platform),
+                )])
+
+    switch_labels = {
+        ConnectionPlatform.VK: "🔵 Перейти во ВКонтакте",
+        ConnectionPlatform.MAX: "🟣 Перейти в MAX",
+    }
+    try:
+        switchable = available_staff_messenger_switches(ctx.actor)
+    except (RuntimeError, ValueError):
+        switchable = ()
+    switch_links = StaffMessengerSwitchLinkService()
+    for platform in switchable:
+        if platform == ConnectionPlatform.TELEGRAM or platform not in switch_labels:
+            continue
+        try:
+            url = switch_links.resolve_command_url(
+                command=build_staff_switch_command(ctx.actor, platform),
+                business_id=ctx.business_id,
+            )
+        except (RuntimeError, ValueError):
+            continue
+        if url:
+            rows.append([InlineKeyboardButton(text=switch_labels[platform], url=url)])
+
+    rows.append([InlineKeyboardButton(
+        text="🤖 Мой Telegram-бот", callback_data=f"cpb:o:{ctx.business_token}"
+    )])
+    rows.append([InlineKeyboardButton(
+        text="⬅️ Назад", callback_data=_callback(ctx, "back")
+    )])
+    await _safe_edit(
+        callback, "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
     )
-    await _safe_edit(callback, text, keyboard)
     await _set_current_section(state, action="messengers", push=True)
+
+
+async def _render_messenger_connect(
+    callback: CallbackQuery,
+    state: FSMContext,
+    ctx: AdminContext,
+    platform: str,
+) -> None:
+    normalized = str(platform or "").strip().lower()
+    if normalized not in {"telegram", "vk", "max"}:
+        raise ValueError("unsupported messenger setup platform")
+    if not _native_messenger_setup_ingress_enabled():
+        await _safe_edit(
+            callback,
+            "Безопасное подключение временно недоступно: multi-messenger ingress не включён.",
+            _back_keyboard(ctx),
+        )
+        return
+    public_base = str(
+        getattr(settings, "MESSENGER_PUBLIC_BASE_URL", "") or ""
+    ).strip().rstrip("/")
+    if not public_base.startswith("https://"):
+        await _safe_edit(
+            callback,
+            "Безопасное подключение временно недоступно: публичный HTTPS-адрес ClientPlatform не настроен.",
+            _back_keyboard(ctx),
+        )
+        return
+    issued = await asyncio.to_thread(
+        issue_native_messenger_setup,
+        actor=ctx.actor,
+        platform=normalized,
+        ttl_seconds=600,
+    )
+    label = {"telegram": "Telegram", "vk": "ВКонтакте", "max": "MAX"}[normalized]
+    setup_url = f"{public_base}/clientplatform/connect/{issued.token}"
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=f"🔐 Открыть подключение {label}",
+                    url=setup_url,
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="⬅️ Назад",
+                    callback_data=_callback(ctx, "messengers"),
+                )
+            ],
+        ]
+    )
+    await _safe_edit(
+        callback,
+        (
+            f"Подключение {label}\n\n"
+            "Откройте одноразовую защищённую страницу ниже. "
+            "Токен мессенджера вводится только на HTTPS-странице и не отправляется сообщением в Telegram.\n\n"
+            "Ссылка действует 10 минут и перестаёт работать после первой отправки формы."
+        ),
+        keyboard,
+    )
+    await _set_current_section(state, action="messenger-connect", push=True)
 
 
 async def _render_attention(callback: CallbackQuery, state: FSMContext, ctx: AdminContext) -> None:
@@ -1051,7 +1203,11 @@ async def admin_gate(callback: CallbackQuery, state: FSMContext) -> None:
     try:
         business_id, action, payload = _parse_callback(str(callback.data or ""))
         ctx = await _load_admin_context(
-            user_id=int(callback.from_user.id),
+            user_id=control._canonical_telegram_user_id(
+                int(callback.from_user.id),
+                username=getattr(callback.from_user, "username", None),
+                display_name=getattr(callback.from_user, "full_name", None),
+            ),
             business_id=business_id,
         )
         if action not in {"menu", "back", "leave"}:
@@ -1095,6 +1251,8 @@ async def admin_gate(callback: CallbackQuery, state: FSMContext) -> None:
             await _render_behavior(callback, state, ctx)
         elif action == "messengers":
             await _render_messengers(callback, state, ctx)
+        elif action == "messenger-connect":
+            await _render_messenger_connect(callback, state, ctx, payload[0])
         elif action == "attention":
             await _render_attention(callback, state, ctx)
         elif action in {

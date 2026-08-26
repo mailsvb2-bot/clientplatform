@@ -9,6 +9,10 @@ from clientplatform.domain.connections import (
     ConnectionInvariantViolation,
     normalize_credential_reference,
 )
+from clientplatform.infrastructure.connection_credentials import (
+    ConnectionCredentialError,
+    ConnectionCredentialStore,
+)
 from clientplatform.infrastructure.managed_bot_credentials import (
     AgeManagedBotCredentialVault,
     ManagedBotCredentialError,
@@ -28,6 +32,7 @@ class CredentialProvider(Protocol):
 
 _ENV_REFERENCE_PREFIX = "secret://env/"
 _MANAGED_BOT_REFERENCE_PREFIX = "vault://managed-bot/"
+_CONNECTION_REFERENCE_PREFIX = "vault://connection/"
 _ENV_NAME_RE = re.compile(r"[A-Z][A-Z0-9_]{2,127}")
 
 
@@ -46,12 +51,14 @@ class EnvironmentCredentialProvider:
         *,
         allowed_name_prefix: str = "CLIENTPLATFORM_SECRET_",
         managed_bot_vault: ManagedBotCredentialVault | None = None,
+        connection_vault: ManagedBotCredentialVault | None = None,
     ) -> None:
         self._environment = environment if environment is not None else os.environ
         self._allowed_name_prefix = str(
             allowed_name_prefix or "CLIENTPLATFORM_SECRET_"
         ).strip()
         self._managed_bot_vault = managed_bot_vault
+        self._connection_vault = connection_vault
         if not _ENV_NAME_RE.fullmatch(self._allowed_name_prefix.rstrip("_")):
             raise ValueError("allowed secret environment prefix is invalid")
 
@@ -73,6 +80,17 @@ class EnvironmentCredentialProvider:
             except ManagedBotCredentialError:
                 raise SecretReferenceError(
                     "managed bot credential reference is unavailable"
+                ) from None
+        if normalized.startswith(_CONNECTION_REFERENCE_PREFIX):
+            vault = self._connection_vault or AgeManagedBotCredentialVault()
+            try:
+                with get_db_ro() as conn:
+                    return ConnectionCredentialStore(conn, vault=vault).resolve(
+                        normalized
+                    )
+            except ConnectionCredentialError:
+                raise SecretReferenceError(
+                    "connection credential reference is unavailable"
                 ) from None
         raise SecretReferenceError("secret reference provider is not configured")
 

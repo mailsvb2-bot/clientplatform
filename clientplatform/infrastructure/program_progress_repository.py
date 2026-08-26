@@ -91,6 +91,28 @@ class ProgramProgressRepository:
             raise EnrollmentNotFound("Вы не подключены к этому бизнесу")
         return str(_value(row, "business_id", 0)), str(_value(row, "customer_id", 1))
 
+    def resolve_customer_id_scope(
+        self,
+        *,
+        business_id: str,
+        customer_id: str,
+    ) -> tuple[str, str]:
+        business = normalize_uuid(business_id, field_name="business_id")
+        customer = normalize_uuid(customer_id, field_name="customer_id")
+        row = self._conn.execute(
+            """
+            SELECT c.business_id, c.id
+            FROM customers c
+            JOIN businesses b ON b.id=c.business_id AND b.status='active'
+            WHERE c.business_id=? AND c.id=? AND c.status='active'
+            LIMIT 1
+            """,
+            (business, customer),
+        ).fetchone()
+        if row is None:
+            raise EnrollmentNotFound("Вы не подключены к этому бизнесу")
+        return str(_value(row, "business_id", 0)), str(_value(row, "id", 1))
+
     def list_customer_programs(
         self,
         *,
@@ -101,12 +123,25 @@ class ProgramProgressRepository:
             telegram_user_id=telegram_user_id,
             business_id=business_id,
         )
+        return self.list_customer_programs_by_customer(
+            business_id=scoped_business, customer_id=customer_id
+        )
+
+    def list_customer_programs_by_customer(
+        self,
+        *,
+        business_id: str,
+        customer_id: str,
+    ) -> list[ProgramProgressSummary]:
+        scoped_business, customer = self.resolve_customer_id_scope(
+            business_id=business_id, customer_id=customer_id
+        )
         rows = self._conn.execute(
             _SUMMARY_SELECT
             + " WHERE e.business_id=? AND e.customer_id=? AND e.status!='cancelled' "
             + _SUMMARY_GROUP
             + " ORDER BY updated_at DESC, e.id LIMIT 50",
-            (scoped_business, customer_id),
+            (scoped_business, customer),
         ).fetchall()
         return [_summary_from_row(row) for row in rows]
 
@@ -121,13 +156,29 @@ class ProgramProgressRepository:
             telegram_user_id=telegram_user_id,
             business_id=business_id,
         )
+        return self.get_customer_program_by_customer(
+            business_id=scoped_business,
+            customer_id=customer_id,
+            enrollment_id=enrollment_id,
+        )
+
+    def get_customer_program_by_customer(
+        self,
+        *,
+        business_id: str,
+        customer_id: str,
+        enrollment_id: str,
+    ) -> CustomerProgramView:
+        scoped_business, customer = self.resolve_customer_id_scope(
+            business_id=business_id, customer_id=customer_id
+        )
         normalized_enrollment = normalize_uuid(enrollment_id, field_name="enrollment_id")
         row = self._conn.execute(
             _SUMMARY_SELECT
             + " WHERE e.business_id=? AND e.customer_id=? AND e.id=? AND e.status!='cancelled' "
             + _SUMMARY_GROUP
             + " LIMIT 1",
-            (scoped_business, customer_id, normalized_enrollment),
+            (scoped_business, customer, normalized_enrollment),
         ).fetchone()
         if row is None:
             raise EnrollmentNotFound("программа клиента не найдена")

@@ -85,6 +85,36 @@ def ensure(c: sqlite3.Connection) -> None:
     )
     c.execute(
         """
+        CREATE TABLE IF NOT EXISTS connection_credentials(
+            id TEXT PRIMARY KEY,
+            business_id TEXT NOT NULL,
+            platform TEXT NOT NULL,
+            external_account_id TEXT NOT NULL,
+            purpose TEXT NOT NULL,
+            ciphertext TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            revoked_at TEXT,
+            UNIQUE(id, business_id),
+            UNIQUE(business_id, platform, external_account_id, purpose),
+            FOREIGN KEY(business_id) REFERENCES businesses(id) ON DELETE CASCADE,
+            CHECK(platform IN ('vk', 'max')),
+            CHECK(purpose IN ('provider_token', 'webhook_secret', 'confirmation_code')),
+            CHECK(status IN ('active', 'revoked')),
+            CHECK(length(ciphertext) > 0)
+        )
+        """
+    )
+    c.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_connection_credentials_business_status
+        ON connection_credentials(business_id, platform, status, updated_at)
+        """
+    )
+
+    c.execute(
+        """
         CREATE TABLE IF NOT EXISTS managed_bot_credentials(
             id TEXT PRIMARY KEY,
             business_id TEXT NOT NULL,

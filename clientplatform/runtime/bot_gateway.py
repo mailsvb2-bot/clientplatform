@@ -20,6 +20,7 @@ from clientplatform.application.bot_gateway import (
     bot_gateway_health_snapshot,
     claim_due_ingress_events,
     consume_telegram_customer_channel_link,
+    consume_telegram_staff_bridge,
     ensure_telegram_customer_link,
     list_active_telegram_routes,
     mark_ingress_event_processed,
@@ -33,6 +34,7 @@ from clientplatform.domain.bot_gateway import (
     ManagedBotRoute,
 )
 from clientplatform.domain.messenger_channels import extract_customer_link_token
+from services.messenger.entrypoints import parse_start_payload
 from clientplatform.runtime.secrets import (
     EnvironmentCredentialProvider,
     SecretReferenceError,
@@ -445,63 +447,77 @@ class ManagedBotGatewayRuntime:
                 )
             actor = _telegram_actor(payload)
             if actor is not None:
-                link_token = extract_customer_link_token(_telegram_message_text(payload))
-                if link_token is not None:
-                    customer_link = await asyncio.to_thread(
-                        consume_telegram_customer_channel_link,
+                message_text = _telegram_message_text(payload)
+                staff_bridge = _telegram_staff_bridge_token(message_text)
+                if staff_bridge is not None:
+                    await asyncio.to_thread(
+                        consume_telegram_staff_bridge,
                         route=item.route,
-                        token=link_token,
+                        token=staff_bridge,
                         telegram_user_id=actor[0],
                         username=actor[1],
                         display_name=actor[2],
                     )
                 else:
-                    customer_link = await asyncio.to_thread(
-                        ensure_telegram_customer_link,
-                        route=item.route,
-                        telegram_user_id=actor[0],
-                        username=actor[1],
-                        display_name=actor[2],
-                    )
-                from clientplatform.application.sales_intelligence import (
-                    extract_customer_message_text,
-                    record_managed_bot_customer_message,
-                )
-
-                customer_text = extract_customer_message_text(payload)
-                if customer_text is not None and link_token is None:
-                    ai_enabled = False
-                    ai_target = ""
-                    try:
-                        from clientplatform.runtime.sales_ai_config import SalesAIRuntimeConfig
-
-                        ai_config = SalesAIRuntimeConfig.from_env()
-                        ai_enabled = ai_config.enabled
-                        ai_target = ai_config.consent_target
-                    except (TypeError, ValueError):
-                        log.warning(
-                            "Sales AI configuration is invalid; continuing without AI",
-                            exc_info=True,
-                        )
-                    try:
-                        await asyncio.to_thread(
-                            record_managed_bot_customer_message,
+                    link_token = extract_customer_link_token(message_text)
+                    if link_token is not None:
+                        customer_link = await asyncio.to_thread(
+                            consume_telegram_customer_channel_link,
                             route=item.route,
-                            customer_link=customer_link,
+                            token=link_token,
                             telegram_user_id=actor[0],
-                            provider_update_id=item.event.provider_update_id,
-                            message_text=customer_text,
-                            runtime_ai_enabled=ai_enabled,
-                            runtime_ai_consent_target=ai_target,
+                            username=actor[1],
+                            display_name=actor[2],
                         )
-                    except Exception:  # validator: allow-wide-except
-                        log.exception(
-                            "Managed bot sales-intelligence side channel failed; dispatch continues",
-                            extra={
-                                "managed_bot_id": item.route.managed_bot_id,
-                                "business_id": item.route.business_id,
-                            },
+                    else:
+                        customer_link = await asyncio.to_thread(
+                            ensure_telegram_customer_link,
+                            route=item.route,
+                            telegram_user_id=actor[0],
+                            username=actor[1],
+                            display_name=actor[2],
                         )
+                    from clientplatform.application.sales_intelligence import (
+                        extract_customer_message_text,
+                        record_managed_bot_customer_message,
+                    )
+
+                    customer_text = extract_customer_message_text(payload)
+                    if customer_text is not None and link_token is None:
+                        ai_enabled = False
+                        ai_target = ""
+                        try:
+                            from clientplatform.runtime.sales_ai_config import (
+                                SalesAIRuntimeConfig,
+                            )
+
+                            ai_config = SalesAIRuntimeConfig.from_env()
+                            ai_enabled = ai_config.enabled
+                            ai_target = ai_config.consent_target
+                        except (TypeError, ValueError):
+                            log.warning(
+                                "Sales AI configuration is invalid; continuing without AI",
+                                exc_info=True,
+                            )
+                        try:
+                            await asyncio.to_thread(
+                                record_managed_bot_customer_message,
+                                route=item.route,
+                                customer_link=customer_link,
+                                telegram_user_id=actor[0],
+                                provider_update_id=item.event.provider_update_id,
+                                message_text=customer_text,
+                                runtime_ai_enabled=ai_enabled,
+                                runtime_ai_consent_target=ai_target,
+                            )
+                        except Exception:  # validator: allow-wide-except
+                            log.exception(
+                                "Managed bot sales-intelligence side channel failed; dispatch continues",
+                                extra={
+                                    "managed_bot_id": item.route.managed_bot_id,
+                                    "business_id": item.route.business_id,
+                                },
+                            )
             bot = await self._bot_for(item.route)
             try:
                 update = Update.model_validate(
@@ -607,6 +623,20 @@ def _telegram_message_text(payload: Mapping[str, Any]) -> str | None:
         if text:
             return text
     return None
+
+
+def _telegram_staff_bridge_token(text: str | None) -> str | None:
+    raw = " ".join(str(text or "").strip().split())
+    if not raw:
+        return None
+    lowered = raw.casefold()
+    if not lowered.startswith("/start ") and not lowered.startswith("start "):
+        return None
+    payload = raw.split(maxsplit=1)[1].strip()
+    parsed = parse_start_payload(payload)
+    if parsed.kind != "bridge" or not parsed.value:
+        return None
+    return parsed.value
 
 
 def _telegram_actor(

@@ -231,6 +231,36 @@ class ClientPlatformBookingHardeningTests(unittest.TestCase):
         ).fetchone()
         self.assertEqual(int(row["c"]), 1)
 
+    def test_open_slot_with_existing_customer_fails_closed(self) -> None:
+        bookings = BookingRepository(self.conn)
+        slot = bookings.create_slot(
+            actor=self.owner,
+            offering_id=self.first_offering.id,
+            local_start="04.08.2026 10:00",
+            duration_minutes=60,
+            now="2026-07-28T12:00:00+00:00",
+        )
+        self.conn.execute(
+            "UPDATE booking_slots SET booked_customer_id=? WHERE id=? AND business_id=?",
+            (self.customer_id, slot.slot.id, self.business_id),
+        )
+        self.conn.commit()
+
+        with self.assertRaisesRegex(BookingInvariantViolation, "только что занял"):
+            bookings.book_slot_for_customer_id(
+                business_id=self.business_id,
+                customer_id=self.customer_id,
+                slot_id=slot.slot.id,
+                now="2026-07-28T12:10:00+00:00",
+            )
+
+        row = self.conn.execute(
+            "SELECT status, booked_at FROM booking_slots WHERE id=? AND business_id=?",
+            (slot.slot.id, self.business_id),
+        ).fetchone()
+        self.assertEqual(str(row["status"]), "open")
+        self.assertIsNone(row["booked_at"])
+
 
 if __name__ == "__main__":
     unittest.main()

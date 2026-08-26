@@ -14,6 +14,7 @@ from clientplatform.domain.activity import (
     InviteClaim,
     invite_token_hash,
 )
+from clientplatform.domain.customers import CustomerPlatform
 from clientplatform.domain.tenancy import TenantContext, normalize_user_id
 from clientplatform.infrastructure.activity_repository import (
     ActivityRepository as BaseActivityRepository,
@@ -29,9 +30,17 @@ class ActivityRepository(BaseActivityRepository):
         self,
         *,
         token: str,
-        telegram_user_id: int,
+        claiming_account_id: int | None = None,
+        telegram_user_id: int | None = None,
     ) -> None:
-        principal_id = normalize_user_id(telegram_user_id)
+        principal = (
+            claiming_account_id
+            if claiming_account_id is not None
+            else telegram_user_id
+        )
+        if principal is None:
+            return
+        principal_id = normalize_user_id(principal)
         row = self._conn.execute(
             """
             SELECT 1
@@ -60,15 +69,40 @@ class ActivityRepository(BaseActivityRepository):
         display_name: str | None,
         now: str | None = None,
     ) -> InviteClaim:
-        self._assert_invite_claim_is_external(
+        principal_id = normalize_user_id(telegram_user_id)
+        return self.claim_customer_invite_identity(
             token=token,
-            telegram_user_id=telegram_user_id,
-        )
-        return super().claim_customer_invite(
-            token=token,
-            telegram_user_id=telegram_user_id,
+            platform=CustomerPlatform.TELEGRAM,
+            external_subject=str(principal_id),
             username=username,
             display_name=display_name,
+            claiming_account_id=principal_id,
+            now=now,
+        )
+
+    def claim_customer_invite_identity(
+        self,
+        *,
+        token: str,
+        platform: CustomerPlatform | str,
+        external_subject: str,
+        username: str | None,
+        display_name: str | None,
+        claiming_account_id: int | None = None,
+        expected_business_id: str | None = None,
+        now: str | None = None,
+    ) -> InviteClaim:
+        self._assert_invite_claim_is_external(
+            token=token,
+            claiming_account_id=claiming_account_id,
+        )
+        return super().claim_customer_invite_identity(
+            token=token,
+            platform=platform,
+            external_subject=external_subject,
+            username=username,
+            display_name=display_name,
+            expected_business_id=expected_business_id,
             now=now,
         )
 
