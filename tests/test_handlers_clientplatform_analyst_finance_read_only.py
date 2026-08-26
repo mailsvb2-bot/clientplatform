@@ -135,6 +135,10 @@ def test_finance_write_buttons_follow_application_write_roles() -> None:
     [
         ("payment-new", ()),
         ("payment-customer", ("none",)),
+        ("pay-customer", ("none",)),
+        ("pay-offer", ("offering",)),
+        ("pay-refund", ("payment",)),
+        ("pay-refund-ok", ("payment",)),
         ("price-set", ("offering",)),
     ],
 )

@@ -39,7 +39,7 @@ def test_finance_rbac_is_read_write_separated() -> None:
     ]
     assert "PlatformRole.ANALYST" in read
     assert "PlatformRole.ANALYST" not in write
-    for name in ("record_payment", "set_offering_price"):
+    for name in ("record_payment", "refund_payment", "set_offering_price"):
         assert "allowed_roles=_FINANCE_WRITE_ROLES" in _function(value, name)
     for name in ("list_payments", "list_offering_prices"):
         assert "allowed_roles=_FINANCE_READ_ROLES" in _function(value, name)

@@ -1,13 +1,22 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 import os
 import re
+import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
+from clientplatform.domain.outcomes import (
+    BusinessOutcomeEvent,
+    OutcomeMoney,
+    OutcomeSource,
+    OutcomeType,
+)
 from clientplatform.domain.tenancy import (
     BUSINESS_MEMBER_ROLES,
     PlatformRole,
@@ -16,6 +25,10 @@ from clientplatform.domain.tenancy import (
     normalize_uuid,
 )
 from clientplatform.infrastructure import TenancyRepository
+from clientplatform.infrastructure.outcome_repository import OutcomeRepository
+from clientplatform.infrastructure.revenue_attribution_repository import (
+    RevenueAttributionRepository,
+)
 from services.db import get_db, get_db_ro
 
 
@@ -47,6 +60,36 @@ _FINANCE_WRITE_ROLES = frozenset(
 )
 _OBSERVABILITY_ROLES = frozenset(BUSINESS_MEMBER_ROLES)
 _CURRENCY_RE = re.compile(r"^[A-Z]{3}$")
+_KNOWN_ISO_CURRENCIES = frozenset(
+    """
+    AED AFN ALL AMD ANG AOA ARS AUD AWG AZN BAM BBD BDT BGN BHD BIF BMD
+    BND BOB BOV BRL BSD BTN BWP BYN BZD CAD CDF CHE CHF CHW CLF CLP CNY
+    COP COU CRC CUC CUP CVE CZK DJF DKK DOP DZD EGP ERN ETB EUR FJD FKP
+    GBP GEL GHS GIP GMD GNF GTQ GYD HKD HNL HTG HUF IDR ILS INR IQD IRR
+    ISK JMD JOD JPY KES KGS KHR KMF KPW KRW KWD KYD KZT LAK LBP LKR LRD
+    LSL LYD MAD MDL MGA MKD MMK MNT MOP MRU MUR MVR MWK MXN MXV MYR MZN
+    NAD NGN NIO NOK NPR NZD OMR PAB PEN PGK PHP PKR PLN PYG QAR RON RSD
+    RUB RWF SAR SBD SCR SDG SEK SGD SHP SLE SLL SOS SRD SSP STN SVC SYP
+    SZL THB TJS TMT TND TOP TRY TTD TWD TZS UAH UGX USD USN UYI UYU UYW
+    UZS VED VES VND VUV WST XAF XAG XAU XBA XBB XBC XBD XCD XCG XDR XOF
+    XPD XPF XPT XSU XTS XUA XXX YER ZAR ZMW ZWG
+    """.split()
+)
+_NON_SETTLEMENT_ISO_CODES = frozenset({"XTS", "XXX"})
+_IDEMPOTENCY_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$")
+_PROVIDER_RE = re.compile(r"^[a-z][a-z0-9._-]{0,39}$")
+
+
+class PaymentIdempotencyConflict(ValueError):
+    """A business payment key was reused for a different external fact."""
+
+
+class PaymentStateConflict(ValueError):
+    """A payment mutation conflicts with the durable payment state."""
+
+
+class PaymentEvidenceInvariantViolation(RuntimeError):
+    """Durable payment state and canonical outcome evidence disagree."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,9 +114,31 @@ class PaymentRecord:
     currency: str
     status: str
     provider: str
+    external_reference: str | None
     note: str
     created_at: str
     paid_at: str | None
+    refunded_at: str | None
+    idempotency_key: str | None
+    outcome_event_id: str | None
+    offering_id: str | None
+    revenue_attribution_id: str | None
+    refund_idempotency_key: str | None
+    refund_outcome_event_id: str | None
+    refund_revenue_attribution_id: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class _PaymentEvidence:
+    business_id: str
+    payment_id: str
+    operation: str
+    idempotency_key: str
+    request_fingerprint: str
+    outcome_event_id: str
+    offering_id: str | None
+    provider: str
+    external_reference: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -197,24 +262,195 @@ def _body(value: object, *, maximum: int = 4000) -> str:
 
 
 def _currency(value: object) -> str:
-    normalized = str(value or "RUB").strip().upper()
+    normalized = str(value or "").strip().upper()
     if not _CURRENCY_RE.fullmatch(normalized):
         raise ValueError("currency must contain exactly three Latin letters")
+    if (
+        normalized not in _KNOWN_ISO_CURRENCIES
+        or normalized in _NON_SETTLEMENT_ISO_CODES
+    ):
+        raise ValueError("currency must be a known ISO 4217 code")
     return normalized
 
 
 def _amount_minor(value: object) -> int:
-    if isinstance(value, bool):
+    if isinstance(value, bool) or not isinstance(value, int):
         raise ValueError("amount_minor must be positive")
-    try:
-        normalized = int(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("amount_minor must be positive") from exc
+    normalized = value
     if normalized <= 0:
         raise ValueError("amount_minor must be positive")
     if normalized > 1_000_000_000_00:
         raise ValueError("amount_minor is too large")
     return normalized
+
+
+def _idempotency_key(value: object) -> str:
+    normalized = str(value or "").strip()
+    if not _IDEMPOTENCY_KEY_RE.fullmatch(normalized):
+        raise ValueError(
+            "idempotency_key must be 1-200 opaque ASCII characters"
+        )
+    return normalized
+
+
+def _provider(value: object) -> str:
+    normalized = str(value or "").strip().lower()
+    if not _PROVIDER_RE.fullmatch(normalized):
+        raise ValueError("provider must be a lowercase stable identifier")
+    return normalized
+
+
+def _external_reference(value: object, *, provider: str) -> str | None:
+    normalized = (
+        None
+        if value in (None, "")
+        else _text(value, field="external_reference", maximum=180)
+    )
+    if provider != "manual" and normalized is None:
+        raise ValueError("external_reference is required for provider confirmation")
+    return normalized
+
+
+def _payment_stamp(value: datetime | None) -> datetime:
+    stamp = value or datetime.now(timezone.utc)
+    if stamp.tzinfo is None:
+        raise ValueError("payment timestamp must be timezone-aware")
+    return stamp.astimezone(timezone.utc)
+
+
+def _request_fingerprint(payload: dict[str, object]) -> str:
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _begin_payment_write(conn: Any) -> None:
+    if isinstance(conn, sqlite3.Connection) and not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+
+
+def _serialize_payment_write(conn: Any, *, business_id: str) -> None:
+    """Serialize payment invariants after tenant authorization has succeeded."""
+
+    cursor = conn.execute(
+        """
+        UPDATE businesses
+        SET updated_at=updated_at
+        WHERE id=? AND status='active'
+        """,
+        (business_id,),
+    )
+    if int(getattr(cursor, "rowcount", 1) or 0) != 1:
+        raise PaymentStateConflict("active business was not found")
+
+
+def _payment_evidence_from_row(row: Any) -> _PaymentEvidence:
+    offering_id = _value(row, "offering_id", 6)
+    external_reference = _value(row, "external_reference", 8)
+    return _PaymentEvidence(
+        business_id=str(_value(row, "business_id", 0)),
+        payment_id=str(_value(row, "payment_id", 1)),
+        operation=str(_value(row, "operation", 2)),
+        idempotency_key=str(_value(row, "idempotency_key", 3)),
+        request_fingerprint=str(_value(row, "request_fingerprint", 4)),
+        outcome_event_id=str(_value(row, "outcome_event_id", 5)),
+        offering_id=None if offering_id is None else str(offering_id),
+        provider=str(_value(row, "provider", 7)),
+        external_reference=(
+            None if external_reference is None else str(external_reference)
+        ),
+    )
+
+
+_PAYMENT_EVIDENCE_SELECT = """
+    SELECT business_id, payment_id, operation, idempotency_key,
+           request_fingerprint, outcome_event_id, offering_id,
+           provider, external_reference
+    FROM business_payment_outcome_evidence
+"""
+
+
+def _evidence_by_key(
+    conn: Any,
+    *,
+    business_id: str,
+    idempotency_key: str,
+) -> _PaymentEvidence | None:
+    row = conn.execute(
+        _PAYMENT_EVIDENCE_SELECT
+        + " WHERE business_id=? AND idempotency_key=? LIMIT 1",
+        (business_id, idempotency_key),
+    ).fetchone()
+    return None if row is None else _payment_evidence_from_row(row)
+
+
+def _evidence_for_payment(
+    conn: Any,
+    *,
+    business_id: str,
+    payment_id: str,
+    operation: str,
+) -> _PaymentEvidence | None:
+    row = conn.execute(
+        _PAYMENT_EVIDENCE_SELECT
+        + " WHERE business_id=? AND payment_id=? AND operation=? LIMIT 1",
+        (business_id, payment_id, operation),
+    ).fetchone()
+    return None if row is None else _payment_evidence_from_row(row)
+
+
+def _provider_evidence(
+    conn: Any,
+    *,
+    business_id: str,
+    operation: str,
+    provider: str,
+    external_reference: str | None,
+) -> _PaymentEvidence | None:
+    if external_reference is None:
+        return None
+    row = conn.execute(
+        _PAYMENT_EVIDENCE_SELECT
+        + " WHERE business_id=? AND operation=? AND provider=? "
+        "AND external_reference=? LIMIT 1",
+        (business_id, operation, provider, external_reference),
+    ).fetchone()
+    return None if row is None else _payment_evidence_from_row(row)
+
+
+def _insert_payment_evidence(
+    conn: Any,
+    *,
+    evidence: _PaymentEvidence,
+    recorded_by_member_id: str,
+    created_at: str,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO business_payment_outcome_evidence(
+            business_id, payment_id, operation, idempotency_key,
+            request_fingerprint, outcome_event_id, offering_id,
+            provider, external_reference, recorded_by_member_id, created_at
+        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            evidence.business_id,
+            evidence.payment_id,
+            evidence.operation,
+            evidence.idempotency_key,
+            evidence.request_fingerprint,
+            evidence.outcome_event_id,
+            evidence.offering_id,
+            evidence.provider,
+            evidence.external_reference,
+            recorded_by_member_id,
+            created_at,
+        ),
+    )
 
 
 def _resolve(
@@ -413,33 +649,349 @@ def _publication_from_row(row: Any) -> PublicationRecord:
     )
 
 
+_PAYMENT_SELECT = """
+    SELECT p.id, p.business_id, p.customer_id, p.amount_minor, p.currency,
+           p.status, p.provider, p.external_reference, p.note,
+           p.created_at, p.paid_at, p.refunded_at,
+           paid_evidence.idempotency_key AS idempotency_key,
+           paid_evidence.outcome_event_id AS outcome_event_id,
+           paid_evidence.offering_id AS offering_id,
+           paid_revenue.id AS revenue_attribution_id,
+           refunded_evidence.idempotency_key AS refund_idempotency_key,
+           refunded_evidence.outcome_event_id AS refund_outcome_event_id,
+           refunded_revenue.id AS refund_revenue_attribution_id
+    FROM business_payments p
+    LEFT JOIN business_payment_outcome_evidence paid_evidence
+      ON paid_evidence.business_id=p.business_id
+     AND paid_evidence.payment_id=p.id
+     AND paid_evidence.operation='paid'
+    LEFT JOIN revenue_attributions paid_revenue
+      ON paid_revenue.business_id=paid_evidence.business_id
+     AND paid_revenue.outcome_event_id=paid_evidence.outcome_event_id
+     AND paid_revenue.model_version='first_touch_v1'
+    LEFT JOIN business_payment_outcome_evidence refunded_evidence
+      ON refunded_evidence.business_id=p.business_id
+     AND refunded_evidence.payment_id=p.id
+     AND refunded_evidence.operation='refund'
+    LEFT JOIN revenue_attributions refunded_revenue
+      ON refunded_revenue.business_id=refunded_evidence.business_id
+     AND refunded_revenue.outcome_event_id=refunded_evidence.outcome_event_id
+     AND refunded_revenue.model_version='first_touch_v1'
+"""
+
+
+def _payment_from_row(row: Any) -> PaymentRecord:
+    customer_id = _value(row, "customer_id", 2)
+    external_reference = _value(row, "external_reference", 7)
+    paid_at = _value(row, "paid_at", 10)
+    refunded_at = _value(row, "refunded_at", 11)
+    idempotency_key = _value(row, "idempotency_key", 12)
+    outcome_event_id = _value(row, "outcome_event_id", 13)
+    offering_id = _value(row, "offering_id", 14)
+    revenue_attribution_id = _value(row, "revenue_attribution_id", 15)
+    refund_idempotency_key = _value(row, "refund_idempotency_key", 16)
+    refund_outcome_event_id = _value(row, "refund_outcome_event_id", 17)
+    refund_revenue_attribution_id = _value(
+        row,
+        "refund_revenue_attribution_id",
+        18,
+    )
+    return PaymentRecord(
+        id=str(_value(row, "id", 0)),
+        business_id=str(_value(row, "business_id", 1)),
+        customer_id=None if customer_id is None else str(customer_id),
+        amount_minor=int(_value(row, "amount_minor", 3)),
+        currency=str(_value(row, "currency", 4)),
+        status=str(_value(row, "status", 5)),
+        provider=str(_value(row, "provider", 6)),
+        external_reference=(
+            None if external_reference is None else str(external_reference)
+        ),
+        note=str(_value(row, "note", 8)),
+        created_at=str(_value(row, "created_at", 9)),
+        paid_at=None if paid_at is None else str(paid_at),
+        refunded_at=None if refunded_at is None else str(refunded_at),
+        idempotency_key=(
+            None if idempotency_key is None else str(idempotency_key)
+        ),
+        outcome_event_id=(
+            None if outcome_event_id is None else str(outcome_event_id)
+        ),
+        offering_id=None if offering_id is None else str(offering_id),
+        revenue_attribution_id=(
+            None
+            if revenue_attribution_id is None
+            else str(revenue_attribution_id)
+        ),
+        refund_idempotency_key=(
+            None
+            if refund_idempotency_key is None
+            else str(refund_idempotency_key)
+        ),
+        refund_outcome_event_id=(
+            None
+            if refund_outcome_event_id is None
+            else str(refund_outcome_event_id)
+        ),
+        refund_revenue_attribution_id=(
+            None
+            if refund_revenue_attribution_id is None
+            else str(refund_revenue_attribution_id)
+        ),
+    )
+
+
+def _payment_row(
+    conn: Any,
+    *,
+    business_id: str,
+    payment_id: str,
+) -> PaymentRecord | None:
+    row = conn.execute(
+        _PAYMENT_SELECT + " WHERE p.business_id=? AND p.id=? LIMIT 1",
+        (business_id, payment_id),
+    ).fetchone()
+    return None if row is None else _payment_from_row(row)
+
+
+def _outcome_idempotency_key(*, operation: str, idempotency_key: str) -> str:
+    digest = hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()
+    return f"business-payment-{operation}:{digest}"
+
+
+def _validate_payment_outcome(
+    conn: Any,
+    *,
+    payment: PaymentRecord,
+    evidence: _PaymentEvidence,
+) -> None:
+    if evidence.operation == "paid" and (
+        evidence.provider != payment.provider
+        or evidence.external_reference != payment.external_reference
+    ):
+        raise PaymentEvidenceInvariantViolation(
+            "payment provider evidence disagrees with the durable payment"
+        )
+    event = OutcomeRepository(conn).get(
+        business_id=evidence.business_id,
+        event_id=evidence.outcome_event_id,
+    )
+    if event is None:
+        raise PaymentEvidenceInvariantViolation(
+            "payment evidence has no canonical outcome"
+        )
+    expected_type = (
+        OutcomeType.ORDER_PAID
+        if evidence.operation == "paid"
+        else OutcomeType.REFUND_RECORDED
+    )
+    expected_subject = (
+        f"business_offering:{evidence.offering_id}"
+        if evidence.offering_id is not None
+        else f"business_payment:{payment.id}"
+    )
+    expected_key = _outcome_idempotency_key(
+        operation=evidence.operation,
+        idempotency_key=evidence.idempotency_key,
+    )
+    if (
+        event.outcome_type != expected_type
+        or event.source_type != "business_payment"
+        or event.source_id != payment.id
+        or event.customer_id != payment.customer_id
+        or event.subject_ref != expected_subject
+        or event.amount_minor != payment.amount_minor
+        or event.currency != payment.currency
+        or event.idempotency_key != expected_key
+    ):
+        raise PaymentEvidenceInvariantViolation(
+            "payment and canonical outcome evidence disagree"
+        )
+
+
+def _replay_payment(
+    conn: Any,
+    *,
+    evidence: _PaymentEvidence,
+    operation: str,
+    request_fingerprint: str,
+    materialized_at: datetime,
+) -> PaymentRecord:
+    if (
+        evidence.operation != operation
+        or evidence.request_fingerprint != request_fingerprint
+    ):
+        raise PaymentIdempotencyConflict(
+            "idempotency key already belongs to a different payment fact"
+        )
+    payment = _payment_row(
+        conn,
+        business_id=evidence.business_id,
+        payment_id=evidence.payment_id,
+    )
+    if payment is None:
+        raise PaymentEvidenceInvariantViolation(
+            "payment evidence has no durable payment"
+        )
+    _validate_payment_outcome(conn, payment=payment, evidence=evidence)
+    RevenueAttributionRepository(conn).materialize_outcome(
+        business_id=evidence.business_id,
+        outcome_event_id=evidence.outcome_event_id,
+        created_at=materialized_at,
+    )
+    refreshed = _payment_row(
+        conn,
+        business_id=evidence.business_id,
+        payment_id=evidence.payment_id,
+    )
+    if refreshed is None:
+        raise PaymentEvidenceInvariantViolation("durable payment disappeared")
+    return refreshed
+
+
+def _resolve_payment_offering(
+    conn: Any,
+    *,
+    business_id: str,
+    offering_id: str | None,
+    currency: str,
+) -> tuple[int | None, str | None]:
+    if offering_id is None:
+        return None, None
+    row = conn.execute(
+        """
+        SELECT p.amount_minor, p.currency
+        FROM business_offerings o
+        LEFT JOIN business_offering_prices p
+          ON p.business_id=o.business_id
+         AND p.offering_id=o.id
+         AND p.status='active'
+        WHERE o.id=? AND o.business_id=? AND o.status='active'
+        LIMIT 1
+        """,
+        (offering_id, business_id),
+    ).fetchone()
+    if row is None:
+        raise ValueError("active offering was not found in this business")
+    configured_amount = _value(row, "amount_minor", 0)
+    configured_currency = _value(row, "currency", 1)
+    if configured_currency is not None and str(configured_currency) != currency:
+        raise PaymentStateConflict(
+            "payment currency does not match the active offering price"
+        )
+    return (
+        None if configured_amount is None else int(configured_amount),
+        None if configured_currency is None else str(configured_currency),
+    )
+
+
+def _assert_provider_reference_available(
+    conn: Any,
+    *,
+    business_id: str,
+    operation: str,
+    provider: str,
+    external_reference: str | None,
+) -> None:
+    if external_reference is None:
+        return
+    evidence = _provider_evidence(
+        conn,
+        business_id=business_id,
+        operation=operation,
+        provider=provider,
+        external_reference=external_reference,
+    )
+    if evidence is not None:
+        raise PaymentIdempotencyConflict(
+            "provider reference already belongs to a different idempotency key"
+        )
+    if operation != "paid":
+        return
+    legacy = conn.execute(
+        """
+        SELECT id
+        FROM business_payments
+        WHERE business_id=? AND provider=? AND external_reference=?
+        LIMIT 1
+        """,
+        (business_id, provider, external_reference),
+    ).fetchone()
+    if legacy is not None:
+        raise PaymentIdempotencyConflict(
+            "provider reference already belongs to a payment without this evidence"
+        )
+
+
 def record_payment(
     *,
     actor: TenantContext,
     amount_minor: int,
+    idempotency_key: str,
     currency: str = "RUB",
     customer_id: str | None = None,
+    offering_id: str | None = None,
     note: str = "",
+    provider: str = "manual",
     external_reference: str | None = None,
+    now: datetime | None = None,
 ) -> PaymentRecord:
+    """Confirm one customer payment and append its canonical money fact atomically."""
+
     normalized_amount = _amount_minor(amount_minor)
     normalized_currency = _currency(currency)
+    normalized_key = _idempotency_key(idempotency_key)
+    normalized_provider = _provider(provider)
+    normalized_reference = _external_reference(
+        external_reference,
+        provider=normalized_provider,
+    )
     normalized_customer = (
         None
         if customer_id in (None, "")
         else normalize_uuid(str(customer_id), field_name="customer_id")
     )
-    normalized_note = str(note or "").replace("\x00", " ").strip()[:500]
-    normalized_reference = (
+    normalized_offering = (
         None
-        if external_reference in (None, "")
-        else _text(external_reference, field="external_reference", maximum=180)
+        if offering_id in (None, "")
+        else normalize_uuid(str(offering_id), field_name="offering_id")
     )
-    payment_id = str(uuid4())
-    timestamp = _utc_now()
+    normalized_note = str(note or "").replace("\x00", " ").strip()[:500]
+    stamp = _payment_stamp(now)
+    timestamp = stamp.isoformat(timespec="microseconds")
+    requested_at = None if now is None else timestamp
+    fingerprint = _request_fingerprint(
+        {
+            "operation": "paid",
+            "amount_minor": normalized_amount,
+            "currency": normalized_currency,
+            "customer_id": normalized_customer,
+            "offering_id": normalized_offering,
+            "note": normalized_note,
+            "provider": normalized_provider,
+            "external_reference": normalized_reference,
+            "occurred_at": requested_at,
+        }
+    )
 
     with get_db() as conn:
+        _begin_payment_write(conn)
         current = _resolve(conn, actor, allowed_roles=_FINANCE_WRITE_ROLES)
+        _serialize_payment_write(conn, business_id=current.business_id)
+        replay = _evidence_by_key(
+            conn,
+            business_id=current.business_id,
+            idempotency_key=normalized_key,
+        )
+        if replay is not None:
+            return _replay_payment(
+                conn,
+                evidence=replay,
+                operation="paid",
+                request_fingerprint=fingerprint,
+                materialized_at=stamp,
+            )
+
         if normalized_customer is not None:
             customer = conn.execute(
                 """
@@ -451,13 +1003,28 @@ def record_payment(
             ).fetchone()
             if customer is None:
                 raise ValueError("active customer was not found in this business")
+        configured_amount, configured_currency = _resolve_payment_offering(
+            conn,
+            business_id=current.business_id,
+            offering_id=normalized_offering,
+            currency=normalized_currency,
+        )
+        _assert_provider_reference_available(
+            conn,
+            business_id=current.business_id,
+            operation="paid",
+            provider=normalized_provider,
+            external_reference=normalized_reference,
+        )
+
+        payment_id = str(uuid4())
         conn.execute(
             """
             INSERT INTO business_payments(
                 id, business_id, customer_id, amount_minor, currency,
                 status, provider, external_reference, note,
                 recorded_by_member_id, created_at, updated_at, paid_at, refunded_at
-            ) VALUES(?, ?, ?, ?, ?, 'paid', 'manual', ?, ?, ?, ?, ?, ?, NULL)
+            ) VALUES(?, ?, ?, ?, ?, 'paid', ?, ?, ?, ?, ?, ?, ?, NULL)
             """,
             (
                 payment_id,
@@ -465,6 +1032,7 @@ def record_payment(
                 normalized_customer,
                 normalized_amount,
                 normalized_currency,
+                normalized_provider,
                 normalized_reference,
                 normalized_note,
                 current.membership_id,
@@ -473,27 +1041,268 @@ def record_payment(
                 timestamp,
             ),
         )
+        subject_ref = (
+            f"business_offering:{normalized_offering}"
+            if normalized_offering is not None
+            else f"business_payment:{payment_id}"
+        )
+        outcome = OutcomeRepository(conn).append(
+            BusinessOutcomeEvent(
+                id=str(uuid4()),
+                business_id=current.business_id,
+                outcome_type=OutcomeType.ORDER_PAID,
+                occurred_at=stamp,
+                source=OutcomeSource(
+                    source_type="business_payment",
+                    source_id=payment_id,
+                ),
+                customer_id=normalized_customer,
+                subject_ref=subject_ref,
+                money=OutcomeMoney(
+                    amount_minor=normalized_amount,
+                    currency=normalized_currency,
+                ),
+                idempotency_key=_outcome_idempotency_key(
+                    operation="paid",
+                    idempotency_key=normalized_key,
+                ),
+                metadata={
+                    "payment_id": payment_id,
+                    "offering_id": normalized_offering,
+                    "provider": normalized_provider,
+                    "external_reference": normalized_reference,
+                    "configured_price_amount_minor": configured_amount,
+                    "configured_price_currency": configured_currency,
+                },
+                metadata_version=1,
+                created_at=stamp,
+            )
+        )
+        evidence = _PaymentEvidence(
+            business_id=current.business_id,
+            payment_id=payment_id,
+            operation="paid",
+            idempotency_key=normalized_key,
+            request_fingerprint=fingerprint,
+            outcome_event_id=outcome.id,
+            offering_id=normalized_offering,
+            provider=normalized_provider,
+            external_reference=normalized_reference,
+        )
+        _insert_payment_evidence(
+            conn,
+            evidence=evidence,
+            recorded_by_member_id=current.membership_id,
+            created_at=timestamp,
+        )
+        RevenueAttributionRepository(conn).materialize_outcome(
+            business_id=current.business_id,
+            outcome_event_id=outcome.id,
+            created_at=stamp,
+        )
         _audit(
             conn,
             actor=current,
             action="payment_recorded",
             subject_type="payment",
             subject_id=payment_id,
-            detail=f"{normalized_amount}:{normalized_currency}",
+            detail=(
+                f"{normalized_amount}:{normalized_currency}:"
+                f"outcome={outcome.id}"
+            ),
             now=timestamp,
         )
-        row = conn.execute(
+        payment = _payment_row(
+            conn,
+            business_id=current.business_id,
+            payment_id=payment_id,
+        )
+        if payment is None:
+            raise PaymentEvidenceInvariantViolation(
+                "recorded payment was not found"
+            )
+        _validate_payment_outcome(conn, payment=payment, evidence=evidence)
+        return payment
+
+
+def refund_payment(
+    *,
+    actor: TenantContext,
+    payment_id: str,
+    idempotency_key: str,
+    reason: str = "",
+    provider: str = "manual",
+    external_reference: str | None = None,
+    now: datetime | None = None,
+) -> PaymentRecord:
+    """Record one full refund and its separate canonical negative money fact."""
+
+    normalized_payment_id = normalize_uuid(payment_id, field_name="payment_id")
+    normalized_key = _idempotency_key(idempotency_key)
+    normalized_provider = _provider(provider)
+    normalized_reference = _external_reference(
+        external_reference,
+        provider=normalized_provider,
+    )
+    normalized_reason = str(reason or "").replace("\x00", " ").strip()[:500]
+    stamp = _payment_stamp(now)
+    timestamp = stamp.isoformat(timespec="microseconds")
+    requested_at = None if now is None else timestamp
+    fingerprint = _request_fingerprint(
+        {
+            "operation": "refund",
+            "payment_id": normalized_payment_id,
+            "reason": normalized_reason,
+            "provider": normalized_provider,
+            "external_reference": normalized_reference,
+            "occurred_at": requested_at,
+        }
+    )
+
+    with get_db() as conn:
+        _begin_payment_write(conn)
+        current = _resolve(conn, actor, allowed_roles=_FINANCE_WRITE_ROLES)
+        _serialize_payment_write(conn, business_id=current.business_id)
+        replay = _evidence_by_key(
+            conn,
+            business_id=current.business_id,
+            idempotency_key=normalized_key,
+        )
+        if replay is not None:
+            return _replay_payment(
+                conn,
+                evidence=replay,
+                operation="refund",
+                request_fingerprint=fingerprint,
+                materialized_at=stamp,
+            )
+
+        payment = _payment_row(
+            conn,
+            business_id=current.business_id,
+            payment_id=normalized_payment_id,
+        )
+        if payment is None:
+            raise ValueError("payment was not found in this business")
+        paid_evidence = _evidence_for_payment(
+            conn,
+            business_id=current.business_id,
+            payment_id=payment.id,
+            operation="paid",
+        )
+        if paid_evidence is None:
+            raise PaymentEvidenceInvariantViolation(
+                "payment has no canonical paid outcome and cannot be refunded"
+            )
+        _validate_payment_outcome(
+            conn,
+            payment=payment,
+            evidence=paid_evidence,
+        )
+        if payment.status != "paid":
+            raise PaymentStateConflict("payment is not refundable")
+        _assert_provider_reference_available(
+            conn,
+            business_id=current.business_id,
+            operation="refund",
+            provider=normalized_provider,
+            external_reference=normalized_reference,
+        )
+
+        subject_ref = (
+            f"business_offering:{paid_evidence.offering_id}"
+            if paid_evidence.offering_id is not None
+            else f"business_payment:{payment.id}"
+        )
+        outcome = OutcomeRepository(conn).append(
+            BusinessOutcomeEvent(
+                id=str(uuid4()),
+                business_id=current.business_id,
+                outcome_type=OutcomeType.REFUND_RECORDED,
+                occurred_at=stamp,
+                source=OutcomeSource(
+                    source_type="business_payment",
+                    source_id=payment.id,
+                ),
+                customer_id=payment.customer_id,
+                subject_ref=subject_ref,
+                money=OutcomeMoney(
+                    amount_minor=payment.amount_minor,
+                    currency=payment.currency,
+                ),
+                idempotency_key=_outcome_idempotency_key(
+                    operation="refund",
+                    idempotency_key=normalized_key,
+                ),
+                metadata={
+                    "payment_id": payment.id,
+                    "payment_outcome_event_id": paid_evidence.outcome_event_id,
+                    "offering_id": paid_evidence.offering_id,
+                    "provider": normalized_provider,
+                    "external_reference": normalized_reference,
+                    "reason": normalized_reason,
+                },
+                metadata_version=1,
+                created_at=stamp,
+            )
+        )
+        evidence = _PaymentEvidence(
+            business_id=current.business_id,
+            payment_id=payment.id,
+            operation="refund",
+            idempotency_key=normalized_key,
+            request_fingerprint=fingerprint,
+            outcome_event_id=outcome.id,
+            offering_id=paid_evidence.offering_id,
+            provider=normalized_provider,
+            external_reference=normalized_reference,
+        )
+        _insert_payment_evidence(
+            conn,
+            evidence=evidence,
+            recorded_by_member_id=current.membership_id,
+            created_at=timestamp,
+        )
+        cursor = conn.execute(
             """
-            SELECT id, business_id, customer_id, amount_minor, currency,
-                   status, provider, note, created_at, paid_at
-            FROM business_payments
-            WHERE id=? AND business_id=?
+            UPDATE business_payments
+            SET status='refunded', updated_at=?, refunded_at=?
+            WHERE id=? AND business_id=? AND status='paid'
             """,
-            (payment_id, current.business_id),
-        ).fetchone()
-    if row is None:
-        raise RuntimeError("recorded payment was not found")
-    return _payment_from_row(row)
+            (timestamp, timestamp, payment.id, current.business_id),
+        )
+        if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+            raise PaymentStateConflict("payment refund lost a concurrent race")
+        RevenueAttributionRepository(conn).materialize_outcome(
+            business_id=current.business_id,
+            outcome_event_id=outcome.id,
+            created_at=stamp,
+        )
+        _audit(
+            conn,
+            actor=current,
+            action="payment_refunded",
+            subject_type="payment",
+            subject_id=payment.id,
+            detail=(
+                f"{payment.amount_minor}:{payment.currency}:"
+                f"outcome={outcome.id}"
+            ),
+            now=timestamp,
+        )
+        refunded = _payment_row(
+            conn,
+            business_id=current.business_id,
+            payment_id=payment.id,
+        )
+        if refunded is None:
+            raise PaymentEvidenceInvariantViolation("refunded payment disappeared")
+        _validate_payment_outcome(
+            conn,
+            payment=refunded,
+            evidence=evidence,
+        )
+        return refunded
 
 
 def list_payments(
@@ -505,34 +1314,12 @@ def list_payments(
     with get_db_ro() as conn:
         current = _resolve(conn, actor, allowed_roles=_FINANCE_READ_ROLES)
         rows = conn.execute(
-            """
-            SELECT id, business_id, customer_id, amount_minor, currency,
-                   status, provider, note, created_at, paid_at
-            FROM business_payments
-            WHERE business_id=?
-            ORDER BY created_at DESC, id DESC
-            LIMIT ?
-            """,
+            _PAYMENT_SELECT
+            + " WHERE p.business_id=? "
+            "ORDER BY p.created_at DESC, p.id DESC LIMIT ?",
             (current.business_id, normalized_limit),
         ).fetchall()
     return [_payment_from_row(row) for row in rows]
-
-
-def _payment_from_row(row: Any) -> PaymentRecord:
-    customer_id = _value(row, "customer_id", 2)
-    paid_at = _value(row, "paid_at", 9)
-    return PaymentRecord(
-        id=str(_value(row, "id", 0)),
-        business_id=str(_value(row, "business_id", 1)),
-        customer_id=None if customer_id is None else str(customer_id),
-        amount_minor=int(_value(row, "amount_minor", 3)),
-        currency=str(_value(row, "currency", 4)),
-        status=str(_value(row, "status", 5)),
-        provider=str(_value(row, "provider", 6)),
-        note=str(_value(row, "note", 7)),
-        created_at=str(_value(row, "created_at", 8)),
-        paid_at=None if paid_at is None else str(paid_at),
-    )
 
 
 def set_offering_price(
@@ -1219,7 +2006,10 @@ __all__ = [
     "InteractionMetricInput",
     "InteractionSnapshot",
     "OfferingPrice",
+    "PaymentEvidenceInvariantViolation",
+    "PaymentIdempotencyConflict",
     "PaymentRecord",
+    "PaymentStateConflict",
     "PublicationRecord",
     "SubscriptionState",
     "business_admin_insights",
@@ -1236,6 +2026,7 @@ __all__ = [
     "recent_audit_events",
     "record_interaction_metric",
     "record_payment",
+    "refund_payment",
     "refresh_interaction_alerts",
     "set_admin_setting",
     "set_offering_price",

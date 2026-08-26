@@ -171,6 +171,12 @@ def test_amount_and_display_helpers_cover_validation_and_formatting(ctx: Any) ->
     assert extension._status_icon(True) == "✅"
     assert extension._status_icon(False) == "⚠️"
     assert extension._payment_totals_text([]) == "0,00 RUB"
+    max_callback = extension._ops_callback(
+        SimpleNamespace(business_token="a" * 22),
+        "pay-refund-ok",
+        "b" * 22,
+    )
+    assert len(max_callback.encode("utf-8")) == 64
 
     payments = [
         SimpleNamespace(status="paid", currency="RUB", amount_minor=10000),
@@ -310,6 +316,11 @@ async def test_admin_ops_gate_payment_and_price_flows(
 ) -> None:
     customer = SimpleNamespace(id="customer-id", display_name="Иван")
     monkeypatch.setattr(extension, "list_customers", lambda **_kwargs: [customer])
+    monkeypatch.setattr(
+        extension.admin_ops,
+        "list_offering_prices",
+        lambda **_kwargs: [],
+    )
 
     state = FakeState()
     await extension.admin_ops_gate(_callback("payment-new"), state)
@@ -335,6 +346,40 @@ async def test_admin_ops_gate_payment_and_price_flows(
     await extension.admin_ops_gate(_callback("price-set", "offering"), state)
     assert state.data["cpao_offering_id"] == "uuid:offering"
     assert state.current_state == extension.ClientPlatformAdminOpsState.price_value
+
+
+@pytest.mark.asyncio
+async def test_payment_flow_uses_active_offering_price_when_available(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_admin: FakeAdmin,
+) -> None:
+    price = SimpleNamespace(
+        offering_id="offering-id",
+        offering_title="Консультация",
+        amount_minor=50_000,
+        currency="RUB",
+        status="active",
+    )
+    monkeypatch.setattr(
+        extension.admin_ops,
+        "list_offering_prices",
+        lambda **_kwargs: [price],
+    )
+    state = FakeState()
+
+    await extension.admin_ops_gate(
+        _callback("pay-customer", "customer"),
+        state,
+    )
+    assert "Выберите предложение" in fake_admin.edits[-1][0]
+    assert state.data["cpao_payment_customer_id"] == "uuid:customer"
+
+    await extension.admin_ops_gate(
+        _callback("pay-offer", "offering"),
+        state,
+    )
+    assert state.current_state == extension.ClientPlatformAdminOpsState.payment_value
+    assert state.data["cpao_payment_offering_id"] == "uuid:offering"
 
 
 @pytest.mark.asyncio
@@ -423,11 +468,16 @@ async def test_payment_and_price_input_handlers_cover_invalid_and_success(
     monkeypatch.setattr(
         extension.admin_ops,
         "record_payment",
-        lambda **kwargs: SimpleNamespace(
-            amount_minor=kwargs["amount_minor"],
-            currency=kwargs["currency"],
+        lambda **kwargs: (
+            recorded_payments.append(kwargs)
+            or SimpleNamespace(
+                amount_minor=kwargs["amount_minor"],
+                currency=kwargs["currency"],
+                outcome_event_id="outcome-id",
+            )
         ),
     )
+    recorded_payments: list[dict[str, Any]] = []
     payment_state = FakeState(
         {
             "cpao_business_id": "business-id",
@@ -437,6 +487,8 @@ async def test_payment_and_price_input_handlers_cover_invalid_and_success(
     payment = FakeMessage("3500 RUB консультация")
     await extension.receive_payment_value(payment, payment_state)
     assert "3 500,00 RUB" in payment.answers[-1]
+    assert "Канонический факт выручки подтверждён" in payment.answers[-1]
+    assert recorded_payments[0]["idempotency_key"] == "telegram-payment:701:0"
 
     invalid_price = FakeMessage("0")
     await extension.receive_price_value(invalid_price, FakeState())
@@ -461,6 +513,98 @@ async def test_payment_and_price_input_handlers_cover_invalid_and_success(
     await extension.receive_price_value(price, price_state)
     assert "Консультация" in price.answers[-1]
     assert "5 000,00 USD" in price.answers[-1]
+
+
+@pytest.mark.asyncio
+async def test_payment_and_price_input_handlers_explain_domain_validation(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_admin: FakeAdmin,
+    ctx: Any,
+) -> None:
+    async def context_from_state(*_args: Any) -> Any:
+        return ctx
+
+    def reject_payment(**_kwargs: Any) -> None:
+        raise ValueError("currency must be a known ISO 4217 code")
+
+    def reject_price(**_kwargs: Any) -> None:
+        raise ValueError("offering is archived")
+
+    monkeypatch.setattr(extension, "_context_from_state", context_from_state)
+    monkeypatch.setattr(extension.admin_ops, "record_payment", reject_payment)
+    payment_state = FakeState({"cpao_business_id": "business-id"})
+    payment = FakeMessage("3500 XXX")
+    await extension.receive_payment_value(payment, payment_state)
+    assert payment.answers == [
+        "Оплата не сохранена: currency must be a known ISO 4217 code."
+    ]
+    assert payment_state.clear_count == 0
+
+    monkeypatch.setattr(extension.admin_ops, "set_offering_price", reject_price)
+    price_state = FakeState(
+        {
+            "cpao_business_id": "business-id",
+            "cpao_offering_id": "offering-id",
+        }
+    )
+    price = FakeMessage("5000 RUB")
+    await extension.receive_price_value(price, price_state)
+    assert price.answers == ["Цена не сохранена: offering is archived."]
+    assert price_state.clear_count == 0
+
+
+@pytest.mark.asyncio
+async def test_payment_refund_requires_confirmation_and_is_idempotent(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_admin: FakeAdmin,
+) -> None:
+    state = FakeState()
+    await extension.admin_ops_gate(_callback("pay-refund", "payment"), state)
+    assert "Подтвердите возврат" in fake_admin.edits[-1][0]
+
+    calls: list[dict[str, Any]] = []
+    rendered: list[str] = []
+    monkeypatch.setattr(
+        extension.admin_ops,
+        "refund_payment",
+        lambda **kwargs: (
+            calls.append(kwargs)
+            or SimpleNamespace(amount_minor=35_000, currency="RUB")
+        ),
+    )
+
+    async def render(_callback: Any, _state: Any, _ctx: Any, action: str) -> None:
+        rendered.append(action)
+
+    monkeypatch.setattr(extension, "_enhanced_marketing", render)
+    callback = _callback("pay-refund-ok", "payment")
+    await extension.admin_ops_gate(callback, state)
+
+    assert calls == [
+        {
+            "actor": fake_admin.ctx.actor,
+            "payment_id": "uuid:payment",
+            "idempotency_key": "telegram-refund:uuid:payment",
+            "reason": "owner_confirmed_full_refund",
+        }
+    ]
+    assert callback.answers == [("Возврат 350,00 RUB сохранён", False)]
+    assert rendered == ["payments"]
+
+    def reject_second_refund(**_kwargs: Any) -> None:
+        raise extension.admin_ops.PaymentStateConflict("payment is not refundable")
+
+    monkeypatch.setattr(
+        extension.admin_ops,
+        "refund_payment",
+        reject_second_refund,
+    )
+    second_callback = _callback("pay-refund-ok", "payment")
+    await extension.admin_ops_gate(second_callback, state)
+    assert second_callback.answers == [
+        ("Возврат уже выполнен или больше недоступен", True)
+    ]
+    assert rendered == ["payments"]
 
 
 @pytest.mark.asyncio
