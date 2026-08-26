@@ -11,6 +11,8 @@ from clientplatform.domain.tenancy import normalize_uuid
 
 
 PUBLIC_PROMOTION_PREFIX = "cpa_"
+PUBLIC_PROMOTION_PATH = "/clientplatform/acquire"
+PUBLIC_PROMOTION_QUERY_KEY = "source"
 
 
 class PromotionError(RuntimeError):
@@ -28,6 +30,7 @@ class PromotionInvariantViolation(PromotionError):
 class PromotionChannel(StrEnum):
     TELEGRAM = "telegram"
     VK = "vk"
+    MAX = "max"
     WHATSAPP = "whatsapp"
     WEBSITE = "website"
     OFFLINE = "offline"
@@ -226,28 +229,66 @@ def new_source_token() -> str:
     return normalize_source_token(secrets.token_urlsafe(12))
 
 
+def promotion_source_payload(source_token: str) -> str:
+    return PUBLIC_PROMOTION_PREFIX + normalize_source_token(source_token)
+
+
+def build_public_promotion_url(base_url: object, *, source_token: str) -> str:
+    """Build one channel-neutral HTTPS acquisition destination.
+
+    The public URL identifies the promotion only. The landing layer decides
+    which connected messenger the visitor chooses and carries the same source
+    payload into that provider's native deep-link format.
+    """
+
+    parsed = urlsplit(str(base_url or "").strip())
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise ValueError("advertising public base URL must be HTTPS")
+    if parsed.query or parsed.fragment:
+        raise ValueError("advertising public base URL must not contain query or fragment")
+    prefix = parsed.path.rstrip("/")
+    path = prefix + PUBLIC_PROMOTION_PATH
+    query = urlencode(
+        {PUBLIC_PROMOTION_QUERY_KEY: promotion_source_payload(source_token)}
+    )
+    return urlunsplit((parsed.scheme, parsed.netloc, path, query, ""))
+
+
 def rewrite_promotion_source_url(
     value: object,
     *,
     from_token: str,
     to_token: str,
 ) -> str:
-    """Replace exactly one Telegram promotion start token in an HTTPS URL."""
+    """Replace exactly one promotion source token in a supported HTTPS URL.
+
+    Legacy Telegram destinations use ``start=`` while the canonical neutral
+    destination uses ``source=``. Supporting both preserves old campaigns while
+    keeping future attribution independent from any messenger transport.
+    """
 
     source = str(value or "").strip()
     parsed = urlsplit(source)
     if parsed.scheme != "https" or not parsed.hostname:
         raise ValueError("advertising destination must be an HTTPS URL")
-    expected = PUBLIC_PROMOTION_PREFIX + normalize_source_token(from_token)
-    replacement = PUBLIC_PROMOTION_PREFIX + normalize_source_token(to_token)
+    expected = promotion_source_payload(from_token)
+    replacement = promotion_source_payload(to_token)
     pairs = parse_qsl(parsed.query, keep_blank_values=True)
-    matches = sum(1 for key, item in pairs if key == "start" and item == expected)
+    supported_keys = {"start", PUBLIC_PROMOTION_QUERY_KEY}
+    matches = sum(
+        1
+        for key, item in pairs
+        if key in supported_keys and item == expected
+    )
     if matches != 1:
         raise PromotionInvariantViolation(
             "advertising destination is not bound to the expected promotion source"
         )
     rewritten = [
-        (key, replacement if key == "start" and item == expected else item)
+        (
+            key,
+            replacement if key in supported_keys and item == expected else item,
+        )
         for key, item in pairs
     ]
     return urlunsplit(
@@ -321,7 +362,9 @@ def validate_creative(
 
 __all__ = [
     "CreativeGuardrails",
+    "PUBLIC_PROMOTION_PATH",
     "PUBLIC_PROMOTION_PREFIX",
+    "PUBLIC_PROMOTION_QUERY_KEY",
     "PromotionCampaign",
     "PromotionCampaignStatus",
     "PromotionChannel",
@@ -333,10 +376,12 @@ __all__ = [
     "PromotionSourceAlias",
     "PromotionSourceResolution",
     "PromotionStats",
+    "build_public_promotion_url",
     "new_source_token",
     "normalize_source_key",
     "normalize_source_kind",
     "normalize_source_token",
+    "promotion_source_payload",
     "rewrite_promotion_source_url",
     "stable_creative_id",
     "validate_creative",
