@@ -20,6 +20,8 @@ from clientplatform.application.promotions import (
     promotion_start_payload,
 )
 from clientplatform.domain.promotions import PromotionChannel
+from clientplatform.infrastructure.promotion_repository import PromotionRepository
+from services.db import get_db_ro
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,19 +42,21 @@ def build_acquisition_destination(
     *,
     promotion: PromotionCampaignView,
     public_base_url: object,
+    attribution_token: str | None = None,
 ) -> AcquisitionDestination:
     """Build one campaign destination without coupling attribution to transport."""
 
     campaign = promotion.campaign
-    payload = promotion_start_payload(campaign.source_token)
+    source_token = str(attribution_token or campaign.source_token)
+    payload = promotion_start_payload(source_token)
     return AcquisitionDestination(
         campaign_id=campaign.id,
         business_id=campaign.business_id,
         attribution_channel=campaign.channel,
-        source_token=campaign.source_token,
+        source_token=source_token,
         public_url=promotion_public_url(
             base_url=public_base_url,
-            source_token=campaign.source_token,
+            source_token=source_token,
         ),
         messenger_destinations=list_public_messenger_destinations(
             business_id=campaign.business_id,
@@ -61,7 +65,30 @@ def build_acquisition_destination(
     )
 
 
+def resolve_acquisition_destination(
+    *,
+    source_token: str,
+    public_base_url: object,
+) -> AcquisitionDestination:
+    """Resolve a public source and preserve its exact attribution token to transport."""
+
+    with get_db_ro() as conn:
+        repository = PromotionRepository(conn)
+        resolution = repository.resolve_public_source(source_token=source_token)
+        campaign = resolution.campaign
+        promotion = PromotionCampaignView(
+            campaign=campaign,
+            slot=repository.get_public_campaign_slot(campaign=campaign),
+        )
+    return build_acquisition_destination(
+        promotion=promotion,
+        public_base_url=public_base_url,
+        attribution_token=resolution.attribution_token,
+    )
+
+
 __all__ = [
     "AcquisitionDestination",
     "build_acquisition_destination",
+    "resolve_acquisition_destination",
 ]

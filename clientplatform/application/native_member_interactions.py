@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -18,6 +20,16 @@ from clientplatform.application.control import business_delivery_summary
 from clientplatform.application.customers import get_customer, list_customers
 from clientplatform.application.programs import list_programs
 from clientplatform.application.progress import list_business_program_progress
+from clientplatform.application.sales_workspace import (
+    add_sales_workspace_note,
+    assign_sales_workspace_to_actor,
+    get_sales_workspace_item,
+    list_sales_workspace,
+    list_sales_workspace_recent_closed,
+    set_sales_workspace_next_action,
+    transition_sales_workspace,
+    unassign_sales_workspace,
+)
 from clientplatform.application.tenancy import (
     list_accessible_businesses,
     resolve_tenant_context,
@@ -30,6 +42,7 @@ from clientplatform.domain.customer_interactions import (
     CustomerInteractionMessage,
 )
 from clientplatform.domain.messenger_channels import MessengerIngressRoute
+from clientplatform.domain.sales import SalesError, SalesLeadStage
 from clientplatform.domain.tenancy import (
     PlatformRole,
     TenantAccessDenied,
@@ -109,6 +122,9 @@ _ALIASES = {
     "записи": "bookings",
     "программы": "programs",
     "мессенджеры": "messengers",
+    "обращения": "sales",
+    "продажи": "sales",
+    "обращения и продажи": "sales",
 }
 _COMMAND_PREFIX = "cpm:"
 NativeSetupCommandIssuer = Callable[
@@ -261,6 +277,39 @@ def resolve_native_member(
 
 def parse_native_member_interaction(value: object) -> ParsedMemberInteraction:
     raw = str(value or "").strip()
+    note_match = re.fullmatch(
+        r"заметка\s+([0-9a-f-]{6,36})\s+(.{1,500})",
+        raw,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if note_match is not None:
+        return ParsedMemberInteraction(
+            "sales-note-text",
+            (note_match.group(1), note_match.group(2).strip()),
+        )
+    next_match = re.fullmatch(
+        r"(?:следующее|следующее\s+действие)\s+([0-9a-f-]{6,36})\s+(.{1,500})",
+        raw,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if next_match is not None:
+        return ParsedMemberInteraction(
+            "sales-next-text",
+            (next_match.group(1), next_match.group(2).strip()),
+        )
+    close_match = re.fullmatch(
+        r"результат\s+([0-9a-f-]{6,36})\s+"
+        r"(won|lost|выиграно|потеряно)\s+(.{1,500})",
+        raw,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if close_match is not None:
+        raw_stage = close_match.group(2).casefold()
+        stage = "won" if raw_stage in {"won", "выиграно"} else "lost"
+        return ParsedMemberInteraction(
+            "sales-close-text",
+            (close_match.group(1), stage, close_match.group(3).strip()),
+        )
     alias = _ALIASES.get(_compact(raw))
     if alias is not None:
         return ParsedMemberInteraction(alias)
@@ -305,6 +354,14 @@ def parse_native_member_interaction(value: object) -> ParsedMemberInteraction:
             "connect-telegram",
             "connect-vk",
             "connect-max",
+            "sales",
+            "sales-lead",
+            "sales-assign",
+            "sales-unassign",
+            "sales-stage",
+            "sales-note-help",
+            "sales-next-help",
+            "sales-close-help",
         }:
             return ParsedMemberInteraction(action, args)
     return ParsedMemberInteraction("menu")
@@ -393,6 +450,7 @@ def _work_message(actor: TenantContext) -> CustomerInteractionMessage:
                 (_button("📅 Записи", "cpm:bookings"),),
                 (_button("🧠 Поведение", "cpm:behavior"),),
                 (_button("⚠️ Требуют внимания", "cpm:attention"),),
+                (_button("💬 Обращения и продажи", "cpm:sales"),),
             ]
         )
     rows.append((_button("📚 Программы", "cpm:programs"),))
@@ -401,6 +459,204 @@ def _work_message(actor: TenantContext) -> CustomerInteractionMessage:
         text="Работа · ClientPlatform\n\nОперационные разделы бизнеса:",
         rows=tuple(rows),
     )
+
+
+_SALES_STAGE_LABELS = {
+    "new": "Новое",
+    "contacted": "Связались",
+    "qualified": "Подтверждён интерес",
+    "checkout": "Оформление",
+    "won": "Оплатил / выиграно",
+    "lost": "Потеряно",
+}
+
+
+def _sales_reference_item(actor: TenantContext, reference: str) -> dict[str, Any]:
+    needle = str(reference or "").strip().casefold()
+    if len(needle) < 6:
+        raise ValueError("sales lead reference is too short")
+    items = [
+        *list_sales_workspace(actor=actor, limit=50),
+        *list_sales_workspace_recent_closed(actor=actor, limit=50),
+    ]
+    matches = [
+        item
+        for item in items
+        if str(item.get("id") or "").casefold().startswith(needle)
+    ]
+    if len(matches) != 1:
+        raise ValueError("sales lead reference is missing or ambiguous")
+    return matches[0]
+
+
+def _sales_message(actor: TenantContext) -> CustomerInteractionMessage:
+    if actor.role not in _SUPPORT_ROLES:
+        return _permission_message()
+    items = list_sales_workspace(actor=actor, limit=7)
+    rows: list[tuple[CustomerInteractionButton, ...]] = []
+    lines = ["Обращения и продажи", ""]
+    for item in items:
+        lead_id = str(item.get("id") or "")
+        customer = str(item.get("customer_name") or "Клиент")
+        stage = _SALES_STAGE_LABELS.get(str(item.get("stage") or ""), "В работе")
+        owner = item.get("assigned_user_id")
+        owner_text = f"ответственный {owner}" if owner is not None else "без ответственного"
+        lines.append(f"• {customer} · {stage} · {owner_text} · {lead_id[:8]}")
+        rows.append((_button(customer[:32], f"cpm:sales-lead:{lead_id}"),))
+    if not items:
+        lines.append("Открытых обращений сейчас нет.")
+    lines.extend(
+        [
+            "",
+            "Заметка: заметка <id> <текст>",
+            "Следующее действие: следующее <id> <текст>",
+            "Результат: результат <id> выиграно|потеряно <причина>",
+        ]
+    )
+    rows.append((_button("📊 Работа", "cpm:work"),))
+    rows.append(_back_row())
+    return CustomerInteractionMessage(text="\n".join(lines), rows=tuple(rows))
+
+
+def _sales_lead_message(actor: TenantContext, lead_id: str) -> CustomerInteractionMessage:
+    if actor.role not in _SUPPORT_ROLES:
+        return _permission_message()
+    item = get_sales_workspace_item(actor=actor, lead_id=lead_id)
+    if item is None:
+        return _stale_message()
+    stage = str(item.get("stage") or "")
+    short_id = str(item.get("id") or "")[:8]
+    assigned_user = item.get("assigned_user_id")
+    source = str(item.get("attribution_source") or item.get("source_kind") or "не определён")
+    source_ref = str(item.get("attribution_source_ref_id") or item.get("source_ref") or "").strip()
+    owner_text = str(assigned_user) if assigned_user is not None else "не назначен"
+    lines = [
+        "Карточка обращения",
+        "",
+        f"Клиент: {item.get('customer_name') or 'Клиент'}",
+        f"ID: {short_id}",
+        f"Стадия: {_SALES_STAGE_LABELS.get(stage, stage or 'В работе')}",
+        f"Ответственный: {owner_text}",
+        f"Следующее действие: {item.get('next_action') or 'не задано'}",
+        f"Срок: {item.get('due_at') or 'без срока'}",
+        f"Источник: {source}" + (f" · {source_ref}" if source_ref else ""),
+    ]
+    if item.get("closure_reason"):
+        lines.append(f"Причина закрытия: {item['closure_reason']}")
+    if item.get("next_plan_id"):
+        approval = "да" if item.get("next_plan_requires_approval") else "нет"
+        lines.append(f"Следующий план: {item.get('next_action_kind') or 'действие'} · approval: {approval}")
+    rows: list[tuple[CustomerInteractionButton, ...]] = []
+    if stage not in {"won", "lost"}:
+        if assigned_user is not None and int(assigned_user) == int(actor.user_id):
+            rows.append((_button("👤 Снять ответственного", f"cpm:sales-unassign:{lead_id}"),))
+        else:
+            rows.append((_button("👤 Взять себе", f"cpm:sales-assign:{lead_id}"),))
+        rows.append(
+            (
+                _button("Связались", f"cpm:sales-stage:{lead_id}:contacted"),
+                _button("Интерес", f"cpm:sales-stage:{lead_id}:qualified"),
+                _button("Оформление", f"cpm:sales-stage:{lead_id}:checkout"),
+            )
+        )
+        rows.append(
+            (
+                _button("📝 Заметка", f"cpm:sales-note-help:{lead_id}"),
+                _button("➡️ Следующее", f"cpm:sales-next-help:{lead_id}"),
+            )
+        )
+        rows.append(
+            (
+                _button("✅ Выиграно", f"cpm:sales-close-help:{lead_id}:won"),
+                _button("❌ Потеряно", f"cpm:sales-close-help:{lead_id}:lost"),
+            )
+        )
+    rows.append((_button("💬 К обращениям", "cpm:sales"),))
+    rows.append(_back_row())
+    return CustomerInteractionMessage(text="\n".join(lines), rows=tuple(rows))
+
+
+def _sales_input_help(lead_id: str, kind: str, stage: str | None = None) -> CustomerInteractionMessage:
+    short_id = str(lead_id)[:8]
+    if kind == "note":
+        example = f"заметка {short_id} Клиент попросил связаться утром"
+        title = "Добавить заметку"
+    elif kind == "next":
+        example = f"следующее {short_id} Позвонить и подтвердить время"
+        title = "Следующее действие"
+    else:
+        result = "выиграно" if stage == "won" else "потеряно"
+        example = f"результат {short_id} {result} причина результата"
+        title = "Закрыть обращение"
+    return CustomerInteractionMessage(
+        text=f"{title}\n\nОтправьте одним сообщением:\n{example}",
+        rows=((_button("💬 К обращениям", "cpm:sales"),), _back_row()),
+    )
+
+
+def _sales_mutation_message(
+    actor: TenantContext,
+    parsed: ParsedMemberInteraction,
+    *,
+    interaction_key: str,
+) -> CustomerInteractionMessage:
+    if actor.role not in _SUPPORT_ROLES:
+        return _permission_message()
+    if parsed.action in {"sales-assign", "sales-unassign"}:
+        if len(parsed.args) != 1:
+            return _stale_message()
+        lead_id = parsed.args[0]
+        if parsed.action == "sales-assign":
+            assign_sales_workspace_to_actor(actor=actor, lead_id=lead_id)
+        else:
+            unassign_sales_workspace(actor=actor, lead_id=lead_id)
+        return _sales_lead_message(actor, lead_id)
+    if parsed.action == "sales-stage":
+        if len(parsed.args) != 2 or parsed.args[1] not in {"contacted", "qualified", "checkout"}:
+            return _stale_message()
+        transition_sales_workspace(
+            actor=actor,
+            lead_id=parsed.args[0],
+            stage=SalesLeadStage(parsed.args[1]),
+        )
+        return _sales_lead_message(actor, parsed.args[0])
+    if parsed.action == "sales-note-text":
+        if len(parsed.args) != 2:
+            return _stale_message()
+        item = _sales_reference_item(actor, parsed.args[0])
+        lead_id = str(item["id"])
+        add_sales_workspace_note(
+            actor=actor,
+            lead_id=lead_id,
+            note=parsed.args[1],
+            interaction_key=interaction_key,
+        )
+        card = _sales_lead_message(actor, lead_id)
+        return CustomerInteractionMessage(text="✅ Заметка сохранена.\n\n" + card.text, rows=card.rows)
+    if parsed.action == "sales-next-text":
+        if len(parsed.args) != 2:
+            return _stale_message()
+        item = _sales_reference_item(actor, parsed.args[0])
+        lead_id = str(item["id"])
+        set_sales_workspace_next_action(
+            actor=actor,
+            lead_id=lead_id,
+            next_action=parsed.args[1],
+        )
+        return _sales_lead_message(actor, lead_id)
+    if parsed.action == "sales-close-text":
+        if len(parsed.args) != 3 or parsed.args[1] not in {"won", "lost"}:
+            return _stale_message()
+        item = _sales_reference_item(actor, parsed.args[0])
+        lead_id = str(item["id"])
+        transition_sales_workspace(
+            actor=actor,
+            lead_id=lead_id,
+            stage=SalesLeadStage(parsed.args[1]),
+            reason=parsed.args[2],
+        )
+        return _sales_lead_message(actor, lead_id)
+    return _stale_message()
 
 
 def _growth_message(actor: TenantContext) -> CustomerInteractionMessage:
@@ -1104,6 +1360,35 @@ def _render(
             return _behavior_message(actor)
         if parsed.action == "attention":
             return _attention_message(actor)
+        if parsed.action == "sales":
+            return _sales_message(actor)
+        if parsed.action == "sales-lead":
+            if len(parsed.args) != 1:
+                return _stale_message()
+            return _sales_lead_message(actor, parsed.args[0])
+        if parsed.action in {
+            "sales-assign",
+            "sales-unassign",
+            "sales-stage",
+            "sales-note-text",
+            "sales-next-text",
+            "sales-close-text",
+        }:
+            return _sales_mutation_message(
+                actor, parsed, interaction_key=setup_key
+            )
+        if parsed.action == "sales-note-help":
+            if len(parsed.args) != 1:
+                return _stale_message()
+            return _sales_input_help(parsed.args[0], "note")
+        if parsed.action == "sales-next-help":
+            if len(parsed.args) != 1:
+                return _stale_message()
+            return _sales_input_help(parsed.args[0], "next")
+        if parsed.action == "sales-close-help":
+            if len(parsed.args) != 2 or parsed.args[1] not in {"won", "lost"}:
+                return _stale_message()
+            return _sales_input_help(parsed.args[0], "close", parsed.args[1])
         if parsed.action == "messengers":
             return _messengers_message(
                 actor,
@@ -1159,6 +1444,8 @@ def _render(
             )
     except TenantPermissionDenied:
         return _permission_message()
+    except SalesError:
+        return _stale_message()
     except ValueError:
         return _stale_message()
     return _menu_message(actor, linked=linked)
@@ -1178,7 +1465,9 @@ def process_native_member_interaction(
         business_id=route.business_id,
     )
     parsed = parse_native_member_interaction(raw_text)
-    action_key = ":".join((parsed.action, *parsed.args))
+    action_payload = "\x1f".join((parsed.action, *parsed.args))
+    action_digest = hashlib.sha256(action_payload.encode("utf-8")).hexdigest()[:20]
+    action_key = f"{parsed.action}:{action_digest}"
     interaction_key = (
         f"route:{route.id}:event:{provider_event_id}:"
         + f"member:{actor.user_id}:action:{action_key}"

@@ -19,13 +19,14 @@ from clientplatform.domain.promotions import (
     PromotionCampaign,
     PromotionChannel,
     PromotionEventType,
+    PromotionInvariantViolation,
     PromotionSourceResolution,
     PromotionStats,
     build_public_promotion_url,
     normalize_source_token,
     promotion_source_payload,
 )
-from clientplatform.domain.tenancy import TenantContext
+from clientplatform.domain.tenancy import TenantContext, normalize_uuid
 from clientplatform.infrastructure.activity_repository import ActivityRepository
 from clientplatform.infrastructure.attribution_repository import AttributionRepository
 from clientplatform.infrastructure.booking_repository import BookingRepository
@@ -184,6 +185,62 @@ def promotion_stats(
         )
 
 
+def open_channel_promotion(
+    *,
+    source_token: str,
+    business_id: str,
+    customer_id: str,
+) -> PromotionLanding:
+    """Capture a verified promotion touch for an existing channel customer.
+
+    VK/MAX adapters resolve the provider identity first, then call this shared
+    use case with the public promotion token. Attribution stays in the
+    canonical promotion spine and never becomes transport-owned state.
+    """
+
+    token = normalize_source_token(source_token)
+    expected_business = normalize_uuid(business_id, field_name="business_id")
+    expected_customer = normalize_uuid(customer_id, field_name="customer_id")
+    with get_db() as conn:
+        repository = PromotionRepository(conn)
+        resolution = repository.resolve_public_source(source_token=token)
+        campaign = resolution.campaign
+        if campaign.business_id != expected_business:
+            raise PromotionInvariantViolation(
+                "promotion source does not belong to the active messenger business"
+            )
+        customer = conn.execute(
+            """
+            SELECT 1 FROM customers
+            WHERE id=? AND business_id=? AND status='active'
+            LIMIT 1
+            """,
+            (expected_customer, expected_business),
+        ).fetchone()
+        if customer is None:
+            raise PromotionInvariantViolation(
+                "promotion attribution requires an active customer in this business"
+            )
+        slot = repository.get_public_campaign_slot(campaign=campaign)
+        repository.record_event(
+            campaign=campaign,
+            customer_id=expected_customer,
+            event_type=PromotionEventType.OPENED,
+            source_token=resolution.attribution_token,
+        )
+        _capture_verified_promotion_touch(
+            conn=conn,
+            resolution=resolution,
+            customer_id=expected_customer,
+        )
+        return PromotionLanding(
+            campaign=campaign,
+            slot=slot,
+            customer_id=expected_customer,
+            attribution_token=resolution.attribution_token,
+        )
+
+
 def open_promotion_link(
     *,
     source_token: str,
@@ -277,6 +334,7 @@ __all__ = [
     "create_slot_promotion",
     "list_promotable_slots",
     "list_promotion_campaigns",
+    "open_channel_promotion",
     "open_promotion_link",
     "parse_promotion_start_payload",
     "promotion_public_url",

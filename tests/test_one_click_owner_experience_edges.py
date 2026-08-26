@@ -126,6 +126,17 @@ def base_data():
 
 
 class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self.public_base = patch.object(
+            one_click.settings,
+            "MESSENGER_PUBLIC_BASE_URL",
+            "https://client.example.test",
+        )
+        self.public_base.start()
+
+    def tearDown(self) -> None:
+        self.public_base.stop()
+
     def common(self, target):
         return (
             patch.object(one_click.asyncio, "to_thread", new=direct),
@@ -144,9 +155,13 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(one_click._user_id(msg), 101)
         with self.assertRaises(ValueError):
             one_click._user_id(SimpleNamespace(from_user=None))
-        self.assertEqual(await one_click._username(msg), "clientplatform_bot")
-        with self.assertRaises(RuntimeError):
-            await one_click._username(message("", username=""))
+        self.assertEqual(
+            one_click._acquisition_link("source-token-0001"),
+            "https://client.example.test/clientplatform/acquire?source=cpa_source-token-0001",
+        )
+        with patch.object(one_click.settings, "MESSENGER_PUBLIC_BASE_URL", ""):
+            with self.assertRaises(RuntimeError):
+                one_click._acquisition_link("source-token-0001")
 
     async def test_dashboard_zero_open_slots_branch(self):
         target = out()
@@ -207,11 +222,12 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
             patch.object(one_click.control, "_callback_message", return_value=target),
             patch.object(one_click, "create_slot_promotion", return_value=promotion()),
         ):
-            await one_click._fallback(
-                callback("cpo:start:business-1", target, username=""),
-                State(), actor="actor", business_token="business-1",
-                slot=slot(), reason="provider down",
-            )
+            with patch.object(one_click.settings, "MESSENGER_PUBLIC_BASE_URL", ""):
+                await one_click._fallback(
+                    callback("cpo:start:business-1", target, username=""),
+                    State(), actor="actor", business_token="business-1",
+                    slot=slot(), reason="provider down",
+                )
         self.assertIn("Не удалось собрать запасной вариант", target.answer.await_args.args[0])
 
     async def test_prepare_draft_promotion_failure(self):
@@ -237,10 +253,11 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
             patch.object(one_click.control, "_callback_message", return_value=target),
             patch.object(one_click, "create_slot_promotion", return_value=promotion()),
         ):
-            await one_click._prepare_draft(
-                callback("cpo:region:47", target, username=""),
-                State(data), data=data, region_ids=(47,)
-            )
+            with patch.object(one_click.settings, "MESSENGER_PUBLIC_BASE_URL", ""):
+                await one_click._prepare_draft(
+                    callback("cpo:region:47", target, username=""),
+                    State(data), data=data, region_ids=(47,)
+                )
         self.assertIn("Ничего не запущено", target.answer.await_args.args[0])
 
         target.answer.reset_mock()

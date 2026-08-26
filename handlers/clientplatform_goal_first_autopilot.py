@@ -197,9 +197,8 @@ async def _prepare_goal_result(
         return
 
     try:
-        source_url = one_click._link(
-            await one_click._username(event),
-            promotion.campaign.source_token,
+        source_url = one_click._acquisition_link(
+            promotion.campaign.source_token
         )
     except (RuntimeError, ValueError):
         await one_click._draft_failure(

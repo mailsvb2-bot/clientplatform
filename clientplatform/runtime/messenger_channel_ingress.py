@@ -28,6 +28,10 @@ from clientplatform.application.native_member_interactions import (
     process_native_member_interaction,
     resolve_native_member,
 )
+from clientplatform.application.promotions import (
+    open_channel_promotion,
+    parse_promotion_start_payload,
+)
 from clientplatform.application.sales_intelligence import (
     normalize_customer_message_text,
     record_customer_channel_message,
@@ -209,6 +213,27 @@ async def _ack_max_message_callback(
         )
 
 
+def _promotion_token_for_event(
+    *,
+    platform: ConnectionPlatform,
+    payload: Mapping[str, Any],
+    raw_text: object,
+) -> str | None:
+    """Extract provider-native acquisition metadata without replacing message text."""
+
+    if platform == ConnectionPlatform.MAX:
+        if str(payload.get("update_type") or "").strip() != "bot_started":
+            return None
+        return parse_promotion_start_payload(
+            str(payload.get("payload") or raw_text or "").strip()
+        )
+    if platform == ConnectionPlatform.VK:
+        obj = _mapping(payload.get("object"))
+        message = _mapping(obj.get("message") or obj)
+        return parse_promotion_start_payload(str(message.get("ref") or "").strip())
+    return None
+
+
 async def _complete_event(
     *,
     platform: ConnectionPlatform,
@@ -325,6 +350,16 @@ async def _process_business_event(
         return web.Response(text="ok")
 
     external_subject, raw_text, display_name = extracted
+    promotion_token = _promotion_token_for_event(
+        platform=platform,
+        payload=payload,
+        raw_text=raw_text,
+    )
+    promotion_start_only = (
+        promotion_token is not None
+        and platform == ConnectionPlatform.MAX
+        and str(payload.get("update_type") or "").strip() == "bot_started"
+    )
     provider_event_id = _safe_provider_event_id(raw_event_key)
     try:
         member = await asyncio.to_thread(
@@ -404,6 +439,14 @@ async def _process_business_event(
                 display_name=display_name,
             )
 
+        if promotion_token is not None:
+            await asyncio.to_thread(
+                open_channel_promotion,
+                source_token=promotion_token,
+                business_id=route.business_id,
+                customer_id=identity.customer_id,
+            )
+
         contact_recorded = await asyncio.to_thread(
             record_customer_contact,
             business_id=route.business_id,
@@ -420,6 +463,7 @@ async def _process_business_event(
             message_text is not None
             and invite_token is None
             and link_token is None
+            and not promotion_start_only
             and not interaction_input
         ):
             ai_enabled, consent_target = _sales_ai_runtime()
@@ -436,14 +480,28 @@ async def _process_business_event(
                 runtime_ai_enabled=ai_enabled,
                 runtime_ai_consent_target=consent_target,
             )
-        if interaction_input or link_token is not None or invite_token is not None:
+        if (
+            interaction_input
+            or link_token is not None
+            or invite_token is not None
+            or promotion_token is not None
+        ):
+            native_text = raw_text
+            if invite_token is not None:
+                native_text = "cpi:menu"
+            elif promotion_token is not None:
+                native_text = "cpi:slots:0"
             await asyncio.to_thread(
                 process_native_customer_interaction,
                 route=route,
                 identity=identity,
-                raw_text=("cpi:menu" if invite_token is not None else raw_text),
+                raw_text=native_text,
                 provider_event_id=provider_event_id,
-                linked=(link_token is not None or invite_token is not None),
+                linked=(
+                    link_token is not None
+                    or invite_token is not None
+                    or promotion_token is not None
+                ),
             )
         return await _complete_event(
             platform=platform,

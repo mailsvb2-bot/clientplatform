@@ -19,12 +19,13 @@ from clientplatform.application.ad_connections import (
     start_yandex_direct_oauth,
     yandex_direct_provider_configured,
 )
-from clientplatform.application.promotions import create_slot_promotion, promotion_start_payload
+from clientplatform.application.promotions import create_slot_promotion, promotion_public_url
 from clientplatform.domain.ad_connections import AdConnectionError, AdConnectionStatus
 from clientplatform.domain.bookings import BookingSlotStatus
 from clientplatform.domain.promotions import PromotionChannel, PromotionError
 from clientplatform.domain.tenancy import TenantPermissionDenied
 from clientplatform.integrations.yandex_direct import YandexDirectError
+from config.settings import settings
 
 from . import clientplatform_ad_connections as ad
 from . import clientplatform_control as control
@@ -123,15 +124,13 @@ def _indexed_choice(data: dict, key: str, callback_data: str | None):
     return values[index]
 
 
-async def _username(event: CallbackQuery | Message) -> str:
-    username = str(getattr(await event.bot.get_me(), "username", "") or "").strip()
-    if not username:
-        raise RuntimeError("bot username missing")
-    return username
+def _acquisition_link(source_token: str) -> str:
+    """Build the canonical public destination independently from owner transport."""
 
-
-def _link(username: str, source_token: str) -> str:
-    return f"https://t.me/{username}?start={promotion_start_payload(source_token)}"
+    public_base = str(getattr(settings, "MESSENGER_PUBLIC_BASE_URL", "") or "").strip()
+    if not public_base:
+        raise RuntimeError("public acquisition base URL is not configured")
+    return promotion_public_url(base_url=public_base, source_token=source_token)
 
 
 async def _reload_slot(actor, slot_id: str):
@@ -197,7 +196,7 @@ async def _fallback(
         )
         return
     try:
-        link = _link(await _username(callback), view.campaign.source_token)
+        link = _acquisition_link(view.campaign.source_token)
     except (RuntimeError, ValueError):
         await _fallback_failure(
             callback,
@@ -278,7 +277,7 @@ async def _prepare_draft(
         )
         return
     try:
-        source_url = _link(await _username(event), promotion.campaign.source_token)
+        source_url = _acquisition_link(promotion.campaign.source_token)
     except (RuntimeError, ValueError):
         await _draft_failure(
             event,
