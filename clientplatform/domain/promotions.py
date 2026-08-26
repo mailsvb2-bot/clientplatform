@@ -11,6 +11,7 @@ from clientplatform.domain.tenancy import normalize_uuid
 
 
 PUBLIC_PROMOTION_PREFIX = "cpa_"
+PUBLIC_PROMOTION_PATH_PREFIX = "/clientplatform/acquire/"
 
 
 class PromotionError(RuntimeError):
@@ -28,6 +29,7 @@ class PromotionInvariantViolation(PromotionError):
 class PromotionChannel(StrEnum):
     TELEGRAM = "telegram"
     VK = "vk"
+    MAX = "max"
     WHATSAPP = "whatsapp"
     WEBSITE = "website"
     OFFLINE = "offline"
@@ -226,13 +228,25 @@ def new_source_token() -> str:
     return normalize_source_token(secrets.token_urlsafe(12))
 
 
+def promotion_destination_url(public_base_url: object, source_token: object) -> str:
+    """Build the transport-neutral HTTPS destination for one promotion source."""
+
+    base = str(public_base_url or "").strip().rstrip("/")
+    parsed = urlsplit(base)
+    if parsed.scheme != "https" or not parsed.hostname or parsed.query or parsed.fragment:
+        raise ValueError("public promotion base must be an HTTPS origin or path")
+    token = PUBLIC_PROMOTION_PREFIX + normalize_source_token(source_token)
+    path = parsed.path.rstrip("/") + PUBLIC_PROMOTION_PATH_PREFIX + token
+    return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
+
+
 def rewrite_promotion_source_url(
     value: object,
     *,
     from_token: str,
     to_token: str,
 ) -> str:
-    """Replace exactly one Telegram promotion start token in an HTTPS URL."""
+    """Rebind one promotion source in a neutral or legacy Telegram HTTPS URL."""
 
     source = str(value or "").strip()
     parsed = urlsplit(source)
@@ -240,18 +254,33 @@ def rewrite_promotion_source_url(
         raise ValueError("advertising destination must be an HTTPS URL")
     expected = PUBLIC_PROMOTION_PREFIX + normalize_source_token(from_token)
     replacement = PUBLIC_PROMOTION_PREFIX + normalize_source_token(to_token)
+
     pairs = parse_qsl(parsed.query, keep_blank_values=True)
-    matches = sum(1 for key, item in pairs if key == "start" and item == expected)
-    if matches != 1:
+    query_matches = sum(
+        1 for key, item in pairs if key == "start" and item == expected
+    )
+    segments = parsed.path.split("/")
+    path_matches = sum(1 for item in segments if item == expected)
+    if query_matches + path_matches != 1:
         raise PromotionInvariantViolation(
             "advertising destination is not bound to the expected promotion source"
         )
-    rewritten = [
+
+    rewritten_query = [
         (key, replacement if key == "start" and item == expected else item)
         for key, item in pairs
     ]
+    rewritten_path = "/".join(
+        replacement if item == expected else item for item in segments
+    )
     return urlunsplit(
-        (parsed.scheme, parsed.netloc, parsed.path, urlencode(rewritten), parsed.fragment)
+        (
+            parsed.scheme,
+            parsed.netloc,
+            rewritten_path,
+            urlencode(rewritten_query),
+            parsed.fragment,
+        )
     )
 
 
@@ -321,6 +350,7 @@ def validate_creative(
 
 __all__ = [
     "CreativeGuardrails",
+    "PUBLIC_PROMOTION_PATH_PREFIX",
     "PUBLIC_PROMOTION_PREFIX",
     "PromotionCampaign",
     "PromotionCampaignStatus",
@@ -337,6 +367,7 @@ __all__ = [
     "normalize_source_key",
     "normalize_source_kind",
     "normalize_source_token",
+    "promotion_destination_url",
     "rewrite_promotion_source_url",
     "stable_creative_id",
     "validate_creative",
