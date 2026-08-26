@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from urllib.parse import urlencode
 
 from clientplatform.application.tenancy import resolve_tenant_context
 from clientplatform.domain.connections import ConnectionPlatform
@@ -14,6 +15,7 @@ _COMMAND_RE = re.compile(
 )
 _TELEGRAM_USERNAME_RE = re.compile(r"[A-Za-z0-9_]{5,32}")
 _MAX_USERNAME_RE = re.compile(r"[A-Za-z0-9_.-]{1,80}")
+_START_PAYLOAD_RE = re.compile(r"[A-Za-z0-9_-]{1,128}")
 
 
 class MessengerSwitchRejected(RuntimeError):
@@ -26,6 +28,12 @@ class StaffMessengerSwitchDestination:
     business_id: str
     platform: ConnectionPlatform
     public_target: str
+
+
+@dataclass(frozen=True, slots=True)
+class PublicMessengerDestination:
+    platform: ConnectionPlatform
+    url: str
 
 
 def _managed_bot_target(
@@ -80,10 +88,77 @@ def _vk_target(*, business_id: str) -> str | None:
     return values[0] if len(values) == 1 else None
 
 
-def _public_target(*, business_id: str, platform: ConnectionPlatform) -> str | None:
+def resolve_messenger_public_target(
+    *,
+    business_id: str,
+    platform: ConnectionPlatform,
+) -> str | None:
+    """Resolve one canonical public identity without exposing credentials."""
+
     if platform == ConnectionPlatform.VK:
         return _vk_target(business_id=business_id)
     return _managed_bot_target(business_id=business_id, platform=platform)
+
+
+def _public_target(*, business_id: str, platform: ConnectionPlatform) -> str | None:
+    """Backward-compatible private alias for existing staff switch callers."""
+
+    return resolve_messenger_public_target(
+        business_id=business_id,
+        platform=platform,
+    )
+
+
+def build_public_messenger_destination(
+    *,
+    business_id: str,
+    platform: ConnectionPlatform,
+    start_payload: str,
+) -> PublicMessengerDestination | None:
+    """Build a provider-native customer deep link from canonical connection data."""
+
+    payload = str(start_payload or "").strip()
+    if _START_PAYLOAD_RE.fullmatch(payload) is None:
+        raise ValueError("messenger start payload is invalid")
+    target = resolve_messenger_public_target(
+        business_id=business_id,
+        platform=platform,
+    )
+    if target is None:
+        return None
+    encoded = urlencode({"start": payload})
+    if platform == ConnectionPlatform.TELEGRAM:
+        url = f"https://t.me/{target}?{encoded}"
+    elif platform == ConnectionPlatform.MAX:
+        url = f"https://max.ru/{target}?{encoded}"
+    elif platform == ConnectionPlatform.VK:
+        url = f"https://vk.com/write-{target}?" + urlencode({"ref": payload})
+    else:
+        raise ValueError("unsupported messenger destination platform")
+    return PublicMessengerDestination(platform=platform, url=url)
+
+
+def list_public_messenger_destinations(
+    *,
+    business_id: str,
+    start_payload: str,
+) -> tuple[PublicMessengerDestination, ...]:
+    """Return every unambiguous connected customer destination for a business."""
+
+    result: list[PublicMessengerDestination] = []
+    for platform in (
+        ConnectionPlatform.TELEGRAM,
+        ConnectionPlatform.VK,
+        ConnectionPlatform.MAX,
+    ):
+        destination = build_public_messenger_destination(
+            business_id=business_id,
+            platform=platform,
+            start_payload=start_payload,
+        )
+        if destination is not None:
+            result.append(destination)
+    return tuple(result)
 
 
 def available_staff_messenger_switches(
@@ -99,7 +174,10 @@ def available_staff_messenger_switches(
         ConnectionPlatform.VK,
         ConnectionPlatform.MAX,
     ):
-        if _public_target(business_id=current.business_id, platform=platform):
+        if resolve_messenger_public_target(
+            business_id=current.business_id,
+            platform=platform,
+        ):
             available.append(platform)
     return tuple(available)
 
@@ -135,7 +213,10 @@ def resolve_staff_switch_destination(
         return None
     platform, user_id = parsed
     actor = resolve_tenant_context(user_id=user_id, business_id=business_id)
-    target = _public_target(business_id=actor.business_id, platform=platform)
+    target = resolve_messenger_public_target(
+        business_id=actor.business_id,
+        platform=platform,
+    )
     if target is None:
         raise MessengerSwitchRejected(
             "messenger switch target is unavailable or ambiguous"
@@ -150,9 +231,13 @@ def resolve_staff_switch_destination(
 
 __all__ = [
     "MessengerSwitchRejected",
+    "PublicMessengerDestination",
     "StaffMessengerSwitchDestination",
     "available_staff_messenger_switches",
+    "build_public_messenger_destination",
     "build_staff_switch_command",
+    "list_public_messenger_destinations",
     "parse_staff_switch_command",
+    "resolve_messenger_public_target",
     "resolve_staff_switch_destination",
 ]
