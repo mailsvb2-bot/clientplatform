@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
+from clientplatform.domain.money import normalize_settlement_currency
 from clientplatform.domain.outcomes import (
     BusinessOutcomeEvent,
     OutcomeMoney,
@@ -59,23 +60,6 @@ _FINANCE_WRITE_ROLES = frozenset(
     }
 )
 _OBSERVABILITY_ROLES = frozenset(BUSINESS_MEMBER_ROLES)
-_CURRENCY_RE = re.compile(r"^[A-Z]{3}$")
-_KNOWN_ISO_CURRENCIES = frozenset(
-    """
-    AED AFN ALL AMD ANG AOA ARS AUD AWG AZN BAM BBD BDT BGN BHD BIF BMD
-    BND BOB BOV BRL BSD BTN BWP BYN BZD CAD CDF CHE CHF CHW CLF CLP CNY
-    COP COU CRC CUC CUP CVE CZK DJF DKK DOP DZD EGP ERN ETB EUR FJD FKP
-    GBP GEL GHS GIP GMD GNF GTQ GYD HKD HNL HTG HUF IDR ILS INR IQD IRR
-    ISK JMD JOD JPY KES KGS KHR KMF KPW KRW KWD KYD KZT LAK LBP LKR LRD
-    LSL LYD MAD MDL MGA MKD MMK MNT MOP MRU MUR MVR MWK MXN MXV MYR MZN
-    NAD NGN NIO NOK NPR NZD OMR PAB PEN PGK PHP PKR PLN PYG QAR RON RSD
-    RUB RWF SAR SBD SCR SDG SEK SGD SHP SLE SLL SOS SRD SSP STN SVC SYP
-    SZL THB TJS TMT TND TOP TRY TTD TWD TZS UAH UGX USD USN UYI UYU UYW
-    UZS VED VES VND VUV WST XAF XAG XAU XBA XBB XBC XBD XCD XCG XDR XOF
-    XPD XPF XPT XSU XTS XUA XXX YER ZAR ZMW ZWG
-    """.split()
-)
-_NON_SETTLEMENT_ISO_CODES = frozenset({"XTS", "XXX"})
 _IDEMPOTENCY_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$")
 _PROVIDER_RE = re.compile(r"^[a-z][a-z0-9._-]{0,39}$")
 
@@ -262,15 +246,7 @@ def _body(value: object, *, maximum: int = 4000) -> str:
 
 
 def _currency(value: object) -> str:
-    normalized = str(value or "").strip().upper()
-    if not _CURRENCY_RE.fullmatch(normalized):
-        raise ValueError("currency must contain exactly three Latin letters")
-    if (
-        normalized not in _KNOWN_ISO_CURRENCIES
-        or normalized in _NON_SETTLEMENT_ISO_CODES
-    ):
-        raise ValueError("currency must be a known ISO 4217 code")
-    return normalized
+    return normalize_settlement_currency(value)
 
 
 def _amount_minor(value: object) -> int:

@@ -31,6 +31,7 @@ from clientplatform.privacy_manifest import (
     validate_clientplatform_privacy_manifest,
 )
 from services.db import get_db, get_db_ro
+from services.migrations import clientplatform_business_payment_outcomes_v1
 
 
 _NOW = datetime(2026, 8, 23, 12, 0, tzinfo=timezone.utc)
@@ -519,8 +520,12 @@ def test_concurrent_owner_or_provider_retries_create_exactly_one_fact() -> None:
     assert _business_payment_counts(actor.business_id)[:3] == (2, 2, 2)
 
 
-def test_legacy_payment_without_outcome_cannot_be_silently_refunded() -> None:
+def test_legacy_payment_is_reconciled_before_refund() -> None:
     actor, _offering, customer = _business(840008, "legacy")
+    _attach_first_touch(
+        business_id=actor.business_id,
+        customer_id=customer.id,
+    )
     payment_id = str(uuid4())
     timestamp = _NOW.isoformat(timespec="microseconds")
     with get_db() as conn:
@@ -544,16 +549,36 @@ def test_legacy_payment_without_outcome_cannot_be_silently_refunded() -> None:
             ),
         )
 
-    with _ASSERTIONS.assertRaisesRegex(
-        PaymentEvidenceInvariantViolation,
-        "no canonical",
-    ):
-        refund_payment(
-            actor=actor,
-            payment_id=payment_id,
-            idempotency_key="legacy-refund",
+    with get_db() as conn:
+        first = (
+            clientplatform_business_payment_outcomes_v1
+            .reconcile_business_payment_outcomes(conn)
         )
-    assert _business_payment_counts(actor.business_id) == (1, 0, 0, 0)
+        replay = (
+            clientplatform_business_payment_outcomes_v1
+            .reconcile_business_payment_outcomes(conn)
+        )
+
+    assert first.payments_scanned == 1
+    assert first.paid_evidence_created == 1
+    assert first.refund_evidence_created == 0
+    assert replay.paid_evidence_created == 0
+    assert _business_payment_counts(actor.business_id) == (1, 1, 1, 1)
+
+    reconciled = list_payments(actor=actor)[0]
+    assert reconciled.id == payment_id
+    assert reconciled.idempotency_key is not None
+    assert reconciled.idempotency_key.startswith("legacy-business-payment-paid:")
+    assert reconciled.outcome_event_id is not None
+
+    refunded = refund_payment(
+        actor=actor,
+        payment_id=payment_id,
+        idempotency_key="legacy-refund",
+    )
+    assert refunded.status == "refunded"
+    assert refunded.refund_outcome_event_id is not None
+    assert _business_payment_counts(actor.business_id) == (1, 2, 2, 2)
 
 
 def test_schema_and_privacy_manifest_cover_payment_evidence_bridge() -> None:

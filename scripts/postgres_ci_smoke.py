@@ -4,6 +4,7 @@ import os
 import sys
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -30,6 +31,9 @@ from services.payments.telegram_stars_refunds import (
 from services.practice_token_contract import package_by_id, telegram_stars_price
 from services.practice_tokens import get_wallet, grant_tokens_for_payment
 from services.schema import init_db
+from services.migrations.clientplatform_business_payment_outcomes_v1 import (
+    reconcile_business_payment_outcomes,
+)
 
 
 def _enabled(name: str) -> bool:
@@ -178,6 +182,75 @@ def _exercise_payment_retry_claim_concurrency() -> None:
         )
 
 
+def _exercise_clientplatform_legacy_payment_backfill() -> None:
+    suffix = uuid.uuid4().hex
+    business_id = f"postgres-ci-business-{suffix}"
+    member_id = f"postgres-ci-member-{suffix}"
+    payment_id = f"postgres-ci-business-payment-{suffix}"
+    user_id = 8_700_000_000 + (uuid.uuid4().int % 1_000_000_000)
+    stamp = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+    with db() as conn:
+        conn.execute(
+            """
+            INSERT INTO businesses(
+                id,name,status,created_by_user_id,created_at,updated_at
+            ) VALUES(?, 'Postgres payment migration', 'active', ?, ?, ?)
+            """,
+            (business_id, user_id, stamp, stamp),
+        )
+        conn.execute(
+            """
+            INSERT INTO business_members(
+                id,business_id,user_id,role,status,created_at,updated_at
+            ) VALUES(?, ?, ?, 'owner', 'active', ?, ?)
+            """,
+            (member_id, business_id, user_id, stamp, stamp),
+        )
+        conn.execute(
+            """
+            INSERT INTO business_payments(
+                id,business_id,customer_id,amount_minor,currency,status,
+                provider,external_reference,note,recorded_by_member_id,
+                created_at,updated_at,paid_at,refunded_at
+            ) VALUES(?, ?, NULL, 15000, 'RUB', 'refunded', 'manual', NULL, '',
+                     ?, ?, ?, ?, ?)
+            """,
+            (payment_id, business_id, member_id, stamp, stamp, stamp, stamp),
+        )
+        first = reconcile_business_payment_outcomes(conn)
+        replay = reconcile_business_payment_outcomes(conn)
+        evidence = int(
+            conn.execute(
+                """
+                SELECT COUNT(*) AS n FROM business_payment_outcome_evidence
+                WHERE business_id=? AND payment_id=?
+                """,
+                (business_id, payment_id),
+            ).fetchone()["n"]
+        )
+        outcomes = int(
+            conn.execute(
+                """
+                SELECT COUNT(*) AS n FROM business_outcome_events
+                WHERE business_id=? AND source_type='business_payment'
+                  AND source_id=?
+                """,
+                (business_id, payment_id),
+            ).fetchone()["n"]
+        )
+    if (
+        first.paid_evidence_created != 1
+        or first.refund_evidence_created != 1
+        or replay.paid_evidence_created != 0
+        or replay.refund_evidence_created != 0
+        or evidence != 2
+        or outcomes != 2
+    ):
+        raise SystemExit(
+            "POSTGRES_CI_SMOKE_FAILED ClientPlatform legacy payment backfill"
+        )
+
+
 def _assert_ledgers(charge_id: str) -> None:
     with db() as conn:
         payment = conn.execute(
@@ -201,6 +274,7 @@ def main() -> int:
     _assert_ledgers(charge_id)
     _exercise_concurrent_payment_grant()
     _exercise_payment_retry_claim_concurrency()
+    _exercise_clientplatform_legacy_payment_backfill()
     print("POSTGRES_CI_SMOKE_OK")
     return 0
 
