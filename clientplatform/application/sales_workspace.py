@@ -7,6 +7,7 @@ instead of re-implementing sales mutations. The canonical invariants remain in
 ``sales_operations`` and the repositories they invoke.
 """
 
+from dataclasses import dataclass
 from typing import Any
 
 from clientplatform.application.sales_operations import (
@@ -18,11 +19,38 @@ from clientplatform.application.sales_operations import (
     unassign_sales_lead,
 )
 from clientplatform.application.sales_ui import (
+    count_sales_handoff_work,
+    list_commercial_ladder_steps,
+    list_commercial_ladders,
     list_recent_closed_sales_work,
+    list_sales_handoff_work,
     list_sales_work,
 )
 from clientplatform.domain.sales import SalesLead, SalesLeadStage
 from clientplatform.domain.tenancy import TenantContext
+
+
+@dataclass(frozen=True, slots=True)
+class SalesWorkspaceSnapshot:
+    """Business-level sales state shared by every staff transport adapter."""
+
+    open_work: tuple[dict[str, Any], ...]
+    handoff_work: tuple[dict[str, Any], ...]
+    recent_closed: tuple[dict[str, Any], ...]
+    handoff_count: int
+
+
+def sales_workspace_snapshot(
+    *,
+    actor: TenantContext,
+    limit: int = 12,
+) -> SalesWorkspaceSnapshot:
+    return SalesWorkspaceSnapshot(
+        open_work=tuple(list_sales_work(actor=actor, limit=limit)),
+        handoff_work=tuple(list_sales_handoff_work(actor=actor, limit=limit)),
+        recent_closed=tuple(list_recent_closed_sales_work(actor=actor, limit=limit)),
+        handoff_count=count_sales_handoff_work(actor=actor),
+    )
 
 
 def list_sales_workspace(
@@ -33,6 +61,34 @@ def list_sales_workspace(
     """Return the active tenant-scoped sales backlog for any staff adapter."""
 
     return list_sales_work(actor=actor, limit=limit)
+
+
+def list_sales_workspace_handoffs(
+    *,
+    actor: TenantContext,
+    limit: int = 12,
+) -> list[dict[str, Any]]:
+    return list_sales_handoff_work(actor=actor, limit=limit)
+
+
+def list_sales_workspace_recent_closed(
+    *,
+    actor: TenantContext,
+    limit: int = 12,
+) -> list[dict[str, Any]]:
+    return list_recent_closed_sales_work(actor=actor, limit=limit)
+
+
+def list_sales_workspace_ladders(*, actor: TenantContext) -> list[dict[str, Any]]:
+    return list_commercial_ladders(actor=actor)
+
+
+def list_sales_workspace_ladder_steps(
+    *,
+    actor: TenantContext,
+    ladder_id: str,
+) -> list[dict[str, Any]]:
+    return list_commercial_ladder_steps(actor=actor, ladder_id=ladder_id)
 
 
 def get_sales_workspace_item(
@@ -143,12 +199,18 @@ def reopen_sales_workspace(
 
 
 __all__ = [
+    "SalesWorkspaceSnapshot",
     "add_sales_workspace_note",
     "assign_sales_workspace_to_actor",
     "clear_sales_workspace_next_action",
     "get_sales_workspace_item",
     "list_sales_workspace",
+    "list_sales_workspace_handoffs",
+    "list_sales_workspace_ladder_steps",
+    "list_sales_workspace_ladders",
+    "list_sales_workspace_recent_closed",
     "reopen_sales_workspace",
+    "sales_workspace_snapshot",
     "set_sales_workspace_next_action",
     "transition_sales_workspace",
     "unassign_sales_workspace",
