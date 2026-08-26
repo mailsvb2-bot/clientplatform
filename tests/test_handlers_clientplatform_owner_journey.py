@@ -201,6 +201,7 @@ async def test_owner_dashboard_keeps_status_and_separates_acquisition_from_sales
         "📈 Что сегодня",
         "🚀 Найти новых клиентов",
         "💬 Обращения и продажи",
+        "💬 Мессенджеры",
         "👥 Клиенты и запись",
         "⚙️ Ещё",
     ]

@@ -58,6 +58,7 @@ class ClientPlatformFirstResultUiTests(unittest.IsolatedAsyncioTestCase):
                 "📈 Что сегодня",
                 "🚀 Найти новых клиентов",
                 "💬 Обращения и продажи",
+                "💬 Мессенджеры",
                 "👥 Клиенты и запись",
                 "⚙️ Ещё",
             ],
