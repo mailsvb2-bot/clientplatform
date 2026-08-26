@@ -317,6 +317,7 @@ def _button(label: str, command: str) -> CustomerInteractionButton:
 def _menu_rows(role: PlatformRole) -> tuple[tuple[CustomerInteractionButton, ...], ...]:
     rows: list[tuple[CustomerInteractionButton, ...]] = [
         (_button("📊 Работа", "cpm:work"),),
+        (_button("💬 Мессенджеры", "cpm:messengers"),),
     ]
     if role in (_MARKETING_ROLES | _CONTENT_ROLES | _AUTOMATION_ROLES):
         rows.append((_button("📈 Рост", "cpm:growth"),))

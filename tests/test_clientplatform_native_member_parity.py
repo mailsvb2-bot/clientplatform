@@ -31,16 +31,16 @@ class NativeMemberParityNavigationTests(unittest.TestCase):
         with patch.object(ui, "_business_name", return_value="Практика"):
             message = ui._menu_message(actor, linked=False)
         self.assertEqual(
-            ["cpm:work", "cpm:growth", "cpm:manage", "cpm:team"],
+            ["cpm:work", "cpm:messengers", "cpm:growth", "cpm:manage", "cpm:team"],
             _commands(message),
         )
         self.assertLessEqual(sum(len(row) for row in message.rows), 10)
 
-    def test_support_home_does_not_expose_growth_management_or_team(self) -> None:
+    def test_support_home_exposes_safe_messenger_switching_without_management(self) -> None:
         actor = _actor(PlatformRole.SUPPORT)
         with patch.object(ui, "_business_name", return_value="Практика"):
             message = ui._menu_message(actor, linked=False)
-        self.assertEqual(["cpm:work"], _commands(message))
+        self.assertEqual(["cpm:work", "cpm:messengers"], _commands(message))
 
     def test_work_section_contains_telegram_admin_operational_reads(self) -> None:
         message = ui._work_message(_actor(PlatformRole.OWNER))

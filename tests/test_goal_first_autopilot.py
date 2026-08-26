@@ -71,6 +71,7 @@ class GoalFirstAutopilotTests(unittest.IsolatedAsyncioTestCase):
                 "📈 Что сегодня",
                 "🚀 Найти новых клиентов",
                 "💬 Обращения и продажи",
+                "💬 Мессенджеры",
                 "👥 Клиенты и запись",
                 "⚙️ Ещё",
             ],
@@ -87,6 +88,11 @@ class GoalFirstAutopilotTests(unittest.IsolatedAsyncioTestCase):
             markup.inline_keyboard[2][0].callback_data,
             "cps:s:business-1",
         )
+        self.assertEqual(
+            markup.inline_keyboard[3][0].callback_data,
+            "cpa:business-1:messengers",
+        )
+        self.assertIn("ВКонтакте, MAX и Telegram", text)
 
     async def test_first_region_question_does_not_ask_for_yandex_campaign(self) -> None:
         out = SimpleNamespace(answer=AsyncMock())

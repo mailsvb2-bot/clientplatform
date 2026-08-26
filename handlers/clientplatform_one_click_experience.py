@@ -567,6 +567,7 @@ async def open_more(callback: CallbackQuery) -> None:
         "⚙️ Ещё\n\nРедко используемые функции убраны сюда.",
         reply_markup=control._keyboard(
             [
+                [("💬 Мессенджеры", f"cpa:{token}:messengers")],
                 [("🧰 Услуги и расписание", f"cpo:work:{token}")],
                 [("📣 Реклама и продвижение", f"cpo:ads:{token}")],
                 [("🤝 Партнёрства", f"cpg:home:{token}")],

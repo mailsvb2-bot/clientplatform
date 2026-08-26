@@ -315,12 +315,17 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             labels,
             [
+                "💬 Мессенджеры",
                 "🧰 Услуги и расписание",
                 "📣 Реклама и продвижение",
                 "🤝 Партнёрства",
                 "⚙️ Настройки",
                 "🏠 В кабинет",
             ],
+        )
+        self.assertEqual(
+            out.answer.await_args.kwargs["reply_markup"].inline_keyboard[0][0].callback_data,
+            "cpa:business-1:messengers",
         )
 
 
