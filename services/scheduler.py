@@ -376,7 +376,21 @@ async def _run_payment_reconciliation_retry_tick() -> None:
         )
 
 
-async def _background_loop(bot: "Bot") -> None:
+def _start_telegram_owner_ticks(
+    bot: "Bot | None",
+    *,
+    auto_audio_tick: Callable[["Bot"], Awaitable[object]],
+    engine_tick: Callable[["Bot"], Awaitable[object]],
+) -> None:
+    """Start only the legacy Telegram-dependent owners when a Bot exists."""
+
+    if bot is None:
+        return
+    _start_owner_tick("auto_audio.tick", lambda: auto_audio_tick(bot))
+    _start_owner_tick("engine.tick", lambda: engine_tick(bot))
+
+
+async def _background_loop(bot: "Bot | None") -> None:
     from core.ai.reward_engine import compute_and_store_rewards
     from core.engine import engine
     from core.runtime.self_healing import SelfHealingEngine
@@ -449,8 +463,11 @@ async def _background_loop(bot: "Bot") -> None:
                 lambda: asyncio.to_thread(self_heal.tick),
             )
 
-        _start_owner_tick("auto_audio.tick", lambda: auto_audio_tick(bot))
-        _start_owner_tick("engine.tick", lambda: engine.tick(bot))
+        _start_telegram_owner_ticks(
+            bot,
+            auto_audio_tick=auto_audio_tick,
+            engine_tick=engine.tick,
+        )
 
         if now_m - last_reward >= reward_interval:
             last_reward = now_m
@@ -484,7 +501,7 @@ async def _background_loop(bot: "Bot") -> None:
             _start_owner_tick("UXGuard.tick", _safe_ux_guard_tick)
 
 
-def start_scheduler(bot: "Bot") -> None:
+def start_scheduler(bot: "Bot | None") -> None:
     global _bg_task, _bg_started_at_monotonic
 
     async def runner_bg() -> None:

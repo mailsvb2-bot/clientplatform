@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from clientplatform.domain.connections import (
     ClaimedDispatch,
@@ -28,6 +28,33 @@ class DispatchAdapter(Protocol):
 
     async def send(self, item: ClaimedDispatch, credential: str) -> str:
         """Send one dispatch and return the provider message identifier."""
+
+
+@runtime_checkable
+class TwoPhaseDispatchAdapter(DispatchAdapter, Protocol):
+    """Adapter whose provider preparation is replay-safe before final write.
+
+    ``prepare`` may resolve/download media and perform provider-side upload work,
+    but it must not create the user-visible message. The worker can therefore do
+    all replay-safe preparation first, durably mark a non-idempotent boundary,
+    and call ``send_prepared`` only for the final provider message write.
+
+    Raw provider credentials are deliberately not part of prepared state. The
+    worker retains the resolved credential and passes it only to the final-write
+    call, preventing an avoidable secret copy in transient prepared objects.
+
+    ``release_prepared`` is best-effort transient cleanup. It must never create
+    provider-visible work or change durable dispatch state.
+    """
+
+    async def prepare(self, item: ClaimedDispatch, credential: str) -> object:
+        """Prepare transient provider state without creating the message."""
+
+    async def send_prepared(self, prepared: object, credential: str) -> str:
+        """Cross only the final provider message-write boundary."""
+
+    async def release_prepared(self, prepared: object) -> None:
+        """Release transient preparation state after send, failure or cancel."""
 
 
 class AdapterRegistry:

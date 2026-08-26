@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -18,8 +19,19 @@ from clientplatform.runtime.messenger_channel_ingress import (
     canonical_max_webhook,
     canonical_vk_webhook,
 )
+from clientplatform.runtime.native_messenger_http_admission import (
+    native_messenger_http_admission_middleware,
+)
+from clientplatform.runtime.native_messenger_reconciliation import (
+    reconcile_max_webhook_batch,
+)
+from clientplatform.runtime.native_messenger_setup_http import (
+    native_messenger_setup_get,
+    native_messenger_setup_post,
+)
 from clientplatform.runtime.partner_aware_bot_gateway import ManagedBotGatewayRuntime
 from config.settings import settings
+from core.runtime_env import env_float, env_int
 from core.task_manager import TaskManager
 from runtime.ad_oauth_http import ad_oauth_http_enabled, register_ad_oauth_routes
 from runtime.ingress_flags import (
@@ -40,6 +52,7 @@ from runtime.payment_webhook_admission import (
     payment_webhook_admission_middleware,
 )
 from runtime.privacy_export_http import privacy_export_download, privacy_export_landing
+from services.bg import tm as canonical_task_manager
 from services.messenger.audio_links import AUDIO_ACCESS_PREFIX, AUDIO_MEDIA_PREFIX
 from services.messenger.delivery_pool import start_delivery_worker, stop_delivery_worker
 from services.privacy_export_links import PRIVACY_EXPORT_PREFIX, privacy_export_http_enabled
@@ -60,9 +73,25 @@ class MessengerWebhookRuntime:
     delivery_worker_started: bool = False
     bot_gateway_runtime: ManagedBotGatewayRuntime | None = None
     ad_publication_worker: AdPublicationWorker | None = None
+    max_webhook_reconciliation_task: asyncio.Task[Any] | None = None
 
     async def stop(self) -> None:
         errors: list[BaseException] = []
+        if self.max_webhook_reconciliation_task is not None:
+            task = self.max_webhook_reconciliation_task
+            self.max_webhook_reconciliation_task = None
+            task.cancel()
+            results = await asyncio.gather(task, return_exceptions=True)
+            for result in results:
+                if isinstance(result, BaseException) and not isinstance(
+                    result,
+                    asyncio.CancelledError,
+                ):
+                    log.error(
+                        "MAX webhook reconciliation shutdown failed",
+                        exc_info=(type(result), result, result.__traceback__),
+                    )
+                    errors.append(result)
         if self.ad_publication_worker is not None:
             try:
                 await self.ad_publication_worker.stop()
@@ -105,6 +134,14 @@ async def _health(request: web.Request) -> web.Response:
         payload["ad_oauth"] = True
     if request.app.get("clientplatform_omnichannel_ingress") is True:
         payload["omnichannel_ingress"] = True
+    reconciliation_task = request.app.get(
+        "clientplatform_max_webhook_reconciliation_task"
+    )
+    if isinstance(reconciliation_task, asyncio.Task):
+        reconciliation_running = not reconciliation_task.done()
+        payload["max_webhook_reconciliation"] = reconciliation_running
+        if not reconciliation_running:
+            payload["ok"] = False
     return web.json_response(payload)
 
 
@@ -125,6 +162,113 @@ def _deployed_env() -> bool:
 
 def _omnichannel_ingress_enabled() -> bool:
     return _truthy_env("CLIENTPLATFORM_OMNICHANNEL_INGRESS_ENABLED")
+
+
+def _max_webhook_reconciliation_enabled() -> bool:
+    return _omnichannel_ingress_enabled() and _deployed_env()
+
+
+def _messenger_public_base_url() -> str:
+    return str(
+        os.getenv("MESSENGER_PUBLIC_BASE_URL")
+        or getattr(settings, "MESSENGER_PUBLIC_BASE_URL", "")
+        or ""
+    ).strip()
+
+
+async def _run_max_webhook_reconciliation_loop() -> None:
+    """Keep canonical MAX webhook subscriptions aligned with active routes.
+
+    MAX may remove a subscription after a prolonged webhook outage. Reasserting
+    the canonical route after the HTTP endpoint has started lets a recovered
+    ClientPlatform instance heal that provider-side loss without creating a
+    second route or credential source of truth.
+    """
+
+    initial_delay = env_float(
+        "CLIENTPLATFORM_MAX_WEBHOOK_RECONCILE_INITIAL_DELAY_SEC",
+        5.0,
+        minimum=0.0,
+        maximum=300.0,
+    )
+    interval = env_float(
+        "CLIENTPLATFORM_MAX_WEBHOOK_RECONCILE_INTERVAL_SEC",
+        21_600.0,
+        minimum=300.0,
+        maximum=86_400.0,
+    )
+    retry_interval = env_float(
+        "CLIENTPLATFORM_MAX_WEBHOOK_RECONCILE_RETRY_SEC",
+        900.0,
+        minimum=60.0,
+        maximum=21_600.0,
+    )
+    batch_pause = env_float(
+        "CLIENTPLATFORM_MAX_WEBHOOK_RECONCILE_BATCH_PAUSE_SEC",
+        1.0,
+        minimum=0.0,
+        maximum=60.0,
+    )
+    request_delay = env_float(
+        "CLIENTPLATFORM_MAX_WEBHOOK_RECONCILE_REQUEST_DELAY_SEC",
+        0.05,
+        minimum=0.0,
+        maximum=5.0,
+    )
+    batch_size = env_int(
+        "CLIENTPLATFORM_MAX_WEBHOOK_RECONCILE_BATCH_SIZE",
+        100,
+        minimum=1,
+        maximum=1000,
+    )
+    if initial_delay:
+        await asyncio.sleep(initial_delay)
+
+    cursor: str | None = None
+    sweep_failures = 0
+    while True:
+        try:
+            result = await reconcile_max_webhook_batch(
+                public_base_url=_messenger_public_base_url(),
+                cursor=cursor,
+                limit=batch_size,
+                request_delay_seconds=request_delay,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # validator: allow-wide-except - top-level resilience daemon boundary
+            log.exception(
+                "MAX webhook reconciliation sweep failed",
+                extra={"error_type": type(exc).__name__},
+            )
+            cursor = None
+            sweep_failures = 0
+            await asyncio.sleep(retry_interval)
+            continue
+
+        sweep_failures += result.failed
+        if result.failed:
+            log.warning(
+                "MAX webhook reconciliation batch completed with failures",
+                extra={
+                    "scanned": result.scanned,
+                    "reconciled": result.reconciled,
+                    "failed": result.failed,
+                },
+            )
+        cursor = result.next_cursor
+        if cursor is not None:
+            await asyncio.sleep(batch_pause)
+            continue
+
+        if result.scanned or sweep_failures:
+            log.info(
+                "MAX webhook reconciliation sweep completed",
+                extra={"failed": sweep_failures},
+            )
+        delay = retry_interval if sweep_failures else interval
+        sweep_failures = 0
+        await asyncio.sleep(delay)
 
 
 async def _max_webhook_with_official_secret(request: web.Request) -> web.Response:
@@ -208,6 +352,14 @@ def _register_clientplatform_omnichannel_routes(app: web.Application) -> None:
         "/clientplatform/webhooks/max/{route_id}",
         canonical_max_webhook,
     )
+    app.router.add_get(
+        "/clientplatform/connect/{token}",
+        native_messenger_setup_get,
+    )
+    app.router.add_post(
+        "/clientplatform/connect/{token}",
+        native_messenger_setup_post,
+    )
     app["clientplatform_omnichannel_ingress"] = True
 
 
@@ -256,7 +408,10 @@ async def start_messenger_webhook_runtime(
 
     app = web.Application(
         client_max_size=ingress_body_limit(),
-        middlewares=[payment_webhook_admission_middleware],
+        middlewares=[
+            native_messenger_http_admission_middleware,
+            payment_webhook_admission_middleware,
+        ],
     )
     _register_health_routes(app)
 
@@ -304,6 +459,7 @@ async def start_messenger_webhook_runtime(
     delivery_worker_started = False
     gateway_started = False
     ad_worker_started = False
+    max_reconciliation_task: asyncio.Task[Any] | None = None
     try:
         site = web.TCPSite(runner, host=host, port=port)
         await site.start()
@@ -319,11 +475,19 @@ async def start_messenger_webhook_runtime(
             ad_worker_started = ad_publication_worker.start()
             if not ad_worker_started:
                 raise RuntimeError("Advertising publication worker failed to start")
+        if _max_webhook_reconciliation_enabled():
+            max_reconciliation_task = canonical_task_manager().create(
+                _run_max_webhook_reconciliation_loop(),
+                name="clientplatform-max-webhook-reconciliation",
+            )
+            app["clientplatform_max_webhook_reconciliation_task"] = (
+                max_reconciliation_task
+            )
 
         log.info(
             "HTTP ingress started on %s:%s payment=%s privacy_export=%s "
             "max=%s vk=%s omnichannel=%s durable_delivery=%s managed_bot_polling=%s "
-            "ad_oauth=%s ad_publication_worker=%s",
+            "ad_oauth=%s ad_publication_worker=%s max_webhook_reconciliation=%s",
             host,
             port,
             payment_enabled,
@@ -335,6 +499,7 @@ async def start_messenger_webhook_runtime(
             gateway_started,
             ad_oauth_enabled,
             ad_worker_enabled,
+            max_reconciliation_task is not None,
         )
         return MessengerWebhookRuntime(
             runner=runner,
@@ -343,8 +508,12 @@ async def start_messenger_webhook_runtime(
             delivery_worker_started=delivery_worker_started,
             bot_gateway_runtime=bot_gateway_runtime,
             ad_publication_worker=ad_publication_worker,
+            max_webhook_reconciliation_task=max_reconciliation_task,
         )
     except (OSError, RuntimeError, ValueError, TypeError, AttributeError):
+        if max_reconciliation_task is not None:
+            max_reconciliation_task.cancel()
+            await asyncio.gather(max_reconciliation_task, return_exceptions=True)
         if ad_worker_started and ad_publication_worker is not None:
             try:
                 await ad_publication_worker.stop()

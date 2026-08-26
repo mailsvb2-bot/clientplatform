@@ -108,12 +108,16 @@ def _resolve_bridge_token_in_conn(conn: Any, raw: str) -> BridgeResolution | Non
     )
 
 
-def resolve_bridge_token(token: str) -> BridgeResolution | None:
+def resolve_bridge_token_in_conn(conn: Any, token: str) -> BridgeResolution | None:
     raw = (token or "").strip()
     if not raw:
         return None
+    return _resolve_bridge_token_in_conn(conn, raw)
+
+
+def resolve_bridge_token(token: str) -> BridgeResolution | None:
     with db() as conn:
-        return _resolve_bridge_token_in_conn(conn, raw)
+        return resolve_bridge_token_in_conn(conn, token)
 
 
 def _consume_bridge_token_in_conn(
@@ -172,6 +176,39 @@ def consume_bridge_token(token: str, *, platform: str, external_user_id: str | N
                 norm=norm,
                 external_user_id=external_user_id,
             )
+
+
+def consume_bridge_token_and_link_in_conn(
+    conn: Any,
+    token: str,
+    *,
+    platform: str,
+    external_user_id: str | None,
+    username: str | None = None,
+    display_name: str | None = None,
+) -> BridgeResolution | None:
+    """Consume and link inside the caller's transaction."""
+
+    raw = (token or "").strip()
+    norm = parse_platform(platform)
+    if not raw or norm is None:
+        return None
+    resolved = _consume_bridge_token_in_conn(
+        conn, raw=raw, norm=norm, external_user_id=external_user_id
+    )
+    if resolved is None:
+        return None
+    _link_channel_to_account_in_conn(
+        conn,
+        int(resolved.canonical_user_id),
+        norm,
+        external_user_id,
+        username=username,
+        display_name=display_name,
+        verified=True,
+        link_source="bridge",
+    )
+    return resolved
 
 
 def consume_bridge_token_and_link(

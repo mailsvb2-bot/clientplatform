@@ -125,6 +125,9 @@ class Settings:
     PAY_PROVIDER_TOKEN: str = _env("PAY_PROVIDER_TOKEN", "")
 
     # --- Multi-messenger routing ---
+    CLIENTPLATFORM_TELEGRAM_RUNTIME_ENABLED: bool = _env_bool(
+        "CLIENTPLATFORM_TELEGRAM_RUNTIME_ENABLED", "1"
+    )
     TELEGRAM_BOT_USERNAME: str = _env("TELEGRAM_BOT_USERNAME", "")
     MAX_BOT_TOKEN: str = _env("MAX_BOT_TOKEN", "")
     MAX_WEBHOOK_SECRET: str = _env("MAX_WEBHOOK_SECRET", "")
@@ -305,8 +308,8 @@ def _fail_fast_prod_config() -> None:
     """Fail fast in prod if critical env vars are missing or inconsistent.
 
     In production we do not allow quiet defaults for secrets, webhook ingress,
-    or partially configured payments. This catches server mixups before the bot
-    starts accepting users from ads.
+    or partially configured payments. This catches server mixups before the
+    selected channel runtime starts accepting users from ads.
     """
     if APP_ENV not in {"prod", "production"}:
         return
@@ -314,10 +317,12 @@ def _fail_fast_prod_config() -> None:
     _validate_trusted_proxy_env()
 
     missing: list[str] = []
-    if not (settings.BOT_TOKEN or '').strip():
-        missing.append('BOT_TOKEN')
-    if not (os.getenv('ADMIN_IDS') or os.getenv('ADMIN_ID') or '').strip():
-        missing.append('ADMIN_IDS')
+    telegram_runtime = bool(settings.CLIENTPLATFORM_TELEGRAM_RUNTIME_ENABLED)
+    if telegram_runtime:
+        if not (settings.BOT_TOKEN or '').strip():
+            missing.append('BOT_TOKEN')
+        if not (os.getenv('ADMIN_IDS') or os.getenv('ADMIN_ID') or '').strip():
+            missing.append('ADMIN_IDS')
 
     legacy_messenger = bool(settings.MESSENGER_WEBHOOK_ENABLED)
     max_flag = _optional_feature_flag('MAX_WEBHOOK_ENABLED')
@@ -353,7 +358,10 @@ def _fail_fast_prod_config() -> None:
                 + '. Set PAYMENT_DANGEROUS_OVERRIDES_ALLOWED=1 only for a documented emergency drill.'
             )
 
-    telegram_webhook = (settings.TELEGRAM_TRANSPORT == 'webhook') or bool(settings.TELEGRAM_WEBHOOK_ENABLED)
+    telegram_webhook = telegram_runtime and (
+        (settings.TELEGRAM_TRANSPORT == 'webhook')
+        or bool(settings.TELEGRAM_WEBHOOK_ENABLED)
+    )
     if telegram_webhook:
         if not (settings.TELEGRAM_WEBHOOK_PUBLIC_BASE_URL or '').strip():
             missing.append('TELEGRAM_WEBHOOK_PUBLIC_BASE_URL')

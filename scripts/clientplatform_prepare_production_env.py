@@ -17,6 +17,7 @@ _AD_OAUTH_REDIRECT_URI = "https://oauth.yandex.ru/verification_code"
 _MANAGED_BOT_IDENTITY_FILE = "/run/secrets/clientplatform-managed-bot/identity.txt"
 _MANAGED_BOT_HOST_DIR = "/var/lib/clientplatform/managed-bot-secrets"
 _MAX_API2_BASE_URL = "https://platform-api2.max.ru"
+_MAX_CA_BUNDLE_FILE = "/run/secrets/clientplatform-managed-bot/max-ca.pem"
 _TELEGRAM_STARS_DEFAULTS = {
     "TELEGRAM_STARS_PRICING_MODE": "explicit",
     "TELEGRAM_STARS_PRICE_PRACTICE_START_7": "1500",
@@ -135,6 +136,47 @@ def _validate_managed_bot_auto_provisioning(values: dict[str, str]) -> None:
         )
 
 
+def _validate_native_omnichannel_security(values: dict[str, str]) -> None:
+    if not _enabled(values, "CLIENTPLATFORM_OMNICHANNEL_INGRESS_ENABLED"):
+        return
+    if _required(
+        values,
+        "CLIENTPLATFORM_MANAGED_BOT_CREDENTIAL_IDENTITY_FILE",
+    ) != _MANAGED_BOT_IDENTITY_FILE:
+        raise EnvironmentPreparationError(
+            "mismatched_clientplatform_managed_bot_credential_identity_file"
+        )
+    if _required(
+        values,
+        "CLIENTPLATFORM_MANAGED_BOT_CREDENTIAL_HOST_DIR",
+    ) != _MANAGED_BOT_HOST_DIR:
+        raise EnvironmentPreparationError(
+            "mismatched_clientplatform_managed_bot_credential_host_dir"
+        )
+    if _enabled(values, "CLIENTPLATFORM_MANAGED_BOT_CREDENTIAL_ALLOW_GENERATE"):
+        raise EnvironmentPreparationError(
+            "managed_bot_credential_generation_forbidden_in_production"
+        )
+    if _required(
+        values,
+        "CLIENTPLATFORM_MEDIA_SIGNING_SECRET_REFERENCE",
+    ) != "secret://env/CLIENTPLATFORM_SECRET_MEDIA_SIGNING_KEY":
+        raise EnvironmentPreparationError(
+            "mismatched_clientplatform_media_signing_secret_reference"
+        )
+    if len(
+        _required(values, "CLIENTPLATFORM_SECRET_MEDIA_SIGNING_KEY").encode(
+            "utf-8"
+        )
+    ) < 32:
+        raise EnvironmentPreparationError(
+            "clientplatform_secret_media_signing_key_too_short"
+        )
+    max_ca_bundle = str(values.get("MAX_CA_BUNDLE", "") or "").strip()
+    if max_ca_bundle and max_ca_bundle != _MAX_CA_BUNDLE_FILE:
+        raise EnvironmentPreparationError("mismatched_max_ca_bundle")
+
+
 def prepare(path: Path) -> tuple[str, ...]:
     expanded = path.expanduser()
     if expanded.is_symlink():
@@ -164,6 +206,7 @@ def prepare(path: Path) -> tuple[str, ...]:
 
     defaults = {
         "CLIENTPLATFORM_PUBLIC_BASE_URL": expected_public,
+        "CLIENTPLATFORM_TELEGRAM_RUNTIME_ENABLED": "1",
         "CLIENTPLATFORM_MEDIA_GATEWAY_ENABLED": "1",
         "CLIENTPLATFORM_MEDIA_GATEWAY_BASE_URL": expected_media,
         "CLIENTPLATFORM_MEDIA_GATEWAY_STORAGE_MODE": "s3",
@@ -193,6 +236,10 @@ def prepare(path: Path) -> tuple[str, ...]:
         ),
         "CLIENTPLATFORM_MANAGED_BOT_CREDENTIAL_HOST_DIR": _MANAGED_BOT_HOST_DIR,
         "CLIENTPLATFORM_MANAGED_BOT_CREDENTIAL_ALLOW_GENERATE": "0",
+        "CLIENTPLATFORM_OMNICHANNEL_INGRESS_ENABLED": "0",
+        "CLIENTPLATFORM_MAX_WEBHOOK_RECONCILE_INTERVAL_SEC": "21600",
+        "CLIENTPLATFORM_MAX_WEBHOOK_RECONCILE_RETRY_SEC": "900",
+        "CLIENTPLATFORM_MAX_WEBHOOK_RECONCILE_BATCH_SIZE": "100",
         "MAX_WEBHOOK_ENABLED": "0",
         "MAX_API_BASE_URL": _MAX_API2_BASE_URL,
         "VK_WEBHOOK_ENABLED": "0",
@@ -228,6 +275,7 @@ def prepare(path: Path) -> tuple[str, ...]:
         values[key] = value
 
     _validate_managed_bot_auto_provisioning(values)
+    _validate_native_omnichannel_security(values)
     _validate_ad_connections(values, domain=domain)
 
     backup = resolved.with_name(resolved.name + ".before-current-main")

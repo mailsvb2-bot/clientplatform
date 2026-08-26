@@ -266,6 +266,32 @@ class BookingRepository:
             raise BookingNotFound("Вы не подключены к этому бизнесу")
         return matches[0]
 
+    def _customer_link_by_customer(
+        self,
+        *,
+        business_id: str,
+        customer_id: str,
+    ) -> CustomerBusinessLink:
+        business = normalize_uuid(business_id, field_name="business_id")
+        customer = normalize_uuid(customer_id, field_name="customer_id")
+        row = self._conn.execute(
+            """
+            SELECT c.business_id, b.name AS business_name, c.id AS customer_id
+            FROM customers c
+            JOIN businesses b ON b.id=c.business_id AND b.status='active'
+            WHERE c.business_id=? AND c.id=? AND c.status='active'
+            LIMIT 1
+            """,
+            (business, customer),
+        ).fetchone()
+        if row is None:
+            raise BookingNotFound("Вы не подключены к этому бизнесу")
+        return CustomerBusinessLink(
+            business_id=str(_value(row, "business_id", 0)),
+            business_name=str(_value(row, "business_name", 1)),
+            customer_id=str(_value(row, "customer_id", 2)),
+        )
+
     def get_customer_booking(
         self,
         *,
@@ -276,6 +302,22 @@ class BookingRepository:
         link = self._customer_link(
             telegram_user_id=telegram_user_id,
             business_id=business_id,
+        )
+        return self.get_customer_booking_by_customer(
+            business_id=link.business_id,
+            customer_id=link.customer_id,
+            slot_id=slot_id,
+        )
+
+    def get_customer_booking_by_customer(
+        self,
+        *,
+        business_id: str,
+        customer_id: str,
+        slot_id: str,
+    ) -> BookingClaim:
+        link = self._customer_link_by_customer(
+            business_id=business_id, customer_id=customer_id
         )
         normalized_slot = normalize_uuid(slot_id, field_name="booking_slot_id")
         row = self._conn.execute(
@@ -298,6 +340,20 @@ class BookingRepository:
         now: str | None = None,
     ) -> list[BookingSlotView]:
         link = self._customer_link(telegram_user_id=telegram_user_id, business_id=business_id)
+        return self.list_open_slots_for_customer_id(
+            business_id=link.business_id, customer_id=link.customer_id, now=now
+        )
+
+    def list_open_slots_for_customer_id(
+        self,
+        *,
+        business_id: str,
+        customer_id: str,
+        now: str | None = None,
+    ) -> list[BookingSlotView]:
+        link = self._customer_link_by_customer(
+            business_id=business_id, customer_id=customer_id
+        )
         timestamp = normalize_utc_datetime(str(now or _utc_now()), field_name="now")
         rows = self._conn.execute(
             _SLOT_SELECT
@@ -319,6 +375,24 @@ class BookingRepository:
         now: str | None = None,
     ) -> BookingClaim:
         link = self._customer_link(telegram_user_id=telegram_user_id, business_id=business_id)
+        return self.book_slot_for_customer_id(
+            business_id=link.business_id,
+            customer_id=link.customer_id,
+            slot_id=slot_id,
+            now=now,
+        )
+
+    def book_slot_for_customer_id(
+        self,
+        *,
+        business_id: str,
+        customer_id: str,
+        slot_id: str,
+        now: str | None = None,
+    ) -> BookingClaim:
+        link = self._customer_link_by_customer(
+            business_id=business_id, customer_id=customer_id
+        )
         normalized_slot = normalize_uuid(slot_id, field_name="booking_slot_id")
         timestamp = normalize_utc_datetime(str(now or _utc_now()), field_name="now")
         _serialize_booking_write(
@@ -362,7 +436,7 @@ class BookingRepository:
             """
             UPDATE booking_slots
             SET status='booked', booked_customer_id=?, booked_at=?, updated_at=?
-            WHERE id=? AND business_id=? AND status='open'
+            WHERE id=? AND business_id=? AND status='open' AND booked_customer_id IS NULL
             """,
             (
                 link.customer_id,

@@ -108,7 +108,6 @@ async def _safe_answer_callback(cb, *args, **kwargs) -> None:
         )
 
 
-
 from core.environment import is_production_env, normalize_app_env
 from config.settings import settings
 
@@ -123,10 +122,11 @@ from services.scheduler import stop_scheduler
 from services.db_writer import start_db_writer, stop_db_writer
 from services.bg import bind_task_manager, register_task_manager
 from runtime.messenger_webhooks import start_messenger_webhook_runtime
-from runtime.telegram_transport import telegram_transport
+from runtime.telegram_transport import telegram_runtime_enabled, telegram_transport
 from runtime.health_server import start_health_runtime
 from services.messenger.setup import build_setup_status
 from clientplatform.runtime.control_bot import bind_control_bot_secret
+from clientplatform.runtime.native_runtime_policy import assert_native_only_runtime_policy
 
 from core.startup_checks import run_startup_checks
 
@@ -170,8 +170,11 @@ async def create_application():
     health_runtime = None
     scheduler_started = False
     db_writer_started = False
+    telegram_enabled = telegram_runtime_enabled()
+    tm = TaskManager()
+    dp: Dispatcher | None = None
 
-    async def _on_startup(bot: Bot):
+    async def _on_startup(bot: Bot | None):
         nonlocal webhook_runtime, health_runtime, scheduler_started, db_writer_started
         app_env = normalize_app_env()
         production = is_production_env(app_env)
@@ -184,6 +187,8 @@ async def create_application():
         # v15.2: fail fast if critical files/folders are missing
         run_startup_checks(Path(__file__).resolve().parent)
         init_db()
+        if bot is None:
+            assert_native_only_runtime_policy()
         # Full validators run after schema/migrations exist.
         validate_all(strict=strict)
         messenger_setup = build_setup_status()
@@ -205,9 +210,12 @@ async def create_application():
                 webhook_runtime = None
                 selected_transport = telegram_transport()
                 log.exception('Messenger/Telegram webhook runtime failed to start')
-                if selected_transport == 'webhook' or production:
+                if bot is None or selected_transport == 'webhook' or production:
                     raise
                 log.warning('Continuing without optional messenger webhook runtime in non-prod polling mode')
+
+            if bot is None and webhook_runtime is None:
+                raise RuntimeError("native-only runtime requires canonical HTTP ingress")
 
             try:
                 health_runtime = await start_health_runtime()
@@ -218,10 +226,11 @@ async def create_application():
                     raise
                 log.warning('Continuing without health endpoint in non-prod mode')
 
-            try:
-                await prewarm_audio_cache(bot)
-            except (OSError, RuntimeError, ValueError, TypeError, AttributeError, KeyError):  # validator: allow-wide-except
-                log.exception("Prewarm audio cache failed")
+            if bot is not None:
+                try:
+                    await prewarm_audio_cache(bot)
+                except (OSError, RuntimeError, ValueError, TypeError, AttributeError, KeyError):  # validator: allow-wide-except
+                    log.exception("Prewarm audio cache failed")
 
             try:
                 await prewarm_matplotlib_cache()
@@ -253,7 +262,7 @@ async def create_application():
             db_writer_started = False
             raise
 
-    async def _on_shutdown(bot: Bot):
+    async def _on_shutdown(bot: Bot | None):
         del bot
         nonlocal webhook_runtime, health_runtime, scheduler_started, db_writer_started
 
@@ -299,18 +308,27 @@ async def create_application():
             )
         )
 
+    # Sovereignty (optional): initialize DecisionCore singleton (SelfHealingEngine.tick runs via services.scheduler)
+    sovereign_enabled = os.getenv('SOVEREIGN_ENABLED', '0').strip() in {'1','true','yes','on'}
+    if sovereign_enabled:
+        DecisionCore.instance()
+
+    if not telegram_enabled:
+        log.info(
+            "Telegram runtime disabled; starting canonical native ClientPlatform runtime"
+        )
+        try:
+            await _on_startup(None)
+            await asyncio.Event().wait()
+        finally:
+            await _on_shutdown(None)
+        return
+
     token = (settings.BOT_TOKEN or "").strip()
     if not token:
         raise SystemExit("BOT_TOKEN is empty. Put it into .env (see .env.example)")
 
     bind_control_bot_secret(token)
-
-    tm = TaskManager()
-
-    # Sovereignty (optional): initialize DecisionCore singleton (SelfHealingEngine.tick runs via services.scheduler)
-    sovereign_enabled = os.getenv('SOVEREIGN_ENABLED', '0').strip() in {'1','true','yes','on'}
-    if sovereign_enabled:
-        DecisionCore.instance()
 
     bot = build_bot(token)
     # Prewarm caches on startup hook (no TaskManager.create in v16.1)

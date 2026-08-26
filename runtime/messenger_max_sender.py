@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import math
 import os
+import re
 import ssl
 import urllib.parse
 from dataclasses import dataclass
@@ -40,6 +41,20 @@ _MEDIA_TOKEN_REJECT_CODES = {
     "invalid_token",
     "media.not.found",
 }
+
+
+class MaxProviderRateLimitError(MessengerTransportError):
+    """MAX explicitly rejected a message before creating it due to rate limits."""
+
+    retryable = True
+    provider_write_definitely_rejected = True
+
+
+class MaxProviderRejectedError(MessengerTransportError):
+    """MAX returned an explicit application-level rejection for a message write."""
+
+    retryable = False
+    provider_write_definitely_rejected = True
 
 
 def _attachment_retry_delays() -> tuple[float, ...]:
@@ -84,6 +99,80 @@ def _max_error(operation: str, code: str) -> MessengerTransportError:
         f"MAX provider {operation} failed",
         code=f"max.{operation}.{safe_code}",
     )
+
+
+def _max_subscription_urls(data: Any) -> tuple[str, ...] | None:
+    subscriptions: Any
+    if isinstance(data, list):
+        subscriptions = data
+    elif isinstance(data, dict):
+        if data.get("error"):
+            return None
+        subscriptions = data.get("subscriptions")
+        if subscriptions is None:
+            subscriptions = data.get("items")
+        if subscriptions is None:
+            subscriptions = data.get("data")
+    else:
+        return None
+    if not isinstance(subscriptions, list):
+        return None
+    urls: list[str] = []
+    for item in subscriptions:
+        if not isinstance(item, dict):
+            return None
+        url = str(item.get("url") or "").strip().rstrip("/")
+        if url:
+            urls.append(url)
+    return tuple(urls)
+
+
+def _max_retryable_http_error(
+    operation: str,
+    exc: BaseException,
+) -> MessengerTransportError | None:
+    try:
+        status_code = int(getattr(exc, "code", 0) or 0)
+    except (TypeError, ValueError):
+        status_code = 0
+    if status_code != 429:
+        return None
+    return MaxProviderRateLimitError(
+        f"MAX provider {operation} was rate limited",
+        code=f"max.{operation}.http_429",
+    )
+
+
+def _max_message_write_result(data: Any, *, operation: str) -> dict[str, Any]:
+    """Return only an official MAX Message object, never an error string.
+
+    MAX documents successful ``POST /messages`` responses as ``{"message": Message}``,
+    while application-level rejections may use top-level ``code`` + ``message``.
+    Treat explicit provider rejections as known non-writes, but keep malformed
+    success-shaped responses ambiguous so the dispatch worker never replays them
+    after the durable non-replay boundary.
+    """
+
+    if not isinstance(data, dict):
+        raise MessengerTransportError(
+            f"MAX provider {operation} returned an invalid response",
+            code=f"max.{operation}.provider_response_invalid",
+        )
+
+    error_code = _max_error_code(data)
+    if error_code or data.get("error"):
+        raise MaxProviderRejectedError(
+            f"MAX provider {operation} rejected the message",
+            code=f"max.{operation}.{error_code or 'provider_rejected'}",
+        )
+
+    message = data.get("message")
+    if not isinstance(message, dict):
+        raise MessengerTransportError(
+            f"MAX provider {operation} returned no message object",
+            code=f"max.{operation}.provider_response_invalid",
+        )
+    return message
 
 
 def _legacy_max_ui():
@@ -156,7 +245,9 @@ class MaxBotSender:
                 code="max.config.ca_bundle_missing",
             )
         try:
-            return ssl.create_default_context(cafile=str(path))
+            context = ssl.create_default_context()
+            context.load_verify_locations(cafile=str(path))
+            return context
         except (OSError, ssl.SSLError) as exc:
             raise MessengerTransportError(
                 f"MAX_CA_BUNDLE is invalid: {type(exc).__name__}",
@@ -188,6 +279,153 @@ class MaxBotSender:
         if isinstance(upload_meta, dict) and upload_meta.get("token"):
             return {"token": str(upload_meta["token"])}
         raise _max_error(f"{media_type}_upload", "token_missing")
+
+    async def get_me(self) -> dict[str, Any]:
+        token = self._token()
+        try:
+            data = await asyncio.to_thread(
+                json_request,
+                f"{self._api_base()}/me",
+                method="GET",
+                headers={"Authorization": token},
+                payload=None,
+                retries=1,
+                ssl_context=self._ssl_context(),
+            )
+        except ProviderPermanentHTTPError as exc:
+            raise self._permanent_http_error(exc) from exc
+        if not isinstance(data, dict) or data.get("error"):
+            raise _max_error("get_me", _max_error_code(data) or "provider_error")
+        user_id = str(data.get("user_id") or "").strip()
+        if not user_id.isdigit() or int(user_id) <= 0 or data.get("is_bot") is not True:
+            raise _max_error("get_me", "invalid_bot_identity")
+        return data
+
+    async def ensure_webhook_subscription(
+        self,
+        *,
+        url: str,
+        secret: str,
+        update_types: tuple[str, ...] = (
+            "message_created",
+            "message_callback",
+            "bot_started",
+        ),
+    ) -> dict[str, Any]:
+        target = str(url or "").strip()
+        parsed = urllib.parse.urlsplit(target)
+        if parsed.scheme.lower() != "https" or not parsed.hostname:
+            raise ValueError("MAX webhook URL must use HTTPS")
+        try:
+            explicit_port = parsed.port
+        except ValueError as exc:
+            raise ValueError("MAX webhook URL port is invalid") from exc
+        if explicit_port is not None:
+            raise ValueError("MAX webhook URL must use the default HTTPS port")
+        clean_secret = str(secret or "").strip()
+        if re.fullmatch(r"[A-Za-z0-9_-]{5,256}", clean_secret) is None:
+            raise ValueError("MAX webhook secret format is invalid")
+        events = tuple(dict.fromkeys(str(item or "").strip() for item in update_types))
+        if not events or any(not item for item in events):
+            raise ValueError("MAX webhook update types must not be empty")
+        token = self._token()
+        headers = {"Authorization": token}
+        subscriptions_url = f"{self._api_base()}/subscriptions"
+        ssl_context = self._ssl_context()
+        try:
+            existing = await asyncio.to_thread(
+                json_request,
+                subscriptions_url,
+                method="GET",
+                headers=headers,
+                payload=None,
+                retries=1,
+                ssl_context=ssl_context,
+            )
+        except ProviderPermanentHTTPError as exc:
+            raise self._permanent_http_error(exc) from exc
+        if _max_subscription_urls(existing) is None:
+            raise _max_error(
+                "subscription_list",
+                _max_error_code(existing) or "provider_response_invalid",
+            )
+        normalized_target = target.rstrip("/")
+
+        # MAX uses POST /subscriptions both to create and to update an existing
+        # webhook subscription. Reconcile the desired secret and update_types on
+        # every provisioning attempt, even when GET already reports the same URL.
+        # Otherwise a retry after locally rotating/revoking the secret can leave
+        # MAX delivering the old X-Max-Bot-Api-Secret to a route expecting a new
+        # value, producing a permanently broken but apparently healthy channel.
+        try:
+            data = await asyncio.to_thread(
+                json_request,
+                subscriptions_url,
+                method="POST",
+                headers=headers,
+                payload={
+                    "url": target,
+                    "update_types": list(events),
+                    "secret": clean_secret,
+                },
+                retries=1,
+                ssl_context=ssl_context,
+            )
+        except ProviderPermanentHTTPError as exc:
+            raise self._permanent_http_error(exc) from exc
+        if not isinstance(data, dict) or data.get("success") is not True:
+            raise _max_error(
+                "subscription",
+                _max_error_code(data) or "provider_rejected",
+            )
+        try:
+            verified = await asyncio.to_thread(
+                json_request,
+                subscriptions_url,
+                method="GET",
+                headers=headers,
+                payload=None,
+                retries=1,
+                ssl_context=ssl_context,
+            )
+        except ProviderPermanentHTTPError as exc:
+            raise self._permanent_http_error(exc) from exc
+        verified_urls = _max_subscription_urls(verified)
+        if verified_urls is None or normalized_target not in verified_urls:
+            raise _max_error(
+                "subscription_verify",
+                _max_error_code(verified) or "subscription_not_visible",
+            )
+        return data
+
+    async def answer_callback(self, *, callback_id: str) -> dict[str, Any]:
+        """Acknowledge one official ``message_callback`` update."""
+
+        clean_callback_id = str(callback_id or "").strip()
+        if not clean_callback_id or len(clean_callback_id) > 512:
+            raise ValueError("MAX callback id format is invalid")
+        if any(ord(char) < 32 or ord(char) == 127 for char in clean_callback_id):
+            raise ValueError("MAX callback id format is invalid")
+        token = self._token()
+        try:
+            data = await asyncio.to_thread(
+                json_request,
+                f"{self._api_base()}/answers?callback_id="
+                f"{urllib.parse.quote(clean_callback_id, safe='')}",
+                method="POST",
+                headers={"Authorization": token},
+                payload={},
+                retries=1,
+                ssl_context=self._ssl_context(),
+            )
+        except ProviderPermanentHTTPError as exc:
+            raise self._permanent_http_error(exc) from exc
+        if not isinstance(data, dict) or data.get("success") is not True:
+            raise _max_error(
+                "answer_callback",
+                _max_error_code(data) or "provider_rejected",
+            )
+        return data
 
     async def send_text(self, external_user_id: str, text: str, **kwargs: Any):
         token = self._token()
@@ -221,9 +459,12 @@ class MaxBotSender:
             )
         except ProviderPermanentHTTPError as exc:
             raise self._permanent_http_error(exc) from exc
-        if isinstance(data, dict) and data.get("error"):
-            raise _max_error("send_text", _max_error_code(data) or "provider_error")
-        return data["message"] if isinstance(data, dict) and data.get("message") is not None else data
+        except OSError as exc:
+            rate_limited = _max_retryable_http_error("send_text", exc)
+            if rate_limited is not None:
+                raise rate_limited from exc
+            raise
+        return _max_message_write_result(data, operation="send_text")
 
     async def _ensure_media_token(self, file_path: Path, *, media_type: str) -> str:
         cached = get_cached_media_token("max", file_path, media_type=media_type)
@@ -299,9 +540,19 @@ class MaxBotSender:
                 )
             except ProviderPermanentHTTPError as exc:
                 raise self._permanent_http_error(exc) from exc
-            except (OSError, ValueError, TypeError) as exc:  # pragma: no cover
-                last_error = exc
-                continue
+            except OSError as exc:
+                rate_limited = _max_retryable_http_error(
+                    f"send_{media_type}",
+                    exc,
+                )
+                if rate_limited is not None:
+                    raise rate_limited from exc
+                raise
+            except (ValueError, TypeError):
+                # A connection failure after POST begins has an ambiguous write
+                # outcome. Never repeat the message inside the provider adapter;
+                # the durable MAX boundary will quarantine it for reconciliation.
+                raise
             code = _max_error_code(data)
             if code == "attachment.not.ready":
                 last_error = MessengerMediaNotReadyError(
@@ -385,6 +636,22 @@ class MaxBotSender:
             external_user_id,
             file_path,
             media_type="audio",
+            caption=caption or "",
+            notify=kwargs.get("notify"),
+        )
+
+    async def send_video_file(
+        self,
+        external_user_id: str,
+        file_path: Path,
+        *,
+        caption: str | None = None,
+        **kwargs: Any,
+    ):
+        return await self._send_media_file(
+            external_user_id,
+            file_path,
+            media_type="video",
             caption=caption or "",
             notify=kwargs.get("notify"),
         )
