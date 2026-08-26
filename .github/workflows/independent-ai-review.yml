@@ -11,6 +11,13 @@ permissions:
   pull-requests: read
   statuses: write
 
+env:
+  # Temporary trusted-repository policy. External paid reviewers are currently
+  # unavailable in the operating jurisdiction. Keep the jobs and contracts in
+  # place, but do not call providers until this is deliberately changed back to
+  # "required" in a reviewed repository change.
+  EXTERNAL_AI_REVIEW_MODE: disabled
+
 concurrency:
   group: independent-ai-review-${{ github.event.pull_request.number }}
   # Do not cancel an in-flight paid provider call before its cost record is uploaded.
@@ -25,6 +32,7 @@ jobs:
       base_sha: ${{ steps.classify.outputs.base_sha }}
       head_sha: ${{ steps.classify.outputs.head_sha }}
       draft: ${{ steps.metadata.outputs.draft }}
+      external_ai_review_mode: ${{ steps.policy.outputs.external_ai_review_mode }}
     steps:
       - name: Checkout trusted base implementation
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -56,6 +64,19 @@ jobs:
           IS_DRAFT: ${{ github.event.pull_request.draft }}
         run: echo "draft=$IS_DRAFT" >> "$GITHUB_OUTPUT"
 
+      - name: Record trusted external AI review policy
+        id: policy
+        run: |
+          set -euo pipefail
+          case "$EXTERNAL_AI_REVIEW_MODE" in
+            required|disabled) ;;
+            *)
+              echo "Unsupported EXTERNAL_AI_REVIEW_MODE=$EXTERNAL_AI_REVIEW_MODE" >&2
+              exit 2
+              ;;
+          esac
+          echo "external_ai_review_mode=$EXTERNAL_AI_REVIEW_MODE" >> "$GITHUB_OUTPUT"
+
       - name: Classify deterministic review risk
         id: classify
         env:
@@ -78,7 +99,7 @@ jobs:
             --repository "$REPOSITORY" \
             --sha "$HEAD_SHA" \
             --state pending \
-            --description 'Independent AI review is running' \
+            --description 'Independent review policy gate is running' \
             --target-url "$TARGET_URL"
 
   claude-adversarial:
@@ -86,6 +107,7 @@ jobs:
     if: >-
       ${{
         needs.prepare.result == 'success' &&
+        needs.prepare.outputs.external_ai_review_mode == 'required' &&
         needs.prepare.outputs.draft == 'false' &&
         needs.prepare.outputs.risk != 'L0'
       }}
@@ -176,6 +198,7 @@ jobs:
     if: >-
       ${{
         needs.prepare.result == 'success' &&
+        needs.prepare.outputs.external_ai_review_mode == 'required' &&
         needs.prepare.outputs.draft == 'false' &&
         (needs.prepare.outputs.risk == 'L2' || needs.prepare.outputs.risk == 'L3')
       }}
@@ -284,22 +307,32 @@ jobs:
           IS_DRAFT: ${{ github.event.pull_request.draft }}
           PREPARE_RESULT: ${{ needs.prepare.result }}
           RISK: ${{ needs.prepare.outputs.risk }}
+          EXTERNAL_AI_REVIEW_MODE: ${{ needs.prepare.outputs.external_ai_review_mode }}
           CLAUDE_RESULT: ${{ needs.claude-adversarial.result }}
           GEMINI_RESULT: ${{ needs.gemini-system.result }}
         run: |
           set -euo pipefail
 
           STATE=failure
-          DESCRIPTION='Independent AI review failed closed'
+          DESCRIPTION='Independent review policy gate failed closed'
 
           if [ "$IS_DRAFT" = 'true' ]; then
             STATE=success
             DESCRIPTION='Draft PR: review deferred until ready-for-review'
           elif [ "$PREPARE_RESULT" != 'success' ]; then
-            DESCRIPTION='AI review prepare/classification did not succeed'
+            DESCRIPTION='Independent review prepare/classification did not succeed'
           elif [ "$RISK" = 'L0' ]; then
             STATE=success
             DESCRIPTION='L0 docs-only change: model review not required'
+          elif [ "$EXTERNAL_AI_REVIEW_MODE" = 'disabled' ]; then
+            if [ "$CLAUDE_RESULT" != 'skipped' ] || [ "$GEMINI_RESULT" != 'skipped' ]; then
+              DESCRIPTION='External AI review disabled but provider jobs were not skipped'
+            else
+              STATE=success
+              DESCRIPTION="$RISK external AI review temporarily disabled by trusted repository policy"
+            fi
+          elif [ "$EXTERNAL_AI_REVIEW_MODE" != 'required' ]; then
+            DESCRIPTION='Unknown external AI review mode; failed closed'
           elif [ "$CLAUDE_RESULT" != 'success' ]; then
             DESCRIPTION='Claude adversarial review did not pass'
           elif [ "$RISK" = 'L1' ]; then
