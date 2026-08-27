@@ -308,10 +308,17 @@ async def _enhanced_marketing(
             limit=20,
         ),
         _optional_thread(
-            admin_ops.list_publication_calendar,
-            default=[],
+            admin_ops.get_publication_calendar_projection,
+            default=admin_ops.PublicationCalendarProjection(
+                entries=(),
+                actionable_drafts=(),
+                draft_count=0,
+                scheduled_count=0,
+                published_count=0,
+                failed_count=0,
+                cancelled_count=0,
+            ),
             actor=ctx.actor,
-            limit=20,
         ),
         _optional_thread(
             admin_ops.list_offering_prices,
@@ -353,10 +360,7 @@ async def _enhanced_marketing(
         if item.total_lessons > item.completed_lessons
     }
     open_slots = sum(item.slot.status.value == "open" for item in slots)
-    published = [item for item in publications if item.status == "published"]
-    drafts = [item for item in publications if item.status == "draft"]
-    scheduled = [item for item in publications if item.status == "scheduled"]
-    failed = [item for item in publications if item.status == "failed"]
+    drafts = list(publications.actionable_drafts)
     enabled = autopilot_value.strip().lower() in {"1", "true", "yes", "on"}
 
     if action == "autopilot":
@@ -380,17 +384,17 @@ async def _enhanced_marketing(
     elif action == "publications":
         recent = "\n".join(
             admin_ops.format_publication_calendar_lines(
-                publications,
+                publications.entries,
                 timezone_name=profile.timezone,
                 max_entries=8,
             )
         )
         text = (
             "📣 Публикации\n\n"
-            f"Черновики: {len(drafts)}\n"
-            f"Запланировано: {len(scheduled)}\n"
-            f"Опубликовано: {len(published)}\n"
-            f"Ошибки: {len(failed)}\n\n"
+            f"Черновики: {publications.draft_count}\n"
+            f"Запланировано: {publications.scheduled_count}\n"
+            f"Опубликовано: {publications.published_count}\n"
+            f"Ошибки: {publications.failed_count}\n\n"
             "Ближайшие и последние:\n"
             f"{recent}"
         )

@@ -13,6 +13,7 @@ from clientplatform.application.admin_ops import (
     InteractionMetricInput,
     create_publication_draft,
     format_publication_calendar_lines,
+    get_publication_calendar_projection,
     get_subscription_state,
     interaction_snapshot,
     list_offering_prices,
@@ -198,12 +199,23 @@ def test_publication_calendar_projects_existing_facts_in_business_timezone() -> 
             ),
         )
 
-    calendar = list_publication_calendar(actor=actor)
+    projection = get_publication_calendar_projection(actor=actor)
+    calendar = list(projection.entries)
     assert [item.id for item in calendar] == [scheduled.id, published.id, failed.id]
+    assert projection.scheduled_count == 1
+    assert projection.published_count == 1
+    assert projection.failed_count == 1
+    assert projection.draft_count == 0
+    assert projection.cancelled_count == 0
+    assert projection.actionable_drafts == ()
     assert calendar[0].scheduled_at == "2026-08-28T09:00:00+00:00"
     assert calendar[2].failed_at == "2026-08-27T11:00:00+00:00"
     assert calendar[2].failure_reason == "provider retry required"
-    assert list_publication_calendar(actor=other) == []
+    assert list_publication_calendar(actor=actor, limit=3) == calendar
+    other_projection = get_publication_calendar_projection(actor=other)
+    assert other_projection.entries == ()
+    assert other_projection.actionable_drafts == ()
+    assert other_projection.scheduled_count == 0
 
     lines = format_publication_calendar_lines(
         calendar,
@@ -212,6 +224,74 @@ def test_publication_calendar_projects_existing_facts_in_business_timezone() -> 
     assert "28.08.2026 12:00 · ВКонтакте · Запланировано · План на завтра" in lines[0]
     assert "27.08.2026 15:00 · Telegram · Опубликовано" in lines[1]
     assert "27.08.2026 14:00 · MAX · Ошибка" in lines[2]
+
+
+def test_publication_calendar_keeps_drafts_actionable_past_upcoming_limit() -> None:
+    actor, _, _ = _business(802104, "Много публикаций")
+    scheduled_ids: list[str] = []
+    for index in range(21):
+        item = create_publication_draft(
+            actor=actor,
+            title=f"План {index:02d}",
+            body="Запланированный материал",
+            channel="vk",
+        )
+        scheduled_ids.append(item.id)
+        with get_db() as conn:
+            conn.execute(
+                """
+                UPDATE business_publications
+                SET status='scheduled', scheduled_at=?, updated_at=?
+                WHERE id=? AND business_id=?
+                """,
+                (
+                    f"2026-09-{index + 1:02d}T09:00:00+00:00",
+                    "2026-08-27T10:00:00+00:00",
+                    item.id,
+                    actor.business_id,
+                ),
+            )
+
+    draft = create_publication_draft(
+        actor=actor,
+        title="Новый черновик",
+        body="Готов к публикации",
+        channel="telegram",
+    )
+    published = create_publication_draft(
+        actor=actor,
+        title="Недавняя публикация",
+        body="Опубликовано",
+        channel="max",
+    )
+    with get_db() as conn:
+        conn.execute(
+            """
+            UPDATE business_publications
+            SET status='published', published_at=?, updated_at=?
+            WHERE id=? AND business_id=?
+            """,
+            (
+                "2026-08-27T18:00:00+00:00",
+                "2026-08-27T18:00:00+00:00",
+                published.id,
+                actor.business_id,
+            ),
+        )
+
+    projection = get_publication_calendar_projection(
+        actor=actor,
+        upcoming_limit=4,
+        recent_limit=2,
+        actionable_draft_limit=1,
+    )
+    assert projection.scheduled_count == 21
+    assert projection.draft_count == 1
+    assert projection.published_count == 1
+    assert [item.id for item in projection.entries[:4]] == scheduled_ids[:4]
+    assert {item.id for item in projection.entries[4:]} == {draft.id, published.id}
+    assert [item.id for item in projection.actionable_drafts] == [draft.id]
+
 
 
 def test_publication_calendar_formatter_is_bounded_and_fail_safe() -> None:
@@ -258,6 +338,15 @@ def test_publication_calendar_formatter_is_bounded_and_fail_safe() -> None:
         timezone_name="UTC",
     )[0]
     assert "27.08.2026 13:00 · Другой канал · Отменено" in naive_line
+    unknown = replace(
+        calendar[0],
+        status="legacy",
+        channel="legacy",
+        title="Старый статус",
+        updated_at="2026-08-27T14:00:00+00:00",
+    )
+    unknown_line = format_publication_calendar_lines([unknown], timezone_name="UTC")[0]
+    assert "Другой канал · Статус неизвестен · Старый статус" in unknown_line
     assert format_publication_calendar_lines([], timezone_name="UTC") == (
         "• Публикаций пока нет.",
     )

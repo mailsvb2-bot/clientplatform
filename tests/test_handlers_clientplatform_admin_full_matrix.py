@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from clientplatform.application.admin_ops import PublicationRecord
+from clientplatform.application.admin_ops import PublicationCalendarProjection, PublicationRecord
 from handlers import clientplatform_admin as admin
 from handlers import clientplatform_admin_extension as extension
 
@@ -198,7 +198,12 @@ def render_contract(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(extension.admin_ops, "business_admin_insights", lambda **_kwargs: insights)
     monkeypatch.setattr(extension.admin_ops, "list_payments", lambda **_kwargs: [])
     monkeypatch.setattr(
-        extension.admin_ops, "list_publication_calendar", lambda **_kwargs: []
+        extension.admin_ops,
+        "get_publication_calendar_projection",
+        lambda **_kwargs: PublicationCalendarProjection(
+            entries=(), actionable_drafts=(), draft_count=0, scheduled_count=0,
+            published_count=0, failed_count=0, cancelled_count=0,
+        ),
     )
     monkeypatch.setattr(extension.admin_ops, "list_offering_prices", lambda **_kwargs: [])
     monkeypatch.setattr(extension.admin_ops, "interaction_snapshot", lambda **_kwargs: interaction)
@@ -268,10 +273,32 @@ async def test_publications_use_shared_calendar_projection(
         failed_at=None,
         failure_reason=None,
     )
+    draft = PublicationRecord(
+        id="00000000-0000-0000-0000-000000000100",
+        business_id=publication.business_id,
+        channel="telegram",
+        title="Готовый черновик",
+        body="Текст",
+        status="draft",
+        created_at="2026-08-27T09:00:00+00:00",
+        updated_at="2026-08-27T09:00:00+00:00",
+        scheduled_at=None,
+        published_at=None,
+        failed_at=None,
+        failure_reason=None,
+    )
     monkeypatch.setattr(
         extension.admin_ops,
-        "list_publication_calendar",
-        lambda **_kwargs: [publication],
+        "get_publication_calendar_projection",
+        lambda **_kwargs: PublicationCalendarProjection(
+            entries=(publication,),
+            actionable_drafts=(draft,),
+            draft_count=1,
+            scheduled_count=21,
+            published_count=4,
+            failed_count=2,
+            cancelled_count=0,
+        ),
     )
     state = FakeState({"cp_admin_section": "menu", "cp_admin_history": []})
     await extension._enhanced_marketing(
@@ -281,9 +308,12 @@ async def test_publications_use_shared_calendar_projection(
         "publications",
     )
     text, markup = render_contract[-1]
-    assert "Запланировано: 1" in text
+    assert "Запланировано: 21" in text
+    assert "Черновики: 1" in text
     assert "28.08.2026 21:00 · MAX · Запланировано · Вечерняя публикация" in text
     assert "ещё не подключ" not in text.casefold()
+    labels = [button.text for row in markup.inline_keyboard for button in row]
+    assert any("Готовый черновик" in label for label in labels)
     assert markup.inline_keyboard[-1][0].text == "⬅️ Назад"
 
 

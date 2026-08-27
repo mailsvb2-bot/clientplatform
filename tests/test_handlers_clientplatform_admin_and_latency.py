@@ -11,6 +11,7 @@ from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import CallbackQuery, Chat, InlineKeyboardMarkup, Message, User
 
+from clientplatform.application.admin_ops import PublicationCalendarProjection
 from clientplatform.domain.activity import BusinessProfileStatus, CapabilityStatus
 from clientplatform.domain.bookings import BookingSlotStatus
 from clientplatform.domain.tenancy import (
@@ -438,7 +439,19 @@ async def test_all_summary_and_marketing_screens_render(
         "business_delivery_summary",
         lambda **_kwargs: snapshot()[1],
     )
-    monkeypatch.setattr(admin, "list_publication_calendar", lambda **_kwargs: [])
+    monkeypatch.setattr(
+        admin,
+        "get_publication_calendar_projection",
+        lambda **_kwargs: PublicationCalendarProjection(
+            entries=(),
+            actionable_drafts=(),
+            draft_count=0,
+            scheduled_count=0,
+            published_count=0,
+            failed_count=0,
+            cancelled_count=0,
+        ),
+    )
     state = fsm_context()
     ctx = admin_context()
     callback = telegram_callback()

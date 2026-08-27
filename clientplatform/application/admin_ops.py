@@ -93,6 +93,17 @@ class PublicationRecord:
     failure_reason: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class PublicationCalendarProjection:
+    entries: tuple[PublicationRecord, ...]
+    actionable_drafts: tuple[PublicationRecord, ...]
+    draft_count: int
+    scheduled_count: int
+    published_count: int
+    failed_count: int
+    cancelled_count: int
+
+
 _PUBLICATION_STATUS_LABELS = {
     "draft": ("📝", "Черновик"),
     "scheduled": ("🗓", "Запланировано"),
@@ -695,36 +706,98 @@ def list_publications(
     return [_publication_from_row(row) for row in rows]
 
 
+def get_publication_calendar_projection(
+    *,
+    actor: TenantContext,
+    upcoming_limit: int = 4,
+    recent_limit: int = 4,
+    actionable_draft_limit: int = 5,
+) -> PublicationCalendarProjection:
+    """Project bounded display partitions and actions from canonical publications."""
+
+    normalized_upcoming = max(1, min(int(upcoming_limit), 20))
+    normalized_recent = max(1, min(int(recent_limit), 20))
+    normalized_drafts = max(1, min(int(actionable_draft_limit), 20))
+    select_fields = """
+        SELECT id, business_id, channel, title, body, status,
+               created_at, updated_at, scheduled_at, published_at,
+               failed_at, failure_reason
+        FROM business_publications
+    """
+    with get_db_ro() as conn:
+        current = _resolve(conn, actor, allowed_roles=_CONTENT_ROLES)
+        count_rows = conn.execute(
+            """
+            SELECT status, COUNT(*) AS c
+            FROM business_publications
+            WHERE business_id=?
+            GROUP BY status
+            """,
+            (current.business_id,),
+        ).fetchall()
+        counts = {
+            str(_value(row, "status", 0)): int(_value(row, "c", 1))
+            for row in count_rows
+        }
+        upcoming_rows = conn.execute(
+            select_fields
+            + """
+            WHERE business_id=? AND status='scheduled' AND scheduled_at IS NOT NULL
+            ORDER BY scheduled_at ASC, id ASC
+            LIMIT ?
+            """,
+            (current.business_id, normalized_upcoming),
+        ).fetchall()
+        recent_rows = conn.execute(
+            select_fields
+            + """
+            WHERE business_id=?
+              AND NOT (status='scheduled' AND scheduled_at IS NOT NULL)
+            ORDER BY COALESCE(published_at, failed_at, updated_at, created_at) DESC, id DESC
+            LIMIT ?
+            """,
+            (current.business_id, normalized_recent),
+        ).fetchall()
+        draft_rows = conn.execute(
+            select_fields
+            + """
+            WHERE business_id=? AND status='draft'
+            ORDER BY updated_at DESC, id DESC
+            LIMIT ?
+            """,
+            (current.business_id, normalized_drafts),
+        ).fetchall()
+
+    upcoming = tuple(_publication_from_row(row) for row in upcoming_rows)
+    recent = tuple(_publication_from_row(row) for row in recent_rows)
+    actionable_drafts = tuple(_publication_from_row(row) for row in draft_rows)
+    return PublicationCalendarProjection(
+        entries=upcoming + recent,
+        actionable_drafts=actionable_drafts,
+        draft_count=counts.get("draft", 0),
+        scheduled_count=counts.get("scheduled", 0),
+        published_count=counts.get("published", 0),
+        failed_count=counts.get("failed", 0),
+        cancelled_count=counts.get("cancelled", 0),
+    )
+
+
 def list_publication_calendar(
     *,
     actor: TenantContext,
     limit: int = 20,
 ) -> list[PublicationRecord]:
-    """Project existing publication facts into a stable owner calendar."""
+    """Compatibility view for callers that only need bounded calendar entries."""
 
-    normalized_limit = max(1, min(int(limit), 100))
-    with get_db_ro() as conn:
-        current = _resolve(conn, actor, allowed_roles=_CONTENT_ROLES)
-        rows = conn.execute(
-            """
-            SELECT id, business_id, channel, title, body, status,
-                   created_at, updated_at, scheduled_at, published_at,
-                   failed_at, failure_reason
-            FROM business_publications
-            WHERE business_id=?
-            ORDER BY
-                CASE WHEN status='scheduled' AND scheduled_at IS NOT NULL
-                     THEN 0 ELSE 1 END ASC,
-                CASE WHEN status='scheduled' THEN scheduled_at ELSE NULL END ASC,
-                CASE WHEN status='scheduled' THEN NULL
-                     ELSE COALESCE(published_at, failed_at, updated_at, created_at)
-                END DESC,
-                id DESC
-            LIMIT ?
-            """,
-            (current.business_id, normalized_limit),
-        ).fetchall()
-    return [_publication_from_row(row) for row in rows]
+    normalized_limit = max(2, min(int(limit), 40))
+    upcoming_limit = max(1, normalized_limit // 2)
+    recent_limit = max(1, normalized_limit - upcoming_limit)
+    projection = get_publication_calendar_projection(
+        actor=actor,
+        upcoming_limit=upcoming_limit,
+        recent_limit=recent_limit,
+    )
+    return list(projection.entries)
 
 
 def _publication_from_row(row: Any) -> PublicationRecord:
@@ -2109,12 +2182,14 @@ __all__ = [
     "PaymentIdempotencyConflict",
     "PaymentRecord",
     "PaymentStateConflict",
+    "PublicationCalendarProjection",
     "PublicationRecord",
     "SubscriptionState",
     "business_admin_insights",
     "create_publication_draft",
     "format_publication_calendar_lines",
     "get_admin_setting",
+    "get_publication_calendar_projection",
     "get_subscription_state",
     "interaction_snapshot",
     "list_offering_prices",

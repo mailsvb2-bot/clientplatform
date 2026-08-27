@@ -10,7 +10,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 from clientplatform.application import native_member_interactions as native_member_ui
-from clientplatform.application.admin_ops import PublicationRecord
+from clientplatform.application.admin_ops import PublicationCalendarProjection, PublicationRecord
 from clientplatform.application.native_member_interactions import (
     NativeMemberBridgeRejected,
     NativeMemberResolution,
@@ -175,14 +175,23 @@ class NativeMemberResolutionTests(unittest.TestCase):
                 return_value=SimpleNamespace(timezone="Europe/Moscow"),
             ),
             patch(
-                "clientplatform.application.native_member_interactions.list_publication_calendar",
-                return_value=[publication],
+                "clientplatform.application.native_member_interactions.get_publication_calendar_projection",
+                return_value=PublicationCalendarProjection(
+                    entries=(publication,),
+                    actionable_drafts=(),
+                    draft_count=3,
+                    scheduled_count=21,
+                    published_count=7,
+                    failed_count=2,
+                    cancelled_count=1,
+                ),
             ) as calendar,
         ):
             message = native_member_ui._growth_report_message(actor, "publications")
 
-        calendar.assert_called_once_with(actor=actor, limit=20)
-        self.assertIn("Запланировано: 1", message.text)
+        calendar.assert_called_once_with(actor=actor)
+        self.assertIn("Запланировано: 21", message.text)
+        self.assertIn("Черновики: 3", message.text)
         self.assertIn("28.08.2026 12:00 · ВКонтакте · Запланировано", message.text)
         self.assertNotIn("ещё не подключ", message.text.casefold())
 

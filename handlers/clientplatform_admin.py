@@ -24,7 +24,7 @@ from clientplatform.application.activity import (
 )
 from clientplatform.application.admin_ops import (
     format_publication_calendar_lines,
-    list_publication_calendar,
+    get_publication_calendar_projection,
 )
 from clientplatform.application.bookings import list_booking_slots
 from clientplatform.application.messenger_switching import (
@@ -801,28 +801,23 @@ async def _render_attention(callback: CallbackQuery, state: FSMContext, ctx: Adm
 async def _render_marketing(callback: CallbackQuery, state: FSMContext, ctx: AdminContext, action: str) -> None:
     profile, summary, capabilities, slots, customers, programs, progress = await _base_snapshot(ctx)
     if action == "publications":
-        publications = await asyncio.to_thread(
-            list_publication_calendar,
+        projection = await asyncio.to_thread(
+            get_publication_calendar_projection,
             actor=ctx.actor,
-            limit=20,
         )
-        drafts = sum(item.status == "draft" for item in publications)
-        scheduled = sum(item.status == "scheduled" for item in publications)
-        published = sum(item.status == "published" for item in publications)
-        failed = sum(item.status == "failed" for item in publications)
         calendar = "\n".join(
             format_publication_calendar_lines(
-                publications,
+                projection.entries,
                 timezone_name=profile.timezone,
                 max_entries=8,
             )
         )
         text = (
             "📣 Публикации\n\n"
-            f"Черновики: {drafts}\n"
-            f"Запланировано: {scheduled}\n"
-            f"Опубликовано: {published}\n"
-            f"Ошибки: {failed}\n\n"
+            f"Черновики: {projection.draft_count}\n"
+            f"Запланировано: {projection.scheduled_count}\n"
+            f"Опубликовано: {projection.published_count}\n"
+            f"Ошибки: {projection.failed_count}\n\n"
             "Ближайшие и последние:\n"
             f"{calendar}"
         )
