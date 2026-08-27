@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, Mock, patch
 from clientplatform.domain.ad_connections import AdConnectionError, AdConnectionStatus
 from clientplatform.domain.bookings import BookingSlotStatus
 from clientplatform.domain.promotions import PromotionChannel, PromotionError
+from clientplatform.domain.tenancy import PlatformRole
 from handlers import clientplatform_one_click_experience as one_click
 
 
@@ -438,7 +439,16 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
 
         async def labels_for(handler, data: str) -> list[str]:
             target.answer.reset_mock()
-            with common[1], common[3], common[4]:
+            actor = SimpleNamespace(role=PlatformRole.OWNER)
+            with (
+                common[1],
+                patch.object(
+                    one_click.control,
+                    "_actor",
+                    new=AsyncMock(return_value=actor),
+                ),
+                common[4],
+            ):
                 await handler(callback(data, target))
             return [
                 button.text
@@ -479,6 +489,42 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("🚀 Найти новых клиентов", ad_labels)
         self.assertNotIn("🚀 Получить клиентов", ad_labels)
         self.assertIn("📣 Яндекс Директ", ad_labels)
+
+    def test_settings_menu_hides_privileged_rows_by_role(self):
+        def labels(role: PlatformRole) -> list[str]:
+            return [
+                title
+                for row in one_click._settings_rows("business-1", role)
+                for title, _callback_data in row
+            ]
+
+        self.assertEqual(
+            labels(PlatformRole.OWNER),
+            [
+                "💬 Мессенджеры",
+                "🧩 Бизнес и возможности",
+                "👥 Команда и тариф",
+                "⚙️ Системное",
+                "⬅️ Назад",
+            ],
+        )
+        self.assertEqual(
+            labels(PlatformRole.ADMINISTRATOR),
+            [
+                "💬 Мессенджеры",
+                "🧩 Бизнес и возможности",
+                "⚙️ Системное",
+                "⬅️ Назад",
+            ],
+        )
+        self.assertEqual(
+            labels(PlatformRole.MANAGER),
+            ["💬 Мессенджеры", "🧩 Бизнес и возможности", "⬅️ Назад"],
+        )
+        self.assertEqual(
+            labels(PlatformRole.MARKETER),
+            ["🧩 Бизнес и возможности", "⬅️ Назад"],
+        )
 
 
 if __name__ == "__main__":

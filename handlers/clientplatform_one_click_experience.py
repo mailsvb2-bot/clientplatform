@@ -23,7 +23,7 @@ from clientplatform.application.promotions import create_slot_promotion, promoti
 from clientplatform.domain.ad_connections import AdConnectionError, AdConnectionStatus
 from clientplatform.domain.bookings import BookingSlotStatus
 from clientplatform.domain.promotions import PromotionChannel, PromotionError
-from clientplatform.domain.tenancy import TenantPermissionDenied
+from clientplatform.domain.tenancy import PlatformRole, TenantPermissionDenied
 from clientplatform.integrations.yandex_direct import YandexDirectError
 from config.settings import settings
 
@@ -615,22 +615,42 @@ async def open_content_tools(callback: CallbackQuery) -> None:
     )
 
 
+_SETTINGS_MESSENGER_ROLES = frozenset(
+    {
+        PlatformRole.OWNER,
+        PlatformRole.ADMINISTRATOR,
+        PlatformRole.MANAGER,
+        PlatformRole.SUPPORT,
+    }
+)
+_SETTINGS_SYSTEM_ROLES = frozenset(
+    {PlatformRole.OWNER, PlatformRole.ADMINISTRATOR}
+)
+
+
+def _settings_rows(token: str, role: PlatformRole) -> list[list[tuple[str, str]]]:
+    # Presentation filtering keeps the screen honest; target handlers still
+    # revalidate the live tenant role before serving any privileged action.
+    rows: list[list[tuple[str, str]]] = []
+    if role in _SETTINGS_MESSENGER_ROLES:
+        rows.append([("💬 Мессенджеры", f"cpa:{token}:messengers")])
+    rows.append([("🧩 Бизнес и возможности", f"cps:advanced:{token}")])
+    if role == PlatformRole.OWNER:
+        rows.append([("👥 Команда и тариф", f"cpa:{token}:menu-team")])
+    if role in _SETTINGS_SYSTEM_ROLES:
+        rows.append([("⚙️ Системное", f"cpa:{token}:menu-system")])
+    rows.append([("⬅️ Назад", f"cpo:more:{token}")])
+    return rows
+
+
 @router.callback_query(F.data.startswith("cpo:settings:"))
 async def open_settings_tools(callback: CallbackQuery) -> None:
     token = str(callback.data).split(":", 2)[2]
-    await control._actor(int(callback.from_user.id), control._token_uuid(token))
+    actor = await control._actor(int(callback.from_user.id), control._token_uuid(token))
     await control._callback_message(callback).answer(
         "⚙️ Настройки\n\n"
         "Обычные настройки — сверху. Команда и технические функции вынесены глубже.",
-        reply_markup=control._keyboard(
-            [
-                [("💬 Мессенджеры", f"cpa:{token}:messengers")],
-                [("🧩 Бизнес и возможности", f"cps:advanced:{token}")],
-                [("👥 Команда и тариф", f"cpa:{token}:menu-team")],
-                [("⚙️ Системное", f"cpa:{token}:menu-system")],
-                [("⬅️ Назад", f"cpo:more:{token}")],
-            ]
-        ),
+        reply_markup=control._keyboard(_settings_rows(token, actor.role)),
     )
 
 
