@@ -35,5 +35,32 @@ def normalize_settlement_currency(value: object) -> str:
         raise ValueError("currency must be a known ISO 4217 code")
     return normalized
 
+_ZERO_DECIMAL_CURRENCIES = frozenset(
+    {
+        "BIF", "CLP", "DJF", "GNF", "ISK", "JPY", "KMF", "KRW",
+        "PYG", "RWF", "UGX", "VND", "VUV", "XAF", "XOF", "XPF",
+    }
+)
+_THREE_DECIMAL_CURRENCIES = frozenset(
+    {"BHD", "IQD", "JOD", "KWD", "LYD", "OMR", "TND"}
+)
+_FOUR_DECIMAL_CURRENCIES = frozenset({"CLF", "UYW"})
 
-__all__ = ["normalize_settlement_currency"]
+
+def settlement_currency_minor_unit_exponent(value: object) -> int:
+    """Return the ISO-4217 minor-unit exponent for a settlement currency."""
+
+    currency = normalize_settlement_currency(value)
+    if currency in _ZERO_DECIMAL_CURRENCIES:
+        return 0
+    if currency in _THREE_DECIMAL_CURRENCIES:
+        return 3
+    if currency in _FOUR_DECIMAL_CURRENCIES:
+        return 4
+    return 2
+
+
+__all__ = [
+    "normalize_settlement_currency",
+    "settlement_currency_minor_unit_exponent",
+]

@@ -34,6 +34,10 @@ from clientplatform.application.control import (
 from clientplatform.application.native_messenger_setup import (
     issue_native_messenger_setup,
 )
+from clientplatform.application.customer_timeline import (
+    format_customer_timeline_lines,
+    get_customer_timeline,
+)
 from clientplatform.application.customers import get_customer, list_customers
 from clientplatform.application.programs import list_programs
 from clientplatform.application.progress import list_business_program_progress
@@ -583,10 +587,9 @@ async def _render_customer_card(
     customer_token: str,
 ) -> None:
     customer_id = control._token_uuid(customer_token)
-    record = await asyncio.to_thread(
-        get_customer,
-        actor=ctx.actor,
-        customer_id=customer_id,
+    record, timeline = await asyncio.gather(
+        asyncio.to_thread(get_customer, actor=ctx.actor, customer_id=customer_id),
+        asyncio.to_thread(get_customer_timeline, actor=ctx.actor, customer_id=customer_id),
     )
     identity_lines = [
         f"• {item.platform.value}: @{item.username}"
@@ -601,6 +604,8 @@ async def _render_customer_card(
         f"Создан: {record.customer.created_at}\n\n"
         "Контакты:\n"
         + ("\n".join(identity_lines) if identity_lines else "• не подключены")
+        + "\n\nИстория клиента:\n"
+        + "\n".join(format_customer_timeline_lines(timeline))
     )
     await _safe_edit(callback, text, _back_keyboard(ctx))
     await _set_current_section(state, action="customer", push=True)

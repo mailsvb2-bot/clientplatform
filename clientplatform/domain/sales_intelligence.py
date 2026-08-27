@@ -5,6 +5,8 @@ import re
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Mapping
+
+from clientplatform.domain.money import settlement_currency_minor_unit_exponent
 from decimal import Decimal
 
 
@@ -203,12 +205,7 @@ class SalesAIVerifiedOffer:
     def price_text(self) -> str | None:
         if self.amount_minor is None or self.currency is None:
             return None
-        zero_decimal = {
-            "BIF", "CLP", "DJF", "GNF", "JPY", "KMF", "KRW", "PYG",
-            "RWF", "UGX", "VND", "VUV", "XAF", "XOF", "XPF",
-        }
-        three_decimal = {"BHD", "IQD", "JOD", "KWD", "LYD", "OMR", "TND"}
-        exponent = 0 if self.currency in zero_decimal else 3 if self.currency in three_decimal else 2
+        exponent = settlement_currency_minor_unit_exponent(self.currency)
         amount = Decimal(self.amount_minor) / (Decimal(10) ** exponent)
         rendered = f"{amount:.{exponent}f}" if exponent else f"{amount:.0f}"
         return f"{rendered} {self.currency}"
