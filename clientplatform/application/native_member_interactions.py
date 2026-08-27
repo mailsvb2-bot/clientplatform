@@ -1540,7 +1540,11 @@ def _today_message(actor: TenantContext) -> CustomerInteractionMessage:
             period_days=7,
             advertising_loader=lambda **_kwargs: None,
         )
-    except (TenantAccessDenied, TenantPermissionDenied, ValueError, OSError, RuntimeError):
+    except (TenantAccessDenied, TenantPermissionDenied, ValueError):
+        snapshot = None
+    except OSError:
+        snapshot = None
+    except RuntimeError:
         snapshot = None
     if snapshot is not None:
         action_lines = [
