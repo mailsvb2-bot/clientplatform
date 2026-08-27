@@ -895,7 +895,7 @@ active business customer
 - currency-safe money model;
 - never store unnecessary card data.
 
-## 9.2. M4-002 — `NEXT` — Unified Customer Timeline Projection
+## 9.2. M4-002 — `DONE` — Unified Customer Timeline Projection
 
 ### Цель
 
@@ -937,9 +937,15 @@ customer
 
 Owner открывает одного клиента и получает одну tenant-scoped, детерминированную и объяснимую chronology его acquisition/sales/booking/payment history, собранную из существующих canonical facts без второго хранилища бизнес-истины.
 
+### Evidence
+
+- PR #230 (`M4-002: add unified customer timeline projection`) merged в `main` как `b5ef6ef0a583577b6b0d6ba0b9a7ded75b36e049`; exact PR head `28c94e11f55d5c384714ed757098ca2229480243` прошёл все 15 pull-request workflow runs, включая CI quality/coverage, Canon, Critical Static Surface, User Scenario Matrix, PostgreSQL payment/concurrency, booking/ad-spend/partner concurrency, Production Isolation, Encrypted Backup и Pre-deploy Release Gate.
+- Timeline остаётся read-only projection поверх canonical customer, attribution, sales и outcome facts; отдельный timeline store/event store/CRM не добавлен.
+- Review follow-up закрепил signed refund/reversal semantics, immutable outcome event identity и ISO-4217 minor-unit exponents; dependency-light regressions и focused Telegram/VK/MAX customer-card tests зелёные.
+
 Последующие расширения той же timeline добавляют messages, materials/program progress и support/feedback только через их canonical факты.
 
-## 9.3. Tasks and owner operating queue
+## 9.3. M4-003 — `NEXT` — Tasks and owner operating queue
 
 ClientPlatform ежедневно собирает максимум несколько действительно важных действий:
 
@@ -1590,7 +1596,8 @@ Duplicate tap, retry, worker restart или uncertain provider response не д�
 | U-009 Follow-up Employee | DONE | PR #207; merge SHA `6436e88de24b5b9caa9e06182ff1b190bfb91865`; all 15 PR workflows green; production smoke `u008-u009-sales-operations-v2` rollback-clean |
 | U-010 Retention & Reactivation Engine | DONE | PR #208 merge SHA `c87a4de62b6ef931686b39a7bb891fa394d0fa7d`; PR #209 merge SHA `6ba76983c255ed70486ce38803c4f3dfd002aa3d`; all 15 required workflows success on exact head `8922e217dbfd7a61bb922f3b8a0753344cce2745`; coverage raised to 74.61% combined / 65.62% branch; canonical sales/follow-up/outcome/revenue contours extended without a second retention brain |
 | M4-001 Customer Payment Evidence Bridge | DONE | PR #224 merge `f5dc4bd0f690ae859852025c240cfedf62389b25`; PR #213 merge `c9574dc68a9858d0429436bd2c37e32d00b80eb9`; final #213 required workflows green at 74.84% combined / 65.95% branch; current `main` `af21a49683917d8e5d5ac4b5d0f8249f589b1bbd` post-merge contours green |
-| M4-002 Unified Customer Timeline Projection | NEXT | project existing acquisition/sales/booking/payment/retention facts into one tenant-scoped read-only customer chronology; no second event store/CRM |
+| M4-002 Unified Customer Timeline Projection | DONE | PR #230 merge `b5ef6ef0a583577b6b0d6ba0b9a7ded75b36e049`; exact PR head `28c94e11f55d5c384714ed757098ca2229480243`; all 15 PR workflows success; read-only canonical customer timeline with tenant/RBAC isolation, Telegram/VK/MAX surfaces and corrected refund/reversal + ISO-4217 money semantics |
+| M4-003 Tasks and owner operating queue | NEXT | derive a small deterministic owner action queue from existing canonical business facts; explain priority without creating a second task/automation brain |
 
 ---
 
