@@ -536,6 +536,16 @@ async def test_customer_behavior_messenger_and_format_screens_render(
             ),
         ),
     )
+    monkeypatch.setattr(
+        admin,
+        "get_customer_timeline",
+        lambda **_kwargs: SimpleNamespace(entries=()),
+    )
+    monkeypatch.setattr(
+        admin,
+        "format_customer_timeline_lines",
+        lambda _timeline: ("• 27.08.2026 · Получена оплата · 500,00 RUB",),
+    )
     state = fsm_context()
     ctx = admin_context()
     callback = telegram_callback()
@@ -555,6 +565,8 @@ async def test_customer_behavior_messenger_and_format_screens_render(
     rendered = "\n".join(item[0] for item in capture_edits)
     assert "👥 Клиенты сегодня" in rendered
     assert "🔎 Карточка клиента" in rendered
+    assert "История клиента" in rendered
+    assert "Получена оплата" in rendered
     assert "🧠 Поведение" in rendered
     assert "💬 Мессенджеры" in rendered
     assert "ВКонтакте: ✅ работает" in rendered

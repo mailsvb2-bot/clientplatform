@@ -190,11 +190,23 @@ class NativeMemberParityReadTests(unittest.TestCase):
                 )
             ],
         )
-        with patch.object(ui, "get_customer", return_value=record) as getter:
+        timeline = SimpleNamespace(entries=())
+        with (
+            patch.object(ui, "get_customer", return_value=record) as getter,
+            patch.object(ui, "get_customer_timeline", return_value=timeline) as timeline_getter,
+            patch.object(
+                ui,
+                "format_customer_timeline_lines",
+                return_value=("• 27.08.2026 · Получена оплата · 500,00 RUB",),
+            ),
+        ):
             message = ui._customer_message(actor, customer_id)
         getter.assert_called_once_with(actor=actor, customer_id=customer_id)
+        timeline_getter.assert_called_once_with(actor=actor, customer_id=customer_id)
         self.assertIn("Анна", message.text)
         self.assertIn("vk: @anna_vk", message.text)
+        self.assertIn("История клиента", message.text)
+        self.assertIn("Получена оплата", message.text)
 
     def test_owner_team_pagination_stays_inside_native_transport_limit(self) -> None:
         actor = _actor(PlatformRole.OWNER)

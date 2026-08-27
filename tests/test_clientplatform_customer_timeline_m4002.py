@@ -1,0 +1,301 @@
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+from uuid import uuid4
+
+import pytest
+
+from clientplatform.application.customer_timeline import (
+    format_customer_timeline_lines,
+    get_customer_timeline,
+)
+from clientplatform.application.customers import create_customer
+from clientplatform.application.tenancy import (
+    create_business,
+    grant_business_member,
+    resolve_tenant_context,
+)
+from clientplatform.domain.customers import CustomerNotFound
+from clientplatform.domain.outcomes import (
+    BusinessOutcomeEvent,
+    OutcomeMoney,
+    OutcomeSource,
+    OutcomeType,
+)
+from clientplatform.domain.sales import ContactBasis, SalesLeadStage
+from clientplatform.domain.tenancy import PlatformRole, TenantPermissionDenied
+from clientplatform.infrastructure.outcome_repository import OutcomeRepository
+from clientplatform.infrastructure.sales_repository import SalesRepository
+from services.db import get_db
+
+
+_BASE = datetime(2026, 8, 27, 9, 0, tzinfo=timezone.utc)
+
+
+def _business(user_id: int, name: str):
+    access = create_business(owner_user_id=user_id, name=name)
+    actor = resolve_tenant_context(user_id=user_id, business_id=access.business.id)
+    customer = create_customer(actor=actor, display_name=f"Клиент {name}")
+    with get_db() as conn:
+        stamp = _BASE.isoformat(timespec="microseconds")
+        conn.execute(
+            "UPDATE customers SET created_at=?, updated_at=? WHERE id=? AND business_id=?",
+            (stamp, stamp, customer.id, actor.business_id),
+        )
+    return actor, customer
+
+
+def _attach_first_touch(*, business_id: str, customer_id: str, at: datetime) -> str:
+    identity_id = str(uuid4())
+    touch_id = str(uuid4())
+    stamp = at.isoformat(timespec="microseconds")
+    with get_db() as conn:
+        conn.execute(
+            """
+            INSERT INTO attribution_identities(
+                id, business_id, source, identity_kind, identity_fingerprint,
+                source_ref_type, source_ref_id, promotion_campaign_id, created_at
+            ) VALUES(?, ?, 'referral', 'test', ?, 'referral', ?, NULL, ?)
+            """,
+            (
+                identity_id,
+                business_id,
+                (business_id.replace("-", "") * 2)[:64],
+                f"referral:{customer_id}",
+                stamp,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO acquisition_touches(
+                id, business_id, attribution_identity_id, customer_id, source,
+                occurred_at, metadata_json, metadata_version, created_at
+            ) VALUES(?, ?, ?, ?, 'referral', ?, '{}', 1, ?)
+            """,
+            (touch_id, business_id, identity_id, customer_id, stamp, stamp),
+        )
+        conn.execute(
+            """
+            INSERT INTO attribution_links(
+                id, business_id, touch_id, customer_id, booking_slot_id,
+                model_version, created_at
+            ) VALUES(?, ?, ?, ?, NULL, 'first_touch_v1', ?)
+            """,
+            (str(uuid4()), business_id, touch_id, customer_id, stamp),
+        )
+    return touch_id
+
+
+def _sales_lead(*, actor, customer_id: str, at: datetime):
+    with get_db() as conn:
+        sales = SalesRepository(conn)
+        lead = sales.create_or_refresh_lead(
+            actor=actor,
+            opportunity_key=f"timeline:{customer_id}",
+            customer_id=customer_id,
+            source_kind="referral",
+            source_ref="friend",
+            contact_basis=ContactBasis.INBOUND,
+            now=at.isoformat(),
+        )
+        return lead
+
+
+def _stage(*, actor, lead_id: str, stage: SalesLeadStage, at: datetime) -> None:
+    with get_db() as conn:
+        SalesRepository(conn).set_stage(
+            actor=actor,
+            lead_id=lead_id,
+            stage=stage,
+            now=at.isoformat(),
+        )
+
+
+def _outcome(
+    *,
+    actor,
+    customer_id: str,
+    outcome_type: OutcomeType,
+    at: datetime,
+    source_type: str,
+    source_id: str,
+    amount_minor: int | None = None,
+    currency: str | None = None,
+) -> str:
+    event_id = str(uuid4())
+    money = (
+        None
+        if amount_minor is None
+        else OutcomeMoney(amount_minor=amount_minor, currency=str(currency))
+    )
+    with get_db() as conn:
+        OutcomeRepository(conn).append(
+            BusinessOutcomeEvent(
+                id=event_id,
+                business_id=actor.business_id,
+                outcome_type=outcome_type,
+                occurred_at=at,
+                source=OutcomeSource(source_type=source_type, source_id=source_id),
+                customer_id=customer_id,
+                subject_ref=f"{source_type}:{source_id}",
+                money=money,
+                idempotency_key=f"timeline:{event_id}",
+                metadata={},
+                metadata_version=1,
+                created_at=at,
+            )
+        )
+    return event_id
+
+
+def test_timeline_projects_acquisition_sales_booking_and_payment_in_order() -> None:
+    actor, customer = _business(880001, "timeline-happy")
+    touch_id = _attach_first_touch(
+        business_id=actor.business_id,
+        customer_id=customer.id,
+        at=_BASE + timedelta(minutes=1),
+    )
+    lead = _sales_lead(actor=actor, customer_id=customer.id, at=_BASE + timedelta(minutes=2))
+    _stage(actor=actor, lead_id=lead.id, stage=SalesLeadStage.QUALIFIED, at=_BASE + timedelta(minutes=3))
+    _outcome(
+        actor=actor,
+        customer_id=customer.id,
+        outcome_type=OutcomeType.BOOKING_CREATED,
+        at=_BASE + timedelta(minutes=4),
+        source_type="booking_slot",
+        source_id=str(uuid4()),
+    )
+    _outcome(
+        actor=actor,
+        customer_id=customer.id,
+        outcome_type=OutcomeType.ORDER_PAID,
+        at=_BASE + timedelta(minutes=5),
+        source_type="business_payment",
+        source_id=str(uuid4()),
+        amount_minor=50_000,
+        currency="RUB",
+    )
+
+    timeline = get_customer_timeline(actor=actor, customer_id=customer.id)
+    kinds = [entry.kind for entry in timeline.entries]
+    assert kinds[-5:] == [
+        "acquisition:first_touch",
+        "sales:lead_opened",
+        "sales:stage_changed",
+        "outcome:booking_created",
+        "outcome:order_paid",
+    ]
+    assert timeline.entries[-5].source_id == touch_id
+    assert timeline.entries[-1].amount_minor == 50_000
+    assert timeline.entries[-1].currency == "RUB"
+    assert [entry.occurred_at for entry in timeline.entries] == sorted(
+        entry.occurred_at for entry in timeline.entries
+    )
+
+
+def test_refund_is_a_distinct_money_fact_and_replay_does_not_duplicate_projection() -> None:
+    actor, customer = _business(880002, "timeline-refund")
+    payment_source = str(uuid4())
+    _outcome(
+        actor=actor,
+        customer_id=customer.id,
+        outcome_type=OutcomeType.ORDER_PAID,
+        at=_BASE + timedelta(minutes=1),
+        source_type="business_payment",
+        source_id=payment_source,
+        amount_minor=20_000,
+        currency="RUB",
+    )
+    _outcome(
+        actor=actor,
+        customer_id=customer.id,
+        outcome_type=OutcomeType.REFUND_RECORDED,
+        at=_BASE + timedelta(minutes=2),
+        source_type="business_payment_refund",
+        source_id=payment_source,
+        amount_minor=-20_000,
+        currency="RUB",
+    )
+
+    first = get_customer_timeline(actor=actor, customer_id=customer.id)
+    second = get_customer_timeline(actor=actor, customer_id=customer.id)
+    money = [entry for entry in first.entries if entry.amount_minor is not None]
+    assert [(entry.kind, entry.amount_minor, entry.currency) for entry in money] == [
+        ("outcome:order_paid", 20_000, "RUB"),
+        ("outcome:refund_recorded", -20_000, "RUB"),
+    ]
+    assert first == second
+    keys = [(entry.kind, entry.source_type, entry.source_id) for entry in first.entries]
+    assert len(keys) == len(set(keys))
+
+
+def test_partial_history_does_not_invent_missing_sales_or_payment_steps() -> None:
+    actor, customer = _business(880003, "timeline-partial")
+    timeline = get_customer_timeline(actor=actor, customer_id=customer.id)
+    assert [entry.kind for entry in timeline.entries] == ["customer:created"]
+
+
+def test_cross_tenant_customer_is_rejected() -> None:
+    actor_a, _customer_a = _business(880004, "timeline-a")
+    _actor_b, customer_b = _business(880005, "timeline-b")
+    with pytest.raises(CustomerNotFound):
+        get_customer_timeline(actor=actor_a, customer_id=customer_b.id)
+
+
+def test_support_role_sees_customer_sales_but_not_attribution_or_money_ledgers() -> None:
+    owner, customer = _business(880006, "timeline-support")
+    _attach_first_touch(
+        business_id=owner.business_id,
+        customer_id=customer.id,
+        at=_BASE + timedelta(minutes=1),
+    )
+    lead = _sales_lead(actor=owner, customer_id=customer.id, at=_BASE + timedelta(minutes=2))
+    _stage(actor=owner, lead_id=lead.id, stage=SalesLeadStage.CONTACTED, at=_BASE + timedelta(minutes=3))
+    _outcome(
+        actor=owner,
+        customer_id=customer.id,
+        outcome_type=OutcomeType.ORDER_PAID,
+        at=_BASE + timedelta(minutes=4),
+        source_type="business_payment",
+        source_id=str(uuid4()),
+        amount_minor=10_000,
+        currency="RUB",
+    )
+    grant_business_member(actor=owner, user_id=880106, role=PlatformRole.SUPPORT)
+    support = resolve_tenant_context(user_id=880106, business_id=owner.business_id)
+
+    timeline = get_customer_timeline(actor=support, customer_id=customer.id)
+    kinds = {entry.kind for entry in timeline.entries}
+    assert "sales:lead_opened" in kinds
+    assert "sales:stage_changed" in kinds
+    assert not any(kind.startswith("acquisition:") for kind in kinds)
+    assert not any(kind.startswith("outcome:") for kind in kinds)
+
+
+def test_non_customer_record_role_is_denied() -> None:
+    owner, customer = _business(880007, "timeline-marketer")
+    grant_business_member(actor=owner, user_id=880107, role=PlatformRole.MARKETER)
+    marketer = resolve_tenant_context(user_id=880107, business_id=owner.business_id)
+    with pytest.raises(TenantPermissionDenied):
+        get_customer_timeline(actor=marketer, customer_id=customer.id)
+
+
+def test_channel_neutral_formatter_keeps_money_explainable_and_bounds_history() -> None:
+    actor, customer = _business(880008, "timeline-format")
+    for index in range(10):
+        _outcome(
+            actor=actor,
+            customer_id=customer.id,
+            outcome_type=OutcomeType.ORDER_PAID,
+            at=_BASE + timedelta(minutes=index + 1),
+            source_type="business_payment",
+            source_id=str(uuid4()),
+            amount_minor=12_345 + index,
+            currency="RUB",
+        )
+    timeline = get_customer_timeline(actor=actor, customer_id=customer.id, limit=100)
+    lines = format_customer_timeline_lines(timeline, max_entries=3)
+    assert lines[0] == "• Показаны последние 3 из 11 событий"
+    assert len(lines) == 4
+    assert "Получена оплата" in lines[-1]
+    assert "123,54 RUB" in lines[-1]

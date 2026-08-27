@@ -20,6 +20,10 @@ from clientplatform.application.messenger_switching import (
 )
 from clientplatform.application.connections import list_connections
 from clientplatform.application.control import business_delivery_summary
+from clientplatform.application.customer_timeline import (
+    format_customer_timeline_lines,
+    get_customer_timeline,
+)
 from clientplatform.application.customers import get_customer, list_customers
 from clientplatform.application.growth_cockpit import get_growth_cockpit
 from clientplatform.application.programs import list_programs
@@ -1180,6 +1184,7 @@ def _customer_message(actor: TenantContext, customer_id: str) -> CustomerInterac
     if actor.role not in _SUPPORT_ROLES:
         return _permission_message()
     record = get_customer(actor=actor, customer_id=customer_id)
+    timeline = get_customer_timeline(actor=actor, customer_id=customer_id)
     identity_lines = [
         (
             f"• {item.platform.value}: @{item.username}"
@@ -1196,6 +1201,8 @@ def _customer_message(actor: TenantContext, customer_id: str) -> CustomerInterac
             f"Создан: {record.customer.created_at}\n\n"
             "Контакты:\n"
             + ("\n".join(identity_lines) if identity_lines else "• не подключены")
+            + "\n\nИстория клиента:\n"
+            + "\n".join(format_customer_timeline_lines(timeline))
         ),
         rows=((_button("👥 К списку", "cpm:customers:0"),), _back_row()),
     )
