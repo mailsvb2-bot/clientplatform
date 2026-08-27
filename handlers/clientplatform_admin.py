@@ -895,6 +895,11 @@ async def _render_marketing(callback: CallbackQuery, state: FSMContext, ctx: Adm
     await _set_current_section(state, action=action, push=True)
 
 
+# Keep the canonical fallback renderer directly testable even when the runtime
+# extension replaces _render_marketing after module import.
+_render_marketing_fallback = _render_marketing
+
+
 async def _render_admin_report(callback: CallbackQuery, state: FSMContext, ctx: AdminContext, action: str) -> None:
     profile, summary, capabilities, slots, customers, programs, progress = await _base_snapshot(ctx)
     active = sum(item.status == CapabilityStatus.ACTIVE for item in capabilities)
