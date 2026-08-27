@@ -222,3 +222,20 @@ def test_channel_promotion_resolves_existing_telegram_identity(monkeypatch) -> N
         ).fetchone()[0] == 1
     finally:
         conn.close()
+
+def test_channel_promotion_identity_lookup_fails_closed(monkeypatch) -> None:
+    conn, actor, alias_token, _customer_id = _promotion_fixture()
+    monkeypatch.setattr(promotions, "get_db", lambda: nullcontext(conn))
+    try:
+        with pytest.raises(
+            PromotionInvariantViolation,
+            match="active channel customer identity",
+        ):
+            promotions.open_channel_promotion_for_identity(
+                source_token=alias_token,
+                business_id=actor.business_id,
+                platform="telegram",
+                external_subject="999999",
+            )
+    finally:
+        conn.close()

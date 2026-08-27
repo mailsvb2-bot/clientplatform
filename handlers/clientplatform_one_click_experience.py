@@ -185,7 +185,7 @@ async def _fallback(
             create_slot_promotion,
             actor=actor,
             slot_id=slot.slot.id,
-            channel=PromotionChannel.TELEGRAM,
+            channel=PromotionChannel.WEBSITE,
         )
     except (PromotionError, TenantPermissionDenied):
         await _fallback_failure(

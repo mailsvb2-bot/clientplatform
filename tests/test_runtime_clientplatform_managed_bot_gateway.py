@@ -279,6 +279,18 @@ class ClientPlatformManagedBotGatewayRuntimeTests(unittest.IsolatedAsyncioTestCa
         mark.assert_called_once_with(item)
         runtime._dispatcher.feed_webhook_update.assert_awaited_once()
 
+    async def test_promotion_start_parser_is_bounded_and_fail_closed(self) -> None:
+        from clientplatform.runtime import bot_gateway as gateway
+
+        self.assertIsNone(gateway._telegram_promotion_token(None))
+        self.assertIsNone(gateway._telegram_promotion_token("обычный текст"))
+        self.assertIsNone(gateway._telegram_promotion_token("/start ordinary"))
+        self.assertIsNone(gateway._telegram_promotion_token("/start cpa_bad!"))
+        self.assertEqual(
+            gateway._telegram_promotion_token(" start   cpa_sourceToken123 "),
+            "sourceToken123",
+        )
+
     async def test_disabled_runtime_has_no_background_owner(self) -> None:
         with patch.dict("os.environ", {}, clear=True):
             config = bot_gateway_runtime_config()

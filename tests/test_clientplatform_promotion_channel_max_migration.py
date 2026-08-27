@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from services.migrations import clientplatform_promotion_channel_max_v1 as migration
 
@@ -75,6 +75,39 @@ class ClientPlatformPromotionChannelMaxMigrationTests(unittest.TestCase):
             (migration.NAME,),
         ).fetchone()["c"]
         self.assertEqual(applied, 1)
+
+
+    def test_postgres_constraint_replacement_targets_channel_check_only(self) -> None:
+        conn = MagicMock()
+        conn.execute.return_value.fetchall.return_value = [
+            {"conname": "legacy_promotion_channel_check", "definition": "CHECK (channel IN ('telegram', 'vk'))"},
+            {"conname": "promotion_status_check", "definition": "CHECK (status IN ('active', 'closed'))"},
+        ]
+        migration._update_postgres_constraint(conn)
+        statements = [str(call.args[0]) for call in conn.execute.call_args_list]
+        self.assertTrue(any('DROP CONSTRAINT "legacy_promotion_channel_check"' in item for item in statements))
+        self.assertFalse(any('DROP CONSTRAINT "promotion_status_check"' in item for item in statements))
+        self.assertTrue(any("cp_promotion_campaigns_channel_max_v1" in item for item in statements))
+
+    def test_postgres_constraint_replacement_rejects_unsafe_name(self) -> None:
+        conn = MagicMock()
+        conn.execute.return_value.fetchall.return_value = [
+            {"conname": 'bad"constraint', "definition": "CHECK (channel IN ('telegram'))"}
+        ]
+        with self.assertRaisesRegex(RuntimeError, "unsafe promotion campaign constraint"):
+            migration._update_postgres_constraint(conn)
+
+    def test_apply_routes_postgres_through_backend_specific_update(self) -> None:
+        conn = MagicMock()
+        with (
+            patch.object(migration, "migration_applied", return_value=False),
+            patch.object(migration, "is_postgres_enabled", return_value=True),
+            patch.object(migration, "_update_postgres_constraint") as update,
+            patch.object(migration, "mark_migration") as mark,
+        ):
+            migration.apply(conn)
+        update.assert_called_once_with(conn)
+        mark.assert_called_once_with(conn, migration.NAME)
 
 
 if __name__ == "__main__":
