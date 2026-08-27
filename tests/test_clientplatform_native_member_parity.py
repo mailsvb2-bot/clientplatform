@@ -55,15 +55,26 @@ class NativeMemberParityNavigationTests(unittest.TestCase):
         self.assertEqual(["cpm:today", "cpm:menu-all"], _commands(message))
         self.assertEqual(["cpm:work", "cpm:messengers", "cpm:menu"], _commands(ui._menu_all_message(actor)))
 
-    def test_native_home_falls_back_to_role_safe_action_when_cockpit_is_unavailable(self) -> None:
-        actor = _actor(PlatformRole.MARKETER)
+    def test_native_home_falls_back_to_role_safe_manual_read_when_cockpit_is_unavailable(self) -> None:
+        marketer = _actor(PlatformRole.MARKETER)
         with patch.object(
             ui,
             "get_growth_cockpit",
             side_effect=ui.TenantPermissionDenied("not available for this projection"),
         ):
-            primary = ui._native_primary_action(actor)
-        self.assertEqual(primary.command, "cpm:acquire")
+            primary = ui._native_primary_action(marketer)
+        self.assertEqual(primary.command, "cpm:growth")
+        self.assertIn("вручную", primary.label.casefold())
+
+        owner = _actor(PlatformRole.OWNER)
+        with patch.object(
+            ui,
+            "get_growth_cockpit",
+            side_effect=RuntimeError("projection temporarily unavailable"),
+        ):
+            primary = ui._native_primary_action(owner)
+        self.assertEqual(primary.command, "cpm:today")
+        self.assertIn("вручную", primary.label.casefold())
 
     def test_work_section_contains_telegram_admin_operational_reads(self) -> None:
         message = ui._work_message(_actor(PlatformRole.OWNER))
