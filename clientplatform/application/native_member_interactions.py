@@ -26,10 +26,17 @@ from clientplatform.application.progress import list_business_program_progress
 from clientplatform.application.sales_workspace import (
     add_sales_workspace_note,
     assign_sales_workspace_to_actor,
+    cancel_sales_workspace_followup,
+    claim_sales_workspace_handoff,
     get_sales_workspace_item,
     list_sales_workspace,
+    list_sales_workspace_handoffs,
     list_sales_workspace_recent_closed,
+    reopen_sales_workspace,
+    resolve_sales_workspace_handoff,
+    schedule_sales_workspace_followup,
     set_sales_workspace_next_action,
+    suppress_sales_workspace_followup,
     transition_sales_workspace,
     unassign_sales_workspace,
 )
@@ -324,6 +331,30 @@ def parse_native_member_interaction(value: object) -> ParsedMemberInteraction:
             "sales-close-text",
             (close_match.group(1), stage, close_match.group(3).strip()),
         )
+    followup_match = re.fullmatch(
+        r"напомнить\s+([0-9a-f-]{6,36})\s+(1|24|72)\s+(.{1,4000})",
+        raw,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if followup_match is not None:
+        return ParsedMemberInteraction(
+            "sales-followup-text",
+            (
+                followup_match.group(1),
+                followup_match.group(2),
+                followup_match.group(3).strip(),
+            ),
+        )
+    optout_match = re.fullmatch(
+        r"не\s+писать\s+([0-9a-f-]{6,36})\s+подтвердить",
+        raw,
+        flags=re.IGNORECASE,
+    )
+    if optout_match is not None:
+        return ParsedMemberInteraction(
+            "sales-followup-optout-text",
+            (optout_match.group(1),),
+        )
     alias = _ALIASES.get(_compact(raw))
     if alias is not None:
         return ParsedMemberInteraction(alias)
@@ -369,6 +400,7 @@ def parse_native_member_interaction(value: object) -> ParsedMemberInteraction:
             "connect-vk",
             "connect-max",
             "sales",
+            "sales-recent",
             "sales-lead",
             "sales-assign",
             "sales-unassign",
@@ -376,6 +408,14 @@ def parse_native_member_interaction(value: object) -> ParsedMemberInteraction:
             "sales-note-help",
             "sales-next-help",
             "sales-close-help",
+            "sales-reopen",
+            "sales-handoffs",
+            "sales-handoff-claim",
+            "sales-handoff-resolve",
+            "sales-followup-menu",
+            "sales-followup-help",
+            "sales-followup-cancel",
+            "sales-followup-optout-help",
             "acquire",
         }:
             return ParsedMemberInteraction(action, args)
@@ -484,6 +524,16 @@ _SALES_STAGE_LABELS = {
     "won": "Оплатил / выиграно",
     "lost": "Потеряно",
 }
+_HANDOFF_REASON_LABELS = {
+    "explicit_request": "Клиент попросил человека",
+    "low_confidence": "Нужна ручная проверка",
+    "sensitive_context": "Требуется личное внимание",
+    "pricing_exception": "Нестандартные условия",
+    "negative_sentiment": "Клиент недоволен",
+    "repeated_failure": "Автоматический сценарий не справился",
+}
+_HANDOFF_SEVERITY_LABELS = {"urgent": "🔴 Срочно", "high": "🟠 Важно", "normal": "🟢 Обычно"}
+_FOLLOWUP_CHANNELS = frozenset({"telegram", "vk", "max"})
 
 
 def _sales_reference_item(actor: TenantContext, reference: str) -> dict[str, Any]:
@@ -507,9 +557,12 @@ def _sales_reference_item(actor: TenantContext, reference: str) -> dict[str, Any
 def _sales_message(actor: TenantContext) -> CustomerInteractionMessage:
     if actor.role not in _SUPPORT_ROLES:
         return _permission_message()
-    items = list_sales_workspace(actor=actor, limit=7)
+    items = list_sales_workspace(actor=actor, limit=6)
+    handoffs = list_sales_workspace_handoffs(actor=actor, limit=1)
     rows: list[tuple[CustomerInteractionButton, ...]] = []
     lines = ["Обращения и продажи", ""]
+    if handoffs:
+        rows.append((_button("🙋 Нужно подключиться", "cpm:sales-handoffs"),))
     for item in items:
         lead_id = str(item.get("id") or "")
         customer = str(item.get("customer_name") or "Клиент")
@@ -520,15 +573,51 @@ def _sales_message(actor: TenantContext) -> CustomerInteractionMessage:
         rows.append((_button(customer[:32], f"cpm:sales-lead:{lead_id}"),))
     if not items:
         lines.append("Открытых обращений сейчас нет.")
-    lines.extend(
-        [
-            "",
-            "Заметка: заметка <id> <текст>",
-            "Следующее действие: следующее <id> <текст>",
-            "Результат: результат <id> выиграно|потеряно <причина>",
-        ]
-    )
+    lines.extend(["", "Заметка: заметка <id> <текст>", "Следующее действие: следующее <id> <текст>", "Follow-up: напомнить <id> 1|24|72 <текст>", "Результат: результат <id> выиграно|потеряно <причина>"])
+    rows.append((_button("🗂 Недавно закрытые", "cpm:sales-recent"),))
     rows.append((_button("📊 Работа", "cpm:work"),))
+    return CustomerInteractionMessage(text="\n".join(lines), rows=tuple(rows))
+
+
+def _sales_recent_message(actor: TenantContext) -> CustomerInteractionMessage:
+    if actor.role not in _SUPPORT_ROLES:
+        return _permission_message()
+    items = list_sales_workspace_recent_closed(actor=actor, limit=7)
+    lines = ["Недавно закрытые обращения", ""]
+    rows: list[tuple[CustomerInteractionButton, ...]] = []
+    for item in items:
+        lead_id = str(item.get("id") or "")
+        customer = str(item.get("customer_name") or "Клиент")
+        stage = _SALES_STAGE_LABELS.get(str(item.get("stage") or ""), "Закрыто")
+        lines.append(f"• {customer} · {stage} · {lead_id[:8]}")
+        rows.append((_button(customer[:32], f"cpm:sales-lead:{lead_id}"),))
+    if not items:
+        lines.append("Недавно закрытых обращений нет.")
+    rows.append((_button("💬 К обращениям", "cpm:sales"),))
+    rows.append(_back_row())
+    return CustomerInteractionMessage(text="\n".join(lines), rows=tuple(rows))
+
+
+def _sales_handoffs_message(actor: TenantContext) -> CustomerInteractionMessage:
+    if actor.role not in _SUPPORT_ROLES:
+        return _permission_message()
+    items = list_sales_workspace_handoffs(actor=actor, limit=4)
+    lines = ["Нужно подключиться лично", ""]
+    rows: list[tuple[CustomerInteractionButton, ...]] = []
+    for index, item in enumerate(items, start=1):
+        handoff_id = str(item.get("id") or "")
+        status = "взято в работу" if str(item.get("status") or "") == "claimed" else "ожидает"
+        reason = _HANDOFF_REASON_LABELS.get(str(item.get("reason") or ""), "Нужно личное внимание")
+        severity = _HANDOFF_SEVERITY_LABELS.get(str(item.get("severity") or ""), "🟢 Обычно")
+        lines.append(f"{index}. {item.get('customer_name') or 'Клиент'} · {severity} · {reason} · {status}")
+        actions: list[CustomerInteractionButton] = []
+        if str(item.get("status") or "") == "open":
+            actions.append(_button(f"✋ Взять {index}", f"cpm:sales-handoff-claim:{handoff_id}"))
+        actions.append(_button(f"✅ Готово {index}", f"cpm:sales-handoff-resolve:{handoff_id}"))
+        rows.append(tuple(actions))
+    if not items:
+        lines.append("Сейчас нет обращений, где требуется личное участие.")
+    rows.append((_button("💬 К обращениям", "cpm:sales"),))
     rows.append(_back_row())
     return CustomerInteractionMessage(text="\n".join(lines), rows=tuple(rows))
 
@@ -546,8 +635,7 @@ def _sales_lead_message(actor: TenantContext, lead_id: str) -> CustomerInteracti
     source_ref = str(item.get("attribution_source_ref_id") or item.get("source_ref") or "").strip()
     owner_text = str(assigned_user) if assigned_user is not None else "не назначен"
     lines = [
-        "Карточка обращения",
-        "",
+        "Карточка обращения", "",
         f"Клиент: {item.get('customer_name') or 'Клиент'}",
         f"ID: {short_id}",
         f"Стадия: {_SALES_STAGE_LABELS.get(stage, stage or 'В работе')}",
@@ -556,6 +644,10 @@ def _sales_lead_message(actor: TenantContext, lead_id: str) -> CustomerInteracti
         f"Срок: {item.get('due_at') or 'без срока'}",
         f"Источник: {source}" + (f" · {source_ref}" if source_ref else ""),
     ]
+    if item.get("followup_suppressed"):
+        lines.append("Follow-up: запрещён по просьбе клиента")
+    elif item.get("active_followup_id"):
+        lines.append(f"Follow-up: запланирован на {item.get('active_followup_scheduled_at') or 'указанное время'}")
     if item.get("closure_reason"):
         lines.append(f"Причина закрытия: {item['closure_reason']}")
     if item.get("next_plan_id"):
@@ -567,27 +659,32 @@ def _sales_lead_message(actor: TenantContext, lead_id: str) -> CustomerInteracti
             rows.append((_button("👤 Снять ответственного", f"cpm:sales-unassign:{lead_id}"),))
         else:
             rows.append((_button("👤 Взять себе", f"cpm:sales-assign:{lead_id}"),))
-        rows.append(
-            (
-                _button("Связались", f"cpm:sales-stage:{lead_id}:contacted"),
-                _button("Интерес", f"cpm:sales-stage:{lead_id}:qualified"),
-                _button("Оформление", f"cpm:sales-stage:{lead_id}:checkout"),
-            )
+        rows.append((
+            _button("Связались", f"cpm:sales-stage:{lead_id}:contacted"),
+            _button("Интерес", f"cpm:sales-stage:{lead_id}:qualified"),
+            _button("Оформление", f"cpm:sales-stage:{lead_id}:checkout"),
+        ))
+        rows.append((
+            _button("📝 Заметка", f"cpm:sales-note-help:{lead_id}"),
+            _button("➡️ Следующее", f"cpm:sales-next-help:{lead_id}"),
+        ))
+        rows.append((
+            _button("✅ Выиграно", f"cpm:sales-close-help:{lead_id}:won"),
+            _button("❌ Потеряно", f"cpm:sales-close-help:{lead_id}:lost"),
+        ))
+        followup_source = str(item.get("source_kind") or "").strip().lower()
+        followup_allowed = (
+            followup_source in _FOLLOWUP_CHANNELS
+            and str(item.get("contact_basis") or "") != "none"
+            and not bool(item.get("followup_suppressed"))
         )
-        rows.append(
-            (
-                _button("📝 Заметка", f"cpm:sales-note-help:{lead_id}"),
-                _button("➡️ Следующее", f"cpm:sales-next-help:{lead_id}"),
-            )
-        )
-        rows.append(
-            (
-                _button("✅ Выиграно", f"cpm:sales-close-help:{lead_id}:won"),
-                _button("❌ Потеряно", f"cpm:sales-close-help:{lead_id}:lost"),
-            )
-        )
+        if item.get("active_followup_id") or followup_allowed:
+            rows.append((_button("✉️ Follow-up", f"cpm:sales-followup-menu:{lead_id}"),))
+    else:
+        rows.append((_button("📝 Заметка", f"cpm:sales-note-help:{lead_id}"),))
+        if stage == "lost":
+            rows.append((_button("↩️ Вернуть в работу", f"cpm:sales-reopen:{lead_id}"),))
     rows.append((_button("💬 К обращениям", "cpm:sales"),))
-    rows.append(_back_row())
     return CustomerInteractionMessage(text="\n".join(lines), rows=tuple(rows))
 
 
@@ -606,6 +703,61 @@ def _sales_input_help(lead_id: str, kind: str, stage: str | None = None) -> Cust
     return CustomerInteractionMessage(
         text=f"{title}\n\nОтправьте одним сообщением:\n{example}",
         rows=((_button("💬 К обращениям", "cpm:sales"),), _back_row()),
+    )
+
+
+def _sales_followup_message(actor: TenantContext, lead_id: str) -> CustomerInteractionMessage:
+    if actor.role not in _SUPPORT_ROLES:
+        return _permission_message()
+    item = get_sales_workspace_item(actor=actor, lead_id=lead_id)
+    if item is None or str(item.get("stage") or "") in {"won", "lost"}:
+        return _stale_message()
+    source = str(item.get("source_kind") or "").strip().lower()
+    active = bool(item.get("active_followup_id"))
+    suppressed = bool(item.get("followup_suppressed"))
+    allowed = source in _FOLLOWUP_CHANNELS and str(item.get("contact_basis") or "") != "none" and not suppressed
+    lines = ["Follow-up клиенту", ""]
+    rows: list[tuple[CustomerInteractionButton, ...]] = []
+    if suppressed:
+        lines.append("Клиент попросил больше не писать по этому каналу.")
+    elif active:
+        lines.append(f"Активный follow-up: {item.get('active_followup_scheduled_at') or 'запланирован'}.")
+        rows.append((_button("✖️ Отменить follow-up", f"cpm:sales-followup-cancel:{lead_id}"),))
+    elif allowed:
+        lines.append("Сообщение уйдёт только по исходному каналу клиента после явной команды.")
+        rows.append((_button("✉️ Запланировать", f"cpm:sales-followup-help:{lead_id}"),))
+    else:
+        lines.append("Для этого обращения безопасный messenger follow-up сейчас недоступен.")
+    if allowed:
+        rows.append((_button("🚫 Больше не писать", f"cpm:sales-followup-optout-help:{lead_id}"),))
+    rows.append((_button("↩️ К карточке", f"cpm:sales-lead:{lead_id}"),))
+    rows.append((_button("💬 К обращениям", "cpm:sales"),))
+    return CustomerInteractionMessage(text="\n".join(lines), rows=tuple(rows))
+
+
+def _sales_followup_help(lead_id: str) -> CustomerInteractionMessage:
+    short_id = str(lead_id)[:8]
+    return CustomerInteractionMessage(
+        text=(
+            "Запланировать follow-up\n\nОтправьте одним сообщением:\n"
+            f"напомнить {short_id} 24 Ваш текст клиенту\n\n"
+            "Вместо 24 можно указать 1 или 72 часа. Ночное время canonical scheduler "
+            "перенесёт на ближайшее разрешённое утро."
+        ),
+        rows=((_button("↩️ К карточке", f"cpm:sales-lead:{lead_id}"),),),
+    )
+
+
+def _sales_followup_optout_help(lead_id: str) -> CustomerInteractionMessage:
+    short_id = str(lead_id)[:8]
+    return CustomerInteractionMessage(
+        text=(
+            "Запретить follow-up\n\nЕсли клиент действительно попросил больше не писать, "
+            "подтвердите отдельным сообщением:\n"
+            f"не писать {short_id} подтвердить\n\n"
+            "Активный follow-up будет остановлен canonical contact-suppression правилом."
+        ),
+        rows=((_button("↩️ К карточке", f"cpm:sales-lead:{lead_id}"),),),
     )
 
 
@@ -671,6 +823,49 @@ def _sales_mutation_message(
             reason=parsed.args[2],
         )
         return _sales_lead_message(actor, lead_id)
+    if parsed.action == "sales-reopen":
+        if len(parsed.args) != 1:
+            return _stale_message()
+        reopen_sales_workspace(actor=actor, lead_id=parsed.args[0])
+        return _sales_lead_message(actor, parsed.args[0])
+    if parsed.action in {"sales-handoff-claim", "sales-handoff-resolve"}:
+        if len(parsed.args) != 1:
+            return _stale_message()
+        if parsed.action == "sales-handoff-claim":
+            claim_sales_workspace_handoff(actor=actor, handoff_id=parsed.args[0])
+        else:
+            resolve_sales_workspace_handoff(actor=actor, handoff_id=parsed.args[0])
+        return _sales_handoffs_message(actor)
+    if parsed.action == "sales-followup-text":
+        if len(parsed.args) != 3 or parsed.args[1] not in {"1", "24", "72"}:
+            return _stale_message()
+        item = _sales_reference_item(actor, parsed.args[0])
+        lead_id = str(item["id"])
+        followup = schedule_sales_workspace_followup(
+            actor=actor, lead_id=lead_id, message_text=parsed.args[2],
+            hours_from_now=int(parsed.args[1]), interaction_key=interaction_key,
+        )
+        card = _sales_lead_message(actor, lead_id)
+        scheduled_at = str(getattr(followup, "scheduled_at", "") or "указанное время")
+        return CustomerInteractionMessage(
+            text=f"✅ Follow-up запланирован на {scheduled_at}.\n\n{card.text}", rows=card.rows
+        )
+    if parsed.action == "sales-followup-cancel":
+        if len(parsed.args) != 1:
+            return _stale_message()
+        cancel_sales_workspace_followup(actor=actor, lead_id=parsed.args[0])
+        card = _sales_lead_message(actor, parsed.args[0])
+        return CustomerInteractionMessage(text="✅ Follow-up отменён.\n\n" + card.text, rows=card.rows)
+    if parsed.action == "sales-followup-optout-text":
+        if len(parsed.args) != 1:
+            return _stale_message()
+        item = _sales_reference_item(actor, parsed.args[0])
+        lead_id = str(item["id"])
+        suppress_sales_workspace_followup(actor=actor, lead_id=lead_id)
+        card = _sales_lead_message(actor, lead_id)
+        return CustomerInteractionMessage(
+            text="✅ Запрет на follow-up сохранён.\n\n" + card.text, rows=card.rows
+        )
     return _stale_message()
 
 
@@ -1445,6 +1640,10 @@ def _render(
             return _attention_message(actor)
         if parsed.action == "sales":
             return _sales_message(actor)
+        if parsed.action == "sales-recent":
+            return _sales_recent_message(actor)
+        if parsed.action == "sales-handoffs":
+            return _sales_handoffs_message(actor)
         if parsed.action == "sales-lead":
             if len(parsed.args) != 1:
                 return _stale_message()
@@ -1456,6 +1655,12 @@ def _render(
             "sales-note-text",
             "sales-next-text",
             "sales-close-text",
+            "sales-reopen",
+            "sales-handoff-claim",
+            "sales-handoff-resolve",
+            "sales-followup-text",
+            "sales-followup-cancel",
+            "sales-followup-optout-text",
         }:
             return _sales_mutation_message(
                 actor, parsed, interaction_key=setup_key
@@ -1472,6 +1677,18 @@ def _render(
             if len(parsed.args) != 2 or parsed.args[1] not in {"won", "lost"}:
                 return _stale_message()
             return _sales_input_help(parsed.args[0], "close", parsed.args[1])
+        if parsed.action == "sales-followup-menu":
+            if len(parsed.args) != 1:
+                return _stale_message()
+            return _sales_followup_message(actor, parsed.args[0])
+        if parsed.action == "sales-followup-help":
+            if len(parsed.args) != 1:
+                return _stale_message()
+            return _sales_followup_help(parsed.args[0])
+        if parsed.action == "sales-followup-optout-help":
+            if len(parsed.args) != 1:
+                return _stale_message()
+            return _sales_followup_optout_help(parsed.args[0])
         if parsed.action == "messengers":
             return _messengers_message(
                 actor,

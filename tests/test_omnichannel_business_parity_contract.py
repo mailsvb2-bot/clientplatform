@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from clientplatform.application import acquisition_destination, sales_workspace
@@ -113,3 +114,55 @@ def test_sales_workspace_mutation_delegates_to_canonical_operation(monkeypatch):
 
     assert result == "updated-lead"
     assert calls == [(actor, "lead-42", "member-7")]
+
+
+def test_sales_workspace_handoff_delegates_to_canonical_use_cases(monkeypatch):
+    actor = object()
+    calls = []
+    monkeypatch.setattr(
+        sales_workspace,
+        "claim_sales_handoff",
+        lambda **kwargs: calls.append(("claim", kwargs)) or {"status": "claimed"},
+    )
+    monkeypatch.setattr(
+        sales_workspace,
+        "resolve_sales_handoff",
+        lambda **kwargs: calls.append(("resolve", kwargs)) or {"status": "resolved"},
+    )
+
+    sales_workspace.claim_sales_workspace_handoff(actor=actor, handoff_id="handoff-1")
+    sales_workspace.resolve_sales_workspace_handoff(actor=actor, handoff_id="handoff-1")
+
+    assert calls == [
+        ("claim", {"actor": actor, "handoff_id": "handoff-1"}),
+        ("resolve", {"actor": actor, "handoff_id": "handoff-1"}),
+    ]
+
+
+def test_sales_workspace_followup_delegates_to_canonical_scheduler(monkeypatch):
+    actor = object()
+    captured = {}
+
+    def schedule(**kwargs):
+        captured.update(kwargs)
+        return "followup"
+
+    monkeypatch.setattr(sales_workspace, "schedule_sales_followup", schedule)
+    before = datetime.now(timezone.utc)
+    result = sales_workspace.schedule_sales_workspace_followup(
+        actor=actor,
+        lead_id="lead-1",
+        message_text="Напомнить о встрече",
+        hours_from_now=24,
+        interaction_key="route:event:followup",
+    )
+    after = datetime.now(timezone.utc)
+
+    assert result == "followup"
+    assert captured["actor"] is actor
+    assert captured["lead_id"] == "lead-1"
+    assert captured["message_text"] == "Напомнить о встрече"
+    assert captured["request_key"] == "route:event:followup"
+    delay = captured["scheduled_at"] - before
+    assert timedelta(hours=24) - timedelta(seconds=1) <= delay
+    assert delay <= timedelta(hours=24) + timedelta(seconds=1)

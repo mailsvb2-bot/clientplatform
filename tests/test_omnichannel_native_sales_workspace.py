@@ -29,8 +29,13 @@ def _item(lead_id: str) -> dict[str, object]:
         "assigned_user_id": 101,
         "next_action": "Позвонить",
         "due_at": "2026-08-27T09:00:00+00:00",
+        "source_kind": "vk",
+        "contact_basis": "consent",
         "attribution_source": "yandex_direct",
         "attribution_source_ref_id": "campaign:neutral-runtime",
+        "active_followup_id": None,
+        "active_followup_scheduled_at": None,
+        "followup_suppressed": False,
         "closure_reason": None,
         "next_plan_id": None,
     }
@@ -186,3 +191,172 @@ def test_native_acquisition_without_slot_is_fail_safe(monkeypatch) -> None:
     commands = [button.command for row in message.rows for button in row]
     assert "cpm:bookings" in commands
     assert "cpm:growth" in commands
+
+
+def test_native_sales_card_exposes_followup_without_exceeding_contract(monkeypatch) -> None:
+    actor = _actor()
+    lead_id = str(uuid4())
+    monkeypatch.setattr(ui, "get_sales_workspace_item", lambda **_: _item(lead_id))
+    message = ui._sales_lead_message(actor, lead_id)
+    commands = [button.command for row in message.rows for button in row]
+    assert f"cpm:sales-followup-menu:{lead_id}" in commands
+    assert len(commands) <= 10
+
+
+def test_native_followup_schedule_is_transport_neutral(monkeypatch) -> None:
+    actor = _actor()
+    lead_id = str(uuid4())
+    parsed = ui.parse_native_member_interaction(
+        f"напомнить {lead_id[:8]} 24 Напомнить о встрече завтра"
+    )
+    assert parsed.action == "sales-followup-text"
+    monkeypatch.setattr(ui, "_sales_reference_item", lambda *_a, **_k: {"id": lead_id})
+    monkeypatch.setattr(
+        ui,
+        "_sales_lead_message",
+        lambda *_a, **_k: CustomerInteractionMessage(text="Карточка обновлена"),
+    )
+    calls: list[dict[str, object]] = []
+
+    def schedule(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(scheduled_at="2026-08-28T09:00:00+00:00")
+
+    monkeypatch.setattr(ui, "schedule_sales_workspace_followup", schedule)
+    for platform in (ConnectionPlatform.VK, ConnectionPlatform.MAX):
+        message = ui._render(
+            actor,
+            parsed,
+            linked=False,
+            setup_issuer=None,
+            setup_key=f"followup:{platform.value}",
+            current_platform=platform,
+        )
+        assert "Follow-up запланирован" in message.text
+    assert len(calls) == 2
+    for call in calls:
+        assert call["actor"] == actor
+        assert call["lead_id"] == lead_id
+        assert call["message_text"] == "Напомнить о встрече завтра"
+        assert call["hours_from_now"] == 24
+        assert "platform" not in call
+
+
+def test_native_followup_optout_requires_explicit_confirmation(monkeypatch) -> None:
+    actor = _actor()
+    lead_id = str(uuid4())
+    parsed = ui.parse_native_member_interaction(
+        f"не писать {lead_id[:8]} подтвердить"
+    )
+    assert parsed.action == "sales-followup-optout-text"
+    monkeypatch.setattr(ui, "_sales_reference_item", lambda *_a, **_k: {"id": lead_id})
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        ui,
+        "suppress_sales_workspace_followup",
+        lambda **kwargs: calls.append(kwargs) or 1,
+    )
+    monkeypatch.setattr(
+        ui,
+        "_sales_lead_message",
+        lambda *_a, **_k: CustomerInteractionMessage(text="Карточка обновлена"),
+    )
+    message = ui._sales_mutation_message(
+        actor,
+        parsed,
+        interaction_key="route:event:optout",
+    )
+    assert "Запрет на follow-up сохранён" in message.text
+    assert calls == [{"actor": actor, "lead_id": lead_id}]
+
+
+def test_native_handoff_queue_is_same_for_vk_and_max(monkeypatch) -> None:
+    actor = _actor()
+    handoff_id = str(uuid4())
+    monkeypatch.setattr(
+        ui,
+        "list_sales_workspace_handoffs",
+        lambda **_: [{
+            "id": handoff_id,
+            "customer_name": "Анна",
+            "reason": "explicit_request",
+            "severity": "urgent",
+            "status": "open",
+        }],
+    )
+    messages = []
+    for platform in (ConnectionPlatform.VK, ConnectionPlatform.MAX):
+        messages.append(ui._render(
+            actor,
+            ui.ParsedMemberInteraction("sales-handoffs"),
+            linked=False,
+            setup_issuer=None,
+            setup_key=f"handoff:{platform.value}",
+            current_platform=platform,
+        ))
+    assert messages[0].text == messages[1].text
+    commands = [button.command for row in messages[0].rows for button in row]
+    assert f"cpm:sales-handoff-claim:{handoff_id}" in commands
+    assert f"cpm:sales-handoff-resolve:{handoff_id}" in commands
+    assert len(commands) <= 10
+
+
+def test_native_handoff_claim_delegates_to_shared_workspace(monkeypatch) -> None:
+    actor = _actor()
+    handoff_id = str(uuid4())
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        ui,
+        "claim_sales_workspace_handoff",
+        lambda **kwargs: calls.append(kwargs) or {},
+    )
+    monkeypatch.setattr(
+        ui,
+        "_sales_handoffs_message",
+        lambda *_a, **_k: CustomerInteractionMessage(text="Очередь обновлена"),
+    )
+    for platform in (ConnectionPlatform.VK, ConnectionPlatform.MAX):
+        message = ui._render(
+            actor,
+            ui.ParsedMemberInteraction("sales-handoff-claim", (handoff_id,)),
+            linked=False,
+            setup_issuer=None,
+            setup_key=f"handoff-claim:{platform.value}",
+            current_platform=platform,
+        )
+        assert message.text == "Очередь обновлена"
+    assert calls == [
+        {"actor": actor, "handoff_id": handoff_id},
+        {"actor": actor, "handoff_id": handoff_id},
+    ]
+
+
+def test_lost_native_lead_can_reopen_through_canonical_workspace(monkeypatch) -> None:
+    actor = _actor()
+    lead_id = str(uuid4())
+    lost = _item(lead_id)
+    lost["stage"] = "lost"
+    lost["closure_reason"] = "бюджет"
+    monkeypatch.setattr(ui, "get_sales_workspace_item", lambda **_: lost)
+    card = ui._sales_lead_message(actor, lead_id)
+    commands = [button.command for row in card.rows for button in row]
+    assert f"cpm:sales-reopen:{lead_id}" in commands
+
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        ui,
+        "reopen_sales_workspace",
+        lambda **kwargs: calls.append(kwargs) or SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        ui,
+        "_sales_lead_message",
+        lambda *_a, **_k: CustomerInteractionMessage(text="Снова в работе"),
+    )
+    message = ui._sales_mutation_message(
+        actor,
+        ui.ParsedMemberInteraction("sales-reopen", (lead_id,)),
+        interaction_key="route:event:reopen",
+    )
+    assert message.text == "Снова в работе"
+    assert calls == [{"actor": actor, "lead_id": lead_id}]
