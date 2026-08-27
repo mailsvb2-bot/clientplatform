@@ -178,12 +178,19 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
             for row in out.answer.await_args.kwargs["reply_markup"].inline_keyboard
             for button in row
         ]
-        self.assertIn("📈 Что происходит с бизнесом", labels)
-        self.assertIn("💬 Обращения и продажи", labels)
-        self.assertIn("👥 Клиенты и запись", labels)
-        self.assertIn("💬 Мессенджеры", labels)
-        self.assertIn("📣 Реклама и продвижение", labels)
-        self.assertIn("⚙️ Настройки", labels)
+        self.assertEqual(
+            labels,
+            [
+                "📈 Обзор бизнеса",
+                "👥 Клиенты и продажи",
+                "🧰 Услуги и расписание",
+                "✍️ Контент и продвижение",
+                "⚙️ Настройки",
+                "🏠 В кабинет",
+            ],
+        )
+        self.assertNotIn("💬 Мессенджеры", labels)
+        self.assertNotIn("📣 Реклама и продвижение", labels)
 
     async def test_no_open_slot_reduces_flow_to_one_required_next_action(self) -> None:
         out = outbound_message()
@@ -342,13 +349,10 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             labels,
             [
-                "📈 Что происходит с бизнесом",
-                "💬 Обращения и продажи",
-                "👥 Клиенты и запись",
-                "💬 Мессенджеры",
+                "📈 Обзор бизнеса",
+                "👥 Клиенты и продажи",
                 "🧰 Услуги и расписание",
-                "📣 Реклама и продвижение",
-                "🤝 Партнёрства",
+                "✍️ Контент и продвижение",
                 "⚙️ Настройки",
                 "🏠 В кабинет",
             ],
@@ -358,7 +362,9 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
             for row in out.answer.await_args.kwargs["reply_markup"].inline_keyboard
             for button in row
         }
-        self.assertEqual(buttons["💬 Мессенджеры"], "cpa:business-1:messengers")
+        self.assertEqual(buttons["👥 Клиенты и продажи"], "cpo:clients:business-1")
+        self.assertEqual(buttons["✍️ Контент и продвижение"], "cpo:content:business-1")
+        self.assertEqual(buttons["⚙️ Настройки"], "cpo:settings:business-1")
 
 
 if __name__ == "__main__":

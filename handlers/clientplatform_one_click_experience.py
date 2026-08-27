@@ -563,18 +563,72 @@ async def open_more(callback: CallbackQuery) -> None:
     token = str(callback.data).split(":", 2)[2]
     await control._actor(int(callback.from_user.id), control._token_uuid(token))
     await control._callback_message(callback).answer(
-        "⋯ Все возможности\n\nГлавная показывает только самое важное. Все остальные функции ClientPlatform доступны здесь.",
+        "⋯ Все возможности\n\n"
+        "Выберите задачу. Внутри каждого раздела собраны связанные действия — "
+        "без длинного списка на одном экране.",
         reply_markup=control._keyboard(
             [
-                [("📈 Что происходит с бизнесом", f"cpg:period:{token}:7")],
-                [("💬 Обращения и продажи", f"cps:s:{token}")],
-                [("👥 Клиенты и запись", f"cpj:bookings:{token}")],
-                [("💬 Мессенджеры", f"cpa:{token}:messengers")],
+                [("📈 Обзор бизнеса", f"cpg:period:{token}:7")],
+                [("👥 Клиенты и продажи", f"cpo:clients:{token}")],
                 [("🧰 Услуги и расписание", f"cpo:work:{token}")],
-                [("📣 Реклама и продвижение", f"cpo:ads:{token}")],
-                [("🤝 Партнёрства", f"cpg:home:{token}")],
-                [("⚙️ Настройки", f"cps:advanced:{token}")],
+                [("✍️ Контент и продвижение", f"cpo:content:{token}")],
+                [("⚙️ Настройки", f"cpo:settings:{token}")],
                 [("🏠 В кабинет", f"cpj:home:{token}")],
+            ]
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("cpo:clients:"))
+async def open_client_tools(callback: CallbackQuery) -> None:
+    token = str(callback.data).split(":", 2)[2]
+    await control._actor(int(callback.from_user.id), control._token_uuid(token))
+    await control._callback_message(callback).answer(
+        "👥 Клиенты и продажи\n\nЗдесь работа с обращениями, клиентами и записями.",
+        reply_markup=control._keyboard(
+            [
+                [("💬 Обращения и продажи", f"cps:s:{token}")],
+                [("📅 Записи клиентов", f"cpj:bookings:{token}")],
+                [("🔎 Все клиенты", f"cpa:{token}:customer-list")],
+                [("⬅️ Назад", f"cpo:more:{token}")],
+            ]
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("cpo:content:"))
+async def open_content_tools(callback: CallbackQuery) -> None:
+    token = str(callback.data).split(":", 2)[2]
+    await control._actor(int(callback.from_user.id), control._token_uuid(token))
+    await control._callback_message(callback).answer(
+        "✍️ Контент и продвижение\n\nПодготовьте материалы и выберите, как приводить людей.",
+        reply_markup=control._keyboard(
+            [
+                [("📣 Публикации", f"cpa:{token}:publications")],
+                [("✍️ Подготовить тексты", f"cpa:{token}:copy")],
+                [("🧪 Проверить предложение", f"cpa:{token}:offers")],
+                [("📣 Реклама", f"cpo:ads:{token}")],
+                [("🤝 Партнёрства", f"cpg:home:{token}")],
+                [("⬅️ Назад", f"cpo:more:{token}")],
+            ]
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("cpo:settings:"))
+async def open_settings_tools(callback: CallbackQuery) -> None:
+    token = str(callback.data).split(":", 2)[2]
+    await control._actor(int(callback.from_user.id), control._token_uuid(token))
+    await control._callback_message(callback).answer(
+        "⚙️ Настройки\n\n"
+        "Обычные настройки — сверху. Команда и технические функции вынесены глубже.",
+        reply_markup=control._keyboard(
+            [
+                [("💬 Мессенджеры", f"cpa:{token}:messengers")],
+                [("🧩 Бизнес и возможности", f"cps:advanced:{token}")],
+                [("👥 Команда и тариф", f"cpa:{token}:menu-team")],
+                [("⚙️ Системное", f"cpa:{token}:menu-system")],
+                [("⬅️ Назад", f"cpo:more:{token}")],
             ]
         ),
     )

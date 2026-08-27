@@ -24,7 +24,7 @@ class ClientPlatformAdminContractTests(unittest.TestCase):
         self.assertLess(text.index(admin), text.index(original))
         self.assertIn("control._admin_router_composed = True", text)
 
-    def test_admin_is_a_tenant_safe_metrotherapy_style_panel(self) -> None:
+    def test_admin_is_a_tenant_safe_grouped_business_panel(self) -> None:
         text = ADMIN.read_text(encoding="utf-8")
         tree = ast.parse(text)
         functions = {
@@ -48,34 +48,44 @@ class ClientPlatformAdminContractTests(unittest.TestCase):
         }:
             self.assertIn(required, functions)
 
-        self.assertIn("🛠 Админ-панель", text)
+        self.assertIn("⚙️ Управление бизнесом", text)
         self.assertIn('text="🛠 Панель"', text)
-        self.assertIn('"📊 Сегодня (кратко)"', text)
-        self.assertIn('"📈 Сегодня (подробно)"', text)
-        self.assertIn('"👥 Клиенты сегодня"', text)
-        self.assertIn('"🔎 Карточка клиента"', text)
-        self.assertIn('"🧠 Поведение"', text)
-        self.assertIn('"💬 Мессенджеры"', text)
-        self.assertIn('"⚠️ Требуют внимания"', text)
-        self.assertIn('"🤖 Growth Autopilot"', text)
-        self.assertIn('"📣 Публикации"', text)
-        self.assertIn('"📉 Путь до заявки"', text)
-        self.assertIn('"💰 Деньги и клиенты"', text)
-        self.assertIn('"💰 Оплаты"', text)
-        self.assertIn('"🧲 Группы клиентов"', text)
-        self.assertIn('"🧪 Проверка предложений"', text)
-        self.assertIn('"✍️ Подготовить тексты"', text)
-        self.assertIn('"💡 Подсказка по ценам"', text)
-        self.assertIn('"🚦 Release gate"', text)
-        self.assertIn('"🎁 Приглашения и рекомендации"', text)
-        self.assertIn('"🧲 Воронка 2.0"', text)
-        self.assertIn('"🧩 Удержание"', text)
-        self.assertIn('"🧾 Последние действия"', text)
-        self.assertIn('"🧪 Системные проверки"', text)
-        self.assertIn('"💳 Тариф ClientPlatform"', text)
-        self.assertIn('"👥 Добавить сотрудника"', text)
-        self.assertIn('"👥 Роли команды"', text)
-        self.assertIn('"🔐 Доступы сотрудников"', text)
+        self.assertIn('"📊 Работа и клиенты"', text)
+        self.assertIn('"✍️ Контент и каналы"', text)
+        self.assertIn('"📈 Маркетинг и деньги"', text)
+        self.assertIn('"👥 Команда и тариф"', text)
+        self.assertIn('"⚙️ Системное"', text)
+        self.assertIn("_admin_group_items", text)
+        self.assertIn("_render_admin_group", text)
+        for action in (
+            "today",
+            "today-full",
+            "customers",
+            "customer-list",
+            "behavior",
+            "messengers",
+            "attention",
+            "autopilot",
+            "publications",
+            "funnel",
+            "money",
+            "payments",
+            "segments",
+            "offers",
+            "copy",
+            "prices",
+            "release",
+            "invites",
+            "funnel2",
+            "retention",
+            "recent",
+            "system",
+            "tariff",
+            "add-member",
+            "members",
+            "permissions",
+        ):
+            self.assertIn(f'"{action}"', text)
         self.assertIn('"⬅️ Назад"', text)
 
     def test_admin_never_routes_into_legacy_global_metrotherapy_admin(self) -> None:

@@ -251,43 +251,79 @@ def _back_keyboard(ctx: AdminContext, *extra: tuple[str, str]) -> InlineKeyboard
     return _keyboard(rows)
 
 
+_ADMIN_MENU_GROUPS: dict[str, tuple[str, tuple[tuple[str, str], ...]]] = {
+    "menu-work": (
+        "📊 Работа и клиенты",
+        (
+            ("📊 Сегодня", "today"),
+            ("📈 Подробный обзор", "today-full"),
+            ("👥 Клиенты сегодня", "customers"),
+            ("🔎 Все клиенты", "customer-list"),
+            ("⚠️ Требуют внимания", "attention"),
+            ("🧠 Поведение клиентов", "behavior"),
+        ),
+    ),
+    "menu-content": (
+        "✍️ Контент и каналы",
+        (
+            ("💬 Мессенджеры", "messengers"),
+            ("📣 Публикации", "publications"),
+            ("✍️ Подготовить тексты", "copy"),
+            ("🧪 Проверка предложений", "offers"),
+            ("🤖 Автопилот", "autopilot"),
+        ),
+    ),
+    "menu-growth": (
+        "📈 Маркетинг и деньги",
+        (
+            ("📉 Путь до заявки", "funnel"),
+            ("💰 Деньги и клиенты", "money"),
+            ("💰 Оплаты", "payments"),
+            ("🧲 Группы клиентов", "segments"),
+            ("💡 Подсказка по ценам", "prices"),
+            ("🎁 Приглашения", "invites"),
+            ("🧲 Воронка 2.0", "funnel2"),
+            ("🧩 Удержание", "retention"),
+        ),
+    ),
+    "menu-team": (
+        "👥 Команда и тариф",
+        (
+            ("💳 Тариф ClientPlatform", "tariff"),
+            ("👥 Добавить сотрудника", "add-member"),
+            ("👥 Роли команды", "members"),
+            ("🔐 Доступы сотрудников", "permissions"),
+        ),
+    ),
+    "menu-system": (
+        "⚙️ Системное",
+        (
+            ("🚦 Release gate", "release"),
+            ("🧾 Последние действия", "recent"),
+            ("🧪 Системные проверки", "system"),
+        ),
+    ),
+}
+
+
+def _admin_group_items(
+    ctx: AdminContext,
+    group_action: str,
+) -> tuple[tuple[str, str], ...]:
+    _title, items = _ADMIN_MENU_GROUPS[group_action]
+    return tuple(
+        (title, action)
+        for title, action in items
+        if ctx.role in _SECTION_ROLES.get(action, set())
+    )
+
+
 def _menu_keyboard(ctx: AdminContext) -> InlineKeyboardMarkup:
-    rows: list[list[tuple[str, str]]] = []
-
-    def add(role_set: set[PlatformRole], title: str, action: str) -> None:
-        if ctx.role in role_set:
-            rows.append([(title, _callback(ctx, action))])
-
-    add(_SUPPORT_ROLES, "📊 Сегодня (кратко)", "today")
-    add(_SUPPORT_ROLES, "📈 Сегодня (подробно)", "today-full")
-    add(_SUPPORT_ROLES, "👥 Клиенты сегодня", "customers")
-    add(_SUPPORT_ROLES, "🔎 Карточка клиента", "customer-list")
-    add(_SUPPORT_ROLES, "🧠 Поведение", "behavior")
-    add(_SUPPORT_ROLES, "💬 Мессенджеры", "messengers")
-    add(_SUPPORT_ROLES, "⚠️ Требуют внимания", "attention")
-
-    add(_AUTOMATION_ROLES, "🤖 Growth Autopilot", "autopilot")
-    add(_CONTENT_ROLES, "📣 Публикации", "publications")
-    add(_MARKETING_ROLES, "📉 Путь до заявки", "funnel")
-    add(_MARKETING_ROLES, "💰 Деньги и клиенты", "money")
-    add(_MARKETING_ROLES, "💰 Оплаты", "payments")
-    add(_MARKETING_ROLES, "🧲 Группы клиентов", "segments")
-    add(_CONTENT_ROLES | _MARKETING_ROLES, "🧪 Проверка предложений", "offers")
-    add(_CONTENT_ROLES | _MARKETING_ROLES, "✍️ Подготовить тексты", "copy")
-    add(_MARKETING_ROLES, "💡 Подсказка по ценам", "prices")
-
-    add(_ADMIN_ROLES, "🚦 Release gate", "release")
-    add(_ADMIN_ROLES, "🎁 Приглашения и рекомендации", "invites")
-    add(_ADMIN_ROLES, "🧲 Воронка 2.0", "funnel2")
-    add(_ADMIN_ROLES, "🧩 Удержание", "retention")
-    add(_ADMIN_ROLES, "🧾 Последние действия", "recent")
-    add(_ADMIN_ROLES, "🧪 Системные проверки", "system")
-
-    add(_OWNER_ROLES, "💳 Тариф ClientPlatform", "tariff")
-    add(_OWNER_ROLES, "👥 Добавить сотрудника", "add-member")
-    add(_OWNER_ROLES, "👥 Роли команды", "members")
-    add(_OWNER_ROLES, "🔐 Доступы сотрудников", "permissions")
-
+    rows = [
+        [(title, _callback(ctx, group_action))]
+        for group_action, (title, _items) in _ADMIN_MENU_GROUPS.items()
+        if _admin_group_items(ctx, group_action)
+    ]
     rows.append([("⬅️ Назад", _callback(ctx, "leave"))])
     return _keyboard(rows)
 
@@ -372,15 +408,39 @@ async def _render_menu(
     if reset:
         await state.update_data(cp_admin_section="menu", cp_admin_history=[])
     text = (
-        "🛠 Админ-панель\n\n"
-        f"Бизнес: {ctx.business_name}\n"
-        f"Роль: {_role_label(ctx.role)}\n\n"
-        "Выберите доступный раздел:"
+        "⚙️ Управление бизнесом\n\n"
+        f"{ctx.business_name} · {_role_label(ctx.role)}\n\n"
+        "Выберите, чем хотите заняться. Редкие и технические функции спрятаны "
+        "внутри соответствующих разделов."
     )
     if isinstance(target, CallbackQuery):
         await _safe_edit(target, text, _menu_keyboard(ctx))
     else:
         await target.answer(text, reply_markup=_menu_keyboard(ctx))
+
+
+async def _render_admin_group(
+    target: Message | CallbackQuery,
+    state: FSMContext,
+    ctx: AdminContext,
+    group_action: str,
+    *,
+    push: bool = True,
+) -> None:
+    title, _items = _ADMIN_MENU_GROUPS[group_action]
+    visible = _admin_group_items(ctx, group_action)
+    if not visible:
+        raise TenantPermissionDenied("admin group is not allowed for this role")
+    if push:
+        await _set_current_section(state, action=group_action, push=True)
+    rows = [[(label, _callback(ctx, action))] for label, action in visible]
+    rows.append([("⬅️ Назад", _callback(ctx, "back"))])
+    text = f"{title}\n\nВыберите нужное действие."
+    markup = _keyboard(rows)
+    if isinstance(target, CallbackQuery):
+        await _safe_edit(target, text, markup)
+    else:
+        await target.answer(text, reply_markup=markup)
 
 
 def _today_for(profile: object) -> date:
@@ -1172,7 +1232,9 @@ async def _navigate_back(callback: CallbackQuery, state: FSMContext, ctx: AdminC
     data = await state.get_data()
     history = list(data.get("cp_admin_history") or [])
     action = str(history.pop() if history else "menu")
-    if action == "customer-list":
+    if action in _ADMIN_MENU_GROUPS:
+        await _render_admin_group(callback, state, ctx, action, push=False)
+    elif action == "customer-list":
         await _render_customer_list(callback, state, ctx, today_only=False)
     elif action == "customers":
         await _render_customer_list(callback, state, ctx, today_only=True)
@@ -1244,7 +1306,11 @@ async def admin_gate(callback: CallbackQuery, state: FSMContext) -> None:
             business_id=business_id,
         )
         if action not in {"menu", "back", "leave"}:
-            _assert_section_allowed(ctx, action)
+            if action in _ADMIN_MENU_GROUPS:
+                if not _admin_group_items(ctx, action):
+                    raise TenantPermissionDenied("admin group is not allowed for this role")
+            else:
+                _assert_section_allowed(ctx, action)
 
         legacy_callback = str(callback.data or "").startswith(
             ("cpa:home:", "cpa:formats:", "cpa:back:")
@@ -1253,16 +1319,18 @@ async def admin_gate(callback: CallbackQuery, state: FSMContext) -> None:
             await state.clear()
             if legacy_callback:
                 await control._callback_message(callback).answer(
-                    "🛠 Админ-панель\n\n"
-                    f"Бизнес: {ctx.business_name}\n"
-                    f"Роль: {_role_label(ctx.role)}\n\n"
-                    "Выберите доступный раздел:",
+                    "⚙️ Управление бизнесом\n\n"
+                    f"{ctx.business_name} · {_role_label(ctx.role)}\n\n"
+                    "Выберите, чем хотите заняться. Редкие и технические функции "
+                    "спрятаны внутри соответствующих разделов.",
                     reply_markup=_menu_keyboard(ctx),
                 )
             else:
                 await _render_menu(callback, state, ctx, reset=True)
         elif action == "back":
             await _navigate_back(callback, state, ctx)
+        elif action in _ADMIN_MENU_GROUPS:
+            await _render_admin_group(callback, state, ctx, action)
         elif action == "leave":
             await state.clear()
             await control._send_dashboard(
@@ -1397,10 +1465,10 @@ async def send_admin_panel(
 
     ctx = await _load_admin_context(user_id=user_id, business_id=business_id)
     await message.answer(
-        "🛠 Админ-панель\n\n"
-        f"Бизнес: {ctx.business_name}\n"
-        f"Роль: {_role_label(ctx.role)}\n\n"
-        "Выберите доступный раздел:",
+        "⚙️ Управление бизнесом\n\n"
+        f"{ctx.business_name} · {_role_label(ctx.role)}\n\n"
+        "Выберите, чем хотите заняться. Редкие и технические функции спрятаны "
+        "внутри соответствующих разделов.",
         reply_markup=_menu_keyboard(ctx),
     )
 

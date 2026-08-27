@@ -432,32 +432,53 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
         await one_click.receive_one_click_region(bad_message, State(data))
         self.assertIn("Напишите город", bad_message.answer.await_args.args[0])
 
-    async def test_secondary_work_and_ad_menus(self):
+    async def test_secondary_grouped_owner_menus(self):
         target = out()
         common = self.common(target)
-        with common[1], common[3], common[4]:
-            await one_click.open_work_tools(callback("cpo:work:business-1", target))
-        labels = [
-            button.text
-            for row in target.answer.await_args.kwargs["reply_markup"].inline_keyboard
-            for button in row
-        ]
+
+        async def labels_for(handler, data: str) -> list[str]:
+            target.answer.reset_mock()
+            with common[1], common[3], common[4]:
+                await handler(callback(data, target))
+            return [
+                button.text
+                for row in target.answer.await_args.kwargs["reply_markup"].inline_keyboard
+                for button in row
+            ]
+
         self.assertEqual(
-            labels,
+            await labels_for(one_click.open_client_tools, "cpo:clients:business-1"),
+            ["💬 Обращения и продажи", "📅 Записи клиентов", "🔎 Все клиенты", "⬅️ Назад"],
+        )
+        self.assertEqual(
+            await labels_for(one_click.open_work_tools, "cpo:work:business-1"),
             ["🧰 Мои услуги", "📅 Мой календарь", "🔗 Моя страница", "⬅️ Назад"],
         )
-
-        target.answer.reset_mock()
-        with common[1], common[3], common[4]:
-            await one_click.open_ad_tools(callback("cpo:ads:business-1", target))
-        labels = [
-            button.text
-            for row in target.answer.await_args.kwargs["reply_markup"].inline_keyboard
-            for button in row
-        ]
-        self.assertIn("🚀 Найти новых клиентов", labels)
-        self.assertNotIn("🚀 Получить клиентов", labels)
-        self.assertIn("📣 Яндекс Директ", labels)
+        self.assertEqual(
+            await labels_for(one_click.open_content_tools, "cpo:content:business-1"),
+            [
+                "📣 Публикации",
+                "✍️ Подготовить тексты",
+                "🧪 Проверить предложение",
+                "📣 Реклама",
+                "🤝 Партнёрства",
+                "⬅️ Назад",
+            ],
+        )
+        self.assertEqual(
+            await labels_for(one_click.open_settings_tools, "cpo:settings:business-1"),
+            [
+                "💬 Мессенджеры",
+                "🧩 Бизнес и возможности",
+                "👥 Команда и тариф",
+                "⚙️ Системное",
+                "⬅️ Назад",
+            ],
+        )
+        ad_labels = await labels_for(one_click.open_ad_tools, "cpo:ads:business-1")
+        self.assertIn("🚀 Найти новых клиентов", ad_labels)
+        self.assertNotIn("🚀 Получить клиентов", ad_labels)
+        self.assertIn("📣 Яндекс Директ", ad_labels)
 
 
 if __name__ == "__main__":
