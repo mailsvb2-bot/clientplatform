@@ -30,6 +30,7 @@ from clientplatform.application.sales_operations import (
 )
 from clientplatform.application.sales_ui import (
     count_sales_handoff_work,
+    get_sales_work_item,
     list_commercial_ladder_steps,
     list_commercial_ladders,
     list_recent_closed_sales_work,
@@ -106,15 +107,9 @@ def get_sales_workspace_item(
     actor: TenantContext,
     lead_id: str,
 ) -> dict[str, Any] | None:
-    """Resolve one open or recently closed lead without bypassing tenant scope."""
+    """Resolve one tenant-scoped lead directly, independent of queue ordering."""
 
-    for item in (
-        *list_sales_work(actor=actor, limit=50),
-        *list_recent_closed_sales_work(actor=actor, limit=50),
-    ):
-        if str(item.get("id") or "") == str(lead_id):
-            return item
-    return None
+    return get_sales_work_item(actor=actor, lead_id=lead_id)
 
 
 def assign_sales_workspace_to_actor(

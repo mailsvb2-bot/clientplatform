@@ -100,6 +100,41 @@ class ClientPlatformSalesUiRepositoryTests(unittest.TestCase):
         self.assertEqual(closed[0]["stage"], "won")
         self.assertEqual(closed[0]["closure_reason"], "won")
 
+    def test_direct_work_item_lookup_is_not_limited_to_first_50(self) -> None:
+        target = self.sales.create_or_refresh_lead(
+            actor=self.owner,
+            opportunity_key="tg:older-than-window",
+            customer_id=self.customer.id,
+            source_kind="telegram",
+            contact_basis=ContactBasis.INBOUND,
+        )
+        self.conn.execute(
+            "UPDATE clientplatform_sales_leads SET updated_at=? WHERE id=?",
+            ("2000-01-01T00:00:00+00:00", target.id),
+        )
+        for index in range(50):
+            self.sales.create_or_refresh_lead(
+                actor=self.owner,
+                opportunity_key=f"tg:window:{index}",
+                customer_id=self.customer.id,
+                source_kind="telegram",
+                contact_basis=ContactBasis.INBOUND,
+            )
+
+        listed_ids = {
+            str(item["id"])
+            for item in self.ui.list_open_work(actor=self.owner, limit=50)
+        }
+        self.assertNotIn(target.id, listed_ids)
+
+        item = self.ui.get_work_item(actor=self.owner, lead_id=target.id)
+
+        self.assertIsNotNone(item)
+        assert item is not None
+        self.assertEqual(item["id"], target.id)
+        self.assertEqual(item["customer_name"], "Анна")
+        self.assertEqual(item["stage"], "new")
+
     def test_handoff_projection_contains_customer_but_not_context_payload(self) -> None:
         lead = self.sales.create_or_refresh_lead(
             actor=self.owner,
@@ -172,6 +207,7 @@ class ClientPlatformSalesUiRepositoryTests(unittest.TestCase):
         )
 
         self.assertEqual(self.ui.list_open_work(actor=other_owner), [])
+        self.assertIsNone(self.ui.get_work_item(actor=other_owner, lead_id=lead.id))
         self.assertEqual(self.ui.list_recent_closed(actor=other_owner), [])
         self.assertEqual(self.ui.list_handoff_work(actor=other_owner), [])
         self.assertEqual(self.ui.list_ladders(actor=other_owner), [])

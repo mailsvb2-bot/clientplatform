@@ -97,6 +97,34 @@ def test_sales_workspace_snapshot_uses_one_transport_neutral_read_surface(monkey
     assert snapshot.handoff_count == 1
 
 
+def test_sales_workspace_item_uses_direct_tenant_scoped_lookup(monkeypatch):
+    actor = object()
+    calls = []
+
+    def direct_lookup(*, actor, lead_id):
+        calls.append((actor, lead_id))
+        return {"id": lead_id, "stage": "new"}
+
+    def bounded_list_must_not_run(**_kwargs):
+        raise AssertionError("single-item lookup must not scan bounded queues")
+
+    monkeypatch.setattr(sales_workspace, "get_sales_work_item", direct_lookup)
+    monkeypatch.setattr(sales_workspace, "list_sales_work", bounded_list_must_not_run)
+    monkeypatch.setattr(
+        sales_workspace,
+        "list_recent_closed_sales_work",
+        bounded_list_must_not_run,
+    )
+
+    result = sales_workspace.get_sales_workspace_item(
+        actor=actor,
+        lead_id="lead-older-than-window",
+    )
+
+    assert result == {"id": "lead-older-than-window", "stage": "new"}
+    assert calls == [(actor, "lead-older-than-window")]
+
+
 def test_sales_workspace_mutation_delegates_to_canonical_operation(monkeypatch):
     actor = SimpleNamespace(membership_id="member-7")
     calls = []
