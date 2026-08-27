@@ -46,7 +46,11 @@ def _owner_next_action(actor) -> GrowthAction:
             period_days=7,
             advertising_loader=_without_advertising,
         ).next_action
-    except (TenantAccessDenied, TenantPermissionDenied, ValueError, OSError, RuntimeError):
+    except (TenantAccessDenied, TenantPermissionDenied, ValueError):
+        return _projection_unavailable_action()
+    except OSError:
+        return _projection_unavailable_action()
+    except RuntimeError:
         return _projection_unavailable_action()
 
 
