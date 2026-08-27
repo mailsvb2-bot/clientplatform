@@ -464,5 +464,148 @@ class ClientPlatformRevenueAttributionTests(unittest.TestCase):
         self.assertEqual(retained.source_ref_id, record.source_ref_id)
 
 
+    def test_money_cockpit_journey_keeps_verified_money_separate_from_source_attribution(self) -> None:
+        self._append(
+            OutcomeType.BOOKING_CONFIRMED,
+            event_id="booking-confirmed-1",
+            money=None,
+            occurred_at=_NOW + timedelta(minutes=4),
+        )
+        self._append(
+            OutcomeType.BOOKING_COMPLETED,
+            event_id="booking-completed-1",
+            money=None,
+            occurred_at=_NOW + timedelta(minutes=5),
+        )
+        self._append(
+            OutcomeType.ORDER_PAID,
+            event_id="journey-paid",
+            money=OutcomeMoney(amount_minor=10_000, currency="RUB"),
+            occurred_at=_NOW + timedelta(minutes=6),
+        )
+        self._append(
+            OutcomeType.REFUND_RECORDED,
+            event_id="journey-refund",
+            money=OutcomeMoney(amount_minor=2_000, currency="RUB"),
+            occurred_at=_NOW + timedelta(minutes=7),
+        )
+        self._append(
+            OutcomeType.CUSTOMER_REACTIVATED,
+            event_id="journey-reactivated",
+            money=OutcomeMoney(amount_minor=10_000, currency="RUB"),
+            occurred_at=_NOW + timedelta(minutes=8),
+            subject_ref="sales_lead:reactivation-1",
+            source_type="outcome_event",
+            source_id="journey-paid",
+        )
+        unattributed_customer = self._connect_customer(77004)
+        self._append(
+            OutcomeType.ORDER_PAID,
+            event_id="journey-unattributed-paid",
+            money=OutcomeMoney(amount_minor=3_000, currency="RUB"),
+            occurred_at=_NOW + timedelta(minutes=9),
+            customer_id=unattributed_customer,
+            subject_ref="order:unattributed",
+        )
+
+        journey = self.revenue.journey_snapshot(
+            business_id=self.business_id,
+            occurred_from=_NOW,
+            occurred_to=_NOW + timedelta(hours=1),
+        )
+
+        self.assertEqual(journey.leads, 1)
+        self.assertEqual(journey.qualified_leads, 1)
+        self.assertEqual(journey.bookings, 1)
+        self.assertEqual(journey.confirmed_bookings, 1)
+        self.assertEqual(journey.completed_bookings, 1)
+        self.assertEqual(journey.paid_customers, 2)
+        self.assertEqual(journey.reactivated_customers, 1)
+        self.assertEqual(journey.monetary_outcomes, 3)
+        self.assertEqual(journey.attributed_monetary_outcomes, 2)
+        self.assertEqual(journey.unattributed_monetary_outcomes, 1)
+        self.assertEqual(
+            [(item.currency, item.amount_minor) for item in journey.verified_revenue_by_currency],
+            [("RUB", 11_000)],
+        )
+        self.assertEqual(
+            [(item.currency, item.amount_minor) for item in journey.attributed_revenue_by_currency],
+            [("RUB", 8_000)],
+        )
+        self.assertEqual(
+            [(item.currency, item.amount_minor) for item in journey.unattributed_revenue_by_currency],
+            [("RUB", 3_000)],
+        )
+        self.assertFalse(journey.attribution_complete)
+        self.assertIn("attribution_incomplete", journey.limitations)
+
+        telegram = next(item for item in journey.sources if item.source.value == "telegram")
+        unknown = next(item for item in journey.sources if item.source.value == "unknown")
+        self.assertEqual(telegram.leads, 1)
+        self.assertEqual(telegram.bookings, 1)
+        self.assertEqual(telegram.completed_bookings, 1)
+        self.assertEqual(telegram.paid_customers, 1)
+        self.assertEqual(telegram.reactivated_customers, 1)
+        self.assertEqual(telegram.revenue_by_currency[0].amount_minor, 8_000)
+        self.assertEqual(unknown.paid_customers, 1)
+        self.assertEqual(unknown.revenue_by_currency[0].amount_minor, 3_000)
+        self.assertEqual(journey.sources[0].source.value, "telegram")
+
+
+
+    def test_money_cockpit_never_combines_mixed_currencies_for_source_ranking(self) -> None:
+        self._append(
+            OutcomeType.ORDER_PAID,
+            event_id="journey-rub",
+            money=OutcomeMoney(amount_minor=7_000, currency="RUB"),
+            occurred_at=_NOW + timedelta(minutes=4),
+        )
+        other_customer = self._connect_customer(77005)
+        self._append(
+            OutcomeType.ORDER_PAID,
+            event_id="journey-usd-unattributed",
+            money=OutcomeMoney(amount_minor=50_00, currency="USD"),
+            occurred_at=_NOW + timedelta(minutes=5),
+            customer_id=other_customer,
+            subject_ref="order:usd-unattributed",
+        )
+
+        journey = self.revenue.journey_snapshot(
+            business_id=self.business_id,
+            occurred_from=_NOW,
+            occurred_to=_NOW + timedelta(hours=1),
+        )
+
+        self.assertEqual(
+            [(item.currency, item.amount_minor) for item in journey.verified_revenue_by_currency],
+            [("RUB", 7_000), ("USD", 5_000)],
+        )
+        self.assertIn("verified_revenue_mixed_currency", journey.limitations)
+        self.assertEqual(journey.sources[0].source.value, "telegram")
+        self.assertEqual(journey.sources[-1].source.value, "unknown")
+
+    def test_money_cockpit_marks_stage_source_unknown_without_guessing(self) -> None:
+        other_customer = self._connect_customer(77006)
+        self._append(
+            OutcomeType.LEAD_CREATED,
+            event_id="journey-unknown-lead",
+            money=None,
+            occurred_at=_NOW + timedelta(minutes=4),
+            customer_id=other_customer,
+            subject_ref="lead:unknown",
+        )
+
+        journey = self.revenue.journey_snapshot(
+            business_id=self.business_id,
+            occurred_from=_NOW,
+            occurred_to=_NOW + timedelta(hours=1),
+        )
+
+        unknown = next(item for item in journey.sources if item.source.value == "unknown")
+        self.assertEqual(unknown.leads, 1)
+        self.assertIn("journey_source_incomplete", journey.limitations)
+
+
+
 if __name__ == "__main__":
     unittest.main()

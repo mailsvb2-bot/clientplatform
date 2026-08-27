@@ -181,7 +181,7 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             labels,
             [
-                "📈 Обзор бизнеса",
+                "💰 Деньги и результат",
                 "👥 Клиенты и продажи",
                 "🧰 Услуги и расписание",
                 "✍️ Контент и продвижение",
@@ -349,7 +349,7 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             labels,
             [
-                "📈 Обзор бизнеса",
+                "💰 Деньги и результат",
                 "👥 Клиенты и продажи",
                 "🧰 Услуги и расписание",
                 "✍️ Контент и продвижение",

@@ -568,7 +568,7 @@ async def open_more(callback: CallbackQuery) -> None:
         "без длинного списка на одном экране.",
         reply_markup=control._keyboard(
             [
-                [("📈 Обзор бизнеса", f"cpg:period:{token}:7")],
+                [("💰 Деньги и результат", f"cpg:period:{token}:7")],
                 [("👥 Клиенты и продажи", f"cpo:clients:{token}")],
                 [("🧰 Услуги и расписание", f"cpo:work:{token}")],
                 [("✍️ Контент и продвижение", f"cpo:content:{token}")],

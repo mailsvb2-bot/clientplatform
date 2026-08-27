@@ -12,6 +12,8 @@ from clientplatform.domain.revenue_attribution import (
     RevenueAttributionInvariantViolation,
     RevenueAttributionModel,
     RevenueAttributionRecord,
+    RevenueJourneySnapshot,
+    RevenueJourneySourceResult,
     UnitEconomicsSnapshot,
 )
 from clientplatform.infrastructure.attribution_repository import AttributionRepository
@@ -320,6 +322,229 @@ class RevenueAttributionRepository:
             if record is not None:
                 accepted.append(record)
         return accepted
+
+    def _event_source(self, *, business_id: str, row: Any) -> AcquisitionSource:
+        """Resolve one non-monetary outcome through the existing first-touch spine."""
+
+        occurred_at = _parse_datetime(_value(row, "occurred_at", 2))
+        customer_value = _value(row, "customer_id", 3)
+        customer_id = None if customer_value is None else str(customer_value)
+        subject_value = _value(row, "subject_ref", 4)
+        subject_ref = None if subject_value is None else str(subject_value)
+
+        customer_trace = None
+        if customer_id is not None:
+            customer_trace = self._attribution.get_customer_trace(
+                business_id=str(business_id),
+                customer_id=customer_id,
+            )
+            if customer_trace is not None and customer_trace.touch.occurred_at > occurred_at:
+                customer_trace = None
+
+        booking_trace = None
+        if subject_ref and subject_ref.startswith("booking_slot:"):
+            booking_slot_id = subject_ref.removeprefix("booking_slot:").strip()
+            if booking_slot_id:
+                booking_trace = self._attribution.get_booking_trace(
+                    business_id=str(business_id),
+                    booking_slot_id=booking_slot_id,
+                )
+                if booking_trace is not None and booking_trace.touch.occurred_at > occurred_at:
+                    booking_trace = None
+
+        if (
+            customer_trace is not None
+            and booking_trace is not None
+            and customer_trace.touch.id != booking_trace.touch.id
+        ):
+            raise RevenueAttributionInvariantViolation(
+                "customer and booking attribution disagree in revenue journey"
+            )
+        trace = booking_trace or customer_trace
+        if trace is None:
+            return AcquisitionSource.UNKNOWN
+        return trace.identity.source
+
+    def journey_snapshot(
+        self,
+        *,
+        business_id: str,
+        occurred_from: datetime,
+        occurred_to: datetime,
+    ) -> RevenueJourneySnapshot:
+        """Project source → booking → payment → reactivation without new durable state."""
+
+        if (
+            occurred_from.tzinfo is None
+            or occurred_to.tzinfo is None
+            or occurred_to <= occurred_from
+        ):
+            raise ValueError("revenue journey window must be timezone-aware and non-empty")
+
+        records = self.reconcile_window(
+            business_id=str(business_id),
+            occurred_from=occurred_from,
+            occurred_to=occurred_to,
+        )
+        records_by_event = {record.outcome_event_id: record for record in records}
+        event_rows = self._conn.execute(
+            _OUTCOME_SELECT + " WHERE business_id=? AND occurred_at>=? AND occurred_at<?",
+            (
+                str(business_id),
+                _serialize_datetime(occurred_from),
+                _serialize_datetime(occurred_to),
+            ),
+        ).fetchall()
+        event_types = Counter(str(_value(row, "outcome_type", 1)) for row in event_rows)
+
+        verified_totals: dict[str, int] = defaultdict(int)
+        attributed_totals: dict[str, int] = defaultdict(int)
+        source_revenue: dict[AcquisitionSource, dict[str, int]] = defaultdict(
+            lambda: defaultdict(int)
+        )
+        source_counts: dict[AcquisitionSource, Counter[str]] = defaultdict(Counter)
+        source_paid_customers: dict[AcquisitionSource, set[str]] = defaultdict(set)
+        source_reactivated_customers: dict[AcquisitionSource, set[str]] = defaultdict(set)
+        all_paid_customers: set[str] = set()
+        all_reactivated_customers: set[str] = set()
+        monetary_outcomes = 0
+        stage_source_unknown = False
+
+        for record in records:
+            attributed_totals[record.currency] += record.amount_minor
+
+        for row in event_rows:
+            event_id = str(_value(row, "id", 0))
+            outcome_type = OutcomeType(str(_value(row, "outcome_type", 1)))
+            customer_value = _value(row, "customer_id", 3)
+            customer_id = None if customer_value is None else str(customer_value)
+
+            if outcome_type in {
+                OutcomeType.LEAD_CREATED,
+                OutcomeType.BOOKING_CREATED,
+                OutcomeType.BOOKING_COMPLETED,
+                OutcomeType.CUSTOMER_REACTIVATED,
+            }:
+                source = self._event_source(business_id=str(business_id), row=row)
+                if source == AcquisitionSource.UNKNOWN:
+                    stage_source_unknown = True
+                if outcome_type == OutcomeType.LEAD_CREATED:
+                    source_counts[source]["leads"] += 1
+                elif outcome_type == OutcomeType.BOOKING_CREATED:
+                    source_counts[source]["bookings"] += 1
+                elif outcome_type == OutcomeType.BOOKING_COMPLETED:
+                    source_counts[source]["completed_bookings"] += 1
+                elif customer_id is not None:
+                    source_reactivated_customers[source].add(customer_id)
+                    all_reactivated_customers.add(customer_id)
+
+            resolved_money = self._resolve_money(business_id=str(business_id), row=row)
+            if resolved_money is None:
+                continue
+            monetary_outcomes += 1
+            signed_amount, currency = resolved_money
+            verified_totals[currency] += signed_amount
+            record = records_by_event.get(event_id)
+            money_source = record.source if record is not None else AcquisitionSource.UNKNOWN
+            source_revenue[money_source][currency] += signed_amount
+            if (
+                outcome_type == OutcomeType.ORDER_PAID
+                and signed_amount > 0
+                and customer_id is not None
+            ):
+                all_paid_customers.add(customer_id)
+                source_paid_customers[money_source].add(customer_id)
+
+        all_sources = set(source_counts) | set(source_revenue) | set(source_paid_customers)
+        all_sources |= set(source_reactivated_customers)
+        verified_currencies = set(verified_totals)
+        rank_currency = next(iter(verified_currencies)) if len(verified_currencies) == 1 else None
+
+        source_rows: list[RevenueJourneySourceResult] = []
+        for source in all_sources:
+            revenue = tuple(
+                MoneyBreakdown(currency=currency, amount_minor=amount)
+                for currency, amount in sorted(source_revenue[source].items())
+            )
+            source_rows.append(
+                RevenueJourneySourceResult(
+                    source=source,
+                    leads=source_counts[source]["leads"],
+                    bookings=source_counts[source]["bookings"],
+                    completed_bookings=source_counts[source]["completed_bookings"],
+                    paid_customers=len(source_paid_customers[source]),
+                    reactivated_customers=len(source_reactivated_customers[source]),
+                    revenue_by_currency=revenue,
+                )
+            )
+
+        def source_rank(item: RevenueJourneySourceResult) -> tuple[object, ...]:
+            revenue_amount = 0
+            if rank_currency is not None:
+                revenue_amount = next(
+                    (
+                        money.amount_minor
+                        for money in item.revenue_by_currency
+                        if money.currency == rank_currency
+                    ),
+                    0,
+                )
+            return (
+                item.source == AcquisitionSource.UNKNOWN,
+                -revenue_amount,
+                -item.paid_customers,
+                -item.completed_bookings,
+                -item.bookings,
+                -item.leads,
+                item.source.value,
+            )
+
+        source_rows.sort(key=source_rank)
+        unattributed_totals: dict[str, int] = {}
+        for currency in sorted(set(verified_totals) | set(attributed_totals)):
+            difference = verified_totals[currency] - attributed_totals[currency]
+            if difference != 0:
+                unattributed_totals[currency] = difference
+
+        limitations: list[str] = []
+        unattributed_count = monetary_outcomes - len(records)
+        if unattributed_count:
+            limitations.append("attribution_incomplete")
+        if len(verified_totals) > 1:
+            limitations.append("verified_revenue_mixed_currency")
+        if stage_source_unknown:
+            limitations.append("journey_source_incomplete")
+
+        return RevenueJourneySnapshot(
+            business_id=str(business_id),
+            model_version=RevenueAttributionModel.FIRST_TOUCH_V1,
+            occurred_from=occurred_from,
+            occurred_to=occurred_to,
+            leads=event_types[OutcomeType.LEAD_CREATED.value],
+            qualified_leads=event_types[OutcomeType.LEAD_QUALIFIED.value],
+            bookings=event_types[OutcomeType.BOOKING_CREATED.value],
+            confirmed_bookings=event_types[OutcomeType.BOOKING_CONFIRMED.value],
+            completed_bookings=event_types[OutcomeType.BOOKING_COMPLETED.value],
+            paid_customers=len(all_paid_customers),
+            reactivated_customers=len(all_reactivated_customers),
+            monetary_outcomes=monetary_outcomes,
+            attributed_monetary_outcomes=len(records),
+            unattributed_monetary_outcomes=unattributed_count,
+            verified_revenue_by_currency=tuple(
+                MoneyBreakdown(currency=currency, amount_minor=amount)
+                for currency, amount in sorted(verified_totals.items())
+            ),
+            attributed_revenue_by_currency=tuple(
+                MoneyBreakdown(currency=currency, amount_minor=amount)
+                for currency, amount in sorted(attributed_totals.items())
+            ),
+            unattributed_revenue_by_currency=tuple(
+                MoneyBreakdown(currency=currency, amount_minor=amount)
+                for currency, amount in sorted(unattributed_totals.items())
+            ),
+            sources=tuple(source_rows),
+            limitations=tuple(limitations),
+        )
 
     def snapshot(
         self,

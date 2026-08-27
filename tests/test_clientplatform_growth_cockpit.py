@@ -11,6 +11,8 @@ from clientplatform.domain.attribution import AcquisitionSource
 from clientplatform.domain.revenue_attribution import (
     MoneyBreakdown,
     RevenueAttributionModel,
+    RevenueJourneySnapshot,
+    RevenueJourneySourceResult,
     UnitEconomicsSnapshot,
 )
 from clientplatform.domain.tenancy import TenantContext
@@ -51,6 +53,58 @@ def _economics(*, start: datetime, end: datetime, today: bool = False) -> UnitEc
             AcquisitionSource.YANDEX_DIRECT: 3,
             AcquisitionSource.REFERRAL: 1,
         },
+    )
+
+
+def _journey(*, start: datetime, end: datetime) -> RevenueJourneySnapshot:
+    return RevenueJourneySnapshot(
+        business_id=_ACTOR.business_id,
+        model_version=RevenueAttributionModel.FIRST_TOUCH_V1,
+        occurred_from=start,
+        occurred_to=end,
+        leads=18,
+        qualified_leads=10,
+        bookings=7,
+        confirmed_bookings=5,
+        completed_bookings=4,
+        paid_customers=4,
+        reactivated_customers=2,
+        monetary_outcomes=5,
+        attributed_monetary_outcomes=4,
+        unattributed_monetary_outcomes=1,
+        verified_revenue_by_currency=(MoneyBreakdown(currency="RUB", amount_minor=54_300_00),),
+        attributed_revenue_by_currency=(MoneyBreakdown(currency="RUB", amount_minor=48_000_00),),
+        unattributed_revenue_by_currency=(MoneyBreakdown(currency="RUB", amount_minor=6_300_00),),
+        sources=(
+            RevenueJourneySourceResult(
+                source=AcquisitionSource.VK,
+                leads=11,
+                bookings=5,
+                completed_bookings=4,
+                paid_customers=2,
+                reactivated_customers=1,
+                revenue_by_currency=(MoneyBreakdown(currency="RUB", amount_minor=34_200_00),),
+            ),
+            RevenueJourneySourceResult(
+                source=AcquisitionSource.YANDEX_DIRECT,
+                leads=5,
+                bookings=2,
+                completed_bookings=0,
+                paid_customers=1,
+                reactivated_customers=1,
+                revenue_by_currency=(MoneyBreakdown(currency="RUB", amount_minor=13_800_00),),
+            ),
+            RevenueJourneySourceResult(
+                source=AcquisitionSource.UNKNOWN,
+                leads=2,
+                bookings=0,
+                completed_bookings=0,
+                paid_customers=1,
+                reactivated_customers=0,
+                revenue_by_currency=(MoneyBreakdown(currency="RUB", amount_minor=6_300_00),),
+            ),
+        ),
+        limitations=("attribution_incomplete", "journey_source_incomplete"),
     )
 
 
@@ -102,6 +156,12 @@ class GrowthCockpitTests(unittest.TestCase):
             patch(
                 "clientplatform.application.growth_cockpit.get_business_unit_economics",
                 side_effect=fake_economics,
+            ),
+            patch(
+                "clientplatform.application.growth_cockpit.get_business_revenue_journey",
+                side_effect=lambda *, actor, occurred_from, occurred_to: _journey(
+                    start=occurred_from, end=occurred_to
+                ),
             ),
             patch(
                 "clientplatform.application.growth_cockpit.count_sales_handoff_work",
@@ -293,7 +353,12 @@ class GrowthCockpitTests(unittest.TestCase):
 
         self.assertIn("Что происходит с бизнесом", text)
         self.assertIn("Новые лиды: 3", text)
-        self.assertIn("Подтверждённая выручка: 48 000.00 RUB", text)
+        self.assertIn("Деньги и путь клиента · 7 дней", text)
+        self.assertIn("Подтверждённая выручка: 54 300.00 RUB", text)
+        self.assertIn("Связано с источником: 48 000.00 RUB", text)
+        self.assertIn("Без подтверждённого источника: 6 300.00 RUB", text)
+        self.assertIn("Лучший подтверждённый источник: VK — 34 200.00 RUB", text)
+        self.assertIn("Вернувшиеся клиенты: 2", text)
         self.assertIn("стоимость скрыта до подтверждения валюты", text)
         self.assertIn("Часть оплат пока нельзя надёжно связать", text)
         self.assertIn("Важные действия", text)
@@ -314,6 +379,9 @@ class GrowthCockpitTests(unittest.TestCase):
         for metric in payload["today_metrics"] + payload["period_metrics"]:
             self.assertTrue(metric["source"])
             self.assertTrue(metric["meaning"])
+        self.assertEqual(payload["journey"]["source"], "canonical_outcome_revenue_projection")
+        self.assertEqual(payload["journey"]["reactivated_customers"], 2)
+        self.assertEqual(payload["journey"]["occurred_from"], result.period_from.isoformat())
         self.assertEqual(payload["advertising"]["source"], "verified_yandex_direct_report")
         self.assertIsNone(payload["advertising"]["cost"])
         self.assertNotIn("cost_micros", payload["advertising"])

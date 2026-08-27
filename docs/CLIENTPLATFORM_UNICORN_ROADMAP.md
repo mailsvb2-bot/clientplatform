@@ -982,25 +982,41 @@ ClientPlatform ежедневно собирает максимум нескол
 - Coverage ratchet закрыт без ослабления и повышен до `74.90%` combined / `66.04%` branch.
 - Production deploy выполнен на exact merge SHA `68d736c7e0c5390acb96740c338d0d7a921f225e`: encrypted backup `/var/backups/clientplatform/postgres/clientplatform-20260827T181243Z.dump.age`, внутренние `/healthz` + `/readyz`, публичный HTTPS contract, polling-only Telegram contract и restart-count `0` подтверждены; deploy evidence `deploy-20260827T181702Z.json`.
 
-### M4-005 — `NEXT` — Owner Publication Scheduling Controls
+### M4-005 — `NEXT` — Customer Revenue Journey + Money Cockpit
 
-Следующий минимальный vertical: дать владельцу безопасно назначать, переносить и отменять время публикации через уже существующие `business_publications.status` + `scheduled_at`. Не создавать второй scheduler/store и не запускать автоматическую доставку в этом slice.
+Следующий vertical по прямому решению владельца: собрать уже существующие canonical outcomes, first-touch attribution, booking facts, authoritative payment evidence и retention/reactivation outcomes в один tenant-scoped read model. Новый event store, CRM, payment ledger или AI decision brain не создавать.
 
-Минимальный DONE contract: `draft -> scheduled` и controlled reschedule/cancel transitions tenant-scoped и RBAC-защищены; ввод времени трактуется в business timezone и сохраняется canonical aware timestamp; прошлое/невалидное время и недопустимые state transitions fail-closed; Telegram/VK/MAX дают одинаковые owner actions и понятное подтверждение. Duplicate tap/retry идемпотентны. Scheduled execution worker, provider delivery/reconciliation и approval policy остаются отдельными последующими slices.
+Минимальный DONE contract:
 
-Расширить существующие content/publication/program primitives:
+```text
+source
+→ lead
+→ booking
+→ completed booking
+→ paid customer
+→ verified revenue
+→ reactivated customer
+```
 
-- content calendar;
-- reusable assets;
-- cross-channel variants;
-- approval workflow;
-- scheduled publication;
-- evergreen funnels;
-- lead magnets;
-- nurture sequences;
-- conversion outcomes;
-- per-channel compliance/limits;
-- content performance linked to outcomes, а не vanity metrics.
+- подтверждённая выручка считается из canonical monetary outcomes независимо от полноты attribution; refund/reversal уменьшают её отдельными signed facts;
+- отдельно показывается, какая часть выручки доказуемо связана с first-touch source, а какая остаётся без подтверждённого источника;
+- source-level projection показывает минимум leads, bookings, completed bookings, paid customers, reactivated customers и currency-safe revenue;
+- mixed currencies никогда не суммируются и не используются для ложного рейтинга источников;
+- Telegram и native Telegram/VK/MAX показывают один и тот же бизнес-смысл без provider/DB jargon;
+- owner surface отвечает на вопросы «сколько заработано / откуда деньги / что сработало / что требует решения / что делать дальше» и не возвращает длинную техническую админку;
+- никаких LLM-inferred оплат, источников или revenue.
+
+### M4-006 — `QUEUED` — Economic Next Best Action
+
+Поверх M4-005 и существующего M4-003 owner queue добавить детерминированный экономический выбор между уже канонически допустимыми действиями. Первый сценарий: свободные окна + разрешённая reactivation cohort + channel consent + historical outcomes + approved ad-spend limits → понятное предложение владельцу, например сначала использовать бесплатную reactivation, затем только при необходимости предложить paid acquisition в существующих policy limits. LLM может объяснять, но не определяет money/consent/channel constraints.
+
+### M4-007 — `QUEUED` — Owner Publication Scheduling Controls
+
+Вернуть ранее запланированный content vertical после money/NBA slices: дать владельцу безопасно назначать, переносить и отменять время публикации через существующие `business_publications.status` + `scheduled_at`. Не создавать второй scheduler/store и не запускать автоматическую доставку в этом slice.
+
+Минимальный DONE contract: `draft -> scheduled` и controlled reschedule/cancel transitions tenant-scoped и RBAC-защищены; business timezone; прошлое/невалидное время и недопустимые transitions fail-closed; Telegram/VK/MAX дают одинаковые owner actions; duplicate tap/retry идемпотентны. Scheduled execution worker, provider delivery/reconciliation и approval policy остаются последующими slices.
+
+Расширить существующие content/publication/program primitives последовательно: content calendar, reusable assets, cross-channel variants, approval workflow, scheduled publication, evergreen funnels, lead magnets, nurture sequences, conversion outcomes, per-channel compliance/limits и content performance linked to outcomes, а не vanity metrics.
 
 ---
 
@@ -1625,7 +1641,9 @@ Duplicate tap, retry, worker restart или uncertain provider response не д�
 | M4-002 Unified Customer Timeline Projection | DONE | PR #230 merge `b5ef6ef0a583577b6b0d6ba0b9a7ded75b36e049`; exact PR head `28c94e11f55d5c384714ed757098ca2229480243`; all 15 PR workflows success; read-only canonical customer timeline with tenant/RBAC isolation, Telegram/VK/MAX surfaces and corrected refund/reversal + ISO-4217 money semantics |
 | M4-003 Tasks and owner operating queue | DONE | PR #232 merge `10c1a3043eb75fd1ad2f829fed35be3753733eaf`; exact PR head `6d43c32e1d54d842d309f8d8fa4fa43b6698a441`; all 15 PR workflows success; coverage 74.87% combined / 66.02% branch; exact-SHA production deploy with encrypted backup, health/readiness, HTTPS and polling-only stability evidence |
 | M4-004 Owner Content Calendar Projection | DONE | PR #234 merge `68d736c7e0c5390acb96740c338d0d7a921f225e`; exact PR head `98bd5374b46f985a9c24c560723c8f7d5efe37d2`; all 15 PR workflows success; coverage 74.90% combined / 66.04% branch; exact-SHA production deploy with encrypted backup, health/readiness, HTTPS, polling-only and restart=0 evidence |
-| M4-005 Owner Publication Scheduling Controls | NEXT | reuse canonical `business_publications.status` + `scheduled_at` for tenant-safe owner schedule/reschedule/cancel actions across Telegram/VK/MAX; no second scheduler; automatic execution remains a later slice |
+| M4-005 Customer Revenue Journey + Money Cockpit | NEXT | canonical read projection over outcomes/attribution/bookings/payments/reactivation; verified revenue remains independent from source completeness; Telegram/VK/MAX money view; no second store/brain |
+| M4-006 Economic Next Best Action | QUEUED | deterministic economic choice over existing owner queue, retention, availability, consent and approved spend limits; no LLM authority over money/policy |
+| M4-007 Owner Publication Scheduling Controls | QUEUED | reuse canonical `business_publications.status` + `scheduled_at` for tenant-safe schedule/reschedule/cancel actions; no second scheduler |
 
 ---
 

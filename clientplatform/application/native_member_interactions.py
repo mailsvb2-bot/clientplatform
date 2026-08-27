@@ -579,7 +579,7 @@ def _work_message(actor: TenantContext) -> CustomerInteractionMessage:
     if actor.role in _SUPPORT_ROLES:
         rows.extend(
             [
-                (_button("📊 Сегодня", "cpm:today"),),
+                (_button("💰 Деньги и результат", "cpm:today"),),
                 (_button("📈 Сегодня подробно", "cpm:today-full"),),
                 (_button("👥 Клиенты", "cpm:customers:0"),),
                 (_button("📅 Записи", "cpm:bookings"),),
@@ -1553,6 +1553,53 @@ def _permissions_message(actor: TenantContext) -> CustomerInteractionMessage:
         rows=((_button("👥 Команда", "cpm:team"),), _back_row()),
     )
 
+
+def _native_money_text(rows: object, *, empty: str) -> str:
+    values = tuple(rows or ())
+    if not values:
+        return empty
+    rendered: list[str] = []
+    for item in values:
+        amount = int(item.amount_minor)
+        sign = "-" if amount < 0 else ""
+        absolute = abs(amount)
+        rendered.append(
+            f"{sign}{absolute // 100:,}.{absolute % 100:02d} {item.currency}".replace(",", " ")
+        )
+    return ", ".join(rendered)
+
+
+def _native_journey_text(snapshot) -> str:
+    journey = snapshot.journey
+    best = next((item for item in journey.sources if item.source.value != "unknown"), None)
+    if best is None:
+        best_text = "пока недостаточно подтверждённых данных"
+    else:
+        label = _SALES_SOURCE_LABELS.get(best.source.value, best.source.value)
+        revenue = _native_money_text(
+            best.revenue_by_currency,
+            empty="выручка пока не подтверждена",
+        )
+        best_text = f"{label} — {revenue} · оплативших: {best.paid_customers}"
+    verified = _native_money_text(
+        journey.verified_revenue_by_currency,
+        empty="пока нет подтверждённой выручки",
+    )
+    unattributed = _native_money_text(
+        journey.unattributed_revenue_by_currency,
+        empty="0",
+    )
+    return (
+        f"\n\nДеньги и путь клиента · {snapshot.period_days} дней\n"
+        f"• Лиды: {journey.leads} → записи: {journey.bookings} → "
+        f"пришли: {journey.completed_bookings} → оплатили: {journey.paid_customers}\n"
+        f"• Вернувшиеся клиенты: {journey.reactivated_customers}\n"
+        f"• Подтверждённая выручка: {verified}\n"
+        f"• Без подтверждённого источника: {unattributed}\n"
+        f"• Лучший подтверждённый источник: {best_text}"
+    )
+
+
 def _today_message(actor: TenantContext) -> CustomerInteractionMessage:
     summary = business_delivery_summary(actor=actor)
     action_lines: list[str] = []
@@ -1569,11 +1616,13 @@ def _today_message(actor: TenantContext) -> CustomerInteractionMessage:
         snapshot = None
     except RuntimeError:
         snapshot = None
+    journey_text = ""
     if snapshot is not None:
         action_lines = [
             f"{index}. {item.title} — {item.reason}"
             for index, item in enumerate(snapshot.actions[:5], start=1)
         ]
+        journey_text = _native_journey_text(snapshot)
         primary_action_button = _native_growth_action_button(actor, snapshot.next_action)
         if primary_action_button is not None and primary_action_button.command == "cpm:today":
             primary_action_button = None
@@ -1601,6 +1650,7 @@ def _today_message(actor: TenantContext) -> CustomerInteractionMessage:
             + f"В очереди отправки: {summary.dispatch_pending}\n"
             + f"Отправлено: {summary.dispatch_sent}\n"
             + f"Требуют внимания: {summary.dispatch_attention}"
+            + journey_text
             + action_text
         ),
         rows=tuple(rows),

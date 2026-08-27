@@ -169,3 +169,97 @@ class UnitEconomicsSnapshot:
             return None
         item = self.revenue_by_currency[0]
         return OutcomeMoney(amount_minor=item.amount_minor, currency=item.currency)
+
+
+@dataclass(frozen=True, slots=True)
+class RevenueJourneySourceResult:
+    """One acquisition source projected across canonical customer/revenue facts."""
+
+    source: AcquisitionSource
+    leads: int
+    bookings: int
+    completed_bookings: int
+    paid_customers: int
+    reactivated_customers: int
+    revenue_by_currency: tuple[MoneyBreakdown, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.source, AcquisitionSource):
+            object.__setattr__(self, "source", AcquisitionSource(str(self.source)))
+        for field_name in (
+            "leads",
+            "bookings",
+            "completed_bookings",
+            "paid_customers",
+            "reactivated_customers",
+        ):
+            value = int(getattr(self, field_name))
+            if value < 0:
+                raise ValueError(f"{field_name} must be non-negative")
+            object.__setattr__(self, field_name, value)
+
+
+@dataclass(frozen=True, slots=True)
+class RevenueJourneySnapshot:
+    """Read-only money/customer journey assembled from existing canonical facts."""
+
+    business_id: str
+    model_version: RevenueAttributionModel
+    occurred_from: datetime
+    occurred_to: datetime
+    leads: int
+    qualified_leads: int
+    bookings: int
+    confirmed_bookings: int
+    completed_bookings: int
+    paid_customers: int
+    reactivated_customers: int
+    monetary_outcomes: int
+    attributed_monetary_outcomes: int
+    unattributed_monetary_outcomes: int
+    verified_revenue_by_currency: tuple[MoneyBreakdown, ...]
+    attributed_revenue_by_currency: tuple[MoneyBreakdown, ...]
+    unattributed_revenue_by_currency: tuple[MoneyBreakdown, ...]
+    sources: tuple[RevenueJourneySourceResult, ...]
+    limitations: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        business_id = str(self.business_id or "").strip()
+        if not business_id:
+            raise ValueError("business_id must not be empty")
+        object.__setattr__(self, "business_id", business_id)
+        if not isinstance(self.model_version, RevenueAttributionModel):
+            object.__setattr__(
+                self,
+                "model_version",
+                RevenueAttributionModel(str(self.model_version)),
+            )
+        if self.occurred_from.tzinfo is None or self.occurred_to.tzinfo is None:
+            raise ValueError("revenue journey timestamps must be timezone-aware")
+        if self.occurred_to <= self.occurred_from:
+            raise ValueError("occurred_to must be after occurred_from")
+        for field_name in (
+            "leads",
+            "qualified_leads",
+            "bookings",
+            "confirmed_bookings",
+            "completed_bookings",
+            "paid_customers",
+            "reactivated_customers",
+            "monetary_outcomes",
+            "attributed_monetary_outcomes",
+            "unattributed_monetary_outcomes",
+        ):
+            value = int(getattr(self, field_name))
+            if value < 0:
+                raise ValueError(f"{field_name} must be non-negative")
+            object.__setattr__(self, field_name, value)
+        if (
+            self.attributed_monetary_outcomes + self.unattributed_monetary_outcomes
+            != self.monetary_outcomes
+        ):
+            raise ValueError("monetary attribution counts must reconcile")
+
+    @property
+    def attribution_complete(self) -> bool:
+        return self.unattributed_monetary_outcomes == 0

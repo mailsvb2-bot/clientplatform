@@ -15,6 +15,12 @@ _LIMITATION_LABELS = {
     "advertising_currency_unverified": (
         "Стоимость рекламы скрыта до подтверждения ISO-валюты рекламного подключения."
     ),
+    "verified_revenue_mixed_currency": (
+        "Подтверждённая выручка есть в нескольких валютах и показывается раздельно."
+    ),
+    "journey_source_incomplete": (
+        "Для части лидов или записей источник клиента пока не подтверждён."
+    ),
 }
 
 
@@ -31,17 +37,50 @@ def _metric_map(snapshot: GrowthCockpitSnapshot, *, today: bool) -> dict[str, in
     return {row.key: row.value for row in rows}
 
 
+def _money_breakdown_text(rows: object, *, empty: str) -> str:
+    values = tuple(rows or ())
+    if not values:
+        return empty
+    return ", ".join(_minor_money_text(item.amount_minor, item.currency) for item in values)
+
+
+def _best_source_text(snapshot: GrowthCockpitSnapshot) -> str:
+    known = [item for item in snapshot.journey.sources if item.source.value != "unknown"]
+    if not known:
+        return "пока недостаточно подтверждённых данных"
+    item = known[0]
+    label = {
+        "organic": "Органика",
+        "referral": "Рекомендации",
+        "telegram": "Telegram",
+        "vk": "VK",
+        "max": "MAX",
+        "website": "Сайт",
+        "yandex_direct": "Яндекс Директ",
+        "partner": "Партнёры",
+        "manual_import": "Импорт / вручную",
+    }.get(item.source.value, item.source.value)
+    money = _money_breakdown_text(item.revenue_by_currency, empty="выручка пока не подтверждена")
+    return f"{label} — {money} · оплативших: {item.paid_customers}"
+
+
 def telegram_growth_summary(snapshot: GrowthCockpitSnapshot) -> str:
-    """Compact owner copy: business meaning first, provider jargon hidden."""
+    """Compact owner copy: money and customer journey first, provider jargon hidden."""
 
     today = _metric_map(snapshot, today=True)
-    period = _metric_map(snapshot, today=False)
-    revenue = ", ".join(
-        _minor_money_text(item.amount_minor, item.currency) for item in snapshot.revenue
-    ) or "пока нет подтверждённой выручки"
-    worked = ", ".join(
-        f"{item.label}: {item.outcomes}" for item in snapshot.what_worked[:3]
-    ) or "пока недостаточно данных"
+    journey = snapshot.journey
+    verified_revenue = _money_breakdown_text(
+        journey.verified_revenue_by_currency,
+        empty="пока нет подтверждённой выручки",
+    )
+    attributed_revenue = _money_breakdown_text(
+        journey.attributed_revenue_by_currency,
+        empty="пока не связана с источниками",
+    )
+    unattributed_revenue = _money_breakdown_text(
+        journey.unattributed_revenue_by_currency,
+        empty="0",
+    )
 
     advertising = "не подключена или нет данных"
     if snapshot.advertising is not None:
@@ -80,13 +119,15 @@ def telegram_growth_summary(snapshot: GrowthCockpitSnapshot) -> str:
         f"• Записи: {today.get('bookings', 0)}\n"
         f"• Оплатившие клиенты: {today.get('paid_customers', 0)}\n"
         f"• Кому нужно ответить: {snapshot.needs_reply}\n\n"
-        f"За {snapshot.period_days} дней\n"
-        f"• Лиды: {period.get('leads', 0)}\n"
-        f"• Записи: {period.get('bookings', 0)}\n"
-        f"• Оплатившие клиенты: {period.get('paid_customers', 0)}\n"
-        f"• Подтверждённая выручка: {revenue}\n"
-        f"• Реклама: {advertising}\n"
-        f"• Что сработало: {worked}\n\n"
+        f"Деньги и путь клиента · {snapshot.period_days} дней\n"
+        f"• Лиды: {journey.leads} → записи: {journey.bookings} → "
+        f"пришли: {journey.completed_bookings} → оплатили: {journey.paid_customers}\n"
+        f"• Вернувшиеся клиенты: {journey.reactivated_customers}\n"
+        f"• Подтверждённая выручка: {verified_revenue}\n"
+        f"• Связано с источником: {attributed_revenue}\n"
+        f"• Без подтверждённого источника: {unattributed_revenue}\n"
+        f"• Лучший подтверждённый источник: {_best_source_text(snapshot)}\n"
+        f"• Реклама: {advertising}\n\n"
         "Что требует решения\n"
         f"{attention}\n\n"
         "Важные действия\n"
@@ -107,6 +148,13 @@ def growth_cockpit_payload(snapshot: GrowthCockpitSnapshot) -> dict[str, Any]:
     payload["period_to"] = snapshot.period_to.isoformat()
     payload["today_from"] = snapshot.today_from.isoformat()
     payload["today_to"] = snapshot.today_to.isoformat()
+    payload["journey"]["occurred_from"] = snapshot.journey.occurred_from.isoformat()
+    payload["journey"]["occurred_to"] = snapshot.journey.occurred_to.isoformat()
+    payload["journey"]["source"] = "canonical_outcome_revenue_projection"
+    payload["journey"]["meaning"] = (
+        "Путь клиента и деньги собраны из существующих outcome, attribution, booking, "
+        "payment и retention facts без отдельного хранилища."
+    )
     if snapshot.advertising is not None:
         payload["advertising"] = {
             "period_days": snapshot.advertising.period_days,

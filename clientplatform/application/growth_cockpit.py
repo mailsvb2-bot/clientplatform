@@ -6,7 +6,10 @@ from typing import Callable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from clientplatform.application.activity import get_business_profile
-from clientplatform.application.revenue_attribution import get_business_unit_economics
+from clientplatform.application.revenue_attribution import (
+    get_business_revenue_journey,
+    get_business_unit_economics,
+)
 from clientplatform.application.sales_ui import (
     count_sales_handoff_work,
     list_sales_handoff_work,
@@ -16,7 +19,7 @@ from clientplatform.application.yandex_growth_analytics import (
     YandexGrowthSnapshot,
     get_yandex_growth_snapshot,
 )
-from clientplatform.domain.revenue_attribution import UnitEconomicsSnapshot
+from clientplatform.domain.revenue_attribution import RevenueJourneySnapshot, UnitEconomicsSnapshot
 from clientplatform.domain.tenancy import TenantContext
 
 _ALLOWED_PERIODS = frozenset({7, 30})
@@ -31,6 +34,9 @@ _SOURCE_LABELS = {
     "telegram": "Telegram",
     "vk": "VK",
     "max": "MAX",
+    "website": "Сайт",
+    "partner": "Партнёры",
+    "manual_import": "Импорт / вручную",
 }
 
 
@@ -79,6 +85,7 @@ class GrowthCockpitSnapshot:
     today_metrics: tuple[GrowthMetric, ...]
     period_metrics: tuple[GrowthMetric, ...]
     revenue: tuple[GrowthMoney, ...]
+    journey: RevenueJourneySnapshot
     needs_reply: int
     advertising: YandexGrowthSnapshot | None
     what_worked: tuple[GrowthSourceResult, ...]
@@ -346,6 +353,11 @@ def get_growth_cockpit(
         occurred_from=period_from,
         occurred_to=period_to,
     )
+    journey = get_business_revenue_journey(
+        actor=actor,
+        occurred_from=period_from,
+        occurred_to=period_to,
+    )
     needs_reply = count_sales_handoff_work(actor=actor)
     handoffs = list_sales_handoff_work(actor=actor, limit=5) if needs_reply else []
     sales_work = list_sales_work(actor=actor, limit=50)
@@ -365,6 +377,7 @@ def get_growth_cockpit(
         advertising_error = True
 
     limitations = list(period.limitations)
+    limitations.extend(journey.limitations)
     if advertising_error:
         limitations.append("advertising_unavailable")
     elif advertising is not None and advertising.connected_accounts > 0:
@@ -388,6 +401,7 @@ def get_growth_cockpit(
         today_metrics=_metrics(today),
         period_metrics=_metrics(period),
         revenue=_revenue(period),
+        journey=journey,
         needs_reply=needs_reply,
         advertising=advertising,
         what_worked=_what_worked(period),

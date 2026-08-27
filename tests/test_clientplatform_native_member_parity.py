@@ -95,7 +95,34 @@ class NativeMemberParityNavigationTests(unittest.TestCase):
             reason="Сохранён следующий шаг: позвонить.",
             action_key=f"sales_lead:{lead_id}",
         )
-        snapshot = SimpleNamespace(actions=(action,), next_action=action)
+        journey = SimpleNamespace(
+            leads=11,
+            bookings=5,
+            completed_bookings=4,
+            paid_customers=3,
+            reactivated_customers=2,
+            verified_revenue_by_currency=(
+                SimpleNamespace(amount_minor=34_200_00, currency="RUB"),
+            ),
+            unattributed_revenue_by_currency=(
+                SimpleNamespace(amount_minor=6_300_00, currency="RUB"),
+            ),
+            sources=(
+                SimpleNamespace(
+                    source=SimpleNamespace(value="vk"),
+                    revenue_by_currency=(
+                        SimpleNamespace(amount_minor=34_200_00, currency="RUB"),
+                    ),
+                    paid_customers=3,
+                ),
+            ),
+        )
+        snapshot = SimpleNamespace(
+            actions=(action,),
+            next_action=action,
+            journey=journey,
+            period_days=7,
+        )
         summary = SimpleNamespace(
             customers=4,
             programs=2,
@@ -110,6 +137,9 @@ class NativeMemberParityNavigationTests(unittest.TestCase):
             message = ui._today_message(actor)
         self.assertIn("Важные действия", message.text)
         self.assertIn("Следующий шаг по клиенту: Анна", message.text)
+        self.assertIn("Деньги и путь клиента · 7 дней", message.text)
+        self.assertIn("Подтверждённая выручка: 34 200.00 RUB", message.text)
+        self.assertIn("Лучший подтверждённый источник: ВКонтакте", message.text)
         commands = _commands(message)
         self.assertEqual(commands[0], f"cpm:sales-lead:{lead_id}")
         self.assertEqual(sum(command.startswith("cpm:sales-lead:") for command in commands), 1)
