@@ -99,36 +99,15 @@ def callbacks(markup: InlineKeyboardMarkup) -> list[str | None]:
     return [button.callback_data for row in markup.inline_keyboard for button in row]
 
 
-def test_owner_menu_matches_metrotherapy_admin_shape() -> None:
+def test_owner_menu_uses_five_human_groups_instead_of_26_buttons() -> None:
     markup = admin._menu_keyboard(admin_context())
 
     assert labels(markup) == [
-        "📊 Сегодня (кратко)",
-        "📈 Сегодня (подробно)",
-        "👥 Клиенты сегодня",
-        "🔎 Карточка клиента",
-        "🧠 Поведение",
-        "💬 Мессенджеры",
-        "⚠️ Требуют внимания",
-        "🤖 Growth Autopilot",
-        "📣 Публикации",
-        "📉 Путь до заявки",
-        "💰 Деньги и клиенты",
-        "💰 Оплаты",
-        "🧲 Группы клиентов",
-        "🧪 Проверка предложений",
-        "✍️ Подготовить тексты",
-        "💡 Подсказка по ценам",
-        "🚦 Release gate",
-        "🎁 Приглашения и рекомендации",
-        "🧲 Воронка 2.0",
-        "🧩 Удержание",
-        "🧾 Последние действия",
-        "🧪 Системные проверки",
-        "💳 Тариф ClientPlatform",
-        "👥 Добавить сотрудника",
-        "👥 Роли команды",
-        "🔐 Доступы сотрудников",
+        "📊 Работа и клиенты",
+        "✍️ Контент и каналы",
+        "📈 Маркетинг и деньги",
+        "👥 Команда и тариф",
+        "⚙️ Системное",
         "⬅️ Назад",
     ]
     assert all(
@@ -142,23 +121,23 @@ def test_owner_menu_matches_metrotherapy_admin_shape() -> None:
     [
         (
             PlatformRole.SUPPORT,
-            {"👥 Клиенты сегодня", "⚠️ Требуют внимания"},
-            {"💰 Оплаты", "👥 Роли команды"},
+            {"📊 Работа и клиенты", "✍️ Контент и каналы"},
+            {"📈 Маркетинг и деньги", "👥 Команда и тариф", "⚙️ Системное"},
         ),
         (
             PlatformRole.MARKETER,
-            {"🤖 Growth Autopilot", "📉 Путь до заявки"},
-            {"👥 Клиенты сегодня", "🚦 Release gate"},
+            {"✍️ Контент и каналы", "📈 Маркетинг и деньги"},
+            {"📊 Работа и клиенты", "👥 Команда и тариф", "⚙️ Системное"},
         ),
         (
             PlatformRole.CONTENT_MANAGER,
-            {"📣 Публикации", "✍️ Подготовить тексты"},
-            {"💰 Оплаты", "👥 Роли команды"},
+            {"✍️ Контент и каналы"},
+            {"📊 Работа и клиенты", "📈 Маркетинг и деньги", "👥 Команда и тариф", "⚙️ Системное"},
         ),
         (
             PlatformRole.ADMINISTRATOR,
-            {"🚦 Release gate", "💰 Оплаты"},
-            {"💳 Тариф ClientPlatform", "👥 Роли команды"},
+            {"📊 Работа и клиенты", "✍️ Контент и каналы", "📈 Маркетинг и деньги", "⚙️ Системное"},
+            {"👥 Команда и тариф"},
         ),
     ],
 )
@@ -291,10 +270,10 @@ async def test_render_menu_uses_exact_panel_header(
     )
 
     assert answers == [
-        "🛠 Админ-панель\n\n"
-        "Бизнес: Сантехник\n"
-        "Роль: Владелец\n\n"
-        "Выберите доступный раздел:"
+        "⚙️ Управление бизнесом\n\n"
+        "Сантехник · Владелец\n\n"
+        "Выберите, чем хотите заняться. Редкие и технические функции спрятаны "
+        "внутри соответствующих разделов."
     ]
     assert (await state.get_data())["cp_admin_section"] == "menu"
 
@@ -335,7 +314,7 @@ async def test_open_admin_command_handles_zero_one_and_multiple_businesses(
         lambda **_kwargs: _async_value(admin_context()),
     )
     await admin.open_admin_command(telegram_message(), fsm_context())
-    assert answers[-1][0].startswith("🛠 Админ-панель")
+    assert answers[-1][0].startswith("⚙️ Управление бизнесом")
 
     second_id = str(uuid4())
     monkeypatch.setattr(

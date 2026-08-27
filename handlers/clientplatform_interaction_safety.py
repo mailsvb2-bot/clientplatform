@@ -43,6 +43,14 @@ _RECENT_ACTION_TTL_SECONDS = 4.0
 _RECENT_ACTION_LIMIT = 4096
 _CONTROL_COMMAND_LOCK_WAIT_SECONDS = 0.25
 _CONTROL_COMMANDS = frozenset({"/start", "/admin", "/mybot", "/cancel"})
+_OWNER_NAVIGATION_PREFIXES = (
+    "cpo:more:",
+    "cpo:clients:",
+    "cpo:content:",
+    "cpo:settings:",
+    "cpo:work:",
+    "cpo:ads:",
+)
 
 # Callback namespaces are shared by several independently composed routers.  Keep
 # the interaction boundary semantic: screen navigation may leave an ordinary
@@ -61,6 +69,7 @@ _CLIENTPLATFORM_CALLBACK_PREFIXES = (
     "cpp:",
     "cpy:",
     "cpsp:",
+    *_OWNER_NAVIGATION_PREFIXES,
 )
 
 # Safe screen transitions.  A user may use these to leave an ordinary wizard;
@@ -114,6 +123,7 @@ _STATE_ESCAPE_PREFIXES = (
     "cpa:disconnects:",
     "cpy:a:",
     "cpsp:home:",
+    *_OWNER_NAVIGATION_PREFIXES,
 )
 
 # Read-only/repeatable navigation must never emit "Действие уже выполняется"
@@ -158,6 +168,7 @@ _REPEATABLE_NAVIGATION_PREFIXES = (
     "cpa:disconnects:",
     "cpy:a:",
     "cpsp:home:",
+    *_OWNER_NAVIGATION_PREFIXES,
 )
 
 # These state families carry secrets, explicit money consent, or privileged

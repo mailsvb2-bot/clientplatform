@@ -23,7 +23,7 @@ from clientplatform.application.promotions import create_slot_promotion, promoti
 from clientplatform.domain.ad_connections import AdConnectionError, AdConnectionStatus
 from clientplatform.domain.bookings import BookingSlotStatus
 from clientplatform.domain.promotions import PromotionChannel, PromotionError
-from clientplatform.domain.tenancy import TenantPermissionDenied
+from clientplatform.domain.tenancy import PlatformRole, TenantPermissionDenied
 from clientplatform.integrations.yandex_direct import YandexDirectError
 from config.settings import settings
 
@@ -563,20 +563,94 @@ async def open_more(callback: CallbackQuery) -> None:
     token = str(callback.data).split(":", 2)[2]
     await control._actor(int(callback.from_user.id), control._token_uuid(token))
     await control._callback_message(callback).answer(
-        "⋯ Все возможности\n\nГлавная показывает только самое важное. Все остальные функции ClientPlatform доступны здесь.",
+        "⋯ Все возможности\n\n"
+        "Выберите задачу. Внутри каждого раздела собраны связанные действия — "
+        "без длинного списка на одном экране.",
         reply_markup=control._keyboard(
             [
-                [("📈 Что происходит с бизнесом", f"cpg:period:{token}:7")],
-                [("💬 Обращения и продажи", f"cps:s:{token}")],
-                [("👥 Клиенты и запись", f"cpj:bookings:{token}")],
-                [("💬 Мессенджеры", f"cpa:{token}:messengers")],
+                [("📈 Обзор бизнеса", f"cpg:period:{token}:7")],
+                [("👥 Клиенты и продажи", f"cpo:clients:{token}")],
                 [("🧰 Услуги и расписание", f"cpo:work:{token}")],
-                [("📣 Реклама и продвижение", f"cpo:ads:{token}")],
-                [("🤝 Партнёрства", f"cpg:home:{token}")],
-                [("⚙️ Настройки", f"cps:advanced:{token}")],
+                [("✍️ Контент и продвижение", f"cpo:content:{token}")],
+                [("⚙️ Настройки", f"cpo:settings:{token}")],
                 [("🏠 В кабинет", f"cpj:home:{token}")],
             ]
         ),
+    )
+
+
+@router.callback_query(F.data.startswith("cpo:clients:"))
+async def open_client_tools(callback: CallbackQuery) -> None:
+    token = str(callback.data).split(":", 2)[2]
+    await control._actor(int(callback.from_user.id), control._token_uuid(token))
+    await control._callback_message(callback).answer(
+        "👥 Клиенты и продажи\n\nЗдесь работа с обращениями, клиентами и записями.",
+        reply_markup=control._keyboard(
+            [
+                [("💬 Обращения и продажи", f"cps:s:{token}")],
+                [("📅 Записи клиентов", f"cpj:bookings:{token}")],
+                [("🔎 Все клиенты", f"cpa:{token}:customer-list")],
+                [("⬅️ Назад", f"cpo:more:{token}")],
+            ]
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("cpo:content:"))
+async def open_content_tools(callback: CallbackQuery) -> None:
+    token = str(callback.data).split(":", 2)[2]
+    await control._actor(int(callback.from_user.id), control._token_uuid(token))
+    await control._callback_message(callback).answer(
+        "✍️ Контент и продвижение\n\nПодготовьте материалы и выберите, как приводить людей.",
+        reply_markup=control._keyboard(
+            [
+                [("📣 Публикации", f"cpa:{token}:publications")],
+                [("✍️ Подготовить тексты", f"cpa:{token}:copy")],
+                [("🧪 Проверить предложение", f"cpa:{token}:offers")],
+                [("📣 Реклама", f"cpo:ads:{token}")],
+                [("🤝 Партнёрства", f"cpg:home:{token}")],
+                [("⬅️ Назад", f"cpo:more:{token}")],
+            ]
+        ),
+    )
+
+
+_SETTINGS_MESSENGER_ROLES = frozenset(
+    {
+        PlatformRole.OWNER,
+        PlatformRole.ADMINISTRATOR,
+        PlatformRole.MANAGER,
+        PlatformRole.SUPPORT,
+    }
+)
+_SETTINGS_SYSTEM_ROLES = frozenset(
+    {PlatformRole.OWNER, PlatformRole.ADMINISTRATOR}
+)
+
+
+def _settings_rows(token: str, role: PlatformRole) -> list[list[tuple[str, str]]]:
+    # Presentation filtering keeps the screen honest; target handlers still
+    # revalidate the live tenant role before serving any privileged action.
+    rows: list[list[tuple[str, str]]] = []
+    if role in _SETTINGS_MESSENGER_ROLES:
+        rows.append([("💬 Мессенджеры", f"cpa:{token}:messengers")])
+    rows.append([("🧩 Бизнес и возможности", f"cps:advanced:{token}")])
+    if role == PlatformRole.OWNER:
+        rows.append([("👥 Команда и тариф", f"cpa:{token}:menu-team")])
+    if role in _SETTINGS_SYSTEM_ROLES:
+        rows.append([("⚙️ Системное", f"cpa:{token}:menu-system")])
+    rows.append([("⬅️ Назад", f"cpo:more:{token}")])
+    return rows
+
+
+@router.callback_query(F.data.startswith("cpo:settings:"))
+async def open_settings_tools(callback: CallbackQuery) -> None:
+    token = str(callback.data).split(":", 2)[2]
+    actor = await control._actor(int(callback.from_user.id), control._token_uuid(token))
+    await control._callback_message(callback).answer(
+        "⚙️ Настройки\n\n"
+        "Обычные настройки — сверху. Команда и технические функции вынесены глубже.",
+        reply_markup=control._keyboard(_settings_rows(token, actor.role)),
     )
 
 

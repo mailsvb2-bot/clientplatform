@@ -242,6 +242,21 @@ def test_admin_token_first_menu_is_recognized_as_repeatable_navigation() -> None
     )
 
 
+def test_owner_group_navigation_escapes_stale_ordinary_wizards() -> None:
+    state_name = "ClientPlatformControlState:activity_description"
+    for data in (
+        "cpo:more:business",
+        "cpo:clients:business",
+        "cpo:content:business",
+        "cpo:settings:business",
+        "cpo:work:business",
+        "cpo:ads:business",
+    ):
+        assert _is_repeatable_navigation(data)
+        assert not _callback_conflicts_with_state(state_name, data)
+        assert _callback_should_clear_state(state_name, data)
+
+
 @pytest.mark.asyncio
 async def test_repeatable_navigation_clears_stale_state_and_is_not_double_tap_blocked(
     monkeypatch: pytest.MonkeyPatch,
