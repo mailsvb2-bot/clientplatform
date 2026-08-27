@@ -23,6 +23,7 @@ from clientplatform.application.promotions import (
     create_slot_promotion,
     list_promotable_slots,
     list_promotion_campaigns,
+    open_channel_promotion_for_identity,
     open_promotion_link,
     parse_promotion_start_payload,
     promotion_start_payload,
@@ -266,19 +267,26 @@ async def dispatch_promotion_start(
     user_id: int,
     managed_bot_business_id: str | None,
 ) -> bool:
-    if managed_bot_business_id is not None:
-        return False
     token = parse_promotion_start_payload(control._start_payload(message))
     if token is None:
         return False
     user = message.from_user
-    landing = await asyncio.to_thread(
-        open_promotion_link,
-        source_token=token,
-        telegram_user_id=user_id,
-        username=None if user is None else user.username,
-        display_name=None if user is None else user.full_name,
-    )
+    if managed_bot_business_id is not None:
+        landing = await asyncio.to_thread(
+            open_channel_promotion_for_identity,
+            source_token=token,
+            business_id=managed_bot_business_id,
+            platform="telegram",
+            external_subject=str(user_id),
+        )
+    else:
+        landing = await asyncio.to_thread(
+            open_promotion_link,
+            source_token=token,
+            telegram_user_id=user_id,
+            username=None if user is None else user.username,
+            display_name=None if user is None else user.full_name,
+        )
     await state.clear()
     creative = landing.campaign.creative
     await message.answer(

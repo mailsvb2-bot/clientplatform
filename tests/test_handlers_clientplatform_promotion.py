@@ -351,12 +351,43 @@ async def test_unrelated_and_malformed_start_payloads_remain_on_canonical_path()
 
 
 @pytest.mark.asyncio
-async def test_managed_business_bot_does_not_accept_central_promotion_payload() -> None:
+async def test_managed_business_bot_opens_canonical_promotion_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    slot = _slot()
+    landing = PromotionLanding(
+        campaign=_campaign(slot),
+        slot=slot,
+        customer_id=str(uuid4()),
+    )
+    business_id = slot.slot.business_id
+    opened: list[dict[str, Any]] = []
+
+    def open_identity(**kwargs: Any) -> PromotionLanding:
+        opened.append(dict(kwargs))
+        return landing
+
+    monkeypatch.setattr(promotion, "open_channel_promotion_for_identity", open_identity)
     message = FakeMessage("/start cpa_abcdefghijklmnop")
     state = FakeState()
-    assert await promotion.dispatch_promotion_start(
+
+    handled = await promotion.dispatch_promotion_start(
         message,
         state,
         user_id=101,
-        managed_bot_business_id=str(uuid4()),
-    ) is False
+        managed_bot_business_id=business_id,
+    )
+
+    assert handled is True
+    assert opened == [
+        {
+            "source_token": "abcdefghijklmnop",
+            "business_id": business_id,
+            "platform": "telegram",
+            "external_subject": "101",
+        }
+    ]
+    assert state.clear_count == 1
+    assert "Время свободно" in message.answers[-1][0]
+    button = message.answers[-1][1]["reply_markup"].inline_keyboard[0][0]
+    assert button.callback_data == "cpp:book:abcdefghijklmnop"

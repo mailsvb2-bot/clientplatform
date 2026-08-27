@@ -193,3 +193,32 @@ def test_channel_promotion_captures_exact_alias_without_transport_state(monkeypa
             )
     finally:
         conn.close()
+
+
+def test_channel_promotion_resolves_existing_telegram_identity(monkeypatch) -> None:
+    conn, actor, alias_token, customer_id = _promotion_fixture()
+    monkeypatch.setattr(promotions, "get_db", lambda: nullcontext(conn))
+    try:
+        first = promotions.open_channel_promotion(
+            source_token=alias_token,
+            business_id=actor.business_id,
+            customer_id=customer_id,
+        )
+        landing = promotions.open_channel_promotion_for_identity(
+            source_token=alias_token,
+            business_id=actor.business_id,
+            platform="telegram",
+            external_subject="700001",
+        )
+        assert first.customer_id == landing.customer_id == customer_id
+        assert landing.attribution_token == alias_token
+        assert conn.execute(
+            "SELECT COUNT(*) FROM promotion_events WHERE customer_id=? AND event_type='opened'",
+            (customer_id,),
+        ).fetchone()[0] == 1
+        assert conn.execute(
+            "SELECT COUNT(*) FROM attribution_links WHERE customer_id=?",
+            (customer_id,),
+        ).fetchone()[0] == 1
+    finally:
+        conn.close()
