@@ -55,10 +55,20 @@ def test_native_sales_card_is_transport_neutral(monkeypatch, platform) -> None:
         current_platform=platform,
     )
     assert "Анна" in message.text
-    assert "Источник: yandex_direct · campaign:neutral-runtime" in message.text
+    assert "Источник: Яндекс Директ" in message.text
+    assert "campaign:neutral-runtime" not in message.text
     commands = [button.command for row in message.rows for button in row]
-    assert f"cpm:sales-unassign:{lead_id}" in commands
-    assert f"cpm:sales-stage:{lead_id}:checkout" in commands
+    assert commands == [
+        f"cpm:sales-stage:{lead_id}:checkout",
+        f"cpm:sales-actions:{lead_id}",
+        "cpm:sales",
+    ]
+
+    advanced = ui._sales_actions_message(actor, lead_id)
+    advanced_commands = [button.command for row in advanced.rows for button in row]
+    assert f"cpm:sales-unassign:{lead_id}" in advanced_commands
+    assert f"cpm:sales-stage:{lead_id}:checkout" in advanced_commands
+    assert f"cpm:sales-followup-menu:{lead_id}" in advanced_commands
 
 
 def test_vk_and_max_assign_through_same_workspace_operation(monkeypatch) -> None:
@@ -193,14 +203,20 @@ def test_native_acquisition_without_slot_is_fail_safe(monkeypatch) -> None:
     assert "cpm:growth" in commands
 
 
-def test_native_sales_card_exposes_followup_without_exceeding_contract(monkeypatch) -> None:
+def test_native_sales_card_progressively_discloses_followup_without_losing_it(monkeypatch) -> None:
     actor = _actor()
     lead_id = str(uuid4())
     monkeypatch.setattr(ui, "get_sales_workspace_item", lambda **_: _item(lead_id))
-    message = ui._sales_lead_message(actor, lead_id)
-    commands = [button.command for row in message.rows for button in row]
-    assert f"cpm:sales-followup-menu:{lead_id}" in commands
-    assert len(commands) <= 10
+    card = ui._sales_lead_message(actor, lead_id)
+    card_commands = [button.command for row in card.rows for button in row]
+    assert f"cpm:sales-followup-menu:{lead_id}" not in card_commands
+    assert f"cpm:sales-actions:{lead_id}" in card_commands
+    assert len(card_commands) <= 3
+
+    actions = ui._sales_actions_message(actor, lead_id)
+    action_commands = [button.command for row in actions.rows for button in row]
+    assert f"cpm:sales-followup-menu:{lead_id}" in action_commands
+    assert len(action_commands) <= 10
 
 
 def test_native_followup_schedule_is_transport_neutral(monkeypatch) -> None:
@@ -232,7 +248,7 @@ def test_native_followup_schedule_is_transport_neutral(monkeypatch) -> None:
             setup_key=f"followup:{platform.value}",
             current_platform=platform,
         )
-        assert "Follow-up запланирован" in message.text
+        assert "Напоминание клиенту запланировано" in message.text
     assert len(calls) == 2
     for call in calls:
         assert call["actor"] == actor
@@ -341,6 +357,7 @@ def test_lost_native_lead_can_reopen_through_canonical_workspace(monkeypatch) ->
     card = ui._sales_lead_message(actor, lead_id)
     commands = [button.command for row in card.rows for button in row]
     assert f"cpm:sales-reopen:{lead_id}" in commands
+    assert f"cpm:sales-actions:{lead_id}" in commands
 
     calls: list[dict[str, object]] = []
     monkeypatch.setattr(

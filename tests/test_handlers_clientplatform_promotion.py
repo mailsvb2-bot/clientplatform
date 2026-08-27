@@ -160,8 +160,8 @@ def test_owner_dashboard_exposes_new_client_acquisition_instead_of_abstract_prom
         for row in owner._owner_keyboard(business_id).inline_keyboard
         for button in row
     ]
-    assert "🚀 Найти новых клиентов" in labels
-    assert "💬 Обращения и продажи" in labels
+    assert labels == ["🚀 Найти новых клиентов", "⋯ Все возможности"]
+    assert "💬 Обращения и продажи" not in labels
     assert "📢 Продвижение" not in labels
 
 

@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, patch
 from clientplatform.domain.ad_connections import AdConnectionStatus
 from clientplatform.domain.bookings import BookingSlotStatus
 from clientplatform.domain.tenancy import TenantPermissionDenied
+from handlers import clientplatform_goal_dashboard as dashboard
 from handlers import clientplatform_goal_first_autopilot as goal
 from handlers import clientplatform_one_click_experience as one_click
 
@@ -151,13 +152,8 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
                 "_business_snapshot",
                 new=AsyncMock(return_value=snapshot),
             ),
-            patch.object(one_click.control, "list_booking_slots", return_value=[slot()]),
             patch.object(one_click.control, "_uuid_token", side_effect=lambda value: value),
-            patch.object(
-                goal.send_goal_dashboard.__globals__["owner"],
-                "_all_offerings",
-                new=AsyncMock(return_value=[]),
-            ),
+            patch.object(dashboard, "_owner_next_action", return_value=None),
         ):
             await goal.send_goal_dashboard(out, user_id=101, business_id="business-1")
         labels = [
@@ -165,9 +161,29 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
             for row in out.answer.await_args.kwargs["reply_markup"].inline_keyboard
             for button in row
         ]
-        self.assertIn("🚀 Найти новых клиентов", labels)
-        self.assertIn("💬 Обращения и продажи", labels)
+        self.assertEqual(labels, ["🚀 Найти новых клиентов", "⋯ Все возможности"])
         self.assertNotIn("🚀 Получить клиентов", labels)
+
+    async def test_all_capabilities_menu_preserves_former_home_entrypoints(self) -> None:
+        out = outbound_message()
+        cb = callback("cpo:more:business-1", out)
+        with (
+            patch.object(one_click.control, "_actor", new=AsyncMock(return_value="actor")),
+            patch.object(one_click.control, "_token_uuid", side_effect=lambda value: value),
+            patch.object(one_click.control, "_callback_message", return_value=out),
+        ):
+            await one_click.open_more(cb)
+        labels = [
+            button.text
+            for row in out.answer.await_args.kwargs["reply_markup"].inline_keyboard
+            for button in row
+        ]
+        self.assertIn("📈 Что происходит с бизнесом", labels)
+        self.assertIn("💬 Обращения и продажи", labels)
+        self.assertIn("👥 Клиенты и запись", labels)
+        self.assertIn("💬 Мессенджеры", labels)
+        self.assertIn("📣 Реклама и продвижение", labels)
+        self.assertIn("⚙️ Настройки", labels)
 
     async def test_no_open_slot_reduces_flow_to_one_required_next_action(self) -> None:
         out = outbound_message()
@@ -326,6 +342,9 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             labels,
             [
+                "📈 Что происходит с бизнесом",
+                "💬 Обращения и продажи",
+                "👥 Клиенты и запись",
                 "💬 Мессенджеры",
                 "🧰 Услуги и расписание",
                 "📣 Реклама и продвижение",
@@ -334,10 +353,12 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
                 "🏠 В кабинет",
             ],
         )
-        self.assertEqual(
-            out.answer.await_args.kwargs["reply_markup"].inline_keyboard[0][0].callback_data,
-            "cpa:business-1:messengers",
-        )
+        buttons = {
+            button.text: button.callback_data
+            for row in out.answer.await_args.kwargs["reply_markup"].inline_keyboard
+            for button in row
+        }
+        self.assertEqual(buttons["💬 Мессенджеры"], "cpa:business-1:messengers")
 
 
 if __name__ == "__main__":

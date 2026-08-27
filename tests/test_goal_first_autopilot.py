@@ -50,8 +50,8 @@ class GoalFirstAutopilotTests(unittest.IsolatedAsyncioTestCase):
                 "_business_snapshot",
                 new=AsyncMock(return_value=snapshot),
             ),
-            patch.object(goal.control, "list_booking_slots", return_value=[slot]),
             patch.object(goal.control, "_uuid_token", side_effect=lambda value: value),
+            patch("handlers.clientplatform_goal_dashboard._owner_next_action", return_value=None),
         ):
             await goal.send_goal_dashboard(
                 out,
@@ -61,38 +61,12 @@ class GoalFirstAutopilotTests(unittest.IsolatedAsyncioTestCase):
         text = out.answer.await_args.args[0]
         markup = out.answer.await_args.kwargs["reply_markup"]
         labels = [button.text for row in markup.inline_keyboard for button in row]
-        self.assertIn("Что нужно сделать сейчас", text)
-        self.assertIn("Технические кабинеты", text)
-        self.assertIn("сообщения клиентам не отправляются без Вашего подтверждения", text)
+        self.assertIn("Главное сейчас", text)
+        self.assertIn("Срочных задач сейчас нет", text)
         self.assertIn("свободных времён: 1", text)
-        self.assertEqual(
-            labels,
-            [
-                "📈 Что сегодня",
-                "🚀 Найти новых клиентов",
-                "💬 Обращения и продажи",
-                "💬 Мессенджеры",
-                "👥 Клиенты и запись",
-                "⚙️ Ещё",
-            ],
-        )
-        self.assertEqual(
-            markup.inline_keyboard[0][0].callback_data,
-            "cpg:period:business-1:7",
-        )
-        self.assertEqual(
-            markup.inline_keyboard[1][0].callback_data,
-            "cpo:start:business-1",
-        )
-        self.assertEqual(
-            markup.inline_keyboard[2][0].callback_data,
-            "cps:s:business-1",
-        )
-        self.assertEqual(
-            markup.inline_keyboard[3][0].callback_data,
-            "cpa:business-1:messengers",
-        )
-        self.assertIn("ВКонтакте, MAX и Telegram", text)
+        self.assertEqual(labels, ["🚀 Найти новых клиентов", "⋯ Все возможности"])
+        self.assertEqual(markup.inline_keyboard[0][0].callback_data, "cpo:start:business-1")
+        self.assertEqual(markup.inline_keyboard[1][0].callback_data, "cpo:more:business-1")
 
     async def test_first_region_question_does_not_ask_for_yandex_campaign(self) -> None:
         out = SimpleNamespace(answer=AsyncMock())

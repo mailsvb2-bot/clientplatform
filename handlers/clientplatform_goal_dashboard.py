@@ -1,18 +1,19 @@
 from __future__ import annotations
 
-"""Information-rich goal-first owner dashboard presentation."""
+"""Result-first owner dashboard with one primary action and progressive disclosure."""
 
 import asyncio
 
 from aiogram.types import Message
 
+from clientplatform.application.growth_cockpit import GrowthAction, get_growth_cockpit
 from clientplatform.domain.bookings import BookingSlotStatus
+from clientplatform.domain.tenancy import TenantAccessDenied, TenantPermissionDenied
 
 from . import clientplatform_control as control
 from . import clientplatform_goal_first_safety as goal_contract
 from . import clientplatform_growth as growth
 from . import clientplatform_one_click_experience as one_click
-from . import clientplatform_owner_journey as owner
 
 # This module is imported by the single canonical handler composition path in
 # handlers.__init__. Compose the Growth Cockpit there as a child of the existing
@@ -22,27 +23,61 @@ if not bool(getattr(one_click.simple, "_growth_cockpit_composed", False)):
     one_click.simple._growth_cockpit_composed = True
 
 
-def _goal_keyboard(business_id: str):
-    """Render the single canonical owner-home navigation.
+def _without_advertising(**_kwargs):
+    return None
 
-    Acquisition and already-arrived customer conversations are deliberately
-    separate actions. Keeping both here prevents later presentation layers
-    from hiding the sales workspace again. Growth Cockpit is a read-only
-    projection over those same canonical facts, not another business brain.
-    """
+
+def _projection_unavailable_action() -> GrowthAction:
+    return GrowthAction(
+        title="Не удалось проверить срочные задачи",
+        reason=(
+            "Обзор сейчас недоступен. Я не считаю очередь пустой — откройте «Что сегодня» "
+            "и проверьте работу вручную."
+        ),
+        action_key="projection_unavailable",
+        source="growth_cockpit",
+    )
+
+
+def _owner_next_action(actor) -> GrowthAction:
+    try:
+        return get_growth_cockpit(
+            actor=actor,
+            period_days=7,
+            advertising_loader=_without_advertising,
+        ).next_action
+    except (TenantAccessDenied, TenantPermissionDenied, ValueError):
+        return _projection_unavailable_action()
+    except OSError:
+        return _projection_unavailable_action()
+    except RuntimeError:
+        return _projection_unavailable_action()
+
+
+def _primary_action(business_id: str, next_action: GrowthAction | None = None) -> tuple[str, str]:
+    token = control._uuid_token(business_id)
+    if next_action is not None:
+        if next_action.action_key == "projection_unavailable":
+            return "📈 Проверить задачи вручную", f"cpg:period:{token}:7"
+        if next_action.action_key == "sales_handoff":
+            return "🙋 Ответить клиентам", f"cps:sh:{token}"
+        if next_action.action_key.startswith("sales_plan:"):
+            return "💬 Продолжить работу с клиентом", f"cps:sw:{token}"
+        if next_action.action_key == "attribution_review":
+            return "💰 Проверить источники оплат", f"cpy:a:{token}:7"
+    action = goal_contract.ACQUIRE_CLIENTS
+    return action.label, action.callback(token)
+
+
+def _goal_keyboard(business_id: str, next_action: GrowthAction | None = None):
+    """Show one result-first action and progressively disclose everything else."""
 
     token = control._uuid_token(business_id)
-    action = goal_contract.ACQUIRE_CLIENTS
+    primary = _primary_action(business_id, next_action)
     return control._keyboard(
         [
-            [("📈 Что сегодня", f"cpg:period:{token}:7")],
-            [(action.label, action.callback(token))],
-            [("💬 Обращения и продажи", f"cps:s:{token}")],
-            [("💬 Мессенджеры", f"cpa:{token}:messengers")],
-            [
-                ("👥 Клиенты и запись", f"cpj:bookings:{token}"),
-                ("⚙️ Ещё", f"cpo:more:{token}"),
-            ],
+            [primary],
+            [("⋯ Все возможности", f"cpo:more:{token}")],
         ]
     )
 
@@ -53,62 +88,34 @@ async def send_goal_dashboard(
     user_id: int,
     business_id: str,
 ) -> None:
-    actor, access, profile, capabilities, customers, programs, _snapshot_slots = (
+    actor, access, profile, _capabilities, customers, programs, slots = (
         await one_click.simple._business_snapshot(
             user_id=user_id,
             business_id=business_id,
         )
     )
-    offerings, slots = await asyncio.gather(
-        owner._all_offerings(actor, capabilities),
-        asyncio.to_thread(
-            control.list_booking_slots,
-            actor=actor,
-            include_unavailable=True,
-        ),
-    )
+    next_action = await asyncio.to_thread(_owner_next_action, actor)
     open_slots = [item for item in slots if item.slot.status == BookingSlotStatus.OPEN]
-    booked_slots = [item for item in slots if item.slot.status == BookingSlotStatus.BOOKED]
-    nearest = min(
-        (
-            item
-            for item in slots
-            if item.slot.status in {BookingSlotStatus.OPEN, BookingSlotStatus.BOOKED}
-        ),
-        key=lambda item: item.slot.starts_at,
-        default=None,
-    )
-    nearest_line = (
-        "Ближайшее время: пока не опубликовано"
-        if nearest is None
-        else f"Ближайшее время: {nearest.local_start} · {nearest.offering_title}"
-    )
-    readiness = (
-        f"Свободных времён: {len(open_slots)}."
-        if open_slots
-        else "Свободных времён пока нет — если понадобится, я попрошу добавить одно."
-    )
-    action = goal_contract.ACQUIRE_CLIENTS
+    primary_label, _primary_callback = _primary_action(business_id, next_action)
+
+    if next_action is None or next_action.action_key == "none":
+        main_title = "Можно заняться ростом бизнеса"
+        main_reason = "Срочных задач сейчас нет — ClientPlatform подготовит следующий шаг для привлечения клиентов."
+    else:
+        main_title = next_action.title
+        main_reason = next_action.reason
+
     await message.answer(
         f"🏠 {access.business.name}\n\n"
         f"{profile.activity_description}\n\n"
-        f"Услуг: {len(offerings)} · свободных времён: {len(open_slots)} · "
-        f"записей клиентов: {len(booked_slots)}\n"
-        f"Материалов и программ: {len(programs)} · клиентов: {len(customers)}\n"
-        f"{nearest_line}\n\n"
-        f"{readiness}\n\n"
-        "Что нужно сделать сейчас:\n"
-        "• «📈 Что сегодня» — увидеть лиды, записи, оплаты, рекламу и следующий шаг.\n"
-        f"• «{action.label}» — подготовить продвижение и привести новых людей.\n"
-        "• «💬 Обращения и продажи» — разобрать тех, кто уже написал: увидеть следующий "
-        "шаг, подключить ИИ-помощника и подготовить ответ.\n"
-        "• «💬 Мессенджеры» — подключить или открыть ВКонтакте, MAX и Telegram "
-        "под одним аккаунтом бизнеса.\n\n"
-        "Технические кабинеты и кампании знать не нужно. Действия с возможными "
-        "расходами подтверждаются отдельно, а сообщения клиентам не отправляются без "
-        "Вашего подтверждения.\n\n"
-        "Остальные функции собраны в «⚙️ Ещё».",
-        reply_markup=_goal_keyboard(business_id),
+        "Главное сейчас\n"
+        f"• {main_title}\n"
+        f"  {main_reason}\n\n"
+        f"Клиентов: {len(customers)} · свободных времён: {len(open_slots)} · "
+        f"материалов и программ: {len(programs)}\n\n"
+        f"Нажмите «{primary_label}» — открою нужный шаг. "
+        "Остальные функции сохранены в «Все возможности».",
+        reply_markup=_goal_keyboard(business_id, next_action),
     )
 
 
