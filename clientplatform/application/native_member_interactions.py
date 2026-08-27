@@ -464,7 +464,11 @@ def _native_primary_action(actor: TenantContext) -> CustomerInteractionButton:
             period_days=7,
             advertising_loader=lambda **_kwargs: None,
         ).next_action
-    except (OSError, RuntimeError, TenantAccessDenied, TenantPermissionDenied, ValueError):
+    except (TenantAccessDenied, TenantPermissionDenied, ValueError):
+        next_action = None
+    except OSError:
+        next_action = None
+    except RuntimeError:
         next_action = None
 
     if next_action is not None:
