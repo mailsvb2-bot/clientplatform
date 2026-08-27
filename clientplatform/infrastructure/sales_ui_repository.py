@@ -147,6 +147,124 @@ class SalesUiRepository:
             }
         return None
 
+    def _decorate_work_item(
+        self,
+        *,
+        current: TenantContext,
+        item: dict[str, Any],
+    ) -> dict[str, Any]:
+        item = self._decorate_attribution(current=current, item=item)
+        plan_id = str(item.get("next_plan_id") or "")
+        if plan_id:
+            candidate = self._commercial_candidate_for_plan(
+                business_id=current.business_id,
+                lead_id=str(item["id"]),
+                plan_id=plan_id,
+            )
+            if candidate is not None:
+                item.update(candidate)
+        return item
+
+    def get_work_item(
+        self,
+        *,
+        actor: TenantContext,
+        lead_id: str,
+    ) -> dict[str, Any] | None:
+        """Return one tenant-scoped sales card without list-window truncation."""
+
+        current = self._customer_context(actor)
+        normalized = normalize_uuid(lead_id, field_name="lead_id")
+        row = self._conn.execute(
+            """
+            SELECT
+                l.id,
+                l.customer_id,
+                COALESCE(c.display_name, 'Клиент') AS customer_name,
+                l.source_kind,
+                l.source_ref,
+                l.contact_basis,
+                l.stage,
+                l.assigned_member_id,
+                (
+                    SELECT bm.user_id
+                    FROM business_members bm
+                    WHERE bm.id=l.assigned_member_id
+                      AND bm.business_id=l.business_id
+                      AND bm.status='active'
+                    LIMIT 1
+                ) AS assigned_user_id,
+                l.next_action,
+                l.due_at,
+                l.closure_reason,
+                l.updated_at,
+                (
+                    SELECT f.id
+                    FROM clientplatform_sales_followups f
+                    WHERE f.business_id=l.business_id AND f.lead_id=l.id
+                      AND f.status IN ('scheduled','queued')
+                    ORDER BY f.created_at DESC,f.id DESC LIMIT 1
+                ) AS active_followup_id,
+                (
+                    SELECT f.scheduled_at
+                    FROM clientplatform_sales_followups f
+                    WHERE f.business_id=l.business_id AND f.lead_id=l.id
+                      AND f.status IN ('scheduled','queued')
+                    ORDER BY f.created_at DESC,f.id DESC LIMIT 1
+                ) AS active_followup_scheduled_at,
+                EXISTS(
+                    SELECT 1 FROM clientplatform_sales_contact_suppressions s
+                    WHERE s.business_id=l.business_id AND s.customer_id=l.customer_id
+                      AND s.platform=l.source_kind
+                ) AS followup_suppressed,
+                (
+                    SELECT p.id
+                    FROM clientplatform_sales_action_plans p
+                    WHERE p.business_id=l.business_id
+                      AND p.lead_id=l.id
+                      AND p.status IN ('planned','approved')
+                    ORDER BY p.created_at DESC, p.id DESC
+                    LIMIT 1
+                ) AS next_plan_id,
+                (
+                    SELECT p.action_kind
+                    FROM clientplatform_sales_action_plans p
+                    WHERE p.business_id=l.business_id
+                      AND p.lead_id=l.id
+                      AND p.status IN ('planned','approved')
+                    ORDER BY p.created_at DESC, p.id DESC
+                    LIMIT 1
+                ) AS next_action_kind,
+                (
+                    SELECT p.status
+                    FROM clientplatform_sales_action_plans p
+                    WHERE p.business_id=l.business_id
+                      AND p.lead_id=l.id
+                      AND p.status IN ('planned','approved')
+                    ORDER BY p.created_at DESC, p.id DESC
+                    LIMIT 1
+                ) AS next_plan_status,
+                (
+                    SELECT p.requires_approval
+                    FROM clientplatform_sales_action_plans p
+                    WHERE p.business_id=l.business_id
+                      AND p.lead_id=l.id
+                      AND p.status IN ('planned','approved')
+                    ORDER BY p.created_at DESC, p.id DESC
+                    LIMIT 1
+                ) AS next_plan_requires_approval
+            FROM clientplatform_sales_leads l
+            JOIN customers c
+              ON c.id=l.customer_id AND c.business_id=l.business_id
+            WHERE l.business_id=? AND l.id=?
+            LIMIT 1
+            """,
+            (current.business_id, normalized),
+        ).fetchone()
+        if row is None:
+            return None
+        return self._decorate_work_item(current=current, item=_rowdict(row))
+
     def list_open_work(
         self,
         *,
@@ -247,23 +365,10 @@ class SalesUiRepository:
             """,
             (current.business_id, selected_limit),
         ).fetchall()
-        result: list[dict[str, Any]] = []
-        for row in rows:
-            item = self._decorate_attribution(
-                current=current,
-                item=_rowdict(row),
-            )
-            plan_id = str(item.get("next_plan_id") or "")
-            if plan_id:
-                candidate = self._commercial_candidate_for_plan(
-                    business_id=current.business_id,
-                    lead_id=str(item["id"]),
-                    plan_id=plan_id,
-                )
-                if candidate is not None:
-                    item.update(candidate)
-            result.append(item)
-        return result
+        return [
+            self._decorate_work_item(current=current, item=_rowdict(row))
+            for row in rows
+        ]
 
     def list_recent_closed(
         self,

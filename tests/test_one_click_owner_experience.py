@@ -110,6 +110,17 @@ def managed_draft():
 
 
 class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self.public_base = patch.object(
+            one_click.settings,
+            "MESSENGER_PUBLIC_BASE_URL",
+            "https://client.example.test",
+        )
+        self.public_base.start()
+
+    def tearDown(self) -> None:
+        self.public_base.stop()
+
     def common_patches(self, out):
         return (
             patch.object(one_click.asyncio, "to_thread", new=immediate_to_thread),

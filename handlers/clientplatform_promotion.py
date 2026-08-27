@@ -23,9 +23,10 @@ from clientplatform.application.promotions import (
     create_slot_promotion,
     list_promotable_slots,
     list_promotion_campaigns,
+    open_channel_promotion_for_identity,
     open_promotion_link,
     parse_promotion_start_payload,
-    promotion_start_payload,
+    promotion_public_url,
     promotion_stats,
 )
 from clientplatform.domain.booking_calendar import (
@@ -34,6 +35,7 @@ from clientplatform.domain.booking_calendar import (
     google_calendar_url,
 )
 from clientplatform.domain.promotions import PromotionChannel
+from config.settings import settings
 
 from . import clientplatform_control as control
 from . import clientplatform_simple_experience as simple
@@ -42,6 +44,7 @@ from . import clientplatform_simple_experience as simple
 _CHANNEL_LABELS = {
     PromotionChannel.TELEGRAM: "Telegram",
     PromotionChannel.VK: "ВКонтакте",
+    PromotionChannel.MAX: "MAX",
     PromotionChannel.WHATSAPP: "WhatsApp",
     PromotionChannel.WEBSITE: "Сайт и объявления",
     PromotionChannel.OFFLINE: "Офлайн-материалы",
@@ -49,6 +52,7 @@ _CHANNEL_LABELS = {
 _CHANNEL_BUTTONS = (
     (PromotionChannel.TELEGRAM, "✈️ Telegram"),
     (PromotionChannel.VK, "🔵 ВКонтакте"),
+    (PromotionChannel.MAX, "🟣 MAX"),
     (PromotionChannel.WHATSAPP, "🟢 WhatsApp"),
     (PromotionChannel.WEBSITE, "🌐 Сайт/объявление"),
     (PromotionChannel.OFFLINE, "📄 Офлайн-материалы"),
@@ -56,16 +60,13 @@ _CHANNEL_BUTTONS = (
 _SLOT_LIMIT = 12
 
 
-def _campaign_link(username: str, source_token: str) -> str:
-    return f"https://t.me/{username}?start={promotion_start_payload(source_token)}"
+def _campaign_link(source_token: str) -> str:
+    """Build one neutral public acquisition URL for every attribution channel."""
 
-
-async def _bot_username(event: CallbackQuery | Message) -> str:
-    bot = await event.bot.get_me()
-    username = str(getattr(bot, "username", "") or "").strip()
-    if not username:
-        raise RuntimeError("ClientPlatform bot requires a public username")
-    return username
+    public_base = str(getattr(settings, "MESSENGER_PUBLIC_BASE_URL", "") or "").strip()
+    if not public_base:
+        raise RuntimeError("public acquisition base URL is not configured")
+    return promotion_public_url(base_url=public_base, source_token=source_token)
 
 
 def _creative_text(view: Any, link: str) -> str:
@@ -213,8 +214,14 @@ async def create_promotion_material(callback: CallbackQuery) -> None:
         slot_id=slot_id,
         channel=channel,
     )
-    username = await _bot_username(callback)
-    link = _campaign_link(username, view.campaign.source_token)
+    try:
+        link = _campaign_link(view.campaign.source_token)
+    except (RuntimeError, ValueError):
+        await callback.answer(
+            "Публичная ссылка для привлечения клиентов пока не настроена.",
+            show_alert=True,
+        )
+        return
     advert = _creative_text(view, link)
     rows: list[list[InlineKeyboardButton]] = []
     if channel == PromotionChannel.TELEGRAM:
@@ -266,19 +273,26 @@ async def dispatch_promotion_start(
     user_id: int,
     managed_bot_business_id: str | None,
 ) -> bool:
-    if managed_bot_business_id is not None:
-        return False
     token = parse_promotion_start_payload(control._start_payload(message))
     if token is None:
         return False
     user = message.from_user
-    landing = await asyncio.to_thread(
-        open_promotion_link,
-        source_token=token,
-        telegram_user_id=user_id,
-        username=None if user is None else user.username,
-        display_name=None if user is None else user.full_name,
-    )
+    if managed_bot_business_id is not None:
+        landing = await asyncio.to_thread(
+            open_channel_promotion_for_identity,
+            source_token=token,
+            business_id=managed_bot_business_id,
+            platform="telegram",
+            external_subject=str(user_id),
+        )
+    else:
+        landing = await asyncio.to_thread(
+            open_promotion_link,
+            source_token=token,
+            telegram_user_id=user_id,
+            username=None if user is None else user.username,
+            display_name=None if user is None else user.full_name,
+        )
     await state.clear()
     creative = landing.campaign.creative
     await message.answer(

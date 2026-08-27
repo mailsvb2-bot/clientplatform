@@ -1,18 +1,23 @@
 from __future__ import annotations
 
 import asyncio
+from html import escape
 import json
 import logging
 import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit
 
 from aiohttp import web
 
+from clientplatform.application.acquisition_destination import resolve_acquisition_destination
 from clientplatform.application.ad_connections import (
     ad_connections_enabled,
     yandex_direct_provider_configured,
 )
+from clientplatform.application.promotions import parse_promotion_start_payload
+from clientplatform.domain.promotions import PromotionError
 from clientplatform.runtime.ad_publication_worker import AdPublicationWorker
 from clientplatform.runtime.bot_gateway import bot_gateway_runtime_config
 from clientplatform.runtime.messenger_channel_ingress import (
@@ -134,6 +139,8 @@ async def _health(request: web.Request) -> web.Response:
         payload["ad_oauth"] = True
     if request.app.get("clientplatform_omnichannel_ingress") is True:
         payload["omnichannel_ingress"] = True
+    if request.app.get("clientplatform_acquisition_ingress") is True:
+        payload["acquisition_ingress"] = True
     reconciliation_task = request.app.get(
         "clientplatform_max_webhook_reconciliation_task"
     )
@@ -166,6 +173,11 @@ def _omnichannel_ingress_enabled() -> bool:
 
 def _max_webhook_reconciliation_enabled() -> bool:
     return _omnichannel_ingress_enabled() and _deployed_env()
+
+
+def _acquisition_ingress_enabled() -> bool:
+    parsed = urlsplit(_messenger_public_base_url())
+    return parsed.scheme == "https" and bool(parsed.hostname)
 
 
 def _messenger_public_base_url() -> str:
@@ -318,6 +330,76 @@ async def _vk_webhook_with_group_guard(request: web.Request) -> web.Response:
     return await vk_webhook(request)
 
 
+async def _clientplatform_acquisition_landing(request: web.Request) -> web.Response:
+    """Render one neutral promotion destination with only verified messenger links."""
+
+    source_payload = str(request.query.get("source") or "").strip()
+    source_token = parse_promotion_start_payload(source_payload)
+    if source_token is None:
+        raise web.HTTPNotFound(text="not found")
+    try:
+        destination = await asyncio.to_thread(
+            resolve_acquisition_destination,
+            source_token=source_token,
+            public_base_url=_messenger_public_base_url(),
+        )
+    except (PromotionError, ValueError):
+        return web.Response(
+            status=410,
+            text="Эта ссылка больше не активна. Откройте актуальное предложение заново.",
+            headers={"Cache-Control": "no-store"},
+        )
+
+    labels = {
+        "telegram": "Telegram",
+        "vk": "ВКонтакте",
+        "max": "MAX",
+    }
+    buttons = []
+    for item in destination.messenger_destinations:
+        platform = item.platform.value
+        label = labels.get(platform, platform.upper())
+        buttons.append(
+            '<p><a rel="noreferrer" href="'
+            + escape(item.url, quote=True)
+            + '">'
+            + escape(f"Продолжить в {label}")
+            + "</a></p>"
+        )
+    if not buttons:
+        return web.Response(
+            status=503,
+            text="У этого бизнеса пока нет доступного мессенджера для записи.",
+            headers={"Cache-Control": "no-store"},
+        )
+    body = (
+        "<!doctype html><html lang=ru><head><meta charset=utf-8>"
+        "<meta name=viewport content='width=device-width,initial-scale=1'>"
+        "<title>ClientPlatform · запись</title></head><body>"
+        "<main><h1>Выберите удобный мессенджер</h1>"
+        "<p>Источник предложения сохранится независимо от выбранного канала.</p>"
+        + "".join(buttons)
+        + "</main></body></html>"
+    )
+    return web.Response(
+        text=body,
+        content_type="text/html",
+        charset="utf-8",
+        headers={
+            "Cache-Control": "no-store",
+            "Referrer-Policy": "no-referrer",
+            "X-Content-Type-Options": "nosniff",
+            "X-Frame-Options": "DENY",
+            "Content-Security-Policy": "default-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+        },
+    )
+
+
+def _register_acquisition_routes(app: web.Application) -> None:
+    app.router.add_get("/clientplatform/acquire", _clientplatform_acquisition_landing)
+    app["clientplatform_acquisition_ingress"] = True
+
+
 def _register_health_routes(app: web.Application) -> None:
     app.router.add_get("/", _health)
     app.router.add_get("/health", _health)
@@ -392,6 +474,7 @@ async def start_messenger_webhook_runtime(
     max_enabled = max_webhook_enabled()
     vk_enabled = vk_webhook_enabled()
     omnichannel_enabled = _omnichannel_ingress_enabled()
+    acquisition_enabled = _acquisition_ingress_enabled()
     ad_oauth_enabled = ad_oauth_http_enabled()
     ad_worker_enabled = _ad_publication_worker_enabled()
     gateway_config = bot_gateway_runtime_config()
@@ -402,6 +485,7 @@ async def start_messenger_webhook_runtime(
         or ad_oauth_enabled
         or ad_worker_enabled
         or omnichannel_enabled
+        or acquisition_enabled
     )
     if not ingress_enabled:
         return None
@@ -425,6 +509,8 @@ async def start_messenger_webhook_runtime(
         _register_vk_routes(app)
     if omnichannel_enabled:
         _register_clientplatform_omnichannel_routes(app)
+    if acquisition_enabled:
+        _register_acquisition_routes(app)
     if max_enabled or vk_enabled:
         _register_audio_routes(app)
     if ad_oauth_enabled:
@@ -486,7 +572,7 @@ async def start_messenger_webhook_runtime(
 
         log.info(
             "HTTP ingress started on %s:%s payment=%s privacy_export=%s "
-            "max=%s vk=%s omnichannel=%s durable_delivery=%s managed_bot_polling=%s "
+            "max=%s vk=%s omnichannel=%s acquisition=%s durable_delivery=%s managed_bot_polling=%s "
             "ad_oauth=%s ad_publication_worker=%s max_webhook_reconciliation=%s",
             host,
             port,
@@ -495,6 +581,7 @@ async def start_messenger_webhook_runtime(
             max_enabled,
             vk_enabled,
             omnichannel_enabled,
+            acquisition_enabled,
             delivery_worker_started,
             gateway_started,
             ad_oauth_enabled,

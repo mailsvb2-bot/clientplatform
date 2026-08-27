@@ -139,6 +139,11 @@ class ManagedGoalFirstSafetyTests(unittest.IsolatedAsyncioTestCase):
                         "create_managed_ad_publication_draft",
                         return_value=draft(),
                     ),
+                    patch.object(
+                        one_click.settings,
+                        "MESSENGER_PUBLIC_BASE_URL",
+                        "https://client.example.test",
+                    ),
                 ]
                 if failure_kind == "promotion":
                     patches[3] = patch.object(
@@ -147,7 +152,11 @@ class ManagedGoalFirstSafetyTests(unittest.IsolatedAsyncioTestCase):
                         side_effect=PromotionError("promotion failed"),
                     )
                 elif failure_kind == "source":
-                    event = callback(target, username="")
+                    patches[5] = patch.object(
+                        one_click.settings,
+                        "MESSENGER_PUBLIC_BASE_URL",
+                        "",
+                    )
                 else:
                     event = callback(target)
                     patches[4] = patch.object(
@@ -156,7 +165,14 @@ class ManagedGoalFirstSafetyTests(unittest.IsolatedAsyncioTestCase):
                         side_effect=YandexDirectError("provider failed"),
                     )
 
-                with patches[0], patches[1], patches[2], patches[3], patches[4]:
+                with (
+                    patches[0],
+                    patches[1],
+                    patches[2],
+                    patches[3],
+                    patches[4],
+                    patches[5],
+                ):
                     await goal._prepare_goal_result(
                         event,
                         state,
@@ -223,6 +239,11 @@ class ManagedGoalFirstSafetyTests(unittest.IsolatedAsyncioTestCase):
             patch.object(control, "_callback_message", return_value=target),
             patch.object(one_click, "create_slot_promotion", return_value=promotion()),
             patch.object(
+                one_click.settings,
+                "MESSENGER_PUBLIC_BASE_URL",
+                "https://client.example.test",
+            ),
+            patch.object(
                 one_click,
                 "create_managed_ad_publication_draft",
                 return_value=draft(),
@@ -236,6 +257,10 @@ class ManagedGoalFirstSafetyTests(unittest.IsolatedAsyncioTestCase):
             )
         create_draft.assert_called_once()
         self.assertNotIn("external_campaign_id", create_draft.call_args.kwargs)
+        self.assertEqual(
+            create_draft.call_args.kwargs["source_url"],
+            "https://client.example.test/clientplatform/acquire?source=cpa_source-token-1",
+        )
         self.assertEqual(state.state, goal.GoalFirstAutopilotState.ready)
         self.assertEqual(state.data["external_campaign_id"], "managed-7001")
         self.assertEqual(state.data["external_campaign_name"], "ClientPlatform managed")

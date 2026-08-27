@@ -230,6 +230,67 @@ class ClientPlatformManagedBotGatewayRuntimeTests(unittest.IsolatedAsyncioTestCa
         customer_bridge.assert_not_called()
         mark.assert_called_once_with(item)
 
+    async def test_promotion_start_captures_canonical_touch_before_dispatch(self) -> None:
+        route = self.route()
+        payload = _FakeUpdate().model_dump()
+        payload["message"]["text"] = "/start cpa_sourceToken123"
+        item = ClaimedIngressEvent(
+            event=IngressEvent(
+                id=str(uuid4()),
+                business_id=route.business_id,
+                managed_bot_id=route.managed_bot_id,
+                provider_update_id="42",
+                payload_sha256="1" * 64,
+                payload_json=json.dumps(payload),
+                status=IngressEventStatus.PROCESSING,
+                attempts=1,
+                available_at="2026-08-25T00:00:00+00:00",
+                created_at="2026-08-25T00:00:00+00:00",
+                updated_at="2026-08-25T00:00:00+00:00",
+            ),
+            route=route,
+        )
+        customer_id = str(uuid4())
+        runtime = ManagedBotGatewayRuntime(dispatcher=Dispatcher())
+        runtime._bot_for = AsyncMock(return_value=SimpleNamespace())  # type: ignore[method-assign]
+        runtime._dispatcher.feed_webhook_update = AsyncMock()  # type: ignore[method-assign]
+        with (
+            patch(
+                "clientplatform.runtime.bot_gateway.ensure_telegram_customer_link",
+                return_value=SimpleNamespace(
+                    business_id=route.business_id,
+                    customer_id=customer_id,
+                ),
+            ),
+            patch("clientplatform.runtime.bot_gateway.open_channel_promotion") as opened,
+            patch("clientplatform.runtime.bot_gateway.mark_ingress_event_processed") as mark,
+            patch(
+                "clientplatform.runtime.bot_gateway.Update.model_validate",
+                return_value=SimpleNamespace(),
+            ),
+        ):
+            await runtime._process_item(item)
+
+        opened.assert_called_once_with(
+            source_token="sourceToken123",
+            business_id=route.business_id,
+            customer_id=customer_id,
+        )
+        mark.assert_called_once_with(item)
+        runtime._dispatcher.feed_webhook_update.assert_awaited_once()
+
+    async def test_promotion_start_parser_is_bounded_and_fail_closed(self) -> None:
+        from clientplatform.runtime import bot_gateway as gateway
+
+        self.assertIsNone(gateway._telegram_promotion_token(None))
+        self.assertIsNone(gateway._telegram_promotion_token("обычный текст"))
+        self.assertIsNone(gateway._telegram_promotion_token("/start ordinary"))
+        self.assertIsNone(gateway._telegram_promotion_token("/start cpa_bad!"))
+        self.assertEqual(
+            gateway._telegram_promotion_token(" start   cpa_sourceToken123 "),
+            "sourceToken123",
+        )
+
     async def test_disabled_runtime_has_no_background_owner(self) -> None:
         with patch.dict("os.environ", {}, clear=True):
             config = bot_gateway_runtime_config()

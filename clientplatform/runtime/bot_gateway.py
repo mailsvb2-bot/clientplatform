@@ -33,6 +33,10 @@ from clientplatform.domain.bot_gateway import (
     ClaimedIngressEvent,
     ManagedBotRoute,
 )
+from clientplatform.application.promotions import (
+    open_channel_promotion,
+    parse_promotion_start_payload,
+)
 from clientplatform.domain.messenger_channels import extract_customer_link_token
 from services.messenger.entrypoints import parse_start_payload
 from clientplatform.runtime.secrets import (
@@ -477,6 +481,14 @@ class ManagedBotGatewayRuntime:
                             username=actor[1],
                             display_name=actor[2],
                         )
+                    promotion_token = _telegram_promotion_token(message_text)
+                    if promotion_token is not None:
+                        await asyncio.to_thread(
+                            open_channel_promotion,
+                            source_token=promotion_token,
+                            business_id=item.route.business_id,
+                            customer_id=customer_link.customer_id,
+                        )
                     from clientplatform.application.sales_intelligence import (
                         extract_customer_message_text,
                         record_managed_bot_customer_message,
@@ -623,6 +635,17 @@ def _telegram_message_text(payload: Mapping[str, Any]) -> str | None:
         if text:
             return text
     return None
+
+
+def _telegram_promotion_token(text: str | None) -> str | None:
+    raw = " ".join(str(text or "").strip().split())
+    if not raw:
+        return None
+    lowered = raw.casefold()
+    if not lowered.startswith("/start ") and not lowered.startswith("start "):
+        return None
+    payload = raw.split(maxsplit=1)[1].strip()
+    return parse_promotion_start_payload(payload)
 
 
 def _telegram_staff_bridge_token(text: str | None) -> str | None:

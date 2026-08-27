@@ -261,6 +261,8 @@ async def test_choose_channel_revalidates_promotable_slot(
         for button in row
     ]
     assert "✈️ Telegram" in labels
+    assert "🔵 ВКонтакте" in labels
+    assert "🟣 MAX" in labels
     assert "⬅️ Назад" in labels
 
 
@@ -276,6 +278,11 @@ async def test_channel_material_has_stable_tagged_link_and_safe_copy(
     slot_token = control._uuid_token(slot.slot.id)
     monkeypatch.setattr(control, "_actor", AsyncMock(return_value=object()))
     monkeypatch.setattr(promotion, "create_slot_promotion", lambda **_kwargs: view)
+    monkeypatch.setattr(
+        promotion.settings,
+        "MESSENGER_PUBLIC_BASE_URL",
+        "https://client.example.test",
+    )
     callback = FakeCallback(
         f"cpp:make:{business_token}:{slot_token}:{PromotionChannel.TELEGRAM.value}"
     )
@@ -284,11 +291,53 @@ async def test_channel_material_has_stable_tagged_link_and_safe_copy(
 
     text, kwargs = callback.message.answers[-1]
     assert "Готово для канала «Telegram»" in text
-    assert "https://t.me/clientplatform_bot?start=cpa_abcdefghijklmnop" in text
+    assert (
+        "https://client.example.test/clientplatform/acquire?source=cpa_abcdefghijklmnop"
+        in text
+    )
     assert "уникальных людей" in text
     buttons = [button for row in kwargs["reply_markup"].inline_keyboard for button in row]
     assert any(button.url and button.url.startswith("https://t.me/share/url") for button in buttons)
     assert all(len(button.callback_data or "") <= 64 for button in buttons)
+
+
+@pytest.mark.asyncio
+async def test_max_material_uses_max_attribution_with_neutral_destination(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    business_id = str(uuid4())
+    slot = _slot(business_id=business_id)
+    campaign = _campaign(slot, channel=PromotionChannel.MAX)
+    view = PromotionCampaignView(campaign=campaign, slot=slot)
+    business_token = control._uuid_token(business_id)
+    slot_token = control._uuid_token(slot.slot.id)
+    calls: list[dict[str, Any]] = []
+
+    def create(**kwargs: Any) -> PromotionCampaignView:
+        calls.append(dict(kwargs))
+        return view
+
+    monkeypatch.setattr(control, "_actor", AsyncMock(return_value=object()))
+    monkeypatch.setattr(promotion, "create_slot_promotion", create)
+    monkeypatch.setattr(
+        promotion.settings,
+        "MESSENGER_PUBLIC_BASE_URL",
+        "https://client.example.test",
+    )
+    callback = FakeCallback(
+        f"cpp:make:{business_token}:{slot_token}:{PromotionChannel.MAX.value}"
+    )
+
+    await promotion.create_promotion_material(callback)
+
+    assert calls[0]["channel"] == PromotionChannel.MAX
+    text, kwargs = callback.message.answers[-1]
+    assert "Готово для канала «MAX»" in text
+    assert "client.example.test/clientplatform/acquire?source=cpa_abcdefghijklmnop" in text
+    buttons = [button for row in kwargs["reply_markup"].inline_keyboard for button in row]
+    assert not any(
+        button.text == "📨 Опубликовать/отправить в Telegram" for button in buttons
+    )
 
 
 @pytest.mark.asyncio
@@ -351,12 +400,43 @@ async def test_unrelated_and_malformed_start_payloads_remain_on_canonical_path()
 
 
 @pytest.mark.asyncio
-async def test_managed_business_bot_does_not_accept_central_promotion_payload() -> None:
+async def test_managed_business_bot_opens_canonical_promotion_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    slot = _slot()
+    landing = PromotionLanding(
+        campaign=_campaign(slot),
+        slot=slot,
+        customer_id=str(uuid4()),
+    )
+    business_id = slot.slot.business_id
+    opened: list[dict[str, Any]] = []
+
+    def open_identity(**kwargs: Any) -> PromotionLanding:
+        opened.append(dict(kwargs))
+        return landing
+
+    monkeypatch.setattr(promotion, "open_channel_promotion_for_identity", open_identity)
     message = FakeMessage("/start cpa_abcdefghijklmnop")
     state = FakeState()
-    assert await promotion.dispatch_promotion_start(
+
+    handled = await promotion.dispatch_promotion_start(
         message,
         state,
         user_id=101,
-        managed_bot_business_id=str(uuid4()),
-    ) is False
+        managed_bot_business_id=business_id,
+    )
+
+    assert handled is True
+    assert opened == [
+        {
+            "source_token": "abcdefghijklmnop",
+            "business_id": business_id,
+            "platform": "telegram",
+            "external_subject": "101",
+        }
+    ]
+    assert state.clear_count == 1
+    assert "Время свободно" in message.answers[-1][0]
+    button = message.answers[-1][1]["reply_markup"].inline_keyboard[0][0]
+    assert button.callback_data == "cpp:book:abcdefghijklmnop"
