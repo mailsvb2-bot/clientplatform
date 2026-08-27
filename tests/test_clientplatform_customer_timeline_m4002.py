@@ -11,6 +11,8 @@ import tempfile
 import unittest
 
 from clientplatform.application.customer_timeline import (
+    CustomerTimeline,
+    CustomerTimelineEntry,
     format_customer_timeline_lines,
     get_customer_timeline,
 )
@@ -227,9 +229,9 @@ class ClientPlatformCustomerTimelineM4002Tests(unittest.TestCase):
             customer_id=customer.id,
             outcome_type=OutcomeType.REFUND_RECORDED,
             at=_BASE + timedelta(minutes=2),
-            source_type="business_payment_refund",
+            source_type="business_payment",
             source_id=payment_source,
-            amount_minor=-20_000,
+            amount_minor=20_000,
             currency="RUB",
         )
 
@@ -244,6 +246,56 @@ class ClientPlatformCustomerTimelineM4002Tests(unittest.TestCase):
         keys = [(entry.kind, entry.source_type, entry.source_id) for entry in first.entries]
         assert len(keys) == len(set(keys))
 
+
+    def test_amountless_reversal_resolves_money_and_same_source_facts_stay_distinct(self) -> None:
+        actor, customer = _business(880009, "timeline-reversal")
+        paid_id = _outcome(
+            actor=actor,
+            customer_id=customer.id,
+            outcome_type=OutcomeType.ORDER_PAID,
+            at=_BASE + timedelta(minutes=1),
+            source_type="business_payment",
+            source_id=str(uuid4()),
+            amount_minor=30_000,
+            currency="RUB",
+        )
+        first_correction = _outcome(
+            actor=actor,
+            customer_id=customer.id,
+            outcome_type=OutcomeType.OUTCOME_CORRECTION,
+            at=_BASE + timedelta(minutes=2),
+            source_type="outcome_event",
+            source_id=paid_id,
+        )
+        second_correction = _outcome(
+            actor=actor,
+            customer_id=customer.id,
+            outcome_type=OutcomeType.OUTCOME_CORRECTION,
+            at=_BASE + timedelta(minutes=3),
+            source_type="outcome_event",
+            source_id=paid_id,
+        )
+        reversal_id = _outcome(
+            actor=actor,
+            customer_id=customer.id,
+            outcome_type=OutcomeType.OUTCOME_REVERSAL,
+            at=_BASE + timedelta(minutes=4),
+            source_type="outcome_event",
+            source_id=paid_id,
+        )
+
+        timeline = get_customer_timeline(actor=actor, customer_id=customer.id)
+        outcomes = {
+            entry.source_id: entry
+            for entry in timeline.entries
+            if entry.source_type == "outcome_event"
+        }
+        self.assertIn(paid_id, outcomes)
+        self.assertIn(first_correction, outcomes)
+        self.assertIn(second_correction, outcomes)
+        self.assertIn(reversal_id, outcomes)
+        self.assertEqual(outcomes[reversal_id].amount_minor, -30_000)
+        self.assertEqual(outcomes[reversal_id].currency, "RUB")
 
     def test_partial_history_does_not_invent_missing_sales_or_payment_steps(self) -> None:
         actor, customer = _business(880003, "timeline-partial")
@@ -315,3 +367,32 @@ class ClientPlatformCustomerTimelineM4002Tests(unittest.TestCase):
         assert len(lines) == 4
         assert "Получена оплата" in lines[-1]
         assert "123,54 RUB" in lines[-1]
+
+    def test_formatter_uses_iso_currency_minor_unit_exponents(self) -> None:
+        timeline = CustomerTimeline(
+            business_id="business",
+            customer_id="customer",
+            entries=(
+                CustomerTimelineEntry(
+                    kind="outcome:order_paid",
+                    occurred_at=_BASE,
+                    source_type="outcome_event",
+                    source_id="jpy-event",
+                    title="Получена оплата",
+                    amount_minor=500,
+                    currency="JPY",
+                ),
+                CustomerTimelineEntry(
+                    kind="outcome:order_paid",
+                    occurred_at=_BASE + timedelta(minutes=1),
+                    source_type="outcome_event",
+                    source_id="kwd-event",
+                    title="Получена оплата",
+                    amount_minor=1_234,
+                    currency="KWD",
+                ),
+            ),
+        )
+        lines = format_customer_timeline_lines(timeline)
+        self.assertIn("500 JPY", lines[0])
+        self.assertIn("1,234 KWD", lines[1])

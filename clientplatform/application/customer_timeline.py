@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
+from clientplatform.domain.money import settlement_currency_minor_unit_exponent
 from clientplatform.domain.outcomes import BusinessOutcomeEvent, OutcomeType
 from clientplatform.domain.tenancy import TenantContext, TenantPermissionDenied
 from clientplatform.infrastructure.attribution_repository import AttributionRepository
@@ -177,15 +178,67 @@ def _sales_event_entry(row: Any) -> CustomerTimelineEntry | None:
     )
 
 
-def _outcome_entry(event: BusinessOutcomeEvent) -> CustomerTimelineEntry:
+def _direct_signed_outcome_money(
+    event: BusinessOutcomeEvent,
+) -> tuple[int, str] | None:
+    if event.amount_minor is None or event.currency is None:
+        return None
+    if event.outcome_type == OutcomeType.ORDER_PAID:
+        if event.amount_minor < 0:
+            raise CustomerTimelineInvariantViolation(
+                "order_paid outcome contains a negative amount"
+            )
+        return event.amount_minor, event.currency
+    if event.outcome_type in {
+        OutcomeType.REFUND_RECORDED,
+        OutcomeType.OUTCOME_REVERSAL,
+    }:
+        return -abs(event.amount_minor), event.currency
+    return event.amount_minor, event.currency
+
+
+def _outcome_money(
+    repository: OutcomeRepository,
+    *,
+    business_id: str,
+    event: BusinessOutcomeEvent,
+) -> tuple[int, str] | None:
+    direct = _direct_signed_outcome_money(event)
+    if direct is not None:
+        return direct
+    if (
+        event.outcome_type != OutcomeType.OUTCOME_REVERSAL
+        or event.source_type != "outcome_event"
+    ):
+        return None
+    referenced = repository.get(
+        business_id=business_id,
+        event_id=event.source_id,
+    )
+    if referenced is None:
+        return None
+    referenced_money = _direct_signed_outcome_money(referenced)
+    if referenced_money is None:
+        return None
+    amount_minor, currency = referenced_money
+    return -amount_minor, currency
+
+
+def _outcome_entry(
+    repository: OutcomeRepository,
+    *,
+    business_id: str,
+    event: BusinessOutcomeEvent,
+) -> CustomerTimelineEntry:
+    money = _outcome_money(repository, business_id=business_id, event=event)
     return CustomerTimelineEntry(
         kind=f"outcome:{event.outcome_type.value}",
         occurred_at=event.occurred_at.astimezone(timezone.utc),
-        source_type=event.source_type,
-        source_id=event.source_id,
+        source_type="outcome_event",
+        source_id=event.id,
         title=_OUTCOME_LABELS[event.outcome_type],
-        amount_minor=event.amount_minor,
-        currency=event.currency,
+        amount_minor=None if money is None else money[0],
+        currency=None if money is None else money[1],
     )
 
 
@@ -296,7 +349,8 @@ def get_customer_timeline(
                 entries.append(entry)
 
         if _can_view_outcomes(current):
-            outcomes = OutcomeRepository(conn).list_events(
+            outcome_repository = OutcomeRepository(conn)
+            outcomes = outcome_repository.list_events(
                 business_id=current.business_id,
                 customer_id=customer.id,
                 limit=500,
@@ -309,7 +363,13 @@ def get_customer_timeline(
                     and event.source_id in lead_ids
                 ):
                     continue
-                entries.append(_outcome_entry(event))
+                entries.append(
+                    _outcome_entry(
+                        outcome_repository,
+                        business_id=current.business_id,
+                        event=event,
+                    )
+                )
 
     unique: dict[tuple[str, str, str], CustomerTimelineEntry] = {}
     for entry in entries:
@@ -353,8 +413,10 @@ def format_customer_timeline_lines(
         if entry.detail:
             line += f" — {entry.detail}"
         if entry.amount_minor is not None and entry.currency is not None:
-            amount = Decimal(entry.amount_minor) / Decimal(100)
-            rendered = f"{amount:,.2f}".replace(",", " ").replace(".", ",")
+            exponent = settlement_currency_minor_unit_exponent(entry.currency)
+            amount = Decimal(entry.amount_minor) / (Decimal(10) ** exponent)
+            rendered = f"{amount:,.{exponent}f}" if exponent else f"{amount:,.0f}"
+            rendered = rendered.replace(",", " ").replace(".", ",")
             line += f" · {rendered} {entry.currency}"
         lines.append(line)
     return tuple(lines)
