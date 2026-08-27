@@ -969,6 +969,12 @@ ClientPlatform ежедневно собирает максимум нескол
 
 ## 9.4. Content & funnel operating system
 
+### M4-004 — `NEXT` — Owner Content Calendar Projection
+
+Первый следующий vertical: подключить существующий canonical `business_publications` к owner-facing разделу «Публикации» как одну tenant-scoped календарную проекцию по статусам `draft` / `scheduled` / `published` / `failed` / `cancelled`. Использовать уже существующие publication/admin primitives и `scheduled_at`; не создавать отдельный content store, event store или channel-specific source of truth.
+
+Минимальный DONE contract: владелец в Telegram/VK/MAX видит детерминированный список ближайших и недавних публикаций с каналом, статусом и временем; RBAC/tenant isolation сохранены; пустое состояние не выдаёт заглушку о «неподключённом контуре», если canonical publications уже существуют; regression tests и coverage ratchet green. Scheduling/execution/approval workflow остаются последующими отдельными slices.
+
 Расширить существующие content/publication/program primitives:
 
 - content calendar;
@@ -1605,6 +1611,7 @@ Duplicate tap, retry, worker restart или uncertain provider response не д�
 | M4-001 Customer Payment Evidence Bridge | DONE | PR #224 merge `f5dc4bd0f690ae859852025c240cfedf62389b25`; PR #213 merge `c9574dc68a9858d0429436bd2c37e32d00b80eb9`; final #213 required workflows green at 74.84% combined / 65.95% branch; current `main` `af21a49683917d8e5d5ac4b5d0f8249f589b1bbd` post-merge contours green |
 | M4-002 Unified Customer Timeline Projection | DONE | PR #230 merge `b5ef6ef0a583577b6b0d6ba0b9a7ded75b36e049`; exact PR head `28c94e11f55d5c384714ed757098ca2229480243`; all 15 PR workflows success; read-only canonical customer timeline with tenant/RBAC isolation, Telegram/VK/MAX surfaces and corrected refund/reversal + ISO-4217 money semantics |
 | M4-003 Tasks and owner operating queue | DONE | PR #232 merge `10c1a3043eb75fd1ad2f829fed35be3753733eaf`; exact PR head `6d43c32e1d54d842d309f8d8fa4fa43b6698a441`; all 15 PR workflows success; coverage 74.87% combined / 66.02% branch; exact-SHA production deploy with encrypted backup, health/readiness, HTTPS and polling-only stability evidence |
+| M4-004 Owner Content Calendar Projection | NEXT | expose existing canonical `business_publications` as one tenant-scoped owner calendar across Telegram/VK/MAX; no second content store; scheduling/execution/approval remain later slices |
 
 ---
 
