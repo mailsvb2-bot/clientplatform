@@ -828,7 +828,7 @@ Exit criteria:
 
 После M1–M3 ClientPlatform должен стать системой ежедневного управления доходом малого бизнеса.
 
-## 9.1. M4-001 — `NEXT` — Customer Payment Evidence Bridge
+## 9.1. M4-001 — `DONE` — Customer Payment Evidence Bridge
 
 ### Цель
 
@@ -872,6 +872,14 @@ active business customer
 
 Одна подтверждённая клиентская оплата создаёт ровно один tenant-scoped payment и ровно один связанный `order_paid` outcome, безопасно переживает retry/concurrency/restart, а возврат отражается отдельным каноническим денежным фактом без двойного учёта.
 
+### Evidence
+
+- PR #224 (`M4-001a: add canonical customer payment evidence`) merged в `main` как `f5dc4bd0f690ae859852025c240cfedf62389b25`; core связывает tenant-scoped `business_payments` с canonical `order_paid` / `refund_recorded` outcomes и revenue attribution, сохраняя отдельность platform billing.
+- PR #213 (`M4-001b: backfill canonical outcomes for legacy payments`) merged в `main` как `c9574dc68a9858d0429436bd2c37e32d00b80eb9`; exact head `044dc7e0a09b8bca9ae504c07a266aa80b557d9e` прошёл required workflows, включая CI quality/coverage, static security, PostgreSQL payment/concurrency, User Scenario Matrix, Production Isolation и Pre-deploy.
+- Финальный M4-001 coverage ratchet на #213: combined `74.84%`, branch `65.95%`, без снижения baseline.
+- `tests/test_clientplatform_payment_evidence_m4001.py` закрепляет happy/exact replay, conflicting provider evidence, refund/double-refund, atomic rollback, tenant isolation, currency validation, concurrent duplicate confirmation и legacy reconciliation; migration regression и PostgreSQL smoke проверяют backfill/replay.
+- Последующий `main` `af21a49683917d8e5d5ac4b5d0f8249f589b1bbd` после PR #228 повторно прошёл все push CI/release/concurrency/isolation contours, подтверждая отсутствие интеграционной регрессии.
+
 ### Последующие Commerce / Orders / Payments capabilities
 
 Перед добавлением новых файлов найти current canonical payment/order modules и расширять их.
@@ -887,24 +895,49 @@ active business customer
 - currency-safe money model;
 - never store unnecessary card data.
 
-## 9.2. Full customer timeline
+## 9.2. M4-002 — `NEXT` — Unified Customer Timeline Projection
 
-Один customer timeline:
+### Цель
+
+Дать владельцу одну объяснимую историю клиента поверх уже существующих canonical facts, не создавая новый event store, вторую CRM или параллельную платёжную историю.
+
+Первый read-only vertical:
 
 ```text
-первый touch
-→ сообщения
-→ лид
-→ запись
-→ посещение
-→ order/payment
-→ materials/program progress
-→ follow-up
-→ repeat purchase
-→ support/feedback
+customer
+→ first acquisition touch/source
+→ sales lead/stage and meaningful sales events
+→ booking facts
+→ payment/refund outcomes
+→ retention/reactivation facts when present
+→ one ordered owner timeline
 ```
 
-Не создавать несколько несовместимых «карточек клиента» для разных вертикалей.
+### Границы
+
+- сначала расширить существующие customer/activity, attribution, sales, booking, outcome/revenue и retention projections; новый durable timeline storage не добавлять без доказанной необходимости;
+- каждая timeline entry обязана ссылаться на canonical source/type/id и не становится новым источником истины;
+- business scope и permission разрешаются server-side; чужой `customer_id`, lead, booking, payment или outcome fail-closed;
+- порядок событий детерминирован по canonical occurrence time с устойчивым tie-break, без LLM-сортировки;
+- отсутствующие facts отображаются как отсутствующие, а не восстанавливаются догадками;
+- money entries используют canonical minor units/currency и не суммируют mixed/unknown currency;
+- пользовательский текст объясняет бизнес-смысл события и скрывает provider/DB jargon.
+
+### Tests / gates
+
+- timeline happy path минимум из acquisition + sales + booking + payment;
+- refund/reversal отображается отдельным денежным фактом и не выглядит второй оплатой;
+- deterministic ordering и exact replay без дублей projection rows;
+- partial customer history без выдуманных промежуточных шагов;
+- cross-tenant customer/source rejection и role permission checks;
+- existing U-001/U-002/U-003/U-008/U-009/U-010/M4-001 regressions green;
+- coverage ratchet не снижать.
+
+### DONE когда
+
+Owner открывает одного клиента и получает одну tenant-scoped, детерминированную и объяснимую chronology его acquisition/sales/booking/payment history, собранную из существующих canonical facts без второго хранилища бизнес-истины.
+
+Последующие расширения той же timeline добавляют messages, materials/program progress и support/feedback только через их canonical факты.
 
 ## 9.3. Tasks and owner operating queue
 
@@ -1556,7 +1589,8 @@ Duplicate tap, retry, worker restart или uncertain provider response не д�
 | U-008 CRM Lead Inbox | DONE | PR #203; merge SHA `7492ca6f1ac6bd3e00526dac80c6d0cba32ad2cd`; all 15 required PR workflows success on `8d46867f2ce0a176b26e8af53e3d2dcea26362b5`; combined coverage baseline 74.30%, branch baseline raised to 65.35%; canonical sales contour extended without `crm.py` or second sales storage |
 | U-009 Follow-up Employee | DONE | PR #207; merge SHA `6436e88de24b5b9caa9e06182ff1b190bfb91865`; all 15 PR workflows green; production smoke `u008-u009-sales-operations-v2` rollback-clean |
 | U-010 Retention & Reactivation Engine | DONE | PR #208 merge SHA `c87a4de62b6ef931686b39a7bb891fa394d0fa7d`; PR #209 merge SHA `6ba76983c255ed70486ce38803c4f3dfd002aa3d`; all 15 required workflows success on exact head `8922e217dbfd7a61bb922f3b8a0753344cce2745`; coverage raised to 74.61% combined / 65.62% branch; canonical sales/follow-up/outcome/revenue contours extended without a second retention brain |
-| M4-001 Customer Payment Evidence Bridge | NEXT | extend the existing tenant payment + outcome/revenue spine; do not merge customer commerce with ClientPlatform subscription billing |
+| M4-001 Customer Payment Evidence Bridge | DONE | PR #224 merge `f5dc4bd0f690ae859852025c240cfedf62389b25`; PR #213 merge `c9574dc68a9858d0429436bd2c37e32d00b80eb9`; final #213 required workflows green at 74.84% combined / 65.95% branch; current `main` `af21a49683917d8e5d5ac4b5d0f8249f589b1bbd` post-merge contours green |
+| M4-002 Unified Customer Timeline Projection | NEXT | project existing acquisition/sales/booking/payment/retention facts into one tenant-scoped read-only customer chronology; no second event store/CRM |
 
 ---
 
