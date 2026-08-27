@@ -27,24 +27,34 @@ def _without_advertising(**_kwargs):
     return None
 
 
-def _owner_next_action(actor) -> GrowthAction | None:
+def _projection_unavailable_action() -> GrowthAction:
+    return GrowthAction(
+        title="Не удалось проверить срочные задачи",
+        reason=(
+            "Обзор сейчас недоступен. Я не считаю очередь пустой — откройте «Что сегодня» "
+            "и проверьте работу вручную."
+        ),
+        action_key="projection_unavailable",
+        source="growth_cockpit",
+    )
+
+
+def _owner_next_action(actor) -> GrowthAction:
     try:
         return get_growth_cockpit(
             actor=actor,
             period_days=7,
             advertising_loader=_without_advertising,
         ).next_action
-    except (TenantAccessDenied, TenantPermissionDenied, ValueError):
-        return None
-    except OSError:
-        return None
-    except RuntimeError:
-        return None
+    except (TenantAccessDenied, TenantPermissionDenied, ValueError, OSError, RuntimeError):
+        return _projection_unavailable_action()
 
 
 def _primary_action(business_id: str, next_action: GrowthAction | None = None) -> tuple[str, str]:
     token = control._uuid_token(business_id)
     if next_action is not None:
+        if next_action.action_key == "projection_unavailable":
+            return "📈 Проверить задачи вручную", f"cpg:period:{token}:7"
         if next_action.action_key == "sales_handoff":
             return "🙋 Ответить клиентам", f"cps:sh:{token}"
         if next_action.action_key.startswith("sales_plan:"):
