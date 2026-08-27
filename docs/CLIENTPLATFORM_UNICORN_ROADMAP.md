@@ -945,7 +945,7 @@ Owner открывает одного клиента и получает одн�
 
 Последующие расширения той же timeline добавляют messages, materials/program progress и support/feedback только через их canonical факты.
 
-## 9.3. M4-003 — `NEXT` — Tasks and owner operating queue
+## 9.3. M4-003 — `DONE` — Tasks and owner operating queue
 
 ClientPlatform ежедневно собирает максимум несколько действительно важных действий:
 
@@ -960,7 +960,20 @@ ClientPlatform ежедневно собирает максимум нескол
 
 Приоритет объясним и детерминирован бизнес-событиями; LLM может формулировать объяснение, но не скрыто менять приоритеты денег/прав.
 
+### Evidence
+
+- PR #232 (`M4-003: add deterministic owner operating queue`) merged в `main` как `10c1a3043eb75fd1ad2f829fed35be3753733eaf`; exact PR head `6d43c32e1d54d842d309f8d8fa4fa43b6698a441` прошёл все 15 pull-request workflow runs, включая CI quality/coverage, Canon, Critical Static Surface, User Scenario Matrix, PostgreSQL payment/concurrency, booking/ad-spend/partner concurrency, Production Isolation, Encrypted Backup и Pre-deploy Release Gate.
+- Owner queue остаётся bounded read-only projection поверх canonical handoff, sales next-action/action-plan и revenue attribution facts; отдельный task store/event store/automation brain не добавлен. Review follow-up закрепил прямую навигацию durable `sales_lead:` actions и безопасный repeatable/FSM escape route `cps:swv:`.
+- Coverage ratchet закрыт без ослабления: combined `74.87%`, branch baseline повышен с `66.00%` до `66.02%`.
+- Production deploy выполнен на exact merge SHA `10c1a3043eb75fd1ad2f829fed35be3753733eaf`: encrypted backup, внутренние `/healthz` + `/readyz`, публичный HTTPS contract и polling-only Telegram webhook absence прошли; deploy evidence `deploy-20260827T162024Z.json`, stability window `20s` завершился успешно.
+
 ## 9.4. Content & funnel operating system
+
+### M4-004 — `NEXT` — Owner Content Calendar Projection
+
+Первый следующий vertical: подключить существующий canonical `business_publications` к owner-facing разделу «Публикации» как одну tenant-scoped календарную проекцию по статусам `draft` / `scheduled` / `published` / `failed` / `cancelled`. Использовать уже существующие publication/admin primitives и `scheduled_at`; не создавать отдельный content store, event store или channel-specific source of truth.
+
+Минимальный DONE contract: владелец в Telegram/VK/MAX видит детерминированный список ближайших и недавних публикаций с каналом, статусом и временем; RBAC/tenant isolation сохранены; пустое состояние не выдаёт заглушку о «неподключённом контуре», если canonical publications уже существуют; regression tests и coverage ratchet green. Scheduling/execution/approval workflow остаются последующими отдельными slices.
 
 Расширить существующие content/publication/program primitives:
 
@@ -1597,7 +1610,8 @@ Duplicate tap, retry, worker restart или uncertain provider response не д�
 | U-010 Retention & Reactivation Engine | DONE | PR #208 merge SHA `c87a4de62b6ef931686b39a7bb891fa394d0fa7d`; PR #209 merge SHA `6ba76983c255ed70486ce38803c4f3dfd002aa3d`; all 15 required workflows success on exact head `8922e217dbfd7a61bb922f3b8a0753344cce2745`; coverage raised to 74.61% combined / 65.62% branch; canonical sales/follow-up/outcome/revenue contours extended without a second retention brain |
 | M4-001 Customer Payment Evidence Bridge | DONE | PR #224 merge `f5dc4bd0f690ae859852025c240cfedf62389b25`; PR #213 merge `c9574dc68a9858d0429436bd2c37e32d00b80eb9`; final #213 required workflows green at 74.84% combined / 65.95% branch; current `main` `af21a49683917d8e5d5ac4b5d0f8249f589b1bbd` post-merge contours green |
 | M4-002 Unified Customer Timeline Projection | DONE | PR #230 merge `b5ef6ef0a583577b6b0d6ba0b9a7ded75b36e049`; exact PR head `28c94e11f55d5c384714ed757098ca2229480243`; all 15 PR workflows success; read-only canonical customer timeline with tenant/RBAC isolation, Telegram/VK/MAX surfaces and corrected refund/reversal + ISO-4217 money semantics |
-| M4-003 Tasks and owner operating queue | NEXT | derive a small deterministic owner action queue from existing canonical business facts; explain priority without creating a second task/automation brain |
+| M4-003 Tasks and owner operating queue | DONE | PR #232 merge `10c1a3043eb75fd1ad2f829fed35be3753733eaf`; exact PR head `6d43c32e1d54d842d309f8d8fa4fa43b6698a441`; all 15 PR workflows success; coverage 74.87% combined / 66.02% branch; exact-SHA production deploy with encrypted backup, health/readiness, HTTPS and polling-only stability evidence |
+| M4-004 Owner Content Calendar Projection | NEXT | expose existing canonical `business_publications` as one tenant-scoped owner calendar across Telegram/VK/MAX; no second content store; scheduling/execution/approval remain later slices |
 
 ---
 
