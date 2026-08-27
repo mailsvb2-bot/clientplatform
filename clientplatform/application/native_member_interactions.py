@@ -25,7 +25,7 @@ from clientplatform.application.customer_timeline import (
     get_customer_timeline,
 )
 from clientplatform.application.customers import get_customer, list_customers
-from clientplatform.application.growth_cockpit import get_growth_cockpit
+from clientplatform.application.growth_cockpit import GrowthAction, get_growth_cockpit
 from clientplatform.application.programs import list_programs
 from clientplatform.application.progress import list_business_program_progress
 from clientplatform.application.sales_workspace import (
@@ -469,6 +469,25 @@ def _native_projection_unavailable_action(actor: TenantContext) -> CustomerInter
     return _button("📚 Открыть программы", "cpm:programs")
 
 
+def _native_growth_action_button(
+    actor: TenantContext,
+    action: GrowthAction,
+) -> CustomerInteractionButton | None:
+    if action.action_key == "sales_handoff" and actor.role in _SUPPORT_ROLES:
+        return _button("🙋 Ответить клиентам", "cpm:sales-handoffs")
+    if action.action_key.startswith("sales_plan:") and actor.role in _SUPPORT_ROLES:
+        return _button("💬 Продолжить работу с клиентом", "cpm:sales")
+    if action.action_key.startswith("sales_lead:") and actor.role in _SUPPORT_ROLES:
+        lead_id = action.action_key.split(":", 1)[1]
+        return _button("💬 Открыть клиента", f"cpm:sales-lead:{lead_id}")
+    if action.action_key == "attribution_review":
+        if actor.role in _MARKETING_ROLES:
+            return _button("💰 Проверить источники оплат", "cpm:money")
+        if actor.role in _SUPPORT_ROLES:
+            return _button("📊 Проверить, что происходит", "cpm:today")
+    return None
+
+
 def _native_primary_action(actor: TenantContext) -> CustomerInteractionButton:
     try:
         next_action = get_growth_cockpit(
@@ -483,16 +502,9 @@ def _native_primary_action(actor: TenantContext) -> CustomerInteractionButton:
     except RuntimeError:
         return _native_projection_unavailable_action(actor)
 
-    if next_action is not None:
-        if next_action.action_key == "sales_handoff" and actor.role in _SUPPORT_ROLES:
-            return _button("🙋 Ответить клиентам", "cpm:sales-handoffs")
-        if next_action.action_key.startswith("sales_plan:") and actor.role in _SUPPORT_ROLES:
-            return _button("💬 Продолжить работу с клиентом", "cpm:sales")
-        if next_action.action_key == "attribution_review":
-            if actor.role in _MARKETING_ROLES:
-                return _button("💰 Проверить источники оплат", "cpm:money")
-            if actor.role in _SUPPORT_ROLES:
-                return _button("📊 Проверить, что происходит", "cpm:today")
+    action_button = _native_growth_action_button(actor, next_action)
+    if action_button is not None:
+        return action_button
 
     if actor.role in _ACQUISITION_ROLES:
         return _button("🚀 Найти новых клиентов", "cpm:acquire")
@@ -1520,6 +1532,44 @@ def _permissions_message(actor: TenantContext) -> CustomerInteractionMessage:
 
 def _today_message(actor: TenantContext) -> CustomerInteractionMessage:
     summary = business_delivery_summary(actor=actor)
+    action_lines: list[str] = []
+    primary_action_button: CustomerInteractionButton | None = None
+    try:
+        snapshot = get_growth_cockpit(
+            actor=actor,
+            period_days=7,
+            advertising_loader=lambda **_kwargs: None,
+        )
+    except (TenantAccessDenied, TenantPermissionDenied, ValueError):
+        snapshot = None
+    except OSError:
+        snapshot = None
+    except RuntimeError:
+        snapshot = None
+    if snapshot is not None:
+        action_lines = [
+            f"{index}. {item.title} — {item.reason}"
+            for index, item in enumerate(snapshot.actions[:5], start=1)
+        ]
+        primary_action_button = _native_growth_action_button(actor, snapshot.next_action)
+        if primary_action_button is not None and primary_action_button.command == "cpm:today":
+            primary_action_button = None
+
+    action_text = (
+        "\n\nВажные действия\n" + "\n".join(action_lines)
+        if action_lines
+        else "\n\nВажные действия\n• Срочных действий нет или они недоступны для этой роли."
+    )
+    rows: list[tuple[CustomerInteractionButton, ...]] = []
+    if primary_action_button is not None:
+        rows.append((primary_action_button,))
+    rows.extend(
+        [
+            (_button("👥 Клиенты", "cpm:customers:0"),),
+            (_button("📅 Записи", "cpm:bookings"),),
+            _back_row(),
+        ]
+    )
     return CustomerInteractionMessage(
         text=(
             "Сегодня · ClientPlatform\n\n"
@@ -1528,12 +1578,9 @@ def _today_message(actor: TenantContext) -> CustomerInteractionMessage:
             + f"В очереди отправки: {summary.dispatch_pending}\n"
             + f"Отправлено: {summary.dispatch_sent}\n"
             + f"Требуют внимания: {summary.dispatch_attention}"
+            + action_text
         ),
-        rows=(
-            (_button("👥 Клиенты", "cpm:customers:0"),),
-            (_button("📅 Записи", "cpm:bookings"),),
-            _back_row(),
-        ),
+        rows=tuple(rows),
     )
 
 

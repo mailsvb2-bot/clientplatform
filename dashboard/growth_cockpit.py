@@ -53,6 +53,15 @@ def telegram_growth_summary(snapshot: GrowthCockpitSnapshot) -> str:
         )
 
     attention = "\n".join(f"• {item}" for item in snapshot.attention) or "• Срочных сигналов нет."
+    actions = tuple(getattr(snapshot, "actions", ()))[:5]
+    action_queue = (
+        "\n".join(
+            f"{index}. {item.title}\n   {item.reason}"
+            for index, item in enumerate(actions, start=1)
+        )
+        if actions
+        else "• Срочных действий нет."
+    )
     limitations = [
         _LIMITATION_LABELS.get(item, item)
         for item in snapshot.limitations
@@ -80,7 +89,9 @@ def telegram_growth_summary(snapshot: GrowthCockpitSnapshot) -> str:
         f"• Что сработало: {worked}\n\n"
         "Что требует решения\n"
         f"{attention}\n\n"
-        "Что ClientPlatform сделает дальше\n"
+        "Важные действия\n"
+        f"{action_queue}\n\n"
+        "Главное действие\n"
         f"• {snapshot.next_action.title}\n"
         f"  {snapshot.next_action.reason}"
         f"{limitation_text}"

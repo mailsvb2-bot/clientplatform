@@ -56,6 +56,7 @@ class GrowthAction:
     reason: str
     action_key: str
     source: str
+    source_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,6 +85,7 @@ class GrowthCockpitSnapshot:
     attention: tuple[str, ...]
     next_action: GrowthAction
     limitations: tuple[str, ...]
+    actions: tuple[GrowthAction, ...] = ()
 
 
 def _business_zone(actor: TenantContext) -> ZoneInfo:
@@ -197,36 +199,116 @@ def _attention(
     return tuple(items)
 
 
-def _next_action(
+def _bounded_action_text(value: object, *, limit: int = 180) -> str | None:
+    text = " ".join(str(value or "").split()).strip()
+    if not text:
+        return None
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def _action_queue(
     *,
-    has_handoff: bool,
+    handoffs: list[dict[str, object]],
     sales_work: list[dict[str, object]],
     economics: UnitEconomicsSnapshot,
-) -> GrowthAction:
-    if has_handoff:
-        return GrowthAction(
-            title="Ответить клиентам, которым нужен человек",
-            reason="Есть открытые обращения, переданные владельцу или сотруднику.",
-            action_key="sales_handoff",
-            source="sales_handoff_queue",
-        )
-    for item in sales_work:
-        action_kind = str(item.get("next_action_kind") or "").strip()
-        if action_kind:
-            customer_name = str(item.get("customer_name") or "Клиент").strip()
-            return GrowthAction(
-                title=f"Продолжить работу с клиентом: {customer_name}",
-                reason="Для клиента уже существует канонический следующий шаг продаж.",
-                action_key=f"sales_plan:{item.get('next_plan_id') or ''}",
-                source="sales_action_plan",
+    limit: int = 5,
+) -> tuple[GrowthAction, ...]:
+    """Project a small deterministic owner queue from canonical read models only."""
+
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1 or limit > 10:
+        raise ValueError("owner action queue limit must be an integer between 1 and 10")
+
+    actions: list[GrowthAction] = []
+    handoff_leads: set[str] = set()
+    severity_reason = {
+        "urgent": "Срочная передача: клиенту требуется личное участие сотрудника.",
+        "high": "Важная передача: клиенту требуется личное участие сотрудника.",
+        "normal": "Открытая передача: клиенту требуется личное участие сотрудника.",
+    }
+    for item in handoffs:
+        lead_id = str(item.get("lead_id") or "").strip()
+        handoff_id = str(item.get("id") or "").strip()
+        if not lead_id or not handoff_id:
+            continue
+        handoff_leads.add(lead_id)
+        severity = str(item.get("severity") or "normal").strip().lower()
+        customer_name = _bounded_action_text(item.get("customer_name"), limit=80) or "Клиент"
+        actions.append(
+            GrowthAction(
+                title=f"Ответить лично: {customer_name}",
+                reason=severity_reason.get(severity, severity_reason["normal"]),
+                action_key="sales_handoff",
+                source="sales_handoff_queue",
+                source_id=handoff_id,
             )
-    if economics.unattributed_monetary_outcomes > 0:
-        return GrowthAction(
-            title="Проверить источники оплат",
-            reason="Есть денежные результаты без подтверждённой attribution.",
-            action_key="attribution_review",
-            source="revenue_attribution",
         )
+
+    for item in sales_work:
+        lead_id = str(item.get("id") or "").strip()
+        if not lead_id or lead_id in handoff_leads:
+            continue
+        customer_name = _bounded_action_text(item.get("customer_name"), limit=80) or "Клиент"
+        plan_id = str(item.get("next_plan_id") or "").strip()
+        next_action_kind = str(item.get("next_action_kind") or "").strip()
+        next_action = _bounded_action_text(item.get("next_action"))
+        due_at = _bounded_action_text(item.get("due_at"), limit=80)
+        if plan_id and next_action_kind:
+            requires_approval = bool(item.get("next_plan_requires_approval"))
+            reason = (
+                "ClientPlatform уже подготовил следующий шаг; перед выполнением требуется Ваше подтверждение."
+                if requires_approval
+                else "Следующий шаг уже сохранён в работе с клиентом."
+            )
+            if due_at:
+                reason += f" Срок: {due_at}."
+            actions.append(
+                GrowthAction(
+                    title=f"Продолжить работу с клиентом: {customer_name}",
+                    reason=reason,
+                    action_key=f"sales_plan:{plan_id}",
+                    source="sales_action_plan",
+                    source_id=plan_id,
+                )
+            )
+            continue
+        if next_action:
+            reason = f"Сохранён следующий шаг: {next_action}."
+            if due_at:
+                reason += f" Срок: {due_at}."
+            actions.append(
+                GrowthAction(
+                    title=f"Следующий шаг по клиенту: {customer_name}",
+                    reason=reason,
+                    action_key=f"sales_lead:{lead_id}",
+                    source="sales_lead",
+                    source_id=lead_id,
+                )
+            )
+
+    if economics.unattributed_monetary_outcomes > 0:
+        count = int(economics.unattributed_monetary_outcomes)
+        actions.append(
+            GrowthAction(
+                title="Проверить источники оплат",
+                reason=(
+                    f"Есть денежные результаты без подтверждённого источника клиента: {count}."
+                ),
+                action_key="attribution_review",
+                source="revenue_attribution",
+                source_id=None,
+            )
+        )
+
+    # Each upstream projection already owns its deterministic ordering:
+    # handoffs by severity/time/id, sales work by due-time/update/id. Keep those
+    # canonical orders and only compose the source classes in the explicit
+    # business priority above instead of inventing a hidden numeric score.
+    return tuple(actions[:limit])
+
+
+def _next_action(actions: tuple[GrowthAction, ...]) -> GrowthAction:
+    if actions:
+        return actions[0]
     return GrowthAction(
         title="Ничего срочного",
         reason="Канонические источники не показывают обязательного действия владельца.",
@@ -265,7 +347,7 @@ def get_growth_cockpit(
         occurred_to=period_to,
     )
     needs_reply = count_sales_handoff_work(actor=actor)
-    handoffs = list_sales_handoff_work(actor=actor, limit=1) if needs_reply else []
+    handoffs = list_sales_handoff_work(actor=actor, limit=5) if needs_reply else []
     sales_work = list_sales_work(actor=actor, limit=50)
 
     advertising: YandexGrowthSnapshot | None = None
@@ -288,6 +370,12 @@ def get_growth_cockpit(
     elif advertising is not None and advertising.connected_accounts > 0:
         limitations.append("advertising_currency_unverified")
 
+    actions = _action_queue(
+        handoffs=handoffs,
+        sales_work=sales_work,
+        economics=period,
+    )
+
     return GrowthCockpitSnapshot(
         business_id=period.business_id,
         timezone_name=zone.key,
@@ -309,11 +397,8 @@ def get_growth_cockpit(
             advertising=advertising,
             advertising_error=advertising_error,
         ),
-        next_action=_next_action(
-            has_handoff=bool(handoffs),
-            sales_work=sales_work,
-            economics=period,
-        ),
+        actions=actions,
+        next_action=_next_action(actions),
         limitations=tuple(dict.fromkeys(limitations)),
     )
 

@@ -223,6 +223,14 @@ def test_ordinary_navigation_escapes_stale_builder_but_mutation_does_not() -> No
     assert _callback_conflicts_with_state(state_name, "cpb:n:business")
 
 
+def test_sales_lead_detail_is_safe_repeatable_navigation_from_stale_state() -> None:
+    data = "cps:swv:business-token:lead-token"
+    state_name = "ClientPlatformControlState:activity_description"
+    assert _is_repeatable_navigation(data)
+    assert not _callback_conflicts_with_state(state_name, data)
+    assert _callback_should_clear_state(state_name, data)
+
+
 def test_admin_token_first_menu_is_recognized_as_repeatable_navigation() -> None:
     data = "cpa:abcdefghijklmnopqrstuv:menu"
     assert _is_repeatable_navigation(data)
