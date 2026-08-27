@@ -162,6 +162,114 @@ async def test_section_back_returns_to_its_admin_group(
     assert state.data["cp_admin_section"] == "menu-work"
 
 
+@pytest.mark.asyncio
+async def test_real_admin_group_renders_message_and_pushes_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(admin.control, "_uuid_token", lambda _value: "business-token")
+    answers: list[tuple[str, Any]] = []
+
+    class MessageTarget:
+        async def answer(self, text: str, *, reply_markup: Any) -> None:
+            answers.append((text, reply_markup))
+
+    state = FakeState({"cp_admin_section": "menu", "cp_admin_history": []})
+    await admin._render_admin_group(
+        MessageTarget(),  # type: ignore[arg-type]
+        state,  # type: ignore[arg-type]
+        _ctx(),
+        "menu-work",
+    )
+
+    text, markup = answers[-1]
+    assert text == "📊 Работа и клиенты\n\nВыберите нужное действие."
+    assert [button.text for row in markup.inline_keyboard for button in row] == [
+        "📊 Сегодня",
+        "📈 Подробный обзор",
+        "👥 Клиенты сегодня",
+        "🔎 Все клиенты",
+        "⚠️ Требуют внимания",
+        "🧠 Поведение клиентов",
+        "⬅️ Назад",
+    ]
+    assert state.data["cp_admin_section"] == "menu-work"
+    assert state.data["cp_admin_history"] == ["menu"]
+
+
+@pytest.mark.asyncio
+async def test_real_admin_group_callback_path_does_not_repush_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class CallbackTarget:
+        pass
+
+    edits: list[tuple[str, Any]] = []
+
+    async def safe_edit(_target: Any, text: str, markup: Any) -> None:
+        edits.append((text, markup))
+
+    monkeypatch.setattr(admin, "CallbackQuery", CallbackTarget)
+    monkeypatch.setattr(admin, "_safe_edit", safe_edit)
+    monkeypatch.setattr(admin.control, "_uuid_token", lambda _value: "business-token")
+    state = FakeState(
+        {"cp_admin_section": "menu-work", "cp_admin_history": ["menu"]}
+    )
+    await admin._render_admin_group(
+        CallbackTarget(),  # type: ignore[arg-type]
+        state,  # type: ignore[arg-type]
+        _ctx(),
+        "menu-content",
+        push=False,
+    )
+
+    assert edits[-1][0].startswith("✍️ Контент и каналы")
+    assert state.data == {
+        "cp_admin_section": "menu-work",
+        "cp_admin_history": ["menu"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_admin_group_rejects_role_without_any_visible_action() -> None:
+    ctx = _ctx()
+    ctx.role = admin.PlatformRole.CONTENT_MANAGER
+    with pytest.raises(admin.TenantPermissionDenied):
+        await admin._render_admin_group(
+            SimpleNamespace(answer=None),  # type: ignore[arg-type]
+            FakeState(),  # type: ignore[arg-type]
+            ctx,
+            "menu-team",
+        )
+
+
+@pytest.mark.asyncio
+async def test_render_menu_callback_path_without_reset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class CallbackTarget:
+        pass
+
+    edits: list[str] = []
+
+    async def safe_edit(_target: Any, text: str, _markup: Any) -> None:
+        edits.append(text)
+
+    monkeypatch.setattr(admin, "CallbackQuery", CallbackTarget)
+    monkeypatch.setattr(admin, "_safe_edit", safe_edit)
+    monkeypatch.setattr(admin.control, "_uuid_token", lambda _value: "business-token")
+    state = FakeState({"cp_admin_section": "menu-content", "cp_admin_history": ["menu"]})
+    await admin._render_menu(
+        CallbackTarget(),  # type: ignore[arg-type]
+        state,  # type: ignore[arg-type]
+        _ctx(),
+        reset=False,
+    )
+
+    assert edits[-1].startswith("⚙️ Управление бизнесом")
+    assert state.data["cp_admin_section"] == "menu-content"
+    assert state.data["cp_admin_history"] == ["menu"]
+
+
 @pytest.fixture
 def render_contract(monkeypatch: pytest.MonkeyPatch):
     rendered: list[tuple[str, Any]] = []
