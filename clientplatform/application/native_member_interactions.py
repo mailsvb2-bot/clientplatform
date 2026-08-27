@@ -457,6 +457,14 @@ def _business_name(actor: TenantContext) -> str:
     return str(access.business.name) if access is not None else "ClientPlatform"
 
 
+def _native_projection_unavailable_action(actor: TenantContext) -> CustomerInteractionButton:
+    if actor.role in _SUPPORT_ROLES:
+        return _button("⚠️ Проверить задачи вручную", "cpm:today")
+    if actor.role in (_MARKETING_ROLES | _CONTENT_ROLES | _AUTOMATION_ROLES):
+        return _button("⚠️ Проверить результат вручную", "cpm:growth")
+    return _button("📚 Открыть программы", "cpm:programs")
+
+
 def _native_primary_action(actor: TenantContext) -> CustomerInteractionButton:
     try:
         next_action = get_growth_cockpit(
@@ -464,12 +472,8 @@ def _native_primary_action(actor: TenantContext) -> CustomerInteractionButton:
             period_days=7,
             advertising_loader=lambda **_kwargs: None,
         ).next_action
-    except (TenantAccessDenied, TenantPermissionDenied, ValueError):
-        next_action = None
-    except OSError:
-        next_action = None
-    except RuntimeError:
-        next_action = None
+    except (TenantAccessDenied, TenantPermissionDenied, ValueError, OSError, RuntimeError):
+        return _native_projection_unavailable_action(actor)
 
     if next_action is not None:
         if next_action.action_key == "sales_handoff" and actor.role in _SUPPORT_ROLES:
@@ -506,7 +510,8 @@ def _menu_message(
         text=(
             heading
             + f"🏠 {_business_name(actor)}\n\n"
-            + "ClientPlatform показывает главное действие первым. "
+            + "ClientPlatform показывает главное безопасное действие первым. "
+            + "Если обзор временно недоступен, вместо догадки предлагает ручную проверку. "
             + "Остальные функции никуда не исчезли — они находятся в «Все возможности»."
         ),
         rows=(
