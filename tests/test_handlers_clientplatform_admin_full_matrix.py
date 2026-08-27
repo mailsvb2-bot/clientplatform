@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 
+from clientplatform.application.admin_ops import PublicationCalendarProjection, PublicationRecord
 from handlers import clientplatform_admin as admin
 from handlers import clientplatform_admin_extension as extension
 
@@ -131,6 +132,7 @@ def render_contract(monkeypatch: pytest.MonkeyPatch):
     async def base_snapshot(_ctx: Any):
         profile = SimpleNamespace(
             activity_description="Помогаем клиентам",
+            timezone="Europe/Moscow",
             status=SimpleNamespace(value="ready"),
         )
         summary = SimpleNamespace(
@@ -195,7 +197,14 @@ def render_contract(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(extension, "telegram_egress_snapshot", lambda: route)
     monkeypatch.setattr(extension.admin_ops, "business_admin_insights", lambda **_kwargs: insights)
     monkeypatch.setattr(extension.admin_ops, "list_payments", lambda **_kwargs: [])
-    monkeypatch.setattr(extension.admin_ops, "list_publications", lambda **_kwargs: [])
+    monkeypatch.setattr(
+        extension.admin_ops,
+        "get_publication_calendar_projection",
+        lambda **_kwargs: PublicationCalendarProjection(
+            entries=(), actionable_drafts=(), draft_count=0, scheduled_count=0,
+            published_count=0, failed_count=0, cancelled_count=0,
+        ),
+    )
     monkeypatch.setattr(extension.admin_ops, "list_offering_prices", lambda **_kwargs: [])
     monkeypatch.setattr(extension.admin_ops, "interaction_snapshot", lambda **_kwargs: interaction)
     monkeypatch.setattr(extension.admin_ops, "get_admin_setting", lambda **_kwargs: "false")
@@ -243,6 +252,69 @@ async def test_all_growth_sections_render_real_screen_and_back(
     assert "ещё не подключ" not in text.casefold()
     assert markup.inline_keyboard[-1][0].text == "⬅️ Назад"
     assert state.data["cp_admin_section"] == action
+
+
+@pytest.mark.asyncio
+async def test_publications_use_shared_calendar_projection(
+    render_contract: list[tuple[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    publication = PublicationRecord(
+        id="00000000-0000-0000-0000-000000000099",
+        business_id="00000000-0000-0000-0000-000000000001",
+        channel="max",
+        title="Вечерняя публикация",
+        body="Текст",
+        status="scheduled",
+        created_at="2026-08-27T08:00:00+00:00",
+        updated_at="2026-08-27T08:00:00+00:00",
+        scheduled_at="2026-08-28T18:00:00+00:00",
+        published_at=None,
+        failed_at=None,
+        failure_reason=None,
+    )
+    draft = PublicationRecord(
+        id="00000000-0000-0000-0000-000000000100",
+        business_id=publication.business_id,
+        channel="telegram",
+        title="Готовый черновик",
+        body="Текст",
+        status="draft",
+        created_at="2026-08-27T09:00:00+00:00",
+        updated_at="2026-08-27T09:00:00+00:00",
+        scheduled_at=None,
+        published_at=None,
+        failed_at=None,
+        failure_reason=None,
+    )
+    monkeypatch.setattr(
+        extension.admin_ops,
+        "get_publication_calendar_projection",
+        lambda **_kwargs: PublicationCalendarProjection(
+            entries=(publication,),
+            actionable_drafts=(draft,),
+            draft_count=1,
+            scheduled_count=21,
+            published_count=4,
+            failed_count=2,
+            cancelled_count=0,
+        ),
+    )
+    state = FakeState({"cp_admin_section": "menu", "cp_admin_history": []})
+    await extension._enhanced_marketing(
+        SimpleNamespace(),  # type: ignore[arg-type]
+        state,  # type: ignore[arg-type]
+        _ctx(),
+        "publications",
+    )
+    text, markup = render_contract[-1]
+    assert "Запланировано: 21" in text
+    assert "Черновики: 1" in text
+    assert "28.08.2026 21:00 · MAX · Запланировано · Вечерняя публикация" in text
+    assert "ещё не подключ" not in text.casefold()
+    labels = [button.text for row in markup.inline_keyboard for button in row]
+    assert any("Готовый черновик" in label for label in labels)
+    assert markup.inline_keyboard[-1][0].text == "⬅️ Назад"
 
 
 @pytest.mark.asyncio

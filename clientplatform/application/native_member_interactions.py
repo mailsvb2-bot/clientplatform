@@ -13,6 +13,10 @@ from clientplatform.application.activity import (
 from clientplatform.application.acquisition_destination import (
     prepare_nearest_acquisition_destination,
 )
+from clientplatform.application.admin_ops import (
+    format_publication_calendar_lines,
+    get_publication_calendar_projection,
+)
 from clientplatform.application.bookings import list_booking_slots
 from clientplatform.application.messenger_switching import (
     available_staff_messenger_switches,
@@ -1269,6 +1273,28 @@ def _growth_report_message(actor: TenantContext, action: str) -> CustomerInterac
     }
     if actor.role not in allowed[action]:
         return _permission_message()
+    if action == "publications":
+        profile = get_business_profile(actor=actor)
+        projection = get_publication_calendar_projection(actor=actor)
+        calendar = "\n".join(
+            format_publication_calendar_lines(
+                projection.entries,
+                timezone_name=profile.timezone,
+                max_entries=8,
+            )
+        )
+        return CustomerInteractionMessage(
+            text=(
+                "Публикации\n\n"
+                f"Черновики: {projection.draft_count}\n"
+                f"Запланировано: {projection.scheduled_count}\n"
+                f"Опубликовано: {projection.published_count}\n"
+                f"Ошибки: {projection.failed_count}\n\n"
+                "Ближайшие и последние:\n"
+                f"{calendar}"
+            ),
+            rows=((_button("📈 Рост", "cpm:growth"),), _back_row()),
+        )
     profile = get_business_profile(actor=actor)
     summary = business_delivery_summary(actor=actor)
     capabilities = list_business_capabilities(actor=actor)
@@ -1288,9 +1314,6 @@ def _growth_report_message(actor: TenantContext, action: str) -> CustomerInterac
             f"Форматов: {len(active)}\nПрограмм: {summary.programs}\n"
             f"Очередь отправки: {summary.dispatch_pending}\n\n"
             "Автопилот работает только в подтверждённых владельцем границах."
-        ),
-        "publications": (
-            "Публикации\n\nПубликационный контур ещё не подключён к этому бизнесу."
         ),
         "funnel": (
             "Путь до заявки\n\n"

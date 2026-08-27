@@ -11,6 +11,7 @@ from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import CallbackQuery, Chat, InlineKeyboardMarkup, Message, User
 
+from clientplatform.application.admin_ops import PublicationCalendarProjection
 from clientplatform.domain.activity import BusinessProfileStatus, CapabilityStatus
 from clientplatform.domain.bookings import BookingSlotStatus
 from clientplatform.domain.tenancy import (
@@ -428,6 +429,40 @@ def capture_edits(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, InlineKeyb
 
 
 @pytest.mark.asyncio
+async def test_fallback_marketing_renderer_covers_publications_and_regular_screen(
+    monkeypatch: pytest.MonkeyPatch,
+    capture_edits: list[tuple[str, InlineKeyboardMarkup]],
+) -> None:
+    monkeypatch.setattr(admin, "_base_snapshot", lambda _ctx: _async_value(snapshot()))
+    monkeypatch.setattr(
+        admin,
+        "get_publication_calendar_projection",
+        lambda **_kwargs: PublicationCalendarProjection(
+            entries=(),
+            actionable_drafts=(),
+            draft_count=2,
+            scheduled_count=21,
+            published_count=7,
+            failed_count=1,
+            cancelled_count=0,
+        ),
+    )
+    state = fsm_context()
+    callback = telegram_callback()
+    ctx = admin_context()
+
+    await admin._render_marketing_fallback(callback, state, ctx, "publications")
+    publication_text = capture_edits[-1][0]
+    assert "Черновики: 2" in publication_text
+    assert "Запланировано: 21" in publication_text
+    assert "• Публикаций пока нет." in publication_text
+    assert "ещё не подключ" not in publication_text.casefold()
+
+    await admin._render_marketing_fallback(callback, state, ctx, "autopilot")
+    assert capture_edits[-1][0].startswith("🤖 Growth Autopilot")
+
+
+@pytest.mark.asyncio
 async def test_all_summary_and_marketing_screens_render(
     monkeypatch: pytest.MonkeyPatch,
     capture_edits: list[tuple[str, InlineKeyboardMarkup]],
@@ -437,6 +472,19 @@ async def test_all_summary_and_marketing_screens_render(
         admin,
         "business_delivery_summary",
         lambda **_kwargs: snapshot()[1],
+    )
+    monkeypatch.setattr(
+        admin,
+        "get_publication_calendar_projection",
+        lambda **_kwargs: PublicationCalendarProjection(
+            entries=(),
+            actionable_drafts=(),
+            draft_count=0,
+            scheduled_count=0,
+            published_count=0,
+            failed_count=0,
+            cancelled_count=0,
+        ),
     )
     state = fsm_context()
     ctx = admin_context()

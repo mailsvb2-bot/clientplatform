@@ -5,9 +5,12 @@ import json
 import sqlite3
 import unittest
 from dataclasses import replace
+from types import SimpleNamespace
 from unittest.mock import patch
 from uuid import uuid4
 
+from clientplatform.application import native_member_interactions as native_member_ui
+from clientplatform.application.admin_ops import PublicationCalendarProjection, PublicationRecord
 from clientplatform.application.native_member_interactions import (
     NativeMemberBridgeRejected,
     NativeMemberResolution,
@@ -148,6 +151,49 @@ class NativeMemberResolutionTests(unittest.TestCase):
 
     def test_unknown_member_text_returns_safe_menu_action(self) -> None:
         self.assertEqual("menu", parse_native_member_interaction("что тут можно?").action)
+
+    def test_publications_render_canonical_calendar_without_placeholder(self) -> None:
+        route = _route(ConnectionPlatform.MAX)
+        actor = _actor(route)
+        publication = PublicationRecord(
+            id=str(uuid4()),
+            business_id=actor.business_id,
+            channel="vk",
+            title="План на завтра",
+            body="Текст",
+            status="scheduled",
+            created_at="2026-08-27T08:00:00+00:00",
+            updated_at="2026-08-27T08:00:00+00:00",
+            scheduled_at="2026-08-28T09:00:00+00:00",
+            published_at=None,
+            failed_at=None,
+            failure_reason=None,
+        )
+        with (
+            patch(
+                "clientplatform.application.native_member_interactions.get_business_profile",
+                return_value=SimpleNamespace(timezone="Europe/Moscow"),
+            ),
+            patch(
+                "clientplatform.application.native_member_interactions.get_publication_calendar_projection",
+                return_value=PublicationCalendarProjection(
+                    entries=(publication,),
+                    actionable_drafts=(),
+                    draft_count=3,
+                    scheduled_count=21,
+                    published_count=7,
+                    failed_count=2,
+                    cancelled_count=1,
+                ),
+            ) as calendar,
+        ):
+            message = native_member_ui._growth_report_message(actor, "publications")
+
+        calendar.assert_called_once_with(actor=actor)
+        self.assertIn("Запланировано: 21", message.text)
+        self.assertIn("Черновики: 3", message.text)
+        self.assertIn("28.08.2026 12:00 · ВКонтакте · Запланировано", message.text)
+        self.assertNotIn("ещё не подключ", message.text.casefold())
 
 
 class NativeMemberDispatchRepositoryTests(unittest.TestCase):

@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from clientplatform.domain.money import normalize_settlement_currency
 from clientplatform.domain.outcomes import (
@@ -86,7 +87,99 @@ class PublicationRecord:
     status: str
     created_at: str
     updated_at: str
+    scheduled_at: str | None
     published_at: str | None
+    failed_at: str | None
+    failure_reason: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class PublicationCalendarProjection:
+    entries: tuple[PublicationRecord, ...]
+    actionable_drafts: tuple[PublicationRecord, ...]
+    draft_count: int
+    scheduled_count: int
+    published_count: int
+    failed_count: int
+    cancelled_count: int
+
+
+_PUBLICATION_STATUS_LABELS = {
+    "draft": ("📝", "Черновик"),
+    "scheduled": ("🗓", "Запланировано"),
+    "published": ("✅", "Опубликовано"),
+    "failed": ("⚠️", "Ошибка"),
+    "cancelled": ("⛔", "Отменено"),
+}
+_PUBLICATION_CHANNEL_LABELS = {
+    "telegram": "Telegram",
+    "vk": "ВКонтакте",
+    "max": "MAX",
+    "other": "Другой канал",
+}
+
+
+def _publication_effective_timestamp(item: PublicationRecord) -> str:
+    if item.status == "scheduled" and item.scheduled_at:
+        return item.scheduled_at
+    if item.status == "published" and item.published_at:
+        return item.published_at
+    if item.status == "failed" and item.failed_at:
+        return item.failed_at
+    return item.updated_at
+
+
+def _format_publication_timestamp(value: object, *, timezone_name: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return "время не указано"
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return "время не указано"
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    try:
+        zone = ZoneInfo(str(timezone_name or "UTC").strip() or "UTC")
+    except (ValueError, ZoneInfoNotFoundError):
+        zone = timezone.utc
+    return parsed.astimezone(zone).strftime("%d.%m.%Y %H:%M")
+
+
+def format_publication_calendar_lines(
+    publications: list[PublicationRecord] | tuple[PublicationRecord, ...],
+    *,
+    timezone_name: str,
+    max_entries: int = 8,
+) -> tuple[str, ...]:
+    """Render canonical publication facts for any owner messenger surface."""
+
+    if isinstance(max_entries, bool) or not isinstance(max_entries, int) or max_entries < 1:
+        raise ValueError("max_entries must be a positive integer")
+    selected = publications[:max_entries]
+    if not selected:
+        return ("• Публикаций пока нет.",)
+    lines: list[str] = []
+    for item in selected:
+        icon, status_label = _PUBLICATION_STATUS_LABELS.get(
+            item.status, ("•", "Статус неизвестен")
+        )
+        channel_label = _PUBLICATION_CHANNEL_LABELS.get(
+            item.channel, "Другой канал"
+        )
+        title = " ".join(str(item.title or "").split())
+        if len(title) > 48:
+            title = title[:47].rstrip() + "…"
+        timestamp = _format_publication_timestamp(
+            _publication_effective_timestamp(item),
+            timezone_name=timezone_name,
+        )
+        lines.append(
+            f"• {icon} {timestamp} · {channel_label} · {status_label} · {title}"
+        )
+    return tuple(lines)
 
 
 @dataclass(frozen=True, slots=True)
@@ -523,7 +616,8 @@ def create_publication_draft(
         row = conn.execute(
             """
             SELECT id, business_id, channel, title, body, status,
-                   created_at, updated_at, published_at
+                   created_at, updated_at, scheduled_at, published_at,
+                   failed_at, failure_reason
             FROM business_publications
             WHERE id=? AND business_id=?
             """,
@@ -577,7 +671,8 @@ def publish_publication(
         row = conn.execute(
             """
             SELECT id, business_id, channel, title, body, status,
-                   created_at, updated_at, published_at
+                   created_at, updated_at, scheduled_at, published_at,
+                   failed_at, failure_reason
             FROM business_publications
             WHERE id=? AND business_id=?
             """,
@@ -599,7 +694,8 @@ def list_publications(
         rows = conn.execute(
             """
             SELECT id, business_id, channel, title, body, status,
-                   created_at, updated_at, published_at
+                   created_at, updated_at, scheduled_at, published_at,
+                   failed_at, failure_reason
             FROM business_publications
             WHERE business_id=?
             ORDER BY created_at DESC, id DESC
@@ -610,8 +706,105 @@ def list_publications(
     return [_publication_from_row(row) for row in rows]
 
 
+def get_publication_calendar_projection(
+    *,
+    actor: TenantContext,
+    upcoming_limit: int = 4,
+    recent_limit: int = 4,
+    actionable_draft_limit: int = 5,
+) -> PublicationCalendarProjection:
+    """Project bounded display partitions and actions from canonical publications."""
+
+    normalized_upcoming = max(1, min(int(upcoming_limit), 20))
+    normalized_recent = max(1, min(int(recent_limit), 20))
+    normalized_drafts = max(1, min(int(actionable_draft_limit), 20))
+    select_fields = """
+        SELECT id, business_id, channel, title, body, status,
+               created_at, updated_at, scheduled_at, published_at,
+               failed_at, failure_reason
+        FROM business_publications
+    """
+    with get_db_ro() as conn:
+        current = _resolve(conn, actor, allowed_roles=_CONTENT_ROLES)
+        count_rows = conn.execute(
+            """
+            SELECT status, COUNT(*) AS c
+            FROM business_publications
+            WHERE business_id=?
+            GROUP BY status
+            """,
+            (current.business_id,),
+        ).fetchall()
+        counts = {
+            str(_value(row, "status", 0)): int(_value(row, "c", 1))
+            for row in count_rows
+        }
+        upcoming_rows = conn.execute(
+            select_fields
+            + """
+            WHERE business_id=? AND status='scheduled' AND scheduled_at IS NOT NULL
+            ORDER BY scheduled_at ASC, id ASC
+            LIMIT ?
+            """,
+            (current.business_id, normalized_upcoming),
+        ).fetchall()
+        recent_rows = conn.execute(
+            select_fields
+            + """
+            WHERE business_id=?
+              AND NOT (status='scheduled' AND scheduled_at IS NOT NULL)
+            ORDER BY COALESCE(published_at, failed_at, updated_at, created_at) DESC, id DESC
+            LIMIT ?
+            """,
+            (current.business_id, normalized_recent),
+        ).fetchall()
+        draft_rows = conn.execute(
+            select_fields
+            + """
+            WHERE business_id=? AND status='draft'
+            ORDER BY updated_at DESC, id DESC
+            LIMIT ?
+            """,
+            (current.business_id, normalized_drafts),
+        ).fetchall()
+
+    upcoming = tuple(_publication_from_row(row) for row in upcoming_rows)
+    recent = tuple(_publication_from_row(row) for row in recent_rows)
+    actionable_drafts = tuple(_publication_from_row(row) for row in draft_rows)
+    return PublicationCalendarProjection(
+        entries=upcoming + recent,
+        actionable_drafts=actionable_drafts,
+        draft_count=counts.get("draft", 0),
+        scheduled_count=counts.get("scheduled", 0),
+        published_count=counts.get("published", 0),
+        failed_count=counts.get("failed", 0),
+        cancelled_count=counts.get("cancelled", 0),
+    )
+
+
+def list_publication_calendar(
+    *,
+    actor: TenantContext,
+    limit: int = 20,
+) -> list[PublicationRecord]:
+    """Compatibility view for callers that only need bounded calendar entries."""
+
+    normalized_limit = max(2, min(int(limit), 40))
+    upcoming_limit = max(1, normalized_limit // 2)
+    recent_limit = max(1, normalized_limit - upcoming_limit)
+    projection = get_publication_calendar_projection(
+        actor=actor,
+        upcoming_limit=upcoming_limit,
+        recent_limit=recent_limit,
+    )
+    return list(projection.entries)
+
+
 def _publication_from_row(row: Any) -> PublicationRecord:
-    published_at = _value(row, "published_at", 8)
+    scheduled_at = _value(row, "scheduled_at", 8)
+    published_at = _value(row, "published_at", 9)
+    failed_at = _value(row, "failed_at", 10)
+    failure_reason = _value(row, "failure_reason", 11)
     return PublicationRecord(
         id=str(_value(row, "id", 0)),
         business_id=str(_value(row, "business_id", 1)),
@@ -621,7 +814,10 @@ def _publication_from_row(row: Any) -> PublicationRecord:
         status=str(_value(row, "status", 5)),
         created_at=str(_value(row, "created_at", 6)),
         updated_at=str(_value(row, "updated_at", 7)),
+        scheduled_at=None if scheduled_at is None else str(scheduled_at),
         published_at=None if published_at is None else str(published_at),
+        failed_at=None if failed_at is None else str(failed_at),
+        failure_reason=None if failure_reason is None else str(failure_reason),
     )
 
 
@@ -1986,16 +2182,20 @@ __all__ = [
     "PaymentIdempotencyConflict",
     "PaymentRecord",
     "PaymentStateConflict",
+    "PublicationCalendarProjection",
     "PublicationRecord",
     "SubscriptionState",
     "business_admin_insights",
     "create_publication_draft",
+    "format_publication_calendar_lines",
     "get_admin_setting",
+    "get_publication_calendar_projection",
     "get_subscription_state",
     "interaction_snapshot",
     "list_offering_prices",
     "list_open_alerts",
     "list_payments",
+    "list_publication_calendar",
     "list_publications",
     "publish_publication",
     "purge_old_interaction_metrics",

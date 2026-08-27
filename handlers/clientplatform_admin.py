@@ -22,6 +22,10 @@ from clientplatform.application.activity import (
     get_business_profile,
     list_business_capabilities,
 )
+from clientplatform.application.admin_ops import (
+    format_publication_calendar_lines,
+    get_publication_calendar_projection,
+)
 from clientplatform.application.bookings import list_booking_slots
 from clientplatform.application.messenger_switching import (
     available_staff_messenger_switches,
@@ -796,6 +800,30 @@ async def _render_attention(callback: CallbackQuery, state: FSMContext, ctx: Adm
 
 async def _render_marketing(callback: CallbackQuery, state: FSMContext, ctx: AdminContext, action: str) -> None:
     profile, summary, capabilities, slots, customers, programs, progress = await _base_snapshot(ctx)
+    if action == "publications":
+        projection = await asyncio.to_thread(
+            get_publication_calendar_projection,
+            actor=ctx.actor,
+        )
+        calendar = "\n".join(
+            format_publication_calendar_lines(
+                projection.entries,
+                timezone_name=profile.timezone,
+                max_entries=8,
+            )
+        )
+        text = (
+            "📣 Публикации\n\n"
+            f"Черновики: {projection.draft_count}\n"
+            f"Запланировано: {projection.scheduled_count}\n"
+            f"Опубликовано: {projection.published_count}\n"
+            f"Ошибки: {projection.failed_count}\n\n"
+            "Ближайшие и последние:\n"
+            f"{calendar}"
+        )
+        await _safe_edit(callback, text, _back_keyboard(ctx))
+        await _set_current_section(state, action=action, push=True)
+        return
     active_capabilities = [item for item in capabilities if item.status == CapabilityStatus.ACTIVE]
     completed_customers = sum(
         item.total_lessons > 0 and item.completed_lessons >= item.total_lessons
@@ -814,11 +842,6 @@ async def _render_marketing(callback: CallbackQuery, state: FSMContext, ctx: Adm
             f"Очередь отправки: {summary.dispatch_pending}\n\n"
             "Автопилот работает только в подтверждённых владельцем границах. "
             "Сейчас доступны безопасные выдачи программ и напоминания."
-        ),
-        "publications": (
-            "📣 Публикации\n\n"
-            "Публикационный контур ещё не подключён к этому бизнесу.\n\n"
-            "Подготовка текстов и подключение каналов доступны из соседних разделов."
         ),
         "funnel": (
             "📉 Путь до заявки\n\n"
@@ -870,6 +893,11 @@ async def _render_marketing(callback: CallbackQuery, state: FSMContext, ctx: Adm
         extra.append(("🧩 Форматы работы", _callback(ctx, "formats")))
     await _safe_edit(callback, sections[action], _back_keyboard(ctx, *extra))
     await _set_current_section(state, action=action, push=True)
+
+
+# Keep the canonical fallback renderer directly testable even when the runtime
+# extension replaces _render_marketing after module import.
+_render_marketing_fallback = _render_marketing
 
 
 async def _render_admin_report(callback: CallbackQuery, state: FSMContext, ctx: AdminContext, action: str) -> None:

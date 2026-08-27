@@ -308,10 +308,17 @@ async def _enhanced_marketing(
             limit=20,
         ),
         _optional_thread(
-            admin_ops.list_publications,
-            default=[],
+            admin_ops.get_publication_calendar_projection,
+            default=admin_ops.PublicationCalendarProjection(
+                entries=(),
+                actionable_drafts=(),
+                draft_count=0,
+                scheduled_count=0,
+                published_count=0,
+                failed_count=0,
+                cancelled_count=0,
+            ),
             actor=ctx.actor,
-            limit=20,
         ),
         _optional_thread(
             admin_ops.list_offering_prices,
@@ -353,8 +360,7 @@ async def _enhanced_marketing(
         if item.total_lessons > item.completed_lessons
     }
     open_slots = sum(item.slot.status.value == "open" for item in slots)
-    published = [item for item in publications if item.status == "published"]
-    drafts = [item for item in publications if item.status == "draft"]
+    drafts = list(publications.actionable_drafts)
     enabled = autopilot_value.strip().lower() in {"1", "true", "yes", "on"}
 
     if action == "autopilot":
@@ -377,14 +383,19 @@ async def _enhanced_marketing(
         ]
     elif action == "publications":
         recent = "\n".join(
-            f"• {'✅' if item.status == 'published' else '📝'} "
-            f"{item.title[:45]} · {item.status}"
-            for item in publications[:8]
-        ) or "• Публикаций пока нет"
+            admin_ops.format_publication_calendar_lines(
+                publications.entries,
+                timezone_name=profile.timezone,
+                max_entries=8,
+            )
+        )
         text = (
             "📣 Публикации\n\n"
-            f"Черновики: {len(drafts)}\n"
-            f"Опубликовано: {len(published)}\n\n"
+            f"Черновики: {publications.draft_count}\n"
+            f"Запланировано: {publications.scheduled_count}\n"
+            f"Опубликовано: {publications.published_count}\n"
+            f"Ошибки: {publications.failed_count}\n\n"
+            "Ближайшие и последние:\n"
             f"{recent}"
         )
         extra = [("➕ Создать черновик", _ops_callback(ctx, "publication-new"))]
