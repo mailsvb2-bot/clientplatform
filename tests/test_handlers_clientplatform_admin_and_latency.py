@@ -438,6 +438,7 @@ async def test_all_summary_and_marketing_screens_render(
         "business_delivery_summary",
         lambda **_kwargs: snapshot()[1],
     )
+    monkeypatch.setattr(admin, "list_publication_calendar", lambda **_kwargs: [])
     state = fsm_context()
     ctx = admin_context()
     callback = telegram_callback()

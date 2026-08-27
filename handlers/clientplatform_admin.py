@@ -22,6 +22,10 @@ from clientplatform.application.activity import (
     get_business_profile,
     list_business_capabilities,
 )
+from clientplatform.application.admin_ops import (
+    format_publication_calendar_lines,
+    list_publication_calendar,
+)
 from clientplatform.application.bookings import list_booking_slots
 from clientplatform.application.messenger_switching import (
     available_staff_messenger_switches,
@@ -796,6 +800,35 @@ async def _render_attention(callback: CallbackQuery, state: FSMContext, ctx: Adm
 
 async def _render_marketing(callback: CallbackQuery, state: FSMContext, ctx: AdminContext, action: str) -> None:
     profile, summary, capabilities, slots, customers, programs, progress = await _base_snapshot(ctx)
+    if action == "publications":
+        publications = await asyncio.to_thread(
+            list_publication_calendar,
+            actor=ctx.actor,
+            limit=20,
+        )
+        drafts = sum(item.status == "draft" for item in publications)
+        scheduled = sum(item.status == "scheduled" for item in publications)
+        published = sum(item.status == "published" for item in publications)
+        failed = sum(item.status == "failed" for item in publications)
+        calendar = "\n".join(
+            format_publication_calendar_lines(
+                publications,
+                timezone_name=profile.timezone,
+                max_entries=8,
+            )
+        )
+        text = (
+            "📣 Публикации\n\n"
+            f"Черновики: {drafts}\n"
+            f"Запланировано: {scheduled}\n"
+            f"Опубликовано: {published}\n"
+            f"Ошибки: {failed}\n\n"
+            "Ближайшие и последние:\n"
+            f"{calendar}"
+        )
+        await _safe_edit(callback, text, _back_keyboard(ctx))
+        await _set_current_section(state, action=action, push=True)
+        return
     active_capabilities = [item for item in capabilities if item.status == CapabilityStatus.ACTIVE]
     completed_customers = sum(
         item.total_lessons > 0 and item.completed_lessons >= item.total_lessons
@@ -814,11 +847,6 @@ async def _render_marketing(callback: CallbackQuery, state: FSMContext, ctx: Adm
             f"Очередь отправки: {summary.dispatch_pending}\n\n"
             "Автопилот работает только в подтверждённых владельцем границах. "
             "Сейчас доступны безопасные выдачи программ и напоминания."
-        ),
-        "publications": (
-            "📣 Публикации\n\n"
-            "Публикационный контур ещё не подключён к этому бизнесу.\n\n"
-            "Подготовка текстов и подключение каналов доступны из соседних разделов."
         ),
         "funnel": (
             "📉 Путь до заявки\n\n"

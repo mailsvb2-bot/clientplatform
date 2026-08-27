@@ -13,6 +13,10 @@ from clientplatform.application.activity import (
 from clientplatform.application.acquisition_destination import (
     prepare_nearest_acquisition_destination,
 )
+from clientplatform.application.admin_ops import (
+    format_publication_calendar_lines,
+    list_publication_calendar,
+)
 from clientplatform.application.bookings import list_booking_slots
 from clientplatform.application.messenger_switching import (
     available_staff_messenger_switches,
@@ -1269,6 +1273,32 @@ def _growth_report_message(actor: TenantContext, action: str) -> CustomerInterac
     }
     if actor.role not in allowed[action]:
         return _permission_message()
+    if action == "publications":
+        profile = get_business_profile(actor=actor)
+        publications = list_publication_calendar(actor=actor, limit=20)
+        drafts = sum(item.status == "draft" for item in publications)
+        scheduled = sum(item.status == "scheduled" for item in publications)
+        published = sum(item.status == "published" for item in publications)
+        failed = sum(item.status == "failed" for item in publications)
+        calendar = "\n".join(
+            format_publication_calendar_lines(
+                publications,
+                timezone_name=profile.timezone,
+                max_entries=8,
+            )
+        )
+        return CustomerInteractionMessage(
+            text=(
+                "Публикации\n\n"
+                f"Черновики: {drafts}\n"
+                f"Запланировано: {scheduled}\n"
+                f"Опубликовано: {published}\n"
+                f"Ошибки: {failed}\n\n"
+                "Ближайшие и последние:\n"
+                f"{calendar}"
+            ),
+            rows=((_button("📈 Рост", "cpm:growth"),), _back_row()),
+        )
     profile = get_business_profile(actor=actor)
     summary = business_delivery_summary(actor=actor)
     capabilities = list_business_capabilities(actor=actor)
@@ -1288,9 +1318,6 @@ def _growth_report_message(actor: TenantContext, action: str) -> CustomerInterac
             f"Форматов: {len(active)}\nПрограмм: {summary.programs}\n"
             f"Очередь отправки: {summary.dispatch_pending}\n\n"
             "Автопилот работает только в подтверждённых владельцем границах."
-        ),
-        "publications": (
-            "Публикации\n\nПубликационный контур ещё не подключён к этому бизнесу."
         ),
         "funnel": (
             "Путь до заявки\n\n"

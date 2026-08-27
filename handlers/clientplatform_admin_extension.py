@@ -308,7 +308,7 @@ async def _enhanced_marketing(
             limit=20,
         ),
         _optional_thread(
-            admin_ops.list_publications,
+            admin_ops.list_publication_calendar,
             default=[],
             actor=ctx.actor,
             limit=20,
@@ -355,6 +355,8 @@ async def _enhanced_marketing(
     open_slots = sum(item.slot.status.value == "open" for item in slots)
     published = [item for item in publications if item.status == "published"]
     drafts = [item for item in publications if item.status == "draft"]
+    scheduled = [item for item in publications if item.status == "scheduled"]
+    failed = [item for item in publications if item.status == "failed"]
     enabled = autopilot_value.strip().lower() in {"1", "true", "yes", "on"}
 
     if action == "autopilot":
@@ -377,14 +379,19 @@ async def _enhanced_marketing(
         ]
     elif action == "publications":
         recent = "\n".join(
-            f"• {'✅' if item.status == 'published' else '📝'} "
-            f"{item.title[:45]} · {item.status}"
-            for item in publications[:8]
-        ) or "• Публикаций пока нет"
+            admin_ops.format_publication_calendar_lines(
+                publications,
+                timezone_name=profile.timezone,
+                max_entries=8,
+            )
+        )
         text = (
             "📣 Публикации\n\n"
             f"Черновики: {len(drafts)}\n"
-            f"Опубликовано: {len(published)}\n\n"
+            f"Запланировано: {len(scheduled)}\n"
+            f"Опубликовано: {len(published)}\n"
+            f"Ошибки: {len(failed)}\n\n"
+            "Ближайшие и последние:\n"
             f"{recent}"
         )
         extra = [("➕ Создать черновик", _ops_callback(ctx, "publication-new"))]
