@@ -472,7 +472,11 @@ def _native_primary_action(actor: TenantContext) -> CustomerInteractionButton:
             period_days=7,
             advertising_loader=lambda **_kwargs: None,
         ).next_action
-    except (TenantAccessDenied, TenantPermissionDenied, ValueError, OSError, RuntimeError):
+    except (TenantAccessDenied, TenantPermissionDenied, ValueError):
+        return _native_projection_unavailable_action(actor)
+    except OSError:
+        return _native_projection_unavailable_action(actor)
+    except RuntimeError:
         return _native_projection_unavailable_action(actor)
 
     if next_action is not None:
