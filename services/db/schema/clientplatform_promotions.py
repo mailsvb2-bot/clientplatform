@@ -35,7 +35,7 @@ def ensure(c: sqlite3.Connection) -> None:
                 REFERENCES booking_slots(id, business_id) ON DELETE CASCADE,
             FOREIGN KEY(created_by_member_id, business_id)
                 REFERENCES business_members(id, business_id),
-            CHECK(channel IN ('telegram', 'vk', 'whatsapp', 'website', 'offline')),
+            CHECK(channel IN ('telegram', 'vk', 'max', 'whatsapp', 'website', 'offline')),
             CHECK(status IN ('active', 'paused', 'closed'))
         )
         """

@@ -238,6 +238,23 @@ class ClientPlatformPromotionRepositoryTests(unittest.TestCase):
         self.assertNotEqual(vk.source_token, telegram.source_token)
         self.assertEqual(len(self.promotions.list_campaigns(actor=self.owner)), 2)
 
+    def test_max_campaign_persists_through_repository(self) -> None:
+        campaign, _ = self.promotions.create_or_refresh_campaign(
+            actor=self.owner,
+            slot_id=self.slot.slot.id,
+            channel=PromotionChannel.MAX,
+            creative=self.creative,
+            now="2026-08-01T10:10:00+00:00",
+        )
+
+        self.assertEqual(campaign.channel, PromotionChannel.MAX)
+        stored = self.conn.execute(
+            "SELECT channel FROM promotion_campaigns WHERE id=? AND business_id=?",
+            (campaign.id, self.business.business.id),
+        ).fetchone()
+        self.assertIsNotNone(stored)
+        self.assertEqual(str(stored["channel"]), "max")
+
     def test_expired_open_slot_is_not_promotable_or_public(self) -> None:
         campaign, _ = self.promotions.create_or_refresh_campaign(
             actor=self.owner,
