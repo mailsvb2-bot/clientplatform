@@ -76,6 +76,45 @@ class NativeMemberParityNavigationTests(unittest.TestCase):
         self.assertEqual(primary.command, "cpm:today")
         self.assertIn("вручную", primary.label.casefold())
 
+    def test_native_primary_action_opens_durable_manual_sales_step_directly(self) -> None:
+        actor = _actor(PlatformRole.OWNER)
+        lead_id = str(uuid4())
+        snapshot = SimpleNamespace(
+            next_action=SimpleNamespace(action_key=f"sales_lead:{lead_id}")
+        )
+        with patch.object(ui, "get_growth_cockpit", return_value=snapshot):
+            primary = ui._native_primary_action(actor)
+        self.assertEqual(primary.command, f"cpm:sales-lead:{lead_id}")
+        self.assertIn("клиент", primary.label.casefold())
+
+    def test_native_today_shows_bounded_operating_queue_and_one_primary_action(self) -> None:
+        actor = _actor(PlatformRole.OWNER)
+        lead_id = str(uuid4())
+        action = SimpleNamespace(
+            title="Следующий шаг по клиенту: Анна",
+            reason="Сохранён следующий шаг: позвонить.",
+            action_key=f"sales_lead:{lead_id}",
+        )
+        snapshot = SimpleNamespace(actions=(action,), next_action=action)
+        summary = SimpleNamespace(
+            customers=4,
+            programs=2,
+            dispatch_pending=1,
+            dispatch_sent=7,
+            dispatch_attention=0,
+        )
+        with (
+            patch.object(ui, "business_delivery_summary", return_value=summary),
+            patch.object(ui, "get_growth_cockpit", return_value=snapshot),
+        ):
+            message = ui._today_message(actor)
+        self.assertIn("Важные действия", message.text)
+        self.assertIn("Следующий шаг по клиенту: Анна", message.text)
+        commands = _commands(message)
+        self.assertEqual(commands[0], f"cpm:sales-lead:{lead_id}")
+        self.assertEqual(sum(command.startswith("cpm:sales-lead:") for command in commands), 1)
+        self.assertLessEqual(sum(len(row) for row in message.rows), 10)
+
     def test_work_section_contains_telegram_admin_operational_reads(self) -> None:
         message = ui._work_message(_actor(PlatformRole.OWNER))
         commands = set(_commands(message))

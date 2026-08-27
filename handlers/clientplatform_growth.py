@@ -61,6 +61,9 @@ def _cockpit_keyboard(*, business_id: str, period_days: int, action_key: str) ->
         rows.append([("Подключиться лично", f"cps:sh:{token}")])
     elif action_key.startswith("sales_plan:"):
         rows.append([("Открыть следующий шаг", f"cps:sw:{token}")])
+    elif action_key.startswith("sales_lead:"):
+        lead_id = action_key.split(":", 1)[1]
+        rows.append([("Открыть клиента", f"cps:swv:{token}:{uuid_token(lead_id)}")])
     elif action_key == "attribution_review":
         rows.append([("Проверить рекламу и источники", f"cpy:a:{token}:{period_days}")])
     if action_key != "none":
@@ -167,10 +170,17 @@ async def growth_attention(callback: CallbackQuery) -> None:
         period_days=period_days,
     )
     lines = list(snapshot.attention) or ["Сейчас нет сигналов, требующих отдельного решения."]
+    actions = tuple(getattr(snapshot, "actions", ()))
+    if actions:
+        lines.extend(["", "Важные действия:"])
+        lines.extend(
+            f"{index}. {item.title} — {item.reason}"
+            for index, item in enumerate(actions[:5], start=1)
+        )
     lines.extend(
         [
             "",
-            "Следующий шаг:",
+            "Главное действие:",
             f"• {snapshot.next_action.title}",
             f"  {snapshot.next_action.reason}",
         ]

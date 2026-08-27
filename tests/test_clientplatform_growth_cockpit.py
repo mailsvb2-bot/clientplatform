@@ -143,7 +143,7 @@ class GrowthCockpitTests(unittest.TestCase):
 
     def test_handoff_becomes_actionable_next_step(self) -> None:
         result, _ = self._build(
-            handoffs=[{"lead_id": "lead-1", "customer_name": "Анна", "status": "open"}],
+            handoffs=[{"id": "handoff-1", "lead_id": "lead-1", "customer_name": "Анна", "status": "open", "severity": "high"}],
         )
 
         self.assertEqual(result.needs_reply, 1)
@@ -153,7 +153,7 @@ class GrowthCockpitTests(unittest.TestCase):
 
     def test_reply_metric_uses_exact_count_not_detail_limit(self) -> None:
         result, _ = self._build(
-            handoffs=[{"lead_id": "lead-1", "customer_name": "Анна", "status": "open"}],
+            handoffs=[{"id": "handoff-1", "lead_id": "lead-1", "customer_name": "Анна", "status": "open", "severity": "high"}],
             handoff_count=87,
         )
 
@@ -165,9 +165,11 @@ class GrowthCockpitTests(unittest.TestCase):
         result, _ = self._build(
             sales=[
                 {
+                    "id": "lead-1",
                     "customer_name": "Мария",
                     "next_plan_id": "plan-1",
                     "next_action_kind": "follow_up",
+                    "next_plan_requires_approval": True,
                 }
             ]
         )
@@ -175,6 +177,100 @@ class GrowthCockpitTests(unittest.TestCase):
         self.assertEqual(result.next_action.action_key, "sales_plan:plan-1")
         self.assertEqual(result.next_action.source, "sales_action_plan")
         self.assertIn("Мария", result.next_action.title)
+        self.assertEqual(result.actions[0], result.next_action)
+        self.assertIn("подтверждение", result.next_action.reason.lower())
+
+    def test_operating_queue_keeps_canonical_source_order_and_caps_at_five(self) -> None:
+        result, _ = self._build(
+            handoffs=[
+                {
+                    "id": "handoff-urgent",
+                    "lead_id": "lead-h1",
+                    "customer_name": "Анна",
+                    "status": "open",
+                    "severity": "urgent",
+                },
+                {
+                    "id": "handoff-high",
+                    "lead_id": "lead-h2",
+                    "customer_name": "Борис",
+                    "status": "open",
+                    "severity": "high",
+                },
+            ],
+            sales=[
+                {
+                    "id": "lead-s1",
+                    "customer_name": "Вера",
+                    "next_plan_id": "plan-1",
+                    "next_action_kind": "present_offer",
+                    "next_plan_requires_approval": True,
+                    "due_at": "2026-08-18T13:00:00+00:00",
+                },
+                {
+                    "id": "lead-s2",
+                    "customer_name": "Глеб",
+                    "next_action": "Позвонить и подтвердить время",
+                    "due_at": "2026-08-18T14:00:00+00:00",
+                },
+                {
+                    "id": "lead-s3",
+                    "customer_name": "Дина",
+                    "next_action": "Уточнить детали",
+                },
+            ],
+        )
+
+        self.assertEqual(len(result.actions), 5)
+        self.assertEqual(
+            [item.source_id for item in result.actions[:4]],
+            ["handoff-urgent", "handoff-high", "plan-1", "lead-s2"],
+        )
+        self.assertEqual(result.actions[0].action_key, "sales_handoff")
+        self.assertEqual(result.actions[2].action_key, "sales_plan:plan-1")
+        self.assertEqual(result.actions[3].action_key, "sales_lead:lead-s2")
+        self.assertEqual(result.actions[-1].source_id, "lead-s3")
+        self.assertFalse(any(item.action_key == "attribution_review" for item in result.actions))
+
+    def test_handoff_suppresses_duplicate_sales_action_for_same_lead(self) -> None:
+        result, _ = self._build(
+            handoffs=[
+                {
+                    "id": "handoff-1",
+                    "lead_id": "lead-1",
+                    "customer_name": "Анна",
+                    "status": "open",
+                    "severity": "high",
+                }
+            ],
+            sales=[
+                {
+                    "id": "lead-1",
+                    "customer_name": "Анна",
+                    "next_action": "Ответить на вопрос",
+                }
+            ],
+        )
+
+        self.assertEqual(sum(item.source_id == "handoff-1" for item in result.actions), 1)
+        self.assertFalse(any(item.action_key == "sales_lead:lead-1" for item in result.actions))
+
+    def test_durable_manual_next_action_is_an_operating_queue_item(self) -> None:
+        result, _ = self._build(
+            sales=[
+                {
+                    "id": "lead-manual",
+                    "customer_name": "Мария",
+                    "next_action": "Позвонить после 18:00",
+                    "due_at": "2026-08-18T15:00:00+00:00",
+                }
+            ]
+        )
+
+        self.assertEqual(result.next_action.action_key, "sales_lead:lead-manual")
+        self.assertEqual(result.next_action.source, "sales_lead")
+        self.assertIn("Позвонить после 18:00", result.next_action.reason)
+        self.assertIn("Срок:", result.next_action.reason)
 
     def test_provider_failures_degrade_advertising_without_hiding_business_facts(self) -> None:
         for error_type in (RuntimeError, ValueError, OSError):
@@ -200,6 +296,9 @@ class GrowthCockpitTests(unittest.TestCase):
         self.assertIn("Подтверждённая выручка: 48 000.00 RUB", text)
         self.assertIn("стоимость скрыта до подтверждения валюты", text)
         self.assertIn("Часть оплат пока нельзя надёжно связать", text)
+        self.assertIn("Важные действия", text)
+        self.assertIn("Проверить источники оплат", text)
+        self.assertIn("Главное действие", text)
         self.assertIn("advertising_currency_unverified", result.limitations)
         self.assertNotIn("CampaignId", text)
         self.assertNotIn("OAuth", text)
@@ -234,6 +333,12 @@ class GrowthCockpitTests(unittest.TestCase):
             period_days=30,
             action_key="sales_plan:plan-1",
         )
+        lead_id = "33333333-3333-4333-8333-333333333333"
+        lead = _cockpit_keyboard(
+            business_id=_ACTOR.business_id,
+            period_days=7,
+            action_key=f"sales_lead:{lead_id}",
+        )
         attribution = _cockpit_keyboard(
             business_id=_ACTOR.business_id,
             period_days=7,
@@ -242,9 +347,11 @@ class GrowthCockpitTests(unittest.TestCase):
 
         handoff_callbacks = [button.callback_data for row in handoff.inline_keyboard for button in row]
         plan_callbacks = [button.callback_data for row in plan.inline_keyboard for button in row]
+        lead_callbacks = [button.callback_data for row in lead.inline_keyboard for button in row]
         attribution_callbacks = [button.callback_data for row in attribution.inline_keyboard for button in row]
         self.assertTrue(any(str(value).startswith("cps:sh:") for value in handoff_callbacks))
         self.assertTrue(any(str(value).startswith("cps:sw:") for value in plan_callbacks))
+        self.assertTrue(any(str(value).startswith("cps:swv:") for value in lead_callbacks))
         self.assertTrue(any(str(value).startswith("cpy:a:") for value in attribution_callbacks))
         self.assertTrue(
             any(
@@ -380,6 +487,7 @@ class GrowthCockpitHandlerTests(unittest.IsolatedAsyncioTestCase):
             business_id=_ACTOR.business_id,
             period_days=7,
             attention=(),
+            actions=(),
             next_action=SimpleNamespace(
                 title="Ничего срочного",
                 reason="Нет обязательного действия.",
