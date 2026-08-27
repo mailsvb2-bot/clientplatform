@@ -87,7 +87,9 @@ class ClientPlatformSalesGoalNavigationTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(exc=type(exc).__name__), patch.object(
                 goal_dashboard, "get_growth_cockpit", side_effect=exc
             ):
-                self.assertIsNone(goal_dashboard._owner_next_action(object()))
+                action = goal_dashboard._owner_next_action(object())
+                self.assertEqual(action.action_key, "projection_unavailable")
+                self.assertIn("проверьте работу вручную", action.reason.casefold())
 
     async def test_dashboard_renders_canonical_next_action_as_the_one_primary_button(self) -> None:
         from clientplatform.application.growth_cockpit import GrowthAction
