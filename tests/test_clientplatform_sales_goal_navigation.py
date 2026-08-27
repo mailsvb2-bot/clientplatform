@@ -64,6 +64,14 @@ class ClientPlatformSalesGoalNavigationTests(unittest.IsolatedAsyncioTestCase):
             action_key="sales_plan:plan-1",
             source="sales_action_plan",
         )
+        lead_id = str(uuid4())
+        manual = GrowthAction(
+            title="Позвонить клиенту",
+            reason="Сохранён ручной следующий шаг",
+            action_key=f"sales_lead:{lead_id}",
+            source="sales_lead",
+            source_id=lead_id,
+        )
         attribution = GrowthAction(
             title="Проверить источники",
             reason="Есть оплата без источника",
@@ -73,6 +81,13 @@ class ClientPlatformSalesGoalNavigationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             goal_dashboard._primary_action(business_id, sales),
             ("💬 Продолжить работу с клиентом", f"cps:sw:{token}"),
+        )
+        self.assertEqual(
+            goal_dashboard._primary_action(business_id, manual),
+            (
+                "💬 Открыть клиента",
+                f"cps:swv:{token}:{goal_dashboard.control._uuid_token(lead_id)}",
+            ),
         )
         self.assertEqual(
             goal_dashboard._primary_action(business_id, attribution),

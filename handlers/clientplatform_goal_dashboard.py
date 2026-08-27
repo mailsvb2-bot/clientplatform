@@ -63,6 +63,12 @@ def _primary_action(business_id: str, next_action: GrowthAction | None = None) -
             return "🙋 Ответить клиентам", f"cps:sh:{token}"
         if next_action.action_key.startswith("sales_plan:"):
             return "💬 Продолжить работу с клиентом", f"cps:sw:{token}"
+        if next_action.action_key.startswith("sales_lead:"):
+            lead_id = next_action.action_key.split(":", 1)[1]
+            return (
+                "💬 Открыть клиента",
+                f"cps:swv:{token}:{control._uuid_token(lead_id)}",
+            )
         if next_action.action_key == "attribution_review":
             return "💰 Проверить источники оплат", f"cpy:a:{token}:7"
     action = goal_contract.ACQUIRE_CLIENTS
