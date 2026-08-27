@@ -14,6 +14,7 @@ from clientplatform.domain.activity import (
 from clientplatform.domain.bookings import BookingInvariantViolation, BookingSlotStatus
 from clientplatform.domain.programs import ContentKind
 from handlers import clientplatform_control as handlers
+from handlers import clientplatform_goal_dashboard as goal_dashboard
 
 
 class FakeUser:
@@ -240,6 +241,7 @@ async def test_setup_dashboard_and_resume_paths(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(handlers, "list_customers", lambda **_kwargs: [])
     monkeypatch.setattr(handlers, "list_programs", lambda **_kwargs: [])
     monkeypatch.setattr(handlers, "list_booking_slots", lambda **_kwargs: [])
+    monkeypatch.setattr(goal_dashboard, "_owner_next_action", lambda _actor: None)
     dashboard = FakeMessage()
     await handlers._send_dashboard(dashboard, user_id=101, business_id=business_id)
     assert "Семейная практика" in dashboard.answers[-1][0]

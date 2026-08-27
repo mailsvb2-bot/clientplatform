@@ -26,10 +26,29 @@ class ClientPlatformSalesGoalNavigationTests(unittest.TestCase):
         action = goal_contract.ACQUIRE_CLIENTS
 
         self.assertEqual(by_text[action.label], action.callback(token))
-        self.assertEqual(by_text["💬 Обращения и продажи"], f"cps:s:{token}")
-        self.assertIn("👥 Клиенты и запись", by_text)
-        self.assertIn("⚙️ Ещё", by_text)
+        self.assertEqual(by_text["⋯ Все возможности"], f"cpo:more:{token}")
+        self.assertEqual(len(buttons), 2)
+        self.assertNotIn("💬 Обращения и продажи", by_text)
+        self.assertNotIn("👥 Клиенты и запись", by_text)
         self.assertNotIn("🚀 Получить клиентов", by_text)
+
+    def test_owner_home_promotes_canonical_handoff_as_single_primary_action(self) -> None:
+        from clientplatform.application.growth_cockpit import GrowthAction
+        from handlers import clientplatform_goal_dashboard as goal_dashboard
+
+        business_id = str(uuid4())
+        token = goal_dashboard.control._uuid_token(business_id)
+        action = GrowthAction(
+            title="Ответить клиентам",
+            reason="Есть обращение",
+            action_key="sales_handoff",
+            source="sales_handoff_queue",
+        )
+        buttons = _buttons(goal_dashboard._goal_keyboard(business_id, action))
+
+        self.assertEqual(buttons[0].text, "🙋 Ответить клиентам")
+        self.assertEqual(buttons[0].callback_data, f"cps:sh:{token}")
+        self.assertEqual(buttons[1].text, "⋯ Все возможности")
 
     def test_goal_schedule_resume_uses_same_acquisition_callback(self) -> None:
         from handlers import clientplatform_goal_first_safety as goal_contract

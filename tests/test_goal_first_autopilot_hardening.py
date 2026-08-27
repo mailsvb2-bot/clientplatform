@@ -83,16 +83,16 @@ class GoalFirstAutopilotHardeningTests(unittest.IsolatedAsyncioTestCase):
                 "_business_snapshot",
                 new=AsyncMock(return_value=snapshot),
             ),
-            patch.object(dashboard.owner, "_all_offerings", new=AsyncMock(return_value=[])),
-            patch.object(dashboard.control, "list_booking_slots", return_value=[]),
+            patch.object(dashboard, "_owner_next_action", return_value=None),
             patch.object(dashboard.asyncio, "to_thread", new=direct),
             patch.object(dashboard.control, "_uuid_token", side_effect=lambda value: value),
         ):
             await dashboard.send_goal_dashboard(out, user_id=101, business_id="business-1")
         text = out.answer.await_args.args[0]
-        self.assertIn("Ближайшее время: пока не опубликовано", text)
-        self.assertIn("Свободных времён пока нет", text)
-        self.assertIn("клиентов: 1", text)
+        self.assertIn("Главное сейчас", text)
+        self.assertIn("Срочных задач сейчас нет", text)
+        self.assertIn("Клиентов: 1", text)
+        self.assertIn("свободных времён: 0", text)
 
     async def test_launch_label_without_known_cap_requires_fresh_check(self) -> None:
         with patch.object(goal, "ad_spend_mutations_enabled", return_value=True):

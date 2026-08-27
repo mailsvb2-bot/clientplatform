@@ -20,6 +20,7 @@ from clientplatform.domain.bookings import (
 control = importlib.import_module("handlers.clientplatform_control")
 simple = importlib.import_module("handlers.clientplatform_simple_experience")
 owner = importlib.import_module("handlers.clientplatform_owner_journey")
+goal_dashboard = importlib.import_module("handlers.clientplatform_goal_dashboard")
 public = importlib.import_module("handlers.clientplatform_public_storefront")
 
 
@@ -178,35 +179,23 @@ async def test_owner_dashboard_keeps_status_and_separates_acquisition_from_sales
         [capability],
         [object()],
         [],
-        [],
+        [_slot(business_id=business_id)],
     )
     monkeypatch.setattr(simple, "_business_snapshot", AsyncMock(return_value=snapshot))
-    monkeypatch.setattr(owner, "_all_offerings", AsyncMock(return_value=[object()]))
-    monkeypatch.setattr(
-        control,
-        "list_booking_slots",
-        lambda **_kwargs: [_slot(business_id=business_id)],
-    )
+    monkeypatch.setattr(goal_dashboard, "_owner_next_action", lambda _actor: None)
     message = FakeMessage()
 
     await owner.send_owner_dashboard(message, user_id=101, business_id=business_id)
 
     text, kwargs = message.answers[-1]
     assert "Ремонтирую сантехнику" in text
-    assert "Услуг: 1" in text
+    assert "Главное сейчас" in text
     assert "свободных времён: 1" in text
     markup = kwargs["reply_markup"]
     labels = [button.text for row in markup.inline_keyboard for button in row]
-    assert labels == [
-        "📈 Что сегодня",
-        "🚀 Найти новых клиентов",
-        "💬 Обращения и продажи",
-        "💬 Мессенджеры",
-        "👥 Клиенты и запись",
-        "⚙️ Ещё",
-    ]
-    assert str(markup.inline_keyboard[0][0].callback_data).startswith("cpg:period:")
-    assert str(markup.inline_keyboard[0][0].callback_data).endswith(":7")
+    assert labels == ["🚀 Найти новых клиентов", "⋯ Все возможности"]
+    assert str(markup.inline_keyboard[0][0].callback_data).startswith("cpo:start:")
+    assert str(markup.inline_keyboard[1][0].callback_data).startswith("cpo:more:")
 
 
 @pytest.mark.asyncio

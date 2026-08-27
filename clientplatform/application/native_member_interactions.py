@@ -21,6 +21,7 @@ from clientplatform.application.messenger_switching import (
 from clientplatform.application.connections import list_connections
 from clientplatform.application.control import business_delivery_summary
 from clientplatform.application.customers import get_customer, list_customers
+from clientplatform.application.growth_cockpit import get_growth_cockpit
 from clientplatform.application.programs import list_programs
 from clientplatform.application.progress import list_business_program_progress
 from clientplatform.application.sales_workspace import (
@@ -364,6 +365,7 @@ def parse_native_member_interaction(value: object) -> ParsedMemberInteraction:
         args = tuple(part.strip() for part in parts[1:] if part.strip())
         if action in {
             "menu",
+            "menu-all",
             "work",
             "growth",
             "manage",
@@ -402,6 +404,8 @@ def parse_native_member_interaction(value: object) -> ParsedMemberInteraction:
             "sales",
             "sales-recent",
             "sales-lead",
+            "sales-actions",
+            "sales-result-menu",
             "sales-assign",
             "sales-unassign",
             "sales-stage",
@@ -453,6 +457,36 @@ def _business_name(actor: TenantContext) -> str:
     return str(access.business.name) if access is not None else "ClientPlatform"
 
 
+def _native_primary_action(actor: TenantContext) -> CustomerInteractionButton:
+    try:
+        next_action = get_growth_cockpit(
+            actor=actor,
+            period_days=7,
+            advertising_loader=lambda **_kwargs: None,
+        ).next_action
+    except (OSError, RuntimeError, TenantAccessDenied, TenantPermissionDenied, ValueError):
+        next_action = None
+
+    if next_action is not None:
+        if next_action.action_key == "sales_handoff" and actor.role in _SUPPORT_ROLES:
+            return _button("🙋 Ответить клиентам", "cpm:sales-handoffs")
+        if next_action.action_key.startswith("sales_plan:") and actor.role in _SUPPORT_ROLES:
+            return _button("💬 Продолжить работу с клиентом", "cpm:sales")
+        if next_action.action_key == "attribution_review":
+            if actor.role in _MARKETING_ROLES:
+                return _button("💰 Проверить источники оплат", "cpm:money")
+            if actor.role in _SUPPORT_ROLES:
+                return _button("📊 Проверить, что происходит", "cpm:today")
+
+    if actor.role in _ACQUISITION_ROLES:
+        return _button("🚀 Найти новых клиентов", "cpm:acquire")
+    if actor.role in _SUPPORT_ROLES:
+        return _button("📊 Проверить, что происходит", "cpm:today")
+    if actor.role in (_MARKETING_ROLES | _CONTENT_ROLES | _AUTOMATION_ROLES):
+        return _button("📈 Посмотреть результат", "cpm:growth")
+    return _button("📚 Открыть программы", "cpm:programs")
+
+
 def _menu_message(
     actor: TenantContext,
     *,
@@ -463,15 +497,28 @@ def _menu_message(
         if linked
         else ""
     )
+    primary = _native_primary_action(actor)
     return CustomerInteractionMessage(
         text=(
             heading
-            + "ClientPlatform · рабочий кабинет\n\n"
-            + f"Бизнес: {_business_name(actor)}\n"
-            + f"Роль: {_ROLE_LABELS.get(actor.role, actor.role.value)}\n\n"
-            + "Выберите раздел:"
+            + f"🏠 {_business_name(actor)}\n\n"
+            + "ClientPlatform показывает главное действие первым. "
+            + "Остальные функции никуда не исчезли — они находятся в «Все возможности»."
         ),
-        rows=_menu_rows(actor.role),
+        rows=(
+            (primary,),
+            (_button("⋯ Все возможности", "cpm:menu-all"),),
+        ),
+    )
+
+
+def _menu_all_message(actor: TenantContext) -> CustomerInteractionMessage:
+    return CustomerInteractionMessage(
+        text=(
+            "Все возможности · ClientPlatform\n\n"
+            "Выберите раздел. Главная страница остаётся короткой, а полный функционал доступен здесь."
+        ),
+        rows=(*_menu_rows(actor.role), _back_row()),
     )
 
 
@@ -524,6 +571,15 @@ _SALES_STAGE_LABELS = {
     "won": "Оплатил / выиграно",
     "lost": "Потеряно",
 }
+_SALES_SOURCE_LABELS = {
+    "telegram": "Telegram",
+    "vk": "ВКонтакте",
+    "max": "MAX",
+    "website": "Сайт",
+    "yandex_direct": "Яндекс Директ",
+    "referral": "Рекомендации",
+    "manual": "Вручную",
+}
 _HANDOFF_REASON_LABELS = {
     "explicit_request": "Клиент попросил человека",
     "low_confidence": "Нужна ручная проверка",
@@ -573,7 +629,7 @@ def _sales_message(actor: TenantContext) -> CustomerInteractionMessage:
         rows.append((_button(customer[:32], f"cpm:sales-lead:{lead_id}"),))
     if not items:
         lines.append("Открытых обращений сейчас нет.")
-    lines.extend(["", "Заметка: заметка <id> <текст>", "Следующее действие: следующее <id> <текст>", "Follow-up: напомнить <id> 1|24|72 <текст>", "Результат: результат <id> выиграно|потеряно <причина>"])
+    lines.extend(["", "Откройте клиента — ClientPlatform покажет главное действие и все дополнительные возможности."])
     rows.append((_button("🗂 Недавно закрытые", "cpm:sales-recent"),))
     rows.append((_button("📊 Работа", "cpm:work"),))
     return CustomerInteractionMessage(text="\n".join(lines), rows=tuple(rows))
@@ -622,6 +678,30 @@ def _sales_handoffs_message(actor: TenantContext) -> CustomerInteractionMessage:
     return CustomerInteractionMessage(text="\n".join(lines), rows=tuple(rows))
 
 
+def _sales_primary_button(
+    actor: TenantContext,
+    item: dict[str, Any],
+    lead_id: str,
+) -> CustomerInteractionButton | None:
+    stage = str(item.get("stage") or "")
+    assigned_user = item.get("assigned_user_id")
+    if stage == "lost":
+        return _button("↩️ Вернуть в работу", f"cpm:sales-reopen:{lead_id}")
+    if stage == "won":
+        return _button("📝 Добавить заметку", f"cpm:sales-note-help:{lead_id}")
+    if assigned_user is None or int(assigned_user) != int(actor.user_id):
+        return _button("👤 Взять обращение", f"cpm:sales-assign:{lead_id}")
+    if stage == "new":
+        return _button("✅ Я связался", f"cpm:sales-stage:{lead_id}:contacted")
+    if stage == "contacted":
+        return _button("👍 Клиент заинтересован", f"cpm:sales-stage:{lead_id}:qualified")
+    if stage == "qualified":
+        return _button("🧾 Перейти к оформлению", f"cpm:sales-stage:{lead_id}:checkout")
+    if stage == "checkout":
+        return _button("🏁 Указать результат", f"cpm:sales-result-menu:{lead_id}")
+    return _button("➡️ Указать следующий шаг", f"cpm:sales-next-help:{lead_id}")
+
+
 def _sales_lead_message(actor: TenantContext, lead_id: str) -> CustomerInteractionMessage:
     if actor.role not in _SUPPORT_ROLES:
         return _permission_message()
@@ -629,30 +709,52 @@ def _sales_lead_message(actor: TenantContext, lead_id: str) -> CustomerInteracti
     if item is None:
         return _stale_message()
     stage = str(item.get("stage") or "")
-    short_id = str(item.get("id") or "")[:8]
     assigned_user = item.get("assigned_user_id")
-    source = str(item.get("attribution_source") or item.get("source_kind") or "не определён")
-    source_ref = str(item.get("attribution_source_ref_id") or item.get("source_ref") or "").strip()
-    owner_text = str(assigned_user) if assigned_user is not None else "не назначен"
+    source_key = str(item.get("attribution_source") or item.get("source_kind") or "").strip().lower()
+    source = _SALES_SOURCE_LABELS.get(source_key, "Источник не определён")
+    if assigned_user is None:
+        owner_text = "не назначен"
+    elif int(assigned_user) == int(actor.user_id):
+        owner_text = "Вы"
+    else:
+        owner_text = "другой сотрудник"
     lines = [
-        "Карточка обращения", "",
-        f"Клиент: {item.get('customer_name') or 'Клиент'}",
-        f"ID: {short_id}",
+        f"💬 {item.get('customer_name') or 'Клиент'}", "",
         f"Стадия: {_SALES_STAGE_LABELS.get(stage, stage or 'В работе')}",
         f"Ответственный: {owner_text}",
-        f"Следующее действие: {item.get('next_action') or 'не задано'}",
-        f"Срок: {item.get('due_at') or 'без срока'}",
-        f"Источник: {source}" + (f" · {source_ref}" if source_ref else ""),
+        f"Следующий шаг: {item.get('next_action') or 'ClientPlatform подскажет по ходу работы'}",
+        f"Срок: {item.get('due_at') or 'не задан'}",
+        f"Источник: {source}",
     ]
     if item.get("followup_suppressed"):
-        lines.append("Follow-up: запрещён по просьбе клиента")
+        lines.append("Напоминания клиенту: отключены по его просьбе")
     elif item.get("active_followup_id"):
-        lines.append(f"Follow-up: запланирован на {item.get('active_followup_scheduled_at') or 'указанное время'}")
+        lines.append(
+            f"Напоминание клиенту: {item.get('active_followup_scheduled_at') or 'запланировано'}"
+        )
     if item.get("closure_reason"):
-        lines.append(f"Причина закрытия: {item['closure_reason']}")
+        lines.append(f"Причина результата: {item['closure_reason']}")
     if item.get("next_plan_id"):
-        approval = "да" if item.get("next_plan_requires_approval") else "нет"
-        lines.append(f"Следующий план: {item.get('next_action_kind') or 'действие'} · approval: {approval}")
+        approval = "нужно Ваше подтверждение" if item.get("next_plan_requires_approval") else "подтверждение не требуется"
+        lines.append(f"ClientPlatform подготовил следующий шаг · {approval}")
+
+    rows: list[tuple[CustomerInteractionButton, ...]] = []
+    primary = _sales_primary_button(actor, item, lead_id)
+    if primary is not None:
+        rows.append((primary,))
+    rows.append((_button("⋯ Другие действия", f"cpm:sales-actions:{lead_id}"),))
+    rows.append((_button("💬 К обращениям", "cpm:sales"),))
+    return CustomerInteractionMessage(text="\n".join(lines), rows=tuple(rows))
+
+
+def _sales_actions_message(actor: TenantContext, lead_id: str) -> CustomerInteractionMessage:
+    if actor.role not in _SUPPORT_ROLES:
+        return _permission_message()
+    item = get_sales_workspace_item(actor=actor, lead_id=lead_id)
+    if item is None:
+        return _stale_message()
+    stage = str(item.get("stage") or "")
+    assigned_user = item.get("assigned_user_id")
     rows: list[tuple[CustomerInteractionButton, ...]] = []
     if stage not in {"won", "lost"}:
         if assigned_user is not None and int(assigned_user) == int(actor.user_id):
@@ -669,8 +771,8 @@ def _sales_lead_message(actor: TenantContext, lead_id: str) -> CustomerInteracti
             _button("➡️ Следующее", f"cpm:sales-next-help:{lead_id}"),
         ))
         rows.append((
-            _button("✅ Выиграно", f"cpm:sales-close-help:{lead_id}:won"),
-            _button("❌ Потеряно", f"cpm:sales-close-help:{lead_id}:lost"),
+            _button("✅ Оплатил", f"cpm:sales-close-help:{lead_id}:won"),
+            _button("❌ Не состоялось", f"cpm:sales-close-help:{lead_id}:lost"),
         ))
         followup_source = str(item.get("source_kind") or "").strip().lower()
         followup_allowed = (
@@ -679,13 +781,34 @@ def _sales_lead_message(actor: TenantContext, lead_id: str) -> CustomerInteracti
             and not bool(item.get("followup_suppressed"))
         )
         if item.get("active_followup_id") or followup_allowed:
-            rows.append((_button("✉️ Follow-up", f"cpm:sales-followup-menu:{lead_id}"),))
+            rows.append((_button("✉️ Напомнить клиенту", f"cpm:sales-followup-menu:{lead_id}"),))
     else:
         rows.append((_button("📝 Заметка", f"cpm:sales-note-help:{lead_id}"),))
         if stage == "lost":
             rows.append((_button("↩️ Вернуть в работу", f"cpm:sales-reopen:{lead_id}"),))
-    rows.append((_button("💬 К обращениям", "cpm:sales"),))
-    return CustomerInteractionMessage(text="\n".join(lines), rows=tuple(rows))
+    rows.append((_button("← К клиенту", f"cpm:sales-lead:{lead_id}"),))
+    return CustomerInteractionMessage(
+        text="Другие действия\n\nЗдесь сохранены все дополнительные возможности работы с обращением.",
+        rows=tuple(rows),
+    )
+
+
+def _sales_result_message(actor: TenantContext, lead_id: str) -> CustomerInteractionMessage:
+    if actor.role not in _SUPPORT_ROLES:
+        return _permission_message()
+    item = get_sales_workspace_item(actor=actor, lead_id=lead_id)
+    if item is None or str(item.get("stage") or "") in {"won", "lost"}:
+        return _stale_message()
+    return CustomerInteractionMessage(
+        text="Чем закончилось обращение?\n\nВыберите результат. Затем ClientPlatform попросит коротко указать причину.",
+        rows=(
+            (
+                _button("✅ Клиент оплатил", f"cpm:sales-close-help:{lead_id}:won"),
+                _button("❌ Не состоялось", f"cpm:sales-close-help:{lead_id}:lost"),
+            ),
+            (_button("← К клиенту", f"cpm:sales-lead:{lead_id}"),),
+        ),
+    )
 
 
 def _sales_input_help(lead_id: str, kind: str, stage: str | None = None) -> CustomerInteractionMessage:
@@ -716,18 +839,18 @@ def _sales_followup_message(actor: TenantContext, lead_id: str) -> CustomerInter
     active = bool(item.get("active_followup_id"))
     suppressed = bool(item.get("followup_suppressed"))
     allowed = source in _FOLLOWUP_CHANNELS and str(item.get("contact_basis") or "") != "none" and not suppressed
-    lines = ["Follow-up клиенту", ""]
+    lines = ["Напоминание клиенту", ""]
     rows: list[tuple[CustomerInteractionButton, ...]] = []
     if suppressed:
         lines.append("Клиент попросил больше не писать по этому каналу.")
     elif active:
-        lines.append(f"Активный follow-up: {item.get('active_followup_scheduled_at') or 'запланирован'}.")
-        rows.append((_button("✖️ Отменить follow-up", f"cpm:sales-followup-cancel:{lead_id}"),))
+        lines.append(f"Напоминание уже запланировано: {item.get('active_followup_scheduled_at') or 'в выбранное время'}.")
+        rows.append((_button("✖️ Отменить напоминание", f"cpm:sales-followup-cancel:{lead_id}"),))
     elif allowed:
         lines.append("Сообщение уйдёт только по исходному каналу клиента после явной команды.")
         rows.append((_button("✉️ Запланировать", f"cpm:sales-followup-help:{lead_id}"),))
     else:
-        lines.append("Для этого обращения безопасный messenger follow-up сейчас недоступен.")
+        lines.append("Для этого обращения автоматическое напоминание сейчас недоступно.")
     if allowed:
         rows.append((_button("🚫 Больше не писать", f"cpm:sales-followup-optout-help:{lead_id}"),))
     rows.append((_button("↩️ К карточке", f"cpm:sales-lead:{lead_id}"),))
@@ -739,10 +862,10 @@ def _sales_followup_help(lead_id: str) -> CustomerInteractionMessage:
     short_id = str(lead_id)[:8]
     return CustomerInteractionMessage(
         text=(
-            "Запланировать follow-up\n\nОтправьте одним сообщением:\n"
+            "Запланировать напоминание\n\nОтправьте одним сообщением:\n"
             f"напомнить {short_id} 24 Ваш текст клиенту\n\n"
-            "Вместо 24 можно указать 1 или 72 часа. Ночное время canonical scheduler "
-            "перенесёт на ближайшее разрешённое утро."
+            "Вместо 24 можно указать 1 или 72 часа. Если выбранное время попадёт на ночь, "
+            "ClientPlatform перенесёт отправку на ближайшее разрешённое утро."
         ),
         rows=((_button("↩️ К карточке", f"cpm:sales-lead:{lead_id}"),),),
     )
@@ -752,10 +875,10 @@ def _sales_followup_optout_help(lead_id: str) -> CustomerInteractionMessage:
     short_id = str(lead_id)[:8]
     return CustomerInteractionMessage(
         text=(
-            "Запретить follow-up\n\nЕсли клиент действительно попросил больше не писать, "
+            "Больше не писать клиенту\n\nЕсли клиент действительно попросил больше не писать, "
             "подтвердите отдельным сообщением:\n"
             f"не писать {short_id} подтвердить\n\n"
-            "Активный follow-up будет остановлен canonical contact-suppression правилом."
+            "Активное напоминание будет отменено, а новые сообщения по этому каналу будут запрещены."
         ),
         rows=((_button("↩️ К карточке", f"cpm:sales-lead:{lead_id}"),),),
     )
@@ -848,14 +971,14 @@ def _sales_mutation_message(
         card = _sales_lead_message(actor, lead_id)
         scheduled_at = str(getattr(followup, "scheduled_at", "") or "указанное время")
         return CustomerInteractionMessage(
-            text=f"✅ Follow-up запланирован на {scheduled_at}.\n\n{card.text}", rows=card.rows
+            text=f"✅ Напоминание клиенту запланировано на {scheduled_at}.\n\n{card.text}", rows=card.rows
         )
     if parsed.action == "sales-followup-cancel":
         if len(parsed.args) != 1:
             return _stale_message()
         cancel_sales_workspace_followup(actor=actor, lead_id=parsed.args[0])
         card = _sales_lead_message(actor, parsed.args[0])
-        return CustomerInteractionMessage(text="✅ Follow-up отменён.\n\n" + card.text, rows=card.rows)
+        return CustomerInteractionMessage(text="✅ Напоминание отменено.\n\n" + card.text, rows=card.rows)
     if parsed.action == "sales-followup-optout-text":
         if len(parsed.args) != 1:
             return _stale_message()
@@ -969,11 +1092,11 @@ def _manage_message(actor: TenantContext) -> CustomerInteractionMessage:
         return _permission_message()
     rows: list[tuple[CustomerInteractionButton, ...]] = [
         (_button("💬 Мессенджеры", "cpm:messengers"),),
-        (_button("🚦 Release gate", "cpm:release"),),
-        (_button("🧲 Воронка 2.0", "cpm:funnel2"),),
+        (_button("✅ Готовность системы", "cpm:release"),),
+        (_button("🧲 Продажи и воронка", "cpm:funnel2"),),
         (_button("🧩 Удержание", "cpm:retention"),),
         (_button("🧾 Последние действия", "cpm:recent"),),
-        (_button("🧪 Системные проверки", "cpm:system"),),
+        (_button("🛡 Проверить систему", "cpm:system"),),
         (_button("🧩 Форматы работы", "cpm:formats"),),
     ]
     if actor.role in _OWNER_ROLES:
@@ -1606,6 +1729,8 @@ def _render(
     if parsed.action == "menu":
         return _menu_message(actor, linked=linked)
     try:
+        if parsed.action == "menu-all":
+            return _menu_all_message(actor)
         if parsed.action == "work":
             return _work_message(actor)
         if parsed.action == "growth":
@@ -1648,6 +1773,14 @@ def _render(
             if len(parsed.args) != 1:
                 return _stale_message()
             return _sales_lead_message(actor, parsed.args[0])
+        if parsed.action == "sales-actions":
+            if len(parsed.args) != 1:
+                return _stale_message()
+            return _sales_actions_message(actor, parsed.args[0])
+        if parsed.action == "sales-result-menu":
+            if len(parsed.args) != 1:
+                return _stale_message()
+            return _sales_result_message(actor, parsed.args[0])
         if parsed.action in {
             "sales-assign",
             "sales-unassign",

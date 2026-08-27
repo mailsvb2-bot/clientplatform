@@ -26,21 +26,44 @@ def _commands(message) -> list[str]:
 
 
 class NativeMemberParityNavigationTests(unittest.TestCase):
-    def test_owner_home_exposes_all_native_sections_within_button_limit(self) -> None:
+    def test_owner_home_has_one_primary_action_and_preserves_all_sections_behind_more(self) -> None:
         actor = _actor(PlatformRole.OWNER)
-        with patch.object(ui, "_business_name", return_value="Практика"):
+        primary = ui._button("🚀 Найти новых клиентов", "cpm:acquire")
+        with (
+            patch.object(ui, "_business_name", return_value="Практика"),
+            patch.object(ui, "_native_primary_action", return_value=primary),
+        ):
             message = ui._menu_message(actor, linked=False)
-        self.assertEqual(
-            ["cpm:work", "cpm:messengers", "cpm:growth", "cpm:manage", "cpm:team"],
-            _commands(message),
-        )
-        self.assertLessEqual(sum(len(row) for row in message.rows), 10)
+        self.assertEqual(["cpm:acquire", "cpm:menu-all"], _commands(message))
+        self.assertEqual(sum(len(row) for row in message.rows), 2)
 
-    def test_support_home_exposes_safe_messenger_switching_without_management(self) -> None:
+        advanced = ui._menu_all_message(actor)
+        commands = _commands(advanced)
+        self.assertTrue(
+            {"cpm:work", "cpm:messengers", "cpm:growth", "cpm:manage", "cpm:team"}.issubset(commands)
+        )
+        self.assertIn("cpm:menu", commands)
+
+    def test_support_home_has_one_primary_action_without_exposing_management(self) -> None:
         actor = _actor(PlatformRole.SUPPORT)
-        with patch.object(ui, "_business_name", return_value="Практика"):
+        primary = ui._button("📊 Проверить, что происходит", "cpm:today")
+        with (
+            patch.object(ui, "_business_name", return_value="Практика"),
+            patch.object(ui, "_native_primary_action", return_value=primary),
+        ):
             message = ui._menu_message(actor, linked=False)
-        self.assertEqual(["cpm:work", "cpm:messengers"], _commands(message))
+        self.assertEqual(["cpm:today", "cpm:menu-all"], _commands(message))
+        self.assertEqual(["cpm:work", "cpm:messengers", "cpm:menu"], _commands(ui._menu_all_message(actor)))
+
+    def test_native_home_falls_back_to_role_safe_action_when_cockpit_is_unavailable(self) -> None:
+        actor = _actor(PlatformRole.MARKETER)
+        with patch.object(
+            ui,
+            "get_growth_cockpit",
+            side_effect=ui.TenantPermissionDenied("not available for this projection"),
+        ):
+            primary = ui._native_primary_action(actor)
+        self.assertEqual(primary.command, "cpm:acquire")
 
     def test_work_section_contains_telegram_admin_operational_reads(self) -> None:
         message = ui._work_message(_actor(PlatformRole.OWNER))
@@ -65,6 +88,21 @@ class NativeMemberParityNavigationTests(unittest.TestCase):
                 message = ui._render(
                     support,
                     ui.ParsedMemberInteraction(action),
+                    linked=False,
+                    setup_issuer=None,
+                    setup_key="test",
+                )
+                self.assertIn("недоступен", message.text.casefold())
+                self.assertEqual(["cpm:menu"], _commands(message))
+
+    def test_forged_sales_progressive_disclosure_commands_fail_closed_by_role(self) -> None:
+        actor = _actor(PlatformRole.CONTENT_MANAGER)
+        lead_id = str(uuid4())
+        for action in ("sales-actions", "sales-result-menu"):
+            with self.subTest(action=action):
+                message = ui._render(
+                    actor,
+                    ui.ParsedMemberInteraction(action, (lead_id,)),
                     linked=False,
                     setup_issuer=None,
                     setup_key="test",

@@ -563,9 +563,12 @@ async def open_more(callback: CallbackQuery) -> None:
     token = str(callback.data).split(":", 2)[2]
     await control._actor(int(callback.from_user.id), control._token_uuid(token))
     await control._callback_message(callback).answer(
-        "⚙️ Ещё\n\nРедко используемые функции убраны сюда.",
+        "⋯ Все возможности\n\nГлавная показывает только самое важное. Все остальные функции ClientPlatform доступны здесь.",
         reply_markup=control._keyboard(
             [
+                [("📈 Что происходит с бизнесом", f"cpg:period:{token}:7")],
+                [("💬 Обращения и продажи", f"cps:s:{token}")],
+                [("👥 Клиенты и запись", f"cpj:bookings:{token}")],
                 [("💬 Мессенджеры", f"cpa:{token}:messengers")],
                 [("🧰 Услуги и расписание", f"cpo:work:{token}")],
                 [("📣 Реклама и продвижение", f"cpo:ads:{token}")],
