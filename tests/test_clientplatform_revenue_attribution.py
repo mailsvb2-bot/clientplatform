@@ -165,6 +165,7 @@ class ClientPlatformRevenueAttributionTests(unittest.TestCase):
         subject_ref: str | None = None,
         source_type: str = "test",
         source_id: str | None = None,
+        metadata: dict[str, object] | None = None,
     ) -> BusinessOutcomeEvent:
         return self.outcomes.append(
             BusinessOutcomeEvent(
@@ -184,7 +185,7 @@ class ClientPlatformRevenueAttributionTests(unittest.TestCase):
                 ),
                 money=money,
                 idempotency_key=f"test:{event_id}",
-                metadata={},
+                metadata={} if metadata is None else metadata,
                 metadata_version=1,
                 created_at=occurred_at,
             )
@@ -462,6 +463,796 @@ class ClientPlatformRevenueAttributionTests(unittest.TestCase):
         self.assertEqual(retained.amount_minor, 5_000)
         self.assertEqual(retained.currency, "RUB")
         self.assertEqual(retained.source_ref_id, record.source_ref_id)
+
+        replay = self.revenue.materialize_outcome(
+            business_id=self.business_id,
+            outcome_event_id=paid.id,
+        )
+        self.assertEqual(replay, retained)
+
+        journey = self.revenue.journey_snapshot(
+            business_id=self.business_id,
+            occurred_from=_NOW,
+            occurred_to=_NOW + timedelta(hours=1),
+        )
+        self.assertTrue(journey.attribution_complete)
+        self.assertEqual(journey.attributed_monetary_outcomes, 1)
+        self.assertEqual(journey.unattributed_monetary_outcomes, 0)
+        self.assertEqual(journey.attributed_revenue_by_currency[0].amount_minor, 5_000)
+        telegram = next(item for item in journey.sources if item.source.value == "telegram")
+        self.assertEqual(telegram.paid_customers, 1)
+        self.assertEqual(telegram.revenue_by_currency[0].amount_minor, 5_000)
+
+
+    def test_refund_never_uses_a_later_touch_when_original_payment_was_unattributed(self) -> None:
+        customer_id = self._connect_customer(77008)
+        paid = self._append(
+            OutcomeType.ORDER_PAID,
+            event_id="unattributed-before-later-touch",
+            money=OutcomeMoney(amount_minor=5_000, currency="RUB"),
+            occurred_at=_NOW + timedelta(minutes=4),
+            customer_id=customer_id,
+            subject_ref="order:before-later-touch",
+        )
+        self.assertIsNone(
+            self.revenue.materialize_outcome(
+                business_id=self.business_id,
+                outcome_event_id=paid.id,
+            )
+        )
+        later_trace = self.attribution.capture_promotion_touch(
+            business_id=self.business_id,
+            source_token=self.campaign.source_token,
+            campaign_id=self.campaign.id,
+            channel=self.campaign.channel,
+            source_kind="campaign",
+            source_key=self.campaign.id,
+            customer_id=customer_id,
+            occurred_at=_NOW + timedelta(minutes=5),
+        )
+        self.assertEqual(later_trace.identity.source.value, "telegram")
+        refund = self._append(
+            OutcomeType.REFUND_RECORDED,
+            event_id="refund-after-later-touch",
+            money=OutcomeMoney(amount_minor=5_000, currency="RUB"),
+            occurred_at=_NOW + timedelta(minutes=6),
+            customer_id=customer_id,
+            source_type="business_payment",
+            source_id="payment-unattributed",
+            subject_ref="business_payment:payment-unattributed",
+            metadata={"payment_outcome_event_id": paid.id},
+        )
+        # Simulate a row created by pre-fix main: the refund was independently
+        # attributed to the customer's later acquisition touch. Upgrade replay
+        # must repair it rather than trusting that stale durable decision.
+        self.conn.execute(
+            """
+            INSERT INTO revenue_attributions(
+                id, business_id, outcome_event_id, outcome_type, customer_id,
+                touch_id, attribution_identity_id, source, source_ref_type,
+                source_ref_id, promotion_campaign_id, model_version,
+                amount_minor, currency, occurred_at, created_at
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "legacy-refund-after-later-touch",
+                self.business_id,
+                refund.id,
+                refund.outcome_type.value,
+                customer_id,
+                later_trace.touch.id,
+                later_trace.identity.id,
+                later_trace.identity.source.value,
+                later_trace.identity.source_ref_type,
+                later_trace.identity.source_ref_id,
+                later_trace.identity.promotion_campaign_id,
+                "first_touch_v1",
+                -5_000,
+                "RUB",
+                refund.occurred_at.isoformat(timespec="microseconds"),
+                refund.created_at.isoformat(timespec="microseconds"),
+            ),
+        )
+        legacy = self.revenue.get_for_outcome(
+            business_id=self.business_id,
+            outcome_event_id=refund.id,
+        )
+        self.assertIsNotNone(legacy)
+        assert legacy is not None
+        self.assertEqual(legacy.source.value, "telegram")
+
+        repaired = self.revenue.materialize_outcome(
+            business_id=self.business_id,
+            outcome_event_id=refund.id,
+        )
+        self.assertIsNotNone(repaired)
+        assert repaired is not None
+        self.assertEqual(repaired.source.value, "unknown")
+        self.assertIsNone(repaired.touch_id)
+        self.assertIsNone(repaired.attribution_identity_id)
+        self.assertIsNone(repaired.promotion_campaign_id)
+        self.assertEqual(repaired.source_ref_type, "outcome_event")
+        self.assertEqual(repaired.source_ref_id, paid.id)
+
+        economics = self.revenue.snapshot(
+            business_id=self.business_id,
+            occurred_from=_NOW + timedelta(minutes=5, seconds=30),
+            occurred_to=_NOW + timedelta(minutes=7),
+        )
+        self.assertEqual(economics.monetary_outcomes, 1)
+        self.assertEqual(economics.attributed_monetary_outcomes, 0)
+        self.assertEqual(economics.unattributed_monetary_outcomes, 1)
+        self.assertEqual(economics.revenue_by_currency, ())
+        self.assertIn("attribution_incomplete", economics.limitations)
+
+        journey = self.revenue.journey_snapshot(
+            business_id=self.business_id,
+            occurred_from=_NOW + timedelta(minutes=4),
+            occurred_to=_NOW + timedelta(minutes=7),
+        )
+        self.assertEqual(journey.monetary_outcomes, 2)
+        self.assertEqual(journey.attributed_monetary_outcomes, 0)
+        self.assertEqual(journey.unattributed_monetary_outcomes, 2)
+        self.assertTrue(all(item.source.value != "telegram" for item in journey.sources))
+
+    def test_window_reconciliation_materializes_referenced_payment_outside_window(self) -> None:
+        paid = self._append(
+            OutcomeType.ORDER_PAID,
+            event_id="payment-before-report-window",
+            money=OutcomeMoney(amount_minor=5_000, currency="RUB"),
+            occurred_at=_NOW + timedelta(minutes=4),
+        )
+        refund = self._append(
+            OutcomeType.REFUND_RECORDED,
+            event_id="refund-inside-report-window",
+            money=OutcomeMoney(amount_minor=2_000, currency="RUB"),
+            occurred_at=_NOW + timedelta(minutes=6),
+            source_type="business_payment",
+            source_id="payment-window-boundary",
+            subject_ref="business_payment:payment-window-boundary",
+            metadata={"payment_outcome_event_id": paid.id},
+        )
+        self.assertIsNone(
+            self.revenue.get_for_outcome(
+                business_id=self.business_id,
+                outcome_event_id=paid.id,
+            )
+        )
+
+        journey = self.revenue.journey_snapshot(
+            business_id=self.business_id,
+            occurred_from=_NOW + timedelta(minutes=5),
+            occurred_to=_NOW + timedelta(minutes=7),
+        )
+
+        materialized_payment = self.revenue.get_for_outcome(
+            business_id=self.business_id,
+            outcome_event_id=paid.id,
+        )
+        materialized_refund = self.revenue.get_for_outcome(
+            business_id=self.business_id,
+            outcome_event_id=refund.id,
+        )
+        self.assertIsNotNone(materialized_payment)
+        self.assertIsNotNone(materialized_refund)
+        assert materialized_payment is not None and materialized_refund is not None
+        self.assertEqual(materialized_payment.source.value, "telegram")
+        self.assertEqual(materialized_refund.source.value, "telegram")
+        self.assertEqual(journey.monetary_outcomes, 1)
+        self.assertEqual(journey.attributed_monetary_outcomes, 1)
+        self.assertEqual(journey.unattributed_monetary_outcomes, 0)
+        self.assertEqual(
+            [(item.currency, item.amount_minor) for item in journey.verified_revenue_by_currency],
+            [("RUB", -2_000)],
+        )
+        self.assertEqual(
+            [(item.currency, item.amount_minor) for item in journey.attributed_revenue_by_currency],
+            [("RUB", -2_000)],
+        )
+
+    def test_amountless_reversal_chain_resolves_signed_money_recursively(self) -> None:
+        paid = self._append(
+            OutcomeType.ORDER_PAID,
+            event_id="recursive-paid",
+            money=OutcomeMoney(amount_minor=5_000, currency="RUB"),
+            occurred_at=_NOW + timedelta(minutes=4),
+        )
+        first_reversal = self._append(
+            OutcomeType.OUTCOME_REVERSAL,
+            event_id="recursive-reversal-1",
+            money=None,
+            occurred_at=_NOW + timedelta(minutes=5),
+            source_type="outcome_event",
+            source_id=paid.id,
+            subject_ref=f"outcome:{paid.id}",
+        )
+        second_reversal = self._append(
+            OutcomeType.OUTCOME_REVERSAL,
+            event_id="recursive-reversal-2",
+            money=None,
+            occurred_at=_NOW + timedelta(minutes=6),
+            source_type="outcome_event",
+            source_id=first_reversal.id,
+            subject_ref=f"outcome:{first_reversal.id}",
+        )
+
+        journey = self.revenue.journey_snapshot(
+            business_id=self.business_id,
+            occurred_from=_NOW,
+            occurred_to=_NOW + timedelta(minutes=7),
+        )
+
+        self.assertEqual(journey.monetary_outcomes, 3)
+        self.assertEqual(journey.attributed_monetary_outcomes, 3)
+        self.assertEqual(journey.unattributed_monetary_outcomes, 0)
+        self.assertEqual(
+            [(item.currency, item.amount_minor) for item in journey.verified_revenue_by_currency],
+            [("RUB", 5_000)],
+        )
+        self.assertEqual(
+            [(item.currency, item.amount_minor) for item in journey.attributed_revenue_by_currency],
+            [("RUB", 5_000)],
+        )
+        second_record = self.revenue.get_for_outcome(
+            business_id=self.business_id,
+            outcome_event_id=second_reversal.id,
+        )
+        self.assertIsNotNone(second_record)
+        assert second_record is not None
+        self.assertEqual(second_record.amount_minor, 5_000)
+        self.assertEqual(second_record.source.value, "telegram")
+
+    def test_amountless_reversal_references_fail_closed_on_cycle_future_and_tenant(self) -> None:
+        cycle_a = self._append(
+            OutcomeType.OUTCOME_REVERSAL,
+            event_id="cycle-a",
+            money=None,
+            occurred_at=_NOW + timedelta(minutes=8),
+            source_type="outcome_event",
+            source_id="cycle-b",
+            subject_ref="outcome:cycle-b",
+        )
+        self._append(
+            OutcomeType.OUTCOME_REVERSAL,
+            event_id="cycle-b",
+            money=None,
+            occurred_at=_NOW + timedelta(minutes=8),
+            source_type="outcome_event",
+            source_id=cycle_a.id,
+            subject_ref=f"outcome:{cycle_a.id}",
+        )
+        with self.assertRaisesRegex(RevenueAttributionInvariantViolation, "cycle"):
+            self.revenue.materialize_outcome(
+                business_id=self.business_id,
+                outcome_event_id=cycle_a.id,
+            )
+
+        future_payment = self._append(
+            OutcomeType.ORDER_PAID,
+            event_id="future-payment-reference",
+            money=OutcomeMoney(amount_minor=5_000, currency="RUB"),
+            occurred_at=_NOW + timedelta(minutes=10),
+        )
+        future_reversal = self._append(
+            OutcomeType.OUTCOME_REVERSAL,
+            event_id="reversal-before-future-payment",
+            money=None,
+            occurred_at=_NOW + timedelta(minutes=9),
+            source_type="outcome_event",
+            source_id=future_payment.id,
+            subject_ref=f"outcome:{future_payment.id}",
+        )
+        with self.assertRaisesRegex(RevenueAttributionInvariantViolation, "future"):
+            self.revenue.materialize_outcome(
+                business_id=self.business_id,
+                outcome_event_id=future_reversal.id,
+            )
+
+        other_access = self.tenancy.create_business(owner_user_id=7002, name="Other revenue")
+        other_payment = self.outcomes.append(
+            BusinessOutcomeEvent(
+                id="other-tenant-payment",
+                business_id=other_access.business.id,
+                outcome_type=OutcomeType.ORDER_PAID,
+                occurred_at=_NOW + timedelta(minutes=8),
+                source=OutcomeSource(source_type="test", source_id="other-tenant-payment"),
+                customer_id=None,
+                subject_ref="order:other-tenant",
+                money=OutcomeMoney(amount_minor=5_000, currency="RUB"),
+                idempotency_key="test:other-tenant-payment",
+                metadata={},
+                metadata_version=1,
+                created_at=_NOW + timedelta(minutes=8),
+            )
+        )
+        cross_tenant = self._append(
+            OutcomeType.OUTCOME_REVERSAL,
+            event_id="cross-tenant-reversal",
+            money=None,
+            occurred_at=_NOW + timedelta(minutes=9),
+            source_type="outcome_event",
+            source_id=other_payment.id,
+            subject_ref=f"outcome:{other_payment.id}",
+        )
+        self.assertIsNone(
+            self.revenue.materialize_outcome(
+                business_id=self.business_id,
+                outcome_event_id=cross_tenant.id,
+            )
+        )
+
+    def test_reconciliation_revisits_dependents_after_legacy_correction_repair(self) -> None:
+        customer_id = self._connect_customer(77009)
+        paid = self._append(
+            OutcomeType.ORDER_PAID,
+            event_id="unattributed-before-correction-chain",
+            money=OutcomeMoney(amount_minor=5_000, currency="RUB"),
+            occurred_at=_NOW + timedelta(minutes=4),
+            customer_id=customer_id,
+            subject_ref="order:correction-chain",
+        )
+        self.assertIsNone(
+            self.revenue.materialize_outcome(
+                business_id=self.business_id,
+                outcome_event_id=paid.id,
+            )
+        )
+        later_trace = self.attribution.capture_promotion_touch(
+            business_id=self.business_id,
+            source_token=self.campaign.source_token,
+            campaign_id=self.campaign.id,
+            channel=self.campaign.channel,
+            source_kind="campaign",
+            source_key=self.campaign.id,
+            customer_id=customer_id,
+            occurred_at=_NOW + timedelta(minutes=5),
+        )
+        correction_time = _NOW + timedelta(minutes=6)
+        refund = self._append(
+            OutcomeType.REFUND_RECORDED,
+            event_id="z-legacy-refund-in-chain",
+            money=OutcomeMoney(amount_minor=5_000, currency="RUB"),
+            occurred_at=correction_time,
+            customer_id=customer_id,
+            source_type="business_payment",
+            source_id="payment-correction-chain",
+            subject_ref="business_payment:payment-correction-chain",
+            metadata={"payment_outcome_event_id": paid.id},
+        )
+        self.conn.execute(
+            """
+            INSERT INTO revenue_attributions(
+                id, business_id, outcome_event_id, outcome_type, customer_id,
+                touch_id, attribution_identity_id, source, source_ref_type,
+                source_ref_id, promotion_campaign_id, model_version,
+                amount_minor, currency, occurred_at, created_at
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "legacy-refund-in-chain",
+                self.business_id,
+                refund.id,
+                refund.outcome_type.value,
+                customer_id,
+                later_trace.touch.id,
+                later_trace.identity.id,
+                later_trace.identity.source.value,
+                later_trace.identity.source_ref_type,
+                later_trace.identity.source_ref_id,
+                later_trace.identity.promotion_campaign_id,
+                "first_touch_v1",
+                -5_000,
+                "RUB",
+                refund.occurred_at.isoformat(timespec="microseconds"),
+                refund.created_at.isoformat(timespec="microseconds"),
+            ),
+        )
+        reversal = self._append(
+            OutcomeType.OUTCOME_REVERSAL,
+            event_id="a-reversal-before-legacy-refund",
+            money=None,
+            occurred_at=correction_time,
+            customer_id=customer_id,
+            source_type="outcome_event",
+            source_id=refund.id,
+            subject_ref=f"outcome:{refund.id}",
+        )
+        self.assertLess(reversal.id, refund.id)
+
+        first = self.revenue.journey_snapshot(
+            business_id=self.business_id,
+            occurred_from=_NOW,
+            occurred_to=_NOW + timedelta(minutes=7),
+        )
+        second = self.revenue.journey_snapshot(
+            business_id=self.business_id,
+            occurred_from=_NOW,
+            occurred_to=_NOW + timedelta(minutes=7),
+        )
+
+        self.assertEqual(first, second)
+        self.assertEqual(first.monetary_outcomes, 3)
+        self.assertEqual(first.attributed_monetary_outcomes, 0)
+        self.assertEqual(first.unattributed_monetary_outcomes, 3)
+        self.assertEqual(first.attributed_revenue_by_currency, ())
+        self.assertEqual(
+            [(item.currency, item.amount_minor) for item in first.unattributed_revenue_by_currency],
+            [("RUB", 5_000)],
+        )
+        repaired_refund = self.revenue.get_for_outcome(
+            business_id=self.business_id,
+            outcome_event_id=refund.id,
+        )
+        repaired_reversal = self.revenue.get_for_outcome(
+            business_id=self.business_id,
+            outcome_event_id=reversal.id,
+        )
+        self.assertIsNotNone(repaired_refund)
+        self.assertIsNotNone(repaired_reversal)
+        assert repaired_refund is not None and repaired_reversal is not None
+        self.assertEqual(repaired_refund.source.value, "unknown")
+        self.assertEqual(repaired_reversal.source.value, "unknown")
+
+    def test_same_time_corrections_resolve_on_first_reconciliation(self) -> None:
+        occurred_at = _NOW + timedelta(minutes=4)
+        paid = self._append(
+            OutcomeType.ORDER_PAID,
+            event_id="z-same-time-paid",
+            money=OutcomeMoney(amount_minor=5_000, currency="RUB"),
+            occurred_at=occurred_at,
+        )
+        self._append(
+            OutcomeType.REFUND_RECORDED,
+            event_id="a-same-time-refund",
+            money=OutcomeMoney(amount_minor=2_000, currency="RUB"),
+            occurred_at=occurred_at,
+            source_type="business_payment",
+            source_id="same-time-payment",
+            subject_ref="business_payment:same-time-payment",
+            metadata={"payment_outcome_event_id": paid.id},
+        )
+        self._append(
+            OutcomeType.OUTCOME_REVERSAL,
+            event_id="b-same-time-reversal",
+            money=OutcomeMoney(amount_minor=1_000, currency="RUB"),
+            occurred_at=occurred_at,
+            source_type="outcome_event",
+            source_id=paid.id,
+            subject_ref=f"outcome:{paid.id}",
+        )
+
+        first = self.revenue.journey_snapshot(
+            business_id=self.business_id,
+            occurred_from=_NOW,
+            occurred_to=_NOW + timedelta(minutes=5),
+        )
+        second = self.revenue.journey_snapshot(
+            business_id=self.business_id,
+            occurred_from=_NOW,
+            occurred_to=_NOW + timedelta(minutes=5),
+        )
+
+        self.assertEqual(first, second)
+        self.assertTrue(first.attribution_complete)
+        self.assertEqual(first.monetary_outcomes, 3)
+        self.assertEqual(first.attributed_monetary_outcomes, 3)
+        self.assertEqual(first.unattributed_monetary_outcomes, 0)
+        self.assertEqual(
+            [(item.currency, item.amount_minor) for item in first.attributed_revenue_by_currency],
+            [("RUB", 2_000)],
+        )
+        telegram = next(item for item in first.sources if item.source.value == "telegram")
+        self.assertEqual(telegram.revenue_by_currency[0].amount_minor, 2_000)
+
+    def test_refund_and_reversal_inherit_durable_source_after_privacy_detach(self) -> None:
+        paid = self._append(
+            OutcomeType.ORDER_PAID,
+            event_id="privacy-paid-before-corrections",
+            money=OutcomeMoney(amount_minor=5_000, currency="RUB"),
+            occurred_at=_NOW + timedelta(minutes=4),
+        )
+        paid_record = self.revenue.materialize_outcome(
+            business_id=self.business_id,
+            outcome_event_id=paid.id,
+        )
+        self.assertIsNotNone(paid_record)
+        assert paid_record is not None
+        self.conn.execute(
+            "DELETE FROM promotion_campaigns WHERE id=? AND business_id=?",
+            (self.campaign.id, self.business_id),
+        )
+        retained = self.revenue.get_for_outcome(
+            business_id=self.business_id,
+            outcome_event_id=paid.id,
+        )
+        self.assertIsNotNone(retained)
+        assert retained is not None
+        self.assertEqual(retained.source.value, "telegram")
+        self.assertIsNone(retained.touch_id)
+
+        self._append(
+            OutcomeType.CUSTOMER_REACTIVATED,
+            event_id="privacy-reactivation-after-detach",
+            money=OutcomeMoney(amount_minor=5_000, currency="RUB"),
+            occurred_at=_NOW + timedelta(minutes=4, seconds=30),
+            source_type="outcome_event",
+            source_id=paid.id,
+            subject_ref="sales_lead:privacy-reactivation",
+        )
+
+        refund = self._append(
+            OutcomeType.REFUND_RECORDED,
+            event_id="privacy-refund-after-detach",
+            money=OutcomeMoney(amount_minor=2_000, currency="RUB"),
+            occurred_at=_NOW + timedelta(minutes=5),
+            source_type="business_payment",
+            source_id="payment-privacy-refund",
+            subject_ref="business_payment:payment-privacy-refund",
+            metadata={"payment_outcome_event_id": paid.id},
+        )
+        reversal = self._append(
+            OutcomeType.OUTCOME_REVERSAL,
+            event_id="privacy-reversal-after-detach",
+            money=OutcomeMoney(amount_minor=3_000, currency="RUB"),
+            occurred_at=_NOW + timedelta(minutes=6),
+            source_type="outcome_event",
+            source_id=paid.id,
+            subject_ref=f"outcome:{paid.id}",
+        )
+        refunded = self.revenue.materialize_outcome(
+            business_id=self.business_id,
+            outcome_event_id=refund.id,
+        )
+        reversed_record = self.revenue.materialize_outcome(
+            business_id=self.business_id,
+            outcome_event_id=reversal.id,
+        )
+        self.assertIsNotNone(refunded)
+        self.assertIsNotNone(reversed_record)
+        assert refunded is not None and reversed_record is not None
+        for correction in (refunded, reversed_record):
+            self.assertEqual(correction.source, retained.source)
+            self.assertEqual(correction.source_ref_type, retained.source_ref_type)
+            self.assertEqual(correction.source_ref_id, retained.source_ref_id)
+            self.assertIsNone(correction.touch_id)
+        self.assertEqual(refunded.amount_minor, -2_000)
+        self.assertEqual(reversed_record.amount_minor, -3_000)
+
+        journey = self.revenue.journey_snapshot(
+            business_id=self.business_id,
+            occurred_from=_NOW + timedelta(minutes=4),
+            occurred_to=_NOW + timedelta(minutes=7),
+        )
+        self.assertTrue(journey.attribution_complete)
+        self.assertEqual(journey.monetary_outcomes, 3)
+        self.assertEqual(journey.attributed_monetary_outcomes, 3)
+        self.assertEqual(journey.unattributed_monetary_outcomes, 0)
+        self.assertEqual(
+            [(item.currency, item.amount_minor) for item in journey.verified_revenue_by_currency],
+            [("RUB", 0)],
+        )
+        self.assertEqual(
+            [(item.currency, item.amount_minor) for item in journey.attributed_revenue_by_currency],
+            [("RUB", 0)],
+        )
+        self.assertEqual(journey.unattributed_revenue_by_currency, ())
+        telegram = next(item for item in journey.sources if item.source.value == "telegram")
+        self.assertEqual(telegram.revenue_by_currency[0].amount_minor, 0)
+        self.assertEqual(telegram.reactivated_customers, 1)
+        self.assertFalse(any(
+            item.source.value == "unknown" and item.reactivated_customers
+            for item in journey.sources
+        ))
+
+    def test_money_cockpit_journey_keeps_verified_money_separate_from_source_attribution(self) -> None:
+        self._append(
+            OutcomeType.BOOKING_CONFIRMED,
+            event_id="booking-confirmed-1",
+            money=None,
+            occurred_at=_NOW + timedelta(minutes=4),
+        )
+        self._append(
+            OutcomeType.BOOKING_COMPLETED,
+            event_id="booking-completed-1",
+            money=None,
+            occurred_at=_NOW + timedelta(minutes=5),
+        )
+        self._append(
+            OutcomeType.ORDER_PAID,
+            event_id="journey-paid",
+            money=OutcomeMoney(amount_minor=10_000, currency="RUB"),
+            occurred_at=_NOW + timedelta(minutes=6),
+        )
+        self._append(
+            OutcomeType.REFUND_RECORDED,
+            event_id="journey-refund",
+            money=OutcomeMoney(amount_minor=2_000, currency="RUB"),
+            occurred_at=_NOW + timedelta(minutes=7),
+        )
+        self._append(
+            OutcomeType.CUSTOMER_REACTIVATED,
+            event_id="journey-reactivated",
+            money=OutcomeMoney(amount_minor=10_000, currency="RUB"),
+            occurred_at=_NOW + timedelta(minutes=8),
+            subject_ref="sales_lead:reactivation-1",
+            source_type="outcome_event",
+            source_id="journey-paid",
+        )
+        unattributed_customer = self._connect_customer(77004)
+        self._append(
+            OutcomeType.ORDER_PAID,
+            event_id="journey-unattributed-paid",
+            money=OutcomeMoney(amount_minor=3_000, currency="RUB"),
+            occurred_at=_NOW + timedelta(minutes=9),
+            customer_id=unattributed_customer,
+            subject_ref="order:unattributed",
+        )
+
+        journey = self.revenue.journey_snapshot(
+            business_id=self.business_id,
+            occurred_from=_NOW,
+            occurred_to=_NOW + timedelta(hours=1),
+        )
+
+        self.assertEqual(journey.leads, 1)
+        self.assertEqual(journey.qualified_leads, 1)
+        self.assertEqual(journey.bookings, 1)
+        self.assertEqual(journey.confirmed_bookings, 1)
+        self.assertEqual(journey.completed_bookings, 1)
+        self.assertEqual(journey.paid_customers, 2)
+        self.assertEqual(journey.reactivated_customers, 1)
+        self.assertEqual(journey.monetary_outcomes, 3)
+        self.assertEqual(journey.attributed_monetary_outcomes, 2)
+        self.assertEqual(journey.unattributed_monetary_outcomes, 1)
+        self.assertEqual(
+            [(item.currency, item.amount_minor) for item in journey.verified_revenue_by_currency],
+            [("RUB", 11_000)],
+        )
+        self.assertEqual(
+            [(item.currency, item.amount_minor) for item in journey.attributed_revenue_by_currency],
+            [("RUB", 8_000)],
+        )
+        self.assertEqual(
+            [(item.currency, item.amount_minor) for item in journey.unattributed_revenue_by_currency],
+            [("RUB", 3_000)],
+        )
+        self.assertFalse(journey.attribution_complete)
+        self.assertIn("attribution_incomplete", journey.limitations)
+        self.assertIn("booking_completion_unavailable", journey.limitations)
+
+        telegram = next(item for item in journey.sources if item.source.value == "telegram")
+        unknown = next(item for item in journey.sources if item.source.value == "unknown")
+        self.assertEqual(telegram.leads, 1)
+        self.assertEqual(telegram.bookings, 1)
+        self.assertEqual(telegram.completed_bookings, 1)
+        self.assertEqual(telegram.paid_customers, 1)
+        self.assertEqual(telegram.reactivated_customers, 1)
+        self.assertEqual(telegram.revenue_by_currency[0].amount_minor, 8_000)
+        self.assertEqual(unknown.paid_customers, 1)
+        self.assertEqual(unknown.revenue_by_currency[0].amount_minor, 3_000)
+        self.assertEqual(journey.sources[0].source.value, "telegram")
+
+
+
+    def test_money_cockpit_treats_durable_unknown_source_as_unattributed(self) -> None:
+        slot = self.bookings.create_slot(
+            actor=self.owner,
+            offering_id=self.campaign.offering_id,
+            local_start="21.08.2026 12:00",
+            duration_minutes=60,
+            now=_NOW.isoformat(),
+        )
+        creative = PromotionCreative(
+            creative_id=stable_creative_id("revenue", "unknown-max"),
+            headline="Unknown source regression",
+            primary_text="Book now",
+            description="Test",
+        )
+        campaign, _ = self.promotions.create_or_refresh_campaign(
+            actor=self.owner,
+            slot_id=slot.slot.id,
+            channel=PromotionChannel.MAX,
+            creative=creative,
+            now=_NOW.isoformat(),
+        )
+        customer_id = self._connect_customer(77007)
+        trace = self.attribution.capture_promotion_touch(
+            business_id=self.business_id,
+            source_token=campaign.source_token,
+            campaign_id=campaign.id,
+            channel=campaign.channel,
+            source_kind="campaign",
+            source_key=campaign.id,
+            customer_id=customer_id,
+            occurred_at=_NOW + timedelta(minutes=4),
+        )
+        self.assertEqual(trace.identity.source.value, "unknown")
+        paid = self._append(
+            OutcomeType.ORDER_PAID,
+            event_id="journey-unknown-source-paid",
+            money=OutcomeMoney(amount_minor=5_000, currency="RUB"),
+            occurred_at=_NOW + timedelta(minutes=5),
+            customer_id=customer_id,
+            subject_ref="order:unknown-source",
+        )
+        record = self.revenue.materialize_outcome(
+            business_id=self.business_id,
+            outcome_event_id=paid.id,
+        )
+        self.assertIsNotNone(record)
+        assert record is not None
+        self.assertEqual(record.source.value, "unknown")
+
+        journey = self.revenue.journey_snapshot(
+            business_id=self.business_id,
+            occurred_from=_NOW + timedelta(minutes=4),
+            occurred_to=_NOW + timedelta(minutes=6),
+        )
+        self.assertEqual(journey.monetary_outcomes, 1)
+        self.assertEqual(journey.attributed_monetary_outcomes, 0)
+        self.assertEqual(journey.unattributed_monetary_outcomes, 1)
+        self.assertEqual(journey.attributed_revenue_by_currency, ())
+        self.assertEqual(
+            [(item.currency, item.amount_minor) for item in journey.unattributed_revenue_by_currency],
+            [("RUB", 5_000)],
+        )
+        self.assertIn("attribution_incomplete", journey.limitations)
+        unknown = next(item for item in journey.sources if item.source.value == "unknown")
+        self.assertEqual(unknown.paid_customers, 1)
+        self.assertEqual(unknown.revenue_by_currency[0].amount_minor, 5_000)
+
+    def test_money_cockpit_never_combines_mixed_currencies_for_source_ranking(self) -> None:
+        self._append(
+            OutcomeType.ORDER_PAID,
+            event_id="journey-rub",
+            money=OutcomeMoney(amount_minor=7_000, currency="RUB"),
+            occurred_at=_NOW + timedelta(minutes=4),
+        )
+        other_customer = self._connect_customer(77005)
+        self._append(
+            OutcomeType.ORDER_PAID,
+            event_id="journey-usd-unattributed",
+            money=OutcomeMoney(amount_minor=50_00, currency="USD"),
+            occurred_at=_NOW + timedelta(minutes=5),
+            customer_id=other_customer,
+            subject_ref="order:usd-unattributed",
+        )
+
+        journey = self.revenue.journey_snapshot(
+            business_id=self.business_id,
+            occurred_from=_NOW,
+            occurred_to=_NOW + timedelta(hours=1),
+        )
+
+        self.assertEqual(
+            [(item.currency, item.amount_minor) for item in journey.verified_revenue_by_currency],
+            [("RUB", 7_000), ("USD", 5_000)],
+        )
+        self.assertIn("verified_revenue_mixed_currency", journey.limitations)
+        self.assertEqual(journey.sources[0].source.value, "telegram")
+        self.assertEqual(journey.sources[-1].source.value, "unknown")
+
+    def test_money_cockpit_marks_stage_source_unknown_without_guessing(self) -> None:
+        other_customer = self._connect_customer(77006)
+        self._append(
+            OutcomeType.LEAD_CREATED,
+            event_id="journey-unknown-lead",
+            money=None,
+            occurred_at=_NOW + timedelta(minutes=4),
+            customer_id=other_customer,
+            subject_ref="lead:unknown",
+        )
+
+        journey = self.revenue.journey_snapshot(
+            business_id=self.business_id,
+            occurred_from=_NOW,
+            occurred_to=_NOW + timedelta(hours=1),
+        )
+
+        unknown = next(item for item in journey.sources if item.source.value == "unknown")
+        self.assertEqual(unknown.leads, 1)
+        self.assertIn("journey_source_incomplete", journey.limitations)
+
 
 
 if __name__ == "__main__":

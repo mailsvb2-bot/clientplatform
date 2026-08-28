@@ -5,6 +5,7 @@ from datetime import datetime
 from clientplatform.domain.outcomes import OutcomeMoney
 from clientplatform.domain.revenue_attribution import (
     RevenueAttributionRecord,
+    RevenueJourneySnapshot,
     UnitEconomicsSnapshot,
 )
 from clientplatform.domain.tenancy import TenantContext
@@ -61,4 +62,26 @@ def get_business_unit_economics(
             occurred_from=occurred_from,
             occurred_to=occurred_to,
             verified_spend=verified_spend,
+        )
+
+
+def get_business_revenue_journey(
+    *,
+    actor: TenantContext,
+    occurred_from: datetime,
+    occurred_to: datetime,
+) -> RevenueJourneySnapshot:
+    """Return the canonical customer/revenue journey without creating new business state."""
+
+    with get_db() as conn:
+        current = TenancyRepository(conn).resolve_context(
+            user_id=actor.user_id,
+            business_id=actor.business_id,
+        )
+        current.assert_can_view_outcome_ledger()
+        current.assert_can_view_attribution_spine()
+        return RevenueAttributionRepository(conn).journey_snapshot(
+            business_id=current.business_id,
+            occurred_from=occurred_from,
+            occurred_to=occurred_to,
         )

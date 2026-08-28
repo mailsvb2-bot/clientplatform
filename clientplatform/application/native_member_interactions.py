@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from decimal import Decimal
 import logging
 import re
 from dataclasses import dataclass
@@ -29,7 +30,11 @@ from clientplatform.application.customer_timeline import (
     get_customer_timeline,
 )
 from clientplatform.application.customers import get_customer, list_customers
-from clientplatform.application.growth_cockpit import GrowthAction, get_growth_cockpit
+from clientplatform.application.growth_cockpit import (
+    GrowthAction,
+    acquisition_source_label,
+    get_growth_cockpit,
+)
 from clientplatform.application.programs import list_programs
 from clientplatform.application.progress import list_business_program_progress
 from clientplatform.application.sales_workspace import (
@@ -61,6 +66,7 @@ from clientplatform.domain.customer_interactions import (
     CustomerInteractionMessage,
 )
 from clientplatform.domain.messenger_channels import MessengerIngressRoute
+from clientplatform.domain.money import settlement_currency_minor_unit_exponent
 from clientplatform.domain.promotions import PromotionChannel, PromotionError
 from clientplatform.domain.sales import SalesError, SalesLeadStage
 from clientplatform.domain.tenancy import (
@@ -579,7 +585,7 @@ def _work_message(actor: TenantContext) -> CustomerInteractionMessage:
     if actor.role in _SUPPORT_ROLES:
         rows.extend(
             [
-                (_button("📊 Сегодня", "cpm:today"),),
+                (_button("💰 Деньги и результат", "cpm:today"),),
                 (_button("📈 Сегодня подробно", "cpm:today-full"),),
                 (_button("👥 Клиенты", "cpm:customers:0"),),
                 (_button("📅 Записи", "cpm:bookings"),),
@@ -1553,6 +1559,61 @@ def _permissions_message(actor: TenantContext) -> CustomerInteractionMessage:
         rows=((_button("👥 Команда", "cpm:team"),), _back_row()),
     )
 
+
+def _native_money_text(rows: object, *, empty: str) -> str:
+    values = tuple(rows or ())
+    if not values:
+        return empty
+    rendered: list[str] = []
+    for item in values:
+        exponent = settlement_currency_minor_unit_exponent(item.currency)
+        amount = Decimal(int(item.amount_minor)) / (Decimal(10) ** exponent)
+        amount_text = f"{amount:,.{exponent}f}" if exponent else f"{amount:,.0f}"
+        rendered.append(f"{amount_text.replace(',', ' ')} {str(item.currency).upper()}")
+    return ", ".join(rendered)
+
+
+def _native_journey_text(snapshot) -> str:
+    journey = snapshot.journey
+    best = next((item for item in journey.sources if item.source.value != "unknown"), None)
+    if best is None:
+        best_text = "пока недостаточно подтверждённых данных"
+    else:
+        label = acquisition_source_label(best.source)
+        revenue = _native_money_text(
+            best.revenue_by_currency,
+            empty="выручка пока не подтверждена",
+        )
+        best_text = f"{label} — {revenue} · оплативших: {best.paid_customers}"
+    verified = _native_money_text(
+        journey.verified_revenue_by_currency,
+        empty="пока нет подтверждённой выручки",
+    )
+    attributed = _native_money_text(
+        journey.attributed_revenue_by_currency,
+        empty="пока не связана с источниками",
+    )
+    unattributed = _native_money_text(
+        journey.unattributed_revenue_by_currency,
+        empty="0",
+    )
+    completion_text = (
+        "нет подтверждённых данных"
+        if "booking_completion_unavailable" in getattr(journey, "limitations", ())
+        else str(journey.completed_bookings)
+    )
+    return (
+        f"\n\nДеньги и путь клиента · {snapshot.period_days} дней\n"
+        f"• Лиды: {journey.leads} → записи: {journey.bookings} → "
+        f"пришли: {completion_text} → оплатили: {journey.paid_customers}\n"
+        f"• Вернувшиеся клиенты: {journey.reactivated_customers}\n"
+        f"• Подтверждённая выручка: {verified}\n"
+        f"• Связано с источником: {attributed}\n"
+        f"• Без подтверждённого источника: {unattributed}\n"
+        f"• Лучший подтверждённый источник: {best_text}"
+    )
+
+
 def _today_message(actor: TenantContext) -> CustomerInteractionMessage:
     summary = business_delivery_summary(actor=actor)
     action_lines: list[str] = []
@@ -1569,11 +1630,13 @@ def _today_message(actor: TenantContext) -> CustomerInteractionMessage:
         snapshot = None
     except RuntimeError:
         snapshot = None
+    journey_text = ""
     if snapshot is not None:
         action_lines = [
             f"{index}. {item.title} — {item.reason}"
             for index, item in enumerate(snapshot.actions[:5], start=1)
         ]
+        journey_text = _native_journey_text(snapshot)
         primary_action_button = _native_growth_action_button(actor, snapshot.next_action)
         if primary_action_button is not None and primary_action_button.command == "cpm:today":
             primary_action_button = None
@@ -1601,6 +1664,7 @@ def _today_message(actor: TenantContext) -> CustomerInteractionMessage:
             + f"В очереди отправки: {summary.dispatch_pending}\n"
             + f"Отправлено: {summary.dispatch_sent}\n"
             + f"Требуют внимания: {summary.dispatch_attention}"
+            + journey_text
             + action_text
         ),
         rows=tuple(rows),

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from typing import Any
@@ -12,6 +13,8 @@ from clientplatform.domain.revenue_attribution import (
     RevenueAttributionInvariantViolation,
     RevenueAttributionModel,
     RevenueAttributionRecord,
+    RevenueJourneySnapshot,
+    RevenueJourneySourceResult,
     UnitEconomicsSnapshot,
 )
 from clientplatform.infrastructure.attribution_repository import AttributionRepository
@@ -38,7 +41,7 @@ def _parse_datetime(value: Any) -> datetime:
 
 _OUTCOME_SELECT = """
     SELECT id, outcome_type, occurred_at, customer_id, subject_ref,
-           amount_minor, currency, source_type, source_id
+           amount_minor, currency, source_type, source_id, metadata_json
     FROM business_outcome_events
 """
 
@@ -121,12 +124,89 @@ class RevenueAttributionRepository:
         self._conn = conn
         self._attribution = AttributionRepository(conn)
 
+    def _financial_reference_id(
+        self,
+        *,
+        row: Any,
+        outcome_type: OutcomeType,
+    ) -> str | None:
+        if outcome_type == OutcomeType.REFUND_RECORDED:
+            raw_metadata = _value(row, "metadata_json", 9)
+            try:
+                metadata = json.loads(str(raw_metadata or "{}"))
+            except (TypeError, ValueError) as exc:
+                raise RevenueAttributionInvariantViolation(
+                    "refund outcome metadata is not valid JSON"
+                ) from exc
+            if not isinstance(metadata, dict):
+                raise RevenueAttributionInvariantViolation(
+                    "refund outcome metadata must be a JSON object"
+                )
+            if "payment_outcome_event_id" not in metadata:
+                return None
+            referenced_outcome_id = str(
+                metadata.get("payment_outcome_event_id") or ""
+            ).strip()
+            if not referenced_outcome_id:
+                raise RevenueAttributionInvariantViolation(
+                    "refund payment_outcome_event_id must not be blank"
+                )
+            return referenced_outcome_id
+        if outcome_type == OutcomeType.OUTCOME_REVERSAL:
+            source_type = str(_value(row, "source_type", 7) or "").strip()
+            source_id = str(_value(row, "source_id", 8) or "").strip()
+            if source_type == "outcome_event" and source_id:
+                return source_id
+        return None
+
+    def _financial_reference_row(
+        self,
+        *,
+        business_id: str,
+        row: Any,
+        outcome_type: OutcomeType,
+    ) -> tuple[str | None, Any | None]:
+        referenced_outcome_id = self._financial_reference_id(
+            row=row,
+            outcome_type=outcome_type,
+        )
+        if referenced_outcome_id is None:
+            return None, None
+        referenced = self._conn.execute(
+            _OUTCOME_SELECT + " WHERE business_id=? AND id=? LIMIT 1",
+            (str(business_id), referenced_outcome_id),
+        ).fetchone()
+        if referenced is None:
+            return referenced_outcome_id, None
+        referenced_type = OutcomeType(str(_value(referenced, "outcome_type", 1)))
+        if (
+            outcome_type == OutcomeType.REFUND_RECORDED
+            and referenced_type != OutcomeType.ORDER_PAID
+        ):
+            raise RevenueAttributionInvariantViolation(
+                "refund must reference an order_paid outcome"
+            )
+        occurred_at = _parse_datetime(_value(row, "occurred_at", 2))
+        referenced_at = _parse_datetime(_value(referenced, "occurred_at", 2))
+        if referenced_at > occurred_at:
+            raise RevenueAttributionInvariantViolation(
+                "financial correction cannot reference a future outcome"
+            )
+        return referenced_outcome_id, referenced
+
     def _resolve_money(
         self,
         *,
         business_id: str,
         row: Any,
+        _seen: frozenset[str] | None = None,
     ) -> tuple[int, str] | None:
+        outcome_id = str(_value(row, "id", 0))
+        seen = frozenset() if _seen is None else _seen
+        if outcome_id in seen:
+            raise RevenueAttributionInvariantViolation(
+                "financial correction reference cycle detected"
+            )
         outcome_type = OutcomeType(str(_value(row, "outcome_type", 1)))
         if outcome_type.value not in _SUPPORTED_MONEY_TYPES:
             return None
@@ -138,27 +218,146 @@ class RevenueAttributionRepository:
             return _direct_signed_amount(outcome_type, int(amount)), str(currency)
         if outcome_type != OutcomeType.OUTCOME_REVERSAL:
             return None
-        source_type = str(_value(row, "source_type", 7) or "").strip()
-        source_id = str(_value(row, "source_id", 8) or "").strip()
-        if source_type != "outcome_event" or not source_id:
-            return None
-        referenced = self._conn.execute(
-            _OUTCOME_SELECT + " WHERE business_id=? AND id=? LIMIT 1",
-            (str(business_id), source_id),
-        ).fetchone()
+        _, referenced = self._financial_reference_row(
+            business_id=str(business_id),
+            row=row,
+            outcome_type=outcome_type,
+        )
         if referenced is None:
             return None
-        referenced_type = OutcomeType(str(_value(referenced, "outcome_type", 1)))
-        referenced_amount = _value(referenced, "amount_minor", 5)
-        referenced_currency = _value(referenced, "currency", 6)
-        if (
-            referenced_type.value not in _SUPPORTED_MONEY_TYPES
-            or referenced_amount is None
-            or referenced_currency is None
-        ):
+        referenced_money = self._resolve_money(
+            business_id=str(business_id),
+            row=referenced,
+            _seen=seen | {outcome_id},
+        )
+        if referenced_money is None:
             return None
-        referenced_signed = _direct_signed_amount(referenced_type, int(referenced_amount))
-        return -referenced_signed, str(referenced_currency)
+        referenced_signed, referenced_currency = referenced_money
+        return -referenced_signed, referenced_currency
+
+    def _referenced_financial_attribution(
+        self,
+        *,
+        business_id: str,
+        row: Any,
+        outcome_type: OutcomeType,
+        occurred_at: datetime,
+        currency: str,
+    ) -> tuple[str | None, RevenueAttributionRecord | None]:
+        """Return referenced money outcome id and its durable source evidence, if any."""
+
+        referenced_outcome_id, referenced_row = self._financial_reference_row(
+            business_id=str(business_id),
+            row=row,
+            outcome_type=outcome_type,
+        )
+        if referenced_outcome_id is None:
+            return None, None
+        if referenced_row is None:
+            return referenced_outcome_id, None
+        referenced = self.get_for_outcome(
+            business_id=str(business_id),
+            outcome_event_id=referenced_outcome_id,
+        )
+        if referenced is None:
+            return referenced_outcome_id, None
+        if referenced.occurred_at > occurred_at:
+            raise RevenueAttributionInvariantViolation(
+                "financial correction cannot inherit attribution from a future outcome"
+            )
+        if referenced.currency != str(currency).upper():
+            raise RevenueAttributionInvariantViolation(
+                "financial correction currency disagrees with referenced attribution"
+            )
+        return referenced_outcome_id, referenced
+
+    def _reconcile_existing_correction(
+        self,
+        *,
+        existing: RevenueAttributionRecord,
+        referenced_outcome_id: str,
+        inherited: RevenueAttributionRecord | None,
+        outcome_type: OutcomeType,
+        signed_amount: int,
+        currency: str,
+        occurred_at: datetime,
+        customer_id: str | None,
+    ) -> RevenueAttributionRecord:
+        """Repair a legacy correction attribution against its canonical referenced money fact."""
+
+        if (
+            existing.outcome_type != outcome_type
+            or existing.amount_minor != signed_amount
+            or existing.currency != str(currency).upper()
+            or existing.occurred_at != occurred_at
+        ):
+            raise RevenueAttributionInvariantViolation(
+                "existing correction attribution disagrees with canonical money evidence"
+            )
+        if (
+            inherited is not None
+            and customer_id is not None
+            and inherited.customer_id is not None
+            and inherited.customer_id != customer_id
+        ):
+            raise RevenueAttributionInvariantViolation(
+                "financial correction customer disagrees with referenced attribution"
+            )
+
+        if inherited is None:
+            desired = (
+                None,
+                None,
+                AcquisitionSource.UNKNOWN,
+                "outcome_event",
+                referenced_outcome_id,
+                None,
+            )
+        else:
+            desired = (
+                inherited.touch_id,
+                inherited.attribution_identity_id,
+                inherited.source,
+                inherited.source_ref_type,
+                inherited.source_ref_id,
+                inherited.promotion_campaign_id,
+            )
+        current = (
+            existing.touch_id,
+            existing.attribution_identity_id,
+            existing.source,
+            existing.source_ref_type,
+            existing.source_ref_id,
+            existing.promotion_campaign_id,
+        )
+        if current == desired:
+            return existing
+
+        self._conn.execute(
+            """
+            UPDATE revenue_attributions
+            SET touch_id=?, attribution_identity_id=?, source=?, source_ref_type=?,
+                source_ref_id=?, promotion_campaign_id=?
+            WHERE id=? AND business_id=?
+            """,
+            (
+                desired[0],
+                desired[1],
+                desired[2].value,
+                desired[3],
+                desired[4],
+                desired[5],
+                existing.id,
+                existing.business_id,
+            ),
+        )
+        repaired = self.get_for_outcome(
+            business_id=existing.business_id,
+            outcome_event_id=existing.outcome_event_id,
+        )
+        if repaired is None:
+            raise RuntimeError("legacy correction attribution disappeared during reconciliation")
+        return repaired
 
     def get_for_outcome(
         self,
@@ -180,8 +379,15 @@ class RevenueAttributionRepository:
         outcome_event_id: str,
         created_at: datetime | None = None,
     ) -> RevenueAttributionRecord | None:
-        """Persist the canonical first-touch decision for one monetary outcome, if attributable."""
+        """Persist or replay the durable first-touch decision for one monetary outcome."""
 
+        # Load the canonical outcome before replaying durable attribution. Legacy
+        # correction rows may have been materialized against an independent later
+        # touch and must be reconciled against their referenced payment first.
+        existing = self.get_for_outcome(
+            business_id=str(business_id),
+            outcome_event_id=str(outcome_event_id),
+        )
         row = self._conn.execute(
             _OUTCOME_SELECT + " WHERE business_id=? AND id=? LIMIT 1",
             (str(business_id), str(outcome_event_id)),
@@ -201,6 +407,38 @@ class RevenueAttributionRepository:
         customer_id = None if customer_value is None else str(customer_value)
         subject_value = _value(row, "subject_ref", 4)
         subject_ref = None if subject_value is None else str(subject_value)
+        referenced_outcome_id, inherited = self._referenced_financial_attribution(
+            business_id=str(business_id),
+            row=row,
+            outcome_type=outcome_type,
+            occurred_at=outcome_occurred_at,
+            currency=currency,
+        )
+        if existing is not None:
+            if referenced_outcome_id is None:
+                return existing
+            return self._reconcile_existing_correction(
+                existing=existing,
+                referenced_outcome_id=referenced_outcome_id,
+                inherited=inherited,
+                outcome_type=outcome_type,
+                signed_amount=signed_amount,
+                currency=currency,
+                occurred_at=outcome_occurred_at,
+                customer_id=customer_id,
+            )
+        if referenced_outcome_id is not None and inherited is None:
+            # A later touch must never retroactively explain an earlier unattributed payment.
+            return None
+        if (
+            inherited is not None
+            and customer_id is not None
+            and inherited.customer_id is not None
+            and inherited.customer_id != customer_id
+        ):
+            raise RevenueAttributionInvariantViolation(
+                "financial correction customer disagrees with referenced attribution"
+            )
 
         customer_trace = None
         if customer_id is not None:
@@ -222,12 +460,28 @@ class RevenueAttributionRepository:
             if booking_trace is not None and booking_trace.touch.occurred_at > outcome_occurred_at:
                 booking_trace = None
         trace = booking_trace or customer_trace
-        if trace is None:
+        if inherited is None and trace is None:
             return None
         if customer_trace is not None and booking_trace is not None and customer_trace.touch.id != booking_trace.touch.id:
             raise RevenueAttributionInvariantViolation("customer and booking attribution disagree")
-        if customer_id is not None and trace.touch.customer_id != customer_id:
+        if inherited is None and customer_id is not None and trace is not None and trace.touch.customer_id != customer_id:
             raise RevenueAttributionInvariantViolation("monetary outcome customer does not match acquisition touch")
+
+        if inherited is not None:
+            touch_id = inherited.touch_id
+            attribution_identity_id = inherited.attribution_identity_id
+            source = inherited.source
+            source_ref_type = inherited.source_ref_type
+            source_ref_id = inherited.source_ref_id
+            promotion_campaign_id = inherited.promotion_campaign_id
+        else:
+            assert trace is not None
+            touch_id = trace.touch.id
+            attribution_identity_id = trace.identity.id
+            source = trace.identity.source
+            source_ref_type = trace.identity.source_ref_type
+            source_ref_id = trace.identity.source_ref_id
+            promotion_campaign_id = trace.identity.promotion_campaign_id
 
         stamp = created_at or datetime.now(timezone.utc)
         record = RevenueAttributionRecord(
@@ -236,12 +490,12 @@ class RevenueAttributionRepository:
             outcome_event_id=str(_value(row, "id", 0)),
             outcome_type=outcome_type,
             customer_id=customer_id,
-            touch_id=trace.touch.id,
-            attribution_identity_id=trace.identity.id,
-            source=trace.identity.source,
-            source_ref_type=trace.identity.source_ref_type,
-            source_ref_id=trace.identity.source_ref_id,
-            promotion_campaign_id=trace.identity.promotion_campaign_id,
+            touch_id=touch_id,
+            attribution_identity_id=attribution_identity_id,
+            source=source,
+            source_ref_type=source_ref_type,
+            source_ref_id=source_ref_id,
+            promotion_campaign_id=promotion_campaign_id,
             model_version=RevenueAttributionModel.FIRST_TOUCH_V1,
             amount_minor=signed_amount,
             currency=currency,
@@ -311,15 +565,331 @@ class RevenueAttributionRepository:
                 _serialize_datetime(occurred_to),
             ),
         ).fetchall()
-        accepted: list[RevenueAttributionRecord] = []
-        for row in rows:
-            record = self.materialize_outcome(
+        outcome_event_ids = [str(_value(row, "id", 0)) for row in rows]
+        graph_ids: list[str] = []
+        visited: set[str] = set()
+        visiting: set[str] = set()
+
+        def visit(outcome_event_id: str) -> None:
+            if outcome_event_id in visited:
+                return
+            if outcome_event_id in visiting:
+                raise RevenueAttributionInvariantViolation(
+                    "financial correction reference cycle detected"
+                )
+            row = self._conn.execute(
+                _OUTCOME_SELECT + " WHERE business_id=? AND id=? LIMIT 1",
+                (str(business_id), outcome_event_id),
+            ).fetchone()
+            if row is None:
+                return
+            outcome_type = OutcomeType(str(_value(row, "outcome_type", 1)))
+            if outcome_type.value not in _SUPPORTED_MONEY_TYPES:
+                return
+            visiting.add(outcome_event_id)
+            referenced_outcome_id, referenced = self._financial_reference_row(
                 business_id=str(business_id),
-                outcome_event_id=str(_value(row, "id", 0)),
+                row=row,
+                outcome_type=outcome_type,
             )
-            if record is not None:
-                accepted.append(record)
-        return accepted
+            if referenced_outcome_id is not None and referenced is not None:
+                referenced_type = OutcomeType(str(_value(referenced, "outcome_type", 1)))
+                if referenced_type.value in _SUPPORTED_MONEY_TYPES:
+                    visit(referenced_outcome_id)
+            visiting.remove(outcome_event_id)
+            visited.add(outcome_event_id)
+            graph_ids.append(outcome_event_id)
+
+        for outcome_event_id in outcome_event_ids:
+            visit(outcome_event_id)
+
+        previous_signature: dict[str, tuple[object, ...] | None] | None = None
+        accepted_by_event: dict[str, RevenueAttributionRecord] = {}
+        for _ in range(len(graph_ids) + 2):
+            current_signature: dict[str, tuple[object, ...] | None] = {}
+            current_records: dict[str, RevenueAttributionRecord] = {}
+            for outcome_event_id in graph_ids:
+                record = self.materialize_outcome(
+                    business_id=str(business_id),
+                    outcome_event_id=outcome_event_id,
+                )
+                current_signature[outcome_event_id] = (
+                    None if record is None else _semantic(record)
+                )
+                if record is not None:
+                    current_records[outcome_event_id] = record
+            if current_signature == previous_signature:
+                accepted_by_event = current_records
+                break
+            previous_signature = current_signature
+        else:
+            raise RevenueAttributionInvariantViolation(
+                "financial attribution reconciliation did not converge"
+            )
+        return [
+            accepted_by_event[outcome_event_id]
+            for outcome_event_id in outcome_event_ids
+            if outcome_event_id in accepted_by_event
+        ]
+
+    def _event_source(self, *, business_id: str, row: Any) -> AcquisitionSource:
+        """Resolve one non-monetary outcome through the existing first-touch spine."""
+
+        occurred_at = _parse_datetime(_value(row, "occurred_at", 2))
+        customer_value = _value(row, "customer_id", 3)
+        customer_id = None if customer_value is None else str(customer_value)
+        subject_value = _value(row, "subject_ref", 4)
+        subject_ref = None if subject_value is None else str(subject_value)
+        outcome_type = OutcomeType(str(_value(row, "outcome_type", 1)))
+        source_type = str(_value(row, "source_type", 7) or "").strip()
+        source_id = str(_value(row, "source_id", 8) or "").strip()
+
+        if outcome_type == OutcomeType.CUSTOMER_REACTIVATED and source_type == "outcome_event":
+            if not source_id:
+                return AcquisitionSource.UNKNOWN
+            referenced = self.get_for_outcome(
+                business_id=str(business_id),
+                outcome_event_id=source_id,
+            )
+            if referenced is None:
+                return AcquisitionSource.UNKNOWN
+            if referenced.outcome_type != OutcomeType.ORDER_PAID:
+                raise RevenueAttributionInvariantViolation(
+                    "customer reactivation must reference an attributed order_paid outcome"
+                )
+            if referenced.occurred_at > occurred_at:
+                raise RevenueAttributionInvariantViolation(
+                    "customer reactivation cannot reference future payment attribution"
+                )
+            if (
+                customer_id is not None
+                and referenced.customer_id is not None
+                and referenced.customer_id != customer_id
+            ):
+                raise RevenueAttributionInvariantViolation(
+                    "customer reactivation customer disagrees with referenced payment attribution"
+                )
+            return referenced.source
+
+        customer_trace = None
+        if customer_id is not None:
+            customer_trace = self._attribution.get_customer_trace(
+                business_id=str(business_id),
+                customer_id=customer_id,
+            )
+            if customer_trace is not None and customer_trace.touch.occurred_at > occurred_at:
+                customer_trace = None
+
+        booking_trace = None
+        if subject_ref and subject_ref.startswith("booking_slot:"):
+            booking_slot_id = subject_ref.removeprefix("booking_slot:").strip()
+            if booking_slot_id:
+                booking_trace = self._attribution.get_booking_trace(
+                    business_id=str(business_id),
+                    booking_slot_id=booking_slot_id,
+                )
+                if booking_trace is not None and booking_trace.touch.occurred_at > occurred_at:
+                    booking_trace = None
+
+        if (
+            customer_trace is not None
+            and booking_trace is not None
+            and customer_trace.touch.id != booking_trace.touch.id
+        ):
+            raise RevenueAttributionInvariantViolation(
+                "customer and booking attribution disagree in revenue journey"
+            )
+        trace = booking_trace or customer_trace
+        if trace is None:
+            return AcquisitionSource.UNKNOWN
+        return trace.identity.source
+
+    def journey_snapshot(
+        self,
+        *,
+        business_id: str,
+        occurred_from: datetime,
+        occurred_to: datetime,
+    ) -> RevenueJourneySnapshot:
+        """Project source → booking → payment → reactivation without new durable state."""
+
+        if (
+            occurred_from.tzinfo is None
+            or occurred_to.tzinfo is None
+            or occurred_to <= occurred_from
+        ):
+            raise ValueError("revenue journey window must be timezone-aware and non-empty")
+
+        records = self.reconcile_window(
+            business_id=str(business_id),
+            occurred_from=occurred_from,
+            occurred_to=occurred_to,
+        )
+        records_by_event = {record.outcome_event_id: record for record in records}
+        known_records = tuple(
+            record for record in records if record.source != AcquisitionSource.UNKNOWN
+        )
+        event_rows = self._conn.execute(
+            _OUTCOME_SELECT + " WHERE business_id=? AND occurred_at>=? AND occurred_at<?",
+            (
+                str(business_id),
+                _serialize_datetime(occurred_from),
+                _serialize_datetime(occurred_to),
+            ),
+        ).fetchall()
+        event_types = Counter(str(_value(row, "outcome_type", 1)) for row in event_rows)
+
+        verified_totals: dict[str, int] = defaultdict(int)
+        attributed_totals: dict[str, int] = defaultdict(int)
+        source_revenue: dict[AcquisitionSource, dict[str, int]] = defaultdict(
+            lambda: defaultdict(int)
+        )
+        source_counts: dict[AcquisitionSource, Counter[str]] = defaultdict(Counter)
+        source_paid_customers: dict[AcquisitionSource, set[str]] = defaultdict(set)
+        source_reactivated_customers: dict[AcquisitionSource, set[str]] = defaultdict(set)
+        all_paid_customers: set[str] = set()
+        all_reactivated_customers: set[str] = set()
+        monetary_outcomes = 0
+        stage_source_unknown = False
+
+        for record in known_records:
+            attributed_totals[record.currency] += record.amount_minor
+
+        for row in event_rows:
+            event_id = str(_value(row, "id", 0))
+            outcome_type = OutcomeType(str(_value(row, "outcome_type", 1)))
+            customer_value = _value(row, "customer_id", 3)
+            customer_id = None if customer_value is None else str(customer_value)
+
+            if outcome_type in {
+                OutcomeType.LEAD_CREATED,
+                OutcomeType.BOOKING_CREATED,
+                OutcomeType.BOOKING_COMPLETED,
+                OutcomeType.CUSTOMER_REACTIVATED,
+            }:
+                source = self._event_source(business_id=str(business_id), row=row)
+                if source == AcquisitionSource.UNKNOWN:
+                    stage_source_unknown = True
+                if outcome_type == OutcomeType.LEAD_CREATED:
+                    source_counts[source]["leads"] += 1
+                elif outcome_type == OutcomeType.BOOKING_CREATED:
+                    source_counts[source]["bookings"] += 1
+                elif outcome_type == OutcomeType.BOOKING_COMPLETED:
+                    source_counts[source]["completed_bookings"] += 1
+                elif customer_id is not None:
+                    source_reactivated_customers[source].add(customer_id)
+                    all_reactivated_customers.add(customer_id)
+
+            resolved_money = self._resolve_money(business_id=str(business_id), row=row)
+            if resolved_money is None:
+                continue
+            monetary_outcomes += 1
+            signed_amount, currency = resolved_money
+            verified_totals[currency] += signed_amount
+            record = records_by_event.get(event_id)
+            money_source = record.source if record is not None else AcquisitionSource.UNKNOWN
+            source_revenue[money_source][currency] += signed_amount
+            if (
+                outcome_type == OutcomeType.ORDER_PAID
+                and signed_amount > 0
+                and customer_id is not None
+            ):
+                all_paid_customers.add(customer_id)
+                source_paid_customers[money_source].add(customer_id)
+
+        all_sources = set(source_counts) | set(source_revenue) | set(source_paid_customers)
+        all_sources |= set(source_reactivated_customers)
+        verified_currencies = set(verified_totals)
+        rank_currency = next(iter(verified_currencies)) if len(verified_currencies) == 1 else None
+
+        source_rows: list[RevenueJourneySourceResult] = []
+        for source in all_sources:
+            revenue = tuple(
+                MoneyBreakdown(currency=currency, amount_minor=amount)
+                for currency, amount in sorted(source_revenue[source].items())
+            )
+            source_rows.append(
+                RevenueJourneySourceResult(
+                    source=source,
+                    leads=source_counts[source]["leads"],
+                    bookings=source_counts[source]["bookings"],
+                    completed_bookings=source_counts[source]["completed_bookings"],
+                    paid_customers=len(source_paid_customers[source]),
+                    reactivated_customers=len(source_reactivated_customers[source]),
+                    revenue_by_currency=revenue,
+                )
+            )
+
+        def source_rank(item: RevenueJourneySourceResult) -> tuple[object, ...]:
+            revenue_amount = 0
+            if rank_currency is not None:
+                revenue_amount = next(
+                    (
+                        money.amount_minor
+                        for money in item.revenue_by_currency
+                        if money.currency == rank_currency
+                    ),
+                    0,
+                )
+            return (
+                item.source == AcquisitionSource.UNKNOWN,
+                -revenue_amount,
+                -item.paid_customers,
+                -item.completed_bookings,
+                -item.bookings,
+                -item.leads,
+                item.source.value,
+            )
+
+        source_rows.sort(key=source_rank)
+        unattributed_totals: dict[str, int] = {}
+        for currency in sorted(set(verified_totals) | set(attributed_totals)):
+            difference = verified_totals[currency] - attributed_totals.get(currency, 0)
+            if difference != 0:
+                unattributed_totals[currency] = difference
+
+        limitations: list[str] = []
+        unattributed_count = monetary_outcomes - len(known_records)
+        if unattributed_count:
+            limitations.append("attribution_incomplete")
+        # Booking completion has a canonical outcome type but no production writer yet.
+        # Keep the stage explicitly unavailable instead of presenting a misleading zero.
+        limitations.append("booking_completion_unavailable")
+        if len(verified_totals) > 1:
+            limitations.append("verified_revenue_mixed_currency")
+        if stage_source_unknown:
+            limitations.append("journey_source_incomplete")
+
+        return RevenueJourneySnapshot(
+            business_id=str(business_id),
+            model_version=RevenueAttributionModel.FIRST_TOUCH_V1,
+            occurred_from=occurred_from,
+            occurred_to=occurred_to,
+            leads=event_types[OutcomeType.LEAD_CREATED.value],
+            qualified_leads=event_types[OutcomeType.LEAD_QUALIFIED.value],
+            bookings=event_types[OutcomeType.BOOKING_CREATED.value],
+            confirmed_bookings=event_types[OutcomeType.BOOKING_CONFIRMED.value],
+            completed_bookings=event_types[OutcomeType.BOOKING_COMPLETED.value],
+            paid_customers=len(all_paid_customers),
+            reactivated_customers=len(all_reactivated_customers),
+            monetary_outcomes=monetary_outcomes,
+            attributed_monetary_outcomes=len(known_records),
+            unattributed_monetary_outcomes=unattributed_count,
+            verified_revenue_by_currency=tuple(
+                MoneyBreakdown(currency=currency, amount_minor=amount)
+                for currency, amount in sorted(verified_totals.items())
+            ),
+            attributed_revenue_by_currency=tuple(
+                MoneyBreakdown(currency=currency, amount_minor=amount)
+                for currency, amount in sorted(attributed_totals.items())
+            ),
+            unattributed_revenue_by_currency=tuple(
+                MoneyBreakdown(currency=currency, amount_minor=amount)
+                for currency, amount in sorted(unattributed_totals.items())
+            ),
+            sources=tuple(source_rows),
+            limitations=tuple(limitations),
+        )
 
     def snapshot(
         self,
@@ -335,6 +905,9 @@ class RevenueAttributionRepository:
             business_id=business_id,
             occurred_from=occurred_from,
             occurred_to=occurred_to,
+        )
+        known_records = tuple(
+            record for record in records if record.source != AcquisitionSource.UNKNOWN
         )
         event_rows = self._conn.execute(
             _OUTCOME_SELECT + " WHERE business_id=? AND occurred_at>=? AND occurred_at<?",
@@ -360,7 +933,7 @@ class RevenueAttributionRepository:
         )
         revenue_totals: dict[str, int] = defaultdict(int)
         source_counts: Counter[AcquisitionSource] = Counter()
-        for record in records:
+        for record in known_records:
             revenue_totals[record.currency] += record.amount_minor
             source_counts[record.source] += 1
         breakdown = tuple(
@@ -369,7 +942,7 @@ class RevenueAttributionRepository:
         )
         attributed_revenue = breakdown[0] if len(breakdown) == 1 else None
         limitations: list[str] = []
-        if len(records) != monetary_outcomes:
+        if len(known_records) != monetary_outcomes:
             limitations.append("attribution_incomplete")
         if len(breakdown) > 1:
             limitations.append("revenue_mixed_currency")
@@ -401,8 +974,8 @@ class RevenueAttributionRepository:
             bookings=event_types[OutcomeType.BOOKING_CREATED.value],
             paid_customers=len(paid_customers),
             monetary_outcomes=monetary_outcomes,
-            attributed_monetary_outcomes=len(records),
-            unattributed_monetary_outcomes=monetary_outcomes - len(records),
+            attributed_monetary_outcomes=len(known_records),
+            unattributed_monetary_outcomes=monetary_outcomes - len(known_records),
             revenue_by_currency=breakdown,
             spend=verified_spend,
             cpl_minor=cpl,

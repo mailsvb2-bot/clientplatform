@@ -95,7 +95,38 @@ class NativeMemberParityNavigationTests(unittest.TestCase):
             reason="Сохранён следующий шаг: позвонить.",
             action_key=f"sales_lead:{lead_id}",
         )
-        snapshot = SimpleNamespace(actions=(action,), next_action=action)
+        journey = SimpleNamespace(
+            leads=11,
+            bookings=5,
+            completed_bookings=4,
+            paid_customers=3,
+            reactivated_customers=2,
+            limitations=("booking_completion_unavailable",),
+            verified_revenue_by_currency=(
+                SimpleNamespace(amount_minor=34_200_00, currency="RUB"),
+            ),
+            attributed_revenue_by_currency=(
+                SimpleNamespace(amount_minor=27_900_00, currency="RUB"),
+            ),
+            unattributed_revenue_by_currency=(
+                SimpleNamespace(amount_minor=6_300_00, currency="RUB"),
+            ),
+            sources=(
+                SimpleNamespace(
+                    source=SimpleNamespace(value="vk"),
+                    revenue_by_currency=(
+                        SimpleNamespace(amount_minor=34_200_00, currency="RUB"),
+                    ),
+                    paid_customers=3,
+                ),
+            ),
+        )
+        snapshot = SimpleNamespace(
+            actions=(action,),
+            next_action=action,
+            journey=journey,
+            period_days=7,
+        )
         summary = SimpleNamespace(
             customers=4,
             programs=2,
@@ -110,10 +141,54 @@ class NativeMemberParityNavigationTests(unittest.TestCase):
             message = ui._today_message(actor)
         self.assertIn("Важные действия", message.text)
         self.assertIn("Следующий шаг по клиенту: Анна", message.text)
+        self.assertIn("Деньги и путь клиента · 7 дней", message.text)
+        self.assertIn("пришли: нет подтверждённых данных", message.text)
+        self.assertNotIn("пришли: 4", message.text)
+        self.assertIn("Подтверждённая выручка: 34 200.00 RUB", message.text)
+        self.assertIn("Связано с источником: 27 900.00 RUB", message.text)
+        self.assertIn("Без подтверждённого источника: 6 300.00 RUB", message.text)
+        self.assertIn("Лучший подтверждённый источник: ВКонтакте", message.text)
         commands = _commands(message)
         self.assertEqual(commands[0], f"cpm:sales-lead:{lead_id}")
         self.assertEqual(sum(command.startswith("cpm:sales-lead:") for command in commands), 1)
         self.assertLessEqual(sum(len(row) for row in message.rows), 10)
+
+    def test_native_money_and_source_labels_match_canonical_semantics(self) -> None:
+        money = ui._native_money_text(
+            (
+                SimpleNamespace(amount_minor=500, currency="JPY"),
+                SimpleNamespace(amount_minor=1234, currency="KWD"),
+            ),
+            empty="нет",
+        )
+        self.assertEqual(money, "500 JPY, 1.234 KWD")
+
+        for source, label in (
+            ("organic", "Органика"),
+            ("partner", "Партнёры"),
+            ("manual_import", "Импорт / вручную"),
+        ):
+            journey = SimpleNamespace(
+                leads=1,
+                bookings=1,
+                completed_bookings=1,
+                paid_customers=1,
+                reactivated_customers=0,
+                verified_revenue_by_currency=(SimpleNamespace(amount_minor=500, currency="JPY"),),
+                attributed_revenue_by_currency=(SimpleNamespace(amount_minor=500, currency="JPY"),),
+                unattributed_revenue_by_currency=(),
+                sources=(
+                    SimpleNamespace(
+                        source=SimpleNamespace(value=source),
+                        revenue_by_currency=(SimpleNamespace(amount_minor=500, currency="JPY"),),
+                        paid_customers=1,
+                    ),
+                ),
+            )
+            text = ui._native_journey_text(SimpleNamespace(journey=journey, period_days=7))
+            self.assertIn("Связано с источником: 500 JPY", text)
+            self.assertIn(f"Лучший подтверждённый источник: {label}", text)
+            self.assertNotIn(f": {source}", text)
 
     def test_work_section_contains_telegram_admin_operational_reads(self) -> None:
         message = ui._work_message(_actor(PlatformRole.OWNER))
