@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from clientplatform.application.partner_scoring import score_partner
 from clientplatform.domain.email_outbound import EmailPayload, normalize_email_address
+from clientplatform.domain.tenancy import PlatformRole
 from clientplatform.domain.partners import (
     ContactBasis,
     PartnerCampaignGoal,
@@ -65,9 +66,9 @@ class EmailOutboundFixture:
         clientplatform_partners.ensure(self.conn)
         clientplatform_connections.ensure(self.conn)
         clientplatform_provider_dispatch.ensure(self.conn)
-        tenancy = TenancyRepository(self.conn)
-        access = tenancy.create_business(owner_user_id=7171, name="Email outbound")
-        self.actor = tenancy.resolve_context(
+        self.tenancy = TenancyRepository(self.conn)
+        access = self.tenancy.create_business(owner_user_id=7171, name="Email outbound")
+        self.actor = self.tenancy.resolve_context(
             user_id=7171,
             business_id=access.business.id,
         )
@@ -194,6 +195,28 @@ class ClientPlatformEmailOutboundTests(unittest.TestCase):
         raw = "|".join(str(value) for value in approval)
         self.assertNotIn(candidate.contact_value, raw)
         self.assertNotIn(payload.body, raw)
+
+    def test_public_business_email_approval_is_owner_only(self) -> None:
+        candidate = self.fx.candidate(email="owner-only@example.org")
+        self.fx.tenancy.grant_member(
+            actor=self.fx.actor,
+            user_id=7172,
+            role=PlatformRole.MARKETER,
+        )
+        marketer = self.fx.tenancy.resolve_context(
+            user_id=7172,
+            business_id=self.fx.actor.business_id,
+        )
+        with self.assertRaisesRegex(
+            PartnerInvariantViolation,
+            "requires the business owner",
+        ):
+            self.fx.outbox.materialize_partner_outreach(
+                actor=marketer,
+                candidate_id=candidate.id,
+                connection_id=self.fx.connection.id,
+                explicit_owner_approval=True,
+            )
 
     def test_opted_in_email_does_not_need_public_contact_approval(self) -> None:
         candidate = self.fx.candidate(

@@ -81,7 +81,6 @@ _CLIENTPLATFORM_EXTERNAL_PRODUCT_FILES = (
     "clientplatform/infrastructure/attribution_repository.py",
     "clientplatform/infrastructure/external_product_repository.py",
     "clientplatform/runtime/external_product_http.py",
-    "runtime/messenger_webhooks.py",
     "services/db/schema/clientplatform_external_products.py",
 )
 

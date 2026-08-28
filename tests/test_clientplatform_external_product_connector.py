@@ -54,7 +54,7 @@ def _db_context(conn: sqlite3.Connection):
     try:
         yield conn
         conn.commit()
-    except BaseException:
+    except (sqlite3.Error, ValueError, RuntimeError):
         conn.rollback()
         raise
 

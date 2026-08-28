@@ -26,6 +26,7 @@ from clientplatform.domain.partners import (
     PartnerCandidateStatus,
     PartnerInvariantViolation,
 )
+from clientplatform.domain.tenancy import PlatformRole
 from clientplatform.integrations.partner_discovery import PartnerDiscoveryUnavailable
 from clientplatform.integrations.partner_discovery_runtime import (
     build_connected_partner_discovery,
@@ -196,7 +197,10 @@ async def _render_candidate(
     )
     rows: list[list[tuple[str, str]]] = []
     if channel == PartnerChannel.EMAIL and connections:
-        if candidate.contact_basis == ContactBasis.PUBLIC_BUSINESS_CONTACT:
+        if (
+            candidate.contact_basis == ContactBasis.PUBLIC_BUSINESS_CONTACT
+            and actor.role == PlatformRole.OWNER
+        ):
             rows.append(
                 [
                     (

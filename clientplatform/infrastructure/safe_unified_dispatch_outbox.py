@@ -14,7 +14,7 @@ from clientplatform.domain.partners import (
     PartnerChannel,
     PartnerInvariantViolation,
 )
-from clientplatform.domain.tenancy import TenantContext, normalize_uuid
+from clientplatform.domain.tenancy import PlatformRole, TenantContext, normalize_uuid
 from clientplatform.infrastructure.partner_repository import PartnerRepository
 from clientplatform.infrastructure.sales_followup_repository import SalesFollowupRepository
 from clientplatform.infrastructure.safe_dispatch_outbox import (
@@ -163,10 +163,15 @@ class DispatchOutboxRepository(_UnifiedDispatchOutboxRepository):
             public_business_approval = (
                 str(candidate.contact_basis.value) == "public_business_contact"
             )
-            if public_business_approval and not explicit_owner_approval:
-                raise PartnerInvariantViolation(
-                    "public business email requires explicit owner approval"
-                )
+            if public_business_approval:
+                if not explicit_owner_approval:
+                    raise PartnerInvariantViolation(
+                        "public business email requires explicit owner approval"
+                    )
+                if current.role != PlatformRole.OWNER:
+                    raise PartnerInvariantViolation(
+                        "public business email approval requires the business owner"
+                    )
             if not public_business_approval and not candidate.first_contact_permitted:
                 raise PartnerInvariantViolation(
                     "partner has not granted automatic first-contact authority"
