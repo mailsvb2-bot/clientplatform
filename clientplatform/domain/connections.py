@@ -41,6 +41,7 @@ class ConnectionPlatform(StrEnum):
     TELEGRAM = "telegram"
     VK = "vk"
     MAX = "max"
+    EMAIL = "email"
 
 
 class ConnectionType(StrEnum):
@@ -51,6 +52,7 @@ class ConnectionType(StrEnum):
     VK_COMMUNITY = "vk_community"
     MAX_SHARED_BOT = "max_shared_bot"
     MAX_PERSONAL_BOT = "max_personal_bot"
+    EMAIL_SMTP = "email_smtp"
 
 
 class ConnectionStatus(StrEnum):
@@ -84,6 +86,7 @@ _CONNECTION_TYPE_PLATFORM = {
     ConnectionType.VK_COMMUNITY: ConnectionPlatform.VK,
     ConnectionType.MAX_SHARED_BOT: ConnectionPlatform.MAX,
     ConnectionType.MAX_PERSONAL_BOT: ConnectionPlatform.MAX,
+    ConnectionType.EMAIL_SMTP: ConnectionPlatform.EMAIL,
 }
 
 

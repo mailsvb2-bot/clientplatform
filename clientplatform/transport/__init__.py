@@ -3,6 +3,14 @@ from clientplatform.transport.base import (
     CredentialProvider,
     DispatchAdapter,
 )
+from clientplatform.transport.email import (
+    EmailPayload,
+    SmtpCredential,
+    SmtpEmailClient,
+    SmtpEmailDispatchAdapter,
+    SmtpEmailError,
+    normalize_email_address,
+)
 from clientplatform.transport.media import (
     HmacMediaGatewayResolver,
     MediaReferenceError,
@@ -25,14 +33,20 @@ __all__ = [
     "AiohttpTelegramBotClient",
     "CredentialProvider",
     "DispatchAdapter",
+    "EmailPayload",
     "HmacMediaGatewayResolver",
     "MaxDispatchAdapter",
     "MediaReferenceError",
     "MediaReferenceResolver",
     "NativeMessengerClient",
     "SafeMediaReferenceResolver",
+    "SmtpCredential",
+    "SmtpEmailClient",
+    "SmtpEmailDispatchAdapter",
+    "SmtpEmailError",
     "TelegramBotApiError",
     "TelegramBotClient",
     "TelegramDispatchAdapter",
     "VkDispatchAdapter",
+    "normalize_email_address",
 ]

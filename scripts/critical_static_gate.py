@@ -75,6 +75,19 @@ _CLIENTPLATFORM_YANDEX_ANALYTICS_FILES = (
     "handlers/clientplatform_yandex_analytics.py",
 )
 
+_CLIENTPLATFORM_EMAIL_OUTBOUND_FILES = (
+    "clientplatform/application/email_connections.py",
+    "clientplatform/application/partner_runtime.py",
+    "clientplatform/domain/email_outbound.py",
+    "clientplatform/infrastructure/connection_credentials.py",
+    "clientplatform/infrastructure/safe_unified_dispatch_outbox.py",
+    "clientplatform/runtime/dispatch_runtime.py",
+    "clientplatform/transport/email.py",
+    "handlers/clientplatform_partner_growth.py",
+    "services/migrations/clientplatform_email_outbound_v1.py",
+)
+
+
 _CLIENTPLATFORM_NATIVE_MESSENGER_FILES = (
     "clientplatform/application/dispatch_worker.py",
     "clientplatform/application/max_dispatch_pacing.py",
@@ -143,6 +156,7 @@ TYPE_CONTRACT_FILES = (
     "services/sales_desk_repository.py",
     "services/sales_desk_sync.py",
     *_CLIENTPLATFORM_MANAGED_BOT_TYPE_FILES,
+    *_CLIENTPLATFORM_EMAIL_OUTBOUND_FILES,
     *_CLIENTPLATFORM_NATIVE_MESSENGER_FILES,
     *_CLIENTPLATFORM_SALES_UI_FILES,
     *_CLIENTPLATFORM_YANDEX_ANALYTICS_FILES,
@@ -200,6 +214,7 @@ SECURITY_SCAN_PATHS = (
     "services/sales_desk_repository.py",
     "services/sales_desk_sync.py",
     *_CLIENTPLATFORM_MANAGED_BOT_SECURITY_FILES,
+    *_CLIENTPLATFORM_EMAIL_OUTBOUND_FILES,
     *_CLIENTPLATFORM_NATIVE_MESSENGER_FILES,
     *_CLIENTPLATFORM_SALES_UI_FILES,
     *_CLIENTPLATFORM_YANDEX_ANALYTICS_FILES,

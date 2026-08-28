@@ -169,6 +169,7 @@ def get_partner_candidate_view(
 def list_partner_send_connections(
     *,
     actor: TenantContext,
+    platform: str = "telegram",
 ) -> list[PartnerSendConnection]:
     with get_db_ro() as conn:
         current = TenancyRepository(conn).resolve_context(
@@ -176,22 +177,42 @@ def list_partner_send_connections(
             business_id=actor.business_id,
         )
         current.assert_can_manage_promotions()
-        rows = conn.execute(
-            """
-            SELECT id, external_account_id, connection_type
-            FROM connections
-            WHERE business_id=? AND platform='telegram' AND status='active'
-              AND connection_type IN ('telegram_shared_bot','telegram_managed_bot')
-            ORDER BY created_at,id
-            """,
-            (current.business_id,),
-        ).fetchall()
+        selected = str(platform or "").strip().lower()
+        if selected == "telegram":
+            rows = conn.execute(
+                """
+                SELECT id, external_account_id, connection_type
+                FROM connections
+                WHERE business_id=? AND platform='telegram' AND status='active'
+                  AND connection_type IN (
+                      'telegram_shared_bot','telegram_managed_bot'
+                  )
+                ORDER BY created_at,id
+                """,
+                (current.business_id,),
+            ).fetchall()
+        elif selected == "email":
+            rows = conn.execute(
+                """
+                SELECT id, external_account_id, connection_type
+                FROM connections
+                WHERE business_id=? AND platform='email' AND status='active'
+                  AND connection_type='email_smtp'
+                ORDER BY created_at,id
+                """,
+                (current.business_id,),
+            ).fetchall()
+        else:
+            raise ValueError("partner send platform must be telegram or email")
+        prefix = "Telegram" if selected == "telegram" else "Email"
+        fallback = "бот" if selected == "telegram" else "отправитель"
         return [
             PartnerSendConnection(
                 id=str(_value(row, "id", 0)),
                 label=(
-                    "Telegram · "
-                    + str(_value(row, "external_account_id", 1) or "бот")[:80]
+                    prefix
+                    + " · "
+                    + str(_value(row, "external_account_id", 1) or fallback)[:80]
                 ),
             )
             for row in rows
@@ -257,6 +278,39 @@ def queue_partner_outreach(
             actor=actor,
             candidate_id=candidate_id,
             connection_id=connection_id,
+        )
+
+
+def approve_and_queue_partner_email_outreach(
+    *,
+    actor: TenantContext,
+    candidate_id: str,
+    connection_id: str,
+) -> Any:
+    """Explicit owner gate for one public-business-email first contact."""
+
+    with get_db() as conn:
+        current = TenancyRepository(conn).resolve_context(
+            user_id=actor.user_id,
+            business_id=actor.business_id,
+        )
+        current.assert_can_manage_promotions()
+        candidate = PartnerRepository(conn).get_candidate(
+            actor=current,
+            candidate_id=candidate_id,
+        )
+        if (
+            candidate.channel.value != "email"
+            or candidate.contact_basis != ContactBasis.PUBLIC_BUSINESS_CONTACT
+        ):
+            raise PartnerInvariantViolation(
+                "explicit email approval is only for a public business contact"
+            )
+        return DispatchOutboxRepository(conn).materialize_partner_outreach(
+            actor=current,
+            candidate_id=candidate.id,
+            connection_id=connection_id,
+            explicit_owner_approval=True,
         )
 
 
@@ -404,6 +458,7 @@ __all__ = [
     "PartnerCandidateView",
     "PartnerReplyView",
     "PartnerSendConnection",
+    "approve_and_queue_partner_email_outreach",
     "authorize_partner_telegram_contact",
     "get_partner_candidate_view",
     "list_partner_campaigns",

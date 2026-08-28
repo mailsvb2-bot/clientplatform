@@ -28,11 +28,12 @@ def ensure(c: sqlite3.Connection) -> None:
             FOREIGN KEY(business_id) REFERENCES businesses(id) ON DELETE CASCADE,
             FOREIGN KEY(created_by_member_id, business_id)
                 REFERENCES business_members(id, business_id),
-            CHECK(platform IN ('telegram', 'vk', 'max')),
+            CHECK(platform IN ('telegram', 'vk', 'max', 'email')),
             CHECK(connection_type IN (
                 'telegram_shared_bot', 'telegram_managed_bot',
                 'telegram_business', 'telegram_channel',
-                'vk_community', 'max_shared_bot', 'max_personal_bot'
+                'vk_community', 'max_shared_bot', 'max_personal_bot',
+                'email_smtp'
             )),
             CHECK(
                 (platform='telegram' AND connection_type IN (
@@ -43,6 +44,7 @@ def ensure(c: sqlite3.Connection) -> None:
                 OR (platform='max' AND connection_type IN (
                     'max_shared_bot', 'max_personal_bot'
                 ))
+                OR (platform='email' AND connection_type='email_smtp')
             ),
             CHECK(
                 substr(credential_reference, 1, 9)='secret://'
@@ -99,8 +101,8 @@ def ensure(c: sqlite3.Connection) -> None:
             UNIQUE(id, business_id),
             UNIQUE(business_id, platform, external_account_id, purpose),
             FOREIGN KEY(business_id) REFERENCES businesses(id) ON DELETE CASCADE,
-            CHECK(platform IN ('vk', 'max')),
-            CHECK(purpose IN ('provider_token', 'webhook_secret', 'confirmation_code')),
+            CHECK(platform IN ('vk', 'max', 'email')),
+            CHECK(purpose IN ('provider_token', 'webhook_secret', 'confirmation_code', 'smtp_credentials')),
             CHECK(status IN ('active', 'revoked')),
             CHECK(length(ciphertext) > 0)
         )

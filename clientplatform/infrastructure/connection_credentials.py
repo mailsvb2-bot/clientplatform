@@ -25,8 +25,8 @@ class ConnectionCredentialError(RuntimeError):
 _REFERENCE_RE = re.compile(
     r"vault://connection/([0-9a-fA-F-]{36})/([0-9a-fA-F-]{36})"
 )
-_PURPOSES = frozenset({"provider_token", "webhook_secret", "confirmation_code"})
-_PLATFORMS = frozenset({ConnectionPlatform.VK, ConnectionPlatform.MAX})
+_PURPOSES = frozenset({"provider_token", "webhook_secret", "confirmation_code", "smtp_credentials"})
+_PLATFORMS = frozenset({ConnectionPlatform.VK, ConnectionPlatform.MAX, ConnectionPlatform.EMAIL})
 
 
 def _utc_now() -> str:
@@ -36,7 +36,7 @@ def _utc_now() -> str:
 def _platform(value: ConnectionPlatform | str) -> ConnectionPlatform:
     platform = value if isinstance(value, ConnectionPlatform) else ConnectionPlatform(str(value).strip().lower())
     if platform not in _PLATFORMS:
-        raise ValueError("connection credential platform must be VK or MAX")
+        raise ValueError("connection credential platform must be VK, MAX or email")
     return platform
 
 
@@ -77,7 +77,7 @@ def assert_connection_credential_reference_business(reference: str, business_id:
 
 
 class ConnectionCredentialStore:
-    """Persist encrypted VK/MAX secrets and expose only business-bound opaque refs."""
+    """Persist encrypted provider secrets and expose only business-bound opaque refs."""
 
     def __init__(
         self,
