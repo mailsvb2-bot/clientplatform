@@ -595,6 +595,118 @@ class ClientPlatformRevenueAttributionTests(unittest.TestCase):
         self.assertEqual(journey.unattributed_monetary_outcomes, 2)
         self.assertTrue(all(item.source.value != "telegram" for item in journey.sources))
 
+    def test_reconciliation_revisits_dependents_after_legacy_correction_repair(self) -> None:
+        customer_id = self._connect_customer(77009)
+        paid = self._append(
+            OutcomeType.ORDER_PAID,
+            event_id="unattributed-before-correction-chain",
+            money=OutcomeMoney(amount_minor=5_000, currency="RUB"),
+            occurred_at=_NOW + timedelta(minutes=4),
+            customer_id=customer_id,
+            subject_ref="order:correction-chain",
+        )
+        self.assertIsNone(
+            self.revenue.materialize_outcome(
+                business_id=self.business_id,
+                outcome_event_id=paid.id,
+            )
+        )
+        later_trace = self.attribution.capture_promotion_touch(
+            business_id=self.business_id,
+            source_token=self.campaign.source_token,
+            campaign_id=self.campaign.id,
+            channel=self.campaign.channel,
+            source_kind="campaign",
+            source_key=self.campaign.id,
+            customer_id=customer_id,
+            occurred_at=_NOW + timedelta(minutes=5),
+        )
+        correction_time = _NOW + timedelta(minutes=6)
+        refund = self._append(
+            OutcomeType.REFUND_RECORDED,
+            event_id="z-legacy-refund-in-chain",
+            money=OutcomeMoney(amount_minor=5_000, currency="RUB"),
+            occurred_at=correction_time,
+            customer_id=customer_id,
+            source_type="business_payment",
+            source_id="payment-correction-chain",
+            subject_ref="business_payment:payment-correction-chain",
+            metadata={"payment_outcome_event_id": paid.id},
+        )
+        self.conn.execute(
+            """
+            INSERT INTO revenue_attributions(
+                id, business_id, outcome_event_id, outcome_type, customer_id,
+                touch_id, attribution_identity_id, source, source_ref_type,
+                source_ref_id, promotion_campaign_id, model_version,
+                amount_minor, currency, occurred_at, created_at
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "legacy-refund-in-chain",
+                self.business_id,
+                refund.id,
+                refund.outcome_type.value,
+                customer_id,
+                later_trace.touch.id,
+                later_trace.identity.id,
+                later_trace.identity.source.value,
+                later_trace.identity.source_ref_type,
+                later_trace.identity.source_ref_id,
+                later_trace.identity.promotion_campaign_id,
+                "first_touch_v1",
+                -5_000,
+                "RUB",
+                refund.occurred_at.isoformat(timespec="microseconds"),
+                refund.created_at.isoformat(timespec="microseconds"),
+            ),
+        )
+        reversal = self._append(
+            OutcomeType.OUTCOME_REVERSAL,
+            event_id="a-reversal-before-legacy-refund",
+            money=None,
+            occurred_at=correction_time,
+            customer_id=customer_id,
+            source_type="outcome_event",
+            source_id=refund.id,
+            subject_ref=f"outcome:{refund.id}",
+        )
+        self.assertLess(reversal.id, refund.id)
+
+        first = self.revenue.journey_snapshot(
+            business_id=self.business_id,
+            occurred_from=_NOW,
+            occurred_to=_NOW + timedelta(minutes=7),
+        )
+        second = self.revenue.journey_snapshot(
+            business_id=self.business_id,
+            occurred_from=_NOW,
+            occurred_to=_NOW + timedelta(minutes=7),
+        )
+
+        self.assertEqual(first, second)
+        self.assertEqual(first.monetary_outcomes, 3)
+        self.assertEqual(first.attributed_monetary_outcomes, 0)
+        self.assertEqual(first.unattributed_monetary_outcomes, 3)
+        self.assertEqual(first.attributed_revenue_by_currency, ())
+        self.assertEqual(
+            [(item.currency, item.amount_minor) for item in first.unattributed_revenue_by_currency],
+            [("RUB", 5_000)],
+        )
+        repaired_refund = self.revenue.get_for_outcome(
+            business_id=self.business_id,
+            outcome_event_id=refund.id,
+        )
+        repaired_reversal = self.revenue.get_for_outcome(
+            business_id=self.business_id,
+            outcome_event_id=reversal.id,
+        )
+        self.assertIsNotNone(repaired_refund)
+        self.assertIsNotNone(repaired_reversal)
+        assert repaired_refund is not None and repaired_reversal is not None
+        self.assertEqual(repaired_refund.source.value, "unknown")
+        self.assertEqual(repaired_reversal.source.value, "unknown")
+
     def test_same_time_corrections_resolve_on_first_reconciliation(self) -> None:
         occurred_at = _NOW + timedelta(minutes=4)
         paid = self._append(

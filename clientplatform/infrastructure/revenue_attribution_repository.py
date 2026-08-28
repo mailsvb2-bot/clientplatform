@@ -519,27 +519,33 @@ class RevenueAttributionRepository:
                 _serialize_datetime(occurred_to),
             ),
         ).fetchall()
+        outcome_event_ids = [str(_value(row, "id", 0)) for row in rows]
+        previous_signature: dict[str, tuple[object, ...] | None] | None = None
         accepted_by_event: dict[str, RevenueAttributionRecord] = {}
-        pending = [str(_value(row, "id", 0)) for row in rows]
-        while pending:
-            next_pending: list[str] = []
-            progressed = False
-            for outcome_event_id in pending:
+        for _ in range(len(outcome_event_ids) + 2):
+            current_signature: dict[str, tuple[object, ...] | None] = {}
+            current_records: dict[str, RevenueAttributionRecord] = {}
+            for outcome_event_id in outcome_event_ids:
                 record = self.materialize_outcome(
                     business_id=str(business_id),
                     outcome_event_id=outcome_event_id,
                 )
-                if record is None:
-                    next_pending.append(outcome_event_id)
-                    continue
-                accepted_by_event[outcome_event_id] = record
-                progressed = True
-            if not progressed:
+                current_signature[outcome_event_id] = (
+                    None if record is None else _semantic(record)
+                )
+                if record is not None:
+                    current_records[outcome_event_id] = record
+            if current_signature == previous_signature:
+                accepted_by_event = current_records
                 break
-            pending = next_pending
+            previous_signature = current_signature
+        else:
+            raise RevenueAttributionInvariantViolation(
+                "financial attribution reconciliation did not converge"
+            )
         return [
             accepted_by_event[outcome_event_id]
-            for outcome_event_id in (str(_value(row, "id", 0)) for row in rows)
+            for outcome_event_id in outcome_event_ids
             if outcome_event_id in accepted_by_event
         ]
 
