@@ -557,6 +557,7 @@ class ClientPlatformRevenueAttributionTests(unittest.TestCase):
         )
         self.assertFalse(journey.attribution_complete)
         self.assertIn("attribution_incomplete", journey.limitations)
+        self.assertIn("booking_completion_unavailable", journey.limitations)
 
         telegram = next(item for item in journey.sources if item.source.value == "telegram")
         unknown = next(item for item in journey.sources if item.source.value == "unknown")
@@ -571,6 +572,73 @@ class ClientPlatformRevenueAttributionTests(unittest.TestCase):
         self.assertEqual(journey.sources[0].source.value, "telegram")
 
 
+
+    def test_money_cockpit_treats_durable_unknown_source_as_unattributed(self) -> None:
+        slot = self.bookings.create_slot(
+            actor=self.owner,
+            offering_id=self.campaign.offering_id,
+            local_start="21.08.2026 12:00",
+            duration_minutes=60,
+            now=_NOW.isoformat(),
+        )
+        creative = PromotionCreative(
+            creative_id=stable_creative_id("revenue", "unknown-max"),
+            headline="Unknown source regression",
+            primary_text="Book now",
+            description="Test",
+        )
+        campaign, _ = self.promotions.create_or_refresh_campaign(
+            actor=self.owner,
+            slot_id=slot.slot.id,
+            channel=PromotionChannel.MAX,
+            creative=creative,
+            now=_NOW.isoformat(),
+        )
+        customer_id = self._connect_customer(77007)
+        trace = self.attribution.capture_promotion_touch(
+            business_id=self.business_id,
+            source_token=campaign.source_token,
+            campaign_id=campaign.id,
+            channel=campaign.channel,
+            source_kind="campaign",
+            source_key=campaign.id,
+            customer_id=customer_id,
+            occurred_at=_NOW + timedelta(minutes=4),
+        )
+        self.assertEqual(trace.identity.source.value, "unknown")
+        paid = self._append(
+            OutcomeType.ORDER_PAID,
+            event_id="journey-unknown-source-paid",
+            money=OutcomeMoney(amount_minor=5_000, currency="RUB"),
+            occurred_at=_NOW + timedelta(minutes=5),
+            customer_id=customer_id,
+            subject_ref="order:unknown-source",
+        )
+        record = self.revenue.materialize_outcome(
+            business_id=self.business_id,
+            outcome_event_id=paid.id,
+        )
+        self.assertIsNotNone(record)
+        assert record is not None
+        self.assertEqual(record.source.value, "unknown")
+
+        journey = self.revenue.journey_snapshot(
+            business_id=self.business_id,
+            occurred_from=_NOW + timedelta(minutes=4),
+            occurred_to=_NOW + timedelta(minutes=6),
+        )
+        self.assertEqual(journey.monetary_outcomes, 1)
+        self.assertEqual(journey.attributed_monetary_outcomes, 0)
+        self.assertEqual(journey.unattributed_monetary_outcomes, 1)
+        self.assertEqual(journey.attributed_revenue_by_currency, ())
+        self.assertEqual(
+            [(item.currency, item.amount_minor) for item in journey.unattributed_revenue_by_currency],
+            [("RUB", 5_000)],
+        )
+        self.assertIn("attribution_incomplete", journey.limitations)
+        unknown = next(item for item in journey.sources if item.source.value == "unknown")
+        self.assertEqual(unknown.paid_customers, 1)
+        self.assertEqual(unknown.revenue_by_currency[0].amount_minor, 5_000)
 
     def test_money_cockpit_never_combines_mixed_currencies_for_source_ranking(self) -> None:
         self._append(

@@ -104,7 +104,11 @@ def _journey(*, start: datetime, end: datetime) -> RevenueJourneySnapshot:
                 revenue_by_currency=(MoneyBreakdown(currency="RUB", amount_minor=6_300_00),),
             ),
         ),
-        limitations=("attribution_incomplete", "journey_source_incomplete"),
+        limitations=(
+            "attribution_incomplete",
+            "journey_source_incomplete",
+            "booking_completion_unavailable",
+        ),
     )
 
 
@@ -361,6 +365,8 @@ class GrowthCockpitTests(unittest.TestCase):
         self.assertIn("Что происходит с бизнесом", text)
         self.assertIn("Новые лиды: 3", text)
         self.assertIn("Деньги и путь клиента · 7 дней", text)
+        self.assertIn("пришли: нет подтверждённых данных", text)
+        self.assertNotIn("пришли: 4", text)
         self.assertIn("Подтверждённая выручка: 54 300.00 RUB", text)
         self.assertIn("Связано с источником: 48 000.00 RUB", text)
         self.assertIn("Без подтверждённого источника: 6 300.00 RUB", text)

@@ -1597,10 +1597,15 @@ def _native_journey_text(snapshot) -> str:
         journey.unattributed_revenue_by_currency,
         empty="0",
     )
+    completion_text = (
+        "нет подтверждённых данных"
+        if "booking_completion_unavailable" in getattr(journey, "limitations", ())
+        else str(journey.completed_bookings)
+    )
     return (
         f"\n\nДеньги и путь клиента · {snapshot.period_days} дней\n"
         f"• Лиды: {journey.leads} → записи: {journey.bookings} → "
-        f"пришли: {journey.completed_bookings} → оплатили: {journey.paid_customers}\n"
+        f"пришли: {completion_text} → оплатили: {journey.paid_customers}\n"
         f"• Вернувшиеся клиенты: {journey.reactivated_customers}\n"
         f"• Подтверждённая выручка: {verified}\n"
         f"• Связано с источником: {attributed}\n"

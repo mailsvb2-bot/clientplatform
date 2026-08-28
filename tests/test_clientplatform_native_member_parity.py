@@ -101,6 +101,7 @@ class NativeMemberParityNavigationTests(unittest.TestCase):
             completed_bookings=4,
             paid_customers=3,
             reactivated_customers=2,
+            limitations=("booking_completion_unavailable",),
             verified_revenue_by_currency=(
                 SimpleNamespace(amount_minor=34_200_00, currency="RUB"),
             ),
@@ -141,6 +142,8 @@ class NativeMemberParityNavigationTests(unittest.TestCase):
         self.assertIn("Важные действия", message.text)
         self.assertIn("Следующий шаг по клиенту: Анна", message.text)
         self.assertIn("Деньги и путь клиента · 7 дней", message.text)
+        self.assertIn("пришли: нет подтверждённых данных", message.text)
+        self.assertNotIn("пришли: 4", message.text)
         self.assertIn("Подтверждённая выручка: 34 200.00 RUB", message.text)
         self.assertIn("Связано с источником: 27 900.00 RUB", message.text)
         self.assertIn("Без подтверждённого источника: 6 300.00 RUB", message.text)

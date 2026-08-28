@@ -398,6 +398,9 @@ class RevenueAttributionRepository:
             occurred_to=occurred_to,
         )
         records_by_event = {record.outcome_event_id: record for record in records}
+        known_records = tuple(
+            record for record in records if record.source != AcquisitionSource.UNKNOWN
+        )
         event_rows = self._conn.execute(
             _OUTCOME_SELECT + " WHERE business_id=? AND occurred_at>=? AND occurred_at<?",
             (
@@ -421,7 +424,7 @@ class RevenueAttributionRepository:
         monetary_outcomes = 0
         stage_source_unknown = False
 
-        for record in records:
+        for record in known_records:
             attributed_totals[record.currency] += record.amount_minor
 
         for row in event_rows:
@@ -513,14 +516,17 @@ class RevenueAttributionRepository:
         source_rows.sort(key=source_rank)
         unattributed_totals: dict[str, int] = {}
         for currency in sorted(set(verified_totals) | set(attributed_totals)):
-            difference = verified_totals[currency] - attributed_totals[currency]
+            difference = verified_totals[currency] - attributed_totals.get(currency, 0)
             if difference != 0:
                 unattributed_totals[currency] = difference
 
         limitations: list[str] = []
-        unattributed_count = monetary_outcomes - len(records)
+        unattributed_count = monetary_outcomes - len(known_records)
         if unattributed_count:
             limitations.append("attribution_incomplete")
+        # Booking completion has a canonical outcome type but no production writer yet.
+        # Keep the stage explicitly unavailable instead of presenting a misleading zero.
+        limitations.append("booking_completion_unavailable")
         if len(verified_totals) > 1:
             limitations.append("verified_revenue_mixed_currency")
         if stage_source_unknown:
@@ -539,7 +545,7 @@ class RevenueAttributionRepository:
             paid_customers=len(all_paid_customers),
             reactivated_customers=len(all_reactivated_customers),
             monetary_outcomes=monetary_outcomes,
-            attributed_monetary_outcomes=len(records),
+            attributed_monetary_outcomes=len(known_records),
             unattributed_monetary_outcomes=unattributed_count,
             verified_revenue_by_currency=tuple(
                 MoneyBreakdown(currency=currency, amount_minor=amount)
