@@ -347,6 +347,13 @@ class GrowthCockpitTests(unittest.TestCase):
                     18,
                 )
 
+    def test_money_cockpit_formats_iso_minor_unit_exponents(self) -> None:
+        from dashboard.growth_cockpit import _minor_money_text
+
+        self.assertEqual(_minor_money_text(500, "JPY"), "500 JPY")
+        self.assertEqual(_minor_money_text(1234, "KWD"), "1.234 KWD")
+        self.assertEqual(_minor_money_text(-1234, "KWD"), "-1.234 KWD")
+
     def test_summary_hides_provider_money_without_verified_iso_currency(self) -> None:
         result, _ = self._build()
         text = telegram_growth_summary(result)
@@ -357,7 +364,7 @@ class GrowthCockpitTests(unittest.TestCase):
         self.assertIn("Подтверждённая выручка: 54 300.00 RUB", text)
         self.assertIn("Связано с источником: 48 000.00 RUB", text)
         self.assertIn("Без подтверждённого источника: 6 300.00 RUB", text)
-        self.assertIn("Лучший подтверждённый источник: VK — 34 200.00 RUB", text)
+        self.assertIn("Лучший подтверждённый источник: ВКонтакте — 34 200.00 RUB", text)
         self.assertIn("Вернувшиеся клиенты: 2", text)
         self.assertIn("стоимость скрыта до подтверждения валюты", text)
         self.assertIn("Часть оплат пока нельзя надёжно связать", text)

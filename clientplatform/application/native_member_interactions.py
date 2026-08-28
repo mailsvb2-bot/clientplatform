@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from decimal import Decimal
 import logging
 import re
 from dataclasses import dataclass
@@ -29,7 +30,11 @@ from clientplatform.application.customer_timeline import (
     get_customer_timeline,
 )
 from clientplatform.application.customers import get_customer, list_customers
-from clientplatform.application.growth_cockpit import GrowthAction, get_growth_cockpit
+from clientplatform.application.growth_cockpit import (
+    GrowthAction,
+    acquisition_source_label,
+    get_growth_cockpit,
+)
 from clientplatform.application.programs import list_programs
 from clientplatform.application.progress import list_business_program_progress
 from clientplatform.application.sales_workspace import (
@@ -61,6 +66,7 @@ from clientplatform.domain.customer_interactions import (
     CustomerInteractionMessage,
 )
 from clientplatform.domain.messenger_channels import MessengerIngressRoute
+from clientplatform.domain.money import settlement_currency_minor_unit_exponent
 from clientplatform.domain.promotions import PromotionChannel, PromotionError
 from clientplatform.domain.sales import SalesError, SalesLeadStage
 from clientplatform.domain.tenancy import (
@@ -1560,12 +1566,10 @@ def _native_money_text(rows: object, *, empty: str) -> str:
         return empty
     rendered: list[str] = []
     for item in values:
-        amount = int(item.amount_minor)
-        sign = "-" if amount < 0 else ""
-        absolute = abs(amount)
-        rendered.append(
-            f"{sign}{absolute // 100:,}.{absolute % 100:02d} {item.currency}".replace(",", " ")
-        )
+        exponent = settlement_currency_minor_unit_exponent(item.currency)
+        amount = Decimal(int(item.amount_minor)) / (Decimal(10) ** exponent)
+        amount_text = f"{amount:,.{exponent}f}" if exponent else f"{amount:,.0f}"
+        rendered.append(f"{amount_text.replace(',', ' ')} {str(item.currency).upper()}")
     return ", ".join(rendered)
 
 
@@ -1575,7 +1579,7 @@ def _native_journey_text(snapshot) -> str:
     if best is None:
         best_text = "пока недостаточно подтверждённых данных"
     else:
-        label = _SALES_SOURCE_LABELS.get(best.source.value, best.source.value)
+        label = acquisition_source_label(best.source)
         revenue = _native_money_text(
             best.revenue_by_currency,
             empty="выручка пока не подтверждена",

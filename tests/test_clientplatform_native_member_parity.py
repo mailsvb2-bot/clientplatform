@@ -145,6 +145,41 @@ class NativeMemberParityNavigationTests(unittest.TestCase):
         self.assertEqual(sum(command.startswith("cpm:sales-lead:") for command in commands), 1)
         self.assertLessEqual(sum(len(row) for row in message.rows), 10)
 
+    def test_native_money_and_source_labels_match_canonical_semantics(self) -> None:
+        money = ui._native_money_text(
+            (
+                SimpleNamespace(amount_minor=500, currency="JPY"),
+                SimpleNamespace(amount_minor=1234, currency="KWD"),
+            ),
+            empty="нет",
+        )
+        self.assertEqual(money, "500 JPY, 1.234 KWD")
+
+        for source, label in (
+            ("organic", "Органика"),
+            ("partner", "Партнёры"),
+            ("manual_import", "Импорт / вручную"),
+        ):
+            journey = SimpleNamespace(
+                leads=1,
+                bookings=1,
+                completed_bookings=1,
+                paid_customers=1,
+                reactivated_customers=0,
+                verified_revenue_by_currency=(SimpleNamespace(amount_minor=500, currency="JPY"),),
+                unattributed_revenue_by_currency=(),
+                sources=(
+                    SimpleNamespace(
+                        source=SimpleNamespace(value=source),
+                        revenue_by_currency=(SimpleNamespace(amount_minor=500, currency="JPY"),),
+                        paid_customers=1,
+                    ),
+                ),
+            )
+            text = ui._native_journey_text(SimpleNamespace(journey=journey, period_days=7))
+            self.assertIn(f"Лучший подтверждённый источник: {label}", text)
+            self.assertNotIn(f": {source}", text)
+
     def test_work_section_contains_telegram_admin_operational_reads(self) -> None:
         message = ui._work_message(_actor(PlatformRole.OWNER))
         commands = set(_commands(message))

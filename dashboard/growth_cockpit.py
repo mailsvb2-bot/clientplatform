@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from decimal import Decimal
 from typing import Any
 
-from clientplatform.application.growth_cockpit import GrowthCockpitSnapshot
+from clientplatform.application.growth_cockpit import GrowthCockpitSnapshot, acquisition_source_label
+from clientplatform.domain.money import settlement_currency_minor_unit_exponent
 
 _LIMITATION_LABELS = {
     "attribution_incomplete": "Часть оплат пока нельзя надёжно связать с источником клиента.",
@@ -25,11 +27,12 @@ _LIMITATION_LABELS = {
 
 
 def _minor_money_text(amount_minor: int, currency: str) -> str:
-    """Render canonical minor-unit money using the established two-decimal UI convention."""
+    """Render canonical minor-unit money using the ISO-4217 currency exponent."""
 
-    sign = "-" if amount_minor < 0 else ""
-    absolute = abs(int(amount_minor))
-    return f"{sign}{absolute // 100:,}.{absolute % 100:02d} {currency}".replace(",", " ")
+    exponent = settlement_currency_minor_unit_exponent(currency)
+    amount = Decimal(int(amount_minor)) / (Decimal(10) ** exponent)
+    rendered = f"{amount:,.{exponent}f}" if exponent else f"{amount:,.0f}"
+    return f"{rendered.replace(',', ' ')} {str(currency).upper()}"
 
 
 def _metric_map(snapshot: GrowthCockpitSnapshot, *, today: bool) -> dict[str, int]:
@@ -49,17 +52,7 @@ def _best_source_text(snapshot: GrowthCockpitSnapshot) -> str:
     if not known:
         return "пока недостаточно подтверждённых данных"
     item = known[0]
-    label = {
-        "organic": "Органика",
-        "referral": "Рекомендации",
-        "telegram": "Telegram",
-        "vk": "VK",
-        "max": "MAX",
-        "website": "Сайт",
-        "yandex_direct": "Яндекс Директ",
-        "partner": "Партнёры",
-        "manual_import": "Импорт / вручную",
-    }.get(item.source.value, item.source.value)
+    label = acquisition_source_label(item.source)
     money = _money_breakdown_text(item.revenue_by_currency, empty="выручка пока не подтверждена")
     return f"{label} — {money} · оплативших: {item.paid_customers}"
 
