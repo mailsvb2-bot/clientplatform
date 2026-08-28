@@ -63,6 +63,7 @@ _FINANCE_WRITE_ROLES = frozenset(
 _OBSERVABILITY_ROLES = frozenset(BUSINESS_MEMBER_ROLES)
 _IDEMPOTENCY_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$")
 _PROVIDER_RE = re.compile(r"^[a-z][a-z0-9._-]{0,39}$")
+_PUBLICATION_SCHEDULE_VERSION_RE = re.compile(r"^[0-9a-f]{1,16}$")
 
 
 class PaymentIdempotencyConflict(ValueError):
@@ -201,6 +202,35 @@ def _publication_schedule_utc(
     if scheduled <= reference.astimezone(timezone.utc):
         raise ValueError("publication time must be in the future")
     return scheduled.isoformat(timespec="seconds")
+
+
+def encode_publication_schedule_version(scheduled_at: str) -> str:
+    """Encode a canonical scheduled timestamp into a compact stale-action token."""
+
+    raw = str(scheduled_at).strip()
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError as exc:
+        raise ValueError("scheduled_at must be an ISO-8601 timestamp") from exc
+    if parsed.tzinfo is None:
+        raise ValueError("scheduled_at must be timezone-aware")
+    utc_value = parsed.astimezone(timezone.utc).replace(microsecond=0)
+    return format(int(utc_value.timestamp()), "x")
+
+
+def decode_publication_schedule_version(version: str) -> str:
+    """Decode a compact schedule token back to the canonical UTC timestamp."""
+
+    raw = str(version).strip().casefold()
+    if not _PUBLICATION_SCHEDULE_VERSION_RE.fullmatch(raw):
+        raise ValueError("publication schedule version is invalid")
+    try:
+        parsed = datetime.fromtimestamp(int(raw, 16), tz=timezone.utc)
+    except (OverflowError, OSError, ValueError) as exc:
+        raise ValueError("publication schedule version is invalid") from exc
+    return parsed.replace(microsecond=0).isoformat(timespec="seconds")
 
 
 def format_publication_calendar_lines(
@@ -1008,6 +1038,7 @@ def cancel_publication_schedule(
     *,
     actor: TenantContext,
     publication_id: str,
+    expected_scheduled_at: str,
 ) -> PublicationRecord:
     """Cancel a scheduled publication without starting any delivery worker."""
 
@@ -1032,6 +1063,11 @@ def cancel_publication_schedule(
             None if previous_schedule is None else str(previous_schedule)
         )
         if status == "cancelled":
+            if previous_schedule_text is None or (
+                encode_publication_schedule_version(previous_schedule_text)
+                != encode_publication_schedule_version(expected_scheduled_at)
+            ):
+                raise ValueError("publication schedule changed; refresh and retry")
             unchanged = conn.execute(
                 """
                 SELECT id, business_id, channel, title, body, status,
@@ -1047,6 +1083,11 @@ def cancel_publication_schedule(
             return _publication_from_row(unchanged)
         if status != "scheduled" or previous_schedule_text is None:
             raise ValueError("only a scheduled publication can be cancelled")
+        if (
+            encode_publication_schedule_version(previous_schedule_text)
+            != encode_publication_schedule_version(expected_scheduled_at)
+        ):
+            raise ValueError("publication schedule changed; refresh and retry")
         cursor = conn.execute(
             """
             UPDATE business_publications
@@ -1058,10 +1099,24 @@ def cancel_publication_schedule(
         )
         if int(getattr(cursor, "rowcount", 0) or 0) != 1:
             concurrent = conn.execute(
-                "SELECT status FROM business_publications WHERE id=? AND business_id=?",
+                "SELECT status, scheduled_at FROM business_publications WHERE id=? AND business_id=?",
                 (normalized_id, current.business_id),
             ).fetchone()
-            if concurrent is not None and str(_value(concurrent, "status", 0)) == "cancelled":
+            concurrent_status = (
+                None if concurrent is None else str(_value(concurrent, "status", 0))
+            )
+            concurrent_schedule = (
+                None if concurrent is None else _value(concurrent, "scheduled_at", 1)
+            )
+            concurrent_schedule_text = (
+                None if concurrent_schedule is None else str(concurrent_schedule)
+            )
+            if (
+                concurrent_status == "cancelled"
+                and concurrent_schedule_text is not None
+                and encode_publication_schedule_version(concurrent_schedule_text)
+                == encode_publication_schedule_version(expected_scheduled_at)
+            ):
                 result = conn.execute(
                     """
                     SELECT id, business_id, channel, title, body, status,

@@ -196,7 +196,13 @@ class NativeMemberResolutionTests(unittest.TestCase):
         self.assertNotIn("ещё не подключ", message.text.casefold())
         commands = {button.command for row in message.rows for button in row}
         self.assertIn(f"cpm:publication-schedule:{publication.id}", commands)
-        self.assertIn(f"cpm:publication-cancel:{publication.id}", commands)
+        schedule_version = native_member_ui.encode_publication_schedule_version(
+            publication.scheduled_at or ""
+        )
+        self.assertIn(
+            f"cpm:publication-cancel:{publication.id}:{schedule_version}",
+            commands,
+        )
 
     def test_native_publication_schedule_and_cancel_use_canonical_mutations(self) -> None:
         route = _route(ConnectionPlatform.VK)
@@ -250,16 +256,50 @@ class NativeMemberResolutionTests(unittest.TestCase):
         self.assertIn("29.08.2026 12:00 · MAX · Запланировано", result.text)
 
         cancelled = replace(scheduled, status="cancelled")
+        schedule_version = native_member_ui.encode_publication_schedule_version(
+            scheduled.scheduled_at or ""
+        )
+        confirm = native_member_ui._publication_cancel_confirm(
+            actor, publication_id, schedule_version
+        )
+        confirm_commands = {button.command for row in confirm.rows for button in row}
+        self.assertIn(
+            f"cpm:publication-cancel-ok:{publication_id}:{schedule_version}",
+            confirm_commands,
+        )
         with patch(
             "clientplatform.application.native_member_interactions.cancel_publication_schedule",
             return_value=cancelled,
         ) as cancel:
             cancelled_message = native_member_ui._publication_cancel_result(
-                actor, publication_id
+                actor, publication_id, schedule_version
             )
-        cancel.assert_called_once_with(actor=actor, publication_id=publication_id)
+        cancel.assert_called_once_with(
+            actor=actor,
+            publication_id=publication_id,
+            expected_scheduled_at=scheduled.scheduled_at,
+        )
         self.assertIn("План публикации «План» отменён", cancelled_message.text)
         self.assertIn("Ничего автоматически не отправлено", cancelled_message.text)
+
+        stale = native_member_ui._publication_cancel_result(
+            actor, publication_id, "not-a-version"
+        )
+        self.assertIn("неактуальна", stale.text.casefold())
+
+        with patch(
+            "clientplatform.application.native_member_interactions.cancel_publication_schedule",
+            side_effect=ValueError("publication schedule changed; refresh and retry"),
+        ) as stale_cancel:
+            stale_after_reschedule = native_member_ui._publication_cancel_result(
+                actor, publication_id, schedule_version
+            )
+        stale_cancel.assert_called_once_with(
+            actor=actor,
+            publication_id=publication_id,
+            expected_scheduled_at=scheduled.scheduled_at,
+        )
+        self.assertIn("неактуальна", stale_after_reschedule.text.casefold())
 
 
 class NativeMemberDispatchRepositoryTests(unittest.TestCase):

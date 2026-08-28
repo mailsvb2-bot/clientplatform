@@ -22,6 +22,8 @@ from clientplatform.application.acquisition_destination import (
 )
 from clientplatform.application.admin_ops import (
     cancel_publication_schedule,
+    decode_publication_schedule_version,
+    encode_publication_schedule_version,
     format_publication_calendar_lines,
     get_publication_calendar_projection,
     schedule_publication,
@@ -1531,9 +1533,14 @@ def _publication_schedule_result(
 def _publication_cancel_confirm(
     actor: TenantContext,
     publication_id: str,
+    schedule_version: str,
 ) -> CustomerInteractionMessage:
     if actor.role not in _CONTENT_ROLES:
         return _permission_message()
+    try:
+        decode_publication_schedule_version(schedule_version)
+    except ValueError:
+        return _stale_message()
     return CustomerInteractionMessage(
         text=(
             "⛔ Отменить запланированную публикацию?\n\n"
@@ -1543,7 +1550,10 @@ def _publication_cancel_confirm(
             (
                 _button(
                     "⛔ Подтвердить отмену",
-                    f"cpm:publication-cancel-ok:{publication_id}",
+                    (
+                        f"cpm:publication-cancel-ok:{publication_id}:"
+                        f"{schedule_version}"
+                    ),
                 ),
             ),
             (_button("📣 К публикациям", "cpm:publications"),),
@@ -1555,13 +1565,16 @@ def _publication_cancel_confirm(
 def _publication_cancel_result(
     actor: TenantContext,
     publication_id: str,
+    schedule_version: str,
 ) -> CustomerInteractionMessage:
     if actor.role not in _CONTENT_ROLES:
         return _permission_message()
     try:
+        expected_scheduled_at = decode_publication_schedule_version(schedule_version)
         publication = cancel_publication_schedule(
             actor=actor,
             publication_id=publication_id,
+            expected_scheduled_at=expected_scheduled_at,
         )
     except ValueError:
         return _stale_message()
@@ -1620,7 +1633,10 @@ def _growth_report_message(actor: TenantContext, action: str) -> CustomerInterac
                     ),
                     _button(
                         "⛔ Отменить",
-                        f"cpm:publication-cancel:{item.id}",
+                        (
+                            f"cpm:publication-cancel:{item.id}:"
+                            f"{encode_publication_schedule_version(item.scheduled_at or '')}"
+                        ),
                     ),
                 )
             )
@@ -2465,13 +2481,13 @@ def _render(
                 interaction_key=setup_key,
             )
         if parsed.action == "publication-cancel":
-            if len(parsed.args) != 1:
+            if len(parsed.args) != 2:
                 return _stale_message()
-            return _publication_cancel_confirm(actor, parsed.args[0])
+            return _publication_cancel_confirm(actor, parsed.args[0], parsed.args[1])
         if parsed.action == "publication-cancel-ok":
-            if len(parsed.args) != 1:
+            if len(parsed.args) != 2:
                 return _stale_message()
-            return _publication_cancel_result(actor, parsed.args[0])
+            return _publication_cancel_result(actor, parsed.args[0], parsed.args[1])
         if parsed.action == "messengers":
             return _messengers_message(
                 actor,

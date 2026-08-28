@@ -177,6 +177,32 @@ def test_amount_and_display_helpers_cover_validation_and_formatting(ctx: Any) ->
         "b" * 22,
     )
     assert len(max_callback.encode("utf-8")) == 64
+    schedule_version = extension.admin_ops.encode_publication_schedule_version(
+        "2026-08-29T09:00:00+00:00"
+    )
+    cancel_callback = extension._ops_callback(
+        SimpleNamespace(business_token="a" * 22),
+        "publication-cancel",
+        "b" * 22,
+        schedule_version,
+    )
+    assert len(cancel_callback.encode("utf-8")) <= 64
+    assert ":pc:" in cancel_callback
+    cancel_ok_callback = extension._ops_callback(
+        SimpleNamespace(business_token="a" * 22),
+        "publication-cancel-ok",
+        "b" * 22,
+        schedule_version,
+    )
+    assert len(cancel_ok_callback.encode("utf-8")) <= 64
+    assert ":pcx:" in cancel_ok_callback
+    publish_callback = extension._ops_callback(
+        SimpleNamespace(business_token="a" * 22),
+        "publication-publish",
+        "b" * 22,
+    )
+    assert len(publish_callback.encode("utf-8")) <= 64
+    assert ":pp:" in publish_callback
 
     payments = [
         SimpleNamespace(status="paid", currency="RUB", amount_minor=10000),
@@ -330,17 +356,23 @@ async def test_admin_ops_gate_publication_schedule_and_cancel_controls(
     assert "Europe/Moscow" in fake_admin.edits[-1][0]
     assert "28.08.2026 19:30" in fake_admin.edits[-1][0]
 
+    schedule_version = extension.admin_ops.encode_publication_schedule_version(
+        "2026-08-29T09:00:00+00:00"
+    )
     await extension.admin_ops_gate(
-        _callback("publication-cancel", "publication"),
+        _callback("publication-cancel", "publication", schedule_version),
         FakeState(),
     )
     assert "Подтвердить отмену" in str(fake_admin.edits[-1][1])
+    assert schedule_version in str(fake_admin.edits[-1][1])
 
-    calls: list[str] = []
+    calls: list[tuple[str, str | None] | str] = []
     monkeypatch.setattr(
         extension.admin_ops,
         "cancel_publication_schedule",
-        lambda *, publication_id, **_kwargs: calls.append(publication_id),
+        lambda *, publication_id, expected_scheduled_at, **_kwargs: calls.append(
+            (publication_id, expected_scheduled_at)
+        ),
     )
 
     async def marketing(_callback: Any, _state: Any, _ctx: Any, action: str) -> None:
@@ -348,10 +380,37 @@ async def test_admin_ops_gate_publication_schedule_and_cancel_controls(
 
     monkeypatch.setattr(extension, "_enhanced_marketing", marketing)
     await extension.admin_ops_gate(
-        _callback("publication-cancel-ok", "publication"),
+        _callback("publication-cancel-ok", "publication", schedule_version),
         FakeState(),
     )
-    assert calls == ["uuid:publication", "publications"]
+    assert calls == [
+        ("uuid:publication", "2026-08-29T09:00:00+00:00"),
+        "publications",
+    ]
+
+    stale_callback = _callback(
+        "publication-cancel-ok",
+        "publication",
+        extension.admin_ops.encode_publication_schedule_version(
+            "2026-08-30T09:00:00+00:00"
+        ),
+    )
+
+    def stale_cancel(**_kwargs: Any) -> None:
+        raise ValueError("publication schedule changed; refresh and retry")
+
+    monkeypatch.setattr(
+        extension.admin_ops,
+        "cancel_publication_schedule",
+        stale_cancel,
+    )
+    await extension.admin_ops_gate(stale_callback, FakeState())
+    assert stale_callback.answers == [
+        (
+            "Расписание уже изменилось. Обновите публикации и повторите действие.",
+            True,
+        )
+    ]
 
     for action in (
         "publication-schedule",

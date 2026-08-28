@@ -140,9 +140,19 @@ def _payment_average_text(payments: list[Any]) -> str:
     )
 
 
+_OPS_ACTION_TOKENS = {
+    "publication-schedule": "ps",
+    "publication-cancel": "pc",
+    "publication-cancel-ok": "pcx",
+    "publication-publish": "pp",
+}
+_OPS_ACTION_FROM_TOKEN = {value: key for key, value in _OPS_ACTION_TOKENS.items()}
+
+
 def _ops_callback(ctx: Any, action: str, *payload: object) -> str:
     tail = ":".join(str(item) for item in payload)
-    value = f"cpao:{ctx.business_token}:{action}"
+    action_token = _OPS_ACTION_TOKENS.get(action, action)
+    value = f"cpao:{ctx.business_token}:{action_token}"
     if tail:
         value += f":{tail}"
     if len(value.encode("utf-8")) > 64:
@@ -434,7 +444,14 @@ async def _enhanced_marketing(
             extra.append(
                 (
                     f"⛔ Отменить · {item.title[:18]}",
-                    _ops_callback(ctx, "publication-cancel", token),
+                    _ops_callback(
+                        ctx,
+                        "publication-cancel",
+                        token,
+                        admin_ops.encode_publication_schedule_version(
+                            item.scheduled_at or ""
+                        ),
+                    ),
                 )
             )
     elif action == "funnel":
@@ -835,7 +852,7 @@ async def admin_ops_gate(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.answer("Кнопка устарела", show_alert=True)
         return
     business_id = admin.control._token_uuid(parts[1])
-    action = parts[2]
+    action = _OPS_ACTION_FROM_TOKEN.get(parts[2], parts[2])
     payload = tuple(parts[3:])
     ctx = await admin._load_admin_context(
         user_id=int(callback.from_user.id),
@@ -959,10 +976,16 @@ async def admin_ops_gate(callback: CallbackQuery, state: FSMContext) -> None:
         )
         return
     if action == "publication-cancel":
-        if len(payload) != 1:
+        if len(payload) != 2:
             await callback.answer("Кнопка устарела", show_alert=True)
             return
         publication_id = admin.control._token_uuid(payload[0])
+        try:
+            admin_ops.decode_publication_schedule_version(payload[1])
+        except ValueError:
+            await callback.answer("Кнопка устарела", show_alert=True)
+            return
+        schedule_version = payload[1]
         await admin._safe_edit(
             callback,
             "⛔ Отменить запланированную публикацию?\n\n"
@@ -978,6 +1001,7 @@ async def admin_ops_gate(callback: CallbackQuery, state: FSMContext) -> None:
                             ctx,
                             "publication-cancel-ok",
                             admin.control._uuid_token(publication_id),
+                            schedule_version,
                         ),
                     )
                 ],
@@ -985,15 +1009,30 @@ async def admin_ops_gate(callback: CallbackQuery, state: FSMContext) -> None:
         )
         return
     if action == "publication-cancel-ok":
-        if len(payload) != 1:
+        if len(payload) != 2:
             await callback.answer("Кнопка устарела", show_alert=True)
             return
         publication_id = admin.control._token_uuid(payload[0])
-        await asyncio.to_thread(
-            admin_ops.cancel_publication_schedule,
-            actor=ctx.actor,
-            publication_id=publication_id,
-        )
+        try:
+            expected_scheduled_at = admin_ops.decode_publication_schedule_version(
+                payload[1]
+            )
+        except ValueError:
+            await callback.answer("Кнопка устарела", show_alert=True)
+            return
+        try:
+            await asyncio.to_thread(
+                admin_ops.cancel_publication_schedule,
+                actor=ctx.actor,
+                publication_id=publication_id,
+                expected_scheduled_at=expected_scheduled_at,
+            )
+        except ValueError:
+            await callback.answer(
+                "Расписание уже изменилось. Обновите публикации и повторите действие.",
+                show_alert=True,
+            )
+            return
         await _enhanced_marketing(callback, state, ctx, "publications")
         return
     if action == "publication-publish":

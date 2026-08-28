@@ -475,8 +475,9 @@ async def test_publications_use_shared_calendar_projection(
         for button in row
         if button.callback_data is not None
     ]
-    assert any(":publication-schedule:" in value for value in callbacks)
-    assert any(":publication-cancel:" in value for value in callbacks)
+    assert any(":ps:" in value for value in callbacks)
+    assert any(":pc:" in value for value in callbacks)
+    assert all(len(value.encode("utf-8")) <= 64 for value in callbacks)
     assert markup.inline_keyboard[-1][0].text == "⬅️ Назад"
 
 
