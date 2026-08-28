@@ -182,7 +182,18 @@ class RevenueAttributionRepository:
         outcome_event_id: str,
         created_at: datetime | None = None,
     ) -> RevenueAttributionRecord | None:
-        """Persist the canonical first-touch decision for one monetary outcome, if attributable."""
+        """Persist or replay the durable first-touch decision for one monetary outcome."""
+
+        # A previously materialized revenue decision is durable financial evidence.
+        # Privacy detach may intentionally remove customer/touch/campaign FKs while
+        # retaining the source snapshot. Replay must therefore return the durable
+        # record before attempting to resolve a now-detached attribution trace.
+        existing = self.get_for_outcome(
+            business_id=str(business_id),
+            outcome_event_id=str(outcome_event_id),
+        )
+        if existing is not None:
+            return existing
 
         row = self._conn.execute(
             _OUTCOME_SELECT + " WHERE business_id=? AND id=? LIMIT 1",

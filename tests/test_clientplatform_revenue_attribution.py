@@ -463,6 +463,25 @@ class ClientPlatformRevenueAttributionTests(unittest.TestCase):
         self.assertEqual(retained.currency, "RUB")
         self.assertEqual(retained.source_ref_id, record.source_ref_id)
 
+        replay = self.revenue.materialize_outcome(
+            business_id=self.business_id,
+            outcome_event_id=paid.id,
+        )
+        self.assertEqual(replay, retained)
+
+        journey = self.revenue.journey_snapshot(
+            business_id=self.business_id,
+            occurred_from=_NOW,
+            occurred_to=_NOW + timedelta(hours=1),
+        )
+        self.assertTrue(journey.attribution_complete)
+        self.assertEqual(journey.attributed_monetary_outcomes, 1)
+        self.assertEqual(journey.unattributed_monetary_outcomes, 0)
+        self.assertEqual(journey.attributed_revenue_by_currency[0].amount_minor, 5_000)
+        telegram = next(item for item in journey.sources if item.source.value == "telegram")
+        self.assertEqual(telegram.paid_customers, 1)
+        self.assertEqual(telegram.revenue_by_currency[0].amount_minor, 5_000)
+
 
     def test_money_cockpit_journey_keeps_verified_money_separate_from_source_attribution(self) -> None:
         self._append(
