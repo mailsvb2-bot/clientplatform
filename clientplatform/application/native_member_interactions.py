@@ -21,8 +21,10 @@ from clientplatform.application.acquisition_destination import (
     prepare_nearest_acquisition_destination,
 )
 from clientplatform.application.admin_ops import (
+    cancel_publication_schedule,
     format_publication_calendar_lines,
     get_publication_calendar_projection,
+    schedule_publication,
 )
 from clientplatform.application.bookings import create_booking_slot, list_booking_slots
 from clientplatform.application.messenger_switching import (
@@ -391,6 +393,17 @@ def parse_native_member_interaction(value: object) -> ParsedMemberInteraction:
             "sales-followup-optout-text",
             (optout_match.group(1),),
         )
+    publication_match = re.fullmatch(
+        r"публикация\s+([0-9a-f-]{6,36})\s+"
+        r"([0-3][0-9]\.[01][0-9]\.[0-9]{4}\s+[0-2][0-9]:[0-5][0-9])",
+        raw,
+        flags=re.IGNORECASE,
+    )
+    if publication_match is not None:
+        return ParsedMemberInteraction(
+            "publication-schedule-text",
+            (publication_match.group(1), publication_match.group(2)),
+        )
     booking_match = re.fullmatch(
         r"время\s+([0-9a-f-]{6,36})\s+"
         r"([0-3][0-9]\.[01][0-9]\.[0-9]{4}\s+[0-2][0-9]:[0-5][0-9])"
@@ -433,6 +446,10 @@ def parse_native_member_interaction(value: object) -> ParsedMemberInteraction:
             "messengers",
             "autopilot",
             "publications",
+            "publication-schedule",
+            "publication-schedule-text",
+            "publication-cancel",
+            "publication-cancel-ok",
             "funnel",
             "money",
             "payments",
@@ -1448,6 +1465,115 @@ def _attention_message(actor: TenantContext) -> CustomerInteractionMessage:
     return CustomerInteractionMessage(text=text, rows=(_back_row(),))
 
 
+def _publication_schedule_help(
+    actor: TenantContext,
+    publication_id: str,
+) -> CustomerInteractionMessage:
+    if actor.role not in _CONTENT_ROLES:
+        return _permission_message()
+    profile = get_business_profile(actor=actor)
+    return CustomerInteractionMessage(
+        text=(
+            "🗓 Время публикации\n\n"
+            f"Часовой пояс бизнеса: {profile.timezone}.\n"
+            "Отправьте одной строкой:\n"
+            f"публикация {publication_id} 28.08.2026 19:30\n\n"
+            "Прошлое, несуществующее и неоднозначное местное время отклоняется."
+        ),
+        rows=((_button("📣 К публикациям", "cpm:publications"),), _back_row()),
+    )
+
+
+def _publication_schedule_result(
+    actor: TenantContext,
+    publication_id: str,
+    local_time: str,
+    *,
+    interaction_key: str | None = None,
+) -> CustomerInteractionMessage:
+    if actor.role not in _CONTENT_ROLES:
+        return _permission_message()
+    try:
+        publication = schedule_publication(
+            actor=actor,
+            publication_id=publication_id,
+            local_time=local_time,
+            idempotency_key=interaction_key,
+        )
+        profile = get_business_profile(actor=actor)
+    except ValueError as exc:
+        detail = str(exc)
+        if "future" in detail:
+            reason = "Выберите будущее время."
+        elif "ambiguous" in detail:
+            reason = "Это местное время неоднозначно. Выберите другое."
+        elif "does not exist locally" in detail:
+            reason = "Такого местного времени нет. Выберите другое."
+        elif "timezone" in detail:
+            reason = "Проверьте часовой пояс бизнеса."
+        else:
+            reason = "Проверьте публикацию и формат 28.08.2026 19:30."
+        return CustomerInteractionMessage(
+            text=f"Не удалось запланировать публикацию. {reason}",
+            rows=((_button("📣 К публикациям", "cpm:publications"),), _back_row()),
+        )
+    line = format_publication_calendar_lines(
+        [publication],
+        timezone_name=profile.timezone,
+        max_entries=1,
+    )[0]
+    return CustomerInteractionMessage(
+        text=f"✅ Публикация запланирована.\n{line}",
+        rows=((_button("📣 К публикациям", "cpm:publications"),), _back_row()),
+    )
+
+
+def _publication_cancel_confirm(
+    actor: TenantContext,
+    publication_id: str,
+) -> CustomerInteractionMessage:
+    if actor.role not in _CONTENT_ROLES:
+        return _permission_message()
+    return CustomerInteractionMessage(
+        text=(
+            "⛔ Отменить запланированную публикацию?\n\n"
+            "Это только изменит канонический статус; отправка не запускается."
+        ),
+        rows=(
+            (
+                _button(
+                    "⛔ Подтвердить отмену",
+                    f"cpm:publication-cancel-ok:{publication_id}",
+                ),
+            ),
+            (_button("📣 К публикациям", "cpm:publications"),),
+            _back_row(),
+        ),
+    )
+
+
+def _publication_cancel_result(
+    actor: TenantContext,
+    publication_id: str,
+) -> CustomerInteractionMessage:
+    if actor.role not in _CONTENT_ROLES:
+        return _permission_message()
+    try:
+        publication = cancel_publication_schedule(
+            actor=actor,
+            publication_id=publication_id,
+        )
+    except ValueError:
+        return _stale_message()
+    return CustomerInteractionMessage(
+        text=(
+            f"✅ План публикации «{publication.title}» отменён.\n"
+            "Ничего автоматически не отправлено."
+        ),
+        rows=((_button("📣 К публикациям", "cpm:publications"),), _back_row()),
+    )
+
+
 def _growth_report_message(actor: TenantContext, action: str) -> CustomerInteractionMessage:
     allowed = {
         "autopilot": _AUTOMATION_ROLES,
@@ -1472,6 +1598,33 @@ def _growth_report_message(actor: TenantContext, action: str) -> CustomerInterac
                 max_entries=8,
             )
         )
+        rows: list[tuple[CustomerInteractionButton, ...]] = []
+        for item in projection.actionable_drafts[:3]:
+            rows.append(
+                (
+                    _button(
+                        f"🗓 Запланировать · {item.title[:18]}",
+                        f"cpm:publication-schedule:{item.id}",
+                    ),
+                )
+            )
+        scheduled_items = [
+            item for item in projection.entries if item.status == "scheduled"
+        ]
+        for item in scheduled_items[:2]:
+            rows.append(
+                (
+                    _button(
+                        f"🕒 Перенести · {item.title[:18]}",
+                        f"cpm:publication-schedule:{item.id}",
+                    ),
+                    _button(
+                        "⛔ Отменить",
+                        f"cpm:publication-cancel:{item.id}",
+                    ),
+                )
+            )
+        rows.extend(((_button("📈 Рост", "cpm:growth"),), _back_row()))
         return CustomerInteractionMessage(
             text=(
                 "Публикации\n\n"
@@ -1482,7 +1635,7 @@ def _growth_report_message(actor: TenantContext, action: str) -> CustomerInterac
                 "Ближайшие и последние:\n"
                 f"{calendar}"
             ),
-            rows=((_button("📈 Рост", "cpm:growth"),), _back_row()),
+            rows=tuple(rows),
         )
     profile = get_business_profile(actor=actor)
     summary = business_delivery_summary(actor=actor)
@@ -2298,6 +2451,27 @@ def _render(
             if len(parsed.args) != 1:
                 return _stale_message()
             return _sales_followup_optout_help(parsed.args[0])
+        if parsed.action == "publication-schedule":
+            if len(parsed.args) != 1:
+                return _stale_message()
+            return _publication_schedule_help(actor, parsed.args[0])
+        if parsed.action == "publication-schedule-text":
+            if len(parsed.args) != 2:
+                return _stale_message()
+            return _publication_schedule_result(
+                actor,
+                parsed.args[0],
+                parsed.args[1],
+                interaction_key=setup_key,
+            )
+        if parsed.action == "publication-cancel":
+            if len(parsed.args) != 1:
+                return _stale_message()
+            return _publication_cancel_confirm(actor, parsed.args[0])
+        if parsed.action == "publication-cancel-ok":
+            if len(parsed.args) != 1:
+                return _stale_message()
+            return _publication_cancel_result(actor, parsed.args[0])
         if parsed.action == "messengers":
             return _messengers_message(
                 actor,

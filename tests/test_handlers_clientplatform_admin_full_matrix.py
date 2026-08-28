@@ -465,7 +465,18 @@ async def test_publications_use_shared_calendar_projection(
     assert "28.08.2026 21:00 · MAX · Запланировано · Вечерняя публикация" in text
     assert "ещё не подключ" not in text.casefold()
     labels = [button.text for row in markup.inline_keyboard for button in row]
-    assert any("Готовый черновик" in label for label in labels)
+    assert any("🗓 Запланировать · Готовый черновик" in label for label in labels)
+    assert any("✅ Отметить опубликованной · Готовый черновик" in label for label in labels)
+    assert any("🕒 Перенести · Вечерняя публикаци" in label for label in labels)
+    assert any("⛔ Отменить · Вечерняя публикаци" in label for label in labels)
+    callbacks = [
+        button.callback_data
+        for row in markup.inline_keyboard
+        for button in row
+        if button.callback_data is not None
+    ]
+    assert any(":publication-schedule:" in value for value in callbacks)
+    assert any(":publication-cancel:" in value for value in callbacks)
     assert markup.inline_keyboard[-1][0].text == "⬅️ Назад"
 
 
