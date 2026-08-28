@@ -88,6 +88,18 @@ class ClientPlatformOwnerActionQueueM4003Tests(unittest.TestCase):
                 "clientplatform.application.growth_cockpit.get_business_unit_economics",
                 side_effect=self._economics,
             ),
+            patch(
+                "clientplatform.application.growth_cockpit.list_booking_slots",
+                return_value=[SimpleNamespace()],
+            ),
+            patch(
+                "clientplatform.application.growth_cockpit.list_reactivation_opportunities",
+                return_value=[],
+            ),
+            patch(
+                "clientplatform.application.growth_cockpit.list_ad_spend_authorizations",
+                return_value=[],
+            ),
         ):
             return get_growth_cockpit(
                 actor=actor,

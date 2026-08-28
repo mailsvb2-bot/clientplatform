@@ -123,19 +123,27 @@ class RetentionRepository:
         ).fetchone()
         return None if row is None else self._candidate_from_row(row, now=now)
 
-    def preferred_reactivation_channel(
+    def preferred_reactivation_channels(
         self,
         *,
         actor: TenantContext,
-        customer_id: str,
-    ) -> str | None:
+        customer_ids: list[str] | tuple[str, ...],
+    ) -> dict[str, str]:
         current = self._current(actor, manage=True)
-        customer = normalize_uuid(customer_id, field_name="customer_id")
-        row = self._conn.execute(
-            """
-            SELECT ci.platform
+        customers = tuple(
+            dict.fromkeys(
+                normalize_uuid(customer_id, field_name="customer_id")
+                for customer_id in customer_ids
+            )
+        )
+        if not customers:
+            return {}
+        placeholders = ",".join("?" for _ in customers)
+        rows = self._conn.execute(
+            f"""
+            SELECT ci.customer_id,ci.platform
             FROM customer_identities ci
-            WHERE ci.business_id=? AND ci.customer_id=? AND ci.status='active'
+            WHERE ci.business_id=? AND ci.customer_id IN ({placeholders}) AND ci.status='active'
               AND ci.platform IN ('telegram','vk','max')
               AND NOT EXISTS (
                   SELECT 1
@@ -160,14 +168,30 @@ class RetentionRepository:
                         ))
                     )
               )
-            ORDER BY COALESCE(ci.last_contact_at,ci.updated_at,ci.created_at) DESC,
+            ORDER BY ci.customer_id,
+                     COALESCE(ci.last_contact_at,ci.updated_at,ci.created_at) DESC,
                      CASE ci.platform WHEN 'telegram' THEN 1 WHEN 'vk' THEN 2 ELSE 3 END,
                      ci.id
-            LIMIT 1
-            """,
-            (current.business_id, customer),
-        ).fetchone()
-        return None if row is None else str(_value(row, "platform", 0))
+            """,  # nosec B608 - placeholders are generated exclusively from normalized UUID count
+            (current.business_id, *customers),
+        ).fetchall()
+        routes: dict[str, str] = {}
+        for row in rows:
+            customer = str(_value(row, "customer_id", 0))
+            routes.setdefault(customer, str(_value(row, "platform", 1)))
+        return routes
+
+    def preferred_reactivation_channel(
+        self,
+        *,
+        actor: TenantContext,
+        customer_id: str,
+    ) -> str | None:
+        customer = normalize_uuid(customer_id, field_name="customer_id")
+        return self.preferred_reactivation_channels(
+            actor=actor,
+            customer_ids=(customer,),
+        ).get(customer)
 
 
 __all__ = ["RetentionRepository"]

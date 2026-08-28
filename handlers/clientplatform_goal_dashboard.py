@@ -20,7 +20,7 @@ from . import clientplatform_one_click_experience as one_click
 # simple owner experience instead of registering a second top-level bot brain.
 if not bool(getattr(one_click.simple, "_growth_cockpit_composed", False)):
     one_click.simple.router.include_router(growth.router)
-    one_click.simple._growth_cockpit_composed = True
+    setattr(one_click.simple, "_growth_cockpit_composed", True)
 
 
 def _without_advertising(**_kwargs):
@@ -71,6 +71,12 @@ def _primary_action(business_id: str, next_action: GrowthAction | None = None) -
             )
         if next_action.action_key == "attribution_review":
             return "💰 Проверить источники оплат", f"cpy:a:{token}:7"
+        if next_action.action_key == "economic_reactivation":
+            return "♻️ Вернуть клиентов без рекламы", f"cps:sr:{token}"
+        if next_action.action_key == "economic_open_slots":
+            return "🕒 Открыть время", goal_contract.ACQUIRE_CLIENTS.callback(token)
+        if next_action.action_key == "economic_paid_acquisition":
+            return "💳 Проверить безопасный запуск", f"cpsp:home:{token}"
     action = goal_contract.ACQUIRE_CLIENTS
     return action.label, action.callback(token)
 
