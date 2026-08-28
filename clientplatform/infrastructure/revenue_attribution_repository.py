@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+import json
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
@@ -40,7 +41,7 @@ def _parse_datetime(value: Any) -> datetime:
 
 _OUTCOME_SELECT = """
     SELECT id, outcome_type, occurred_at, customer_id, subject_ref,
-           amount_minor, currency, source_type, source_id
+           amount_minor, currency, source_type, source_id, metadata_json
     FROM business_outcome_events
 """
 
@@ -162,6 +163,71 @@ class RevenueAttributionRepository:
         referenced_signed = _direct_signed_amount(referenced_type, int(referenced_amount))
         return -referenced_signed, str(referenced_currency)
 
+    def _referenced_financial_attribution(
+        self,
+        *,
+        business_id: str,
+        row: Any,
+        outcome_type: OutcomeType,
+        occurred_at: datetime,
+        currency: str,
+    ) -> tuple[bool, RevenueAttributionRecord | None]:
+        """Return whether a correction references prior money and its durable source evidence."""
+
+        has_reference = False
+        referenced_outcome_id: str | None = None
+        if outcome_type == OutcomeType.REFUND_RECORDED:
+            raw_metadata = _value(row, "metadata_json", 9)
+            try:
+                metadata = json.loads(str(raw_metadata or "{}"))
+            except (TypeError, ValueError) as exc:
+                raise RevenueAttributionInvariantViolation(
+                    "refund outcome metadata is not valid JSON"
+                ) from exc
+            if not isinstance(metadata, dict):
+                raise RevenueAttributionInvariantViolation(
+                    "refund outcome metadata must be a JSON object"
+                )
+            if "payment_outcome_event_id" in metadata:
+                has_reference = True
+                candidate = metadata.get("payment_outcome_event_id")
+                referenced_outcome_id = str(candidate or "").strip() or None
+                if referenced_outcome_id is None:
+                    raise RevenueAttributionInvariantViolation(
+                        "refund payment_outcome_event_id must not be blank"
+                    )
+        elif outcome_type == OutcomeType.OUTCOME_REVERSAL:
+            source_type = str(_value(row, "source_type", 7) or "").strip()
+            source_id = str(_value(row, "source_id", 8) or "").strip()
+            if source_type == "outcome_event" and source_id:
+                has_reference = True
+                referenced_outcome_id = source_id
+
+        if referenced_outcome_id is None:
+            return has_reference, None
+        referenced = self.get_for_outcome(
+            business_id=str(business_id),
+            outcome_event_id=referenced_outcome_id,
+        )
+        if referenced is None:
+            return True, None
+        if (
+            outcome_type == OutcomeType.REFUND_RECORDED
+            and referenced.outcome_type != OutcomeType.ORDER_PAID
+        ):
+            raise RevenueAttributionInvariantViolation(
+                "refund must reference the durable attribution of an order_paid outcome"
+            )
+        if referenced.occurred_at > occurred_at:
+            raise RevenueAttributionInvariantViolation(
+                "financial correction cannot inherit attribution from a future outcome"
+            )
+        if referenced.currency != str(currency).upper():
+            raise RevenueAttributionInvariantViolation(
+                "financial correction currency disagrees with referenced attribution"
+            )
+        return True, referenced
+
     def get_for_outcome(
         self,
         *,
@@ -214,6 +280,25 @@ class RevenueAttributionRepository:
         customer_id = None if customer_value is None else str(customer_value)
         subject_value = _value(row, "subject_ref", 4)
         subject_ref = None if subject_value is None else str(subject_value)
+        has_financial_reference, inherited = self._referenced_financial_attribution(
+            business_id=str(business_id),
+            row=row,
+            outcome_type=outcome_type,
+            occurred_at=outcome_occurred_at,
+            currency=currency,
+        )
+        if has_financial_reference and inherited is None:
+            # A later touch must never retroactively explain an earlier unattributed payment.
+            return None
+        if (
+            inherited is not None
+            and customer_id is not None
+            and inherited.customer_id is not None
+            and inherited.customer_id != customer_id
+        ):
+            raise RevenueAttributionInvariantViolation(
+                "financial correction customer disagrees with referenced attribution"
+            )
 
         customer_trace = None
         if customer_id is not None:
@@ -235,12 +320,28 @@ class RevenueAttributionRepository:
             if booking_trace is not None and booking_trace.touch.occurred_at > outcome_occurred_at:
                 booking_trace = None
         trace = booking_trace or customer_trace
-        if trace is None:
+        if inherited is None and trace is None:
             return None
         if customer_trace is not None and booking_trace is not None and customer_trace.touch.id != booking_trace.touch.id:
             raise RevenueAttributionInvariantViolation("customer and booking attribution disagree")
-        if customer_id is not None and trace.touch.customer_id != customer_id:
+        if inherited is None and customer_id is not None and trace is not None and trace.touch.customer_id != customer_id:
             raise RevenueAttributionInvariantViolation("monetary outcome customer does not match acquisition touch")
+
+        if inherited is not None:
+            touch_id = inherited.touch_id
+            attribution_identity_id = inherited.attribution_identity_id
+            source = inherited.source
+            source_ref_type = inherited.source_ref_type
+            source_ref_id = inherited.source_ref_id
+            promotion_campaign_id = inherited.promotion_campaign_id
+        else:
+            assert trace is not None
+            touch_id = trace.touch.id
+            attribution_identity_id = trace.identity.id
+            source = trace.identity.source
+            source_ref_type = trace.identity.source_ref_type
+            source_ref_id = trace.identity.source_ref_id
+            promotion_campaign_id = trace.identity.promotion_campaign_id
 
         stamp = created_at or datetime.now(timezone.utc)
         record = RevenueAttributionRecord(
@@ -249,12 +350,12 @@ class RevenueAttributionRepository:
             outcome_event_id=str(_value(row, "id", 0)),
             outcome_type=outcome_type,
             customer_id=customer_id,
-            touch_id=trace.touch.id,
-            attribution_identity_id=trace.identity.id,
-            source=trace.identity.source,
-            source_ref_type=trace.identity.source_ref_type,
-            source_ref_id=trace.identity.source_ref_id,
-            promotion_campaign_id=trace.identity.promotion_campaign_id,
+            touch_id=touch_id,
+            attribution_identity_id=attribution_identity_id,
+            source=source,
+            source_ref_type=source_ref_type,
+            source_ref_id=source_ref_id,
+            promotion_campaign_id=promotion_campaign_id,
             model_version=RevenueAttributionModel.FIRST_TOUCH_V1,
             amount_minor=signed_amount,
             currency=currency,

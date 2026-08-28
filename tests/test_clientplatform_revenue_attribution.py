@@ -165,6 +165,7 @@ class ClientPlatformRevenueAttributionTests(unittest.TestCase):
         subject_ref: str | None = None,
         source_type: str = "test",
         source_id: str | None = None,
+        metadata: dict[str, object] | None = None,
     ) -> BusinessOutcomeEvent:
         return self.outcomes.append(
             BusinessOutcomeEvent(
@@ -184,7 +185,7 @@ class ClientPlatformRevenueAttributionTests(unittest.TestCase):
                 ),
                 money=money,
                 idempotency_key=f"test:{event_id}",
-                metadata={},
+                metadata={} if metadata is None else metadata,
                 metadata_version=1,
                 created_at=occurred_at,
             )
@@ -482,6 +483,145 @@ class ClientPlatformRevenueAttributionTests(unittest.TestCase):
         self.assertEqual(telegram.paid_customers, 1)
         self.assertEqual(telegram.revenue_by_currency[0].amount_minor, 5_000)
 
+
+    def test_refund_never_uses_a_later_touch_when_original_payment_was_unattributed(self) -> None:
+        customer_id = self._connect_customer(77008)
+        paid = self._append(
+            OutcomeType.ORDER_PAID,
+            event_id="unattributed-before-later-touch",
+            money=OutcomeMoney(amount_minor=5_000, currency="RUB"),
+            occurred_at=_NOW + timedelta(minutes=4),
+            customer_id=customer_id,
+            subject_ref="order:before-later-touch",
+        )
+        self.assertIsNone(
+            self.revenue.materialize_outcome(
+                business_id=self.business_id,
+                outcome_event_id=paid.id,
+            )
+        )
+        later_trace = self.attribution.capture_promotion_touch(
+            business_id=self.business_id,
+            source_token=self.campaign.source_token,
+            campaign_id=self.campaign.id,
+            channel=self.campaign.channel,
+            source_kind="campaign",
+            source_key=self.campaign.id,
+            customer_id=customer_id,
+            occurred_at=_NOW + timedelta(minutes=5),
+        )
+        self.assertEqual(later_trace.identity.source.value, "telegram")
+        refund = self._append(
+            OutcomeType.REFUND_RECORDED,
+            event_id="refund-after-later-touch",
+            money=OutcomeMoney(amount_minor=5_000, currency="RUB"),
+            occurred_at=_NOW + timedelta(minutes=6),
+            customer_id=customer_id,
+            source_type="business_payment",
+            source_id="payment-unattributed",
+            subject_ref="business_payment:payment-unattributed",
+            metadata={"payment_outcome_event_id": paid.id},
+        )
+        self.assertIsNone(
+            self.revenue.materialize_outcome(
+                business_id=self.business_id,
+                outcome_event_id=refund.id,
+            )
+        )
+        journey = self.revenue.journey_snapshot(
+            business_id=self.business_id,
+            occurred_from=_NOW + timedelta(minutes=4),
+            occurred_to=_NOW + timedelta(minutes=7),
+        )
+        self.assertEqual(journey.monetary_outcomes, 2)
+        self.assertEqual(journey.attributed_monetary_outcomes, 0)
+        self.assertEqual(journey.unattributed_monetary_outcomes, 2)
+        self.assertTrue(all(item.source.value != "telegram" for item in journey.sources))
+
+    def test_refund_and_reversal_inherit_durable_source_after_privacy_detach(self) -> None:
+        paid = self._append(
+            OutcomeType.ORDER_PAID,
+            event_id="privacy-paid-before-corrections",
+            money=OutcomeMoney(amount_minor=5_000, currency="RUB"),
+            occurred_at=_NOW + timedelta(minutes=4),
+        )
+        paid_record = self.revenue.materialize_outcome(
+            business_id=self.business_id,
+            outcome_event_id=paid.id,
+        )
+        self.assertIsNotNone(paid_record)
+        assert paid_record is not None
+        self.conn.execute(
+            "DELETE FROM promotion_campaigns WHERE id=? AND business_id=?",
+            (self.campaign.id, self.business_id),
+        )
+        retained = self.revenue.get_for_outcome(
+            business_id=self.business_id,
+            outcome_event_id=paid.id,
+        )
+        self.assertIsNotNone(retained)
+        assert retained is not None
+        self.assertEqual(retained.source.value, "telegram")
+        self.assertIsNone(retained.touch_id)
+
+        refund = self._append(
+            OutcomeType.REFUND_RECORDED,
+            event_id="privacy-refund-after-detach",
+            money=OutcomeMoney(amount_minor=2_000, currency="RUB"),
+            occurred_at=_NOW + timedelta(minutes=5),
+            source_type="business_payment",
+            source_id="payment-privacy-refund",
+            subject_ref="business_payment:payment-privacy-refund",
+            metadata={"payment_outcome_event_id": paid.id},
+        )
+        reversal = self._append(
+            OutcomeType.OUTCOME_REVERSAL,
+            event_id="privacy-reversal-after-detach",
+            money=OutcomeMoney(amount_minor=3_000, currency="RUB"),
+            occurred_at=_NOW + timedelta(minutes=6),
+            source_type="outcome_event",
+            source_id=paid.id,
+            subject_ref=f"outcome:{paid.id}",
+        )
+        refunded = self.revenue.materialize_outcome(
+            business_id=self.business_id,
+            outcome_event_id=refund.id,
+        )
+        reversed_record = self.revenue.materialize_outcome(
+            business_id=self.business_id,
+            outcome_event_id=reversal.id,
+        )
+        self.assertIsNotNone(refunded)
+        self.assertIsNotNone(reversed_record)
+        assert refunded is not None and reversed_record is not None
+        for correction in (refunded, reversed_record):
+            self.assertEqual(correction.source, retained.source)
+            self.assertEqual(correction.source_ref_type, retained.source_ref_type)
+            self.assertEqual(correction.source_ref_id, retained.source_ref_id)
+            self.assertIsNone(correction.touch_id)
+        self.assertEqual(refunded.amount_minor, -2_000)
+        self.assertEqual(reversed_record.amount_minor, -3_000)
+
+        journey = self.revenue.journey_snapshot(
+            business_id=self.business_id,
+            occurred_from=_NOW + timedelta(minutes=4),
+            occurred_to=_NOW + timedelta(minutes=7),
+        )
+        self.assertTrue(journey.attribution_complete)
+        self.assertEqual(journey.monetary_outcomes, 3)
+        self.assertEqual(journey.attributed_monetary_outcomes, 3)
+        self.assertEqual(journey.unattributed_monetary_outcomes, 0)
+        self.assertEqual(
+            [(item.currency, item.amount_minor) for item in journey.verified_revenue_by_currency],
+            [("RUB", 0)],
+        )
+        self.assertEqual(
+            [(item.currency, item.amount_minor) for item in journey.attributed_revenue_by_currency],
+            [("RUB", 0)],
+        )
+        self.assertEqual(journey.unattributed_revenue_by_currency, ())
+        telegram = next(item for item in journey.sources if item.source.value == "telegram")
+        self.assertEqual(telegram.revenue_by_currency[0].amount_minor, 0)
 
     def test_money_cockpit_journey_keeps_verified_money_separate_from_source_attribution(self) -> None:
         self._append(
