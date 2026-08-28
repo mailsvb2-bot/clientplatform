@@ -595,6 +595,57 @@ class ClientPlatformRevenueAttributionTests(unittest.TestCase):
         self.assertEqual(journey.unattributed_monetary_outcomes, 2)
         self.assertTrue(all(item.source.value != "telegram" for item in journey.sources))
 
+    def test_same_time_corrections_resolve_on_first_reconciliation(self) -> None:
+        occurred_at = _NOW + timedelta(minutes=4)
+        paid = self._append(
+            OutcomeType.ORDER_PAID,
+            event_id="z-same-time-paid",
+            money=OutcomeMoney(amount_minor=5_000, currency="RUB"),
+            occurred_at=occurred_at,
+        )
+        self._append(
+            OutcomeType.REFUND_RECORDED,
+            event_id="a-same-time-refund",
+            money=OutcomeMoney(amount_minor=2_000, currency="RUB"),
+            occurred_at=occurred_at,
+            source_type="business_payment",
+            source_id="same-time-payment",
+            subject_ref="business_payment:same-time-payment",
+            metadata={"payment_outcome_event_id": paid.id},
+        )
+        self._append(
+            OutcomeType.OUTCOME_REVERSAL,
+            event_id="b-same-time-reversal",
+            money=OutcomeMoney(amount_minor=1_000, currency="RUB"),
+            occurred_at=occurred_at,
+            source_type="outcome_event",
+            source_id=paid.id,
+            subject_ref=f"outcome:{paid.id}",
+        )
+
+        first = self.revenue.journey_snapshot(
+            business_id=self.business_id,
+            occurred_from=_NOW,
+            occurred_to=_NOW + timedelta(minutes=5),
+        )
+        second = self.revenue.journey_snapshot(
+            business_id=self.business_id,
+            occurred_from=_NOW,
+            occurred_to=_NOW + timedelta(minutes=5),
+        )
+
+        self.assertEqual(first, second)
+        self.assertTrue(first.attribution_complete)
+        self.assertEqual(first.monetary_outcomes, 3)
+        self.assertEqual(first.attributed_monetary_outcomes, 3)
+        self.assertEqual(first.unattributed_monetary_outcomes, 0)
+        self.assertEqual(
+            [(item.currency, item.amount_minor) for item in first.attributed_revenue_by_currency],
+            [("RUB", 2_000)],
+        )
+        telegram = next(item for item in first.sources if item.source.value == "telegram")
+        self.assertEqual(telegram.revenue_by_currency[0].amount_minor, 2_000)
+
     def test_refund_and_reversal_inherit_durable_source_after_privacy_detach(self) -> None:
         paid = self._append(
             OutcomeType.ORDER_PAID,

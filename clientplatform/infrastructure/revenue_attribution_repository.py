@@ -519,15 +519,29 @@ class RevenueAttributionRepository:
                 _serialize_datetime(occurred_to),
             ),
         ).fetchall()
-        accepted: list[RevenueAttributionRecord] = []
-        for row in rows:
-            record = self.materialize_outcome(
-                business_id=str(business_id),
-                outcome_event_id=str(_value(row, "id", 0)),
-            )
-            if record is not None:
-                accepted.append(record)
-        return accepted
+        accepted_by_event: dict[str, RevenueAttributionRecord] = {}
+        pending = [str(_value(row, "id", 0)) for row in rows]
+        while pending:
+            next_pending: list[str] = []
+            progressed = False
+            for outcome_event_id in pending:
+                record = self.materialize_outcome(
+                    business_id=str(business_id),
+                    outcome_event_id=outcome_event_id,
+                )
+                if record is None:
+                    next_pending.append(outcome_event_id)
+                    continue
+                accepted_by_event[outcome_event_id] = record
+                progressed = True
+            if not progressed:
+                break
+            pending = next_pending
+        return [
+            accepted_by_event[outcome_event_id]
+            for outcome_event_id in (str(_value(row, "id", 0)) for row in rows)
+            if outcome_event_id in accepted_by_event
+        ]
 
     def _event_source(self, *, business_id: str, row: Any) -> AcquisitionSource:
         """Resolve one non-monetary outcome through the existing first-touch spine."""
