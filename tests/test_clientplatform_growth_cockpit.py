@@ -179,6 +179,18 @@ class GrowthCockpitTests(unittest.TestCase):
                 "clientplatform.application.growth_cockpit.list_sales_work",
                 side_effect=lambda *, actor, limit: sales[:limit],
             ),
+            patch(
+                "clientplatform.application.growth_cockpit.list_booking_slots",
+                return_value=[SimpleNamespace()],
+            ),
+            patch(
+                "clientplatform.application.growth_cockpit.list_reactivation_opportunities",
+                return_value=[],
+            ),
+            patch(
+                "clientplatform.application.growth_cockpit.list_ad_spend_authorizations",
+                return_value=[],
+            ),
         ):
             result = get_growth_cockpit(
                 actor=_ACTOR,

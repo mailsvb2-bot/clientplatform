@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Callable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from clientplatform.application.activity import get_business_profile
+from clientplatform.application.ad_spend_consent import list_ad_spend_authorizations
+from clientplatform.application.bookings import list_booking_slots
+from clientplatform.application.retention import ReactivationOpportunity, list_reactivation_opportunities
 from clientplatform.application.revenue_attribution import (
     get_business_revenue_journey,
     get_business_unit_economics,
@@ -19,8 +23,10 @@ from clientplatform.application.yandex_growth_analytics import (
     YandexGrowthSnapshot,
     get_yandex_growth_snapshot,
 )
+from clientplatform.domain.ad_spend import AdSpendAuthorization, AdSpendAuthorizationStatus
+from clientplatform.domain.money import settlement_currency_minor_unit_exponent
 from clientplatform.domain.revenue_attribution import RevenueJourneySnapshot, UnitEconomicsSnapshot
-from clientplatform.domain.tenancy import TenantContext
+from clientplatform.domain.tenancy import PlatformRole, TenantContext
 
 _ALLOWED_PERIODS = frozenset({7, 30})
 
@@ -220,11 +226,120 @@ def _bounded_action_text(value: object, *, limit: int = 180) -> str | None:
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
+def _money_text(amount_minor: int, currency: str) -> str:
+    exponent = settlement_currency_minor_unit_exponent(currency)
+    amount = Decimal(int(amount_minor)) / (Decimal(10) ** exponent)
+    rendered = f"{amount:,.{exponent}f}" if exponent else f"{amount:,.0f}"
+    return f"{rendered.replace(',', ' ')} {str(currency).upper()}"
+
+
+def _utc(value: object) -> datetime:
+    parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("economic action timestamp must be timezone-aware")
+    return parsed.astimezone(timezone.utc)
+
+
+def _current_approved_spend(
+    authorizations: list[AdSpendAuthorization], *, now: datetime
+) -> AdSpendAuthorization | None:
+    current = now.astimezone(timezone.utc)
+    allowed = {
+        AdSpendAuthorizationStatus.AUTHORIZED,
+        AdSpendAuthorizationStatus.LAUNCHING,
+        AdSpendAuthorizationStatus.ACTIVE,
+    }
+    for item in authorizations:
+        if item.status not in allowed or item.consent_receipt is None:
+            continue
+        try:
+            if _utc(item.authorization_expires_at) <= current:
+                continue
+            if _utc(item.snapshot.valid_until) <= current:
+                continue
+        except (TypeError, ValueError):
+            continue
+        return item
+    return None
+
+
+def _economic_next_action(
+    *,
+    open_slots: int,
+    reactivation: list[ReactivationOpportunity],
+    authorizations: list[AdSpendAuthorization],
+    journey: RevenueJourneySnapshot,
+    now: datetime,
+) -> GrowthAction | None:
+    """Pick capacity, free reactivation, then already-consented paid acquisition."""
+    if open_slots < 1:
+        return GrowthAction(
+            title="Сначала открыть время для записи",
+            reason=(
+                "Свободных времён нет. До привлечения или возврата клиентов сначала "
+                "нужно создать доступное время — так ClientPlatform не предлагает тратить "
+                "деньги на спрос, который сейчас нельзя принять."
+            ),
+            action_key="economic_open_slots",
+            source="booking_availability",
+        )
+
+    routable = [item for item in reactivation if item.route_platform]
+    if routable:
+        candidate = routable[0]
+        history = (
+            f" За выбранный период уже подтверждено возвратов: {journey.reactivated_customers}."
+            if journey.reactivated_customers > 0
+            else ""
+        )
+        return GrowthAction(
+            title="Сначала вернуть существующих клиентов",
+            reason=(
+                f"Есть {len(routable)} клиент(ов) из reactivation cohort с доступным "
+                "разрешённым каналом и свободное время для записи. Начните с этого без "
+                "рекламных расходов; сообщение само не отправится." + history
+            ),
+            action_key="economic_reactivation",
+            source="retention_projection",
+            source_id=candidate.candidate.customer_id,
+        )
+
+    approved = _current_approved_spend(authorizations, now=now)
+    if approved is None:
+        return None
+    paid_from_yandex = next(
+        (
+            item.paid_customers
+            for item in journey.sources
+            if str(getattr(item.source, "value", item.source)) == "yandex_direct"
+        ),
+        0,
+    )
+    history = (
+        f" За выбранный период Яндекс Директ дал оплативших клиентов: {paid_from_yandex}."
+        if int(paid_from_yandex) > 0
+        else " Исторические оплаты из Яндекс Директ за выбранный период не подтверждены."
+    )
+    return GrowthAction(
+        title="Проверить уже разрешённое платное привлечение",
+        reason=(
+            f"Свободных времён: {open_slots}. Владелец уже подтвердил рекламные пределы: "
+            f"общий {_money_text(approved.hard_cap_minor, approved.currency)}, "
+            f"дневной {_money_text(approved.daily_cap_minor, approved.currency)}. "
+            "Любой расход остаётся только внутри этих consent-bound лимитов." + history
+        ),
+        action_key="economic_paid_acquisition",
+        source="ad_spend_authorization",
+        source_id=approved.id,
+    )
+
+
 def _action_queue(
     *,
     handoffs: list[dict[str, object]],
     sales_work: list[dict[str, object]],
     economics: UnitEconomicsSnapshot,
+    economic_action: GrowthAction | None = None,
     limit: int = 5,
 ) -> tuple[GrowthAction, ...]:
     """Project a small deterministic owner queue from canonical read models only."""
@@ -299,6 +414,9 @@ def _action_queue(
                 )
             )
 
+    if economic_action is not None:
+        actions.append(economic_action)
+
     if economics.unattributed_monetary_outcomes > 0:
         count = int(economics.unattributed_monetary_outcomes)
         actions.append(
@@ -336,7 +454,7 @@ def get_growth_cockpit(
     actor: TenantContext,
     period_days: int = 7,
     now: datetime | None = None,
-    advertising_loader: Callable[..., YandexGrowthSnapshot] = get_yandex_growth_snapshot,
+    advertising_loader: Callable[..., YandexGrowthSnapshot | None] = get_yandex_growth_snapshot,
 ) -> GrowthCockpitSnapshot:
     """Build the owner growth view from existing canonical facts only.
 
@@ -390,10 +508,38 @@ def get_growth_cockpit(
     elif advertising is not None and advertising.connected_accounts > 0:
         limitations.append("advertising_currency_unverified")
 
+    economic_action: GrowthAction | None = None
+    economic_projection_incomplete = False
+    try:
+        open_slots = len(list_booking_slots(actor=actor, include_unavailable=False))
+        reactivation = list_reactivation_opportunities(actor=actor, now=now, limit=100)
+        authorizations = (
+            list_ad_spend_authorizations(actor=actor, limit=50)
+            if actor.role == PlatformRole.OWNER
+            else []
+        )
+        economic_action = _economic_next_action(
+            open_slots=open_slots,
+            reactivation=reactivation,
+            authorizations=authorizations,
+            journey=journey,
+            now=(now or datetime.now(timezone.utc)),
+        )
+    except OSError:
+        economic_projection_incomplete = True
+    except RuntimeError:
+        economic_projection_incomplete = True
+    except ValueError:
+        economic_projection_incomplete = True
+
+    if economic_projection_incomplete:
+        limitations.append("economic_next_action_unavailable")
+
     actions = _action_queue(
         handoffs=handoffs,
         sales_work=sales_work,
         economics=period,
+        economic_action=economic_action,
     )
 
     return GrowthCockpitSnapshot(

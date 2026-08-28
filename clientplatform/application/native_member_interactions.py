@@ -11,6 +11,11 @@ from clientplatform.application.activity import (
     get_business_profile,
     list_business_capabilities,
 )
+from clientplatform.application.ad_spend_consent import list_ad_spend_authorizations
+from clientplatform.application.ad_spend_operations import (
+    ad_spend_mutations_enabled,
+    queue_ad_spend_launch,
+)
 from clientplatform.application.acquisition_destination import (
     prepare_nearest_acquisition_destination,
 )
@@ -36,6 +41,11 @@ from clientplatform.application.growth_cockpit import (
     get_growth_cockpit,
 )
 from clientplatform.application.programs import list_programs
+from clientplatform.application.retention import (
+    RetentionCandidateUnavailable,
+    list_reactivation_opportunities,
+    prepare_reactivation_sales_lead,
+)
 from clientplatform.application.progress import list_business_program_progress
 from clientplatform.application.sales_workspace import (
     add_sales_workspace_note,
@@ -59,6 +69,7 @@ from clientplatform.application.tenancy import (
     resolve_tenant_context,
 )
 from clientplatform.domain.activity import CapabilityStatus
+from clientplatform.domain.ad_spend import AdSpendAuthorizationStatus, AdSpendError
 from clientplatform.domain.bookings import BookingSlotStatus
 from clientplatform.domain.connections import ConnectionPlatform
 from clientplatform.domain.customer_interactions import (
@@ -68,7 +79,8 @@ from clientplatform.domain.customer_interactions import (
 from clientplatform.domain.messenger_channels import MessengerIngressRoute
 from clientplatform.domain.money import settlement_currency_minor_unit_exponent
 from clientplatform.domain.promotions import PromotionChannel, PromotionError
-from clientplatform.domain.sales import SalesError, SalesLeadStage
+from clientplatform.domain.retention import RetentionCohort
+from clientplatform.domain.sales import SalesError, SalesInvariantViolation, SalesLeadStage
 from clientplatform.domain.tenancy import (
     PlatformRole,
     TenantAccessDenied,
@@ -416,6 +428,10 @@ def parse_native_member_interaction(value: object) -> ParsedMemberInteraction:
             "connect-vk",
             "connect-max",
             "sales",
+            "reactivate",
+            "reactivate-approve",
+            "ad-spend",
+            "ad-spend-launch",
             "sales-recent",
             "sales-lead",
             "sales-actions",
@@ -495,6 +511,12 @@ def _native_growth_action_button(
             return _button("💰 Проверить источники оплат", "cpm:money")
         if actor.role in _SUPPORT_ROLES:
             return _button("📊 Проверить, что происходит", "cpm:today")
+    if action.action_key == "economic_reactivation" and actor.role in _SUPPORT_ROLES:
+        return _button("♻️ Вернуть клиентов без рекламы", "cpm:reactivate")
+    if action.action_key == "economic_open_slots" and actor.role in _ACQUISITION_ROLES:
+        return _button("🕒 Открыть время", "cpm:acquire")
+    if action.action_key == "economic_paid_acquisition" and actor.role == PlatformRole.OWNER:
+        return _button("💳 Проверить безопасный запуск", "cpm:ad-spend")
     return None
 
 
@@ -669,9 +691,136 @@ def _sales_message(actor: TenantContext) -> CustomerInteractionMessage:
     if not items:
         lines.append("Открытых обращений сейчас нет.")
     lines.extend(["", "Откройте клиента — ClientPlatform покажет главное действие и все дополнительные возможности."])
+    rows.append((_button("♻️ Вернуть клиентов", "cpm:reactivate"),))
     rows.append((_button("🗂 Недавно закрытые", "cpm:sales-recent"),))
     rows.append((_button("📊 Работа", "cpm:work"),))
     return CustomerInteractionMessage(text="\n".join(lines), rows=tuple(rows))
+
+
+def _reactivation_message(actor: TenantContext) -> CustomerInteractionMessage:
+    if actor.role not in _SUPPORT_ROLES:
+        return _permission_message()
+    opportunities = list_reactivation_opportunities(actor=actor, limit=6)
+    lines = [
+        "♻️ Вернуть клиентов",
+        "",
+        "Только подтверждённая история покупок и активности. Ничего не отправляется автоматически.",
+    ]
+    rows: list[tuple[CustomerInteractionButton, ...]] = []
+    for index, item in enumerate(opportunities, start=1):
+        candidate = item.candidate
+        route = item.route_platform or "ручная работа"
+        lines.append(
+            f"{index}. {candidate.display_name or 'Клиент'} · без активности {candidate.inactive_days} дн. · канал: {route}"
+        )
+        rows.append((
+            _button(
+                f"✅ Взять в работу {index}",
+                f"cpm:reactivate-approve:{candidate.customer_id}:{candidate.cohort.value}",
+            ),
+        ))
+    if not opportunities:
+        lines.append("Сейчас нет клиентов, которых можно обоснованно предложить для возврата.")
+    rows.append((_button("💬 К обращениям", "cpm:sales"),))
+    return CustomerInteractionMessage(text="\n".join(lines), rows=tuple(rows))
+
+
+def _reactivation_approve_message(
+    actor: TenantContext,
+    customer_id: str,
+    cohort: str,
+) -> CustomerInteractionMessage:
+    if actor.role not in _SUPPORT_ROLES:
+        return _permission_message()
+    try:
+        prepared = prepare_reactivation_sales_lead(
+            actor=actor,
+            customer_id=customer_id,
+            expected_cohort=RetentionCohort(cohort),
+        )
+    except (RetentionCandidateUnavailable, SalesInvariantViolation, ValueError):
+        return _stale_message()
+    route = prepared.route_platform or "ручная работа"
+    return CustomerInteractionMessage(
+        text=(
+            "Клиент добавлен в обращения.\n\n"
+            f"Канал: {route}. Клиенту ничего не отправлено — отправка по-прежнему требует отдельного подтверждения."
+        ),
+        rows=(
+            (_button("💬 Открыть клиента", f"cpm:sales-lead:{prepared.lead.id}"),),
+            (_button("♻️ К возврату клиентов", "cpm:reactivate"),),
+        ),
+    )
+
+
+def _native_minor_amount_text(amount_minor: int, currency: str) -> str:
+    exponent = settlement_currency_minor_unit_exponent(currency)
+    amount = Decimal(int(amount_minor)) / (Decimal(10) ** exponent)
+    amount_text = f"{amount:,.{exponent}f}" if exponent else f"{amount:,.0f}"
+    return f"{amount_text.replace(',', ' ')} {str(currency).upper()}"
+
+
+def _ad_spend_message(actor: TenantContext) -> CustomerInteractionMessage:
+    if actor.role != PlatformRole.OWNER:
+        return _permission_message()
+    authorizations = list_ad_spend_authorizations(actor=actor, limit=8)
+    launch_enabled = ad_spend_mutations_enabled()
+    lines = [
+        "💳 Безопасный запуск рекламы",
+        "",
+        "Здесь видны только уже подтверждённые владельцем лимиты. Новый бюджет или новое согласие не создаются.",
+    ]
+    rows: list[tuple[CustomerInteractionButton, ...]] = []
+    for index, item in enumerate(authorizations[:6], start=1):
+        lines.append(
+            f"{index}. {item.status.value} · общий "
+            f"{_native_minor_amount_text(item.hard_cap_minor, item.currency)} · день "
+            f"{_native_minor_amount_text(item.daily_cap_minor, item.currency)}"
+        )
+        if item.status == AdSpendAuthorizationStatus.AUTHORIZED and launch_enabled:
+            rows.append((
+                _button(
+                    f"🚀 Запустить разрешение {index}",
+                    f"cpm:ad-spend-launch:{item.id}",
+                ),
+            ))
+    if not authorizations:
+        lines.append("Разрешений на платный запуск сейчас нет.")
+    elif not launch_enabled:
+        lines.append("Запуск сейчас выключен операторским kill switch; существующие лимиты не расходуются.")
+    rows.append((_button("📈 Рост", "cpm:growth"),))
+    return CustomerInteractionMessage(text="\n".join(lines), rows=tuple(rows))
+
+
+def _ad_spend_launch_message(actor: TenantContext, authorization_id: str) -> CustomerInteractionMessage:
+    if actor.role != PlatformRole.OWNER:
+        return _permission_message()
+    try:
+        operation = queue_ad_spend_launch(
+            actor=actor,
+            authorization_id=authorization_id,
+        )
+    except AdSpendError:
+        return CustomerInteractionMessage(
+            text="Запуск запрещён, устарел или состояние разрешения изменилось. Ничего не потрачено.",
+            rows=((_button("💳 К разрешениям", "cpm:ad-spend"),),),
+        )
+    except RuntimeError:
+        return CustomerInteractionMessage(
+            text="Безопасный запуск сейчас недоступен. Ничего не потрачено.",
+            rows=((_button("💳 К разрешениям", "cpm:ad-spend"),),),
+        )
+    except ValueError:
+        return _stale_message()
+    return CustomerInteractionMessage(
+        text=(
+            "🚀 Запуск поставлен в защищённую идемпотентную очередь.\n\n"
+            "Перед обращением к рекламному провайдеру сервер ещё раз проверит кабинет, "
+            "срок, расход и точные подтверждённые лимиты. При расхождении запуск будет заблокирован.\n\n"
+            f"Операция: …{operation.id[-12:]}"
+        ),
+        rows=((_button("💳 К разрешениям", "cpm:ad-spend"),),),
+    )
 
 
 def _sales_recent_message(actor: TenantContext) -> CustomerInteractionMessage:
@@ -1560,7 +1709,7 @@ def _permissions_message(actor: TenantContext) -> CustomerInteractionMessage:
     )
 
 
-def _native_money_text(rows: object, *, empty: str) -> str:
+def _native_money_text(rows: Any, *, empty: str) -> str:
     values = tuple(rows or ())
     if not values:
         return empty
@@ -1753,7 +1902,7 @@ def _messengers_message(
         ConnectionPlatform.VK: ("🔵", "ВКонтакте"),
         ConnectionPlatform.MAX: ("🟣", "MAX"),
     }
-    by_platform = {platform: [] for platform in labels}
+    by_platform: dict[ConnectionPlatform, list[str]] = {platform: [] for platform in labels}
     for item in connections:
         by_platform[item.platform].append(item.status.value)
     lines = ["Мессенджеры", ""]
@@ -1919,6 +2068,18 @@ def _render(
             return _attention_message(actor)
         if parsed.action == "sales":
             return _sales_message(actor)
+        if parsed.action == "reactivate":
+            return _reactivation_message(actor)
+        if parsed.action == "reactivate-approve":
+            if len(parsed.args) != 2:
+                return _stale_message()
+            return _reactivation_approve_message(actor, parsed.args[0], parsed.args[1])
+        if parsed.action == "ad-spend":
+            return _ad_spend_message(actor)
+        if parsed.action == "ad-spend-launch":
+            if len(parsed.args) != 1:
+                return _stale_message()
+            return _ad_spend_launch_message(actor, parsed.args[0])
         if parsed.action == "sales-recent":
             return _sales_recent_message(actor)
         if parsed.action == "sales-handoffs":

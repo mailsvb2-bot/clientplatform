@@ -25,6 +25,14 @@ class RetentionCandidateUnavailable(ValueError):
 
 
 @dataclass(frozen=True, slots=True)
+class ReactivationOpportunity:
+    """Read-only retention candidate paired with a currently permitted channel route."""
+
+    candidate: RetentionCandidate
+    route_platform: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class PreparedReactivation:
     candidate: RetentionCandidate
     lead: SalesLead
@@ -115,6 +123,34 @@ def list_retention_candidates(
     stamp = _stamp(now)
     with get_db_ro() as conn:
         return RetentionRepository(conn).list_candidates(actor=actor, now=stamp, limit=limit)
+
+
+def list_reactivation_opportunities(
+    *,
+    actor: TenantContext,
+    now: datetime | None = None,
+    limit: int = 100,
+) -> list[ReactivationOpportunity]:
+    """Pair deterministic retention cohorts with the existing safe channel route.
+
+    A missing route is preserved as explicit evidence instead of being guessed.
+    This projection does not create a sales lead and never queues a message.
+    """
+
+    stamp = _stamp(now)
+    with get_db_ro() as conn:
+        repository = RetentionRepository(conn)
+        candidates = repository.list_candidates(actor=actor, now=stamp, limit=limit)
+        return [
+            ReactivationOpportunity(
+                candidate=candidate,
+                route_platform=repository.preferred_reactivation_channel(
+                    actor=actor,
+                    customer_id=candidate.customer_id,
+                ),
+            )
+            for candidate in candidates
+        ]
 
 
 def prepare_reactivation_sales_lead(
@@ -322,8 +358,10 @@ def record_reactivation_result(
 
 __all__ = [
     "PreparedReactivation",
+    "ReactivationOpportunity",
     "RecordedReactivation",
     "RetentionCandidateUnavailable",
+    "list_reactivation_opportunities",
     "list_retention_candidates",
     "prepare_reactivation_sales_lead",
     "record_reactivation_result",

@@ -13,6 +13,7 @@ from clientplatform.domain.activity import ActivityError
 from clientplatform.domain.tenancy import TenancyError
 from clientplatform.runtime.control_bot import control_bot_enabled
 from dashboard.growth_cockpit import telegram_growth_summary
+from handlers.clientplatform_goal_first_safety import ACQUIRE_CLIENTS
 
 router = Router(name="clientplatform_growth")
 
@@ -66,6 +67,12 @@ def _cockpit_keyboard(*, business_id: str, period_days: int, action_key: str) ->
         rows.append([("Открыть клиента", f"cps:swv:{token}:{uuid_token(lead_id)}")])
     elif action_key == "attribution_review":
         rows.append([("Проверить рекламу и источники", f"cpy:a:{token}:{period_days}")])
+    elif action_key == "economic_reactivation":
+        rows.append([("Вернуть клиентов без рекламы", f"cps:sr:{token}")])
+    elif action_key == "economic_open_slots":
+        rows.append([("Открыть время", ACQUIRE_CLIENTS.callback(token))])
+    elif action_key == "economic_paid_acquisition":
+        rows.append([("Открыть безопасный запуск", f"cpsp:home:{token}")])
     if action_key != "none":
         rows.append([("Почему это важно", f"cpg:attention:{token}:{period_days}")])
     rows.append([("Клиенты", f"cp:clients:{token}"), ("Результаты", f"cp:results:{token}")])

@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from clientplatform.application.retention import (
     RetentionCandidateUnavailable,
+    list_reactivation_opportunities,
     prepare_reactivation_sales_lead,
     record_reactivation_result,
 )
@@ -114,6 +115,16 @@ class ClientPlatformRetentionU010ActionTests(unittest.TestCase):
                 now=NOW,
             )
 
+    def _opportunities(self, actor=None):
+        with patch(
+            "clientplatform.application.retention.get_db_ro",
+            side_effect=lambda: nullcontext(self.conn),
+        ):
+            return list_reactivation_opportunities(
+                actor=actor or self.owner,
+                now=NOW,
+                limit=10,
+            )
 
     def _record(
         self,
@@ -134,6 +145,30 @@ class ClientPlatformRetentionU010ActionTests(unittest.TestCase):
                 currency=currency,
                 now=now or NOW + timedelta(minutes=5),
             )
+
+    def test_reactivation_opportunity_projection_is_read_only_routable_and_tenant_scoped(self) -> None:
+        customer_id = self._candidate()
+        self._route(customer_id, platform="vk")
+        other = self.tenancy.create_business(owner_user_id=4102, name="Other Projection")
+        other_owner = self.tenancy.resolve_context(user_id=4102, business_id=other.business.id)
+        before_leads = self.conn.execute("SELECT COUNT(*) FROM clientplatform_sales_leads").fetchone()[0]
+        before_outbox = self.conn.execute("SELECT COUNT(*) FROM provider_dispatch_outbox").fetchone()[0]
+
+        rows = self._opportunities()
+        foreign_rows = self._opportunities(other_owner)
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].candidate.customer_id, customer_id)
+        self.assertEqual(rows[0].route_platform, "vk")
+        self.assertEqual(foreign_rows, [])
+        self.assertEqual(
+            self.conn.execute("SELECT COUNT(*) FROM clientplatform_sales_leads").fetchone()[0],
+            before_leads,
+        )
+        self.assertEqual(
+            self.conn.execute("SELECT COUNT(*) FROM provider_dispatch_outbox").fetchone()[0],
+            before_outbox,
+        )
 
     def test_owner_approval_materializes_canonical_sales_lead_without_sending(self) -> None:
         customer_id = self._candidate()
