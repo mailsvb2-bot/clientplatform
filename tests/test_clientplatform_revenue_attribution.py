@@ -595,6 +595,192 @@ class ClientPlatformRevenueAttributionTests(unittest.TestCase):
         self.assertEqual(journey.unattributed_monetary_outcomes, 2)
         self.assertTrue(all(item.source.value != "telegram" for item in journey.sources))
 
+    def test_window_reconciliation_materializes_referenced_payment_outside_window(self) -> None:
+        paid = self._append(
+            OutcomeType.ORDER_PAID,
+            event_id="payment-before-report-window",
+            money=OutcomeMoney(amount_minor=5_000, currency="RUB"),
+            occurred_at=_NOW + timedelta(minutes=4),
+        )
+        refund = self._append(
+            OutcomeType.REFUND_RECORDED,
+            event_id="refund-inside-report-window",
+            money=OutcomeMoney(amount_minor=2_000, currency="RUB"),
+            occurred_at=_NOW + timedelta(minutes=6),
+            source_type="business_payment",
+            source_id="payment-window-boundary",
+            subject_ref="business_payment:payment-window-boundary",
+            metadata={"payment_outcome_event_id": paid.id},
+        )
+        self.assertIsNone(
+            self.revenue.get_for_outcome(
+                business_id=self.business_id,
+                outcome_event_id=paid.id,
+            )
+        )
+
+        journey = self.revenue.journey_snapshot(
+            business_id=self.business_id,
+            occurred_from=_NOW + timedelta(minutes=5),
+            occurred_to=_NOW + timedelta(minutes=7),
+        )
+
+        materialized_payment = self.revenue.get_for_outcome(
+            business_id=self.business_id,
+            outcome_event_id=paid.id,
+        )
+        materialized_refund = self.revenue.get_for_outcome(
+            business_id=self.business_id,
+            outcome_event_id=refund.id,
+        )
+        self.assertIsNotNone(materialized_payment)
+        self.assertIsNotNone(materialized_refund)
+        assert materialized_payment is not None and materialized_refund is not None
+        self.assertEqual(materialized_payment.source.value, "telegram")
+        self.assertEqual(materialized_refund.source.value, "telegram")
+        self.assertEqual(journey.monetary_outcomes, 1)
+        self.assertEqual(journey.attributed_monetary_outcomes, 1)
+        self.assertEqual(journey.unattributed_monetary_outcomes, 0)
+        self.assertEqual(
+            [(item.currency, item.amount_minor) for item in journey.verified_revenue_by_currency],
+            [("RUB", -2_000)],
+        )
+        self.assertEqual(
+            [(item.currency, item.amount_minor) for item in journey.attributed_revenue_by_currency],
+            [("RUB", -2_000)],
+        )
+
+    def test_amountless_reversal_chain_resolves_signed_money_recursively(self) -> None:
+        paid = self._append(
+            OutcomeType.ORDER_PAID,
+            event_id="recursive-paid",
+            money=OutcomeMoney(amount_minor=5_000, currency="RUB"),
+            occurred_at=_NOW + timedelta(minutes=4),
+        )
+        first_reversal = self._append(
+            OutcomeType.OUTCOME_REVERSAL,
+            event_id="recursive-reversal-1",
+            money=None,
+            occurred_at=_NOW + timedelta(minutes=5),
+            source_type="outcome_event",
+            source_id=paid.id,
+            subject_ref=f"outcome:{paid.id}",
+        )
+        second_reversal = self._append(
+            OutcomeType.OUTCOME_REVERSAL,
+            event_id="recursive-reversal-2",
+            money=None,
+            occurred_at=_NOW + timedelta(minutes=6),
+            source_type="outcome_event",
+            source_id=first_reversal.id,
+            subject_ref=f"outcome:{first_reversal.id}",
+        )
+
+        journey = self.revenue.journey_snapshot(
+            business_id=self.business_id,
+            occurred_from=_NOW,
+            occurred_to=_NOW + timedelta(minutes=7),
+        )
+
+        self.assertEqual(journey.monetary_outcomes, 3)
+        self.assertEqual(journey.attributed_monetary_outcomes, 3)
+        self.assertEqual(journey.unattributed_monetary_outcomes, 0)
+        self.assertEqual(
+            [(item.currency, item.amount_minor) for item in journey.verified_revenue_by_currency],
+            [("RUB", 5_000)],
+        )
+        self.assertEqual(
+            [(item.currency, item.amount_minor) for item in journey.attributed_revenue_by_currency],
+            [("RUB", 5_000)],
+        )
+        second_record = self.revenue.get_for_outcome(
+            business_id=self.business_id,
+            outcome_event_id=second_reversal.id,
+        )
+        self.assertIsNotNone(second_record)
+        assert second_record is not None
+        self.assertEqual(second_record.amount_minor, 5_000)
+        self.assertEqual(second_record.source.value, "telegram")
+
+    def test_amountless_reversal_references_fail_closed_on_cycle_future_and_tenant(self) -> None:
+        cycle_a = self._append(
+            OutcomeType.OUTCOME_REVERSAL,
+            event_id="cycle-a",
+            money=None,
+            occurred_at=_NOW + timedelta(minutes=8),
+            source_type="outcome_event",
+            source_id="cycle-b",
+            subject_ref="outcome:cycle-b",
+        )
+        self._append(
+            OutcomeType.OUTCOME_REVERSAL,
+            event_id="cycle-b",
+            money=None,
+            occurred_at=_NOW + timedelta(minutes=8),
+            source_type="outcome_event",
+            source_id=cycle_a.id,
+            subject_ref=f"outcome:{cycle_a.id}",
+        )
+        with self.assertRaisesRegex(RevenueAttributionInvariantViolation, "cycle"):
+            self.revenue.materialize_outcome(
+                business_id=self.business_id,
+                outcome_event_id=cycle_a.id,
+            )
+
+        future_payment = self._append(
+            OutcomeType.ORDER_PAID,
+            event_id="future-payment-reference",
+            money=OutcomeMoney(amount_minor=5_000, currency="RUB"),
+            occurred_at=_NOW + timedelta(minutes=10),
+        )
+        future_reversal = self._append(
+            OutcomeType.OUTCOME_REVERSAL,
+            event_id="reversal-before-future-payment",
+            money=None,
+            occurred_at=_NOW + timedelta(minutes=9),
+            source_type="outcome_event",
+            source_id=future_payment.id,
+            subject_ref=f"outcome:{future_payment.id}",
+        )
+        with self.assertRaisesRegex(RevenueAttributionInvariantViolation, "future"):
+            self.revenue.materialize_outcome(
+                business_id=self.business_id,
+                outcome_event_id=future_reversal.id,
+            )
+
+        other_access = self.tenancy.create_business(owner_user_id=7002, name="Other revenue")
+        other_payment = self.outcomes.append(
+            BusinessOutcomeEvent(
+                id="other-tenant-payment",
+                business_id=other_access.business.id,
+                outcome_type=OutcomeType.ORDER_PAID,
+                occurred_at=_NOW + timedelta(minutes=8),
+                source=OutcomeSource(source_type="test", source_id="other-tenant-payment"),
+                customer_id=None,
+                subject_ref="order:other-tenant",
+                money=OutcomeMoney(amount_minor=5_000, currency="RUB"),
+                idempotency_key="test:other-tenant-payment",
+                metadata={},
+                metadata_version=1,
+                created_at=_NOW + timedelta(minutes=8),
+            )
+        )
+        cross_tenant = self._append(
+            OutcomeType.OUTCOME_REVERSAL,
+            event_id="cross-tenant-reversal",
+            money=None,
+            occurred_at=_NOW + timedelta(minutes=9),
+            source_type="outcome_event",
+            source_id=other_payment.id,
+            subject_ref=f"outcome:{other_payment.id}",
+        )
+        self.assertIsNone(
+            self.revenue.materialize_outcome(
+                business_id=self.business_id,
+                outcome_event_id=cross_tenant.id,
+            )
+        )
+
     def test_reconciliation_revisits_dependents_after_legacy_correction_repair(self) -> None:
         customer_id = self._connect_customer(77009)
         paid = self._append(
