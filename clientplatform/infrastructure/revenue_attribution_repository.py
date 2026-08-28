@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from collections import Counter, defaultdict
 import json
+from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
@@ -171,10 +171,9 @@ class RevenueAttributionRepository:
         outcome_type: OutcomeType,
         occurred_at: datetime,
         currency: str,
-    ) -> tuple[bool, RevenueAttributionRecord | None]:
-        """Return whether a correction references prior money and its durable source evidence."""
+    ) -> tuple[str | None, RevenueAttributionRecord | None]:
+        """Return referenced money outcome id and its durable source evidence, if any."""
 
-        has_reference = False
         referenced_outcome_id: str | None = None
         if outcome_type == OutcomeType.REFUND_RECORDED:
             raw_metadata = _value(row, "metadata_json", 9)
@@ -189,7 +188,6 @@ class RevenueAttributionRepository:
                     "refund outcome metadata must be a JSON object"
                 )
             if "payment_outcome_event_id" in metadata:
-                has_reference = True
                 candidate = metadata.get("payment_outcome_event_id")
                 referenced_outcome_id = str(candidate or "").strip() or None
                 if referenced_outcome_id is None:
@@ -200,17 +198,16 @@ class RevenueAttributionRepository:
             source_type = str(_value(row, "source_type", 7) or "").strip()
             source_id = str(_value(row, "source_id", 8) or "").strip()
             if source_type == "outcome_event" and source_id:
-                has_reference = True
                 referenced_outcome_id = source_id
 
         if referenced_outcome_id is None:
-            return has_reference, None
+            return None, None
         referenced = self.get_for_outcome(
             business_id=str(business_id),
             outcome_event_id=referenced_outcome_id,
         )
         if referenced is None:
-            return True, None
+            return referenced_outcome_id, None
         if (
             outcome_type == OutcomeType.REFUND_RECORDED
             and referenced.outcome_type != OutcomeType.ORDER_PAID
@@ -226,7 +223,95 @@ class RevenueAttributionRepository:
             raise RevenueAttributionInvariantViolation(
                 "financial correction currency disagrees with referenced attribution"
             )
-        return True, referenced
+        return referenced_outcome_id, referenced
+
+    def _reconcile_existing_correction(
+        self,
+        *,
+        existing: RevenueAttributionRecord,
+        referenced_outcome_id: str,
+        inherited: RevenueAttributionRecord | None,
+        outcome_type: OutcomeType,
+        signed_amount: int,
+        currency: str,
+        occurred_at: datetime,
+        customer_id: str | None,
+    ) -> RevenueAttributionRecord:
+        """Repair a legacy correction attribution against its canonical referenced money fact."""
+
+        if (
+            existing.outcome_type != outcome_type
+            or existing.amount_minor != signed_amount
+            or existing.currency != str(currency).upper()
+            or existing.occurred_at != occurred_at
+        ):
+            raise RevenueAttributionInvariantViolation(
+                "existing correction attribution disagrees with canonical money evidence"
+            )
+        if (
+            inherited is not None
+            and customer_id is not None
+            and inherited.customer_id is not None
+            and inherited.customer_id != customer_id
+        ):
+            raise RevenueAttributionInvariantViolation(
+                "financial correction customer disagrees with referenced attribution"
+            )
+
+        if inherited is None:
+            desired = (
+                None,
+                None,
+                AcquisitionSource.UNKNOWN,
+                "outcome_event",
+                referenced_outcome_id,
+                None,
+            )
+        else:
+            desired = (
+                inherited.touch_id,
+                inherited.attribution_identity_id,
+                inherited.source,
+                inherited.source_ref_type,
+                inherited.source_ref_id,
+                inherited.promotion_campaign_id,
+            )
+        current = (
+            existing.touch_id,
+            existing.attribution_identity_id,
+            existing.source,
+            existing.source_ref_type,
+            existing.source_ref_id,
+            existing.promotion_campaign_id,
+        )
+        if current == desired:
+            return existing
+
+        self._conn.execute(
+            """
+            UPDATE revenue_attributions
+            SET touch_id=?, attribution_identity_id=?, source=?, source_ref_type=?,
+                source_ref_id=?, promotion_campaign_id=?
+            WHERE id=? AND business_id=?
+            """,
+            (
+                desired[0],
+                desired[1],
+                desired[2].value,
+                desired[3],
+                desired[4],
+                desired[5],
+                existing.id,
+                existing.business_id,
+            ),
+        )
+        repaired = self.get_for_outcome(
+            business_id=existing.business_id,
+            outcome_event_id=existing.outcome_event_id,
+        )
+        if repaired is None:
+            raise RuntimeError("legacy correction attribution disappeared during reconciliation")
+        return repaired
 
     def get_for_outcome(
         self,
@@ -250,17 +335,13 @@ class RevenueAttributionRepository:
     ) -> RevenueAttributionRecord | None:
         """Persist or replay the durable first-touch decision for one monetary outcome."""
 
-        # A previously materialized revenue decision is durable financial evidence.
-        # Privacy detach may intentionally remove customer/touch/campaign FKs while
-        # retaining the source snapshot. Replay must therefore return the durable
-        # record before attempting to resolve a now-detached attribution trace.
+        # Load the canonical outcome before replaying durable attribution. Legacy
+        # correction rows may have been materialized against an independent later
+        # touch and must be reconciled against their referenced payment first.
         existing = self.get_for_outcome(
             business_id=str(business_id),
             outcome_event_id=str(outcome_event_id),
         )
-        if existing is not None:
-            return existing
-
         row = self._conn.execute(
             _OUTCOME_SELECT + " WHERE business_id=? AND id=? LIMIT 1",
             (str(business_id), str(outcome_event_id)),
@@ -280,14 +361,27 @@ class RevenueAttributionRepository:
         customer_id = None if customer_value is None else str(customer_value)
         subject_value = _value(row, "subject_ref", 4)
         subject_ref = None if subject_value is None else str(subject_value)
-        has_financial_reference, inherited = self._referenced_financial_attribution(
+        referenced_outcome_id, inherited = self._referenced_financial_attribution(
             business_id=str(business_id),
             row=row,
             outcome_type=outcome_type,
             occurred_at=outcome_occurred_at,
             currency=currency,
         )
-        if has_financial_reference and inherited is None:
+        if existing is not None:
+            if referenced_outcome_id is None:
+                return existing
+            return self._reconcile_existing_correction(
+                existing=existing,
+                referenced_outcome_id=referenced_outcome_id,
+                inherited=inherited,
+                outcome_type=outcome_type,
+                signed_amount=signed_amount,
+                currency=currency,
+                occurred_at=outcome_occurred_at,
+                customer_id=customer_id,
+            )
+        if referenced_outcome_id is not None and inherited is None:
             # A later touch must never retroactively explain an earlier unattributed payment.
             return None
         if (

@@ -522,12 +522,57 @@ class ClientPlatformRevenueAttributionTests(unittest.TestCase):
             subject_ref="business_payment:payment-unattributed",
             metadata={"payment_outcome_event_id": paid.id},
         )
-        self.assertIsNone(
-            self.revenue.materialize_outcome(
-                business_id=self.business_id,
-                outcome_event_id=refund.id,
-            )
+        # Simulate a row created by pre-fix main: the refund was independently
+        # attributed to the customer's later acquisition touch. Upgrade replay
+        # must repair it rather than trusting that stale durable decision.
+        self.conn.execute(
+            """
+            INSERT INTO revenue_attributions(
+                id, business_id, outcome_event_id, outcome_type, customer_id,
+                touch_id, attribution_identity_id, source, source_ref_type,
+                source_ref_id, promotion_campaign_id, model_version,
+                amount_minor, currency, occurred_at, created_at
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "legacy-refund-after-later-touch",
+                self.business_id,
+                refund.id,
+                refund.outcome_type.value,
+                customer_id,
+                later_trace.touch.id,
+                later_trace.identity.id,
+                later_trace.identity.source.value,
+                later_trace.identity.source_ref_type,
+                later_trace.identity.source_ref_id,
+                later_trace.identity.promotion_campaign_id,
+                "first_touch_v1",
+                -5_000,
+                "RUB",
+                refund.occurred_at.isoformat(timespec="microseconds"),
+                refund.created_at.isoformat(timespec="microseconds"),
+            ),
         )
+        legacy = self.revenue.get_for_outcome(
+            business_id=self.business_id,
+            outcome_event_id=refund.id,
+        )
+        self.assertIsNotNone(legacy)
+        assert legacy is not None
+        self.assertEqual(legacy.source.value, "telegram")
+
+        repaired = self.revenue.materialize_outcome(
+            business_id=self.business_id,
+            outcome_event_id=refund.id,
+        )
+        self.assertIsNotNone(repaired)
+        assert repaired is not None
+        self.assertEqual(repaired.source.value, "unknown")
+        self.assertIsNone(repaired.touch_id)
+        self.assertIsNone(repaired.attribution_identity_id)
+        self.assertIsNone(repaired.promotion_campaign_id)
+        self.assertEqual(repaired.source_ref_type, "outcome_event")
+        self.assertEqual(repaired.source_ref_id, paid.id)
         journey = self.revenue.journey_snapshot(
             business_id=self.business_id,
             occurred_from=_NOW + timedelta(minutes=4),
