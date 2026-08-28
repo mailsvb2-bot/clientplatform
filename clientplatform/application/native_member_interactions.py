@@ -1589,6 +1589,10 @@ def _native_journey_text(snapshot) -> str:
         journey.verified_revenue_by_currency,
         empty="пока нет подтверждённой выручки",
     )
+    attributed = _native_money_text(
+        journey.attributed_revenue_by_currency,
+        empty="пока не связана с источниками",
+    )
     unattributed = _native_money_text(
         journey.unattributed_revenue_by_currency,
         empty="0",
@@ -1599,6 +1603,7 @@ def _native_journey_text(snapshot) -> str:
         f"пришли: {journey.completed_bookings} → оплатили: {journey.paid_customers}\n"
         f"• Вернувшиеся клиенты: {journey.reactivated_customers}\n"
         f"• Подтверждённая выручка: {verified}\n"
+        f"• Связано с источником: {attributed}\n"
         f"• Без подтверждённого источника: {unattributed}\n"
         f"• Лучший подтверждённый источник: {best_text}"
     )

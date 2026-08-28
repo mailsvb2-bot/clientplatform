@@ -104,6 +104,9 @@ class NativeMemberParityNavigationTests(unittest.TestCase):
             verified_revenue_by_currency=(
                 SimpleNamespace(amount_minor=34_200_00, currency="RUB"),
             ),
+            attributed_revenue_by_currency=(
+                SimpleNamespace(amount_minor=27_900_00, currency="RUB"),
+            ),
             unattributed_revenue_by_currency=(
                 SimpleNamespace(amount_minor=6_300_00, currency="RUB"),
             ),
@@ -139,6 +142,8 @@ class NativeMemberParityNavigationTests(unittest.TestCase):
         self.assertIn("Следующий шаг по клиенту: Анна", message.text)
         self.assertIn("Деньги и путь клиента · 7 дней", message.text)
         self.assertIn("Подтверждённая выручка: 34 200.00 RUB", message.text)
+        self.assertIn("Связано с источником: 27 900.00 RUB", message.text)
+        self.assertIn("Без подтверждённого источника: 6 300.00 RUB", message.text)
         self.assertIn("Лучший подтверждённый источник: ВКонтакте", message.text)
         commands = _commands(message)
         self.assertEqual(commands[0], f"cpm:sales-lead:{lead_id}")
@@ -167,6 +172,7 @@ class NativeMemberParityNavigationTests(unittest.TestCase):
                 paid_customers=1,
                 reactivated_customers=0,
                 verified_revenue_by_currency=(SimpleNamespace(amount_minor=500, currency="JPY"),),
+                attributed_revenue_by_currency=(SimpleNamespace(amount_minor=500, currency="JPY"),),
                 unattributed_revenue_by_currency=(),
                 sources=(
                     SimpleNamespace(
@@ -177,6 +183,7 @@ class NativeMemberParityNavigationTests(unittest.TestCase):
                 ),
             )
             text = ui._native_journey_text(SimpleNamespace(journey=journey, period_days=7))
+            self.assertIn("Связано с источником: 500 JPY", text)
             self.assertIn(f"Лучший подтверждённый источник: {label}", text)
             self.assertNotIn(f": {source}", text)
 
