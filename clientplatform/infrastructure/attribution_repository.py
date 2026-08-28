@@ -201,6 +201,71 @@ class AttributionRepository:
             raise RuntimeError("customer attribution was not persisted")
         return trace
 
+    def capture_external_product_touch(
+        self,
+        *,
+        business_id: str,
+        connector_id: str,
+        source: AcquisitionSource | str,
+        source_key: str,
+        customer_id: str,
+        occurred_at: datetime | None = None,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> AttributionTrace:
+        """Capture a trusted external-product acquisition without a raw public token."""
+
+        now = occurred_at or datetime.now(timezone.utc)
+        if now.tzinfo is None:
+            raise ValueError("occurred_at must be timezone-aware")
+        selected_source = (
+            source if isinstance(source, AcquisitionSource) else AcquisitionSource(str(source))
+        )
+        connector = str(connector_id or "").strip()
+        key = " ".join(str(source_key or "").replace("\x00", " ").split())
+        if not connector or len(connector) > 80:
+            raise ValueError("external product connector id is invalid")
+        if not key or len(key) > 200:
+            raise ValueError("external product attribution source_key is invalid")
+        source_ref_id = f"{connector}:{key}"
+        fingerprint = hashlib.sha256(
+            f"external_product\x00{business_id}\x00{connector}\x00{selected_source.value}\x00{key}".encode(
+                "utf-8"
+            )
+        ).hexdigest()
+        identity = self._ensure_external_product_identity(
+            business_id=str(business_id),
+            source=selected_source,
+            fingerprint=fingerprint,
+            source_ref_id=source_ref_id,
+            created_at=now,
+        )
+        touch_metadata = {
+            "external_product_connector_id": connector,
+            "external_product_source_key": key,
+        }
+        if metadata:
+            touch_metadata.update(dict(metadata))
+        touch = self._ensure_touch(
+            business_id=str(business_id),
+            identity=identity,
+            customer_id=str(customer_id),
+            occurred_at=now,
+            metadata=touch_metadata,
+        )
+        self._ensure_customer_first_touch(
+            business_id=str(business_id),
+            customer_id=str(customer_id),
+            touch_id=touch.id,
+            created_at=now,
+        )
+        trace = self.get_customer_trace(
+            business_id=str(business_id),
+            customer_id=str(customer_id),
+        )
+        if trace is None:
+            raise RuntimeError("external product attribution was not persisted")
+        return trace
+
     def link_booking_from_customer(
         self,
         *,
@@ -297,6 +362,54 @@ class AttributionRepository:
             ),
         ).fetchone()
         return self._trace_from_link_row(link_row)
+
+    def _ensure_external_product_identity(
+        self,
+        *,
+        business_id: str,
+        source: AcquisitionSource,
+        fingerprint: str,
+        source_ref_id: str,
+        created_at: datetime,
+    ) -> AttributionIdentity:
+        identity_kind = "external_product_source"
+        self._conn.execute(
+            """
+            INSERT OR IGNORE INTO attribution_identities(
+                id, business_id, source, identity_kind, identity_fingerprint,
+                source_ref_type, source_ref_id, promotion_campaign_id, created_at
+            ) VALUES(?, ?, ?, ?, ?, 'external_product', ?, NULL, ?)
+            """,
+            (
+                str(uuid4()),
+                business_id,
+                source.value,
+                identity_kind,
+                fingerprint,
+                source_ref_id,
+                _serialize_datetime(created_at),
+            ),
+        )
+        row = self._conn.execute(
+            _IDENTITY_SELECT
+            + " WHERE business_id=? AND identity_kind=? AND identity_fingerprint=? LIMIT 1",
+            (business_id, identity_kind, fingerprint),
+        ).fetchone()
+        if row is None:
+            raise RuntimeError("external product attribution identity was not persisted")
+        identity = _identity_from_row(row)
+        expected = (source, "external_product", source_ref_id, None)
+        actual = (
+            identity.source,
+            identity.source_ref_type,
+            identity.source_ref_id,
+            identity.promotion_campaign_id,
+        )
+        if actual != expected:
+            raise AttributionInvariantViolation(
+                "external product attribution fingerprint has different semantics"
+            )
+        return identity
 
     def _ensure_identity(
         self,

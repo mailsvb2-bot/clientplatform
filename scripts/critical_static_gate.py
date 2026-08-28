@@ -75,6 +75,17 @@ _CLIENTPLATFORM_YANDEX_ANALYTICS_FILES = (
     "handlers/clientplatform_yandex_analytics.py",
 )
 
+_CLIENTPLATFORM_EXTERNAL_PRODUCT_FILES = (
+    "clientplatform/application/external_products.py",
+    "clientplatform/domain/external_products.py",
+    "clientplatform/infrastructure/attribution_repository.py",
+    "clientplatform/infrastructure/external_product_repository.py",
+    "clientplatform/runtime/external_product_http.py",
+    "runtime/messenger_webhooks.py",
+    "services/db/schema/clientplatform_external_products.py",
+)
+
+
 _CLIENTPLATFORM_EMAIL_OUTBOUND_FILES = (
     "clientplatform/application/email_connections.py",
     "clientplatform/application/partner_runtime.py",
@@ -156,6 +167,7 @@ TYPE_CONTRACT_FILES = (
     "services/sales_desk_repository.py",
     "services/sales_desk_sync.py",
     *_CLIENTPLATFORM_MANAGED_BOT_TYPE_FILES,
+    *_CLIENTPLATFORM_EXTERNAL_PRODUCT_FILES,
     *_CLIENTPLATFORM_EMAIL_OUTBOUND_FILES,
     *_CLIENTPLATFORM_NATIVE_MESSENGER_FILES,
     *_CLIENTPLATFORM_SALES_UI_FILES,
@@ -214,6 +226,7 @@ SECURITY_SCAN_PATHS = (
     "services/sales_desk_repository.py",
     "services/sales_desk_sync.py",
     *_CLIENTPLATFORM_MANAGED_BOT_SECURITY_FILES,
+    *_CLIENTPLATFORM_EXTERNAL_PRODUCT_FILES,
     *_CLIENTPLATFORM_EMAIL_OUTBOUND_FILES,
     *_CLIENTPLATFORM_NATIVE_MESSENGER_FILES,
     *_CLIENTPLATFORM_SALES_UI_FILES,
