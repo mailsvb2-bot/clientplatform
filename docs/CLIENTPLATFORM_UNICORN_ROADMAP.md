@@ -982,7 +982,7 @@ ClientPlatform ежедневно собирает максимум нескол
 - Coverage ratchet закрыт без ослабления и повышен до `74.90%` combined / `66.04%` branch.
 - Production deploy выполнен на exact merge SHA `68d736c7e0c5390acb96740c338d0d7a921f225e`: encrypted backup `/var/backups/clientplatform/postgres/clientplatform-20260827T181243Z.dump.age`, внутренние `/healthz` + `/readyz`, публичный HTTPS contract, polling-only Telegram contract и restart-count `0` подтверждены; deploy evidence `deploy-20260827T181702Z.json`.
 
-### M4-005 — `NEXT` — Customer Revenue Journey + Money Cockpit
+### M4-005 — `DONE` — Customer Revenue Journey + Money Cockpit
 
 Следующий vertical по прямому решению владельца: собрать уже существующие canonical outcomes, first-touch attribution, booking facts, authoritative payment evidence и retention/reactivation outcomes в один tenant-scoped read model. Новый event store, CRM, payment ledger или AI decision brain не создавать.
 
@@ -1006,7 +1006,14 @@ source
 - owner surface отвечает на вопросы «сколько заработано / откуда деньги / что сработало / что требует решения / что делать дальше» и не возвращает длинную техническую админку;
 - никаких LLM-inferred оплат, источников или revenue.
 
-### M4-006 — `QUEUED` — Economic Next Best Action
+### Evidence
+
+- PR #237 (`M4-005: add customer revenue journey and money cockpit`) squash-merged в `main` как `08fdb8fc89c6627c4ee3478ed1f3b1a650b79abb`; exact PR head `818d3edd3d1044cef6a805e709e645f1bfd49fac`.
+- Все 15 pull-request workflow runs на exact head завершились `success`, включая CI, Canon, Critical Static Surface, User Scenario Matrix, PostgreSQL/concurrency, Production Isolation, Encrypted Backup, Managed Bot Gateway и Pre-deploy Release Gate.
+- Все 12 review threads закрыты; regression follow-ups закрепили privacy-detach attribution, ISO-4217 minor-unit formatting, UNKNOWN-source classification, correction/reversal dependency reconciliation и deterministic first-read convergence.
+- Production deploy не выполнялся: по Канону он остаётся отдельным действием только по прямому указанию владельца.
+
+### M4-006 — `NEXT` — Economic Next Best Action
 
 Поверх M4-005 и существующего M4-003 owner queue добавить детерминированный экономический выбор между уже канонически допустимыми действиями. Первый сценарий: свободные окна + разрешённая reactivation cohort + channel consent + historical outcomes + approved ad-spend limits → понятное предложение владельцу, например сначала использовать бесплатную reactivation, затем только при необходимости предложить paid acquisition в существующих policy limits. LLM может объяснять, но не определяет money/consent/channel constraints.
 
@@ -1641,8 +1648,8 @@ Duplicate tap, retry, worker restart или uncertain provider response не д�
 | M4-002 Unified Customer Timeline Projection | DONE | PR #230 merge `b5ef6ef0a583577b6b0d6ba0b9a7ded75b36e049`; exact PR head `28c94e11f55d5c384714ed757098ca2229480243`; all 15 PR workflows success; read-only canonical customer timeline with tenant/RBAC isolation, Telegram/VK/MAX surfaces and corrected refund/reversal + ISO-4217 money semantics |
 | M4-003 Tasks and owner operating queue | DONE | PR #232 merge `10c1a3043eb75fd1ad2f829fed35be3753733eaf`; exact PR head `6d43c32e1d54d842d309f8d8fa4fa43b6698a441`; all 15 PR workflows success; coverage 74.87% combined / 66.02% branch; exact-SHA production deploy with encrypted backup, health/readiness, HTTPS and polling-only stability evidence |
 | M4-004 Owner Content Calendar Projection | DONE | PR #234 merge `68d736c7e0c5390acb96740c338d0d7a921f225e`; exact PR head `98bd5374b46f985a9c24c560723c8f7d5efe37d2`; all 15 PR workflows success; coverage 74.90% combined / 66.04% branch; exact-SHA production deploy with encrypted backup, health/readiness, HTTPS, polling-only and restart=0 evidence |
-| M4-005 Customer Revenue Journey + Money Cockpit | NEXT | canonical read projection over outcomes/attribution/bookings/payments/reactivation; verified revenue remains independent from source completeness; Telegram/VK/MAX money view; no second store/brain |
-| M4-006 Economic Next Best Action | QUEUED | deterministic economic choice over existing owner queue, retention, availability, consent and approved spend limits; no LLM authority over money/policy |
+| M4-005 Customer Revenue Journey + Money Cockpit | DONE | PR #237 squash-merge `08fdb8fc89c6627c4ee3478ed1f3b1a650b79abb`; exact head `818d3edd3d1044cef6a805e709e645f1bfd49fac`; all 15 PR workflows success; 12 review threads resolved; canonical outcome/attribution/payment/reactivation projection with Telegram/VK/MAX parity and no second store/brain |
+| M4-006 Economic Next Best Action | NEXT | deterministic economic choice over existing owner queue, retention, availability, consent and approved spend limits; no LLM authority over money/policy |
 | M4-007 Owner Publication Scheduling Controls | QUEUED | reuse canonical `business_publications.status` + `scheduled_at` for tenant-safe schedule/reschedule/cancel actions; no second scheduler |
 
 ---
