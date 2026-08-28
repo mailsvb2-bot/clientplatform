@@ -1025,7 +1025,7 @@ source
 - Coverage ratchet усилен до `74.93%` combined / `66.13%` branch; полный локальный regression перед merge: `4081 passed, 7 skipped`.
 - Production deploy не выполнялся: по Канону он остаётся отдельным действием только по прямому указанию владельца.
 
-### M4-007 — `NEXT` — Owner Publication Scheduling Controls
+### M4-007 — `DONE` — Owner Publication Scheduling Controls
 
 Вернуть ранее запланированный content vertical после money/NBA slices: дать владельцу безопасно назначать, переносить и отменять время публикации через существующие `business_publications.status` + `scheduled_at`. Не создавать второй scheduler/store и не запускать автоматическую доставку в этом slice.
 
@@ -1033,11 +1033,23 @@ source
 
 Расширить существующие content/publication/program primitives последовательно: content calendar, reusable assets, cross-channel variants, approval workflow, scheduled publication, evergreen funnels, lead magnets, nurture sequences, conversion outcomes, per-channel compliance/limits и content performance linked to outcomes, а не vanity metrics.
 
+### Evidence
+
+- PR #241 (`M4-007: add owner publication scheduling controls`) squash-merged в `main` как `1637bb565499ec1c3209fed07d5ef30ccefa0aba`; exact PR head `7e6f20a67a10a3932e9b51fa552243f48c0ce520`.
+- Все 15 pull-request workflows на exact head завершились `success`, включая CI quality/coverage, Canon, Critical Static Surface, User Scenario Matrix, Booking/Ad Spend/Partner concurrency, Production Isolation, Encrypted Backup, Managed Bot Gateway и Pre-deploy Release Gate; AI Review gate также `pass` по trusted repository policy.
+- P1 native VK/MAX retry finding закрыт durable business-scoped idempotency receipt в существующем canonical admin audit contour: stale и первоначально no-op retries возвращают исходный результат, но не могут перезаписать более новое `scheduled_at`; review thread resolved.
+- Финальный локальный regression перед merge: `4093 passed, 7 skipped`; coverage ratchet `74.98%` combined / `66.22%` branch при baseline `74.97%` / `66.21%`; Critical Static, Ruff, Canon и release hygiene green.
+- Production deploy не выполнялся: scheduled execution/provider delivery по-прежнему не добавлялись и остаются отдельными последующими slices.
+
 ---
 
 # 10. M5 — Safe Autopilot
 
 Автопилот — не отдельный «AI-режим», а слой поверх доказанных deterministic capabilities.
+
+### M5-001 — `NEXT` — Canonical AutomationPolicy Foundation
+
+Расширить существующий canonical automation/policy contour, не создавая второй движок или store: формализовать tenant-scoped allowed/forbidden actions, channels/audiences, schedule/quiet hours, approval thresholds, stop conditions, expiry/version и owner approval. Первый slice ограничить policy read/write + deterministic `PolicyCheck`: RBAC и tenant isolation fail-closed, изменение money limits/чувствительных каналов требует явного owner approval, а автономное execution в M5-001 не запускать.
 
 ## 10.1. Единый AutomationPolicy
 
@@ -1658,7 +1670,8 @@ Duplicate tap, retry, worker restart или uncertain provider response не д�
 | M4-004 Owner Content Calendar Projection | DONE | PR #234 merge `68d736c7e0c5390acb96740c338d0d7a921f225e`; exact PR head `98bd5374b46f985a9c24c560723c8f7d5efe37d2`; all 15 PR workflows success; coverage 74.90% combined / 66.04% branch; exact-SHA production deploy with encrypted backup, health/readiness, HTTPS, polling-only and restart=0 evidence |
 | M4-005 Customer Revenue Journey + Money Cockpit | DONE | PR #237 squash-merge `08fdb8fc89c6627c4ee3478ed1f3b1a650b79abb`; exact head `818d3edd3d1044cef6a805e709e645f1bfd49fac`; all 15 PR workflows success; 12 review threads resolved; canonical outcome/attribution/payment/reactivation projection with Telegram/VK/MAX parity and no second store/brain |
 | M4-006 Economic Next Best Action | DONE | PR #239 squash-merge `c3a3ac7a47a2663cf04398aff898fb53db8fe744`; exact head `099d4a497814887727153f6dce67fcf005306d44`; all 15 PR workflows success; coverage raised to 74.93% combined / 66.13% branch; native slot creation and bulk reactivation routing review findings resolved |
-| M4-007 Owner Publication Scheduling Controls | NEXT | reuse canonical `business_publications.status` + `scheduled_at` for tenant-safe schedule/reschedule/cancel actions; no second scheduler |
+| M4-007 Owner Publication Scheduling Controls | DONE | PR #241 squash-merge `1637bb565499ec1c3209fed07d5ef30ccefa0aba`; exact head `7e6f20a67a10a3932e9b51fa552243f48c0ce520`; all 15 PR workflows success; P1 native VK/MAX stale/no-op retry race fixed with canonical durable idempotency receipt; coverage 74.98% combined / 66.22% branch |
+| M5-001 Canonical AutomationPolicy Foundation | NEXT | extend one canonical policy contour with fail-closed tenant/RBAC boundaries, explicit owner approvals and deterministic PolicyCheck; no second automation engine/store and no autonomous execution in this slice |
 
 ---
 

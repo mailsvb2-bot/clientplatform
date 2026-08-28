@@ -9,6 +9,8 @@ from clientplatform.application.activity import save_business_profile
 from clientplatform.application.admin_ops import (
     cancel_publication_schedule,
     create_publication_draft,
+    decode_publication_schedule_version,
+    encode_publication_schedule_version,
     publish_publication,
     schedule_publication,
 )
@@ -99,14 +101,88 @@ class PublicationSchedulingM4007Tests(unittest.TestCase):
         assert moved.scheduled_at == "2026-08-30T12:30:00+00:00"
         assert _audit_count(actor.business_id, draft.id, "publication_rescheduled") == 1
 
-        cancelled = cancel_publication_schedule(actor=actor, publication_id=draft.id)
+        cancelled = cancel_publication_schedule(
+            actor=actor,
+            publication_id=draft.id,
+            expected_scheduled_at=moved.scheduled_at or "",
+        )
         assert cancelled.status == "cancelled"
         assert cancelled.scheduled_at == moved.scheduled_at
         assert _audit_count(actor.business_id, draft.id, "publication_schedule_cancelled") == 1
 
-        repeated_cancel = cancel_publication_schedule(actor=actor, publication_id=draft.id)
+        repeated_cancel = cancel_publication_schedule(
+            actor=actor,
+            publication_id=draft.id,
+            expected_scheduled_at=moved.scheduled_at or "",
+        )
         assert repeated_cancel == cancelled
         assert _audit_count(actor.business_id, draft.id, "publication_schedule_cancelled") == 1
+
+    def test_stale_cancel_confirmation_cannot_cancel_newer_schedule(self) -> None:
+        actor = _actor(840711, "Stale cancel")
+        draft = create_publication_draft(
+            actor=actor,
+            title="Не отменять новое",
+            body="Текст",
+            channel="vk",
+        )
+        now = datetime(2026, 8, 28, 8, 0, tzinfo=timezone.utc)
+        first = schedule_publication(
+            actor=actor,
+            publication_id=draft.id,
+            local_time="29.08.2026 12:00",
+            now=now,
+        )
+        stale_version = encode_publication_schedule_version(first.scheduled_at or "")
+        assert decode_publication_schedule_version(stale_version) == first.scheduled_at
+
+        newer = schedule_publication(
+            actor=actor,
+            publication_id=draft.id,
+            local_time="30.08.2026 15:30",
+            now=now,
+        )
+        with self.assertRaisesRegex(ValueError, r"schedule changed"):
+            cancel_publication_schedule(
+                actor=actor,
+                publication_id=draft.id,
+                expected_scheduled_at=decode_publication_schedule_version(stale_version),
+            )
+
+        with get_db_ro() as conn:
+            current = conn.execute(
+                "SELECT status, scheduled_at FROM business_publications WHERE id=? AND business_id=?",
+                (draft.id, actor.business_id),
+            ).fetchone()
+        self.assertEqual("scheduled", current["status"])
+        self.assertEqual(newer.scheduled_at, current["scheduled_at"])
+        self.assertEqual(
+            0,
+            _audit_count(actor.business_id, draft.id, "publication_schedule_cancelled"),
+        )
+
+        cancelled = cancel_publication_schedule(
+            actor=actor,
+            publication_id=draft.id,
+            expected_scheduled_at=newer.scheduled_at,
+        )
+        self.assertEqual("cancelled", cancelled.status)
+        repeated = cancel_publication_schedule(
+            actor=actor,
+            publication_id=draft.id,
+            expected_scheduled_at=newer.scheduled_at,
+        )
+        self.assertEqual(cancelled, repeated)
+        self.assertEqual(
+            1,
+            _audit_count(actor.business_id, draft.id, "publication_schedule_cancelled"),
+        )
+
+    def test_publication_schedule_version_rejects_invalid_values(self) -> None:
+        with self.assertRaisesRegex(ValueError, r"timezone-aware"):
+            encode_publication_schedule_version("2026-08-29T09:00:00")
+        with self.assertRaisesRegex(ValueError, r"version is invalid"):
+            decode_publication_schedule_version("not-a-version")
 
 
     def test_native_event_retry_cannot_overwrite_newer_reschedule(self) -> None:
@@ -220,13 +296,17 @@ class PublicationSchedulingM4007Tests(unittest.TestCase):
     def test_scheduling_never_creates_delivery_work(self) -> None:
         actor = _actor(840702, "Без автодоставки")
         draft = create_publication_draft(actor=actor, title="Без отправки", body="Текст")
-        schedule_publication(
+        scheduled = schedule_publication(
             actor=actor,
             publication_id=draft.id,
             local_time="29.08.2026 13:00",
             now=datetime(2026, 8, 28, 8, 0, tzinfo=timezone.utc),
         )
-        cancel_publication_schedule(actor=actor, publication_id=draft.id)
+        cancel_publication_schedule(
+            actor=actor,
+            publication_id=draft.id,
+            expected_scheduled_at=scheduled.scheduled_at or "",
+        )
 
         with get_db_ro() as conn:
             delivery = conn.execute("SELECT COUNT(*) AS c FROM delivery_dispatch_outbox").fetchone()
@@ -284,7 +364,11 @@ class PublicationSchedulingM4007Tests(unittest.TestCase):
                 now=now,
             )
         with self.assertRaisesRegex(ValueError, r"only a scheduled"):
-            cancel_publication_schedule(actor=actor, publication_id=draft.id)
+            cancel_publication_schedule(
+                actor=actor,
+                publication_id=draft.id,
+                expected_scheduled_at="2026-08-29T09:00:00+00:00",
+            )
 
         published = publish_publication(actor=actor, publication_id=draft.id)
         assert published.status == "published"
