@@ -109,6 +109,114 @@ class PublicationSchedulingM4007Tests(unittest.TestCase):
         assert _audit_count(actor.business_id, draft.id, "publication_schedule_cancelled") == 1
 
 
+    def test_native_event_retry_cannot_overwrite_newer_reschedule(self) -> None:
+        actor = _actor(840709, "Native retry")
+        draft = create_publication_draft(
+            actor=actor,
+            title="Очередность",
+            body="Текст",
+            channel="vk",
+        )
+        now = datetime(2026, 8, 28, 8, 0, tzinfo=timezone.utc)
+
+        first = schedule_publication(
+            actor=actor,
+            publication_id=draft.id,
+            local_time="29.08.2026 12:00",
+            now=now,
+            idempotency_key="route:vk:event:A:member:840709:action:schedule",
+        )
+        newer = schedule_publication(
+            actor=actor,
+            publication_id=draft.id,
+            local_time="30.08.2026 15:30",
+            now=now,
+            idempotency_key="route:vk:event:B:member:840709:action:schedule",
+        )
+        replay = schedule_publication(
+            actor=actor,
+            publication_id=draft.id,
+            local_time="29.08.2026 12:00",
+            now=datetime(2026, 9, 1, 8, 0, tzinfo=timezone.utc),
+            idempotency_key="route:vk:event:A:member:840709:action:schedule",
+        )
+
+        self.assertEqual(first.scheduled_at, replay.scheduled_at)
+        self.assertEqual(first.updated_at, replay.updated_at)
+        with get_db_ro() as conn:
+            current = conn.execute(
+                "SELECT status, scheduled_at FROM business_publications WHERE id=? AND business_id=?",
+                (draft.id, actor.business_id),
+            ).fetchone()
+        self.assertEqual("scheduled", current["status"])
+        self.assertEqual(newer.scheduled_at, current["scheduled_at"])
+        self.assertEqual(
+            2,
+            _audit_count(
+                actor.business_id,
+                draft.id,
+                "publication_schedule_mutation",
+            ),
+        )
+
+        with self.assertRaisesRegex(ValueError, r"idempotency key"):
+            schedule_publication(
+                actor=actor,
+                publication_id=draft.id,
+                local_time="31.08.2026 10:00",
+                now=now,
+                idempotency_key="route:vk:event:A:member:840709:action:schedule",
+            )
+
+
+    def test_noop_native_event_retry_cannot_revert_newer_schedule(self) -> None:
+        actor = _actor(840710, "Native noop retry")
+        draft = create_publication_draft(
+            actor=actor,
+            title="No-op",
+            body="Текст",
+            channel="max",
+        )
+        now = datetime(2026, 8, 28, 8, 0, tzinfo=timezone.utc)
+        original = schedule_publication(
+            actor=actor,
+            publication_id=draft.id,
+            local_time="29.08.2026 12:00",
+            now=now,
+        )
+        no_op = schedule_publication(
+            actor=actor,
+            publication_id=draft.id,
+            local_time="29.08.2026 12:00",
+            now=now,
+            idempotency_key="route:max:event:NOOP:member:840710:action:schedule",
+        )
+        self.assertEqual(original, no_op)
+
+        newer = schedule_publication(
+            actor=actor,
+            publication_id=draft.id,
+            local_time="30.08.2026 15:30",
+            now=now,
+            idempotency_key="route:max:event:NEW:member:840710:action:schedule",
+        )
+        replay = schedule_publication(
+            actor=actor,
+            publication_id=draft.id,
+            local_time="29.08.2026 12:00",
+            now=datetime(2026, 9, 1, 8, 0, tzinfo=timezone.utc),
+            idempotency_key="route:max:event:NOOP:member:840710:action:schedule",
+        )
+        self.assertEqual(original.scheduled_at, replay.scheduled_at)
+        self.assertEqual(original.updated_at, replay.updated_at)
+        with get_db_ro() as conn:
+            current = conn.execute(
+                "SELECT scheduled_at FROM business_publications WHERE id=? AND business_id=?",
+                (draft.id, actor.business_id),
+            ).fetchone()
+        self.assertEqual(newer.scheduled_at, current["scheduled_at"])
+
+
     def test_scheduling_never_creates_delivery_work(self) -> None:
         actor = _actor(840702, "Без автодоставки")
         draft = create_publication_draft(actor=actor, title="Без отправки", body="Текст")

@@ -6,7 +6,7 @@ import math
 import os
 import re
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
@@ -683,19 +683,178 @@ def create_publication_draft(
     return _publication_from_row(row)
 
 
+def _publication_schedule_mutation_id(
+    *, business_id: str, idempotency_key: str
+) -> str:
+    digest = hashlib.sha256(
+        f"{business_id}\x1f{idempotency_key}".encode("utf-8")
+    ).hexdigest()
+    return f"publication-schedule-mutation:{digest}"
+
+
+def _publication_schedule_request_hash(
+    *, publication_id: str, local_time: str
+) -> str:
+    return hashlib.sha256(
+        f"{publication_id}\x1f{str(local_time).strip()}".encode("utf-8")
+    ).hexdigest()
+
+
+def _record_publication_schedule_mutation(
+    conn: Any,
+    *,
+    actor: TenantContext,
+    mutation_id: str,
+    publication_id: str,
+    request_hash: str,
+    scheduled_at: str,
+    updated_at: str,
+    now: str,
+) -> None:
+    detail = json.dumps(
+        {
+            "request_hash": request_hash,
+            "scheduled_at": scheduled_at,
+            "updated_at": updated_at,
+        },
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    conn.execute(
+        """
+        INSERT INTO clientplatform_admin_audit_events(
+            id, business_id, actor_user_id, action, subject_type,
+            subject_id, detail, created_at
+        ) VALUES(?, ?, ?, 'publication_schedule_mutation', 'publication', ?, ?, ?)
+        ON CONFLICT(id) DO NOTHING
+        """,
+        (
+            mutation_id,
+            actor.business_id,
+            actor.user_id,
+            publication_id,
+            detail,
+            now,
+        ),
+    )
+    receipt = conn.execute(
+        """
+        SELECT actor_user_id, subject_id, detail
+        FROM clientplatform_admin_audit_events
+        WHERE id=? AND business_id=? AND action='publication_schedule_mutation'
+        LIMIT 1
+        """,
+        (mutation_id, actor.business_id),
+    ).fetchone()
+    if receipt is None:
+        raise RuntimeError("publication scheduling receipt was not persisted")
+    if int(_value(receipt, "actor_user_id", 0)) != actor.user_id:
+        raise ValueError("publication scheduling idempotency key is not reusable")
+    if str(_value(receipt, "subject_id", 1) or "") != publication_id:
+        raise ValueError("publication scheduling idempotency key is not reusable")
+    if str(_value(receipt, "detail", 2) or "") != detail:
+        raise ValueError("publication scheduling idempotency key is not reusable")
+
+
+def _publication_schedule_replay(
+    conn: Any,
+    *,
+    actor: TenantContext,
+    mutation_id: str,
+    publication_id: str,
+    request_hash: str,
+) -> PublicationRecord | None:
+    receipt = conn.execute(
+        """
+        SELECT actor_user_id, subject_id, detail
+        FROM clientplatform_admin_audit_events
+        WHERE id=? AND business_id=? AND action='publication_schedule_mutation'
+        LIMIT 1
+        """,
+        (mutation_id, actor.business_id),
+    ).fetchone()
+    if receipt is None:
+        return None
+    if int(_value(receipt, "actor_user_id", 0)) != actor.user_id:
+        raise ValueError("publication scheduling idempotency key is not reusable")
+    if str(_value(receipt, "subject_id", 1) or "") != publication_id:
+        raise ValueError("publication scheduling idempotency key is not reusable")
+    try:
+        detail = json.loads(str(_value(receipt, "detail", 2) or ""))
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError("publication scheduling receipt is invalid") from exc
+    if not isinstance(detail, dict) or detail.get("request_hash") != request_hash:
+        raise ValueError("publication scheduling idempotency key is not reusable")
+    scheduled_at = detail.get("scheduled_at")
+    updated_at = detail.get("updated_at")
+    if not isinstance(scheduled_at, str) or not isinstance(updated_at, str):
+        raise RuntimeError("publication scheduling receipt is invalid")
+    row = conn.execute(
+        """
+        SELECT id, business_id, channel, title, body, status,
+               created_at, updated_at, scheduled_at, published_at,
+               failed_at, failure_reason
+        FROM business_publications
+        WHERE id=? AND business_id=?
+        """,
+        (publication_id, actor.business_id),
+    ).fetchone()
+    if row is None:
+        raise ValueError("publication is not available for scheduling")
+    current = _publication_from_row(row)
+    return replace(
+        current,
+        status="scheduled",
+        updated_at=updated_at,
+        scheduled_at=scheduled_at,
+        published_at=None,
+        failed_at=None,
+        failure_reason=None,
+    )
+
+
 def schedule_publication(
     *,
     actor: TenantContext,
     publication_id: str,
     local_time: str,
     now: datetime | None = None,
+    idempotency_key: str | None = None,
 ) -> PublicationRecord:
     """Schedule or reschedule one canonical publication in business local time."""
 
     normalized_id = normalize_uuid(publication_id, field_name="publication_id")
     timestamp = _utc_now()
+    normalized_idempotency_key = (
+        None
+        if idempotency_key is None
+        else _text(idempotency_key, field="idempotency_key", maximum=500)
+    )
+    request_hash = _publication_schedule_request_hash(
+        publication_id=normalized_id,
+        local_time=local_time,
+    )
     with get_db() as conn:
         current = _resolve(conn, actor, allowed_roles=_CONTENT_ROLES)
+        mutation_id = (
+            None
+            if normalized_idempotency_key is None
+            else _publication_schedule_mutation_id(
+                business_id=current.business_id,
+                idempotency_key=normalized_idempotency_key,
+            )
+        )
+        if mutation_id is not None:
+            replay = _publication_schedule_replay(
+                conn,
+                actor=current,
+                mutation_id=mutation_id,
+                publication_id=normalized_id,
+                request_hash=request_hash,
+            )
+            if replay is not None:
+                return replay
         zone = _publication_business_zone(conn, current.business_id)
         scheduled_at = _publication_schedule_utc(local_time, zone=zone, now=now)
         row = conn.execute(
@@ -727,7 +886,19 @@ def schedule_publication(
             ).fetchone()
             if unchanged is None:
                 raise RuntimeError("scheduled publication was not found")
-            return _publication_from_row(unchanged)
+            unchanged_record = _publication_from_row(unchanged)
+            if mutation_id is not None:
+                _record_publication_schedule_mutation(
+                    conn,
+                    actor=current,
+                    mutation_id=mutation_id,
+                    publication_id=normalized_id,
+                    request_hash=request_hash,
+                    scheduled_at=scheduled_at,
+                    updated_at=unchanged_record.updated_at,
+                    now=timestamp,
+                )
+            return unchanged_record
         if status not in {"draft", "scheduled"}:
             raise ValueError("publication is not available for scheduling")
         if status == "scheduled" and previous_schedule_text is None:
@@ -784,8 +955,31 @@ def schedule_publication(
                     ).fetchone()
                     if result is None:
                         raise RuntimeError("scheduled publication was not found")
-                    return _publication_from_row(result)
+                    concurrent_record = _publication_from_row(result)
+                    if mutation_id is not None:
+                        _record_publication_schedule_mutation(
+                            conn,
+                            actor=current,
+                            mutation_id=mutation_id,
+                            publication_id=normalized_id,
+                            request_hash=request_hash,
+                            scheduled_at=scheduled_at,
+                            updated_at=concurrent_record.updated_at,
+                            now=timestamp,
+                        )
+                    return concurrent_record
             raise ValueError("publication changed concurrently; refresh and retry")
+        if mutation_id is not None:
+            _record_publication_schedule_mutation(
+                conn,
+                actor=current,
+                mutation_id=mutation_id,
+                publication_id=normalized_id,
+                request_hash=request_hash,
+                scheduled_at=scheduled_at,
+                updated_at=timestamp,
+                now=timestamp,
+            )
         _audit(
             conn,
             actor=current,

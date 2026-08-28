@@ -232,13 +232,19 @@ class NativeMemberResolutionTests(unittest.TestCase):
                 return_value=SimpleNamespace(timezone="Europe/Moscow"),
             ),
         ):
-            result = native_member_ui._publication_schedule_result(
-                actor, publication_id, "29.08.2026 12:00"
+            result = native_member_ui._render(
+                actor,
+                parsed,
+                linked=True,
+                setup_issuer=None,
+                setup_key="route:vk:event:91002:member:900001:action:schedule",
+                current_platform=ConnectionPlatform.VK,
             )
         schedule.assert_called_once_with(
             actor=actor,
             publication_id=publication_id,
             local_time="29.08.2026 12:00",
+            idempotency_key="route:vk:event:91002:member:900001:action:schedule",
         )
         self.assertIn("✅ Публикация запланирована", result.text)
         self.assertIn("29.08.2026 12:00 · MAX · Запланировано", result.text)

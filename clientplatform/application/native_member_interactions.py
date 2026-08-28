@@ -1488,6 +1488,8 @@ def _publication_schedule_result(
     actor: TenantContext,
     publication_id: str,
     local_time: str,
+    *,
+    interaction_key: str | None = None,
 ) -> CustomerInteractionMessage:
     if actor.role not in _CONTENT_ROLES:
         return _permission_message()
@@ -1496,6 +1498,7 @@ def _publication_schedule_result(
             actor=actor,
             publication_id=publication_id,
             local_time=local_time,
+            idempotency_key=interaction_key,
         )
         profile = get_business_profile(actor=actor)
     except ValueError as exc:
@@ -2455,7 +2458,12 @@ def _render(
         if parsed.action == "publication-schedule-text":
             if len(parsed.args) != 2:
                 return _stale_message()
-            return _publication_schedule_result(actor, parsed.args[0], parsed.args[1])
+            return _publication_schedule_result(
+                actor,
+                parsed.args[0],
+                parsed.args[1],
+                interaction_key=setup_key,
+            )
         if parsed.action == "publication-cancel":
             if len(parsed.args) != 1:
                 return _stale_message()
