@@ -537,6 +537,36 @@ class RevenueAttributionRepository:
         customer_id = None if customer_value is None else str(customer_value)
         subject_value = _value(row, "subject_ref", 4)
         subject_ref = None if subject_value is None else str(subject_value)
+        outcome_type = OutcomeType(str(_value(row, "outcome_type", 1)))
+        source_type = str(_value(row, "source_type", 7) or "").strip()
+        source_id = str(_value(row, "source_id", 8) or "").strip()
+
+        if outcome_type == OutcomeType.CUSTOMER_REACTIVATED and source_type == "outcome_event":
+            if not source_id:
+                return AcquisitionSource.UNKNOWN
+            referenced = self.get_for_outcome(
+                business_id=str(business_id),
+                outcome_event_id=source_id,
+            )
+            if referenced is None:
+                return AcquisitionSource.UNKNOWN
+            if referenced.outcome_type != OutcomeType.ORDER_PAID:
+                raise RevenueAttributionInvariantViolation(
+                    "customer reactivation must reference an attributed order_paid outcome"
+                )
+            if referenced.occurred_at > occurred_at:
+                raise RevenueAttributionInvariantViolation(
+                    "customer reactivation cannot reference future payment attribution"
+                )
+            if (
+                customer_id is not None
+                and referenced.customer_id is not None
+                and referenced.customer_id != customer_id
+            ):
+                raise RevenueAttributionInvariantViolation(
+                    "customer reactivation customer disagrees with referenced payment attribution"
+                )
+            return referenced.source
 
         customer_trace = None
         if customer_id is not None:
@@ -773,6 +803,9 @@ class RevenueAttributionRepository:
             occurred_from=occurred_from,
             occurred_to=occurred_to,
         )
+        known_records = tuple(
+            record for record in records if record.source != AcquisitionSource.UNKNOWN
+        )
         event_rows = self._conn.execute(
             _OUTCOME_SELECT + " WHERE business_id=? AND occurred_at>=? AND occurred_at<?",
             (
@@ -797,7 +830,7 @@ class RevenueAttributionRepository:
         )
         revenue_totals: dict[str, int] = defaultdict(int)
         source_counts: Counter[AcquisitionSource] = Counter()
-        for record in records:
+        for record in known_records:
             revenue_totals[record.currency] += record.amount_minor
             source_counts[record.source] += 1
         breakdown = tuple(
@@ -806,7 +839,7 @@ class RevenueAttributionRepository:
         )
         attributed_revenue = breakdown[0] if len(breakdown) == 1 else None
         limitations: list[str] = []
-        if len(records) != monetary_outcomes:
+        if len(known_records) != monetary_outcomes:
             limitations.append("attribution_incomplete")
         if len(breakdown) > 1:
             limitations.append("revenue_mixed_currency")
@@ -838,8 +871,8 @@ class RevenueAttributionRepository:
             bookings=event_types[OutcomeType.BOOKING_CREATED.value],
             paid_customers=len(paid_customers),
             monetary_outcomes=monetary_outcomes,
-            attributed_monetary_outcomes=len(records),
-            unattributed_monetary_outcomes=monetary_outcomes - len(records),
+            attributed_monetary_outcomes=len(known_records),
+            unattributed_monetary_outcomes=monetary_outcomes - len(known_records),
             revenue_by_currency=breakdown,
             spend=verified_spend,
             cpl_minor=cpl,

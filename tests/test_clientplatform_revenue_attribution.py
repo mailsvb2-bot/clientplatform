@@ -573,6 +573,18 @@ class ClientPlatformRevenueAttributionTests(unittest.TestCase):
         self.assertIsNone(repaired.promotion_campaign_id)
         self.assertEqual(repaired.source_ref_type, "outcome_event")
         self.assertEqual(repaired.source_ref_id, paid.id)
+
+        economics = self.revenue.snapshot(
+            business_id=self.business_id,
+            occurred_from=_NOW + timedelta(minutes=5, seconds=30),
+            occurred_to=_NOW + timedelta(minutes=7),
+        )
+        self.assertEqual(economics.monetary_outcomes, 1)
+        self.assertEqual(economics.attributed_monetary_outcomes, 0)
+        self.assertEqual(economics.unattributed_monetary_outcomes, 1)
+        self.assertEqual(economics.revenue_by_currency, ())
+        self.assertIn("attribution_incomplete", economics.limitations)
+
         journey = self.revenue.journey_snapshot(
             business_id=self.business_id,
             occurred_from=_NOW + timedelta(minutes=4),
@@ -608,6 +620,16 @@ class ClientPlatformRevenueAttributionTests(unittest.TestCase):
         assert retained is not None
         self.assertEqual(retained.source.value, "telegram")
         self.assertIsNone(retained.touch_id)
+
+        self._append(
+            OutcomeType.CUSTOMER_REACTIVATED,
+            event_id="privacy-reactivation-after-detach",
+            money=OutcomeMoney(amount_minor=5_000, currency="RUB"),
+            occurred_at=_NOW + timedelta(minutes=4, seconds=30),
+            source_type="outcome_event",
+            source_id=paid.id,
+            subject_ref="sales_lead:privacy-reactivation",
+        )
 
         refund = self._append(
             OutcomeType.REFUND_RECORDED,
@@ -667,6 +689,11 @@ class ClientPlatformRevenueAttributionTests(unittest.TestCase):
         self.assertEqual(journey.unattributed_revenue_by_currency, ())
         telegram = next(item for item in journey.sources if item.source.value == "telegram")
         self.assertEqual(telegram.revenue_by_currency[0].amount_minor, 0)
+        self.assertEqual(telegram.reactivated_customers, 1)
+        self.assertFalse(any(
+            item.source.value == "unknown" and item.reactivated_customers
+            for item in journey.sources
+        ))
 
     def test_money_cockpit_journey_keeps_verified_money_separate_from_source_attribution(self) -> None:
         self._append(
