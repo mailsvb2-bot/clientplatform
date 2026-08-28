@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 
@@ -110,6 +111,7 @@ def test_older_trigger_is_coalesced_before_release_build_or_switch(tmp_path) -> 
     env.update(
         {
             "APP_DIR": str(repo),
+            "SYSTEM_PYTHON": sys.executable,
             "DEPLOY_TRIGGER_SHA": trigger_sha,
             "DEPLOY_STATE_DIR": str(state_dir),
             "DEPLOYED_SHA_FILE": str(marker),

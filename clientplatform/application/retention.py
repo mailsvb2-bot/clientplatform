@@ -141,13 +141,14 @@ def list_reactivation_opportunities(
     with get_db_ro() as conn:
         repository = RetentionRepository(conn)
         candidates = repository.list_candidates(actor=actor, now=stamp, limit=limit)
+        routes = repository.preferred_reactivation_channels(
+            actor=actor,
+            customer_ids=tuple(candidate.customer_id for candidate in candidates),
+        )
         return [
             ReactivationOpportunity(
                 candidate=candidate,
-                route_platform=repository.preferred_reactivation_channel(
-                    actor=actor,
-                    customer_id=candidate.customer_id,
-                ),
+                route_platform=routes.get(candidate.customer_id),
             )
             for candidate in candidates
         ]

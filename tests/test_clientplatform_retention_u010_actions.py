@@ -170,6 +170,21 @@ class ClientPlatformRetentionU010ActionTests(unittest.TestCase):
             before_outbox,
         )
 
+    def test_reactivation_projection_bulk_loads_routes_without_scalar_n_plus_one(self) -> None:
+        customer_id = self._candidate()
+        self._route(customer_id, platform="vk")
+
+        with patch.object(
+            RetentionRepository,
+            "preferred_reactivation_channel",
+            side_effect=AssertionError("scalar route lookup must not be used by projection"),
+        ):
+            rows = self._opportunities()
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].candidate.customer_id, customer_id)
+        self.assertEqual(rows[0].route_platform, "vk")
+
     def test_owner_approval_materializes_canonical_sales_lead_without_sending(self) -> None:
         customer_id = self._candidate()
         self._route(customer_id)

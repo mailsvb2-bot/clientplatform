@@ -10,6 +10,7 @@ from typing import Any, Callable
 from clientplatform.application.activity import (
     get_business_profile,
     list_business_capabilities,
+    list_business_offerings,
 )
 from clientplatform.application.ad_spend_consent import list_ad_spend_authorizations
 from clientplatform.application.ad_spend_operations import (
@@ -23,7 +24,7 @@ from clientplatform.application.admin_ops import (
     format_publication_calendar_lines,
     get_publication_calendar_projection,
 )
-from clientplatform.application.bookings import list_booking_slots
+from clientplatform.application.bookings import create_booking_slot, list_booking_slots
 from clientplatform.application.messenger_switching import (
     available_staff_messenger_switches,
     build_staff_switch_command,
@@ -68,9 +69,9 @@ from clientplatform.application.tenancy import (
     list_accessible_businesses,
     resolve_tenant_context,
 )
-from clientplatform.domain.activity import CapabilityStatus
+from clientplatform.domain.activity import CapabilityStatus, OfferingStatus
 from clientplatform.domain.ad_spend import AdSpendAuthorizationStatus, AdSpendError
-from clientplatform.domain.bookings import BookingSlotStatus
+from clientplatform.domain.bookings import BookingError, BookingSlotStatus
 from clientplatform.domain.connections import ConnectionPlatform
 from clientplatform.domain.customer_interactions import (
     CustomerInteractionButton,
@@ -141,6 +142,14 @@ _ACQUISITION_ROLES = frozenset(
         PlatformRole.MANAGER,
         PlatformRole.CONTENT_MANAGER,
         PlatformRole.MARKETER,
+    }
+)
+_BOOKING_MANAGEMENT_ROLES = frozenset(
+    {
+        PlatformRole.OWNER,
+        PlatformRole.ADMINISTRATOR,
+        PlatformRole.MANAGER,
+        PlatformRole.CONTENT_MANAGER,
     }
 )
 _CONNECTION_ROLES = frozenset({PlatformRole.OWNER, PlatformRole.ADMINISTRATOR})
@@ -382,6 +391,22 @@ def parse_native_member_interaction(value: object) -> ParsedMemberInteraction:
             "sales-followup-optout-text",
             (optout_match.group(1),),
         )
+    booking_match = re.fullmatch(
+        r"время\s+([0-9a-f-]{6,36})\s+"
+        r"([0-3][0-9]\.[01][0-9]\.[0-9]{4}\s+[0-2][0-9]:[0-5][0-9])"
+        r"(?:\s+([1-9][0-9]{0,2}))?",
+        raw,
+        flags=re.IGNORECASE,
+    )
+    if booking_match is not None:
+        return ParsedMemberInteraction(
+            "booking-open-text",
+            (
+                booking_match.group(1),
+                booking_match.group(2),
+                booking_match.group(3) or "60",
+            ),
+        )
     alias = _ALIASES.get(_compact(raw))
     if alias is not None:
         return ParsedMemberInteraction(alias)
@@ -401,6 +426,7 @@ def parse_native_member_interaction(value: object) -> ParsedMemberInteraction:
             "customers",
             "customer",
             "bookings",
+            "booking-open",
             "programs",
             "behavior",
             "attention",
@@ -513,8 +539,11 @@ def _native_growth_action_button(
             return _button("📊 Проверить, что происходит", "cpm:today")
     if action.action_key == "economic_reactivation" and actor.role in _SUPPORT_ROLES:
         return _button("♻️ Вернуть клиентов без рекламы", "cpm:reactivate")
-    if action.action_key == "economic_open_slots" and actor.role in _ACQUISITION_ROLES:
-        return _button("🕒 Открыть время", "cpm:acquire")
+    if action.action_key == "economic_open_slots":
+        if actor.role in _BOOKING_MANAGEMENT_ROLES:
+            return _button("🕒 Открыть время", "cpm:booking-open")
+        if actor.role in _ACQUISITION_ROLES:
+            return _button("📅 Проверить расписание", "cpm:bookings")
     if action.action_key == "economic_paid_acquisition" and actor.role == PlatformRole.OWNER:
         return _button("💳 Проверить безопасный запуск", "cpm:ad-spend")
     return None
@@ -1241,12 +1270,17 @@ def _acquisition_message(actor: TenantContext) -> CustomerInteractionMessage:
             rows=((_button("🔄 Проверить снова", "cpm:acquire"),), (_button("📈 Рост", "cpm:growth"),), _back_row()),
         )
     if prepared is None:
+        first_row = (
+            (_button("🕒 Открыть время", "cpm:booking-open"),)
+            if actor.role in _BOOKING_MANAGEMENT_ROLES
+            else (_button("📅 Проверить расписание", "cpm:bookings"),)
+        )
         return CustomerInteractionMessage(
             text=(
                 "Найти новых клиентов\n\nСначала нужно открыть хотя бы одно будущее "
                 "время для записи. После этого ClientPlatform сама выберет ближайшее."
             ),
-            rows=((_button("📅 Записи", "cpm:bookings"),), (_button("📈 Рост", "cpm:growth"),), _back_row()),
+            rows=(first_row, (_button("📈 Рост", "cpm:growth"),), _back_row()),
         )
     destination = prepared.destination
     if not destination.has_native_messenger_destination:
@@ -1854,6 +1888,122 @@ def _customers_message(actor: TenantContext, page: int = 0) -> CustomerInteracti
     )
 
 
+def _active_booking_offerings(actor: TenantContext) -> list[Any]:
+    offerings: list[Any] = []
+    for capability in list_business_capabilities(actor=actor):
+        offerings.extend(
+            item
+            for item in list_business_offerings(
+                actor=actor,
+                capability_id=capability.id,
+            )
+            if item.status == OfferingStatus.ACTIVE
+        )
+    offerings.sort(key=lambda item: (str(item.title).casefold(), str(item.id)))
+    return offerings
+
+
+def _booking_offering_reference(actor: TenantContext, reference: str) -> Any:
+    needle = str(reference or "").strip().casefold()
+    if len(needle) < 6:
+        raise ValueError("booking offering reference is too short")
+    matches = [
+        item
+        for item in _active_booking_offerings(actor)
+        if str(item.id).casefold().startswith(needle)
+    ]
+    if len(matches) != 1:
+        raise ValueError("booking offering reference is stale or ambiguous")
+    return matches[0]
+
+
+def _booking_open_message(actor: TenantContext) -> CustomerInteractionMessage:
+    if actor.role not in _BOOKING_MANAGEMENT_ROLES:
+        return _permission_message()
+    offerings = _active_booking_offerings(actor)
+    if not offerings:
+        return CustomerInteractionMessage(
+            text=(
+                "🕒 Открыть время\n\n"
+                "Сначала нужна активная услуга или формат работы. После её настройки "
+                "сюда можно вернуться и открыть время для записи."
+            ),
+            rows=((_button("🧩 Форматы работы", "cpm:formats"),), _back_row()),
+        )
+    lines = [
+        f"• {item.title} — код {str(item.id)[:8]}"
+        for item in offerings[:8]
+    ]
+    suffix = (
+        f"\n\nПоказаны первые 8 из {len(offerings)} услуг."
+        if len(offerings) > 8
+        else ""
+    )
+    return CustomerInteractionMessage(
+        text=(
+            "🕒 Открыть время\n\n"
+            + "\n".join(lines)
+            + suffix
+            + "\n\nОтправьте одним сообщением:\n"
+            + "время <код> ДД.ММ.ГГГГ ЧЧ:ММ [минуты]\n\n"
+            + "Например: время 1a2b3c4d 30.08.2026 15:00 60. "
+            + "Если длительность не указать, будет 60 минут."
+        ),
+        rows=((_button("📅 Текущие записи", "cpm:bookings"),), _back_row()),
+    )
+
+
+def _booking_open_failure_message() -> CustomerInteractionMessage:
+    return CustomerInteractionMessage(
+        text=(
+            "Не удалось открыть это время. Проверьте код услуги, дату, время и длительность, "
+            "затем попробуйте снова. Ничего не было опубликовано автоматически."
+        ),
+        rows=((_button("🕒 Открыть время", "cpm:booking-open"),), _back_row()),
+    )
+
+
+def _booking_open_create_message(
+    actor: TenantContext,
+    offering_reference: str,
+    local_start: str,
+    duration_text: str,
+) -> CustomerInteractionMessage:
+    if actor.role not in _BOOKING_MANAGEMENT_ROLES:
+        return _permission_message()
+    try:
+        offering = _booking_offering_reference(actor, offering_reference)
+        duration = int(duration_text)
+        if duration < 5 or duration > 720:
+            raise ValueError("booking duration is out of range")
+        slot = create_booking_slot(
+            actor=actor,
+            offering_id=str(offering.id),
+            local_start=local_start,
+            duration_minutes=duration,
+        )
+    except BookingError:
+        return _booking_open_failure_message()
+    except TenantPermissionDenied:
+        return _booking_open_failure_message()
+    except TypeError:
+        return _booking_open_failure_message()
+    except ValueError:
+        return _booking_open_failure_message()
+    return CustomerInteractionMessage(
+        text=(
+            "✅ Время открыто для записи.\n\n"
+            f"{slot.offering_title} — {slot.local_start}.\n"
+            "Теперь можно продолжить привлечение клиентов; платная реклама сама не запускается."
+        ),
+        rows=(
+            (_button("🚀 Продолжить привлечение", "cpm:acquire"),),
+            (_button("📅 Записи", "cpm:bookings"),),
+            _back_row(),
+        ),
+    )
+
+
 def _bookings_message(actor: TenantContext) -> CustomerInteractionMessage:
     slots = list_booking_slots(actor=actor, include_unavailable=False)
     if not slots:
@@ -2056,6 +2206,17 @@ def _render(
             if len(parsed.args) != 1:
                 return _stale_message()
             return _customer_message(actor, parsed.args[0])
+        if parsed.action == "booking-open":
+            return _booking_open_message(actor)
+        if parsed.action == "booking-open-text":
+            if len(parsed.args) != 3:
+                return _stale_message()
+            return _booking_open_create_message(
+                actor,
+                parsed.args[0],
+                parsed.args[1],
+                parsed.args[2],
+            )
         if parsed.action == "bookings":
             if actor.role not in _SUPPORT_ROLES:
                 return _permission_message()

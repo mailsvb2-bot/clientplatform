@@ -157,7 +157,7 @@ class NativeEconomicActionParityM4006Tests(unittest.TestCase):
         actor = self.actor()
         cases = (
             ("economic_reactivation", "cpm:reactivate"),
-            ("economic_open_slots", "cpm:acquire"),
+            ("economic_open_slots", "cpm:booking-open"),
             ("economic_paid_acquisition", "cpm:ad-spend"),
         )
         for key, command in cases:
@@ -169,6 +169,55 @@ class NativeEconomicActionParityM4006Tests(unittest.TestCase):
                 self.assertIsNotNone(button)
                 assert button is not None
                 self.assertEqual(button.command, command)
+
+    def test_native_capacity_action_opens_reachable_slot_creation_flow(self) -> None:
+        actor = self.actor()
+        offering_id = str(uuid4())
+        offering = SimpleNamespace(id=offering_id, title="Консультация")
+        with patch.object(native, "_active_booking_offerings", return_value=[offering]):
+            message = native._booking_open_message(actor)
+        self.assertIn(offering_id[:8], message.text)
+        self.assertIn("время <код>", message.text)
+
+        parsed = native.parse_native_member_interaction(
+            f"время {offering_id[:8]} 30.08.2026 15:00 45"
+        )
+        self.assertEqual(parsed.action, "booking-open-text")
+        self.assertEqual(parsed.args[0], offering_id[:8])
+        self.assertEqual(parsed.args[1], "30.08.2026 15:00")
+        self.assertEqual(parsed.args[2], "45")
+
+        slot = SimpleNamespace(
+            offering_title="Консультация",
+            local_start="30.08.2026 15:00",
+        )
+        with (
+            patch.object(native, "_booking_offering_reference", return_value=offering),
+            patch.object(native, "create_booking_slot", return_value=slot) as create,
+        ):
+            result = native._booking_open_create_message(
+                actor, offering_id[:8], "30.08.2026 15:00", "45"
+            )
+        create.assert_called_once_with(
+            actor=actor,
+            offering_id=offering_id,
+            local_start="30.08.2026 15:00",
+            duration_minutes=45,
+        )
+        commands = [button.command for row in result.rows for button in row]
+        self.assertIn("cpm:acquire", commands)
+        self.assertIn("Время открыто", result.text)
+
+    def test_native_acquisition_without_slots_links_to_slot_creation_for_owner(self) -> None:
+        actor = self.actor()
+        with (
+            patch.object(native.settings, "MESSENGER_PUBLIC_BASE_URL", "https://example.test"),
+            patch.object(native, "prepare_nearest_acquisition_destination", return_value=None),
+        ):
+            message = native._acquisition_message(actor)
+        commands = [button.command for row in message.rows for button in row]
+        self.assertIn("cpm:booking-open", commands)
+        self.assertNotIn("cpm:bookings", commands)
 
     def test_native_paid_action_reuses_exact_safe_launch_boundary(self) -> None:
         actor = self.actor()
@@ -256,6 +305,65 @@ class TelegramEconomicActionParityM4006Tests(unittest.TestCase):
         ]
         self.assertTrue(any(value.startswith("cps:sr:") for value in reactivation_callbacks))
         self.assertTrue(any(value.startswith("cpsp:home:") for value in acquisition_callbacks))
+
+    def test_growth_keyboard_routes_capacity_action_to_canonical_acquisition(self) -> None:
+        from handlers.clientplatform_growth import _cockpit_keyboard
+
+        business_id = str(uuid4())
+        markup = _cockpit_keyboard(
+            business_id=business_id,
+            period_days=7,
+            action_key="economic_open_slots",
+        )
+        callbacks = [
+            str(button.callback_data) for row in markup.inline_keyboard for button in row
+        ]
+        self.assertTrue(any(value.startswith("cpo:start:") for value in callbacks))
+
+    def test_goal_dashboard_routes_all_economic_actions_to_existing_safe_flows(self) -> None:
+        from handlers import clientplatform_goal_dashboard as dashboard
+
+        business_id = str(uuid4())
+        token = dashboard.control._uuid_token(business_id)
+        cases = (
+            ("economic_reactivation", "♻️ Вернуть клиентов без рекламы", f"cps:sr:{token}"),
+            (
+                "economic_open_slots",
+                "🕒 Открыть время",
+                dashboard.goal_contract.ACQUIRE_CLIENTS.callback(token),
+            ),
+            (
+                "economic_paid_acquisition",
+                "💳 Проверить безопасный запуск",
+                f"cpsp:home:{token}",
+            ),
+        )
+        for action_key, label, callback in cases:
+            with self.subTest(action_key=action_key):
+                action = GrowthAction(
+                    title="x",
+                    reason="y",
+                    action_key=action_key,
+                    source="test",
+                )
+                self.assertEqual(
+                    dashboard._primary_action(business_id, action),
+                    (label, callback),
+                )
+
+        unknown = GrowthAction(
+            title="x",
+            reason="y",
+            action_key="future_economic_action",
+            source="test",
+        )
+        self.assertEqual(
+            dashboard._primary_action(business_id, unknown),
+            (
+                dashboard.goal_contract.ACQUIRE_CLIENTS.label,
+                dashboard.goal_contract.ACQUIRE_CLIENTS.callback(token),
+            ),
+        )
 
 
 if __name__ == "__main__":
