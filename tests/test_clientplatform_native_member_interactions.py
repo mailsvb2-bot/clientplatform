@@ -194,6 +194,66 @@ class NativeMemberResolutionTests(unittest.TestCase):
         self.assertIn("Черновики: 3", message.text)
         self.assertIn("28.08.2026 12:00 · ВКонтакте · Запланировано", message.text)
         self.assertNotIn("ещё не подключ", message.text.casefold())
+        commands = {button.command for row in message.rows for button in row}
+        self.assertIn(f"cpm:publication-schedule:{publication.id}", commands)
+        self.assertIn(f"cpm:publication-cancel:{publication.id}", commands)
+
+    def test_native_publication_schedule_and_cancel_use_canonical_mutations(self) -> None:
+        route = _route(ConnectionPlatform.VK)
+        actor = _actor(route)
+        publication_id = str(uuid4())
+        parsed = parse_native_member_interaction(
+            f"публикация {publication_id} 29.08.2026 12:00"
+        )
+        self.assertEqual("publication-schedule-text", parsed.action)
+        self.assertEqual((publication_id, "29.08.2026 12:00"), parsed.args)
+
+        scheduled = PublicationRecord(
+            id=publication_id,
+            business_id=actor.business_id,
+            channel="max",
+            title="План",
+            body="Текст",
+            status="scheduled",
+            created_at="2026-08-28T08:00:00+00:00",
+            updated_at="2026-08-28T08:00:00+00:00",
+            scheduled_at="2026-08-29T09:00:00+00:00",
+            published_at=None,
+            failed_at=None,
+            failure_reason=None,
+        )
+        with (
+            patch(
+                "clientplatform.application.native_member_interactions.schedule_publication",
+                return_value=scheduled,
+            ) as schedule,
+            patch(
+                "clientplatform.application.native_member_interactions.get_business_profile",
+                return_value=SimpleNamespace(timezone="Europe/Moscow"),
+            ),
+        ):
+            result = native_member_ui._publication_schedule_result(
+                actor, publication_id, "29.08.2026 12:00"
+            )
+        schedule.assert_called_once_with(
+            actor=actor,
+            publication_id=publication_id,
+            local_time="29.08.2026 12:00",
+        )
+        self.assertIn("✅ Публикация запланирована", result.text)
+        self.assertIn("29.08.2026 12:00 · MAX · Запланировано", result.text)
+
+        cancelled = replace(scheduled, status="cancelled")
+        with patch(
+            "clientplatform.application.native_member_interactions.cancel_publication_schedule",
+            return_value=cancelled,
+        ) as cancel:
+            cancelled_message = native_member_ui._publication_cancel_result(
+                actor, publication_id
+            )
+        cancel.assert_called_once_with(actor=actor, publication_id=publication_id)
+        self.assertIn("План публикации «План» отменён", cancelled_message.text)
+        self.assertIn("Ничего автоматически не отправлено", cancelled_message.text)
 
 
 class NativeMemberDispatchRepositoryTests(unittest.TestCase):

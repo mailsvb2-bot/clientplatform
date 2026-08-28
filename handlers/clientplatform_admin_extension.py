@@ -22,7 +22,7 @@ from aiogram.types import (
 )
 
 from clientplatform.application import admin_ops
-from clientplatform.application.activity import list_business_offerings
+from clientplatform.application.activity import get_business_profile, list_business_offerings
 from clientplatform.application.customers import list_customers
 from clientplatform.domain.activity import CapabilityStatus
 from clientplatform.domain.tenancy import TenantPermissionDenied, TenancyError
@@ -40,6 +40,7 @@ router = Router(name="clientplatform_admin_extension")
 class ClientPlatformAdminOpsState(StatesGroup):
     publication_title = State()
     publication_body = State()
+    publication_schedule_time = State()
     payment_value = State()
     price_value = State()
 
@@ -181,6 +182,12 @@ def _can_write_finance(ctx: Any) -> bool:
     """Use the application layer's canonical finance-write role set."""
 
     return getattr(ctx.actor, "role", None) in admin_ops._FINANCE_WRITE_ROLES
+
+
+def _can_write_publications(ctx: Any) -> bool:
+    """Mirror the canonical publication mutation role boundary in the UI."""
+
+    return getattr(ctx.actor, "role", None) in admin_ops._CONTENT_ROLES
 
 
 def _finance_write_buttons(
@@ -361,6 +368,9 @@ async def _enhanced_marketing(
     }
     open_slots = sum(item.slot.status.value == "open" for item in slots)
     drafts = list(publications.actionable_drafts)
+    scheduled_publications = [
+        item for item in publications.entries if item.status == "scheduled"
+    ]
     enabled = autopilot_value.strip().lower() in {"1", "true", "yes", "on"}
 
     if action == "autopilot":
@@ -399,17 +409,34 @@ async def _enhanced_marketing(
             f"{recent}"
         )
         extra = [("➕ Создать черновик", _ops_callback(ctx, "publication-new"))]
-        extra.extend(
-            (
-                f"✅ Отметить опубликованной · {item.title[:18]}",
-                _ops_callback(
-                    ctx,
-                    "publication-publish",
-                    admin.control._uuid_token(item.id),
-                ),
+        for item in drafts[:5]:
+            token = admin.control._uuid_token(item.id)
+            extra.append(
+                (
+                    f"🗓 Запланировать · {item.title[:18]}",
+                    _ops_callback(ctx, "publication-schedule", token),
+                )
             )
-            for item in drafts[:5]
-        )
+            extra.append(
+                (
+                    f"✅ Отметить опубликованной · {item.title[:18]}",
+                    _ops_callback(ctx, "publication-publish", token),
+                )
+            )
+        for item in scheduled_publications[:4]:
+            token = admin.control._uuid_token(item.id)
+            extra.append(
+                (
+                    f"🕒 Перенести · {item.title[:18]}",
+                    _ops_callback(ctx, "publication-schedule", token),
+                )
+            )
+            extra.append(
+                (
+                    f"⛔ Отменить · {item.title[:18]}",
+                    _ops_callback(ctx, "publication-cancel", token),
+                )
+            )
     elif action == "funnel":
         text = (
             "📉 Путь до заявки\n\n"
@@ -816,6 +843,19 @@ async def admin_ops_gate(callback: CallbackQuery, state: FSMContext) -> None:
     )
 
     if action in {
+        "publication-new",
+        "publication-channel",
+        "publication-schedule",
+        "publication-cancel",
+        "publication-cancel-ok",
+        "publication-publish",
+    } and not _can_write_publications(ctx):
+        await callback.answer(
+            "Для вашей роли публикации доступны только для просмотра.",
+            show_alert=True,
+        )
+        return
+    if action in {
         "payment-new",
         "payment-customer",
         "pay-customer",
@@ -891,6 +931,70 @@ async def admin_ops_gate(callback: CallbackQuery, state: FSMContext) -> None:
                 return_action="return-publications",
             ),
         )
+        return
+    if action == "publication-schedule":
+        if len(payload) != 1:
+            await callback.answer("Кнопка устарела", show_alert=True)
+            return
+        publication_id = admin.control._token_uuid(payload[0])
+        profile = await asyncio.to_thread(get_business_profile, actor=ctx.actor)
+        await state.clear()
+        await state.set_state(ClientPlatformAdminOpsState.publication_schedule_time)
+        await state.update_data(
+            cpao_business_id=ctx.business_id,
+            cpao_publication_id=publication_id,
+        )
+        await admin._safe_edit(
+            callback,
+            "🗓 Время публикации\n\n"
+            f"Часовой пояс бизнеса: {profile.timezone}.\n"
+            "Отправьте дату и время в формате 28.08.2026 19:30.\n"
+            "Прошлое и неоднозначное местное время не принимаются.\n"
+            "Для отмены отправьте /cancel.",
+            _flow_keyboard(
+                admin,
+                ctx,
+                return_action="return-publications",
+            ),
+        )
+        return
+    if action == "publication-cancel":
+        if len(payload) != 1:
+            await callback.answer("Кнопка устарела", show_alert=True)
+            return
+        publication_id = admin.control._token_uuid(payload[0])
+        await admin._safe_edit(
+            callback,
+            "⛔ Отменить запланированную публикацию?\n\n"
+            "Автоматическая отправка не запускается этим действием.",
+            _flow_keyboard(
+                admin,
+                ctx,
+                return_action="return-publications",
+                extra=[
+                    (
+                        "⛔ Подтвердить отмену",
+                        _ops_callback(
+                            ctx,
+                            "publication-cancel-ok",
+                            admin.control._uuid_token(publication_id),
+                        ),
+                    )
+                ],
+            ),
+        )
+        return
+    if action == "publication-cancel-ok":
+        if len(payload) != 1:
+            await callback.answer("Кнопка устарела", show_alert=True)
+            return
+        publication_id = admin.control._token_uuid(payload[0])
+        await asyncio.to_thread(
+            admin_ops.cancel_publication_schedule,
+            actor=ctx.actor,
+            publication_id=publication_id,
+        )
+        await _enhanced_marketing(callback, state, ctx, "publications")
         return
     if action == "publication-publish":
         publication_id = admin.control._token_uuid(payload[0])
@@ -1120,6 +1224,61 @@ async def receive_publication_body(message: Message, state: FSMContext) -> None:
     )
     await state.clear()
     await message.answer(f"✅ Черновик «{publication.title}» создан.")
+    admin = importlib.import_module(".clientplatform_admin", __package__)
+    await admin.send_admin_panel(
+        message,
+        user_id=ctx.user_id,
+        business_id=ctx.business_id,
+    )
+
+
+@router.message(ClientPlatformAdminOpsState.publication_schedule_time)
+async def receive_publication_schedule_time(message: Message, state: FSMContext) -> None:
+    local_time = " ".join(str(message.text or "").split())
+    if not local_time or local_time.startswith("/"):
+        await message.answer(
+            "Отправьте дату и время, например 28.08.2026 19:30, или /cancel."
+        )
+        return
+    data = await state.get_data()
+    ctx = await _context_from_state(message, state)
+    try:
+        publication = await asyncio.to_thread(
+            admin_ops.schedule_publication,
+            actor=ctx.actor,
+            publication_id=str(data["cpao_publication_id"]),
+            local_time=local_time,
+        )
+    except TenantPermissionDenied:
+        await state.clear()
+        await message.answer(
+            "Для вашей роли публикации доступны только для просмотра."
+        )
+        return
+    except ValueError as exc:
+        detail = str(exc)
+        if "future" in detail:
+            text = "Выберите будущее время публикации."
+        elif "ambiguous" in detail:
+            text = "Это местное время неоднозначно. Выберите другое время."
+        elif "does not exist locally" in detail:
+            text = "Такого местного времени нет. Выберите другое время."
+        elif "timezone" in detail:
+            text = "Не удалось проверить часовой пояс бизнеса. Проверьте настройки."
+        elif "changed concurrently" in detail:
+            text = "Публикация уже изменилась. Откройте раздел публикаций заново."
+        else:
+            text = "Введите дату и время в формате 28.08.2026 19:30."
+        await message.answer(text)
+        return
+    profile = await asyncio.to_thread(get_business_profile, actor=ctx.actor)
+    line = admin_ops.format_publication_calendar_lines(
+        [publication],
+        timezone_name=profile.timezone,
+        max_entries=1,
+    )[0]
+    await state.clear()
+    await message.answer(f"✅ Публикация запланирована.\n{line}")
     admin = importlib.import_module(".clientplatform_admin", __package__)
     await admin.send_admin_panel(
         message,

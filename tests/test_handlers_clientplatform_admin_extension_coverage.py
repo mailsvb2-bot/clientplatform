@@ -310,6 +310,74 @@ async def test_admin_ops_gate_publication_flow(
 
 
 @pytest.mark.asyncio
+async def test_admin_ops_gate_publication_schedule_and_cancel_controls(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_admin: FakeAdmin,
+) -> None:
+    monkeypatch.setattr(
+        extension,
+        "get_business_profile",
+        lambda **_kwargs: SimpleNamespace(timezone="Europe/Moscow"),
+    )
+    state = FakeState({"dirty": True})
+    await extension.admin_ops_gate(
+        _callback("publication-schedule", "publication"),
+        state,
+    )
+    assert state.current_state == extension.ClientPlatformAdminOpsState.publication_schedule_time
+    assert state.data["cpao_business_id"] == "business-id"
+    assert state.data["cpao_publication_id"] == "uuid:publication"
+    assert "Europe/Moscow" in fake_admin.edits[-1][0]
+    assert "28.08.2026 19:30" in fake_admin.edits[-1][0]
+
+    await extension.admin_ops_gate(
+        _callback("publication-cancel", "publication"),
+        FakeState(),
+    )
+    assert "Подтвердить отмену" in str(fake_admin.edits[-1][1])
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        extension.admin_ops,
+        "cancel_publication_schedule",
+        lambda *, publication_id, **_kwargs: calls.append(publication_id),
+    )
+
+    async def marketing(_callback: Any, _state: Any, _ctx: Any, action: str) -> None:
+        calls.append(action)
+
+    monkeypatch.setattr(extension, "_enhanced_marketing", marketing)
+    await extension.admin_ops_gate(
+        _callback("publication-cancel-ok", "publication"),
+        FakeState(),
+    )
+    assert calls == ["uuid:publication", "publications"]
+
+    for action in (
+        "publication-schedule",
+        "publication-cancel",
+        "publication-cancel-ok",
+    ):
+        malformed = _callback(action)
+        await extension.admin_ops_gate(malformed, FakeState())
+        assert malformed.answers == [("Кнопка устарела", True)]
+
+
+@pytest.mark.asyncio
+async def test_publication_mutation_callbacks_fail_closed_for_read_only_role(
+    fake_admin: FakeAdmin,
+    ctx: Any,
+) -> None:
+    ctx.actor.role = PlatformRole.ANALYST
+    callback = _callback("publication-schedule", "publication")
+    await extension.admin_ops_gate(callback, FakeState())
+    assert callback.answers == [
+        ("Для вашей роли публикации доступны только для просмотра.", True)
+    ]
+    assert fake_admin.edits == []
+
+
+@pytest.mark.asyncio
 async def test_admin_ops_gate_payment_and_price_flows(
     monkeypatch: pytest.MonkeyPatch,
     fake_admin: FakeAdmin,
@@ -447,6 +515,118 @@ async def test_publication_input_handlers_cover_invalid_and_success(
     body = FakeMessage("Полный текст")
     await extension.receive_publication_body(body, state)
     assert body.answers[-1] == "✅ Черновик «Новый заголовок» создан."
+    assert fake_admin.panels == [(701, "business-id")]
+
+
+@pytest.mark.asyncio
+async def test_publication_schedule_input_handler_retries_and_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_admin: FakeAdmin,
+    ctx: Any,
+) -> None:
+    async def context_from_state(*_args: Any) -> Any:
+        return ctx
+
+    monkeypatch.setattr(extension, "_context_from_state", context_from_state)
+    monkeypatch.setattr(
+        extension,
+        "get_business_profile",
+        lambda **_kwargs: SimpleNamespace(timezone="Europe/Moscow"),
+    )
+    state = FakeState(
+        {
+            "cpao_business_id": "business-id",
+            "cpao_publication_id": "publication-id",
+        }
+    )
+
+    invalid = FakeMessage("/cancel")
+    await extension.receive_publication_schedule_time(invalid, state)
+    assert "28.08.2026 19:30" in invalid.answers[-1]
+
+    def reject_past(**_kwargs: Any) -> None:
+        raise ValueError("publication time must be in the future")
+
+    def reject_role(**_kwargs: Any) -> None:
+        raise TenantPermissionDenied("operation is not allowed for this business role")
+
+    monkeypatch.setattr(extension.admin_ops, "schedule_publication", reject_role)
+    revoked = FakeMessage("29.08.2026 12:00")
+    await extension.receive_publication_schedule_time(revoked, state)
+    assert revoked.answers == [
+        "Для вашей роли публикации доступны только для просмотра."
+    ]
+    assert state.clear_count == 1
+    state.data.update(
+        cpao_business_id="business-id",
+        cpao_publication_id="publication-id",
+    )
+    state.clear_count = 0
+
+    monkeypatch.setattr(extension.admin_ops, "schedule_publication", reject_past)
+    past = FakeMessage("27.08.2026 10:00")
+    await extension.receive_publication_schedule_time(past, state)
+    assert past.answers[-1] == "Выберите будущее время публикации."
+    assert state.clear_count == 0
+
+    for error, expected in (
+        (
+            "publication time is ambiguous because of a timezone transition",
+            "Это местное время неоднозначно. Выберите другое время.",
+        ),
+        (
+            "publication time does not exist locally because of a timezone transition",
+            "Такого местного времени нет. Выберите другое время.",
+        ),
+        (
+            "business timezone is invalid",
+            "Не удалось проверить часовой пояс бизнеса. Проверьте настройки.",
+        ),
+        (
+            "publication changed concurrently; refresh and retry",
+            "Публикация уже изменилась. Откройте раздел публикаций заново.",
+        ),
+        (
+            "publication time must look like 28.08.2026 19:30",
+            "Введите дату и время в формате 28.08.2026 19:30.",
+        ),
+    ):
+        def reject(**_kwargs: Any) -> None:
+            raise ValueError(error)
+
+        monkeypatch.setattr(extension.admin_ops, "schedule_publication", reject)
+        invalid_time = FakeMessage("29.08.2026 12:00")
+        await extension.receive_publication_schedule_time(invalid_time, state)
+        assert invalid_time.answers[-1] == expected
+        assert state.clear_count == 0
+
+    publication = SimpleNamespace(
+        status="scheduled",
+        channel="vk",
+        title="План",
+        scheduled_at="2026-08-29T09:00:00+00:00",
+        published_at=None,
+        failed_at=None,
+        updated_at="2026-08-28T08:00:00+00:00",
+    )
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        extension.admin_ops,
+        "schedule_publication",
+        lambda **kwargs: calls.append(kwargs) or publication,
+    )
+    success = FakeMessage("29.08.2026 12:00")
+    await extension.receive_publication_schedule_time(success, state)
+    assert calls == [
+        {
+            "actor": ctx.actor,
+            "publication_id": "publication-id",
+            "local_time": "29.08.2026 12:00",
+        }
+    ]
+    assert "✅ Публикация запланирована" in success.answers[-1]
+    assert "29.08.2026 12:00 · ВКонтакте · Запланировано" in success.answers[-1]
+    assert state.clear_count == 1
     assert fake_admin.panels == [(701, "business-id")]
 
 
