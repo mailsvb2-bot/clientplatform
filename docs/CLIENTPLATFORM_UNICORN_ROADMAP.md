@@ -1013,11 +1013,19 @@ source
 - Все 12 review threads закрыты; regression follow-ups закрепили privacy-detach attribution, ISO-4217 minor-unit formatting, UNKNOWN-source classification, correction/reversal dependency reconciliation и deterministic first-read convergence.
 - Production deploy не выполнялся: по Канону он остаётся отдельным действием только по прямому указанию владельца.
 
-### M4-006 — `NEXT` — Economic Next Best Action
+### M4-006 — `DONE` — Economic Next Best Action
 
 Поверх M4-005 и существующего M4-003 owner queue добавить детерминированный экономический выбор между уже канонически допустимыми действиями. Первый сценарий: свободные окна + разрешённая reactivation cohort + channel consent + historical outcomes + approved ad-spend limits → понятное предложение владельцу, например сначала использовать бесплатную reactivation, затем только при необходимости предложить paid acquisition в существующих policy limits. LLM может объяснять, но не определяет money/consent/channel constraints.
 
-### M4-007 — `QUEUED` — Owner Publication Scheduling Controls
+### Evidence
+
+- PR #239 (`M4-006: add economic next best action`) squash-merged в `main` как `c3a3ac7a47a2663cf04398aff898fb53db8fe744`; exact PR head `099d4a497814887727153f6dce67fcf005306d44`.
+- Все 15 pull-request workflows на exact head завершились `success`, включая CI quality/coverage, Canon, Critical Static Surface, User Scenario Matrix, Booking/Ad Spend/Partner concurrency, Production Isolation, Encrypted Backup, Managed Bot Gateway и Pre-deploy Release Gate.
+- Два review finding закрыты без обхода Канона: native Telegram/VK/MAX action `Открыть время` ведёт в реальное каноническое создание booking slot, а reactivation routes загружаются одним tenant-scoped bulk query вместо N+1.
+- Coverage ratchet усилен до `74.93%` combined / `66.13%` branch; полный локальный regression перед merge: `4081 passed, 7 skipped`.
+- Production deploy не выполнялся: по Канону он остаётся отдельным действием только по прямому указанию владельца.
+
+### M4-007 — `NEXT` — Owner Publication Scheduling Controls
 
 Вернуть ранее запланированный content vertical после money/NBA slices: дать владельцу безопасно назначать, переносить и отменять время публикации через существующие `business_publications.status` + `scheduled_at`. Не создавать второй scheduler/store и не запускать автоматическую доставку в этом slice.
 
@@ -1649,8 +1657,8 @@ Duplicate tap, retry, worker restart или uncertain provider response не д�
 | M4-003 Tasks and owner operating queue | DONE | PR #232 merge `10c1a3043eb75fd1ad2f829fed35be3753733eaf`; exact PR head `6d43c32e1d54d842d309f8d8fa4fa43b6698a441`; all 15 PR workflows success; coverage 74.87% combined / 66.02% branch; exact-SHA production deploy with encrypted backup, health/readiness, HTTPS and polling-only stability evidence |
 | M4-004 Owner Content Calendar Projection | DONE | PR #234 merge `68d736c7e0c5390acb96740c338d0d7a921f225e`; exact PR head `98bd5374b46f985a9c24c560723c8f7d5efe37d2`; all 15 PR workflows success; coverage 74.90% combined / 66.04% branch; exact-SHA production deploy with encrypted backup, health/readiness, HTTPS, polling-only and restart=0 evidence |
 | M4-005 Customer Revenue Journey + Money Cockpit | DONE | PR #237 squash-merge `08fdb8fc89c6627c4ee3478ed1f3b1a650b79abb`; exact head `818d3edd3d1044cef6a805e709e645f1bfd49fac`; all 15 PR workflows success; 12 review threads resolved; canonical outcome/attribution/payment/reactivation projection with Telegram/VK/MAX parity and no second store/brain |
-| M4-006 Economic Next Best Action | NEXT | deterministic economic choice over existing owner queue, retention, availability, consent and approved spend limits; no LLM authority over money/policy |
-| M4-007 Owner Publication Scheduling Controls | QUEUED | reuse canonical `business_publications.status` + `scheduled_at` for tenant-safe schedule/reschedule/cancel actions; no second scheduler |
+| M4-006 Economic Next Best Action | DONE | PR #239 squash-merge `c3a3ac7a47a2663cf04398aff898fb53db8fe744`; exact head `099d4a497814887727153f6dce67fcf005306d44`; all 15 PR workflows success; coverage raised to 74.93% combined / 66.13% branch; native slot creation and bulk reactivation routing review findings resolved |
+| M4-007 Owner Publication Scheduling Controls | NEXT | reuse canonical `business_publications.status` + `scheduled_at` for tenant-safe schedule/reschedule/cancel actions; no second scheduler |
 
 ---
 
