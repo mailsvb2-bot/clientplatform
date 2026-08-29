@@ -282,6 +282,14 @@ async def test_admin_ops_gate_autopilot_and_alert_routes(
         await extension.admin_ops_gate(_callback("autopilot-toggle"), FakeState())
     assert calls == []
 
+    ctx.role = PlatformRole.ADMINISTRATOR
+    non_owner = _callback("autopilot-toggle")
+    await extension.admin_ops_gate(non_owner, FakeState())
+    assert non_owner.answers == [
+        ("Изменить effective AutomationPolicy может только владелец бизнеса.", True)
+    ]
+    assert calls == []
+
     ctx.role = "owner"
     await extension.admin_ops_gate(_callback("alerts-refresh"), FakeState())
     assert calls == ["refresh", "report:system"]

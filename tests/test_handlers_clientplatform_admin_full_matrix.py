@@ -374,6 +374,29 @@ async def _empty_async() -> list[Any]:
 
 
 @pytest.mark.asyncio
+async def test_autopilot_screen_is_read_only_for_non_owner_role(
+    render_contract: list[tuple[str, Any]],
+) -> None:
+    ctx = _ctx()
+    ctx.role = admin.PlatformRole.ADMINISTRATOR
+    state = FakeState({"cp_admin_section": "menu", "cp_admin_history": []})
+
+    await extension._enhanced_marketing(
+        SimpleNamespace(),  # type: ignore[arg-type]
+        state,  # type: ignore[arg-type]
+        ctx,
+        "autopilot",
+    )
+
+    text, markup = render_contract[-1]
+    assert "Изменить режим может только владелец бизнеса." in text
+    labels = [button.text for row in markup.inline_keyboard for button in row]
+    assert "▶️ Включить" not in labels
+    assert "⏸ Выключить" not in labels
+
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("action", "title"),
     [
