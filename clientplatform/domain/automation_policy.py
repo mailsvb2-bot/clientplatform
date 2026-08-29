@@ -317,6 +317,19 @@ class AutomationPolicySpec:
         limits = tuple(sorted(self.money_limits, key=lambda item: (item.action, item.currency)))
         if len({(item.action, item.currency) for item in limits}) != len(limits):
             raise ValueError("duplicate money limits are not allowed")
+        limit_actions = {item.action for item in limits}
+        missing_money_limits = tuple(
+            action
+            for action in self.allowed_actions
+            if (semantics := automation_action_semantics(action)) is not None
+            and semantics.money_bearing
+            and action not in limit_actions
+        )
+        if missing_money_limits:
+            raise ValueError(
+                "money-bearing allowed actions require an explicit money limit: "
+                + ",".join(missing_money_limits)
+            )
         object.__setattr__(self, "money_limits", limits)
         thresholds = tuple(
             sorted(

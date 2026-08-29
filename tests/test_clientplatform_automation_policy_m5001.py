@@ -197,12 +197,9 @@ class AutomationPolicyDomainTests(unittest.TestCase):
 
     def test_action_semantics_cannot_be_downgraded_by_candidate_payload(self) -> None:
         policy = _policy()
-        missing_policy_limit = replace(policy.spec, money_limits=())
-        unsafe_policy = replace(
-            policy,
-            spec=missing_policy_limit,
-            policy_hash=missing_policy_limit.policy_hash,
-        )
+        with self.assertRaisesRegex(ValueError, "money-bearing allowed actions"):
+            replace(policy.spec, money_limits=())
+
         understated_budget = AutomationCandidateAction(
             business_id=policy.business_id,
             action="ads.adjust_budget",
@@ -210,7 +207,7 @@ class AutomationPolicyDomainTests(unittest.TestCase):
             scheduled_at=_NOW,
         )
         check = evaluate_automation_policy(
-            policy=unsafe_policy,
+            policy=policy,
             candidate=understated_budget,
             now=_NOW,
         )
@@ -219,7 +216,6 @@ class AutomationPolicyDomainTests(unittest.TestCase):
         self.assertIn("external_channel_required", check.violations)
         self.assertIn("external_audience_required", check.violations)
         self.assertIn("money_evidence_required", check.violations)
-        self.assertIn("money_limit_missing", check.violations)
 
         understated_followup = AutomationCandidateAction(
             business_id=policy.business_id,
@@ -506,6 +502,18 @@ class AutomationPolicyRepositoryTests(unittest.TestCase):
         repo = AutomationPolicyRepository(self.conn)
         self.assertTrue(repo.autopilot_enabled_projection(actor=self.owner, now=_NOW))
         self.assertIsNone(repo.effective(actor=self.owner, now=_NOW))
+        admin_draft = repo.create_draft(
+            actor=self.admin,
+            spec=_spec(mode=AutomationMode.NORMAL),
+            now=_NOW,
+        )
+        self.assertEqual(AutomationPolicyStatus.DRAFT, admin_draft.status)
+        self.assertTrue(
+            repo.autopilot_enabled_projection(
+                actor=self.owner,
+                now=_NOW + timedelta(seconds=1),
+            )
+        )
 
         candidate = AutomationCandidateAction(
             business_id=self.owner.business_id,

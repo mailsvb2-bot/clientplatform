@@ -203,15 +203,25 @@ class AutomationPolicyRepository:
         A legacy `autopilot_enabled=true` may keep the existing recommendation UX
         enabled only while this business has never written an AutomationPolicy.
         It is deliberately *not* an effective policy and can never authorize an
-        action through `effective()` / PolicyCheck. The first policy write makes
-        the canonical ledger authoritative forever for this business.
+        action through `effective()` / PolicyCheck. The first owner-approved
+        policy makes the canonical ledger authoritative forever for this business;
+        an administrator-only draft cannot silently disable this projection.
         """
 
         current = self._current(actor)
         effective = self.effective(actor=current, now=now)
         if effective is not None:
             return effective.spec.mode == AutomationMode.AUTOPILOT
-        if self.latest(actor=current) is not None:
+        owner_authority_row = self._conn.execute(
+            """
+            SELECT 1
+            FROM clientplatform_automation_policies
+            WHERE business_id=? AND approved_by_member_id IS NOT NULL
+            LIMIT 1
+            """,
+            (current.business_id,),
+        ).fetchone()
+        if owner_authority_row is not None:
             return False
         row = self._conn.execute(
             """
