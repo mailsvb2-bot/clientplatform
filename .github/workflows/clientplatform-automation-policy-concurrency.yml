@@ -1,0 +1,79 @@
+name: ClientPlatform AutomationPolicy Concurrency
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  automation-policy-concurrency:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    name: postgres / policy version and approval
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: clientplatform_automation_policy_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d clientplatform_automation_policy_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      APP_ENV: test
+      LOAD_DOTENV: '0'
+      CLIENTPLATFORM_DB_ENGINE: postgres
+      CLIENTPLATFORM_DATABASE_NAME: clientplatform_automation_policy_ci
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/clientplatform_automation_policy_ci
+      POSTGRES_REUSE_CONNECTIONS: '0'
+      POSTGRES_CI_SMOKE: '1'
+      BOT_TOKEN: '000000:CI'
+      TELEGRAM_TRANSPORT: polling
+      TELEGRAM_WEBHOOK_ENABLED: '0'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install hash-locked dependencies
+        run: |
+          python -m pip install --disable-pip-version-check pip==26.1.2
+          python -m pip install --require-hashes -r requirements-dev.txt
+
+      - name: Focused AutomationPolicy regression
+        env:
+          CLIENTPLATFORM_DB_ENGINE: sqlite
+          DATABASE_URL: ''
+        run: |
+          set -o pipefail
+          python -m pytest -q tests/test_clientplatform_automation_policy_m5001.py \
+            2>&1 | tee "$RUNNER_TEMP/automation-policy-unit.log"
+
+      - name: Two-connection PostgreSQL policy matrix
+        run: |
+          set -o pipefail
+          python scripts/probe_postgres_automation_policy_concurrency.py \
+            2>&1 | tee "$RUNNER_TEMP/automation-policy-postgres.log"
+
+      - name: Upload AutomationPolicy concurrency logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: clientplatform-automation-policy-concurrency-logs
+          path: |
+            ${{ runner.temp }}/automation-policy-unit.log
+            ${{ runner.temp }}/automation-policy-postgres.log
+          if-no-files-found: warn

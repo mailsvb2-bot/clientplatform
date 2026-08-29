@@ -1,3 +1,14 @@
+from clientplatform.application.automation_policy import (
+    approve_automation_policy,
+    check_automation_action,
+    get_effective_automation_policy,
+    get_latest_automation_policy,
+    is_owner_autopilot_enabled,
+    revoke_effective_automation_policy,
+    save_automation_policy_draft,
+    set_owner_autopilot_enabled,
+    toggle_owner_autopilot,
+)
 from clientplatform.application.connections import (
     activate_connection,
     create_connection,
@@ -38,6 +49,15 @@ from clientplatform.application.tenancy import (
 )
 
 __all__ = [
+    "approve_automation_policy",
+    "check_automation_action",
+    "get_effective_automation_policy",
+    "get_latest_automation_policy",
+    "is_owner_autopilot_enabled",
+    "revoke_effective_automation_policy",
+    "save_automation_policy_draft",
+    "set_owner_autopilot_enabled",
+    "toggle_owner_autopilot",
     "DispatchBatchResult",
     "activate_connection",
     "add_program_lesson",

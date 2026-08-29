@@ -39,6 +39,14 @@ _REWARD_HARDENING_FILES = (
     "services/reward_tokens.py",
 )
 
+_CLIENTPLATFORM_AUTOMATION_POLICY_FILES = (
+    "clientplatform/application/automation_policy.py",
+    "clientplatform/domain/automation_policy.py",
+    "clientplatform/infrastructure/automation_policy_repository.py",
+    "services/db/schema/clientplatform_automation_policy.py",
+)
+
+
 _CLIENTPLATFORM_MANAGED_BOT_TYPE_FILES = (
     "clientplatform/application/existing_bot_onboarding.py",
     "clientplatform/application/managed_bot_onboarding.py",
@@ -165,6 +173,7 @@ TYPE_CONTRACT_FILES = (
     "services/sales_desk.py",
     "services/sales_desk_repository.py",
     "services/sales_desk_sync.py",
+    *_CLIENTPLATFORM_AUTOMATION_POLICY_FILES,
     *_CLIENTPLATFORM_MANAGED_BOT_TYPE_FILES,
     *_CLIENTPLATFORM_EXTERNAL_PRODUCT_FILES,
     *_CLIENTPLATFORM_EMAIL_OUTBOUND_FILES,
@@ -224,6 +233,7 @@ SECURITY_SCAN_PATHS = (
     "services/sales_desk_db.py",
     "services/sales_desk_repository.py",
     "services/sales_desk_sync.py",
+    *_CLIENTPLATFORM_AUTOMATION_POLICY_FILES,
     *_CLIENTPLATFORM_MANAGED_BOT_SECURITY_FILES,
     *_CLIENTPLATFORM_EXTERNAL_PRODUCT_FILES,
     *_CLIENTPLATFORM_EMAIL_OUTBOUND_FILES,

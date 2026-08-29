@@ -359,6 +359,7 @@ def render_contract(monkeypatch: pytest.MonkeyPatch):
     )
     monkeypatch.setattr(extension.admin_ops, "list_offering_prices", lambda **_kwargs: [])
     monkeypatch.setattr(extension.admin_ops, "interaction_snapshot", lambda **_kwargs: interaction)
+    monkeypatch.setattr(extension.admin_ops, "get_autopilot_enabled", lambda **_kwargs: False)
     monkeypatch.setattr(extension.admin_ops, "get_admin_setting", lambda **_kwargs: "false")
     monkeypatch.setattr(extension.admin_ops, "recent_audit_events", lambda **_kwargs: [])
     monkeypatch.setattr(extension.admin_ops, "refresh_interaction_alerts", lambda **_kwargs: [])
@@ -370,6 +371,29 @@ def render_contract(monkeypatch: pytest.MonkeyPatch):
 
 async def _empty_async() -> list[Any]:
     return []
+
+
+@pytest.mark.asyncio
+async def test_autopilot_screen_is_read_only_for_non_owner_role(
+    render_contract: list[tuple[str, Any]],
+) -> None:
+    ctx = _ctx()
+    ctx.role = admin.PlatformRole.ADMINISTRATOR
+    state = FakeState({"cp_admin_section": "menu", "cp_admin_history": []})
+
+    await extension._enhanced_marketing(
+        SimpleNamespace(),  # type: ignore[arg-type]
+        state,  # type: ignore[arg-type]
+        ctx,
+        "autopilot",
+    )
+
+    text, markup = render_contract[-1]
+    assert "Изменить режим может только владелец бизнеса." in text
+    labels = [button.text for row in markup.inline_keyboard for button in row]
+    assert "▶️ Включить" not in labels
+    assert "⏸ Выключить" not in labels
+
 
 
 @pytest.mark.asyncio

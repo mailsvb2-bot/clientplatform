@@ -12,6 +12,10 @@ from typing import Any
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from clientplatform.application.automation_policy import (
+    is_owner_autopilot_enabled,
+    toggle_owner_autopilot,
+)
 from clientplatform.domain.money import normalize_settlement_currency
 from clientplatform.domain.outcomes import (
     BusinessOutcomeEvent,
@@ -27,6 +31,7 @@ from clientplatform.domain.tenancy import (
     normalize_uuid,
 )
 from clientplatform.infrastructure import TenancyRepository
+from clientplatform.infrastructure.automation_policy_repository import AutomationPolicyRepository
 from clientplatform.infrastructure.outcome_repository import OutcomeRepository
 from clientplatform.infrastructure.revenue_attribution_repository import (
     RevenueAttributionRepository,
@@ -2258,15 +2263,18 @@ def set_admin_setting(
     return normalized_value
 
 
+def get_autopilot_enabled(*, actor: TenantContext) -> bool:
+    return is_owner_autopilot_enabled(actor=actor)
+
+
 def toggle_autopilot(*, actor: TenantContext) -> bool:
-    current = get_admin_setting(actor=actor, key="autopilot_enabled", default="false")
-    enabled = current.strip().lower() not in {"1", "true", "yes", "on"}
-    set_admin_setting(
-        actor=actor,
-        key="autopilot_enabled",
-        value="true" if enabled else "false",
-    )
-    return enabled
+    """Toggle the owner-approved canonical AutomationPolicy mode.
+
+    The legacy `business_admin_settings.autopilot_enabled` flag is deliberately
+    no longer authoritative: it could not carry limits, version or owner approval.
+    """
+
+    return toggle_owner_autopilot(actor=actor)
 
 
 def record_interaction_metric(metric: InteractionMetricInput) -> None:
@@ -2394,18 +2402,9 @@ def refresh_interaction_alerts(
     timestamp = _utc_now()
     with get_db() as conn:
         current = _resolve(conn, actor, allowed_roles=_OBSERVABILITY_ROLES)
-        autopilot_row = conn.execute(
-            """
-            SELECT setting_value FROM business_admin_settings
-            WHERE business_id=? AND setting_key='autopilot_enabled'
-            LIMIT 1
-            """,
-            (current.business_id,),
-        ).fetchone()
-        autopilot_enabled = bool(
-            autopilot_row is not None
-            and str(_value(autopilot_row, "setting_value", 0)).strip().lower()
-            in {"1", "true", "yes", "on"}
+        autopilot_enabled = AutomationPolicyRepository(conn).autopilot_enabled_projection(
+            actor=current,
+            now=timestamp,
         )
         if autopilot_enabled:
             operations = {
@@ -2735,5 +2734,6 @@ __all__ = [
     "refresh_interaction_alerts",
     "set_admin_setting",
     "set_offering_price",
+    "get_autopilot_enabled",
     "toggle_autopilot",
 ]
