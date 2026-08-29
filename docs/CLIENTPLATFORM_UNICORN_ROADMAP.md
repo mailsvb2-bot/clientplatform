@@ -1053,9 +1053,18 @@ source
 
 Автопилот — не отдельный «AI-режим», а слой поверх доказанных deterministic capabilities.
 
-### M5-001 — `NEXT` — Canonical AutomationPolicy Foundation
+### M5-001 — `DONE` — Canonical AutomationPolicy Foundation
 
 Расширить существующий canonical automation/policy contour, не создавая второй движок или store: формализовать tenant-scoped allowed/forbidden actions, channels/audiences, schedule/quiet hours, approval thresholds, stop conditions, expiry/version и owner approval. Первый slice ограничить policy read/write + deterministic `PolicyCheck`: RBAC и tenant isolation fail-closed, изменение money limits/чувствительных каналов требует явного owner approval, а автономное execution в M5-001 не запускать.
+
+### Evidence
+
+- PR #245 (`M5-001: add canonical AutomationPolicy foundation`) squash-merged в `main` как `0c813605c23e1d8e6f1f5d4c7f85193a9b09a209`; exact final PR head `536d8e35429c8695f110c09f345fd67303c39d85`.
+- Все 16 pull-request workflows на final head завершились `success`, включая CI quality/coverage, Canon, Critical Static Surface, User Scenario Matrix, Booking/Ad Spend/Partner/AutomationPolicy concurrency, Production Isolation, Encrypted Backup, Managed Bot Gateway и Pre-deploy Release Gate; AI Review gate также `pass` по trusted repository policy.
+- Два P1 review finding закрыты deterministic invariants/regressions: money-bearing action semantics и обязательный money limit больше нельзя понизить caller payload-ом, а pre-M5 `autopilot_enabled=true` сохраняет только read-only advisory UX без поддельного owner approval; оба review thread resolved.
+- Focused AutomationPolicy suite: `14 passed`; финальный full coverage regression: `4151 passed, 7 skipped`; coverage ratchets подняты до `75.00%` combined / `66.26%` branch при baseline `74.99%` / `66.25%`.
+- M5-001 не запускает autonomous execution/provider writes: текущий owner toggle разрешает только `growth.read_only_analysis`; production deploy намеренно не выполнялся.
+- После M5-001 в текущем roadmap нет заранее сформулированного `QUEUED` executable slice. Следующий slice должен быть отдельно декомпозирован из последующих milestone-разделов, а не придуман в closure-PR.
 
 ## 10.1. Единый AutomationPolicy
 
@@ -1678,7 +1687,7 @@ Duplicate tap, retry, worker restart или uncertain provider response не д�
 | M4-006 Economic Next Best Action | DONE | PR #239 squash-merge `c3a3ac7a47a2663cf04398aff898fb53db8fe744`; exact head `099d4a497814887727153f6dce67fcf005306d44`; all 15 PR workflows success; coverage raised to 74.93% combined / 66.13% branch; native slot creation and bulk reactivation routing review findings resolved |
 | M4-007 Owner Publication Scheduling Controls | DONE | PR #241 squash-merge `1637bb565499ec1c3209fed07d5ef30ccefa0aba`; exact head `7e6f20a67a10a3932e9b51fa552243f48c0ce520`; all 15 PR workflows success; P1 native VK/MAX stale/no-op retry race fixed with canonical durable idempotency receipt; coverage 74.98% combined / 66.22% branch |
 | M4-008 Canonical Outbound Email + External Product Bridge | DONE | PR #243 squash-merge `64e96d13d2e33eede100646d937d45ba947c297f`; exact PR head `656672b20b2b4b3257629f7e70f3635e36d4f99b`; all 15 PR workflows success; focused 61 tests + full regression `4131 passed, 7 skipped`; coverage raised to 74.99% combined / 66.25% branch; production deploy intentionally not part of the slice |
-| M5-001 Canonical AutomationPolicy Foundation | NEXT | extend one canonical policy contour with fail-closed tenant/RBAC boundaries, explicit owner approvals and deterministic PolicyCheck; no second automation engine/store and no autonomous execution in this slice |
+| M5-001 Canonical AutomationPolicy Foundation | DONE | PR #245 squash-merge `0c813605c23e1d8e6f1f5d4c7f85193a9b09a209`; exact head `536d8e35429c8695f110c09f345fd67303c39d85`; all 16 PR workflows success; 2 P1 review findings resolved; focused 14 tests + full coverage regression `4151 passed, 7 skipped`; coverage 75.00% combined / 66.26% branch; no autonomous execution and no production deploy |
 
 ---
 
