@@ -1,11 +1,28 @@
 from __future__ import annotations
 
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 from uuid import uuid4
 
 from clientplatform.application import native_member_interactions as member_ui
 from clientplatform.domain.connections import ConnectionPlatform
 from clientplatform.domain.tenancy import PlatformRole, TenantContext
+
+
+def _connectable_projection(*_args, **_kwargs):
+    return tuple(
+        SimpleNamespace(
+            platform=platform,
+            availability=member_ui.CapabilityAvailability.CONNECTABLE,
+            can_connect=True,
+        )
+        for platform in (
+            ConnectionPlatform.TELEGRAM,
+            ConnectionPlatform.VK,
+            ConnectionPlatform.MAX,
+        )
+    )
 
 
 class NativeMemberSetupUxTests(unittest.TestCase):
@@ -30,13 +47,17 @@ class NativeMemberSetupUxTests(unittest.TestCase):
             calls.append((tenant, platform, setup_key))
             return f"cpm:setup:{session_id}"
 
-        message = member_ui._render(
-            actor,
-            member_ui.ParsedMemberInteraction("connect-vk"),
-            linked=False,
-            setup_issuer=issuer,
-            setup_key="route:r:event:e:member:1001:action:connect-vk",
-        )
+        with (
+            patch.object(member_ui, "list_connections", return_value=[]),
+            patch.object(member_ui, "project_messenger_capabilities", side_effect=_connectable_projection),
+        ):
+            message = member_ui._render(
+                actor,
+                member_ui.ParsedMemberInteraction("connect-vk"),
+                linked=False,
+                setup_issuer=issuer,
+                setup_key="route:r:event:e:member:1001:action:connect-vk",
+            )
 
         self.assertEqual(1, len(calls))
         self.assertEqual(ConnectionPlatform.VK, calls[0][1])
@@ -57,13 +78,17 @@ class NativeMemberSetupUxTests(unittest.TestCase):
             calls.append(platform)
             return f"cpm:setup:{uuid4()}"
 
-        message = member_ui._render(
-            actor,
-            member_ui.ParsedMemberInteraction("connect-max"),
-            linked=False,
-            setup_issuer=issuer,
-            setup_key="route:r:event:e:member:1001:action:connect-max",
-        )
+        with (
+            patch.object(member_ui, "list_connections", return_value=[]),
+            patch.object(member_ui, "project_messenger_capabilities", side_effect=_connectable_projection),
+        ):
+            message = member_ui._render(
+                actor,
+                member_ui.ParsedMemberInteraction("connect-max"),
+                linked=False,
+                setup_issuer=issuer,
+                setup_key="route:r:event:e:member:1001:action:connect-max",
+            )
 
         self.assertEqual([ConnectionPlatform.MAX], calls)
         self.assertTrue(message.rows[0][0].command.startswith("cpm:setup:"))
@@ -105,7 +130,11 @@ class NativeMemberSetupUxTests(unittest.TestCase):
         ) -> str:
             raise RuntimeError("secret://env/SHOULD_NOT_LEAK")
 
-        with self.assertLogs(member_ui.log, level="ERROR") as captured:
+        with (
+            patch.object(member_ui, "list_connections", return_value=[]),
+            patch.object(member_ui, "project_messenger_capabilities", side_effect=_connectable_projection),
+            self.assertLogs(member_ui.log, level="ERROR") as captured,
+        ):
             message = member_ui._render(
                 actor,
                 member_ui.ParsedMemberInteraction("connect-max"),

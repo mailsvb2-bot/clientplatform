@@ -1003,7 +1003,8 @@ async def admin_ops_gate(callback: CallbackQuery, state: FSMContext) -> None:
         await state.update_data(cpao_business_id=ctx.business_id)
         await admin._safe_edit(
             callback,
-            "📣 Новый черновик\n\nВыберите канал публикации:",
+            "📣 Новый черновик\n\nВыберите канал или площадку для плана публикации. "
+            "Это календарь контента: выбор площадки сам по себе ничего не отправляет.",
             _flow_keyboard(
                 admin,
                 ctx,

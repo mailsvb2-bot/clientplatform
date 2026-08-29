@@ -13,6 +13,10 @@ from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
+from clientplatform.application.capability_parity import (
+    CapabilityAvailability,
+    get_business_capability_projection,
+)
 from clientplatform.application.managed_bot_onboarding import (
     has_active_telegram_managed_bot,
 )
@@ -27,6 +31,20 @@ router.message.filter(control.ClientPlatformControlEnabled())
 router.callback_query.filter(control.ClientPlatformControlEnabled())
 
 _ADVANCED_KEYBOARD: Any = None
+
+
+_CAPABILITY_STATE_LABELS = {
+    CapabilityAvailability.ACTIVE: "✅ работает",
+    CapabilityAvailability.ATTENTION: "⚠️ требует внимания",
+    CapabilityAvailability.CONFIGURING: "⏳ настройка",
+    CapabilityAvailability.CONNECTABLE: "○ можно подключить",
+    CapabilityAvailability.CONNECTED_UNAVAILABLE: "⏸ подключено, но сейчас выключено",
+    CapabilityAvailability.UNAVAILABLE: "⏸ сейчас недоступно",
+}
+
+
+def _capability_state_label(value: CapabilityAvailability) -> str:
+    return _CAPABILITY_STATE_LABELS[value]
 
 
 def _routed_callback(callback: CallbackQuery, data: str) -> CallbackQuery:
@@ -133,30 +151,48 @@ async def send_advanced_dashboard(
     business_id: str,
 ) -> None:
     actor = await control._actor(user_id, business_id)
-    profile, capabilities, accesses = await asyncio.gather(
+    profile, capabilities, accesses, external = await asyncio.gather(
         asyncio.to_thread(control.get_business_profile, actor=actor),
         asyncio.to_thread(control.list_business_capabilities, actor=actor),
         asyncio.to_thread(control.list_accessible_businesses, user_id=user_id),
+        asyncio.to_thread(get_business_capability_projection, actor=actor),
     )
     access = next(item for item in accesses if item.business.id == business_id)
     module_lines = "\n".join(f"• {item.title}" for item in capabilities) or "• пока не выбраны"
+    messenger_names = {
+        "telegram": "Telegram",
+        "vk": "ВКонтакте",
+        "max": "MAX",
+    }
+    messenger_lines = "\n".join(
+        f"• {messenger_names[item.platform.value]} — {_capability_state_label(item.availability)}"
+        for item in external.messengers
+    )
+    advertising_lines = ""
+    if external.yandex_direct is not None:
+        advertising_lines = (
+            "\n\nПродвижение:\n"
+            f"• Яндекс Директ — {_capability_state_label(external.yandex_direct.availability)}"
+        )
+
     base_keyboard = _ADVANCED_KEYBOARD(business_id, capabilities)
     token = control._uuid_token(business_id)
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
+            [InlineKeyboardButton(text="💬 Мессенджеры", callback_data=f"cpa:{token}:messengers")],
+            [InlineKeyboardButton(text="📣 Реклама", callback_data=f"cpo:ads:{token}")],
             *base_keyboard.inline_keyboard,
-            [
-                InlineKeyboardButton(
-                    text="🎨 Фирменный стиль",
-                    callback_data=f"cpb:open:{token}",
-                )
-            ],
+            [InlineKeyboardButton(text="🎨 Фирменный стиль", callback_data=f"cpb:open:{token}")],
         ]
     )
     await message.answer(
-        f"⚙️ Все возможности · {access.business.name}\n\n"
+        f"🧩 Бизнес и возможности · {access.business.name}\n\n"
         f"Чем Вы занимаетесь:\n{profile.activity_description}\n\n"
-        f"Подключено:\n{module_lines}",
+        f"Каналы:\n{messenger_lines}"
+        f"{advertising_lines}\n\n"
+        f"Рабочие возможности:\n{module_lines}\n\n"
+        "Статусы показывают фактическую доступность в этой установке ClientPlatform. "
+        "Недоступный канал не предлагается к подключению, пока его runtime не готов.",
         reply_markup=keyboard,
     )
 

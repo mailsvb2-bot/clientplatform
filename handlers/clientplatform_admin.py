@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import importlib
 import logging
-import os
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from types import ModuleType
@@ -31,10 +30,11 @@ from clientplatform.application.messenger_switching import (
     available_staff_messenger_switches,
     build_staff_switch_command,
 )
-from clientplatform.application.control import (
-    business_connection_statuses,
-    business_delivery_summary,
+from clientplatform.application.capability_parity import (
+    CapabilityAvailability,
+    get_business_capability_projection,
 )
+from clientplatform.application.control import business_delivery_summary
 from clientplatform.application.native_messenger_setup import (
     issue_native_messenger_setup,
 )
@@ -71,12 +71,6 @@ router.message.filter(control.ClientPlatformControlEnabled())
 router.callback_query.filter(control.ClientPlatformControlEnabled())
 
 log = logging.getLogger(__name__)
-
-
-def _native_messenger_setup_ingress_enabled() -> bool:
-    return (
-        os.getenv("CLIENTPLATFORM_OMNICHANNEL_INGRESS_ENABLED") or ""
-    ).strip().lower() in {"1", "true", "yes", "on"}
 
 _ROLE_LABELS = {
     PlatformRole.OWNER: "Владелец",
@@ -697,52 +691,48 @@ async def _render_behavior(callback: CallbackQuery, state: FSMContext, ctx: Admi
 
 
 async def _render_messengers(callback: CallbackQuery, state: FSMContext, ctx: AdminContext) -> None:
-    connection_statuses = await asyncio.to_thread(
-        business_connection_statuses, actor=ctx.actor
+    projection = await asyncio.to_thread(
+        get_business_capability_projection,
+        actor=ctx.actor,
+        include_advertising=False,
     )
-    labels = {"telegram": "Telegram", "vk": "ВКонтакте", "max": "MAX"}
-    status_labels = {
-        "active": "✅ работает",
-        "pending": "⏳ настройка",
-        "attention": "⚠️ требует внимания",
-        "disabled": "⏸ отключён",
-        "revoked": "⛔ отозван",
+    labels = {
+        ConnectionPlatform.TELEGRAM: "Telegram",
+        ConnectionPlatform.VK: "ВКонтакте",
+        ConnectionPlatform.MAX: "MAX",
     }
-    by_platform: dict[str, list[Any]] = {"telegram": [], "vk": [], "max": []}
-    for connection_platform, connection_status in connection_statuses:
-        platform = str(connection_platform.value)
-        if platform in by_platform:
-            by_platform[platform].append(connection_status)
+    state_labels = {
+        CapabilityAvailability.ACTIVE: "✅ работает",
+        CapabilityAvailability.ATTENTION: "⚠️ требует внимания",
+        CapabilityAvailability.CONFIGURING: "⏳ настройка",
+        CapabilityAvailability.CONNECTABLE: "○ можно подключить",
+        CapabilityAvailability.CONNECTED_UNAVAILABLE: "⏸ подключён, но канал сейчас выключен",
+        CapabilityAvailability.UNAVAILABLE: "⏸ сейчас недоступен",
+    }
 
     lines = ["💬 Мессенджеры", "", "Каналы этого бизнеса:"]
-    active: set[str] = set()
-    for platform in ("vk", "max", "telegram"):
-        items = by_platform[platform]
-        if any(item.value == "active" for item in items):
-            active.add(platform)
-        if not items:
-            lines.append(f"• {labels[platform]}: не подключён")
-            continue
-        states = [status_labels.get(item.value, item.value) for item in items]
-        lines.append(f"• {labels[platform]}: {', '.join(states)}")
+    by_platform = {item.platform: item for item in projection.messengers}
+    for platform in (ConnectionPlatform.VK, ConnectionPlatform.MAX, ConnectionPlatform.TELEGRAM):
+        item = by_platform[platform]
+        lines.append(f"• {labels[platform]}: {state_labels[item.availability]}")
     lines.extend([
         "",
-        "Можно подключить дополнительный мессенджер или продолжить работу "
-        "в уже подключённом канале под тем же аккаунтом.",
+        "Кнопки подключения показываются только для каналов, которые реально включены "
+        "и готовы в этой установке ClientPlatform.",
     ])
 
     rows: list[list[InlineKeyboardButton]] = []
-    if ctx.role in _ADMIN_ROLES and _native_messenger_setup_ingress_enabled():
+    if ctx.role in _ADMIN_ROLES:
         connect = {
-            "telegram": "✈️ Подключить Telegram",
-            "vk": "🔵 Подключить ВКонтакте",
-            "max": "🟣 Подключить MAX",
+            ConnectionPlatform.TELEGRAM: "✈️ Подключить Telegram",
+            ConnectionPlatform.VK: "🔵 Подключить ВКонтакте",
+            ConnectionPlatform.MAX: "🟣 Подключить MAX",
         }
-        for platform in ("telegram", "vk", "max"):
-            if platform not in active:
+        for item in projection.messengers:
+            if item.can_connect:
                 rows.append([InlineKeyboardButton(
-                    text=connect[platform],
-                    callback_data=_callback(ctx, "messenger-connect", platform),
+                    text=connect[item.platform],
+                    callback_data=_callback(ctx, "messenger-connect", item.platform.value),
                 )])
 
     switch_labels = {
@@ -755,7 +745,13 @@ async def _render_messengers(callback: CallbackQuery, state: FSMContext, ctx: Ad
         switchable = ()
     switch_links = StaffMessengerSwitchLinkService()
     for platform in switchable:
-        if platform == ConnectionPlatform.TELEGRAM or platform not in switch_labels:
+        capability = by_platform.get(platform)
+        if (
+            platform == ConnectionPlatform.TELEGRAM
+            or platform not in switch_labels
+            or capability is None
+            or capability.availability != CapabilityAvailability.ACTIVE
+        ):
             continue
         try:
             url = switch_links.resolve_command_url(
@@ -788,23 +784,24 @@ async def _render_messenger_connect(
     normalized = str(platform or "").strip().lower()
     if normalized not in {"telegram", "vk", "max"}:
         raise ValueError("unsupported messenger setup platform")
-    if not _native_messenger_setup_ingress_enabled():
+    requested = ConnectionPlatform(normalized)
+    projection = await asyncio.to_thread(
+        get_business_capability_projection,
+        actor=ctx.actor,
+        include_advertising=False,
+    )
+    capability = projection.messenger(requested)
+    if not capability.can_connect:
         await _safe_edit(
             callback,
-            "Безопасное подключение временно недоступно: multi-messenger ingress не включён.",
+            "Этот канал сейчас нельзя подключить в данной установке ClientPlatform. "
+            "Когда runtime канала будет включён и готов, кнопка подключения появится автоматически.",
             _back_keyboard(ctx),
         )
         return
     public_base = str(
         getattr(settings, "MESSENGER_PUBLIC_BASE_URL", "") or ""
     ).strip().rstrip("/")
-    if not public_base.startswith("https://"):
-        await _safe_edit(
-            callback,
-            "Безопасное подключение временно недоступно: публичный HTTPS-адрес ClientPlatform не настроен.",
-            _back_keyboard(ctx),
-        )
-        return
     issued = await asyncio.to_thread(
         issue_native_messenger_setup,
         actor=ctx.actor,
@@ -815,18 +812,8 @@ async def _render_messenger_connect(
     setup_url = f"{public_base}/clientplatform/connect/{issued.token}"
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=f"🔐 Открыть подключение {label}",
-                    url=setup_url,
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="⬅️ Назад",
-                    callback_data=_callback(ctx, "messengers"),
-                )
-            ],
+            [InlineKeyboardButton(text=f"🔐 Открыть подключение {label}", url=setup_url)],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data=_callback(ctx, "messengers"))],
         ]
     )
     await _safe_edit(

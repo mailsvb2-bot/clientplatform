@@ -14,6 +14,7 @@ from aiogram.types import CallbackQuery, Chat, InlineKeyboardMarkup, Message, Us
 from clientplatform.application.admin_ops import PublicationCalendarProjection
 from clientplatform.domain.activity import BusinessProfileStatus, CapabilityStatus
 from clientplatform.domain.bookings import BookingSlotStatus
+from clientplatform.domain.connections import ConnectionPlatform
 from clientplatform.domain.tenancy import (
     PlatformRole,
     TenantContext,
@@ -97,6 +98,31 @@ def labels(markup: InlineKeyboardMarkup) -> list[str]:
 
 def callbacks(markup: InlineKeyboardMarkup) -> list[str | None]:
     return [button.callback_data for row in markup.inline_keyboard for button in row]
+
+
+def capability_projection(
+    *,
+    telegram: admin.CapabilityAvailability = admin.CapabilityAvailability.CONNECTABLE,
+    vk: admin.CapabilityAvailability = admin.CapabilityAvailability.UNAVAILABLE,
+    max_channel: admin.CapabilityAvailability = admin.CapabilityAvailability.UNAVAILABLE,
+):
+    states = {
+        ConnectionPlatform.TELEGRAM: telegram,
+        ConnectionPlatform.VK: vk,
+        ConnectionPlatform.MAX: max_channel,
+    }
+    items = tuple(
+        SimpleNamespace(
+            platform=platform,
+            availability=availability,
+            can_connect=availability == admin.CapabilityAvailability.CONNECTABLE,
+        )
+        for platform, availability in states.items()
+    )
+    return SimpleNamespace(
+        messengers=items,
+        messenger=lambda platform: next(item for item in items if item.platform == platform),
+    )
 
 
 def test_owner_menu_uses_five_human_groups_instead_of_26_buttons() -> None:
@@ -532,17 +558,11 @@ async def test_customer_behavior_messenger_and_format_screens_render(
     monkeypatch.setattr(admin, "list_business_capabilities", lambda **_kwargs: capabilities)
     monkeypatch.setattr(
         admin,
-        "business_connection_statuses",
-        lambda **_kwargs: [
-            (
-                SimpleNamespace(value="vk"),
-                SimpleNamespace(value="active"),
-            ),
-            (
-                SimpleNamespace(value="max"),
-                SimpleNamespace(value="attention"),
-            ),
-        ],
+        "get_business_capability_projection",
+        lambda **_kwargs: capability_projection(
+            vk=admin.CapabilityAvailability.ACTIVE,
+            max_channel=admin.CapabilityAvailability.ATTENTION,
+        ),
     )
     monkeypatch.setattr(
         admin,
@@ -598,7 +618,7 @@ async def test_customer_behavior_messenger_and_format_screens_render(
     assert "💬 Мессенджеры" in rendered
     assert "ВКонтакте: ✅ работает" in rendered
     assert "MAX: ⚠️ требует внимания" in rendered
-    assert "Telegram: не подключён" in rendered
+    assert "Telegram: ○ можно подключить" in rendered
     assert "🧩 Форматы работы" in rendered
 
 
@@ -867,7 +887,15 @@ async def test_messenger_owner_gets_secure_telegram_vk_max_setup_links(
     capture_edits: list[tuple[str, InlineKeyboardMarkup]],
 ) -> None:
     monkeypatch.setenv("CLIENTPLATFORM_OMNICHANNEL_INGRESS_ENABLED", "1")
-    monkeypatch.setattr(admin, "business_connection_statuses", lambda **_kwargs: [])
+    monkeypatch.setattr(
+        admin,
+        "get_business_capability_projection",
+        lambda **_kwargs: capability_projection(
+            telegram=admin.CapabilityAvailability.CONNECTABLE,
+            vk=admin.CapabilityAvailability.CONNECTABLE,
+            max_channel=admin.CapabilityAvailability.CONNECTABLE,
+        ),
+    )
     monkeypatch.setattr(
         admin,
         "issue_native_messenger_setup",
@@ -914,7 +942,15 @@ async def test_messenger_setup_actions_are_hidden_when_omnichannel_ingress_is_of
     capture_edits: list[tuple[str, InlineKeyboardMarkup]],
 ) -> None:
     monkeypatch.setenv("CLIENTPLATFORM_OMNICHANNEL_INGRESS_ENABLED", "0")
-    monkeypatch.setattr(admin, "business_connection_statuses", lambda **_kwargs: [])
+    monkeypatch.setattr(
+        admin,
+        "get_business_capability_projection",
+        lambda **_kwargs: capability_projection(
+            telegram=admin.CapabilityAvailability.UNAVAILABLE,
+            vk=admin.CapabilityAvailability.UNAVAILABLE,
+            max_channel=admin.CapabilityAvailability.UNAVAILABLE,
+        ),
+    )
     issued: list[object] = []
     monkeypatch.setattr(
         admin,
@@ -941,7 +977,7 @@ async def test_messenger_setup_actions_are_hidden_when_omnichannel_ingress_is_of
         "vk",
     )
     text, _markup = capture_edits[-1]
-    assert "временно недоступно" in text
+    assert "сейчас нельзя подключить" in text
     assert issued == []
 
 
@@ -950,7 +986,15 @@ async def test_support_can_view_messengers_but_cannot_create_setup_link(
     monkeypatch: pytest.MonkeyPatch,
     capture_edits: list[tuple[str, InlineKeyboardMarkup]],
 ) -> None:
-    monkeypatch.setattr(admin, "business_connection_statuses", lambda **_kwargs: [])
+    monkeypatch.setattr(
+        admin,
+        "get_business_capability_projection",
+        lambda **_kwargs: capability_projection(
+            telegram=admin.CapabilityAvailability.CONNECTABLE,
+            vk=admin.CapabilityAvailability.CONNECTABLE,
+            max_channel=admin.CapabilityAvailability.CONNECTABLE,
+        ),
+    )
     ctx = admin_context(PlatformRole.SUPPORT)
     await admin._render_messengers(telegram_callback(), fsm_context(), ctx)
     visible = set(labels(capture_edits[-1][1]))
