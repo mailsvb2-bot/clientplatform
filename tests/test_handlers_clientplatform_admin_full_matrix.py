@@ -359,6 +359,7 @@ def render_contract(monkeypatch: pytest.MonkeyPatch):
     )
     monkeypatch.setattr(extension.admin_ops, "list_offering_prices", lambda **_kwargs: [])
     monkeypatch.setattr(extension.admin_ops, "interaction_snapshot", lambda **_kwargs: interaction)
+    monkeypatch.setattr(extension.admin_ops, "get_autopilot_enabled", lambda **_kwargs: False)
     monkeypatch.setattr(extension.admin_ops, "get_admin_setting", lambda **_kwargs: "false")
     monkeypatch.setattr(extension.admin_ops, "recent_audit_events", lambda **_kwargs: [])
     monkeypatch.setattr(extension.admin_ops, "refresh_interaction_alerts", lambda **_kwargs: [])
