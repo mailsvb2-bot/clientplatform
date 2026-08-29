@@ -73,11 +73,11 @@ def _currency(value: object, name: str = "currency") -> str:
 
 
 def _minor(value: object, name: str, *, zero: bool = False) -> int:
-    if isinstance(value, (bool, float)):
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
         raise ValueError(f"{name} must use integer minor units")
     try:
         normalized = int(value)
-    except (TypeError, ValueError) as exc:
+    except ValueError as exc:
         raise ValueError(f"{name} must use integer minor units") from exc
     if normalized < (0 if zero else 1) or normalized > 9_000_000_000_000_000:
         raise ValueError(f"{name} is outside the supported range")
