@@ -1,3 +1,19 @@
+from clientplatform.domain.automation_policy import (
+    AutomationApprovalThreshold,
+    AutomationCandidateAction,
+    AutomationMode,
+    AutomationMoneyLimit,
+    AutomationPolicy,
+    AutomationPolicyConflict,
+    AutomationPolicyInvariantViolation,
+    AutomationPolicyNotFound,
+    AutomationPolicySpec,
+    AutomationPolicyStatus,
+    AutomationSchedule,
+    PolicyCheck,
+    PolicyDecision,
+    evaluate_automation_policy,
+)
 from clientplatform.domain.connections import (
     ClaimedDispatch,
     Connection,
@@ -63,6 +79,20 @@ from clientplatform.domain.tenancy import (
 )
 
 __all__ = [
+    "AutomationApprovalThreshold",
+    "AutomationCandidateAction",
+    "AutomationMode",
+    "AutomationMoneyLimit",
+    "AutomationPolicy",
+    "AutomationPolicyConflict",
+    "AutomationPolicyInvariantViolation",
+    "AutomationPolicyNotFound",
+    "AutomationPolicySpec",
+    "AutomationPolicyStatus",
+    "AutomationSchedule",
+    "PolicyCheck",
+    "PolicyDecision",
+    "evaluate_automation_policy",
     "Business",
     "BusinessAccess",
     "BusinessMember",

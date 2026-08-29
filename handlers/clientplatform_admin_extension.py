@@ -25,7 +25,7 @@ from clientplatform.application import admin_ops
 from clientplatform.application.activity import get_business_profile, list_business_offerings
 from clientplatform.application.customers import list_customers
 from clientplatform.domain.activity import CapabilityStatus
-from clientplatform.domain.tenancy import TenantPermissionDenied, TenancyError
+from clientplatform.domain.tenancy import PlatformRole, TenantPermissionDenied, TenancyError
 from clientplatform.runtime import admin_observability
 from core.telegram_multi_egress import (
     install_multi_egress_bot,
@@ -310,7 +310,7 @@ async def _enhanced_marketing(
         publications,
         prices,
         interaction,
-        autopilot_value,
+        autopilot_enabled,
     ) = await asyncio.gather(
         admin._base_snapshot(ctx),
         _optional_thread(
@@ -349,11 +349,9 @@ async def _enhanced_marketing(
             window_minutes=60,
         ),
         _optional_thread(
-            admin_ops.get_admin_setting,
-            default="false",
-            forward_default=True,
+            admin_ops.get_autopilot_enabled,
+            default=False,
             actor=ctx.actor,
-            key="autopilot_enabled",
         ),
     )
     profile, summary, capabilities, slots, customers, programs, progress = base_snapshot
@@ -381,7 +379,7 @@ async def _enhanced_marketing(
     scheduled_publications = [
         item for item in publications.entries if item.status == "scheduled"
     ]
-    enabled = autopilot_value.strip().lower() in {"1", "true", "yes", "on"}
+    enabled = bool(autopilot_enabled)
 
     if action == "autopilot":
         text = (
@@ -393,14 +391,20 @@ async def _enhanced_marketing(
             f"Ожидают отправки: {summary.dispatch_pending}\n"
             f"Ошибки отправки: {summary.dispatch_attention}\n\n"
             "Автопилот использует только существующие программы, "
-            "подтверждённые клиентские связи и разрешённые отправки."
+            "подтверждённые клиентские связи и разрешённые отправки.\n"
+            "Политика задаёт и проверяет границы автоматизации. "
+            "Внешние действия пока не выполняются автоматически."
         )
-        extra = [
-            (
-                "⏸ Выключить" if enabled else "▶️ Включить",
-                _ops_callback(ctx, "autopilot-toggle"),
+        extra = []
+        if ctx.role == PlatformRole.OWNER:
+            extra.append(
+                (
+                    "⏸ Выключить" if enabled else "▶️ Включить",
+                    _ops_callback(ctx, "autopilot-toggle"),
+                )
             )
-        ]
+        else:
+            text += "\n\nИзменить режим может только владелец бизнеса."
     elif action == "publications":
         recent = "\n".join(
             admin_ops.format_publication_calendar_lines(
@@ -891,6 +895,12 @@ async def admin_ops_gate(callback: CallbackQuery, state: FSMContext) -> None:
             raise TenantPermissionDenied(
                 "automation controls are not allowed for this business role"
             )
+        if ctx.role != PlatformRole.OWNER:
+            await callback.answer(
+                "Изменить effective AutomationPolicy может только владелец бизнеса.",
+                show_alert=True,
+            )
+            return
         await asyncio.to_thread(admin_ops.toggle_autopilot, actor=ctx.actor)
         await asyncio.to_thread(
             admin_ops.refresh_interaction_alerts,
