@@ -51,6 +51,39 @@ class PolicyDecision(StrEnum):
     ALLOW = "allow"
 
 
+@dataclass(frozen=True, slots=True)
+class AutomationActionSemantics:
+    action: str
+    external_write: bool
+    money_bearing: bool = False
+
+
+_ACTION_SEMANTICS = {
+    "growth.read_only_analysis": AutomationActionSemantics(
+        action="growth.read_only_analysis",
+        external_write=False,
+    ),
+    "ads.adjust_budget": AutomationActionSemantics(
+        action="ads.adjust_budget",
+        external_write=True,
+        money_bearing=True,
+    ),
+    "sales.followup": AutomationActionSemantics(
+        action="sales.followup",
+        external_write=True,
+    ),
+    "payments.refund": AutomationActionSemantics(
+        action="payments.refund",
+        external_write=True,
+        money_bearing=True,
+    ),
+}
+
+
+def automation_action_semantics(action: object) -> AutomationActionSemantics | None:
+    return _ACTION_SEMANTICS.get(_token(action, "action"))
+
+
 def _token(value: object, name: str) -> str:
     normalized = str(value or "").strip().lower().replace(" ", "_")
     if not _TOKEN_RE.fullmatch(normalized):
@@ -491,15 +524,25 @@ def evaluate_automation_policy(
         violations.append("policy_not_effective")
 
     spec = policy.spec
+    semantics = automation_action_semantics(candidate.action)
+    if semantics is None:
+        violations.append("action_semantics_unknown")
+        effective_external_write = True
+        money_bearing = True
+    else:
+        effective_external_write = semantics.external_write
+        money_bearing = semantics.money_bearing
+        if candidate.external_write != semantics.external_write:
+            violations.append("action_semantics_mismatch")
     if candidate.action in spec.forbidden_actions:
         violations.append("action_forbidden")
     if candidate.action not in spec.allowed_actions:
         violations.append("action_not_explicitly_allowed")
-    if candidate.external_write and candidate.channel is None:
+    if effective_external_write and candidate.channel is None:
         violations.append("external_channel_required")
     elif candidate.channel is not None and candidate.channel not in spec.allowed_channels:
         violations.append("channel_not_allowed")
-    if candidate.external_write and candidate.audience is None:
+    if effective_external_write and candidate.audience is None:
         violations.append("external_audience_required")
     elif candidate.audience is not None and candidate.audience not in spec.allowed_audiences:
         violations.append("audience_not_allowed")
@@ -517,8 +560,10 @@ def evaluate_automation_policy(
         violations.append("forbidden_claim")
 
     action_money_limits = tuple(item for item in spec.money_limits if item.action == candidate.action)
-    if action_money_limits and candidate.amount_minor is None:
+    if money_bearing and candidate.amount_minor is None:
         violations.append("money_evidence_required")
+    if money_bearing and not action_money_limits:
+        violations.append("money_limit_missing")
     if candidate.amount_minor is not None:
         money_limit = next(
             (item for item in action_money_limits if item.currency == candidate.currency),
@@ -543,7 +588,7 @@ def evaluate_automation_policy(
         elif candidate.ai_usage_minor > spec.ai_usage_limit_minor:
             violations.append("ai_usage_limit_exceeded")
 
-    if candidate.external_write and spec.mode == AutomationMode.CAUTIOUS:
+    if effective_external_write and spec.mode == AutomationMode.CAUTIOUS:
         approvals.append("cautious_mode_external_write")
     if candidate.action in spec.approval_required_actions:
         approvals.append("action_requires_approval")
@@ -578,6 +623,7 @@ def evaluate_automation_policy(
 
 
 __all__ = [
+    "AutomationActionSemantics",
     "AutomationApprovalThreshold",
     "AutomationCandidateAction",
     "AutomationMode",
@@ -592,5 +638,6 @@ __all__ = [
     "AutomationSchedule",
     "PolicyCheck",
     "PolicyDecision",
+    "automation_action_semantics",
     "evaluate_automation_policy",
 ]

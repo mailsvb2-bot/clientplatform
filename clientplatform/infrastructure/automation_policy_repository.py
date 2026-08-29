@@ -5,6 +5,7 @@ from typing import Any
 from uuid import uuid4
 
 from clientplatform.domain.automation_policy import (
+    AutomationMode,
     AutomationPolicy,
     AutomationPolicyConflict,
     AutomationPolicyNotFound,
@@ -190,6 +191,45 @@ class AutomationPolicyRepository:
             if policy.is_effective(now=timestamp):
                 return policy
         return None
+
+    def autopilot_enabled_projection(
+        self,
+        *,
+        actor: TenantContext,
+        now: datetime | str | None = None,
+    ) -> bool:
+        """Read-only compatibility projection for the pre-M5 Growth toggle.
+
+        A legacy `autopilot_enabled=true` may keep the existing recommendation UX
+        enabled only while this business has never written an AutomationPolicy.
+        It is deliberately *not* an effective policy and can never authorize an
+        action through `effective()` / PolicyCheck. The first policy write makes
+        the canonical ledger authoritative forever for this business.
+        """
+
+        current = self._current(actor)
+        effective = self.effective(actor=current, now=now)
+        if effective is not None:
+            return effective.spec.mode == AutomationMode.AUTOPILOT
+        if self.latest(actor=current) is not None:
+            return False
+        row = self._conn.execute(
+            """
+            SELECT setting_value
+            FROM business_admin_settings
+            WHERE business_id=? AND setting_key='autopilot_enabled'
+            LIMIT 1
+            """,
+            (current.business_id,),
+        ).fetchone()
+        if row is None:
+            return False
+        return str(_value(row, "setting_value", 0) or "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
 
     def approve(
         self,

@@ -16,7 +16,6 @@ from clientplatform.application.automation_policy import (
     is_owner_autopilot_enabled,
     toggle_owner_autopilot,
 )
-from clientplatform.domain.automation_policy import AutomationMode
 from clientplatform.domain.money import normalize_settlement_currency
 from clientplatform.domain.outcomes import (
     BusinessOutcomeEvent,
@@ -2403,13 +2402,9 @@ def refresh_interaction_alerts(
     timestamp = _utc_now()
     with get_db() as conn:
         current = _resolve(conn, actor, allowed_roles=_OBSERVABILITY_ROLES)
-        automation_policy = AutomationPolicyRepository(conn).effective(
+        autopilot_enabled = AutomationPolicyRepository(conn).autopilot_enabled_projection(
             actor=current,
             now=timestamp,
-        )
-        autopilot_enabled = bool(
-            automation_policy is not None
-            and automation_policy.spec.mode == AutomationMode.AUTOPILOT
         )
         if autopilot_enabled:
             operations = {

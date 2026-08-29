@@ -195,6 +195,70 @@ class AutomationPolicyDomainTests(unittest.TestCase):
             evaluate_automation_policy(policy=policy, candidate=missing_amount, now=_NOW).violations,
         )
 
+    def test_action_semantics_cannot_be_downgraded_by_candidate_payload(self) -> None:
+        policy = _policy()
+        missing_policy_limit = replace(policy.spec, money_limits=())
+        unsafe_policy = replace(
+            policy,
+            spec=missing_policy_limit,
+            policy_hash=missing_policy_limit.policy_hash,
+        )
+        understated_budget = AutomationCandidateAction(
+            business_id=policy.business_id,
+            action="ads.adjust_budget",
+            external_write=False,
+            scheduled_at=_NOW,
+        )
+        check = evaluate_automation_policy(
+            policy=unsafe_policy,
+            candidate=understated_budget,
+            now=_NOW,
+        )
+        self.assertEqual(PolicyDecision.DENY, check.decision)
+        self.assertIn("action_semantics_mismatch", check.violations)
+        self.assertIn("external_channel_required", check.violations)
+        self.assertIn("external_audience_required", check.violations)
+        self.assertIn("money_evidence_required", check.violations)
+        self.assertIn("money_limit_missing", check.violations)
+
+        understated_followup = AutomationCandidateAction(
+            business_id=policy.business_id,
+            action="sales.followup",
+            external_write=False,
+            scheduled_at=_NOW,
+        )
+        followup = evaluate_automation_policy(
+            policy=policy,
+            candidate=understated_followup,
+            now=_NOW,
+        )
+        self.assertEqual(PolicyDecision.DENY, followup.decision)
+        self.assertIn("action_semantics_mismatch", followup.violations)
+        self.assertIn("external_channel_required", followup.violations)
+
+        unknown = AutomationCandidateAction(
+            business_id=policy.business_id,
+            action="custom.unclassified_write",
+            external_write=False,
+            scheduled_at=_NOW,
+        )
+        unknown_check = evaluate_automation_policy(
+            policy=replace(
+                policy,
+                spec=replace(
+                    policy.spec,
+                    allowed_actions=(*policy.spec.allowed_actions, "custom.unclassified_write"),
+                ),
+                policy_hash=replace(
+                    policy.spec,
+                    allowed_actions=(*policy.spec.allowed_actions, "custom.unclassified_write"),
+                ).policy_hash,
+            ),
+            candidate=unknown,
+            now=_NOW,
+        )
+        self.assertIn("action_semantics_unknown", unknown_check.violations)
+
     def test_channel_audience_quiet_hours_claims_and_stop_conditions_are_enforced(self) -> None:
         policy = _policy()
         candidate = AutomationCandidateAction(
@@ -422,6 +486,63 @@ class AutomationPolicyRepositoryTests(unittest.TestCase):
                 now=_NOW + timedelta(minutes=1),
             )
             self.assertEqual(AutomationMode.CAUTIOUS, disabled.spec.mode)  # type: ignore[union-attr]
+
+    def test_legacy_enabled_state_is_preserved_without_becoming_action_authority(self) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO business_admin_settings(
+                business_id, setting_key, setting_value, updated_by_member_id,
+                created_at, updated_at
+            ) VALUES(?, 'autopilot_enabled', 'true', ?, ?, ?)
+            """,
+            (
+                self.owner.business_id,
+                self.owner.membership_id,
+                _NOW.isoformat(),
+                _NOW.isoformat(),
+            ),
+        )
+        self.conn.commit()
+        repo = AutomationPolicyRepository(self.conn)
+        self.assertTrue(repo.autopilot_enabled_projection(actor=self.owner, now=_NOW))
+        self.assertIsNone(repo.effective(actor=self.owner, now=_NOW))
+
+        candidate = AutomationCandidateAction(
+            business_id=self.owner.business_id,
+            action="growth.read_only_analysis",
+            external_write=False,
+            scheduled_at=_NOW,
+        )
+        with (
+            patch.object(application, "get_db", side_effect=lambda: _same_db(self.conn)),
+            patch.object(application, "get_db_ro", side_effect=lambda: _same_db(self.conn)),
+        ):
+            self.assertTrue(application.is_owner_autopilot_enabled(actor=self.owner, now=_NOW))
+            with self.assertRaises(AutomationPolicyNotFound):
+                application.check_automation_action(actor=self.owner, candidate=candidate, now=_NOW)
+            enabled = application.toggle_owner_autopilot(
+                actor=self.owner,
+                now=_NOW + timedelta(minutes=1),
+            )
+            self.assertFalse(enabled)
+            policy = application.get_effective_automation_policy(
+                actor=self.owner,
+                now=_NOW + timedelta(minutes=1),
+            )
+            self.assertEqual(AutomationMode.CAUTIOUS, policy.spec.mode)  # type: ignore[union-attr]
+            self.assertFalse(application.is_owner_autopilot_enabled(
+                actor=self.owner,
+                now=_NOW + timedelta(minutes=1),
+            ))
+
+        self.assertEqual(
+            "true",
+            self.conn.execute(
+                "SELECT setting_value FROM business_admin_settings "
+                "WHERE business_id=? AND setting_key='autopilot_enabled'",
+                (self.owner.business_id,),
+            ).fetchone()[0],
+        )
 
     def test_non_owner_cannot_turn_on_autopilot_policy(self) -> None:
         with patch.object(application, "get_db", side_effect=lambda: _same_db(self.conn)):

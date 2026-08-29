@@ -1,4 +1,5 @@
 from clientplatform.domain.automation_policy import (
+    AutomationActionSemantics,
     AutomationApprovalThreshold,
     AutomationCandidateAction,
     AutomationMode,
@@ -12,6 +13,7 @@ from clientplatform.domain.automation_policy import (
     AutomationSchedule,
     PolicyCheck,
     PolicyDecision,
+    automation_action_semantics,
     evaluate_automation_policy,
 )
 from clientplatform.domain.connections import (
@@ -79,6 +81,7 @@ from clientplatform.domain.tenancy import (
 )
 
 __all__ = [
+    "AutomationActionSemantics",
     "AutomationApprovalThreshold",
     "AutomationCandidateAction",
     "AutomationMode",
@@ -92,6 +95,7 @@ __all__ = [
     "AutomationSchedule",
     "PolicyCheck",
     "PolicyDecision",
+    "automation_action_semantics",
     "evaluate_automation_policy",
     "Business",
     "BusinessAccess",

@@ -170,8 +170,7 @@ def toggle_owner_autopilot(
     actor: TenantContext,
     now: datetime | None = None,
 ) -> bool:
-    current = get_effective_automation_policy(actor=actor, now=now)
-    enabled = current is None or current.spec.mode != AutomationMode.AUTOPILOT
+    enabled = not is_owner_autopilot_enabled(actor=actor, now=now)
     set_owner_autopilot_enabled(actor=actor, enabled=enabled, now=now)
     return enabled
 
@@ -181,8 +180,11 @@ def is_owner_autopilot_enabled(
     actor: TenantContext,
     now: datetime | str | None = None,
 ) -> bool:
-    policy = get_effective_automation_policy(actor=actor, now=now)
-    return policy is not None and policy.spec.mode == AutomationMode.AUTOPILOT
+    with get_db_ro() as conn:
+        return AutomationPolicyRepository(conn).autopilot_enabled_projection(
+            actor=actor,
+            now=_now(now),
+        )
 
 
 __all__ = [
