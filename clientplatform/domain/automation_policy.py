@@ -800,8 +800,8 @@ def build_pending_automation_action_approval(
         approval_reasons=policy_check.approval_reasons,
         status=AutomationApprovalStatus.PENDING,
         requested_by_member_id=requested_by_member_id,
-        requested_at=requested_at,
-        expires_at=request_payload["expires_at"],
+        requested_at=_timestamp(requested_at, "requested_at"),
+        expires_at=str(request_payload["expires_at"]),
     )
 
 
@@ -821,7 +821,18 @@ def build_automation_action_authorization(approval: AutomationActionApproval) ->
         "approved_at": approval.decided_at,
         "expires_at": approval.expires_at,
     }
-    return AutomationActionAuthorization(authorization_hash=_stable_hash(payload), **payload)
+    return AutomationActionAuthorization(
+        approval_id=approval.id,
+        business_id=approval.business_id,
+        candidate_hash=approval.candidate_hash,
+        policy_id=approval.policy_id,
+        policy_version=approval.policy_version,
+        policy_hash=approval.policy_hash,
+        approved_by_member_id=approval.decided_by_member_id,
+        approved_at=approval.decided_at,
+        expires_at=approval.expires_at,
+        authorization_hash=_stable_hash(payload),
+    )
 
 
 def evaluate_automation_policy(
