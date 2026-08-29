@@ -5,6 +5,7 @@ from typing import Any
 
 import pytest
 
+from clientplatform.domain.automation_policy import AutomationApprovalConflict
 from clientplatform.domain.tenancy import (
     PlatformRole,
     TenantPermissionDenied,
@@ -298,6 +299,72 @@ async def test_admin_ops_gate_autopilot_and_alert_routes(
     ctx.role = "operator"
     await extension.admin_ops_gate(_callback("alerts-refresh"), FakeState())
     assert calls == ["refresh", "attention"]
+
+
+@pytest.mark.asyncio
+async def test_admin_ops_gate_automation_action_decisions(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_admin: FakeAdmin,
+    ctx: Any,
+) -> None:
+    calls: list[str] = []
+
+    async def marketing(_callback: Any, _state: Any, _ctx: Any, action: str) -> None:
+        calls.append(f"marketing:{action}")
+
+    monkeypatch.setattr(extension, "_enhanced_marketing", marketing)
+    monkeypatch.setattr(
+        extension.admin_ops,
+        "approve_pending_automation_action",
+        lambda **kwargs: calls.append(f"approve:{kwargs['approval_id']}"),
+    )
+    monkeypatch.setattr(
+        extension.admin_ops,
+        "reject_pending_automation_action",
+        lambda **kwargs: calls.append(f"reject:{kwargs['approval_id']}"),
+    )
+    monkeypatch.setattr(
+        extension.admin_ops,
+        "revoke_approved_automation_action",
+        lambda **kwargs: calls.append(f"revoke:{kwargs['approval_id']}"),
+    )
+
+    for token, prefix, message in (
+        ("aa", "approve", "Действие разрешено"),
+        ("ar", "reject", "Действие отклонено"),
+        ("av", "revoke", "Разрешение отозвано"),
+    ):
+        calls.clear()
+        callback = _callback(token, "approval")
+        await extension.admin_ops_gate(callback, FakeState())
+        assert calls == [f"{prefix}:uuid:approval", "marketing:autopilot"]
+        assert callback.answers and callback.answers[0][0].startswith(message)
+
+    calls.clear()
+    ctx.role = PlatformRole.ADMINISTRATOR
+    non_owner = _callback("aa", "approval")
+    await extension.admin_ops_gate(non_owner, FakeState())
+    assert non_owner.answers == [
+        ("Решение по автоматическому действию может принять только владелец бизнеса.", True)
+    ]
+    assert calls == []
+
+    ctx.role = PlatformRole.OWNER
+    malformed = _callback("aa")
+    await extension.admin_ops_gate(malformed, FakeState())
+    assert malformed.answers == [("Кнопка устарела", True)]
+
+    def stale(**_kwargs: Any) -> None:
+        raise AutomationApprovalConflict("automation_action_policy_changed")
+
+    monkeypatch.setattr(extension.admin_ops, "approve_pending_automation_action", stale)
+    calls.clear()
+    stale_callback = _callback("aa", "approval")
+    await extension.admin_ops_gate(stale_callback, FakeState())
+    assert stale_callback.answers == [
+        ("Это решение уже изменилось или устарело. Экран обновлён без выполнения действия.", True)
+    ]
+    assert calls == ["marketing:autopilot"]
 
 
 @pytest.mark.asyncio

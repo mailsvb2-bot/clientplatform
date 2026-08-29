@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 TenantDisposition = Literal["erase", "retain", "anonymize"]
-CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-08-29.v37-automation-policy-foundation"
+CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-08-29.v38-automation-action-approval"
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,6 +37,7 @@ _POLICIES = (
     _required("business_offerings", "retain", "business-owned consultation, service and custom offerings"),
     _required("business_admin_settings", "retain", "business-owned administrator configuration and legacy compatibility settings"),
     _required("clientplatform_automation_policies", "retain", "versioned business-owned automation limits and owner approval evidence"),
+    _required("clientplatform_automation_action_approvals", "retain", "immutable business-owned automation action intent, policy binding and owner decision evidence"),
     _required("business_offering_prices", "retain", "business-owned offering prices and commercial configuration"),
     _required("business_publications", "retain", "business-owned publication drafts, schedules and delivery state"),
     _required("business_subscription_state", "retain", "business subscription plan, limits and renewal state"),

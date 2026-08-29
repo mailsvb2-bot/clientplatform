@@ -360,6 +360,7 @@ def render_contract(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(extension.admin_ops, "list_offering_prices", lambda **_kwargs: [])
     monkeypatch.setattr(extension.admin_ops, "interaction_snapshot", lambda **_kwargs: interaction)
     monkeypatch.setattr(extension.admin_ops, "get_autopilot_enabled", lambda **_kwargs: False)
+    monkeypatch.setattr(extension.admin_ops, "get_current_automation_action_approvals", lambda **_kwargs: ())
     monkeypatch.setattr(extension.admin_ops, "get_admin_setting", lambda **_kwargs: "false")
     monkeypatch.setattr(extension.admin_ops, "recent_audit_events", lambda **_kwargs: [])
     monkeypatch.setattr(extension.admin_ops, "refresh_interaction_alerts", lambda **_kwargs: [])
@@ -394,6 +395,63 @@ async def test_autopilot_screen_is_read_only_for_non_owner_role(
     assert "▶️ Включить" not in labels
     assert "⏸ Выключить" not in labels
 
+
+
+@pytest.mark.asyncio
+async def test_autopilot_screen_renders_owner_action_approval_controls(
+    render_contract: list[tuple[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pending = SimpleNamespace(
+        id="00000000-0000-0000-0000-000000000201",
+        status=SimpleNamespace(value="pending"),
+        requested_at="2026-08-29T15:05:00+00:00",
+    )
+    approved = SimpleNamespace(
+        id="00000000-0000-0000-0000-000000000202",
+        status=SimpleNamespace(value="approved"),
+        requested_at="2026-08-29T15:00:00+00:00",
+    )
+    monkeypatch.setattr(
+        extension.admin_ops,
+        "get_current_automation_action_approvals",
+        lambda **_kwargs: (approved, pending),
+    )
+    monkeypatch.setattr(
+        extension.admin_ops,
+        "format_automation_action_approval",
+        lambda item, **_kwargs: (
+            "Нужно Ваше подтверждение: Отправить follow-up"
+            if item.status.value == "pending"
+            else "Разрешено владельцем · ещё не исполняется автоматически"
+        ),
+    )
+    state = FakeState({"cp_admin_section": "menu", "cp_admin_history": []})
+    await extension._enhanced_marketing(
+        SimpleNamespace(),  # type: ignore[arg-type]
+        state,  # type: ignore[arg-type]
+        _ctx(),
+        "autopilot",
+    )
+
+    text, markup = render_contract[-1]
+    assert "Решения, которые ждут владельца или могут быть отозваны" in text
+    assert "Нужно Ваше подтверждение" in text
+    assert "Разрешено владельцем" in text
+    labels = [button.text for row in markup.inline_keyboard for button in row]
+    assert "✅ Разрешить действие #1" in labels
+    assert "⛔ Отклонить действие #1" in labels
+    assert "↩️ Отозвать разрешение #2" in labels
+    callbacks = [
+        button.callback_data
+        for row in markup.inline_keyboard
+        for button in row
+        if button.callback_data is not None
+    ]
+    assert any(":aa:" in value for value in callbacks)
+    assert any(":ar:" in value for value in callbacks)
+    assert any(":av:" in value for value in callbacks)
+    assert all(len(value.encode("utf-8")) <= 64 for value in callbacks)
 
 
 @pytest.mark.asyncio
