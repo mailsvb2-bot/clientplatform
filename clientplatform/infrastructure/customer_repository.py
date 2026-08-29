@@ -187,6 +187,36 @@ class CustomerRepository:
             ).fetchall()
         return [_customer_from_row(row) for row in rows]
 
+    def list_customers_with_active_identity(
+        self,
+        *,
+        actor: TenantContext,
+        platform: CustomerPlatform | str,
+        limit: int = 100,
+    ) -> list[Customer]:
+        current = self._resolve_actor(actor, manage=False)
+        normalized_platform = (
+            platform
+            if isinstance(platform, CustomerPlatform)
+            else CustomerPlatform(str(platform).strip().lower())
+        )
+        normalized_limit = max(1, min(int(limit), 100))
+        rows = self._conn.execute(
+            """
+            SELECT DISTINCT c.id, c.business_id, c.display_name, c.status,
+                   c.created_by_member_id, c.created_at, c.updated_at, c.archived_at
+            FROM customers c
+            JOIN customer_identities ci
+              ON ci.customer_id=c.id AND ci.business_id=c.business_id
+             AND ci.status='active' AND ci.platform=?
+            WHERE c.business_id=? AND c.status='active'
+            ORDER BY c.created_at, c.id
+            LIMIT ?
+            """,
+            (normalized_platform.value, current.business_id, normalized_limit),
+        ).fetchall()
+        return [_customer_from_row(row) for row in rows]
+
     def attach_identity(
         self,
         *,

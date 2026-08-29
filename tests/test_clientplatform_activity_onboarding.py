@@ -9,6 +9,7 @@ from unittest.mock import patch
 from clientplatform.application.control import (
     business_connection_statuses,
     create_single_lesson_program,
+    prepare_native_program_delivery,
     prepare_program_delivery,
 )
 from clientplatform.domain.activity import (
@@ -355,6 +356,98 @@ class ClientPlatformActivityOnboardingTests(unittest.TestCase):
         self.assertEqual(prepared.connection.id, max_connection.id)
         self.assertEqual(prepared.dispatch.customer_identity_id, max_identity.id)
         self.assertEqual(prepared.dispatch.platform.value, "max")
+
+    def test_native_program_delivery_uses_exact_requested_platform(self) -> None:
+        customers = CustomerRepository(self.conn)
+        customer = customers.create_customer(actor=self.owner_a, display_name="VK и MAX")
+        vk_identity = customers.attach_identity(
+            actor=self.owner_a,
+            customer_id=customer.id,
+            platform="vk",
+            external_subject="880001",
+            now="2026-08-20T10:00:00+00:00",
+        )
+        customers.attach_identity(
+            actor=self.owner_a,
+            customer_id=customer.id,
+            platform="max",
+            external_subject="990001",
+            now="2026-08-20T12:00:00+00:00",
+        )
+        connections = ConnectionRepository(self.conn)
+        vk = connections.create_connection(
+            actor=self.owner_a,
+            platform="vk",
+            connection_type="vk_community",
+            external_account_id="441201",
+            credential_reference="secret://env/CLIENTPLATFORM_SECRET_TEST_NATIVE_VK",
+            permissions=("send_message",),
+        )
+        vk = connections.activate_connection(actor=self.owner_a, connection_id=vk.id)
+        max_connection = connections.create_connection(
+            actor=self.owner_a,
+            platform="max",
+            connection_type="max_personal_bot",
+            external_account_id="551201",
+            credential_reference="secret://env/CLIENTPLATFORM_SECRET_TEST_NATIVE_MAX",
+            permissions=("send_message",),
+        )
+        connections.activate_connection(
+            actor=self.owner_a, connection_id=max_connection.id
+        )
+
+        @contextmanager
+        def local_db():
+            yield self.conn
+
+        with patch("clientplatform.application.control.get_db", local_db):
+            program = create_single_lesson_program(
+                actor=self.owner_a,
+                program_title="Точный VK маршрут",
+                lesson_title="Шаг",
+                content_kind="text",
+                content_ref="VK",
+            )
+            prepared = prepare_native_program_delivery(
+                actor=self.owner_a,
+                program_id=program.program.id,
+                customer_id=customer.id,
+                platform="vk",
+            )
+
+        self.assertEqual(vk.id, prepared.connection.id)
+        self.assertEqual("vk", prepared.dispatch.platform.value)
+        self.assertEqual(vk_identity.id, prepared.dispatch.customer_identity_id)
+
+    def test_native_program_delivery_rejects_non_native_platform_before_enrollment(self) -> None:
+        customers = CustomerRepository(self.conn)
+        customer = customers.create_customer(actor=self.owner_a, display_name="Telegram")
+
+        @contextmanager
+        def local_db():
+            yield self.conn
+
+        with patch("clientplatform.application.control.get_db", local_db):
+            program = create_single_lesson_program(
+                actor=self.owner_a,
+                program_title="Не native",
+                lesson_title="Шаг",
+                content_kind="text",
+                content_ref="test",
+            )
+            with self.assertRaisesRegex(ValueError, "requires VK or MAX"):
+                prepare_native_program_delivery(
+                    actor=self.owner_a,
+                    program_id=program.program.id,
+                    customer_id=customer.id,
+                    platform="telegram",
+                )
+
+        row = self.conn.execute(
+            "SELECT COUNT(*) AS c FROM enrollments WHERE business_id=? AND customer_id=?",
+            (self.owner_a.business_id, customer.id),
+        ).fetchone()
+        self.assertEqual(0, int(row["c"]))
 
     def test_program_delivery_fails_before_enrollment_on_ambiguous_native_connection(self) -> None:
         customers = CustomerRepository(self.conn)

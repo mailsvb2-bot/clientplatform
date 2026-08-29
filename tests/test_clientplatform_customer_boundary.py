@@ -89,6 +89,49 @@ class ClientPlatformCustomerBoundaryTests(unittest.TestCase):
         self.assertEqual(resolved_a.customer.id, customer_a.id)
         self.assertEqual(resolved_b.customer.id, customer_b.id)
 
+    def test_active_identity_customer_list_is_platform_scoped_and_tenant_scoped(self) -> None:
+        vk_customer = self.customers.create_customer(
+            actor=self.owner_a,
+            display_name="Клиент VK",
+        )
+        max_customer = self.customers.create_customer(
+            actor=self.owner_a,
+            display_name="Клиент MAX",
+        )
+        other_business_vk = self.customers.create_customer(
+            actor=self.owner_b,
+            display_name="Чужой VK",
+        )
+        self.customers.attach_identity(
+            actor=self.owner_a,
+            customer_id=vk_customer.id,
+            platform="vk",
+            external_subject="700001",
+        )
+        self.customers.attach_identity(
+            actor=self.owner_a,
+            customer_id=max_customer.id,
+            platform="max",
+            external_subject="800001",
+        )
+        self.customers.attach_identity(
+            actor=self.owner_b,
+            customer_id=other_business_vk.id,
+            platform="vk",
+            external_subject="700002",
+        )
+
+        vk = self.customers.list_customers_with_active_identity(
+            actor=self.owner_a,
+            platform=CustomerPlatform.VK,
+        )
+        max_items = self.customers.list_customers_with_active_identity(
+            actor=self.owner_a,
+            platform="max",
+        )
+        self.assertEqual([vk_customer.id], [item.id for item in vk])
+        self.assertEqual([max_customer.id], [item.id for item in max_items])
+
     def test_cross_business_customer_lookup_is_denied(self) -> None:
         customer_b = self.customers.create_customer(
             actor=self.owner_b,
@@ -213,6 +256,11 @@ class ClientPlatformCustomerBoundaryTests(unittest.TestCase):
         )
         with self.assertRaises(TenantPermissionDenied):
             self.customers.list_customers(actor=marketer)
+        with self.assertRaises(TenantPermissionDenied):
+            self.customers.list_customers_with_active_identity(
+                actor=marketer,
+                platform="vk",
+            )
 
     def test_support_role_can_manage_customer_record(self) -> None:
         self.tenancy.grant_member(

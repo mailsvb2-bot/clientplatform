@@ -594,10 +594,15 @@ async def _enhanced_marketing(
             "3. Как проходит работа или программа.\n"
             "4. Один понятный следующий шаг."
         )
-        extra = [
-            ("✏️ Изменить деятельность", f"cp:editact:{ctx.business_token}"),
-            ("➕ Создать публикацию", _ops_callback(ctx, "publication-new")),
-        ]
+        extra = []
+        if ctx.role in admin._ADMIN_ROLES:
+            extra.append(
+                ("✏️ Изменить деятельность", f"cp:editact:{ctx.business_token}")
+            )
+        if _can_write_publications(ctx):
+            extra.append(
+                ("➕ Создать публикацию", _ops_callback(ctx, "publication-new"))
+            )
     elif action == "prices":
         lines = "\n".join(
             f"• {item.title[:36]} — "

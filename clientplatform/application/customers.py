@@ -47,6 +47,20 @@ def list_customers(
         )
 
 
+def list_customers_with_active_identity(
+    *,
+    actor: TenantContext,
+    platform: CustomerPlatform | str,
+    limit: int = 100,
+) -> list[Customer]:
+    with get_db_ro() as conn:
+        return CustomerRepository(conn).list_customers_with_active_identity(
+            actor=actor,
+            platform=platform,
+            limit=limit,
+        )
+
+
 def attach_customer_identity(
     *,
     actor: TenantContext,

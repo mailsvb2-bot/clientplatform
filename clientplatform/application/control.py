@@ -208,6 +208,74 @@ def _preferred_customer_delivery_route(
     )
 
 
+def prepare_native_program_delivery(
+    *,
+    actor: TenantContext,
+    program_id: str,
+    customer_id: str,
+    platform: ConnectionPlatform | str,
+) -> PreparedProgramDelivery:
+    """Enroll and dispatch through one exact active VK/MAX business connection."""
+
+    target = (
+        platform
+        if isinstance(platform, ConnectionPlatform)
+        else ConnectionPlatform(str(platform).strip().lower())
+    )
+    if target not in {ConnectionPlatform.VK, ConnectionPlatform.MAX}:
+        raise ValueError("native program delivery requires VK or MAX")
+    with get_db() as conn:
+        programs = ProgramRepository(conn)
+        customers = CustomerRepository(conn)
+        deliveries = DeliveryRepository(conn)
+        connections = ConnectionRepository(conn)
+        outbox = DispatchOutboxRepository(conn)
+
+        program = programs.get_program(actor=actor, program_id=program_id)
+        customer = customers.get_customer(actor=actor, customer_id=customer_id)
+        connection = _single_active_native_connection(
+            actor=actor,
+            platform=target,
+            repository=connections,
+        )
+        if connection is None:
+            raise ValueError(f"business has no active {target.value} connection")
+        customer_platform = CustomerPlatform(target.value)
+        identities = [
+            identity
+            for identity in customer.identities
+            if identity.platform == customer_platform
+            and identity.status == CustomerIdentityStatus.ACTIVE
+        ]
+        if len(identities) != 1:
+            raise ValueError(
+                f"customer must have exactly one active {target.value} identity"
+            )
+        enrollment = deliveries.enroll_customer(
+            actor=actor,
+            program_id=program.program.id,
+            customer_id=customer.customer.id,
+        )
+        pending = [
+            delivery
+            for delivery in enrollment.deliveries
+            if delivery.status.value in {"pending", "failed"}
+        ]
+        if not pending:
+            raise ValueError("program enrollment has no dispatchable lesson")
+        dispatch = outbox.materialize(
+            actor=actor,
+            logical_delivery_id=pending[0].id,
+            connection_id=connection.id,
+            customer_identity_id=identities[0].id,
+        )
+        return PreparedProgramDelivery(
+            program=program,
+            connection=connection,
+            dispatch=dispatch,
+        )
+
+
 def prepare_program_delivery(
     *,
     actor: TenantContext,
