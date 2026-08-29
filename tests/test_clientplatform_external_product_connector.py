@@ -16,7 +16,6 @@ from clientplatform.application.external_products import (
     verify_and_activate_external_product_connector,
     verify_external_product_signature,
 )
-from clientplatform.runtime.external_product_http import external_product_event_webhook
 from clientplatform.domain.attribution import AcquisitionSource
 from clientplatform.domain.external_products import (
     ExternalProductAcquisition,
@@ -512,6 +511,17 @@ class ClientPlatformExternalProductConnectorTests(unittest.TestCase):
 
 class ClientPlatformExternalProductHttpTests(unittest.IsolatedAsyncioTestCase):
     async def test_webhook_ingestion_is_offloaded_from_event_loop(self) -> None:
+        try:
+            from clientplatform.runtime.external_product_http import (
+                external_product_event_webhook,
+            )
+        except ModuleNotFoundError as exc:
+            if exc.name == "aiohttp":
+                self.skipTest(
+                    "aiohttp runtime dependency is not installed in dependency-light Canon"
+                )
+            raise
+
         request = SimpleNamespace(
             headers={},
             match_info={"connector_id": "connector-id"},
