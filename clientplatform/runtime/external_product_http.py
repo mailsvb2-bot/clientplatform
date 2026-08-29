@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from typing import Any
 
@@ -45,7 +46,8 @@ async def external_product_event_webhook(request: web.Request) -> web.Response:
     if len(body) > _MAX_BODY_BYTES:
         return _response(413, "body_too_large")
     try:
-        receipt = ingest_external_product_webhook(
+        receipt = await asyncio.to_thread(
+            ingest_external_product_webhook,
             connector_id=str(request.match_info.get("connector_id") or ""),
             timestamp_header=str(
                 request.headers.get("X-ClientPlatform-Timestamp") or ""

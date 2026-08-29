@@ -371,6 +371,37 @@ class ExternalProductRepository:
                 raise ExternalProductInvariantViolation(
                     "refund related_event_id must reference an accepted order_paid event"
                 )
+            if related.customer_id != customer_id:
+                raise ExternalProductInvariantViolation(
+                    "refund customer must match the referenced order_paid event"
+                )
+            payment_row = self._conn.execute(
+                """
+                SELECT customer_id,currency
+                FROM business_outcome_events
+                WHERE business_id=? AND id=? AND outcome_type='order_paid'
+                LIMIT 1
+                """,
+                (connector.business_id, related.outcome_event_id),
+            ).fetchone()
+            if payment_row is None:
+                raise ExternalProductInvariantViolation(
+                    "refund referenced payment outcome is unavailable"
+                )
+            payment_customer_id = _value(payment_row, "customer_id", 0)
+            payment_currency = _value(payment_row, "currency", 1)
+            if payment_customer_id is None or str(payment_customer_id) != customer_id:
+                raise ExternalProductInvariantViolation(
+                    "refund customer must match the referenced payment outcome"
+                )
+            if (
+                event.money is None
+                or payment_currency is None
+                or str(payment_currency) != event.money.currency
+            ):
+                raise ExternalProductInvariantViolation(
+                    "refund currency must match the referenced payment outcome"
+                )
             metadata["payment_outcome_event_id"] = related.outcome_event_id
 
         outcome = OutcomeRepository(self._conn).append(

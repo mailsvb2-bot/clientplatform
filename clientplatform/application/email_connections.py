@@ -54,13 +54,23 @@ def provision_email_smtp_connection(
             purpose="smtp_credentials",
             plaintext=credential.to_json(),
         )
-        return ConnectionRepository(conn).create_connection(
+        repository = ConnectionRepository(conn)
+        connection = repository.create_connection(
             actor=actor,
             platform=ConnectionPlatform.EMAIL,
             connection_type=ConnectionType.EMAIL_SMTP,
             external_account_id=sender,
             credential_reference=credential_reference,
             permissions=("send_email",),
+        )
+        connection = repository.replace_credential_reference(
+            actor=actor,
+            connection_id=connection.id,
+            credential_reference=credential_reference,
+        )
+        return repository.mark_connection_pending_for_reverification(
+            actor=actor,
+            connection_id=connection.id,
         )
 
 

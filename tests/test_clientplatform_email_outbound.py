@@ -3,9 +3,12 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 import unittest
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
+from unittest.mock import patch
 
+from clientplatform.application.email_connections import provision_email_smtp_connection
 from clientplatform.application.partner_scoring import score_partner
 from clientplatform.domain.email_outbound import EmailPayload, normalize_email_address
 from clientplatform.domain.tenancy import PlatformRole
@@ -34,6 +37,16 @@ from services.db.schema import (
     clientplatform_provider_dispatch,
     clientplatform_tenancy,
 )
+
+
+@contextmanager
+def _email_db_context(conn: sqlite3.Connection):
+    try:
+        yield conn
+        conn.commit()
+    except (sqlite3.Error, ValueError, RuntimeError):
+        conn.rollback()
+        raise
 
 
 class _FakeEmailClient:
@@ -153,6 +166,36 @@ class ClientPlatformEmailOutboundTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.fx.close()
+
+    def test_reprovisioned_smtp_credentials_force_fresh_probe(self) -> None:
+        self.assertEqual(self.fx.connection.status.value, "active")
+        with (
+            patch(
+                "clientplatform.application.email_connections.get_db",
+                side_effect=lambda: _email_db_context(self.fx.conn),
+            ),
+            patch(
+                "clientplatform.application.email_connections.ConnectionCredentialStore.put",
+                return_value=self.fx.connection.credential_reference,
+            ),
+        ):
+            connection = provision_email_smtp_connection(
+                actor=self.fx.actor,
+                sender_email="partners@example.test",
+                smtp_host="smtp.example.test",
+                smtp_port=465,
+                username="partners@example.test",
+                password="replacement-secret",
+                security="ssl",
+            )
+        self.assertEqual(connection.id, self.fx.connection.id)
+        self.assertEqual(connection.status.value, "pending")
+        row = self.fx.conn.execute(
+            "SELECT status,last_success_at FROM connections WHERE id=?",
+            (connection.id,),
+        ).fetchone()
+        self.assertEqual(row["status"], "pending")
+        self.assertIsNone(row["last_success_at"])
 
     def test_address_normalization_rejects_header_injection(self) -> None:
         self.assertEqual(normalize_email_address("Test@Example.ORG"), "test@example.org")

@@ -7,7 +7,8 @@ import sqlite3
 import unittest
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from clientplatform.application.external_products import (
     ingest_external_product_webhook,
@@ -15,6 +16,7 @@ from clientplatform.application.external_products import (
     verify_and_activate_external_product_connector,
     verify_external_product_signature,
 )
+from clientplatform.runtime.external_product_http import external_product_event_webhook
 from clientplatform.domain.attribution import AcquisitionSource
 from clientplatform.domain.external_products import (
     ExternalProductAcquisition,
@@ -370,6 +372,84 @@ class ClientPlatformExternalProductConnectorTests(unittest.TestCase):
         self.assertEqual(lead.customer_id, paid.customer_id)
         self.assertEqual(paid.customer_id, refund.customer_id)
 
+    def test_refund_rejects_customer_mismatch_with_referenced_payment(self) -> None:
+        paid = ExternalProductEvent(
+            external_event_id="pay-customer-a",
+            event_type=ExternalProductEventType.ORDER_PAID,
+            occurred_at=self.now,
+            customer_ref="customer-a",
+            money=OutcomeMoney(amount_minor=1200, currency="USD"),
+        )
+        self.fx.repo.ingest_event(
+            connector=self.fx.connector,
+            event=paid,
+            payload_fingerprint="2" * 64,
+            received_at=self.now,
+        )
+        refund = ExternalProductEvent(
+            external_event_id="refund-customer-b",
+            event_type=ExternalProductEventType.REFUND_RECORDED,
+            occurred_at=self.now + timedelta(minutes=1),
+            customer_ref="customer-b",
+            related_event_id="pay-customer-a",
+            money=OutcomeMoney(amount_minor=100, currency="USD"),
+        )
+        with self.assertRaisesRegex(
+            ExternalProductInvariantViolation,
+            "refund customer must match",
+        ):
+            self.fx.repo.ingest_event(
+                connector=self.fx.connector,
+                event=refund,
+                payload_fingerprint="3" * 64,
+                received_at=self.now + timedelta(minutes=1),
+            )
+
+    def test_refund_rejects_currency_mismatch_with_referenced_payment(self) -> None:
+        paid = ExternalProductEvent(
+            external_event_id="pay-usd",
+            event_type=ExternalProductEventType.ORDER_PAID,
+            occurred_at=self.now,
+            customer_ref="customer-a",
+            money=OutcomeMoney(amount_minor=1200, currency="USD"),
+        )
+        self.fx.repo.ingest_event(
+            connector=self.fx.connector,
+            event=paid,
+            payload_fingerprint="4" * 64,
+            received_at=self.now,
+        )
+        refund = ExternalProductEvent(
+            external_event_id="refund-eur",
+            event_type=ExternalProductEventType.REFUND_RECORDED,
+            occurred_at=self.now + timedelta(minutes=1),
+            customer_ref="customer-a",
+            related_event_id="pay-usd",
+            money=OutcomeMoney(amount_minor=100, currency="EUR"),
+        )
+        with self.assertRaisesRegex(
+            ExternalProductInvariantViolation,
+            "refund currency must match",
+        ):
+            self.fx.repo.ingest_event(
+                connector=self.fx.connector,
+                event=refund,
+                payload_fingerprint="5" * 64,
+                received_at=self.now + timedelta(minutes=1),
+            )
+
+    def test_external_acquisition_source_key_limit_matches_attribution_boundary(self) -> None:
+        acquisition = ExternalProductAcquisition(
+            source=AcquisitionSource.PARTNER,
+            source_key="x" * 200,
+        )
+        self.assertEqual(len(acquisition.source_key), 200)
+        with self.assertRaisesRegex(ValueError, "1..200"):
+            ExternalProductAcquisition(
+                source=AcquisitionSource.PARTNER,
+                source_key="x" * 201,
+            )
+
     def test_refund_must_reference_accepted_payment_event(self) -> None:
         event = ExternalProductEvent(
             external_event_id="refund-orphan",
@@ -428,6 +508,31 @@ class ClientPlatformExternalProductConnectorTests(unittest.TestCase):
             (self.fx.actor.business_id,),
         ).fetchone()[0]
         self.assertEqual(stored, 1)
+
+
+class ClientPlatformExternalProductHttpTests(unittest.IsolatedAsyncioTestCase):
+    async def test_webhook_ingestion_is_offloaded_from_event_loop(self) -> None:
+        request = SimpleNamespace(
+            headers={},
+            match_info={"connector_id": "connector-id"},
+            read=AsyncMock(return_value=b"{}"),
+        )
+        receipt = SimpleNamespace(
+            id="receipt-id",
+            external_event_id="event-id",
+            outcome_event_id="outcome-id",
+        )
+        offload = AsyncMock(return_value=receipt)
+        with patch(
+            "clientplatform.runtime.external_product_http.asyncio.to_thread",
+            new=offload,
+        ):
+            response = await external_product_event_webhook(request)
+        self.assertEqual(response.status, 200)
+        offload.assert_awaited_once()
+        self.assertEqual(offload.await_args.args[0].__name__, "ingest_external_product_webhook")
+        self.assertEqual(offload.await_args.kwargs["connector_id"], "connector-id")
+
 
 
 if __name__ == "__main__":

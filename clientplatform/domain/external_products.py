@@ -104,8 +104,8 @@ class ExternalProductAcquisition:
         if not isinstance(source, AcquisitionSource):
             source = AcquisitionSource(str(source).strip().lower())
         source_key = " ".join(str(self.source_key or "").replace("\x00", " ").split())
-        if not source_key or len(source_key) > 300:
-            raise ValueError("external acquisition source_key must be 1..300 characters")
+        if not source_key or len(source_key) > 200:
+            raise ValueError("external acquisition source_key must be 1..200 characters")
         object.__setattr__(self, "source", source)
         object.__setattr__(self, "source_key", source_key)
 
