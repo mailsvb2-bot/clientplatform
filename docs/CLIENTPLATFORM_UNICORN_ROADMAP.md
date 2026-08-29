@@ -1087,11 +1087,21 @@ owner who approved
 
 ## 10.2. Action lifecycle
 
-### M5-002 — `NEXT` — Canonical Action Approval Boundary
+### M5-002 — `DONE` — Canonical Action Approval Boundary
 
 Расширить тот же canonical automation contour следующим минимальным шагом после M5-001: сохранять tenant-scoped CandidateAction + PolicyCheck как immutable approval intent и давать OWNER возможность явно approve/reject действие, когда PolicyCheck требует подтверждение. Approval должен быть привязан к exact candidate fingerprint, AutomationPolicy id/version/hash и expiry, быть idempotent/restart-safe и fail-closed при stale/changed policy, cross-tenant доступе или повторном conflicting решении. Использовать существующий canonical audit contour и текущий owner admin surface; не создавать второй approval engine/store, отдельный scheduler или provider-specific automation brain.
 
 Минимальный DONE contract M5-002: read/list pending approvals + approve/reject/revoke, deterministic authorization artifact для последующего Execution slice, owner-only mutation и business-scoped read permissions, immutable audit/evidence, concurrency regression. **Execution, provider calls, autonomous scheduling и money movement в M5-002 не запускать.**
+
+### Evidence
+
+- PR #247 (`M5-002: add canonical action approval boundary`) squash-merged в `main` как `1cbee98d85131c0e6579e292e8413a5ae71b7613`; exact final PR head `6b985a35d73244bebcde56edcc4905efc19e2398`.
+- На exact final head все PR checks green: оба CI quality/static контура, Canon, User Scenario Matrix, AutomationPolicy/Ad Spend/payment/booking/bot/partner PostgreSQL concurrency, Production Isolation, Encrypted Backup, Managed Bot Gateway, Pre-deploy Release Gate и AI Review gate.
+- Два review finding закрыты fail-closed invariants и regressions: P1 требует для каждого external-write approval exact `subject_ref` + SHA-256 `payload_digest` в candidate/authorization и повторно сверяет их перед выдачей authorization; P2 приоритизирует pending approvals до LIMIT в repository и owner UI. Оба review thread resolved.
+- Focused M5 suite после review fixes: `33 tests OK`; финальный full coverage regression: `4172 passed, 7 skipped, 33 warnings`; coverage ratchets `75.02%` combined / `66.29%` branch при locked baseline `75.02%` / `66.29%`.
+- PostgreSQL AutomationPolicy concurrency подтверждает restart-safe/idempotent request replay и approve-vs-reject race; stale policy, expiry, cross-tenant и conflicting decisions остаются fail-closed.
+- M5-002 не выполняет provider calls, autonomous scheduling, external execution или money movement; production deploy намеренно не выполнялся.
+- Следующий исполнимый slice после M5-002 в roadmap пока не декомпозирован и не имеет статуса `QUEUED`; closure не изобретает M5-003/M6-001 без отдельной декомпозиции scope.
 
 Единый шаблон для важных автоматических действий:
 
@@ -1694,7 +1704,7 @@ Duplicate tap, retry, worker restart или uncertain provider response не д�
 | M4-007 Owner Publication Scheduling Controls | DONE | PR #241 squash-merge `1637bb565499ec1c3209fed07d5ef30ccefa0aba`; exact head `7e6f20a67a10a3932e9b51fa552243f48c0ce520`; all 15 PR workflows success; P1 native VK/MAX stale/no-op retry race fixed with canonical durable idempotency receipt; coverage 74.98% combined / 66.22% branch |
 | M4-008 Canonical Outbound Email + External Product Bridge | DONE | PR #243 squash-merge `64e96d13d2e33eede100646d937d45ba947c297f`; exact PR head `656672b20b2b4b3257629f7e70f3635e36d4f99b`; all 15 PR workflows success; focused 61 tests + full regression `4131 passed, 7 skipped`; coverage raised to 74.99% combined / 66.25% branch; production deploy intentionally not part of the slice |
 | M5-001 Canonical AutomationPolicy Foundation | DONE | PR #245 squash-merge `0c813605c23e1d8e6f1f5d4c7f85193a9b09a209`; exact head `536d8e35429c8695f110c09f345fd67303c39d85`; all 16 PR workflows success; 2 P1 review findings resolved; focused 14 tests + full coverage regression `4151 passed, 7 skipped`; coverage 75.00% combined / 66.26% branch; no autonomous execution and no production deploy |
-| M5-002 Canonical Action Approval Boundary | NEXT | persist exact CandidateAction + PolicyCheck approval intents in the canonical automation contour; owner-only approve/reject/revoke bound to policy hash/version with idempotency, concurrency and audit; no Execution/provider writes in this slice |
+| M5-002 Canonical Action Approval Boundary | DONE | PR #247 squash-merge `1cbee98d85131c0e6579e292e8413a5ae71b7613`; exact head `6b985a35d73244bebcde56edcc4905efc19e2398`; all final-head PR checks green; 2 review findings resolved; focused 33 tests + full regression `4172 passed, 7 skipped`; coverage locked at 75.02% combined / 66.29% branch; no provider execution or production deploy |
 
 ---
 
