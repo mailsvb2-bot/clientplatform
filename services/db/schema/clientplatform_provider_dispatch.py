@@ -54,7 +54,7 @@ def ensure(c: sqlite3.Connection) -> None:
             FOREIGN KEY(partner_candidate_id, business_id, partner_campaign_id)
                 REFERENCES partner_candidates(id, business_id, campaign_id)
                 ON DELETE CASCADE,
-            CHECK(platform IN ('telegram', 'vk', 'max')),
+            CHECK(platform IN ('telegram', 'vk', 'max', 'email')),
             CHECK(source_kind IN ('lesson_delivery', 'partner_outreach', 'sales_followup', 'customer_interaction', 'member_interaction')),
             CHECK(recipient_kind IN ('customer_identity', 'external_subject')),
             CHECK(payload_kind IN (
@@ -146,7 +146,7 @@ def ensure(c: sqlite3.Connection) -> None:
                 ON DELETE CASCADE,
             FOREIGN KEY(connection_id, business_id, platform)
                 REFERENCES connections(id, business_id, platform),
-            CHECK(platform IN ('telegram', 'vk', 'max')),
+            CHECK(platform IN ('telegram', 'vk', 'max', 'email')),
             CHECK(length(external_subject) > 0),
             CHECK(length(provider_event_key) > 0)
         )
@@ -156,5 +156,49 @@ def ensure(c: sqlite3.Connection) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_partner_reply_events_candidate
         ON partner_reply_events(business_id, campaign_id, candidate_id, occurred_at)
+        """
+    )
+
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS partner_outreach_approvals(
+            id TEXT PRIMARY KEY,
+            business_id TEXT NOT NULL,
+            campaign_id TEXT NOT NULL,
+            candidate_id TEXT NOT NULL,
+            connection_id TEXT NOT NULL,
+            dispatch_id TEXT NOT NULL,
+            platform TEXT NOT NULL,
+            recipient_fingerprint TEXT NOT NULL,
+            content_fingerprint TEXT NOT NULL,
+            approved_by_member_id TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'approved',
+            created_at TEXT NOT NULL,
+            consumed_at TEXT,
+            revoked_at TEXT,
+            UNIQUE(id, business_id),
+            UNIQUE(business_id, dispatch_id),
+            FOREIGN KEY(candidate_id, business_id, campaign_id)
+                REFERENCES partner_candidates(id, business_id, campaign_id)
+                ON DELETE CASCADE,
+            FOREIGN KEY(connection_id, business_id, platform)
+                REFERENCES connections(id, business_id, platform),
+            FOREIGN KEY(dispatch_id, business_id)
+                REFERENCES provider_dispatch_outbox(id, business_id) ON DELETE CASCADE,
+            FOREIGN KEY(approved_by_member_id, business_id)
+                REFERENCES business_members(id, business_id),
+            CHECK(platform='email'),
+            CHECK(length(recipient_fingerprint)=64),
+            CHECK(length(content_fingerprint)=64),
+            CHECK(status IN ('approved','consumed','revoked'))
+        )
+        """
+    )
+    c.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_partner_outreach_approvals_candidate
+        ON partner_outreach_approvals(
+            business_id, candidate_id, status, created_at
+        )
         """
     )

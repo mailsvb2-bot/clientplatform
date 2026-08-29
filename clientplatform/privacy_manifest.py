@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 TenantDisposition = Literal["erase", "retain", "anonymize"]
-CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-08-26.v34-payment-and-native-messaging"
+CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-08-28.v36-external-product-connector"
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,6 +57,9 @@ _POLICIES = (
     _required("partner_placements", "erase", "candidate-linked partner placement and publication evidence"),
     _required("partner_referral_events", "erase", "candidate-linked referral capability and attribution evidence"),
     _required("partner_reply_events", "erase", "partner inbound messages and authenticated provider reply evidence"),
+    _required("partner_outreach_approvals", "anonymize", "owner approval evidence for exact public-business-contact outreach while recipient/payload fingerprints remain non-reversible"),
+    _required("external_product_connectors", "retain", "business-owned external product integration and secret reference without raw secret material"),
+    _required("external_product_event_receipts", "erase", "customer-linked verified external product event evidence and bounded metadata"),
     _required("ad_connections", "erase", "personal advertising account identity and encrypted OAuth material"),
     _required("ad_oauth_sessions", "erase", "short-lived one-time OAuth state and encrypted PKCE verifier"),
     _required("ad_managed_campaigns", "retain", "business-owned provider campaign binding and provisioning lifecycle without customer identity or credential material"),
@@ -76,7 +79,7 @@ _POLICIES = (
     _required("lesson_deliveries", "anonymize", "customer delivery attempts and fulfilment evidence"),
     _required("lesson_progress", "anonymize", "customer lesson progress state"),
     _required("connections", "retain", "business integration ownership, permissions and secret references"),
-    _required("connection_credentials", "erase", "tenant-scoped encrypted VK/MAX provider and webhook credential material"),
+    _required("connection_credentials", "erase", "tenant-scoped encrypted messenger/email provider and webhook credential material"),
     _required("messenger_ingress_routes", "erase", "tenant messenger callback route, connection binding and secret references"),
     _required("native_messenger_provisioning_leases", "erase", "short-lived tenant provider-account setup serialization state"),
     _required("messenger_connection_setup_sessions", "erase", "short-lived owner capability for secure Telegram/VK/MAX connection setup"),

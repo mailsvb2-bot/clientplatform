@@ -88,6 +88,52 @@ class NativeMessengerHttpAdmissionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second.status, 200)
         self.assertEqual(request.reads, 2)
 
+    async def test_external_product_rejects_oversized_body_before_read(self) -> None:
+        request = _Request(
+            path="/clientplatform/external-products/connector/events",
+            content_length=65_537,
+        )
+        called = False
+
+        from aiohttp import web
+
+        async def handler(_request: object) -> web.Response:
+            nonlocal called
+            called = True
+            return web.Response(text="unexpected")
+
+        response = await self.admission.native_messenger_http_admission_middleware(
+            request,  # type: ignore[arg-type]
+            handler,  # type: ignore[arg-type]
+        )
+
+        self.assertEqual(response.status, 413)
+        self.assertFalse(called)
+        self.assertEqual(request.reads, 0)
+
+    async def test_external_product_slot_is_released_after_handler(self) -> None:
+        request = _Request(
+            path="/clientplatform/external-products/connector/events",
+            body=b"{}",
+        )
+
+        from aiohttp import web
+
+        async def handler(_request: object) -> web.Response:
+            return web.Response(text="ok")
+
+        first = await self.admission.native_messenger_http_admission_middleware(
+            request,  # type: ignore[arg-type]
+            handler,  # type: ignore[arg-type]
+        )
+        second = await self.admission.native_messenger_http_admission_middleware(
+            request,  # type: ignore[arg-type]
+            handler,  # type: ignore[arg-type]
+        )
+        self.assertEqual(first.status, 200)
+        self.assertEqual(second.status, 200)
+        self.assertEqual(request.reads, 2)
+
     async def test_unrelated_route_bypasses_native_admission(self) -> None:
         request = _Request(
             path="/health",

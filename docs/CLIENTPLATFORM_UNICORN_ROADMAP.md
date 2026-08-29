@@ -1041,13 +1041,19 @@ source
 - Финальный локальный regression перед merge: `4093 passed, 7 skipped`; coverage ratchet `74.98%` combined / `66.22%` branch при baseline `74.97%` / `66.21%`; Critical Static, Ruff, Canon и release hygiene green.
 - Production deploy не выполнялся: scheduled execution/provider delivery по-прежнему не добавлялись и остаются отдельными последующими slices.
 
+### M4-008 — `NEXT` — Canonical Outbound Email + External Product Bridge
+
+По прямому указанию владельца добавить универсальный коммерческий bridge перед Safe Autopilot, не создавая второй CRM, sender, scheduler, attribution engine или payment authority. Первый slice состоит только из двух общих capabilities: owner-approved B2B email через существующий `provider_dispatch_outbox` и tenant-scoped signed ingress для проверенных фактов внешних продуктов.
+
+Минимальный DONE contract: SMTP credentials живут только за credential reference и connection активируется после probe; публичный business email не считается согласием и требует OWNER-only approval конкретного recipient + payload, а opt-in/existing relationship сохраняют прежний RBAC; SMTP ambiguity после provider boundary не replay-ится автоматически. External Product Connector включается отдельно, tenant определяется только connector id, HMAC/replay window/body limits/idempotency fail-closed, raw external customer reference не сохраняется, а `lead_created`, `lead_qualified`, `order_paid` и `refund_recorded` материализуются только в существующие customer/outcome/revenue/attribution contours. Никаких product-specific adapters и runtime-зависимостей в этом slice.
+
 ---
 
 # 10. M5 — Safe Autopilot
 
 Автопилот — не отдельный «AI-режим», а слой поверх доказанных deterministic capabilities.
 
-### M5-001 — `NEXT` — Canonical AutomationPolicy Foundation
+### M5-001 — `QUEUED` — Canonical AutomationPolicy Foundation
 
 Расширить существующий canonical automation/policy contour, не создавая второй движок или store: формализовать tenant-scoped allowed/forbidden actions, channels/audiences, schedule/quiet hours, approval thresholds, stop conditions, expiry/version и owner approval. Первый slice ограничить policy read/write + deterministic `PolicyCheck`: RBAC и tenant isolation fail-closed, изменение money limits/чувствительных каналов требует явного owner approval, а автономное execution в M5-001 не запускать.
 

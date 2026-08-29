@@ -20,6 +20,10 @@ from clientplatform.application.promotions import parse_promotion_start_payload
 from clientplatform.domain.promotions import PromotionError
 from clientplatform.runtime.ad_publication_worker import AdPublicationWorker
 from clientplatform.runtime.bot_gateway import bot_gateway_runtime_config
+from clientplatform.runtime.external_product_http import (
+    external_product_event_webhook,
+    external_product_ingress_enabled,
+)
 from clientplatform.runtime.messenger_channel_ingress import (
     canonical_max_webhook,
     canonical_vk_webhook,
@@ -425,6 +429,14 @@ def _register_vk_routes(app: web.Application) -> None:
     app.router.add_post("/webhooks/vk", _vk_webhook_with_group_guard)
 
 
+def _register_external_product_routes(app: web.Application) -> None:
+    app.router.add_post(
+        "/clientplatform/external-products/{connector_id}/events",
+        external_product_event_webhook,
+    )
+    app["clientplatform_external_product_ingress"] = True
+
+
 def _register_clientplatform_omnichannel_routes(app: web.Application) -> None:
     app.router.add_post(
         "/clientplatform/webhooks/vk/{route_id}",
@@ -474,6 +486,7 @@ async def start_messenger_webhook_runtime(
     max_enabled = max_webhook_enabled()
     vk_enabled = vk_webhook_enabled()
     omnichannel_enabled = _omnichannel_ingress_enabled()
+    external_product_enabled = external_product_ingress_enabled()
     acquisition_enabled = _acquisition_ingress_enabled()
     ad_oauth_enabled = ad_oauth_http_enabled()
     ad_worker_enabled = _ad_publication_worker_enabled()
@@ -485,6 +498,7 @@ async def start_messenger_webhook_runtime(
         or ad_oauth_enabled
         or ad_worker_enabled
         or omnichannel_enabled
+        or external_product_enabled
         or acquisition_enabled
     )
     if not ingress_enabled:
@@ -509,6 +523,8 @@ async def start_messenger_webhook_runtime(
         _register_vk_routes(app)
     if omnichannel_enabled:
         _register_clientplatform_omnichannel_routes(app)
+    if external_product_enabled:
+        _register_external_product_routes(app)
     if acquisition_enabled:
         _register_acquisition_routes(app)
     if max_enabled or vk_enabled:
@@ -572,8 +588,9 @@ async def start_messenger_webhook_runtime(
 
         log.info(
             "HTTP ingress started on %s:%s payment=%s privacy_export=%s "
-            "max=%s vk=%s omnichannel=%s acquisition=%s durable_delivery=%s managed_bot_polling=%s "
-            "ad_oauth=%s ad_publication_worker=%s max_webhook_reconciliation=%s",
+            "max=%s vk=%s omnichannel=%s external_product=%s acquisition=%s "
+            "durable_delivery=%s managed_bot_polling=%s ad_oauth=%s "
+            "ad_publication_worker=%s max_webhook_reconciliation=%s",
             host,
             port,
             payment_enabled,
@@ -581,6 +598,7 @@ async def start_messenger_webhook_runtime(
             max_enabled,
             vk_enabled,
             omnichannel_enabled,
+            external_product_enabled,
             acquisition_enabled,
             delivery_worker_started,
             gateway_started,

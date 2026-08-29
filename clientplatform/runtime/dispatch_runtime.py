@@ -18,6 +18,8 @@ from clientplatform.runtime.secrets import EnvironmentCredentialProvider
 from clientplatform.transport import (
     AdapterRegistry,
     MaxDispatchAdapter,
+    SmtpEmailClient,
+    SmtpEmailDispatchAdapter,
     TelegramDispatchAdapter,
     VkDispatchAdapter,
 )
@@ -61,6 +63,7 @@ class DispatchRuntimeConfig:
     media_cleanup_batch_size: int = 10
     media_cleanup_max_attempts: int = 12
     media_cleanup_lock_ttl_seconds: int = 900
+    email_smtp_timeout_seconds: float = 20.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,6 +151,12 @@ def dispatch_runtime_config() -> DispatchRuntimeConfig:
             minimum=30,
             maximum=86_400,
         ),
+        email_smtp_timeout_seconds=env_float(
+            "CLIENTPLATFORM_EMAIL_SMTP_TIMEOUT_SEC",
+            20.0,
+            minimum=1.0,
+            maximum=120.0,
+        ),
     )
 
 
@@ -205,6 +214,9 @@ def build_dispatch_runtime(
             MaxDispatchAdapter(
                 TwoPhaseMaxRuntimeClient(),
                 media_resolver=media_resolver,
+            ),
+            SmtpEmailDispatchAdapter(
+                SmtpEmailClient(timeout_seconds=selected.email_smtp_timeout_seconds),
             ),
         ]
     )

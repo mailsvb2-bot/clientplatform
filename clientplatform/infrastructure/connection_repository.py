@@ -198,6 +198,36 @@ class ConnectionRepository:
             connection_id=normalized_connection_id,
         )
 
+    def mark_connection_pending_for_reverification(
+        self,
+        *,
+        actor: TenantContext,
+        connection_id: str,
+        now: str | None = None,
+    ) -> Connection:
+        """Require a fresh provider probe after credential material changes."""
+
+        current = self._resolve_actor(actor)
+        normalized_connection_id = normalize_uuid(
+            connection_id, field_name="connection_id"
+        )
+        timestamp = str(now or _utc_now())
+        cursor = self._conn.execute(
+            """
+            UPDATE connections
+            SET status='pending', last_success_at=NULL, last_error_at=NULL,
+                last_error_code=NULL, updated_at=?
+            WHERE id=? AND business_id=? AND status!='revoked'
+            """,
+            (timestamp, normalized_connection_id, current.business_id),
+        )
+        if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+            raise ConnectionNotFound("connection was not found in the business")
+        return self._get_connection(
+            business_id=current.business_id,
+            connection_id=normalized_connection_id,
+        )
+
     def activate_connection(
         self,
         *,

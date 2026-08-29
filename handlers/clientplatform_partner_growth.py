@@ -8,6 +8,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
 from clientplatform.application.partner_runtime import (
+    approve_and_queue_partner_email_outreach,
     authorize_partner_telegram_contact,
     get_partner_candidate_view,
     list_partner_campaigns,
@@ -21,9 +22,11 @@ from clientplatform.application.partner_runtime import (
 )
 from clientplatform.domain.partners import (
     ContactBasis,
+    PartnerChannel,
     PartnerCandidateStatus,
     PartnerInvariantViolation,
 )
+from clientplatform.domain.tenancy import PlatformRole
 from clientplatform.integrations.partner_discovery import PartnerDiscoveryUnavailable
 from clientplatform.integrations.partner_discovery_runtime import (
     build_connected_partner_discovery,
@@ -167,15 +170,19 @@ async def _render_candidate(
     answer_callback: bool = True,
 ) -> None:
     actor = await _actor(callback, business_token)
-    view, connections = await asyncio.gather(
-        asyncio.to_thread(
-            get_partner_candidate_view,
-            actor=actor,
-            candidate_id=control._token_uuid(candidate_token),
-        ),
-        asyncio.to_thread(list_partner_send_connections, actor=actor),
+    view = await asyncio.to_thread(
+        get_partner_candidate_view,
+        actor=actor,
+        candidate_id=control._token_uuid(candidate_token),
     )
     candidate = view.candidate
+    channel = getattr(candidate, "channel", PartnerChannel.TELEGRAM)
+    send_platform = "email" if channel == PartnerChannel.EMAIL else "telegram"
+    connections = await asyncio.to_thread(
+        list_partner_send_connections,
+        actor=actor,
+        platform=send_platform,
+    )
     reply = (
         f"\n\n💬 Последний ответ:\n{view.latest_reply[:900]}"
         if view.latest_reply
@@ -189,32 +196,55 @@ async def _render_candidate(
         f"✉️ Готовое предложение:\n{view.content.outreach_message[:2200]}{reply}"
     )
     rows: list[list[tuple[str, str]]] = []
-    if candidate.first_contact_permitted and connections:
-        rows.append(
-            [
-                (
-                    "📨 Поставить в очередь Telegram",
-                    f"cpg:s:{business_token}:{candidate_token}",
-                )
-            ]
-        )
-    elif candidate.status not in _TERMINAL_CONTACT_STATUSES:
-        rows.extend(
-            [
+    if channel == PartnerChannel.EMAIL and connections:
+        if (
+            candidate.contact_basis == ContactBasis.PUBLIC_BUSINESS_CONTACT
+            and actor.role == PlatformRole.OWNER
+        ):
+            rows.append(
                 [
                     (
-                        "✅ Есть согласие на Telegram",
-                        f"cpg:a:{business_token}:{candidate_token}:o",
+                        "📧 Подтвердить и поставить Email в очередь",
+                        f"cpg:es:{business_token}:{candidate_token}",
                     )
-                ],
+                ]
+            )
+        elif candidate.first_contact_permitted:
+            rows.append(
                 [
                     (
-                        "🤝 Уже есть деловой контакт",
-                        f"cpg:a:{business_token}:{candidate_token}:r",
+                        "📧 Поставить Email в очередь",
+                        f"cpg:se:{business_token}:{candidate_token}",
                     )
-                ],
-            ]
-        )
+                ]
+            )
+    elif channel == PartnerChannel.TELEGRAM:
+        if candidate.first_contact_permitted and connections:
+            rows.append(
+                [
+                    (
+                        "📨 Поставить в очередь Telegram",
+                        f"cpg:s:{business_token}:{candidate_token}",
+                    )
+                ]
+            )
+        elif candidate.status not in _TERMINAL_CONTACT_STATUSES:
+            rows.extend(
+                [
+                    [
+                        (
+                            "✅ Есть согласие на Telegram",
+                            f"cpg:a:{business_token}:{candidate_token}:o",
+                        )
+                    ],
+                    [
+                        (
+                            "🤝 Уже есть деловой контакт",
+                            f"cpg:a:{business_token}:{candidate_token}:r",
+                        )
+                    ],
+                ]
+            )
     rows.extend(
         [
             [("✅ Сотрудничаем", f"cpg:ok:{business_token}:{candidate_token}")],
@@ -241,11 +271,16 @@ async def _queue_selected_connection(
     business_token: str,
     candidate_token: str,
     connection_id: str,
+    explicit_email_approval: bool = False,
 ) -> None:
     actor = await _actor(callback, business_token)
     try:
         dispatch = await asyncio.to_thread(
-            queue_partner_outreach,
+            (
+                approve_and_queue_partner_email_outreach
+                if explicit_email_approval
+                else queue_partner_outreach
+            ),
             actor=actor,
             candidate_id=control._token_uuid(candidate_token),
             connection_id=connection_id,
@@ -411,6 +446,61 @@ async def save_partner_contact(message: Message, state: FSMContext) -> None:
     )
 
 
+@simple.router.callback_query(F.data.startswith("cpg:es:"))
+async def approve_public_email_partner_outreach(callback: CallbackQuery) -> None:
+    _, _, business_token, candidate_token = str(callback.data).split(":", 3)
+    actor = await _actor(callback, business_token)
+    connections = await asyncio.to_thread(
+        list_partner_send_connections, actor=actor, platform="email"
+    )
+    if not connections:
+        await callback.answer("Нет активного Email SMTP connection", show_alert=True)
+        return
+    if len(connections) == 1:
+        await _queue_selected_connection(
+            callback,
+            business_token=business_token,
+            candidate_token=candidate_token,
+            connection_id=connections[0].id,
+            explicit_email_approval=True,
+        )
+        return
+    await callback.answer()
+    await control._callback_message(callback).answer(
+        "Подтвердите отправителя для этого конкретного публичного B2B email. "
+        "Это подтверждение относится только к текущему адресу и текущему тексту.",
+        reply_markup=control._keyboard(
+            [
+                [
+                    (
+                        connection.label[:36],
+                        "cpg:esc:"
+                        f"{business_token}:{candidate_token}:{_token(connection.id)}",
+                    )
+                ]
+                for connection in connections[:10]
+            ]
+            + [[("⬅️ К партнёру", f"cpg:c:{business_token}:{candidate_token}")]],
+        ),
+    )
+
+
+@simple.router.callback_query(F.data.startswith("cpg:esc:"))
+async def approve_public_email_partner_outreach_via_connection(
+    callback: CallbackQuery,
+) -> None:
+    _, _, business_token, candidate_token, connection_token = str(
+        callback.data
+    ).split(":", 4)
+    await _queue_selected_connection(
+        callback,
+        business_token=business_token,
+        candidate_token=candidate_token,
+        connection_id=control._token_uuid(connection_token),
+        explicit_email_approval=True,
+    )
+
+
 @simple.router.callback_query(F.data.startswith("cpg:s:"))
 async def send_partner_outreach(callback: CallbackQuery) -> None:
     _, _, business_token, candidate_token = str(callback.data).split(":", 3)
@@ -430,7 +520,46 @@ async def send_partner_outreach(callback: CallbackQuery) -> None:
 
     await callback.answer()
     await control._callback_message(callback).answer(
-        "Выберите Telegram-бота, от имени которого отправить предложение. "
+        "Выберите подключение, от имени которого отправить предложение. "
+        "ClientPlatform не выбирает его автоматически, когда подключено несколько.",
+        reply_markup=control._keyboard(
+            [
+                [
+                    (
+                        connection.label[:36],
+                        "cpg:sc:"
+                        f"{business_token}:{candidate_token}:{_token(connection.id)}",
+                    )
+                ]
+                for connection in connections[:10]
+            ]
+            + [[("⬅️ К партнёру", f"cpg:c:{business_token}:{candidate_token}")]],
+        ),
+    )
+
+
+@simple.router.callback_query(F.data.startswith("cpg:se:"))
+async def send_partner_email_outreach(callback: CallbackQuery) -> None:
+    _, _, business_token, candidate_token = str(callback.data).split(":", 3)
+    actor = await _actor(callback, business_token)
+    connections = await asyncio.to_thread(
+        list_partner_send_connections, actor=actor, platform="email"
+    )
+    if not connections:
+        await callback.answer("Нет активного Email SMTP connection", show_alert=True)
+        return
+    if len(connections) == 1:
+        await _queue_selected_connection(
+            callback,
+            business_token=business_token,
+            candidate_token=candidate_token,
+            connection_id=connections[0].id,
+        )
+        return
+
+    await callback.answer()
+    await control._callback_message(callback).answer(
+        "Выберите Email SMTP подключение, от имени которого отправить предложение. "
         "ClientPlatform не выбирает его автоматически, когда подключено несколько.",
         reply_markup=control._keyboard(
             [

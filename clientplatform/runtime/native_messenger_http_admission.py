@@ -12,10 +12,13 @@ _WEBHOOK_PREFIXES = (
     "/clientplatform/webhooks/max/",
 )
 _SETUP_PREFIX = "/clientplatform/connect/"
+_EXTERNAL_PRODUCT_PREFIX = "/clientplatform/external-products/"
 _webhook_slots: asyncio.Semaphore | None = None
 _webhook_slots_size = 0
 _setup_slots: asyncio.Semaphore | None = None
 _setup_slots_size = 0
+_external_product_slots: asyncio.Semaphore | None = None
+_external_product_slots_size = 0
 
 
 def _positive_int(
@@ -51,6 +54,15 @@ def native_setup_body_limit() -> int:
     )
 
 
+def external_product_body_limit() -> int:
+    return _positive_int(
+        "CLIENTPLATFORM_EXTERNAL_PRODUCT_MAX_BODY_BYTES",
+        64 * 1024,
+        minimum=4096,
+        maximum=64 * 1024,
+    )
+
+
 def _request_kind(request: web.Request) -> str | None:
     if request.method != "POST":
         return None
@@ -58,12 +70,15 @@ def _request_kind(request: web.Request) -> str | None:
         return "webhook"
     if request.path.startswith(_SETUP_PREFIX):
         return "setup"
+    if request.path.startswith(_EXTERNAL_PRODUCT_PREFIX):
+        return "external_product"
     return None
 
 
 def _slots(kind: str) -> asyncio.Semaphore:
     global _webhook_slots, _webhook_slots_size
     global _setup_slots, _setup_slots_size
+    global _external_product_slots, _external_product_slots_size
 
     if kind == "webhook":
         size = _positive_int(
@@ -76,6 +91,21 @@ def _slots(kind: str) -> asyncio.Semaphore:
             _webhook_slots = asyncio.Semaphore(size)
             _webhook_slots_size = size
         return _webhook_slots
+
+    if kind == "external_product":
+        size = _positive_int(
+            "CLIENTPLATFORM_EXTERNAL_PRODUCT_MAX_INFLIGHT",
+            16,
+            minimum=1,
+            maximum=128,
+        )
+        if (
+            _external_product_slots is None
+            or _external_product_slots_size != size
+        ):
+            _external_product_slots = asyncio.Semaphore(size)
+            _external_product_slots_size = size
+        return _external_product_slots
 
     size = _positive_int(
         "CLIENTPLATFORM_NATIVE_SETUP_MAX_INFLIGHT",
@@ -128,11 +158,12 @@ async def native_messenger_http_admission_middleware(
     if kind is None:
         return await handler(request)
 
-    body_limit = (
-        native_webhook_body_limit()
-        if kind == "webhook"
-        else native_setup_body_limit()
-    )
+    if kind == "webhook":
+        body_limit = native_webhook_body_limit()
+    elif kind == "external_product":
+        body_limit = external_product_body_limit()
+    else:
+        body_limit = native_setup_body_limit()
     content_length = request.content_length
     if content_length is not None and int(content_length) > body_limit:
         return _rejected(status=413, text="payload_too_large")
@@ -155,13 +186,17 @@ async def native_messenger_http_admission_middleware(
 def reset_native_messenger_http_admission_state_for_tests() -> None:
     global _webhook_slots, _webhook_slots_size
     global _setup_slots, _setup_slots_size
+    global _external_product_slots, _external_product_slots_size
     _webhook_slots = None
     _webhook_slots_size = 0
     _setup_slots = None
     _setup_slots_size = 0
+    _external_product_slots = None
+    _external_product_slots_size = 0
 
 
 __all__ = [
+    "external_product_body_limit",
     "native_messenger_http_admission_middleware",
     "native_setup_body_limit",
     "native_webhook_body_limit",

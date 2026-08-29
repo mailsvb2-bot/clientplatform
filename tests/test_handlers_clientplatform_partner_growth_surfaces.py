@@ -5,9 +5,12 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from clientplatform.domain.partners import (
+    ContactBasis,
     PartnerCandidateStatus,
+    PartnerChannel,
     PartnerInvariantViolation,
 )
+from clientplatform.domain.tenancy import PlatformRole
 from clientplatform.integrations.partner_discovery import PartnerDiscoveryUnavailable
 from handlers import clientplatform_partner_growth as growth
 from handlers import clientplatform_partner_materials as materials
@@ -45,7 +48,9 @@ def _stats() -> SimpleNamespace:
 
 class PartnerGrowthSurfaceTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
-        self.actor = SimpleNamespace(user_id=101, business_id="business")
+        self.actor = SimpleNamespace(
+            user_id=101, business_id="business", role=PlatformRole.OWNER
+        )
         self.output = SimpleNamespace(answer=AsyncMock())
 
     def _base_patches(self):
@@ -127,6 +132,27 @@ class PartnerGrowthSurfaceTests(unittest.IsolatedAsyncioTestCase):
         rows = self.output.answer.await_args.kwargs["reply_markup"]
         self.assertEqual(rows[0][0][1], "cpg:c:business:candidate")
 
+    async def test_open_campaign_wrapper_acknowledges_and_renders(self) -> None:
+        callback = _callback("cpg:p:business:campaign")
+        patches = self._base_patches()
+        with (
+            patches[0], patches[1], patches[2], patches[3], patches[4], patches[5],
+            patch.object(growth, "list_partner_candidates", return_value=[]),
+            patch.object(growth, "partner_stats", return_value=_stats()),
+        ):
+            await growth.open_partner_campaign(callback)
+        callback.answer.assert_awaited_once()
+        self.assertIn("Партнёрская кампания", self.output.answer.await_args.args[0])
+
+    async def test_open_candidate_wrapper_forwards_tokens(self) -> None:
+        callback = _callback("cpg:c:business:candidate")
+        render = AsyncMock()
+        with patch.object(growth, "_render_candidate", new=render):
+            await growth.open_partner_candidate(callback)
+        render.assert_awaited_once_with(
+            callback, business_token="business", candidate_token="candidate"
+        )
+
     async def test_candidate_with_permission_exposes_send_and_reply(self) -> None:
         callback = _callback()
         candidate = SimpleNamespace(
@@ -160,6 +186,175 @@ class PartnerGrowthSurfaceTests(unittest.IsolatedAsyncioTestCase):
         rows = self.output.answer.await_args.kwargs["reply_markup"]
         callbacks = [value for row in rows for _label, value in row]
         self.assertIn("cpg:s:business:candidate", callbacks)
+
+    async def test_email_candidate_with_permission_uses_email_send_route(self) -> None:
+        callback = _callback()
+        candidate = SimpleNamespace(
+            id="candidate",
+            campaign_id="campaign",
+            name="Partner",
+            status=PartnerCandidateStatus.READY,
+            source_url="https://example.test",
+            channel=PartnerChannel.EMAIL,
+            contact_basis=ContactBasis.OPTED_IN,
+            first_contact_permitted=True,
+        )
+        view = SimpleNamespace(
+            candidate=candidate,
+            fit_total=88.0,
+            latest_reply="",
+            content=SimpleNamespace(outreach_message="Предложение"),
+        )
+        connection = SimpleNamespace(id="connection", label="SMTP")
+        patches = self._base_patches()
+        with (
+            patches[0], patches[1], patches[2], patches[3], patches[4], patches[5],
+            patch.object(growth, "get_partner_candidate_view", return_value=view),
+            patch.object(growth, "list_partner_send_connections", return_value=[connection]),
+        ):
+            await growth._render_candidate(
+                callback,
+                business_token="business",
+                candidate_token="candidate",
+            )
+        rows = self.output.answer.await_args.kwargs["reply_markup"]
+        callbacks = [value for row in rows for _label, value in row]
+        self.assertIn("cpg:se:business:candidate", callbacks)
+        self.assertNotIn("cpg:s:business:candidate", callbacks)
+
+    async def test_public_business_email_approval_button_is_owner_only(self) -> None:
+        callback = _callback()
+        candidate = SimpleNamespace(
+            id="candidate",
+            campaign_id="campaign",
+            name="Partner",
+            status=PartnerCandidateStatus.READY,
+            source_url="https://example.test",
+            channel=PartnerChannel.EMAIL,
+            contact_basis=ContactBasis.PUBLIC_BUSINESS_CONTACT,
+            first_contact_permitted=False,
+        )
+        view = SimpleNamespace(
+            candidate=candidate,
+            fit_total=88.0,
+            latest_reply="",
+            content=SimpleNamespace(outreach_message="Предложение"),
+        )
+        connection = SimpleNamespace(id="connection", label="SMTP")
+        self.actor.role = PlatformRole.MARKETER
+        patches = self._base_patches()
+        with (
+            patches[0], patches[1], patches[2], patches[3], patches[4], patches[5],
+            patch.object(growth, "get_partner_candidate_view", return_value=view),
+            patch.object(growth, "list_partner_send_connections", return_value=[connection]),
+        ):
+            await growth._render_candidate(
+                callback,
+                business_token="business",
+                candidate_token="candidate",
+            )
+        rows = self.output.answer.await_args.kwargs["reply_markup"]
+        callbacks = [value for row in rows for _label, value in row]
+        self.assertNotIn("cpg:es:business:candidate", callbacks)
+
+    async def test_public_business_email_owner_sees_exact_approval_action(self) -> None:
+        callback = _callback()
+        candidate = SimpleNamespace(
+            id="candidate",
+            campaign_id="campaign",
+            name="Partner",
+            status=PartnerCandidateStatus.READY,
+            source_url="https://example.test",
+            channel=PartnerChannel.EMAIL,
+            contact_basis=ContactBasis.PUBLIC_BUSINESS_CONTACT,
+            first_contact_permitted=False,
+        )
+        view = SimpleNamespace(
+            candidate=candidate,
+            fit_total=92.0,
+            latest_reply="",
+            content=SimpleNamespace(outreach_message="Предложение"),
+        )
+        connection = SimpleNamespace(id="connection", label="SMTP")
+        patches = self._base_patches()
+        with (
+            patches[0], patches[1], patches[2], patches[3], patches[4], patches[5],
+            patch.object(growth, "get_partner_candidate_view", return_value=view),
+            patch.object(growth, "list_partner_send_connections", return_value=[connection]),
+        ):
+            await growth._render_candidate(
+                callback, business_token="business", candidate_token="candidate"
+            )
+        rows = self.output.answer.await_args.kwargs["reply_markup"]
+        callbacks = [value for row in rows for _label, value in row]
+        self.assertIn("cpg:es:business:candidate", callbacks)
+
+    async def test_non_send_channel_has_no_contact_action_and_can_skip_ack(self) -> None:
+        callback = _callback()
+        candidate = SimpleNamespace(
+            id="candidate",
+            campaign_id="campaign",
+            name="Partner",
+            status=PartnerCandidateStatus.READY,
+            source_url="https://example.test",
+            channel=PartnerChannel.VK,
+            contact_basis=ContactBasis.PUBLIC_BUSINESS_CONTACT,
+            first_contact_permitted=False,
+        )
+        view = SimpleNamespace(
+            candidate=candidate,
+            fit_total=77.0,
+            latest_reply="",
+            content=SimpleNamespace(outreach_message="Предложение"),
+        )
+        patches = self._base_patches()
+        with (
+            patches[0], patches[1], patches[2], patches[3], patches[4], patches[5],
+            patch.object(growth, "get_partner_candidate_view", return_value=view),
+            patch.object(growth, "list_partner_send_connections", return_value=[]),
+        ):
+            await growth._render_candidate(
+                callback,
+                business_token="business",
+                candidate_token="candidate",
+                answer_callback=False,
+            )
+        callback.answer.assert_not_awaited()
+        rows = self.output.answer.await_args.kwargs["reply_markup"]
+        callbacks = [value for row in rows for _label, value in row]
+        self.assertFalse(any(value.startswith("cpg:s") for value in callbacks))
+
+    async def test_terminal_telegram_candidate_does_not_offer_authorization(self) -> None:
+        callback = _callback()
+        candidate = SimpleNamespace(
+            id="candidate",
+            campaign_id="campaign",
+            name="Partner",
+            status=PartnerCandidateStatus.DO_NOT_CONTACT,
+            source_url="",
+            channel=PartnerChannel.TELEGRAM,
+            contact_basis=ContactBasis.NONE,
+            first_contact_permitted=False,
+        )
+        view = SimpleNamespace(
+            candidate=candidate,
+            fit_total=40.0,
+            latest_reply="",
+            content=SimpleNamespace(outreach_message="Предложение"),
+        )
+        patches = self._base_patches()
+        with (
+            patches[0], patches[1], patches[2], patches[3], patches[4], patches[5],
+            patch.object(growth, "get_partner_candidate_view", return_value=view),
+            patch.object(growth, "list_partner_send_connections", return_value=[]),
+        ):
+            await growth._render_candidate(
+                callback, business_token="business", candidate_token="candidate"
+            )
+        rows = self.output.answer.await_args.kwargs["reply_markup"]
+        callbacks = [value for row in rows for _label, value in row]
+        self.assertNotIn("cpg:a:business:candidate:o", callbacks)
+        self.assertNotIn("cpg:a:business:candidate:r", callbacks)
 
     async def test_candidate_without_permission_requires_explicit_basis(self) -> None:
         callback = _callback()
@@ -417,6 +612,143 @@ class PartnerGrowthSurfaceTests(unittest.IsolatedAsyncioTestCase):
             connection_id="connection",
         )
 
+    async def test_email_send_one_connection_queues_directly(self) -> None:
+        callback = _callback("cpg:se:business:candidate")
+        connection = SimpleNamespace(id="connection", label="SMTP")
+        queue = AsyncMock()
+        patches = self._base_patches()
+        with (
+            patches[0], patches[1],
+            patch.object(growth, "list_partner_send_connections", return_value=[connection]),
+            patch.object(growth, "_queue_selected_connection", new=queue),
+        ):
+            await growth.send_partner_email_outreach(callback)
+        queue.assert_awaited_once_with(
+            callback,
+            business_token="business",
+            candidate_token="candidate",
+            connection_id="connection",
+        )
+
+    async def test_email_send_requires_active_connection(self) -> None:
+        callback = _callback("cpg:se:business:candidate")
+        patches = self._base_patches()
+        with (
+            patches[0], patches[1],
+            patch.object(growth, "list_partner_send_connections", return_value=[]),
+        ):
+            await growth.send_partner_email_outreach(callback)
+        callback.answer.assert_awaited_once_with(
+            "Нет активного Email SMTP connection", show_alert=True
+        )
+
+    async def test_email_send_multiple_connections_requires_selection(self) -> None:
+        callback = _callback("cpg:se:business:candidate")
+        connections = [
+            SimpleNamespace(id="email-a", label="SMTP A"),
+            SimpleNamespace(id="email-b", label="SMTP B"),
+        ]
+        patches = self._base_patches()
+        with (
+            patches[0], patches[1], patches[2], patches[3], patches[4], patches[5],
+            patch.object(growth, "list_partner_send_connections", return_value=connections),
+        ):
+            await growth.send_partner_email_outreach(callback)
+        text = self.output.answer.await_args.args[0]
+        self.assertIn("Email SMTP", text)
+        rows = self.output.answer.await_args.kwargs["reply_markup"]
+        callbacks = [value for row in rows for _label, value in row]
+        self.assertIn("cpg:sc:business:candidate:email-a", callbacks)
+        self.assertIn("cpg:sc:business:candidate:email-b", callbacks)
+
+    async def test_public_email_approval_requires_connection(self) -> None:
+        callback = _callback("cpg:es:business:candidate")
+        patches = self._base_patches()
+        with (
+            patches[0], patches[1],
+            patch.object(growth, "list_partner_send_connections", return_value=[]),
+        ):
+            await growth.approve_public_email_partner_outreach(callback)
+        callback.answer.assert_awaited_once_with(
+            "Нет активного Email SMTP connection", show_alert=True
+        )
+
+    async def test_public_email_approval_one_connection_is_exact(self) -> None:
+        callback = _callback("cpg:es:business:candidate")
+        connection = SimpleNamespace(id="email-one", label="SMTP")
+        queue = AsyncMock()
+        patches = self._base_patches()
+        with (
+            patches[0], patches[1],
+            patch.object(growth, "list_partner_send_connections", return_value=[connection]),
+            patch.object(growth, "_queue_selected_connection", new=queue),
+        ):
+            await growth.approve_public_email_partner_outreach(callback)
+        queue.assert_awaited_once_with(
+            callback,
+            business_token="business",
+            candidate_token="candidate",
+            connection_id="email-one",
+            explicit_email_approval=True,
+        )
+
+    async def test_public_email_approval_multiple_connections_requires_selection(self) -> None:
+        callback = _callback("cpg:es:business:candidate")
+        connections = [
+            SimpleNamespace(id="email-a", label="SMTP A"),
+            SimpleNamespace(id="email-b", label="SMTP B"),
+        ]
+        patches = self._base_patches()
+        with (
+            patches[0], patches[1], patches[2], patches[3], patches[4], patches[5],
+            patch.object(growth, "list_partner_send_connections", return_value=connections),
+        ):
+            await growth.approve_public_email_partner_outreach(callback)
+        text = self.output.answer.await_args.args[0]
+        self.assertIn("конкретного публичного B2B email", text)
+        rows = self.output.answer.await_args.kwargs["reply_markup"]
+        callbacks = [value for row in rows for _label, value in row]
+        self.assertIn("cpg:esc:business:candidate:email-a", callbacks)
+        self.assertIn("cpg:esc:business:candidate:email-b", callbacks)
+
+    async def test_public_email_selected_connection_keeps_explicit_approval(self) -> None:
+        callback = _callback("cpg:esc:business:candidate:email-a")
+        queue = AsyncMock()
+        with (
+            patch.object(growth.control, "_token_uuid", side_effect=lambda value: value),
+            patch.object(growth, "_queue_selected_connection", new=queue),
+        ):
+            await growth.approve_public_email_partner_outreach_via_connection(callback)
+        queue.assert_awaited_once_with(
+            callback,
+            business_token="business",
+            candidate_token="candidate",
+            connection_id="email-a",
+            explicit_email_approval=True,
+        )
+
+    async def test_queue_partner_outreach_surfaces_domain_rejection(self) -> None:
+        callback = _callback()
+        patches = self._base_patches()
+        with (
+            patches[0], patches[1], patches[4],
+            patch.object(
+                growth,
+                "approve_and_queue_partner_email_outreach",
+                side_effect=PartnerInvariantViolation("owner approval required"),
+            ),
+        ):
+            await growth._queue_selected_connection(
+                callback,
+                business_token="business",
+                candidate_token="candidate",
+                connection_id="email-a",
+                explicit_email_approval=True,
+            )
+        callback.answer.assert_awaited_once_with(
+            "owner approval required", show_alert=True
+        )
+
     async def test_send_multiple_connections_requires_explicit_selection(self) -> None:
         callback = _callback("cpg:s:business:candidate")
         connections = [
@@ -472,7 +804,9 @@ class PartnerGrowthSurfaceTests(unittest.IsolatedAsyncioTestCase):
 
 class PartnerMaterialsSurfaceTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
-        self.actor = SimpleNamespace(user_id=101, business_id="business")
+        self.actor = SimpleNamespace(
+            user_id=101, business_id="business", role=PlatformRole.OWNER
+        )
         self.output = SimpleNamespace(answer=AsyncMock())
 
     async def test_materials_lists_campaigns_and_navigation(self) -> None:
