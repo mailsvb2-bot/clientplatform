@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sys
@@ -139,6 +140,8 @@ def main() -> int:
             channel="email",
             audience="prospect_opted_in",
             scheduled_at=_NOW + timedelta(minutes=2),
+            subject_ref="customer:postgres-probe",
+            payload_digest=hashlib.sha256(b"m5002 postgres followup payload").hexdigest(),
         )
 
         # Promote a policy that explicitly permits this external action but requires

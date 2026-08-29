@@ -405,15 +405,17 @@ async def test_autopilot_screen_renders_owner_action_approval_controls(
     pending = SimpleNamespace(
         id="00000000-0000-0000-0000-000000000201",
         status=SimpleNamespace(value="pending"),
+        requested_at="2026-08-29T15:05:00+00:00",
     )
     approved = SimpleNamespace(
         id="00000000-0000-0000-0000-000000000202",
         status=SimpleNamespace(value="approved"),
+        requested_at="2026-08-29T15:00:00+00:00",
     )
     monkeypatch.setattr(
         extension.admin_ops,
         "get_current_automation_action_approvals",
-        lambda **_kwargs: (pending, approved),
+        lambda **_kwargs: (approved, pending),
     )
     monkeypatch.setattr(
         extension.admin_ops,

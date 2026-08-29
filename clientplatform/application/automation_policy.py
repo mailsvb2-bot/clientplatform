@@ -210,6 +210,8 @@ def get_automation_action_authorization(
     actor: TenantContext,
     approval_id: str,
     expected_candidate_hash: str,
+    expected_subject_ref: str,
+    expected_payload_digest: str,
     now: datetime | str | None = None,
 ) -> AutomationActionAuthorization:
     with get_db_ro() as conn:
@@ -217,6 +219,8 @@ def get_automation_action_authorization(
             actor=actor,
             approval_id=approval_id,
             expected_candidate_hash=expected_candidate_hash,
+            expected_subject_ref=expected_subject_ref,
+            expected_payload_digest=expected_payload_digest,
             now=_now(now),
         )
 

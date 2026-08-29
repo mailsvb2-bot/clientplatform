@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -46,7 +47,18 @@ def _spec(*, mode: AutomationMode = AutomationMode.NORMAL) -> AutomationPolicySp
     )
 
 
-def _candidate(business_id: str, *, topic: str | None = None) -> AutomationCandidateAction:
+def _digest(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _candidate(
+    business_id: str,
+    *,
+    topic: str | None = None,
+    subject_ref: str = "customer:fixture-1",
+    payload_text: str | None = None,
+) -> AutomationCandidateAction:
+    content = payload_text or f"followup:{topic or 'default'}"
     return AutomationCandidateAction(
         business_id=business_id,
         action="sales.followup",
@@ -55,6 +67,8 @@ def _candidate(business_id: str, *, topic: str | None = None) -> AutomationCandi
         audience="prospect_opted_in",
         scheduled_at=_NOW,
         content_topics=() if topic is None else (topic,),
+        subject_ref=subject_ref,
+        payload_digest=_digest(content),
     )
 
 
@@ -134,6 +148,29 @@ class AutomationActionApprovalTests(unittest.TestCase):
         assert restored.candidate_hash == candidate.candidate_hash
         assert len(candidate.candidate_hash) == 64
 
+
+    def test_external_approval_requires_exact_subject_and_payload_binding(self) -> None:
+        fx = self.fx
+        unbound = replace(
+            _candidate(fx.owner.business_id),
+            subject_ref=None,
+            payload_digest=None,
+        )
+        with self.assertRaisesRegex(AutomationApprovalConflict, "exact_binding_required"):
+            fx.repo.request_action_approval(
+                actor=fx.owner,
+                candidate=unbound,
+                idempotency_key="m5002:unbound",
+                now=_NOW + timedelta(minutes=1),
+            )
+
+    def test_candidate_hash_binds_subject_and_exact_payload_digest(self) -> None:
+        fx = self.fx
+        candidate = _candidate(fx.owner.business_id)
+        other_subject = replace(candidate, subject_ref="customer:fixture-2")
+        other_payload = replace(candidate, payload_digest=_digest("followup:different"))
+        assert candidate.candidate_hash != other_subject.candidate_hash
+        assert candidate.candidate_hash != other_payload.candidate_hash
 
     def test_request_is_durable_and_exact_replay_is_idempotent(self) -> None:
         fx = self.fx
@@ -225,15 +262,21 @@ class AutomationActionApprovalTests(unittest.TestCase):
             actor=fx.owner,
             approval_id=approval.id,
             expected_candidate_hash=approval.candidate_hash,
+            expected_subject_ref=approval.candidate.subject_ref or "",
+            expected_payload_digest=approval.candidate.payload_digest or "",
             now=_NOW + timedelta(minutes=3),
         )
         second = fx.repo.get_action_authorization(
             actor=fx.members[PlatformRole.MARKETER],
             approval_id=approval.id,
             expected_candidate_hash=approval.candidate_hash,
+            expected_subject_ref=approval.candidate.subject_ref or "",
+            expected_payload_digest=approval.candidate.payload_digest or "",
             now=_NOW + timedelta(minutes=3),
         )
         assert first == second
+        assert first.subject_ref == approval.candidate.subject_ref
+        assert first.payload_digest == approval.candidate.payload_digest
         assert len(first.authorization_hash) == 64
         audit = fx.conn.execute(
             "SELECT COUNT(*) FROM clientplatform_admin_audit_events WHERE business_id=? AND action='automation_action_owner_approved'",
@@ -296,6 +339,8 @@ class AutomationActionApprovalTests(unittest.TestCase):
                 actor=fx.owner,
                 approval_id=approval.id,
                 expected_candidate_hash=approval.candidate_hash,
+                expected_subject_ref=approval.candidate.subject_ref or "",
+                expected_payload_digest=approval.candidate.payload_digest or "",
                 now=_NOW + timedelta(minutes=4),
             )
 
@@ -352,6 +397,8 @@ class AutomationActionApprovalTests(unittest.TestCase):
                 actor=fx.owner,
                 approval_id=approval.id,
                 expected_candidate_hash=approval.candidate_hash,
+                expected_subject_ref=approval.candidate.subject_ref or "",
+                expected_payload_digest=approval.candidate.payload_digest or "",
                 now=_NOW + timedelta(minutes=4),
             )
 
@@ -403,9 +450,76 @@ class AutomationActionApprovalTests(unittest.TestCase):
                 actor=fx.owner,
                 approval_id=approved.id,
                 expected_candidate_hash="0" * 64,
+                expected_subject_ref=approval.candidate.subject_ref or "",
+                expected_payload_digest=approval.candidate.payload_digest or "",
                 now=_NOW + timedelta(minutes=2),
             )
 
+
+    def test_authorization_requires_exact_subject_and_payload_digest(self) -> None:
+        fx = self.fx
+        approval = fx.request(key="m5002:auth-binding")
+        approved = fx.repo.approve_action_approval(
+            actor=fx.owner,
+            approval_id=approval.id,
+            expected_request_fingerprint=approval.request_fingerprint,
+            now=_NOW + timedelta(minutes=2),
+        )
+        with self.assertRaisesRegex(AutomationApprovalConflict, "subject_changed"):
+            fx.repo.get_action_authorization(
+                actor=fx.owner,
+                approval_id=approved.id,
+                expected_candidate_hash=approval.candidate_hash,
+                expected_subject_ref="customer:other",
+                expected_payload_digest=approval.candidate.payload_digest or "",
+                now=_NOW + timedelta(minutes=2),
+            )
+        with self.assertRaisesRegex(AutomationApprovalConflict, "payload_changed"):
+            fx.repo.get_action_authorization(
+                actor=fx.owner,
+                approval_id=approved.id,
+                expected_candidate_hash=approval.candidate_hash,
+                expected_subject_ref=approval.candidate.subject_ref or "",
+                expected_payload_digest="0" * 64,
+                now=_NOW + timedelta(minutes=2),
+            )
+
+    def test_current_approval_list_prioritizes_pending_before_approved_limit(self) -> None:
+        fx = self.fx
+        for index in range(4):
+            approval = fx.repo.request_action_approval(
+                actor=fx.owner,
+                candidate=_candidate(
+                    fx.owner.business_id,
+                    subject_ref=f"customer:approved-{index}",
+                    payload_text=f"approved payload {index}",
+                ),
+                idempotency_key=f"m5002:approved:{index}",
+                now=_NOW + timedelta(minutes=index + 1),
+            )
+            fx.repo.approve_action_approval(
+                actor=fx.owner,
+                approval_id=approval.id,
+                expected_request_fingerprint=approval.request_fingerprint,
+                now=_NOW + timedelta(minutes=index + 1, seconds=10),
+            )
+        pending = fx.repo.request_action_approval(
+            actor=fx.owner,
+            candidate=_candidate(
+                fx.owner.business_id,
+                subject_ref="customer:pending-new",
+                payload_text="pending newest payload",
+            ),
+            idempotency_key="m5002:pending:new",
+            now=_NOW + timedelta(minutes=6),
+        )
+        visible = fx.repo.list_current_action_approvals(
+            actor=fx.owner,
+            now=_NOW + timedelta(minutes=7),
+            limit=4,
+        )
+        assert visible[0].id == pending.id
+        assert any(item.status == AutomationApprovalStatus.PENDING for item in visible)
 
     def test_schema_privacy_and_owner_copy_cover_action_approval(self) -> None:
         fx = self.fx
@@ -436,6 +550,8 @@ class AutomationActionApprovalTests(unittest.TestCase):
         assert "Отправить клиенту follow-up" in rendered
         assert "Канал: email" in rendered
         assert "Почему:" in rendered
+        assert f"Цель: {approval.candidate.subject_ref}" in rendered
+        assert f"Отпечаток содержимого: {approval.candidate.payload_digest}" in rendered
         assert approval.candidate_hash not in rendered
         assert approval.policy_hash not in rendered
         assert approval.id not in rendered

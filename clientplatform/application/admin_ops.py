@@ -2325,6 +2325,13 @@ def format_automation_action_approval(item: AutomationActionApproval, *, timezon
     else:
         status = "Разрешено владельцем · ещё не исполняется автоматически"
     details = [f"{status}: {action}", f"Канал: {channel}"]
+    if candidate.subject_ref is not None and candidate.payload_digest is not None:
+        details.extend(
+            [
+                f"Цель: {candidate.subject_ref}",
+                f"Отпечаток содержимого: {candidate.payload_digest}",
+            ]
+        )
     if candidate.amount_minor is not None and candidate.currency is not None:
         details.append(f"Сумма: {_automation_money_text(candidate.amount_minor, candidate.currency)}")
     if item.status.value == "pending":

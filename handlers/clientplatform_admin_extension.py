@@ -406,7 +406,15 @@ async def _enhanced_marketing(
             "Внешние действия пока не выполняются автоматически."
         )
         extra = []
-        visible_approvals = list(automation_approvals)[:4]
+        ordered_approvals = sorted(
+            automation_approvals,
+            key=lambda item: (
+                item.status.value != "pending",
+                item.requested_at,
+                item.id,
+            ),
+        )
+        visible_approvals = list(ordered_approvals)[:4]
         if visible_approvals:
             text += "\n\nРешения, которые ждут владельца или могут быть отозваны:\n"
             text += "\n\n".join(

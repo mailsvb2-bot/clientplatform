@@ -14,6 +14,7 @@ from clientplatform.domain.tenancy import normalize_uuid
 
 _TOKEN_RE = re.compile(r"^[a-z][a-z0-9._:-]{0,79}$")
 _HASH_RE = re.compile(r"^[0-9a-f]{64}$")
+_SUBJECT_REF_RE = re.compile(r"^[a-z][a-z0-9._:/-]{0,199}$")
 
 
 class AutomationPolicyError(RuntimeError):
@@ -497,6 +498,8 @@ class AutomationCandidateAction:
     content_topics: tuple[str, ...] = ()
     claims: tuple[str, ...] = ()
     active_stop_conditions: tuple[str, ...] = ()
+    subject_ref: str | None = None
+    payload_digest: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "business_id", normalize_uuid(self.business_id, field_name="business_id"))
@@ -529,6 +532,22 @@ class AutomationCandidateAction:
             object.__setattr__(self, "ai_usage_currency", _currency(self.ai_usage_currency, "ai_usage_currency"))
         for name in ("content_topics", "claims", "active_stop_conditions"):
             object.__setattr__(self, name, _tokens(list(getattr(self, name)), name))
+        if self.subject_ref is not None:
+            normalized_subject_ref = str(self.subject_ref).strip().lower()
+            if not _SUBJECT_REF_RE.fullmatch(normalized_subject_ref):
+                raise ValueError("subject_ref must be an opaque stable reference")
+            object.__setattr__(self, "subject_ref", normalized_subject_ref)
+        if self.payload_digest is not None:
+            normalized_payload_digest = str(self.payload_digest).strip().lower()
+            if not _HASH_RE.fullmatch(normalized_payload_digest):
+                raise ValueError("payload_digest must be a SHA-256 hex digest")
+            object.__setattr__(self, "payload_digest", normalized_payload_digest)
+        if (self.subject_ref is None) != (self.payload_digest is None):
+            raise ValueError("subject_ref and payload_digest must be supplied together")
+
+    @property
+    def has_exact_external_binding(self) -> bool:
+        return self.subject_ref is not None and self.payload_digest is not None
 
     def payload(self) -> dict[str, Any]:
         return {
@@ -546,6 +565,8 @@ class AutomationCandidateAction:
             "content_topics": list(self.content_topics),
             "claims": list(self.claims),
             "active_stop_conditions": list(self.active_stop_conditions),
+            "subject_ref": self.subject_ref,
+            "payload_digest": self.payload_digest,
         }
 
     @property
@@ -725,6 +746,8 @@ class AutomationActionAuthorization:
     approval_id: str
     business_id: str
     candidate_hash: str
+    subject_ref: str | None
+    payload_digest: str | None
     policy_id: str
     policy_version: int
     policy_hash: str
@@ -742,6 +765,12 @@ class AutomationActionAuthorization:
         for name in ("candidate_hash", "policy_hash", "authorization_hash"):
             if not _HASH_RE.fullmatch(str(getattr(self, name))):
                 raise ValueError(f"{name} is invalid")
+        if self.subject_ref is not None and not _SUBJECT_REF_RE.fullmatch(str(self.subject_ref)):
+            raise ValueError("authorization subject_ref is invalid")
+        if self.payload_digest is not None and not _HASH_RE.fullmatch(str(self.payload_digest)):
+            raise ValueError("authorization payload_digest is invalid")
+        if (self.subject_ref is None) != (self.payload_digest is None):
+            raise ValueError("authorization exact binding is incomplete")
         object.__setattr__(self, "approved_at", _timestamp(self.approved_at, "approved_at"))
         object.__setattr__(self, "expires_at", _timestamp(self.expires_at, "expires_at"))
         if self.authorization_hash != _stable_hash(self.payload()):
@@ -752,6 +781,8 @@ class AutomationActionAuthorization:
             "approval_id": self.approval_id,
             "business_id": self.business_id,
             "candidate_hash": self.candidate_hash,
+            "subject_ref": self.subject_ref,
+            "payload_digest": self.payload_digest,
             "policy_id": self.policy_id,
             "policy_version": self.policy_version,
             "policy_hash": self.policy_hash,
@@ -774,6 +805,8 @@ def build_pending_automation_action_approval(
 ) -> AutomationActionApproval:
     if policy_check.decision != PolicyDecision.APPROVAL_REQUIRED or not policy_check.approval_reasons:
         raise AutomationApprovalConflict("automation_action_approval_not_required")
+    if candidate.external_write and not candidate.has_exact_external_binding:
+        raise AutomationApprovalConflict("automation_action_exact_binding_required")
     normalized_business_id = normalize_uuid(business_id, field_name="business_id")
     if candidate.business_id != normalized_business_id:
         raise AutomationPolicyInvariantViolation("approval candidate belongs to another business")
@@ -814,6 +847,8 @@ def build_automation_action_authorization(approval: AutomationActionApproval) ->
         "approval_id": approval.id,
         "business_id": approval.business_id,
         "candidate_hash": approval.candidate_hash,
+        "subject_ref": approval.candidate.subject_ref,
+        "payload_digest": approval.candidate.payload_digest,
         "policy_id": approval.policy_id,
         "policy_version": approval.policy_version,
         "policy_hash": approval.policy_hash,
@@ -825,6 +860,8 @@ def build_automation_action_authorization(approval: AutomationActionApproval) ->
         approval_id=approval.id,
         business_id=approval.business_id,
         candidate_hash=approval.candidate_hash,
+        subject_ref=approval.candidate.subject_ref,
+        payload_digest=approval.candidate.payload_digest,
         policy_id=approval.policy_id,
         policy_version=approval.policy_version,
         policy_hash=approval.policy_hash,

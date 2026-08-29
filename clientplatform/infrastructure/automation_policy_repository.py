@@ -596,7 +596,7 @@ class AutomationPolicyRepository:
             f"SELECT {_APPROVAL_COLUMNS} FROM clientplatform_automation_action_approvals "  # nosec B608
             "WHERE business_id=? AND status IN ('pending','approved') AND requested_at<=? AND expires_at>? "
             "AND policy_id=? AND policy_version=? AND policy_hash=? "
-            "ORDER BY requested_at ASC, id ASC LIMIT ?",
+            "ORDER BY CASE status WHEN 'pending' THEN 0 ELSE 1 END, requested_at ASC, id ASC LIMIT ?",
             (
                 current.business_id,
                 timestamp,
@@ -789,6 +789,8 @@ class AutomationPolicyRepository:
         actor: TenantContext,
         approval_id: str,
         expected_candidate_hash: str,
+        expected_subject_ref: str,
+        expected_payload_digest: str,
         now: datetime | str | None = None,
     ) -> AutomationActionAuthorization:
         current = self._approval_actor(actor)
@@ -798,6 +800,11 @@ class AutomationPolicyRepository:
             raise AutomationApprovalConflict("automation_action_not_approved")
         if approval.candidate_hash != str(expected_candidate_hash or "").strip().lower():
             raise AutomationApprovalConflict("automation_action_candidate_changed")
+        if approval.candidate.external_write:
+            if approval.candidate.subject_ref != str(expected_subject_ref or "").strip().lower():
+                raise AutomationApprovalConflict("automation_action_subject_changed")
+            if approval.candidate.payload_digest != str(expected_payload_digest or "").strip().lower():
+                raise AutomationApprovalConflict("automation_action_payload_changed")
         self._validate_current_action_policy(actor=current, approval=approval, now=timestamp)
         return build_automation_action_authorization(approval)
 
