@@ -59,7 +59,9 @@ jobs:
           DATABASE_URL: ''
         run: |
           set -o pipefail
-          python -m pytest -q tests/test_clientplatform_automation_policy_m5001.py \
+          python -m pytest -q \
+            tests/test_clientplatform_automation_policy_m5001.py \
+            tests/test_clientplatform_automation_approval_m5002.py \
             2>&1 | tee "$RUNNER_TEMP/automation-policy-unit.log"
 
       - name: Two-connection PostgreSQL policy matrix

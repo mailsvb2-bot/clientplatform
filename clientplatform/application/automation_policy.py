@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from clientplatform.domain.automation_policy import (
+    AutomationActionApproval,
+    AutomationActionAuthorization,
     AutomationCandidateAction,
     AutomationMode,
     AutomationPolicy,
@@ -91,6 +93,132 @@ def check_automation_action(
     if policy is None:
         raise AutomationPolicyNotFound("effective_automation_policy_required")
     return evaluate_automation_policy(policy=policy, candidate=candidate, now=current_time)
+
+
+def request_automation_action_approval(
+    *,
+    actor: TenantContext,
+    candidate: AutomationCandidateAction,
+    idempotency_key: str,
+    now: datetime | str | None = None,
+    ttl_seconds: int = 86_400,
+) -> AutomationActionApproval:
+    with get_db() as conn:
+        with tx(conn):
+            return AutomationPolicyRepository(conn).request_action_approval(
+                actor=actor,
+                candidate=candidate,
+                idempotency_key=idempotency_key,
+                now=_now(now),
+                ttl_seconds=ttl_seconds,
+            )
+
+
+def get_automation_action_approval(
+    *,
+    actor: TenantContext,
+    approval_id: str,
+) -> AutomationActionApproval:
+    with get_db_ro() as conn:
+        return AutomationPolicyRepository(conn).get_action_approval(
+            actor=actor,
+            approval_id=approval_id,
+        )
+
+
+def list_current_automation_action_approvals(
+    *,
+    actor: TenantContext,
+    now: datetime | str | None = None,
+    limit: int = 20,
+) -> tuple[AutomationActionApproval, ...]:
+    with get_db_ro() as conn:
+        return AutomationPolicyRepository(conn).list_current_action_approvals(
+            actor=actor,
+            now=_now(now),
+            limit=limit,
+        )
+
+
+def list_pending_automation_action_approvals(
+    *,
+    actor: TenantContext,
+    now: datetime | str | None = None,
+    limit: int = 20,
+) -> tuple[AutomationActionApproval, ...]:
+    with get_db_ro() as conn:
+        return AutomationPolicyRepository(conn).list_pending_action_approvals(
+            actor=actor,
+            now=_now(now),
+            limit=limit,
+        )
+
+
+def approve_automation_action(
+    *,
+    actor: TenantContext,
+    approval_id: str,
+    expected_request_fingerprint: str,
+    now: datetime | str | None = None,
+) -> AutomationActionApproval:
+    with get_db() as conn:
+        with tx(conn):
+            return AutomationPolicyRepository(conn).approve_action_approval(
+                actor=actor,
+                approval_id=approval_id,
+                expected_request_fingerprint=expected_request_fingerprint,
+                now=_now(now),
+            )
+
+
+def reject_automation_action(
+    *,
+    actor: TenantContext,
+    approval_id: str,
+    expected_request_fingerprint: str,
+    now: datetime | str | None = None,
+) -> AutomationActionApproval:
+    with get_db() as conn:
+        with tx(conn):
+            return AutomationPolicyRepository(conn).reject_action_approval(
+                actor=actor,
+                approval_id=approval_id,
+                expected_request_fingerprint=expected_request_fingerprint,
+                now=_now(now),
+            )
+
+
+def revoke_automation_action_approval(
+    *,
+    actor: TenantContext,
+    approval_id: str,
+    expected_request_fingerprint: str,
+    now: datetime | str | None = None,
+) -> AutomationActionApproval:
+    with get_db() as conn:
+        with tx(conn):
+            return AutomationPolicyRepository(conn).revoke_action_approval(
+                actor=actor,
+                approval_id=approval_id,
+                expected_request_fingerprint=expected_request_fingerprint,
+                now=_now(now),
+            )
+
+
+def get_automation_action_authorization(
+    *,
+    actor: TenantContext,
+    approval_id: str,
+    expected_candidate_hash: str,
+    now: datetime | str | None = None,
+) -> AutomationActionAuthorization:
+    with get_db_ro() as conn:
+        return AutomationPolicyRepository(conn).get_action_authorization(
+            actor=actor,
+            approval_id=approval_id,
+            expected_candidate_hash=expected_candidate_hash,
+            now=_now(now),
+        )
 
 
 def _business_timezone(conn, *, business_id: str) -> str:
@@ -188,11 +316,19 @@ def is_owner_autopilot_enabled(
 
 
 __all__ = [
+    "approve_automation_action",
     "approve_automation_policy",
     "check_automation_action",
+    "get_automation_action_approval",
+    "get_automation_action_authorization",
     "get_effective_automation_policy",
     "get_latest_automation_policy",
     "is_owner_autopilot_enabled",
+    "list_current_automation_action_approvals",
+    "list_pending_automation_action_approvals",
+    "reject_automation_action",
+    "request_automation_action_approval",
+    "revoke_automation_action_approval",
     "revoke_effective_automation_policy",
     "save_automation_policy_draft",
     "set_owner_autopilot_enabled",

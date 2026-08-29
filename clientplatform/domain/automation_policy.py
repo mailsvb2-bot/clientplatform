@@ -9,10 +9,10 @@ from enum import StrEnum
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from clientplatform.domain.money import normalize_settlement_currency
 from clientplatform.domain.tenancy import normalize_uuid
 
 _TOKEN_RE = re.compile(r"^[a-z][a-z0-9._:-]{0,79}$")
-_CURRENCY_RE = re.compile(r"^[A-Z]{3}$")
 _HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -32,6 +32,14 @@ class AutomationPolicyConflict(AutomationPolicyError):
     """The policy changed between review and mutation."""
 
 
+class AutomationApprovalNotFound(AutomationPolicyError):
+    """No automation action approval in the active business matched the request."""
+
+
+class AutomationApprovalConflict(AutomationPolicyError):
+    """An automation action approval changed or no longer matches its policy."""
+
+
 class AutomationPolicyStatus(StrEnum):
     DRAFT = "draft"
     APPROVED = "approved"
@@ -49,6 +57,13 @@ class PolicyDecision(StrEnum):
     DENY = "deny"
     APPROVAL_REQUIRED = "approval_required"
     ALLOW = "allow"
+
+
+class AutomationApprovalStatus(StrEnum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    REVOKED = "revoked"
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,10 +114,10 @@ def _tokens(values: tuple[str, ...] | list[str], name: str) -> tuple[str, ...]:
 
 
 def _currency(value: object, name: str = "currency") -> str:
-    normalized = str(value or "").strip().upper()
-    if not _CURRENCY_RE.fullmatch(normalized):
-        raise ValueError(f"{name} must be a three-letter ISO currency code")
-    return normalized
+    try:
+        return normalize_settlement_currency(value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a known settlement ISO 4217 currency code") from exc
 
 
 def _minor(value: object, name: str, *, zero: bool = False) -> int:
@@ -154,6 +169,17 @@ def _clock_contains(current: time, start: str, end: str) -> bool:
 
 def _stable_json(payload: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _stable_hash(payload: dict[str, Any]) -> str:
+    return hashlib.sha256(_stable_json(payload).encode("utf-8")).hexdigest()
+
+
+def _idempotency_key(value: object) -> str:
+    normalized = str(value or "").strip()
+    if not normalized or len(normalized) > 200 or any(ord(char) < 32 for char in normalized):
+        raise ValueError("idempotency_key is invalid")
+    return normalized
 
 
 @dataclass(frozen=True, slots=True)
@@ -372,7 +398,7 @@ class AutomationPolicySpec:
 
     @property
     def policy_hash(self) -> str:
-        return hashlib.sha256(_stable_json(self.payload()).encode("utf-8")).hexdigest()
+        return _stable_hash(self.payload())
 
     def to_json(self) -> str:
         return _stable_json(self.payload())
@@ -504,6 +530,48 @@ class AutomationCandidateAction:
         for name in ("content_topics", "claims", "active_stop_conditions"):
             object.__setattr__(self, name, _tokens(list(getattr(self, name)), name))
 
+    def payload(self) -> dict[str, Any]:
+        return {
+            "business_id": self.business_id,
+            "action": self.action,
+            "external_write": self.external_write,
+            "channel": self.channel,
+            "audience": self.audience,
+            "scheduled_at": self.scheduled_at,
+            "amount_minor": self.amount_minor,
+            "currency": self.currency,
+            "projected_daily_amount_minor": self.projected_daily_amount_minor,
+            "ai_usage_minor": self.ai_usage_minor,
+            "ai_usage_currency": self.ai_usage_currency,
+            "content_topics": list(self.content_topics),
+            "claims": list(self.claims),
+            "active_stop_conditions": list(self.active_stop_conditions),
+        }
+
+    @property
+    def candidate_hash(self) -> str:
+        return _stable_hash(self.payload())
+
+    def to_json(self) -> str:
+        return _stable_json(self.payload())
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any]) -> AutomationCandidateAction:
+        data = dict(payload)
+        for name in ("content_topics", "claims", "active_stop_conditions"):
+            data[name] = tuple(data.get(name) or ())
+        return cls(**data)
+
+    @classmethod
+    def from_json(cls, value: str) -> AutomationCandidateAction:
+        try:
+            payload = json.loads(str(value))
+        except json.JSONDecodeError as exc:
+            raise ValueError("automation candidate JSON is invalid") from exc
+        if not isinstance(payload, dict):
+            raise ValueError("automation candidate JSON must be an object")
+        return cls.from_payload(payload)
+
 
 @dataclass(frozen=True, slots=True)
 class PolicyCheck:
@@ -521,6 +589,239 @@ class PolicyCheck:
     @property
     def requires_approval(self) -> bool:
         return self.decision == PolicyDecision.APPROVAL_REQUIRED
+
+    def payload(self) -> dict[str, Any]:
+        return {
+            "decision": self.decision.value,
+            "policy_id": self.policy_id,
+            "policy_version": self.policy_version,
+            "policy_hash": self.policy_hash,
+            "violations": list(self.violations),
+            "approval_reasons": list(self.approval_reasons),
+        }
+
+
+def automation_approval_request_fingerprint(
+    *,
+    business_id: str,
+    candidate_hash: str,
+    policy_id: str,
+    policy_version: int,
+    policy_hash: str,
+    approval_reasons: tuple[str, ...],
+    expires_at: datetime | str,
+) -> str:
+    normalized_business = normalize_uuid(business_id, field_name="business_id")
+    normalized_policy_id = normalize_uuid(policy_id, field_name="policy_id")
+    normalized_reasons = _tokens(list(approval_reasons), "approval_reasons")
+    normalized_expiry = _timestamp(expires_at, "expires_at")
+    if isinstance(policy_version, bool) or int(policy_version) < 1:
+        raise ValueError("approval policy_version must be positive")
+    if not _HASH_RE.fullmatch(str(candidate_hash)) or not _HASH_RE.fullmatch(str(policy_hash)):
+        raise ValueError("approval fingerprint hashes are invalid")
+    return _stable_hash(
+        {
+            "business_id": normalized_business,
+            "candidate_hash": str(candidate_hash),
+            "policy_id": normalized_policy_id,
+            "policy_version": int(policy_version),
+            "policy_hash": str(policy_hash),
+            "approval_reasons": list(normalized_reasons),
+            "expires_at": normalized_expiry,
+        }
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class AutomationActionApproval:
+    id: str
+    business_id: str
+    idempotency_key: str
+    request_fingerprint: str
+    candidate: AutomationCandidateAction
+    candidate_hash: str
+    policy_id: str
+    policy_version: int
+    policy_hash: str
+    approval_reasons: tuple[str, ...]
+    status: AutomationApprovalStatus
+    requested_by_member_id: str
+    requested_at: str
+    expires_at: str
+    decided_by_member_id: str | None = None
+    decided_at: str | None = None
+    revoked_at: str | None = None
+
+    def __post_init__(self) -> None:
+        for name in ("id", "business_id", "policy_id", "requested_by_member_id"):
+            object.__setattr__(self, name, normalize_uuid(getattr(self, name), field_name=name))
+        if self.decided_by_member_id is not None:
+            object.__setattr__(
+                self,
+                "decided_by_member_id",
+                normalize_uuid(self.decided_by_member_id, field_name="decided_by_member_id"),
+            )
+        object.__setattr__(self, "idempotency_key", _idempotency_key(self.idempotency_key))
+        object.__setattr__(self, "status", AutomationApprovalStatus(self.status))
+        if self.candidate.business_id != self.business_id:
+            raise AutomationPolicyInvariantViolation("approval candidate belongs to another business")
+        if self.candidate_hash != self.candidate.candidate_hash or not _HASH_RE.fullmatch(self.candidate_hash):
+            raise AutomationPolicyInvariantViolation("approval candidate hash does not match candidate contents")
+        if isinstance(self.policy_version, bool) or int(self.policy_version) < 1:
+            raise ValueError("approval policy_version must be positive")
+        object.__setattr__(self, "policy_version", int(self.policy_version))
+        if not _HASH_RE.fullmatch(str(self.policy_hash)):
+            raise ValueError("approval policy_hash is invalid")
+        reasons = _tokens(list(self.approval_reasons), "approval_reasons")
+        if not reasons:
+            raise AutomationPolicyInvariantViolation("approval requires at least one policy reason")
+        object.__setattr__(self, "approval_reasons", reasons)
+        object.__setattr__(self, "requested_at", _timestamp(self.requested_at, "requested_at"))
+        object.__setattr__(self, "expires_at", _timestamp(self.expires_at, "expires_at"))
+        if datetime.fromisoformat(self.expires_at) <= datetime.fromisoformat(self.requested_at):
+            raise AutomationPolicyInvariantViolation("approval must expire after it is requested")
+        if self.decided_at is not None:
+            object.__setattr__(self, "decided_at", _timestamp(self.decided_at, "decided_at"))
+        if self.revoked_at is not None:
+            object.__setattr__(self, "revoked_at", _timestamp(self.revoked_at, "revoked_at"))
+        expected_fingerprint = automation_approval_request_fingerprint(
+            business_id=self.business_id,
+            candidate_hash=self.candidate_hash,
+            policy_id=self.policy_id,
+            policy_version=self.policy_version,
+            policy_hash=self.policy_hash,
+            approval_reasons=self.approval_reasons,
+            expires_at=self.expires_at,
+        )
+        if self.request_fingerprint != expected_fingerprint or not _HASH_RE.fullmatch(self.request_fingerprint):
+            raise AutomationPolicyInvariantViolation("approval request fingerprint does not match immutable contents")
+        if self.status == AutomationApprovalStatus.PENDING:
+            if self.decided_by_member_id is not None or self.decided_at is not None or self.revoked_at is not None:
+                raise AutomationPolicyInvariantViolation("pending approval cannot contain decision evidence")
+        elif self.status in {AutomationApprovalStatus.APPROVED, AutomationApprovalStatus.REJECTED}:
+            if self.decided_by_member_id is None or self.decided_at is None or self.revoked_at is not None:
+                raise AutomationPolicyInvariantViolation("decided approval requires owner decision evidence")
+        elif self.status == AutomationApprovalStatus.REVOKED:
+            if self.decided_by_member_id is None or self.decided_at is None or self.revoked_at is None:
+                raise AutomationPolicyInvariantViolation("revoked approval requires prior decision and revocation evidence")
+
+    def request_payload(self) -> dict[str, Any]:
+        return {
+            "business_id": self.business_id,
+            "candidate_hash": self.candidate_hash,
+            "policy_id": self.policy_id,
+            "policy_version": self.policy_version,
+            "policy_hash": self.policy_hash,
+            "approval_reasons": list(self.approval_reasons),
+            "expires_at": self.expires_at,
+        }
+
+    def is_expired(self, *, now: datetime | str) -> bool:
+        return datetime.fromisoformat(_timestamp(now, "now")) >= datetime.fromisoformat(self.expires_at)
+
+
+@dataclass(frozen=True, slots=True)
+class AutomationActionAuthorization:
+    approval_id: str
+    business_id: str
+    candidate_hash: str
+    policy_id: str
+    policy_version: int
+    policy_hash: str
+    approved_by_member_id: str
+    approved_at: str
+    expires_at: str
+    authorization_hash: str
+
+    def __post_init__(self) -> None:
+        for name in ("approval_id", "business_id", "policy_id", "approved_by_member_id"):
+            object.__setattr__(self, name, normalize_uuid(getattr(self, name), field_name=name))
+        if isinstance(self.policy_version, bool) or int(self.policy_version) < 1:
+            raise ValueError("authorization policy_version must be positive")
+        object.__setattr__(self, "policy_version", int(self.policy_version))
+        for name in ("candidate_hash", "policy_hash", "authorization_hash"):
+            if not _HASH_RE.fullmatch(str(getattr(self, name))):
+                raise ValueError(f"{name} is invalid")
+        object.__setattr__(self, "approved_at", _timestamp(self.approved_at, "approved_at"))
+        object.__setattr__(self, "expires_at", _timestamp(self.expires_at, "expires_at"))
+        if self.authorization_hash != _stable_hash(self.payload()):
+            raise AutomationPolicyInvariantViolation("authorization hash does not match approval evidence")
+
+    def payload(self) -> dict[str, Any]:
+        return {
+            "approval_id": self.approval_id,
+            "business_id": self.business_id,
+            "candidate_hash": self.candidate_hash,
+            "policy_id": self.policy_id,
+            "policy_version": self.policy_version,
+            "policy_hash": self.policy_hash,
+            "approved_by_member_id": self.approved_by_member_id,
+            "approved_at": self.approved_at,
+            "expires_at": self.expires_at,
+        }
+
+
+def build_pending_automation_action_approval(
+    *,
+    approval_id: str,
+    business_id: str,
+    idempotency_key: str,
+    candidate: AutomationCandidateAction,
+    policy_check: PolicyCheck,
+    requested_by_member_id: str,
+    requested_at: datetime | str,
+    expires_at: datetime | str,
+) -> AutomationActionApproval:
+    if policy_check.decision != PolicyDecision.APPROVAL_REQUIRED or not policy_check.approval_reasons:
+        raise AutomationApprovalConflict("automation_action_approval_not_required")
+    normalized_business_id = normalize_uuid(business_id, field_name="business_id")
+    if candidate.business_id != normalized_business_id:
+        raise AutomationPolicyInvariantViolation("approval candidate belongs to another business")
+    candidate_hash = candidate.candidate_hash
+    request_payload = {
+        "business_id": normalized_business_id,
+        "candidate_hash": candidate_hash,
+        "policy_id": normalize_uuid(policy_check.policy_id, field_name="policy_id"),
+        "policy_version": int(policy_check.policy_version),
+        "policy_hash": str(policy_check.policy_hash),
+        "approval_reasons": list(sorted(set(policy_check.approval_reasons))),
+        "expires_at": _timestamp(expires_at, "expires_at"),
+    }
+    return AutomationActionApproval(
+        id=approval_id,
+        business_id=normalized_business_id,
+        idempotency_key=idempotency_key,
+        request_fingerprint=_stable_hash(request_payload),
+        candidate=candidate,
+        candidate_hash=candidate_hash,
+        policy_id=policy_check.policy_id,
+        policy_version=policy_check.policy_version,
+        policy_hash=policy_check.policy_hash,
+        approval_reasons=policy_check.approval_reasons,
+        status=AutomationApprovalStatus.PENDING,
+        requested_by_member_id=requested_by_member_id,
+        requested_at=requested_at,
+        expires_at=request_payload["expires_at"],
+    )
+
+
+def build_automation_action_authorization(approval: AutomationActionApproval) -> AutomationActionAuthorization:
+    if approval.status != AutomationApprovalStatus.APPROVED:
+        raise AutomationApprovalConflict("automation_action_not_approved")
+    if approval.decided_by_member_id is None or approval.decided_at is None:
+        raise AutomationPolicyInvariantViolation("approved action is missing owner evidence")
+    payload = {
+        "approval_id": approval.id,
+        "business_id": approval.business_id,
+        "candidate_hash": approval.candidate_hash,
+        "policy_id": approval.policy_id,
+        "policy_version": approval.policy_version,
+        "policy_hash": approval.policy_hash,
+        "approved_by_member_id": approval.decided_by_member_id,
+        "approved_at": approval.decided_at,
+        "expires_at": approval.expires_at,
+    }
+    return AutomationActionAuthorization(authorization_hash=_stable_hash(payload), **payload)
 
 
 def evaluate_automation_policy(
@@ -636,7 +937,12 @@ def evaluate_automation_policy(
 
 
 __all__ = [
+    "AutomationActionApproval",
+    "AutomationActionAuthorization",
     "AutomationActionSemantics",
+    "AutomationApprovalConflict",
+    "AutomationApprovalNotFound",
+    "AutomationApprovalStatus",
     "AutomationApprovalThreshold",
     "AutomationCandidateAction",
     "AutomationMode",
@@ -652,5 +958,8 @@ __all__ = [
     "PolicyCheck",
     "PolicyDecision",
     "automation_action_semantics",
+    "automation_approval_request_fingerprint",
+    "build_automation_action_authorization",
+    "build_pending_automation_action_approval",
     "evaluate_automation_policy",
 ]

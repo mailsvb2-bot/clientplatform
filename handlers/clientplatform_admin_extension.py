@@ -25,6 +25,7 @@ from clientplatform.application import admin_ops
 from clientplatform.application.activity import get_business_profile, list_business_offerings
 from clientplatform.application.customers import list_customers
 from clientplatform.domain.activity import CapabilityStatus
+from clientplatform.domain.automation_policy import AutomationPolicyError
 from clientplatform.domain.tenancy import PlatformRole, TenantPermissionDenied, TenancyError
 from clientplatform.runtime import admin_observability
 from core.telegram_multi_egress import (
@@ -141,6 +142,9 @@ def _payment_average_text(payments: list[Any]) -> str:
 
 
 _OPS_ACTION_TOKENS = {
+    "automation-approve": "aa",
+    "automation-reject": "ar",
+    "automation-revoke": "av",
     "publication-schedule": "ps",
     "publication-cancel": "pc",
     "publication-cancel-ok": "pcx",
@@ -311,6 +315,7 @@ async def _enhanced_marketing(
         prices,
         interaction,
         autopilot_enabled,
+        automation_approvals,
     ) = await asyncio.gather(
         admin._base_snapshot(ctx),
         _optional_thread(
@@ -351,6 +356,11 @@ async def _enhanced_marketing(
         _optional_thread(
             admin_ops.get_autopilot_enabled,
             default=False,
+            actor=ctx.actor,
+        ),
+        _optional_thread(
+            admin_ops.get_current_automation_action_approvals,
+            default=(),
             actor=ctx.actor,
         ),
     )
@@ -396,6 +406,13 @@ async def _enhanced_marketing(
             "Внешние действия пока не выполняются автоматически."
         )
         extra = []
+        visible_approvals = list(automation_approvals)[:4]
+        if visible_approvals:
+            text += "\n\nРешения, которые ждут владельца или могут быть отозваны:\n"
+            text += "\n\n".join(
+                f"{index}. {admin_ops.format_automation_action_approval(item, timezone_name=profile.timezone)}"
+                for index, item in enumerate(visible_approvals, start=1)
+            )
         if ctx.role == PlatformRole.OWNER:
             extra.append(
                 (
@@ -403,8 +420,24 @@ async def _enhanced_marketing(
                     _ops_callback(ctx, "autopilot-toggle"),
                 )
             )
+            for index, item in enumerate(visible_approvals, start=1):
+                token = admin.control._uuid_token(item.id)
+                if item.status.value == "pending":
+                    extra.extend(
+                        [
+                            (f"✅ Разрешить действие #{index}", _ops_callback(ctx, "automation-approve", token)),
+                            (f"⛔ Отклонить действие #{index}", _ops_callback(ctx, "automation-reject", token)),
+                        ]
+                    )
+                elif item.status.value == "approved":
+                    extra.append(
+                        (f"↩️ Отозвать разрешение #{index}", _ops_callback(ctx, "automation-revoke", token))
+                    )
         else:
-            text += "\n\nИзменить режим может только владелец бизнеса."
+            text += (
+                "\n\nИзменить режим может только владелец бизнеса. "
+                "Решения по автоматическим действиям тоже принимает только владелец."
+            )
     elif action == "publications":
         recent = "\n".join(
             admin_ops.format_publication_calendar_lines(
@@ -889,6 +922,43 @@ async def admin_ops_gate(callback: CallbackQuery, state: FSMContext) -> None:
             "Для вашей роли финансовые данные доступны только для просмотра.",
             show_alert=True,
         )
+        return
+    if action in {"automation-approve", "automation-reject", "automation-revoke"}:
+        if ctx.role not in admin._AUTOMATION_ROLES:
+            raise TenantPermissionDenied(
+                "automation controls are not allowed for this business role"
+            )
+        if ctx.role != PlatformRole.OWNER:
+            await callback.answer(
+                "Решение по автоматическому действию может принять только владелец бизнеса.",
+                show_alert=True,
+            )
+            return
+        if len(payload) != 1:
+            await callback.answer("Кнопка устарела", show_alert=True)
+            return
+        approval_id = admin.control._token_uuid(payload[0])
+        operation = {
+            "automation-approve": admin_ops.approve_pending_automation_action,
+            "automation-reject": admin_ops.reject_pending_automation_action,
+            "automation-revoke": admin_ops.revoke_approved_automation_action,
+        }[action]
+        try:
+            await asyncio.to_thread(operation, actor=ctx.actor, approval_id=approval_id)
+        except AutomationPolicyError:
+            await callback.answer(
+                "Это решение уже изменилось или устарело. Экран обновлён без выполнения действия.",
+                show_alert=True,
+            )
+            await _enhanced_marketing(callback, state, ctx, "autopilot")
+            return
+        message = {
+            "automation-approve": "Действие разрешено. Автоматическое выполнение в этом этапе не запускается.",
+            "automation-reject": "Действие отклонено.",
+            "automation-revoke": "Разрешение отозвано.",
+        }[action]
+        await callback.answer(message)
+        await _enhanced_marketing(callback, state, ctx, "autopilot")
         return
     if action == "autopilot-toggle":
         if ctx.role not in admin._AUTOMATION_ROLES:

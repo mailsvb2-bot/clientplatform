@@ -1,5 +1,10 @@
 from clientplatform.domain.automation_policy import (
+    AutomationActionApproval,
+    AutomationActionAuthorization,
     AutomationActionSemantics,
+    AutomationApprovalConflict,
+    AutomationApprovalNotFound,
+    AutomationApprovalStatus,
     AutomationApprovalThreshold,
     AutomationCandidateAction,
     AutomationMode,
@@ -14,6 +19,8 @@ from clientplatform.domain.automation_policy import (
     PolicyCheck,
     PolicyDecision,
     automation_action_semantics,
+    build_automation_action_authorization,
+    build_pending_automation_action_approval,
     evaluate_automation_policy,
 )
 from clientplatform.domain.connections import (
@@ -81,7 +88,12 @@ from clientplatform.domain.tenancy import (
 )
 
 __all__ = [
+    "AutomationActionApproval",
+    "AutomationActionAuthorization",
     "AutomationActionSemantics",
+    "AutomationApprovalConflict",
+    "AutomationApprovalNotFound",
+    "AutomationApprovalStatus",
     "AutomationApprovalThreshold",
     "AutomationCandidateAction",
     "AutomationMode",
@@ -96,6 +108,8 @@ __all__ = [
     "PolicyCheck",
     "PolicyDecision",
     "automation_action_semantics",
+    "build_automation_action_authorization",
+    "build_pending_automation_action_approval",
     "evaluate_automation_policy",
     "Business",
     "BusinessAccess",

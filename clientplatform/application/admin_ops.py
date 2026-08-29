@@ -13,10 +13,16 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from clientplatform.application.automation_policy import (
+    approve_automation_action,
+    get_automation_action_approval,
     is_owner_autopilot_enabled,
+    list_current_automation_action_approvals,
+    reject_automation_action,
+    revoke_automation_action_approval,
     toggle_owner_autopilot,
 )
-from clientplatform.domain.money import normalize_settlement_currency
+from clientplatform.domain.automation_policy import AutomationActionApproval
+from clientplatform.domain.money import normalize_settlement_currency, settlement_currency_minor_unit_exponent
 from clientplatform.domain.outcomes import (
     BusinessOutcomeEvent,
     OutcomeMoney,
@@ -117,6 +123,29 @@ _PUBLICATION_STATUS_LABELS = {
     "failed": ("⚠️", "Ошибка"),
     "cancelled": ("⛔", "Отменено"),
 }
+_AUTOMATION_ACTION_LABELS = {
+    "growth.read_only_analysis": "Проанализировать рост",
+    "ads.adjust_budget": "Изменить рекламный бюджет",
+    "sales.followup": "Отправить клиенту follow-up",
+    "payments.refund": "Оформить возврат",
+}
+_AUTOMATION_CHANNEL_LABELS = {
+    "internal": "внутри ClientPlatform",
+    "email": "email",
+    "yandex_direct": "Яндекс Директ",
+    "telegram": "Telegram",
+    "vk": "ВКонтакте",
+    "max": "MAX",
+}
+_AUTOMATION_APPROVAL_REASON_LABELS = {
+    "cautious_mode_external_write": "включён осторожный режим",
+    "action_requires_approval": "это действие требует подтверждения",
+    "channel_requires_approval": "канал требует подтверждения",
+    "action_threshold_requires_approval": "для действия установлен порог подтверждения",
+    "money_threshold_requires_approval": "сумма достигла порога подтверждения",
+}
+
+
 _PUBLICATION_CHANNEL_LABELS = {
     "telegram": "Telegram",
     "vk": "ВКонтакте",
@@ -2275,6 +2304,71 @@ def toggle_autopilot(*, actor: TenantContext) -> bool:
     """
 
     return toggle_owner_autopilot(actor=actor)
+
+
+def _automation_money_text(amount_minor: int, currency: str) -> str:
+    normalized = normalize_settlement_currency(currency)
+    exponent = settlement_currency_minor_unit_exponent(normalized)
+    scale = 10**exponent
+    whole, fraction = divmod(int(amount_minor), scale)
+    if exponent == 0:
+        return f"{whole} {normalized}"
+    return f"{whole},{fraction:0{exponent}d} {normalized}"
+
+
+def format_automation_action_approval(item: AutomationActionApproval, *, timezone_name: str) -> str:
+    candidate = item.candidate
+    action = _AUTOMATION_ACTION_LABELS.get(candidate.action, "Выполнить автоматическое действие")
+    channel = _AUTOMATION_CHANNEL_LABELS.get(candidate.channel or "", candidate.channel or "канал не указан")
+    if item.status.value == "pending":
+        status = "Нужно Ваше подтверждение"
+    else:
+        status = "Разрешено владельцем · ещё не исполняется автоматически"
+    details = [f"{status}: {action}", f"Канал: {channel}"]
+    if candidate.amount_minor is not None and candidate.currency is not None:
+        details.append(f"Сумма: {_automation_money_text(candidate.amount_minor, candidate.currency)}")
+    if item.status.value == "pending":
+        reasons = [
+            _AUTOMATION_APPROVAL_REASON_LABELS.get(reason, "требуется подтверждение владельца")
+            for reason in item.approval_reasons
+        ]
+        details.append("Почему: " + "; ".join(dict.fromkeys(reasons)))
+    details.append(
+        "Действует до: "
+        + _format_publication_timestamp(item.expires_at, timezone_name=timezone_name)
+    )
+    return "\n".join(details)
+
+
+def get_current_automation_action_approvals(*, actor: TenantContext) -> tuple[AutomationActionApproval, ...]:
+    return list_current_automation_action_approvals(actor=actor, limit=20)
+
+
+def approve_pending_automation_action(*, actor: TenantContext, approval_id: str) -> AutomationActionApproval:
+    approval = get_automation_action_approval(actor=actor, approval_id=approval_id)
+    return approve_automation_action(
+        actor=actor,
+        approval_id=approval.id,
+        expected_request_fingerprint=approval.request_fingerprint,
+    )
+
+
+def reject_pending_automation_action(*, actor: TenantContext, approval_id: str) -> AutomationActionApproval:
+    approval = get_automation_action_approval(actor=actor, approval_id=approval_id)
+    return reject_automation_action(
+        actor=actor,
+        approval_id=approval.id,
+        expected_request_fingerprint=approval.request_fingerprint,
+    )
+
+
+def revoke_approved_automation_action(*, actor: TenantContext, approval_id: str) -> AutomationActionApproval:
+    approval = get_automation_action_approval(actor=actor, approval_id=approval_id)
+    return revoke_automation_action_approval(
+        actor=actor,
+        approval_id=approval.id,
+        expected_request_fingerprint=approval.request_fingerprint,
+    )
 
 
 def record_interaction_metric(metric: InteractionMetricInput) -> None:
