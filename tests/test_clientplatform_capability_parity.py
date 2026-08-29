@@ -55,6 +55,22 @@ class CapabilityParityTests(unittest.TestCase):
             )
             self.assertFalse(projected[platform].can_connect)
 
+    def test_enum_like_connection_values_are_normalized(self) -> None:
+        connection = SimpleNamespace(
+            platform=SimpleNamespace(value="max"),
+            status=SimpleNamespace(value="active"),
+        )
+        enabled = {
+            ConnectionPlatform.TELEGRAM: True,
+            ConnectionPlatform.VK: False,
+            ConnectionPlatform.MAX: True,
+        }
+        projected = self._project((connection,), enabled=enabled)
+        self.assertEqual(
+            projected[ConnectionPlatform.MAX].availability,
+            CapabilityAvailability.ACTIVE,
+        )
+
     def test_active_connection_with_disabled_runtime_is_explicitly_unavailable(self) -> None:
         connection = SimpleNamespace(
             platform=ConnectionPlatform.VK,

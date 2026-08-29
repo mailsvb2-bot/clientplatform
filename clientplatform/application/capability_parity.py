@@ -125,17 +125,19 @@ def project_messenger_capabilities(
         else:
             platform_value = getattr(connection, "platform")
             status_value = getattr(connection, "status")
+        platform_raw = getattr(platform_value, "value", platform_value)
         platform = (
             platform_value
             if isinstance(platform_value, ConnectionPlatform)
-            else ConnectionPlatform(str(platform_value).strip().lower())
+            else ConnectionPlatform(str(platform_raw).strip().lower())
         )
         if platform not in by_platform:
             continue
+        status_raw = getattr(status_value, "value", status_value)
         status = (
             status_value
             if isinstance(status_value, ConnectionStatus)
-            else ConnectionStatus(str(status_value).strip().lower())
+            else ConnectionStatus(str(status_raw).strip().lower())
         )
         by_platform[platform].append(status)
 
