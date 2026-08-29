@@ -35,6 +35,22 @@ class NativeMessengerMenuTests(unittest.TestCase):
         ]
         with (
             patch.object(member_ui, "list_connections", return_value=connections),
+            patch(
+                "clientplatform.application.capability_parity.telegram_runtime_enabled",
+                return_value=True,
+            ),
+            patch(
+                "clientplatform.application.capability_parity.vk_webhook_enabled",
+                return_value=True,
+            ),
+            patch(
+                "clientplatform.application.capability_parity.max_webhook_enabled",
+                return_value=True,
+            ),
+            patch(
+                "clientplatform.application.capability_parity.build_setup_status",
+                return_value=SimpleNamespace(telegram_ok=True, vk_ok=True, max_ok=True),
+            ),
             patch.object(
                 member_ui,
                 "available_staff_messenger_switches",

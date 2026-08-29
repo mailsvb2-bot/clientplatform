@@ -29,6 +29,10 @@ from clientplatform.application.admin_ops import (
     schedule_publication,
 )
 from clientplatform.application.bookings import create_booking_slot, list_booking_slots
+from clientplatform.application.capability_parity import (
+    CapabilityAvailability,
+    project_messenger_capabilities,
+)
 from clientplatform.application.messenger_switching import (
     available_staff_messenger_switches,
     build_staff_switch_command,
@@ -2216,47 +2220,51 @@ def _messengers_message(
     current_platform: ConnectionPlatform,
 ) -> CustomerInteractionMessage:
     connections = list_connections(actor=actor)
+    capabilities = project_messenger_capabilities(
+        connections,
+        setup_available=setup_available,
+    )
     labels = {
         ConnectionPlatform.TELEGRAM: ("✈️", "Telegram"),
         ConnectionPlatform.VK: ("🔵", "ВКонтакте"),
         ConnectionPlatform.MAX: ("🟣", "MAX"),
     }
-    by_platform: dict[ConnectionPlatform, list[str]] = {platform: [] for platform in labels}
-    for item in connections:
-        by_platform[item.platform].append(item.status.value)
+    state_labels = {
+        CapabilityAvailability.ACTIVE: "работает",
+        CapabilityAvailability.ATTENTION: "требует внимания",
+        CapabilityAvailability.CONFIGURING: "настраивается",
+        CapabilityAvailability.CONNECTABLE: "можно подключить",
+        CapabilityAvailability.CONNECTED_UNAVAILABLE: "подключён, но сейчас выключен",
+        CapabilityAvailability.UNAVAILABLE: "сейчас недоступен",
+    }
+    by_platform = {item.platform: item for item in capabilities}
     lines = ["Мессенджеры", ""]
-    active: set[ConnectionPlatform] = set()
     for platform in (
         ConnectionPlatform.VK,
         ConnectionPlatform.MAX,
         ConnectionPlatform.TELEGRAM,
     ):
         icon, title = labels[platform]
-        statuses = by_platform[platform]
-        if "active" in statuses:
-            active.add(platform)
-        state = ", ".join(statuses) if statuses else "не подключён"
+        capability = by_platform[platform]
         current = " · сейчас здесь" if platform == current_platform else ""
-        lines.append(f"{icon} {title} — {state}{current}")
+        lines.append(
+            f"{icon} {title} — {state_labels[capability.availability]}{current}"
+        )
 
     rows: list[tuple[CustomerInteractionButton, ...]] = []
-    if actor.role in _CONNECTION_ROLES and setup_available:
+    if actor.role in _CONNECTION_ROLES:
         connect_labels = {
             ConnectionPlatform.TELEGRAM: "✈️ Подключить Telegram",
             ConnectionPlatform.VK: "🔵 Подключить ВКонтакте",
             ConnectionPlatform.MAX: "🟣 Подключить MAX",
         }
-        for platform in (
-            ConnectionPlatform.TELEGRAM,
-            ConnectionPlatform.VK,
-            ConnectionPlatform.MAX,
-        ):
-            if platform not in active:
+        for capability in capabilities:
+            if capability.can_connect:
                 rows.append(
                     (
                         _button(
-                            connect_labels[platform],
-                            f"cpm:connect-{platform.value}",
+                            connect_labels[capability.platform],
+                            f"cpm:connect-{capability.platform.value}",
                         ),
                     )
                 )
@@ -2271,7 +2279,12 @@ def _messengers_message(
     except (RuntimeError, ValueError):
         switchable = ()
     for platform in switchable:
-        if platform == current_platform:
+        capability = by_platform.get(platform)
+        if (
+            platform == current_platform
+            or capability is None
+            or capability.availability != CapabilityAvailability.ACTIVE
+        ):
             continue
         rows.append(
             (
@@ -2291,9 +2304,26 @@ def _setup_message(
     platform: ConnectionPlatform,
     setup_issuer: NativeSetupCommandIssuer | None,
     setup_key: str,
+    setup_available: bool,
 ) -> CustomerInteractionMessage:
     if actor.role not in _CONNECTION_ROLES:
         return _permission_message()
+    capability = next(
+        item
+        for item in project_messenger_capabilities(
+            list_connections(actor=actor),
+            setup_available=setup_available,
+        )
+        if item.platform == platform
+    )
+    if not capability.can_connect:
+        return CustomerInteractionMessage(
+            text=(
+                "Этот канал сейчас нельзя подключить в данной установке ClientPlatform. "
+                "Когда runtime канала будет включён и готов, действие появится автоматически."
+            ),
+            rows=(_back_row(),),
+        )
     if setup_issuer is None:
         return CustomerInteractionMessage(
             text="Защищённая настройка мессенджера сейчас недоступна.",
@@ -2526,6 +2556,7 @@ def _render(
                 platform=ConnectionPlatform.TELEGRAM,
                 setup_issuer=setup_issuer,
                 setup_key=setup_key,
+                setup_available=setup_issuer is not None,
             )
         if parsed.action == "connect-vk":
             return _setup_message(
@@ -2533,6 +2564,7 @@ def _render(
                 platform=ConnectionPlatform.VK,
                 setup_issuer=setup_issuer,
                 setup_key=setup_key,
+                setup_available=setup_issuer is not None,
             )
         if parsed.action == "connect-max":
             return _setup_message(
@@ -2540,6 +2572,7 @@ def _render(
                 platform=ConnectionPlatform.MAX,
                 setup_issuer=setup_issuer,
                 setup_key=setup_key,
+                setup_available=setup_issuer is not None,
             )
     except TenantPermissionDenied:
         return _permission_message()
