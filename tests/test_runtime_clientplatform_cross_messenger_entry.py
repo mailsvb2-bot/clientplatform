@@ -118,6 +118,60 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(command.action, "owner_control")
         self.assertEqual(command.value, "мессенджеры")
 
+    def test_native_text_mutations_are_routed_to_owner_control(self) -> None:
+        commands = (
+            "программа Новый курс",
+            f"урок {B1} текст | Введение | Материал урока",
+            "оплата 1500 RUB",
+            "черновик vk | Заголовок | Текст публикации",
+            f"заметка {B1} Позвонить клиенту завтра",
+        )
+        for text in commands:
+            with self.subTest(text=text):
+                command = parse_clientplatform_entry_command(text)
+                self.assertIsNotNone(command)
+                assert command is not None
+                self.assertEqual(command.action, "owner_control")
+                self.assertEqual(command.value, text)
+
+    def test_owner_mutation_interaction_key_is_unique_per_provider_event(self) -> None:
+        entry = SimpleNamespace(user_id=909)
+        access = SimpleNamespace(
+            business=SimpleNamespace(id=B1, name="Практика Анны")
+        )
+        actor = SimpleNamespace(user_id=909, business_id=B1)
+        interaction = CustomerInteractionMessage(text="✅ Платёж сохранён")
+        with (
+            patch(
+                "services.messenger.clientplatform_entry.register_user_entry",
+                return_value=entry,
+            ),
+            patch(
+                "services.messenger.clientplatform_entry.list_accessible_businesses",
+                return_value=[access],
+            ),
+            patch(
+                "services.messenger.clientplatform_entry.resolve_tenant_context",
+                return_value=actor,
+            ),
+            patch(
+                "services.messenger.clientplatform_entry.render_native_member_interaction",
+                return_value=interaction,
+            ) as render,
+        ):
+            for event_key in ("vk-event-1", "vk-event-2", "vk-event-1"):
+                handle_clientplatform_entry(
+                    909,
+                    platform="vk",
+                    external_user_id="vk-909",
+                    text="оплата 1500 RUB",
+                    event_key=event_key,
+                )
+
+        keys = [call.kwargs["interaction_key"] for call in render.call_args_list]
+        self.assertNotEqual(keys[0], keys[1])
+        self.assertEqual(keys[0], keys[2])
+
     def test_workspace_command_is_recognized_separately_from_native_action(self) -> None:
         command = parse_clientplatform_entry_command(
             f"cpw:act:{uuid_token(B1)}:cpm:messengers"
@@ -658,6 +712,7 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertTrue(processed)
         handle.assert_called_once()
+        self.assertEqual(handle.call_args.kwargs["event_key"], "vk-entry-1")
         persist.assert_called_once()
 
         with (

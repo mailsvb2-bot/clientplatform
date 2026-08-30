@@ -98,6 +98,7 @@ def _process_clientplatform_entry_and_persist(
             username=extracted["username"],
             display_name=extracted["display_name"],
             first_name=extracted["first_name"],
+            event_key=event_key,
         )
         persist_reply_bundle(
             platform=platform,

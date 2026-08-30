@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 
 from clientplatform.application.activity import save_business_profile
 from clientplatform.application.control_callbacks import token_uuid, uuid_token
-from clientplatform.application.native_member_interactions import render_native_member_interaction
+from clientplatform.application.native_member_interactions import (
+    recognizes_native_member_interaction,
+    render_native_member_interaction,
+)
 from clientplatform.application.tenancy import (
     create_business,
     list_accessible_businesses,
@@ -132,6 +136,8 @@ def parse_clientplatform_entry_command(
     if lowered.startswith("cpw:"):
         return ClientPlatformEntryCommand("workspace", raw)
     if lowered.startswith("cpm:") or lowered in _OWNER_CONTROL_ALIASES:
+        return ClientPlatformEntryCommand("owner_control", raw)
+    if recognizes_native_member_interaction(raw):
         return ClientPlatformEntryCommand("owner_control", raw)
     return None
 
@@ -262,6 +268,26 @@ def _business_selector_reply(accesses: list[object], *, page: int = 0) -> Messen
     return _interaction_reply(interaction)
 
 
+def _official_interaction_key(
+    *,
+    platform: str,
+    canonical_user_id: int,
+    event_key: str | None,
+    raw_text: str,
+) -> str:
+    normalized_platform = normalize_platform(platform)
+    material = "\x1f".join(
+        (
+            normalized_platform,
+            str(int(canonical_user_id)),
+            str(event_key or "direct").strip(),
+            str(raw_text or "").strip(),
+        )
+    )
+    digest = hashlib.sha256(material.encode("utf-8")).hexdigest()[:32]
+    return f"official:{normalized_platform}:{int(canonical_user_id)}:{digest}"
+
+
 def _owner_control_reply(
     *,
     canonical_user_id: int,
@@ -269,6 +295,7 @@ def _owner_control_reply(
     accesses: list[object],
     raw_text: str,
     business_id: str | None = None,
+    interaction_key: str,
 ) -> MessengerReply | None:
     actor = _business_actor(
         user_id=canonical_user_id,
@@ -295,7 +322,7 @@ def _owner_control_reply(
     interaction = render_native_member_interaction(
         actor=actor,
         raw_text=raw_text or "cpm:menu",
-        interaction_key=f"official:{normalize_platform(platform)}:{canonical_user_id}",
+        interaction_key=interaction_key,
         current_platform=_connection_platform(platform),
         setup_issuer=_issue_setup_command,
     )
@@ -325,6 +352,7 @@ def handle_clientplatform_entry(
     username: str | None = None,
     display_name: str | None = None,
     first_name: str | None = None,
+    event_key: str | None = None,
 ) -> tuple[int, list[MessengerReply]]:
     """Register a channel identity and return the ClientPlatform entry response."""
 
@@ -344,6 +372,12 @@ def handle_clientplatform_entry(
     canonical_user_id = int(entry.user_id)
 
     accesses = list(list_accessible_businesses(user_id=canonical_user_id))
+    interaction_key = _official_interaction_key(
+        platform=platform,
+        canonical_user_id=canonical_user_id,
+        event_key=event_key,
+        raw_text=command.value or str(text or command.action),
+    )
     if command.action == "workspace":
         parts = command.value.split(":", 3)
         if len(parts) >= 3 and parts[:2] == ["cpw", "list"]:
@@ -365,6 +399,7 @@ def handle_clientplatform_entry(
                 accesses=accesses,
                 raw_text="cpm:menu",
                 business_id=str(access.business.id),
+                interaction_key=interaction_key,
             )
             if reply is None:
                 raise RuntimeError("selected business could not be resolved")
@@ -385,6 +420,7 @@ def handle_clientplatform_entry(
                 accesses=accesses,
                 raw_text=inner,
                 business_id=str(access.business.id),
+                interaction_key=interaction_key,
             )
             if reply is None:
                 raise RuntimeError("scoped business action could not be resolved")
@@ -397,6 +433,7 @@ def handle_clientplatform_entry(
             platform=platform,
             accesses=accesses,
             raw_text=command.value,
+            interaction_key=interaction_key,
         )
         if reply is not None:
             return canonical_user_id, [reply]
@@ -440,6 +477,7 @@ def handle_clientplatform_entry(
             platform=platform,
             accesses=accesses,
             raw_text="cpm:menu",
+            interaction_key=interaction_key,
         )
         if reply is None:
             raise RuntimeError("single-business owner control could not be rendered")
@@ -500,6 +538,7 @@ def handle_clientplatform_entry(
             platform=platform,
             accesses=accesses,
             raw_text="cpm:menu",
+            interaction_key=interaction_key,
         )
         if reply is not None:
             return canonical_user_id, [reply]

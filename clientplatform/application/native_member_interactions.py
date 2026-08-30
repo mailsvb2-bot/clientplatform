@@ -775,6 +775,47 @@ def parse_native_member_interaction(value: object) -> ParsedMemberInteraction:
     return ParsedMemberInteraction("menu")
 
 
+_NATIVE_MEMBER_TEXT_ENTRY_ACTIONS = frozenset(
+    {
+        "sales-note-text",
+        "sales-next-text",
+        "sales-close-text",
+        "sales-followup-text",
+        "sales-followup-optout-text",
+        "publication-schedule-text",
+        "booking-open-text",
+        "publication-new-text",
+        "payment-new-text",
+        "price-set-text",
+        "member-add-text",
+        "activity-edit-text",
+        "program-create-text",
+        "program-lesson-text",
+        "program-deliver-text",
+        "offering-new-text",
+    }
+)
+
+
+def recognizes_native_member_interaction(value: object) -> bool:
+    """Return whether raw messenger text belongs to the canonical owner grammar.
+
+    The parser intentionally falls back to ``menu`` for unknown input, so global
+    owner ingress cannot infer recognition from the parsed action alone. Keep the
+    recognition decision beside the canonical grammar to prevent the legacy VK/MAX
+    runtime from swallowing supported owner mutations.
+    """
+
+    raw = str(value or "").strip()
+    if not raw:
+        return False
+    if _compact(raw) in _ALIASES:
+        return True
+    if raw.casefold().startswith(_COMMAND_PREFIX):
+        return True
+    return parse_native_member_interaction(raw).action in _NATIVE_MEMBER_TEXT_ENTRY_ACTIONS
+
+
 def _button(label: str, command: str) -> CustomerInteractionButton:
     return CustomerInteractionButton(label=label[:40], command=command)
 
@@ -3973,6 +4014,7 @@ __all__ = [
     "SIMPLE_OWNER_NATIVE_INTENT_EQUIVALENTS",
     "TELEGRAM_NATIVE_ACTION_EQUIVALENTS",
     "parse_native_member_interaction",
+    "recognizes_native_member_interaction",
     "process_native_member_interaction",
     "render_native_member_interaction",
     "resolve_native_member",
