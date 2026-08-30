@@ -483,11 +483,15 @@ def _register_external_product_routes(app: web.Application) -> None:
     app["clientplatform_external_product_ingress"] = True
 
 
-def _register_clientplatform_omnichannel_routes(app: web.Application) -> None:
+def _register_clientplatform_owner_entry_routes(app: web.Application) -> None:
     app.router.add_get(
         "/clientplatform/open/{platform}",
         _clientplatform_owner_entry_redirect,
     )
+    app["clientplatform_owner_entry_ingress"] = True
+
+
+def _register_clientplatform_omnichannel_routes(app: web.Application) -> None:
     app.router.add_post(
         "/clientplatform/webhooks/vk/{route_id}",
         canonical_vk_webhook,
@@ -562,6 +566,11 @@ async def start_messenger_webhook_runtime(
         ],
     )
     _register_health_routes(app)
+    # Landing owner-entry redirects are a first-party public surface, not a
+    # tenant-scoped omnichannel capability. Keep them available whenever the
+    # HTTP ingress runtime exists, even if canonical tenant VK/MAX ingress is
+    # intentionally disabled. Each redirect still checks provider readiness.
+    _register_clientplatform_owner_entry_routes(app)
 
     if payment_enabled:
         _register_payment_routes(app)
