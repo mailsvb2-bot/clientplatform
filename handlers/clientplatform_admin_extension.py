@@ -26,6 +26,7 @@ from clientplatform.application.activity import get_business_profile, list_busin
 from clientplatform.application.customers import list_customers
 from clientplatform.domain.activity import CapabilityStatus
 from clientplatform.domain.automation_policy import AutomationPolicyError
+from clientplatform.domain.money import settlement_currency_minor_unit_exponent
 from clientplatform.domain.tenancy import PlatformRole, TenantPermissionDenied, TenancyError
 from clientplatform.runtime import admin_observability
 from core.telegram_multi_egress import (
@@ -77,6 +78,12 @@ _EMPTY_INSIGHTS = admin_ops.AdminInsightSnapshot(
     priced_offerings=0,
     active_staff=0,
 )
+_EMPTY_PAYMENT_SUMMARY = admin_ops.PaymentSummary(
+    paid_payments=0,
+    paid_customers=0,
+    by_currency=(),
+)
+
 _EMPTY_INTERACTION = admin_ops.InteractionSnapshot(
     count=0,
     successes=0,
@@ -106,38 +113,24 @@ async def _optional_thread(
         return default
 
 
-def _payment_totals(payments: list[Any]) -> dict[str, int]:
-    totals: dict[str, int] = {}
-    for payment in payments:
-        if payment.status != "paid":
-            continue
-        totals[payment.currency] = (
-            totals.get(payment.currency, 0) + int(payment.amount_minor)
-        )
-    return totals
-
-
-def _payment_totals_text(payments: list[Any]) -> str:
-    totals = _payment_totals(payments)
-    if not totals:
+def _payment_totals_text(summary: admin_ops.PaymentSummary) -> str:
+    if not summary.by_currency:
         return "0,00 RUB"
     return " · ".join(
-        _money(amount, currency)
-        for currency, amount in sorted(totals.items())
+        _money(item.amount_minor, item.currency)
+        for item in summary.by_currency
     )
 
 
-def _payment_average_text(payments: list[Any]) -> str:
-    totals = _payment_totals(payments)
-    counts: dict[str, int] = {}
-    for payment in payments:
-        if payment.status == "paid":
-            counts[payment.currency] = counts.get(payment.currency, 0) + 1
-    if not totals:
+def _payment_average_text(summary: admin_ops.PaymentSummary) -> str:
+    if not summary.by_currency:
         return "0,00 RUB"
     return " · ".join(
-        _money(total // max(1, counts[currency]), currency)
-        for currency, total in sorted(totals.items())
+        _money(
+            item.amount_minor // max(1, item.paid_payments),
+            item.currency,
+        )
+        for item in summary.by_currency
     )
 
 
@@ -177,8 +170,11 @@ def _flow_keyboard(
 
 
 def _money(amount_minor: int, currency: str) -> str:
-    amount = Decimal(int(amount_minor)) / Decimal(100)
-    rendered = f"{amount:,.2f}".replace(",", " ").replace(".", ",")
+    exponent = settlement_currency_minor_unit_exponent(currency)
+    amount = Decimal(int(amount_minor)) / (Decimal(10) ** exponent)
+    rendered = (
+        f"{amount:,.{exponent}f}" if exponent else f"{amount:,.0f}"
+    ).replace(",", " ").replace(".", ",")
     return f"{rendered} {currency}"
 
 
@@ -311,6 +307,7 @@ async def _enhanced_marketing(
         base_snapshot,
         insights,
         payments,
+        payment_facts,
         publications,
         prices,
         interaction,
@@ -328,6 +325,11 @@ async def _enhanced_marketing(
             default=[],
             actor=ctx.actor,
             limit=20,
+        ),
+        _optional_thread(
+            admin_ops.payment_summary,
+            default=_EMPTY_PAYMENT_SUMMARY,
+            actor=ctx.actor,
         ),
         _optional_thread(
             admin_ops.get_publication_calendar_projection,
@@ -367,11 +369,6 @@ async def _enhanced_marketing(
     profile, summary, capabilities, slots, customers, programs, progress = base_snapshot
     offerings = await _all_offerings(ctx.actor, capabilities)
     price_by_offering = {item.offering_id: item for item in prices}
-    paid_customer_ids = {
-        item.customer_id
-        for item in payments
-        if item.status == "paid" and item.customer_id is not None
-    }
     enrolled_ids = {item.customer_id for item in progress}
     completed_ids = {
         item.customer_id
@@ -518,13 +515,13 @@ async def _enhanced_marketing(
     elif action == "money":
         text = (
             "💰 Деньги и клиенты\n\n"
-            f"Оплачено: {_payment_totals_text(payments)}\n"
+            f"Оплачено: {_payment_totals_text(payment_facts)}\n"
             f"Успешных оплат: {insights.paid_payments}\n"
-            f"Средний платёж: {_payment_average_text(payments)}\n"
-            f"Платящих клиентов: {len(paid_customer_ids)}\n"
+            f"Средний платёж: {_payment_average_text(payment_facts)}\n"
+            f"Платящих клиентов: {payment_facts.paid_customers}\n"
             f"Всего клиентов: {insights.active_customers}\n"
             f"Доля платящих: "
-            f"{_percent(len(paid_customer_ids), insights.active_customers)}"
+            f"{_percent(payment_facts.paid_customers, insights.active_customers)}"
         )
         extra = _finance_write_buttons(admin, ctx, action=action, offerings=offerings)
     elif action == "payments":
@@ -536,7 +533,7 @@ async def _enhanced_marketing(
         text = (
             "💰 Оплаты\n\n"
             f"Успешных: {insights.paid_payments}\n"
-            f"Сумма: {_payment_totals_text(payments)}\n\n"
+            f"Сумма: {_payment_totals_text(payment_facts)}\n\n"
             f"{recent}"
         )
         extra = _finance_write_buttons(admin, ctx, action=action, offerings=offerings)
@@ -562,9 +559,9 @@ async def _enhanced_marketing(
             f"Проходят программу: {len(enrolled_ids - completed_ids)}\n"
             f"Завершили: {len(completed_ids)}\n"
             f"Остановились: {len(stalled_ids)}\n"
-            f"Платящие: {len(paid_customer_ids)}\n"
+            f"Платящие: {payment_facts.paid_customers}\n"
             f"Без зафиксированной оплаты: "
-            f"{max(0, insights.active_customers - len(paid_customer_ids))}"
+            f"{max(0, insights.active_customers - payment_facts.paid_customers)}"
         )
         extra = []
     elif action == "offers":
@@ -594,10 +591,15 @@ async def _enhanced_marketing(
             "3. Как проходит работа или программа.\n"
             "4. Один понятный следующий шаг."
         )
-        extra = [
-            ("✏️ Изменить деятельность", f"cp:editact:{ctx.business_token}"),
-            ("➕ Создать публикацию", _ops_callback(ctx, "publication-new")),
-        ]
+        extra = []
+        if ctx.role in admin._ADMIN_ROLES:
+            extra.append(
+                ("✏️ Изменить деятельность", f"cp:editact:{ctx.business_token}")
+            )
+        if _can_write_publications(ctx):
+            extra.append(
+                ("➕ Создать публикацию", _ops_callback(ctx, "publication-new"))
+            )
     elif action == "prices":
         lines = "\n".join(
             f"• {item.title[:36]} — "
@@ -608,8 +610,8 @@ async def _enhanced_marketing(
             "💡 Подсказка по ценам\n\n"
             f"Предложений: {len(offerings)}\n"
             f"Цены заполнены: {len(price_by_offering)}/{len(offerings)}\n"
-            f"Зафиксированная выручка: {_payment_totals_text(payments)}\n"
-            f"Средний платёж: {_payment_average_text(payments)}\n\n"
+            f"Зафиксированная выручка: {_payment_totals_text(payment_facts)}\n"
+            f"Средний платёж: {_payment_average_text(payment_facts)}\n\n"
             f"{lines}"
         )
         extra = _finance_write_buttons(admin, ctx, action=action, offerings=offerings)
@@ -640,6 +642,7 @@ async def _enhanced_admin_report(
         base_snapshot,
         insights,
         payments,
+        payment_facts,
         interaction,
         audit,
     ) = await asyncio.gather(
@@ -654,6 +657,11 @@ async def _enhanced_admin_report(
             default=[],
             actor=ctx.actor,
             limit=20,
+        ),
+        _optional_thread(
+            admin_ops.payment_summary,
+            default=_EMPTY_PAYMENT_SUMMARY,
+            actor=ctx.actor,
         ),
         _optional_thread(
             admin_ops.interaction_snapshot,
@@ -727,7 +735,7 @@ async def _enhanced_admin_report(
             f"В программах: {enrolled}\n"
             f"Завершили: {complete}\n"
             f"Оплатили: {insights.paid_payments}\n"
-            f"Оплачено: {_payment_totals_text(payments)}\n"
+            f"Оплачено: {_payment_totals_text(payment_facts)}\n"
             f"Свободных времён: {open_slots}"
         )
         extra = []
@@ -835,12 +843,6 @@ def _parse_amount(value: str) -> tuple[int, str, str]:
         raise ValueError("Сумма должна быть числом") from exc
     if not amount.is_finite() or amount <= 0:
         raise ValueError("Сумма должна быть больше нуля")
-    amount_minor = int(
-        (amount * Decimal(100)).quantize(
-            Decimal("1"),
-            rounding=ROUND_HALF_UP,
-        )
-    )
     currency = "RUB"
     note = ""
     if len(parts) >= 2 and len(parts[1]) == 3 and parts[1].isalpha():
@@ -848,6 +850,13 @@ def _parse_amount(value: str) -> tuple[int, str, str]:
         note = parts[2] if len(parts) == 3 else ""
     elif len(parts) >= 2:
         note = " ".join(parts[1:])
+    exponent = settlement_currency_minor_unit_exponent(currency)
+    amount_minor = int(
+        (amount * (Decimal(10) ** exponent)).quantize(
+            Decimal("1"),
+            rounding=ROUND_HALF_UP,
+        )
+    )
     return amount_minor, currency, note
 
 

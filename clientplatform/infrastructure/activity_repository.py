@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from typing import Any
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from clientplatform.domain.activity import (
     ActivityInvariantViolation,
@@ -322,6 +322,7 @@ class ActivityRepository:
         capability_id: str,
         title: str,
         description: str,
+        idempotency_key: str | None = None,
         now: str | None = None,
     ) -> BusinessOffering:
         current = self._current_actor(actor)
@@ -332,8 +333,44 @@ class ActivityRepository:
         connector = resolve_activity_connector(capability.connector_key)
         if not connector.supports_offerings:
             raise ActivityInvariantViolation("this connector uses its own specialized content model")
+        normalized_title = normalize_offering_title(title)
+        normalized_description = normalize_offering_description(description)
+        if idempotency_key is None:
+            offering_id = str(uuid4())
+        else:
+            normalized_key = str(idempotency_key).strip()
+            if not normalized_key or len(normalized_key) > 500:
+                raise ValueError("idempotency_key must be 1..500 characters")
+            if any(ord(char) < 32 or ord(char) == 127 for char in normalized_key):
+                raise ValueError("idempotency_key contains control characters")
+            offering_id = str(
+                uuid5(
+                    NAMESPACE_URL,
+                    f"clientplatform:offering:{current.business_id}:{normalized_key}",
+                )
+            )
+            existing = self._conn.execute(
+                """
+                SELECT id, business_id, capability_id, title, description, status,
+                       created_by_member_id, created_at, updated_at
+                FROM business_offerings
+                WHERE id=? AND business_id=?
+                LIMIT 1
+                """,
+                (offering_id, current.business_id),
+            ).fetchone()
+            if existing is not None:
+                offering = _offering_from_row(existing)
+                if (
+                    offering.capability_id != capability.id
+                    or offering.title != normalized_title
+                    or offering.description != normalized_description
+                ):
+                    raise ActivityInvariantViolation(
+                        "offering idempotency key belongs to different work"
+                    )
+                return offering
         timestamp = str(now or _utc_now())
-        offering_id = str(uuid4())
         self._conn.execute(
             """
             INSERT INTO business_offerings(
@@ -345,8 +382,8 @@ class ActivityRepository:
                 offering_id,
                 current.business_id,
                 capability.id,
-                normalize_offering_title(title),
-                normalize_offering_description(description),
+                normalized_title,
+                normalized_description,
                 current.membership_id,
                 timestamp,
                 timestamp,

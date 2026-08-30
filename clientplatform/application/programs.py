@@ -19,11 +19,13 @@ def create_program(
     *,
     actor: TenantContext,
     title: str,
+    idempotency_key: str | None = None,
 ) -> Program:
     with get_db() as conn:
         return ProgramRepository(conn).create_program(
             actor=actor,
             title=title,
+            idempotency_key=idempotency_key,
         )
 
 
@@ -35,6 +37,7 @@ def add_program_lesson(
     content_kind: ContentKind | str,
     content_ref: str,
     position: int | None = None,
+    idempotency_key: str | None = None,
 ) -> Lesson:
     with get_db() as conn:
         return ProgramRepository(conn).add_lesson(
@@ -44,6 +47,7 @@ def add_program_lesson(
             content_kind=content_kind,
             content_ref=content_ref,
             position=position,
+            idempotency_key=idempotency_key,
         )
 
 

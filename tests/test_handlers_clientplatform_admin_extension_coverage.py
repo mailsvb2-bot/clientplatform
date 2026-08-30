@@ -106,6 +106,15 @@ class FakeAdmin:
     ) -> None:
         self.panels.append((user_id, business_id))
 
+    async def _set_current_section(
+        self,
+        _state: Any,
+        *,
+        action: str,
+        push: bool,
+    ) -> None:
+        _ = (action, push)
+
     @staticmethod
     def _keyboard(rows: Any) -> Any:
         return rows
@@ -166,12 +175,23 @@ def test_amount_and_display_helpers_cover_validation_and_formatting(ctx: Any) ->
         "RUB",
         "комментарий",
     )
+    assert extension._parse_amount("99") == (9900, "RUB", "")
     assert extension._money(123456, "RUB") == "1 234,56 RUB"
+    assert extension._parse_amount("3500 JPY") == (3500, "JPY", "")
+    assert extension._parse_amount("3500 KWD") == (3_500_000, "KWD", "")
+    assert extension._money(3500, "JPY") == "3 500 JPY"
+    assert extension._money(3_500_000, "KWD") == "3 500,000 KWD"
     assert extension._percent(1, 4) == "25%"
     assert extension._percent(1, 0) == "0%"
     assert extension._status_icon(True) == "✅"
     assert extension._status_icon(False) == "⚠️"
-    assert extension._payment_totals_text([]) == "0,00 RUB"
+    assert extension._payment_totals_text(
+        extension.admin_ops.PaymentSummary(
+            paid_payments=0,
+            paid_customers=0,
+            by_currency=(),
+        )
+    ) == "0,00 RUB"
     max_callback = extension._ops_callback(
         SimpleNamespace(business_token="a" * 22),
         "pay-refund-ok",
@@ -205,15 +225,20 @@ def test_amount_and_display_helpers_cover_validation_and_formatting(ctx: Any) ->
     assert len(publish_callback.encode("utf-8")) <= 64
     assert ":pp:" in publish_callback
 
-    payments = [
-        SimpleNamespace(status="paid", currency="RUB", amount_minor=10000),
-        SimpleNamespace(status="paid", currency="RUB", amount_minor=20000),
-        SimpleNamespace(status="failed", currency="RUB", amount_minor=90000),
-        SimpleNamespace(status="paid", currency="USD", amount_minor=500),
-    ]
-    assert extension._payment_totals(payments) == {"RUB": 30000, "USD": 500}
-    assert "300,00 RUB" in extension._payment_totals_text(payments)
-    assert "150,00 RUB" in extension._payment_average_text(payments)
+    summary = extension.admin_ops.PaymentSummary(
+        paid_payments=3,
+        paid_customers=2,
+        by_currency=(
+            extension.admin_ops.PaymentCurrencySummary(
+                currency="RUB", amount_minor=30000, paid_payments=2
+            ),
+            extension.admin_ops.PaymentCurrencySummary(
+                currency="USD", amount_minor=500, paid_payments=1
+            ),
+        ),
+    )
+    assert extension._payment_totals_text(summary) == "300,00 RUB · 5,00 USD"
+    assert extension._payment_average_text(summary) == "150,00 RUB · 5,00 USD"
 
     for value, message in [
         ("", "Укажите сумму"),
@@ -228,6 +253,48 @@ def test_amount_and_display_helpers_cover_validation_and_formatting(ctx: Any) ->
     assert extension._ops_callback(ctx, "run", "x") == "cpao:business:run:x"
     with pytest.raises(ValueError, match="exceeds Telegram limit"):
         extension._ops_callback(ctx, "x" * 80)
+
+
+def test_finance_write_buttons_cover_non_write_and_unknown_action(
+    ctx: Any,
+) -> None:
+    admin = FakeAdmin(ctx)
+    ctx.actor.role = PlatformRole.OWNER
+    assert extension._finance_write_buttons(
+        admin, ctx, action="money", offerings=[]
+    ) == [("➕ Зафиксировать оплату вручную", "cpao:business:payment-new")]
+    assert extension._finance_write_buttons(
+        admin, ctx, action="unrelated", offerings=[]
+    ) == []
+    ctx.actor.role = PlatformRole.ANALYST
+    assert extension._finance_write_buttons(
+        admin, ctx, action="money", offerings=[]
+    ) == []
+
+
+@pytest.mark.asyncio
+async def test_enhanced_attention_renders_open_alerts(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_admin: FakeAdmin,
+    ctx: Any,
+) -> None:
+    fake_admin.business_delivery_summary = lambda **_kwargs: SimpleNamespace(
+        dispatch_attention=2, dispatch_pending=1
+    )
+    monkeypatch.setattr(
+        extension.admin_ops,
+        "list_open_alerts",
+        lambda **_kwargs: [
+            SimpleNamespace(severity="critical", message="Критический сигнал"),
+            SimpleNamespace(severity="warning", message="Предупреждение"),
+        ],
+    )
+    await extension._enhanced_attention(FakeCallback("x"), FakeState(), ctx)
+    assert fake_admin.edits
+    text = fake_admin.edits[-1][0]
+    assert "🔴 Критический сигнал" in text
+    assert "🟠 Предупреждение" in text
+    assert "Сейчас критических задач нет" not in text
 
 
 @pytest.mark.asyncio
@@ -850,7 +917,7 @@ async def test_payment_and_price_input_handlers_explain_domain_validation(
     payment = FakeMessage("3500 XXX")
     await extension.receive_payment_value(payment, payment_state)
     assert payment.answers == [
-        "Оплата не сохранена: currency must be a known ISO 4217 code."
+        "currency must be a known ISO 4217 code. Пример: 3500 RUB консультация."
     ]
     assert payment_state.clear_count == 0
 

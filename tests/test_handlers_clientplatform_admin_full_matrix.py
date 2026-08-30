@@ -351,6 +351,13 @@ def render_contract(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(extension.admin_ops, "list_payments", lambda **_kwargs: [])
     monkeypatch.setattr(
         extension.admin_ops,
+        "payment_summary",
+        lambda **_kwargs: extension.admin_ops.PaymentSummary(
+            paid_payments=0, paid_customers=0, by_currency=()
+        ),
+    )
+    monkeypatch.setattr(
+        extension.admin_ops,
         "get_publication_calendar_projection",
         lambda **_kwargs: PublicationCalendarProjection(
             entries=(), actionable_drafts=(), draft_count=0, scheduled_count=0,

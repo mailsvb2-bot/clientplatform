@@ -9,7 +9,7 @@ import sqlite3
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from typing import Any
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from clientplatform.application.automation_policy import (
@@ -19,6 +19,7 @@ from clientplatform.application.automation_policy import (
     list_current_automation_action_approvals,
     reject_automation_action,
     revoke_automation_action_approval,
+    set_owner_autopilot_enabled,
     toggle_owner_autopilot,
 )
 from clientplatform.domain.automation_policy import AutomationActionApproval
@@ -404,6 +405,20 @@ class AdminAlert:
 
 
 @dataclass(frozen=True, slots=True)
+class PaymentCurrencySummary:
+    currency: str
+    amount_minor: int
+    paid_payments: int
+
+
+@dataclass(frozen=True, slots=True)
+class PaymentSummary:
+    paid_payments: int
+    paid_customers: int
+    by_currency: tuple[PaymentCurrencySummary, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class AdminInsightSnapshot:
     active_customers: int
     active_offerings: int
@@ -687,12 +702,30 @@ def _audit(
     )
 
 
+def _native_idempotent_entity_id(
+    *,
+    business_id: str,
+    kind: str,
+    idempotency_key: str | None,
+) -> str:
+    if idempotency_key is None:
+        return str(uuid4())
+    normalized = _idempotency_key(idempotency_key)
+    return str(
+        uuid5(
+            NAMESPACE_URL,
+            f"clientplatform:{kind}:{business_id}:{normalized}",
+        )
+    )
+
+
 def create_publication_draft(
     *,
     actor: TenantContext,
     title: str,
     body: str,
     channel: str = "telegram",
+    idempotency_key: str | None = None,
 ) -> PublicationRecord:
     normalized_channel = str(channel or "telegram").strip().lower()
     if normalized_channel not in {"telegram", "vk", "max", "other"}:
@@ -700,10 +733,37 @@ def create_publication_draft(
     normalized_title = _text(title, field="title", maximum=180)
     normalized_body = _body(body)
     timestamp = _utc_now()
-    publication_id = str(uuid4())
 
     with get_db() as conn:
         current = _resolve(conn, actor, allowed_roles=_CONTENT_ROLES)
+        publication_id = _native_idempotent_entity_id(
+            business_id=current.business_id,
+            kind="publication",
+            idempotency_key=idempotency_key,
+        )
+        if idempotency_key is not None:
+            existing = conn.execute(
+                """
+                SELECT id, business_id, channel, title, body, status,
+                       created_at, updated_at, scheduled_at, published_at,
+                       failed_at, failure_reason
+                FROM business_publications
+                WHERE id=? AND business_id=?
+                LIMIT 1
+                """,
+                (publication_id, current.business_id),
+            ).fetchone()
+            if existing is not None:
+                record = _publication_from_row(existing)
+                if (
+                    record.channel != normalized_channel
+                    or record.title != normalized_title
+                    or record.body != normalized_body
+                ):
+                    raise ValueError(
+                        "publication idempotency key belongs to different work"
+                    )
+                return record
         conn.execute(
             """
             INSERT INTO business_publications(
@@ -2306,6 +2366,16 @@ def toggle_autopilot(*, actor: TenantContext) -> bool:
     return toggle_owner_autopilot(actor=actor)
 
 
+def set_autopilot_enabled(*, actor: TenantContext, enabled: bool) -> bool:
+    """Set the owner policy to a desired state; repeated calls are safe."""
+
+    current = is_owner_autopilot_enabled(actor=actor)
+    if current == enabled:
+        return current
+    set_owner_autopilot_enabled(actor=actor, enabled=enabled)
+    return enabled
+
+
 def _automation_money_text(amount_minor: int, currency: str) -> str:
     normalized = normalize_settlement_currency(currency)
     exponent = settlement_currency_minor_unit_exponent(normalized)
@@ -2670,6 +2740,49 @@ def list_open_alerts(*, actor: TenantContext) -> list[AdminAlert]:
     ]
 
 
+def payment_summary(*, actor: TenantContext) -> PaymentSummary:
+    """Return complete paid-payment facts without truncating recent rows."""
+
+    with get_db_ro() as conn:
+        current = _resolve(conn, actor, allowed_roles=_FINANCE_READ_ROLES)
+        rows = conn.execute(
+            """
+            SELECT currency, COUNT(*) AS paid_payments,
+                   COALESCE(SUM(amount_minor), 0) AS amount_minor
+            FROM business_payments
+            WHERE business_id=? AND status='paid'
+            GROUP BY currency
+            ORDER BY currency
+            """,
+            (current.business_id,),
+        ).fetchall()
+        customer_row = conn.execute(
+            """
+            SELECT COUNT(DISTINCT customer_id) AS paid_customers
+            FROM business_payments
+            WHERE business_id=? AND status='paid' AND customer_id IS NOT NULL
+            """,
+            (current.business_id,),
+        ).fetchone()
+    by_currency = tuple(
+        PaymentCurrencySummary(
+            currency=str(_value(row, "currency", 0)).upper(),
+            paid_payments=int(_value(row, "paid_payments", 1) or 0),
+            amount_minor=int(_value(row, "amount_minor", 2) or 0),
+        )
+        for row in rows
+    )
+    return PaymentSummary(
+        paid_payments=sum(item.paid_payments for item in by_currency),
+        paid_customers=(
+            0
+            if customer_row is None
+            else int(_value(customer_row, "paid_customers", 0) or 0)
+        ),
+        by_currency=by_currency,
+    )
+
+
 def business_admin_insights(*, actor: TenantContext) -> AdminInsightSnapshot:
     with get_db_ro() as conn:
         current = _resolve(conn, actor, allowed_roles=_OBSERVABILITY_ROLES)
@@ -2807,7 +2920,9 @@ __all__ = [
     "OfferingPrice",
     "PaymentEvidenceInvariantViolation",
     "PaymentIdempotencyConflict",
+    "PaymentCurrencySummary",
     "PaymentRecord",
+    "PaymentSummary",
     "PaymentStateConflict",
     "PublicationCalendarProjection",
     "PublicationRecord",
@@ -2823,6 +2938,7 @@ __all__ = [
     "list_offering_prices",
     "list_open_alerts",
     "list_payments",
+    "payment_summary",
     "list_publication_calendar",
     "list_publications",
     "publish_publication",
@@ -2836,5 +2952,6 @@ __all__ = [
     "set_admin_setting",
     "set_offering_price",
     "get_autopilot_enabled",
+    "set_autopilot_enabled",
     "toggle_autopilot",
 ]

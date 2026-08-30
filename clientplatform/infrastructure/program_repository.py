@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timezone
 from typing import Any
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from clientplatform.domain.programs import (
     ContentKind,
@@ -47,6 +47,22 @@ def _program_from_row(row: Any) -> Program:
         updated_at=str(_value(row, "updated_at", 6)),
         published_at=None if published_at is None else str(published_at),
         archived_at=None if archived_at is None else str(archived_at),
+    )
+
+
+def _idempotent_uuid(*, business_id: str, kind: str, key: str | None) -> str:
+    if key is None:
+        return str(uuid4())
+    normalized = str(key).strip()
+    if not normalized or len(normalized) > 500:
+        raise ValueError("idempotency_key must be 1..500 characters")
+    if any(ord(char) < 32 or ord(char) == 127 for char in normalized):
+        raise ValueError("idempotency_key contains control characters")
+    return str(
+        uuid5(
+            NAMESPACE_URL,
+            f"clientplatform:{kind}:{business_id}:{normalized}",
+        )
     )
 
 
@@ -95,11 +111,34 @@ class ProgramRepository:
         *,
         actor: TenantContext,
         title: str,
+        idempotency_key: str | None = None,
         now: str | None = None,
     ) -> Program:
         current = self._resolve_actor(actor, manage=True)
         normalized_title = normalize_program_title(title)
-        program_id = str(uuid4())
+        program_id = _idempotent_uuid(
+            business_id=current.business_id,
+            kind="program",
+            key=idempotency_key,
+        )
+        if idempotency_key is not None:
+            existing = self._conn.execute(
+                """
+                SELECT id, business_id, title, status, created_by_member_id,
+                       created_at, updated_at, published_at, archived_at
+                FROM programs
+                WHERE id=? AND business_id=?
+                LIMIT 1
+                """,
+                (program_id, current.business_id),
+            ).fetchone()
+            if existing is not None:
+                program = _program_from_row(existing)
+                if program.title != normalized_title:
+                    raise ProgramInvariantViolation(
+                        "program idempotency key belongs to different work"
+                    )
+                return program
         timestamp = str(now or _utc_now())
         self._conn.execute(
             """
@@ -131,6 +170,7 @@ class ProgramRepository:
         content_kind: ContentKind | str,
         content_ref: str,
         position: int | None = None,
+        idempotency_key: str | None = None,
         now: str | None = None,
     ) -> Lesson:
         current = self._resolve_actor(actor, manage=True)
@@ -141,6 +181,36 @@ class ProgramRepository:
         normalized_title = normalize_lesson_title(title)
         normalized_kind = normalize_content_kind(content_kind)
         normalized_ref = normalize_content_ref(content_ref)
+        lesson_id = _idempotent_uuid(
+            business_id=current.business_id,
+            kind="lesson",
+            key=idempotency_key,
+        )
+        if idempotency_key is not None:
+            existing = self._conn.execute(
+                """
+                SELECT id, business_id, program_id, position, title, content_kind,
+                       content_ref, status, created_at, updated_at, archived_at
+                FROM lessons
+                WHERE id=? AND business_id=?
+                LIMIT 1
+                """,
+                (lesson_id, current.business_id),
+            ).fetchone()
+            if existing is not None:
+                lesson = _lesson_from_row(existing)
+                expected_position = None if position is None else normalize_position(position)
+                if (
+                    lesson.program_id != normalized_program_id
+                    or lesson.title != normalized_title
+                    or lesson.content_kind != normalized_kind
+                    or lesson.content_ref != normalized_ref
+                    or (expected_position is not None and lesson.position != expected_position)
+                ):
+                    raise ProgramInvariantViolation(
+                        "lesson idempotency key belongs to different work"
+                    )
+                return lesson
         timestamp = str(now or _utc_now())
 
         self._lock_program(
@@ -169,7 +239,6 @@ class ProgramRepository:
         else:
             lesson_position = normalize_position(position)
 
-        lesson_id = str(uuid4())
         try:
             self._conn.execute(
                 """
