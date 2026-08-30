@@ -76,8 +76,32 @@ def _max_link(payload: str) -> str:
 
 
 def _max_owner_link(payload: str) -> str:
-    # MAX exposes deep-link data to bot_started via its `payload` field.
-    return _render_max_link(payload, query_name='payload')
+    # MAX exposes owner deep-link data to bot_started only through the
+    # `payload` query parameter.  A generic template may legally place
+    # `{payload}` elsewhere for legacy links, but owner entry must never
+    # silently turn that into `start=` or a path segment.
+    bot_name = _strip(settings.MAX_BOT_NAME)
+    base = _strip(settings.MAX_BOT_LINK_BASE)
+    if not base:
+        return ''
+    if '{bot}' in base and not bot_name:
+        return ''
+
+    rendered = base.replace('{bot}', urllib.parse.quote(bot_name))
+    if '{' in rendered.replace('{payload}', '') or '}' in rendered.replace('{payload}', ''):
+        return ''
+
+    quoted_payload = urllib.parse.quote(payload)
+    if '{payload}' in rendered:
+        parsed = urllib.parse.urlsplit(rendered)
+        query_parts = parsed.query.split('&') if parsed.query else []
+        if not any(part == 'payload={payload}' for part in query_parts):
+            return ''
+        rendered = rendered.replace('{payload}', quoted_payload)
+        return '' if '{' in rendered or '}' in rendered else rendered
+
+    sep = '&' if '?' in rendered else '?'
+    return f'{rendered}{sep}payload={quoted_payload}'
 
 
 def _vk_link(payload: str) -> str:
