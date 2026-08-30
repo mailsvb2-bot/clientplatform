@@ -50,7 +50,7 @@ def test_owner_entry_targets_use_explicit_owner_payload(monkeypatch):
     assert [item['platform'] for item in items] == ['telegram', 'max', 'vk']
     assert items[0]['url'] == 'https://t.me/metro_test_bot?start=cpo_landing'
     assert items[1]['url'] == 'https://max.ru/metrotherapy?start=cpo_landing'
-    assert items[2]['url'] == 'https://vk.com/im?sel=-123456&start=cpo_landing'
+    assert items[2]['url'] == 'https://vk.com/im?sel=-123456&ref=cpo_landing'
     assert build_owner_entry_target('vk', 'landing') == items[2]
     assert build_owner_entry_target('unknown', 'landing') is None
 

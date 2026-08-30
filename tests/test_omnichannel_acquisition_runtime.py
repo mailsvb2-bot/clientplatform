@@ -87,7 +87,7 @@ async def test_neutral_landing_keeps_one_source_across_connected_messengers(monk
     ("platform", "target"),
     (
         ("telegram", "https://t.me/clientplatform_bot?start=cpo_landing"),
-        ("vk", "https://vk.com/im?sel=-123456&start=cpo_landing"),
+        ("vk", "https://vk.com/im?sel=-123456&ref=cpo_landing"),
         ("max", "https://max.ru/clientplatform?start=cpo_landing"),
     ),
 )

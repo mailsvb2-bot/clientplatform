@@ -383,8 +383,12 @@ def extract_vk_message(payload: dict[str, Any]) -> dict[str, Any] | None:
         return None
 
     payload_text = text_from_vk_payload(message.get("payload") or obj.get("payload") or payload.get("payload"))
-    text = (payload_text or message.get("text") or obj.get("text") or "").strip()
-    text = normalise_messenger_text(text, allow_plain_score=_has_pending_score_context(safe_user_id))
+    ref = str(message.get("ref") or obj.get("ref") or "").strip()
+    if ref.casefold().startswith("cpo_"):
+        text = f"/start {ref}"
+    else:
+        text = (payload_text or message.get("text") or obj.get("text") or "").strip()
+        text = normalise_messenger_text(text, allow_plain_score=_has_pending_score_context(safe_user_id))
     return {
         "user_id": safe_user_id,
         "external_user_id": str(from_id),

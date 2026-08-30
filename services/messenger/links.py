@@ -93,8 +93,33 @@ def build_site_entry_targets(source: str = 'site') -> list[dict[str, str]]:
     return _entry_targets(build_site_payload(source))
 
 
+def _vk_owner_link(payload: str) -> str:
+    group_id = _strip(settings.VK_GROUP_ID)
+    if not group_id:
+        return ''
+    return f'https://vk.com/im?sel=-{group_id}&ref={urllib.parse.quote(payload)}'
+
+
 def build_owner_entry_targets(source: str = 'site') -> list[dict[str, str]]:
-    return _entry_targets(build_owner_entry_payload(source))
+    payload = build_owner_entry_payload(source)
+    raw = [
+        {
+            'platform': MessengerPlatform.TELEGRAM.value,
+            'title': 'Telegram',
+            'url': _telegram_link(payload),
+        },
+        {
+            'platform': MessengerPlatform.MAX.value,
+            'title': 'MAX',
+            'url': _max_link(payload),
+        },
+        {
+            'platform': MessengerPlatform.VK.value,
+            'title': 'ВКонтакте',
+            'url': _vk_owner_link(payload),
+        },
+    ]
+    return [item for item in raw if item['url']]
 
 
 def build_owner_entry_target(platform: str, source: str = 'site') -> dict[str, str] | None:
