@@ -22,6 +22,11 @@ def setup_module(module):
     init_db()
 
 
+@pytest.fixture(autouse=True)
+def _enable_payment_surface(monkeypatch):
+    monkeypatch.setenv("PAYMENT_HTTP_ENABLED", "1")
+
+
 def _payment_urls(text: str) -> list[str]:
     return [line.strip() for line in str(text or "").splitlines() if line.strip().startswith("http") and "/pay/yookassa" in line]
 

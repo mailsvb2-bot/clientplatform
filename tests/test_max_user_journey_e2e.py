@@ -118,6 +118,7 @@ def test_max_full_user_journey_score_audio_done_repeat_pay_gift(monkeypatch, tmp
 
     sender = _FakeMaxSender()
     monkeypatch.setenv("TOKEN_ENFORCEMENT_MODE", "hard")
+    monkeypatch.setenv("PAYMENT_HTTP_ENABLED", "1")
     monkeypatch.setenv("MESSENGER_PUBLIC_BASE_URL", "https://example.test")
     monkeypatch.setenv("PAYMENT_PUBLIC_BASE_URL", "https://example.test")
     monkeypatch.setattr(settings, "MESSENGER_PUBLIC_BASE_URL", "https://example.test", raising=False)

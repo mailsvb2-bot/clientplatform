@@ -29,7 +29,8 @@ def test_continue_command_returns_next_audio_action():
     assert replies[0].kind == 'next_audio'
 
 
-def test_vk_and_max_accept_all_canonical_main_menu_titles():
+def test_vk_and_max_accept_all_canonical_main_menu_titles(monkeypatch):
+    monkeypatch.setenv("PAYMENT_HTTP_ENABLED", "1")
     expected_fragments = {
         'demo': 'Бесплатная практика',
         'full': 'Полный маршрут',

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from services.db import db
 from services.gift_claims import claim_gift_token
 from services.messenger.text_ui import handle_incoming_text
@@ -7,6 +9,11 @@ from services.payments.reconciliation import record_yookassa_webhook
 from services.practice_tokens import get_wallet
 from services.schema import init_db
 from services.practice_token_contract import package_by_id
+
+
+@pytest.fixture(autouse=True)
+def _enable_payment_surface(monkeypatch):
+    monkeypatch.setenv("PAYMENT_HTTP_ENABLED", "1")
 
 
 def _payment_payload(*, payment_id: str, user_id: int, package_id: str, gift_token: str = "") -> dict:
