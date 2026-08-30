@@ -905,6 +905,34 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(kwargs["text"], "start")
         self.assertEqual(kwargs["extracted"]["external_user_id"], "501")
 
+    async def test_vk_owner_ref_reaches_clientplatform_entry(self) -> None:
+        payload = {
+            "type": "message_new",
+            "event_id": "vk-owner-ref-1",
+            "object": {
+                "message": {
+                    "id": 2,
+                    "from_id": 502,
+                    "text": "start",
+                    "ref": "cpo_landing",
+                }
+            },
+        }
+        with (
+            patch.object(reliability.legacy, "_vk_secret_ok", return_value=True),
+            patch.object(
+                reliability,
+                "_process_clientplatform_entry_and_persist",
+                return_value=True,
+            ) as process,
+        ):
+            response = await reliability.vk_webhook(_FakeRequest(payload))
+        self.assertEqual(response.status, 200)
+        process.assert_called_once()
+        kwargs = process.call_args.kwargs
+        self.assertEqual(kwargs["text"], "/start cpo_landing")
+        self.assertEqual(kwargs["extracted"]["external_user_id"], "502")
+
     async def test_global_max_owner_callback_is_acknowledged_before_processing(self) -> None:
         payload = {
             "update_type": "message_callback",
@@ -961,6 +989,28 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(kwargs["event_type"], "bot_started")
         self.assertEqual(kwargs["text"], "start")
         self.assertEqual(kwargs["extracted"]["external_user_id"], "601")
+
+    async def test_max_owner_deep_link_payload_reaches_clientplatform_entry(self) -> None:
+        payload = {
+            "update_type": "bot_started",
+            "update_id": 78,
+            "user_id": 602,
+            "payload": "cpo_landing",
+        }
+        with (
+            patch.object(reliability.legacy, "_max_secret_ok", return_value=True),
+            patch.object(
+                reliability,
+                "_process_clientplatform_entry_and_persist",
+                return_value=True,
+            ) as process,
+        ):
+            response = await reliability.max_webhook(_FakeRequest(payload))
+        self.assertEqual(response.status, 200)
+        process.assert_called_once()
+        kwargs = process.call_args.kwargs
+        self.assertEqual(kwargs["text"], "cpo_landing")
+        self.assertEqual(kwargs["extracted"]["external_user_id"], "602")
 
     def test_owner_mutation_and_outbox_are_atomic_across_retry(self) -> None:
         # This module is also executed by the PostgreSQL bot-provisioning unittest
