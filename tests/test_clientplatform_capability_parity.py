@@ -4,6 +4,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from clientplatform.application import capability_parity
 from clientplatform.application.capability_parity import (
     CapabilityAvailability,
     get_business_capability_projection,
@@ -137,10 +138,9 @@ class CapabilityParityTests(unittest.TestCase):
         setup_status = SimpleNamespace(telegram_ok=True, vk_ok=True, max_ok=True)
         with (
             patch("clientplatform.application.capability_parity.business_connection_statuses", return_value=[(ConnectionPlatform.VK, ConnectionStatus.ACTIVE)]) as statuses,
+            patch("clientplatform.application.capability_parity._omnichannel_runtime_enabled", return_value=True),
             patch("clientplatform.application.capability_parity._omnichannel_setup_available", return_value=True),
             patch("clientplatform.application.capability_parity.telegram_runtime_enabled", return_value=True),
-            patch("clientplatform.application.capability_parity.vk_webhook_enabled", return_value=False),
-            patch("clientplatform.application.capability_parity.max_webhook_enabled", return_value=False),
             patch("clientplatform.application.capability_parity.build_setup_status", return_value=setup_status),
         ):
             projection = get_business_capability_projection(
@@ -151,16 +151,15 @@ class CapabilityParityTests(unittest.TestCase):
         statuses.assert_called_once_with(actor=actor)
         self.assertEqual(
             projection.messenger(ConnectionPlatform.VK).availability,
-            CapabilityAvailability.CONNECTED_UNAVAILABLE,
+            CapabilityAvailability.ACTIVE,
         )
 
-    def test_generic_omnichannel_setup_does_not_enable_disabled_vk_max_runtime(self) -> None:
+    def test_canonical_omnichannel_runtime_enables_native_vk_max_setup(self) -> None:
         setup_status = SimpleNamespace(telegram_ok=True, vk_ok=True, max_ok=True)
         with (
+            patch("clientplatform.application.capability_parity._omnichannel_runtime_enabled", return_value=True),
             patch("clientplatform.application.capability_parity._omnichannel_setup_available", return_value=True),
             patch("clientplatform.application.capability_parity.telegram_runtime_enabled", return_value=True),
-            patch("clientplatform.application.capability_parity.vk_webhook_enabled", return_value=False),
-            patch("clientplatform.application.capability_parity.max_webhook_enabled", return_value=False),
             patch("clientplatform.application.capability_parity.build_setup_status", return_value=setup_status),
         ):
             projected = {
@@ -169,16 +168,52 @@ class CapabilityParityTests(unittest.TestCase):
             }
 
         self.assertTrue(projected[ConnectionPlatform.TELEGRAM].can_connect)
-        self.assertFalse(projected[ConnectionPlatform.VK].can_connect)
-        self.assertFalse(projected[ConnectionPlatform.MAX].can_connect)
+        self.assertTrue(projected[ConnectionPlatform.VK].can_connect)
+        self.assertTrue(projected[ConnectionPlatform.MAX].can_connect)
         self.assertEqual(
             projected[ConnectionPlatform.VK].availability,
-            CapabilityAvailability.UNAVAILABLE,
+            CapabilityAvailability.CONNECTABLE,
         )
         self.assertEqual(
             projected[ConnectionPlatform.MAX].availability,
-            CapabilityAvailability.UNAVAILABLE,
+            CapabilityAvailability.CONNECTABLE,
         )
+
+    def test_legacy_global_webhook_flags_do_not_gate_native_vk_max(self) -> None:
+        setup_status = SimpleNamespace(telegram_ok=True, vk_ok=True, max_ok=True)
+        with (
+            patch.dict(
+                "os.environ",
+                {
+                    "CLIENTPLATFORM_OMNICHANNEL_INGRESS_ENABLED": "1",
+                    "VK_WEBHOOK_ENABLED": "0",
+                    "MAX_WEBHOOK_ENABLED": "0",
+                },
+                clear=False,
+            ),
+            patch.object(
+                capability_parity.settings,
+                "MESSENGER_PUBLIC_BASE_URL",
+                "https://app.clientplatform.test",
+            ),
+            patch(
+                "clientplatform.application.capability_parity.telegram_runtime_enabled",
+                return_value=True,
+            ),
+            patch(
+                "clientplatform.application.capability_parity.build_setup_status",
+                return_value=setup_status,
+            ),
+        ):
+            projected = {
+                item.platform: item
+                for item in project_messenger_capabilities(())
+            }
+
+        self.assertTrue(projected[ConnectionPlatform.VK].runtime_enabled)
+        self.assertTrue(projected[ConnectionPlatform.MAX].runtime_enabled)
+        self.assertTrue(projected[ConnectionPlatform.VK].can_connect)
+        self.assertTrue(projected[ConnectionPlatform.MAX].can_connect)
 
 
 if __name__ == "__main__":
