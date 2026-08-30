@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 
-from clientplatform.application.activity import save_business_profile
+from clientplatform.application.activity import get_business_profile, save_business_profile
 from clientplatform.application.control_callbacks import token_uuid, uuid_token
 from clientplatform.application.native_member_interactions import (
     recognizes_native_member_interaction,
@@ -16,6 +16,7 @@ from clientplatform.application.tenancy import (
     resolve_tenant_context,
     set_owner_control_workspace,
 )
+from clientplatform.domain.activity import ActivityNotFound
 from clientplatform.domain.connections import ConnectionPlatform
 from clientplatform.domain.customer_interactions import (
     CustomerInteractionButton,
@@ -527,10 +528,14 @@ def handle_clientplatform_entry(
                     )
                 )
             ]
+        try:
+            timezone_name = get_business_profile(actor=actor).timezone
+        except ActivityNotFound:
+            timezone_name = settings.TIMEZONE
         save_business_profile(
             actor=actor,
             activity_description=command.value,
-            timezone_name=settings.TIMEZONE,
+            timezone_name=timezone_name,
         )
         reply = _owner_control_reply(
             canonical_user_id=canonical_user_id,

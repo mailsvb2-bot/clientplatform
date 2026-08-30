@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from clientplatform.application.control_callbacks import uuid_token
+from clientplatform.domain.activity import ActivityNotFound
 from clientplatform.domain.customer_interactions import (
     CustomerInteractionButton,
     CustomerInteractionMessage,
@@ -480,6 +481,10 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
                 return_value=actor,
             ),
             patch(
+                "services.messenger.clientplatform_entry.get_business_profile",
+                return_value=SimpleNamespace(timezone="Europe/Tallinn"),
+            ),
+            patch(
                 "services.messenger.clientplatform_entry.save_business_profile"
             ) as save_profile,
             patch(
@@ -498,6 +503,10 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
             save_profile.call_args.kwargs["activity_description"],
             "Провожу уроки английского онлайн",
         )
+        self.assertEqual(
+            save_profile.call_args.kwargs["timezone_name"],
+            "Europe/Tallinn",
+        )
         self.assertEqual(len(replies), 2)
         self.assertEqual(replies[0].kind, "text")
         self.assertIn("Описание сохранено", replies[0].text)
@@ -505,6 +514,101 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
         restored = CustomerInteractionMessage.from_json(replies[1].meta["interaction"])
         self.assertIn("Школа английского", restored.text)
         self.assertEqual(restored.rows[0][0].command, "cpm:menu-all")
+
+    def test_first_activity_uses_default_timezone_when_profile_does_not_exist(self) -> None:
+        entry = SimpleNamespace(user_id=707)
+        access = SimpleNamespace(
+            business=SimpleNamespace(id=B1, name="Новая практика")
+        )
+        actor = SimpleNamespace(user_id=707, business_id=B1)
+        interaction = CustomerInteractionMessage(text="🏠 Новая практика")
+        with (
+            patch(
+                "services.messenger.clientplatform_entry.register_user_entry",
+                return_value=entry,
+            ),
+            patch(
+                "services.messenger.clientplatform_entry.list_accessible_businesses",
+                return_value=[access],
+            ),
+            patch(
+                "services.messenger.clientplatform_entry.resolve_tenant_context",
+                return_value=actor,
+            ),
+            patch(
+                "services.messenger.clientplatform_entry.get_business_profile",
+                side_effect=ActivityNotFound("missing"),
+            ),
+            patch(
+                "services.messenger.clientplatform_entry.settings.TIMEZONE",
+                "Europe/Tallinn",
+            ),
+            patch(
+                "services.messenger.clientplatform_entry.save_business_profile"
+            ) as save_profile,
+            patch(
+                "services.messenger.clientplatform_entry.render_native_member_interaction",
+                return_value=interaction,
+            ),
+        ):
+            handle_clientplatform_entry(
+                707,
+                platform="max",
+                external_user_id="max-707",
+                text="деятельность Новая частная практика",
+                event_key="max-activity-first",
+            )
+
+        self.assertEqual(
+            save_profile.call_args.kwargs["timezone_name"],
+            "Europe/Tallinn",
+        )
+
+    def test_activity_update_preserves_existing_business_timezone(self) -> None:
+        entry = SimpleNamespace(user_id=808)
+        access = SimpleNamespace(
+            business=SimpleNamespace(id=B1, name="Международная практика")
+        )
+        actor = SimpleNamespace(user_id=808, business_id=B1)
+        interaction = CustomerInteractionMessage(text="🏠 Международная практика")
+        with (
+            patch(
+                "services.messenger.clientplatform_entry.register_user_entry",
+                return_value=entry,
+            ),
+            patch(
+                "services.messenger.clientplatform_entry.list_accessible_businesses",
+                return_value=[access],
+            ),
+            patch(
+                "services.messenger.clientplatform_entry.resolve_tenant_context",
+                return_value=actor,
+            ),
+            patch(
+                "services.messenger.clientplatform_entry.get_business_profile",
+                return_value=SimpleNamespace(timezone="America/New_York"),
+            ),
+            patch(
+                "services.messenger.clientplatform_entry.save_business_profile"
+            ) as save_profile,
+            patch(
+                "services.messenger.clientplatform_entry.render_native_member_interaction",
+                return_value=interaction,
+            ),
+        ):
+            handle_clientplatform_entry(
+                808,
+                platform="vk",
+                external_user_id="vk-808",
+                text="деятельность Консультирую международных клиентов",
+                event_key="vk-activity-1",
+            )
+
+        save_profile.assert_called_once()
+        self.assertEqual(
+            save_profile.call_args.kwargs["timezone_name"],
+            "America/New_York",
+        )
 
     async def test_multi_business_selector_is_delivered_without_preselected_tenant(self) -> None:
         sent: list[tuple[str, str, dict[str, object]]] = []
