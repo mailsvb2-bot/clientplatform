@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from clientplatform.application.activity import save_business_profile
+from clientplatform.application.control_callbacks import token_uuid, uuid_token
 from clientplatform.application.native_member_interactions import render_native_member_interaction
 from clientplatform.application.tenancy import (
     create_business,
@@ -10,7 +11,10 @@ from clientplatform.application.tenancy import (
     resolve_tenant_context,
 )
 from clientplatform.domain.connections import ConnectionPlatform
-from clientplatform.domain.customer_interactions import CustomerInteractionMessage
+from clientplatform.domain.customer_interactions import (
+    CustomerInteractionButton,
+    CustomerInteractionMessage,
+)
 from clientplatform.domain.tenancy import TenancyError
 from clientplatform.runtime.native_messenger_setup_links import (
     NativeMessengerSetupLinkService,
@@ -125,6 +129,8 @@ def parse_clientplatform_entry_command(
             )
     if lowered in {"activity", "/activity", "деятельность"}:
         return ClientPlatformEntryCommand("describe_business")
+    if lowered.startswith("cpw:"):
+        return ClientPlatformEntryCommand("workspace", raw)
     if lowered.startswith("cpm:") or lowered in _OWNER_CONTROL_ALIASES:
         return ClientPlatformEntryCommand("owner_control", raw)
     return None
@@ -166,25 +172,94 @@ def _connection_platform(platform: str) -> ConnectionPlatform:
 def _interaction_reply(
     interaction: CustomerInteractionMessage,
     *,
-    business_id: str,
+    business_id: str | None = None,
 ) -> MessengerReply:
+    meta = {"interaction": interaction.to_json()}
+    if business_id:
+        meta["business_id"] = str(business_id)
     return MessengerReply(
         kind="clientplatform_interaction",
         text=interaction.text,
-        meta={
-            "interaction": interaction.to_json(),
-            "business_id": str(business_id),
-        },
+        meta=meta,
     )
 
 
-def _single_business_actor(*, user_id: int, accesses: list[object]):
-    if len(accesses) != 1:
+def _business_access_by_id(accesses: list[object], business_id: str):
+    expected = str(business_id or "").strip()
+    return next(
+        (access for access in accesses if str(access.business.id) == expected),
+        None,
+    )
+
+
+def _business_access_by_token(accesses: list[object], token: str):
+    try:
+        business_id = token_uuid(token)
+    except (TypeError, ValueError):
         return None
+    return _business_access_by_id(accesses, business_id)
+
+
+def _business_actor(
+    *,
+    user_id: int,
+    accesses: list[object],
+    business_id: str | None = None,
+):
+    if business_id is None:
+        if len(accesses) != 1:
+            return None
+        access = accesses[0]
+    else:
+        access = _business_access_by_id(accesses, business_id)
+        if access is None:
+            return None
     return resolve_tenant_context(
         user_id=int(user_id),
-        business_id=str(accesses[0].business.id),
+        business_id=str(access.business.id),
     )
+
+
+def _business_selector_reply(accesses: list[object], *, page: int = 0) -> MessengerReply:
+    page_size = 8
+    page_count = max(1, (len(accesses) + page_size - 1) // page_size)
+    safe_page = min(max(int(page), 0), page_count - 1)
+    current = accesses[safe_page * page_size : (safe_page + 1) * page_size]
+    rows = [
+        (
+            CustomerInteractionButton(
+                label=str(access.business.name)[:40],
+                command=f"cpw:open:{uuid_token(str(access.business.id))}",
+            ),
+        )
+        for access in current
+    ]
+    navigation = []
+    if safe_page > 0:
+        navigation.append(
+            CustomerInteractionButton(
+                label="⬅️ Назад",
+                command=f"cpw:list:{safe_page - 1}",
+            )
+        )
+    if safe_page + 1 < page_count:
+        navigation.append(
+            CustomerInteractionButton(
+                label="Вперёд ➡️",
+                command=f"cpw:list:{safe_page + 1}",
+            )
+        )
+    if navigation:
+        rows.append(tuple(navigation))
+    interaction = CustomerInteractionMessage(
+        text=(
+            "Выберите бизнес, с которым хотите работать.\n\n"
+            "ClientPlatform проверит Ваш доступ заново при каждом выборе."
+            + (f"\n\nСтраница {safe_page + 1}/{page_count}" if page_count > 1 else "")
+        ),
+        rows=tuple(rows),
+    )
+    return _interaction_reply(interaction)
 
 
 def _owner_control_reply(
@@ -193,8 +268,13 @@ def _owner_control_reply(
     platform: str,
     accesses: list[object],
     raw_text: str,
+    business_id: str | None = None,
 ) -> MessengerReply | None:
-    actor = _single_business_actor(user_id=canonical_user_id, accesses=accesses)
+    actor = _business_actor(
+        user_id=canonical_user_id,
+        accesses=accesses,
+        business_id=business_id,
+    )
     if actor is None:
         return None
     setup_links = NativeMessengerSetupLinkService(
@@ -264,6 +344,53 @@ def handle_clientplatform_entry(
     canonical_user_id = int(entry.user_id)
 
     accesses = list(list_accessible_businesses(user_id=canonical_user_id))
+    if command.action == "workspace":
+        parts = command.value.split(":", 3)
+        if len(parts) >= 3 and parts[:2] == ["cpw", "list"]:
+            try:
+                page = int(parts[2])
+            except ValueError:
+                page = 0
+            return canonical_user_id, [_business_selector_reply(accesses, page=page)]
+        if len(parts) >= 3 and parts[:2] == ["cpw", "open"]:
+            access = _business_access_by_token(accesses, parts[2])
+            if access is None:
+                return canonical_user_id, [
+                    MessengerReply(text="Этот бизнес больше недоступен для Вашего аккаунта."),
+                    _business_selector_reply(accesses),
+                ]
+            reply = _owner_control_reply(
+                canonical_user_id=canonical_user_id,
+                platform=platform,
+                accesses=accesses,
+                raw_text="cpm:menu",
+                business_id=str(access.business.id),
+            )
+            if reply is None:
+                raise RuntimeError("selected business could not be resolved")
+            return canonical_user_id, [reply]
+        if len(parts) == 4 and parts[:2] == ["cpw", "act"]:
+            access = _business_access_by_token(accesses, parts[2])
+            if access is None:
+                return canonical_user_id, [
+                    MessengerReply(text="Доступ к выбранному бизнесу изменился. Выберите бизнес снова."),
+                    _business_selector_reply(accesses),
+                ]
+            inner = parts[3]
+            if not inner.startswith("cpm:"):
+                return canonical_user_id, [_business_selector_reply(accesses)]
+            reply = _owner_control_reply(
+                canonical_user_id=canonical_user_id,
+                platform=platform,
+                accesses=accesses,
+                raw_text=inner,
+                business_id=str(access.business.id),
+            )
+            if reply is None:
+                raise RuntimeError("scoped business action could not be resolved")
+            return canonical_user_id, [reply]
+        return canonical_user_id, [_business_selector_reply(accesses)]
+
     if command.action == "owner_control":
         reply = _owner_control_reply(
             canonical_user_id=canonical_user_id,
@@ -275,10 +402,10 @@ def handle_clientplatform_entry(
             return canonical_user_id, [reply]
         if not accesses:
             return canonical_user_id, [MessengerReply(text=_entry_text(platform=platform, accesses=[]))]
-        return canonical_user_id, [MessengerReply(text=_entry_text(platform=platform, accesses=accesses))]
+        return canonical_user_id, [_business_selector_reply(accesses)]
 
     if command.action == "describe_business":
-        actor = _single_business_actor(user_id=canonical_user_id, accesses=accesses)
+        actor = _business_actor(user_id=canonical_user_id, accesses=accesses)
         if actor is None:
             if not accesses:
                 return canonical_user_id, [
@@ -376,6 +503,8 @@ def handle_clientplatform_entry(
         )
         if reply is not None:
             return canonical_user_id, [reply]
+    if command.action == "start" and len(accesses) > 1:
+        return canonical_user_id, [_business_selector_reply(accesses)]
 
     return canonical_user_id, [
         MessengerReply(text=_entry_text(platform=platform, accesses=accesses))

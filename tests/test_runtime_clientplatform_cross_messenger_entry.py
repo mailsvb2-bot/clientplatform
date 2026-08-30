@@ -5,6 +5,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from clientplatform.application.control_callbacks import uuid_token
 from clientplatform.domain.customer_interactions import (
     CustomerInteractionButton,
     CustomerInteractionMessage,
@@ -25,6 +26,11 @@ class _FakeRequest:
 
     async def text(self) -> str:
         return self._body
+
+
+B1 = "11111111-1111-1111-1111-111111111111"
+B2 = "22222222-2222-2222-2222-222222222222"
+B3 = "33333333-3333-3333-3333-333333333333"
 
 
 class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
@@ -111,6 +117,143 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
         assert command is not None
         self.assertEqual(command.action, "owner_control")
         self.assertEqual(command.value, "мессенджеры")
+
+    def test_workspace_command_is_recognized_separately_from_native_action(self) -> None:
+        command = parse_clientplatform_entry_command(
+            f"cpw:act:{uuid_token(B1)}:cpm:messengers"
+        )
+        self.assertIsNotNone(command)
+        assert command is not None
+        self.assertEqual(command.action, "workspace")
+
+    def test_multi_business_start_returns_server_resolved_selector(self) -> None:
+        entry = SimpleNamespace(user_id=505)
+        accesses = [
+            SimpleNamespace(business=SimpleNamespace(id=B1, name="Практика Анны")),
+            SimpleNamespace(business=SimpleNamespace(id=B2, name="Школа Анны")),
+        ]
+        with (
+            patch(
+                "services.messenger.clientplatform_entry.register_user_entry",
+                return_value=entry,
+            ),
+            patch(
+                "services.messenger.clientplatform_entry.list_accessible_businesses",
+                return_value=accesses,
+            ),
+        ):
+            _, replies = handle_clientplatform_entry(
+                505, platform="vk", external_user_id="505", text="start"
+            )
+        self.assertEqual(len(replies), 1)
+        self.assertEqual(replies[0].kind, "clientplatform_interaction")
+        self.assertNotIn("business_id", replies[0].meta)
+        restored = CustomerInteractionMessage.from_json(replies[0].meta["interaction"])
+        self.assertEqual(
+            [row[0].command for row in restored.rows],
+            [f"cpw:open:{uuid_token(B1)}", f"cpw:open:{uuid_token(B2)}"],
+        )
+
+    def test_multi_business_selection_revalidates_access_and_opens_selected_tenant(self) -> None:
+        entry = SimpleNamespace(user_id=505)
+        accesses = [
+            SimpleNamespace(business=SimpleNamespace(id=B1, name="Практика Анны")),
+            SimpleNamespace(business=SimpleNamespace(id=B2, name="Школа Анны")),
+        ]
+        actor = SimpleNamespace(user_id=505, business_id=B2)
+        interaction = CustomerInteractionMessage(
+            text="🏠 Школа Анны",
+            rows=((CustomerInteractionButton(label="💬 Мессенджеры", command="cpm:messengers"),),),
+        )
+        with (
+            patch(
+                "services.messenger.clientplatform_entry.register_user_entry",
+                return_value=entry,
+            ),
+            patch(
+                "services.messenger.clientplatform_entry.list_accessible_businesses",
+                return_value=accesses,
+            ),
+            patch(
+                "services.messenger.clientplatform_entry.resolve_tenant_context",
+                return_value=actor,
+            ) as resolve,
+            patch(
+                "services.messenger.clientplatform_entry.render_native_member_interaction",
+                return_value=interaction,
+            ) as render,
+        ):
+            _, replies = handle_clientplatform_entry(
+                505,
+                platform="max",
+                external_user_id="505",
+                text=f"cpw:open:{uuid_token(B2)}",
+            )
+        resolve.assert_called_once_with(user_id=505, business_id=B2)
+        self.assertEqual(render.call_args.kwargs["raw_text"], "cpm:menu")
+        self.assertEqual(replies[0].meta["business_id"], B2)
+
+    def test_scoped_multi_business_action_keeps_selected_tenant(self) -> None:
+        entry = SimpleNamespace(user_id=505)
+        accesses = [
+            SimpleNamespace(business=SimpleNamespace(id=B1, name="Практика Анны")),
+            SimpleNamespace(business=SimpleNamespace(id=B2, name="Школа Анны")),
+        ]
+        actor = SimpleNamespace(user_id=505, business_id=B1)
+        interaction = CustomerInteractionMessage(text="Мессенджеры")
+        with (
+            patch(
+                "services.messenger.clientplatform_entry.register_user_entry",
+                return_value=entry,
+            ),
+            patch(
+                "services.messenger.clientplatform_entry.list_accessible_businesses",
+                return_value=accesses,
+            ),
+            patch(
+                "services.messenger.clientplatform_entry.resolve_tenant_context",
+                return_value=actor,
+            ) as resolve,
+            patch(
+                "services.messenger.clientplatform_entry.render_native_member_interaction",
+                return_value=interaction,
+            ) as render,
+        ):
+            _, replies = handle_clientplatform_entry(
+                505,
+                platform="vk",
+                external_user_id="505",
+                text=f"cpw:act:{uuid_token(B1)}:cpm:messengers",
+            )
+        resolve.assert_called_once_with(user_id=505, business_id=B1)
+        self.assertEqual(render.call_args.kwargs["raw_text"], "cpm:messengers")
+        self.assertEqual(replies[0].meta["business_id"], B1)
+
+    def test_tampered_or_inaccessible_business_token_fails_closed_to_selector(self) -> None:
+        entry = SimpleNamespace(user_id=505)
+        accesses = [SimpleNamespace(business=SimpleNamespace(id=B1, name="Практика Анны"))]
+        with (
+            patch(
+                "services.messenger.clientplatform_entry.register_user_entry",
+                return_value=entry,
+            ),
+            patch(
+                "services.messenger.clientplatform_entry.list_accessible_businesses",
+                return_value=accesses,
+            ),
+            patch(
+                "services.messenger.clientplatform_entry.resolve_tenant_context"
+            ) as resolve,
+        ):
+            _, replies = handle_clientplatform_entry(
+                505,
+                platform="vk",
+                external_user_id="505",
+                text=f"cpw:open:{uuid_token(B3)}",
+            )
+        resolve.assert_not_called()
+        self.assertIn("недоступен", replies[0].text)
+        self.assertEqual(replies[1].kind, "clientplatform_interaction")
 
     def test_activity_description_is_channel_neutral_onboarding_step(self) -> None:
         command = parse_clientplatform_entry_command(
@@ -257,6 +400,36 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Школа английского", restored.text)
         self.assertEqual(restored.rows[0][0].command, "cpm:menu-all")
 
+    async def test_multi_business_selector_is_delivered_without_preselected_tenant(self) -> None:
+        sent: list[tuple[str, str, dict[str, object]]] = []
+
+        class FakeSender:
+            async def send_text(self, external_user_id, text, **kwargs):
+                sent.append((str(external_user_id), str(text), dict(kwargs)))
+                return {"ok": True}
+
+        interaction = CustomerInteractionMessage(
+            text="Выберите бизнес",
+            rows=((CustomerInteractionButton(
+                label="Практика Анны",
+                command=f"cpw:open:{uuid_token(B1)}",
+            ),),),
+        )
+        reply = MessengerReply(
+            kind="clientplatform_interaction",
+            text=interaction.text,
+            meta={"interaction": interaction.to_json()},
+        )
+        with (
+            patch.object(reply_dispatcher, "VkBotSender", return_value=FakeSender()),
+            patch.object(reply_dispatcher, "MaxBotSender", return_value=FakeSender()),
+        ):
+            await reply_dispatcher.send_reply_bundle("vk", "vk-505", 505, [reply])
+
+        keyboard = json.loads(str(sent[0][2]["keyboard_json"]))
+        payload = json.loads(keyboard["buttons"][0][0]["action"]["payload"])
+        self.assertEqual(payload["command"], f"cpw:open:{uuid_token(B1)}")
+
     async def test_global_vk_owner_interaction_renders_real_inline_buttons(self) -> None:
         sent: list[tuple[str, str, dict[str, object]]] = []
 
@@ -274,7 +447,7 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
             text=interaction.text,
             meta={
                 "interaction": interaction.to_json(),
-                "business_id": "business-101",
+                "business_id": B1,
             },
         )
         with (
@@ -286,7 +459,7 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(sent), 1)
         keyboard = json.loads(str(sent[0][2]["keyboard_json"]))
         payload = json.loads(keyboard["buttons"][0][0]["action"]["payload"])
-        self.assertEqual(payload, {"command": "cpm:messengers"})
+        self.assertEqual(payload, {"command": f"cpw:act:{uuid_token(B1)}:cpm:messengers"})
         self.assertNotIn("cpm:messengers", sent[0][1])
 
     async def test_global_max_owner_interaction_renders_real_callback_buttons(self) -> None:
@@ -306,7 +479,7 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
             text=interaction.text,
             meta={
                 "interaction": interaction.to_json(),
-                "business_id": "business-303",
+                "business_id": B2,
             },
         )
         with (
@@ -318,7 +491,7 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
         attachments = sent[0][2]["attachments"]
         button = attachments[0]["payload"]["buttons"][0][0]
         self.assertEqual(button["type"], "callback")
-        self.assertEqual(button["payload"], "cpm:work")
+        self.assertEqual(button["payload"], f"cpw:act:{uuid_token(B2)}:cpm:work")
 
     async def test_setup_link_resolution_fails_closed(self) -> None:
         class FakeSender:

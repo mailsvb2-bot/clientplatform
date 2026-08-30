@@ -6,6 +6,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from clientplatform.application.control_callbacks import uuid_token
 from clientplatform.domain.customer_interactions import CustomerInteractionMessage
 from clientplatform.runtime.messenger_switch_links import StaffMessengerSwitchLinkService
 from clientplatform.runtime.native_messenger_setup_links import NativeMessengerSetupLinkService
@@ -281,10 +282,24 @@ def _clientplatform_runtime_button_links(
     return resolved
 
 
+
+
+def _scoped_clientplatform_command(command: str, *, business_id: str) -> str:
+    raw = str(command or "").strip()
+    if not business_id or not raw.startswith("cpm:"):
+        return raw
+    if raw.startswith(("cpm:setup:", "cpm:switch:")):
+        return raw
+    scoped = f"cpw:act:{uuid_token(business_id)}:{raw}"
+    if len(scoped) > 180:
+        raise ValueError("scoped ClientPlatform interaction command is too long")
+    return scoped
+
 def _vk_clientplatform_keyboard(
     interaction: CustomerInteractionMessage,
     *,
     button_links: dict[str, str],
+    business_id: str,
 ) -> str:
     rows: list[list[dict[str, Any]]] = []
     for row in interaction.rows:
@@ -308,7 +323,7 @@ def _vk_clientplatform_keyboard(
                             "type": "text",
                             "label": button.label,
                             "payload": json.dumps(
-                                {"command": button.command},
+                                {"command": _scoped_clientplatform_command(button.command, business_id=business_id)},
                                 ensure_ascii=False,
                                 separators=(",", ":"),
                             ),
@@ -328,6 +343,7 @@ def _max_clientplatform_attachments(
     interaction: CustomerInteractionMessage,
     *,
     button_links: dict[str, str],
+    business_id: str,
 ) -> list[dict[str, Any]]:
     if not interaction.rows:
         return []
@@ -345,7 +361,7 @@ def _max_clientplatform_attachments(
                     {
                         "type": "callback",
                         "text": button.label,
-                        "payload": button.command,
+                        "payload": _scoped_clientplatform_command(button.command, business_id=business_id),
                     }
                 )
         rows.append(rendered)
@@ -420,15 +436,27 @@ async def send_reply_bundle(
             meta = dict(reply.meta or {})
             raw_interaction = str(meta.get("interaction") or "").strip()
             business_id = str(meta.get("business_id") or "").strip()
-            if not raw_interaction or not business_id:
+            if not raw_interaction:
                 raise MessengerTransportError(
                     "ClientPlatform interaction reply is missing canonical metadata"
                 )
             interaction = CustomerInteractionMessage.from_json(raw_interaction)
             try:
-                button_links = _clientplatform_runtime_button_links(
-                    interaction,
-                    business_id=business_id,
+                link_commands = {
+                    button.command
+                    for row in interaction.rows
+                    for button in row
+                    if button.command.startswith(("cpm:setup:", "cpm:switch:"))
+                }
+                if link_commands and not business_id:
+                    raise ValueError("ClientPlatform linked interaction is missing business scope")
+                button_links = (
+                    _clientplatform_runtime_button_links(
+                        interaction,
+                        business_id=business_id,
+                    )
+                    if business_id
+                    else {}
                 )
             except (RuntimeError, ValueError) as exc:
                 log.error(
@@ -443,6 +471,7 @@ async def send_reply_bundle(
                     "keyboard_json": _vk_clientplatform_keyboard(
                         interaction,
                         button_links=button_links,
+                        business_id=business_id,
                     )
                 }
             elif platform == "max":
@@ -450,6 +479,7 @@ async def send_reply_bundle(
                     "attachments": _max_clientplatform_attachments(
                         interaction,
                         button_links=button_links,
+                        business_id=business_id,
                     )
                 }
             else:
