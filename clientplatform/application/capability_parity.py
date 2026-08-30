@@ -18,6 +18,7 @@ from clientplatform.domain.connections import ConnectionPlatform, ConnectionStat
 from clientplatform.domain.tenancy import TenantContext, TenantPermissionDenied
 from config.settings import settings
 from runtime.telegram_transport import telegram_runtime_enabled
+from scripts.clientplatform_messenger_channels_preflight import inspect_messenger_channels
 from services.messenger.setup import build_setup_status
 
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
@@ -78,6 +79,25 @@ def _omnichannel_runtime_enabled() -> bool:
     return (
         os.getenv("CLIENTPLATFORM_OMNICHANNEL_INGRESS_ENABLED") or ""
     ).strip().lower() in _TRUE_VALUES
+
+
+def _native_dispatch_runtime_enabled() -> bool:
+    raw = str(os.getenv("CLIENTPLATFORM_DISPATCH_RUNTIME_ENABLED") or "").strip()
+    if not raw:
+        return _omnichannel_runtime_enabled()
+    return raw.lower() in _TRUE_VALUES
+
+
+def _native_runtime_state() -> tuple[bool, bool]:
+    if not _omnichannel_runtime_enabled() or not _native_dispatch_runtime_enabled():
+        return False, False
+    try:
+        preflight = inspect_messenger_channels()
+    except (OSError, RuntimeError, ValueError, TypeError, AttributeError):
+        return True, False
+    enabled = bool(preflight.omnichannel_enabled)
+    ready = bool(enabled and preflight.omnichannel_ready)
+    return enabled, ready
 
 
 def _omnichannel_setup_available() -> bool:
@@ -145,14 +165,18 @@ def project_messenger_capabilities(
 
     resolved_setup = _omnichannel_setup_available() if setup_available is None else bool(setup_available)
     setup_status = build_setup_status() if runtime_ready is None else None
-    native_runtime_enabled = _omnichannel_runtime_enabled()
+    native_enabled, native_ready = (
+        _native_runtime_state()
+        if runtime_enabled is None or runtime_ready is None
+        else (False, False)
+    )
     enabled = (
         runtime_enabled
         if runtime_enabled is not None
         else {
             ConnectionPlatform.TELEGRAM: telegram_runtime_enabled(),
-            ConnectionPlatform.VK: native_runtime_enabled,
-            ConnectionPlatform.MAX: native_runtime_enabled,
+            ConnectionPlatform.VK: native_enabled,
+            ConnectionPlatform.MAX: native_enabled,
         }
     )
     ready = (
@@ -160,8 +184,8 @@ def project_messenger_capabilities(
         if runtime_ready is not None
         else {
             ConnectionPlatform.TELEGRAM: bool(setup_status and setup_status.telegram_ok),
-            ConnectionPlatform.VK: resolved_setup,
-            ConnectionPlatform.MAX: resolved_setup,
+            ConnectionPlatform.VK: native_ready,
+            ConnectionPlatform.MAX: native_ready,
         }
     )
 

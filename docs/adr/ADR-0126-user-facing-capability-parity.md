@@ -29,7 +29,7 @@ Editorial publication planning remains provider-independent. Its UI must say tha
 
 ## Consequences
 
-- Canonical omnichannel enablement plus an HTTPS public base makes tenant-scoped VK/MAX setup available; legacy global VK/MAX webhook flags do not gate native ClientPlatform connections.
+- Canonical omnichannel enablement is necessary but not sufficient for tenant-scoped VK/MAX availability: the dispatch runtime must be enabled and the native security/preflight contour must be ready. Legacy global VK/MAX webhook flags do not gate native ClientPlatform connections.
 - Existing connections remain visible when their runtime is disabled, instead of disappearing.
 - UI and callback authorization share the same availability facts.
 - Provider secrets and raw configuration values remain outside the presentation layer.
