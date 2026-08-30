@@ -264,19 +264,18 @@ def _prod_payment_base_url() -> str:
     ).rstrip("/")
 
 
-def _external_checkout_enabled(*, max_enabled: bool, vk_enabled: bool) -> bool:
+def _external_checkout_enabled() -> bool:
     """Return whether production needs the external YooKassa checkout surface.
 
-    Telegram digital packages are Stars-only. Preserve the historical default
-    for existing deployments, but allow an explicit PAYMENT_HTTP_ENABLED=0 to
-    run a Telegram-only production instance without unrelated YooKassa secrets.
-    VK or MAX still imply external checkout because those channels use the
-    public package-payment URL.
+    PAYMENT_HTTP_ENABLED is the canonical payment-ingress switch. Preserve the
+    historical default when it is absent, but honor an explicit 0 independently
+    of VK/MAX webhook ingress. Official ClientPlatform owner-control channels
+    must not make unrelated YooKassa credentials mandatory just to receive and
+    answer owner messages.
     """
 
     payment_flag = _optional_feature_flag('PAYMENT_HTTP_ENABLED')
-    payment_enabled = True if payment_flag is None else bool(payment_flag)
-    return bool(payment_enabled or max_enabled or vk_enabled)
+    return True if payment_flag is None else bool(payment_flag)
 
 
 def _validate_trusted_proxy_env() -> None:
@@ -333,7 +332,7 @@ def _fail_fast_prod_config() -> None:
     max_enabled = max_flag if max_flag is not None else bool(legacy_messenger and settings.MAX_BOT_TOKEN)
     vk_enabled = vk_flag if vk_flag is not None else bool(legacy_messenger and settings.VK_GROUP_TOKEN)
 
-    if _external_checkout_enabled(max_enabled=max_enabled, vk_enabled=vk_enabled):
+    if _external_checkout_enabled():
         if not _first_env('YOOKASSA_SHOP_ID'):
             missing.append('YOOKASSA_SHOP_ID')
         if not _first_env('YOOKASSA_SECRET_KEY'):

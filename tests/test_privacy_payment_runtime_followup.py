@@ -72,18 +72,18 @@ def test_prod_config_requires_external_checkout_when_enabled(
     assert "PAYMENT_PUBLIC_BASE_URL" in message
 
 
-def test_prod_config_vk_or_max_still_implies_external_checkout(
+def test_prod_config_owner_vk_does_not_force_external_checkout_when_disabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _install_telegram_only_prod(monkeypatch)
     monkeypatch.setenv("VK_WEBHOOK_ENABLED", "1")
+    monkeypatch.setattr(cfg.settings, "MESSENGER_PUBLIC_BASE_URL", "https://app.example")
+    monkeypatch.setattr(cfg.settings, "VK_GROUP_ID", "241176159")
+    monkeypatch.setattr(cfg.settings, "VK_GROUP_TOKEN", "vk-token-for-test")
+    monkeypatch.setattr(cfg.settings, "VK_CONFIRMATION_TOKEN", "confirm-for-test")
+    monkeypatch.setattr(cfg.settings, "VK_SECRET", "secret-for-test")
 
-    with pytest.raises(SystemExit) as exc_info:
-        cfg._fail_fast_prod_config()
-
-    message = str(exc_info.value)
-    assert "YOOKASSA_SHOP_ID" in message
-    assert "VK_GROUP_TOKEN" in message
+    cfg._fail_fast_prod_config()
 
 
 def test_cross_messenger_privacy_commands(monkeypatch: pytest.MonkeyPatch) -> None:
