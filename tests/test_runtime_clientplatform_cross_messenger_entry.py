@@ -470,7 +470,12 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
         access = SimpleNamespace(
             business=SimpleNamespace(id=B1, name="Школа английского")
         )
-        actor = SimpleNamespace(user_id=707, business_id=B1)
+        actor = TenantContext(
+            business_id=B1,
+            user_id=707,
+            membership_id="77777777-7777-7777-7777-777777777777",
+            role=PlatformRole.OWNER,
+        )
         interaction = CustomerInteractionMessage(
             text="✅ Описание деятельности обновлено",
             rows=((CustomerInteractionButton(label="✍️ Тексты", command="cpm:copy"),),),
@@ -491,6 +496,10 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
             patch(
                 "clientplatform.application.native_member_interactions.resolve_tenant_context",
                 return_value=actor,
+            ),
+            patch(
+                "services.messenger.clientplatform_entry.get_business_profile",
+                return_value=SimpleNamespace(timezone="Europe/Tallinn"),
             ),
             patch(
                 "services.messenger.clientplatform_entry.save_business_profile"
@@ -523,7 +532,12 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
         access = SimpleNamespace(
             business=SimpleNamespace(id=B1, name="Новая практика")
         )
-        actor = SimpleNamespace(user_id=707, business_id=B1)
+        actor = TenantContext(
+            business_id=B1,
+            user_id=707,
+            membership_id="77777777-7777-7777-7777-777777777777",
+            role=PlatformRole.OWNER,
+        )
         interaction = CustomerInteractionMessage(text="🏠 Новая практика")
         with (
             patch(
@@ -543,11 +557,15 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
                 "Europe/Tallinn",
             ),
             patch(
+                "services.messenger.clientplatform_entry.get_business_profile",
+                side_effect=ActivityNotFound("missing"),
+            ),
+            patch(
                 "services.messenger.clientplatform_entry.save_business_profile"
             ) as save_profile,
             patch(
                 "services.messenger.clientplatform_entry.render_native_member_interaction",
-                side_effect=[ActivityNotFound("missing"), interaction],
+                return_value=interaction,
             ) as render,
         ):
             _, replies = handle_clientplatform_entry(
@@ -562,9 +580,8 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
             save_profile.call_args.kwargs["timezone_name"],
             "Europe/Tallinn",
         )
-        self.assertEqual(render.call_count, 2)
-        self.assertEqual(render.call_args_list[0].kwargs["raw_text"], "деятельность Новая частная практика")
-        self.assertEqual(render.call_args_list[1].kwargs["raw_text"], "cpm:menu")
+        self.assertEqual(render.call_count, 1)
+        self.assertEqual(render.call_args.kwargs["raw_text"], "cpm:menu")
         self.assertEqual(len(replies), 2)
 
     def test_activity_update_preserves_existing_business_timezone(self) -> None:
@@ -594,6 +611,10 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
             patch(
                 "clientplatform.application.native_member_interactions.resolve_tenant_context",
                 return_value=actor,
+            ),
+            patch(
+                "services.messenger.clientplatform_entry.get_business_profile",
+                return_value=SimpleNamespace(timezone="America/New_York"),
             ),
             patch(
                 "clientplatform.application.native_member_interactions.get_business_profile",

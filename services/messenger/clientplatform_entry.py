@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 
-from clientplatform.application.activity import save_business_profile
+from clientplatform.application.activity import get_business_profile, save_business_profile
 from clientplatform.application.control_callbacks import token_uuid, uuid_token
 from clientplatform.application.native_member_interactions import (
     recognizes_native_member_interaction,
@@ -22,7 +22,7 @@ from clientplatform.domain.customer_interactions import (
     CustomerInteractionButton,
     CustomerInteractionMessage,
 )
-from clientplatform.domain.tenancy import TenancyError
+from clientplatform.domain.tenancy import TenantPermissionDenied, TenancyError
 from clientplatform.runtime.native_messenger_setup_links import (
     NativeMessengerSetupLinkService,
 )
@@ -528,7 +528,14 @@ def handle_clientplatform_entry(
                     )
                 )
             ]
+        # Existing profiles use the canonical native edit path so authorization,
+        # timezone preservation and user-facing errors stay channel-neutral. The
+        # first profile is special: the native renderer intentionally converts
+        # ActivityNotFound into a stale interaction, so detect that bootstrap
+        # state before rendering instead of relying on the exception to escape.
         try:
+            actor.assert_can_manage_business()
+        except TenantPermissionDenied:
             activity_reply = _owner_control_reply(
                 canonical_user_id=canonical_user_id,
                 platform=platform,
@@ -537,6 +544,12 @@ def handle_clientplatform_entry(
                 business_id=actor.business_id,
                 interaction_key=interaction_key,
             )
+            if activity_reply is None:
+                raise RuntimeError("single-business activity permission could not be resolved")
+            return canonical_user_id, [activity_reply]
+
+        try:
+            get_business_profile(actor=actor)
         except ActivityNotFound:
             save_business_profile(
                 actor=actor,
@@ -544,6 +557,14 @@ def handle_clientplatform_entry(
                 timezone_name=settings.TIMEZONE,
             )
         else:
+            activity_reply = _owner_control_reply(
+                canonical_user_id=canonical_user_id,
+                platform=platform,
+                accesses=accesses,
+                raw_text=f"деятельность {command.value}",
+                business_id=actor.business_id,
+                interaction_key=interaction_key,
+            )
             if activity_reply is None:
                 raise RuntimeError("single-business activity update could not be resolved")
             return canonical_user_id, [activity_reply]
