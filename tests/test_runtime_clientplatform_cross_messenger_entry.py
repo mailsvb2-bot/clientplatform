@@ -25,6 +25,7 @@ from services.messenger.clientplatform_entry import (
     parse_clientplatform_entry_command,
 )
 from services.messenger.text_ui import MessengerReply
+from services.schema import init_db
 
 
 class _FakeRequest:
@@ -932,6 +933,11 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(kwargs["extracted"]["external_user_id"], "601")
 
     def test_owner_mutation_and_outbox_are_atomic_across_retry(self) -> None:
+        # This module is also executed by the PostgreSQL bot-provisioning unittest
+        # wall, which intentionally does not run pytest's canonical schema fixture.
+        # Bootstrap the dedicated test database explicitly so this real transaction
+        # regression is engine-neutral instead of depending on test-runner order.
+        init_db()
         owner_user_id = 9401
         member_user_id = 9402
         access = create_business(owner_user_id=owner_user_id, name="Atomic Owner Business")
