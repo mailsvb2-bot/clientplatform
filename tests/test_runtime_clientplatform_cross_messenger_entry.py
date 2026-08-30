@@ -414,6 +414,10 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("MAX", combined)
         self.assertIn("без перехода в Telegram", combined)
         self.assertIn("бизнес <название>", combined)
+        self.assertEqual(replies[0].kind, "clientplatform_interaction")
+        interaction = CustomerInteractionMessage.from_json(replies[0].meta["interaction"])
+        self.assertEqual(interaction.rows[0][0].label, "Подключить мой бизнес")
+        self.assertEqual(interaction.rows[0][0].command, "business")
 
     def test_business_command_creates_real_tenant(self) -> None:
         entry = SimpleNamespace(user_id=303)

@@ -196,6 +196,21 @@ def _interaction_reply(
     )
 
 
+def _new_business_entry_reply(*, platform: str) -> MessengerReply:
+    interaction = CustomerInteractionMessage(
+        text=_entry_text(platform=platform, accesses=[]),
+        rows=(
+            (
+                CustomerInteractionButton(
+                    label="Подключить мой бизнес",
+                    command="business",
+                ),
+            ),
+        ),
+    )
+    return _interaction_reply(interaction)
+
+
 def _business_access_by_id(accesses: list[object], business_id: str):
     expected = str(business_id or "").strip()
     return next(
@@ -493,7 +508,7 @@ def handle_clientplatform_entry(
         if reply is not None:
             return canonical_user_id, [reply]
         if not accesses:
-            return canonical_user_id, [MessengerReply(text=_entry_text(platform=platform, accesses=[]))]
+            return canonical_user_id, [_new_business_entry_reply(platform=platform)]
         return canonical_user_id, [_business_selector_reply(accesses)]
 
     if command.action == "describe_business":
@@ -657,9 +672,9 @@ def handle_clientplatform_entry(
     if command.action == "start" and len(accesses) > 1:
         return canonical_user_id, [_business_selector_reply(accesses)]
 
-    return canonical_user_id, [
-        MessengerReply(text=_entry_text(platform=platform, accesses=accesses))
-    ]
+    if not accesses:
+        return canonical_user_id, [_new_business_entry_reply(platform=platform)]
+    return canonical_user_id, [MessengerReply(text=_entry_text(platform=platform, accesses=accesses))]
 
 
 __all__ = [
