@@ -19,6 +19,7 @@ from clientplatform.application.admin_ops import (
     list_offering_prices,
     list_open_alerts,
     list_payments,
+    payment_summary,
     list_publication_calendar,
     list_publications,
     publish_publication,
@@ -105,6 +106,62 @@ def test_admin_operations_are_real_and_tenant_isolated() -> None:
     assert list_publications(actor=other) == []
     assert list_payments(actor=other) == []
     assert list_offering_prices(actor=other) == []
+
+
+def test_payment_summary_aggregates_all_paid_rows_not_recent_page() -> None:
+    actor, _, customer = _business(801101, "Полные итоги")
+    for index in range(25):
+        record_payment(
+            actor=actor,
+            customer_id=customer.id,
+            amount_minor=100,
+            idempotency_key=f"summary-rub-{index}",
+            currency="RUB",
+        )
+    for index in range(3):
+        record_payment(
+            actor=actor,
+            customer_id=customer.id,
+            amount_minor=1000,
+            idempotency_key=f"summary-jpy-{index}",
+            currency="JPY",
+        )
+
+    assert len(list_payments(actor=actor, limit=20)) == 20
+    summary = payment_summary(actor=actor)
+    assert summary.paid_payments == 28
+    assert summary.paid_customers == 1
+    assert {
+        item.currency: (item.paid_payments, item.amount_minor)
+        for item in summary.by_currency
+    } == {"JPY": (3, 3000), "RUB": (25, 2500)}
+
+
+def test_publication_create_is_retry_idempotent_and_payload_bound() -> None:
+    actor, _, _ = _business(801102, "Идемпотентный контент")
+    first = create_publication_draft(
+        actor=actor,
+        title="Один черновик",
+        body="Текст",
+        channel="vk",
+        idempotency_key="native-event-42",
+    )
+    replay = create_publication_draft(
+        actor=actor,
+        title="Один черновик",
+        body="Текст",
+        channel="vk",
+        idempotency_key="native-event-42",
+    )
+    assert replay.id == first.id
+    with pytest.raises(ValueError, match="different work"):
+        create_publication_draft(
+            actor=actor,
+            title="Другой черновик",
+            body="Текст",
+            channel="vk",
+            idempotency_key="native-event-42",
+        )
 
 
 def test_role_permissions_remain_fail_closed() -> None:

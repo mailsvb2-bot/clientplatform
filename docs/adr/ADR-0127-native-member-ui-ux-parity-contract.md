@@ -24,6 +24,8 @@ Pixel-identical layouts are neither possible nor desirable because Telegram, VK 
 10. Tests source-check reachable Telegram admin actions against the semantic-equivalence registry so future Telegram-only product actions fail CI until a native equivalent is added.
 11. Common owner intents from the short Telegram experience are also registered explicitly: clients, programs, booking, result, customer invite, offerings and advanced controls. Program creation, lesson creation, publication and delivery are real native workflows rather than read-only placeholders.
 12. Native program delivery is channel-exact: a VK staff action uses the active VK business connection and a MAX staff action uses the active MAX connection. The chooser exposes only customers with an active identity in that channel and fails closed instead of silently switching providers.
+13. Provider-event retries may not duplicate native create mutations. Program, lesson, publication and offering creation bind one provider interaction key to one deterministic canonical entity; replay returns the same entity, while reuse of the key with different work fails closed. Native Autopilot controls set an explicit desired state instead of replay-unsafe toggling.
+14. Money parity uses the canonical ISO-4217 minor-unit exponent for input and display in every messenger. Business-wide payment counts, paying-customer counts and revenue totals come from untruncated canonical aggregates; limited payment queries are used only for recent-row lists and action buttons.
 
 ## Consequences
 

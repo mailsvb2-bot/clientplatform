@@ -249,7 +249,7 @@ TELEGRAM_NATIVE_ACTION_EQUIVALENTS: dict[str, tuple[str, ...]] = {
     "messengers": ("messengers",),
     "messenger-connect": ("connect-telegram", "connect-vk", "connect-max"),
     "autopilot": ("autopilot",),
-    "autopilot-toggle": ("autopilot-toggle",),
+    "autopilot-toggle": ("autopilot-enable", "autopilot-disable"),
     "automation-approve": ("automation-approve",),
     "automation-reject": ("automation-reject",),
     "automation-revoke": ("automation-revoke",),
@@ -744,7 +744,8 @@ def parse_native_member_interaction(value: object) -> ParsedMemberInteraction:
             "member-add-text",
             "member-role",
             "member-revoke",
-            "autopilot-toggle",
+            "autopilot-enable",
+            "autopilot-disable",
             "automation-approve",
             "automation-reject",
             "automation-revoke",
@@ -1884,16 +1885,16 @@ def _publication_cancel_result(
     )
 
 
-def _native_amount_minor(raw: str) -> int:
+def _native_amount_minor(raw: str, currency: str) -> int:
     try:
         amount = Decimal(str(raw or "").replace(",", "."))
     except InvalidOperation as exc:
         raise ValueError("amount must be numeric") from exc
     if not amount.is_finite() or amount <= 0:
         raise ValueError("amount must be positive")
-    return int(
-        (amount * Decimal(100)).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
-    )
+    exponent = settlement_currency_minor_unit_exponent(currency)
+    scale = Decimal(10) ** exponent
+    return int((amount * scale).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
 def _native_amount_label(amount_minor: int, currency: str) -> str:
@@ -1931,16 +1932,12 @@ def _native_reference(items: list[Any], reference: str, *, field: str = "id") ->
     return matches[0]
 
 
-def _native_payment_totals(payments: list[Any]) -> str:
-    totals: dict[str, int] = {}
-    for item in payments:
-        if item.status == "paid":
-            totals[item.currency] = totals.get(item.currency, 0) + int(item.amount_minor)
-    if not totals:
+def _native_payment_summary_totals(summary: admin_ops.PaymentSummary) -> str:
+    if not summary.by_currency:
         return "0,00 RUB"
     return " · ".join(
-        _native_amount_label(total, currency)
-        for currency, total in sorted(totals.items())
+        _native_amount_label(item.amount_minor, item.currency)
+        for item in summary.by_currency
     )
 
 
@@ -1964,6 +1961,8 @@ def _publication_new_result(
     channel: str,
     title: str,
     body: str,
+    *,
+    interaction_key: str,
 ) -> CustomerInteractionMessage:
     if actor.role not in _CONTENT_ROLES:
         return _permission_message()
@@ -1972,6 +1971,7 @@ def _publication_new_result(
         title=title,
         body=body,
         channel=channel,
+        idempotency_key=f"{interaction_key}:publication-create",
     )
     return CustomerInteractionMessage(
         text=f"✅ Черновик «{publication.title}» создан. Ничего автоматически не отправлено.",
@@ -2038,7 +2038,7 @@ def _payment_new_result(
     offering_id = _native_reference(offerings, offering_reference)
     payment = admin_ops.record_payment(
         actor=actor,
-        amount_minor=_native_amount_minor(amount_text),
+        amount_minor=_native_amount_minor(amount_text, currency),
         currency=currency,
         customer_id=customer_id,
         offering_id=offering_id,
@@ -2111,7 +2111,7 @@ def _price_set_result(actor: TenantContext, offering_reference: str, amount: str
     price = admin_ops.set_offering_price(
         actor=actor,
         offering_id=offering_id,
-        amount_minor=_native_amount_minor(amount),
+        amount_minor=_native_amount_minor(amount, currency),
         currency=currency,
     )
     return CustomerInteractionMessage(
@@ -2162,8 +2162,9 @@ def _invite_new_result(actor: TenantContext) -> CustomerInteractionMessage:
 def _automation_mutation_message(actor: TenantContext, action: str, approval_id: str | None = None) -> CustomerInteractionMessage:
     if actor.role != PlatformRole.OWNER:
         return _permission_message()
-    if action == "autopilot-toggle":
-        enabled = admin_ops.toggle_autopilot(actor=actor)
+    if action in {"autopilot-enable", "autopilot-disable"}:
+        enabled = action == "autopilot-enable"
+        admin_ops.set_autopilot_enabled(actor=actor, enabled=enabled)
         result = f"Автопилот {'включён' if enabled else 'выключен'}."
     else:
         if not approval_id:
@@ -2320,7 +2321,7 @@ def _growth_report_message(actor: TenantContext, action: str) -> CustomerInterac
                 (
                     _button(
                         "⏸ Выключить" if enabled else "▶️ Включить",
-                        "cpm:autopilot-toggle",
+                        "cpm:autopilot-disable" if enabled else "cpm:autopilot-enable",
                     ),
                 ),
             )
@@ -2407,16 +2408,15 @@ def _growth_report_message(actor: TenantContext, action: str) -> CustomerInterac
             )
 
         payments = admin_ops.list_payments(actor=actor, limit=20) if actor.role in admin_ops._FINANCE_READ_ROLES else []
+        payment_facts = (
+            admin_ops.payment_summary(actor=actor)
+            if actor.role in admin_ops._FINANCE_READ_ROLES
+            else admin_ops.PaymentSummary(paid_payments=0, paid_customers=0, by_currency=())
+        )
         prices = admin_ops.list_offering_prices(actor=actor) if actor.role in admin_ops._FINANCE_READ_ROLES else []
         price_by_offering = {item.offering_id: item for item in prices}
-        paid_customer_ids = {
-            item.customer_id
-            for item in payments
-            if item.status == "paid" and item.customer_id is not None
-        }
 
         if action == "money":
-            paid_count = sum(item.status == "paid" for item in payments)
             rows = []
             if actor.role in admin_ops._FINANCE_WRITE_ROLES:
                 rows.append((_button("➕ Зафиксировать оплату", "cpm:payment-new"),))
@@ -2424,9 +2424,9 @@ def _growth_report_message(actor: TenantContext, action: str) -> CustomerInterac
             return CustomerInteractionMessage(
                 text=(
                     "💰 Деньги и клиенты\n\n"
-                    f"Оплачено: {_native_payment_totals(payments)}\n"
-                    f"Успешных оплат: {paid_count}\n"
-                    f"Платящих клиентов: {len(paid_customer_ids)}\n"
+                    f"Оплачено: {_native_payment_summary_totals(payment_facts)}\n"
+                    f"Успешных оплат: {payment_facts.paid_payments}\n"
+                    f"Платящих клиентов: {payment_facts.paid_customers}\n"
                     f"Всего клиентов: {insights.active_customers}"
                 ),
                 rows=tuple(rows),
@@ -2452,8 +2452,8 @@ def _growth_report_message(actor: TenantContext, action: str) -> CustomerInterac
             return CustomerInteractionMessage(
                 text=(
                     "💳 Оплаты\n\n"
-                    f"Успешных: {sum(item.status == 'paid' for item in payments)}\n"
-                    f"Сумма: {_native_payment_totals(payments)}\n\n{recent}"
+                    f"Успешных: {payment_facts.paid_payments}\n"
+                    f"Сумма: {_native_payment_summary_totals(payment_facts)}\n\n{recent}"
                 ),
                 rows=tuple(rows),
             )
@@ -2466,7 +2466,7 @@ def _growth_report_message(actor: TenantContext, action: str) -> CustomerInterac
                     f"Проходят программу: {len(enrolled_ids - completed_ids)}\n"
                     f"Завершили: {len(completed_ids)}\n"
                     f"Остановились: {len(stalled_ids)}\n"
-                    f"Платящие: {len(paid_customer_ids)}"
+                    f"Платящие: {payment_facts.paid_customers}"
                 ),
                 rows=((_button("📈 Рост", "cpm:growth"),), _back_row()),
             )
@@ -2540,7 +2540,7 @@ def _growth_report_message(actor: TenantContext, action: str) -> CustomerInterac
                     "💡 Подсказка по ценам\n\n"
                     f"Предложений: {len(offerings)}\n"
                     f"Цены заполнены: {len(price_by_offering)}/{len(offerings)}\n"
-                    f"Зафиксированная выручка: {_native_payment_totals(payments)}\n\n"
+                    f"Зафиксированная выручка: {_native_payment_summary_totals(payment_facts)}\n\n"
                     f"{lines}"
                 ),
                 rows=tuple(rows),
@@ -3146,10 +3146,19 @@ def _program_create_help(actor: TenantContext) -> CustomerInteractionMessage:
     )
 
 
-def _program_create_result(actor: TenantContext, title: str) -> CustomerInteractionMessage:
+def _program_create_result(
+    actor: TenantContext,
+    title: str,
+    *,
+    interaction_key: str,
+) -> CustomerInteractionMessage:
     if actor.role not in _PROGRAM_MANAGEMENT_ROLES:
         return _permission_message()
-    program = create_program(actor=actor, title=title)
+    program = create_program(
+        actor=actor,
+        title=title,
+        idempotency_key=f"{interaction_key}:program-create",
+    )
     code = str(program.id)[:8]
     return CustomerInteractionMessage(
         text=(
@@ -3187,6 +3196,8 @@ def _program_lesson_result(
     content_kind: str,
     title: str,
     content_ref: str,
+    *,
+    interaction_key: str,
 ) -> CustomerInteractionMessage:
     if actor.role not in _PROGRAM_MANAGEMENT_ROLES:
         return _permission_message()
@@ -3198,6 +3209,7 @@ def _program_lesson_result(
         title=title,
         content_kind=content_kind,
         content_ref=content_ref,
+        idempotency_key=f"{interaction_key}:program-lesson",
     )
     return CustomerInteractionMessage(
         text=f"✅ Урок «{lesson.title}» добавлен.",
@@ -3349,6 +3361,8 @@ def _offering_new_result(
     connector_key: str,
     title: str,
     description: str,
+    *,
+    interaction_key: str,
 ) -> CustomerInteractionMessage:
     if actor.role not in _PROGRAM_MANAGEMENT_ROLES:
         return _permission_message()
@@ -3367,6 +3381,7 @@ def _offering_new_result(
         capability_id=capability.id,
         title=title,
         description=description,
+        idempotency_key=f"{interaction_key}:offering-create",
     )
     return CustomerInteractionMessage(
         text=f"✅ Предложение «{offering.title}» создано.",
@@ -3589,7 +3604,9 @@ def _render(
         if parsed.action == "program-create-text":
             if len(parsed.args) != 1:
                 return _stale_message()
-            return _program_create_result(actor, parsed.args[0])
+            return _program_create_result(
+                actor, parsed.args[0], interaction_key=setup_key
+            )
         if parsed.action == "program-lesson":
             if len(parsed.args) != 1:
                 return _stale_message()
@@ -3598,7 +3615,12 @@ def _render(
             if len(parsed.args) != 4:
                 return _stale_message()
             return _program_lesson_result(
-                actor, parsed.args[0], parsed.args[1], parsed.args[2], parsed.args[3]
+                actor,
+                parsed.args[0],
+                parsed.args[1],
+                parsed.args[2],
+                parsed.args[3],
+                interaction_key=setup_key,
             )
         if parsed.action == "program-publish":
             if len(parsed.args) != 1:
@@ -3626,7 +3648,13 @@ def _render(
         if parsed.action == "offering-new-text":
             if len(parsed.args) != 3:
                 return _stale_message()
-            return _offering_new_result(actor, parsed.args[0], parsed.args[1], parsed.args[2])
+            return _offering_new_result(
+                actor,
+                parsed.args[0],
+                parsed.args[1],
+                parsed.args[2],
+                interaction_key=setup_key,
+            )
         if parsed.action == "behavior":
             return _behavior_message(actor)
         if parsed.action == "attention":
@@ -3707,7 +3735,13 @@ def _render(
         if parsed.action == "publication-new-text":
             if len(parsed.args) != 3:
                 return _stale_message()
-            return _publication_new_result(actor, parsed.args[0], parsed.args[1], parsed.args[2])
+            return _publication_new_result(
+                actor,
+                parsed.args[0],
+                parsed.args[1],
+                parsed.args[2],
+                interaction_key=setup_key,
+            )
         if parsed.action == "publication-publish":
             if len(parsed.args) != 1:
                 return _stale_message()
@@ -3757,7 +3791,7 @@ def _render(
             if len(parsed.args) != 3:
                 return _stale_message()
             return _price_set_result(actor, parsed.args[0], parsed.args[1], parsed.args[2])
-        if parsed.action == "autopilot-toggle":
+        if parsed.action in {"autopilot-enable", "autopilot-disable"}:
             return _automation_mutation_message(actor, parsed.action)
         if parsed.action in {"automation-approve", "automation-reject", "automation-revoke"}:
             if len(parsed.args) != 1:

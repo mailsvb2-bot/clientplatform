@@ -130,6 +130,7 @@ def create_business_offering(
     capability_id: str,
     title: str,
     description: str,
+    idempotency_key: str | None = None,
 ) -> BusinessOffering:
     with get_db() as conn:
         return ActivityRepository(conn).create_offering(
@@ -137,6 +138,7 @@ def create_business_offering(
             capability_id=capability_id,
             title=title,
             description=description,
+            idempotency_key=idempotency_key,
         )
 
 

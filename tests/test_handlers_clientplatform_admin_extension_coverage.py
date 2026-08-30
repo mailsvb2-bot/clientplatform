@@ -167,11 +167,21 @@ def test_amount_and_display_helpers_cover_validation_and_formatting(ctx: Any) ->
         "комментарий",
     )
     assert extension._money(123456, "RUB") == "1 234,56 RUB"
+    assert extension._parse_amount("3500 JPY") == (3500, "JPY", "")
+    assert extension._parse_amount("3500 KWD") == (3_500_000, "KWD", "")
+    assert extension._money(3500, "JPY") == "3 500 JPY"
+    assert extension._money(3_500_000, "KWD") == "3 500,000 KWD"
     assert extension._percent(1, 4) == "25%"
     assert extension._percent(1, 0) == "0%"
     assert extension._status_icon(True) == "✅"
     assert extension._status_icon(False) == "⚠️"
-    assert extension._payment_totals_text([]) == "0,00 RUB"
+    assert extension._payment_totals_text(
+        extension.admin_ops.PaymentSummary(
+            paid_payments=0,
+            paid_customers=0,
+            by_currency=(),
+        )
+    ) == "0,00 RUB"
     max_callback = extension._ops_callback(
         SimpleNamespace(business_token="a" * 22),
         "pay-refund-ok",
@@ -205,15 +215,20 @@ def test_amount_and_display_helpers_cover_validation_and_formatting(ctx: Any) ->
     assert len(publish_callback.encode("utf-8")) <= 64
     assert ":pp:" in publish_callback
 
-    payments = [
-        SimpleNamespace(status="paid", currency="RUB", amount_minor=10000),
-        SimpleNamespace(status="paid", currency="RUB", amount_minor=20000),
-        SimpleNamespace(status="failed", currency="RUB", amount_minor=90000),
-        SimpleNamespace(status="paid", currency="USD", amount_minor=500),
-    ]
-    assert extension._payment_totals(payments) == {"RUB": 30000, "USD": 500}
-    assert "300,00 RUB" in extension._payment_totals_text(payments)
-    assert "150,00 RUB" in extension._payment_average_text(payments)
+    summary = extension.admin_ops.PaymentSummary(
+        paid_payments=3,
+        paid_customers=2,
+        by_currency=(
+            extension.admin_ops.PaymentCurrencySummary(
+                currency="RUB", amount_minor=30000, paid_payments=2
+            ),
+            extension.admin_ops.PaymentCurrencySummary(
+                currency="USD", amount_minor=500, paid_payments=1
+            ),
+        ),
+    )
+    assert extension._payment_totals_text(summary) == "300,00 RUB · 5,00 USD"
+    assert extension._payment_average_text(summary) == "150,00 RUB · 5,00 USD"
 
     for value, message in [
         ("", "Укажите сумму"),
@@ -850,7 +865,7 @@ async def test_payment_and_price_input_handlers_explain_domain_validation(
     payment = FakeMessage("3500 XXX")
     await extension.receive_payment_value(payment, payment_state)
     assert payment.answers == [
-        "Оплата не сохранена: currency must be a known ISO 4217 code."
+        "currency must be a known ISO 4217 code. Пример: 3500 RUB консультация."
     ]
     assert payment_state.clear_count == 0
 

@@ -185,8 +185,16 @@ class NativeFullParityMutationTests(unittest.TestCase):
         actor = _actor(PlatformRole.CONTENT_MANAGER)
         publication = SimpleNamespace(id=str(uuid4()), title="Новость")
         with patch.object(ui.admin_ops, "create_publication_draft", return_value=publication) as create:
-            message = ui._publication_new_result(actor, "vk", "Новость", "Текст")
-        create.assert_called_once_with(actor=actor, title="Новость", body="Текст", channel="vk")
+            message = ui._publication_new_result(
+                actor, "vk", "Новость", "Текст", interaction_key="event-publication"
+            )
+        create.assert_called_once_with(
+            actor=actor,
+            title="Новость",
+            body="Текст",
+            channel="vk",
+            idempotency_key="event-publication:publication-create",
+        )
         self.assertIn("Черновик", message.text)
 
         with patch.object(ui.admin_ops, "publish_publication", return_value=publication) as publish:
@@ -241,6 +249,13 @@ class NativeFullParityMutationTests(unittest.TestCase):
         self.assertEqual(payment_id, refund.call_args.kwargs["payment_id"])
         self.assertIn("Возврат", result.text)
 
+    def test_native_money_scaling_uses_iso4217_currency_exponent(self) -> None:
+        self.assertEqual(3500, ui._native_amount_minor("3500", "JPY"))
+        self.assertEqual(3_500_000, ui._native_amount_minor("3500", "KWD"))
+        self.assertEqual(350_000, ui._native_amount_minor("3500", "RUB"))
+        self.assertEqual("3 500 JPY", ui._native_amount_label(3500, "JPY"))
+        self.assertEqual("3 500.000 KWD", ui._native_amount_label(3_500_000, "KWD"))
+
     def test_price_mutation_resolves_offering_and_uses_canonical_price_api(self) -> None:
         actor = _actor(PlatformRole.MARKETER)
         offering_id = str(uuid4())
@@ -265,10 +280,15 @@ class NativeFullParityMutationTests(unittest.TestCase):
 
     def test_automation_owner_controls_use_canonical_policy_boundary(self) -> None:
         actor = _actor()
-        with patch.object(ui.admin_ops, "toggle_autopilot", return_value=True) as toggle:
-            result = ui._automation_mutation_message(actor, "autopilot-toggle")
-        toggle.assert_called_once_with(actor=actor)
+        with patch.object(ui.admin_ops, "set_autopilot_enabled", return_value=True) as setter:
+            result = ui._automation_mutation_message(actor, "autopilot-enable")
+        setter.assert_called_once_with(actor=actor, enabled=True)
         self.assertIn("включён", result.text)
+
+        with patch.object(ui.admin_ops, "set_autopilot_enabled", return_value=False) as setter:
+            result = ui._automation_mutation_message(actor, "autopilot-disable")
+        setter.assert_called_once_with(actor=actor, enabled=False)
+        self.assertIn("выключен", result.text)
 
         approval_id = str(uuid4())
         with patch.object(ui.admin_ops, "approve_pending_automation_action") as approve:
@@ -335,21 +355,35 @@ class NativeFullParityMutationTests(unittest.TestCase):
         lesson = SimpleNamespace(title="Введение")
 
         with patch.object(ui, "create_program", return_value=draft) as create:
-            created = ui._program_create_result(actor, "Курс")
-        create.assert_called_once_with(actor=actor, title="Курс")
+            created = ui._program_create_result(
+                actor, "Курс", interaction_key="event-program"
+            )
+        create.assert_called_once_with(
+            actor=actor,
+            title="Курс",
+            idempotency_key="event-program:program-create",
+        )
         self.assertIn("Черновик", created.text)
 
         with (
             patch.object(ui, "list_programs", return_value=[draft]),
             patch.object(ui, "add_program_lesson", return_value=lesson) as add_lesson,
         ):
-            added = ui._program_lesson_result(actor, program_id[:8], "text", "Введение", "Первый шаг")
+            added = ui._program_lesson_result(
+                actor,
+                program_id[:8],
+                "text",
+                "Введение",
+                "Первый шаг",
+                interaction_key="event-lesson",
+            )
         add_lesson.assert_called_once_with(
             actor=actor,
             program_id=program_id,
             title="Введение",
             content_kind="text",
             content_ref="Первый шаг",
+            idempotency_key="event-lesson:program-lesson",
         )
         self.assertIn("добавлен", added.text)
 
@@ -426,12 +460,14 @@ class NativeFullParityMutationTests(unittest.TestCase):
                 "consultations",
                 "Консультация 60 минут",
                 "Личная встреча",
+                interaction_key="event-offering",
             )
         create.assert_called_once_with(
             actor=actor,
             capability_id=capability.id,
             title="Консультация 60 минут",
             description="Личная встреча",
+            idempotency_key="event-offering:offering-create",
         )
         self.assertIn("создано", result.text)
 
@@ -456,7 +492,8 @@ class NativeFullParityMutationTests(unittest.TestCase):
         for parsed in (
             ui.ParsedMemberInteraction("publication-new"),
             ui.ParsedMemberInteraction("payment-new"),
-            ui.ParsedMemberInteraction("autopilot-toggle"),
+            ui.ParsedMemberInteraction("autopilot-enable"),
+            ui.ParsedMemberInteraction("autopilot-disable"),
             ui.ParsedMemberInteraction("member-add-help"),
             ui.ParsedMemberInteraction("activity-edit-help"),
             ui.ParsedMemberInteraction("program-create"),

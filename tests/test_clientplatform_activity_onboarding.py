@@ -22,6 +22,8 @@ from clientplatform.domain.activity import (
 from clientplatform.infrastructure import ConnectionRepository, TenancyRepository
 from clientplatform.infrastructure.activity_repository import ActivityRepository
 from clientplatform.infrastructure.customer_repository import CustomerRepository
+from clientplatform.infrastructure.program_repository import ProgramRepository
+from clientplatform.domain.programs import ProgramInvariantViolation
 from clientplatform.privacy_manifest import validate_clientplatform_privacy_manifest
 from clientplatform.runtime.control_bot import (
     CONTROL_BOT_CREDENTIAL_ENV,
@@ -146,6 +148,86 @@ class ClientPlatformActivityOnboardingTests(unittest.TestCase):
                 capability_id=programs.id,
                 title="Неверная запись",
                 description="Программы используют специализированную модель уроков",
+            )
+
+    def test_native_retry_keys_do_not_duplicate_program_lesson_or_offering(self) -> None:
+        self.activity.upsert_profile(
+            actor=self.owner_a,
+            activity_description="Консультации и программы",
+            timezone_name="Europe/Moscow",
+        )
+        consultations = self.activity.enable_capability(
+            actor=self.owner_a,
+            connector_key="consultations",
+        )
+        offering = self.activity.create_offering(
+            actor=self.owner_a,
+            capability_id=consultations.id,
+            title="Разбор",
+            description="60 минут",
+            idempotency_key="event-77:offering",
+        )
+        replayed_offering = self.activity.create_offering(
+            actor=self.owner_a,
+            capability_id=consultations.id,
+            title="Разбор",
+            description="60 минут",
+            idempotency_key="event-77:offering",
+        )
+        self.assertEqual(offering.id, replayed_offering.id)
+        with self.assertRaisesRegex(ActivityInvariantViolation, "different work"):
+            self.activity.create_offering(
+                actor=self.owner_a,
+                capability_id=consultations.id,
+                title="Другой разбор",
+                description="60 минут",
+                idempotency_key="event-77:offering",
+            )
+
+        programs = ProgramRepository(self.conn)
+        program = programs.create_program(
+            actor=self.owner_a,
+            title="Программа сна",
+            idempotency_key="event-88:program",
+        )
+        replayed_program = programs.create_program(
+            actor=self.owner_a,
+            title="Программа сна",
+            idempotency_key="event-88:program",
+        )
+        self.assertEqual(program.id, replayed_program.id)
+        with self.assertRaisesRegex(ProgramInvariantViolation, "different work"):
+            programs.create_program(
+                actor=self.owner_a,
+                title="Другая программа",
+                idempotency_key="event-88:program",
+            )
+
+        lesson = programs.add_lesson(
+            actor=self.owner_a,
+            program_id=program.id,
+            title="Шаг 1",
+            content_kind="text",
+            content_ref="Материал",
+            idempotency_key="event-89:lesson",
+        )
+        replayed_lesson = programs.add_lesson(
+            actor=self.owner_a,
+            program_id=program.id,
+            title="Шаг 1",
+            content_kind="text",
+            content_ref="Материал",
+            idempotency_key="event-89:lesson",
+        )
+        self.assertEqual(lesson.id, replayed_lesson.id)
+        with self.assertRaisesRegex(ProgramInvariantViolation, "different work"):
+            programs.add_lesson(
+                actor=self.owner_a,
+                program_id=program.id,
+                title="Шаг 1",
+                content_kind="text",
+                content_ref="Другой материал",
+                idempotency_key="event-89:lesson",
             )
 
     def test_activity_objects_are_invisible_across_businesses(self) -> None:
