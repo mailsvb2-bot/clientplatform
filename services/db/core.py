@@ -36,6 +36,10 @@ _DB_OPERATION_DEADLINE: ContextVar[float | None] = ContextVar(
     "db_operation_deadline",
     default=None,
 )
+_DB_AMBIENT_CONNECTION: ContextVar[Any | None] = ContextVar(
+    "db_ambient_connection",
+    default=None,
+)
 
 
 @contextmanager
@@ -562,6 +566,56 @@ def get_connection():
     return conn
 
 
+def get_ambient_connection() -> Any | None:
+    """Return the caller-owned ambient write transaction, if one exists."""
+
+    return _DB_AMBIENT_CONNECTION.get()
+
+
+@contextmanager
+def atomic_db() -> Iterator[Any]:
+    """Share one commit/rollback boundary across nested application DB calls.
+
+    Nested ``get_db()`` calls reuse this connection without committing or closing
+    it. Read-only application calls receive a guarded view of the same connection
+    from :mod:`services.db.read_only`, so they can observe earlier writes in the
+    transaction without opening a second snapshot. Only the outermost scope owns
+    commit, rollback and connection lifecycle.
+    """
+
+    existing = _DB_AMBIENT_CONNECTION.get()
+    if existing is not None:
+        yield existing
+        return
+
+    conn = get_connection()
+    token = _DB_AMBIENT_CONNECTION.set(conn)
+    try:
+        yield conn
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:  # validator: allow-wide-except
+            logging.getLogger(__name__).exception("Ambient DB rollback after body failure failed")
+        raise
+    else:
+        try:
+            conn.commit()
+        except Exception:  # validator: allow-wide-except
+            logging.getLogger(__name__).exception("Ambient DB commit failed")
+            try:
+                conn.rollback()
+            except Exception:  # validator: allow-wide-except
+                logging.getLogger(__name__).exception("Ambient DB rollback after commit failure failed")
+            raise
+    finally:
+        _DB_AMBIENT_CONNECTION.reset(token)
+        try:
+            conn.close()
+        except Exception:  # validator: allow-wide-except
+            logging.getLogger(__name__).exception("Ambient DB close failed")
+
+
 def _is_write_sql(sql: str) -> bool:
     s = (sql or "").lstrip().upper()
     return (
@@ -601,6 +655,11 @@ def get_db_ro() -> Iterator[Any]:
 
 @contextmanager
 def get_db() -> Iterator[Any]:
+    ambient = get_ambient_connection()
+    if ambient is not None:
+        yield ambient
+        return
+
     conn = get_connection()
     try:
         yield conn

@@ -6,13 +6,19 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from clientplatform.application.control_callbacks import uuid_token
+from clientplatform.application.tenancy import (
+    create_business,
+    grant_business_member,
+    resolve_tenant_context as resolve_real_tenant_context,
+)
 from clientplatform.domain.activity import ActivityNotFound
-from clientplatform.domain.tenancy import PlatformRole, TenantContext
 from clientplatform.domain.customer_interactions import (
     CustomerInteractionButton,
     CustomerInteractionMessage,
 )
+from clientplatform.domain.tenancy import PlatformRole, TenantAccessDenied, TenantContext
 from runtime import messenger_ingress_reliability as reliability
+from services.db import get_db_ro
 from services.messenger import reply_dispatcher
 from services.messenger.clientplatform_entry import (
     handle_clientplatform_entry,
@@ -924,6 +930,96 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(kwargs["event_type"], "bot_started")
         self.assertEqual(kwargs["text"], "start")
         self.assertEqual(kwargs["extracted"]["external_user_id"], "601")
+
+    def test_owner_mutation_and_outbox_are_atomic_across_retry(self) -> None:
+        owner_user_id = 9401
+        member_user_id = 9402
+        access = create_business(owner_user_id=owner_user_id, name="Atomic Owner Business")
+        business_id = str(access.business.id)
+        owner = resolve_real_tenant_context(
+            user_id=owner_user_id,
+            business_id=business_id,
+        )
+        grant_business_member(
+            actor=owner,
+            user_id=member_user_id,
+            role=PlatformRole.MANAGER,
+        )
+        extracted = {
+            "user_id": owner_user_id,
+            "external_user_id": str(owner_user_id),
+            "username": None,
+            "display_name": "Owner",
+            "first_name": "Owner",
+        }
+        payload = {"event_id": "vk-owner-revoke-atomic"}
+        command = f"cpm:member-revoke:{member_user_id}"
+
+        with (
+            patch.object(reliability, "claim_inbound_event", return_value=True),
+            patch(
+                "services.messenger.clientplatform_entry.register_user_entry",
+                return_value=SimpleNamespace(user_id=owner_user_id),
+            ),
+            patch.object(reliability, "fail_inbound_event") as fail_event,
+            patch.object(
+                reliability,
+                "log_event",
+                side_effect=RuntimeError("failure after durable reply"),
+            ),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "failure after durable reply"):
+                reliability._process_clientplatform_entry_and_persist(
+                    platform="vk",
+                    event_key="vk-owner-revoke-atomic",
+                    event_type="message_event",
+                    payload=payload,
+                    extracted=extracted,
+                    text=command,
+                )
+
+        restored_member = resolve_real_tenant_context(
+            user_id=member_user_id,
+            business_id=business_id,
+        )
+        self.assertEqual(restored_member.role, PlatformRole.MANAGER)
+        with get_db_ro() as conn:
+            rolled_back_outbox = conn.execute(
+                "SELECT COUNT(*) FROM messenger_delivery_outbox WHERE platform=? AND event_key=?",
+                ("vk", "vk-owner-revoke-atomic"),
+            ).fetchone()[0]
+        self.assertEqual(rolled_back_outbox, 0)
+        fail_event.assert_called_once()
+
+        with (
+            patch.object(reliability, "claim_inbound_event", return_value=True),
+            patch(
+                "services.messenger.clientplatform_entry.register_user_entry",
+                return_value=SimpleNamespace(user_id=owner_user_id),
+            ),
+            patch.object(reliability, "log_event"),
+        ):
+            processed = reliability._process_clientplatform_entry_and_persist(
+                platform="vk",
+                event_key="vk-owner-revoke-atomic",
+                event_type="message_event",
+                payload=payload,
+                extracted=extracted,
+                text=command,
+            )
+
+        self.assertTrue(processed)
+        with self.assertRaises(TenantAccessDenied):
+            resolve_real_tenant_context(
+                user_id=member_user_id,
+                business_id=business_id,
+            )
+        with get_db_ro() as conn:
+            committed_outbox = conn.execute(
+                "SELECT COUNT(*) FROM messenger_delivery_outbox WHERE platform=? AND event_key=?",
+                ("vk", "vk-owner-revoke-atomic"),
+            ).fetchone()[0]
+        self.assertEqual(committed_outbox, 1)
 
     def test_webhook_entry_is_deduplicated_before_side_effects(self) -> None:
         extracted = {

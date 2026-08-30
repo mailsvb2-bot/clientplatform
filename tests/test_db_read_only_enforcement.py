@@ -121,6 +121,34 @@ def test_postgres_read_only_verification_fails_closed(
     assert conn.rolled_back and conn.closed
 
 
+def test_ambient_read_only_view_reuses_outer_connection_without_owning_lifecycle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute("CREATE TABLE sample(id INTEGER PRIMARY KEY, value TEXT)")
+    conn.execute("INSERT INTO sample(value) VALUES('visible')")
+
+    monkeypatch.setattr(read_only, "get_ambient_connection", lambda: conn)
+    monkeypatch.setattr(
+        read_only,
+        "get_connection",
+        lambda: pytest.fail("ambient read-only view must not open a second connection"),
+    )
+
+    with read_only.get_db_ro() as ro:
+        assert ro.execute("SELECT value FROM sample").fetchone()[0] == "visible"
+        with pytest.raises(RuntimeError, match="rejected write SQL"):
+            ro.execute("INSERT INTO sample(value) VALUES('blocked')")
+        with pytest.raises(RuntimeError, match="rejected rollback"):
+            ro.rollback()
+        ro.close()
+
+    assert conn.execute("SELECT COUNT(*) FROM sample").fetchone()[0] == 1
+    conn.rollback()
+    conn.close()
+
+
 def test_public_db_package_exports_enforced_read_only_context() -> None:
     import services.db as db_package
 

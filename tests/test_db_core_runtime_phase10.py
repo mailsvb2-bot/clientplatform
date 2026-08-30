@@ -269,6 +269,40 @@ def test_get_db_read_only_success_failure_and_cleanup(monkeypatch: pytest.Monkey
     assert conn.close_calls == 1
 
 
+def test_atomic_db_reuses_one_connection_and_owns_single_commit(monkeypatch: pytest.MonkeyPatch) -> None:
+    conn = LifecycleConnection()
+    install_connection(monkeypatch, conn, postgres=False)
+
+    with core.atomic_db() as outer:
+        with core.get_db() as inner:
+            assert inner is outer is conn
+        with core.atomic_db() as nested:
+            assert nested is conn
+        assert conn.commit_calls == 0
+        assert conn.close_calls == 0
+
+    assert conn.commit_calls == 1
+    assert conn.rollback_calls == 0
+    assert conn.close_calls == 1
+    assert core.get_ambient_connection() is None
+
+
+def test_atomic_db_rolls_back_nested_write_on_later_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    conn = LifecycleConnection()
+    install_connection(monkeypatch, conn, postgres=False)
+
+    with pytest.raises(RuntimeError, match="outbox failed"):
+        with core.atomic_db():
+            with core.get_db() as inner:
+                assert inner is conn
+            raise RuntimeError("outbox failed")
+
+    assert conn.commit_calls == 0
+    assert conn.rollback_calls == 1
+    assert conn.close_calls == 1
+    assert core.get_ambient_connection() is None
+
+
 def test_get_db_commit_body_and_cleanup_failures(monkeypatch: pytest.MonkeyPatch) -> None:
     conn = LifecycleConnection()
     install_connection(monkeypatch, conn, postgres=False)
