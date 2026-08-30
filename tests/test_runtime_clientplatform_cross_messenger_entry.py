@@ -233,6 +233,10 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
                 return_value=actor,
             ) as resolve,
             patch(
+                "services.messenger.clientplatform_entry.set_owner_control_workspace",
+                return_value=B2,
+            ) as remember,
+            patch(
                 "services.messenger.clientplatform_entry.render_native_member_interaction",
                 return_value=interaction,
             ) as render,
@@ -244,6 +248,7 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
                 text=f"cpw:open:{uuid_token(B2)}",
             )
         resolve.assert_called_once_with(user_id=505, business_id=B2)
+        remember.assert_called_once_with(user_id=505, platform="max", business_id=B2)
         self.assertEqual(render.call_args.kwargs["raw_text"], "cpm:menu")
         self.assertEqual(replies[0].meta["business_id"], B2)
 
@@ -269,6 +274,10 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
                 return_value=actor,
             ) as resolve,
             patch(
+                "services.messenger.clientplatform_entry.set_owner_control_workspace",
+                return_value=B1,
+            ) as remember,
+            patch(
                 "services.messenger.clientplatform_entry.render_native_member_interaction",
                 return_value=interaction,
             ) as render,
@@ -280,8 +289,51 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
                 text=f"cpw:act:{uuid_token(B1)}:cpm:messengers",
             )
         resolve.assert_called_once_with(user_id=505, business_id=B1)
+        remember.assert_called_once_with(user_id=505, platform="vk", business_id=B1)
         self.assertEqual(render.call_args.kwargs["raw_text"], "cpm:messengers")
         self.assertEqual(replies[0].meta["business_id"], B1)
+
+    def test_multi_business_plain_text_continuation_uses_server_saved_workspace(self) -> None:
+        entry = SimpleNamespace(user_id=505)
+        accesses = [
+            SimpleNamespace(business=SimpleNamespace(id=B1, name="Практика Анны")),
+            SimpleNamespace(business=SimpleNamespace(id=B2, name="Школа Анны")),
+        ]
+        actor = SimpleNamespace(user_id=505, business_id=B2)
+        interaction = CustomerInteractionMessage(text="✅ Платёж сохранён")
+        with (
+            patch(
+                "services.messenger.clientplatform_entry.register_user_entry",
+                return_value=entry,
+            ),
+            patch(
+                "services.messenger.clientplatform_entry.list_accessible_businesses",
+                return_value=accesses,
+            ),
+            patch(
+                "services.messenger.clientplatform_entry.get_owner_control_workspace",
+                return_value=B2,
+            ) as selected,
+            patch(
+                "services.messenger.clientplatform_entry.resolve_tenant_context",
+                return_value=actor,
+            ) as resolve,
+            patch(
+                "services.messenger.clientplatform_entry.render_native_member_interaction",
+                return_value=interaction,
+            ) as render,
+        ):
+            _, replies = handle_clientplatform_entry(
+                505,
+                platform="max",
+                external_user_id="505",
+                text="оплата 1500 RUB",
+                event_key="max-payment-1",
+            )
+        selected.assert_called_once_with(user_id=505, platform="max")
+        resolve.assert_called_once_with(user_id=505, business_id=B2)
+        self.assertEqual(render.call_args.kwargs["raw_text"], "оплата 1500 RUB")
+        self.assertEqual(replies[0].meta["business_id"], B2)
 
     def test_tampered_or_inaccessible_business_token_fails_closed_to_selector(self) -> None:
         entry = SimpleNamespace(user_id=505)
@@ -658,6 +710,39 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(kwargs["event_type"], "message_new")
         self.assertEqual(kwargs["text"], "start")
         self.assertEqual(kwargs["extracted"]["external_user_id"], "501")
+
+    async def test_global_max_owner_callback_is_acknowledged_before_processing(self) -> None:
+        payload = {
+            "update_type": "message_callback",
+            "timestamp": 1787259600000,
+            "user": {"user_id": 601, "first_name": "Анна"},
+            "callback": {
+                "callback_id": "owner-callback-1",
+                "payload": "cpm:work",
+            },
+        }
+        acknowledged: list[str] = []
+
+        class FakeMaxSender:
+            async def answer_callback(self, *, callback_id: str):
+                acknowledged.append(callback_id)
+                return {"success": True}
+
+        with (
+            patch.object(reliability.legacy, "_max_secret_ok", return_value=True),
+            patch.object(reliability, "MaxBotSender", return_value=FakeMaxSender()),
+            patch.object(
+                reliability,
+                "_process_clientplatform_entry_and_persist",
+                return_value=True,
+            ) as process,
+        ):
+            response = await reliability.max_webhook(_FakeRequest(payload))
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(acknowledged, ["owner-callback-1"])
+        process.assert_called_once()
+        self.assertEqual(process.call_args.kwargs["text"], "cpm:work")
 
     async def test_max_native_bot_started_reaches_entry_without_text(self) -> None:
         payload = {

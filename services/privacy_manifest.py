@@ -254,6 +254,13 @@ _POLICIES = (
         "tenant authorization assignment and revocation audit",
         required=True,
     ),
+    _policy(
+        "clientplatform_owner_control_workspaces",
+        ("user_id",),
+        "erase",
+        "owner-selected control workspace routing state",
+        required=True,
+    ),
     *(_policy(table, columns, "erase", reason) for table, columns, reason in _BEHAVIORAL),
     *(
         _policy(table, columns, "retain", reason, required=required)

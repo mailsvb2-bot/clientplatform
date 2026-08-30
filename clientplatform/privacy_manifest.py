@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 TenantDisposition = Literal["erase", "retain", "anonymize"]
-CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-08-29.v38-automation-action-approval"
+CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-08-30.v39-owner-control-workspace"
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,6 +30,7 @@ def _required(table: str, disposition: TenantDisposition, reason: str) -> Tenant
 
 _POLICIES = (
     _required("business_members", "retain", "tenant authorization and revocation audit"),
+    _required("clientplatform_owner_control_workspaces", "erase", "owner-selected messenger control workspace routing state"),
     _required("customers", "anonymize", "tenant customer profile"),
     _required("customer_identities", "erase", "external routing identity and contact metadata"),
     _required("business_profiles", "retain", "business-owned activity description and onboarding state"),

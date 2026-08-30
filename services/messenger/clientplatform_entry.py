@@ -11,8 +11,10 @@ from clientplatform.application.native_member_interactions import (
 )
 from clientplatform.application.tenancy import (
     create_business,
+    get_owner_control_workspace,
     list_accessible_businesses,
     resolve_tenant_context,
+    set_owner_control_workspace,
 )
 from clientplatform.domain.connections import ConnectionPlatform
 from clientplatform.domain.customer_interactions import (
@@ -206,6 +208,39 @@ def _business_access_by_token(accesses: list[object], token: str):
     return _business_access_by_id(accesses, business_id)
 
 
+def _active_business_id(
+    *,
+    user_id: int,
+    platform: str,
+    accesses: list[object],
+) -> str | None:
+    if len(accesses) == 1:
+        return str(accesses[0].business.id)
+    if not accesses:
+        return None
+    selected = get_owner_control_workspace(
+        user_id=int(user_id),
+        platform=normalize_platform(platform),
+    )
+    if selected is None:
+        return None
+    access = _business_access_by_id(accesses, selected)
+    return None if access is None else str(access.business.id)
+
+
+def _remember_business(
+    *,
+    user_id: int,
+    platform: str,
+    business_id: str,
+) -> str:
+    return set_owner_control_workspace(
+        user_id=int(user_id),
+        platform=normalize_platform(platform),
+        business_id=str(business_id),
+    )
+
+
 def _business_actor(
     *,
     user_id: int,
@@ -393,6 +428,11 @@ def handle_clientplatform_entry(
                     MessengerReply(text="Этот бизнес больше недоступен для Вашего аккаунта."),
                     _business_selector_reply(accesses),
                 ]
+            _remember_business(
+                user_id=canonical_user_id,
+                platform=platform,
+                business_id=str(access.business.id),
+            )
             reply = _owner_control_reply(
                 canonical_user_id=canonical_user_id,
                 platform=platform,
@@ -414,6 +454,11 @@ def handle_clientplatform_entry(
             inner = parts[3]
             if not inner.startswith("cpm:"):
                 return canonical_user_id, [_business_selector_reply(accesses)]
+            _remember_business(
+                user_id=canonical_user_id,
+                platform=platform,
+                business_id=str(access.business.id),
+            )
             reply = _owner_control_reply(
                 canonical_user_id=canonical_user_id,
                 platform=platform,
@@ -428,11 +473,17 @@ def handle_clientplatform_entry(
         return canonical_user_id, [_business_selector_reply(accesses)]
 
     if command.action == "owner_control":
+        active_business_id = _active_business_id(
+            user_id=canonical_user_id,
+            platform=platform,
+            accesses=accesses,
+        )
         reply = _owner_control_reply(
             canonical_user_id=canonical_user_id,
             platform=platform,
             accesses=accesses,
             raw_text=command.value,
+            business_id=active_business_id,
             interaction_key=interaction_key,
         )
         if reply is not None:
@@ -442,7 +493,16 @@ def handle_clientplatform_entry(
         return canonical_user_id, [_business_selector_reply(accesses)]
 
     if command.action == "describe_business":
-        actor = _business_actor(user_id=canonical_user_id, accesses=accesses)
+        active_business_id = _active_business_id(
+            user_id=canonical_user_id,
+            platform=platform,
+            accesses=accesses,
+        )
+        actor = _business_actor(
+            user_id=canonical_user_id,
+            accesses=accesses,
+            business_id=active_business_id,
+        )
         if actor is None:
             if not accesses:
                 return canonical_user_id, [
@@ -451,11 +511,11 @@ def handle_clientplatform_entry(
             return canonical_user_id, [
                 MessengerReply(
                     text=(
-                        "У Вас несколько бизнесов. Выбор рабочего пространства для "
-                        "официального VK/MAX-входа будет добавлен следующим этапом. "
-                        "Пока откройте нужный бизнес через основной ClientPlatform."
+                        "У Вас несколько бизнесов. Сначала выберите рабочее пространство "
+                        "кнопкой ниже, затем повторите описание деятельности."
                     )
-                )
+                ),
+                _business_selector_reply(accesses),
             ]
         if not command.value:
             return canonical_user_id, [
@@ -477,6 +537,7 @@ def handle_clientplatform_entry(
             platform=platform,
             accesses=accesses,
             raw_text="cpm:menu",
+            business_id=actor.business_id,
             interaction_key=interaction_key,
         )
         if reply is None:
@@ -499,6 +560,12 @@ def handle_clientplatform_entry(
         existing = _existing_business(accesses, command.value)
         if existing is not None:
             existing_name = str(existing.business.name)
+            if len(accesses) > 1:
+                _remember_business(
+                    user_id=canonical_user_id,
+                    platform=platform,
+                    business_id=str(existing.business.id),
+                )
             return canonical_user_id, [
                 MessengerReply(
                     text=(
@@ -521,6 +588,12 @@ def handle_clientplatform_entry(
                     )
                 )
             ]
+        if accesses:
+            _remember_business(
+                user_id=canonical_user_id,
+                platform=platform,
+                business_id=str(access.business.id),
+            )
         return canonical_user_id, [
             MessengerReply(
                 text=(
