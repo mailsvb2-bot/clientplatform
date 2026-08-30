@@ -93,7 +93,9 @@ def _native_runtime_state() -> tuple[bool, bool]:
         return False, False
     try:
         preflight = inspect_messenger_channels()
-    except (OSError, RuntimeError, ValueError, TypeError, AttributeError):
+    except (OSError, ValueError, TypeError):
+        return True, False
+    except (RuntimeError, AttributeError):
         return True, False
     enabled = bool(preflight.omnichannel_enabled)
     ready = bool(enabled and preflight.omnichannel_ready)
