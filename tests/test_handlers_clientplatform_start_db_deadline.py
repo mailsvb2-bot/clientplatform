@@ -105,3 +105,75 @@ def test_start_storage_deadline_leaves_response_margin() -> None:
         entry._START_TIMEOUT_SECONDS - entry._START_STORAGE_DEADLINE_SECONDS
         >= 2.0
     )
+
+
+class _OwnerMessage:
+    def __init__(self, text: str) -> None:
+        self.text = text
+        self.answers: list[tuple[str, dict[str, Any]]] = []
+
+    async def answer(self, text: str, **kwargs: Any) -> None:
+        self.answers.append((text, kwargs))
+
+
+class _OwnerState:
+    def __init__(self) -> None:
+        self.cleared = 0
+        self.states: list[Any] = []
+
+    async def clear(self) -> None:
+        self.cleared += 1
+
+    async def set_state(self, value: Any) -> None:
+        self.states.append(value)
+
+
+@pytest.mark.asyncio
+async def test_cpo_start_is_owner_intent_even_when_customer_links_exist(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    message = _OwnerMessage("/start cpo_landing")
+    state = _OwnerState()
+    monkeypatch.setattr(entry, "list_accessible_businesses", lambda **_kwargs: [])
+
+    def customer_links_must_not_be_read(**_kwargs: Any):
+        raise AssertionError("cpo owner start must not route through customer links")
+
+    monkeypatch.setattr(entry, "list_customer_businesses", customer_links_must_not_be_read)
+
+    await entry._dispatch_clientplatform_start(
+        message,
+        state,
+        user_id=42,
+        managed_bot_business_id=None,
+    )
+
+    assert state.cleared == 1
+    assert len(message.answers) == 1
+    text, kwargs = message.answers[0]
+    assert "управляющий вход" in text
+    keyboard = kwargs["reply_markup"]
+    button = keyboard.inline_keyboard[0][0]
+    assert button.text == "Подключить мой бизнес"
+    assert button.callback_data == "business"
+
+
+@pytest.mark.asyncio
+async def test_owner_business_button_starts_business_name_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _OwnerState()
+    message = _OwnerMessage("")
+
+    class Callback:
+        async def answer(self) -> None:
+            return None
+
+    monkeypatch.setattr(entry.control, "_callback_message", lambda _callback: message)
+
+    await entry.clientplatform_owner_business_start(Callback(), state)
+
+    assert state.cleared == 1
+    assert state.states == [entry.control.ClientPlatformControlState.business_name]
+    assert len(message.answers) == 1
+    assert "Как называется Ваше дело" in message.answers[0][0]

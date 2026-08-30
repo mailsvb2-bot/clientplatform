@@ -114,12 +114,15 @@ def parse_clientplatform_entry_command(
         return ClientPlatformEntryCommand("start")
     if lowered.startswith("/start ") or lowered.startswith("start "):
         payload = raw.split(maxsplit=1)[1].strip()
-        if payload.casefold().startswith("bridge_"):
+        payload_lower = payload.casefold()
+        if payload_lower.startswith(("bridge_", "cpo_")):
             return ClientPlatformEntryCommand("start", payload)
         # Non-owner deep links (for example cpa_* customer acquisition) must
         # continue to their dedicated route instead of being swallowed by the
         # official ClientPlatform owner bootstrap.
         return None
+    if lowered.startswith("cpo_"):
+        return ClientPlatformEntryCommand("start", raw)
     for prefix in _BUSINESS_PREFIXES:
         if lowered.startswith(prefix):
             return ClientPlatformEntryCommand(
@@ -191,6 +194,21 @@ def _interaction_reply(
         text=interaction.text,
         meta=meta,
     )
+
+
+def _new_business_entry_reply(*, platform: str) -> MessengerReply:
+    interaction = CustomerInteractionMessage(
+        text=_entry_text(platform=platform, accesses=[]),
+        rows=(
+            (
+                CustomerInteractionButton(
+                    label="Подключить мой бизнес",
+                    command="business",
+                ),
+            ),
+        ),
+    )
+    return _interaction_reply(interaction)
 
 
 def _business_access_by_id(accesses: list[object], business_id: str):
@@ -490,7 +508,7 @@ def handle_clientplatform_entry(
         if reply is not None:
             return canonical_user_id, [reply]
         if not accesses:
-            return canonical_user_id, [MessengerReply(text=_entry_text(platform=platform, accesses=[]))]
+            return canonical_user_id, [_new_business_entry_reply(platform=platform)]
         return canonical_user_id, [_business_selector_reply(accesses)]
 
     if command.action == "describe_business":
@@ -654,9 +672,9 @@ def handle_clientplatform_entry(
     if command.action == "start" and len(accesses) > 1:
         return canonical_user_id, [_business_selector_reply(accesses)]
 
-    return canonical_user_id, [
-        MessengerReply(text=_entry_text(platform=platform, accesses=accesses))
-    ]
+    if not accesses:
+        return canonical_user_id, [_new_business_entry_reply(platform=platform)]
+    return canonical_user_id, [MessengerReply(text=_entry_text(platform=platform, accesses=accesses))]
 
 
 __all__ = [

@@ -369,6 +369,7 @@ def test_route_registration_helpers_have_no_telegram_route() -> None:
     messenger_webhooks._register_max_routes(app)
     messenger_webhooks._register_vk_routes(app)
     messenger_webhooks._register_audio_routes(app)
+    messenger_webhooks._register_clientplatform_owner_entry_routes(app)
     routes = {(method, path) for method, path, _handler in app.router.routes}
     assert ("GET", "/") in routes
     assert ("GET", "/health") in routes
@@ -377,6 +378,7 @@ def test_route_registration_helpers_have_no_telegram_route() -> None:
     assert ("POST", "/pay/yookassa/webhook") in routes
     assert ("POST", "/webhooks/max") in routes
     assert ("POST", "/webhooks/vk") in routes
+    assert ("GET", "/clientplatform/open/{platform}") in routes
     assert all("telegram" not in path for _method, path in routes)
     assert any(path.endswith("{filename}") for _method, path in routes)
     assert any(path.endswith("{token}") for _method, path in routes)
@@ -405,6 +407,30 @@ async def test_start_runtime_returns_none_when_every_ingress_is_disabled(
     _patch_runtime_surface(monkeypatch, ingress=False, gateway=False)
     assert await messenger_webhooks.start_messenger_webhook_runtime() is None
     assert FakeApplication.instances == []
+
+
+@pytest.mark.asyncio
+async def test_owner_entry_route_is_registered_without_omnichannel_ingress(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_runtime_surface(monkeypatch, ingress=True, gateway=False)
+    monkeypatch.setattr(messenger_webhooks, "_omnichannel_ingress_enabled", lambda: False)
+    monkeypatch.setattr(messenger_webhooks, "_acquisition_ingress_enabled", lambda: False)
+    monkeypatch.setattr(messenger_webhooks, "external_product_ingress_enabled", lambda: False)
+    monkeypatch.setattr(messenger_webhooks, "ad_oauth_http_enabled", lambda: False)
+    monkeypatch.setattr(messenger_webhooks, "_ad_publication_worker_enabled", lambda: False)
+
+    runtime = await messenger_webhooks.start_messenger_webhook_runtime()
+
+    assert runtime is not None
+    routes = {
+        (method, path)
+        for method, path, _handler in FakeApplication.instances[-1].router.routes
+    }
+    assert ("GET", "/clientplatform/open/{platform}") in routes
+    assert ("POST", "/clientplatform/webhooks/vk/{route_id}") not in routes
+    assert ("POST", "/clientplatform/webhooks/max/{route_id}") not in routes
+    await runtime.stop()
 
 
 @pytest.mark.asyncio

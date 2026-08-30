@@ -60,6 +60,15 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
         assert command is not None
         self.assertEqual(command.action, "start")
 
+    def test_explicit_owner_deep_link_is_owner_entry(self) -> None:
+        for text in ("/start cpo_landing", "start cpo_site", "cpo_landing"):
+            with self.subTest(text=text):
+                command = parse_clientplatform_entry_command(text)
+                self.assertIsNotNone(command)
+                assert command is not None
+                self.assertEqual(command.action, "start")
+                self.assertTrue(command.value.startswith("cpo_"))
+
     def test_customer_acquisition_start_is_not_owner_entry(self) -> None:
         self.assertIsNone(
             parse_clientplatform_entry_command("/start cpa_sourceToken123")
@@ -405,6 +414,10 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("MAX", combined)
         self.assertIn("без перехода в Telegram", combined)
         self.assertIn("бизнес <название>", combined)
+        self.assertEqual(replies[0].kind, "clientplatform_interaction")
+        interaction = CustomerInteractionMessage.from_json(replies[0].meta["interaction"])
+        self.assertEqual(interaction.rows[0][0].label, "Подключить мой бизнес")
+        self.assertEqual(interaction.rows[0][0].command, "business")
 
     def test_business_command_creates_real_tenant(self) -> None:
         entry = SimpleNamespace(user_id=303)
@@ -896,6 +909,34 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(kwargs["text"], "start")
         self.assertEqual(kwargs["extracted"]["external_user_id"], "501")
 
+    async def test_vk_owner_ref_reaches_clientplatform_entry(self) -> None:
+        payload = {
+            "type": "message_new",
+            "event_id": "vk-owner-ref-1",
+            "object": {
+                "message": {
+                    "id": 2,
+                    "from_id": 502,
+                    "text": "start",
+                    "ref": "cpo_landing",
+                }
+            },
+        }
+        with (
+            patch.object(reliability.legacy, "_vk_secret_ok", return_value=True),
+            patch.object(
+                reliability,
+                "_process_clientplatform_entry_and_persist",
+                return_value=True,
+            ) as process,
+        ):
+            response = await reliability.vk_webhook(_FakeRequest(payload))
+        self.assertEqual(response.status, 200)
+        process.assert_called_once()
+        kwargs = process.call_args.kwargs
+        self.assertEqual(kwargs["text"], "/start cpo_landing")
+        self.assertEqual(kwargs["extracted"]["external_user_id"], "502")
+
     async def test_global_max_owner_callback_is_acknowledged_before_processing(self) -> None:
         payload = {
             "update_type": "message_callback",
@@ -952,6 +993,28 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(kwargs["event_type"], "bot_started")
         self.assertEqual(kwargs["text"], "start")
         self.assertEqual(kwargs["extracted"]["external_user_id"], "601")
+
+    async def test_max_owner_deep_link_payload_reaches_clientplatform_entry(self) -> None:
+        payload = {
+            "update_type": "bot_started",
+            "update_id": 78,
+            "user_id": 602,
+            "payload": "cpo_landing",
+        }
+        with (
+            patch.object(reliability.legacy, "_max_secret_ok", return_value=True),
+            patch.object(
+                reliability,
+                "_process_clientplatform_entry_and_persist",
+                return_value=True,
+            ) as process,
+        ):
+            response = await reliability.max_webhook(_FakeRequest(payload))
+        self.assertEqual(response.status, 200)
+        process.assert_called_once()
+        kwargs = process.call_args.kwargs
+        self.assertEqual(kwargs["text"], "cpo_landing")
+        self.assertEqual(kwargs["extracted"]["external_user_id"], "602")
 
     def test_owner_mutation_and_outbox_are_atomic_across_retry(self) -> None:
         # This module is also executed by the PostgreSQL bot-provisioning unittest

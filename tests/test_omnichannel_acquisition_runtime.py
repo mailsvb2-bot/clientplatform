@@ -82,6 +82,70 @@ async def test_neutral_landing_keeps_one_source_across_connected_messengers(monk
     assert "https://max.ru/demo?start=cpa_sourceToken123" in body
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("platform", "target"),
+    (
+        ("telegram", "https://t.me/clientplatform_bot?start=cpo_landing"),
+        ("vk", "https://vk.com/im?sel=-123456&ref=cpo_landing"),
+        ("max", "https://max.ru/clientplatform?payload=cpo_landing"),
+    ),
+)
+async def test_owner_landing_redirect_uses_stable_server_route(monkeypatch, platform, target) -> None:
+    status = SimpleNamespace(telegram_ok=True, vk_ok=True, max_ok=True)
+    monkeypatch.setattr(messenger_webhooks, "build_setup_status", lambda: status)
+    monkeypatch.setattr(messenger_webhooks, "telegram_runtime_enabled", lambda: True)
+    monkeypatch.setattr(messenger_webhooks, "vk_webhook_enabled", lambda: True)
+    monkeypatch.setattr(messenger_webhooks, "max_webhook_enabled", lambda: True)
+    monkeypatch.setattr(
+        messenger_webhooks,
+        "build_owner_entry_target",
+        lambda requested, source="site": (
+            {"platform": requested, "url": target} if requested == platform and source == "landing" else None
+        ),
+    )
+
+    response = await messenger_webhooks._clientplatform_owner_entry_redirect(
+        SimpleNamespace(match_info={"platform": platform})
+    )
+
+    assert response.status == 302
+    assert response.headers["Location"] == target
+    assert response.headers["Cache-Control"] == "no-store, max-age=0"
+
+
+@pytest.mark.asyncio
+async def test_owner_landing_redirect_fails_closed_when_provider_is_not_ready(monkeypatch) -> None:
+    monkeypatch.setattr(
+        messenger_webhooks,
+        "build_owner_entry_target",
+        lambda *_args, **_kwargs: {"platform": "vk", "url": "https://vk.example"},
+    )
+    monkeypatch.setattr(
+        messenger_webhooks,
+        "build_setup_status",
+        lambda: SimpleNamespace(telegram_ok=True, vk_ok=True, max_ok=True),
+    )
+    monkeypatch.setattr(messenger_webhooks, "vk_webhook_enabled", lambda: False)
+
+    response = await messenger_webhooks._clientplatform_owner_entry_redirect(
+        SimpleNamespace(match_info={"platform": "vk"})
+    )
+
+    assert response.status == 503
+    assert "пока не подключён" in response.text
+    assert "vk.example" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_owner_landing_redirect_rejects_unknown_platform() -> None:
+    with pytest.raises(Exception) as exc_info:
+        await messenger_webhooks._clientplatform_owner_entry_redirect(
+            SimpleNamespace(match_info={"platform": "icq"})
+        )
+    assert getattr(exc_info.value, "status", None) == 404
+
+
 def _promotion_fixture() -> tuple[sqlite3.Connection, object, str, str]:
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row

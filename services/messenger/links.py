@@ -20,6 +20,17 @@ def build_site_payload(source: str = 'site') -> str:
     return clean or 'site'
 
 
+def build_owner_entry_payload(source: str = 'site') -> str:
+    """Return an explicit owner-control deep-link payload.
+
+    `cpo_` is intentionally distinct from customer acquisition (`cpa_`) and
+    customer invite (`cpj_`) payloads so official ClientPlatform entry can
+    never be mistaken for a tenant customer route.
+    """
+
+    return f'cpo_{build_site_payload(source)}'
+
+
 def build_bridge_payload(token: str) -> str:
     token_clean = (token or "").strip()
     return f"bridge_{token_clean}"
@@ -30,20 +41,73 @@ def build_gift_payload(code: str) -> str:
     return f'gift_{code_clean}'
 
 
+def _telegram_bot_username() -> str:
+    return _strip(settings.TELEGRAM_BOT_USERNAME) or _strip(
+        getattr(settings, 'CLIENTPLATFORM_PRODUCTION_BOT_USERNAME', '')
+    )
+
+
 def _telegram_link(payload: str) -> str:
-    username = _strip(settings.TELEGRAM_BOT_USERNAME)
+    username = _telegram_bot_username()
     return f'https://t.me/{username}?start={urllib.parse.quote(payload)}' if username else ''
 
 
-def _max_link(payload: str) -> str:
+def _render_max_link(payload: str, *, query_name: str) -> str:
     bot_name = _strip(settings.MAX_BOT_NAME)
     base = _strip(settings.MAX_BOT_LINK_BASE)
     if not base:
         return ''
-    if '{payload}' in base:
-        return base.format(payload=urllib.parse.quote(payload), bot=urllib.parse.quote(bot_name))
-    sep = '&' if '?' in base else '?'
-    return f'{base}{sep}start={urllib.parse.quote(payload)}'
+    if '{bot}' in base and not bot_name:
+        return ''
+
+    rendered = base.replace('{bot}', urllib.parse.quote(bot_name))
+    quoted_payload = urllib.parse.quote(payload)
+    if '{payload}' in rendered:
+        rendered = rendered.replace('{payload}', quoted_payload)
+        return '' if '{' in rendered or '}' in rendered else rendered
+    if '{' in rendered or '}' in rendered:
+        return ''
+    sep = '&' if '?' in rendered else '?'
+    return f'{rendered}{sep}{query_name}={quoted_payload}'
+
+
+def _max_link(payload: str) -> str:
+    return _render_max_link(payload, query_name='start')
+
+
+def _max_owner_link(payload: str) -> str:
+    # MAX exposes owner deep-link data to bot_started only through the
+    # `payload` query parameter.  A generic template may legally place
+    # `{payload}` elsewhere for legacy links, but owner entry must never
+    # silently turn that into `start=` or a path segment.
+    bot_name = _strip(settings.MAX_BOT_NAME)
+    base = _strip(settings.MAX_BOT_LINK_BASE)
+    if not base:
+        return ''
+    if '{bot}' in base and not bot_name:
+        return ''
+
+    rendered = base.replace('{bot}', urllib.parse.quote(bot_name))
+    if '{' in rendered.replace('{payload}', '') or '}' in rendered.replace('{payload}', ''):
+        return ''
+
+    quoted_payload = urllib.parse.quote(payload)
+    if '{payload}' in rendered:
+        # Owner entry must have exactly one payload placeholder, and that one
+        # must be the value of MAX's `payload` query parameter.  Reject mixed
+        # path/query placements so substitution can never mutate the bot path.
+        if rendered.count('{payload}') != 1:
+            return ''
+        parsed = urllib.parse.urlsplit(rendered)
+        query_parts = parsed.query.split('&') if parsed.query else []
+        payload_parts = [part for part in query_parts if part.split('=', 1)[0] == 'payload']
+        if payload_parts != ['payload={payload}']:
+            return ''
+        rendered = rendered.replace('{payload}', quoted_payload)
+        return '' if '{' in rendered or '}' in rendered else rendered
+
+    sep = '&' if '?' in rendered else '?'
+    return f'{rendered}{sep}payload={quoted_payload}'
 
 
 def _vk_link(payload: str) -> str:
@@ -80,6 +144,43 @@ def build_entry_targets(payload: str = 'site') -> list[dict[str, str]]:
 
 def build_site_entry_targets(source: str = 'site') -> list[dict[str, str]]:
     return _entry_targets(build_site_payload(source))
+
+
+def _vk_owner_link(payload: str) -> str:
+    group_id = _strip(settings.VK_GROUP_ID)
+    if not group_id:
+        return ''
+    return f'https://vk.com/im?sel=-{group_id}&ref={urllib.parse.quote(payload)}'
+
+
+def build_owner_entry_targets(source: str = 'site') -> list[dict[str, str]]:
+    payload = build_owner_entry_payload(source)
+    raw = [
+        {
+            'platform': MessengerPlatform.TELEGRAM.value,
+            'title': 'Telegram',
+            'url': _telegram_link(payload),
+        },
+        {
+            'platform': MessengerPlatform.MAX.value,
+            'title': 'MAX',
+            'url': _max_owner_link(payload),
+        },
+        {
+            'platform': MessengerPlatform.VK.value,
+            'title': 'ВКонтакте',
+            'url': _vk_owner_link(payload),
+        },
+    ]
+    return [item for item in raw if item['url']]
+
+
+def build_owner_entry_target(platform: str, source: str = 'site') -> dict[str, str] | None:
+    expected = str(platform or '').strip().lower()
+    return next(
+        (item for item in build_owner_entry_targets(source) if item['platform'] == expected),
+        None,
+    )
 
 
 def build_messenger_targets(referrer_user_id: int) -> list[dict[str, str]]:

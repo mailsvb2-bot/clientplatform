@@ -2,6 +2,9 @@ from services.messenger.links import (
     build_gift_share_targets,
     build_gift_targets,
     build_messenger_targets,
+    build_owner_entry_payload,
+    build_owner_entry_target,
+    build_owner_entry_targets,
     build_share_targets,
     build_site_entry_targets,
 )
@@ -36,6 +39,20 @@ def test_site_entry_targets_include_all_configured_messengers(monkeypatch):
     assert items[0]['url'] == 'https://t.me/metro_test_bot?start=site'
     assert items[1]['url'] == 'https://max.ru/metrotherapy?start=site'
     assert items[2]['url'] == 'https://vk.com/im?sel=-123456&start=site'
+
+
+def test_owner_entry_targets_use_explicit_owner_payload(monkeypatch):
+    _configure_all_targets(monkeypatch)
+
+    assert build_owner_entry_payload() == 'cpo_site'
+    items = build_owner_entry_targets('landing')
+
+    assert [item['platform'] for item in items] == ['telegram', 'max', 'vk']
+    assert items[0]['url'] == 'https://t.me/metro_test_bot?start=cpo_landing'
+    assert items[1]['url'] == 'https://max.ru/metrotherapy?payload=cpo_landing'
+    assert items[2]['url'] == 'https://vk.com/im?sel=-123456&ref=cpo_landing'
+    assert build_owner_entry_target('vk', 'landing') == items[2]
+    assert build_owner_entry_target('unknown', 'landing') is None
 
 
 def test_share_targets_route_to_selected_platform(monkeypatch):
@@ -74,3 +91,85 @@ def test_gift_share_targets_open_selected_messenger_share_or_entry(monkeypatch):
     assert by_platform['vk']['url'].startswith('https://vk.com/share.php?')
     assert 'gift_abc123' in by_platform['vk']['url']
     assert by_platform['max']['url'] == 'https://max.ru/metrotherapy?start=gift_abc123'
+
+
+def test_owner_telegram_uses_canonical_production_username_fallback(monkeypatch):
+    monkeypatch.setattr(settings, 'TELEGRAM_BOT_USERNAME', '')
+    monkeypatch.setattr(settings, 'CLIENTPLATFORM_PRODUCTION_BOT_USERNAME', 'clientplatform_bot')
+    monkeypatch.setattr(settings, 'MAX_BOT_LINK_BASE', '')
+    monkeypatch.setattr(settings, 'VK_GROUP_ID', '')
+
+    target = build_owner_entry_target('telegram', 'landing')
+
+    assert target == {
+        'platform': 'telegram',
+        'title': 'Telegram',
+        'url': 'https://t.me/clientplatform_bot?start=cpo_landing',
+    }
+
+
+def test_owner_max_uses_payload_query_and_requires_bot_for_placeholder(monkeypatch):
+    monkeypatch.setattr(settings, 'TELEGRAM_BOT_USERNAME', '')
+    monkeypatch.setattr(settings, 'CLIENTPLATFORM_PRODUCTION_BOT_USERNAME', '')
+    monkeypatch.setattr(settings, 'VK_GROUP_ID', '')
+    monkeypatch.setattr(settings, 'MAX_BOT_LINK_BASE', 'https://max.ru/{bot}')
+    monkeypatch.setattr(settings, 'MAX_BOT_NAME', '')
+
+    assert build_owner_entry_target('max', 'landing') is None
+
+    monkeypatch.setattr(settings, 'MAX_BOT_NAME', 'clientplatform')
+    target = build_owner_entry_target('max', 'landing')
+    assert target == {
+        'platform': 'max',
+        'title': 'MAX',
+        'url': 'https://max.ru/clientplatform?payload=cpo_landing',
+    }
+
+
+def test_owner_max_payload_placeholder_is_rendered_fail_closed(monkeypatch):
+    monkeypatch.setattr(settings, 'TELEGRAM_BOT_USERNAME', '')
+    monkeypatch.setattr(settings, 'CLIENTPLATFORM_PRODUCTION_BOT_USERNAME', '')
+    monkeypatch.setattr(settings, 'VK_GROUP_ID', '')
+    monkeypatch.setattr(settings, 'MAX_BOT_LINK_BASE', 'https://max.ru/{bot}?payload={payload}')
+    monkeypatch.setattr(settings, 'MAX_BOT_NAME', '')
+    assert build_owner_entry_target('max', 'landing') is None
+
+    monkeypatch.setattr(settings, 'MAX_BOT_NAME', 'clientplatform')
+    assert build_owner_entry_target('max', 'landing')['url'] == (
+        'https://max.ru/clientplatform?payload=cpo_landing'
+    )
+
+
+def test_owner_max_rejects_payload_placeholder_outside_payload_query(monkeypatch):
+    monkeypatch.setattr(settings, 'TELEGRAM_BOT_USERNAME', '')
+    monkeypatch.setattr(settings, 'CLIENTPLATFORM_PRODUCTION_BOT_USERNAME', '')
+    monkeypatch.setattr(settings, 'VK_GROUP_ID', '')
+    monkeypatch.setattr(settings, 'MAX_BOT_NAME', 'clientplatform')
+
+    for template in (
+        'https://max.ru/{bot}?start={payload}',
+        'https://max.ru/{bot}/{payload}',
+        'https://max.ru/{bot}?foo={payload}',
+        'https://max.ru/{bot}/{payload}?payload={payload}',
+        'https://max.ru/{bot}?payload={payload}&from={payload}',
+        'https://max.ru/{bot}?payload=legacy&payload={payload}',
+        'https://max.ru/{bot}?payload={payload}&payload=legacy',
+    ):
+        monkeypatch.setattr(settings, 'MAX_BOT_LINK_BASE', template)
+        assert build_owner_entry_target('max', 'landing') is None
+
+
+def test_owner_max_payload_query_may_follow_other_query_params(monkeypatch):
+    monkeypatch.setattr(settings, 'TELEGRAM_BOT_USERNAME', '')
+    monkeypatch.setattr(settings, 'CLIENTPLATFORM_PRODUCTION_BOT_USERNAME', '')
+    monkeypatch.setattr(settings, 'VK_GROUP_ID', '')
+    monkeypatch.setattr(
+        settings,
+        'MAX_BOT_LINK_BASE',
+        'https://max.ru/{bot}?from=landing&payload={payload}',
+    )
+    monkeypatch.setattr(settings, 'MAX_BOT_NAME', 'clientplatform')
+
+    assert build_owner_entry_target('max', 'landing')['url'] == (
+        'https://max.ru/clientplatform?from=landing&payload=cpo_landing'
+    )

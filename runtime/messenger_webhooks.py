@@ -61,9 +61,12 @@ from runtime.payment_webhook_admission import (
     payment_webhook_admission_middleware,
 )
 from runtime.privacy_export_http import privacy_export_download, privacy_export_landing
+from runtime.telegram_transport import telegram_runtime_enabled
 from services.bg import tm as canonical_task_manager
 from services.messenger.audio_links import AUDIO_ACCESS_PREFIX, AUDIO_MEDIA_PREFIX
 from services.messenger.delivery_pool import start_delivery_worker, stop_delivery_worker
+from services.messenger.links import build_owner_entry_target
+from services.messenger.setup import build_setup_status
 from services.privacy_export_links import PRIVACY_EXPORT_PREFIX, privacy_export_http_enabled
 
 if TYPE_CHECKING:
@@ -334,6 +337,49 @@ async def _vk_webhook_with_group_guard(request: web.Request) -> web.Response:
     return await vk_webhook(request)
 
 
+def _owner_entry_available(platform: str) -> bool:
+    normalized = str(platform or "").strip().lower()
+    status = build_setup_status()
+    if normalized == "telegram":
+        return bool(telegram_runtime_enabled() and status.telegram_ok)
+    if normalized == "vk":
+        return bool(vk_webhook_enabled() and status.vk_ok)
+    if normalized == "max":
+        return bool(max_webhook_enabled() and status.max_ok)
+    return False
+
+
+async def _clientplatform_owner_entry_redirect(request: web.Request) -> web.Response:
+    """Redirect a stable landing URL into the official owner-control bot."""
+
+    platform = str(request.match_info.get("platform") or "").strip().lower()
+    if platform not in {"telegram", "vk", "max"}:
+        raise web.HTTPNotFound(text="not found")
+    target = build_owner_entry_target(platform, source="landing")
+    if target is None or not _owner_entry_available(platform):
+        return web.Response(
+            status=503,
+            text=(
+                "Этот вход ClientPlatform пока не подключён. "
+                "Выберите другой мессенджер или попробуйте позже."
+            ),
+            headers={
+                "Cache-Control": "no-store, max-age=0",
+                "Referrer-Policy": "no-referrer",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+    return web.Response(
+        status=302,
+        headers={
+            "Location": target["url"],
+            "Cache-Control": "no-store, max-age=0",
+            "Referrer-Policy": "no-referrer",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
 async def _clientplatform_acquisition_landing(request: web.Request) -> web.Response:
     """Render one neutral promotion destination with only verified messenger links."""
 
@@ -437,6 +483,14 @@ def _register_external_product_routes(app: web.Application) -> None:
     app["clientplatform_external_product_ingress"] = True
 
 
+def _register_clientplatform_owner_entry_routes(app: web.Application) -> None:
+    app.router.add_get(
+        "/clientplatform/open/{platform}",
+        _clientplatform_owner_entry_redirect,
+    )
+    app["clientplatform_owner_entry_ingress"] = True
+
+
 def _register_clientplatform_omnichannel_routes(app: web.Application) -> None:
     app.router.add_post(
         "/clientplatform/webhooks/vk/{route_id}",
@@ -512,6 +566,11 @@ async def start_messenger_webhook_runtime(
         ],
     )
     _register_health_routes(app)
+    # Landing owner-entry redirects are a first-party public surface, not a
+    # tenant-scoped omnichannel capability. Keep them available whenever the
+    # HTTP ingress runtime exists, even if canonical tenant VK/MAX ingress is
+    # intentionally disabled. Each redirect still checks provider readiness.
+    _register_clientplatform_owner_entry_routes(app)
 
     if payment_enabled:
         _register_payment_routes(app)

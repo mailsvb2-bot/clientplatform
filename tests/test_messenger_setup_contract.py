@@ -7,6 +7,7 @@ def _reload_setup(monkeypatch, **env):
     keys = {
         "APP_ENV",
         "TELEGRAM_BOT_USERNAME",
+        "CLIENTPLATFORM_PRODUCTION_BOT_USERNAME",
         "MAX_BOT_LINK_BASE",
         "MAX_BOT_TOKEN",
         "MAX_BOT_NAME",
@@ -113,3 +114,32 @@ def test_public_base_url_must_be_full_url(monkeypatch):
     status = setup_mod.build_setup_status()
 
     assert any("MESSENGER_PUBLIC_BASE_URL" in warning for warning in status.warnings)
+
+
+def test_setup_accepts_canonical_production_telegram_username(monkeypatch):
+    setup_mod = _reload_setup(
+        monkeypatch,
+        CLIENTPLATFORM_PRODUCTION_BOT_USERNAME="clientplatform_bot",
+        TELEGRAM_TRANSPORT="polling",
+    )
+
+    status = setup_mod.build_setup_status()
+
+    assert status.telegram_ok is True
+    assert "TELEGRAM_BOT_USERNAME" not in status.missing
+
+
+def test_max_setup_fails_closed_when_bot_placeholder_has_no_bot_name(monkeypatch):
+    setup_mod = _reload_setup(
+        monkeypatch,
+        TELEGRAM_BOT_USERNAME="metrotherapybot",
+        MAX_WEBHOOK_ENABLED="1",
+        MAX_BOT_LINK_BASE="https://max.ru/{bot}?payload={payload}",
+        MAX_BOT_TOKEN="max-token",
+        MESSENGER_PUBLIC_BASE_URL="https://metrotherapy.ru",
+    )
+
+    status = setup_mod.build_setup_status()
+
+    assert status.max_ok is False
+    assert "MAX_BOT_NAME" in status.missing

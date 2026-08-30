@@ -57,23 +57,25 @@ def build_setup_status() -> MessengerSetupStatus:
     telegram_enabled = telegram_runtime_enabled()
     telegram_transport_mode = telegram_transport()
     telegram_webhook_enabled = telegram_enabled and telegram_transport_mode == 'webhook'
-    telegram_ok = bool(
-        not telegram_enabled
-        or _strip(getattr(settings, 'TELEGRAM_BOT_USERNAME', ''))
+    telegram_username = _strip(getattr(settings, 'TELEGRAM_BOT_USERNAME', '')) or _strip(
+        getattr(settings, 'CLIENTPLATFORM_PRODUCTION_BOT_USERNAME', '')
     )
+    telegram_ok = bool(not telegram_enabled or telegram_username)
 
     max_link = _strip(getattr(settings, 'MAX_BOT_LINK_BASE', ''))
+    max_bot_name = _strip(getattr(settings, 'MAX_BOT_NAME', ''))
     max_token = _strip(getattr(settings, 'MAX_BOT_TOKEN', ''))
     max_secret = _strip(getattr(settings, 'MAX_WEBHOOK_SECRET', ''))
+    max_link_resolvable = bool(max_link and ('{bot}' not in max_link or max_bot_name))
     max_values_present = _present(
         max_link,
         max_token,
         max_secret,
-        getattr(settings, 'MAX_BOT_NAME', ''),
+        max_bot_name,
     )
     max_configured = bool(
         public_base
-        and max_link
+        and max_link_resolvable
         and max_token
         and (not deployed or (public_base_https and max_secret))
     )
@@ -124,6 +126,8 @@ def build_setup_status() -> MessengerSetupStatus:
             missing.append('MAX_BOT_TOKEN')
         if not max_link:
             missing.append('MAX_BOT_LINK_BASE')
+        if max_link and '{bot}' in max_link and not max_bot_name:
+            missing.append('MAX_BOT_NAME')
         if deployed and not max_secret:
             missing.append('MAX_WEBHOOK_SECRET')
     elif max_values_present:
