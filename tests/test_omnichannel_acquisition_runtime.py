@@ -88,7 +88,7 @@ async def test_neutral_landing_keeps_one_source_across_connected_messengers(monk
     (
         ("telegram", "https://t.me/clientplatform_bot?start=cpo_landing"),
         ("vk", "https://vk.com/im?sel=-123456&ref=cpo_landing"),
-        ("max", "https://max.ru/clientplatform?start=cpo_landing"),
+        ("max", "https://max.ru/clientplatform?payload=cpo_landing"),
     ),
 )
 async def test_owner_landing_redirect_uses_stable_server_route(monkeypatch, platform, target) -> None:

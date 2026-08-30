@@ -41,20 +41,43 @@ def build_gift_payload(code: str) -> str:
     return f'gift_{code_clean}'
 
 
+def _telegram_bot_username() -> str:
+    return _strip(settings.TELEGRAM_BOT_USERNAME) or _strip(
+        getattr(settings, 'CLIENTPLATFORM_PRODUCTION_BOT_USERNAME', '')
+    )
+
+
 def _telegram_link(payload: str) -> str:
-    username = _strip(settings.TELEGRAM_BOT_USERNAME)
+    username = _telegram_bot_username()
     return f'https://t.me/{username}?start={urllib.parse.quote(payload)}' if username else ''
 
 
-def _max_link(payload: str) -> str:
+def _render_max_link(payload: str, *, query_name: str) -> str:
     bot_name = _strip(settings.MAX_BOT_NAME)
     base = _strip(settings.MAX_BOT_LINK_BASE)
     if not base:
         return ''
-    if '{payload}' in base:
-        return base.format(payload=urllib.parse.quote(payload), bot=urllib.parse.quote(bot_name))
-    sep = '&' if '?' in base else '?'
-    return f'{base}{sep}start={urllib.parse.quote(payload)}'
+    if '{bot}' in base and not bot_name:
+        return ''
+
+    rendered = base.replace('{bot}', urllib.parse.quote(bot_name))
+    quoted_payload = urllib.parse.quote(payload)
+    if '{payload}' in rendered:
+        rendered = rendered.replace('{payload}', quoted_payload)
+        return '' if '{' in rendered or '}' in rendered else rendered
+    if '{' in rendered or '}' in rendered:
+        return ''
+    sep = '&' if '?' in rendered else '?'
+    return f'{rendered}{sep}{query_name}={quoted_payload}'
+
+
+def _max_link(payload: str) -> str:
+    return _render_max_link(payload, query_name='start')
+
+
+def _max_owner_link(payload: str) -> str:
+    # MAX exposes deep-link data to bot_started via its `payload` field.
+    return _render_max_link(payload, query_name='payload')
 
 
 def _vk_link(payload: str) -> str:
@@ -111,7 +134,7 @@ def build_owner_entry_targets(source: str = 'site') -> list[dict[str, str]]:
         {
             'platform': MessengerPlatform.MAX.value,
             'title': 'MAX',
-            'url': _max_link(payload),
+            'url': _max_owner_link(payload),
         },
         {
             'platform': MessengerPlatform.VK.value,
