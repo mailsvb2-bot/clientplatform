@@ -93,6 +93,11 @@ def _max_owner_link(payload: str) -> str:
 
     quoted_payload = urllib.parse.quote(payload)
     if '{payload}' in rendered:
+        # Owner entry must have exactly one payload placeholder, and that one
+        # must be the value of MAX's `payload` query parameter.  Reject mixed
+        # path/query placements so substitution can never mutate the bot path.
+        if rendered.count('{payload}') != 1:
+            return ''
         parsed = urllib.parse.urlsplit(rendered)
         query_parts = parsed.query.split('&') if parsed.query else []
         if not any(part == 'payload={payload}' for part in query_parts):
