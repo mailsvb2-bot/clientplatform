@@ -106,6 +106,15 @@ class FakeAdmin:
     ) -> None:
         self.panels.append((user_id, business_id))
 
+    async def _set_current_section(
+        self,
+        _state: Any,
+        *,
+        action: str,
+        push: bool,
+    ) -> None:
+        _ = (action, push)
+
     @staticmethod
     def _keyboard(rows: Any) -> Any:
         return rows
@@ -166,6 +175,7 @@ def test_amount_and_display_helpers_cover_validation_and_formatting(ctx: Any) ->
         "RUB",
         "комментарий",
     )
+    assert extension._parse_amount("99") == (9900, "RUB", "")
     assert extension._money(123456, "RUB") == "1 234,56 RUB"
     assert extension._parse_amount("3500 JPY") == (3500, "JPY", "")
     assert extension._parse_amount("3500 KWD") == (3_500_000, "KWD", "")
@@ -243,6 +253,48 @@ def test_amount_and_display_helpers_cover_validation_and_formatting(ctx: Any) ->
     assert extension._ops_callback(ctx, "run", "x") == "cpao:business:run:x"
     with pytest.raises(ValueError, match="exceeds Telegram limit"):
         extension._ops_callback(ctx, "x" * 80)
+
+
+def test_finance_write_buttons_cover_non_write_and_unknown_action(
+    ctx: Any,
+) -> None:
+    admin = FakeAdmin(ctx)
+    ctx.actor.role = PlatformRole.OWNER
+    assert extension._finance_write_buttons(
+        admin, ctx, action="money", offerings=[]
+    ) == [("➕ Зафиксировать оплату вручную", "cpao:business:payment-new")]
+    assert extension._finance_write_buttons(
+        admin, ctx, action="unrelated", offerings=[]
+    ) == []
+    ctx.actor.role = PlatformRole.ANALYST
+    assert extension._finance_write_buttons(
+        admin, ctx, action="money", offerings=[]
+    ) == []
+
+
+@pytest.mark.asyncio
+async def test_enhanced_attention_renders_open_alerts(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_admin: FakeAdmin,
+    ctx: Any,
+) -> None:
+    fake_admin.business_delivery_summary = lambda **_kwargs: SimpleNamespace(
+        dispatch_attention=2, dispatch_pending=1
+    )
+    monkeypatch.setattr(
+        extension.admin_ops,
+        "list_open_alerts",
+        lambda **_kwargs: [
+            SimpleNamespace(severity="critical", message="Критический сигнал"),
+            SimpleNamespace(severity="warning", message="Предупреждение"),
+        ],
+    )
+    await extension._enhanced_attention(FakeCallback("x"), FakeState(), ctx)
+    assert fake_admin.edits
+    text = fake_admin.edits[-1][0]
+    assert "🔴 Критический сигнал" in text
+    assert "🟠 Предупреждение" in text
+    assert "Сейчас критических задач нет" not in text
 
 
 @pytest.mark.asyncio
