@@ -36,6 +36,14 @@ _DB_OPERATION_DEADLINE: ContextVar[float | None] = ContextVar(
     "db_operation_deadline",
     default=None,
 )
+_DB_AMBIENT_CONNECTION: ContextVar[Any | None] = ContextVar(
+    "db_ambient_connection",
+    default=None,
+)
+_DB_AMBIENT_SAVEPOINT_SEQUENCE: ContextVar[int] = ContextVar(
+    "db_ambient_savepoint_sequence",
+    default=0,
+)
 
 
 @contextmanager
@@ -562,6 +570,111 @@ def get_connection():
     return conn
 
 
+def get_ambient_connection() -> Any | None:
+    """Return the caller-owned ambient write transaction, if one exists."""
+
+    return _DB_AMBIENT_CONNECTION.get()
+
+
+def _next_ambient_savepoint_name() -> str:
+    sequence = _DB_AMBIENT_SAVEPOINT_SEQUENCE.get() + 1
+    _DB_AMBIENT_SAVEPOINT_SEQUENCE.set(sequence)
+    return f"clientplatform_ambient_{sequence}"
+
+
+@contextmanager
+def ambient_savepoint(conn: Any) -> Iterator[Any]:
+    """Preserve the historical rollback boundary of one nested DB scope.
+
+    An exception may be intentionally handled by a higher application layer.
+    Rolling back to a savepoint keeps partial writes from that failed nested
+    operation out of the surrounding ``atomic_db()`` transaction while still
+    allowing the outer scope to persist a safe/stale/permission reply.
+    """
+
+    name = _next_ambient_savepoint_name()
+    conn.execute(f"SAVEPOINT {name}")  # nosec B608 - generated internal identifier only
+    try:
+        yield conn
+    except Exception:
+        try:
+            conn.execute(
+                f"ROLLBACK TO SAVEPOINT {name}"  # nosec B608 - generated internal identifier only
+            )
+        finally:
+            conn.execute(
+                f"RELEASE SAVEPOINT {name}"  # nosec B608 - generated internal identifier only
+            )
+        raise
+    else:
+        conn.execute(
+            f"RELEASE SAVEPOINT {name}"  # nosec B608 - generated internal identifier only
+        )
+
+
+@contextmanager
+def atomic_db() -> Iterator[Any]:
+    """Share one commit/rollback boundary across nested application DB calls.
+
+    Nested ``get_db()`` calls reuse this connection without committing or closing
+    it. Read-only application calls receive a guarded view of the same connection
+    from :mod:`services.db.read_only`, so they can observe earlier writes in the
+    transaction without opening a second snapshot. Only the outermost scope owns
+    commit, rollback and connection lifecycle.
+    """
+
+    existing = _DB_AMBIENT_CONNECTION.get()
+    if existing is not None:
+        with ambient_savepoint(existing):
+            yield existing
+        return
+
+    conn = get_connection()
+    # SQLite treats a top-level SAVEPOINT as the transaction itself, so
+    # releasing that savepoint would commit before the ambient unit of work
+    # reaches its durable reply. Establish the outer transaction explicitly
+    # on every engine before nested application scopes create savepoints.
+    try:
+        conn.execute("BEGIN")
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:  # validator: allow-wide-except
+            logging.getLogger(__name__).exception("Ambient DB rollback after BEGIN failure failed")
+        try:
+            conn.close()
+        except Exception:  # validator: allow-wide-except
+            logging.getLogger(__name__).exception("Ambient DB close after BEGIN failure failed")
+        raise
+    token = _DB_AMBIENT_CONNECTION.set(conn)
+    sequence_token = _DB_AMBIENT_SAVEPOINT_SEQUENCE.set(0)
+    try:
+        yield conn
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:  # validator: allow-wide-except
+            logging.getLogger(__name__).exception("Ambient DB rollback after body failure failed")
+        raise
+    else:
+        try:
+            conn.commit()
+        except Exception:  # validator: allow-wide-except
+            logging.getLogger(__name__).exception("Ambient DB commit failed")
+            try:
+                conn.rollback()
+            except Exception:  # validator: allow-wide-except
+                logging.getLogger(__name__).exception("Ambient DB rollback after commit failure failed")
+            raise
+    finally:
+        _DB_AMBIENT_SAVEPOINT_SEQUENCE.reset(sequence_token)
+        _DB_AMBIENT_CONNECTION.reset(token)
+        try:
+            conn.close()
+        except Exception:  # validator: allow-wide-except
+            logging.getLogger(__name__).exception("Ambient DB close failed")
+
+
 def _is_write_sql(sql: str) -> bool:
     s = (sql or "").lstrip().upper()
     return (
@@ -601,6 +714,12 @@ def get_db_ro() -> Iterator[Any]:
 
 @contextmanager
 def get_db() -> Iterator[Any]:
+    ambient = get_ambient_connection()
+    if ambient is not None:
+        with ambient_savepoint(ambient):
+            yield ambient
+        return
+
     conn = get_connection()
     try:
         yield conn

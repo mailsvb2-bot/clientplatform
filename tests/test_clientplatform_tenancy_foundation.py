@@ -132,5 +132,48 @@ class ClientPlatformTenancyFoundationTests(unittest.TestCase):
         self.assertEqual(remaining_owner.role, PlatformRole.OWNER)
 
 
+    def test_owner_control_workspace_is_durable_channel_scoped_and_authorized(self) -> None:
+        first = self.repo.create_business(owner_user_id=101, name="Практика")
+        second = self.repo.create_business(owner_user_id=101, name="Школа")
+        outsider = self.repo.create_business(owner_user_id=202, name="Чужой бизнес")
+
+        self.repo.set_owner_control_workspace(
+            user_id=101, platform="vk", business_id=first.business.id
+        )
+        self.repo.set_owner_control_workspace(
+            user_id=101, platform="max", business_id=second.business.id
+        )
+
+        self.assertEqual(
+            self.repo.get_owner_control_workspace(user_id=101, platform="vk"),
+            first.business.id,
+        )
+        self.assertEqual(
+            self.repo.get_owner_control_workspace(user_id=101, platform="max"),
+            second.business.id,
+        )
+        with self.assertRaises(TenantAccessDenied):
+            self.repo.set_owner_control_workspace(
+                user_id=101, platform="vk", business_id=outsider.business.id
+            )
+
+    def test_owner_control_workspace_fails_closed_after_membership_revocation(self) -> None:
+        access = self.repo.create_business(owner_user_id=101, name="Практика")
+        owner = self.repo.resolve_context(user_id=101, business_id=access.business.id)
+        self.repo.grant_member(actor=owner, user_id=202, role=PlatformRole.MANAGER)
+        self.repo.set_owner_control_workspace(
+            user_id=202, platform="max", business_id=access.business.id
+        )
+        self.assertEqual(
+            self.repo.get_owner_control_workspace(user_id=202, platform="max"),
+            access.business.id,
+        )
+
+        self.repo.revoke_member(actor=owner, user_id=202)
+        self.assertIsNone(
+            self.repo.get_owner_control_workspace(user_id=202, platform="max")
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

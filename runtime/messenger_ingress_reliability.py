@@ -10,6 +10,8 @@ from aiohttp import web
 
 from runtime import messenger_ingress as legacy
 from runtime.messenger_payloads import extract_max_message, extract_vk_message, max_event_key
+from runtime.messenger_senders import MaxBotSender
+from services.db import atomic_db
 from services.events import log_event
 from services.messenger.clientplatform_entry import (
     handle_clientplatform_entry,
@@ -89,29 +91,31 @@ def _process_clientplatform_entry_and_persist(
         command = parse_clientplatform_entry_command(text, event_type=event_type)
         if command is None:
             raise ValueError("ClientPlatform entry command disappeared during processing")
-        canonical_user_id, replies = handle_clientplatform_entry(
-            extracted["user_id"],
-            platform=platform,
-            external_user_id=extracted["external_user_id"],
-            text=text,
-            event_type=event_type,
-            username=extracted["username"],
-            display_name=extracted["display_name"],
-            first_name=extracted["first_name"],
-        )
-        persist_reply_bundle(
-            platform=platform,
-            external_user_id=extracted["external_user_id"],
-            canonical_user_id=int(canonical_user_id),
-            event_key=event_key,
-            replies=list(replies),
-            action=f"clientplatform_{command.action}",
-        )
-        log_event(
-            int(canonical_user_id),
-            f"{platform}_clientplatform_entry",
-            {"action": command.action, "text_len": len(text)},
-        )
+        with atomic_db():
+            canonical_user_id, replies = handle_clientplatform_entry(
+                extracted["user_id"],
+                platform=platform,
+                external_user_id=extracted["external_user_id"],
+                text=text,
+                event_type=event_type,
+                username=extracted["username"],
+                display_name=extracted["display_name"],
+                first_name=extracted["first_name"],
+                event_key=event_key,
+            )
+            persist_reply_bundle(
+                platform=platform,
+                external_user_id=extracted["external_user_id"],
+                canonical_user_id=int(canonical_user_id),
+                event_key=event_key,
+                replies=list(replies),
+                action=f"clientplatform_{command.action}",
+            )
+            log_event(
+                int(canonical_user_id),
+                f"{platform}_clientplatform_entry",
+                {"action": command.action, "text_len": len(text)},
+            )
         return True
     except Exception as exc:  # validator: allow-wide-except
         fail_inbound_event(platform, event_key, payload, type(exc).__name__)
@@ -170,6 +174,23 @@ async def vk_webhook(request: web.Request) -> web.Response:
     return web.Response(text="ok")
 
 
+async def _ack_global_max_owner_callback(payload: dict[str, Any]) -> None:
+    if str(payload.get("update_type") or "").strip() != "message_callback":
+        return
+    raw_callback = payload.get("callback")
+    callback = raw_callback if isinstance(raw_callback, dict) else {}
+    callback_id = str(callback.get("callback_id") or "").strip()
+    if not callback_id:
+        return
+    try:
+        await MaxBotSender().answer_callback(callback_id=callback_id)
+    except Exception:  # validator: allow-wide-except - provider acknowledgement is best effort only
+        log.warning(
+            "Official MAX owner callback acknowledgement failed",
+            exc_info=True,
+        )
+
+
 async def max_webhook(request: web.Request) -> web.Response:
     """Add finite extraction retries and ClientPlatform entry routing for MAX."""
 
@@ -210,6 +231,7 @@ async def max_webhook(request: web.Request) -> web.Response:
     if command is None:
         return await legacy.max_webhook(request)
 
+    await _ack_global_max_owner_callback(payload)
     event_key = max_event_key(payload)
     try:
         processed = await asyncio.to_thread(

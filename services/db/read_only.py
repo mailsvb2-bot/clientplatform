@@ -5,7 +5,7 @@ import sqlite3
 from contextlib import contextmanager
 from typing import Any, Iterator, Literal, Sequence
 
-from services.db.core import get_connection
+from services.db.core import ambient_savepoint, get_ambient_connection, get_connection
 from services.db.runtime import is_postgres_enabled
 
 log = logging.getLogger(__name__)
@@ -109,8 +109,9 @@ class ReadOnlyCursor:
 
 
 class ReadOnlyConnection:
-    def __init__(self, conn: Any):
+    def __init__(self, conn: Any, *, owns_connection: bool = True):
         self._conn = conn
+        self._owns_connection = bool(owns_connection)
 
     def execute(self, sql: str, params: Sequence[Any] = ()):
         if _is_write_sql(sql):
@@ -132,10 +133,14 @@ class ReadOnlyConnection:
         raise RuntimeError("read-only DB context rejected commit")
 
     def rollback(self) -> None:
-        self._conn.rollback()
+        if self._owns_connection:
+            self._conn.rollback()
+            return
+        raise RuntimeError("ambient read-only DB view rejected rollback")
 
     def close(self) -> None:
-        self._conn.close()
+        if self._owns_connection:
+            self._conn.close()
 
     def __enter__(self):
         return self
@@ -168,12 +173,20 @@ def _enable_database_read_only(conn: Any) -> None:
 
 @contextmanager
 def get_db_ro() -> Iterator[ReadOnlyConnection]:
-    """Open a database-enforced read-only transaction and fail closed.
+    """Open a read-only view and fail closed.
 
-    PostgreSQL uses ``SET TRANSACTION READ ONLY`` and verifies the resulting
-    transaction state. SQLite uses ``PRAGMA query_only=ON`` and verifies it.
-    The Python wrapper is a second guardrail; rollback and close always run.
+    Normally PostgreSQL/SQLite database-level read-only enforcement is enabled
+    and verified. Inside an explicit ``atomic_db()`` write transaction we must
+    reuse that exact connection so reads observe uncommitted application writes;
+    in that narrow case the Python read-only wrapper remains the guardrail and
+    transaction lifecycle stays with the outer atomic scope.
     """
+
+    ambient = get_ambient_connection()
+    if ambient is not None:
+        with ambient_savepoint(ambient):
+            yield ReadOnlyConnection(ambient, owns_connection=False)
+        return
 
     conn = get_connection()
     try:

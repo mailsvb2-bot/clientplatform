@@ -364,6 +364,7 @@ class ClientPlatformProgramDeliveryVerticalTests(unittest.TestCase):
             set(report.discovered_business_tables),
             {
                 "business_members",
+                "clientplatform_owner_control_workspaces",
                 "customers",
                 "customer_identities",
                 "programs",

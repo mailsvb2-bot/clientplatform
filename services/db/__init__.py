@@ -10,6 +10,7 @@ read-only mode before yielding a connection wrapper.
 from services.db.core import (
     DB_PATH,
     PROJECT_ROOT,
+    atomic_db,
     db,
     execute,
     get_connection,

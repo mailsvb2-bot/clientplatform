@@ -63,13 +63,22 @@ class LifecycleConnection:
         commit_error: BaseException | None = None,
         rollback_error: BaseException | None = None,
         close_error: BaseException | None = None,
+        execute_error: BaseException | None = None,
     ) -> None:
         self.commit_error = commit_error
         self.rollback_error = rollback_error
         self.close_error = close_error
+        self.execute_error = execute_error
         self.commit_calls = 0
         self.rollback_calls = 0
         self.close_calls = 0
+        self.execute_calls: list[str] = []
+
+    def execute(self, sql: str, params: tuple[Any, ...] = ()) -> None:
+        del params
+        self.execute_calls.append(sql)
+        if self.execute_error is not None:
+            raise self.execute_error
 
     def commit(self) -> None:
         self.commit_calls += 1
@@ -267,6 +276,154 @@ def test_get_db_read_only_success_failure_and_cleanup(monkeypatch: pytest.Monkey
             raise ValueError("body")
     assert conn.rollback_calls == 1
     assert conn.close_calls == 1
+
+
+def test_atomic_db_reuses_one_connection_and_owns_single_commit(monkeypatch: pytest.MonkeyPatch) -> None:
+    conn = LifecycleConnection()
+    install_connection(monkeypatch, conn, postgres=False)
+
+    with core.atomic_db() as outer:
+        with core.get_db() as inner:
+            assert inner is outer is conn
+        with core.atomic_db() as nested:
+            assert nested is conn
+        assert conn.commit_calls == 0
+        assert conn.close_calls == 0
+
+    assert conn.commit_calls == 1
+    assert conn.rollback_calls == 0
+    assert conn.close_calls == 1
+    assert conn.execute_calls == [
+        "BEGIN",
+        "SAVEPOINT clientplatform_ambient_1",
+        "RELEASE SAVEPOINT clientplatform_ambient_1",
+        "SAVEPOINT clientplatform_ambient_2",
+        "RELEASE SAVEPOINT clientplatform_ambient_2",
+    ]
+    assert core.get_ambient_connection() is None
+
+
+def test_atomic_db_begin_failure_rolls_back_closes_and_never_sets_ambient(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = LifecycleConnection(execute_error=RuntimeError("begin failed"))
+    install_connection(monkeypatch, conn, postgres=False)
+
+    with pytest.raises(RuntimeError, match="begin failed"):
+        with core.atomic_db():
+            pytest.fail("atomic_db must not yield after BEGIN failure")
+
+    assert conn.execute_calls == ["BEGIN"]
+    assert conn.rollback_calls == 1
+    assert conn.close_calls == 1
+    assert core.get_ambient_connection() is None
+
+
+def test_atomic_db_nested_failure_rolls_back_to_savepoint_when_caller_recovers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = LifecycleConnection()
+    install_connection(monkeypatch, conn, postgres=False)
+
+    with core.atomic_db():
+        try:
+            with core.get_db():
+                raise ValueError("domain rejection")
+        except ValueError:
+            pass
+        with core.get_db():
+            pass
+
+    assert conn.commit_calls == 1
+    assert conn.rollback_calls == 0
+    assert conn.close_calls == 1
+    assert conn.execute_calls == [
+        "BEGIN",
+        "SAVEPOINT clientplatform_ambient_1",
+        "ROLLBACK TO SAVEPOINT clientplatform_ambient_1",
+        "RELEASE SAVEPOINT clientplatform_ambient_1",
+        "SAVEPOINT clientplatform_ambient_2",
+        "RELEASE SAVEPOINT clientplatform_ambient_2",
+    ]
+
+
+def test_nested_atomic_db_failure_uses_savepoint_when_outer_caller_recovers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = LifecycleConnection()
+    install_connection(monkeypatch, conn, postgres=False)
+
+    with core.atomic_db():
+        try:
+            with core.atomic_db():
+                raise ValueError("nested atomic rejection")
+        except ValueError:
+            pass
+
+    assert conn.commit_calls == 1
+    assert conn.rollback_calls == 0
+    assert conn.close_calls == 1
+    assert conn.execute_calls == [
+        "BEGIN",
+        "SAVEPOINT clientplatform_ambient_1",
+        "ROLLBACK TO SAVEPOINT clientplatform_ambient_1",
+        "RELEASE SAVEPOINT clientplatform_ambient_1",
+    ]
+
+
+def test_atomic_db_sqlite_savepoint_release_never_commits_outer_transaction(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "ambient-atomic.db"
+
+    def open_connection() -> sqlite3.Connection:
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    monkeypatch.setattr(core, "get_connection", open_connection)
+    monkeypatch.setattr(core, "is_postgres_enabled", lambda: False)
+
+    with core.atomic_db() as outer:
+        outer.execute("CREATE TABLE sample(id INTEGER PRIMARY KEY, value TEXT NOT NULL)")
+        try:
+            with core.get_db() as nested:
+                nested.execute("INSERT INTO sample(id,value) VALUES(1,'partial')")
+                raise ValueError("domain rejection")
+        except ValueError:
+            pass
+        assert outer.execute("SELECT COUNT(*) FROM sample").fetchone()[0] == 0
+        with core.get_db() as nested:
+            nested.execute("INSERT INTO sample(id,value) VALUES(2,'committed')")
+
+    verify = sqlite3.connect(db_path)
+    try:
+        rows = verify.execute("SELECT id,value FROM sample ORDER BY id").fetchall()
+    finally:
+        verify.close()
+    assert rows == [(2, "committed")]
+
+
+def test_atomic_db_rolls_back_nested_write_on_later_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    conn = LifecycleConnection()
+    install_connection(monkeypatch, conn, postgres=False)
+
+    with pytest.raises(RuntimeError, match="outbox failed"):
+        with core.atomic_db():
+            with core.get_db() as inner:
+                assert inner is conn
+            raise RuntimeError("outbox failed")
+
+    assert conn.commit_calls == 0
+    assert conn.rollback_calls == 1
+    assert conn.close_calls == 1
+    assert conn.execute_calls == [
+        "BEGIN",
+        "SAVEPOINT clientplatform_ambient_1",
+        "RELEASE SAVEPOINT clientplatform_ambient_1",
+    ]
+    assert core.get_ambient_connection() is None
 
 
 def test_get_db_commit_body_and_cleanup_failures(monkeypatch: pytest.MonkeyPatch) -> None:

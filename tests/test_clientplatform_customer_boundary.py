@@ -285,6 +285,7 @@ class ClientPlatformCustomerBoundaryTests(unittest.TestCase):
             set(report.discovered_business_tables),
             {
                 "business_members",
+                "clientplatform_owner_control_workspaces",
                 "connection_credentials",
                 "connections",
                 "customer_identities",

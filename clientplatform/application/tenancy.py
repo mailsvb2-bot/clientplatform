@@ -20,6 +20,20 @@ def list_accessible_businesses(*, user_id: int) -> list[BusinessAccess]:
         return TenancyRepository(conn).list_accessible_businesses(user_id=user_id)
 
 
+def set_owner_control_workspace(*, user_id: int, platform: str, business_id: str) -> str:
+    with get_db() as conn:
+        return TenancyRepository(conn).set_owner_control_workspace(
+            user_id=user_id, platform=platform, business_id=business_id
+        )
+
+
+def get_owner_control_workspace(*, user_id: int, platform: str) -> str | None:
+    with get_db_ro() as conn:
+        return TenancyRepository(conn).get_owner_control_workspace(
+            user_id=user_id, platform=platform
+        )
+
+
 def rename_business(*, actor: TenantContext, name: str) -> Business:
     with get_db() as conn:
         return TenancyRepository(conn).rename_business(actor=actor, name=name)

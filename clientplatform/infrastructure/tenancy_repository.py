@@ -127,6 +127,55 @@ class TenancyRepository:
             role=PlatformRole(str(_value(row, "role", 3))),
         )
 
+    def set_owner_control_workspace(
+        self,
+        *,
+        user_id: int,
+        platform: str,
+        business_id: str,
+        now: str | None = None,
+    ) -> str:
+        principal_id = normalize_user_id(user_id)
+        normalized_platform = str(platform or "").strip().casefold()
+        if normalized_platform not in {"telegram", "vk", "max"}:
+            raise ValueError("owner control platform is invalid")
+        current = self.resolve_context(user_id=principal_id, business_id=business_id)
+        timestamp = str(now or _utc_now())
+        self._conn.execute(
+            """
+            INSERT INTO clientplatform_owner_control_workspaces(
+                user_id, platform, business_id, updated_at
+            ) VALUES(?, ?, ?, ?)
+            ON CONFLICT(user_id, platform) DO UPDATE SET
+                business_id=excluded.business_id,
+                updated_at=excluded.updated_at
+            """,
+            (principal_id, normalized_platform, current.business_id, timestamp),
+        )
+        return current.business_id
+
+    def get_owner_control_workspace(self, *, user_id: int, platform: str) -> str | None:
+        principal_id = normalize_user_id(user_id)
+        normalized_platform = str(platform or "").strip().casefold()
+        if normalized_platform not in {"telegram", "vk", "max"}:
+            raise ValueError("owner control platform is invalid")
+        row = self._conn.execute(
+            """
+            SELECT w.business_id
+            FROM clientplatform_owner_control_workspaces w
+            JOIN business_members bm
+              ON bm.business_id=w.business_id AND bm.user_id=w.user_id
+            JOIN businesses b ON b.id=w.business_id
+            WHERE w.user_id=? AND w.platform=?
+              AND bm.status='active' AND b.status='active'
+            LIMIT 1
+            """,
+            (principal_id, normalized_platform),
+        ).fetchone()
+        if row is None:
+            return None
+        return str(_value(row, "business_id", 0))
+
     def get_access(self, *, user_id: int, business_id: str) -> BusinessAccess:
         context = self.resolve_context(user_id=user_id, business_id=business_id)
         business_row = self._conn.execute(
