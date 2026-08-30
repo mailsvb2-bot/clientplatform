@@ -188,15 +188,16 @@ def _validate_database_runtime(prod: bool, errors: list[str], warnings: list[str
 def _validate_payment_runtime(prod: bool, errors: list[str]) -> None:
     if not prod:
         return
-    for name in ("YOOKASSA_SHOP_ID", "YOOKASSA_SECRET_KEY"):
-        _require_env(name, errors)
-    if not _first_env("PAYMENT_CHECKOUT_SIGNING_KEY", "CHECKOUT_SIGNING_KEY"):
-        errors.append("PAYMENT_CHECKOUT_SIGNING_KEY is missing or placeholder")
-    public_base = _payment_public_base_url()
-    if not public_base:
-        errors.append("PAYMENT_PUBLIC_BASE_URL or MESSENGER_PUBLIC_BASE_URL is missing or placeholder")
-    elif not public_base.startswith("https://"):
-        errors.append("payment public base URL must start with https:// in prod")
+    if _payment_http_enabled():
+        for name in ("YOOKASSA_SHOP_ID", "YOOKASSA_SECRET_KEY"):
+            _require_env(name, errors)
+        if not _first_env("PAYMENT_CHECKOUT_SIGNING_KEY", "CHECKOUT_SIGNING_KEY"):
+            errors.append("PAYMENT_CHECKOUT_SIGNING_KEY is missing or placeholder")
+        public_base = _payment_public_base_url()
+        if not public_base:
+            errors.append("PAYMENT_PUBLIC_BASE_URL or MESSENGER_PUBLIC_BASE_URL is missing or placeholder")
+        elif not public_base.startswith("https://"):
+            errors.append("payment public base URL must start with https:// in prod")
     dangerous = [
         "ALLOW_UNSIGNED_PAYMENT_CHECKOUT_IN_PROD",
         "ALLOW_UNVERIFIED_YOOKASSA_WEBHOOK_IN_PROD",
