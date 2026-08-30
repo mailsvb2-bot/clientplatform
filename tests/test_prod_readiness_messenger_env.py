@@ -69,6 +69,30 @@ def test_prod_payment_validation_honors_explicit_disabled_ingress(monkeypatch):
     assert not any("PAYMENT_CHECKOUT_SIGNING_KEY" in error for error in errors)
 
 
+def test_prod_payment_validation_defaults_fail_closed_when_flag_is_omitted(monkeypatch):
+    mod = importlib.import_module("scripts.prod_readiness_check")
+    monkeypatch.setenv("APP_ENV", "prod")
+    monkeypatch.delenv("PAYMENT_HTTP_ENABLED", raising=False)
+    monkeypatch.delenv("MESSENGER_WEBHOOK_ENABLED", raising=False)
+    for name in (
+        "YOOKASSA_SHOP_ID",
+        "YOOKASSA_SECRET_KEY",
+        "PAYMENT_CHECKOUT_SIGNING_KEY",
+        "CHECKOUT_SIGNING_KEY",
+        "PAYMENT_PUBLIC_BASE_URL",
+        "MESSENGER_PUBLIC_BASE_URL",
+        "PUBLIC_BASE_URL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    errors: list[str] = []
+    mod._validate_payment_runtime(True, errors)
+
+    assert any("YOOKASSA_SHOP_ID" in error for error in errors)
+    assert any("YOOKASSA_SECRET_KEY" in error for error in errors)
+    assert any("PAYMENT_CHECKOUT_SIGNING_KEY" in error for error in errors)
+
+
 def test_prod_payment_validation_stays_fail_closed_when_enabled(monkeypatch):
     mod = importlib.import_module("scripts.prod_readiness_check")
     monkeypatch.setenv("PAYMENT_HTTP_ENABLED", "1")

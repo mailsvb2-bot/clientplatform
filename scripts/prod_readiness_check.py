@@ -104,6 +104,11 @@ def _payment_http_enabled() -> bool:
     explicit = _optional_flag("PAYMENT_HTTP_ENABLED")
     if explicit is not None:
         return explicit
+    app_env = (os.getenv("APP_ENV", "dev") or "dev").strip().lower()
+    if app_env in {"prod", "production"}:
+        # Match config.settings startup semantics: an omitted payment flag keeps
+        # the historical production checkout default fail-closed.
+        return True
     return _truthy("MESSENGER_WEBHOOK_ENABLED")
 
 
