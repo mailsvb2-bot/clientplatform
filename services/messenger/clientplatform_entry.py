@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 
-from clientplatform.application.activity import get_business_profile, save_business_profile
+from clientplatform.application.activity import save_business_profile
 from clientplatform.application.control_callbacks import token_uuid, uuid_token
 from clientplatform.application.native_member_interactions import (
     recognizes_native_member_interaction,
@@ -529,14 +529,24 @@ def handle_clientplatform_entry(
                 )
             ]
         try:
-            timezone_name = get_business_profile(actor=actor).timezone
+            activity_reply = _owner_control_reply(
+                canonical_user_id=canonical_user_id,
+                platform=platform,
+                accesses=accesses,
+                raw_text=f"деятельность {command.value}",
+                business_id=actor.business_id,
+                interaction_key=interaction_key,
+            )
         except ActivityNotFound:
-            timezone_name = settings.TIMEZONE
-        save_business_profile(
-            actor=actor,
-            activity_description=command.value,
-            timezone_name=timezone_name,
-        )
+            save_business_profile(
+                actor=actor,
+                activity_description=command.value,
+                timezone_name=settings.TIMEZONE,
+            )
+        else:
+            if activity_reply is None:
+                raise RuntimeError("single-business activity update could not be resolved")
+            return canonical_user_id, [activity_reply]
         reply = _owner_control_reply(
             canonical_user_id=canonical_user_id,
             platform=platform,

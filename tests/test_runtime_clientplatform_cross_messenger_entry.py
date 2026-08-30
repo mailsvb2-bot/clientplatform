@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from clientplatform.application.control_callbacks import uuid_token
 from clientplatform.domain.activity import ActivityNotFound
+from clientplatform.domain.tenancy import PlatformRole, TenantContext
 from clientplatform.domain.customer_interactions import (
     CustomerInteractionButton,
     CustomerInteractionMessage,
@@ -457,15 +458,15 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
         create.assert_not_called()
         self.assertIn("уже существует", replies[0].text)
 
-    def test_max_activity_step_saves_profile_and_opens_native_dashboard(self) -> None:
+    def test_max_activity_step_routes_existing_profile_through_native_renderer(self) -> None:
         entry = SimpleNamespace(user_id=707)
         access = SimpleNamespace(
-            business=SimpleNamespace(id="business-707", name="Школа английского")
+            business=SimpleNamespace(id=B1, name="Школа английского")
         )
-        actor = SimpleNamespace(user_id=707, business_id="business-707")
+        actor = SimpleNamespace(user_id=707, business_id=B1)
         interaction = CustomerInteractionMessage(
-            text="🏠 Школа английского",
-            rows=((CustomerInteractionButton(label="⋯ Все возможности", command="cpm:menu-all"),),),
+            text="✅ Описание деятельности обновлено",
+            rows=((CustomerInteractionButton(label="✍️ Тексты", command="cpm:copy"),),),
         )
         with (
             patch(
@@ -481,39 +482,34 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
                 return_value=actor,
             ),
             patch(
-                "services.messenger.clientplatform_entry.get_business_profile",
-                return_value=SimpleNamespace(timezone="Europe/Tallinn"),
+                "clientplatform.application.native_member_interactions.resolve_tenant_context",
+                return_value=actor,
             ),
             patch(
                 "services.messenger.clientplatform_entry.save_business_profile"
-            ) as save_profile,
+            ) as direct_save,
             patch(
                 "services.messenger.clientplatform_entry.render_native_member_interaction",
                 return_value=interaction,
-            ),
+            ) as render,
         ):
             _, replies = handle_clientplatform_entry(
                 707,
                 platform="max",
                 external_user_id="max-707",
                 text="деятельность Провожу уроки английского онлайн",
+                event_key="max-activity-existing",
             )
-        save_profile.assert_called_once()
+
+        direct_save.assert_not_called()
+        render.assert_called_once()
         self.assertEqual(
-            save_profile.call_args.kwargs["activity_description"],
-            "Провожу уроки английского онлайн",
+            render.call_args.kwargs["raw_text"],
+            "деятельность Провожу уроки английского онлайн",
         )
-        self.assertEqual(
-            save_profile.call_args.kwargs["timezone_name"],
-            "Europe/Tallinn",
-        )
-        self.assertEqual(len(replies), 2)
-        self.assertEqual(replies[0].kind, "text")
-        self.assertIn("Описание сохранено", replies[0].text)
-        self.assertEqual(replies[1].kind, "clientplatform_interaction")
-        restored = CustomerInteractionMessage.from_json(replies[1].meta["interaction"])
-        self.assertIn("Школа английского", restored.text)
-        self.assertEqual(restored.rows[0][0].command, "cpm:menu-all")
+        self.assertEqual(len(replies), 1)
+        restored = CustomerInteractionMessage.from_json(replies[0].meta["interaction"])
+        self.assertIn("Описание деятельности обновлено", restored.text)
 
     def test_first_activity_uses_default_timezone_when_profile_does_not_exist(self) -> None:
         entry = SimpleNamespace(user_id=707)
@@ -536,10 +532,6 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
                 return_value=actor,
             ),
             patch(
-                "services.messenger.clientplatform_entry.get_business_profile",
-                side_effect=ActivityNotFound("missing"),
-            ),
-            patch(
                 "services.messenger.clientplatform_entry.settings.TIMEZONE",
                 "Europe/Tallinn",
             ),
@@ -548,10 +540,10 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
             ) as save_profile,
             patch(
                 "services.messenger.clientplatform_entry.render_native_member_interaction",
-                return_value=interaction,
-            ),
+                side_effect=[ActivityNotFound("missing"), interaction],
+            ) as render,
         ):
-            handle_clientplatform_entry(
+            _, replies = handle_clientplatform_entry(
                 707,
                 platform="max",
                 external_user_id="max-707",
@@ -563,14 +555,22 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
             save_profile.call_args.kwargs["timezone_name"],
             "Europe/Tallinn",
         )
+        self.assertEqual(render.call_count, 2)
+        self.assertEqual(render.call_args_list[0].kwargs["raw_text"], "деятельность Новая частная практика")
+        self.assertEqual(render.call_args_list[1].kwargs["raw_text"], "cpm:menu")
+        self.assertEqual(len(replies), 2)
 
     def test_activity_update_preserves_existing_business_timezone(self) -> None:
         entry = SimpleNamespace(user_id=808)
         access = SimpleNamespace(
             business=SimpleNamespace(id=B1, name="Международная практика")
         )
-        actor = SimpleNamespace(user_id=808, business_id=B1)
-        interaction = CustomerInteractionMessage(text="🏠 Международная практика")
+        actor = TenantContext(
+            business_id=B1,
+            user_id=808,
+            membership_id="88888888-8888-8888-8888-888888888888",
+            role=PlatformRole.OWNER,
+        )
         with (
             patch(
                 "services.messenger.clientplatform_entry.register_user_entry",
@@ -585,18 +585,21 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
                 return_value=actor,
             ),
             patch(
-                "services.messenger.clientplatform_entry.get_business_profile",
+                "clientplatform.application.native_member_interactions.resolve_tenant_context",
+                return_value=actor,
+            ),
+            patch(
+                "clientplatform.application.native_member_interactions.get_business_profile",
                 return_value=SimpleNamespace(timezone="America/New_York"),
             ),
             patch(
-                "services.messenger.clientplatform_entry.save_business_profile"
+                "clientplatform.application.native_member_interactions.save_business_profile",
+                return_value=SimpleNamespace(
+                    activity_description="Консультирую международных клиентов"
+                ),
             ) as save_profile,
-            patch(
-                "services.messenger.clientplatform_entry.render_native_member_interaction",
-                return_value=interaction,
-            ),
         ):
-            handle_clientplatform_entry(
+            _, replies = handle_clientplatform_entry(
                 808,
                 platform="vk",
                 external_user_id="vk-808",
@@ -604,11 +607,61 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
                 event_key="vk-activity-1",
             )
 
-        save_profile.assert_called_once()
         self.assertEqual(
             save_profile.call_args.kwargs["timezone_name"],
             "America/New_York",
         )
+        restored = CustomerInteractionMessage.from_json(replies[0].meta["interaction"])
+        self.assertIn("Описание деятельности обновлено", restored.text)
+
+    def test_activity_update_for_manager_returns_permission_reply_without_write(self) -> None:
+        entry = SimpleNamespace(user_id=909)
+        access = SimpleNamespace(
+            business=SimpleNamespace(id=B1, name="Практика с командой")
+        )
+        actor = TenantContext(
+            business_id=B1,
+            user_id=909,
+            membership_id="99999999-9999-9999-9999-999999999999",
+            role=PlatformRole.MANAGER,
+        )
+        with (
+            patch(
+                "services.messenger.clientplatform_entry.register_user_entry",
+                return_value=entry,
+            ),
+            patch(
+                "services.messenger.clientplatform_entry.list_accessible_businesses",
+                return_value=[access],
+            ),
+            patch(
+                "services.messenger.clientplatform_entry.resolve_tenant_context",
+                return_value=actor,
+            ),
+            patch(
+                "clientplatform.application.native_member_interactions.resolve_tenant_context",
+                return_value=actor,
+            ),
+            patch(
+                "services.messenger.clientplatform_entry.save_business_profile"
+            ) as direct_save,
+            patch(
+                "clientplatform.application.native_member_interactions.save_business_profile"
+            ) as native_save,
+        ):
+            _, replies = handle_clientplatform_entry(
+                909,
+                platform="vk",
+                external_user_id="vk-909",
+                text="деятельность Пытаюсь изменить профиль",
+                event_key="vk-manager-activity",
+            )
+
+        direct_save.assert_not_called()
+        native_save.assert_not_called()
+        self.assertEqual(len(replies), 1)
+        restored = CustomerInteractionMessage.from_json(replies[0].meta["interaction"])
+        self.assertEqual(restored.text, "Для Вашей роли этот раздел недоступен.")
 
     async def test_multi_business_selector_is_delivered_without_preselected_tenant(self) -> None:
         sent: list[tuple[str, str, dict[str, object]]] = []
