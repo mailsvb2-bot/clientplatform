@@ -56,6 +56,20 @@ def _entry_keyboard():
     )
 
 
+def _owner_landing_keyboard():
+    return control._keyboard(
+        [[("Подключить мой бизнес", "business")]]
+    )
+
+
+def _owner_landing_text() -> str:
+    return (
+        "Добро пожаловать в ClientPlatform.\n\n"
+        "Вы открыли управляющий вход для владельца бизнеса. "
+        "Нажмите «Подключить мой бизнес», чтобы создать новое рабочее пространство."
+    )
+
+
 async def _send_business_choice(
     message: Message,
     *,
@@ -122,6 +136,26 @@ async def _dispatch_clientplatform_start(
         return
 
     payload = control._start_payload(message)
+    if payload.casefold().startswith("cpo_"):
+        # Landing owner links are explicit owner intent. Resolve only owner
+        # workspaces here and never let an existing customer relationship
+        # redirect this start into the customer portal.
+        accesses = await asyncio.to_thread(list_accessible_businesses, user_id=user_id)
+        if accesses:
+            await _send_business_choice(
+                message,
+                user_id=user_id,
+                accesses=accesses,
+                state=state,
+            )
+            return
+        await state.clear()
+        await message.answer(
+            _owner_landing_text(),
+            reply_markup=_owner_landing_keyboard(),
+        )
+        return
+
     if payload.startswith("cpj_"):
         token = payload.removeprefix("cpj_")
         user = message.from_user
@@ -178,6 +212,22 @@ async def _dispatch_clientplatform_start(
     await message.answer(
         simple.welcome_text(),
         reply_markup=simple.welcome_keyboard(),
+    )
+
+
+@router.callback_query(F.data == "business")
+async def clientplatform_owner_business_start(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    """Start owner onboarding from the canonical landing action."""
+
+    await state.clear()
+    await state.set_state(control.ClientPlatformControlState.business_name)
+    await callback.answer()
+    await control._callback_message(callback).answer(
+        "Как называется Ваше дело, проект или практика?\n\n"
+        "Например: «Практика Анны», «Автосервис Мотор» или «Школа английского»."
     )
 
 

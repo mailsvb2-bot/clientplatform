@@ -100,7 +100,8 @@ def _max_owner_link(payload: str) -> str:
             return ''
         parsed = urllib.parse.urlsplit(rendered)
         query_parts = parsed.query.split('&') if parsed.query else []
-        if not any(part == 'payload={payload}' for part in query_parts):
+        payload_parts = [part for part in query_parts if part.split('=', 1)[0] == 'payload']
+        if payload_parts != ['payload={payload}']:
             return ''
         rendered = rendered.replace('{payload}', quoted_payload)
         return '' if '{' in rendered or '}' in rendered else rendered

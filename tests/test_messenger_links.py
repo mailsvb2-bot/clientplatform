@@ -152,6 +152,8 @@ def test_owner_max_rejects_payload_placeholder_outside_payload_query(monkeypatch
         'https://max.ru/{bot}?foo={payload}',
         'https://max.ru/{bot}/{payload}?payload={payload}',
         'https://max.ru/{bot}?payload={payload}&from={payload}',
+        'https://max.ru/{bot}?payload=legacy&payload={payload}',
+        'https://max.ru/{bot}?payload={payload}&payload=legacy',
     ):
         monkeypatch.setattr(settings, 'MAX_BOT_LINK_BASE', template)
         assert build_owner_entry_target('max', 'landing') is None
