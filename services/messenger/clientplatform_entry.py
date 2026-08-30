@@ -2,8 +2,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from clientplatform.application.tenancy import create_business, list_accessible_businesses
+from clientplatform.application.activity import save_business_profile
+from clientplatform.application.native_member_interactions import render_native_member_interaction
+from clientplatform.application.tenancy import (
+    create_business,
+    list_accessible_businesses,
+    resolve_tenant_context,
+)
+from clientplatform.domain.connections import ConnectionPlatform
+from clientplatform.domain.customer_interactions import CustomerInteractionMessage
 from clientplatform.domain.tenancy import TenancyError
+from config.settings import settings
 from services.messenger.entrypoints import register_user_entry
 from services.messenger.platforms import normalize_platform
 from services.messenger.text_ui import MessengerReply
@@ -32,6 +41,33 @@ _BUSINESS_PREFIXES = (
     "/business ",
     "бизнес ",
     "создать бизнес ",
+)
+_ACTIVITY_PREFIXES = (
+    "activity ",
+    "/activity ",
+    "деятельность ",
+)
+_OWNER_CONTROL_ALIASES = frozenset(
+    {
+        "menu",
+        "/menu",
+        "меню",
+        "кабинет",
+        "админ",
+        "/admin",
+        "работа",
+        "рост",
+        "управление",
+        "команда",
+        "сегодня",
+        "клиенты",
+        "записи",
+        "программы",
+        "мессенджеры",
+        "обращения",
+        "продажи",
+        "обращения и продажи",
+    }
 )
 _PLATFORM_TITLES = {
     "telegram": "Telegram",
@@ -72,6 +108,16 @@ def parse_clientplatform_entry_command(
             )
     if lowered in {"business", "/business", "бизнес", "создать бизнес"}:
         return ClientPlatformEntryCommand("create_business")
+    for prefix in _ACTIVITY_PREFIXES:
+        if lowered.startswith(prefix):
+            return ClientPlatformEntryCommand(
+                "describe_business",
+                raw[len(prefix) :].strip(),
+            )
+    if lowered in {"activity", "/activity", "деятельность"}:
+        return ClientPlatformEntryCommand("describe_business")
+    if lowered.startswith("cpm:") or lowered in _OWNER_CONTROL_ALIASES:
+        return ClientPlatformEntryCommand("owner_control", raw)
     return None
 
 
@@ -101,6 +147,49 @@ def _entry_text(*, platform: str, accesses: list[object]) -> str:
         f"{business_lines}\n\n"
         "Команда start или /start в любой момент снова открывает этот вход."
     )
+
+
+def _connection_platform(platform: str) -> ConnectionPlatform:
+    normalized = normalize_platform(platform)
+    return ConnectionPlatform(normalized)
+
+
+def _interaction_reply(interaction: CustomerInteractionMessage) -> MessengerReply:
+    lines = [interaction.text]
+    buttons = [button for row in interaction.rows for button in row]
+    if buttons:
+        lines.extend(("", "Доступные действия:"))
+        lines.extend(f"• {button.label} — {button.command}" for button in buttons)
+        lines.extend(("", "Команду после тире можно отправить сообщением."))
+    return MessengerReply(text="\n".join(lines))
+
+
+def _single_business_actor(*, user_id: int, accesses: list[object]):
+    if len(accesses) != 1:
+        return None
+    return resolve_tenant_context(
+        user_id=int(user_id),
+        business_id=str(accesses[0].business.id),
+    )
+
+
+def _owner_control_reply(
+    *,
+    canonical_user_id: int,
+    platform: str,
+    accesses: list[object],
+    raw_text: str,
+) -> MessengerReply | None:
+    actor = _single_business_actor(user_id=canonical_user_id, accesses=accesses)
+    if actor is None:
+        return None
+    interaction = render_native_member_interaction(
+        actor=actor,
+        raw_text=raw_text or "cpm:menu",
+        interaction_key=f"official:{normalize_platform(platform)}:{canonical_user_id}",
+        current_platform=_connection_platform(platform),
+    )
+    return _interaction_reply(interaction)
 
 
 def _normalized_business_name(value: object) -> str:
@@ -145,6 +234,67 @@ def handle_clientplatform_entry(
     canonical_user_id = int(entry.user_id)
 
     accesses = list(list_accessible_businesses(user_id=canonical_user_id))
+    if command.action == "owner_control":
+        reply = _owner_control_reply(
+            canonical_user_id=canonical_user_id,
+            platform=platform,
+            accesses=accesses,
+            raw_text=command.value,
+        )
+        if reply is not None:
+            return canonical_user_id, [reply]
+        if not accesses:
+            return canonical_user_id, [MessengerReply(text=_entry_text(platform=platform, accesses=[]))]
+        return canonical_user_id, [MessengerReply(text=_entry_text(platform=platform, accesses=accesses))]
+
+    if command.action == "describe_business":
+        actor = _single_business_actor(user_id=canonical_user_id, accesses=accesses)
+        if actor is None:
+            if not accesses:
+                return canonical_user_id, [
+                    MessengerReply(text="Сначала создайте бизнес: бизнес <название>")
+                ]
+            return canonical_user_id, [
+                MessengerReply(
+                    text=(
+                        "У Вас несколько бизнесов. Выбор рабочего пространства для "
+                        "официального VK/MAX-входа будет добавлен следующим этапом. "
+                        "Пока откройте нужный бизнес через основной ClientPlatform."
+                    )
+                )
+            ]
+        if not command.value:
+            return canonical_user_id, [
+                MessengerReply(
+                    text=(
+                        "Опишите, чем Вы занимаетесь, после слова «деятельность».\n\n"
+                        "Например: деятельность Ремонтирую автомобили и принимаю "
+                        "заказы на обслуживание"
+                    )
+                )
+            ]
+        save_business_profile(
+            actor=actor,
+            activity_description=command.value,
+            timezone_name=settings.TIMEZONE,
+        )
+        reply = _owner_control_reply(
+            canonical_user_id=canonical_user_id,
+            platform=platform,
+            accesses=accesses,
+            raw_text="cpm:menu",
+        )
+        if reply is None:
+            raise RuntimeError("single-business owner control could not be rendered")
+        return canonical_user_id, [
+            MessengerReply(
+                text=(
+                    f"Описание сохранено: {command.value}\n\n"
+                    + reply.text
+                )
+            )
+        ]
+
     if command.action == "create_business":
         if not command.value:
             return canonical_user_id, [
@@ -184,10 +334,22 @@ def handle_clientplatform_entry(
             MessengerReply(
                 text=(
                     f"Готово. Рабочее пространство «{access.business.name}» создано.\n\n"
-                    "Отправьте start, чтобы открыть вход ClientPlatform."
+                    "Теперь опишите, чем Вы занимаетесь, одним сообщением:\n"
+                    "деятельность <описание>\n\n"
+                    "Например: деятельность Консультирую родителей по вопросам сна детей"
                 )
             )
         ]
+
+    if command.action == "start" and len(accesses) == 1:
+        reply = _owner_control_reply(
+            canonical_user_id=canonical_user_id,
+            platform=platform,
+            accesses=accesses,
+            raw_text="cpm:menu",
+        )
+        if reply is not None:
+            return canonical_user_id, [reply]
 
     return canonical_user_id, [
         MessengerReply(text=_entry_text(platform=platform, accesses=accesses))

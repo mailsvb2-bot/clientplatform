@@ -3894,6 +3894,37 @@ def _render(
     return _menu_message(actor, linked=linked)
 
 
+def render_native_member_interaction(
+    *,
+    actor: TenantContext,
+    raw_text: object,
+    interaction_key: str,
+    current_platform: ConnectionPlatform,
+    linked: bool = False,
+    setup_issuer: NativeSetupCommandIssuer | None = None,
+) -> CustomerInteractionMessage:
+    """Render the canonical staff UI without requiring a tenant webhook route.
+
+    This is the channel-neutral control-plane adapter used by official ClientPlatform
+    owner entry points. Tenant-scoped provider ingress keeps using
+    ``process_native_member_interaction`` so its durable delivery boundary is unchanged.
+    """
+
+    current = resolve_tenant_context(
+        user_id=actor.user_id,
+        business_id=actor.business_id,
+    )
+    parsed = parse_native_member_interaction(raw_text)
+    return _render(
+        current,
+        parsed,
+        linked=linked,
+        setup_issuer=setup_issuer,
+        setup_key=str(interaction_key or "official-owner-entry"),
+        current_platform=current_platform,
+    )
+
+
 def process_native_member_interaction(
     *,
     route: MessengerIngressRoute,
@@ -3943,5 +3974,6 @@ __all__ = [
     "TELEGRAM_NATIVE_ACTION_EQUIVALENTS",
     "parse_native_member_interaction",
     "process_native_member_interaction",
+    "render_native_member_interaction",
     "resolve_native_member",
 ]
