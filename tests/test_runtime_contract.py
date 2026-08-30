@@ -28,6 +28,22 @@ def _run(monkeypatch, **env):
         "DATABASE_URL",
         "METRO_DB_PATH",
         "LOG_PATH",
+        "BOT_TOKEN",
+        "ADMIN_IDS",
+        "ADMIN_ID",
+        "YOOKASSA_SHOP_ID",
+        "YOOKASSA_SECRET_KEY",
+        "PAYMENT_CHECKOUT_SIGNING_KEY",
+        "CHECKOUT_SIGNING_KEY",
+        "VK_WEBHOOK_ENABLED",
+        "VK_GROUP_ID",
+        "VK_GROUP_TOKEN",
+        "VK_CONFIRMATION_TOKEN",
+        "VK_SECRET",
+        "MAX_WEBHOOK_ENABLED",
+        "MAX_BOT_TOKEN",
+        "MAX_BOT_LINK_BASE",
+        "MAX_WEBHOOK_SECRET",
     }:
         monkeypatch.delenv(key, raising=False)
     for key, value in env.items():
@@ -36,6 +52,56 @@ def _run(monkeypatch, **env):
     importlib.reload(mod)
     return mod.run()
 
+
+
+def _owner_vk_prod_env() -> dict[str, str]:
+    return {
+        "APP_ENV": "prod",
+        "BOT_TOKEN": "test-bot-token",
+        "ADMIN_IDS": "1",
+        "TELEGRAM_TRANSPORT": "polling",
+        "TELEGRAM_WEBHOOK_ENABLED": "0",
+        "PAYMENT_HTTP_ENABLED": "0",
+        "PRIVACY_EXPORT_HTTP_ENABLED": "1",
+        "PRIVACY_EXPORT_PUBLIC_BASE_URL": "https://app.example",
+        "PRIVACY_EXPORT_TOKEN_TTL_MINUTES": "10",
+        "VK_WEBHOOK_ENABLED": "1",
+        "MESSENGER_PUBLIC_BASE_URL": "https://app.example",
+        "VK_GROUP_ID": "241176159",
+        "VK_GROUP_TOKEN": "vk-token-for-test",
+        "VK_CONFIRMATION_TOKEN": "vk-confirm-for-test",
+        "VK_SECRET": "vk-secret-for-test",
+        "METRO_DB_ENGINE": "postgres",
+        "DATABASE_URL": "postgresql:///clientplatform_test",
+        "LOG_PATH": "/tmp/clientplatform-test.log",
+        "HEALTHCHECK_ENABLED": "1",
+    }
+
+
+def test_runtime_contract_accepts_owner_vk_without_payment_checkout(monkeypatch):
+    errors, warnings = _run(monkeypatch, **_owner_vk_prod_env())
+
+    assert errors == []
+
+
+def test_runtime_contract_payment_enabled_stays_fail_closed(monkeypatch):
+    env = _owner_vk_prod_env()
+    env["PAYMENT_HTTP_ENABLED"] = "1"
+    errors, warnings = _run(monkeypatch, **env)
+
+    assert any("YOOKASSA_SHOP_ID" in error for error in errors)
+    assert any("YOOKASSA_SECRET_KEY" in error for error in errors)
+    assert any("PAYMENT_CHECKOUT_SIGNING_KEY" in error for error in errors)
+
+
+def test_runtime_contract_omitted_payment_flag_stays_fail_closed(monkeypatch):
+    env = _owner_vk_prod_env()
+    env.pop("PAYMENT_HTTP_ENABLED")
+    errors, warnings = _run(monkeypatch, **env)
+
+    assert any("YOOKASSA_SHOP_ID" in error for error in errors)
+    assert any("YOOKASSA_SECRET_KEY" in error for error in errors)
+    assert any("PAYMENT_CHECKOUT_SIGNING_KEY" in error for error in errors)
 
 def test_runtime_contract_accepts_dev_defaults(monkeypatch):
     errors, warnings = _run(monkeypatch, APP_ENV="dev")

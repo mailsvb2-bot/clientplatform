@@ -102,6 +102,11 @@ def _payment_enabled() -> bool:
     explicit = _optional_flag("PAYMENT_HTTP_ENABLED")
     if explicit is not None:
         return explicit
+    app_env = (_value("APP_ENV") or "dev").lower()
+    if app_env in {"prod", "production"}:
+        # Match startup/readiness semantics: an omitted payment flag preserves
+        # the historical production checkout default and therefore fails closed.
+        return True
     return _truthy("MESSENGER_WEBHOOK_ENABLED")
 
 
@@ -166,19 +171,20 @@ def run() -> tuple[list[str], list[str]]:
         if not _valid_admin_ids():
             errors.append("ADMIN_IDS or ADMIN_ID must contain positive numeric IDs in prod")
 
-        # Canonical payment path is external YooKassa/package checkout. Webhook
-        # authenticity is proven by provider source-of-truth verification; an
-        # optional reverse-proxy header secret is defense in depth only.
-        for name in ("YOOKASSA_SHOP_ID", "YOOKASSA_SECRET_KEY"):
-            if not _value(name):
-                errors.append(f"{name} is required in prod")
-        if not _first_value("PAYMENT_CHECKOUT_SIGNING_KEY", "CHECKOUT_SIGNING_KEY"):
-            errors.append("PAYMENT_CHECKOUT_SIGNING_KEY is required in prod")
-        payment_base = _payment_public_base_url()
-        if not payment_base:
-            errors.append("PAYMENT_PUBLIC_BASE_URL or MESSENGER_PUBLIC_BASE_URL is required in prod")
-        elif not payment_base.startswith("https://"):
-            errors.append("payment public base URL must start with https:// in prod")
+        # Canonical payment path is external YooKassa/package checkout. Validate
+        # those credentials only when payment HTTP ingress is active; official
+        # owner-control VK/MAX ingress is independent of the payment surface.
+        if _payment_enabled():
+            for name in ("YOOKASSA_SHOP_ID", "YOOKASSA_SECRET_KEY"):
+                if not _value(name):
+                    errors.append(f"{name} is required in prod")
+            if not _first_value("PAYMENT_CHECKOUT_SIGNING_KEY", "CHECKOUT_SIGNING_KEY"):
+                errors.append("PAYMENT_CHECKOUT_SIGNING_KEY is required in prod")
+            payment_base = _payment_public_base_url()
+            if not payment_base:
+                errors.append("PAYMENT_PUBLIC_BASE_URL or MESSENGER_PUBLIC_BASE_URL is required in prod")
+            elif not payment_base.startswith("https://"):
+                errors.append("payment public base URL must start with https:// in prod")
 
         if _resolved_db_engine() != "postgres":
             errors.append("METRO_DB_ENGINE must be postgres in prod")
