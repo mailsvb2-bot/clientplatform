@@ -12,6 +12,10 @@ from clientplatform.application.tenancy import (
 from clientplatform.domain.connections import ConnectionPlatform
 from clientplatform.domain.customer_interactions import CustomerInteractionMessage
 from clientplatform.domain.tenancy import TenancyError
+from clientplatform.runtime.native_messenger_setup_links import (
+    NativeMessengerSetupLinkService,
+)
+from clientplatform.runtime.secrets import EnvironmentCredentialProvider
 from config.settings import settings
 from services.messenger.entrypoints import register_user_entry
 from services.messenger.platforms import normalize_platform
@@ -154,14 +158,19 @@ def _connection_platform(platform: str) -> ConnectionPlatform:
     return ConnectionPlatform(normalized)
 
 
-def _interaction_reply(interaction: CustomerInteractionMessage) -> MessengerReply:
-    lines = [interaction.text]
-    buttons = [button for row in interaction.rows for button in row]
-    if buttons:
-        lines.extend(("", "Доступные действия:"))
-        lines.extend(f"• {button.label} — {button.command}" for button in buttons)
-        lines.extend(("", "Команду после тире можно отправить сообщением."))
-    return MessengerReply(text="\n".join(lines))
+def _interaction_reply(
+    interaction: CustomerInteractionMessage,
+    *,
+    business_id: str,
+) -> MessengerReply:
+    return MessengerReply(
+        kind="clientplatform_interaction",
+        text=interaction.text,
+        meta={
+            "interaction": interaction.to_json(),
+            "business_id": str(business_id),
+        },
+    )
 
 
 def _single_business_actor(*, user_id: int, accesses: list[object]):
@@ -183,13 +192,29 @@ def _owner_control_reply(
     actor = _single_business_actor(user_id=canonical_user_id, accesses=accesses)
     if actor is None:
         return None
+    setup_links = NativeMessengerSetupLinkService(
+        credential_provider=EnvironmentCredentialProvider(),
+    )
+
+    def _issue_setup_command(
+        current_actor,
+        target_platform: ConnectionPlatform,
+        setup_key: str,
+    ) -> str:
+        return setup_links.issue_command(
+            actor=current_actor,
+            platform=target_platform,
+            idempotency_key=setup_key,
+        )
+
     interaction = render_native_member_interaction(
         actor=actor,
         raw_text=raw_text or "cpm:menu",
         interaction_key=f"official:{normalize_platform(platform)}:{canonical_user_id}",
         current_platform=_connection_platform(platform),
+        setup_issuer=_issue_setup_command,
     )
-    return _interaction_reply(interaction)
+    return _interaction_reply(interaction, business_id=actor.business_id)
 
 
 def _normalized_business_name(value: object) -> str:
@@ -287,12 +312,8 @@ def handle_clientplatform_entry(
         if reply is None:
             raise RuntimeError("single-business owner control could not be rendered")
         return canonical_user_id, [
-            MessengerReply(
-                text=(
-                    f"Описание сохранено: {command.value}\n\n"
-                    + reply.text
-                )
-            )
+            MessengerReply(text=f"Описание сохранено: {command.value}"),
+            reply,
         ]
 
     if command.action == "create_business":

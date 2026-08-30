@@ -17,7 +17,7 @@ ClientPlatform уже имеет канонический tenant-scoped owner/me
 4. Канонический renderer получает публичный channel-neutral adapter, который не требует tenant webhook route и не материализует provider outbox самостоятельно.
 5. Создание `Business` во VK/MAX сразу продолжает onboarding шагом описания деятельности. Этот шаг сохраняется через существующий application layer, а не в отдельной предметной модели.
 6. Для пользователей с несколькими `Business` автоматический выбор запрещён; отдельный безопасный selector будет следующим вертикальным срезом.
-7. Защищённые setup-ссылки и provider buttons остаются отдельным следующим срезом. Секреты, route credentials и tenant selection не переносятся в глобальный payload.
+7. Глобальный owner entry сохраняет канонический `CustomerInteractionMessage` и доставляет его нативными inline-кнопками VK/MAX. `cpm:setup:*` и `cpm:switch:*` хранятся как несекретные команды; short-lived HTTPS URL материализуется только непосредственно перед provider I/O. Секреты, route credentials и tenant selection не переносятся в глобальный payload.
 
 ## Безопасность
 
@@ -29,7 +29,7 @@ ClientPlatform уже имеет канонический tenant-scoped owner/me
 
 ## Последствия
 
-Первый срез даёт новому владельцу VK/MAX непрерывный путь: `start -> Business -> деятельность -> канонический owner menu`, а существующему владельцу с одним бизнесом — прямой вход в тот же native owner surface. Кнопочный transport parity, безопасный выбор одного из нескольких бизнесов и выдача short-lived `/clientplatform/connect/...` из официального control entry продолжаются следующими срезами.
+Этот срез даёт новому владельцу VK/MAX непрерывный путь: `start -> Business -> деятельность -> канонический owner menu`, а существующему владельцу с одним бизнесом — прямой вход в тот же native owner surface. Канонические действия отображаются реальными VK/MAX-кнопками, а защищённые `/clientplatform/connect/...` materialize только на границе доставки. Безопасный выбор одного из нескольких бизнесов остаётся следующим вертикальным срезом.
 
 ## Проверки
 
@@ -38,4 +38,7 @@ ClientPlatform уже имеет канонический tenant-scoped owner/me
 - создание бизнеса предлагает следующий onboarding step;
 - single-business owner entry вызывает канонический native renderer;
 - activity step сохраняет профиль и возвращает owner dashboard;
+- VK/MAX получают provider-native callback buttons из одного interaction payload;
+- setup bearer URL отсутствует в durable reply payload и материализуется только перед отправкой;
+- неразрешимая setup-ссылка fail-closed и не превращается во внутреннюю callback-команду;
 - webhook dedupe сохраняется до side effects.

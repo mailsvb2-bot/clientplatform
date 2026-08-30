@@ -1,9 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from pathlib import Path
 from typing import Any
+
+from clientplatform.domain.customer_interactions import CustomerInteractionMessage
+from clientplatform.runtime.messenger_switch_links import StaffMessengerSwitchLinkService
+from clientplatform.runtime.native_messenger_setup_links import NativeMessengerSetupLinkService
+from clientplatform.runtime.secrets import EnvironmentCredentialProvider
 
 from runtime.messenger_senders import MaxBotSender, VkBotSender, MessengerTransportError
 from runtime import messenger_max_ui as max_ui
@@ -244,6 +250,108 @@ async def _handle_post_score_flow(
         )
 
 
+def _clientplatform_runtime_button_links(
+    interaction: CustomerInteractionMessage,
+    *,
+    business_id: str,
+) -> dict[str, str]:
+    setup_links = NativeMessengerSetupLinkService(
+        credential_provider=EnvironmentCredentialProvider(),
+    )
+    switch_links = StaffMessengerSwitchLinkService()
+    resolved: dict[str, str] = {}
+    for row in interaction.rows:
+        for button in row:
+            command = button.command
+            if command.startswith("cpm:setup:"):
+                url = setup_links.resolve_command_url(
+                    command=command,
+                    business_id=business_id,
+                )
+            elif command.startswith("cpm:switch:"):
+                url = switch_links.resolve_command_url(
+                    command=command,
+                    business_id=business_id,
+                )
+            else:
+                continue
+            if url is None or not str(url).startswith("https://"):
+                raise ValueError("ClientPlatform interaction link could not be resolved")
+            resolved[command] = str(url)
+    return resolved
+
+
+def _vk_clientplatform_keyboard(
+    interaction: CustomerInteractionMessage,
+    *,
+    button_links: dict[str, str],
+) -> str:
+    rows: list[list[dict[str, Any]]] = []
+    for row in interaction.rows:
+        rendered: list[dict[str, Any]] = []
+        for button in row:
+            link = button_links.get(button.command)
+            if link is not None:
+                rendered.append(
+                    {
+                        "action": {
+                            "type": "open_link",
+                            "link": link,
+                            "label": button.label,
+                        }
+                    }
+                )
+            else:
+                rendered.append(
+                    {
+                        "action": {
+                            "type": "text",
+                            "label": button.label,
+                            "payload": json.dumps(
+                                {"command": button.command},
+                                ensure_ascii=False,
+                                separators=(",", ":"),
+                            ),
+                        },
+                        "color": "secondary",
+                    }
+                )
+        rows.append(rendered)
+    return json.dumps(
+        {"one_time": True, "inline": True, "buttons": rows},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
+def _max_clientplatform_attachments(
+    interaction: CustomerInteractionMessage,
+    *,
+    button_links: dict[str, str],
+) -> list[dict[str, Any]]:
+    if not interaction.rows:
+        return []
+    rows: list[list[dict[str, Any]]] = []
+    for row in interaction.rows:
+        rendered: list[dict[str, Any]] = []
+        for button in row:
+            link = button_links.get(button.command)
+            if link is not None:
+                rendered.append(
+                    {"type": "link", "text": button.label, "url": link}
+                )
+            else:
+                rendered.append(
+                    {
+                        "type": "callback",
+                        "text": button.label,
+                        "payload": button.command,
+                    }
+                )
+        rows.append(rendered)
+    return [{"type": "inline_keyboard", "payload": {"buttons": rows}}]
+
+
 def _reply_requests_replay(reply: MessengerReply) -> tuple[bool, int | None]:
     meta = reply.meta or {}
     raw_replay = str(meta.get("replay") or "").strip().lower()
@@ -308,6 +416,58 @@ async def send_reply_bundle(
         raise MessengerTransportError(f"No sender for {platform}")
 
     for reply in replies:
+        if reply.kind == "clientplatform_interaction":
+            meta = dict(reply.meta or {})
+            raw_interaction = str(meta.get("interaction") or "").strip()
+            business_id = str(meta.get("business_id") or "").strip()
+            if not raw_interaction or not business_id:
+                raise MessengerTransportError(
+                    "ClientPlatform interaction reply is missing canonical metadata"
+                )
+            interaction = CustomerInteractionMessage.from_json(raw_interaction)
+            try:
+                button_links = _clientplatform_runtime_button_links(
+                    interaction,
+                    business_id=business_id,
+                )
+            except (RuntimeError, ValueError) as exc:
+                log.error(
+                    "ClientPlatform interaction link materialization failed",
+                    extra={"business_id": business_id, "platform": platform},
+                )
+                raise MessengerTransportError(
+                    "ClientPlatform interaction link is expired or unavailable"
+                ) from exc
+            if platform == "vk":
+                kwargs = {
+                    "keyboard_json": _vk_clientplatform_keyboard(
+                        interaction,
+                        button_links=button_links,
+                    )
+                }
+            elif platform == "max":
+                kwargs = {
+                    "attachments": _max_clientplatform_attachments(
+                        interaction,
+                        button_links=button_links,
+                    )
+                }
+            else:
+                raise MessengerTransportError(
+                    f"Unsupported ClientPlatform interaction platform: {platform}"
+                )
+            await sender.send_text(
+                external_user_id,
+                interaction.text,
+                **_vk_kwargs(
+                    platform,
+                    kwargs,
+                    canonical_user_id,
+                    text=interaction.text,
+                ),
+            )
+            continue
+
         if reply.kind == "text":
             text = _canonical_payment_text(platform, canonical_user_id, external_user_id, reply.text)
             if not str(text or "").strip():

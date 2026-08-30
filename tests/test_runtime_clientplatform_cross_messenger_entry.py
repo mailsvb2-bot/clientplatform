@@ -10,6 +10,7 @@ from clientplatform.domain.customer_interactions import (
     CustomerInteractionMessage,
 )
 from runtime import messenger_ingress_reliability as reliability
+from services.messenger import reply_dispatcher
 from services.messenger.clientplatform_entry import (
     handle_clientplatform_entry,
     parse_clientplatform_entry_command,
@@ -86,11 +87,13 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
                 text="/start",
             )
         self.assertEqual(user_id, 101)
-        combined = " ".join(reply.text for reply in replies)
-        self.assertIn("ClientPlatform", combined)
-        self.assertIn("Практика Анны", combined)
-        self.assertIn("cpm:messengers", combined)
-        self.assertNotIn("Метротерап", combined)
+        self.assertEqual(replies[0].kind, "clientplatform_interaction")
+        restored = CustomerInteractionMessage.from_json(replies[0].meta["interaction"])
+        self.assertIn("ClientPlatform", restored.text)
+        self.assertIn("Практика Анны", restored.text)
+        self.assertEqual(restored.rows[0][0].command, "cpm:messengers")
+        self.assertEqual(replies[0].meta["business_id"], "business-101")
+        self.assertNotIn("Метротерап", restored.text)
         render.assert_called_once()
         self.assertEqual(render.call_args.kwargs["raw_text"], "cpm:menu")
 
@@ -238,9 +241,158 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
             save_profile.call_args.kwargs["activity_description"],
             "Провожу уроки английского онлайн",
         )
+        self.assertEqual(len(replies), 2)
+        self.assertEqual(replies[0].kind, "text")
         self.assertIn("Описание сохранено", replies[0].text)
-        self.assertIn("Школа английского", replies[0].text)
-        self.assertIn("cpm:menu-all", replies[0].text)
+        self.assertEqual(replies[1].kind, "clientplatform_interaction")
+        restored = CustomerInteractionMessage.from_json(replies[1].meta["interaction"])
+        self.assertIn("Школа английского", restored.text)
+        self.assertEqual(restored.rows[0][0].command, "cpm:menu-all")
+
+    async def test_global_vk_owner_interaction_renders_real_inline_buttons(self) -> None:
+        sent: list[tuple[str, str, dict[str, object]]] = []
+
+        class FakeSender:
+            async def send_text(self, external_user_id, text, **kwargs):
+                sent.append((str(external_user_id), str(text), dict(kwargs)))
+                return {"ok": True}
+
+        interaction = CustomerInteractionMessage(
+            text="🏠 Практика Анны",
+            rows=((CustomerInteractionButton(label="💬 Мессенджеры", command="cpm:messengers"),),),
+        )
+        reply = MessengerReply(
+            kind="clientplatform_interaction",
+            text=interaction.text,
+            meta={
+                "interaction": interaction.to_json(),
+                "business_id": "business-101",
+            },
+        )
+        with (
+            patch.object(reply_dispatcher, "VkBotSender", return_value=FakeSender()),
+            patch.object(reply_dispatcher, "MaxBotSender", return_value=FakeSender()),
+        ):
+            await reply_dispatcher.send_reply_bundle("vk", "vk-101", 101, [reply])
+
+        self.assertEqual(len(sent), 1)
+        keyboard = json.loads(str(sent[0][2]["keyboard_json"]))
+        payload = json.loads(keyboard["buttons"][0][0]["action"]["payload"])
+        self.assertEqual(payload, {"command": "cpm:messengers"})
+        self.assertNotIn("cpm:messengers", sent[0][1])
+
+    async def test_global_max_owner_interaction_renders_real_callback_buttons(self) -> None:
+        sent: list[tuple[str, str, dict[str, object]]] = []
+
+        class FakeSender:
+            async def send_text(self, external_user_id, text, **kwargs):
+                sent.append((str(external_user_id), str(text), dict(kwargs)))
+                return {"ok": True}
+
+        interaction = CustomerInteractionMessage(
+            text="🏠 Автосервис Север",
+            rows=((CustomerInteractionButton(label="📊 Работа", command="cpm:work"),),),
+        )
+        reply = MessengerReply(
+            kind="clientplatform_interaction",
+            text=interaction.text,
+            meta={
+                "interaction": interaction.to_json(),
+                "business_id": "business-303",
+            },
+        )
+        with (
+            patch.object(reply_dispatcher, "VkBotSender", return_value=FakeSender()),
+            patch.object(reply_dispatcher, "MaxBotSender", return_value=FakeSender()),
+        ):
+            await reply_dispatcher.send_reply_bundle("max", "max-303", 303, [reply])
+
+        attachments = sent[0][2]["attachments"]
+        button = attachments[0]["payload"]["buttons"][0][0]
+        self.assertEqual(button["type"], "callback")
+        self.assertEqual(button["payload"], "cpm:work")
+
+    async def test_setup_link_resolution_fails_closed(self) -> None:
+        class FakeSender:
+            async def send_text(self, external_user_id, text, **kwargs):
+                raise AssertionError("provider must not be called with unresolved setup link")
+
+        interaction = CustomerInteractionMessage(
+            text="Подключение MAX",
+            rows=((CustomerInteractionButton(
+                label="🔐 Открыть защищённую настройку",
+                command="cpm:setup:123e4567-e89b-12d3-a456-426614174000",
+            ),),),
+        )
+        reply = MessengerReply(
+            kind="clientplatform_interaction",
+            text=interaction.text,
+            meta={
+                "interaction": interaction.to_json(),
+                "business_id": "business-303",
+            },
+        )
+        with (
+            patch.object(reply_dispatcher, "VkBotSender", return_value=FakeSender()),
+            patch.object(reply_dispatcher, "MaxBotSender", return_value=FakeSender()),
+            patch.object(
+                reply_dispatcher,
+                "_clientplatform_runtime_button_links",
+                side_effect=ValueError("expired"),
+            ),
+        ):
+            with self.assertRaises(reply_dispatcher.MessengerTransportError):
+                await reply_dispatcher.send_reply_bundle(
+                    "max", "max-303", 303, [reply]
+                )
+
+    async def test_setup_link_is_materialized_only_at_delivery_boundary(self) -> None:
+        sent: list[tuple[str, str, dict[str, object]]] = []
+
+        class FakeSender:
+            async def send_text(self, external_user_id, text, **kwargs):
+                sent.append((str(external_user_id), str(text), dict(kwargs)))
+                return {"ok": True}
+
+        interaction = CustomerInteractionMessage(
+            text="Подключение ВКонтакте",
+            rows=((CustomerInteractionButton(
+                label="🔐 Открыть защищённую настройку",
+                command="cpm:setup:123e4567-e89b-12d3-a456-426614174000",
+            ),),),
+        )
+        reply = MessengerReply(
+            kind="clientplatform_interaction",
+            text=interaction.text,
+            meta={
+                "interaction": interaction.to_json(),
+                "business_id": "business-303",
+            },
+        )
+        durable = json.dumps(reply.meta, ensure_ascii=False)
+        self.assertIn("cpm:setup:", durable)
+        self.assertNotIn("https://", durable)
+        with (
+            patch.object(reply_dispatcher, "VkBotSender", return_value=FakeSender()),
+            patch.object(reply_dispatcher, "MaxBotSender", return_value=FakeSender()),
+            patch.object(
+                reply_dispatcher,
+                "_clientplatform_runtime_button_links",
+                return_value={
+                    "cpm:setup:123e4567-e89b-12d3-a456-426614174000":
+                    "https://clientplatform.example/clientplatform/connect/opaque"
+                },
+            ),
+        ):
+            await reply_dispatcher.send_reply_bundle("vk", "vk-303", 303, [reply])
+
+        keyboard = json.loads(str(sent[0][2]["keyboard_json"]))
+        action = keyboard["buttons"][0][0]["action"]
+        self.assertEqual(action["type"], "open_link")
+        self.assertEqual(
+            action["link"],
+            "https://clientplatform.example/clientplatform/connect/opaque",
+        )
 
     async def test_vk_webhook_start_reaches_clientplatform_entry(self) -> None:
         payload = {
