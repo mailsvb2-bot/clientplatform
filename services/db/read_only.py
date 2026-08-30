@@ -5,7 +5,7 @@ import sqlite3
 from contextlib import contextmanager
 from typing import Any, Iterator, Literal, Sequence
 
-from services.db.core import get_ambient_connection, get_connection
+from services.db.core import ambient_savepoint, get_ambient_connection, get_connection
 from services.db.runtime import is_postgres_enabled
 
 log = logging.getLogger(__name__)
@@ -184,7 +184,8 @@ def get_db_ro() -> Iterator[ReadOnlyConnection]:
 
     ambient = get_ambient_connection()
     if ambient is not None:
-        yield ReadOnlyConnection(ambient, owns_connection=False)
+        with ambient_savepoint(ambient):
+            yield ReadOnlyConnection(ambient, owns_connection=False)
         return
 
     conn = get_connection()

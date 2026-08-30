@@ -40,6 +40,10 @@ _DB_AMBIENT_CONNECTION: ContextVar[Any | None] = ContextVar(
     "db_ambient_connection",
     default=None,
 )
+_DB_AMBIENT_SAVEPOINT_SEQUENCE: ContextVar[int] = ContextVar(
+    "db_ambient_savepoint_sequence",
+    default=0,
+)
 
 
 @contextmanager
@@ -572,6 +576,42 @@ def get_ambient_connection() -> Any | None:
     return _DB_AMBIENT_CONNECTION.get()
 
 
+def _next_ambient_savepoint_name() -> str:
+    sequence = _DB_AMBIENT_SAVEPOINT_SEQUENCE.get() + 1
+    _DB_AMBIENT_SAVEPOINT_SEQUENCE.set(sequence)
+    return f"clientplatform_ambient_{sequence}"
+
+
+@contextmanager
+def ambient_savepoint(conn: Any) -> Iterator[Any]:
+    """Preserve the historical rollback boundary of one nested DB scope.
+
+    An exception may be intentionally handled by a higher application layer.
+    Rolling back to a savepoint keeps partial writes from that failed nested
+    operation out of the surrounding ``atomic_db()`` transaction while still
+    allowing the outer scope to persist a safe/stale/permission reply.
+    """
+
+    name = _next_ambient_savepoint_name()
+    conn.execute(f"SAVEPOINT {name}")  # nosec B608 - generated internal identifier only
+    try:
+        yield conn
+    except Exception:
+        try:
+            conn.execute(
+                f"ROLLBACK TO SAVEPOINT {name}"  # nosec B608 - generated internal identifier only
+            )
+        finally:
+            conn.execute(
+                f"RELEASE SAVEPOINT {name}"  # nosec B608 - generated internal identifier only
+            )
+        raise
+    else:
+        conn.execute(
+            f"RELEASE SAVEPOINT {name}"  # nosec B608 - generated internal identifier only
+        )
+
+
 @contextmanager
 def atomic_db() -> Iterator[Any]:
     """Share one commit/rollback boundary across nested application DB calls.
@@ -585,11 +625,29 @@ def atomic_db() -> Iterator[Any]:
 
     existing = _DB_AMBIENT_CONNECTION.get()
     if existing is not None:
-        yield existing
+        with ambient_savepoint(existing):
+            yield existing
         return
 
     conn = get_connection()
+    # SQLite treats a top-level SAVEPOINT as the transaction itself, so
+    # releasing that savepoint would commit before the ambient unit of work
+    # reaches its durable reply. Establish the outer transaction explicitly
+    # on every engine before nested application scopes create savepoints.
+    try:
+        conn.execute("BEGIN")
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:  # validator: allow-wide-except
+            logging.getLogger(__name__).exception("Ambient DB rollback after BEGIN failure failed")
+        try:
+            conn.close()
+        except Exception:  # validator: allow-wide-except
+            logging.getLogger(__name__).exception("Ambient DB close after BEGIN failure failed")
+        raise
     token = _DB_AMBIENT_CONNECTION.set(conn)
+    sequence_token = _DB_AMBIENT_SAVEPOINT_SEQUENCE.set(0)
     try:
         yield conn
     except Exception:
@@ -609,6 +667,7 @@ def atomic_db() -> Iterator[Any]:
                 logging.getLogger(__name__).exception("Ambient DB rollback after commit failure failed")
             raise
     finally:
+        _DB_AMBIENT_SAVEPOINT_SEQUENCE.reset(sequence_token)
         _DB_AMBIENT_CONNECTION.reset(token)
         try:
             conn.close()
@@ -657,7 +716,8 @@ def get_db_ro() -> Iterator[Any]:
 def get_db() -> Iterator[Any]:
     ambient = get_ambient_connection()
     if ambient is not None:
-        yield ambient
+        with ambient_savepoint(ambient):
+            yield ambient
         return
 
     conn = get_connection()
