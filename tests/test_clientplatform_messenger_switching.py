@@ -40,12 +40,8 @@ class NativeMessengerMenuTests(unittest.TestCase):
                 return_value=True,
             ),
             patch(
-                "clientplatform.application.capability_parity.vk_webhook_enabled",
-                return_value=True,
-            ),
-            patch(
-                "clientplatform.application.capability_parity.max_webhook_enabled",
-                return_value=True,
+                "clientplatform.application.capability_parity._native_runtime_state",
+                return_value=(True, True),
             ),
             patch(
                 "clientplatform.application.capability_parity.build_setup_status",

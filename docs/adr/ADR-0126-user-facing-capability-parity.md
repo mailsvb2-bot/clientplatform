@@ -6,7 +6,7 @@ Accepted for the owner-directed UI/UX capability parity pass.
 
 ## Context
 
-ClientPlatform can have a setup ingress available while a concrete provider runtime is disabled or not ready. A UI that checks only the generic setup surface can therefore expose a connection button that cannot lead to a working channel. The same mismatch can appear across Telegram admin and native VK/MAX staff surfaces.
+ClientPlatform has two distinct messenger ingress families: legacy global VK/MAX webhooks and the canonical tenant-scoped omnichannel runtime. User-facing VK/MAX setup belongs to the tenant-scoped runtime, where provider tokens and webhook secrets are verified during onboarding and stored through encrypted credential references. The UI must not use legacy global webhook flags as the availability signal for native ClientPlatform connections.
 
 ## Decision
 
@@ -29,8 +29,8 @@ Editorial publication planning remains provider-independent. Its UI must say tha
 
 ## Consequences
 
-- Generic omnichannel setup enablement no longer makes disabled VK/MAX channels look usable.
+- Canonical omnichannel enablement is necessary but not sufficient for tenant-scoped VK/MAX availability: the dispatch runtime must be enabled and the native security/preflight contour must be ready. Legacy global VK/MAX webhook flags do not gate native ClientPlatform connections.
 - Existing connections remain visible when their runtime is disabled, instead of disappearing.
 - UI and callback authorization share the same availability facts.
 - Provider secrets and raw configuration values remain outside the presentation layer.
-- Enabling a channel in production automatically makes the connect action appear once readiness is satisfied; disabling it removes the action without a UI code change.
+- Enabling the canonical omnichannel runtime in production automatically makes native VK/MAX connect actions appear once the HTTPS setup surface is ready; disabling it removes those actions without a UI code change.

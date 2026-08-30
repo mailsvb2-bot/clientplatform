@@ -17,8 +17,8 @@ from clientplatform.domain.ad_connections import AdConnectionStatus
 from clientplatform.domain.connections import ConnectionPlatform, ConnectionStatus
 from clientplatform.domain.tenancy import TenantContext, TenantPermissionDenied
 from config.settings import settings
-from runtime.ingress_flags import max_webhook_enabled, vk_webhook_enabled
 from runtime.telegram_transport import telegram_runtime_enabled
+from scripts.clientplatform_messenger_channels_preflight import inspect_messenger_channels
 from services.messenger.setup import build_setup_status
 
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
@@ -75,12 +75,36 @@ class BusinessCapabilityProjection:
         return next(item for item in self.messengers if item.platform == normalized)
 
 
-def _omnichannel_setup_available() -> bool:
-    enabled = (
+def _omnichannel_runtime_enabled() -> bool:
+    return (
         os.getenv("CLIENTPLATFORM_OMNICHANNEL_INGRESS_ENABLED") or ""
     ).strip().lower() in _TRUE_VALUES
+
+
+def _native_dispatch_runtime_enabled() -> bool:
+    raw = str(os.getenv("CLIENTPLATFORM_DISPATCH_RUNTIME_ENABLED") or "").strip()
+    if not raw:
+        return _omnichannel_runtime_enabled()
+    return raw.lower() in _TRUE_VALUES
+
+
+def _native_runtime_state() -> tuple[bool, bool]:
+    if not _omnichannel_runtime_enabled() or not _native_dispatch_runtime_enabled():
+        return False, False
+    try:
+        preflight = inspect_messenger_channels()
+    except (OSError, ValueError, TypeError):
+        return True, False
+    except (RuntimeError, AttributeError):
+        return True, False
+    enabled = bool(preflight.omnichannel_enabled)
+    ready = bool(enabled and preflight.omnichannel_ready)
+    return enabled, ready
+
+
+def _omnichannel_setup_available() -> bool:
     public_base = str(getattr(settings, "MESSENGER_PUBLIC_BASE_URL", "") or "").strip()
-    return bool(enabled and public_base.startswith("https://"))
+    return bool(_omnichannel_runtime_enabled() and public_base.startswith("https://"))
 
 
 def _availability(
@@ -143,13 +167,18 @@ def project_messenger_capabilities(
 
     resolved_setup = _omnichannel_setup_available() if setup_available is None else bool(setup_available)
     setup_status = build_setup_status() if runtime_ready is None else None
+    native_enabled, native_ready = (
+        _native_runtime_state()
+        if runtime_enabled is None or runtime_ready is None
+        else (False, False)
+    )
     enabled = (
         runtime_enabled
         if runtime_enabled is not None
         else {
             ConnectionPlatform.TELEGRAM: telegram_runtime_enabled(),
-            ConnectionPlatform.VK: vk_webhook_enabled(),
-            ConnectionPlatform.MAX: max_webhook_enabled(),
+            ConnectionPlatform.VK: native_enabled,
+            ConnectionPlatform.MAX: native_enabled,
         }
     )
     ready = (
@@ -157,8 +186,8 @@ def project_messenger_capabilities(
         if runtime_ready is not None
         else {
             ConnectionPlatform.TELEGRAM: bool(setup_status and setup_status.telegram_ok),
-            ConnectionPlatform.VK: bool(setup_status and setup_status.vk_ok),
-            ConnectionPlatform.MAX: bool(setup_status and setup_status.max_ok),
+            ConnectionPlatform.VK: native_ready,
+            ConnectionPlatform.MAX: native_ready,
         }
     )
 
