@@ -148,6 +148,8 @@ ClientPlatform показывает, что сделал, почему, како
 
 Официальные VK/MAX-точки ClientPlatform являются управляющими входами владельца и сотрудников, а не клиентскими каналами конкретного бизнеса. Новый владелец может создать `Business` и продолжить настройку без обязательного перехода в Telegram. После выбора или создания бизнеса управляющий вход обязан разрешать tenant context только сервером и переиспользовать канонический owner surface, а не отдельную копию бизнес-логики.
 
+Лендинг владельца обязан ссылаться только на стабильные ClientPlatform owner-entry URL (`/clientplatform/open/telegram`, `/clientplatform/open/vk`, `/clientplatform/open/max`). Provider-specific bot/group links формируются сервером. Для owner deep-link используется namespace `cpo_*`; `cpa_*` и `cpj_*` остаются клиентскими маршрутами и не могут использоваться кнопками «Открыть ClientPlatform».
+
 На раннем MVP допускается общий клиентский бот с deep links.
 
 ## 6.4. Один backend

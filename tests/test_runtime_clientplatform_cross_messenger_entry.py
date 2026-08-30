@@ -60,6 +60,15 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
         assert command is not None
         self.assertEqual(command.action, "start")
 
+    def test_explicit_owner_deep_link_is_owner_entry(self) -> None:
+        for text in ("/start cpo_landing", "start cpo_site", "cpo_landing"):
+            with self.subTest(text=text):
+                command = parse_clientplatform_entry_command(text)
+                self.assertIsNotNone(command)
+                assert command is not None
+                self.assertEqual(command.action, "start")
+                self.assertTrue(command.value.startswith("cpo_"))
+
     def test_customer_acquisition_start_is_not_owner_entry(self) -> None:
         self.assertIsNone(
             parse_clientplatform_entry_command("/start cpa_sourceToken123")

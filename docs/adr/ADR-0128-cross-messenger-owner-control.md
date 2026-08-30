@@ -19,6 +19,7 @@ ClientPlatform уже имеет канонический tenant-scoped owner/me
 6. Для пользователей с несколькими `Business` используется server-authorized selector: messenger получает только короткую ссылку на UUID, а каждый выбор повторно проверяется через текущий список доступных бизнесов. После явного выбора `(user_id, platform) -> business_id` сохраняется в каноническом tenancy-хранилище только как routing context для последующих текстовых шагов; этот контекст не является авторизацией и при каждом использовании повторно валидируется активным membership.
 7. Глобальный owner entry сохраняет канонический `CustomerInteractionMessage` и доставляет его нативными inline-кнопками VK/MAX. `cpm:setup:*` и `cpm:switch:*` хранятся как несекретные команды; short-lived HTTPS URL материализуется только непосредственно перед provider I/O. Секреты и route credentials не переносятся в глобальный payload.
 8. Мутации получают idempotency key, привязанный к provider event и payload, а официальный MAX owner entry best-effort подтверждает `message_callback` до бизнес-обработки.
+9. Публичный лендинг не хранит provider-specific ID/бот-ссылки. Он использует стабильные HTTPS entry URL `https://app.clientplatform.ru/clientplatform/open/{telegram|vk|max}`. Runtime проверяет готовность выбранного официального канала и только затем делает redirect в provider deep link с явным owner payload `cpo_*`; неготовый канал отвечает fail-closed `503`.
 
 ## Безопасность
 
@@ -27,6 +28,7 @@ ClientPlatform уже имеет канонический tenant-scoped owner/me
 - При нескольких бизнесах система не угадывает tenant: активный workspace появляется только после явного server-validated выбора и повторно авторизуется перед каждым использованием.
 - Tenant-scoped VK/MAX ingress и его durable dispatch/outbox остаются без изменений.
 - `cpa_*` не становится owner-командой и сохраняет customer acquisition семантику.
+- `cpo_*` зарезервирован только для официального owner-entry ClientPlatform и не является ссылкой клиента конкретного бизнеса.
 
 ## Последствия
 

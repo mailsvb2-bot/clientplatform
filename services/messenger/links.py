@@ -20,6 +20,17 @@ def build_site_payload(source: str = 'site') -> str:
     return clean or 'site'
 
 
+def build_owner_entry_payload(source: str = 'site') -> str:
+    """Return an explicit owner-control deep-link payload.
+
+    `cpo_` is intentionally distinct from customer acquisition (`cpa_`) and
+    customer invite (`cpj_`) payloads so official ClientPlatform entry can
+    never be mistaken for a tenant customer route.
+    """
+
+    return f'cpo_{build_site_payload(source)}'
+
+
 def build_bridge_payload(token: str) -> str:
     token_clean = (token or "").strip()
     return f"bridge_{token_clean}"
@@ -80,6 +91,18 @@ def build_entry_targets(payload: str = 'site') -> list[dict[str, str]]:
 
 def build_site_entry_targets(source: str = 'site') -> list[dict[str, str]]:
     return _entry_targets(build_site_payload(source))
+
+
+def build_owner_entry_targets(source: str = 'site') -> list[dict[str, str]]:
+    return _entry_targets(build_owner_entry_payload(source))
+
+
+def build_owner_entry_target(platform: str, source: str = 'site') -> dict[str, str] | None:
+    expected = str(platform or '').strip().lower()
+    return next(
+        (item for item in build_owner_entry_targets(source) if item['platform'] == expected),
+        None,
+    )
 
 
 def build_messenger_targets(referrer_user_id: int) -> list[dict[str, str]]:

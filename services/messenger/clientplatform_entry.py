@@ -114,12 +114,15 @@ def parse_clientplatform_entry_command(
         return ClientPlatformEntryCommand("start")
     if lowered.startswith("/start ") or lowered.startswith("start "):
         payload = raw.split(maxsplit=1)[1].strip()
-        if payload.casefold().startswith("bridge_"):
+        payload_lower = payload.casefold()
+        if payload_lower.startswith(("bridge_", "cpo_")):
             return ClientPlatformEntryCommand("start", payload)
         # Non-owner deep links (for example cpa_* customer acquisition) must
         # continue to their dedicated route instead of being swallowed by the
         # official ClientPlatform owner bootstrap.
         return None
+    if lowered.startswith("cpo_"):
+        return ClientPlatformEntryCommand("start", raw)
     for prefix in _BUSINESS_PREFIXES:
         if lowered.startswith(prefix):
             return ClientPlatformEntryCommand(

@@ -2,6 +2,9 @@ from services.messenger.links import (
     build_gift_share_targets,
     build_gift_targets,
     build_messenger_targets,
+    build_owner_entry_payload,
+    build_owner_entry_target,
+    build_owner_entry_targets,
     build_share_targets,
     build_site_entry_targets,
 )
@@ -36,6 +39,20 @@ def test_site_entry_targets_include_all_configured_messengers(monkeypatch):
     assert items[0]['url'] == 'https://t.me/metro_test_bot?start=site'
     assert items[1]['url'] == 'https://max.ru/metrotherapy?start=site'
     assert items[2]['url'] == 'https://vk.com/im?sel=-123456&start=site'
+
+
+def test_owner_entry_targets_use_explicit_owner_payload(monkeypatch):
+    _configure_all_targets(monkeypatch)
+
+    assert build_owner_entry_payload() == 'cpo_site'
+    items = build_owner_entry_targets('landing')
+
+    assert [item['platform'] for item in items] == ['telegram', 'max', 'vk']
+    assert items[0]['url'] == 'https://t.me/metro_test_bot?start=cpo_landing'
+    assert items[1]['url'] == 'https://max.ru/metrotherapy?start=cpo_landing'
+    assert items[2]['url'] == 'https://vk.com/im?sel=-123456&start=cpo_landing'
+    assert build_owner_entry_target('vk', 'landing') == items[2]
+    assert build_owner_entry_target('unknown', 'landing') is None
 
 
 def test_share_targets_route_to_selected_platform(monkeypatch):
