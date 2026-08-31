@@ -55,6 +55,16 @@ def test_prod_monetization_guard_requires_explicit_receipt_email(monkeypatch):
         validate_prod_monetization_contract(strict=True)
 
 
+def test_prod_monetization_guard_skips_yookassa_receipt_when_payment_disabled(monkeypatch):
+    _set_valid_prod_monetization_env(monkeypatch)
+    monkeypatch.setenv("PAYMENT_HTTP_ENABLED", "0")
+    monkeypatch.delenv("YOOKASSA_RECEIPT_EMAIL", raising=False)
+    monkeypatch.delenv("PAYMENT_RECEIPT_EMAIL", raising=False)
+    monkeypatch.delenv("ADMIN_EMAIL", raising=False)
+
+    validate_prod_monetization_contract(strict=True)
+
+
 def test_prod_monetization_guard_rejects_direct_security_disable_flags(monkeypatch):
     _set_valid_prod_monetization_env(monkeypatch)
     monkeypatch.setenv("YOOKASSA_PROVIDER_VERIFICATION_REQUIRED", "0")

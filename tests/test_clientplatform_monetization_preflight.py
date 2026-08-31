@@ -36,6 +36,15 @@ class ClientPlatformMonetizationPreflightTests(unittest.TestCase):
             validate_environment(env),
         )
 
+    def test_missing_receipt_email_passes_when_payment_http_is_disabled(self) -> None:
+        env = {
+            "APP_ENV": "prod",
+            "PAYMENT_HTTP_ENABLED": "0",
+            "TOKEN_ECONOMY_ENABLED": "1",
+            "TOKEN_ENFORCEMENT_MODE": "hard",
+        }
+        self.assertEqual(validate_environment(env), [])
+
     def test_disabled_token_economy_fails_closed(self) -> None:
         env = {
             "TOKEN_ECONOMY_ENABLED": "0",

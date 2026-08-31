@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 
+from core.payment_ingress import resolve_payment_http_enabled
 from services.db.runtime import CONFIG, redacted_db_target
 from services.disaster_recovery_status import disaster_recovery_status
 from services.storage_legacy_audit import storage_legacy_audit
@@ -47,6 +48,7 @@ def format_runtime_contract_report() -> str:
 
     token_economy_enabled = _env("TOKEN_ECONOMY_ENABLED", "1").strip().lower() not in _DISABLED_VALUES
     token_enforcement_mode = _env("TOKEN_ENFORCEMENT_MODE")
+    payment_http_enabled = resolve_payment_http_enabled(os.environ)
     receipt_contact_configured = bool(_first_env("YOOKASSA_RECEIPT_EMAIL", "PAYMENT_RECEIPT_EMAIL", "ADMIN_EMAIL"))
 
     postgres_ok = CONFIG.engine == "postgres" and bool(storage.database_url_configured)
@@ -56,7 +58,7 @@ def format_runtime_contract_report() -> str:
     monetization_ok = (
         token_economy_enabled
         and token_enforcement_mode.strip().lower() in _HARD_TOKEN_VALUES
-        and receipt_contact_configured
+        and (receipt_contact_configured or not payment_http_enabled)
     )
     marker = "✅" if postgres_ok and telegram_ok and legacy_ok and backup_ok and monetization_ok else "⚠️"
 
@@ -79,6 +81,7 @@ def format_runtime_contract_report() -> str:
         f"Restore target configured: {disaster.restore_target_configured}",
         f"Token economy enabled: {token_economy_enabled}",
         f"Token enforcement mode: {token_enforcement_mode or '<missing>'}",
+        f"Payment HTTP enabled: {payment_http_enabled}",
         f"Receipt contact configured: {receipt_contact_configured}",
     ]
 

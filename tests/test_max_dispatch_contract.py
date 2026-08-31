@@ -50,3 +50,35 @@ def test_disabled_payment_reply_reaches_sender_without_checkout_rebuild(monkeypa
     assert sender.text_calls
     assert sender.text_calls[-1][1] == PAYMENT_UNAVAILABLE_TEXT
     assert not PAYMENT_UNAVAILABLE_TEXT.lstrip().startswith("💳")
+
+
+@pytest.mark.parametrize("platform", ["vk", "max"])
+@pytest.mark.parametrize(
+    "stale_text",
+    [
+        "💳 Оплата доступа к Метротерапии\n\nhttps://old.example/pay/yookassa?kind=subscription",
+        "🎁 Подарить Метротерапию\n\nПолучатель: Иван\n\nhttps://old.example/pay/yookassa?gift=1",
+    ],
+)
+def test_stale_checkout_reply_degrades_at_dispatch_time(monkeypatch, platform: str, stale_text: str) -> None:
+    sender = _FakeSender()
+    monkeypatch.setenv("PAYMENT_HTTP_ENABLED", "0")
+    monkeypatch.setattr(reply_dispatcher, "MaxBotSender", lambda: sender if platform == "max" else _FakeSender())
+    monkeypatch.setattr(reply_dispatcher, "VkBotSender", lambda: sender if platform == "vk" else _FakeSender())
+    monkeypatch.setattr(
+        reply_dispatcher,
+        "package_payment_text",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("stale checkout must not rebuild")),
+    )
+
+    asyncio.run(
+        reply_dispatcher.send_reply_bundle(
+            platform,
+            f"{platform}-stale-payment",
+            1004,
+            [MessengerReply(text=stale_text)],
+        )
+    )
+
+    assert sender.text_calls
+    assert sender.text_calls[-1][1] == PAYMENT_UNAVAILABLE_TEXT

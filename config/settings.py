@@ -2,6 +2,8 @@ from dataclasses import dataclass
 import ipaddress
 import os
 
+from core.payment_ingress import resolve_payment_http_enabled
+
 # ВАЖНО (prod-safe): НЕ подхватываем .env автоматически в продакшене.
 # Иначе локальный .env рядом с кодом может неожиданно переопределить системные переменные окружения.
 #
@@ -274,8 +276,7 @@ def _external_checkout_enabled() -> bool:
     answer owner messages.
     """
 
-    payment_flag = _optional_feature_flag('PAYMENT_HTTP_ENABLED')
-    return True if payment_flag is None else bool(payment_flag)
+    return resolve_payment_http_enabled(os.environ)
 
 
 def _validate_trusted_proxy_env() -> None:

@@ -51,6 +51,7 @@ def test_extract_labeled_urls_finds_all_package_links(monkeypatch):
 
 
 def test_dispatcher_upgrades_legacy_payment_text_to_package_surface(monkeypatch):
+    monkeypatch.setenv("PAYMENT_HTTP_ENABLED", "1")
     monkeypatch.setenv("MESSENGER_PUBLIC_BASE_URL", "https://bot.example")
 
     text = _canonical_payment_text(

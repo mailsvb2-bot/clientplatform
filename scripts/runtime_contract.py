@@ -10,6 +10,8 @@ ads or live traffic are sent to the bot.
 import os
 from pathlib import Path
 
+from core.payment_ingress import resolve_payment_http_enabled
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -99,16 +101,7 @@ def _bounded_int(
 
 
 def _payment_enabled() -> bool:
-    explicit = _optional_flag("PAYMENT_HTTP_ENABLED")
-    if explicit is not None:
-        return explicit
-    app_env = (_value("APP_ENV") or "dev").lower()
-    if app_env in {"prod", "production"}:
-        # Match startup/readiness semantics: an omitted payment flag preserves
-        # the historical production checkout default and therefore fails closed.
-        return True
-    return _truthy("MESSENGER_WEBHOOK_ENABLED")
-
+    return resolve_payment_http_enabled(os.environ)
 
 def _privacy_export_enabled() -> bool:
     explicit = _optional_flag("PRIVACY_EXPORT_HTTP_ENABLED")
