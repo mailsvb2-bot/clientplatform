@@ -53,13 +53,17 @@ def test_account_bigint_migration_column_filter_is_narrow() -> None:
 
 
 def test_account_bigint_migration_selects_all_integer_account_id_columns() -> None:
-    class _Connection:
-        def execute(self, _sql: str):
+    class _Cursor:
+        def fetchall(self):
             return [
                 {"table_name": "account_channel_identities", "column_name": "account_id"},
                 {"table_name": "account_audio_progress", "column_name": "account_id"},
                 {"table_name": "payments", "column_name": "payment_id"},
             ]
+
+    class _Connection:
+        def execute(self, _sql: str):
+            return _Cursor()
 
     assert _account_integer_columns(_Connection()) == [
         ("account_channel_identities", "account_id"),
