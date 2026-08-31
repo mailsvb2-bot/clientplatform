@@ -32,7 +32,7 @@ def _print_presence(name: str, *, required: bool = True) -> bool:
     ok = _present(name)
     marker = "OK" if ok else ("FAIL" if required else "WARN")
     print(f"{marker}: {name}={'<set>' if ok else '<empty>'}")
-    return ok or not required
+    return ok
 
 
 def _port_open(host: str, port: int, timeout: float = 1.5) -> bool:
