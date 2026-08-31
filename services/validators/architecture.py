@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 
 from core.paths import ROOT as PROJECT_ROOT
+from core.payment_ingress import PaymentIngressConfigurationError, resolve_payment_http_enabled
 from services.validators.base import ValidationError
 
 SECRET_PATTERNS = (
@@ -103,9 +104,10 @@ def _truthy_env(name: str) -> bool:
 
 
 def _payment_http_enabled() -> bool:
-    if "PAYMENT_HTTP_ENABLED" in os.environ:
-        return _truthy_env("PAYMENT_HTTP_ENABLED")
-    return _truthy_env("MESSENGER_WEBHOOK_ENABLED")
+    try:
+        return resolve_payment_http_enabled(os.environ)
+    except PaymentIngressConfigurationError as exc:
+        raise ValidationError(str(exc)) from exc
 
 
 def validate_no_embedded_secrets(*, strict: bool = True) -> None:

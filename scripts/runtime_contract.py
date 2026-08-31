@@ -8,9 +8,14 @@ ads or live traffic are sent to the bot.
 """
 
 import os
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from core.payment_ingress import PaymentIngressConfigurationError, resolve_payment_http_enabled
 
 
 def _truthy(name: str, default: str = "0") -> bool:
@@ -99,11 +104,7 @@ def _bounded_int(
 
 
 def _payment_enabled() -> bool:
-    explicit = _optional_flag("PAYMENT_HTTP_ENABLED")
-    if explicit is not None:
-        return explicit
-    return _truthy("MESSENGER_WEBHOOK_ENABLED")
-
+    return resolve_payment_http_enabled(os.environ)
 
 def _privacy_export_enabled() -> bool:
     explicit = _optional_flag("PRIVACY_EXPORT_HTTP_ENABLED")
@@ -124,9 +125,11 @@ def _vk_enabled() -> bool:
     return _truthy("MESSENGER_WEBHOOK_ENABLED") and bool(_value("VK_GROUP_TOKEN"))
 
 
-def _http_ingress_enabled() -> bool:
+def _http_ingress_enabled(payment_enabled: bool | None = None) -> bool:
+    if payment_enabled is None:
+        payment_enabled = _payment_enabled()
     return (
-        _payment_enabled()
+        payment_enabled
         or _privacy_export_enabled()
         or _max_enabled()
         or _vk_enabled()
@@ -148,6 +151,11 @@ def run() -> tuple[list[str], list[str]]:
     app_env = (_value("APP_ENV") or "dev").lower()
     prod = app_env in {"prod", "production"}
     secure_env = app_env in {"prod", "production", "stage", "staging"}
+    try:
+        payment_enabled = _payment_enabled()
+    except PaymentIngressConfigurationError as exc:
+        errors.append(str(exc))
+        payment_enabled = False
 
     transport = (_value("TELEGRAM_TRANSPORT") or _value("RUN_MODE") or "polling").lower()
     if transport != "polling":
@@ -166,19 +174,20 @@ def run() -> tuple[list[str], list[str]]:
         if not _valid_admin_ids():
             errors.append("ADMIN_IDS or ADMIN_ID must contain positive numeric IDs in prod")
 
-        # Canonical payment path is external YooKassa/package checkout. Webhook
-        # authenticity is proven by provider source-of-truth verification; an
-        # optional reverse-proxy header secret is defense in depth only.
-        for name in ("YOOKASSA_SHOP_ID", "YOOKASSA_SECRET_KEY"):
-            if not _value(name):
-                errors.append(f"{name} is required in prod")
-        if not _first_value("PAYMENT_CHECKOUT_SIGNING_KEY", "CHECKOUT_SIGNING_KEY"):
-            errors.append("PAYMENT_CHECKOUT_SIGNING_KEY is required in prod")
-        payment_base = _payment_public_base_url()
-        if not payment_base:
-            errors.append("PAYMENT_PUBLIC_BASE_URL or MESSENGER_PUBLIC_BASE_URL is required in prod")
-        elif not payment_base.startswith("https://"):
-            errors.append("payment public base URL must start with https:// in prod")
+        # Canonical payment path is external YooKassa/package checkout. Validate
+        # those credentials only when payment HTTP ingress is active; official
+        # owner-control VK/MAX ingress is independent of the payment surface.
+        if payment_enabled:
+            for name in ("YOOKASSA_SHOP_ID", "YOOKASSA_SECRET_KEY"):
+                if not _value(name):
+                    errors.append(f"{name} is required in prod")
+            if not _first_value("PAYMENT_CHECKOUT_SIGNING_KEY", "CHECKOUT_SIGNING_KEY"):
+                errors.append("PAYMENT_CHECKOUT_SIGNING_KEY is required in prod")
+            payment_base = _payment_public_base_url()
+            if not payment_base:
+                errors.append("PAYMENT_PUBLIC_BASE_URL or MESSENGER_PUBLIC_BASE_URL is required in prod")
+            elif not payment_base.startswith("https://"):
+                errors.append("payment public base URL must start with https:// in prod")
 
         if _resolved_db_engine() != "postgres":
             errors.append("METRO_DB_ENGINE must be postgres in prod")
@@ -198,11 +207,10 @@ def run() -> tuple[list[str], list[str]]:
         if not _privacy_export_enabled():
             errors.append("PRIVACY_EXPORT_HTTP_ENABLED must be 1 in prod")
 
-    payment_enabled = _payment_enabled()
     privacy_export_enabled = _privacy_export_enabled()
     max_enabled = _max_enabled()
     vk_enabled = _vk_enabled()
-    ingress_enabled = _http_ingress_enabled()
+    ingress_enabled = _http_ingress_enabled(payment_enabled)
 
     if payment_enabled and not _payment_public_base_url():
         errors.append("PAYMENT_PUBLIC_BASE_URL or MESSENGER_PUBLIC_BASE_URL is required when payment HTTP ingress is enabled")

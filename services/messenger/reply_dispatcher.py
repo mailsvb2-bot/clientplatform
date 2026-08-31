@@ -14,6 +14,7 @@ from clientplatform.runtime.secrets import EnvironmentCredentialProvider
 
 from runtime.messenger_senders import MaxBotSender, VkBotSender, MessengerTransportError
 from runtime import messenger_max_ui as max_ui
+from runtime.ingress_flags import payment_http_enabled
 from runtime.messenger_vk_ui import (
     vk_demo_kind_keyboard_json,
     vk_score_scale_keyboard_json,
@@ -28,7 +29,7 @@ from services.messenger.audio_progress import confirm_pending_audio_delivery
 from services.messenger.outbound import SenderRegistry, UnsupportedMessengerDelivery
 from services.messenger.package_payment_ui import package_payment_text
 from services.messenger.progress_charts import build_vk_mood_progress_chart_path
-from services.messenger.text_ui import MessengerReply
+from services.messenger.text_ui import MessengerReply, PAYMENT_UNAVAILABLE_TEXT
 from services.mood_text_flow import complete_pre_score_and_send, complete_post_score_and_send_next
 from services.privacy_export_links import issue_privacy_export_url, privacy_export_ttl_minutes
 from services.weather import get_weather_text_async, set_city
@@ -61,13 +62,33 @@ def _looks_like_score_scale(text: str) -> bool:
     return any(marker in raw for marker in SCORE_SCALE_MARKERS)
 
 
-def _canonical_payment_text(platform: str, canonical_user_id: int, external_user_id: str, text: str) -> str:
-    """Upgrade legacy pay texts without rebuilding stateful gift-recipient flows."""
+def _is_checkout_surface_text(text: str) -> bool:
     stripped = str(text or "").lstrip()
+    if stripped.startswith("💳"):
+        return True
+    if not stripped.startswith("🎁"):
+        return False
+    return (
+        stripped.startswith("🎁 Подарить Метротерапию")
+        or stripped.startswith("🎁 Кому подарить Метротерапию?")
+        or "/pay/yookassa" in stripped
+    )
+
+
+def _canonical_payment_text(platform: str, canonical_user_id: int, external_user_id: str, text: str) -> str:
+    """Apply the current payment policy when a text reply is actually delivered.
+
+    Durable outbox rows can outlive a deploy. A checkout reply created while
+    payment ingress was enabled must therefore degrade safely if the current
+    runtime has PAYMENT_HTTP_ENABLED=0.
+    """
+    stripped = str(text or "").lstrip()
+    if not payment_http_enabled() and _is_checkout_surface_text(stripped):
+        return PAYMENT_UNAVAILABLE_TEXT
     if stripped.startswith("💳"):
         return package_payment_text(user_id=canonical_user_id, platform=platform, external_user_id=external_user_id)
     if stripped.startswith("🎁"):
-        # Gift text is now stateful: command -> recipient prompt -> recipient-bound checkout links.
+        # Gift text is stateful: command -> recipient prompt -> recipient-bound checkout links.
         # Rebuilding it here would lose recipient_hint and turn a ready checkout back into the prompt.
         return text
     return text

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from core.payment_ingress import PaymentIngressConfigurationError, resolve_payment_http_enabled
 from services.payments.receipt_contract import validate_receipt_contract
 from services.validators.base import ValidationError
 
@@ -173,22 +174,28 @@ def validate_prod_monetization_contract(*, strict: bool = True) -> None:
         errors.append("TOKEN_ECONOMY_ENABLED must not be disabled in prod")
     if token_mode not in _HARD_TOKEN_VALUES:
         errors.append("TOKEN_ENFORCEMENT_MODE must be hard in prod")
-    if not _first_env("YOOKASSA_RECEIPT_EMAIL", "PAYMENT_RECEIPT_EMAIL", "ADMIN_EMAIL"):
-        errors.append("YOOKASSA_RECEIPT_EMAIL or PAYMENT_RECEIPT_EMAIL or ADMIN_EMAIL is required in prod")
-
     try:
-        validate_receipt_contract(
-            tax_system_code=_env("YOOKASSA_TAX_SYSTEM_CODE", "2"),
-            vat_code=_env("YOOKASSA_VAT_CODE", "1"),
-            payment_mode=_env("YOOKASSA_PAYMENT_MODE", "full_payment"),
-            payment_subject=_env("YOOKASSA_PAYMENT_SUBJECT", "service"),
-        )
-    except ValueError as exc:
+        payment_enabled = resolve_payment_http_enabled(os.environ)
+    except PaymentIngressConfigurationError as exc:
         errors.append(str(exc))
+        payment_enabled = False
+    if payment_enabled:
+        if not _first_env("YOOKASSA_RECEIPT_EMAIL", "PAYMENT_RECEIPT_EMAIL", "ADMIN_EMAIL"):
+            errors.append("YOOKASSA_RECEIPT_EMAIL or PAYMENT_RECEIPT_EMAIL or ADMIN_EMAIL is required in prod")
 
-    for name in ("YOOKASSA_PROVIDER_VERIFICATION_REQUIRED", "PAYMENT_CHECKOUT_INTENT_REQUIRED"):
-        if _explicitly_disabled(name):
-            errors.append(f"{name} must not be disabled in prod")
+        try:
+            validate_receipt_contract(
+                tax_system_code=_env("YOOKASSA_TAX_SYSTEM_CODE", "2"),
+                vat_code=_env("YOOKASSA_VAT_CODE", "1"),
+                payment_mode=_env("YOOKASSA_PAYMENT_MODE", "full_payment"),
+                payment_subject=_env("YOOKASSA_PAYMENT_SUBJECT", "service"),
+            )
+        except ValueError as exc:
+            errors.append(str(exc))
+
+        for name in ("YOOKASSA_PROVIDER_VERIFICATION_REQUIRED", "PAYMENT_CHECKOUT_INTENT_REQUIRED"):
+            if _explicitly_disabled(name):
+                errors.append(f"{name} must not be disabled in prod")
 
     for name in (
         "ALLOW_UNVERIFIED_YOOKASSA_WEBHOOK_IN_PROD",

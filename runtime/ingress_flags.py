@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 
 from config.settings import settings
+from core.payment_ingress import resolve_payment_http_enabled
 from services.privacy_export_links import privacy_export_http_enabled
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
@@ -23,10 +24,10 @@ def payment_http_enabled() -> bool:
     routes during rollout of the split ingress contract.
     """
 
-    explicit = _optional_env_flag("PAYMENT_HTTP_ENABLED")
-    if explicit is not None:
-        return explicit
-    return bool(getattr(settings, "MESSENGER_WEBHOOK_ENABLED", False) or False)
+    return resolve_payment_http_enabled(
+        os.environ,
+        legacy_default=bool(getattr(settings, "MESSENGER_WEBHOOK_ENABLED", False) or False),
+    )
 
 
 def max_webhook_enabled() -> bool:

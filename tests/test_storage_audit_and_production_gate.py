@@ -33,6 +33,52 @@ def test_production_gate_restore_target_reads_env_file(tmp_path, monkeypatch) ->
     assert not production_gate._restore_target_configured({})
 
 
+
+def test_production_gate_runtime_contract_accepts_owner_vk_without_payment_checkout(
+    tmp_path, monkeypatch
+) -> None:
+    for name in (
+        "YOOKASSA_SHOP_ID",
+        "YOOKASSA_SECRET_KEY",
+        "PAYMENT_CHECKOUT_SIGNING_KEY",
+        "CHECKOUT_SIGNING_KEY",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    env_file = tmp_path / "clientplatform.env"
+    env_file.write_text(
+        "\n".join(
+            (
+                "APP_ENV=prod",
+                "BOT_TOKEN=test-bot-token",
+                "ADMIN_IDS=1",
+                "TELEGRAM_TRANSPORT=polling",
+                "TELEGRAM_WEBHOOK_ENABLED=0",
+                "PAYMENT_HTTP_ENABLED=0",
+                "PRIVACY_EXPORT_HTTP_ENABLED=1",
+                "PRIVACY_EXPORT_PUBLIC_BASE_URL=https://app.example",
+                "PRIVACY_EXPORT_TOKEN_TTL_MINUTES=10",
+                "VK_WEBHOOK_ENABLED=1",
+                "MESSENGER_PUBLIC_BASE_URL=https://app.example",
+                "VK_GROUP_ID=241176159",
+                "VK_GROUP_TOKEN=vk-token-for-test",
+                "VK_CONFIRMATION_TOKEN=vk-confirm-for-test",
+                "VK_SECRET=vk-secret-for-test",
+                "METRO_DB_ENGINE=postgres",
+                "DATABASE_URL=postgresql:///clientplatform_test",
+                "LOG_PATH=/tmp/clientplatform-test.log",
+                "HEALTHCHECK_ENABLED=1",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    gate_env = production_gate._merged_env(env_file)
+    production_gate._run(
+        [sys.executable, "scripts/runtime_contract.py"],
+        env=gate_env,
+    )
+
 def test_payment_reconciliation_import_has_no_messenger_package_cycle() -> None:
     env = os.environ.copy()
     env.setdefault("LOAD_DOTENV", "0")

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 
 from config.settings import settings
+from runtime.ingress_flags import payment_http_enabled
 from services.db import db
 from services.jobs import add_job, cancel_jobs
 from services.personalization import get_preface
@@ -113,8 +115,24 @@ def _share_text(user_id: int) -> str:
     return "\n".join(lines)
 
 
+PAYMENT_UNAVAILABLE_TEXT = (
+    "⚠️ Оплата сейчас недоступна в этом канале. "
+    "Вернитесь в главное меню или попробуйте позже."
+)
+
+
+def _payment_ui_enabled() -> bool:
+    """Honor an explicit payment-ingress disable without changing legacy UI defaults."""
+
+    if "PAYMENT_HTTP_ENABLED" not in os.environ:
+        return True
+    return payment_http_enabled()
+
+
 def _payment_text(user_id: int, *, platform: str, external_user_id: str | None) -> str:
     """Canonical public payment surface for Telegram/VK/MAX text UI."""
+    if not _payment_ui_enabled():
+        return PAYMENT_UNAVAILABLE_TEXT
     return package_payment_text(
         user_id=int(user_id),
         platform=normalize_platform(platform),
@@ -124,6 +142,8 @@ def _payment_text(user_id: int, *, platform: str, external_user_id: str | None) 
 
 def _gift_text(user_id: int, *, platform: str, external_user_id: str | None, recipient_hint: str = "") -> str:
     """Canonical public gift/payment surface for Telegram/VK/MAX text UI."""
+    if not _payment_ui_enabled():
+        return PAYMENT_UNAVAILABLE_TEXT
     return gift_package_text(
         user_id=int(user_id),
         platform=normalize_platform(platform),
@@ -133,6 +153,8 @@ def _gift_text(user_id: int, *, platform: str, external_user_id: str | None, rec
 
 
 def _start_gift_recipient_flow(user_id: int) -> MessengerReply:
+    if not _payment_ui_enabled():
+        return MessengerReply(text=PAYMENT_UNAVAILABLE_TEXT)
     set_pending(int(user_id), "gift_recipient", {})
     return MessengerReply(text=gift_recipient_prompt_text())
 

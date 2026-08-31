@@ -202,3 +202,53 @@ def test_stale_sending_lease_is_reclaimed_after_worker_crash(monkeypatch, tmp_pa
     assert len(recovered) == 1
     assert recovered[0].id == first[0].id
     assert recovered[0].lock_token != first[0].lock_token
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("platform", ["vk", "max"])
+async def test_stale_payment_outbox_replay_degrades_when_payment_is_disabled(
+    monkeypatch, tmp_path, platform: str
+) -> None:
+    monkeypatch.setenv("PAYMENT_HTTP_ENABLED", "0")
+    dedupe, outbox, db_core = _reload(monkeypatch, tmp_path)
+    from services.messenger import reply_dispatcher
+    from services.messenger.text_ui import PAYMENT_UNAVAILABLE_TEXT
+
+    class FakeSender:
+        def __init__(self) -> None:
+            self.text_calls = []
+
+        async def send_text(self, external_user_id, text, **kwargs):
+            self.text_calls.append((str(external_user_id), str(text), dict(kwargs)))
+            return {"ok": True}
+
+    sender = FakeSender()
+    monkeypatch.setattr(reply_dispatcher, "MaxBotSender", lambda: sender if platform == "max" else FakeSender())
+    monkeypatch.setattr(reply_dispatcher, "VkBotSender", lambda: sender if platform == "vk" else FakeSender())
+    monkeypatch.setattr(
+        reply_dispatcher,
+        "package_payment_text",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("queued checkout must not rebuild")),
+    )
+
+    event_key = f"{platform}-stale-payment-outbox"
+    _enqueue(
+        dedupe,
+        outbox,
+        platform=platform,
+        event_key=event_key,
+        user_id=77,
+        text="💳 Старый checkout\n\nhttps://old.example/pay/yookassa?kind=tokens",
+    )
+    item = outbox.claim_due_deliveries(limit=1)[0]
+
+    await outbox._deliver_one(item)
+
+    assert sender.text_calls
+    assert sender.text_calls[-1][1] == PAYMENT_UNAVAILABLE_TEXT
+    with db_core.db() as conn:
+        row = conn.execute(
+            "SELECT status FROM messenger_delivery_outbox WHERE id=?",
+            (item.id,),
+        ).fetchone()
+    assert row["status"] == "sent"

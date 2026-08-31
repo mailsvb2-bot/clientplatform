@@ -5,8 +5,15 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Mapping
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from core.payment_ingress import PaymentIngressConfigurationError, resolve_payment_http_enabled
 
 _DISABLED_VALUES = frozenset({"0", "false", "no", "off"})
 _HARD_TOKEN_VALUES = frozenset({"hard", "1", "true", "yes", "on"})
@@ -40,7 +47,14 @@ def validate_environment(env: Mapping[str, str]) -> list[str]:
         errors.append("TOKEN_ECONOMY_ENABLED must not be disabled in prod")
     if token_mode not in _HARD_TOKEN_VALUES:
         errors.append("TOKEN_ENFORCEMENT_MODE must be hard in prod")
-    if not _first_value(env, _RECEIPT_EMAIL_KEYS):
+    payment_env = dict(env)
+    payment_env.setdefault("APP_ENV", "prod")
+    try:
+        payment_enabled = resolve_payment_http_enabled(payment_env)
+    except PaymentIngressConfigurationError as exc:
+        errors.append(str(exc))
+        payment_enabled = False
+    if payment_enabled and not _first_value(env, _RECEIPT_EMAIL_KEYS):
         errors.append(
             "YOOKASSA_RECEIPT_EMAIL or PAYMENT_RECEIPT_EMAIL or ADMIN_EMAIL "
             "is required in prod"
