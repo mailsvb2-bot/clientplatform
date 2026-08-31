@@ -258,9 +258,15 @@ class NativeCustomerInteractionJourneyTests(unittest.TestCase):
         self.fx.close()
 
     def _process(self, text: str, event: str) -> dict[str, object]:
-        with patch(
-            "clientplatform.application.native_customer_interactions.get_db",
-            self.fx.db,
+        with (
+            patch(
+                "clientplatform.application.native_customer_interactions.get_db",
+                self.fx.db,
+            ),
+            patch(
+                "clientplatform.infrastructure.booking_repository._utc_now",
+                return_value="2026-08-21T00:00:00+00:00",
+            ),
         ):
             handled = process_native_customer_interaction(
                 route=self.fx.route,
