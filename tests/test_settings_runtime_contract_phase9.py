@@ -15,6 +15,7 @@ ENV_NAMES = (
     "PAYMENT_CHECKOUT_SIGNING_KEY",
     "CHECKOUT_SIGNING_KEY",
     "MESSENGER_PUBLIC_BASE_URL",
+    "PAYMENT_HTTP_ENABLED",
     "PAYMENT_PUBLIC_BASE_URL",
     "PUBLIC_BASE_URL",
     "ALLOW_UNSIGNED_PAYMENT_CHECKOUT_IN_PROD",
@@ -35,6 +36,7 @@ def install_valid_prod(monkeypatch: pytest.MonkeyPatch) -> None:
     clear_env(monkeypatch)
     monkeypatch.setattr(cfg, "APP_ENV", "prod")
     monkeypatch.setenv("ADMIN_IDS", "10")
+    monkeypatch.setenv("PAYMENT_HTTP_ENABLED", "1")
     monkeypatch.setenv("YOOKASSA_SHOP_ID", "shop")
     monkeypatch.setenv("YOOKASSA_SECRET_KEY", "secret")
     monkeypatch.setenv("PAYMENT_CHECKOUT_SIGNING_KEY", "signing")

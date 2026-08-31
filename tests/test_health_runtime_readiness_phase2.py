@@ -276,6 +276,7 @@ def patch_common_payload_dependencies(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_build_health_and_readiness_payloads(monkeypatch: pytest.MonkeyPatch) -> None:
     patch_common_payload_dependencies(monkeypatch)
     monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("PAYMENT_HTTP_ENABLED", "0")
 
     payload, status = health_server.build_health_payload()
     assert status == 200
