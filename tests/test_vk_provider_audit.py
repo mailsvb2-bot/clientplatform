@@ -15,9 +15,20 @@ def _configure(monkeypatch) -> None:
 def _success_call(_token: str, _version: str, method: str, params: dict):
     assert _token == "vk-secret-token"
     assert _version == "5.199"
-    assert params["group_id"] == 238191212
+    if method != "groups.getTokenPermissions":
+        assert params["group_id"] == 238191212
     if method == "groups.getById":
         return {"response": {"groups": [{"id": 238191212, "name": "Metrotherapy"}]}}, 200
+    if method == "groups.getTokenPermissions":
+        return {
+            "response": {
+                "mask": 266240,
+                "permissions": [
+                    {"name": "messages", "setting": 4096},
+                    {"name": "manage", "setting": 262144},
+                ],
+            }
+        }, 200
     if method == "groups.getCallbackConfirmationCode":
         return {"response": {"code": "confirmation-code"}}, 200
     if method == "groups.getCallbackServers":
@@ -61,6 +72,29 @@ def test_vk_provider_audit_confirms_callback_server_and_events(monkeypatch) -> N
     assert "vk-secret-token" not in message
     assert "callback-secret" not in message
     assert "confirmation-code" not in message
+
+
+def test_vk_provider_audit_reports_missing_manage_permission(monkeypatch) -> None:
+    _configure(monkeypatch)
+
+    def fake_call(token: str, version: str, method: str, params: dict):
+        if method == "groups.getTokenPermissions":
+            return {
+                "response": {
+                    "mask": 4096,
+                    "permissions": [{"name": "messages", "setting": 4096}],
+                }
+            }, 200
+        return _success_call(token, version, method, params)
+
+    monkeypatch.setattr(vk_provider_audit, "_api_call", fake_call)
+
+    message, code = vk_provider_audit.run()
+
+    assert code == 5
+    assert "stage=permissions" in message
+    assert "TOKEN_PERMISSION_MISSING_MANAGE" in message
+    assert "granted=messages" in message
 
 
 def test_vk_provider_audit_fails_when_message_event_is_disabled(monkeypatch) -> None:
