@@ -198,6 +198,15 @@ def test_fail_fast_rejects_insecure_public_url_and_overrides(monkeypatch: pytest
     cfg._fail_fast_prod_config()
 
 
+def test_fail_fast_rejects_malformed_payment_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    install_valid_prod(monkeypatch)
+    monkeypatch.setenv("APP_ENV", "prod")
+    monkeypatch.setenv("PAYMENT_HTTP_ENABLED", "tru")
+
+    with pytest.raises(SystemExit, match="PAYMENT_HTTP_ENABLED"):
+        cfg._fail_fast_prod_config()
+
+
 def test_fail_fast_telegram_webhook_contract(monkeypatch: pytest.MonkeyPatch) -> None:
     install_valid_prod(monkeypatch)
     monkeypatch.setattr(cfg.settings, "TELEGRAM_TRANSPORT", "webhook")

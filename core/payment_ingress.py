@@ -3,12 +3,17 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 
-_TRUE_VALUES = frozenset({"1", "true", "yes", "on", "webhook"})
+_TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
+_FALSE_VALUES = frozenset({"0", "false", "no", "off"})
 _PROD_ENVS = frozenset({"prod", "production"})
 
 
 def _value(env: Mapping[str, str], name: str, default: str = "") -> str:
     return str(env.get(name, default) or default).strip()
+
+
+class PaymentIngressConfigurationError(ValueError):
+    """Raised when the canonical payment-ingress flag is malformed."""
 
 
 def resolve_payment_http_enabled(
@@ -25,10 +30,23 @@ def resolve_payment_http_enabled(
     """
 
     values = os.environ if env is None else env
-    if "PAYMENT_HTTP_ENABLED" in values:
-        return _value(values, "PAYMENT_HTTP_ENABLED").lower() in _TRUE_VALUES
-
     app_env = _value(values, "APP_ENV", "dev").lower()
+    if "PAYMENT_HTTP_ENABLED" in values:
+        raw = _value(values, "PAYMENT_HTTP_ENABLED")
+        normalized = raw.lower()
+        if normalized in _TRUE_VALUES:
+            return True
+        if normalized in _FALSE_VALUES:
+            return False
+        if app_env in _PROD_ENVS:
+            rendered = raw if raw else "<empty>"
+            raise PaymentIngressConfigurationError(
+                "PAYMENT_HTTP_ENABLED must be an explicit boolean in production "
+                f"(1/0, true/false, yes/no, on/off); got {rendered!r}"
+            )
+        # Preserve historical non-production compatibility for unknown values.
+        return False
+
     if app_env in _PROD_ENVS:
         return True
 
@@ -37,4 +55,4 @@ def resolve_payment_http_enabled(
     return _value(values, "MESSENGER_WEBHOOK_ENABLED").lower() in _TRUE_VALUES
 
 
-__all__ = ["resolve_payment_http_enabled"]
+__all__ = ["PaymentIngressConfigurationError", "resolve_payment_http_enabled"]

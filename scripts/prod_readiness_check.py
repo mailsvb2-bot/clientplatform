@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from core.payment_ingress import resolve_payment_http_enabled
+from core.payment_ingress import PaymentIngressConfigurationError, resolve_payment_http_enabled
 
 SKIP_DIRS = {'.git', '.venv', 'venv', '__pycache__', '.pytest_cache', '.mypy_cache', '.ruff_cache'}
 
@@ -185,10 +185,14 @@ def _validate_database_runtime(prod: bool, errors: list[str], warnings: list[str
         warnings.append("DATABASE_URL is set but does not look like a Postgres URL")
 
 
-def _validate_payment_runtime(prod: bool, errors: list[str]) -> None:
+def _validate_payment_runtime(
+    prod: bool, errors: list[str], *, payment_enabled: bool | None = None
+) -> None:
     if not prod:
         return
-    if _payment_http_enabled():
+    if payment_enabled is None:
+        payment_enabled = _payment_http_enabled()
+    if payment_enabled:
         for name in ("YOOKASSA_SHOP_ID", "YOOKASSA_SECRET_KEY"):
             _require_env(name, errors)
         if not _first_env("PAYMENT_CHECKOUT_SIGNING_KEY", "CHECKOUT_SIGNING_KEY"):
@@ -209,8 +213,11 @@ def _validate_payment_runtime(prod: bool, errors: list[str]) -> None:
             errors.append("dangerous payment override(s) enabled in prod: " + ", ".join(enabled))
 
 
-def _validate_http_ingress(prod: bool, errors: list[str], warnings: list[str]) -> bool:
-    payment_enabled = _payment_http_enabled()
+def _validate_http_ingress(
+    prod: bool, errors: list[str], warnings: list[str], *, payment_enabled: bool | None = None
+) -> bool:
+    if payment_enabled is None:
+        payment_enabled = _payment_http_enabled()
     privacy_export_enabled = _privacy_export_http_enabled()
     max_enabled = _max_webhook_enabled()
     vk_enabled = _vk_webhook_enabled()
@@ -349,6 +356,11 @@ def run() -> tuple[list[str], list[str]]:
     app_env = (os.getenv("APP_ENV", "dev") or "dev").strip().lower()
     prod = app_env in {"prod", "production"}
     bot_token = (os.getenv("BOT_TOKEN") or "").strip()
+    try:
+        payment_enabled = _payment_http_enabled()
+    except PaymentIngressConfigurationError as exc:
+        errors.append(str(exc))
+        payment_enabled = False
 
     if prod:
         if _looks_placeholder(bot_token):
@@ -357,13 +369,13 @@ def run() -> tuple[list[str], list[str]]:
             warnings.append("BOT_TOKEN format does not look like a Telegram bot token")
         _validate_admin_ids(errors)
 
-    _validate_payment_runtime(prod, errors)
+    _validate_payment_runtime(prod, errors, payment_enabled=payment_enabled)
     _validate_database_runtime(prod, errors, warnings)
     _validate_ai_runtime(prod, errors, warnings)
 
     telegram_transport = (os.getenv("TELEGRAM_TRANSPORT", os.getenv("RUN_MODE", "polling")) or "polling").strip().lower()
     telegram_webhook = telegram_transport == "webhook" or _truthy("TELEGRAM_WEBHOOK_ENABLED")
-    http_ingress = _validate_http_ingress(prod, errors, warnings)
+    http_ingress = _validate_http_ingress(prod, errors, warnings, payment_enabled=payment_enabled)
 
     if prod and not _truthy("HEALTHCHECK_ENABLED", "1"):
         errors.append("HEALTHCHECK_ENABLED must be 1 in prod")

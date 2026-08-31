@@ -93,6 +93,19 @@ def test_prod_payment_validation_defaults_fail_closed_when_flag_is_omitted(monke
     assert any("PAYMENT_CHECKOUT_SIGNING_KEY" in error for error in errors)
 
 
+def test_prod_readiness_rejects_malformed_payment_flag(monkeypatch):
+    errors, warnings = _run(
+        monkeypatch,
+        APP_ENV="prod",
+        PAYMENT_HTTP_ENABLED="tru",
+        HEALTHCHECK_ENABLED="1",
+        PRIVACY_EXPORT_HTTP_ENABLED="1",
+        PRIVACY_EXPORT_PUBLIC_BASE_URL="https://app.example",
+    )
+
+    assert any("PAYMENT_HTTP_ENABLED" in error for error in errors)
+
+
 def test_prod_payment_validation_stays_fail_closed_when_enabled(monkeypatch):
     mod = importlib.import_module("scripts.prod_readiness_check")
     monkeypatch.setenv("PAYMENT_HTTP_ENABLED", "1")

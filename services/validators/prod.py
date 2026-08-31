@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from core.payment_ingress import resolve_payment_http_enabled
+from core.payment_ingress import PaymentIngressConfigurationError, resolve_payment_http_enabled
 from services.payments.receipt_contract import validate_receipt_contract
 from services.validators.base import ValidationError
 
@@ -174,7 +174,11 @@ def validate_prod_monetization_contract(*, strict: bool = True) -> None:
         errors.append("TOKEN_ECONOMY_ENABLED must not be disabled in prod")
     if token_mode not in _HARD_TOKEN_VALUES:
         errors.append("TOKEN_ENFORCEMENT_MODE must be hard in prod")
-    payment_enabled = resolve_payment_http_enabled(os.environ)
+    try:
+        payment_enabled = resolve_payment_http_enabled(os.environ)
+    except PaymentIngressConfigurationError as exc:
+        errors.append(str(exc))
+        payment_enabled = False
     if payment_enabled:
         if not _first_env("YOOKASSA_RECEIPT_EMAIL", "PAYMENT_RECEIPT_EMAIL", "ADMIN_EMAIL"):
             errors.append("YOOKASSA_RECEIPT_EMAIL or PAYMENT_RECEIPT_EMAIL or ADMIN_EMAIL is required in prod")

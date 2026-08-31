@@ -103,6 +103,14 @@ def test_runtime_contract_omitted_payment_flag_stays_fail_closed(monkeypatch):
     assert any("YOOKASSA_SECRET_KEY" in error for error in errors)
     assert any("PAYMENT_CHECKOUT_SIGNING_KEY" in error for error in errors)
 
+def test_runtime_contract_rejects_malformed_payment_flag(monkeypatch):
+    env = _owner_vk_prod_env()
+    env["PAYMENT_HTTP_ENABLED"] = "tru"
+    errors, warnings = _run(monkeypatch, **env)
+
+    assert any("PAYMENT_HTTP_ENABLED" in error for error in errors)
+
+
 def test_runtime_contract_accepts_dev_defaults(monkeypatch):
     errors, warnings = _run(monkeypatch, APP_ENV="dev")
 

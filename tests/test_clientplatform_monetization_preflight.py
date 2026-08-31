@@ -71,6 +71,16 @@ class ClientPlatformMonetizationPreflightTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn('"ok": true', proc.stdout)
 
+    def test_malformed_payment_flag_fails_closed(self) -> None:
+        env = {
+            "APP_ENV": "prod",
+            "PAYMENT_HTTP_ENABLED": "tru",
+            "TOKEN_ECONOMY_ENABLED": "1",
+            "TOKEN_ENFORCEMENT_MODE": "hard",
+        }
+        errors = validate_environment(env)
+        self.assertTrue(any("PAYMENT_HTTP_ENABLED" in error for error in errors))
+
     def test_disabled_token_economy_fails_closed(self) -> None:
         env = {
             "TOKEN_ECONOMY_ENABLED": "0",

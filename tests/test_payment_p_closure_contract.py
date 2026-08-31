@@ -65,6 +65,14 @@ def test_prod_monetization_guard_skips_yookassa_receipt_when_payment_disabled(mo
     validate_prod_monetization_contract(strict=True)
 
 
+def test_prod_monetization_guard_rejects_malformed_payment_flag(monkeypatch):
+    _set_valid_prod_monetization_env(monkeypatch)
+    monkeypatch.setenv("PAYMENT_HTTP_ENABLED", "tru")
+
+    with pytest.raises(ValidationError, match="PAYMENT_HTTP_ENABLED"):
+        validate_prod_monetization_contract(strict=True)
+
+
 def test_prod_monetization_guard_rejects_direct_security_disable_flags(monkeypatch):
     _set_valid_prod_monetization_env(monkeypatch)
     monkeypatch.setenv("YOOKASSA_PROVIDER_VERIFICATION_REQUIRED", "0")

@@ -2,7 +2,7 @@ from dataclasses import dataclass
 import ipaddress
 import os
 
-from core.payment_ingress import resolve_payment_http_enabled
+from core.payment_ingress import PaymentIngressConfigurationError, resolve_payment_http_enabled
 
 # ВАЖНО (prod-safe): НЕ подхватываем .env автоматически в продакшене.
 # Иначе локальный .env рядом с кодом может неожиданно переопределить системные переменные окружения.
@@ -333,7 +333,12 @@ def _fail_fast_prod_config() -> None:
     max_enabled = max_flag if max_flag is not None else bool(legacy_messenger and settings.MAX_BOT_TOKEN)
     vk_enabled = vk_flag if vk_flag is not None else bool(legacy_messenger and settings.VK_GROUP_TOKEN)
 
-    if _external_checkout_enabled():
+    try:
+        external_checkout_enabled = _external_checkout_enabled()
+    except PaymentIngressConfigurationError as exc:
+        raise SystemExit(str(exc)) from exc
+
+    if external_checkout_enabled:
         if not _first_env('YOOKASSA_SHOP_ID'):
             missing.append('YOOKASSA_SHOP_ID')
         if not _first_env('YOOKASSA_SECRET_KEY'):
