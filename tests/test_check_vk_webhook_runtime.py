@@ -33,7 +33,7 @@ def test_vk_runtime_preflight_uses_messenger_ingress_port(monkeypatch, capsys) -
     assert "127.0.0.1:9999" not in output
 
 
-def test_vk_runtime_preflight_warns_when_optional_secret_is_empty(monkeypatch, capsys) -> None:
+def test_vk_runtime_preflight_fails_when_production_secret_is_empty(monkeypatch, capsys) -> None:
     _configure_vk_preflight(monkeypatch)
     monkeypatch.delenv("VK_SECRET", raising=False)
     monkeypatch.setattr(check_vk_webhook_runtime, "_port_open", lambda *_args, **_kwargs: True)
@@ -41,7 +41,7 @@ def test_vk_runtime_preflight_warns_when_optional_secret_is_empty(monkeypatch, c
     code = check_vk_webhook_runtime.main()
     output = capsys.readouterr().out
 
-    assert code == 0
-    assert "WARN: VK_SECRET=<empty>" in output
-    assert "WARN: VK_SECRET is empty; secret verification cannot be enforced" in output
-    assert "VK WEBHOOK PREFLIGHT: OK" in output
+    assert code == 2
+    assert "FAIL: VK_SECRET=<empty>" in output
+    assert "ERROR: VK_SECRET is required" in output
+    assert "VK WEBHOOK PREFLIGHT: FAILED" in output
