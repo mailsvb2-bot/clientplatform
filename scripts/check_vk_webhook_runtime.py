@@ -45,7 +45,6 @@ def _port_open(host: str, port: int, timeout: float = 1.5) -> bool:
 
 def main() -> int:
     failures: list[str] = []
-    warnings: list[str] = []
 
     print("VK webhook runtime preflight")
     print("=" * 32)
@@ -56,12 +55,15 @@ def main() -> int:
     else:
         print("OK: MESSENGER_WEBHOOK_ENABLED=1")
 
-    for name in ["MESSENGER_PUBLIC_BASE_URL", "VK_GROUP_ID", "VK_GROUP_TOKEN", "VK_CONFIRMATION_TOKEN"]:
+    for name in [
+        "MESSENGER_PUBLIC_BASE_URL",
+        "VK_GROUP_ID",
+        "VK_GROUP_TOKEN",
+        "VK_CONFIRMATION_TOKEN",
+        "VK_SECRET",
+    ]:
         if not _print_presence(name):
             failures.append(f"{name} is required")
-
-    if not _print_presence("VK_SECRET", required=False):
-        warnings.append("VK_SECRET is empty; secret verification cannot be enforced")
 
     public_base = _env("MESSENGER_PUBLIC_BASE_URL").rstrip("/")
     if public_base:
@@ -91,9 +93,6 @@ def main() -> int:
     print(f"  app ingress port: {port}")
     print("\nVK dashboard callback URL must be:")
     print(f"  {public_base}/webhooks/vk" if public_base else "  <MESSENGER_PUBLIC_BASE_URL>/webhooks/vk")
-
-    for warning in warnings:
-        print(f"WARN: {warning}")
 
     if failures:
         print("\nVK WEBHOOK PREFLIGHT: FAILED")
