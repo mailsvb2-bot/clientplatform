@@ -126,6 +126,17 @@ def _servers(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return [item for item in items if isinstance(item, dict)] if isinstance(items, list) else []
 
 
+def _permission_names(payload: dict[str, Any]) -> set[str]:
+    permissions = _response_object(payload).get("permissions") or []
+    if not isinstance(permissions, list):
+        return set()
+    return {
+        str(item.get("name") or "").strip().lower()
+        for item in permissions
+        if isinstance(item, dict) and str(item.get("name") or "").strip()
+    }
+
+
 def _enabled(value: Any) -> bool:
     if isinstance(value, bool):
         return value
@@ -174,6 +185,24 @@ def run() -> tuple[str, int]:
     )
     if code != 200 or group_id not in _group_ids(group_payload):
         return _error("group", group_id=str(group_id), code=code, payload=group_payload)
+
+    permissions_payload, code = _api_call(
+        token,
+        api_version,
+        "groups.getTokenPermissions",
+        {},
+    )
+    if code != 200:
+        return _error("permissions", group_id=str(group_id), code=code, payload=permissions_payload)
+    permissions = _permission_names(permissions_payload)
+    missing_permissions = [name for name in ("messages", "manage") if name not in permissions]
+    if missing_permissions:
+        missing = "_".join(name.upper() for name in missing_permissions)
+        granted = ",".join(sorted(permissions)) or "none"
+        return (
+            f"status=error stage=permissions group={group_id} code=200 "
+            f"error=TOKEN_PERMISSION_MISSING_{missing} granted={granted}"
+        ), 5
 
     confirmation_payload, code = _api_call(
         token,
