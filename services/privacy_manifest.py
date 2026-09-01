@@ -207,6 +207,13 @@ _POLICIES = (
         "owner-selected control workspace routing state",
         required=True,
     ),
+    _policy(
+        "clientplatform_owner_onboarding_sessions",
+        ("user_id",),
+        "erase",
+        "short-lived owner onboarding continuation state",
+        required=True,
+    ),
     *(_policy(table, columns, "erase", reason) for table, columns, reason in _RETIRED_ERASE),
     *(_policy(table, columns, "retain", reason) for table, columns, reason in _RETIRED_RETAIN),
     _policy(

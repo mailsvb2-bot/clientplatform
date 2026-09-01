@@ -102,10 +102,10 @@ def _entry_start_text(text: str) -> str:
 
 
 def _official_entry_text(text: str, *, event_type: str) -> str:
-    raw = _entry_start_text(text)
-    if parse_clientplatform_entry_command(raw, event_type=event_type) is not None:
-        return raw
-    return "start"
+    del event_type
+    # Preserve free-form owner text. The canonical entry handler decides whether
+    # it is an active onboarding continuation or a generic request for the menu.
+    return _entry_start_text(text)
 
 
 def _vk_dedupe_key(payload: dict[str, Any]) -> str:
@@ -175,8 +175,6 @@ def _process_and_persist(
             event_key=event_key,
         )
         command = parse_clientplatform_entry_command(entry_text, event_type=event_type)
-        if command is None:
-            raise RuntimeError("ClientPlatform official entry command resolution failed")
         canonical_user_id, replies = handle_clientplatform_entry(
             extracted["user_id"],
             platform=platform,
@@ -187,8 +185,10 @@ def _process_and_persist(
             display_name=extracted.get("display_name"),
             first_name=extracted.get("first_name"),
             event_key=event_key,
+            fallback_unknown_to_start=True,
         )
-        action = f"clientplatform_{command.action}"
+        command_action = command.action if command is not None else "owner_text"
+        action = f"clientplatform_{command_action}"
         log.info(
             "%s %s processed: canonical_user_id=%s action=%s replies=%s",
             platform.upper(),
@@ -200,7 +200,7 @@ def _process_and_persist(
         log_event(
             int(canonical_user_id),
             f"{platform}_clientplatform_entry",
-            {"action": command.action, "text_len": len(str(extracted.get("text") or ""))},
+            {"action": command_action, "text_len": len(str(extracted.get("text") or ""))},
         )
         persist_reply_bundle(
             platform=platform,

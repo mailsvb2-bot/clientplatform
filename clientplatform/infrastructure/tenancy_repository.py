@@ -10,6 +10,8 @@ from clientplatform.domain.tenancy import (
     BusinessMember,
     BusinessStatus,
     MembershipStatus,
+    OwnerOnboardingSession,
+    OwnerOnboardingStep,
     PlatformRole,
     TenantAccessDenied,
     TenantContext,
@@ -153,6 +155,110 @@ class TenancyRepository:
             (principal_id, normalized_platform, current.business_id, timestamp),
         )
         return current.business_id
+
+    def set_owner_onboarding_session(
+        self,
+        *,
+        user_id: int,
+        platform: str,
+        step: OwnerOnboardingStep | str,
+        business_id: str | None = None,
+        now: str | None = None,
+    ) -> OwnerOnboardingSession:
+        principal_id = normalize_user_id(user_id)
+        normalized_platform = str(platform or "").strip().casefold()
+        if normalized_platform not in {"telegram", "vk", "max"}:
+            raise ValueError("owner onboarding platform is invalid")
+        try:
+            normalized_step = (
+                step if isinstance(step, OwnerOnboardingStep) else OwnerOnboardingStep(str(step).strip())
+            )
+        except ValueError as exc:
+            raise ValueError("owner onboarding step is invalid") from exc
+
+        normalized_business_id: str | None = None
+        if normalized_step == OwnerOnboardingStep.ACTIVITY_DESCRIPTION:
+            if business_id is None:
+                raise ValueError("activity onboarding requires business_id")
+            actor = self.resolve_context(user_id=principal_id, business_id=business_id)
+            actor.assert_can_manage_business()
+            normalized_business_id = actor.business_id
+        elif business_id is not None:
+            raise ValueError("business-name onboarding cannot be business-scoped")
+
+        timestamp = str(now or _utc_now())
+        self._conn.execute(
+            """
+            INSERT INTO clientplatform_owner_onboarding_sessions(
+                user_id, platform, step, business_id, updated_at
+            ) VALUES(?, ?, ?, ?, ?)
+            ON CONFLICT(user_id, platform) DO UPDATE SET
+                step=excluded.step,
+                business_id=excluded.business_id,
+                updated_at=excluded.updated_at
+            """,
+            (
+                principal_id,
+                normalized_platform,
+                normalized_step.value,
+                normalized_business_id,
+                timestamp,
+            ),
+        )
+        return OwnerOnboardingSession(
+            user_id=principal_id,
+            platform=normalized_platform,
+            step=normalized_step,
+            business_id=normalized_business_id,
+            updated_at=timestamp,
+        )
+
+    def get_owner_onboarding_session(
+        self, *, user_id: int, platform: str
+    ) -> OwnerOnboardingSession | None:
+        principal_id = normalize_user_id(user_id)
+        normalized_platform = str(platform or "").strip().casefold()
+        if normalized_platform not in {"telegram", "vk", "max"}:
+            raise ValueError("owner onboarding platform is invalid")
+        row = self._conn.execute(
+            """
+            SELECT user_id, platform, step, business_id, updated_at
+            FROM clientplatform_owner_onboarding_sessions
+            WHERE user_id=? AND platform=?
+            LIMIT 1
+            """,
+            (principal_id, normalized_platform),
+        ).fetchone()
+        if row is None:
+            return None
+        business_id = _value(row, "business_id", 3)
+        step = OwnerOnboardingStep(str(_value(row, "step", 2)))
+        if business_id is not None:
+            try:
+                actor = self.resolve_context(
+                    user_id=principal_id, business_id=str(business_id)
+                )
+                actor.assert_can_manage_business()
+            except (TenantAccessDenied, TenantPermissionDenied):
+                return None
+            business_id = actor.business_id
+        return OwnerOnboardingSession(
+            user_id=principal_id,
+            platform=normalized_platform,
+            step=step,
+            business_id=None if business_id is None else str(business_id),
+            updated_at=str(_value(row, "updated_at", 4)),
+        )
+
+    def clear_owner_onboarding_session(self, *, user_id: int, platform: str) -> None:
+        principal_id = normalize_user_id(user_id)
+        normalized_platform = str(platform or "").strip().casefold()
+        if normalized_platform not in {"telegram", "vk", "max"}:
+            raise ValueError("owner onboarding platform is invalid")
+        self._conn.execute(
+            "DELETE FROM clientplatform_owner_onboarding_sessions WHERE user_id=? AND platform=?",
+            (principal_id, normalized_platform),
+        )
 
     def get_owner_control_workspace(self, *, user_id: int, platform: str) -> str | None:
         principal_id = normalize_user_id(user_id)

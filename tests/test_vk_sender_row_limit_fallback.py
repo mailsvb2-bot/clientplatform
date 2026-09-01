@@ -6,6 +6,7 @@ from runtime.messenger_vk_sender import _callback_keyboard_json
 
 VK_MAX_BUTTONS_PER_ROW = 5
 VK_MAX_BUTTON_ROWS = 6
+VK_MOBILE_FALLBACK_BUTTONS_PER_ROW = 2
 
 
 def _button(index: int) -> dict:
@@ -29,7 +30,7 @@ def test_vk_sender_packs_raw_text_keyboards_into_vk_row_limits() -> None:
 
     assert keyboard["inline"] is True
     assert len(keyboard["buttons"]) <= VK_MAX_BUTTON_ROWS
-    assert all(len(row) <= VK_MAX_BUTTONS_PER_ROW for row in keyboard["buttons"])
+    assert all(len(row) <= VK_MOBILE_FALLBACK_BUTTONS_PER_ROW for row in keyboard["buttons"])
     commands = [
         json.loads(button["action"]["payload"])["command"]
         for row in keyboard["buttons"]

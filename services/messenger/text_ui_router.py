@@ -1,17 +1,7 @@
 from __future__ import annotations
 
-from services.messenger.clientplatform_entry import (
-    handle_clientplatform_entry,
-    parse_clientplatform_entry_command,
-)
+from services.messenger.clientplatform_entry import handle_clientplatform_entry
 from services.messenger.text_ui import MessengerReply
-
-
-def _official_entry_text(text: str | None, *, event_type: str | None = None) -> str:
-    raw = str(text or "").strip()
-    if parse_clientplatform_entry_command(raw, event_type=event_type) is not None:
-        return raw
-    return "start"
 
 
 def handle_incoming_text(
@@ -37,12 +27,13 @@ def handle_incoming_text(
         int(user_id),
         platform=platform,
         external_user_id=external_user_id,
-        text=_official_entry_text(text, event_type=event_type),
+        text=text,
         event_type=event_type,
         username=username,
         display_name=display_name,
         first_name=first_name,
         event_key=event_key,
+        fallback_unknown_to_start=True,
     )
 
 

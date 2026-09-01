@@ -30,6 +30,7 @@ from services.messenger.provider_transport import (
 
 VK_MAX_BUTTONS_PER_ROW = 5
 VK_MAX_BUTTON_ROWS = 6
+VK_MOBILE_FALLBACK_BUTTONS_PER_ROW = 2
 VK_MAX_INLINE_CALLBACK_BUTTONS = 10
 
 
@@ -46,7 +47,10 @@ def _pack_keyboard_rows(rows: list[list[dict[str, Any]]]) -> list[list[dict[str,
     if len(normalized) <= VK_MAX_BUTTON_ROWS:
         return normalized
     flat = [button for row in normalized for button in row]
-    repacked = _chunks(flat, VK_MAX_BUTTONS_PER_ROW)
+    # Provider limits must never turn a readable vertical menu into a 4–5
+    # column wall on mobile. When we have to repack, prefer at most two
+    # buttons per row; canonical menus are also kept under six rows.
+    repacked = _chunks(flat, VK_MOBILE_FALLBACK_BUTTONS_PER_ROW)
     return repacked if len(repacked) <= VK_MAX_BUTTON_ROWS else normalized
 
 
