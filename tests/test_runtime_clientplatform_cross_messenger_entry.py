@@ -6,8 +6,9 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from clientplatform.application.control_callbacks import uuid_token
+from clientplatform.application.owner_input import get_owner_input_session
 from clientplatform.application.owner_onboarding import get_owner_onboarding_session
-from clientplatform.application.activity import get_business_profile
+from clientplatform.application.activity import get_business_profile, save_business_profile
 from clientplatform.application.tenancy import (
     create_business,
     grant_business_member,
@@ -517,6 +518,98 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
                 )
                 profile = get_business_profile(actor=actor)
                 self.assertEqual(profile.activity_description, description)
+
+    def test_plain_owner_form_answer_works_in_telegram_vk_and_max(self) -> None:
+        init_db()
+        for index, platform in enumerate(("telegram", "vk", "max"), start=1):
+            user_id = 8850 + index
+            entry = SimpleNamespace(user_id=user_id)
+            access = create_business(owner_user_id=user_id, name=f"UX {platform}")
+            actor = resolve_real_tenant_context(
+                user_id=user_id, business_id=access.business.id
+            )
+            save_business_profile(
+                actor=actor,
+                activity_description="Старое описание",
+                timezone_name="Europe/Moscow",
+            )
+            with self.subTest(platform=platform), patch(
+                "services.messenger.clientplatform_entry.register_user_entry",
+                return_value=entry,
+            ):
+                _, prompt = handle_incoming_text(
+                    user_id,
+                    platform=platform,
+                    external_user_id=f"{platform}-{user_id}",
+                    text="cpm:activity-edit-help",
+                    event_key=f"{platform}-activity-start",
+                )
+                self.assertIn("без команды", prompt[0].text)
+                self.assertIsNotNone(
+                    get_owner_input_session(user_id=user_id, platform=platform)
+                )
+
+                # Even a word that is also a navigation alias is data while the
+                # owner form is waiting for an answer.
+                _, result = handle_incoming_text(
+                    user_id,
+                    platform=platform,
+                    external_user_id=f"{platform}-{user_id}",
+                    text="Клиенты и обслуживание",
+                    event_key=f"{platform}-activity-answer",
+                )
+                self.assertIn("обновлено", result[0].text.casefold())
+                self.assertIsNone(
+                    get_owner_input_session(user_id=user_id, platform=platform)
+                )
+                updated = get_business_profile(actor=actor)
+                self.assertEqual(updated.activity_description, "Клиенты и обслуживание")
+
+    def test_cancel_stops_pending_plain_owner_form_without_changing_data(self) -> None:
+        init_db()
+        user_id = 8899
+        platform = "vk"
+        entry = SimpleNamespace(user_id=user_id)
+        access = create_business(owner_user_id=user_id, name="UX отмена")
+        actor = resolve_real_tenant_context(
+            user_id=user_id, business_id=access.business.id
+        )
+        save_business_profile(
+            actor=actor,
+            activity_description="Исходное описание",
+            timezone_name="Europe/Moscow",
+        )
+        with patch(
+            "services.messenger.clientplatform_entry.register_user_entry",
+            return_value=entry,
+        ):
+            handle_incoming_text(
+                user_id,
+                platform=platform,
+                external_user_id=f"{platform}-{user_id}",
+                text="cpm:activity-edit-help",
+                event_key="owner-form-cancel-start",
+            )
+            self.assertIsNotNone(
+                get_owner_input_session(user_id=user_id, platform=platform)
+            )
+
+            _, replies = handle_incoming_text(
+                user_id,
+                platform=platform,
+                external_user_id=f"{platform}-{user_id}",
+                text="Отмена",
+                event_key="owner-form-cancel",
+            )
+
+        self.assertIn("данные не изменены", replies[0].text.casefold())
+        self.assertIsNone(
+            get_owner_input_session(user_id=user_id, platform=platform)
+        )
+        self.assertEqual(
+            get_business_profile(actor=actor).activity_description,
+            "Исходное описание",
+        )
 
     def test_command_like_business_names_are_saved_as_plain_onboarding_data(self) -> None:
         init_db()

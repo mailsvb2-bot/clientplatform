@@ -9,6 +9,7 @@ from clientplatform.application.native_member_interactions import (
     recognizes_native_member_interaction,
     render_native_member_interaction,
 )
+from clientplatform.application.owner_input import clear_owner_input, get_owner_input_session
 from clientplatform.application.owner_onboarding import (
     begin_business_name_onboarding,
     cancel_owner_onboarding,
@@ -426,6 +427,7 @@ def _owner_control_reply(
         interaction_key=interaction_key,
         current_platform=_connection_platform(platform),
         setup_issuer=_issue_setup_command,
+        resolve_pending_input=True,
     )
     return _interaction_reply(interaction, business_id=actor.business_id)
 
@@ -479,16 +481,22 @@ def handle_clientplatform_entry(
     canonical_user_id = int(entry.user_id)
     command = parsed_command
     onboarding: OwnerOnboardingSession | None = None
+    owner_input = None
     if fallback_unknown_to_start:
         onboarding = get_owner_onboarding_session(
             user_id=canonical_user_id, platform=platform
         )
+        if onboarding is None and raw_text:
+            owner_input = get_owner_input_session(
+                user_id=canonical_user_id, platform=platform
+            )
     if command is None:
-        command = (
-            ClientPlatformEntryCommand("onboarding_input", raw_text)
-            if onboarding is not None and raw_text
-            else ClientPlatformEntryCommand("start")
-        )
+        if onboarding is not None and raw_text:
+            command = ClientPlatformEntryCommand("onboarding_input", raw_text)
+        elif owner_input is not None and raw_text:
+            command = ClientPlatformEntryCommand("owner_control", raw_text)
+        else:
+            command = ClientPlatformEntryCommand("start")
 
     if (
         onboarding is not None
@@ -496,17 +504,29 @@ def handle_clientplatform_entry(
         and command.action != "cancel_onboarding"
         and not raw_text.startswith(("/", "cpm:", "cpw:"))
     ):
-        # During a conversational step, ordinary text is data even when it
+        # During business onboarding, ordinary text is data even when it
         # matches a navigation alias such as Start, Menu or Clients.
         command = ClientPlatformEntryCommand("onboarding_input", raw_text)
+    elif (
+        owner_input is not None
+        and raw_text
+        and command.action != "cancel_onboarding"
+        and not raw_text.startswith(("/", "cpm:", "cpw:"))
+    ):
+        # The same rule applies to later owner forms: a pending answer is data,
+        # not a navigation command. The native renderer validates it in context.
+        command = ClientPlatformEntryCommand("owner_control", raw_text)
 
     if command.action == "start" and onboarding is not None:
         return canonical_user_id, [_owner_onboarding_reply(onboarding)]
     if command.action == "cancel_onboarding":
-        if onboarding is None:
-            return canonical_user_id, [MessengerReply(text="Незавершённой настройки нет.")]
-        cancel_owner_onboarding(user_id=canonical_user_id, platform=platform)
-        return canonical_user_id, [MessengerReply(text="Настройка бизнеса отменена.")]
+        if onboarding is not None:
+            cancel_owner_onboarding(user_id=canonical_user_id, platform=platform)
+            return canonical_user_id, [MessengerReply(text="Настройка бизнеса отменена.")]
+        if owner_input is not None:
+            clear_owner_input(user_id=canonical_user_id, platform=platform)
+            return canonical_user_id, [MessengerReply(text="Ввод отменён. Данные не изменены.")]
+        return canonical_user_id, [MessengerReply(text="Незавершённого ввода нет.")]
     if command.action == "privacy":
         return canonical_user_id, [
             MessengerReply(

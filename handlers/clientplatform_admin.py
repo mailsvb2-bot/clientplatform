@@ -60,6 +60,7 @@ from clientplatform.domain.tenancy import (
     TenancyError,
 )
 from clientplatform.infrastructure import TenancyRepository
+from clientplatform.presentation import owner_navigation as nav
 from clientplatform.runtime.messenger_switch_links import StaffMessengerSwitchLinkService
 from config.settings import settings
 from services.db import get_db_ro
@@ -247,56 +248,93 @@ def _back_keyboard(ctx: AdminContext, *extra: tuple[str, str]) -> InlineKeyboard
 
 _ADMIN_MENU_GROUPS: dict[str, tuple[str, tuple[tuple[str, str], ...]]] = {
     "menu-work": (
-        "📊 Работа и клиенты",
+        nav.WORK.label,
         (
-            ("📊 Сегодня", "today"),
-            ("📈 Подробный обзор", "today-full"),
-            ("👥 Клиенты сегодня", "customers"),
-            ("🔎 Все клиенты", "customer-list"),
-            ("⚠️ Требуют внимания", "attention"),
-            ("🧠 Поведение клиентов", "behavior"),
+            (nav.TODAY.label, "today"),
+            (nav.TODAY_FULL.label, "today-full"),
+            ("👥 Клиенты за сегодня", "customers"),
+            (nav.CUSTOMERS.label, "customer-list"),
+            (nav.ATTENTION.label, "attention"),
+            (nav.BEHAVIOR.label, "behavior"),
         ),
     ),
     "menu-content": (
-        "✍️ Контент и каналы",
+        "📣 Публикации и каналы",
         (
-            ("💬 Мессенджеры", "messengers"),
-            ("📣 Публикации", "publications"),
-            ("✍️ Подготовить тексты", "copy"),
-            ("🧪 Проверка предложений", "offers"),
-            ("🤖 Автопилот", "autopilot"),
+            (nav.MESSENGERS.label, "messengers"),
+            (nav.PUBLICATIONS.label, "publications"),
+            (nav.COPY.label, "copy"),
+            (nav.OFFERS.label, "offers"),
+            (nav.AUTOMATION.label, "autopilot"),
         ),
     ),
     "menu-growth": (
-        "📈 Маркетинг и деньги",
+        nav.GROWTH.label,
         (
-            ("📉 Путь до заявки", "funnel"),
-            ("💰 Деньги и клиенты", "money"),
-            ("💰 Оплаты", "payments"),
-            ("🧲 Группы клиентов", "segments"),
-            ("💡 Подсказка по ценам", "prices"),
-            ("🎁 Приглашения", "invites"),
-            ("🧲 Воронка 2.0", "funnel2"),
-            ("🧩 Удержание", "retention"),
+            (nav.JOURNEY.label, "funnel2"),
+            (nav.PROGRAM_PROGRESS.label, "funnel"),
+            (nav.MONEY.label, "money"),
+            (nav.PAYMENTS.label, "payments"),
+            (nav.SEGMENTS.label, "segments"),
+            (nav.PRICES.label, "prices"),
+            (nav.INVITES.label, "invites"),
+            (nav.RETENTION.label, "retention"),
         ),
     ),
     "menu-team": (
-        "👥 Команда и тариф",
+        "👤 Сотрудники и тариф",
         (
-            ("💳 Тариф ClientPlatform", "tariff"),
-            ("👥 Добавить сотрудника", "add-member"),
-            ("👥 Роли команды", "members"),
-            ("🔐 Доступы сотрудников", "permissions"),
+            (nav.TARIFF.label, "tariff"),
+            (nav.ADD_MEMBER.label, "add-member"),
+            (nav.MEMBERS.label, "members"),
+            (nav.PERMISSIONS.label, "permissions"),
         ),
     ),
     "menu-system": (
-        "⚙️ Системное",
+        "🛠 Технические проверки",
         (
-            ("🚦 Release gate", "release"),
-            ("🧾 Последние действия", "recent"),
-            ("🧪 Системные проверки", "system"),
+            (nav.READINESS.label, "release"),
+            (nav.RECENT.label, "recent"),
+            (nav.SYSTEM.label, "system"),
         ),
     ),
+}
+
+_ADMIN_GROUP_NEEDS = {
+    "menu-work": "работать с клиентами, записями и текущими задачами",
+    "menu-content": "подключить каналы, сделать публикацию или подготовить текст",
+    "menu-growth": "привлекать клиентов, смотреть продажи, оплаты и возврат",
+    "menu-team": "добавить сотрудников, настроить роли или посмотреть тариф",
+    "menu-system": "проверить готовность или техническое состояние",
+}
+
+_ADMIN_ACTION_NEEDS = {
+    "today": nav.TODAY.need,
+    "today-full": nav.TODAY_FULL.need,
+    "customers": "увидеть клиентов, которые появились сегодня",
+    "customer-list": nav.CUSTOMERS.need,
+    "attention": nav.ATTENTION.need,
+    "behavior": nav.BEHAVIOR.need,
+    "messengers": nav.MESSENGERS.need,
+    "publications": nav.PUBLICATIONS.need,
+    "copy": nav.COPY.need,
+    "offers": nav.OFFERS.need,
+    "autopilot": nav.AUTOMATION.need,
+    "funnel2": nav.JOURNEY.need,
+    "funnel": nav.PROGRAM_PROGRESS.need,
+    "money": nav.MONEY.need,
+    "payments": nav.PAYMENTS.need,
+    "segments": nav.SEGMENTS.need,
+    "prices": nav.PRICES.need,
+    "invites": nav.INVITES.need,
+    "retention": nav.RETENTION.need,
+    "tariff": nav.TARIFF.need,
+    "add-member": nav.ADD_MEMBER.need,
+    "members": nav.MEMBERS.need,
+    "permissions": nav.PERMISSIONS.need,
+    "release": nav.READINESS.need,
+    "recent": nav.RECENT.need,
+    "system": nav.SYSTEM.need,
 }
 
 
@@ -401,11 +439,21 @@ async def _render_menu(
 ) -> None:
     if reset:
         await state.update_data(cp_admin_section="menu", cp_admin_history=[])
+    visible_groups = [
+        (group_action, title)
+        for group_action, (title, _items) in _ADMIN_MENU_GROUPS.items()
+        if _admin_group_items(ctx, group_action)
+    ]
+    guidance = "\n".join(
+        f"• {_ADMIN_GROUP_NEEDS[group_action]} → «{title}»"
+        for group_action, title in visible_groups
+    )
     text = (
         "⚙️ Управление бизнесом\n\n"
         f"{ctx.business_name} · {_role_label(ctx.role)}\n\n"
-        "Выберите, чем хотите заняться. Редкие и технические функции спрятаны "
-        "внутри соответствующих разделов."
+        "Если Вам нужно:\n"
+        f"{guidance}\n\n"
+        "Обычные действия находятся выше. Технические проверки вынесены отдельно."
     )
     if isinstance(target, CallbackQuery):
         await _safe_edit(target, text, _menu_keyboard(ctx))
@@ -429,7 +477,11 @@ async def _render_admin_group(
         await _set_current_section(state, action=group_action, push=True)
     rows = [[(label, _callback(ctx, action))] for label, action in visible]
     rows.append([("⬅️ Назад", _callback(ctx, "back"))])
-    text = f"{title}\n\nВыберите нужное действие."
+    guidance = "\n".join(
+        f"• {_ADMIN_ACTION_NEEDS.get(action, 'открыть этот раздел')} → «{label}»"
+        for label, action in visible
+    )
+    text = f"{title}\n\nЕсли Вам нужно:\n{guidance}"
     markup = _keyboard(rows)
     if isinstance(target, CallbackQuery):
         await _safe_edit(target, text, markup)
@@ -649,16 +701,29 @@ async def _render_customer_card(
         asyncio.to_thread(get_customer, actor=ctx.actor, customer_id=customer_id),
         asyncio.to_thread(get_customer_timeline, actor=ctx.actor, customer_id=customer_id),
     )
+    platform_labels = {
+        "telegram": "Telegram",
+        "vk": "ВКонтакте",
+        "max": "MAX",
+        "email": "Email",
+        "phone": "Телефон",
+        "web": "Сайт",
+        "internal": "ClientPlatform",
+    }
     identity_lines = [
-        f"• {item.platform.value}: @{item.username}"
+        f"• {platform_labels.get(item.platform.value, item.platform.value)}: @{item.username}"
         if item.username
-        else f"• {item.platform.value}: {item.display_name or item.external_subject}"
+        else f"• {platform_labels.get(item.platform.value, item.platform.value)}: {item.display_name or item.external_subject}"
         for item in record.identities
     ]
+    status_label = {"active": "активен", "archived": "в архиве"}.get(
+        record.customer.status.value,
+        record.customer.status.value,
+    )
     text = (
         "🔎 Карточка клиента\n\n"
         f"Имя: {record.customer.display_name or 'не указано'}\n"
-        f"Статус: {record.customer.status.value}\n"
+        f"Статус: {status_label}\n"
         f"Создан: {record.customer.created_at}\n\n"
         "Контакты:\n"
         + ("\n".join(identity_lines) if identity_lines else "• не подключены")
@@ -710,15 +775,21 @@ async def _render_messengers(callback: CallbackQuery, state: FSMContext, ctx: Ad
         CapabilityAvailability.UNAVAILABLE: "⏸ сейчас недоступен",
     }
 
-    lines = ["💬 Мессенджеры", "", "Каналы этого бизнеса:"]
+    lines = [
+        "💬 Мессенджеры бизнеса",
+        "",
+        "Здесь подключаются каналы, через которые клиенты общаются именно с Вашим бизнесом.",
+        "",
+        "Состояние каналов:",
+    ]
     by_platform = {item.platform: item for item in projection.messengers}
     for platform in (ConnectionPlatform.VK, ConnectionPlatform.MAX, ConnectionPlatform.TELEGRAM):
         item = by_platform[platform]
         lines.append(f"• {labels[platform]}: {state_labels[item.availability]}")
     lines.extend([
         "",
-        "Кнопки подключения показываются только для каналов, которые реально включены "
-        "и готовы в этой установке ClientPlatform.",
+        "Если канал можно подключить сейчас, ниже появится отдельная кнопка. "
+        "Если кнопки нет — этот канал пока не готов для подключения.",
     ])
 
     rows: list[list[InlineKeyboardButton]] = []
@@ -795,7 +866,7 @@ async def _render_messenger_connect(
         await _safe_edit(
             callback,
             "Этот канал сейчас нельзя подключить в данной установке ClientPlatform. "
-            "Когда runtime канала будет включён и готов, кнопка подключения появится автоматически.",
+            "Когда техническая поддержка этого канала будет готова, кнопка подключения появится автоматически.",
             _back_keyboard(ctx),
         )
         return
@@ -883,7 +954,7 @@ async def _render_marketing(callback: CallbackQuery, state: FSMContext, ctx: Adm
     )
     sections = {
         "autopilot": (
-            "🤖 Growth Autopilot\n\n"
+            "🤖 Автоматизация\n\n"
             f"Подключено форматов: {len(active_capabilities)}\n"
             f"Активных программ: {summary.programs}\n"
             f"Очередь отправки: {summary.dispatch_pending}\n\n"
@@ -891,14 +962,14 @@ async def _render_marketing(callback: CallbackQuery, state: FSMContext, ctx: Adm
             "Сейчас доступны безопасные выдачи программ и напоминания."
         ),
         "funnel": (
-            "📉 Путь до заявки\n\n"
+            f"{nav.PROGRAM_PROGRESS.label}\n\n"
             f"Клиенты: {summary.customers}\n"
             f"Подключены к программам: {enrolled_customers}\n"
             f"Завершили программу: {completed_customers}\n"
             f"Свободных слотов: {sum(item.slot.status == BookingSlotStatus.OPEN for item in slots)}"
         ),
         "money": (
-            "💰 Деньги и клиенты\n\n"
+            "💰 Выручка и платящие клиенты\n\n"
             f"Активных клиентов: {summary.customers}\n"
             f"Активных программ: {summary.programs}\n"
             "Заказы и выручка: платёжный модуль бизнеса ещё не подключён."
@@ -909,7 +980,7 @@ async def _render_marketing(callback: CallbackQuery, state: FSMContext, ctx: Adm
             "После подключения здесь появятся успешные, ожидающие и проблемные оплаты."
         ),
         "segments": (
-            "🧲 Группы клиентов\n\n"
+            "👥 Группы клиентов\n\n"
             f"Все клиенты: {summary.customers}\n"
             f"Проходят программы: {enrolled_customers}\n"
             f"Завершили: {completed_customers}\n"
@@ -917,18 +988,18 @@ async def _render_marketing(callback: CallbackQuery, state: FSMContext, ctx: Adm
             f"Без программы: {max(0, summary.customers - enrolled_customers)}"
         ),
         "offers": (
-            "🧪 Проверка предложений\n\n"
+            "🧪 Услуги и предложения\n\n"
             f"Форматов работы: {len(active_capabilities)}\n"
             f"Программ: {len(programs)}\n\n"
             "Предложения можно сравнивать после накопления заявок и оплат."
         ),
         "copy": (
-            "✍️ Подготовить тексты\n\n"
+            "✍️ Подготовить текст\n\n"
             f"Описание бизнеса:\n{profile.activity_description}\n\n"
             "Используйте это описание как основу; изменение доступно кнопкой ниже."
         ),
         "prices": (
-            "💡 Подсказка по ценам\n\n"
+            "💵 Цены\n\n"
             "В текущих предложениях ClientPlatform ещё нет структурированного поля цены.\n"
             "Сначала добавьте услуги и программы; затем здесь появится ценовой анализ."
         ),
@@ -973,7 +1044,7 @@ async def _render_admin_report(callback: CallbackQuery, state: FSMContext, ctx: 
     )
     sections = {
         "release": (
-            "🚦 Release gate\n\n"
+            "✅ Проверить готовность\n\n"
             f"Профиль бизнеса: {'✅' if profile.status.value == 'ready' else '❌'}\n"
             f"Форматы работы: {'✅' if active else '❌'}\n"
             f"Ошибки отправки: {'✅' if summary.dispatch_attention == 0 else '❌'}\n"
@@ -986,7 +1057,7 @@ async def _render_admin_report(callback: CallbackQuery, state: FSMContext, ctx: 
             "Создайте персональную ссылку для клиента кнопкой ниже."
         ),
         "funnel2": (
-            "🧲 Воронка 2.0\n\n"
+            "🧭 Путь клиента\n\n"
             f"Клиенты: {summary.customers}\n"
             f"В программах: {enrolled}\n"
             f"Завершили: {complete}\n"
@@ -994,21 +1065,21 @@ async def _render_admin_report(callback: CallbackQuery, state: FSMContext, ctx: 
             f"Отправлено материалов: {summary.dispatch_sent}"
         ),
         "retention": (
-            "🧩 Удержание\n\n"
+            "♻️ Кого стоит вернуть\n\n"
             f"Клиентов всего: {summary.customers}\n"
             f"Незавершённых прохождений: {len(incomplete)}\n"
             f"Без активной программы: {max(0, summary.customers - enrolled)}\n\n"
             "Следующий шаг — вернуть остановившихся клиентов через безопасное напоминание."
         ),
         "recent": (
-            "🧾 Последние действия\n\n"
+            "🧾 История изменений\n\n"
             + ("\n".join(f"• {label} — {stamp}" for stamp, label in recent_items)
                if recent_items else "Действий пока нет.")
         ),
         "system": (
-            "🧪 Системные проверки\n\n"
-            "Tenant-доступ: ✅\n"
-            "PostgreSQL-чтение: ✅\n"
+            "🛠 Проверка системы\n\n"
+            "Доступ к бизнесу: ✅\n"
+            "База данных: ✅\n"
             f"Профиль бизнеса: {'✅' if profile.status.value == 'ready' else '⚠️'}\n"
             f"Очередь отправки: {'✅' if summary.dispatch_attention == 0 else '⚠️'}\n"
             f"Программы: {summary.programs}\n"
@@ -1308,8 +1379,8 @@ async def admin_gate(callback: CallbackQuery, state: FSMContext) -> None:
                 await control._callback_message(callback).answer(
                     "⚙️ Управление бизнесом\n\n"
                     f"{ctx.business_name} · {_role_label(ctx.role)}\n\n"
-                    "Выберите, чем хотите заняться. Редкие и технические функции "
-                    "спрятаны внутри соответствующих разделов.",
+                    "Выберите раздел по тому, что Вам нужно сделать. Если название непонятно, "
+                    "откройте раздел — внутри каждое действие описано простыми словами.",
                     reply_markup=_menu_keyboard(ctx),
                 )
             else:

@@ -44,6 +44,14 @@ class NativeMemberParityNavigationTests(unittest.TestCase):
         )
         self.assertIn("cpm:menu", commands)
 
+    def test_team_screen_explains_account_number_in_plain_language(self) -> None:
+        actor = _actor(PlatformRole.OWNER)
+        team = ui._team_message(actor)
+        self.assertIn(f"Ваш номер аккаунта ClientPlatform: {actor.user_id}", team.text)
+        add = ui._member_add_help(actor)
+        self.assertIn("Где взять номер", add.text)
+        self.assertNotIn("Account ID", add.text)
+
     def test_owner_navigation_menus_are_mobile_readable_and_preserve_all_growth_tools(self) -> None:
         actor = _actor(PlatformRole.OWNER)
         menus = (
@@ -51,6 +59,7 @@ class NativeMemberParityNavigationTests(unittest.TestCase):
             ui._work_more_message(actor),
             ui._growth_message(actor),
             ui._growth_sales_message(actor),
+            ui._growth_analysis_message(actor),
             ui._growth_more_message(actor),
             ui._growth_lifecycle_message(actor),
             ui._manage_message(actor),
@@ -63,7 +72,13 @@ class NativeMemberParityNavigationTests(unittest.TestCase):
 
         growth_commands = {
             command
-            for message in menus[2:6]
+            for message in (
+                ui._growth_message(actor),
+                ui._growth_sales_message(actor),
+                ui._growth_analysis_message(actor),
+                ui._growth_more_message(actor),
+                ui._growth_lifecycle_message(actor),
+            )
             for command in _commands(message)
         }
         self.assertTrue(
@@ -71,9 +86,10 @@ class NativeMemberParityNavigationTests(unittest.TestCase):
                 "cpm:acquire",
                 "cpm:autopilot",
                 "cpm:publications",
-                "cpm:funnel",
                 "cpm:money",
                 "cpm:payments",
+                "cpm:funnel",
+                "cpm:funnel2",
                 "cpm:segments",
                 "cpm:offers",
                 "cpm:copy",
@@ -84,6 +100,34 @@ class NativeMemberParityNavigationTests(unittest.TestCase):
             }.issubset(growth_commands)
         )
 
+    def test_beginner_navigation_explains_every_visible_section_by_intent(self) -> None:
+        actor = _actor(PlatformRole.OWNER)
+        messages = (
+            ui._menu_all_message(actor),
+            ui._work_message(actor),
+            ui._work_more_message(actor),
+            ui._growth_message(actor),
+            ui._growth_sales_message(actor),
+            ui._growth_more_message(actor),
+            ui._growth_lifecycle_message(actor),
+            ui._manage_message(actor),
+            ui._manage_more_message(actor),
+            ui._team_message(actor),
+        )
+        for message in messages:
+            with self.subTest(title=message.text.splitlines()[0]):
+                self.assertIn("Если Вам нужно:", message.text)
+                for row in message.rows:
+                    for button in row:
+                        if button.command in {"cpm:menu", "cpm:work", "cpm:growth", "cpm:manage"}:
+                            continue
+                        self.assertIn(f"«{button.label}»", message.text)
+
+        visible = "\n".join(message.text for message in messages)
+        self.assertNotIn("Воронка 2.0", visible)
+        self.assertNotIn("Release gate", visible)
+        self.assertNotIn("Growth Autopilot", visible)
+
     def test_owner_home_copy_is_plain_language_not_internal_safety_explanation(self) -> None:
         actor = _actor(PlatformRole.OWNER)
         primary = ui._button("🚀 Новые клиенты", "cpm:acquire")
@@ -92,7 +136,8 @@ class NativeMemberParityNavigationTests(unittest.TestCase):
             patch.object(ui, "_native_primary_action", return_value=primary),
         ):
             message = ui._menu_message(actor, linked=False)
-        self.assertIn("Что хотите сделать?", message.text)
+        self.assertIn("Не знаете, что нажать?", message.text)
+        self.assertIn("Что можно сделать", message.text)
         self.assertNotIn("главное безопасное действие", message.text)
         self.assertNotIn("вместо догадки", message.text)
 
@@ -373,7 +418,7 @@ class NativeMemberParityReadTests(unittest.TestCase):
         getter.assert_called_once_with(actor=actor, customer_id=customer_id)
         timeline_getter.assert_called_once_with(actor=actor, customer_id=customer_id)
         self.assertIn("Анна", message.text)
-        self.assertIn("vk: @anna_vk", message.text)
+        self.assertIn("ВКонтакте: @anna_vk", message.text)
         self.assertIn("История клиента", message.text)
         self.assertIn("Получена оплата", message.text)
 

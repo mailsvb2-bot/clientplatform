@@ -91,6 +91,28 @@ def ensure(c: sqlite3.Connection) -> None:
     )
     c.execute(
         """
+        CREATE TABLE IF NOT EXISTS clientplatform_owner_input_sessions(
+            user_id INTEGER NOT NULL,
+            platform TEXT NOT NULL,
+            business_id TEXT NOT NULL,
+            action TEXT NOT NULL,
+            context_json TEXT NOT NULL DEFAULT '{}',
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(user_id, platform),
+            FOREIGN KEY(business_id, user_id)
+                REFERENCES business_members(business_id, user_id) ON DELETE CASCADE,
+            CHECK(platform IN ('telegram', 'vk', 'max'))
+        )
+        """
+    )
+    c.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_owner_input_session_business
+        ON clientplatform_owner_input_sessions(business_id, platform)
+        """
+    )
+    c.execute(
+        """
         CREATE UNIQUE INDEX IF NOT EXISTS uq_business_members_id_business
         ON business_members(id, business_id)
         """

@@ -176,8 +176,12 @@ class NativeEconomicActionParityM4006Tests(unittest.TestCase):
         offering = SimpleNamespace(id=offering_id, title="Консультация")
         with patch.object(native, "_active_booking_offerings", return_value=[offering]):
             message = native._booking_open_message(actor)
-        self.assertIn(offering_id[:8], message.text)
-        self.assertIn("время <код>", message.text)
+        self.assertIn("Для какой услуги", message.text)
+        self.assertIn(
+            f"cpm:booking-open-for:{offering_id}",
+            [button.command for row in message.rows for button in row],
+        )
+        self.assertNotIn("время <код>", message.text)
 
         parsed = native.parse_native_member_interaction(
             f"время {offering_id[:8]} 30.08.2026 15:00 45"

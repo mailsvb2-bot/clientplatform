@@ -50,11 +50,10 @@ class ClientPlatformAdminContractTests(unittest.TestCase):
 
         self.assertIn("⚙️ Управление бизнесом", text)
         self.assertIn('text="🛠 Панель"', text)
-        self.assertIn('"📊 Работа и клиенты"', text)
-        self.assertIn('"✍️ Контент и каналы"', text)
-        self.assertIn('"📈 Маркетинг и деньги"', text)
-        self.assertIn('"👥 Команда и тариф"', text)
-        self.assertIn('"⚙️ Системное"', text)
+        self.assertIn("owner_navigation as nav", text)
+        self.assertIn("_ADMIN_GROUP_NEEDS", text)
+        self.assertIn("_ADMIN_ACTION_NEEDS", text)
+        self.assertIn("Если Вам нужно:", text)
         self.assertIn("_admin_group_items", text)
         self.assertIn("_render_admin_group", text)
         for action in (

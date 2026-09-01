@@ -468,8 +468,8 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
             await labels_for(one_click.open_content_tools, "cpo:content:business-1"),
             [
                 "📣 Публикации",
-                "✍️ Подготовить тексты",
-                "🧪 Проверить предложение",
+                "✍️ Подготовить текст",
+                "🧪 Услуги и предложения",
                 "📣 Реклама",
                 "🤝 Партнёрства",
                 "⬅️ Назад",
@@ -478,10 +478,10 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             await labels_for(one_click.open_settings_tools, "cpo:settings:business-1"),
             [
-                "💬 Мессенджеры",
+                "💬 Подключить мессенджеры",
                 "🧩 Бизнес и возможности",
-                "👥 Команда и тариф",
-                "⚙️ Системное",
+                "👤 Сотрудники и тариф",
+                "🛠 Технические проверки",
                 "⬅️ Назад",
             ],
         )
@@ -501,25 +501,25 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             labels(PlatformRole.OWNER),
             [
-                "💬 Мессенджеры",
+                "💬 Подключить мессенджеры",
                 "🧩 Бизнес и возможности",
-                "👥 Команда и тариф",
-                "⚙️ Системное",
+                "👤 Сотрудники и тариф",
+                "🛠 Технические проверки",
                 "⬅️ Назад",
             ],
         )
         self.assertEqual(
             labels(PlatformRole.ADMINISTRATOR),
             [
-                "💬 Мессенджеры",
+                "💬 Подключить мессенджеры",
                 "🧩 Бизнес и возможности",
-                "⚙️ Системное",
+                "🛠 Технические проверки",
                 "⬅️ Назад",
             ],
         )
         self.assertEqual(
             labels(PlatformRole.MANAGER),
-            ["💬 Мессенджеры", "🧩 Бизнес и возможности", "⬅️ Назад"],
+            ["💬 Подключить мессенджеры", "🧩 Бизнес и возможности", "⬅️ Назад"],
         )
         self.assertEqual(
             labels(PlatformRole.MARKETER),

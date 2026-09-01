@@ -287,6 +287,7 @@ class ClientPlatformCustomerBoundaryTests(unittest.TestCase):
                 "business_members",
                 "clientplatform_owner_control_workspaces",
                 "clientplatform_owner_onboarding_sessions",
+                "clientplatform_owner_input_sessions",
                 "connection_credentials",
                 "connections",
                 "customer_identities",

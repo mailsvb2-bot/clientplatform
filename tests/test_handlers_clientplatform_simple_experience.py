@@ -117,7 +117,7 @@ def test_welcome_and_simple_keyboard_are_result_first() -> None:
 
     business_id = str(uuid4())
     first = simple._simple_keyboard(business_id).inline_keyboard[0][0]
-    assert first.text == "✨ Что настроить первым?"
+    assert first.text == "✨ Помочь выбрать первый шаг"
     assert str(first.callback_data).startswith("cps:firstgoal:")
 
 
@@ -235,9 +235,9 @@ async def test_simple_booking_fallback_returns_to_result_first_menu(
     await simple.open_simple_booking(callback, FakeState())
 
     text, kwargs = callback.message.answers[-1]
-    assert "Что настроить первым?" in text
+    assert "Помочь выбрать первый шаг" in text
     button = kwargs["reply_markup"].inline_keyboard[0][0]
-    assert button.text == "✨ Что настроить первым?"
+    assert button.text == "✨ Помочь выбрать первый шаг"
     assert button.callback_data == f"cps:firstgoal:{token}"
 
 
