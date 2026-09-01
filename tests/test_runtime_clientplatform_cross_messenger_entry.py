@@ -203,6 +203,35 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
         assert command is not None
         self.assertEqual(command.action, "workspace")
 
+    def test_malformed_workspace_page_fails_safe_to_first_selector_page(self) -> None:
+        entry = SimpleNamespace(user_id=505)
+        accesses = [
+            SimpleNamespace(business=SimpleNamespace(id=B1, name="Практика Анны")),
+            SimpleNamespace(business=SimpleNamespace(id=B2, name="Школа Анны")),
+        ]
+        with (
+            patch(
+                "services.messenger.clientplatform_entry.register_user_entry",
+                return_value=entry,
+            ),
+            patch(
+                "services.messenger.clientplatform_entry.list_accessible_businesses",
+                return_value=accesses,
+            ),
+        ):
+            _, replies = handle_clientplatform_entry(
+                505,
+                platform="vk",
+                external_user_id="505",
+                text="cpw:list:not-a-page",
+            )
+        self.assertEqual(len(replies), 1)
+        restored = CustomerInteractionMessage.from_json(replies[0].meta["interaction"])
+        self.assertEqual(
+            [row[0].command for row in restored.rows],
+            [f"cpw:open:{uuid_token(B1)}", f"cpw:open:{uuid_token(B2)}"],
+        )
+
     def test_multi_business_start_returns_server_resolved_selector(self) -> None:
         entry = SimpleNamespace(user_id=505)
         accesses = [
