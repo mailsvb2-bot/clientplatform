@@ -186,7 +186,7 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
                 "📅 Услуги и запись",
                 "📈 Продвижение и контент",
                 "⚙️ Настройки бизнеса",
-                "🏠 В рабочий кабинет",
+                "⬅️ Назад",
             ],
         )
         self.assertNotIn("💬 Подключить мессенджеры", labels)
@@ -354,7 +354,7 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
                 "📅 Услуги и запись",
                 "📈 Продвижение и контент",
                 "⚙️ Настройки бизнеса",
-                "🏠 В рабочий кабинет",
+                "⬅️ Назад",
             ],
         )
         buttons = {

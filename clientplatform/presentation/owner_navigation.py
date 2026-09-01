@@ -62,7 +62,8 @@ MEMBERS = OwnerNavItem("👥 Сотрудники и роли", "посмотр�
 PERMISSIONS = OwnerNavItem("🔐 Кто что может", "понять, какие действия доступны каждой роли")
 
 ALL = OwnerNavItem("🧭 Что можно сделать", "выбрать другой раздел, если рекомендуемый шаг сейчас не нужен")
-HOME = OwnerNavItem("🏠 В рабочий кабинет", "вернуться на главный экран")
+BACK = OwnerNavItem("⬅️ Назад", "вернуться на предыдущий экран")
+HOME = OwnerNavItem("🏠 Главная", "вернуться на главный экран")
 
 # Telegram progressive-disclosure groups use the same human vocabulary.
 MONEY_RESULT = OwnerNavItem("💰 Деньги и результат", "посмотреть выручку, оплаты и общий результат")
