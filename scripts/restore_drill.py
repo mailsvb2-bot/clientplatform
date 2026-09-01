@@ -17,7 +17,7 @@ from services.db.runtime import is_postgres_enabled, redacted_db_target
 def main() -> int:
     if is_postgres_enabled():
         print(
-            'SKIP: METRO_DB_ENGINE=postgres uses pg_dump/psql restore drills, not SQLite restore_drill.py. '
+            'SKIP: CLIENTPLATFORM_DB_ENGINE=postgres uses pg_dump/psql restore drills, not SQLite restore_drill.py. '
             f'Target={redacted_db_target()}'
         )
         return 0
@@ -30,7 +30,7 @@ def main() -> int:
         raise SystemExit('No backup available for restore drill')
 
     restore_db._integrity_check(backup)
-    with tempfile.TemporaryDirectory(prefix='metrotherapy_restore_drill_') as tmp:
+    with tempfile.TemporaryDirectory(prefix='clientplatform_restore_drill_') as tmp:
         target = Path(tmp) / 'restore_check.db'
         restore_db._restore(backup, target)
         restore_db._integrity_check(target)

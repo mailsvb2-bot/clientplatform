@@ -31,6 +31,7 @@ from config.settings import settings
 from services.messenger.entrypoints import register_user_entry
 from services.messenger.platforms import normalize_platform
 from services.messenger.text_ui import MessengerReply
+from services.privacy_controls import erase_user_behavioral_data
 
 _START_EVENT_TYPES = frozenset(
     {
@@ -62,6 +63,10 @@ _ACTIVITY_PREFIXES = (
     "/activity ",
     "деятельность ",
 )
+_PRIVACY_ALIASES = frozenset({"privacy", "/privacy", "конфиденциальность", "мои данные"})
+_EXPORT_ALIASES = frozenset({"mydata", "/mydata"})
+_DELETE_ALIASES = frozenset({"deletemydata", "/deletemydata"})
+
 _OWNER_CONTROL_ALIASES = frozenset(
     {
         "menu",
@@ -123,6 +128,16 @@ def parse_clientplatform_entry_command(
         return None
     if lowered.startswith("cpo_"):
         return ClientPlatformEntryCommand("start", raw)
+    if lowered in _PRIVACY_ALIASES:
+        return ClientPlatformEntryCommand("privacy")
+    if lowered in _EXPORT_ALIASES:
+        return ClientPlatformEntryCommand("privacy_export")
+    if lowered in {f"{item} confirm" for item in _EXPORT_ALIASES}:
+        return ClientPlatformEntryCommand("privacy_export_confirm")
+    if lowered in _DELETE_ALIASES:
+        return ClientPlatformEntryCommand("privacy_delete")
+    if lowered in {f"{item} confirm" for item in _DELETE_ALIASES}:
+        return ClientPlatformEntryCommand("privacy_delete_confirm")
     for prefix in _BUSINESS_PREFIXES:
         if lowered.startswith(prefix):
             return ClientPlatformEntryCommand(
@@ -162,7 +177,7 @@ def _entry_text(*, platform: str, accesses: list[object]) -> str:
             "в Telegram.\n\n"
             "Чтобы создать своё рабочее пространство, отправьте одним сообщением:\n"
             "бизнес <название>\n\n"
-            "Например: бизнес Психологическая практика Анны"
+            "Например: бизнес Студия Анны"
         )
 
     names = [str(access.business.name) for access in accesses]
@@ -424,6 +439,53 @@ def handle_clientplatform_entry(
         start_payload=command.value if command.action == "start" else None,
     )
     canonical_user_id = int(entry.user_id)
+
+    if command.action == "privacy":
+        return canonical_user_id, [
+            MessengerReply(
+                text=(
+                    "Конфиденциальность ClientPlatform\n\n"
+                    "Для экспорта данных отправьте: mydata CONFIRM\n"
+                    "Для удаления поведенческих данных отправьте: deletemydata CONFIRM\n\n"
+                    "Обе операции выполняются только для Вашего подтверждённого аккаунта."
+                )
+            )
+        ]
+    if command.action == "privacy_export":
+        return canonical_user_id, [
+            MessengerReply(
+                text=(
+                    "Для экспорта отправьте точно: mydata CONFIRM\n\n"
+                    "ClientPlatform выдаст одноразовую HTTPS-ссылку на архив."
+                )
+            )
+        ]
+    if command.action == "privacy_export_confirm":
+        return canonical_user_id, [MessengerReply(kind="privacy_export")]
+    if command.action == "privacy_delete":
+        return canonical_user_id, [
+            MessengerReply(
+                text=(
+                    "Удаление необратимо. Для подтверждения отправьте точно: "
+                    "deletemydata CONFIRM"
+                )
+            )
+        ]
+    if command.action == "privacy_delete_confirm":
+        result = erase_user_behavioral_data(
+            canonical_user_id,
+            reason=f"{normalize_platform(platform)}_user_request",
+        )
+        deleted = sum(int(value or 0) for value in result.deleted_tables.values())
+        return canonical_user_id, [
+            MessengerReply(
+                text=(
+                    f"Удаление завершено. Удалено записей: {deleted}.\n"
+                    "Технические идентификаторы сохраняются только там, где это "
+                    "необходимо для безопасности и операционного аудита."
+                )
+            )
+        ]
 
     accesses = list(list_accessible_businesses(user_id=canonical_user_id))
     interaction_key = _official_interaction_key(

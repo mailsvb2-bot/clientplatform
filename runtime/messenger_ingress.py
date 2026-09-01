@@ -14,23 +14,32 @@ from runtime.messenger_payloads import (
     extract_max_message,
     extract_vk_message,
     max_event_key,
-    normalise_messenger_text,
-    text_from_max_payload,
-    text_from_vk_payload,
     vk_event_key,
 )
 from runtime.messenger_senders import MessengerTransportError, VkBotSender
 from services.events import log_event
-from services.gift_claims import claim_gift_token, is_gift_token, normalize_gift_token
+from services.messenger.clientplatform_entry import (
+    handle_clientplatform_entry,
+    parse_clientplatform_entry_command,
+)
 from services.messenger.delivery_outbox import persist_reply_bundle
-from services.messenger.entrypoints import register_user_entry
-from services.messenger.observability import classify_messenger_action, log_payload_normalized
-from services.messenger.text_ui_router import MessengerReply, handle_incoming_text
+from services.messenger.observability import log_payload_normalized
 from services.messenger.webhook_dedupe import claim_inbound_event, fail_inbound_event
 
 log = logging.getLogger(__name__)
 
 VK_PROCESSABLE_EVENT_TYPES = {"message_new", "message_event"}
+_MAX_PROCESSABLE_UPDATE_TYPES = {
+    "",
+    "message_created",
+    "message_callback",
+    "bot_started",
+    "bot_start",
+    "chat_started",
+    "conversation_started",
+    "button_callback",
+    "callback_query",
+}
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -54,150 +63,49 @@ def _allow_insecure_messenger_webhooks() -> bool:
     return _env_bool("ALLOW_INSECURE_MESSENGER_WEBHOOKS", False)
 
 
-def _allow_legacy_max_secret_sources() -> bool:
-    return not _deployed_env() and _env_bool("ALLOW_LEGACY_MAX_WEBHOOK_SECRET_SOURCES", False)
-
-
-def _provided_max_secret(request: web.Request, payload: dict) -> str:
-    header_value = (
+def _provided_max_secret(request: web.Request) -> str:
+    return str(
         request.headers.get("X-Max-Webhook-Secret")
         or request.headers.get("X-Webhook-Secret")
-        or request.headers.get("X-Metrotherapy-Webhook-Secret")
         or ""
     ).strip()
-    if header_value or not _allow_legacy_max_secret_sources():
-        return header_value
-    return str(request.query.get("secret") or payload.get("secret") or "").strip()
 
 
-def _max_secret_ok(request: web.Request, payload: dict) -> bool:
+def _max_secret_ok(request: web.Request, payload: dict[str, Any]) -> bool:
+    del payload
     expected = (getattr(settings, "MAX_WEBHOOK_SECRET", "") or "").strip()
     if not expected:
         return _allow_insecure_messenger_webhooks()
-    provided = _provided_max_secret(request, payload)
-    if not provided:
-        return False
-    return hmac.compare_digest(provided, expected)
+    provided = _provided_max_secret(request)
+    return bool(provided and hmac.compare_digest(provided, expected))
 
 
-def _vk_secret_ok(payload: dict) -> bool:
+def _vk_secret_ok(payload: dict[str, Any]) -> bool:
     expected = (getattr(settings, "VK_SECRET", "") or "").strip()
-    provided = (payload.get("secret") or "").strip()
+    provided = str(payload.get("secret") or "").strip()
     if not expected:
         return _allow_insecure_messenger_webhooks()
-    if not provided:
-        return False
-    return hmac.compare_digest(provided, expected)
+    return bool(provided and hmac.compare_digest(provided, expected))
 
 
 def _entry_start_text(text: str) -> str:
     raw = str(text or "").strip()
     if not raw:
-        return raw
+        return "start"
     lowered = raw.casefold()
     if lowered.startswith("/start ") or lowered.startswith("start "):
         payload = raw.split(maxsplit=1)[1].strip()
         return f"/start {payload}" if payload else "start"
-    if lowered.startswith(("bridge_", "ref_", "gift_")):
+    if lowered.startswith("cpo_"):
         return f"/start {raw}"
     return raw
 
 
-def _claim_replies_if_needed(*, platform: str, extracted: dict) -> tuple[int, list[MessengerReply]] | None:
-    text = normalise_messenger_text(extracted["text"])
-    token = normalize_gift_token(text)
-    if not is_gift_token(token):
-        return None
-    entry = register_user_entry(
-        extracted["user_id"],
-        platform=platform,
-        external_user_id=extracted["external_user_id"],
-        username=extracted["username"],
-        display_name=extracted["display_name"],
-        first_name=extracted["first_name"],
-        start_payload=token,
-    )
-    result = claim_gift_token(
-        gift_token=token,
-        recipient_user_id=int(entry.user_id),
-        platform=platform,
-    )
-    return int(entry.user_id), [MessengerReply(text=result.message)]
-
-
-def _explicit_score_route_text(raw: str | None) -> str | None:
-    compact = str(raw or "").strip().casefold().replace("−", "-")
-    if compact.startswith("mood:"):
-        parts = compact.split(":")
-        if len(parts) >= 4 and parts[1] in {"pre", "post"}:
-            stage = parts[1]
-            sid = parts[2] or "0"
-            try:
-                score = int(parts[-1])
-            except ValueError:
-                return None
-            if -10 <= score <= 10:
-                return f"mood:{stage}:{sid}:{score}"
-    if compact in {"score:1", "score=1"}:
-        return "+1"
-    if compact in {"score:2", "score=2"}:
-        return "+2"
-    return None
-
-
-def _max_score_route_text(payload: dict[str, Any]) -> str | None:
-    message = payload.get("message") or {}
-    body = message.get("body") if isinstance(message, dict) else {}
-    if not isinstance(body, dict):
-        body = {}
-    callback = payload.get("callback") or payload.get("button") or payload.get("payload") or {}
-    if not isinstance(callback, dict):
-        callback = {}
-    candidates = [
-        body.get("payload"),
-        body.get("button"),
-        body.get("callback"),
-        message.get("payload") if isinstance(message, dict) else None,
-        message.get("button") if isinstance(message, dict) else None,
-        message.get("callback") if isinstance(message, dict) else None,
-        callback,
-        payload.get("payload"),
-        payload.get("button"),
-        payload.get("callback"),
-    ]
-    for candidate in candidates:
-        score_text = _explicit_score_route_text(text_from_max_payload(candidate))
-        if score_text:
-            return score_text
-    return None
-
-
-def _vk_score_route_text(payload: dict[str, Any]) -> str | None:
-    obj = payload.get("object") or {}
-    if not isinstance(obj, dict):
-        obj = {}
-    message = obj.get("message") or {}
-    if not isinstance(message, dict):
-        message = {}
-
-    candidates = [
-        obj.get("payload"),
-        obj.get("button"),
-        obj.get("callback"),
-        message.get("payload"),
-        message.get("button"),
-        message.get("callback"),
-        payload.get("payload"),
-        payload.get("button"),
-        payload.get("callback"),
-        obj,
-        message,
-    ]
-    for candidate in candidates:
-        score_text = _explicit_score_route_text(text_from_vk_payload(candidate))
-        if score_text:
-            return score_text
-    return None
+def _official_entry_text(text: str, *, event_type: str) -> str:
+    raw = _entry_start_text(text)
+    if parse_clientplatform_entry_command(raw, event_type=event_type) is not None:
+        return raw
+    return "start"
 
 
 def _vk_dedupe_key(payload: dict[str, Any]) -> str:
@@ -232,7 +140,11 @@ async def _ack_vk_message_event(payload: dict[str, Any]) -> None:
         return
     event_id, user_id, peer_id = context
     try:
-        await VkBotSender().answer_message_event(event_id=event_id, user_id=user_id, peer_id=peer_id)
+        await VkBotSender().answer_message_event(
+            event_id=event_id,
+            user_id=user_id,
+            peer_id=peer_id,
+        )
         log.info("VK message_event acknowledged")
     except MessengerTransportError:
         log.exception("VK message_event acknowledgement failed")
@@ -244,41 +156,39 @@ def _process_and_persist(
     event_key: str,
     payload: dict[str, Any],
     extracted: dict[str, Any],
-    normalized_text: str,
     event_type: str,
 ) -> tuple[bool, int, int]:
-    """Own the synchronous DB/business boundary outside the aiohttp event loop."""
+    """Persist one official ClientPlatform owner/member interaction atomically."""
 
     if not claim_inbound_event(platform, event_key, payload):
         return False, 0, 0
-
     try:
+        entry_text = _official_entry_text(
+            str(extracted.get("text") or ""),
+            event_type=event_type,
+        )
         log_payload_normalized(
             platform=platform,
             user_id=extracted["user_id"],
-            raw_text=extracted["text"],
-            normalized_text=normalized_text,
+            raw_text=str(extracted.get("text") or ""),
+            normalized_text=entry_text,
             event_key=event_key,
         )
-        claim_result = _claim_replies_if_needed(
+        command = parse_clientplatform_entry_command(entry_text, event_type=event_type)
+        if command is None:
+            raise RuntimeError("ClientPlatform official entry command resolution failed")
+        canonical_user_id, replies = handle_clientplatform_entry(
+            extracted["user_id"],
             platform=platform,
-            extracted={**extracted, "text": normalized_text},
+            external_user_id=extracted["external_user_id"],
+            text=entry_text,
+            event_type=event_type,
+            username=extracted.get("username"),
+            display_name=extracted.get("display_name"),
+            first_name=extracted.get("first_name"),
+            event_key=event_key,
         )
-        if claim_result is not None:
-            canonical_user_id, replies = claim_result
-            action = "gift_claim"
-        else:
-            canonical_user_id, replies = handle_incoming_text(
-                extracted["user_id"],
-                platform=platform,
-                external_user_id=extracted["external_user_id"],
-                text=normalized_text,
-                username=extracted["username"],
-                display_name=extracted["display_name"],
-                first_name=extracted["first_name"],
-            )
-            action = classify_messenger_action(normalized_text)
-
+        action = f"clientplatform_{command.action}"
         log.info(
             "%s %s processed: canonical_user_id=%s action=%s replies=%s",
             platform.upper(),
@@ -288,9 +198,9 @@ def _process_and_persist(
             len(replies),
         )
         log_event(
-            canonical_user_id,
-            f"{platform}_webhook_inbound",
-            {"action": action, "text_len": len(str(extracted["text"] or "")), "replies": len(replies)},
+            int(canonical_user_id),
+            f"{platform}_clientplatform_entry",
+            {"action": command.action, "text_len": len(str(extracted.get("text") or ""))},
         )
         persist_reply_bundle(
             platform=platform,
@@ -318,7 +228,7 @@ async def vk_webhook(request: web.Request) -> web.Response:
         log.warning("VK webhook rejected: bad or missing secret")
         return web.Response(status=403, text="forbidden")
 
-    event_type = (payload.get("type") or "").strip()
+    event_type = str(payload.get("type") or "").strip()
     if event_type == "confirmation":
         return web.Response(text=(settings.VK_CONFIRMATION_TOKEN or "").strip())
     if event_type not in VK_PROCESSABLE_EVENT_TYPES:
@@ -329,9 +239,7 @@ async def vk_webhook(request: web.Request) -> web.Response:
     extracted = extract_vk_message(payload)
     if not extracted:
         return web.Response(text="ok")
-
     event_key = _vk_dedupe_key(payload)
-    normalized_text = _entry_start_text(_vk_score_route_text(payload) or extracted["text"])
     try:
         processed, _, _ = await asyncio.to_thread(
             _process_and_persist,
@@ -339,28 +247,14 @@ async def vk_webhook(request: web.Request) -> web.Response:
             event_key=event_key,
             payload=payload,
             extracted=extracted,
-            normalized_text=normalized_text,
             event_type=event_type,
         )
     except (RuntimeError, OSError, ValueError, TypeError, KeyError):
-        log.exception("VK webhook processing failed")
+        log.exception("VK ClientPlatform webhook processing failed")
         return web.Response(status=503, text="retry")
     if not processed:
-        log.info("VK webhook duplicate skipped")
+        log.info("VK ClientPlatform webhook duplicate skipped")
     return web.Response(text="ok")
-
-
-_MAX_PROCESSABLE_UPDATE_TYPES = {
-    "",
-    "message_created",
-    "message_callback",
-    "bot_started",
-    "bot_start",
-    "chat_started",
-    "conversation_started",
-    "button_callback",
-    "callback_query",
-}
 
 
 async def max_webhook(request: web.Request) -> web.Response:
@@ -368,37 +262,26 @@ async def max_webhook(request: web.Request) -> web.Response:
     try:
         payload = json.loads(body)
     except json.JSONDecodeError:
-        log.warning("MAX webhook rejected invalid json")
-        return web.Response(status=400, text="invalid json")
+        return web.json_response({"ok": False, "error": "invalid_json"}, status=400)
     if not isinstance(payload, dict):
-        log.warning("MAX webhook rejected non-object json")
-        return web.Response(status=400, text="bad payload")
+        return web.json_response({"ok": False, "error": "bad_payload"}, status=400)
     if not _max_secret_ok(request, payload):
         log.warning("MAX webhook rejected: bad or missing secret")
         return web.json_response({"ok": False, "error": "forbidden"}, status=403)
 
-    update_type = (
-        payload.get("update_type") or payload.get("type") or payload.get("event_type") or ""
+    update_type = str(
+        payload.get("update_type")
+        or payload.get("type")
+        or payload.get("event_type")
+        or ""
     ).strip()
     if update_type not in _MAX_PROCESSABLE_UPDATE_TYPES:
-        log.info("MAX webhook ignored: update_type=%r keys=%s", update_type, sorted(payload.keys()))
         return web.json_response({"ok": True})
 
     extracted = extract_max_message(payload)
     if not extracted:
-        message = payload.get("message") or {}
-        body_payload = message.get("body") if isinstance(message, dict) else None
-        log.warning(
-            "MAX webhook extraction failed: update_type=%r keys=%s message_keys=%s body_type=%s",
-            update_type,
-            sorted(payload.keys()),
-            sorted(message.keys()) if isinstance(message, dict) else [],
-            type(body_payload).__name__,
-        )
         return web.json_response({"ok": True})
-
     event_key = max_event_key(payload)
-    normalized_text = _entry_start_text(_max_score_route_text(payload) or extracted["text"])
     try:
         processed, _, _ = await asyncio.to_thread(
             _process_and_persist,
@@ -406,12 +289,24 @@ async def max_webhook(request: web.Request) -> web.Response:
             event_key=event_key,
             payload=payload,
             extracted=extracted,
-            normalized_text=normalized_text,
             event_type=update_type,
         )
     except (RuntimeError, OSError, ValueError, TypeError, KeyError):
-        log.exception("MAX webhook processing failed")
+        log.exception("MAX ClientPlatform webhook processing failed")
         return web.json_response({"ok": False, "error": "retry"}, status=503)
     if not processed:
-        log.info("MAX webhook duplicate skipped: update_type=%r", update_type)
+        log.info("MAX ClientPlatform webhook duplicate skipped: update_type=%r", update_type)
     return web.json_response({"ok": True})
+
+
+__all__ = [
+    "VK_PROCESSABLE_EVENT_TYPES",
+    "_MAX_PROCESSABLE_UPDATE_TYPES",
+    "_ack_vk_message_event",
+    "_entry_start_text",
+    "_max_secret_ok",
+    "_vk_dedupe_key",
+    "_vk_secret_ok",
+    "max_webhook",
+    "vk_webhook",
+]

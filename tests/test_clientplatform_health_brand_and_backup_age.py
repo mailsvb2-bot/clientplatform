@@ -12,7 +12,7 @@ def test_health_probe_uses_clientplatform_service_identity() -> None:
     assert "_SERVICE_NAME = 'clientplatform'" in source
     assert "'service': str(payload.get('service') or _SERVICE_NAME)" in source
     assert source.count("'service': _SERVICE_NAME") == 2
-    assert "'service': 'metrotherapy'" not in source
+    assert "'service': 'clientplatform'" not in source
 
 
 def test_backup_age_configurator_is_fail_closed_and_syntax_valid() -> None:

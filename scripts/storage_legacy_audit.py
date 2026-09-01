@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_ENV_FILE = Path("/etc/metrotherapy/metrotherapy.env")
+DEFAULT_ENV_FILE = Path("/etc/clientplatform/clientplatform.env")
 
 
 def _load_env_file(path: str | Path | None) -> dict[str, str]:
@@ -57,7 +57,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Audit active DB storage and legacy SQLite ambiguity")
     parser.add_argument("--json", action="store_true", help="Print machine-readable JSON only")
     parser.add_argument("--strict", action="store_true", help="Exit non-zero when the audit has hard findings")
-    parser.add_argument("--env-file", default=os.getenv("METROTHERAPY_ENV_FILE", str(DEFAULT_ENV_FILE)))
+    parser.add_argument("--env-file", default=os.getenv("CLIENTPLATFORM_ENV_FILE", str(DEFAULT_ENV_FILE)))
     args = parser.parse_args()
 
     audit_module = _load_project_storage_module(args.env_file)

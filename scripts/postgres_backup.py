@@ -11,8 +11,8 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 
-DEFAULT_ENV_FILE = Path("/etc/metrotherapy/metrotherapy.env")
-DEFAULT_BACKUP_DIR = Path(os.getenv("METRO_POSTGRES_BACKUP_DIR", "/var/backups/metrotherapy/postgres"))
+DEFAULT_ENV_FILE = Path("/etc/clientplatform/clientplatform.env")
+DEFAULT_BACKUP_DIR = Path(os.getenv("CLIENTPLATFORM_POSTGRES_BACKUP_DIR", "/var/backups/clientplatform/postgres"))
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -58,10 +58,10 @@ def _apply_env(values: dict[str, str]) -> None:
 
 
 def _database_url() -> str:
-    engine = (os.getenv("METRO_DB_ENGINE") or "").strip().lower()
+    engine = (os.getenv("CLIENTPLATFORM_DB_ENGINE") or "").strip().lower()
     if engine != "postgres":
-        raise SystemExit("METRO_DB_ENGINE=postgres is required for Postgres backup")
-    value = os.getenv("DATABASE_URL") or os.getenv("METRO_DATABASE_URL") or ""
+        raise SystemExit("CLIENTPLATFORM_DB_ENGINE=postgres is required for Postgres backup")
+    value = os.getenv("DATABASE_URL") or os.getenv("CLIENTPLATFORM_DATABASE_URL") or ""
     if not value.strip():
         raise SystemExit("DATABASE_URL is required for Postgres backup")
     return value.strip()
@@ -69,9 +69,9 @@ def _database_url() -> str:
 
 def _db_name(url: str) -> str:
     parsed = urlparse(url)
-    name = (parsed.path or "").strip("/") or "metrotherapy"
+    name = (parsed.path or "").strip("/") or "clientplatform"
     safe = "".join(ch for ch in name if ch.isalnum() or ch in {"_", "-"})
-    return safe or "metrotherapy"
+    return safe or "clientplatform"
 
 
 def _safe_backup_dir(backup_dir: Path) -> Path:
@@ -138,10 +138,10 @@ def prune_backups(*, backup_dir: Path = DEFAULT_BACKUP_DIR, keep: int = 14) -> N
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Create a pg_dump backup for Metrotherapy Postgres")
-    parser.add_argument("--env-file", default=os.getenv("METROTHERAPY_ENV_FILE", str(DEFAULT_ENV_FILE)))
+    parser = argparse.ArgumentParser(description="Create a pg_dump backup for ClientPlatform Postgres")
+    parser.add_argument("--env-file", default=os.getenv("CLIENTPLATFORM_ENV_FILE", str(DEFAULT_ENV_FILE)))
     parser.add_argument("--backup-dir", default=str(DEFAULT_BACKUP_DIR))
-    parser.add_argument("--keep", type=int, default=int(os.getenv("METRO_POSTGRES_BACKUP_KEEP", "14")))
+    parser.add_argument("--keep", type=int, default=int(os.getenv("CLIENTPLATFORM_POSTGRES_BACKUP_KEEP", "14")))
     args = parser.parse_args()
 
     _apply_env(_load_env_file(args.env_file))

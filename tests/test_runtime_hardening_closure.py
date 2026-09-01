@@ -26,24 +26,19 @@ async def test_partial_startup_rollback_runs_in_reverse_order(monkeypatch):
         async def stop(self):
             calls.append(self.name)
 
-    async def stop_scheduler():
-        calls.append("scheduler")
-
     async def stop_db_writer(*, drain: bool):
         assert drain is False
         calls.append("db_writer")
 
-    monkeypatch.setattr(app, "stop_scheduler", stop_scheduler)
     monkeypatch.setattr(app, "stop_db_writer", stop_db_writer)
 
     await app._rollback_partial_startup(
         webhook_runtime=Runtime("webhook"),
         health_runtime=Runtime("health"),
-        scheduler_started=True,
         db_writer_started=True,
     )
 
-    assert calls == ["health", "webhook", "scheduler", "db_writer"]
+    assert calls == ["health", "webhook", "db_writer"]
 
 
 def test_cached_postgres_connection_is_pre_pinged_and_rolled_back():

@@ -38,6 +38,9 @@ async def register_clientplatform_bot_commands(bot: Bot) -> bool:
                 BotCommand(command="start", description="Открыть ClientPlatform"),
                 BotCommand(command="admin", description="Открыть админку бизнеса"),
                 BotCommand(command="mybot", description="Управление моим Telegram-ботом"),
+                BotCommand(command="privacy", description="Конфиденциальность и данные"),
+                BotCommand(command="mydata", description="Экспортировать мои данные"),
+                BotCommand(command="deletemydata", description="Удалить мои данные"),
                 BotCommand(command="cancel", description="Отменить текущий шаг"),
             ]
         )
@@ -437,7 +440,12 @@ if not bool(getattr(control, "_dual_role_entry_composed", False)):
         ".clientplatform_program_lesson_editor_composition",
         __package__,
     )
+    privacy = importlib.import_module(
+        ".clientplatform_privacy",
+        __package__,
+    )
     router.include_router(admin.router)
+    router.include_router(privacy.router)
     router.include_router(interaction_safety.router)
     router.include_router(onboarding_recovery.router)
     # Booking wizard UX must precede the legacy/simple router because it owns

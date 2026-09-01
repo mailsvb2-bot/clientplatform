@@ -69,7 +69,6 @@ def has_event_since(user_id: int, name: str, since_utc_iso: str) -> bool:
         ).fetchone()
     return row is not None
 
-from core.runtime.sovereignty.enforcement import get_current_token
 
 # Cache PRAGMA table_info results per-process to avoid slow PRAGMA on every event write.
 _EVENTS_COLS_CACHE: set[str] | None = None
@@ -96,15 +95,13 @@ def log_runtime_event(
     decision_id: str | None = None,
     conn=None,
 ) -> None:
-    """Event v2 per Constitution, but backward-compatible with legacy `events` table.
+    """Write one best-effort runtime event without owning business decisions.
 
-    Writes into `events` using only columns that actually exist in the DB schema.
-    Never raises (best-effort): runtime must not crash because of analytics.
+    Optional decision/correlation identifiers are accepted from the canonical
+    caller when available; this shared logger never creates or authorizes them.
     """
-    tok = get_current_token()
-
-    did = decision_id or (getattr(tok, "decision_id", None) if tok else None)
-    corr = correlation_id or (getattr(tok, "nonce", None) if tok else None)
+    did = decision_id
+    corr = correlation_id
 
     meta_obj = payload or {}
     payload_json = json.dumps(meta_obj, ensure_ascii=False)

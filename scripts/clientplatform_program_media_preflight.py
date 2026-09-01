@@ -98,7 +98,6 @@ def validate_environment(env: Mapping[str, str]) -> list[str]:
         not _BUCKET_RE.fullmatch(bucket)
         or not bucket.startswith("clientplatform-")
         or "staging" in bucket
-        or "metrotherapy" in bucket
     ):
         errors.append("CLIENTPLATFORM_STORAGE_BUCKET must be dedicated to production")
     allowed = [

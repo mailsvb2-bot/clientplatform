@@ -15,8 +15,6 @@ def _run(monkeypatch, **env):
         "MESSENGER_WEBHOOK_HOST",
         "MESSENGER_WEBHOOK_PORT",
         "MESSENGER_PUBLIC_BASE_URL",
-        "PAYMENT_HTTP_ENABLED",
-        "PAYMENT_PUBLIC_BASE_URL",
         "PRIVACY_EXPORT_HTTP_ENABLED",
         "PRIVACY_EXPORT_PUBLIC_BASE_URL",
         "PRIVACY_EXPORT_TOKEN_TTL_MINUTES",
@@ -24,17 +22,13 @@ def _run(monkeypatch, **env):
         "HEALTHCHECK_ENABLED",
         "HEALTHCHECK_HOST",
         "HEALTHCHECK_PORT",
-        "METRO_DB_ENGINE",
+        "CLIENTPLATFORM_DB_ENGINE",
         "DATABASE_URL",
-        "METRO_DB_PATH",
+        "CLIENTPLATFORM_DB_PATH",
         "LOG_PATH",
         "BOT_TOKEN",
         "ADMIN_IDS",
         "ADMIN_ID",
-        "YOOKASSA_SHOP_ID",
-        "YOOKASSA_SECRET_KEY",
-        "PAYMENT_CHECKOUT_SIGNING_KEY",
-        "CHECKOUT_SIGNING_KEY",
         "VK_WEBHOOK_ENABLED",
         "VK_GROUP_ID",
         "VK_GROUP_TOKEN",
@@ -61,7 +55,6 @@ def _owner_vk_prod_env() -> dict[str, str]:
         "ADMIN_IDS": "1",
         "TELEGRAM_TRANSPORT": "polling",
         "TELEGRAM_WEBHOOK_ENABLED": "0",
-        "PAYMENT_HTTP_ENABLED": "0",
         "PRIVACY_EXPORT_HTTP_ENABLED": "1",
         "PRIVACY_EXPORT_PUBLIC_BASE_URL": "https://app.example",
         "PRIVACY_EXPORT_TOKEN_TTL_MINUTES": "10",
@@ -71,7 +64,7 @@ def _owner_vk_prod_env() -> dict[str, str]:
         "VK_GROUP_TOKEN": "vk-token-for-test",
         "VK_CONFIRMATION_TOKEN": "vk-confirm-for-test",
         "VK_SECRET": "vk-secret-for-test",
-        "METRO_DB_ENGINE": "postgres",
+        "CLIENTPLATFORM_DB_ENGINE": "postgres",
         "DATABASE_URL": "postgresql:///clientplatform_test",
         "LOG_PATH": "/tmp/clientplatform-test.log",
         "HEALTHCHECK_ENABLED": "1",
@@ -83,32 +76,6 @@ def test_runtime_contract_accepts_owner_vk_without_payment_checkout(monkeypatch)
 
     assert errors == []
 
-
-def test_runtime_contract_payment_enabled_stays_fail_closed(monkeypatch):
-    env = _owner_vk_prod_env()
-    env["PAYMENT_HTTP_ENABLED"] = "1"
-    errors, warnings = _run(monkeypatch, **env)
-
-    assert any("YOOKASSA_SHOP_ID" in error for error in errors)
-    assert any("YOOKASSA_SECRET_KEY" in error for error in errors)
-    assert any("PAYMENT_CHECKOUT_SIGNING_KEY" in error for error in errors)
-
-
-def test_runtime_contract_omitted_payment_flag_stays_fail_closed(monkeypatch):
-    env = _owner_vk_prod_env()
-    env.pop("PAYMENT_HTTP_ENABLED")
-    errors, warnings = _run(monkeypatch, **env)
-
-    assert any("YOOKASSA_SHOP_ID" in error for error in errors)
-    assert any("YOOKASSA_SECRET_KEY" in error for error in errors)
-    assert any("PAYMENT_CHECKOUT_SIGNING_KEY" in error for error in errors)
-
-def test_runtime_contract_rejects_malformed_payment_flag(monkeypatch):
-    env = _owner_vk_prod_env()
-    env["PAYMENT_HTTP_ENABLED"] = "tru"
-    errors, warnings = _run(monkeypatch, **env)
-
-    assert any("PAYMENT_HTTP_ENABLED" in error for error in errors)
 
 
 def test_runtime_contract_accepts_dev_defaults(monkeypatch):
@@ -123,9 +90,9 @@ def test_runtime_contract_rejects_telegram_webhook(monkeypatch):
         APP_ENV="prod",
         TELEGRAM_TRANSPORT="polling",
         TELEGRAM_WEBHOOK_ENABLED="1",
-        METRO_DB_ENGINE="postgres",
-        DATABASE_URL="postgresql:///metrotherapy_test",
-        LOG_PATH="/tmp/metrotherapy.log",
+        CLIENTPLATFORM_DB_ENGINE="postgres",
+        DATABASE_URL="postgresql:///clientplatform_test",
+        LOG_PATH="/tmp/clientplatform.log",
         HEALTHCHECK_ENABLED="1",
     )
 
@@ -138,13 +105,13 @@ def test_runtime_contract_rejects_sqlite_prod(monkeypatch, tmp_path):
         APP_ENV="prod",
         TELEGRAM_TRANSPORT="polling",
         TELEGRAM_WEBHOOK_ENABLED="0",
-        METRO_DB_ENGINE="sqlite",
-        METRO_DB_PATH=str(tmp_path / "state" / "data.db"),
-        LOG_PATH="/tmp/metrotherapy.log",
+        CLIENTPLATFORM_DB_ENGINE="sqlite",
+        CLIENTPLATFORM_DB_PATH=str(tmp_path / "state" / "data.db"),
+        LOG_PATH="/tmp/clientplatform.log",
         HEALTHCHECK_ENABLED="1",
     )
 
-    assert any("METRO_DB_ENGINE" in error for error in errors)
+    assert any("CLIENTPLATFORM_DB_ENGINE" in error for error in errors)
     assert any("DATABASE_URL" in error for error in errors)
 
 
@@ -154,9 +121,9 @@ def test_runtime_contract_rejects_bad_database_url_scheme(monkeypatch):
         APP_ENV="prod",
         TELEGRAM_TRANSPORT="polling",
         TELEGRAM_WEBHOOK_ENABLED="0",
-        METRO_DB_ENGINE="postgres",
+        CLIENTPLATFORM_DB_ENGINE="postgres",
         DATABASE_URL="sqlite:///tmp.db",
-        LOG_PATH="/tmp/metrotherapy.log",
+        LOG_PATH="/tmp/clientplatform.log",
         HEALTHCHECK_ENABLED="1",
     )
 
@@ -169,8 +136,8 @@ def test_runtime_contract_rejects_repo_relative_log_path(monkeypatch):
         APP_ENV="prod",
         TELEGRAM_TRANSPORT="polling",
         TELEGRAM_WEBHOOK_ENABLED="0",
-        METRO_DB_ENGINE="postgres",
-        DATABASE_URL="postgresql:///metrotherapy_test",
+        CLIENTPLATFORM_DB_ENGINE="postgres",
+        DATABASE_URL="postgresql:///clientplatform_test",
         LOG_PATH="logs/app.log",
         HEALTHCHECK_ENABLED="1",
     )
@@ -182,7 +149,8 @@ def test_runtime_contract_detects_messenger_health_port_collision(monkeypatch):
     errors, warnings = _run(
         monkeypatch,
         APP_ENV="dev",
-        MESSENGER_WEBHOOK_ENABLED="1",
+        PRIVACY_EXPORT_HTTP_ENABLED="1",
+        PRIVACY_EXPORT_PUBLIC_BASE_URL="https://example.invalid",
         MESSENGER_WEBHOOK_HOST="127.0.0.1",
         MESSENGER_WEBHOOK_PORT="8082",
         MESSENGER_PUBLIC_BASE_URL="https://example.invalid",
@@ -200,9 +168,9 @@ def test_runtime_contract_requires_privacy_export_in_prod(monkeypatch):
         TELEGRAM_TRANSPORT="polling",
         TELEGRAM_WEBHOOK_ENABLED="0",
         PRIVACY_EXPORT_HTTP_ENABLED="0",
-        METRO_DB_ENGINE="postgres",
-        DATABASE_URL="postgresql:///metrotherapy_test",
-        LOG_PATH="/tmp/metrotherapy.log",
+        CLIENTPLATFORM_DB_ENGINE="postgres",
+        DATABASE_URL="postgresql:///clientplatform_test",
+        LOG_PATH="/tmp/clientplatform.log",
         HEALTHCHECK_ENABLED="1",
     )
 
@@ -213,7 +181,6 @@ def test_runtime_contract_accepts_privacy_export_as_http_ingress(monkeypatch):
     errors, warnings = _run(
         monkeypatch,
         APP_ENV="dev",
-        PAYMENT_HTTP_ENABLED="0",
         PRIVACY_EXPORT_HTTP_ENABLED="1",
         PRIVACY_EXPORT_PUBLIC_BASE_URL="https://example.invalid",
         PRIVACY_EXPORT_TOKEN_TTL_MINUTES="10",

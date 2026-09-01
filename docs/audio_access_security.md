@@ -1,6 +1,6 @@
 # Protected audio access policy
 
-Metrotherapy fallback listening URLs are bearer capabilities. The HTTP request does not contain a reliable authenticated Telegram, MAX or VK user identity, so the runtime must not pretend that IP addresses, cookies or user-agent strings prove ownership.
+ClientPlatform fallback listening URLs are bearer capabilities. The HTTP request does not contain a reliable authenticated Telegram, MAX or VK user identity, so the runtime must not pretend that IP addresses, cookies or user-agent strings prove ownership.
 
 The protection model is intentionally bounded and fail-closed:
 

@@ -18,10 +18,10 @@ def test_streaming_export_writes_valid_gzip_json(tmp_path) -> None:
         conn.execute("DELETE FROM users WHERE user_id=?", (uid,))
         conn.execute(
             """
-            INSERT INTO users(user_id, joined_at, username, first_name, demo_uses)
-            VALUES(?,?,?,?,?)
+            INSERT INTO users(user_id, joined_at, username, first_name)
+            VALUES(?,?,?,?)
             """.strip(),
-            (uid, "2026-07-17", "stream_user", "Stream", 1),
+            (uid, "2026-07-17", "stream_user", "Stream"),
         )
         for index in range(5):
             conn.execute(

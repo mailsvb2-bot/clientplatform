@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from config.settings import settings
-from runtime.ingress_flags import max_webhook_enabled, payment_http_enabled, vk_webhook_enabled
+from runtime.ingress_flags import max_webhook_enabled, vk_webhook_enabled
 from runtime.telegram_transport import telegram_transport, telegram_webhook_requested
 from services.messenger.delivery_health import delivery_health_snapshot
 
@@ -107,50 +107,6 @@ def check_telegram_preflight() -> MessengerPreflightStatus:
         },
     )
 
-
-def check_payment_preflight() -> MessengerPreflightStatus:
-    enabled = payment_http_enabled()
-    if not enabled:
-        return MessengerPreflightStatus(channel="payment", ok=True, details={"enabled": False})
-
-    missing = list(_missing("YOOKASSA_SHOP_ID", "YOOKASSA_SECRET_KEY"))
-    signing_key = (
-        (os.getenv("PAYMENT_CHECKOUT_SIGNING_KEY") or "").strip()
-        or (os.getenv("CHECKOUT_SIGNING_KEY") or "").strip()
-    )
-    if not signing_key:
-        missing.append("PAYMENT_CHECKOUT_SIGNING_KEY")
-
-    public_base = str(
-        os.getenv("PAYMENT_PUBLIC_BASE_URL")
-        or os.getenv("MESSENGER_PUBLIC_BASE_URL")
-        or os.getenv("PUBLIC_BASE_URL")
-        or _value("MESSENGER_PUBLIC_BASE_URL", "")
-        or ""
-    ).strip()
-    if not public_base:
-        missing.append("PAYMENT_PUBLIC_BASE_URL")
-
-    warnings: list[str] = []
-    if _deployed_env():
-        _https_warning("PAYMENT_PUBLIC_BASE_URL", public_base, warnings)
-        for name in ("YOOKASSA_PROVIDER_VERIFICATION_REQUIRED", "PAYMENT_CHECKOUT_INTENT_REQUIRED"):
-            if _explicitly_disabled(name):
-                missing.append(f"{name}(must_be_enabled)")
-        for name in (
-            "ALLOW_UNVERIFIED_YOOKASSA_WEBHOOK_IN_PROD",
-            "ALLOW_UNSIGNED_PAYMENT_CHECKOUT_IN_PROD",
-        ):
-            if _truthy(os.getenv(name)):
-                missing.append(f"{name}(forbidden)")
-
-    return MessengerPreflightStatus(
-        channel="payment",
-        ok=not missing,
-        missing=tuple(sorted(set(missing))),
-        warnings=tuple(warnings),
-        details={"enabled": True, "checkout_url": f"{public_base.rstrip('/')}/pay/yookassa" if public_base else ""},
-    )
 
 
 def check_vk_preflight() -> MessengerPreflightStatus:
@@ -316,7 +272,6 @@ def check_delivery_outbox_preflight() -> MessengerPreflightStatus:
 def check_all_preflights() -> tuple[MessengerPreflightStatus, ...]:
     return (
         check_telegram_preflight(),
-        check_payment_preflight(),
         check_max_preflight(),
         check_vk_preflight(),
         check_delivery_outbox_preflight(),

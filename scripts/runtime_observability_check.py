@@ -54,8 +54,8 @@ def _service_disabled(service: str) -> CheckResult:
     value = out.splitlines()[0].strip() if out else ""
     normalized = value.lower()
 
-    # The old metrotherapy-bot.service was a duplicate runtime hazard when it
-    # existed next to metrotherapy.service. If the legacy unit is absent, that is
+    # The old clientplatform-bot.service was a duplicate runtime hazard when it
+    # existed next to clientplatform.service. If the legacy unit is absent, that is
     # also a safe state: there is no second process owner to disable or mask.
     if normalized in {"disabled", "masked", "not-found"}:
         return CheckResult(f"service:{service}:disabled", True, normalized)
@@ -100,7 +100,7 @@ def _health_check() -> CheckResult:
 
 
 def _runtime_memory_check() -> CheckResult:
-    pid = _main_pid("metrotherapy.service")
+    pid = _main_pid("clientplatform.service")
     rss = _rss_kb(pid)
     if rss <= 0:
         return CheckResult("runtime:rss", False, f"pid={pid} rss={rss}")
@@ -109,8 +109,8 @@ def _runtime_memory_check() -> CheckResult:
 
 def _collect() -> list[CheckResult]:
     return [
-        _service_active("metrotherapy.service"),
-        _service_disabled("metrotherapy-bot.service"),
+        _service_active("clientplatform.service"),
+        _service_disabled("clientplatform-bot.service"),
         _health_check(),
         _runtime_memory_check(),
     ]

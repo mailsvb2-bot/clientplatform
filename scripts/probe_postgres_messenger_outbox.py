@@ -48,7 +48,7 @@ def _persist(platform: str, event_key: str, user_id: int) -> None:
 
 def main() -> int:
     if not CONFIG.uses_postgres:
-        raise SystemExit("POSTGRES_MESSENGER_OUTBOX_FAILED: METRO_DB_ENGINE=postgres is required")
+        raise SystemExit("POSTGRES_MESSENGER_OUTBOX_FAILED: CLIENTPLATFORM_DB_ENGINE=postgres is required")
     if not (os.getenv("DATABASE_URL") or "").strip():
         raise SystemExit("POSTGRES_MESSENGER_OUTBOX_FAILED: DATABASE_URL is required")
 

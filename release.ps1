@@ -109,8 +109,8 @@ Write-Host "▶ Running strict validator (prod)..."
 $env:APP_ENV = "prod"
 $env:VALIDATOR_RELEASE_MODE = "1"
 $env:PYTHONDONTWRITEBYTECODE = "1"
-$tempDb = Join-Path ([System.IO.Path]::GetTempPath()) ("metro_release_db_" + [guid]::NewGuid().ToString("N") + ".sqlite")
-$env:METRO_DB_PATH = $tempDb
+$tempDb = Join-Path ([System.IO.Path]::GetTempPath()) ("clientplatform_release_db_" + [guid]::NewGuid().ToString("N") + ".sqlite")
+$env:CLIENTPLATFORM_DB_PATH = $tempDb
 python scripts/validate_project.py
 if ($LASTEXITCODE -ne 0) { Die "Validator failed" }
 
@@ -118,7 +118,7 @@ Write-Host "▶ Running smoke checks (no polling)..."
 python scripts/smoke.py
 if ($LASTEXITCODE -ne 0) { Die "Smoke checks failed" }
 Remove-Item $tempDb, "$tempDb-journal", "$tempDb-wal", "$tempDb-shm" -Force -ErrorAction SilentlyContinue
-Remove-Item Env:METRO_DB_PATH -ErrorAction SilentlyContinue
+Remove-Item Env:CLIENTPLATFORM_DB_PATH -ErrorAction SilentlyContinue
 
 Write-Host "▶ Re-checking cleanliness after validator/smoke..."
 Clean-Artifacts
@@ -144,7 +144,7 @@ Write-Host "▶ Preparing clean staging tree for packaging..."
 $zipPath = Join-Path $OutDir $ArchiveName
 if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
 
-$stageRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("metro_release_stage_" + [guid]::NewGuid().ToString("N"))
+$stageRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("clientplatform_release_stage_" + [guid]::NewGuid().ToString("N"))
 $stageProject = Join-Path $stageRoot $ProjectName
 New-Item -ItemType Directory -Force -Path $stageProject | Out-Null
 

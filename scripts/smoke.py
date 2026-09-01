@@ -66,19 +66,6 @@ def _cleanup_temp_db(path: Path) -> None:
             pass
 
 
-def _set_smoke_prod_payment_env() -> None:
-    """Provide harmless payment-shape values for hermetic smoke checks.
-
-    Smoke never calls provider APIs. These values only keep import-time settings
-    that expect payment-shaped configuration from failing in isolated checks.
-    """
-    os.environ.setdefault('YOOKASSA_SHOP_ID', 'smoke-shop')
-    os.environ.setdefault('YOOKASSA_SECRET_KEY', 'smoke-secret')
-    os.environ.setdefault('PAYMENT_CHECKOUT_SIGNING_KEY', 'smoke-checkout-signing-key')
-    os.environ.setdefault('YOOKASSA_WEBHOOK_SECRET', 'smoke-webhook-secret')
-    os.environ.setdefault('PAYMENT_PUBLIC_BASE_URL', 'https://metrotherapy.example')
-
-
 def _force_hermetic_app_env() -> None:
     """Smoke is not the production gate.
 
@@ -98,14 +85,11 @@ def main() -> int:
     sys.dont_write_bytecode = True
     os.environ.setdefault('VALIDATOR_RELEASE_MODE', '1')
     os.environ.setdefault('VALIDATOR_GUARDRAILS_STRICT', '1')
-    os.environ.setdefault('VALIDATOR_SKIP_AUDIO', '1')
-    temp_dir = Path(tempfile.mkdtemp(prefix="metro_smoke_"))
+    temp_dir = Path(tempfile.mkdtemp(prefix="clientplatform_smoke_"))
     temp_db = temp_dir / "smoke.db"
-    os.environ.setdefault('METRO_DB_PATH', str(temp_db))
+    os.environ.setdefault('CLIENTPLATFORM_DB_PATH', str(temp_db))
     os.environ.setdefault('BOT_TOKEN', SMOKE_BOT_TOKEN)
-    os.environ.setdefault('PAY_PROVIDER_TOKEN', '000000:SMOKE')
     os.environ.setdefault('ADMIN_IDS', '1')
-    _set_smoke_prod_payment_env()
 
     ok = compileall.compile_dir(str(ROOT), quiet=1)
     if not ok:
@@ -149,38 +133,12 @@ def main() -> int:
     bot = Bot(token=token)
     dp = Dispatcher()
 
-    # Include routers exactly as app does (imports already happen in app).
-    # Keep this list in parity with app.create_application(); otherwise smoke can
-    # pass while a production router is broken or missing.
-    from handlers import (
-        clientplatform_control,
-        start, menu, text_input, payments, demo, audio,
-        admin, admin_release, admin_stats, admin_inline, share, weather,
-        info, micro, settings as settings_router, mood,
-        diagnostics, gift_flow, kb_debug, messenger_audio,
-    )
+    # Compose exactly the single production ClientPlatform user surface.
+    # Importing inherited product routers here would make smoke validate a
+    # different application than app.create_application().
+    from handlers import clientplatform_entry
 
-    dp.include_router(clientplatform_control.router)
-    dp.include_router(start.router)
-    dp.include_router(menu.router)
-    dp.include_router(text_input.router)
-    dp.include_router(demo.router)
-    dp.include_router(audio.router)
-    dp.include_router(payments.router)
-    dp.include_router(admin.router)
-    dp.include_router(admin_release.router)
-    dp.include_router(admin_stats.router)
-    dp.include_router(admin_inline.router)
-    dp.include_router(share.router)
-    dp.include_router(weather.router)
-    dp.include_router(info.router)
-    dp.include_router(micro.router)
-    dp.include_router(settings_router.router)
-    dp.include_router(mood.router)
-    dp.include_router(diagnostics.router)
-    dp.include_router(gift_flow.router)
-    dp.include_router(kb_debug.router)
-    dp.include_router(messenger_audio.router)
+    dp.include_router(clientplatform_entry.router)
 
     # Close aiohttp session to avoid warnings.
     try:

@@ -1,6 +1,6 @@
 Runtime state contract v1
 
-This release resolves mutable data, logs, caches, and temporary files outside the content-addressed runtime tree and is safe to start with ReadOnlyPaths applied to METRO_RUNTIME_ROOT.
+This release resolves mutable data, logs, caches, and temporary files outside the content-addressed runtime tree and is safe to start with ReadOnlyPaths applied to CLIENTPLATFORM_RUNTIME_ROOT.
 
 Capability marker for deploy-time guard selection and read-only production topology probes.
 

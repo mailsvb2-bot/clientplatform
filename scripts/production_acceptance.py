@@ -115,8 +115,8 @@ def _method_probe(name: str, url: str, *, expected_status: int = 405, expected_a
 
 def collect_results(*, include_pytest: bool = False) -> list[AcceptanceResult]:
     public_base = os.getenv(
-        "METRO_PUBLIC_BOT_BASE_URL",
-        os.getenv("MESSENGER_PUBLIC_BASE_URL", "https://metrotherapy-bot.metrotherapy.ru"),
+        "CLIENTPLATFORM_PUBLIC_BOT_BASE_URL",
+        os.getenv("MESSENGER_PUBLIC_BASE_URL", "https://clientplatform-bot.clientplatform.ru"),
     ).rstrip("/")
     results: list[AcceptanceResult] = []
     results.append(
@@ -155,10 +155,10 @@ def collect_results(*, include_pytest: bool = False) -> list[AcceptanceResult]:
         )
     results.append(_run("prod_readiness", [sys.executable, "scripts/prod_readiness_check.py"], timeout=120))
     results.append(_run("runtime_observability", [sys.executable, "scripts/runtime_observability_check.py"], timeout=60))
-    results.append(_run("user_scenario_gate:prod", [sys.executable, "scripts/user_scenario_gate.py", "--mode", "prod"], timeout=120))
-    results.append(_http_json("http:local_health", "http://127.0.0.1:8082/healthz", require_telegram_polling=True))
-    results.append(_http_json("http:local_ready", "http://127.0.0.1:8082/readyz", readiness=True))
-    results.append(_http_json("http:local_webhook_health", "http://127.0.0.1:8081/healthz"))
+    results.append(_run("clientplatform_sales_smoke", [sys.executable, "scripts/clientplatform_sales_production_smoke.py"], timeout=120))
+    results.append(_http_json("http:local_health", "http://127.0.0.1:8182/healthz", require_telegram_polling=True))
+    results.append(_http_json("http:local_ready", "http://127.0.0.1:8182/readyz", readiness=True))
+    results.append(_http_json("http:local_webhook_health", "http://127.0.0.1:8181/healthz"))
     if public_base:
         results.append(_method_probe("http:vk_webhook_get_rejected", f"{public_base}/webhooks/vk"))
         results.append(_method_probe("http:max_webhook_get_rejected", f"{public_base}/webhooks/max"))
@@ -184,7 +184,7 @@ def main() -> int:
     pytest_note = "pytest included" if include_pytest else "pytest skipped"
     print(f"AUTOMATED ACCEPTANCE: GREEN ({pytest_note})")
     print("LIVE ACCEPTANCE: NOT PROVEN")
-    print("Required live journeys: Telegram demo, VK message, MAX message, payment and refund test.")
+    print("Required live journeys: Telegram owner entry, VK message, MAX message, customer booking and business payment/refund test.")
     return 0
 
 

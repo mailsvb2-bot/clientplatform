@@ -103,8 +103,6 @@ services:
     build:
       context: ../..
       dockerfile: deploy/clientplatform/Dockerfile
-      args:
-        CLIENTPLATFORM_REQUIRE_AUDIO_ASSETS: ${CLIENTPLATFORM_REQUIRE_AUDIO_ASSETS:-0}
     restart: unless-stopped
     env_file: ./clientplatform.env
     environment:
@@ -164,8 +162,6 @@ services:
     build:
       context: ../..
       dockerfile: deploy/clientplatform/Dockerfile
-      args:
-        CLIENTPLATFORM_REQUIRE_AUDIO_ASSETS: "0"
     env_file: ./clientplatform.env
     environment:
       DATABASE_URL: postgresql://clientplatform_app:${CLIENTPLATFORM_POSTGRES_APP_PASSWORD}@postgres:5432/clientplatform
@@ -188,8 +184,6 @@ services:
     build:
       context: ../..
       dockerfile: deploy/clientplatform/Dockerfile
-      args:
-        CLIENTPLATFORM_REQUIRE_AUDIO_ASSETS: "0"
     env_file: ./clientplatform.env
     entrypoint: ["python", "scripts/clientplatform_s3_replication.py", "sync"]
     read_only: true

@@ -2,7 +2,7 @@
 
 ## Production boundary
 
-ClientPlatform production is separate from the imported Metrotherapy deployment. It requires its own control Telegram bot, PostgreSQL database and roles, private S3-compatible bucket, HTTPS domain, Linux service account, state directories, backups, and staging/production secrets.
+ClientPlatform production is separate from any imported baseline deployment. It requires its own control Telegram bot, PostgreSQL database and roles, private S3-compatible bucket, HTTPS domain, Linux service account, state directories, backups, and staging/production secrets.
 
 Fixed paths:
 
@@ -118,7 +118,7 @@ sudo -u clientplatform --preserve-env=DATABASE_URL,CLIENTPLATFORM_BACKUP_DIR,CLI
   /var/lib/clientplatform/runtime/current/.venv/bin/python \
   /var/lib/clientplatform/runtime/current/scripts/clientplatform_postgres_backup.py backup
 cd "$RELEASE"
-sudo -u clientplatform --preserve-env=DATABASE_URL,METRO_DB_ENGINE \
+sudo -u clientplatform --preserve-env=DATABASE_URL,CLIENTPLATFORM_DB_ENGINE \
   .venv/bin/python -c 'from services.schema import init_db; init_db()'
 sudo -u clientplatform .venv/bin/python scripts/clientplatform_production_preflight.py \
   --env-file /etc/clientplatform/clientplatform.env

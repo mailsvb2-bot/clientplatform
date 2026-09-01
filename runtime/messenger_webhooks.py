@@ -46,24 +46,13 @@ from runtime.ad_oauth_http import ad_oauth_http_enabled, register_ad_oauth_route
 from runtime.ingress_flags import (
     http_ingress_enabled,
     max_webhook_enabled,
-    payment_http_enabled,
     vk_webhook_enabled,
 )
 from runtime.messenger_ingress_reliability import max_webhook, vk_webhook
-from runtime.messenger_media_http import audio_access, audio_media
-from runtime.payment_http import (
-    payment_terms_web,
-    pay_yookassa_web,
-    yookassa_reconciliation_webhook,
-)
-from runtime.payment_webhook_admission import (
-    ingress_body_limit,
-    payment_webhook_admission_middleware,
-)
+from runtime.http_ingress_limits import ingress_body_limit
 from runtime.privacy_export_http import privacy_export_download, privacy_export_landing
 from runtime.telegram_transport import telegram_runtime_enabled
 from services.bg import tm as canonical_task_manager
-from services.messenger.audio_links import AUDIO_ACCESS_PREFIX, AUDIO_MEDIA_PREFIX
 from services.messenger.delivery_pool import start_delivery_worker, stop_delivery_worker
 from services.messenger.links import build_owner_entry_target
 from services.messenger.setup import build_setup_status
@@ -299,7 +288,7 @@ async def _max_webhook_with_official_secret(request: web.Request) -> web.Respons
         for name in (
             "X-Max-Webhook-Secret",
             "X-Webhook-Secret",
-            "X-Metrotherapy-Webhook-Secret",
+            "X-ClientPlatform-Webhook-Secret",
         )
     )
     if official and not legacy_present:
@@ -456,12 +445,6 @@ def _register_health_routes(app: web.Application) -> None:
     app.router.add_get("/healthz", _health)
 
 
-def _register_payment_routes(app: web.Application) -> None:
-    app.router.add_get("/terms", payment_terms_web)
-    app.router.add_get("/pay/yookassa", pay_yookassa_web)
-    app.router.add_post("/pay/yookassa/webhook", yookassa_reconciliation_webhook)
-
-
 def _register_privacy_export_routes(app: web.Application) -> None:
     app.router.add_get(f"{PRIVACY_EXPORT_PREFIX}{{token}}", privacy_export_landing)
     app.router.add_post(f"{PRIVACY_EXPORT_PREFIX}{{token}}", privacy_export_download)
@@ -511,11 +494,6 @@ def _register_clientplatform_omnichannel_routes(app: web.Application) -> None:
     app["clientplatform_omnichannel_ingress"] = True
 
 
-def _register_audio_routes(app: web.Application) -> None:
-    app.router.add_get(f"{AUDIO_MEDIA_PREFIX}{{filename}}", audio_media)
-    app.router.add_get(f"{AUDIO_ACCESS_PREFIX}{{token}}", audio_access)
-
-
 def _resolve_ingress_bind() -> tuple[str, int]:
     return (
         str(getattr(settings, "MESSENGER_WEBHOOK_HOST", "127.0.0.1")),
@@ -535,7 +513,6 @@ async def start_messenger_webhook_runtime(
 ) -> MessengerWebhookRuntime | None:
     """Start webhook providers, OAuth callbacks and durable provider workers."""
 
-    payment_enabled = payment_http_enabled()
     privacy_export_enabled = privacy_export_http_enabled()
     max_enabled = max_webhook_enabled()
     vk_enabled = vk_webhook_enabled()
@@ -560,10 +537,7 @@ async def start_messenger_webhook_runtime(
 
     app = web.Application(
         client_max_size=ingress_body_limit(),
-        middlewares=[
-            native_messenger_http_admission_middleware,
-            payment_webhook_admission_middleware,
-        ],
+        middlewares=[native_messenger_http_admission_middleware],
     )
     _register_health_routes(app)
     # Landing owner-entry redirects are a first-party public surface, not a
@@ -572,8 +546,6 @@ async def start_messenger_webhook_runtime(
     # intentionally disabled. Each redirect still checks provider readiness.
     _register_clientplatform_owner_entry_routes(app)
 
-    if payment_enabled:
-        _register_payment_routes(app)
     if privacy_export_enabled:
         _register_privacy_export_routes(app)
     if max_enabled:
@@ -586,8 +558,6 @@ async def start_messenger_webhook_runtime(
         _register_external_product_routes(app)
     if acquisition_enabled:
         _register_acquisition_routes(app)
-    if max_enabled or vk_enabled:
-        _register_audio_routes(app)
     if ad_oauth_enabled:
         if bot is None:
             raise RuntimeError("Advertising OAuth callback requires the central bot")
@@ -646,13 +616,12 @@ async def start_messenger_webhook_runtime(
             )
 
         log.info(
-            "HTTP ingress started on %s:%s payment=%s privacy_export=%s "
+            "HTTP ingress started on %s:%s privacy_export=%s "
             "max=%s vk=%s omnichannel=%s external_product=%s acquisition=%s "
             "durable_delivery=%s managed_bot_polling=%s ad_oauth=%s "
             "ad_publication_worker=%s max_webhook_reconciliation=%s",
             host,
             port,
-            payment_enabled,
             privacy_export_enabled,
             max_enabled,
             vk_enabled,

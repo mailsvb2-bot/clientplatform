@@ -18,7 +18,7 @@ def _truthy(name: str, default: str = "0") -> bool:
 
 
 def _db_engine() -> str:
-    raw = _env("METRO_DB_ENGINE").lower()
+    raw = _env("CLIENTPLATFORM_DB_ENGINE").lower()
     if raw in {"postgres", "postgresql", "pg"}:
         return "postgres"
     if raw in {"sqlite", "sqlite3"}:
@@ -43,7 +43,7 @@ def validate_production_contract() -> None:
         problems.append("ALLOW_INSECURE_TELEGRAM_WEBHOOK is forbidden in production")
 
     if _db_engine() != "postgres":
-        problems.append("METRO_DB_ENGINE must be postgres in production")
+        problems.append("CLIENTPLATFORM_DB_ENGINE must be postgres in production")
     database_url = _env("DATABASE_URL")
     if not database_url:
         problems.append("DATABASE_URL is required in production")

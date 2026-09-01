@@ -2379,28 +2379,28 @@ def _growth_report_message(actor: TenantContext, action: str) -> CustomerInterac
                 max_entries=8,
             )
         )
-        rows: list[tuple[CustomerInteractionButton, ...]] = [
+        publication_rows: list[tuple[CustomerInteractionButton, ...]] = [
             (_button("➕ Создать черновик", "cpm:publication-new"),)
         ]
-        for item in projection.actionable_drafts[:2]:
-            rows.append(
+        for draft_item in projection.actionable_drafts[:2]:
+            publication_rows.append(
                 (
-                    _button("🗓 Запланировать", f"cpm:publication-schedule:{item.id}"),
-                    _button("✅ Опубликована", f"cpm:publication-publish:{item.id}"),
+                    _button("🗓 Запланировать", f"cpm:publication-schedule:{draft_item.id}"),
+                    _button("✅ Опубликована", f"cpm:publication-publish:{draft_item.id}"),
                 )
             )
-        scheduled = [item for item in projection.entries if item.status == "scheduled"]
-        for item in scheduled[:1]:
-            rows.append(
+        scheduled = [entry for entry in projection.entries if entry.status == "scheduled"]
+        for scheduled_item in scheduled[:1]:
+            publication_rows.append(
                 (
-                    _button("🕒 Перенести", f"cpm:publication-schedule:{item.id}"),
+                    _button("🕒 Перенести", f"cpm:publication-schedule:{scheduled_item.id}"),
                     _button(
                         "⛔ Отменить",
-                        f"cpm:publication-cancel:{item.id}:{encode_publication_schedule_version(item.scheduled_at or '')}",
+                        f"cpm:publication-cancel:{scheduled_item.id}:{encode_publication_schedule_version(scheduled_item.scheduled_at or '')}",
                     ),
                 )
             )
-        rows.extend(((_button("📈 Рост", "cpm:growth"),), _back_row()))
+        publication_rows.extend(((_button("📈 Рост", "cpm:growth"),), _back_row()))
         return CustomerInteractionMessage(
             text=(
                 "📣 Публикации\n\n"
@@ -2410,7 +2410,7 @@ def _growth_report_message(actor: TenantContext, action: str) -> CustomerInterac
                 f"Ошибки: {projection.failed_count}\n\n"
                 f"Ближайшие и последние:\n{calendar}"
             ),
-            rows=tuple(rows),
+            rows=tuple(publication_rows),
         )
 
     if action in {"funnel", "segments", "offers", "copy", "money", "payments", "prices"}:
@@ -2458,10 +2458,10 @@ def _growth_report_message(actor: TenantContext, action: str) -> CustomerInterac
         price_by_offering = {item.offering_id: item for item in prices}
 
         if action == "money":
-            rows = []
+            money_rows: list[tuple[CustomerInteractionButton, ...]] = []
             if actor.role in admin_ops._FINANCE_WRITE_ROLES:
-                rows.append((_button("➕ Зафиксировать оплату", "cpm:payment-new"),))
-            rows.extend(((_button("📈 Рост", "cpm:growth"),), _back_row()))
+                money_rows.append((_button("➕ Зафиксировать оплату", "cpm:payment-new"),))
+            money_rows.extend(((_button("📈 Рост", "cpm:growth"),), _back_row()))
             return CustomerInteractionMessage(
                 text=(
                     "💰 Деньги и клиенты\n\n"
@@ -2470,33 +2470,33 @@ def _growth_report_message(actor: TenantContext, action: str) -> CustomerInterac
                     f"Платящих клиентов: {payment_facts.paid_customers}\n"
                     f"Всего клиентов: {insights.active_customers}"
                 ),
-                rows=tuple(rows),
+                rows=tuple(money_rows),
             )
 
         if action == "payments":
             recent = "\n".join(
-                f"• {_native_amount_label(item.amount_minor, item.currency)} · {item.note[:35] or item.provider} · {item.status}"
-                for item in payments[:10]
+                f"• {_native_amount_label(payment_item.amount_minor, payment_item.currency)} · {payment_item.note[:35] or payment_item.provider} · {payment_item.status}"
+                for payment_item in payments[:10]
             ) or "• Оплат пока нет"
-            rows = []
+            payment_rows: list[tuple[CustomerInteractionButton, ...]] = []
             if actor.role in admin_ops._FINANCE_WRITE_ROLES:
-                rows.append((_button("➕ Зафиксировать оплату", "cpm:payment-new"),))
-                for item in [
+                payment_rows.append((_button("➕ Зафиксировать оплату", "cpm:payment-new"),))
+                for refund_candidate in [
                     payment
                     for payment in payments
                     if payment.status == "paid" and payment.outcome_event_id is not None
                 ][:4]:
-                    rows.append(
-                        (_button(f"↩️ Возврат · {_native_amount_label(item.amount_minor, item.currency)}", f"cpm:pay-refund:{item.id}"),)
+                    payment_rows.append(
+                        (_button(f"↩️ Возврат · {_native_amount_label(refund_candidate.amount_minor, refund_candidate.currency)}", f"cpm:pay-refund:{refund_candidate.id}"),)
                     )
-            rows.extend(((_button("📈 Рост", "cpm:growth"),), _back_row()))
+            payment_rows.extend(((_button("📈 Рост", "cpm:growth"),), _back_row()))
             return CustomerInteractionMessage(
                 text=(
                     "💳 Оплаты\n\n"
                     f"Успешных: {payment_facts.paid_payments}\n"
                     f"Сумма: {_native_payment_summary_totals(payment_facts)}\n\n{recent}"
                 ),
-                rows=tuple(rows),
+                rows=tuple(payment_rows),
             )
 
         if action == "segments":
@@ -2522,12 +2522,12 @@ def _growth_report_message(actor: TenantContext, action: str) -> CustomerInterac
                 )
                 for item in offerings[:12]
             ) or "• Предложения ещё не созданы"
-            rows: list[tuple[CustomerInteractionButton, ...]] = []
+            offer_rows: list[tuple[CustomerInteractionButton, ...]] = []
             if actor.role in _PROGRAM_MANAGEMENT_ROLES:
-                rows.append((_button("➕ Создать предложение", "cpm:offering-new"),))
+                offer_rows.append((_button("➕ Создать предложение", "cpm:offering-new"),))
             if actor.role in _MARKETING_ROLES:
-                rows.append((_button("💡 Настроить цены", "cpm:prices"),))
-            rows.extend(((_button("📈 Рост", "cpm:growth"),), _back_row()))
+                offer_rows.append((_button("💡 Настроить цены", "cpm:prices"),))
+            offer_rows.extend(((_button("📈 Рост", "cpm:growth"),), _back_row()))
             return CustomerInteractionMessage(
                 text=(
                     "🧪 Проверка предложений\n\n"
@@ -2536,16 +2536,16 @@ def _growth_report_message(actor: TenantContext, action: str) -> CustomerInterac
                     f"Без цены: {max(0, len(offerings) - len(price_by_offering))}\n\n"
                     f"{offer_lines}"
                 ),
-                rows=tuple(rows),
+                rows=tuple(offer_rows),
             )
 
         if action == "copy":
-            rows = []
+            copy_rows: list[tuple[CustomerInteractionButton, ...]] = []
             if actor.role in _CONNECTION_ROLES:
-                rows.append((_button("✏️ Изменить деятельность", "cpm:activity-edit-help"),))
+                copy_rows.append((_button("✏️ Изменить деятельность", "cpm:activity-edit-help"),))
             if actor.role in _CONTENT_ROLES:
-                rows.append((_button("➕ Создать публикацию", "cpm:publication-new"),))
-            rows.extend(((_button("📈 Рост", "cpm:growth"),), _back_row()))
+                copy_rows.append((_button("➕ Создать публикацию", "cpm:publication-new"),))
+            copy_rows.extend(((_button("📈 Рост", "cpm:growth"),), _back_row()))
             return CustomerInteractionMessage(
                 text=(
                     "✍️ Подготовить тексты\n\n"
@@ -2556,11 +2556,11 @@ def _growth_report_message(actor: TenantContext, action: str) -> CustomerInterac
                     "3. Как проходит работа.\n"
                     "4. Один понятный следующий шаг."
                 ),
-                rows=tuple(rows),
+                rows=tuple(copy_rows),
             )
 
         if action == "prices":
-            lines = "\n".join(
+            price_lines = "\n".join(
                 f"• {item.title[:36]} — "
                 + (
                     _native_amount_label(price_by_offering[item.id].amount_minor, price_by_offering[item.id].currency)
@@ -2569,22 +2569,22 @@ def _growth_report_message(actor: TenantContext, action: str) -> CustomerInterac
                 )
                 for item in offerings[:12]
             ) or "• Сначала создайте предложение"
-            rows = []
+            price_rows: list[tuple[CustomerInteractionButton, ...]] = []
             if actor.role in admin_ops._FINANCE_WRITE_ROLES:
-                rows.extend(
-                    (_button(f"💵 Цена · {item.title[:22]}", f"cpm:price-set:{item.id}"),)
-                    for item in offerings[:6]
+                price_rows.extend(
+                    (_button(f"💵 Цена · {offering_item.title[:22]}", f"cpm:price-set:{offering_item.id}"),)
+                    for offering_item in offerings[:6]
                 )
-            rows.extend(((_button("📈 Рост", "cpm:growth"),), _back_row()))
+            price_rows.extend(((_button("📈 Рост", "cpm:growth"),), _back_row()))
             return CustomerInteractionMessage(
                 text=(
                     "💡 Подсказка по ценам\n\n"
                     f"Предложений: {len(offerings)}\n"
                     f"Цены заполнены: {len(price_by_offering)}/{len(offerings)}\n"
                     f"Зафиксированная выручка: {_native_payment_summary_totals(payment_facts)}\n\n"
-                    f"{lines}"
+                    f"{price_lines}"
                 ),
-                rows=tuple(rows),
+                rows=tuple(price_rows),
             )
 
     raise ValueError("unknown native growth report")

@@ -17,12 +17,14 @@ def test_current_schema_has_explicit_policy_for_every_user_owned_table() -> None
         "invalid": report.invalid_policies,
         "missing_required": report.missing_required_tables,
     }
-    assert "payments" in report.discovered_user_tables
-    assert "mood_sessions" in report.discovered_user_tables
-    assert "messenger_delivery_outbox" in report.discovered_user_tables
-    assert "yookassa_refunds" in report.discovered_user_tables
-    assert "ad_oauth_sessions" in report.discovered_user_tables
-
+    for table in (
+        "users",
+        "accounts",
+        "account_channel_identities",
+        "messenger_delivery_outbox",
+        "business_members",
+    ):
+        assert table in report.discovered_user_tables
 
 def test_new_user_owned_table_fails_closed_until_policy_is_added() -> None:
     conn = sqlite3.connect(":memory:")
@@ -41,8 +43,8 @@ def test_export_and_erasure_record_manifest_version() -> None:
     user_id = 885001
     with db() as conn:
         conn.execute(
-            "INSERT OR REPLACE INTO users(user_id,username,first_name,demo_uses) VALUES(?,?,?,?)",
-            (user_id, "privacy_manifest_user", "Manifest", 1),
+            "INSERT OR REPLACE INTO users(user_id,username,first_name) VALUES(?,?,?)",
+            (user_id, "privacy_manifest_user", "Manifest"),
         )
         conn.execute(
             "INSERT INTO events(user_id,event,ts,meta) VALUES(?,?,?,?)",
@@ -59,7 +61,7 @@ def test_export_and_erasure_record_manifest_version() -> None:
     assert result.deleted_tables["events"] == 1
     with db() as conn:
         user = conn.execute(
-            "SELECT username,first_name,demo_uses FROM users WHERE user_id=?",
+            "SELECT username,first_name FROM users WHERE user_id=?",
             (user_id,),
         ).fetchone()
         audit = conn.execute(
@@ -68,5 +70,4 @@ def test_export_and_erasure_record_manifest_version() -> None:
         ).fetchone()
     assert user["username"] is None
     assert user["first_name"] is None
-    assert int(user["demo_uses"]) == 0
     assert MANIFEST_VERSION in str(audit["retained_tables"])

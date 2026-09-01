@@ -189,7 +189,7 @@ def _artifact_directory() -> Path:
     if configured:
         path = Path(configured).expanduser().resolve()
     else:
-        path = Path(tempfile.mkdtemp(prefix="metrotherapy-coverage-"))
+        path = Path(tempfile.mkdtemp(prefix="clientplatform-coverage-"))
     path.mkdir(parents=True, exist_ok=True)
     return path
 

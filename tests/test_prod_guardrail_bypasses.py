@@ -13,11 +13,8 @@ def _prod_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("VALIDATOR_GUARDRAILS_STRICT", "1")
     monkeypatch.setenv("TELEGRAM_TRANSPORT", "polling")
     monkeypatch.setenv("TELEGRAM_WEBHOOK_ENABLED", "0")
-    monkeypatch.setenv("METRO_DB_ENGINE", "postgres")
-    monkeypatch.setenv("DATABASE_URL", "postgresql://metrotherapy@127.0.0.1:5432/metrotherapy")
-    monkeypatch.setenv("TOKEN_ECONOMY_ENABLED", "1")
-    monkeypatch.setenv("TOKEN_ENFORCEMENT_MODE", "hard")
-    monkeypatch.setenv("YOOKASSA_RECEIPT_EMAIL", "billing@example.com")
+    monkeypatch.setenv("CLIENTPLATFORM_DB_ENGINE", "postgres")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://clientplatform@127.0.0.1:5432/clientplatform")
 
 
 def test_prod_guardrails_reject_unguarded_prod_bypass(monkeypatch: pytest.MonkeyPatch) -> None:

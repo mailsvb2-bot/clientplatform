@@ -28,7 +28,7 @@ class FakeConnection:
         self.calls.append(sql)
         if "sqlite_master" in sql:
             return Result([(name,) for name in sorted(self.tables)])
-        if sql.startswith("PRAGMA table_info(payments)"):
+        if sql.startswith("PRAGMA table_info(business_payments)"):
             return Result([(index, name) for index, name in enumerate(sorted(self.columns))])
         raise AssertionError(sql)
 
@@ -39,20 +39,13 @@ def connection(conn: FakeConnection) -> Iterator[FakeConnection]:
 
 
 def required_tables() -> set[str]:
-    return {
-        "users",
-        "plans",
-        "plan_price_history",
-        "payments",
-        "telegram_stars_refunds",
-        "yookassa_refunds",
-        "selected_plan",
-        "mood_sessions",
-    }
+    from services.db.schema.readiness import READY_TABLES
+
+    return set(READY_TABLES)
 
 
 def required_payment_columns() -> set[str]:
-    return {"id", "user_id", "payload", "amount", "currency", "created_at"}
+    return {"id", "business_id", "status", "amount_minor", "currency"}
 
 
 def test_excluded_scan_path_inside_and_outside_project(tmp_path: Path) -> None:
@@ -115,7 +108,7 @@ def install_schema_connection(
 def test_table_columns_and_valid_schema(monkeypatch: pytest.MonkeyPatch) -> None:
     conn = FakeConnection(required_tables(), required_payment_columns())
     install_schema_connection(monkeypatch, conn)
-    assert db_validator._table_columns(conn, "payments") == required_payment_columns()
+    assert db_validator._table_columns(conn, "business_payments") == required_payment_columns()
     db_validator.validate_db_schema(strict=True)
 
 
@@ -135,10 +128,10 @@ def test_validate_db_schema_missing_tables_strict_and_warning(
 def test_validate_db_schema_missing_payment_columns(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    columns = required_payment_columns() - {"payload", "currency"}
+    columns = required_payment_columns() - {"amount_minor", "currency"}
     conn = FakeConnection(required_tables(), columns)
     install_schema_connection(monkeypatch, conn)
-    with pytest.raises(ValidationError, match="payments missing columns"):
+    with pytest.raises(ValidationError, match="business_payments missing columns"):
         db_validator.validate_db_schema(strict=True)
 
     conn = FakeConnection(required_tables(), columns)

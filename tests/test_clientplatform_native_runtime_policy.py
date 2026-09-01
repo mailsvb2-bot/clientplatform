@@ -139,7 +139,7 @@ class NativeOnlyProductionGuardTests(unittest.TestCase):
                 "APP_ENV": "production",
                 "CLIENTPLATFORM_TELEGRAM_RUNTIME_ENABLED": "0",
                 "HEALTHCHECK_ENABLED": "1",
-                "METRO_DB_ENGINE": "postgres",
+                "CLIENTPLATFORM_DB_ENGINE": "postgres",
                 "DATABASE_URL": "postgresql://runtime@example.invalid/clientplatform",
                 "MESSENGER_WEBHOOK_ENABLED": "0",
             },
@@ -154,7 +154,7 @@ class NativeOnlyProductionGuardTests(unittest.TestCase):
                 "APP_ENV": "production",
                 "CLIENTPLATFORM_TELEGRAM_RUNTIME_ENABLED": "1",
                 "HEALTHCHECK_ENABLED": "1",
-                "METRO_DB_ENGINE": "postgres",
+                "CLIENTPLATFORM_DB_ENGINE": "postgres",
                 "DATABASE_URL": "postgresql://runtime@example.invalid/clientplatform",
             },
             clear=True,
@@ -178,7 +178,6 @@ class NativeOnlyProductionGuardTests(unittest.TestCase):
                 {
                     "APP_ENV": "production",
                     "CLIENTPLATFORM_TELEGRAM_RUNTIME_ENABLED": "0",
-                    "PAYMENT_HTTP_ENABLED": "0",
                     "MAX_WEBHOOK_ENABLED": "0",
                     "VK_WEBHOOK_ENABLED": "0",
                     "HEALTHCHECK_ENABLED": "1",
@@ -205,7 +204,6 @@ class NativeOnlyProductionGuardTests(unittest.TestCase):
                 {
                     "APP_ENV": "production",
                     "CLIENTPLATFORM_TELEGRAM_RUNTIME_ENABLED": "1",
-                    "PAYMENT_HTTP_ENABLED": "0",
                     "MAX_WEBHOOK_ENABLED": "0",
                     "VK_WEBHOOK_ENABLED": "0",
                     "HEALTHCHECK_ENABLED": "1",

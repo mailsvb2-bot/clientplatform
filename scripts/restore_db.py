@@ -26,7 +26,7 @@ if str(ROOT_PATH) not in sys.path:
 from core.paths import DB_PATH, ROOT
 from services.db.runtime import is_postgres_enabled, redacted_db_target
 
-RESTORE_CONFIRMATION = "I_CONFIRM_METROTHERAPY_IS_STOPPED"
+RESTORE_CONFIRMATION = "I_CONFIRM_CLIENTPLATFORM_IS_STOPPED"
 
 
 class RestoreDbError(RuntimeError):
@@ -330,11 +330,11 @@ def _error_report(
 def main(argv: list[str] | None = None) -> int:
     if is_postgres_enabled():
         raise SystemExit(
-            "REFUSE: METRO_DB_ENGINE=postgres uses pg_dump/psql restore, not SQLite restore_db.py. "
+            "REFUSE: CLIENTPLATFORM_DB_ENGINE=postgres uses pg_dump/psql restore, not SQLite restore_db.py. "
             f"Target={redacted_db_target()}"
         )
 
-    parser = argparse.ArgumentParser(description="Restore Metrotherapy SQLite DB from backup")
+    parser = argparse.ArgumentParser(description="Restore ClientPlatform SQLite DB from backup")
     parser.add_argument("--from-path", dest="from_path", default="", help="Path to backup .db file")
     parser.add_argument("--apply", action="store_true", help="Apply the verified restore")
     parser.add_argument("--confirm-service-stopped", default="")

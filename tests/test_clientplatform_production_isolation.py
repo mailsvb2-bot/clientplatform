@@ -34,12 +34,11 @@ class ClientPlatformProductionIsolationTests(unittest.TestCase):
                 "clientplatform_ci"
             ),
             "ALLOW_SQLITE_IN_PROD": "0",
-            "METRO_RUNTIME_ROOT": "/var/lib/clientplatform/runtime",
-            "METRO_WRITABLE_ROOT": "/var/lib/clientplatform/state",
+            "CLIENTPLATFORM_RUNTIME_ROOT": "/var/lib/clientplatform/runtime",
+            "CLIENTPLATFORM_WRITABLE_ROOT": "/var/lib/clientplatform/state",
             "CLIENTPLATFORM_DATA_DIR": "/var/lib/clientplatform/state/data",
             "CLIENTPLATFORM_LOGS_DIR": "/var/log/clientplatform",
             "MPLCONFIGDIR": "/var/lib/clientplatform/state/matplotlib",
-            "PREWARM_MARKER_PATH": "/var/lib/clientplatform/state/prewarm/audio.done",
             "TELEGRAM_TRANSPORT": "polling",
             "RUN_MODE": "polling",
             "TELEGRAM_WEBHOOK_ENABLED": "0",
@@ -52,7 +51,6 @@ class ClientPlatformProductionIsolationTests(unittest.TestCase):
             "MESSENGER_WEBHOOK_HOST": "127.0.0.1",
             "MESSENGER_WEBHOOK_PORT": "8181",
             "MESSENGER_PUBLIC_BASE_URL": f"https://{domain}",
-            "PAYMENT_PUBLIC_BASE_URL": f"https://{domain}",
             "PRIVACY_EXPORT_PUBLIC_BASE_URL": f"https://{domain}",
             "HEALTHCHECK_ENABLED": "1",
             "HEALTHCHECK_HOST": "127.0.0.1",
@@ -99,23 +97,25 @@ class ClientPlatformProductionIsolationTests(unittest.TestCase):
     def test_valid_dedicated_systemd_environment_passes(self) -> None:
         self.assertEqual(validate_environment(self._valid_env()), [])
 
-    def test_clientplatform_namespace_wins_over_conflicting_legacy_values(self) -> None:
+    def test_invalid_canonical_database_and_paths_fail_closed(self) -> None:
         env = self._valid_env()
         env.update(
             {
-                "METRO_DB_ENGINE": "sqlite",
-                "METRO_DATA_DIR": "/app/legacy-data",
-                "METRO_LOGS_DIR": "/tmp/legacy-logs",
+                "CLIENTPLATFORM_DB_ENGINE": "sqlite",
+                "CLIENTPLATFORM_DATA_DIR": "/app/shared-data",
+                "CLIENTPLATFORM_LOGS_DIR": "/tmp/shared-logs",
             }
         )
-        self.assertEqual(validate_environment(env), [])
+        errors = validate_environment(env)
+        self.assertIn("CLIENTPLATFORM_DB_ENGINE must be postgres", errors)
+        self.assertIn("CLIENTPLATFORM_LOGS_DIR must equal /var/log/clientplatform", errors)
+        self.assertIn("CLIENTPLATFORM_DATA_DIR must stay under /var/lib/clientplatform/state", errors)
 
-    def test_legacy_database_and_path_names_remain_fallbacks(self) -> None:
+    def test_canonical_namespace_is_self_contained(self) -> None:
         env = self._valid_env()
-        env["METRO_DB_ENGINE"] = env.pop("CLIENTPLATFORM_DB_ENGINE")
-        env["METRO_DATA_DIR"] = env.pop("CLIENTPLATFORM_DATA_DIR")
-        env["METRO_LOGS_DIR"] = env.pop("CLIENTPLATFORM_LOGS_DIR")
         self.assertEqual(validate_environment(env), [])
+        self.assertEqual(env["CLIENTPLATFORM_DB_ENGINE"], "postgres")
+        self.assertTrue(env["CLIENTPLATFORM_DATA_DIR"].startswith("/var/lib/clientplatform/state/"))
 
     def test_shared_or_insecure_boundaries_fail_closed(self) -> None:
         cases = {
@@ -128,19 +128,19 @@ class ClientPlatformProductionIsolationTests(unittest.TestCase):
                 "TELEGRAM_WEBHOOK_SECRET_TOKEN": "w" * 48,
                 "TELEGRAM_WEBHOOK_PREFIX": "/telegram-webhook",
             },
-            "shared_database": {
-                "CLIENTPLATFORM_DATABASE_NAME": "metrotherapy",
+            "wrong_database": {
+                "CLIENTPLATFORM_DATABASE_NAME": "shared_app",
                 "DATABASE_URL": (
                     "postgresql://clientplatform_app:password@127.0.0.1:5432/"
-                    "metrotherapy"
+                    "shared_app"
                 ),
             },
             "shared_bucket": {
-                "CLIENTPLATFORM_STORAGE_BUCKET": "metrotherapy-media",
-                "CLIENTPLATFORM_MEDIA_GATEWAY_ALLOWED_BUCKETS": "metrotherapy-media",
+                "CLIENTPLATFORM_STORAGE_BUCKET": "shared-media",
+                "CLIENTPLATFORM_MEDIA_GATEWAY_ALLOWED_BUCKETS": "shared-media",
             },
             "shared_runtime": {
-                "METRO_WRITABLE_ROOT": "/var/lib/metrotherapy/state"
+                "CLIENTPLATFORM_WRITABLE_ROOT": "/var/lib/shared-platform/state"
             },
             "project_data": {"CLIENTPLATFORM_DATA_DIR": "/app/data"},
             "unexpected_webhook_secret": {
@@ -217,7 +217,7 @@ class ClientPlatformProductionIsolationTests(unittest.TestCase):
             "CLIENTPLATFORM_DEPLOYMENT_ID=clientplatform-production", env_example
         )
         self.assertIn(
-            "METRO_WRITABLE_ROOT=/var/lib/clientplatform/state", env_example
+            "CLIENTPLATFORM_WRITABLE_ROOT=/var/lib/clientplatform/state", env_example
         )
         self.assertIn(
             "CLIENTPLATFORM_DATA_DIR=/var/lib/clientplatform/state/data", env_example
@@ -235,7 +235,7 @@ class ClientPlatformProductionIsolationTests(unittest.TestCase):
         self.assertIn("CLIENTPLATFORM_BOT_GATEWAY_ENABLED=1", env_example)
         self.assertIn("CLIENTPLATFORM_BOT_GATEWAY_POLL_TIMEOUT_SEC=20", env_example)
         self.assertNotIn(
-            "DATABASE_URL=postgresql://localhost:5432/metrotherapy", env_example
+            "DATABASE_URL=postgresql://localhost:5432/clientplatform", env_example
         )
         self.assertIn("clientplatform_production_preflight.py", service)
         self.assertIn("clientplatform_bot_gateway_preflight.py", service)
@@ -246,10 +246,6 @@ class ClientPlatformProductionIsolationTests(unittest.TestCase):
         self.assertNotIn("clientplatform_bot_gateway_preflight.py", compose)
         self.assertIn(
             "python -m scripts.clientplatform_production_preflight",
-            image_entrypoint,
-        )
-        self.assertIn(
-            "python -m scripts.clientplatform_monetization_preflight",
             image_entrypoint,
         )
         self.assertIn(
@@ -291,7 +287,7 @@ class ClientPlatformProductionIsolationTests(unittest.TestCase):
 
     def test_backup_helpers_reject_non_clientplatform_database(self) -> None:
         with self.assertRaisesRegex(ValueError, "non-ClientPlatform"):
-            _database_name("postgresql://user:password@db:5432/metrotherapy")
+            _database_name("postgresql://user:password@db:5432/shared_app")
         env = _pg_environment(
             "postgresql://clientplatform_app:very-secret@db:5432/clientplatform"
         )

@@ -18,13 +18,7 @@ _MANAGED_BOT_IDENTITY_FILE = "/run/secrets/clientplatform-managed-bot/identity.t
 _MANAGED_BOT_HOST_DIR = "/var/lib/clientplatform/managed-bot-secrets"
 _MAX_API2_BASE_URL = "https://platform-api2.max.ru"
 _MAX_CA_BUNDLE_FILE = "/run/secrets/clientplatform-managed-bot/max-ca.pem"
-_TELEGRAM_STARS_DEFAULTS = {
-    "TELEGRAM_STARS_PRICING_MODE": "explicit",
-    "TELEGRAM_STARS_PRICE_PRACTICE_START_7": "1500",
-    "TELEGRAM_STARS_PRICE_PRACTICE_60": "2500",
-    "TELEGRAM_STARS_PRICE_PRACTICE_ANTISTRESS_60": "5000",
-    "TELEGRAM_STARS_PRICE_PRACTICE_PERSONAL_MONTH": "15000",
-}
+
 
 
 class EnvironmentPreparationError(RuntimeError):
@@ -202,7 +196,6 @@ def prepare(path: Path) -> tuple[str, ...]:
     _exact_or_missing(values, "CLIENTPLATFORM_MEDIA_GATEWAY_BASE_URL", expected_media)
     _exact_or_missing(values, "CLIENTPLATFORM_MEDIA_GATEWAY_ALLOWED_BUCKETS", bucket)
     _exact_or_missing(values, "CLIENTPLATFORM_MEDIA_GATEWAY_STORAGE_MODE", "s3")
-    _exact_or_missing(values, "CLIENTPLATFORM_REQUIRE_AUDIO_ASSETS", "1")
 
     defaults = {
         "CLIENTPLATFORM_PUBLIC_BASE_URL": expected_public,
@@ -223,7 +216,6 @@ def prepare(path: Path) -> tuple[str, ...]:
         "CLIENTPLATFORM_PROGRAM_MEDIA_INGEST_ENABLED": "1",
         "CLIENTPLATFORM_PROGRAM_MEDIA_MAX_BYTES": "20000000",
         "CLIENTPLATFORM_PROGRAM_MEDIA_TIMEOUT_SEC": "30",
-        "CLIENTPLATFORM_REQUIRE_AUDIO_ASSETS": "1",
         "CLIENTPLATFORM_POSTGRES_CLIENT_MAJOR": "16",
         "CLIENTPLATFORM_BACKUP_DIR": "/var/backups/clientplatform/postgres",
         "CLIENTPLATFORM_BACKUP_RETENTION_DAYS": "30",
@@ -243,7 +235,6 @@ def prepare(path: Path) -> tuple[str, ...]:
         "MAX_WEBHOOK_ENABLED": "0",
         "MAX_API_BASE_URL": _MAX_API2_BASE_URL,
         "VK_WEBHOOK_ENABLED": "0",
-        "TELEGRAM_YOOKASSA_ENABLED": "0",
         "CLIENTPLATFORM_AD_CONNECTIONS_ENABLED": "0",
         "CLIENTPLATFORM_AD_SPEND_MUTATIONS_ENABLED": "0",
         "CLIENTPLATFORM_AD_OAUTH_REDIRECT_URI": _AD_OAUTH_REDIRECT_URI,
@@ -251,7 +242,6 @@ def prepare(path: Path) -> tuple[str, ...]:
         "CLIENTPLATFORM_AD_CREDENTIAL_HOST_DIR": _AD_HOST_DIR,
         "CLIENTPLATFORM_AD_PUBLICATION_INTERVAL_SEC": "2",
         "CLIENTPLATFORM_AD_SPEND_GUARD_INTERVAL_SEC": "5",
-        **_TELEGRAM_STARS_DEFAULTS,
     }
     legacy_visual_gateway_url = str(values.get("VISUAL_GATEWAY_URL", "") or "").strip()
     legacy_visual_gateway_token = str(values.get("VISUAL_GATEWAY_TOKEN", "") or "").strip()

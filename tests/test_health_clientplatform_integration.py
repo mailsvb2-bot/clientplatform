@@ -65,7 +65,6 @@ class ClientPlatformHealthPayloadIntegrationTests(unittest.TestCase):
         )
         with ExitStack() as stack:
             self._patch_common_payload_dependencies(stack)
-            stack.enter_context(patch.object(health_server, '_scheduler_snapshot', return_value={}))
             stack.enter_context(patch.object(health_server, 'clientplatform_runtime_snapshot', return_value=clientplatform))
             payload, status = health_server.build_health_payload()
 
@@ -85,16 +84,7 @@ class ClientPlatformHealthPayloadIntegrationTests(unittest.TestCase):
             self._patch_common_payload_dependencies(stack)
             stack.enter_context(patch.object(health_server, '_db_ready', return_value=(True, None)))
             stack.enter_context(patch.object(health_server, '_schema_ready', return_value=(True, None)))
-            stack.enter_context(patch.object(health_server, '_scheduler_snapshot', return_value={}))
-            stack.enter_context(
-                patch.object(
-                    health_server,
-                    '_scheduler_readiness',
-                    return_value=(True, [], {}),
-                )
-            )
             stack.enter_context(patch.object(health_server, 'clientplatform_runtime_snapshot', return_value=clientplatform))
-            stack.enter_context(patch.object(health_server, '_audio_ready', return_value=(True, None)))
             stack.enter_context(patch.object(health_server, 'http_ingress_enabled', return_value=False))
             stack.enter_context(patch.object(health_server, 'required_readiness_tables', return_value=[]))
             payload, status = health_server.build_readiness_payload()

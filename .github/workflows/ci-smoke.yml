@@ -14,7 +14,6 @@ jobs:
       APP_ENV: prod
       VALIDATOR_RELEASE_MODE: '1'
       VALIDATOR_GUARDRAILS_STRICT: '1'
-      VALIDATOR_SKIP_AUDIO: '1'
       PYTHONDONTWRITEBYTECODE: '1'
     steps:
       - name: Checkout

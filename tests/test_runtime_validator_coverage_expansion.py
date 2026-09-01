@@ -33,7 +33,7 @@ def test_background_task_validator_clean_allowed_and_failure(
     write(tmp_path, "services/good.py", "async def run():\n    return None\n")
     runtime.validate_background_tasks(strict=True)
 
-    write(tmp_path, "services/scheduler.py", f"def owner():\n    return {token}(work())\n")
+    write(tmp_path, "core/task_manager.py", f"def owner():\n    return {token}(work())\n")
     runtime.validate_background_tasks(strict=True)
 
     write(tmp_path, "services/bad.py", f"def bad():\n    return {token}(work())\n")
@@ -52,7 +52,6 @@ def test_single_scheduler_validator_all_failure_classes(
 ) -> None:
     monkeypatch.setattr(runtime, "PROJECT_ROOT", tmp_path)
     write(tmp_path, "services/jobs.py", "def run():\n    return 1\n")
-    write(tmp_path, "core/engine.py", "def tick():\n    return 1\n")
     runtime.validate_single_scheduler(strict=True)
 
     deprecated_import = "services." + "session_timers"
@@ -119,7 +118,7 @@ def test_wide_except_policy_allowed_suppressed_and_rejected(
     write(tmp_path, "services/good.py", "try:\n    x = 1\nexcept ValueError:\n    x = 2\n")
     runtime.validate_wide_except_policy(strict=True)
 
-    write(tmp_path, "services/scheduler.py", f"try:\n    x = 1\nexcept {exc}:\n    x = 2\n")
+    write(tmp_path, "app.py", f"try:\n    x = 1\nexcept {exc}:\n    x = 2\n")
     runtime.validate_wide_except_policy(strict=True)
 
     write(

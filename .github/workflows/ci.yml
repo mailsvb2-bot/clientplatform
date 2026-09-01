@@ -226,22 +226,21 @@ jobs:
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: metrotherapy_ci
+          POSTGRES_DB: clientplatform_ci
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U postgres -d metrotherapy_ci"
+          --health-cmd "pg_isready -U postgres -d clientplatform_ci"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 12
     env:
       APP_ENV: test
       LOAD_DOTENV: '0'
-      METRO_DB_ENGINE: postgres
-      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/metrotherapy_ci
+      CLIENTPLATFORM_DB_ENGINE: postgres
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/clientplatform_ci
       POSTGRES_REUSE_CONNECTIONS: '1'
       POSTGRES_CI_SMOKE: '1'
-      TELEGRAM_STARS_ENABLED: '1'
       BOT_TOKEN: '000000:CI'
       TELEGRAM_TRANSPORT: polling
       TELEGRAM_WEBHOOK_ENABLED: '0'
@@ -260,26 +259,26 @@ jobs:
           python -m pip install --disable-pip-version-check pip==26.1.2
           python -m pip install --require-hashes -r requirements-dev.txt
 
-      - name: Postgres payment smoke without connection reuse
+      - name: Postgres canonical money smoke without connection reuse
         env:
           POSTGRES_REUSE_CONNECTIONS: '0'
         run: |
           set -o pipefail
-          python scripts/postgres_ci_smoke.py 2>&1 | tee "$RUNNER_TEMP/postgres-payment-no-reuse.log"
+          python scripts/postgres_ci_smoke.py 2>&1 | tee "$RUNNER_TEMP/postgres-money-no-reuse.log"
 
       - name: Reset Postgres smoke database
         run: |
           python - <<'PY'
           import psycopg
           with psycopg.connect('postgresql://postgres:postgres@127.0.0.1:5432/postgres', autocommit=True) as conn:
-              conn.execute('DROP DATABASE IF EXISTS metrotherapy_ci WITH (FORCE)')
-              conn.execute('CREATE DATABASE metrotherapy_ci')
+              conn.execute('DROP DATABASE IF EXISTS clientplatform_ci WITH (FORCE)')
+              conn.execute('CREATE DATABASE clientplatform_ci')
           PY
 
-      - name: Postgres payment smoke with production connection reuse
+      - name: Postgres canonical money smoke with production connection reuse
         run: |
           set -o pipefail
-          python scripts/postgres_ci_smoke.py 2>&1 | tee "$RUNNER_TEMP/postgres-payment-reuse.log"
+          python scripts/postgres_ci_smoke.py 2>&1 | tee "$RUNNER_TEMP/postgres-money-reuse.log"
 
       - name: Postgres scheduler concurrency
         run: |
@@ -299,8 +298,8 @@ jobs:
         with:
           name: postgres-probe-logs
           path: |
-            ${{ runner.temp }}/postgres-payment-no-reuse.log
-            ${{ runner.temp }}/postgres-payment-reuse.log
+            ${{ runner.temp }}/postgres-money-no-reuse.log
+            ${{ runner.temp }}/postgres-money-reuse.log
             ${{ runner.temp }}/postgres-scheduler.log
             ${{ runner.temp }}/postgres-messenger-outbox.log
           if-no-files-found: warn

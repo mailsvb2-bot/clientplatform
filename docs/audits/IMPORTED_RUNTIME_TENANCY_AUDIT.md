@@ -16,7 +16,7 @@
 
 `services/db/schema/_parts/part_01.py` создаёт `users(user_id PRIMARY KEY, work_time, home_time, work_index, home_index, demo_uses...)`.
 
-Это профиль клиента Метротерапии, а не нейтральная идентичность участника ClientPlatform. Владелец бизнеса, сотрудник и конечный клиент не разделены.
+Это профиль клиента ClientPlatform, а не нейтральная идентичность участника ClientPlatform. Владелец бизнеса, сотрудник и конечный клиент не разделены.
 
 ### 2. События не имеют tenant scope
 

@@ -36,11 +36,6 @@ def build_bridge_payload(token: str) -> str:
     return f"bridge_{token_clean}"
 
 
-def build_gift_payload(code: str) -> str:
-    code_clean = (code or '').strip()
-    return f'gift_{code_clean}'
-
-
 def _telegram_bot_username() -> str:
     return _strip(settings.TELEGRAM_BOT_USERNAME) or _strip(
         getattr(settings, 'CLIENTPLATFORM_PRODUCTION_BOT_USERNAME', '')
@@ -195,7 +190,7 @@ def _telegram_share_url(target_url: str, text: str) -> str:
     return 'https://t.me/share/url?' + urllib.parse.urlencode({'url': target_url, 'text': text})
 
 
-def _vk_share_url(target_url: str, text: str, *, title: str = 'Метротерапия') -> str:
+def _vk_share_url(target_url: str, text: str, *, title: str = 'ClientPlatform') -> str:
     return 'https://vk.com/share.php?' + urllib.parse.urlencode({
         'url': target_url,
         'title': title,
@@ -203,7 +198,7 @@ def _vk_share_url(target_url: str, text: str, *, title: str = 'Метротер�
     })
 
 
-def _share_url_for_platform(platform: str, target_url: str, text: str, *, title: str = 'Метротерапия') -> str:
+def _share_url_for_platform(platform: str, target_url: str, text: str, *, title: str = 'ClientPlatform') -> str:
     if platform == MessengerPlatform.TELEGRAM.value:
         return _telegram_share_url(target_url, text)
     if platform == MessengerPlatform.VK.value:
@@ -217,30 +212,9 @@ def build_share_targets(
     referrer_user_id: int,
     *,
     text: str,
-    title: str = 'Метротерапия',
+    title: str = 'ClientPlatform',
 ) -> list[dict[str, str]]:
     targets = build_messenger_targets(referrer_user_id)
-    return [
-        {
-            **item,
-            'entry_url': item['url'],
-            'url': _share_url_for_platform(item['platform'], item['url'], text, title=title),
-        }
-        for item in targets
-    ]
-
-
-def build_gift_targets(code: str) -> list[dict[str, str]]:
-    return _entry_targets(build_gift_payload(code))
-
-
-def build_gift_share_targets(
-    code: str,
-    *,
-    text: str,
-    title: str = 'Подарок Метротерапии',
-) -> list[dict[str, str]]:
-    targets = build_gift_targets(code)
     return [
         {
             **item,

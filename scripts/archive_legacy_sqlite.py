@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_ENV_FILE = Path("/etc/metrotherapy/metrotherapy.env")
+DEFAULT_ENV_FILE = Path("/etc/clientplatform/clientplatform.env")
 DEFAULT_ARCHIVE_DIRNAME = "legacy_sqlite_archive"
 ARCHIVE_CONFIRMATION = "I_CONFIRM_LEGACY_SQLITE_IS_INACTIVE_AND_POSTGRES_IS_PRIMARY"
 
@@ -458,11 +458,11 @@ def main() -> int:
     parser.add_argument("--json", action="store_true", help="Print JSON only")
     parser.add_argument(
         "--env-file",
-        default=os.getenv("METROTHERAPY_ENV_FILE", str(DEFAULT_ENV_FILE)),
+        default=os.getenv("CLIENTPLATFORM_ENV_FILE", str(DEFAULT_ENV_FILE)),
     )
     parser.add_argument(
         "--archive-dir",
-        default=os.getenv("METRO_LEGACY_SQLITE_ARCHIVE_DIR", ""),
+        default=os.getenv("CLIENTPLATFORM_LEGACY_SQLITE_ARCHIVE_DIR", ""),
     )
     args = parser.parse_args()
 

@@ -69,7 +69,7 @@ def test_apply_skips_duplicate_subscription(monkeypatch: pytest.MonkeyPatch) -> 
         if url.endswith("/me"):
             return registration.MaxApiResponse(
                 200,
-                {"user_id": 1, "username": "metrotherapy", "is_bot": True},
+                {"user_id": 1, "username": "clientplatform", "is_bot": True},
             )
         return registration.MaxApiResponse(
             200,
@@ -112,7 +112,7 @@ def test_apply_posts_secret_only_in_request_and_never_in_report(
                 200,
                 {
                     "user_id": 1,
-                    "username": f"metro-{cfg.token}",
+                    "username": f"clientplatform-{cfg.token}",
                     "name": f"bot-{cfg.secret}",
                     "is_bot": True,
                 },

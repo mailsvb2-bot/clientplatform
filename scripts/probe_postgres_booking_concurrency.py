@@ -74,7 +74,7 @@ def _cleanup_business(business_id: str) -> None:
 
 def main() -> int:
     if not CONFIG.uses_postgres:
-        raise SystemExit("POSTGRES_BOOKING_CONCURRENCY_FAILED: METRO_DB_ENGINE=postgres is required")
+        raise SystemExit("POSTGRES_BOOKING_CONCURRENCY_FAILED: CLIENTPLATFORM_DB_ENGINE=postgres is required")
     if not (os.getenv("DATABASE_URL") or "").strip():
         raise SystemExit("POSTGRES_BOOKING_CONCURRENCY_FAILED: DATABASE_URL is required")
     if (os.getenv("POSTGRES_REUSE_CONNECTIONS") or "").strip() != "0":

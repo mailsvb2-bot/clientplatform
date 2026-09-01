@@ -5,14 +5,14 @@ from pathlib import Path
 
 
 class ClientPlatformRuntimeOwnershipTests(unittest.TestCase):
-    def test_legacy_metrotherapy_production_cluster_is_absent(self) -> None:
+    def test_legacy_clientplatform_production_cluster_is_absent(self) -> None:
         root = Path(__file__).resolve().parents[1]
         legacy_paths = (
             "deploy/deploy.sh",
             "deploy/install_server.sh",
-            "deploy/metrotherapy.env.example",
-            "deploy/metrotherapy.service",
-            "deploy/nginx-metrotherapy.conf",
+            "deploy/clientplatform.env.example",
+            "deploy/clientplatform.service",
+            "deploy/nginx-clientplatform.conf",
             "deploy/post_deploy_smoke.sh",
             "deploy/github-deploy-webhook.service",
             "ops/deploy_webhook.py",
@@ -73,8 +73,8 @@ class ClientPlatformRuntimeOwnershipTests(unittest.TestCase):
             contract.startswith("# ClientPlatform production runtime contract")
         )
         self.assertIn("deploy/clientplatform/", contract)
-        self.assertNotIn("cd /root/metrotherapy", contract)
-        self.assertNotIn("/etc/metrotherapy/metrotherapy.env", contract)
+        self.assertNotIn("cd /root/clientplatform", contract)
+        self.assertNotIn("/etc/clientplatform/clientplatform.env", contract)
 
     def test_root_deploy_is_only_a_clientplatform_compatibility_entrypoint(self) -> None:
         root = Path(__file__).resolve().parents[1]
@@ -87,9 +87,9 @@ class ClientPlatformRuntimeOwnershipTests(unittest.TestCase):
         self.assertNotIn("scripts/immutable_deploy.sh", wrapper)
         self.assertNotIn("run_deploy_worker.sh", wrapper)
         self.assertNotIn("repair_contaminated_current_release.sh", wrapper)
-        self.assertNotIn("/root/metrotherapy", wrapper)
-        self.assertNotIn("/etc/metrotherapy", wrapper)
-        self.assertNotIn("metrotherapy.service", wrapper)
+        self.assertNotIn("/root/clientplatform", wrapper)
+        self.assertNotIn("/etc/clientplatform", wrapper)
+        self.assertNotIn("clientplatform.service", wrapper)
 
     def test_canonical_deploy_owns_lock_backup_readiness_rollback_and_evidence(self) -> None:
         root = Path(__file__).resolve().parents[1]
@@ -144,7 +144,7 @@ class ClientPlatformRuntimeOwnershipTests(unittest.TestCase):
         self.assertLess(rollback_evidence, success_evidence)
         self.assertNotIn("run_deploy_worker.sh", source)
         self.assertNotIn("scripts/immutable_deploy.sh", source)
-        self.assertNotIn("/var/lib/metrotherapy", source)
+        self.assertIn('EVIDENCE_DIR = Path("/var/lib/clientplatform/deploy-evidence")', source)
 
     def test_workflows_cannot_revive_legacy_deploy_webhook(self) -> None:
         root = Path(__file__).resolve().parents[1]

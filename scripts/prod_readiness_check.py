@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Offline/live production-readiness checks.
 
-This script deliberately does not call Telegram/YooKassa/VK/MAX. It validates
+This script deliberately does not call Telegram/VK/MAX. It validates
 runtime contracts before deploy or during post-deploy smoke: required production
 configuration, split HTTP ingress, port isolation and required runtime paths.
 
@@ -19,8 +19,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-
-from core.payment_ingress import PaymentIngressConfigurationError, resolve_payment_http_enabled
 
 SKIP_DIRS = {'.git', '.venv', 'venv', '__pycache__', '.pytest_cache', '.mypy_cache', '.ruff_cache'}
 
@@ -91,21 +89,13 @@ def _first_env(*names: str) -> str:
     return ""
 
 
-def _payment_public_base_url() -> str:
-    return _first_env("PAYMENT_PUBLIC_BASE_URL", "MESSENGER_PUBLIC_BASE_URL", "PUBLIC_BASE_URL").rstrip("/")
-
-
 def _privacy_export_public_base_url() -> str:
     return _first_env(
         "PRIVACY_EXPORT_PUBLIC_BASE_URL",
         "MESSENGER_PUBLIC_BASE_URL",
-        "PAYMENT_PUBLIC_BASE_URL",
         "PUBLIC_BASE_URL",
     ).rstrip("/")
 
-
-def _payment_http_enabled() -> bool:
-    return resolve_payment_http_enabled(os.environ)
 
 def _privacy_export_http_enabled() -> bool:
     explicit = _optional_flag("PRIVACY_EXPORT_HTTP_ENABLED")
@@ -127,12 +117,7 @@ def _vk_webhook_enabled() -> bool:
 
 
 def _http_ingress_enabled() -> bool:
-    return (
-        _payment_http_enabled()
-        or _privacy_export_http_enabled()
-        or _max_webhook_enabled()
-        or _vk_webhook_enabled()
-    )
+    return bool(_privacy_export_http_enabled() or _max_webhook_enabled() or _vk_webhook_enabled())
 
 
 def _validate_admin_ids(errors: list[str]) -> None:
@@ -169,10 +154,10 @@ def _validate_ai_runtime(prod: bool, errors: list[str], warnings: list[str]) -> 
 
 def _validate_database_runtime(prod: bool, errors: list[str], warnings: list[str]) -> None:
     database_url = (os.getenv("DATABASE_URL") or "").strip()
-    engine = (os.getenv("METRO_DB_ENGINE") or "").strip().lower()
+    engine = (os.getenv("CLIENTPLATFORM_DB_ENGINE") or "").strip().lower()
     if prod:
         if engine not in {"postgres", "postgresql", "pg"}:
-            errors.append("METRO_DB_ENGINE must be postgres in prod")
+            errors.append("CLIENTPLATFORM_DB_ENGINE must be postgres in prod")
         if not database_url:
             errors.append("DATABASE_URL is required in prod")
         elif not database_url.startswith(("postgresql://", "postgres://")):
@@ -185,46 +170,13 @@ def _validate_database_runtime(prod: bool, errors: list[str], warnings: list[str
         warnings.append("DATABASE_URL is set but does not look like a Postgres URL")
 
 
-def _validate_payment_runtime(
-    prod: bool, errors: list[str], *, payment_enabled: bool | None = None
-) -> None:
-    if not prod:
-        return
-    if payment_enabled is None:
-        payment_enabled = _payment_http_enabled()
-    if payment_enabled:
-        for name in ("YOOKASSA_SHOP_ID", "YOOKASSA_SECRET_KEY"):
-            _require_env(name, errors)
-        if not _first_env("PAYMENT_CHECKOUT_SIGNING_KEY", "CHECKOUT_SIGNING_KEY"):
-            errors.append("PAYMENT_CHECKOUT_SIGNING_KEY is missing or placeholder")
-        public_base = _payment_public_base_url()
-        if not public_base:
-            errors.append("PAYMENT_PUBLIC_BASE_URL or MESSENGER_PUBLIC_BASE_URL is missing or placeholder")
-        elif not public_base.startswith("https://"):
-            errors.append("payment public base URL must start with https:// in prod")
-    dangerous = [
-        "ALLOW_UNSIGNED_PAYMENT_CHECKOUT_IN_PROD",
-        "ALLOW_UNVERIFIED_YOOKASSA_WEBHOOK_IN_PROD",
-        "ALLOW_STATIC_PAYMENT_IDEMPOTENCE_KEY_IN_PROD",
-    ]
-    if not _truthy("PAYMENT_DANGEROUS_OVERRIDES_ALLOWED"):
-        enabled = [name for name in dangerous if _truthy(name)]
-        if enabled:
-            errors.append("dangerous payment override(s) enabled in prod: " + ", ".join(enabled))
-
-
 def _validate_http_ingress(
-    prod: bool, errors: list[str], warnings: list[str], *, payment_enabled: bool | None = None
+    prod: bool, errors: list[str], warnings: list[str]
 ) -> bool:
-    if payment_enabled is None:
-        payment_enabled = _payment_http_enabled()
     privacy_export_enabled = _privacy_export_http_enabled()
     max_enabled = _max_webhook_enabled()
     vk_enabled = _vk_webhook_enabled()
-    ingress_enabled = payment_enabled or privacy_export_enabled or max_enabled or vk_enabled
-
-    if payment_enabled and not _payment_public_base_url():
-        errors.append("PAYMENT_PUBLIC_BASE_URL or MESSENGER_PUBLIC_BASE_URL is required when payment HTTP ingress is enabled")
+    ingress_enabled = privacy_export_enabled or max_enabled or vk_enabled
 
     if prod and not privacy_export_enabled:
         errors.append("PRIVACY_EXPORT_HTTP_ENABLED must be 1 in prod")
@@ -275,7 +227,7 @@ def _validate_http_ingress(
 
     if not ingress_enabled:
         warnings.append(
-            "HTTP ingress is disabled; YooKassa/privacy export/MAX/VK web endpoints "
+            "HTTP ingress is disabled; privacy export/MAX/VK web endpoints "
             "will not be served by this process"
         )
     return ingress_enabled
@@ -356,11 +308,6 @@ def run() -> tuple[list[str], list[str]]:
     app_env = (os.getenv("APP_ENV", "dev") or "dev").strip().lower()
     prod = app_env in {"prod", "production"}
     bot_token = (os.getenv("BOT_TOKEN") or "").strip()
-    try:
-        payment_enabled = _payment_http_enabled()
-    except PaymentIngressConfigurationError as exc:
-        errors.append(str(exc))
-        payment_enabled = False
 
     if prod:
         if _looks_placeholder(bot_token):
@@ -369,13 +316,12 @@ def run() -> tuple[list[str], list[str]]:
             warnings.append("BOT_TOKEN format does not look like a Telegram bot token")
         _validate_admin_ids(errors)
 
-    _validate_payment_runtime(prod, errors, payment_enabled=payment_enabled)
     _validate_database_runtime(prod, errors, warnings)
     _validate_ai_runtime(prod, errors, warnings)
 
     telegram_transport = (os.getenv("TELEGRAM_TRANSPORT", os.getenv("RUN_MODE", "polling")) or "polling").strip().lower()
     telegram_webhook = telegram_transport == "webhook" or _truthy("TELEGRAM_WEBHOOK_ENABLED")
-    http_ingress = _validate_http_ingress(prod, errors, warnings, payment_enabled=payment_enabled)
+    http_ingress = _validate_http_ingress(prod, errors, warnings)
 
     if prod and not _truthy("HEALTHCHECK_ENABLED", "1"):
         errors.append("HEALTHCHECK_ENABLED must be 1 in prod")
@@ -405,10 +351,6 @@ def run() -> tuple[list[str], list[str]]:
         if same_host and ingress_port == health_port:
             errors.append(f"HTTP ingress port and health port collide on {ingress_host}:{ingress_port}")
 
-    required_paths = [ROOT / "audio" / "demo", ROOT / "audio" / "full", ROOT / "data"]
-    for path in required_paths:
-        if not path.exists():
-            errors.append(f"Required path missing: {path.relative_to(ROOT)}")
 
     forbidden = _collect_release_artifacts()
     if forbidden:

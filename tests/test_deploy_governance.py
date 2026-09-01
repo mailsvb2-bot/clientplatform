@@ -59,8 +59,8 @@ def test_deploy_governance_rejects_legacy_runtime_identity(tmp_path: Path) -> No
         'exec python3 "$ROOT/scripts/clientplatform_production_deploy.py" "$@"\n',
         encoding="utf-8",
     )
-    production.write_text("SERVICE_NAME=metrotherapy.service\n", encoding="utf-8")
+    production.write_text("SERVICE_NAME=clientplatform.service\n", encoding="utf-8")
 
     problems = deploy_governance_problems(wrapper, production)
 
-    assert "legacy Metrotherapy systemd identity remains" in problems
+    assert "obsolete systemd identity remains" in problems

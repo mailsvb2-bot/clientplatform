@@ -8,7 +8,7 @@ import pytest
 from scripts import migrate_privacy_export_env as migration
 
 
-DEFAULT_URL = "https://metrotherapy-bot.metrotherapy.ru"
+DEFAULT_URL = "https://clientplatform-bot.clientplatform.ru"
 SYNTHETIC_TOKEN = "not-a-live-telegram-token"
 
 
@@ -17,11 +17,11 @@ def _assignments(path: Path) -> dict[str, tuple[int, str]]:
 
 
 def test_migration_adds_only_managed_keys_and_keeps_exact_backup(tmp_path: Path) -> None:
-    env_file = tmp_path / "metrotherapy.env"
+    env_file = tmp_path / "clientplatform.env"
     original = (
         "# production secrets\n"
         f"BOT_TOKEN={SYNTHETIC_TOKEN}\n"
-        "DATABASE_URL='postgresql://db-user:db-pass@db/metrotherapy'\n"
+        "DATABASE_URL='postgresql://db-user:db-pass@db/clientplatform'\n"
         "TELEGRAM_TRANSPORT=polling\n"
     ).encode()
     env_file.write_bytes(original)
@@ -40,7 +40,7 @@ def test_migration_adds_only_managed_keys_and_keeps_exact_backup(tmp_path: Path)
     assert stat.S_IMODE(env_file.stat().st_mode) == 0o640
     updated = env_file.read_text(encoding="utf-8")
     assert f"BOT_TOKEN={SYNTHETIC_TOKEN}" in updated
-    assert "DATABASE_URL='postgresql://db-user:db-pass@db/metrotherapy'" in updated
+    assert "DATABASE_URL='postgresql://db-user:db-pass@db/clientplatform'" in updated
     active = _assignments(env_file)
     assert active["PRIVACY_EXPORT_HTTP_ENABLED"][1] == "1"
     assert active["PRIVACY_EXPORT_PUBLIC_BASE_URL"][1] == DEFAULT_URL
@@ -60,10 +60,10 @@ def test_migration_adds_only_managed_keys_and_keeps_exact_backup(tmp_path: Path)
 
 
 def test_migration_preserves_valid_custom_url_ttl_and_export_prefix(tmp_path: Path) -> None:
-    env_file = tmp_path / "metrotherapy.env"
+    env_file = tmp_path / "clientplatform.env"
     env_file.write_text(
         "export PRIVACY_EXPORT_HTTP_ENABLED=0\n"
-        "PRIVACY_EXPORT_PUBLIC_BASE_URL='https://custom.example/metro'\n"
+        "PRIVACY_EXPORT_PUBLIC_BASE_URL='https://custom.example/clientplatform'\n"
         "PRIVACY_EXPORT_TOKEN_TTL_MINUTES=20\n",
         encoding="utf-8",
     )
@@ -74,16 +74,16 @@ def test_migration_preserves_valid_custom_url_ttl_and_export_prefix(tmp_path: Pa
         fallback_ttl_minutes=10,
     )
 
-    assert result.public_base_url == "https://custom.example/metro"
+    assert result.public_base_url == "https://custom.example/clientplatform"
     assert result.ttl_minutes == 20
     text = env_file.read_text(encoding="utf-8")
     assert "export PRIVACY_EXPORT_HTTP_ENABLED=1" in text
-    assert "PRIVACY_EXPORT_PUBLIC_BASE_URL=https://custom.example/metro" in text
+    assert "PRIVACY_EXPORT_PUBLIC_BASE_URL=https://custom.example/clientplatform" in text
     assert "PRIVACY_EXPORT_TOKEN_TTL_MINUTES=20" in text
 
 
 def test_migration_repairs_invalid_managed_values_with_safe_fallbacks(tmp_path: Path) -> None:
-    env_file = tmp_path / "metrotherapy.env"
+    env_file = tmp_path / "clientplatform.env"
     env_file.write_text(
         "PRIVACY_EXPORT_HTTP_ENABLED=maybe\n"
         "PRIVACY_EXPORT_PUBLIC_BASE_URL=http://insecure.example\n"
@@ -105,7 +105,7 @@ def test_migration_repairs_invalid_managed_values_with_safe_fallbacks(tmp_path: 
 
 
 def test_migration_rejects_duplicate_keys_without_touching_file(tmp_path: Path) -> None:
-    env_file = tmp_path / "metrotherapy.env"
+    env_file = tmp_path / "clientplatform.env"
     original = (
         "PRIVACY_EXPORT_HTTP_ENABLED=0\n"
         "PRIVACY_EXPORT_HTTP_ENABLED=1\n"
@@ -120,7 +120,7 @@ def test_migration_rejects_duplicate_keys_without_touching_file(tmp_path: Path) 
         )
 
     assert env_file.read_bytes() == original
-    assert list(tmp_path.glob("metrotherapy.env.bak.privacy-export.*")) == []
+    assert list(tmp_path.glob("clientplatform.env.bak.privacy-export.*")) == []
 
 
 def test_migration_rejects_symlink_and_world_writable_env(tmp_path: Path) -> None:
@@ -144,7 +144,7 @@ def test_migration_rejects_symlink_and_world_writable_env(tmp_path: Path) -> Non
 
 
 def test_migration_rejects_invalid_cli_fallbacks_before_writing(tmp_path: Path) -> None:
-    env_file = tmp_path / "metrotherapy.env"
+    env_file = tmp_path / "clientplatform.env"
     original = b"BOT_TOKEN=synthetic\n"
     env_file.write_bytes(original)
 
@@ -167,7 +167,7 @@ def test_post_write_verification_failure_restores_original(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    env_file = tmp_path / "metrotherapy.env"
+    env_file = tmp_path / "clientplatform.env"
     original = b"BOT_TOKEN=synthetic\n"
     env_file.write_bytes(original)
     real_atomic_replace = migration._atomic_replace
@@ -200,7 +200,7 @@ def test_post_write_verification_failure_restores_original(
 
 
 def test_cli_output_never_prints_existing_secrets(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    env_file = tmp_path / "metrotherapy.env"
+    env_file = tmp_path / "clientplatform.env"
     secret = "super-private-synthetic-token"
     env_file.write_text(f"BOT_TOKEN={secret}\n", encoding="utf-8")
 
@@ -220,23 +220,3 @@ def test_cli_output_never_prints_existing_secrets(tmp_path: Path, capsys: pytest
     assert "PRIVACY_EXPORT_ENV_MIGRATION_OK" in output.out
     assert secret not in output.out
     assert secret not in output.err
-
-
-def test_rollout_and_immutable_deploy_contracts_are_ordered() -> None:
-    root = Path(__file__).resolve().parents[1]
-    rollout = (root / "scripts" / "prepare_privacy_export_rollout.sh").read_text(encoding="utf-8")
-    deploy = (root / "scripts" / "immutable_deploy.sh").read_text(encoding="utf-8")
-
-    assert "scripts/migrate_privacy_export_env.py" in rollout
-    assert "scripts/runtime_contract.py" in rollout
-    assert "systemctl restart" not in rollout
-    assert "restart_performed=0" in rollout
-
-    merge_index = deploy.index("git merge --ff-only origin/main")
-    migration_index = deploy.index("migrate_privacy_export_environment", merge_index)
-    build_index = deploy.index('build_release "$NEW_SHA"')
-    switch_index = deploy.index('"$SYSTEM_PYTHON" "$RELEASE_MANAGER" switch', build_index)
-    assert merge_index < migration_index < build_index < switch_index
-    assert "PRIVACY_EXPORT_DEFAULT_PUBLIC_BASE_URL" in deploy
-    assert "reload_authoritative_environment" in deploy
-    assert '"$SYSTEM_PYTHON" "$RUNTIME_CONTRACT"' in deploy

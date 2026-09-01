@@ -15,16 +15,16 @@ def writable_root() -> Path:
 
     Immutable release directories are content-addressed and verified after the
     process starts. Caches and one-time markers must therefore live outside the
-    source/release tree. Production may override the location explicitly with
-    METRO_WRITABLE_ROOT.
+    source/release tree. Production overrides the location explicitly with
+    CLIENTPLATFORM_WRITABLE_ROOT.
     """
 
-    explicit = (os.getenv("METRO_WRITABLE_ROOT") or "").strip()
+    explicit = (os.getenv("CLIENTPLATFORM_WRITABLE_ROOT") or "").strip()
     if explicit:
         return Path(explicit).expanduser().resolve()
     if _is_prod():
         runtime_root = Path(
-            (os.getenv("METRO_RUNTIME_ROOT") or "/var/lib/metrotherapy/runtime").strip()
+            (os.getenv("CLIENTPLATFORM_RUNTIME_ROOT") or "/var/lib/clientplatform/runtime").strip()
         ).expanduser()
         return (runtime_root.parent / "state").resolve()
     return (PROJECT_ROOT / "data" / "runtime-state").resolve()
@@ -46,12 +46,3 @@ def matplotlib_cache_dir() -> Path:
         path.mkdir(parents=True, exist_ok=True)
         return path
     return runtime_dir("matplotlib")
-
-
-def prewarm_marker_path() -> Path:
-    explicit = (os.getenv("PREWARM_MARKER_PATH") or "").strip()
-    if explicit:
-        path = Path(explicit).expanduser().resolve()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        return path
-    return runtime_dir("prewarm") / "audio.done"

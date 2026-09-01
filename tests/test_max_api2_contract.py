@@ -186,7 +186,7 @@ def test_max_audit_reports_active_api2_subscription(monkeypatch) -> None:
 
     def fake_call(_token: str, path: str):
         if path == "/me":
-            return {"username": "metrotherapy"}, 200
+            return {"username": "clientplatform"}, 200
         return {"subscriptions": [{"url": "https://bot.example.test/webhooks/max"}]}, 200
 
     monkeypatch.setattr(max_provider_audit, "_api_call", fake_call)
@@ -194,7 +194,7 @@ def test_max_audit_reports_active_api2_subscription(monkeypatch) -> None:
 
     assert code == 0
     assert message == (
-        "status=ok stage=subscriptions bot=metrotherapy code=200 "
+        "status=ok stage=subscriptions bot=clientplatform code=200 "
         "error=NONE api=platform-api2.max.ru webhook=present"
     )
 
@@ -206,7 +206,7 @@ def test_max_audit_fails_closed_when_webhook_is_missing(monkeypatch) -> None:
 
     def fake_call(_token: str, path: str):
         if path == "/me":
-            return {"username": "metrotherapy"}, 200
+            return {"username": "clientplatform"}, 200
         return {"subscriptions": []}, 200
 
     monkeypatch.setattr(max_provider_audit, "_api_call", fake_call)

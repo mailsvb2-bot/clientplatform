@@ -1,8 +1,8 @@
 # ClientPlatform production runtime contract
 
 ClientPlatform production is owned by the dedicated runtime under `deploy/clientplatform/`.
-The repository must not expose a second Metrotherapy-branded production installer,
-systemd unit, nginx configuration, deploy webhook, or `/root/metrotherapy` rollout path.
+The repository must not expose a second ClientPlatform-branded production installer,
+systemd unit, nginx configuration, deploy webhook, or `/root/clientplatform` rollout path.
 
 ## Canonical production deployment
 
@@ -37,19 +37,19 @@ procedures live in `deploy/clientplatform/` and
 
 ## Legacy compatibility is application-only
 
-Some `METRO_*` environment names remain supported as compatibility fallbacks inside
+Some `CLIENTPLATFORM_*` environment names remain supported as compatibility fallbacks inside
 the application while migration is in progress. They do **not** authorize a separate
-Metrotherapy production deployment inside this repository. ClientPlatform-prefixed
+ClientPlatform production deployment inside this repository. ClientPlatform-prefixed
 settings win when both are present.
 
 In particular, production tooling in this repository must not reintroduce:
 
-- `deploy/metrotherapy.service`
-- `deploy/metrotherapy.env.example`
-- `deploy/nginx-metrotherapy.conf`
+- `deploy/clientplatform.service`
+- `deploy/clientplatform.env.example`
+- `deploy/nginx-clientplatform.conf`
 - root-level legacy `deploy/deploy.sh` or `deploy/install_server.sh`
 - `ops/deploy_webhook.py` or `ops/deploy_webhook_hardened.py`
-- a service or script whose operational root is `/root/metrotherapy`
+- a service or script whose operational root is `/root/clientplatform`
 
 ## Runtime state
 

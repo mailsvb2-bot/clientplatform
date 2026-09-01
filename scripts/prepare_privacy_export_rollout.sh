@@ -2,10 +2,10 @@
 set -Eeuo pipefail
 umask 077
 
-SOURCE_DIR="${APP_DIR:-/root/metrotherapy}"
-ENV_FILE="${METROTHERAPY_ENV_FILE:-/etc/metrotherapy/metrotherapy.env}"
+SOURCE_DIR="${APP_DIR:-/root/clientplatform}"
+ENV_FILE="${CLIENTPLATFORM_ENV_FILE:-/etc/clientplatform/clientplatform.env}"
 SYSTEM_PYTHON="${SYSTEM_PYTHON:-/usr/bin/python3}"
-PUBLIC_BASE_URL="${PRIVACY_EXPORT_DEFAULT_PUBLIC_BASE_URL:-https://metrotherapy-bot.metrotherapy.ru}"
+PUBLIC_BASE_URL="${PRIVACY_EXPORT_DEFAULT_PUBLIC_BASE_URL:-https://clientplatform-bot.clientplatform.ru}"
 TTL_MINUTES="${PRIVACY_EXPORT_DEFAULT_TTL_MINUTES:-10}"
 
 if [ "$(id -u)" -ne 0 ]; then

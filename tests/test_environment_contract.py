@@ -27,5 +27,5 @@ def test_runtime_uses_canonical_production_and_single_chart_router() -> None:
     assert "if production:" in source
     assert "post_chart.router" not in source
 
-    mood_source = (ROOT / "handlers" / "mood.py").read_text(encoding="utf-8")
-    assert "charts.router" in mood_source
+    assert not (ROOT / "handlers" / "mood.py").exists()
+    assert "dp.include_router(clientplatform_entry.router)" in source

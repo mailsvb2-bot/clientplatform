@@ -50,7 +50,7 @@ def _run_pair(worker: Callable[[int], str]) -> list[str]:
 def main() -> int:
     if not CONFIG.uses_postgres:
         raise SystemExit(
-            "POSTGRES_BOT_PROVISIONING_FAILED: METRO_DB_ENGINE=postgres is required"
+            "POSTGRES_BOT_PROVISIONING_FAILED: CLIENTPLATFORM_DB_ENGINE=postgres is required"
         )
     if not (os.getenv("DATABASE_URL") or "").strip():
         raise SystemExit("POSTGRES_BOT_PROVISIONING_FAILED: DATABASE_URL is required")

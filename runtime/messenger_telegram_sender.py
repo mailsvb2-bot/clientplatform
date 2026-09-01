@@ -16,13 +16,19 @@ class TelegramBotSender:
     async def send_text(self, external_user_id: str, text: str, **kwargs: Any):
         return await self.bot.send_message(int(external_user_id), text, **kwargs)
 
-    async def send_audio_file(self, external_user_id: str, file_path: Path, *, caption: str | None = None, **kwargs: Any):
-        from services.fast_send_audio import send_audio_cached
+    async def send_audio_file(
+        self,
+        external_user_id: str,
+        file_path: Path,
+        *,
+        caption: str | None = None,
+        **kwargs: Any,
+    ):
+        from aiogram.types import FSInputFile
 
-        return await send_audio_cached(
-            self.bot,
+        return await self.bot.send_audio(
             int(external_user_id),
-            key=f"cross_audio:{file_path.name}",
-            file_path=file_path,
-            caption=caption or "",
+            audio=FSInputFile(file_path),
+            caption=caption or None,
+            **kwargs,
         )

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Metrotherapy-parity, tenant-safe administration for ClientPlatform businesses."""
+"""ClientPlatform-parity, tenant-safe administration for ClientPlatform businesses."""
 
 import asyncio
 import importlib
@@ -1461,7 +1461,7 @@ async def send_admin_panel(
 
 
 def install_admin_dashboard_button(control_module: ModuleType) -> None:
-    """Add the Metrotherapy-style panel entry to every business dashboard."""
+    """Add the ClientPlatform-style panel entry to every business dashboard."""
 
     if bool(getattr(control_module, "_admin_dashboard_installed", False)):
         return

@@ -17,7 +17,7 @@ curl -fsS http://127.0.0.1:8082/healthz || true
 echo
 
 echo "=== services before reboot ==="
-systemctl is-active metrotherapy.service || true
+systemctl is-active clientplatform.service || true
 systemctl is-active github-deploy-webhook.service || true
 
 echo "=== rebooting now ==="

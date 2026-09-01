@@ -38,13 +38,11 @@ def classify_messenger_action(value: str | None) -> str:
     if not raw:
         return "empty"
     lowered = raw.casefold()
-    if lowered.startswith(("/start ", "start ", "bridge_", "ref_", "gift_")):
+    if lowered.startswith(("/start ", "start ", "bridge_", "ref_", "cpo_", "cpa_", "cpj_")):
         return "start_payload"
     if lowered.startswith("/"):
         command = lowered.split(maxsplit=1)[0]
         return command if _ACTION_TOKEN_RE.fullmatch(command) else "command"
-    if lowered.startswith("mood:"):
-        return "mood"
     if lowered in {"+1", "+2", "-1", "-2"} or lowered.startswith(("score:", "score=")):
         return "score"
     if ":" in lowered:

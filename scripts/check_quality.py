@@ -58,13 +58,6 @@ def main() -> int:
     checks = [
         ("compile", _compile_project),
         ("ruff", lambda: _run("Ruff P0 gate", [sys.executable, "scripts/check_ruff.py"])),
-        (
-            "messenger_button_parity",
-            lambda: _run(
-                "Telegram/VK/MAX button parity",
-                [sys.executable, "scripts/verify_messenger_button_parity.py"],
-            ),
-        ),
     ]
 
     failed: list[str] = []

@@ -38,7 +38,6 @@ def test_app_registers_canonical_manager_before_services_and_rebinds_owners() ->
     startup_register_calls = [node for node in ast.walk(startup) if _named_call(node, "register_task_manager")]
     startup_bind_calls = [node for node in ast.walk(startup) if _named_call(node, "bind_task_manager")]
     db_writer_calls = [node for node in ast.walk(startup) if _named_call(node, "start_db_writer")]
-    scheduler_calls = [node for node in ast.walk(startup) if _named_call(node, "start_scheduler")]
     shutdown_refs = [
         node
         for node in ast.walk(shutdown)
@@ -53,8 +52,7 @@ def test_app_registers_canonical_manager_before_services_and_rebinds_owners() ->
     assert len(bind_calls) == 1
     assert startup_bind_calls == bind_calls
     assert len(db_writer_calls) == 1
-    assert len(scheduler_calls) == 1
-    assert register_calls[0].lineno < db_writer_calls[0].lineno < scheduler_calls[0].lineno < bind_calls[0].lineno
+    assert register_calls[0].lineno < db_writer_calls[0].lineno < bind_calls[0].lineno
     assert len(shutdown_refs) == 1
 
 

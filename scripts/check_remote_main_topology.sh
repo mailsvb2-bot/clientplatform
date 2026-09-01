@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-SOURCE_DIR="${1:-${APP_DIR:-/root/metrotherapy}}"
+SOURCE_DIR="${1:-${APP_DIR:-/root/clientplatform}}"
 TIMEOUT_BIN="${TIMEOUT_BIN:-/usr/bin/timeout}"
 GIT_NETWORK_TIMEOUT_SECONDS="${GIT_NETWORK_TIMEOUT_SECONDS:-180}"
 

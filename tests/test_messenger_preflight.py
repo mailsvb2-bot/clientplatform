@@ -61,25 +61,6 @@ def test_telegram_preflight_still_requires_bot_token(monkeypatch):
     assert status.details["webhook_enabled"] is False
 
 
-def test_payment_preflight_can_be_enabled_independently(monkeypatch):
-    monkeypatch.setenv("APP_ENV", "prod")
-    monkeypatch.setenv("PAYMENT_HTTP_ENABLED", "1")
-    monkeypatch.setenv("YOOKASSA_SHOP_ID", "shop")
-    monkeypatch.setenv("YOOKASSA_SECRET_KEY", "secret")
-    monkeypatch.setenv("PAYMENT_CHECKOUT_SIGNING_KEY", "signing")
-    monkeypatch.setenv("PAYMENT_PUBLIC_BASE_URL", "https://pay.example.test")
-    monkeypatch.setenv("MAX_WEBHOOK_ENABLED", "0")
-    monkeypatch.setenv("VK_WEBHOOK_ENABLED", "0")
-
-    status = preflight.check_payment_preflight()
-
-    assert status.ok is True
-    assert status.channel == "payment"
-    assert status.details == {
-        "enabled": True,
-        "checkout_url": "https://pay.example.test/pay/yookassa",
-    }
-
 
 def test_vk_preflight_warns_when_secret_missing_for_dev_webhook(monkeypatch):
     monkeypatch.setenv("APP_ENV", "dev")

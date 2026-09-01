@@ -80,7 +80,7 @@ def _sqlite_url_path(raw: str) -> Path | None:
 
 def _configured_db_paths() -> tuple[Path, ...]:
     candidates: set[Path] = {_resolved_path(ROOT / "data" / "data.db")}
-    configured_path = (os.getenv("METRO_DB_PATH") or "").strip()
+    configured_path = (os.getenv("CLIENTPLATFORM_DB_PATH") or "").strip()
     if configured_path:
         candidates.add(_resolved_path(Path(configured_path)))
     database_url_path = _sqlite_url_path(os.getenv("DATABASE_URL") or "")
@@ -385,7 +385,7 @@ def main() -> int:
             )
             target_kind = "custom"
         else:
-            temporary_dir = Path(tempfile.mkdtemp(prefix="metrotherapy_stress_"))
+            temporary_dir = Path(tempfile.mkdtemp(prefix="clientplatform_stress_"))
             target = temporary_dir / "stress.db"
             target_kind = "temporary"
 

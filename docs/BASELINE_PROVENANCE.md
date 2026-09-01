@@ -1,27 +1,15 @@
 # ClientPlatform baseline provenance
 
-- Source repository: `mailsvb2-bot/metrotherapy-bot-telegram`
-- Imported baseline commit: `b4ac43c2961fb581078aedc25efeffd2ab4ecb34`
-- New repository: `mailsvb2-bot/clientplatform`
-- Product working name: **clientplatform**
-- Runtime status at baseline: imported Metrotherapy code; not yet transformed into clientplatform.
+- Imported technical baseline commit: `b4ac43c2961fb581078aedc25efeffd2ab4ecb34`
+- Canonical repository: `mailsvb2-bot/clientplatform`
+- Product name: **ClientPlatform**
+- The original product identity and product-specific runtime contract have been intentionally removed from this repository.
 - Repository visibility: public by owner decision to support GitHub Actions without private-repository billing.
 
 ## Non-negotiable isolation
 
-ClientPlatform must never use Metrotherapy production:
+ClientPlatform must use only ClientPlatform-owned production resources. It must never reuse credentials, databases, backups, webhook secrets, domains, object storage, runtime paths, deployment units, monitoring credentials, deployment keys, or real user data from any other product.
 
-- bot tokens;
-- PostgreSQL database, dumps or backups;
-- YooKassa or Telegram Stars credentials;
-- webhook URLs or secrets;
-- domains and TLS keys;
-- object storage;
-- systemd units and server paths;
-- real user data;
-- monitoring credentials;
-- deployment SSH keys.
+The imported commit records technical provenance only. It does not define the current product model and does not authorize deployment of copied runtime behavior.
 
-The imported commit records provenance only. It does not authorize deployment of the copied runtime.
-
-Before any clientplatform staging or production launch, create independent bots, credentials, databases, storage, domains and deployment units.
+Every ClientPlatform staging or production environment must have independent bots, credentials, databases, storage, domains and deployment units.

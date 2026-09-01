@@ -47,53 +47,13 @@ jobs:
       - name: Critical type contracts
         run: |
           set -o pipefail
-          python -m mypy --follow-imports=skip --check-untyped-defs \
-            core/environment.py \
-            core/shutdown.py \
-            services/pending.py \
-            services/weather.py \
-            services/accounts/identity.py \
-            services/messenger/text_ui.py \
-            services/messenger/delivery_outbox.py \
-            services/payments/checkout_intent.py \
-            services/payments/telegram_stars.py \
-            services/payments/telegram_stars_refunds.py \
-            services/payments/verified_reconciliation.py \
-            services/practice_token_lots.py \
-            services/practice_tokens_access_core.py \
-            services/practice_tokens_wallet.py \
-            services/premium_entitlements.py \
-            services/sales_desk.py \
-            services/sales_desk_repository.py \
-            services/sales_desk_sync.py \
-            runtime/payment_http.py \
-            runtime/payment_webhook_admission.py \
-            services/privacy_controls.py \
+          python scripts/critical_static_gate.py mypy \
             2>&1 | tee "$RUNNER_TEMP/release-mypy.log"
 
       - name: Critical Bandit gate
         run: |
           set -o pipefail
-          python -m bandit -q -r -c pyproject.toml \
-            core/environment.py \
-            core/shutdown.py \
-            services/pending.py \
-            services/weather.py \
-            services/payments \
-            services/accounts/identity.py \
-            services/messenger/text_ui.py \
-            services/messenger/delivery_outbox.py \
-            services/practice_token_lots.py \
-            services/practice_tokens_access_core.py \
-            services/practice_tokens_wallet.py \
-            services/premium_entitlements.py \
-            services/sales_desk.py \
-            services/sales_desk_db.py \
-            services/sales_desk_repository.py \
-            services/sales_desk_sync.py \
-            runtime/payment_http.py \
-            runtime/payment_webhook_admission.py \
-            services/privacy_controls.py \
+          python scripts/critical_static_gate.py bandit \
             2>&1 | tee "$RUNNER_TEMP/release-bandit.log"
 
       - name: Dependency audit

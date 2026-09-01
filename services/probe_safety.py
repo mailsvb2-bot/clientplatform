@@ -11,7 +11,7 @@ from services.probe_ledger import (
     assert_synthetic_user_id,
 )
 
-PROBE_MUTATION_AUTH_ENV = "METRO_PROBE_ALLOW_LIVE_DB_MUTATION"
+PROBE_MUTATION_AUTH_ENV = "CLIENTPLATFORM_PROBE_ALLOW_LIVE_DB_MUTATION"
 
 
 class ProbeMutationAuthorizationRequired(RuntimeError):

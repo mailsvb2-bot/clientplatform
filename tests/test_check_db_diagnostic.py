@@ -63,7 +63,7 @@ def test_active_storage_report_uses_canonical_audit(monkeypatch: pytest.MonkeyPa
                 "ok": True,
                 "status": "GREEN",
                 "active_engine": "postgres",
-                "db_target": "postgresql://metrotherapy:***@db/metrotherapy",
+                "db_target": "postgresql://clientplatform:***@db/clientplatform",
                 "legacy_sqlite_present": False,
                 "repo_local_sqlite_present": False,
                 "disallowed_direct_sqlite_connects": [],
@@ -162,13 +162,13 @@ def test_active_storage_cli_strict_uses_canonical_ok_flag(
 def test_env_loader_handles_export_quotes_and_comments(tmp_path: Path) -> None:
     env_file = tmp_path / "service.env"
     env_file.write_text(
-        "# comment\nexport METRO_DB_ENGINE='postgres'\nDATABASE_URL=postgresql://db/example\n",
+        "# comment\nexport CLIENTPLATFORM_DB_ENGINE='postgres'\nDATABASE_URL=postgresql://db/example\n",
         encoding="utf-8",
     )
 
     loaded = check_db._load_env_file(env_file)
 
     assert loaded == {
-        "METRO_DB_ENGINE": "postgres",
+        "CLIENTPLATFORM_DB_ENGINE": "postgres",
         "DATABASE_URL": "postgresql://db/example",
     }

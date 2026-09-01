@@ -7,8 +7,8 @@ import pytest
 
 
 def _fresh_modules(tmp_path, monkeypatch):
-    monkeypatch.setenv("METRO_DB_PATH", str(tmp_path / "account_identity.db"))
-    monkeypatch.setenv("METRO_DB_ENGINE", "sqlite")
+    monkeypatch.setenv("CLIENTPLATFORM_DB_PATH", str(tmp_path / "account_identity.db"))
+    monkeypatch.setenv("CLIENTPLATFORM_DB_ENGINE", "sqlite")
 
     modules = {}
     for name in [
@@ -17,7 +17,6 @@ def _fresh_modules(tmp_path, monkeypatch):
         "services.schema_core",
         "services.schema",
         "services.accounts.identity",
-        "services.accounts.audio_progress",
         "services.messenger.bridge",
         "services.messenger.entrypoints",
         "services.messenger.preferences",
@@ -222,30 +221,6 @@ def test_legacy_channel_identity_writes_through_to_account_layer(tmp_path, monke
 
     assert {row["platform"] for row in prefs.get_channel_snapshot(10001)["identities"]} == {"telegram", "vk"}
     assert prefs.get_channel_snapshot(30003)["identities"] == []
-
-
-def test_account_audio_progress_is_channel_independent(tmp_path, monkeypatch):
-    modules = _fresh_modules(tmp_path, monkeypatch)
-    audio = modules["services.accounts.audio_progress"]
-
-    account_id = 10001
-    assert audio.next_audio_no(account_id) == 1
-
-    state = audio.mark_audio_sent(account_id, 1, platform="telegram", external_user_id="tg-10001")
-    assert state.next_audio_no == 1
-
-    state = audio.mark_audio_completed(account_id, 1, platform="telegram")
-    assert state.next_audio_no == 2
-
-    audio.mark_audio_completed(account_id, 2, platform="telegram")
-    audio.mark_audio_completed(account_id, 3, platform="telegram")
-    assert audio.next_audio_no(account_id) == 4
-
-    state = audio.mark_audio_sent(account_id, 4, platform="vk", external_user_id="vk-20002")
-    assert state.next_audio_no == 4
-
-    state = audio.mark_audio_completed(account_id, 4, platform="vk")
-    assert state.next_audio_no == 5
 
 
 def test_same_numeric_id_on_three_platforms_creates_three_accounts(tmp_path, monkeypatch):

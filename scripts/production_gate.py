@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Mapping
 
 ROOT = Path(__file__).resolve().parents[1]
-PROBE_MUTATION_AUTH_ENV = "METRO_PROBE_ALLOW_LIVE_DB_MUTATION"
+PROBE_MUTATION_AUTH_ENV = "CLIENTPLATFORM_PROBE_ALLOW_LIVE_DB_MUTATION"
 
 
 def _load_env_file(path: str | Path | None) -> dict[str, str]:
@@ -52,7 +52,7 @@ def _merged_env(env_file: str | Path | None) -> dict[str, str]:
 
 def _restore_target_configured(env: Mapping[str, str] | None = None) -> bool:
     values = env or os.environ
-    return bool((values.get("METRO_RESTORE_DRILL_DATABASE_URL") or values.get("RESTORE_DATABASE_URL") or "").strip())
+    return bool((values.get("CLIENTPLATFORM_RESTORE_DRILL_DATABASE_URL") or values.get("RESTORE_DATABASE_URL") or "").strip())
 
 
 def _json_probe_name(line: str) -> str:
@@ -119,7 +119,7 @@ def _run(cmd: list[str], *, env: Mapping[str, str] | None = None) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run the non-bypassable production readiness gate")
-    parser.add_argument("--env-file", default=os.getenv("METROTHERAPY_ENV_FILE", "/etc/metrotherapy/metrotherapy.env"))
+    parser.add_argument("--env-file", default=os.getenv("CLIENTPLATFORM_ENV_FILE", "/etc/clientplatform/clientplatform.env"))
     parser.add_argument("--health-url", default=os.getenv("HEALTH_URL", "http://127.0.0.1:8082/health"))
     parser.add_argument("--ready-url", default=os.getenv("READINESS_URL", "http://127.0.0.1:8082/readyz"))
     args = parser.parse_args()
@@ -164,9 +164,6 @@ def main() -> int:
 
     print("==> postgres messenger outbox concurrency", flush=True)
     _run([sys.executable, "scripts/probe_postgres_messenger_outbox.py"], env=gate_env)
-
-    print("==> auto-audio load dry-run", flush=True)
-    _run([sys.executable, "scripts/probe_auto_audio_load_dry_run.py"], env=gate_env)
 
     print("PRODUCTION_GATE_OK", flush=True)
     return 0

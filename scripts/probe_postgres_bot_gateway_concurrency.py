@@ -82,7 +82,7 @@ def _create_active_connection(
 
 def main() -> int:
     if not CONFIG.uses_postgres:
-        raise SystemExit("POSTGRES_BOT_GATEWAY_FAILED: METRO_DB_ENGINE=postgres is required")
+        raise SystemExit("POSTGRES_BOT_GATEWAY_FAILED: CLIENTPLATFORM_DB_ENGINE=postgres is required")
     if not (os.getenv("DATABASE_URL") or "").strip():
         raise SystemExit("POSTGRES_BOT_GATEWAY_FAILED: DATABASE_URL is required")
     if (os.getenv("POSTGRES_REUSE_CONNECTIONS") or "").strip() != "0":

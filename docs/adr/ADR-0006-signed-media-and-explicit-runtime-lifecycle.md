@@ -73,7 +73,7 @@ clientplatform exposes:
 
 The lifecycle owns at most one `ClientPlatformDispatchScheduler`, awaits shutdown and is
 safe across separate event loops. It is not called automatically by imported
-Metrotherapy startup in this change.
+ClientPlatform startup in this change.
 
 ## Consequences
 

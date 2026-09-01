@@ -39,10 +39,6 @@ jobs:
       POSTGRES_REUSE_CONNECTIONS: "0"
       BOT_TOKEN: ci-bot-token-material
       ADMIN_IDS: "100001"
-      PAYMENT_CHECKOUT_SIGNING_KEY: ci-payment-signing-key-material-000000000000
-      PAYMENT_PUBLIC_BASE_URL: https://clientplatform.production.internal
-      YOOKASSA_SECRET_KEY: ci-yookassa-secret-material
-      YOOKASSA_SHOP_ID: "100001"
       TELEGRAM_TRANSPORT: polling
       TELEGRAM_WEBHOOK_ENABLED: "0"
       CLIENTPLATFORM_BOT_GATEWAY_ENABLED: "1"
@@ -136,7 +132,6 @@ jobs:
                   "TELEGRAM_WEBHOOK_SECRET_TOKEN": "",
                   "TELEGRAM_WEBHOOK_PREFIX": "",
                   "MESSENGER_PUBLIC_BASE_URL": f"https://{domain}",
-                  "PAYMENT_PUBLIC_BASE_URL": f"https://{domain}",
                   "PRIVACY_EXPORT_PUBLIC_BASE_URL": f"https://{domain}",
                   "HEALTHCHECK_DIAGNOSTICS_TOKEN": "d" * 48,
                   "CLIENTPLATFORM_MEDIA_GATEWAY_BASE_URL": f"https://{domain}/clientplatform",

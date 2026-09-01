@@ -35,7 +35,6 @@ async def test_health_handler_reports_ok(tmp_path, monkeypatch):
     monkeypatch.setattr(health_server, 'get_connection', lambda: DummyConn())
     monkeypatch.setattr(health_server, 'DB_PATH', tmp_path / 'data.db')
     monkeypatch.setattr(health_server, 'ROOT', tmp_path)
-    monkeypatch.setattr(health_server, '_scheduler_snapshot', lambda: {'scheduler_loop_task_running': True, 'precise_scheduler_running': True, 'precise_scheduler_task_running': True, 'precise_scheduler_queue_size': 2})
     monkeypatch.setattr(health_server, '_messenger_webhook_configured', lambda: True)
     monkeypatch.setattr(health_server, '_telegram_transport', lambda: 'polling')
 
@@ -60,7 +59,6 @@ async def test_health_handler_reports_db_failure(tmp_path, monkeypatch):
     monkeypatch.setattr(health_server, 'get_connection', _boom)
     monkeypatch.setattr(health_server, 'DB_PATH', tmp_path / 'data.db')
     monkeypatch.setattr(health_server, 'ROOT', tmp_path)
-    monkeypatch.setattr(health_server, '_scheduler_snapshot', lambda: {'scheduler_loop_task_running': False, 'precise_scheduler_running': False, 'precise_scheduler_task_running': False, 'precise_scheduler_queue_size': 0})
 
     response = await health_server._ready(None)  # type: ignore[arg-type]
     assert response.status == 500
@@ -74,7 +72,6 @@ def test_build_health_payload_reports_schema_missing(monkeypatch, tmp_path):
     monkeypatch.setattr(health_server, 'DB_PATH', tmp_path / 'data.db')
     monkeypatch.setattr(health_server, 'ROOT', tmp_path)
     monkeypatch.setattr(health_server, '_schema_ready', lambda: (False, 'schema_missing:jobs'))
-    monkeypatch.setattr(health_server, '_scheduler_snapshot', lambda: {'scheduler_loop_task_running': True, 'precise_scheduler_running': True, 'precise_scheduler_task_running': True, 'precise_scheduler_queue_size': 0})
 
     payload, status = health_server.build_readiness_payload()
     assert status == 500
@@ -113,7 +110,6 @@ def test_build_health_payload_reports_hybrid_polling_plus_http_ingress(monkeypat
     monkeypatch.setattr(health_server, 'get_connection', lambda: DummyConn())
     monkeypatch.setattr(health_server, 'DB_PATH', tmp_path / 'data.db')
     monkeypatch.setattr(health_server, 'ROOT', tmp_path)
-    monkeypatch.setattr(health_server, '_scheduler_snapshot', lambda: {'scheduler_loop_task_running': True, 'precise_scheduler_running': True, 'precise_scheduler_task_running': True, 'precise_scheduler_queue_size': 0})
     monkeypatch.setattr(health_server, '_messenger_webhook_configured', lambda: True)
     monkeypatch.setattr(health_server, 'http_ingress_enabled', lambda: True)
     monkeypatch.setattr(health_server, '_telegram_transport', lambda: 'polling')

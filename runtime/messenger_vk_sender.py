@@ -132,8 +132,8 @@ def _strip_raw_vk_payment_links(text: str) -> str:
     raw = str(text or "")
     head = raw.lstrip()
     if not (
-        head.startswith("💳 Тарифы Метротерапии")
-        or head.startswith("🎁 Подарить Метротерапию")
+        head.startswith("💳 Тарифы ClientPlatform")
+        or head.startswith("🎁 Подарить ClientPlatform")
     ):
         return raw
 
@@ -219,6 +219,7 @@ def _callback_keyboard_json(keyboard_json: str) -> str:
         return _as_text_keyboard_json(keyboard, rows)
 
     normalized = dict(keyboard)
+    normalized.pop("one_time", None)
     normalized["inline"] = True
     normalized["buttons"] = _pack_keyboard_rows(normalized_rows)
     return json.dumps(normalized, ensure_ascii=False, separators=(",", ":"))
@@ -411,16 +412,7 @@ class VkBotSender:
         }
 
         if kwargs.get("keyboard_json"):
-            from runtime.messenger_vk_ui import prepare_vk_keyboard_json
-
-            keyboard_json = prepare_vk_keyboard_json(
-                str(kwargs["keyboard_json"]),
-                external_user_id=str(external_user_id),
-                text=message_text,
-            )
-            params["keyboard"] = _callback_keyboard_json(keyboard_json)
-            message_text = _strip_raw_vk_payment_links(message_text)
-            params["message"] = message_text
+            params["keyboard"] = _callback_keyboard_json(str(kwargs["keyboard_json"]))
 
         if kwargs.get("attachment"):
             params["attachment"] = kwargs["attachment"]
@@ -535,7 +527,7 @@ class VkBotSender:
 
         saved = await self._vk_method(
             "docs.save",
-            {"file": uploaded_file, "title": file_path.stem[:128], "tags": "metrotherapy,audio"},
+            {"file": uploaded_file, "title": file_path.stem[:128], "tags": "clientplatform,audio"},
         )
         attachment = self._doc_attachment_from_save_response(saved)
         store_media_token("vk", file_path, attachment, media_type=cache_media_type)

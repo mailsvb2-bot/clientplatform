@@ -5,13 +5,13 @@
 The production Git checkout remains the source and webhook-deploy control plane:
 
 ```text
-/root/metrotherapy
+/root/clientplatform
 ```
 
 The running application is separate:
 
 ```text
-/var/lib/metrotherapy/runtime/
+/var/lib/clientplatform/runtime/
 ├── releases/
 │   ├── <40-char-git-sha>/
 │   │   ├── .venv/
@@ -26,7 +26,7 @@ The running application is separate:
 Licensed audio is application state, not release code. The default shared store is:
 
 ```text
-/var/lib/metrotherapy/audio
+/var/lib/clientplatform/audio
 ```
 
 Each release contains an `audio` symlink to that shared store. Existing source-tree audio is copied into the shared store during the first immutable build.
@@ -53,7 +53,7 @@ The complete tree digest covers relative paths, file types, permission bits, sym
 1. Verify remote Git topology is exactly `1/main` without writing to GitHub.
 2. Fast-forward the source checkout.
 3. On the first rollout, build the previously deployed SHA and point `current` to it.
-4. Install the systemd override that executes `/var/lib/metrotherapy/runtime/current/.venv/bin/python`.
+4. Install the systemd override that executes `/var/lib/clientplatform/runtime/current/.venv/bin/python`.
 5. Build and seal the candidate SHA.
 6. Run strict candidate validation. This applies expand-compatible migrations.
 7. Run the previous release against the expanded schema and require schema readiness.
@@ -72,25 +72,25 @@ The service must execute the symlinked runtime, never the source checkout:
 
 ```ini
 [Service]
-WorkingDirectory=/var/lib/metrotherapy/runtime/current
+WorkingDirectory=/var/lib/clientplatform/runtime/current
 ExecStart=
-ExecStart=/var/lib/metrotherapy/runtime/current/.venv/bin/python /var/lib/metrotherapy/runtime/current/main.py
+ExecStart=/var/lib/clientplatform/runtime/current/.venv/bin/python /var/lib/clientplatform/runtime/current/main.py
 Environment=PYTHONDONTWRITEBYTECODE=1
 ```
 
 `scripts/immutable_deploy.sh` installs this as:
 
 ```text
-/etc/systemd/system/metrotherapy.service.d/immutable-release.conf
+/etc/systemd/system/clientplatform.service.d/immutable-release.conf
 ```
 
 ## Mandatory production environment
 
 The real deployment still requires:
 
-- `/etc/metrotherapy/metrotherapy.env`;
+- `/etc/clientplatform/clientplatform.env`;
 - PostgreSQL production storage;
-- `METRO_RESTORE_DRILL_DATABASE_URL` or `RESTORE_DATABASE_URL` pointing to a different database whose name contains `drill`, `restore`, or `test`;
+- `CLIENTPLATFORM_RESTORE_DRILL_DATABASE_URL` or `RESTORE_DATABASE_URL` pointing to a different database whose name contains `drill`, `restore`, or `test`;
 - a fresh disaster-recovery backup and checksum manifest;
 - normal health/readiness endpoints.
 
@@ -101,7 +101,7 @@ The restore script refuses the production URL, the same database name, system da
 The authoritative env file is migrated with:
 
 ```bash
-cd /root/metrotherapy
+cd /root/clientplatform
 git fetch --prune origin
 git checkout main
 git merge --ff-only origin/main
@@ -123,8 +123,8 @@ idempotently after every fast-forward and before building or switching a release
 A successful deployment writes:
 
 ```text
-/var/lib/metrotherapy/deploy-state/deployment-proof.json
-/var/lib/metrotherapy/deploy-state/deployed_sha
+/var/lib/clientplatform/deploy-state/deployment-proof.json
+/var/lib/clientplatform/deploy-state/deployed_sha
 ```
 
 The proof includes:

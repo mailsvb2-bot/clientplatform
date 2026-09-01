@@ -65,7 +65,7 @@ def main() -> int:
     if not CONFIG.uses_postgres:
         raise SystemExit(
             "POSTGRES_PROGRAM_DRAFT_LESSON_CONCURRENCY_FAILED: "
-            "METRO_DB_ENGINE=postgres is required"
+            "CLIENTPLATFORM_DB_ENGINE=postgres is required"
         )
     if not (os.getenv("DATABASE_URL") or "").strip():
         raise SystemExit(

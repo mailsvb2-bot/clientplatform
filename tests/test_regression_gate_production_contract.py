@@ -20,18 +20,14 @@ def test_hermetic_production_contract_uses_fail_closed_prod_settings() -> None:
     env = regression_gate.HERMETIC_PROD_VALIDATOR_ENV
 
     assert env["APP_ENV"] == "prod"
-    assert env["METRO_DB_ENGINE"] == "postgres"
+    assert env["CLIENTPLATFORM_DB_ENGINE"] == "postgres"
     assert env["DATABASE_URL"].startswith("postgresql://")
     assert env["VALIDATOR_RELEASE_MODE"] == "1"
     assert env["VALIDATOR_GUARDRAILS_STRICT"] == "1"
     assert env["TELEGRAM_TRANSPORT"] == "polling"
     assert env["TELEGRAM_WEBHOOK_ENABLED"] == "0"
     assert env["TELEGRAM_LEGACY_TOKEN_WEBHOOK_ENABLED"] == "0"
-    assert env["TOKEN_ENFORCEMENT_MODE"] == "hard"
-    assert env["PAYMENT_CHECKOUT_INTENT_REQUIRED"] == "1"
-    assert env["YOOKASSA_PROVIDER_VERIFICATION_REQUIRED"] == "1"
-    assert env["TELEGRAM_STARS_ENABLED"] == "1"
-    assert env["TELEGRAM_YOOKASSA_ENABLED"] == "0"
+    assert env["PRIVACY_EXPORT_HTTP_ENABLED"] == "1"
 
 
 def test_real_production_env_validation_remains_additional() -> None:

@@ -1,8 +1,6 @@
 from dataclasses import dataclass
-import ipaddress
 import os
 
-from core.payment_ingress import PaymentIngressConfigurationError, resolve_payment_http_enabled
 
 # ВАЖНО (prod-safe): НЕ подхватываем .env автоматически в продакшене.
 # Иначе локальный .env рядом с кодом может неожиданно переопределить системные переменные окружения.
@@ -122,9 +120,6 @@ def _optional_feature_flag(name: str) -> bool | None:
 @dataclass
 class Settings:
     BOT_TOKEN: str = _env("BOT_TOKEN", "")
-    # Legacy Telegram Payments provider token. Kept for old local/manual flows only;
-    # production checkout is external YooKassa package checkout (runtime/payment_http.py).
-    PAY_PROVIDER_TOKEN: str = _env("PAY_PROVIDER_TOKEN", "")
 
     # --- Multi-messenger routing ---
     CLIENTPLATFORM_TELEGRAM_RUNTIME_ENABLED: bool = _env_bool(
@@ -172,49 +167,10 @@ class Settings:
     MESSENGER_PUBLIC_BASE_URL: str = _env("MESSENGER_PUBLIC_BASE_URL", "")
     MESSENGER_BRIDGE_TOKEN_TTL_HOURS: int = _env_int("MESSENGER_BRIDGE_TOKEN_TTL_HOURS", 72, minimum=1)
 
-    # --- YooKassa ---
-    YOOKASSA_TAX_SYSTEM_CODE: int = _env_int("YOOKASSA_TAX_SYSTEM_CODE", 2, minimum=1, maximum=6)
-    YOOKASSA_VAT_CODE: int = _env_int("YOOKASSA_VAT_CODE", 1, minimum=1, maximum=12)
-    YOOKASSA_PAYMENT_SUBJECT: str = _env("YOOKASSA_PAYMENT_SUBJECT", "service")
-    YOOKASSA_PAYMENT_MODE: str = _env("YOOKASSA_PAYMENT_MODE", "full_payment")
-
-    # IANA timezone string (Москва)
+    # IANA timezone used by scheduling and business-local date rendering.
     TIMEZONE: str = _env("TIMEZONE", "Europe/Moscow")
 
-    # Daily auto-audio schedule (local time in TIMEZONE)
-    # Format: HH:MM or HH:MM:SS
-    MORNING_TIME: str = _env("MORNING_TIME", "08:30")
-    EVENING_TIME: str = _env("EVENING_TIME", "19:30")
-
-    # Default duration (seconds) for full tracks (used for post-rating fallback timer)
-    TRACK_DURATION_SEC: int = _env_int("TRACK_DURATION_SEC", 1680, minimum=1)
-
-    AUDIO_DIR: str = _env("AUDIO_DIR", "audio/full")
-    DEMO_DIR: str = _env("DEMO_DIR", "audio/demo")
-
-    # Источник истины для тарифов: БД (таблица plans). Файл тарифов не используется.
-
-    # 0 = unlimited
-    DEMO_LIMIT: int = _env_int("DEMO_LIMIT", 0, minimum=0)
-
-    # Funnel timings
-    DEMO_REMINDER_MINUTES: int = _env_int("DEMO_REMINDER_MINUTES", 5, minimum=0)
-    FUNNEL_AFTER_DEMO_MINUTES: int = _env_int("FUNNEL_AFTER_DEMO_MINUTES", 30, minimum=0)
-    FUNNEL_POSTDEMO_MINUTES: int = _env_int("FUNNEL_POSTDEMO_MINUTES", 10, minimum=0)
-    FUNNEL_DEADLINE_HOURS: int = _env_int("FUNNEL_DEADLINE_HOURS", 24, minimum=0)
-    FUNNEL_LASTCALL_HOURS: int = _env_int("FUNNEL_LASTCALL_HOURS", 48, minimum=0)
-
-    # Referral bonuses
-    REF_BONUS_WEEK_DAYS: int = _env_int("REF_BONUS_WEEK_DAYS", 3, minimum=0)
-    REF_BONUS_MONTH_DAYS: int = _env_int("REF_BONUS_MONTH_DAYS", 7, minimum=0)
-
-    # Referral PRO anti-abuse
-    REF_MAX_BONUSES: int = _env_int("REF_MAX_BONUSES", 10, minimum=0)
-
     ADMIN_IDS: str = _env("ADMIN_IDS", "")
-    PREWARM_ENABLED: bool = _env_bool("PREWARM_ENABLED")
-    PREWARM_CHAT_ID: str = _env("PREWARM_CHAT_ID", "")
-
     # --- AI (OpenAI) ---
     # AI включён, если задан ключ. UX не меняем: AI помогает выбирать сценарии/тексты/цены.
     OPENAI_API_KEY: str = _env("OPENAI_API_KEY", "")
@@ -256,68 +212,15 @@ class Settings:
 settings = Settings()
 
 
-def _prod_payment_base_url() -> str:
-    return (
-        _first_env("MESSENGER_PUBLIC_BASE_URL")
-        or _first_env("PAYMENT_PUBLIC_BASE_URL")
-        or _first_env("PUBLIC_BASE_URL")
-        or str(settings.MESSENGER_PUBLIC_BASE_URL or "").strip()
-        or str(settings.TELEGRAM_WEBHOOK_PUBLIC_BASE_URL or "").strip()
-    ).rstrip("/")
-
-
-def _external_checkout_enabled() -> bool:
-    """Return whether production needs the external YooKassa checkout surface.
-
-    PAYMENT_HTTP_ENABLED is the canonical payment-ingress switch. Preserve the
-    historical default when it is absent, but honor an explicit 0 independently
-    of VK/MAX webhook ingress. Official ClientPlatform owner-control channels
-    must not make unrelated YooKassa credentials mandatory just to receive and
-    answer owner messages.
-    """
-
-    return resolve_payment_http_enabled(os.environ)
-
-
-def _validate_trusted_proxy_env() -> None:
-    """Reject spoofable proxy trust configuration before production starts."""
-
-    if not _truthy_env("TRUST_PROXY_HEADERS"):
-        return
-    raw = (os.getenv("PAYMENT_WEBHOOK_TRUSTED_PROXY_CIDRS") or "").strip()
-    if not raw:
-        raise SystemExit(
-            "TRUST_PROXY_HEADERS=1 requires PAYMENT_WEBHOOK_TRUSTED_PROXY_CIDRS in prod"
-        )
-    invalid: list[str] = []
-    valid_count = 0
-    for item in raw.split(","):
-        candidate = item.strip()
-        if not candidate:
-            continue
-        try:
-            ipaddress.ip_network(candidate, strict=False)
-            valid_count += 1
-        except ValueError:
-            invalid.append(candidate)
-    if invalid or valid_count == 0:
-        detail = ", ".join(invalid) if invalid else "<empty>"
-        raise SystemExit(
-            "PAYMENT_WEBHOOK_TRUSTED_PROXY_CIDRS contains invalid networks: " + detail
-        )
-
-
 def _fail_fast_prod_config() -> None:
     """Fail fast in prod if critical env vars are missing or inconsistent.
 
     In production we do not allow quiet defaults for secrets, webhook ingress,
-    or partially configured payments. This catches server mixups before the
+    or partially configured channel ingress. This catches server mixups before the
     selected channel runtime starts accepting users from ads.
     """
     if APP_ENV not in {"prod", "production"}:
         return
-
-    _validate_trusted_proxy_env()
 
     missing: list[str] = []
     telegram_runtime = bool(settings.CLIENTPLATFORM_TELEGRAM_RUNTIME_ENABLED)
@@ -332,39 +235,6 @@ def _fail_fast_prod_config() -> None:
     vk_flag = _optional_feature_flag('VK_WEBHOOK_ENABLED')
     max_enabled = max_flag if max_flag is not None else bool(legacy_messenger and settings.MAX_BOT_TOKEN)
     vk_enabled = vk_flag if vk_flag is not None else bool(legacy_messenger and settings.VK_GROUP_TOKEN)
-
-    try:
-        external_checkout_enabled = _external_checkout_enabled()
-    except PaymentIngressConfigurationError as exc:
-        raise SystemExit(str(exc)) from exc
-
-    if external_checkout_enabled:
-        if not _first_env('YOOKASSA_SHOP_ID'):
-            missing.append('YOOKASSA_SHOP_ID')
-        if not _first_env('YOOKASSA_SECRET_KEY'):
-            missing.append('YOOKASSA_SECRET_KEY')
-        if not _first_env('PAYMENT_CHECKOUT_SIGNING_KEY', 'CHECKOUT_SIGNING_KEY'):
-            missing.append('PAYMENT_CHECKOUT_SIGNING_KEY')
-
-        public_payment_base = _prod_payment_base_url()
-        if not public_payment_base:
-            missing.append('PAYMENT_PUBLIC_BASE_URL')
-        elif not public_payment_base.startswith('https://'):
-            raise SystemExit('Payment public base URL must start with https:// in prod')
-
-    dangerous_payment_overrides = [
-        'ALLOW_UNSIGNED_PAYMENT_CHECKOUT_IN_PROD',
-        'ALLOW_UNVERIFIED_YOOKASSA_WEBHOOK_IN_PROD',
-        'ALLOW_STATIC_PAYMENT_IDEMPOTENCE_KEY_IN_PROD',
-    ]
-    if not _truthy_env('PAYMENT_DANGEROUS_OVERRIDES_ALLOWED'):
-        enabled = [name for name in dangerous_payment_overrides if _truthy_env(name)]
-        if enabled:
-            raise SystemExit(
-                'Dangerous payment override(s) are forbidden in prod: '
-                + ', '.join(enabled)
-                + '. Set PAYMENT_DANGEROUS_OVERRIDES_ALLOWED=1 only for a documented emergency drill.'
-            )
 
     telegram_webhook = telegram_runtime and (
         (settings.TELEGRAM_TRANSPORT == 'webhook')

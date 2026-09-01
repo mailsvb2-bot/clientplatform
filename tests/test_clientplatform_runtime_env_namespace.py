@@ -15,10 +15,6 @@ _ENV_NAMES = (
     "CLIENTPLATFORM_LOGS_DIR",
     "CLIENTPLATFORM_DB_ENGINE",
     "CLIENTPLATFORM_DB_PATH",
-    "METRO_DATA_DIR",
-    "METRO_LOGS_DIR",
-    "METRO_DB_ENGINE",
-    "METRO_DB_PATH",
     "DATABASE_URL",
 )
 _PROBE = """
@@ -61,45 +57,23 @@ class ClientPlatformRuntimeEnvironmentTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
         return json.loads(completed.stdout.strip())
 
-    def test_clientplatform_namespace_has_priority_over_legacy_values(self) -> None:
+    def test_clientplatform_namespace_controls_runtime_paths_and_database(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
             result = self._probe(
                 {
                     "CLIENTPLATFORM_DATA_DIR": str(root / "client-data"),
                     "CLIENTPLATFORM_LOGS_DIR": str(root / "client-logs"),
-                    "CLIENTPLATFORM_DB_ENGINE": "postgres",
+                    "CLIENTPLATFORM_DB_ENGINE": "sqlite",
                     "CLIENTPLATFORM_DB_PATH": str(root / "client.sqlite3"),
-                    "METRO_DATA_DIR": str(root / "legacy-data"),
-                    "METRO_LOGS_DIR": str(root / "legacy-logs"),
-                    "METRO_DB_ENGINE": "sqlite",
-                    "METRO_DB_PATH": str(root / "legacy.sqlite3"),
                 }
             )
         self.assertTrue(result["data_dir"].endswith("client-data"))
         self.assertTrue(result["logs_dir"].endswith("client-logs"))
-        self.assertEqual(result["db_engine"], "postgres")
-        self.assertEqual(result["runtime_engine"], "postgres")
-        self.assertTrue(result["db_path"].endswith("client.sqlite3"))
-        self.assertIn("clientplatform:secret", result["driver_hint"])
-        self.assertNotIn("metrotherapy", result["driver_hint"])
-
-    def test_legacy_namespace_remains_a_compatible_fallback(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            root = Path(raw)
-            result = self._probe(
-                {
-                    "METRO_DATA_DIR": str(root / "legacy-data"),
-                    "METRO_LOGS_DIR": str(root / "legacy-logs"),
-                    "METRO_DB_ENGINE": "sqlite",
-                    "METRO_DB_PATH": str(root / "legacy.sqlite3"),
-                }
-            )
-        self.assertTrue(result["data_dir"].endswith("legacy-data"))
-        self.assertTrue(result["logs_dir"].endswith("legacy-logs"))
         self.assertEqual(result["db_engine"], "sqlite")
         self.assertEqual(result["runtime_engine"], "sqlite")
-        self.assertTrue(result["db_path"].endswith("legacy.sqlite3"))
+        self.assertTrue(result["db_path"].endswith("client.sqlite3"))
+        self.assertIn("postgresql://clientplatform:secret", result["driver_hint"])
 
     def test_canonical_scenario_gate_uses_product_namespace(self) -> None:
         source = (ROOT / "scripts/all_user_scenario_gate.py").read_text(
@@ -107,8 +81,8 @@ class ClientPlatformRuntimeEnvironmentTests(unittest.TestCase):
         )
         self.assertIn('"CLIENTPLATFORM_DB_ENGINE": "sqlite"', source)
         self.assertIn('env["CLIENTPLATFORM_DB_PATH"]', source)
-        self.assertNotIn("METRO_DB_ENGINE", source)
-        self.assertNotIn("METRO_DB_PATH", source)
+        self.assertIn('"MESSENGER_WEBHOOK_ENABLED": "0"', source)
+        self.assertIn('"VK_WEBHOOK_ENABLED": "0"', source)
 
     def test_migration_backend_detection_uses_canonical_runtime(self) -> None:
         paths = (
@@ -118,7 +92,7 @@ class ClientPlatformRuntimeEnvironmentTests(unittest.TestCase):
         for path in paths:
             source = path.read_text(encoding="utf-8")
             self.assertIn("is_postgres_enabled", source, str(path))
-            self.assertNotIn("METRO_DB_ENGINE", source, str(path))
+            self.assertNotIn("CLIENTPLATFORM_DB_ENGINE", source, str(path))
 
     def test_runtime_namespace_files_are_in_critical_static_gate(self) -> None:
         source = (ROOT / "scripts/critical_static_gate.py").read_text(

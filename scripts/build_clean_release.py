@@ -117,7 +117,7 @@ def main(argv: list[str]) -> int:
 
     zip_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with tempfile.TemporaryDirectory(prefix="metro_release_stage_") as tmp:
+    with tempfile.TemporaryDirectory(prefix="clientplatform_release_stage_") as tmp:
         stage_root = Path(tmp)
         stage_project = stage_root / project_root.name
         stage_project.mkdir(parents=True, exist_ok=True)

@@ -56,8 +56,8 @@ def test_production_media_contract_fails_closed() -> None:
 
     shared_bucket = {
         **production_env(),
-        "CLIENTPLATFORM_STORAGE_BUCKET": "metrotherapy-production",
-        "CLIENTPLATFORM_MEDIA_GATEWAY_ALLOWED_BUCKETS": "metrotherapy-production",
+        "CLIENTPLATFORM_STORAGE_BUCKET": "shared-production-media",
+        "CLIENTPLATFORM_MEDIA_GATEWAY_ALLOWED_BUCKETS": "shared-production-media",
     }
     assert any(
         "dedicated to production" in error

@@ -304,7 +304,7 @@ async def begin_bot_setup(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     await control._callback_message(callback).answer(
         "Шаг 1 из 2. Напишите username бота, созданного через BotFather.\n\n"
-        "Например: @my_practice_bot. Имя должно оканчиваться на bot.\n\n"
+        "Например: @my_business_bot. Имя должно оканчиваться на bot.\n\n"
         "Токен сюда не отправляйте."
     )
 
@@ -314,7 +314,7 @@ async def receive_bot_username(message: Message, state: FSMContext) -> None:
     try:
         username = normalize_requested_username(str(message.text or ""))
     except ValueError:
-        await message.answer("Не похоже на username Telegram-бота. Пример: @my_practice_bot.")
+        await message.answer("Не похоже на username Telegram-бота. Пример: @my_business_bot.")
         return
     if username is None:
         await message.answer("Username бота обязателен.")

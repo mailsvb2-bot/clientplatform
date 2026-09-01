@@ -10,7 +10,7 @@ Telegram is polling-only in ClientPlatform:
 - startup removes any stale Telegram webhook without dropping pending updates;
 - `TELEGRAM_TRANSPORT=webhook` and `TELEGRAM_WEBHOOK_ENABLED=1` are rejected by production preflight and overridden to polling by the process entrypoint.
 
-VK and MAX remain webhook-based and use the independent messenger HTTP ingress. Their `start`, `/start` and provider-native start events enter ClientPlatform directly; they must not redirect users to Telegram or show inherited Metrotherapy menus.
+VK and MAX remain webhook-based and use the independent messenger HTTP ingress. Their `start`, `/start` and provider-native start events enter ClientPlatform directly; they must not redirect users to Telegram or show inherited product menus.
 
 ## Safety boundary
 
@@ -160,7 +160,7 @@ Before enabling traffic, prove:
 - duplicate polling ownership produces a visible conflict rather than a transport switch;
 - durable admission remains idempotent under concurrent PostgreSQL connections;
 - disable/revoke clear queued payloads and make route admission fail closed;
-- VK `/start` returns ClientPlatform content, not Metrotherapy content;
+- VK `/start` returns canonical ClientPlatform content, not inherited product content;
 - MAX `bot_started` works without a text message;
 - repeated VK/MAX webhook events do not repeat tenant creation or replies;
 - production preflight rejects every Telegram webhook configuration while permitting independent VK/MAX webhook ingress.

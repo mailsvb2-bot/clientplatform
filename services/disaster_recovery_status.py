@@ -19,9 +19,9 @@ def _float_env(name: str, default: float) -> float:
     return value if math.isfinite(value) else float(default)
 
 
-DEFAULT_BACKUP_DIR = Path(os.getenv("METRO_POSTGRES_BACKUP_DIR", "/var/backups/metrotherapy/postgres"))
+DEFAULT_BACKUP_DIR = Path(os.getenv("CLIENTPLATFORM_POSTGRES_BACKUP_DIR", "/var/backups/clientplatform/postgres"))
 SUPPORTED_SUFFIXES = (".dump", ".sql", ".sql.gz")
-DEFAULT_MAX_BACKUP_AGE_HOURS = _float_env("METRO_POSTGRES_BACKUP_MAX_AGE_HOURS", 72.0)
+DEFAULT_MAX_BACKUP_AGE_HOURS = _float_env("CLIENTPLATFORM_POSTGRES_BACKUP_MAX_AGE_HOURS", 72.0)
 
 
 @dataclass(frozen=True)
@@ -123,7 +123,7 @@ def disaster_recovery_status(
 ) -> DisasterRecoveryStatus:
     safe_max_age = _coerce_max_age(max_backup_age_hours)
     target_configured = bool(
-        (os.getenv("METRO_RESTORE_DRILL_DATABASE_URL") or os.getenv("RESTORE_DATABASE_URL") or "").strip()
+        (os.getenv("CLIENTPLATFORM_RESTORE_DRILL_DATABASE_URL") or os.getenv("RESTORE_DATABASE_URL") or "").strip()
     )
     try:
         backup_dir_exists = backup_dir.exists()

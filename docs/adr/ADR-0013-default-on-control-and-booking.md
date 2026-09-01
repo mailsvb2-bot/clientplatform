@@ -31,7 +31,7 @@ The first booking implementation enforced overlap rules with a read followed by 
 
 ## Consequences
 
-- The next normal application start presents ClientPlatform rather than the imported Metrotherapy start interface.
+- The next normal application start presents ClientPlatform rather than the imported baseline start interface.
 - The dispatch worker and readiness checks are active without an extra rollout flag.
 - Operators retain a deterministic two-variable rollback.
 - Connected clients no longer fall into owner onboarding when they return to the bot.

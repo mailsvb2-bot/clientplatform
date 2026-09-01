@@ -5,7 +5,7 @@
 
 ## Контекст
 
-ClientPlatform уже определяет `Customer` как tenant-scoped бизнес-сущность и `CustomerIdentity` как внешнюю идентичность внутри конкретного `Business` (ADR-0002). В кодовой базе также исторически присутствуют VK/MAX sender/webhook/account-link механизмы, унаследованные из исходной Метротерапии.
+ClientPlatform уже определяет `Customer` как tenant-scoped бизнес-сущность и `CustomerIdentity` как внешнюю идентичность внутри конкретного `Business` (ADR-0002). В кодовой базе также исторически присутствовали VK/MAX sender/webhook/account-link механизмы, унаследованные из импортированного технического baseline.
 
 Эти механизмы полезны как проверенные provider adapters, но их legacy `account_id`, меню и продуктовый state не могут становиться вторым источником истины ClientPlatform. Для массовой платформы один и тот же клиент специалиста должен видеть один прогресс, записи, продажи, программы и коммуникационное состояние независимо от того, пришёл он через Telegram, VK или MAX.
 
@@ -22,16 +22,16 @@ ClientPlatform уже определяет `Customer` как tenant-scoped би�
 7. В URL webhook допустим только opaque route UUID. `business_id`, `connection_id`, credential и expected external provider account разрешаются сервером.
 8. На каждом admission route повторно проверяется против активных `Business` и `Connection`; tenant ID из provider/client payload не принимается на доверии.
 9. Provider replay/dedupe key включает canonical route id, поэтому одинаковые provider event IDs разных бизнесов не конфликтуют.
-10. Входящий человеческий текст Telegram/VK/MAX идёт в один Sales/Sales AI application contour и тот же consent boundary. Provider-specific меню Метротерапии не является ClientPlatform intent model.
+10. Входящий человеческий текст Telegram/VK/MAX идёт в один Sales/Sales AI application contour и тот же consent boundary. Унаследованное provider-specific меню не является ClientPlatform intent model.
 11. Исходящие сообщения Telegram/VK/MAX используют один `delivery_dispatch_outbox`, leases, retries, dead handling, credential resolution и media resolver. Различается только transport adapter.
 12. Существующие hardened VK/MAX provider senders могут использоваться ниже transport boundary как implementation detail. Они не владеют Customer, Sales, Program, booking, consent или durable delivery truth.
 13. Если retained provider client не доказывает native capability (например native video), adapter использует честный поддерживаемый file/document fallback вместо выдуманной parity.
 14. Legacy global VK/MAX endpoints сохраняются только как временный compatibility surface; новый ClientPlatform contour включается отдельным feature flag и не зависит от legacy account/menu state.
 15. Production rollout выполняется отдельно от code merge и только после secret/connection/route provisioning, migrations, health/readiness и synthetic cross-channel probes.
 
-## Почему не копируем Метротерапию целиком
+## Почему не копируем унаследованный provider/runtime слой целиком
 
-У Метротерапии уже есть полезные provider HTTP/upload/retry и linking-механизмы, но её предметная модель рассчитана на один продукт и legacy account. Механическое копирование создало бы второй customer/account graph, второй UI state и риск расхождения Telegram/VK/MAX.
+Импортированный baseline содержал полезные provider HTTP/upload/retry и linking-механизмы, но его предметная модель была рассчитана на один продукт и legacy account. Механическое копирование создало бы второй customer/account graph, второй UI state и риск расхождения Telegram/VK/MAX.
 
 Выбрано переносить только provider-level mechanics и проверенные failure semantics, а identity, tenant authorization, delivery, Sales и business state оставлять каноническими ClientPlatform.
 
