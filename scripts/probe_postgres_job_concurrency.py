@@ -19,7 +19,7 @@ if str(ROOT) not in sys.path:
 from core.time_utils import utc_now_iso
 from services.db import db
 from services.db.runtime import CONFIG
-from services.jobs import add_job
+from services.jobs import add_job, claim_due_jobs
 from services.probe_ledger import assert_synthetic_user_id, finish_probe_run, start_probe_run
 from services.schema import init_db
 
@@ -76,6 +76,20 @@ def _cleanup(*, user_id: int, key_prefix: str) -> int:
 def _stale_before_iso(*, now_iso: str) -> str:
     now_dt = datetime.fromisoformat(str(now_iso))
     return (now_dt - timedelta(seconds=LOCK_TTL_SECONDS)).replace(microsecond=0).isoformat()
+
+
+def _assert_canonical_claim_path_parses() -> None:
+    """Exercise the production claim SQL without claiming or mutating any row."""
+    now_iso = utc_now_iso()
+    for job_type in (PROBE_TYPE, None):
+        claimed = claim_due_jobs(
+            now_iso,
+            limit=0,
+            lock_ttl_sec=LOCK_TTL_SECONDS,
+            job_type=job_type,
+        )
+        if claimed:
+            raise RuntimeError("zero_limit_canonical_claim_returned_rows")
 
 
 def _claim_synthetic_jobs(
@@ -160,6 +174,7 @@ def run_probe(*, user_id: int = DEFAULT_USER_ID, workers: int = 4, jobs: int = 2
 
     assert_synthetic_user_id(int(user_id))
     init_db()
+    _assert_canonical_claim_path_parses()
 
     run_id = uuid.uuid4().hex
     key_prefix = f"probe:{PROBE_TYPE}:{run_id}:"
