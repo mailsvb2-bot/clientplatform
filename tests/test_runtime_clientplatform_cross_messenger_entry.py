@@ -384,6 +384,46 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("недоступен", replies[0].text)
         self.assertEqual(replies[1].kind, "clientplatform_interaction")
 
+    def test_scoped_workspace_action_fails_closed_before_native_dispatch(self) -> None:
+        entry = SimpleNamespace(user_id=505)
+        accesses = [
+            SimpleNamespace(business=SimpleNamespace(id=B1, name="Практика Анны"))
+        ]
+        with (
+            patch(
+                "services.messenger.clientplatform_entry.register_user_entry",
+                return_value=entry,
+            ),
+            patch(
+                "services.messenger.clientplatform_entry.list_accessible_businesses",
+                return_value=accesses,
+            ),
+            patch(
+                "services.messenger.clientplatform_entry.resolve_tenant_context"
+            ) as resolve,
+            patch(
+                "services.messenger.clientplatform_entry.render_native_member_interaction"
+            ) as render,
+        ):
+            _, inaccessible = handle_clientplatform_entry(
+                505,
+                platform="vk",
+                external_user_id="505",
+                text=f"cpw:act:{uuid_token(B3)}:cpm:messengers",
+            )
+            _, malformed = handle_clientplatform_entry(
+                505,
+                platform="vk",
+                external_user_id="505",
+                text=f"cpw:act:{uuid_token(B1)}:not-native",
+            )
+
+        resolve.assert_not_called()
+        render.assert_not_called()
+        self.assertIn("изменился", inaccessible[0].text)
+        self.assertEqual(inaccessible[1].kind, "clientplatform_interaction")
+        self.assertEqual(malformed[0].kind, "clientplatform_interaction")
+
     def test_activity_description_is_channel_neutral_onboarding_step(self) -> None:
         command = parse_clientplatform_entry_command(
             "деятельность Ремонтирую автомобили и принимаю заказы"

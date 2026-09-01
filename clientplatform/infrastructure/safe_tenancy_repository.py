@@ -92,9 +92,23 @@ class TenancyRepository(_BaseTenancyRepository):
         now: str | None = None,
     ) -> BusinessMember:
         current_actor = self.resolve_context(user_id=actor.user_id, business_id=actor.business_id)
+        target_user_id = normalize_user_id(user_id)
         self._lock_business_membership_boundary(current_actor.business_id)
-        return super().revoke_member(
+        revoked = super().revoke_member(
             actor=current_actor,
-            user_id=normalize_user_id(user_id),
+            user_id=target_user_id,
             now=now,
         )
+        self._conn.execute(
+            "DELETE FROM clientplatform_owner_input_sessions WHERE business_id=? AND user_id=?",
+            (current_actor.business_id, target_user_id),
+        )
+        self._conn.execute(
+            "DELETE FROM clientplatform_owner_control_workspaces WHERE business_id=? AND user_id=?",
+            (current_actor.business_id, target_user_id),
+        )
+        self._conn.execute(
+            "DELETE FROM clientplatform_owner_onboarding_sessions WHERE business_id=? AND user_id=?",
+            (current_actor.business_id, target_user_id),
+        )
+        return revoked

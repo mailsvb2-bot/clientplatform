@@ -13,6 +13,7 @@ class OwnerInputSession:
     action: str
     context: Mapping[str, str]
     updated_at: str
+    surface: str = "official"
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "context", MappingProxyType(dict(self.context)))

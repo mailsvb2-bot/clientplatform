@@ -850,17 +850,31 @@ def _pending_owner_input(
     actor: TenantContext,
     *,
     platform: ConnectionPlatform,
+    surface: str,
     raw_text: object,
 ) -> tuple[ParsedMemberInteraction, OwnerInputSession | None]:
-    raw = " ".join(str(raw_text or "").strip().split())
-    if raw.startswith(("cpm:", "cpw:", "/")):
-        clear_owner_input(user_id=actor.user_id, platform=platform.value)
+    raw = str(raw_text or "").strip()
+    compact = " ".join(raw.split())
+    session = get_owner_input_session(
+        user_id=actor.user_id, platform=platform.value, surface=surface
+    )
+    if compact.casefold() in {"отмена", "cancel"} and session is not None:
+        clear_owner_input(
+            user_id=actor.user_id, platform=platform.value, surface=surface
+        )
+        return ParsedMemberInteraction("owner-input-cancelled"), None
+    if compact.startswith(("cpm:", "cpw:", "/")):
+        if session is not None:
+            clear_owner_input(
+                user_id=actor.user_id, platform=platform.value, surface=surface
+            )
         return parse_native_member_interaction(raw), None
-    session = get_owner_input_session(user_id=actor.user_id, platform=platform.value)
     if session is None:
         return parse_native_member_interaction(raw), None
     if session.business_id != actor.business_id:
-        clear_owner_input(user_id=actor.user_id, platform=platform.value)
+        clear_owner_input(
+            user_id=actor.user_id, platform=platform.value, surface=surface
+        )
         return parse_native_member_interaction(raw), None
     try:
         resolved = resolve_owner_input(session, raw)
@@ -891,6 +905,7 @@ def _begin_owner_input_message(
     actor: TenantContext,
     *,
     platform: ConnectionPlatform,
+    surface: str,
     action: str,
     text: str,
     context: dict[str, object] | None = None,
@@ -901,6 +916,7 @@ def _begin_owner_input_message(
         platform=platform.value,
         action=action,
         context=context,
+        surface=surface,
     )
     return CustomerInteractionMessage(
         text=(
@@ -2182,6 +2198,7 @@ def _publication_new_for_message(
     channel: str,
     *,
     current_platform: ConnectionPlatform,
+    input_surface: str = "official",
 ) -> CustomerInteractionMessage:
     if actor.role not in _CONTENT_ROLES:
         return _permission_message()
@@ -2196,6 +2213,7 @@ def _publication_new_for_message(
     return _begin_owner_input_message(
         actor,
         platform=current_platform,
+        surface=input_surface,
         action="publication_draft",
         context={"channel": channel},
         text=(
@@ -2245,6 +2263,7 @@ def _payment_new_help(
     actor: TenantContext,
     *,
     current_platform: ConnectionPlatform,
+    input_surface: str = "official",
 ) -> CustomerInteractionMessage:
     if actor.role not in admin_ops._FINANCE_WRITE_ROLES:
         return _permission_message()
@@ -2259,6 +2278,7 @@ def _payment_new_help(
     return _begin_owner_input_message(
         actor,
         platform=current_platform,
+        surface=input_surface,
         action="payment",
         text=(
             "💳 Зафиксировать оплату\n\n"
@@ -2343,6 +2363,7 @@ def _price_set_help(
     offering_id: str,
     *,
     current_platform: ConnectionPlatform,
+    input_surface: str = "official",
 ) -> CustomerInteractionMessage:
     if actor.role not in admin_ops._FINANCE_WRITE_ROLES:
         return _permission_message()
@@ -2352,6 +2373,7 @@ def _price_set_help(
     return _begin_owner_input_message(
         actor,
         platform=current_platform,
+        surface=input_surface,
         action="price",
         context={"offering_id": str(offering.id)},
         text=(
@@ -2454,6 +2476,7 @@ def _activity_edit_help(
     actor: TenantContext,
     *,
     current_platform: ConnectionPlatform,
+    input_surface: str = "official",
 ) -> CustomerInteractionMessage:
     if actor.role not in _CONNECTION_ROLES:
         return _permission_message()
@@ -2461,6 +2484,7 @@ def _activity_edit_help(
     return _begin_owner_input_message(
         actor,
         platform=current_platform,
+        surface=input_surface,
         action="activity_description",
         text=(
             "✏️ Изменить описание бизнеса\n\n"
@@ -2515,6 +2539,7 @@ def _member_add_role_message(
     role_code: str,
     *,
     current_platform: ConnectionPlatform,
+    input_surface: str = "official",
 ) -> CustomerInteractionMessage:
     if actor.role != PlatformRole.OWNER:
         return _permission_message()
@@ -2524,6 +2549,7 @@ def _member_add_role_message(
     return _begin_owner_input_message(
         actor,
         platform=current_platform,
+        surface=input_surface,
         action="member_user",
         context={"role_code": role_code},
         text=(
@@ -3341,6 +3367,7 @@ def _booking_open_for_message(
     offering_id: str,
     *,
     current_platform: ConnectionPlatform,
+    input_surface: str = "official",
 ) -> CustomerInteractionMessage:
     if actor.role not in _BOOKING_MANAGEMENT_ROLES:
         return _permission_message()
@@ -3353,6 +3380,7 @@ def _booking_open_for_message(
     return _begin_owner_input_message(
         actor,
         platform=current_platform,
+        surface=input_surface,
         action="booking_time",
         context={"offering_id": str(offering.id)},
         text=(
@@ -3504,12 +3532,14 @@ def _program_create_help(
     actor: TenantContext,
     *,
     current_platform: ConnectionPlatform,
+    input_surface: str = "official",
 ) -> CustomerInteractionMessage:
     if actor.role not in _PROGRAM_MANAGEMENT_ROLES:
         return _permission_message()
     return _begin_owner_input_message(
         actor,
         platform=current_platform,
+        surface=input_surface,
         action="program_title",
         text=(
             "➕ Новый материал или программа\n\n"
@@ -3580,6 +3610,7 @@ def _program_lesson_kind_message(
     content_kind: str,
     *,
     current_platform: ConnectionPlatform,
+    input_surface: str = "official",
 ) -> CustomerInteractionMessage:
     if actor.role not in _PROGRAM_MANAGEMENT_ROLES:
         return _permission_message()
@@ -3598,6 +3629,7 @@ def _program_lesson_kind_message(
     return _begin_owner_input_message(
         actor,
         platform=current_platform,
+        surface=input_surface,
         action="program_lesson",
         context={"program_id": str(record.program.id), "content_kind": content_kind},
         text=(
@@ -3781,6 +3813,7 @@ def _offering_new_for_message(
     connector_key: str,
     *,
     current_platform: ConnectionPlatform,
+    input_surface: str = "official",
 ) -> CustomerInteractionMessage:
     if actor.role not in _PROGRAM_MANAGEMENT_ROLES:
         return _permission_message()
@@ -3799,6 +3832,7 @@ def _offering_new_for_message(
     return _begin_owner_input_message(
         actor,
         platform=current_platform,
+        surface=input_surface,
         action="offering",
         context={"connector_key": connector_key},
         text=(
@@ -4012,12 +4046,18 @@ def _render(
     linked: bool,
     setup_issuer: NativeSetupCommandIssuer | None,
     setup_key: str,
+    input_surface: str = "official",
     current_platform: ConnectionPlatform = ConnectionPlatform.TELEGRAM,
 ) -> CustomerInteractionMessage:
     if parsed.action == "menu":
         return _menu_message(actor, linked=linked)
     if parsed.action == "owner-input-invalid":
         return _owner_input_invalid_message(parsed.args[0] if parsed.args else "")
+    if parsed.action == "owner-input-cancelled":
+        return CustomerInteractionMessage(
+            text="Ввод отменён. Данные не изменены.",
+            rows=(_back_row(),),
+        )
     try:
         if parsed.action == "menu-all":
             return _menu_all_message(actor)
@@ -4061,7 +4101,10 @@ def _render(
             if len(parsed.args) != 1:
                 return _stale_message()
             return _booking_open_for_message(
-                actor, parsed.args[0], current_platform=current_platform
+                actor,
+                parsed.args[0],
+                current_platform=current_platform,
+                input_surface=input_surface,
             )
         if parsed.action == "booking-open-text":
             if len(parsed.args) != 3:
@@ -4079,7 +4122,9 @@ def _render(
         if parsed.action == "programs":
             return _programs_message(actor, _page_number(parsed.args))
         if parsed.action == "program-create":
-            return _program_create_help(actor, current_platform=current_platform)
+            return _program_create_help(
+                actor, current_platform=current_platform, input_surface=input_surface
+            )
         if parsed.action == "program-create-text":
             if len(parsed.args) != 1:
                 return _stale_message()
@@ -4094,7 +4139,11 @@ def _render(
             if len(parsed.args) != 2:
                 return _stale_message()
             return _program_lesson_kind_message(
-                actor, parsed.args[0], parsed.args[1], current_platform=current_platform
+                actor,
+                parsed.args[0],
+                parsed.args[1],
+                current_platform=current_platform,
+                input_surface=input_surface,
             )
         if parsed.action == "program-lesson-text":
             if len(parsed.args) != 4:
@@ -4134,7 +4183,10 @@ def _render(
             if len(parsed.args) != 1:
                 return _stale_message()
             return _offering_new_for_message(
-                actor, parsed.args[0], current_platform=current_platform
+                actor,
+                parsed.args[0],
+                current_platform=current_platform,
+                input_surface=input_surface,
             )
         if parsed.action == "offering-new-text":
             if len(parsed.args) != 3:
@@ -4227,7 +4279,10 @@ def _render(
             if len(parsed.args) != 1:
                 return _stale_message()
             return _publication_new_for_message(
-                actor, parsed.args[0], current_platform=current_platform
+                actor,
+                parsed.args[0],
+                current_platform=current_platform,
+                input_surface=input_surface,
             )
         if parsed.action == "publication-new-text":
             if len(parsed.args) != 3:
@@ -4265,7 +4320,9 @@ def _render(
                 return _stale_message()
             return _publication_cancel_result(actor, parsed.args[0], parsed.args[1])
         if parsed.action == "payment-new":
-            return _payment_new_help(actor, current_platform=current_platform)
+            return _payment_new_help(
+                actor, current_platform=current_platform, input_surface=input_surface
+            )
         if parsed.action == "payment-new-text":
             if len(parsed.args) != 5:
                 return _stale_message()
@@ -4284,7 +4341,10 @@ def _render(
             if len(parsed.args) != 1:
                 return _stale_message()
             return _price_set_help(
-                actor, parsed.args[0], current_platform=current_platform
+                actor,
+                parsed.args[0],
+                current_platform=current_platform,
+                input_surface=input_surface,
             )
         if parsed.action == "price-set-text":
             if len(parsed.args) != 3:
@@ -4306,7 +4366,10 @@ def _render(
             if len(parsed.args) != 1:
                 return _stale_message()
             return _member_add_role_message(
-                actor, parsed.args[0], current_platform=current_platform
+                actor,
+                parsed.args[0],
+                current_platform=current_platform,
+                input_surface=input_surface,
             )
         if parsed.action == "member-add-text":
             if len(parsed.args) != 2:
@@ -4321,7 +4384,9 @@ def _render(
                 return _stale_message()
             return _member_revoke_result(actor, int(parsed.args[0]))
         if parsed.action == "activity-edit-help":
-            return _activity_edit_help(actor, current_platform=current_platform)
+            return _activity_edit_help(
+                actor, current_platform=current_platform, input_surface=input_surface
+            )
         if parsed.action == "activity-edit-text":
             if len(parsed.args) != 1:
                 return _stale_message()
@@ -4422,7 +4487,10 @@ def render_native_member_interaction(
     )
     if resolve_pending_input:
         parsed, pending = _pending_owner_input(
-            current, platform=current_platform, raw_text=raw_text
+            current,
+            platform=current_platform,
+            surface="official",
+            raw_text=raw_text,
         )
     else:
         parsed, pending = parse_native_member_interaction(raw_text), None
@@ -4432,10 +4500,15 @@ def render_native_member_interaction(
         linked=linked,
         setup_issuer=setup_issuer,
         setup_key=str(interaction_key or "official-owner-entry"),
+        input_surface="official",
         current_platform=current_platform,
     )
     if pending is not None and parsed.action != "owner-input-invalid":
-        clear_owner_input(user_id=current.user_id, platform=current_platform.value)
+        clear_owner_input(
+            user_id=current.user_id,
+            platform=current_platform.value,
+            surface="official",
+        )
     return interaction
 
 
@@ -4452,8 +4525,12 @@ def process_native_member_interaction(
         user_id=resolution.actor.user_id,
         business_id=route.business_id,
     )
+    input_surface = f"route:{route.id}"
     parsed, pending = _pending_owner_input(
-        actor, platform=route.platform, raw_text=raw_text
+        actor,
+        platform=route.platform,
+        surface=input_surface,
+        raw_text=raw_text,
     )
     action_payload = "\x1f".join((parsed.action, *parsed.args))
     action_digest = hashlib.sha256(action_payload.encode("utf-8")).hexdigest()[:20]
@@ -4468,10 +4545,15 @@ def process_native_member_interaction(
         linked=resolution.linked,
         setup_issuer=setup_issuer,
         setup_key=interaction_key,
+        input_surface=input_surface,
         current_platform=route.platform,
     )
     if pending is not None and parsed.action != "owner-input-invalid":
-        clear_owner_input(user_id=actor.user_id, platform=route.platform.value)
+        clear_owner_input(
+            user_id=actor.user_id,
+            platform=route.platform.value,
+            surface=input_surface,
+        )
     with get_db() as conn:
         return DispatchOutboxRepository(conn).materialize_member_interaction(
             business_id=route.business_id,

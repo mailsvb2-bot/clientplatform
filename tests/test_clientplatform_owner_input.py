@@ -25,8 +25,9 @@ class OwnerInputRepositoryTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.conn.close()
 
-    def test_session_is_durable_channel_scoped_and_tenant_safe(self) -> None:
-        saved = self.repo.set(
+    def test_session_is_durable_surface_scoped_and_tenant_safe(self) -> None:
+        route_surface = "route:11111111-1111-1111-1111-111111111111"
+        official = self.repo.set(
             user_id=101,
             platform="vk",
             business_id=self.first.business.id,
@@ -34,7 +35,18 @@ class OwnerInputRepositoryTests(unittest.TestCase):
             context={"offering_id": "offer-1"},
             now="2026-09-01T10:00:00+00:00",
         )
-        self.assertEqual(self.repo.get(user_id=101, platform="vk"), saved)
+        managed = self.repo.set(
+            user_id=101,
+            platform="vk",
+            surface=route_surface,
+            business_id=self.first.business.id,
+            action="program_title",
+            now="2026-09-01T10:01:00+00:00",
+        )
+        self.assertEqual(self.repo.get(user_id=101, platform="vk"), official)
+        self.assertEqual(
+            self.repo.get(user_id=101, platform="vk", surface=route_surface), managed
+        )
         self.assertIsNone(self.repo.get(user_id=101, platform="max"))
 
         with self.assertRaises(TenantAccessDenied):
@@ -45,8 +57,11 @@ class OwnerInputRepositoryTests(unittest.TestCase):
                 action="program_title",
             )
 
-        self.repo.clear(user_id=101, platform="vk")
-        self.assertIsNone(self.repo.get(user_id=101, platform="vk"))
+        self.repo.clear(user_id=101, platform="vk", surface=route_surface)
+        self.assertIsNone(
+            self.repo.get(user_id=101, platform="vk", surface=route_surface)
+        )
+        self.assertEqual(self.repo.get(user_id=101, platform="vk"), official)
 
     def test_session_is_removed_by_membership_cascade(self) -> None:
         owner = self.tenancy.resolve_context(user_id=101, business_id=self.first.business.id)
@@ -57,8 +72,24 @@ class OwnerInputRepositoryTests(unittest.TestCase):
             business_id=self.first.business.id,
             action="program_title",
         )
+        self.repo.set(
+            user_id=303,
+            platform="vk",
+            surface="route:22222222-2222-2222-2222-222222222222",
+            business_id=self.first.business.id,
+            action="price",
+            context={"offering_id": "offer-2"},
+        )
         self.tenancy.revoke_member(actor=owner, user_id=303)
+        self.tenancy.grant_member(actor=owner, user_id=303, role="manager")
         self.assertIsNone(self.repo.get(user_id=303, platform="vk"))
+        self.assertIsNone(
+            self.repo.get(
+                user_id=303,
+                platform="vk",
+                surface="route:22222222-2222-2222-2222-222222222222",
+            )
+        )
 
 
 class OwnerInputResolutionTests(unittest.TestCase):
@@ -118,6 +149,33 @@ class OwnerInputResolutionTests(unittest.TestCase):
             with self.subTest(action=action):
                 resolved = resolve_owner_input(session, raw)
                 self.assertEqual((resolved.action, resolved.args), (action, args))
+
+    def test_free_text_fields_preserve_multiline_formatting(self) -> None:
+        activity = resolve_owner_input(
+            self.session("activity_description"),
+            "Первая строка\n\nВторая  строка",
+        )
+        self.assertEqual(activity.args, ("Первая строка\n\nВторая  строка",))
+
+        publication = resolve_owner_input(
+            self.session("publication_draft", channel="vk"),
+            "Заголовок | первая строка\nвторая  строка",
+        )
+        self.assertEqual(
+            publication.args,
+            ("vk", "Заголовок", "первая строка\nвторая  строка"),
+        )
+
+        lesson = resolve_owner_input(
+            self.session(
+                "program_lesson", program_id="program-1", content_kind="text"
+            ),
+            "Введение | абзац один\n\nабзац два",
+        )
+        self.assertEqual(
+            lesson.args,
+            ("program-1", "text", "Введение", "абзац один\n\nабзац два"),
+        )
 
     def test_payment_accepts_simple_and_legacy_advanced_forms(self) -> None:
         session = self.session("payment")

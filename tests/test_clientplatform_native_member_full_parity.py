@@ -520,6 +520,7 @@ class NativeFullParityMutationTests(unittest.TestCase):
                 platform="vk",
                 action="publication_draft",
                 context={"channel": "vk"},
+                surface="official",
             )
 
             begin.reset_mock()
@@ -536,6 +537,7 @@ class NativeFullParityMutationTests(unittest.TestCase):
                 platform="max",
                 action="price",
                 context={"offering_id": offering_id},
+                surface="official",
             )
 
             begin.reset_mock()
@@ -557,6 +559,7 @@ class NativeFullParityMutationTests(unittest.TestCase):
                 platform="vk",
                 action="program_lesson",
                 context={"program_id": program_id, "content_kind": "text"},
+                surface="official",
             )
 
     def test_beginner_program_delivery_uses_existing_canonical_delivery_result(self) -> None:
