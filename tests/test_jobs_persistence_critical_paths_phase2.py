@@ -158,6 +158,42 @@ def test_direct_postgres_enqueue(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "ON CONFLICT" in conn.calls[1][0]
 
 
+def test_direct_postgres_claim_uses_typed_job_filter(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(jobs, "tx", no_tx)
+    conn = QueryConn(lambda _query, _params: Cursor(rows=[]))
+    monkeypatch.setattr(jobs, "db", lambda: DbContext(conn))
+
+    assert jobs._claim_due_jobs_postgres(
+        now_utc_iso="now",
+        stale_before="stale",
+        limit=2,
+        token="token",
+        job_type="clientplatform_booking_reminder",
+    ) == []
+    filtered_query, filtered_params = conn.calls[-1]
+    assert "? IS NULL" not in filtered_query
+    assert "AND job_type=?" in filtered_query
+    assert filtered_params == [
+        "now",
+        "stale",
+        "clientplatform_booking_reminder",
+        2,
+        "now",
+        "token",
+    ]
+
+    assert jobs._claim_due_jobs_postgres(
+        now_utc_iso="now",
+        stale_before="stale",
+        limit=3,
+        token="all-token",
+    ) == []
+    unfiltered_query, unfiltered_params = conn.calls[-1]
+    assert "? IS NULL" not in unfiltered_query
+    assert "AND job_type=?" not in unfiltered_query
+    assert unfiltered_params == ["now", "stale", 3, "now", "all-token"]
+
+
 def test_cancel_jobs_and_specialized_helpers(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(jobs, "tx", no_tx)
     conn = QueryConn(lambda _q, _p: Cursor(rowcount=1))
