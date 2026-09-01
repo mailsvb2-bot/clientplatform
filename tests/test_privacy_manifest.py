@@ -6,7 +6,7 @@ import pytest
 
 from services.db import db
 from services.privacy_controls import erase_user_behavioral_data, export_user_data_snapshot
-from services.privacy_manifest import MANIFEST_VERSION, validate_privacy_manifest
+from services.privacy_manifest import MANIFEST_VERSION, POLICIES, validate_privacy_manifest
 
 
 def test_current_schema_has_explicit_policy_for_every_user_owned_table() -> None:
@@ -36,6 +36,49 @@ def test_new_user_owned_table_fails_closed_until_policy_is_added() -> None:
     assert "privacy_manifest_unknown_fixture" in report.unknown_tables
     with pytest.raises(RuntimeError, match="privacy_manifest_invalid"):
         validate_privacy_manifest(conn, strict=True)
+    conn.close()
+
+
+def test_retired_historical_tables_keep_explicit_non_required_privacy_policy() -> None:
+    assert POLICIES["account_audio_progress"].disposition == "erase"
+    assert POLICIES["payments"].disposition == "retain"
+    assert POLICIES["sales_leads"].disposition == "anonymize"
+    assert POLICIES["account_audio_progress"].required is False
+    assert POLICIES["payments"].required is False
+    assert POLICIES["sales_leads"].required is False
+
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute("CREATE TABLE account_audio_progress(account_id INTEGER, value TEXT)")
+    conn.execute("CREATE TABLE payments(user_id INTEGER, amount INTEGER)")
+    report = validate_privacy_manifest(conn, strict=False)
+    assert "account_audio_progress" in report.discovered_user_tables
+    assert "payments" in report.discovered_user_tables
+    assert "account_audio_progress" not in report.unknown_tables
+    assert "payments" not in report.unknown_tables
+    conn.close()
+
+
+def test_non_business_unknown_ownership_column_still_fails_closed() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        "CREATE TABLE privacy_manifest_buyer_fixture(id INTEGER PRIMARY KEY, buyer_user_id INTEGER)"
+    )
+    report = validate_privacy_manifest(conn, strict=False)
+    assert "privacy_manifest_buyer_fixture" in report.unknown_tables
+    conn.close()
+
+
+def test_business_scoped_user_table_is_delegated_to_tenant_manifest() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        "CREATE TABLE tenant_owned_fixture(id INTEGER PRIMARY KEY, business_id INTEGER, user_id INTEGER)"
+    )
+    report = validate_privacy_manifest(conn, strict=False)
+    assert "tenant_owned_fixture" not in report.discovered_user_tables
+    assert "tenant_owned_fixture" not in report.unknown_tables
     conn.close()
 
 
