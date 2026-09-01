@@ -33,6 +33,11 @@ class MembershipStatus(StrEnum):
     REVOKED = "revoked"
 
 
+class OwnerOnboardingStep(StrEnum):
+    BUSINESS_NAME = "business_name"
+    ACTIVITY_DESCRIPTION = "activity_description"
+
+
 class PlatformRole(StrEnum):
     OWNER = "owner"
     ADMINISTRATOR = "administrator"
@@ -168,6 +173,15 @@ def parse_business_member_role(value: PlatformRole | str) -> PlatformRole:
     if role not in BUSINESS_MEMBER_ROLES:
         raise ValueError("customer is not a BusinessMember role")
     return role
+
+
+@dataclass(frozen=True, slots=True)
+class OwnerOnboardingSession:
+    user_id: int
+    platform: str
+    step: OwnerOnboardingStep
+    business_id: str | None
+    updated_at: str
 
 
 @dataclass(frozen=True, slots=True)

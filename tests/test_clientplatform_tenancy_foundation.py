@@ -5,6 +5,7 @@ import unittest
 
 from clientplatform.domain.tenancy import (
     MembershipStatus,
+    OwnerOnboardingStep,
     PlatformRole,
     TenantAccessDenied,
     TenantInvariantViolation,
@@ -131,6 +132,45 @@ class ClientPlatformTenancyFoundationTests(unittest.TestCase):
         remaining_owner = self.repo.resolve_context(user_id=202, business_id=access.business.id)
         self.assertEqual(remaining_owner.role, PlatformRole.OWNER)
 
+
+    def test_owner_onboarding_session_is_durable_channel_scoped_and_tenant_safe(self) -> None:
+        first = self.repo.create_business(owner_user_id=101, name="Практика")
+        outsider = self.repo.create_business(owner_user_id=202, name="Чужой бизнес")
+
+        started = self.repo.set_owner_onboarding_session(
+            user_id=101,
+            platform="vk",
+            step=OwnerOnboardingStep.BUSINESS_NAME,
+        )
+        self.assertEqual(started.step, OwnerOnboardingStep.BUSINESS_NAME)
+        self.assertIsNone(started.business_id)
+        self.assertIsNone(
+            self.repo.get_owner_onboarding_session(user_id=101, platform="max")
+        )
+
+        continued = self.repo.set_owner_onboarding_session(
+            user_id=101,
+            platform="vk",
+            step=OwnerOnboardingStep.ACTIVITY_DESCRIPTION,
+            business_id=first.business.id,
+        )
+        restored = TenancyRepository(self.conn).get_owner_onboarding_session(
+            user_id=101, platform="vk"
+        )
+        self.assertEqual(restored, continued)
+
+        with self.assertRaises(TenantAccessDenied):
+            self.repo.set_owner_onboarding_session(
+                user_id=101,
+                platform="max",
+                step=OwnerOnboardingStep.ACTIVITY_DESCRIPTION,
+                business_id=outsider.business.id,
+            )
+
+        self.repo.clear_owner_onboarding_session(user_id=101, platform="vk")
+        self.assertIsNone(
+            self.repo.get_owner_onboarding_session(user_id=101, platform="vk")
+        )
 
     def test_owner_control_workspace_is_durable_channel_scoped_and_authorized(self) -> None:
         first = self.repo.create_business(owner_user_id=101, name="Практика")

@@ -72,6 +72,25 @@ def ensure(c: sqlite3.Connection) -> None:
     )
     c.execute(
         """
+        CREATE TABLE IF NOT EXISTS clientplatform_owner_onboarding_sessions(
+            user_id INTEGER NOT NULL,
+            platform TEXT NOT NULL,
+            step TEXT NOT NULL,
+            business_id TEXT,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(user_id, platform),
+            FOREIGN KEY(business_id) REFERENCES businesses(id) ON DELETE CASCADE,
+            CHECK(platform IN ('telegram', 'vk', 'max')),
+            CHECK(step IN ('business_name', 'activity_description')),
+            CHECK(
+                (step='business_name' AND business_id IS NULL)
+                OR (step='activity_description' AND business_id IS NOT NULL)
+            )
+        )
+        """
+    )
+    c.execute(
+        """
         CREATE UNIQUE INDEX IF NOT EXISTS uq_business_members_id_business
         ON business_members(id, business_id)
         """

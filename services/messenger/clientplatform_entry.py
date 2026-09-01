@@ -9,8 +9,14 @@ from clientplatform.application.native_member_interactions import (
     recognizes_native_member_interaction,
     render_native_member_interaction,
 )
+from clientplatform.application.owner_onboarding import (
+    begin_business_name_onboarding,
+    cancel_owner_onboarding,
+    complete_activity_onboarding,
+    create_business_from_onboarding,
+    get_owner_onboarding_session,
+)
 from clientplatform.application.tenancy import (
-    create_business,
     get_owner_control_workspace,
     list_accessible_businesses,
     resolve_tenant_context,
@@ -22,7 +28,12 @@ from clientplatform.domain.customer_interactions import (
     CustomerInteractionButton,
     CustomerInteractionMessage,
 )
-from clientplatform.domain.tenancy import TenantPermissionDenied, TenancyError
+from clientplatform.domain.tenancy import (
+    OwnerOnboardingSession,
+    OwnerOnboardingStep,
+    TenantPermissionDenied,
+    TenancyError,
+)
 from clientplatform.runtime.native_messenger_setup_links import (
     NativeMessengerSetupLinkService,
 )
@@ -66,6 +77,7 @@ _ACTIVITY_PREFIXES = (
 _PRIVACY_ALIASES = frozenset({"privacy", "/privacy", "конфиденциальность", "мои данные"})
 _EXPORT_ALIASES = frozenset({"mydata", "/mydata"})
 _DELETE_ALIASES = frozenset({"deletemydata", "/deletemydata"})
+_CANCEL_ALIASES = frozenset({"cancel", "/cancel", "отмена"})
 
 _OWNER_CONTROL_ALIASES = frozenset(
     {
@@ -128,6 +140,8 @@ def parse_clientplatform_entry_command(
         return None
     if lowered.startswith("cpo_"):
         return ClientPlatformEntryCommand("start", raw)
+    if lowered in _CANCEL_ALIASES:
+        return ClientPlatformEntryCommand("cancel_onboarding")
     if lowered in _PRIVACY_ALIASES:
         return ClientPlatformEntryCommand("privacy")
     if lowered in _EXPORT_ALIASES:
@@ -175,9 +189,8 @@ def _entry_text(*, platform: str, accesses: list[object]) -> str:
             "Добро пожаловать в ClientPlatform.\n\n"
             f"Вы вошли через {title}. Здесь можно начать работу без перехода "
             "в Telegram.\n\n"
-            "Чтобы создать своё рабочее пространство, отправьте одним сообщением:\n"
-            "бизнес <название>\n\n"
-            "Например: бизнес Студия Анны"
+            "Нажмите «Подключить мой бизнес», и ClientPlatform по шагам спросит "
+            "название и описание деятельности."
         )
 
     names = [str(access.business.name) for access in accesses]
@@ -224,6 +237,25 @@ def _new_business_entry_reply(*, platform: str) -> MessengerReply:
         ),
     )
     return _interaction_reply(interaction)
+
+
+def _owner_onboarding_reply(session: OwnerOnboardingSession) -> MessengerReply:
+    if session.step == OwnerOnboardingStep.BUSINESS_NAME:
+        text = (
+            "Как называется Ваш бизнес, проект или практика?\n\n"
+            "Напишите только название — например: Автосервис Север."
+        )
+    else:
+        text = (
+            "Расскажите своими словами, чем Вы занимаетесь.\n\n"
+            "Напишите обычным сообщением — например: Ремонтируем автомобили, "
+            "проводим диагностику и шиномонтаж."
+        )
+    interaction = CustomerInteractionMessage(
+        text=text,
+        rows=((CustomerInteractionButton(label="Отмена", command="cancel"),),),
+    )
+    return _interaction_reply(interaction, business_id=session.business_id)
 
 
 def _business_access_by_id(accesses: list[object], business_id: str):
@@ -422,11 +454,13 @@ def handle_clientplatform_entry(
     display_name: str | None = None,
     first_name: str | None = None,
     event_key: str | None = None,
+    fallback_unknown_to_start: bool = False,
 ) -> tuple[int, list[MessengerReply]]:
     """Register a channel identity and return the ClientPlatform entry response."""
 
-    command = parse_clientplatform_entry_command(text, event_type=event_type)
-    if command is None:
+    raw_text = " ".join(str(text or "").strip().split())
+    parsed_command = parse_clientplatform_entry_command(text, event_type=event_type)
+    if parsed_command is None and not fallback_unknown_to_start:
         raise ValueError("message is not a ClientPlatform entry command")
 
     entry = register_user_entry(
@@ -436,10 +470,43 @@ def handle_clientplatform_entry(
         username=username,
         display_name=display_name,
         first_name=first_name,
-        start_payload=command.value if command.action == "start" else None,
+        start_payload=(
+            parsed_command.value
+            if parsed_command is not None and parsed_command.action == "start"
+            else None
+        ),
     )
     canonical_user_id = int(entry.user_id)
+    command = parsed_command
+    onboarding: OwnerOnboardingSession | None = None
+    if fallback_unknown_to_start:
+        onboarding = get_owner_onboarding_session(
+            user_id=canonical_user_id, platform=platform
+        )
+    if command is None:
+        command = (
+            ClientPlatformEntryCommand("onboarding_input", raw_text)
+            if onboarding is not None and raw_text
+            else ClientPlatformEntryCommand("start")
+        )
 
+    if (
+        onboarding is not None
+        and raw_text
+        and command.action != "cancel_onboarding"
+        and not raw_text.startswith(("/", "cpm:", "cpw:"))
+    ):
+        # During a conversational step, ordinary text is data even when it
+        # matches a navigation alias such as Start, Menu or Clients.
+        command = ClientPlatformEntryCommand("onboarding_input", raw_text)
+
+    if command.action == "start" and onboarding is not None:
+        return canonical_user_id, [_owner_onboarding_reply(onboarding)]
+    if command.action == "cancel_onboarding":
+        if onboarding is None:
+            return canonical_user_id, [MessengerReply(text="Незавершённой настройки нет.")]
+        cancel_owner_onboarding(user_id=canonical_user_id, platform=platform)
+        return canonical_user_id, [MessengerReply(text="Настройка бизнеса отменена.")]
     if command.action == "privacy":
         return canonical_user_id, [
             MessengerReply(
@@ -494,6 +561,107 @@ def handle_clientplatform_entry(
         event_key=event_key,
         raw_text=command.value or str(text or command.action),
     )
+    if command.action == "onboarding_input":
+        if onboarding is None:
+            return canonical_user_id, [_new_business_entry_reply(platform=platform)]
+        if onboarding.step == OwnerOnboardingStep.BUSINESS_NAME:
+            existing = _existing_business(accesses, command.value)
+            if existing is not None:
+                cancel_owner_onboarding(user_id=canonical_user_id, platform=platform)
+                _remember_business(
+                    user_id=canonical_user_id,
+                    platform=platform,
+                    business_id=str(existing.business.id),
+                )
+                reply = _owner_control_reply(
+                    canonical_user_id=canonical_user_id,
+                    platform=platform,
+                    accesses=accesses,
+                    raw_text="cpm:menu",
+                    business_id=str(existing.business.id),
+                    interaction_key=interaction_key,
+                )
+                responses = [
+                    MessengerReply(
+                        text=(
+                            f"Рабочее пространство «{existing.business.name}» уже существует. "
+                            "Открываю его."
+                        )
+                    )
+                ]
+                if reply is not None:
+                    responses.append(reply)
+                return canonical_user_id, responses
+            try:
+                access = create_business_from_onboarding(
+                    owner_user_id=canonical_user_id,
+                    platform=platform,
+                    name=command.value,
+                )
+            except (TenancyError, ValueError):
+                return canonical_user_id, [
+                    MessengerReply(
+                        text=(
+                            "Не удалось создать рабочее пространство с таким названием. "
+                            "Проверьте название и отправьте его ещё раз."
+                        )
+                    ),
+                    _owner_onboarding_reply(onboarding),
+                ]
+            next_session = get_owner_onboarding_session(
+                user_id=canonical_user_id, platform=platform
+            )
+            if next_session is None:
+                raise RuntimeError("activity onboarding did not start after business creation")
+            return canonical_user_id, [
+                MessengerReply(
+                    text=f"Готово. Рабочее пространство «{access.business.name}» создано."
+                ),
+                _owner_onboarding_reply(next_session),
+            ]
+
+        try:
+            profile = complete_activity_onboarding(
+                user_id=canonical_user_id,
+                platform=platform,
+                activity_description=command.value,
+                timezone_name=settings.TIMEZONE,
+            )
+        except (TenancyError, ValueError):
+            return canonical_user_id, [
+                MessengerReply(
+                    text=(
+                        "Не удалось сохранить описание. Напишите чуть подробнее, "
+                        "чем занимается Ваш бизнес."
+                    )
+                ),
+                _owner_onboarding_reply(onboarding),
+            ]
+        accesses = list(list_accessible_businesses(user_id=canonical_user_id))
+        access = _business_access_by_id(accesses, profile.business_id)
+        business_name = (
+            str(access.business.name) if access is not None else "Ваш бизнес"
+        )
+        reply = _owner_control_reply(
+            canonical_user_id=canonical_user_id,
+            platform=platform,
+            accesses=accesses,
+            raw_text="cpm:messengers",
+            business_id=profile.business_id,
+            interaction_key=interaction_key,
+        )
+        responses = [
+            MessengerReply(
+                text=(
+                    f"Готово. «{business_name}» настроен в ClientPlatform. "
+                    "Теперь выберите, какой канал бизнеса подключить первым."
+                )
+            )
+        ]
+        if reply is not None:
+            responses.append(reply)
+        return canonical_user_id, responses
+
     if command.action == "workspace":
         parts = command.value.split(":", 3)
         if len(parts) >= 3 and parts[:2] == ["cpw", "list"]:
@@ -587,7 +755,7 @@ def handle_clientplatform_entry(
         if actor is None:
             if not accesses:
                 return canonical_user_id, [
-                    MessengerReply(text="Сначала создайте бизнес: бизнес <название>")
+                    MessengerReply(text="Сначала нажмите «Подключить мой бизнес» и укажите его название.")
                 ]
             return canonical_user_id, [
                 MessengerReply(
@@ -665,38 +833,38 @@ def handle_clientplatform_entry(
 
     if command.action == "create_business":
         if not command.value:
-            return canonical_user_id, [
-                MessengerReply(
-                    text=(
-                        "Напишите название после слова «бизнес».\n\n"
-                        "Например: бизнес Автосервис Север"
-                    )
-                )
-            ]
+            session = begin_business_name_onboarding(
+                user_id=canonical_user_id, platform=platform
+            )
+            return canonical_user_id, [_owner_onboarding_reply(session)]
         existing = _existing_business(accesses, command.value)
         if existing is not None:
-            existing_name = str(existing.business.name)
-            if len(accesses) > 1:
-                _remember_business(
-                    user_id=canonical_user_id,
-                    platform=platform,
-                    business_id=str(existing.business.id),
-                )
+            cancel_owner_onboarding(user_id=canonical_user_id, platform=platform)
+            _remember_business(
+                user_id=canonical_user_id,
+                platform=platform,
+                business_id=str(existing.business.id),
+            )
             return canonical_user_id, [
                 MessengerReply(
                     text=(
-                        f"Рабочее пространство «{existing_name}» уже существует.\n\n"
-                        "Отправьте start, чтобы открыть вход ClientPlatform."
+                        f"Рабочее пространство «{existing.business.name}» уже существует.\n\n"
+                        "Отправьте start, чтобы открыть ClientPlatform."
                     )
                 )
             ]
+        begin_business_name_onboarding(user_id=canonical_user_id, platform=platform)
         try:
-            access = create_business(
+            access = create_business_from_onboarding(
                 owner_user_id=canonical_user_id,
+                platform=platform,
                 name=command.value,
             )
         except (TenancyError, ValueError):
-            return canonical_user_id, [
+            session = get_owner_onboarding_session(
+                user_id=canonical_user_id, platform=platform
+            )
+            responses = [
                 MessengerReply(
                     text=(
                         "Не удалось создать рабочее пространство с таким названием. "
@@ -704,21 +872,19 @@ def handle_clientplatform_entry(
                     )
                 )
             ]
-        if accesses:
-            _remember_business(
-                user_id=canonical_user_id,
-                platform=platform,
-                business_id=str(access.business.id),
-            )
+            if session is not None:
+                responses.append(_owner_onboarding_reply(session))
+            return canonical_user_id, responses
+        session = get_owner_onboarding_session(
+            user_id=canonical_user_id, platform=platform
+        )
+        if session is None:
+            raise RuntimeError("activity onboarding did not start after business creation")
         return canonical_user_id, [
             MessengerReply(
-                text=(
-                    f"Готово. Рабочее пространство «{access.business.name}» создано.\n\n"
-                    "Теперь опишите, чем Вы занимаетесь, одним сообщением:\n"
-                    "деятельность <описание>\n\n"
-                    "Например: деятельность Консультирую родителей по вопросам сна детей"
-                )
-            )
+                text=f"Готово. Рабочее пространство «{access.business.name}» создано."
+            ),
+            _owner_onboarding_reply(session),
         ]
 
     if command.action == "start" and len(accesses) == 1:

@@ -197,7 +197,7 @@ def test_native_acquisition_without_slot_is_fail_safe(monkeypatch) -> None:
     )
     monkeypatch.setattr(ui, "prepare_nearest_acquisition_destination", lambda **_: None)
     message = ui._acquisition_message(actor)
-    assert "Сначала нужно открыть хотя бы одно будущее время" in message.text
+    assert "сначала добавьте хотя бы одно свободное время" in message.text
     commands = [button.command for row in message.rows for button in row]
     assert "cpm:booking-open" in commands
     assert "cpm:growth" in commands

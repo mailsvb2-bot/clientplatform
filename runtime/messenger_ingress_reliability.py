@@ -89,8 +89,6 @@ def _process_clientplatform_entry_and_persist(
         return False
     try:
         command = parse_clientplatform_entry_command(text, event_type=event_type)
-        if command is None:
-            raise ValueError("ClientPlatform entry command disappeared during processing")
         with atomic_db():
             canonical_user_id, replies = handle_clientplatform_entry(
                 extracted["user_id"],
@@ -102,19 +100,21 @@ def _process_clientplatform_entry_and_persist(
                 display_name=extracted["display_name"],
                 first_name=extracted["first_name"],
                 event_key=event_key,
+                fallback_unknown_to_start=True,
             )
+            command_action = command.action if command is not None else "owner_text"
             persist_reply_bundle(
                 platform=platform,
                 external_user_id=extracted["external_user_id"],
                 canonical_user_id=int(canonical_user_id),
                 event_key=event_key,
                 replies=list(replies),
-                action=f"clientplatform_{command.action}",
+                action=f"clientplatform_{command_action}",
             )
             log_event(
                 int(canonical_user_id),
                 f"{platform}_clientplatform_entry",
-                {"action": command.action, "text_len": len(text)},
+                {"action": command_action, "text_len": len(text)},
             )
         return True
     except Exception as exc:  # validator: allow-wide-except
@@ -149,10 +149,6 @@ async def vk_webhook(request: web.Request) -> web.Response:
         return web.Response(text="ok")
 
     entry_text = base_ingress._entry_start_text(str(extracted.get("text") or ""))
-    command = parse_clientplatform_entry_command(entry_text, event_type=event_type)
-    if command is None:
-        entry_text = "start"
-
     if event_type == "message_event":
         await base_ingress._ack_vk_message_event(payload)
     event_key = base_ingress._vk_dedupe_key(payload)
@@ -227,10 +223,6 @@ async def max_webhook(request: web.Request) -> web.Response:
         )
 
     entry_text = base_ingress._entry_start_text(str(extracted.get("text") or ""))
-    command = parse_clientplatform_entry_command(entry_text, event_type=update_type)
-    if command is None:
-        entry_text = "start"
-
     await _ack_global_max_owner_callback(payload)
     event_key = max_event_key(payload)
     try:

@@ -132,8 +132,15 @@ class NativeFullParityContractTests(unittest.TestCase):
     def test_progressive_disclosure_preserves_owner_growth_surface_within_transport_limit(self) -> None:
         actor = _actor()
         first = ui._growth_message(actor)
+        sales = ui._growth_sales_message(actor)
         second = ui._growth_more_message(actor)
-        commands = set(_commands(first) + _commands(second))
+        lifecycle = ui._growth_lifecycle_message(actor)
+        commands = set(
+            _commands(first)
+            + _commands(sales)
+            + _commands(second)
+            + _commands(lifecycle)
+        )
         expected = {
             "cpm:acquire",
             "cpm:autopilot",
@@ -150,8 +157,9 @@ class NativeFullParityContractTests(unittest.TestCase):
             "cpm:retention",
         }
         self.assertTrue(expected.issubset(commands))
-        self.assertLessEqual(sum(len(row) for row in first.rows), 10)
-        self.assertLessEqual(sum(len(row) for row in second.rows), 10)
+        for message in (first, sales, second, lifecycle):
+            self.assertLessEqual(len(message.rows), 6)
+            self.assertTrue(all(len(row) == 1 for row in message.rows))
 
 
     def test_middle_pages_never_exceed_native_button_ceiling(self) -> None:

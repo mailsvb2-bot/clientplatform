@@ -6,9 +6,12 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from clientplatform.application.control_callbacks import uuid_token
+from clientplatform.application.owner_onboarding import get_owner_onboarding_session
+from clientplatform.application.activity import get_business_profile
 from clientplatform.application.tenancy import (
     create_business,
     grant_business_member,
+    list_accessible_businesses,
     resolve_tenant_context as resolve_real_tenant_context,
 )
 from clientplatform.domain.activity import ActivityNotFound
@@ -25,6 +28,7 @@ from services.messenger.clientplatform_entry import (
     parse_clientplatform_entry_command,
 )
 from services.messenger.text_ui import MessengerReply
+from services.messenger.text_ui_router import handle_incoming_text
 from services.schema import init_db
 
 
@@ -413,30 +417,19 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
         combined = " ".join(reply.text for reply in replies)
         self.assertIn("MAX", combined)
         self.assertIn("без перехода в Telegram", combined)
-        self.assertIn("бизнес <название>", combined)
+        self.assertIn("Подключить мой бизнес", combined)
+        self.assertNotIn("бизнес <название>", combined)
         self.assertEqual(replies[0].kind, "clientplatform_interaction")
         interaction = CustomerInteractionMessage.from_json(replies[0].meta["interaction"])
         self.assertEqual(interaction.rows[0][0].label, "Подключить мой бизнес")
         self.assertEqual(interaction.rows[0][0].command, "business")
 
-    def test_business_command_creates_real_tenant(self) -> None:
+    def test_business_command_creates_real_tenant_and_starts_plain_activity_step(self) -> None:
+        init_db()
         entry = SimpleNamespace(user_id=303)
-        created = SimpleNamespace(
-            business=SimpleNamespace(name="Автосервис Север")
-        )
-        with (
-            patch(
-                "services.messenger.clientplatform_entry.register_user_entry",
-                return_value=entry,
-            ),
-            patch(
-                "services.messenger.clientplatform_entry.list_accessible_businesses",
-                return_value=[],
-            ),
-            patch(
-                "services.messenger.clientplatform_entry.create_business",
-                return_value=created,
-            ) as create,
+        with patch(
+            "services.messenger.clientplatform_entry.register_user_entry",
+            return_value=entry,
         ):
             _, replies = handle_clientplatform_entry(
                 303,
@@ -444,39 +437,150 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
                 external_user_id="vk-303",
                 text="бизнес Автосервис Север",
             )
-        create.assert_called_once_with(
-            owner_user_id=303,
-            name="Автосервис Север",
-        )
+        with get_db_ro() as conn:
+            row = conn.execute(
+                "SELECT name FROM businesses WHERE created_by_user_id=?", (303,)
+            ).fetchone()
+        self.assertEqual(row[0], "Автосервис Север")
         self.assertIn("создано", replies[0].text)
-        self.assertIn("деятельность <описание>", replies[0].text)
+        self.assertIn("Расскажите своими словами", replies[1].text)
+        self.assertNotIn("деятельность <описание>", " ".join(r.text for r in replies))
 
     def test_business_command_retry_reuses_existing_tenant(self) -> None:
-        entry = SimpleNamespace(user_id=303)
-        existing = SimpleNamespace(
-            business=SimpleNamespace(name="Автосервис Север")
-        )
-        with (
-            patch(
-                "services.messenger.clientplatform_entry.register_user_entry",
-                return_value=entry,
-            ),
-            patch(
-                "services.messenger.clientplatform_entry.list_accessible_businesses",
-                return_value=[existing],
-            ),
-            patch(
-                "services.messenger.clientplatform_entry.create_business"
-            ) as create,
+        init_db()
+        entry = SimpleNamespace(user_id=304)
+        existing = create_business(owner_user_id=304, name="Автосервис Север")
+        with patch(
+            "services.messenger.clientplatform_entry.register_user_entry",
+            return_value=entry,
         ):
             _, replies = handle_clientplatform_entry(
-                303,
+                304,
                 platform="vk",
-                external_user_id="vk-303",
+                external_user_id="vk-304",
                 text="бизнес  автосервис   север",
             )
-        create.assert_not_called()
         self.assertIn("уже существует", replies[0].text)
+        with get_db_ro() as conn:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM businesses WHERE created_by_user_id=?", (304,)
+            ).fetchone()[0]
+        self.assertEqual(count, 1)
+        self.assertEqual(existing.business.name, "Автосервис Север")
+
+    def test_plain_text_owner_onboarding_works_in_telegram_vk_and_max(self) -> None:
+        init_db()
+        for index, platform in enumerate(("telegram", "vk", "max"), start=1):
+            user_id = 8800 + index
+            name = f"Бизнес {platform}"
+            description = f"Помогаем клиентам через {platform}"
+            entry = SimpleNamespace(user_id=user_id)
+            with self.subTest(platform=platform), patch(
+                "services.messenger.clientplatform_entry.register_user_entry",
+                return_value=entry,
+            ):
+                _, first = handle_incoming_text(
+                    user_id,
+                    platform=platform,
+                    external_user_id=f"{platform}-{user_id}",
+                    text="business",
+                )
+                self.assertIn("Как называется", first[0].text)
+
+                _, second = handle_incoming_text(
+                    user_id,
+                    platform=platform,
+                    external_user_id=f"{platform}-{user_id}",
+                    text=name,
+                )
+                self.assertIn("создано", second[0].text)
+                self.assertIn("Расскажите своими словами", second[1].text)
+
+                _, third = handle_incoming_text(
+                    user_id,
+                    platform=platform,
+                    external_user_id=f"{platform}-{user_id}",
+                    text=description,
+                    event_key=f"onboarding-{platform}-activity",
+                )
+                self.assertIn("настроен в ClientPlatform", third[0].text)
+                self.assertIsNone(
+                    get_owner_onboarding_session(user_id=user_id, platform=platform)
+                )
+                access = next(
+                    item
+                    for item in list_accessible_businesses(user_id=user_id)
+                    if item.business.name == name
+                )
+                actor = resolve_real_tenant_context(
+                    user_id=user_id, business_id=access.business.id
+                )
+                profile = get_business_profile(actor=actor)
+                self.assertEqual(profile.activity_description, description)
+
+    def test_command_like_business_names_are_saved_as_plain_onboarding_data(self) -> None:
+        init_db()
+        for index, name in enumerate(("Старт", "Меню", "Клиенты", "Программы"), start=1):
+            user_id = 8900 + index
+            entry = SimpleNamespace(user_id=user_id)
+            with self.subTest(name=name), patch(
+                "services.messenger.clientplatform_entry.register_user_entry",
+                return_value=entry,
+            ):
+                handle_incoming_text(
+                    user_id,
+                    platform="vk",
+                    external_user_id=f"vk-{user_id}",
+                    text="business",
+                )
+                _, replies = handle_incoming_text(
+                    user_id,
+                    platform="vk",
+                    external_user_id=f"vk-{user_id}",
+                    text=name,
+                )
+            self.assertIn("создано", replies[0].text)
+            self.assertTrue(
+                any(item.business.name == name for item in list_accessible_businesses(user_id=user_id))
+            )
+
+    def test_vk_webhook_persistence_keeps_plain_onboarding_text(self) -> None:
+        init_db()
+        user_id = 8999
+        entry = SimpleNamespace(user_id=user_id)
+        with patch(
+            "services.messenger.clientplatform_entry.register_user_entry",
+            return_value=entry,
+        ):
+            handle_incoming_text(
+                user_id,
+                platform="vk",
+                external_user_id=str(user_id),
+                text="business",
+            )
+            with (
+                patch.object(reliability, "claim_inbound_event", return_value=True),
+                patch.object(reliability, "persist_reply_bundle"),
+                patch.object(reliability, "log_event"),
+            ):
+                processed = reliability._process_clientplatform_entry_and_persist(
+                    platform="vk",
+                    event_key="vk-onboarding-plain-menu",
+                    event_type="message_new",
+                    payload={"type": "message_new"},
+                    extracted={
+                        "user_id": user_id,
+                        "external_user_id": str(user_id),
+                        "username": None,
+                        "display_name": "",
+                        "first_name": "",
+                    },
+                    text="Меню",
+                )
+        self.assertTrue(processed)
+        self.assertTrue(
+            any(item.business.name == "Меню" for item in list_accessible_businesses(user_id=user_id))
+        )
 
     def test_max_activity_step_routes_existing_profile_through_native_renderer(self) -> None:
         entry = SimpleNamespace(user_id=707)
@@ -909,6 +1013,31 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(kwargs["text"], "start")
         self.assertEqual(kwargs["extracted"]["external_user_id"], "501")
 
+    async def test_vk_free_form_onboarding_text_reaches_entry_unchanged(self) -> None:
+        payload = {
+            "type": "message_new",
+            "event_id": "vk-onboarding-text-1",
+            "object": {
+                "message": {
+                    "id": 11,
+                    "from_id": 511,
+                    "text": "Автосервис Север",
+                }
+            },
+        }
+        with (
+            patch.object(reliability.base_ingress, "_vk_secret_ok", return_value=True),
+            patch.object(
+                reliability,
+                "_process_clientplatform_entry_and_persist",
+                return_value=True,
+            ) as process,
+        ):
+            response = await reliability.vk_webhook(_FakeRequest(payload))
+        self.assertEqual(response.status, 200)
+        process.assert_called_once()
+        self.assertEqual(process.call_args.kwargs["text"], "Автосервис Север")
+
     async def test_vk_owner_ref_reaches_clientplatform_entry(self) -> None:
         payload = {
             "type": "message_new",
@@ -993,6 +1122,32 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(kwargs["event_type"], "bot_started")
         self.assertEqual(kwargs["text"], "start")
         self.assertEqual(kwargs["extracted"]["external_user_id"], "601")
+
+    async def test_max_free_form_onboarding_text_reaches_entry_unchanged(self) -> None:
+        payload = {
+            "update_type": "message_created",
+            "update_id": 79,
+            "user": {"user_id": 603, "first_name": "Иван"},
+            "message": {
+                "body": {"text": "Ремонтируем автомобили и делаем диагностику"},
+                "recipient": {"chat_id": 603},
+            },
+        }
+        with (
+            patch.object(reliability.base_ingress, "_max_secret_ok", return_value=True),
+            patch.object(
+                reliability,
+                "_process_clientplatform_entry_and_persist",
+                return_value=True,
+            ) as process,
+        ):
+            response = await reliability.max_webhook(_FakeRequest(payload))
+        self.assertEqual(response.status, 200)
+        process.assert_called_once()
+        self.assertEqual(
+            process.call_args.kwargs["text"],
+            "Ремонтируем автомобили и делаем диагностику",
+        )
 
     async def test_max_owner_deep_link_payload_reaches_clientplatform_entry(self) -> None:
         payload = {

@@ -44,6 +44,58 @@ class NativeMemberParityNavigationTests(unittest.TestCase):
         )
         self.assertIn("cpm:menu", commands)
 
+    def test_owner_navigation_menus_are_mobile_readable_and_preserve_all_growth_tools(self) -> None:
+        actor = _actor(PlatformRole.OWNER)
+        menus = (
+            ui._work_message(actor),
+            ui._work_more_message(actor),
+            ui._growth_message(actor),
+            ui._growth_sales_message(actor),
+            ui._growth_more_message(actor),
+            ui._growth_lifecycle_message(actor),
+            ui._manage_message(actor),
+            ui._manage_more_message(actor),
+        )
+        for message in menus:
+            with self.subTest(text=message.text.splitlines()[0]):
+                self.assertLessEqual(len(message.rows), 6)
+                self.assertTrue(all(len(row) == 1 for row in message.rows))
+
+        growth_commands = {
+            command
+            for message in menus[2:6]
+            for command in _commands(message)
+        }
+        self.assertTrue(
+            {
+                "cpm:acquire",
+                "cpm:autopilot",
+                "cpm:publications",
+                "cpm:funnel",
+                "cpm:money",
+                "cpm:payments",
+                "cpm:segments",
+                "cpm:offers",
+                "cpm:copy",
+                "cpm:prices",
+                "cpm:invites",
+                "cpm:funnel2",
+                "cpm:retention",
+            }.issubset(growth_commands)
+        )
+
+    def test_owner_home_copy_is_plain_language_not_internal_safety_explanation(self) -> None:
+        actor = _actor(PlatformRole.OWNER)
+        primary = ui._button("🚀 Новые клиенты", "cpm:acquire")
+        with (
+            patch.object(ui, "_business_name", return_value="Сантехник"),
+            patch.object(ui, "_native_primary_action", return_value=primary),
+        ):
+            message = ui._menu_message(actor, linked=False)
+        self.assertIn("Что хотите сделать?", message.text)
+        self.assertNotIn("главное безопасное действие", message.text)
+        self.assertNotIn("вместо догадки", message.text)
+
     def test_support_home_has_one_primary_action_without_exposing_management(self) -> None:
         actor = _actor(PlatformRole.SUPPORT)
         primary = ui._button("📊 Проверить, что происходит", "cpm:today")
@@ -191,8 +243,10 @@ class NativeMemberParityNavigationTests(unittest.TestCase):
             self.assertNotIn(f": {source}", text)
 
     def test_work_section_contains_telegram_admin_operational_reads(self) -> None:
-        message = ui._work_message(_actor(PlatformRole.OWNER))
-        commands = set(_commands(message))
+        actor = _actor(PlatformRole.OWNER)
+        primary = ui._work_message(actor)
+        secondary = ui._work_more_message(actor)
+        commands = set(_commands(primary)) | set(_commands(secondary))
         self.assertTrue(
             {
                 "cpm:today",
@@ -204,7 +258,8 @@ class NativeMemberParityNavigationTests(unittest.TestCase):
                 "cpm:attention",
             }.issubset(commands)
         )
-        self.assertLessEqual(sum(len(row) for row in message.rows), 10)
+        self.assertLessEqual(len(primary.rows), 6)
+        self.assertLessEqual(len(secondary.rows), 6)
 
     def test_forged_management_and_team_commands_fail_closed_by_role(self) -> None:
         support = _actor(PlatformRole.SUPPORT)

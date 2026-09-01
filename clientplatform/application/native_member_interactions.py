@@ -675,6 +675,10 @@ def parse_native_member_interaction(value: object) -> ParsedMemberInteraction:
             "work",
             "growth",
             "growth-more",
+            "growth-sales",
+            "growth-lifecycle",
+            "work-more",
+            "manage-more",
             "manage",
             "team",
             "today",
@@ -875,7 +879,7 @@ def _native_growth_action_button(
         return _button("♻️ Вернуть клиентов без рекламы", "cpm:reactivate")
     if action.action_key == "economic_open_slots":
         if actor.role in _BOOKING_MANAGEMENT_ROLES:
-            return _button("🕒 Открыть время", "cpm:booking-open")
+            return _button("🕒 Добавить время", "cpm:booking-open")
         if actor.role in _ACQUISITION_ROLES:
             return _button("📅 Проверить расписание", "cpm:bookings")
     if action.action_key == "economic_paid_acquisition" and actor.role == PlatformRole.OWNER:
@@ -902,7 +906,7 @@ def _native_primary_action(actor: TenantContext) -> CustomerInteractionButton:
         return action_button
 
     if actor.role in _ACQUISITION_ROLES:
-        return _button("🚀 Найти новых клиентов", "cpm:acquire")
+        return _button("🚀 Новые клиенты", "cpm:acquire")
     if actor.role in _SUPPORT_ROLES:
         return _button("📊 Проверить, что происходит", "cpm:today")
     if actor.role in (_MARKETING_ROLES | _CONTENT_ROLES | _AUTOMATION_ROLES):
@@ -925,9 +929,8 @@ def _menu_message(
         text=(
             heading
             + f"🏠 {_business_name(actor)}\n\n"
-            + "ClientPlatform показывает главное безопасное действие первым. "
-            + "Если обзор временно недоступен, вместо догадки предлагает ручную проверку. "
-            + "Остальные функции никуда не исчезли — они находятся в «Все возможности»."
+            + "Что хотите сделать? Ниже — следующий полезный шаг. "
+            + "Все разделы доступны в «Все возможности»."
         ),
         rows=(
             (primary,),
@@ -970,20 +973,34 @@ def _work_message(actor: TenantContext) -> CustomerInteractionMessage:
     if actor.role in _SUPPORT_ROLES:
         rows.extend(
             [
-                (_button("💰 Деньги и результат", "cpm:today"),),
-                (_button("📈 Сегодня подробно", "cpm:today-full"),),
+                (_button("💰 Результат", "cpm:today"),),
                 (_button("👥 Клиенты", "cpm:customers:0"),),
                 (_button("📅 Записи", "cpm:bookings"),),
-                (_button("🧠 Поведение", "cpm:behavior"),),
-                (_button("⚠️ Требуют внимания", "cpm:attention"),),
-                (_button("💬 Обращения и продажи", "cpm:sales"),),
             ]
         )
     rows.append((_button("📚 Программы", "cpm:programs"),))
+    if actor.role in _SUPPORT_ROLES:
+        rows.append((_button("⋯ Ещё", "cpm:work-more"),))
     rows.append(_back_row())
     return CustomerInteractionMessage(
-        text="Работа · ClientPlatform\n\nОперационные разделы бизнеса:",
+        text="📊 Работа\n\nВыберите, что нужно сделать:",
         rows=tuple(rows),
+    )
+
+
+def _work_more_message(actor: TenantContext) -> CustomerInteractionMessage:
+    if actor.role not in _SUPPORT_ROLES:
+        return _permission_message()
+    return CustomerInteractionMessage(
+        text="📊 Работа · ещё\n\nДополнительные рабочие разделы:",
+        rows=(
+            (_button("💬 Продажи", "cpm:sales"),),
+            (_button("📈 Подробный обзор", "cpm:today-full"),),
+            (_button("🧠 Поведение клиентов", "cpm:behavior"),),
+            (_button("⚠️ Требуют внимания", "cpm:attention"),),
+            (_button("📊 Работа", "cpm:work"),),
+            _back_row(),
+        ),
     )
 
 
@@ -1548,26 +1565,35 @@ def _growth_message(actor: TenantContext) -> CustomerInteractionMessage:
         return _permission_message()
     rows: list[tuple[CustomerInteractionButton, ...]] = []
     if actor.role in _ACQUISITION_ROLES:
-        rows.append((_button("🚀 Найти новых клиентов", "cpm:acquire"),))
-    if actor.role in _AUTOMATION_ROLES:
-        rows.append((_button("🤖 Автопилот", "cpm:autopilot"),))
+        rows.append((_button("🚀 Новые клиенты", "cpm:acquire"),))
     if actor.role in _CONTENT_ROLES:
         rows.append((_button("📣 Публикации", "cpm:publications"),))
     if actor.role in _MARKETING_ROLES:
-        rows.extend(
-            [
-                (_button("📉 Путь до заявки", "cpm:funnel"),),
-                (_button("💰 Деньги и клиенты", "cpm:money"),),
-                (_button("💳 Оплаты", "cpm:payments"),),
-                (_button("🧲 Группы клиентов", "cpm:segments"),),
-            ]
-        )
+        rows.append((_button("💰 Продажи и деньги", "cpm:growth-sales"),))
+    if actor.role in _AUTOMATION_ROLES:
+        rows.append((_button("🤖 Автопилот", "cpm:autopilot"),))
     if actor.role in (_CONTENT_ROLES | _MARKETING_ROLES):
-        rows.append((_button("⋯ Ещё инструменты", "cpm:growth-more"),))
+        rows.append((_button("⋯ Ещё", "cpm:growth-more"),))
     rows.append(_back_row())
     return CustomerInteractionMessage(
-        text="Рост · ClientPlatform\n\nМаркетинг, продажи и деньги:",
+        text="📈 Рост бизнеса\n\nВыберите задачу:",
         rows=tuple(rows),
+    )
+
+
+def _growth_sales_message(actor: TenantContext) -> CustomerInteractionMessage:
+    if actor.role not in _MARKETING_ROLES:
+        return _permission_message()
+    return CustomerInteractionMessage(
+        text="💰 Продажи и деньги\n\nВыберите раздел:",
+        rows=(
+            (_button("📉 Путь до заявки", "cpm:funnel"),),
+            (_button("💰 Деньги и клиенты", "cpm:money"),),
+            (_button("💳 Оплаты", "cpm:payments"),),
+            (_button("🧲 Группы клиентов", "cpm:segments"),),
+            (_button("📈 Рост", "cpm:growth"),),
+            _back_row(),
+        ),
     )
 
 
@@ -1585,18 +1611,27 @@ def _growth_more_message(actor: TenantContext) -> CustomerInteractionMessage:
     if actor.role in _MARKETING_ROLES:
         rows.append((_button("💡 Подсказка по ценам", "cpm:prices"),))
     if actor.role in _CONNECTION_ROLES:
-        rows.extend(
-            [
-                (_button("🎁 Приглашения", "cpm:invites"),),
-                (_button("🧲 Воронка 2.0", "cpm:funnel2"),),
-                (_button("🧩 Удержание", "cpm:retention"),),
-            ]
-        )
+        rows.append((_button("🧩 Клиентский путь", "cpm:growth-lifecycle"),))
     rows.append((_button("📈 Рост", "cpm:growth"),))
     rows.append(_back_row())
     return CustomerInteractionMessage(
-        text="Ещё инструменты роста · ClientPlatform\n\nВсе дополнительные возможности остаются доступны:",
+        text="📈 Рост · ещё\n\nДополнительные инструменты:",
         rows=tuple(rows),
+    )
+
+
+def _growth_lifecycle_message(actor: TenantContext) -> CustomerInteractionMessage:
+    if actor.role not in _CONNECTION_ROLES:
+        return _permission_message()
+    return CustomerInteractionMessage(
+        text="🧩 Клиентский путь\n\nПриглашение, воронка и удержание:",
+        rows=(
+            (_button("🎁 Приглашения", "cpm:invites"),),
+            (_button("🧲 Воронка", "cpm:funnel2"),),
+            (_button("🧩 Удержание", "cpm:retention"),),
+            (_button("📈 Рост", "cpm:growth"),),
+            _back_row(),
+        ),
     )
 
 
@@ -1628,14 +1663,14 @@ def _acquisition_message(actor: TenantContext) -> CustomerInteractionMessage:
         )
     if prepared is None:
         first_row = (
-            (_button("🕒 Открыть время", "cpm:booking-open"),)
+            (_button("🕒 Добавить время", "cpm:booking-open"),)
             if actor.role in _BOOKING_MANAGEMENT_ROLES
             else (_button("📅 Проверить расписание", "cpm:bookings"),)
         )
         return CustomerInteractionMessage(
             text=(
-                "Найти новых клиентов\n\nСначала нужно открыть хотя бы одно будущее "
-                "время для записи. После этого ClientPlatform сама выберет ближайшее."
+                "🚀 Новые клиенты\n\nЧтобы приглашать клиентов на запись, сначала "
+                "добавьте хотя бы одно свободное время."
             ),
             rows=(first_row, (_button("📈 Рост", "cpm:growth"),), _back_row()),
         )
@@ -1671,19 +1706,32 @@ def _manage_message(actor: TenantContext) -> CustomerInteractionMessage:
         return _permission_message()
     rows: list[tuple[CustomerInteractionButton, ...]] = [
         (_button("💬 Мессенджеры", "cpm:messengers"),),
-        (_button("✅ Готовность системы", "cpm:release"),),
-        (_button("🧲 Продажи и воронка", "cpm:funnel2"),),
-        (_button("🧩 Удержание", "cpm:retention"),),
-        (_button("🧾 Последние действия", "cpm:recent"),),
-        (_button("🛡 Проверить систему", "cpm:system"),),
+        (_button("✅ Готовность", "cpm:release"),),
         (_button("🧩 Форматы работы", "cpm:formats"),),
     ]
     if actor.role in _OWNER_ROLES:
         rows.append((_button("💳 Тариф", "cpm:tariff"),))
+    rows.append((_button("⋯ Ещё", "cpm:manage-more"),))
     rows.append(_back_row())
     return CustomerInteractionMessage(
-        text="Управление · ClientPlatform\n\nСостояние, каналы и системные настройки:",
+        text="🛡 Управление\n\nКаналы и настройки бизнеса:",
         rows=tuple(rows),
+    )
+
+
+def _manage_more_message(actor: TenantContext) -> CustomerInteractionMessage:
+    if actor.role not in _CONNECTION_ROLES:
+        return _permission_message()
+    return CustomerInteractionMessage(
+        text="🛡 Управление · ещё\n\nДополнительные настройки:",
+        rows=(
+            (_button("🧲 Продажи и воронка", "cpm:funnel2"),),
+            (_button("🧩 Удержание", "cpm:retention"),),
+            (_button("🧾 Последние действия", "cpm:recent"),),
+            (_button("🛡 Проверить систему", "cpm:system"),),
+            (_button("🛡 Управление", "cpm:manage"),),
+            _back_row(),
+        ),
     )
 
 
@@ -3066,7 +3114,7 @@ def _booking_open_failure_message() -> CustomerInteractionMessage:
             "Не удалось открыть это время. Проверьте код услуги, дату, время и длительность, "
             "затем попробуйте снова. Ничего не было опубликовано автоматически."
         ),
-        rows=((_button("🕒 Открыть время", "cpm:booking-open"),), _back_row()),
+        rows=((_button("🕒 Добавить время", "cpm:booking-open"),), _back_row()),
     )
 
 
@@ -3601,14 +3649,22 @@ def _render(
             return _menu_all_message(actor)
         if parsed.action == "work":
             return _work_message(actor)
+        if parsed.action == "work-more":
+            return _work_more_message(actor)
         if parsed.action == "growth":
             return _growth_message(actor)
+        if parsed.action == "growth-sales":
+            return _growth_sales_message(actor)
         if parsed.action == "growth-more":
             return _growth_more_message(actor)
+        if parsed.action == "growth-lifecycle":
+            return _growth_lifecycle_message(actor)
         if parsed.action == "acquire":
             return _acquisition_message(actor)
         if parsed.action == "manage":
             return _manage_message(actor)
+        if parsed.action == "manage-more":
+            return _manage_more_message(actor)
         if parsed.action == "team":
             return _team_message(actor)
         if parsed.action == "today":
