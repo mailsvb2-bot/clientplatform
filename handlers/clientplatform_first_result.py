@@ -33,7 +33,7 @@ def _replace_next_action(markup: InlineKeyboardMarkup) -> InlineKeyboardMarkup:
                 token = callback_data.split(":", 2)[2]
                 buttons.append(
                     InlineKeyboardButton(
-                        text="✨ Что настроить первым?",
+                        text="✨ Помочь выбрать первый шаг",
                         callback_data=f"cps:firstgoal:{token}",
                     )
                 )

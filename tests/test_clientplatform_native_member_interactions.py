@@ -6,7 +6,7 @@ import sqlite3
 import unittest
 from dataclasses import replace
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 from clientplatform.application import native_member_interactions as native_member_ui
@@ -55,6 +55,69 @@ def _actor(route: MessengerIngressRoute, user_id: int = 101) -> TenantContext:
         membership_id=str(uuid4()),
         role=PlatformRole.OWNER,
     )
+
+
+class NativeOwnerInputSurfaceTests(unittest.TestCase):
+    def test_managed_ingress_uses_route_scoped_pending_surface(self) -> None:
+        route = _route(ConnectionPlatform.VK)
+        actor = _actor(route)
+        resolution = NativeMemberResolution(actor=actor, account_id=actor.user_id)
+        db_context = MagicMock()
+        db_context.__enter__.return_value = object()
+        outbox = MagicMock()
+        outbox.materialize_member_interaction.return_value = "queued"
+        with (
+            patch.object(native_member_ui, "resolve_tenant_context", return_value=actor),
+            patch.object(
+                native_member_ui,
+                "_pending_owner_input",
+                return_value=(native_member_ui.ParsedMemberInteraction("menu"), None),
+            ) as pending,
+            patch.object(
+                native_member_ui,
+                "_render",
+                return_value=CustomerInteractionMessage(text="Меню"),
+            ) as render,
+            patch.object(native_member_ui, "get_db", return_value=db_context),
+            patch.object(
+                native_member_ui, "DispatchOutboxRepository", return_value=outbox
+            ),
+        ):
+            native_member_ui.process_native_member_interaction(
+                route=route,
+                resolution=resolution,
+                external_subject="700001",
+                raw_text="обычное сообщение",
+                provider_event_id="event-1",
+            )
+
+        expected_surface = f"route:{route.id}"
+        self.assertEqual(pending.call_args.kwargs["surface"], expected_surface)
+        self.assertEqual(render.call_args.kwargs["input_surface"], expected_surface)
+
+    def test_textual_cancel_clears_managed_form_without_resolving_value(self) -> None:
+        route = _route(ConnectionPlatform.MAX)
+        actor = _actor(route)
+        surface = f"route:{route.id}"
+        session = SimpleNamespace(business_id=actor.business_id, action="activity_description")
+        with (
+            patch.object(native_member_ui, "get_owner_input_session", return_value=session),
+            patch.object(native_member_ui, "clear_owner_input") as clear,
+            patch.object(native_member_ui, "resolve_owner_input") as resolve,
+        ):
+            parsed, pending = native_member_ui._pending_owner_input(
+                actor,
+                platform=route.platform,
+                surface=surface,
+                raw_text="Отмена",
+            )
+
+        self.assertEqual(parsed.action, "owner-input-cancelled")
+        self.assertIsNone(pending)
+        resolve.assert_not_called()
+        clear.assert_called_once_with(
+            user_id=actor.user_id, platform="max", surface=surface
+        )
 
 
 class NativeMemberResolutionTests(unittest.TestCase):

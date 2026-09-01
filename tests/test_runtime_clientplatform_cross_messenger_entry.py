@@ -6,8 +6,9 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from clientplatform.application.control_callbacks import uuid_token
+from clientplatform.application.owner_input import get_owner_input_session
 from clientplatform.application.owner_onboarding import get_owner_onboarding_session
-from clientplatform.application.activity import get_business_profile
+from clientplatform.application.activity import get_business_profile, save_business_profile
 from clientplatform.application.tenancy import (
     create_business,
     grant_business_member,
@@ -202,6 +203,35 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
         assert command is not None
         self.assertEqual(command.action, "workspace")
 
+    def test_malformed_workspace_page_fails_safe_to_first_selector_page(self) -> None:
+        entry = SimpleNamespace(user_id=505)
+        accesses = [
+            SimpleNamespace(business=SimpleNamespace(id=B1, name="Практика Анны")),
+            SimpleNamespace(business=SimpleNamespace(id=B2, name="Школа Анны")),
+        ]
+        with (
+            patch(
+                "services.messenger.clientplatform_entry.register_user_entry",
+                return_value=entry,
+            ),
+            patch(
+                "services.messenger.clientplatform_entry.list_accessible_businesses",
+                return_value=accesses,
+            ),
+        ):
+            _, replies = handle_clientplatform_entry(
+                505,
+                platform="vk",
+                external_user_id="505",
+                text="cpw:list:not-a-page",
+            )
+        self.assertEqual(len(replies), 1)
+        restored = CustomerInteractionMessage.from_json(replies[0].meta["interaction"])
+        self.assertEqual(
+            [row[0].command for row in restored.rows],
+            [f"cpw:open:{uuid_token(B1)}", f"cpw:open:{uuid_token(B2)}"],
+        )
+
     def test_multi_business_start_returns_server_resolved_selector(self) -> None:
         entry = SimpleNamespace(user_id=505)
         accesses = [
@@ -383,6 +413,46 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("недоступен", replies[0].text)
         self.assertEqual(replies[1].kind, "clientplatform_interaction")
 
+    def test_scoped_workspace_action_fails_closed_before_native_dispatch(self) -> None:
+        entry = SimpleNamespace(user_id=505)
+        accesses = [
+            SimpleNamespace(business=SimpleNamespace(id=B1, name="Практика Анны"))
+        ]
+        with (
+            patch(
+                "services.messenger.clientplatform_entry.register_user_entry",
+                return_value=entry,
+            ),
+            patch(
+                "services.messenger.clientplatform_entry.list_accessible_businesses",
+                return_value=accesses,
+            ),
+            patch(
+                "services.messenger.clientplatform_entry.resolve_tenant_context"
+            ) as resolve,
+            patch(
+                "services.messenger.clientplatform_entry.render_native_member_interaction"
+            ) as render,
+        ):
+            _, inaccessible = handle_clientplatform_entry(
+                505,
+                platform="vk",
+                external_user_id="505",
+                text=f"cpw:act:{uuid_token(B3)}:cpm:messengers",
+            )
+            _, malformed = handle_clientplatform_entry(
+                505,
+                platform="vk",
+                external_user_id="505",
+                text=f"cpw:act:{uuid_token(B1)}:not-native",
+            )
+
+        resolve.assert_not_called()
+        render.assert_not_called()
+        self.assertIn("изменился", inaccessible[0].text)
+        self.assertEqual(inaccessible[1].kind, "clientplatform_interaction")
+        self.assertEqual(malformed[0].kind, "clientplatform_interaction")
+
     def test_activity_description_is_channel_neutral_onboarding_step(self) -> None:
         command = parse_clientplatform_entry_command(
             "деятельность Ремонтирую автомобили и принимаю заказы"
@@ -468,6 +538,49 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(count, 1)
         self.assertEqual(existing.business.name, "Автосервис Север")
 
+    def test_business_create_failure_keeps_retry_only_when_session_exists(self) -> None:
+        entry = SimpleNamespace(user_id=305)
+        retry_session = SimpleNamespace(step="business_name", business_id=None)
+        for session in (retry_session, None):
+            with (
+                self.subTest(session_exists=session is not None),
+                patch(
+                    "services.messenger.clientplatform_entry.register_user_entry",
+                    return_value=entry,
+                ),
+                patch(
+                    "services.messenger.clientplatform_entry.list_accessible_businesses",
+                    return_value=[],
+                ),
+                patch("services.messenger.clientplatform_entry.begin_business_name_onboarding"),
+                patch(
+                    "services.messenger.clientplatform_entry.create_business_from_onboarding",
+                    side_effect=ValueError("invalid business name"),
+                ),
+                patch(
+                    "services.messenger.clientplatform_entry.get_owner_onboarding_session",
+                    return_value=session,
+                ),
+                patch(
+                    "services.messenger.clientplatform_entry._owner_onboarding_reply",
+                    return_value=MessengerReply(text="Повторите название."),
+                ) as onboarding_reply,
+            ):
+                _, replies = handle_clientplatform_entry(
+                    305,
+                    platform="vk",
+                    external_user_id="vk-305",
+                    text="бизнес Некорректный",
+                )
+
+            self.assertIn("Не удалось создать", replies[0].text)
+            if session is None:
+                self.assertEqual(len(replies), 1)
+                onboarding_reply.assert_not_called()
+            else:
+                self.assertEqual(len(replies), 2)
+                onboarding_reply.assert_called_once_with(session)
+
     def test_plain_text_owner_onboarding_works_in_telegram_vk_and_max(self) -> None:
         init_db()
         for index, platform in enumerate(("telegram", "vk", "max"), start=1):
@@ -517,6 +630,98 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
                 )
                 profile = get_business_profile(actor=actor)
                 self.assertEqual(profile.activity_description, description)
+
+    def test_plain_owner_form_answer_works_in_telegram_vk_and_max(self) -> None:
+        init_db()
+        for index, platform in enumerate(("telegram", "vk", "max"), start=1):
+            user_id = 8850 + index
+            entry = SimpleNamespace(user_id=user_id)
+            access = create_business(owner_user_id=user_id, name=f"UX {platform}")
+            actor = resolve_real_tenant_context(
+                user_id=user_id, business_id=access.business.id
+            )
+            save_business_profile(
+                actor=actor,
+                activity_description="Старое описание",
+                timezone_name="Europe/Moscow",
+            )
+            with self.subTest(platform=platform), patch(
+                "services.messenger.clientplatform_entry.register_user_entry",
+                return_value=entry,
+            ):
+                _, prompt = handle_incoming_text(
+                    user_id,
+                    platform=platform,
+                    external_user_id=f"{platform}-{user_id}",
+                    text="cpm:activity-edit-help",
+                    event_key=f"{platform}-activity-start",
+                )
+                self.assertIn("без команды", prompt[0].text)
+                self.assertIsNotNone(
+                    get_owner_input_session(user_id=user_id, platform=platform)
+                )
+
+                # Even a word that is also a navigation alias is data while the
+                # owner form is waiting for an answer.
+                _, result = handle_incoming_text(
+                    user_id,
+                    platform=platform,
+                    external_user_id=f"{platform}-{user_id}",
+                    text="Клиенты и обслуживание",
+                    event_key=f"{platform}-activity-answer",
+                )
+                self.assertIn("обновлено", result[0].text.casefold())
+                self.assertIsNone(
+                    get_owner_input_session(user_id=user_id, platform=platform)
+                )
+                updated = get_business_profile(actor=actor)
+                self.assertEqual(updated.activity_description, "Клиенты и обслуживание")
+
+    def test_cancel_stops_pending_plain_owner_form_without_changing_data(self) -> None:
+        init_db()
+        user_id = 8899
+        platform = "vk"
+        entry = SimpleNamespace(user_id=user_id)
+        access = create_business(owner_user_id=user_id, name="UX отмена")
+        actor = resolve_real_tenant_context(
+            user_id=user_id, business_id=access.business.id
+        )
+        save_business_profile(
+            actor=actor,
+            activity_description="Исходное описание",
+            timezone_name="Europe/Moscow",
+        )
+        with patch(
+            "services.messenger.clientplatform_entry.register_user_entry",
+            return_value=entry,
+        ):
+            handle_incoming_text(
+                user_id,
+                platform=platform,
+                external_user_id=f"{platform}-{user_id}",
+                text="cpm:activity-edit-help",
+                event_key="owner-form-cancel-start",
+            )
+            self.assertIsNotNone(
+                get_owner_input_session(user_id=user_id, platform=platform)
+            )
+
+            _, replies = handle_incoming_text(
+                user_id,
+                platform=platform,
+                external_user_id=f"{platform}-{user_id}",
+                text="Отмена",
+                event_key="owner-form-cancel",
+            )
+
+        self.assertIn("данные не изменены", replies[0].text.casefold())
+        self.assertIsNone(
+            get_owner_input_session(user_id=user_id, platform=platform)
+        )
+        self.assertEqual(
+            get_business_profile(actor=actor).activity_description,
+            "Исходное описание",
+        )
 
     def test_command_like_business_names_are_saved_as_plain_onboarding_data(self) -> None:
         init_db()
@@ -743,6 +948,9 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
                     activity_description="Консультирую международных клиентов"
                 ),
             ) as save_profile,
+            patch(
+                "clientplatform.application.native_member_interactions.get_owner_input_session"
+            ) as pending_lookup,
         ):
             _, replies = handle_clientplatform_entry(
                 808,
@@ -752,6 +960,7 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
                 event_key="vk-activity-1",
             )
 
+        pending_lookup.assert_not_called()
         self.assertEqual(
             save_profile.call_args.kwargs["timezone_name"],
             "America/New_York",

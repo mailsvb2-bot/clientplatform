@@ -47,7 +47,7 @@ class ClientPlatformFirstResultUiTests(unittest.IsolatedAsyncioTestCase):
         buttons = [button for row in markup.inline_keyboard for button in row]
         self.assertEqual(
             [button.text for button in buttons],
-            ["🚀 Найти новых клиентов", "⋯ Все возможности"],
+            ["🚀 Найти новых клиентов", "🧭 Что можно сделать"],
         )
         self.assertTrue(str(buttons[0].callback_data).startswith("cpo:start:"))
         self.assertTrue(str(buttons[1].callback_data).startswith("cpo:more:"))

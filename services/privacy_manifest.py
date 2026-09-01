@@ -214,6 +214,13 @@ _POLICIES = (
         "short-lived owner onboarding continuation state",
         required=True,
     ),
+    _policy(
+        "clientplatform_owner_input_sessions",
+        ("user_id",),
+        "erase",
+        "short-lived owner conversational input continuation state",
+        required=True,
+    ),
     *(_policy(table, columns, "erase", reason) for table, columns, reason in _RETIRED_ERASE),
     *(_policy(table, columns, "retain", reason) for table, columns, reason in _RETIRED_RETAIN),
     _policy(

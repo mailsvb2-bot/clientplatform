@@ -80,11 +80,11 @@ def test_owner_menu_groups_all_26_sections_without_surface_sprawl(
     callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
 
     assert labels == [
-        "📊 Работа и клиенты",
-        "✍️ Контент и каналы",
-        "📈 Маркетинг и деньги",
-        "👥 Команда и тариф",
-        "⚙️ Системное",
+        "👥 Клиенты и работа",
+        "📣 Публикации и каналы",
+        "📈 Продвижение и продажи",
+        "👤 Сотрудники и тариф",
+        "🛠 Технические проверки",
         "⬅️ Назад",
     ]
     group_actions = [str(value).split(":")[2] for value in callbacks[:-1]]
@@ -182,14 +182,16 @@ async def test_real_admin_group_renders_message_and_pushes_history(
     )
 
     text, markup = answers[-1]
-    assert text == "📊 Работа и клиенты\n\nВыберите нужное действие."
+    assert text.startswith("👥 Клиенты и работа\n\nЕсли Вам нужно:\n")
+    assert "«📊 Что сегодня происходит»" in text
+    assert "«👥 Открыть клиентов»" in text
     assert [button.text for row in markup.inline_keyboard for button in row] == [
-        "📊 Сегодня",
-        "📈 Подробный обзор",
-        "👥 Клиенты сегодня",
-        "🔎 Все клиенты",
-        "⚠️ Требуют внимания",
-        "🧠 Поведение клиентов",
+        "📊 Что сегодня происходит",
+        "📈 Подробная сводка",
+        "👥 Клиенты за сегодня",
+        "👥 Открыть клиентов",
+        "⚠️ Что требует внимания",
+        "🧠 Кто проходит материалы",
         "⬅️ Назад",
     ]
     assert state.data["cp_admin_section"] == "menu-work"
@@ -222,7 +224,7 @@ async def test_real_admin_group_callback_path_does_not_repush_history(
         push=False,
     )
 
-    assert edits[-1][0].startswith("✍️ Контент и каналы")
+    assert edits[-1][0].startswith("📣 Публикации и каналы")
     assert state.data == {
         "cp_admin_section": "menu-work",
         "cp_admin_history": ["menu"],
@@ -465,15 +467,15 @@ async def test_autopilot_screen_renders_owner_action_approval_controls(
 @pytest.mark.parametrize(
     ("action", "title"),
     [
-        ("autopilot", "🤖 Growth Autopilot"),
+        ("autopilot", "🤖 Автоматизация"),
         ("publications", "📣 Публикации"),
-        ("funnel", "📉 Путь до заявки"),
-        ("money", "💰 Деньги и клиенты"),
+        ("funnel", "📚 Прохождение программ"),
+        ("money", "💰 Выручка и платящие клиенты"),
         ("payments", "💰 Оплаты"),
-        ("segments", "🧲 Группы клиентов"),
-        ("offers", "🧪 Проверка предложений"),
-        ("copy", "✍️ Подготовить тексты"),
-        ("prices", "💡 Подсказка по ценам"),
+        ("segments", "👥 Группы клиентов"),
+        ("offers", "🧪 Услуги и предложения"),
+        ("copy", "✍️ Подготовить текст"),
+        ("prices", "💵 Цены"),
     ],
 )
 async def test_all_growth_sections_render_real_screen_and_back(
@@ -574,12 +576,12 @@ async def test_publications_use_shared_calendar_projection(
 @pytest.mark.parametrize(
     ("action", "title"),
     [
-        ("release", "🚦 Release gate"),
+        ("release", "✅ Проверить готовность"),
         ("invites", "🎁 Приглашения и рекомендации"),
-        ("funnel2", "🧲 Воронка 2.0"),
-        ("retention", "🧩 Удержание"),
-        ("recent", "🧾 Последние действия"),
-        ("system", "🧪 Системные проверки"),
+        ("funnel2", "🧭 Путь клиента"),
+        ("retention", "♻️ Кого стоит вернуть"),
+        ("recent", "🧾 История изменений"),
+        ("system", "🛠 Проверка системы"),
     ],
 )
 async def test_all_admin_reports_render_real_screen_and_back(

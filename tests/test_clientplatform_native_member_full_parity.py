@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import re
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -71,6 +72,15 @@ class NativeFullParityContractTests(unittest.TestCase):
         missing = (actions - transport_only) - set(ui.TELEGRAM_NATIVE_ACTION_EQUIVALENTS)
         self.assertEqual(set(), missing)
 
+    def test_every_literal_native_button_route_is_admitted_by_parser(self) -> None:
+        source = (ROOT / "clientplatform/application/native_member_interactions.py").read_text(encoding="utf-8")
+        actions = set(re.findall(r'_button\([^\n]*?[f]?["](?:[^"\n]*?)cpm:([a-z0-9_-]+)', source))
+        self.assertTrue(actions)
+        for action in sorted(actions):
+            with self.subTest(action=action):
+                parsed = ui.parse_native_member_interaction(f"cpm:{action}")
+                self.assertEqual(action, parsed.action)
+
     def test_all_native_equivalent_actions_are_admitted_by_parser(self) -> None:
         for telegram_action, native_actions in ui.TELEGRAM_NATIVE_ACTION_EQUIVALENTS.items():
             for native_action in native_actions:
@@ -133,11 +143,13 @@ class NativeFullParityContractTests(unittest.TestCase):
         actor = _actor()
         first = ui._growth_message(actor)
         sales = ui._growth_sales_message(actor)
+        analysis = ui._growth_analysis_message(actor)
         second = ui._growth_more_message(actor)
         lifecycle = ui._growth_lifecycle_message(actor)
         commands = set(
             _commands(first)
             + _commands(sales)
+            + _commands(analysis)
             + _commands(second)
             + _commands(lifecycle)
         )
@@ -145,7 +157,6 @@ class NativeFullParityContractTests(unittest.TestCase):
             "cpm:acquire",
             "cpm:autopilot",
             "cpm:publications",
-            "cpm:funnel",
             "cpm:money",
             "cpm:payments",
             "cpm:segments",
@@ -154,10 +165,11 @@ class NativeFullParityContractTests(unittest.TestCase):
             "cpm:prices",
             "cpm:invites",
             "cpm:funnel2",
+            "cpm:funnel",
             "cpm:retention",
         }
         self.assertTrue(expected.issubset(commands))
-        for message in (first, sales, second, lifecycle):
+        for message in (first, sales, analysis, second, lifecycle):
             self.assertLessEqual(len(message.rows), 6)
             self.assertTrue(all(len(row) == 1 for row in message.rows))
 
@@ -494,6 +506,114 @@ class NativeFullParityMutationTests(unittest.TestCase):
         self.assertLessEqual(sum(len(row) for row in message.rows), 10)
         self.assertIn("cpm:programs:0", _commands(message))
         self.assertIn("cpm:programs:2", _commands(message))
+
+    def test_beginner_form_buttons_start_canonical_owner_input_sessions(self) -> None:
+        actor = _actor(PlatformRole.OWNER)
+        offering_id = str(uuid4())
+        program_id = str(uuid4())
+        with patch.object(ui, "begin_owner_input") as begin:
+            ui._publication_new_for_message(
+                actor, "vk", current_platform=ui.ConnectionPlatform.VK
+            )
+            begin.assert_called_with(
+                actor=actor,
+                platform="vk",
+                action="publication_draft",
+                context={"channel": "vk"},
+                surface="official",
+            )
+
+            begin.reset_mock()
+            with patch.object(
+                ui,
+                "_native_all_offerings",
+                return_value=[SimpleNamespace(id=offering_id, title="Консультация")],
+            ):
+                ui._price_set_help(
+                    actor, offering_id, current_platform=ui.ConnectionPlatform.MAX
+                )
+            begin.assert_called_with(
+                actor=actor,
+                platform="max",
+                action="price",
+                context={"offering_id": offering_id},
+                surface="official",
+            )
+
+            begin.reset_mock()
+            with patch.object(
+                ui,
+                "get_program_draft",
+                return_value=SimpleNamespace(
+                    program=SimpleNamespace(id=program_id, title="Курс")
+                ),
+            ):
+                ui._program_lesson_kind_message(
+                    actor,
+                    program_id,
+                    "text",
+                    current_platform=ui.ConnectionPlatform.VK,
+                )
+            begin.assert_called_with(
+                actor=actor,
+                platform="vk",
+                action="program_lesson",
+                context={"program_id": program_id, "content_kind": "text"},
+                surface="official",
+            )
+
+    def test_beginner_program_delivery_uses_existing_canonical_delivery_result(self) -> None:
+        actor = _actor(PlatformRole.MANAGER)
+        program_id = str(uuid4())
+        customer_id = str(uuid4())
+        active = SimpleNamespace(id=program_id, status=SimpleNamespace(value="active"))
+        customer = SimpleNamespace(id=customer_id, display_name="Анна")
+        prepared = SimpleNamespace(program=SimpleNamespace(program=SimpleNamespace(title="Курс")))
+        with (
+            patch.object(ui, "list_programs", return_value=[active]),
+            patch.object(ui, "list_customers_with_active_identity", return_value=[customer]),
+            patch.object(ui, "prepare_native_program_delivery", return_value=prepared) as deliver,
+        ):
+            message = ui._render(
+                actor,
+                ui.ParsedMemberInteraction("program-deliver-to", (program_id, customer_id)),
+                linked=False,
+                setup_issuer=None,
+                setup_key="event-delivery-button",
+                current_platform=ui.ConnectionPlatform.VK,
+            )
+        deliver.assert_called_once_with(
+            actor=actor,
+            program_id=program_id,
+            customer_id=customer_id,
+            platform=ui.ConnectionPlatform.VK,
+        )
+        self.assertIn("поставлена в очередь", message.text)
+
+    def test_beginner_selection_routes_are_human_readable_and_keep_legacy_commands(self) -> None:
+        actor = _actor(PlatformRole.OWNER)
+        publication = ui._publication_new_help(actor)
+        self.assertIn("выберите", publication.text.casefold())
+        self.assertIn("cpm:publication-new-for:vk", _commands(publication))
+        self.assertNotIn("черновик telegram", publication.text.casefold())
+
+        program_id = str(uuid4())
+        with patch.object(
+            ui,
+            "get_program_draft",
+            return_value=SimpleNamespace(program=SimpleNamespace(id=program_id, title="Курс")),
+        ):
+            lesson = ui._program_lesson_help(actor, program_id)
+        self.assertIn("что вы хотите добавить", lesson.text.casefold())
+        self.assertIn(f"cpm:program-lesson-kind:{program_id}:text", _commands(lesson))
+
+        # The advanced syntax is deliberately still parsed after the simpler UI was added.
+        self.assertEqual(
+            ui.parse_native_member_interaction(
+                f"урок {program_id[:8]} text | Введение | Старый расширенный путь"
+            ).action,
+            "program-lesson-text",
+        )
 
     def test_forged_native_write_actions_fail_closed_for_read_only_role(self) -> None:
         actor = _actor(PlatformRole.ANALYST)

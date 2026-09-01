@@ -22,6 +22,7 @@ from clientplatform.application.managed_bot_onboarding import (
 )
 from clientplatform.domain.activity import CapabilityStatus
 from clientplatform.domain.bookings import BookingSlotStatus
+from clientplatform.presentation import owner_navigation as nav
 
 control = importlib.import_module(".clientplatform_control", __package__)
 builder = importlib.import_module(".clientplatform_program_builder", __package__)
@@ -84,16 +85,12 @@ def _simple_keyboard(business_id: str):
     token = control._uuid_token(business_id)
     return control._keyboard(
         [
-            [("✨ Что настроить первым?", f"cps:firstgoal:{token}")],
-            [
-                ("👥 Клиенты", f"cp:clients:{token}"),
-                ("📚 Материалы", f"cps:programs:{token}"),
-            ],
-            [
-                ("📅 Запись", f"cps:booking:{token}"),
-                ("📊 Результат", f"cp:results:{token}"),
-            ],
-            [("⚙️ Все возможности", f"cps:advanced:{token}")],
+            [("✨ Помочь выбрать первый шаг", f"cps:firstgoal:{token}")],
+            [(nav.CUSTOMERS.label, f"cp:clients:{token}")],
+            [(nav.PROGRAMS.label, f"cps:programs:{token}")],
+            [(nav.BOOKINGS.label, f"cps:booking:{token}")],
+            [(nav.TODAY.label, f"cp:results:{token}")],
+            [(nav.ALL.label, f"cps:advanced:{token}")],
         ]
     )
 
@@ -138,8 +135,8 @@ async def send_simple_dashboard(
         "• посмотреть результат.\n\n"
         f"Клиентов: {len(customers)} · программ: {len(programs)} · "
         f"свободных времён: {open_slots}\n\n"
-        "Не знаете, с чего начать? Нажмите «Что настроить первым?» — "
-        "я проведу по минимальному числу шагов.",
+        "Совсем не знаете, с чего начать? Нажмите «✨ Помочь выбрать первый шаг» — "
+        "ClientPlatform проведёт по минимальному числу действий.",
         reply_markup=_simple_keyboard(business_id),
     )
 
@@ -179,7 +176,7 @@ async def send_advanced_dashboard(
     token = control._uuid_token(business_id)
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="💬 Мессенджеры", callback_data=f"cpa:{token}:messengers")],
+            [InlineKeyboardButton(text=nav.MESSENGERS.label, callback_data=f"cpa:{token}:messengers")],
             [InlineKeyboardButton(text="📣 Реклама", callback_data=f"cpo:ads:{token}")],
             *base_keyboard.inline_keyboard,
             [InlineKeyboardButton(text="🎨 Фирменный стиль", callback_data=f"cpb:open:{token}")],
@@ -192,7 +189,7 @@ async def send_advanced_dashboard(
         f"{advertising_lines}\n\n"
         f"Рабочие возможности:\n{module_lines}\n\n"
         "Статусы показывают фактическую доступность в этой установке ClientPlatform. "
-        "Недоступный канал не предлагается к подключению, пока его runtime не готов.",
+        "Если канал технически ещё не готов, кнопка подключения не показывается.",
         reply_markup=keyboard,
     )
 
@@ -356,10 +353,10 @@ async def open_simple_booking(callback: CallbackQuery, state: FSMContext) -> Non
         token = control._uuid_token(business_id)
         await callback.answer()
         await control._callback_message(callback).answer(
-            "Запись пока не подключена. Нажмите «Что настроить первым?» — "
+            "Запись пока не подключена. Нажмите «Помочь выбрать первый шаг» — "
             "я проведу по нужным шагам.",
             reply_markup=control._keyboard(
-                [[("✨ Что настроить первым?", f"cps:firstgoal:{token}")]]
+                [[("✨ Помочь выбрать первый шаг", f"cps:firstgoal:{token}")]]
             ),
         )
         return

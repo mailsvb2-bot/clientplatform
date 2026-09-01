@@ -9,6 +9,7 @@ from aiogram.types import Message
 from clientplatform.application.growth_cockpit import GrowthAction, get_growth_cockpit
 from clientplatform.domain.bookings import BookingSlotStatus
 from clientplatform.domain.tenancy import TenantAccessDenied, TenantPermissionDenied
+from clientplatform.presentation import owner_navigation as nav
 
 from . import clientplatform_control as control
 from . import clientplatform_goal_first_safety as goal_contract
@@ -89,7 +90,7 @@ def _goal_keyboard(business_id: str, next_action: GrowthAction | None = None):
     return control._keyboard(
         [
             [primary],
-            [("⋯ Все возможности", f"cpo:more:{token}")],
+            [(nav.ALL.label, f"cpo:more:{token}")],
         ]
     )
 
@@ -125,8 +126,8 @@ async def send_goal_dashboard(
         f"  {main_reason}\n\n"
         f"Клиентов: {len(customers)} · свободных времён: {len(open_slots)} · "
         f"материалов и программ: {len(programs)}\n\n"
-        f"Нажмите «{primary_label}» — открою нужный шаг. "
-        "Остальные функции сохранены в «Все возможности».",
+        f"Не знаете, что нажать? «{primary_label}» — рекомендуемый следующий шаг.\n"
+        f"Если Вам сейчас нужно другое, нажмите «{nav.ALL.label}» — там каждая кнопка объяснена простыми словами.",
         reply_markup=_goal_keyboard(business_id, next_action),
     )
 

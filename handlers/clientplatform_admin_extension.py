@@ -28,6 +28,7 @@ from clientplatform.domain.activity import CapabilityStatus
 from clientplatform.domain.automation_policy import AutomationPolicyError
 from clientplatform.domain.money import settlement_currency_minor_unit_exponent
 from clientplatform.domain.tenancy import PlatformRole, TenantPermissionDenied, TenancyError
+from clientplatform.presentation import owner_navigation as nav
 from clientplatform.runtime import admin_observability
 from core.telegram_multi_egress import (
     install_multi_egress_bot,
@@ -390,7 +391,7 @@ async def _enhanced_marketing(
 
     if action == "autopilot":
         text = (
-            "🤖 Growth Autopilot\n\n"
+            "🤖 Автоматизация\n\n"
             f"Статус: {'включён' if enabled else 'выключен'}\n"
             f"Клиентов без программы: "
             f"{max(0, insights.active_customers - len(enrolled_ids))}\n"
@@ -498,7 +499,7 @@ async def _enhanced_marketing(
             )
     elif action == "funnel":
         text = (
-            "📉 Путь до заявки\n\n"
+            f"{nav.PROGRAM_PROGRESS.label}\n\n"
             f"Создано приглашений: "
             f"{insights.active_invites + insights.claimed_invites}\n"
             f"Принято приглашений: {insights.claimed_invites} "
@@ -514,7 +515,7 @@ async def _enhanced_marketing(
         extra = []
     elif action == "money":
         text = (
-            "💰 Деньги и клиенты\n\n"
+            "💰 Выручка и платящие клиенты\n\n"
             f"Оплачено: {_payment_totals_text(payment_facts)}\n"
             f"Успешных оплат: {insights.paid_payments}\n"
             f"Средний платёж: {_payment_average_text(payment_facts)}\n"
@@ -554,7 +555,7 @@ async def _enhanced_marketing(
     elif action == "segments":
         without_program = max(0, insights.active_customers - len(enrolled_ids))
         text = (
-            "🧲 Группы клиентов\n\n"
+            "👥 Группы клиентов\n\n"
             f"Новые / без программы: {without_program}\n"
             f"Проходят программу: {len(enrolled_ids - completed_ids)}\n"
             f"Завершили: {len(completed_ids)}\n"
@@ -572,7 +573,7 @@ async def _enhanced_marketing(
             for item in offerings[:12]
         ) or "• Предложения ещё не созданы"
         text = (
-            "🧪 Проверка предложений\n\n"
+            "🧪 Услуги и предложения\n\n"
             f"Активных предложений: {len(offerings)}\n"
             f"С ценой: {priced}\n"
             f"Без цены: {max(0, len(offerings) - priced)}\n"
@@ -583,7 +584,7 @@ async def _enhanced_marketing(
         extra = [("💡 Настроить цены", admin._callback(ctx, "prices"))]
     elif action == "copy":
         text = (
-            "✍️ Подготовить тексты\n\n"
+            "✍️ Подготовить текст\n\n"
             f"Основа бренда:\n{profile.activity_description}\n\n"
             "Готовая структура:\n"
             f"1. Кому помогает «{ctx.business_name}».\n"
@@ -607,7 +608,7 @@ async def _enhanced_marketing(
             for item in offerings[:12]
         ) or "• Сначала создайте предложение"
         text = (
-            "💡 Подсказка по ценам\n\n"
+            "💵 Цены\n\n"
             f"Предложений: {len(offerings)}\n"
             f"Цены заполнены: {len(price_by_offering)}/{len(offerings)}\n"
             f"Зафиксированная выручка: {_payment_totals_text(payment_facts)}\n"
@@ -705,11 +706,11 @@ async def _enhanced_admin_report(
 
     if action == "release":
         text = (
-            "🚦 Release gate\n\n"
+            "✅ Проверить готовность\n\n"
             f"{_status_icon(profile.status.value == 'ready')} Профиль бизнеса\n"
             f"{_status_icon(active_capabilities > 0)} Форматы работы\n"
             f"{_status_icon(summary.dispatch_attention == 0)} Доставка материалов\n"
-            f"{_status_icon(route.polling_ready)} Telegram polling\n"
+            f"{_status_icon(route.polling_ready)} Получение сообщений Telegram\n"
             f"{_status_icon(route.egress_redundant)} Резервный сетевой путь\n"
             f"{_status_icon(interaction.p95_ms <= 1000)} p95 кнопок: {interaction.p95_ms} мс\n"
             f"{_status_icon(not alerts)} Открытые предупреждения: {len(alerts)}\n\n"
@@ -728,7 +729,7 @@ async def _enhanced_admin_report(
         extra = [("➕ Подключить клиента", f"cp:invite:{ctx.business_token}")]
     elif action == "funnel2":
         text = (
-            "🧲 Воронка 2.0\n\n"
+            "🧭 Путь клиента\n\n"
             f"Приглашения: {insights.active_invites + insights.claimed_invites}\n"
             f"Подключения: {insights.claimed_invites}\n"
             f"Клиенты: {insights.active_customers}\n"
@@ -741,7 +742,7 @@ async def _enhanced_admin_report(
         extra = []
     elif action == "retention":
         text = (
-            "🧩 Удержание\n\n"
+            "♻️ Кого стоит вернуть\n\n"
             f"Клиентов: {insights.active_customers}\n"
             f"В программах: {enrolled}\n"
             f"Завершили: {complete}\n"
@@ -756,7 +757,7 @@ async def _enhanced_admin_report(
             + (f" · {item.detail[:60]}" if item.detail else "")
             for item in audit
         ) or "• Управляющих действий пока нет"
-        text = "🧾 Последние действия\n\n" + lines
+        text = "🧾 История изменений\n\n" + lines
         extra = []
     elif action == "system":
         alert_lines = "\n".join(
@@ -764,19 +765,19 @@ async def _enhanced_admin_report(
             for item in alerts[:8]
         ) or "• предупреждений нет"
         text = (
-            "🧪 Системные проверки\n\n"
-            f"Tenant-доступ: ✅\n"
+            "🛠 Проверка системы\n\n"
+            f"Доступ к бизнесу: ✅\n"
             f"Профиль бизнеса: {_status_icon(profile.status.value == 'ready')}\n"
-            f"Telegram polling: {_status_icon(route.polling_ready)}"
+            f"Получение сообщений Telegram: {_status_icon(route.polling_ready)}"
             f" ({'активный long poll' if route.polling_in_flight else 'последний ответ'})\n"
-            f"UI-маршрут: {route.ui_mode} / {route.ui_route}\n"
-            f"Polling-маршрут: {route.polling_mode} / {route.polling_route}\n"
-            f"Резервный egress: {_status_icon(route.egress_redundant)}\n"
-            f"p50 / p95 / max: {interaction.p50_ms} / "
+            f"Маршрут интерфейса: {route.ui_mode} / {route.ui_route}\n"
+            f"Маршрут получения сообщений: {route.polling_mode} / {route.polling_route}\n"
+            f"Резервная отправка сообщений: {_status_icon(route.egress_redundant)}\n"
+            f"Время ответа p50 / p95 / max: {interaction.p50_ms} / "
             f"{interaction.p95_ms} / {interaction.max_ms} мс\n"
-            f"Ack p95: {interaction.ack_p95_ms} мс\n"
-            f"Lock p95: {interaction.lock_p95_ms} мс\n"
-            f"Telegram p95: {interaction.telegram_p95_ms} мс\n"
+            f"Подтверждение p95: {interaction.ack_p95_ms} мс\n"
+            f"Блокировка p95: {interaction.lock_p95_ms} мс\n"
+            f"Ответ Telegram p95: {interaction.telegram_p95_ms} мс\n"
             f"Ошибок: {interaction.failures}/{interaction.count}\n\n"
             f"{alert_lines}"
         )
@@ -790,6 +791,20 @@ async def _enhanced_admin_report(
         admin._back_keyboard(ctx, *extra),
     )
     await admin._set_current_section(state, action=action, push=True)
+
+
+_SUBSCRIPTION_PLAN_LABELS = {
+    "base": "Базовый",
+    "not_configured": "Не выбран",
+}
+_SUBSCRIPTION_STATUS_LABELS = {
+    "trial": "Пробный период",
+    "active": "Активен",
+    "past_due": "Нужна оплата",
+    "suspended": "Приостановлен",
+    "cancelled": "Отменён",
+    "inactive": "Не активирован",
+}
 
 
 async def _enhanced_tariff(
@@ -819,13 +834,15 @@ async def _enhanced_tariff(
             actor=ctx.actor,
         ),
     )
+    plan_label = _SUBSCRIPTION_PLAN_LABELS.get(subscription.plan_key, subscription.plan_key)
+    status_label = _SUBSCRIPTION_STATUS_LABELS.get(subscription.status, subscription.status)
     text = (
         "💳 Тариф ClientPlatform\n\n"
-        f"План: {subscription.plan_key}\n"
-        f"Статус: {subscription.status}\n"
-        f"Сотрудники: {insights.active_staff}/{subscription.included_staff}\n"
-        f"Клиенты: {insights.active_customers}/{subscription.included_customers}\n"
-        f"Активирован: {subscription.started_at}\n"
+        f"Тариф: {plan_label}\n"
+        f"Состояние: {status_label}\n"
+        f"Сотрудники: {insights.active_staff} из {subscription.included_staff}\n"
+        f"Клиенты: {insights.active_customers} из {subscription.included_customers}\n"
+        f"Начало: {subscription.started_at}\n"
         f"Следующее обновление: {subscription.renews_at or 'не назначено'}"
     )
     await admin._safe_edit(callback, text, admin._back_keyboard(ctx))

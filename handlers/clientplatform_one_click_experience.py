@@ -25,6 +25,7 @@ from clientplatform.domain.bookings import BookingSlotStatus
 from clientplatform.domain.promotions import PromotionChannel, PromotionError
 from clientplatform.domain.tenancy import PlatformRole, TenantPermissionDenied
 from clientplatform.integrations.yandex_direct import YandexDirectError
+from clientplatform.presentation import owner_navigation as nav
 from config.settings import settings
 
 from . import clientplatform_ad_connections as ad
@@ -380,7 +381,7 @@ async def get_clients_one_click(callback: CallbackQuery, state: FSMContext) -> N
             reply_markup=control._keyboard(
                 [
                     [("➕ Открыть время", f"cps:firstbook:{token}")],
-                    [("🏠 В кабинет", f"cpj:home:{token}")],
+                    [(nav.HOME.label, f"cpj:home:{token}")],
                 ]
             ),
         )
@@ -563,17 +564,22 @@ async def open_more(callback: CallbackQuery) -> None:
     token = str(callback.data).split(":", 2)[2]
     await control._actor(int(callback.from_user.id), control._token_uuid(token))
     await control._callback_message(callback).answer(
-        "⋯ Все возможности\n\n"
-        "Выберите задачу. Внутри каждого раздела собраны связанные действия — "
-        "без длинного списка на одном экране.",
+        "🧭 Что можно сделать\n\n"
+        + nav.choice_help(
+            nav.MONEY_RESULT,
+            nav.CLIENTS_SALES,
+            nav.SERVICES_BOOKING,
+            nav.CONTENT_PROMOTION,
+            nav.BUSINESS_SETTINGS,
+        ),
         reply_markup=control._keyboard(
             [
-                [("💰 Деньги и результат", f"cpg:period:{token}:7")],
-                [("👥 Клиенты и продажи", f"cpo:clients:{token}")],
-                [("🧰 Услуги и расписание", f"cpo:work:{token}")],
-                [("✍️ Контент и продвижение", f"cpo:content:{token}")],
-                [("⚙️ Настройки", f"cpo:settings:{token}")],
-                [("🏠 В кабинет", f"cpj:home:{token}")],
+                [(nav.MONEY_RESULT.label, f"cpg:period:{token}:7")],
+                [(nav.CLIENTS_SALES.label, f"cpo:clients:{token}")],
+                [(nav.SERVICES_BOOKING.label, f"cpo:work:{token}")],
+                [(nav.CONTENT_PROMOTION.label, f"cpo:content:{token}")],
+                [(nav.BUSINESS_SETTINGS.label, f"cpo:settings:{token}")],
+                [(nav.HOME.label, f"cpj:home:{token}")],
             ]
         ),
     )
@@ -584,7 +590,11 @@ async def open_client_tools(callback: CallbackQuery) -> None:
     token = str(callback.data).split(":", 2)[2]
     await control._actor(int(callback.from_user.id), control._token_uuid(token))
     await control._callback_message(callback).answer(
-        "👥 Клиенты и продажи\n\nЗдесь работа с обращениями, клиентами и записями.",
+        "👥 Клиенты и продажи\n\n"
+        "Если Вам нужно:\n"
+        "• ответить на новую заявку или продолжить продажу → «💬 Обращения и продажи»\n"
+        "• посмотреть, кто и когда записан → «📅 Записи клиентов»\n"
+        "• найти конкретного человека → «🔎 Все клиенты»",
         reply_markup=control._keyboard(
             [
                 [("💬 Обращения и продажи", f"cps:s:{token}")],
@@ -601,12 +611,18 @@ async def open_content_tools(callback: CallbackQuery) -> None:
     token = str(callback.data).split(":", 2)[2]
     await control._actor(int(callback.from_user.id), control._token_uuid(token))
     await control._callback_message(callback).answer(
-        "✍️ Контент и продвижение\n\nПодготовьте материалы и выберите, как приводить людей.",
+        "📈 Продвижение и контент\n\n"
+        "Если Вам нужно:\n"
+        "• создать или запланировать пост → «📣 Публикации»\n"
+        "• подготовить текст → «✍️ Подготовить текст»\n"
+        "• проверить, что именно Вы предлагаете → «🧪 Услуги и предложения»\n"
+        "• запустить продвижение → «📣 Реклама»\n"
+        "• привлекать через партнёров → «🤝 Партнёрства»",
         reply_markup=control._keyboard(
             [
                 [("📣 Публикации", f"cpa:{token}:publications")],
-                [("✍️ Подготовить тексты", f"cpa:{token}:copy")],
-                [("🧪 Проверить предложение", f"cpa:{token}:offers")],
+                [(nav.COPY.label, f"cpa:{token}:copy")],
+                [(nav.OFFERS.label, f"cpa:{token}:offers")],
                 [("📣 Реклама", f"cpo:ads:{token}")],
                 [("🤝 Партнёрства", f"cpg:home:{token}")],
                 [("⬅️ Назад", f"cpo:more:{token}")],
@@ -633,12 +649,12 @@ def _settings_rows(token: str, role: PlatformRole) -> list[list[tuple[str, str]]
     # revalidate the live tenant role before serving any privileged action.
     rows: list[list[tuple[str, str]]] = []
     if role in _SETTINGS_MESSENGER_ROLES:
-        rows.append([("💬 Мессенджеры", f"cpa:{token}:messengers")])
+        rows.append([(nav.MESSENGERS.label, f"cpa:{token}:messengers")])
     rows.append([("🧩 Бизнес и возможности", f"cps:advanced:{token}")])
     if role == PlatformRole.OWNER:
-        rows.append([("👥 Команда и тариф", f"cpa:{token}:menu-team")])
+        rows.append([("👤 Сотрудники и тариф", f"cpa:{token}:menu-team")])
     if role in _SETTINGS_SYSTEM_ROLES:
-        rows.append([("⚙️ Системное", f"cpa:{token}:menu-system")])
+        rows.append([("🛠 Технические проверки", f"cpa:{token}:menu-system")])
     rows.append([("⬅️ Назад", f"cpo:more:{token}")])
     return rows
 
@@ -648,8 +664,12 @@ async def open_settings_tools(callback: CallbackQuery) -> None:
     token = str(callback.data).split(":", 2)[2]
     actor = await control._actor(int(callback.from_user.id), control._token_uuid(token))
     await control._callback_message(callback).answer(
-        "⚙️ Настройки\n\n"
-        "Обычные настройки — сверху. Команда и технические функции вынесены глубже.",
+        "⚙️ Настройки бизнеса\n\n"
+        "Если Вам нужно:\n"
+        "• подключить Telegram, ВКонтакте или MAX → «💬 Подключить мессенджеры»\n"
+        "• настроить услуги и возможности → «🧰 Бизнес и возможности»\n"
+        "• добавить сотрудника или посмотреть тариф → «👤 Сотрудники и тариф»\n"
+        "• проверить техническое состояние → «🛠 Технические проверки»",
         reply_markup=control._keyboard(_settings_rows(token, actor.role)),
     )
 
@@ -659,7 +679,11 @@ async def open_work_tools(callback: CallbackQuery) -> None:
     token = str(callback.data).split(":", 2)[2]
     await control._actor(int(callback.from_user.id), control._token_uuid(token))
     await control._callback_message(callback).answer(
-        "🧰 Услуги и расписание",
+        "📅 Услуги и запись\n\n"
+        "Если Вам нужно:\n"
+        "• настроить то, что можно заказать → «🧰 Мои услуги»\n"
+        "• открыть или проверить время → «📅 Мой календарь»\n"
+        "• посмотреть ссылку для клиентов → «🔗 Моя страница»",
         reply_markup=control._keyboard(
             [
                 [("🧰 Мои услуги", f"cpj:services:{token}")],
