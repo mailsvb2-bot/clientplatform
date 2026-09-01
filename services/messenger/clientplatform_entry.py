@@ -398,6 +398,7 @@ def _owner_control_reply(
     raw_text: str,
     business_id: str | None = None,
     interaction_key: str,
+    resolve_pending_input: bool = False,
 ) -> MessengerReply | None:
     actor = _business_actor(
         user_id=canonical_user_id,
@@ -427,7 +428,7 @@ def _owner_control_reply(
         interaction_key=interaction_key,
         current_platform=_connection_platform(platform),
         setup_issuer=_issue_setup_command,
-        resolve_pending_input=True,
+        resolve_pending_input=resolve_pending_input,
     )
     return _interaction_reply(interaction, business_id=actor.business_id)
 
@@ -754,6 +755,7 @@ def handle_clientplatform_entry(
             raw_text=command.value,
             business_id=active_business_id,
             interaction_key=interaction_key,
+            resolve_pending_input=owner_input is not None,
         )
         if reply is not None:
             return canonical_user_id, [reply]

@@ -469,6 +469,49 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(count, 1)
         self.assertEqual(existing.business.name, "Автосервис Север")
 
+    def test_business_create_failure_keeps_retry_only_when_session_exists(self) -> None:
+        entry = SimpleNamespace(user_id=305)
+        retry_session = SimpleNamespace(step="business_name", business_id=None)
+        for session in (retry_session, None):
+            with (
+                self.subTest(session_exists=session is not None),
+                patch(
+                    "services.messenger.clientplatform_entry.register_user_entry",
+                    return_value=entry,
+                ),
+                patch(
+                    "services.messenger.clientplatform_entry.list_accessible_businesses",
+                    return_value=[],
+                ),
+                patch("services.messenger.clientplatform_entry.begin_business_name_onboarding"),
+                patch(
+                    "services.messenger.clientplatform_entry.create_business_from_onboarding",
+                    side_effect=ValueError("invalid business name"),
+                ),
+                patch(
+                    "services.messenger.clientplatform_entry.get_owner_onboarding_session",
+                    return_value=session,
+                ),
+                patch(
+                    "services.messenger.clientplatform_entry._owner_onboarding_reply",
+                    return_value=MessengerReply(text="Повторите название."),
+                ) as onboarding_reply,
+            ):
+                _, replies = handle_clientplatform_entry(
+                    305,
+                    platform="vk",
+                    external_user_id="vk-305",
+                    text="бизнес Некорректный",
+                )
+
+            self.assertIn("Не удалось создать", replies[0].text)
+            if session is None:
+                self.assertEqual(len(replies), 1)
+                onboarding_reply.assert_not_called()
+            else:
+                self.assertEqual(len(replies), 2)
+                onboarding_reply.assert_called_once_with(session)
+
     def test_plain_text_owner_onboarding_works_in_telegram_vk_and_max(self) -> None:
         init_db()
         for index, platform in enumerate(("telegram", "vk", "max"), start=1):
@@ -836,6 +879,9 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
                     activity_description="Консультирую международных клиентов"
                 ),
             ) as save_profile,
+            patch(
+                "clientplatform.application.native_member_interactions.get_owner_input_session"
+            ) as pending_lookup,
         ):
             _, replies = handle_clientplatform_entry(
                 808,
@@ -845,6 +891,7 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
                 event_key="vk-activity-1",
             )
 
+        pending_lookup.assert_not_called()
         self.assertEqual(
             save_profile.call_args.kwargs["timezone_name"],
             "America/New_York",
