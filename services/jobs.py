@@ -280,31 +280,39 @@ def cancel_post_prompt(user_id: int, session_id: int | str) -> None:
 
 def _claim_due_jobs_postgres(*, now_utc_iso: str, stale_before: str, limit: int, token: str, job_type: str | None = None) -> list[ClaimedJob]:
     """Atomically claim due jobs using native Postgres row locks."""
+    job_type_filter = ""
+    params: list[Any] = [now_utc_iso, stale_before]
+    if job_type is not None:
+        # Do not bind a standalone ``? IS NULL`` parameter here. PostgreSQL
+        # cannot infer the type of that parameter because it has no typed
+        # expression context, even when the Python value itself is a string.
+        job_type_filter = "AND job_type=?"
+        params.append(str(job_type))
+    params.extend((int(limit), now_utc_iso, token))
+
+    query = f"""
+        WITH due AS (
+            SELECT id
+            FROM jobs
+            WHERE done_at IS NULL
+              AND run_at_utc <= ?
+              AND (locked_at IS NULL OR locked_at <= ?)
+              {job_type_filter}
+            ORDER BY id ASC
+            LIMIT ?
+            FOR UPDATE SKIP LOCKED
+        )
+        UPDATE jobs
+        SET locked_at=?, lock_token=?
+        FROM due
+        WHERE jobs.id = due.id
+          AND jobs.done_at IS NULL
+        RETURNING jobs.id, jobs.user_id, jobs.job_type, jobs.run_at_utc,
+                  jobs.payload, jobs.job_key, jobs.retries, jobs.lock_token
+        """.strip()  # nosec B608 - filter is selected only from static SQL above
     with db() as conn:
         with tx(conn):
-            rows = conn.execute(
-                """
-                WITH due AS (
-                    SELECT id
-                    FROM jobs
-                    WHERE done_at IS NULL
-                      AND run_at_utc <= ?
-                      AND (locked_at IS NULL OR locked_at <= ?)
-                      AND (? IS NULL OR job_type=?)
-                    ORDER BY id ASC
-                    LIMIT ?
-                    FOR UPDATE SKIP LOCKED
-                )
-                UPDATE jobs
-                SET locked_at=?, lock_token=?
-                FROM due
-                WHERE jobs.id = due.id
-                  AND jobs.done_at IS NULL
-                RETURNING jobs.id, jobs.user_id, jobs.job_type, jobs.run_at_utc,
-                          jobs.payload, jobs.job_key, jobs.retries, jobs.lock_token
-                """.strip(),
-                (now_utc_iso, stale_before, job_type, job_type, int(limit), now_utc_iso, token),
-            ).fetchall()
+            rows = conn.execute(query, params).fetchall()
     return _claimed_jobs_from_rows(list(rows), fallback_token=token)
 
 
