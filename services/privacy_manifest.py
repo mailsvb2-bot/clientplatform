@@ -5,7 +5,37 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 Disposition = Literal["erase", "retain", "anonymize"]
-MANIFEST_VERSION = "2026-08-31.v1-clientplatform-global"
+MANIFEST_VERSION = "2026-09-01.v2-clientplatform-retired-surfaces"
+
+# Global user-owned tables are discovered independently from the currently active
+# policies. This keeps privacy validation fail-closed when a historical or new
+# table still carries a user/account identifier. Business-scoped tables are
+# governed by clientplatform.privacy_manifest instead.
+OWNERSHIP_COLUMN_CANDIDATES = frozenset(
+    {
+        "user_id",
+        "account_id",
+        "primary_user_id",
+        "canonical_user_id",
+        "consumed_account_id",
+        "buyer_user_id",
+        "recipient_user_id",
+        "payment_user_id",
+        "beneficiary_user_id",
+        "requested_by",
+        "created_by",
+        "created_by_user_id",
+        "changed_by",
+        "updated_by",
+        "admin_id",
+        "related_user_id",
+        "referred_id",
+        "referrer_id",
+        "recipient_id",
+        "redeemed_by",
+        "claimed_by",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -47,6 +77,85 @@ def _policy(
         anonymize_literals=literals,
         required=required,
     )
+
+
+# These tables are retired from the ClientPlatform runtime, but may still exist
+# in historical production databases. Keeping their privacy disposition here is
+# deliberately not a runtime dependency: it preserves export/erasure/accounting
+# semantics until a separately governed retention migration removes the data.
+_RETIRED_ERASE: tuple[tuple[str, tuple[str, ...], str], ...] = (
+    ("pending_actions", ("user_id",), "historical pending interaction state"),
+    ("deliveries", ("user_id",), "historical delivery schedule"),
+    ("progress", ("user_id",), "historical progress state"),
+    ("demo_events", ("user_id",), "historical demo behavior"),
+    ("user_state_log", ("user_id",), "historical interaction diagnostics"),
+    ("interaction_log", ("user_id",), "historical interaction timing"),
+    ("user_behavior", ("user_id",), "historical derived behavior"),
+    ("user_funnel", ("user_id",), "historical funnel state"),
+    ("user_bricks", ("user_id",), "historical content exposure"),
+    ("micro_answers", ("user_id",), "historical questionnaire answers"),
+    ("ai_decisions", ("user_id",), "historical decision records"),
+    ("selected_plan", ("user_id",), "historical plan choice"),
+    ("weather_prefs", ("user_id",), "historical location preference"),
+    ("user_settings", ("user_id",), "historical user settings"),
+    ("mood_sessions", ("user_id",), "historical self-assessment"),
+    ("state_ratings", ("user_id",), "historical self-assessment rating"),
+    ("body_feedback", ("user_id",), "historical body feedback"),
+    ("user_daily_state", ("user_id",), "historical daily state"),
+    ("user_dynamic_profile", ("user_id",), "historical derived profile"),
+    ("system_reactions_log", ("user_id",), "historical automated reaction"),
+    ("sla_metrics", ("user_id",), "historical per-user telemetry"),
+    ("decision_rewards", ("user_id",), "historical decision reward"),
+    ("funnel_events", ("user_id",), "historical funnel event"),
+    ("daily_audio_log", ("user_id",), "historical media delivery behavior"),
+    ("gift_bonus_log", ("user_id",), "historical bonus behavior"),
+    ("referrals", ("referred_id", "referrer_id"), "historical referral relation"),
+    ("practice_token_audit", ("user_id",), "historical access audit"),
+    ("trial_analytics", ("user_id",), "historical trial analytics"),
+    ("audio_progress", ("user_id",), "historical media progress"),
+    ("messenger_audio_progress", ("user_id",), "historical messenger media progress"),
+    ("user_audio_progress", ("user_id",), "historical user media progress"),
+    ("user_audio_timeline", ("user_id",), "historical media timeline"),
+    ("user_audio_access_tokens", ("user_id",), "historical media access capability"),
+    ("user_channel_links", ("user_id",), "historical cross-channel relation"),
+    ("user_delivery_preferences", ("user_id",), "historical delivery preference"),
+    ("account_audio_progress", ("account_id",), "historical account media progress"),
+    ("account_audio_deliveries", ("account_id",), "historical account media delivery"),
+    ("account_audio_completions", ("account_id",), "historical account media completion"),
+    ("growth_conversion_outbox", ("user_id",), "historical conversion attribution"),
+    ("growth_apply_review_confirmations", ("user_id",), "historical growth review state"),
+    ("sales_desk_contacts", ("user_id",), "historical sales contact profile"),
+    ("sales_desk_events", ("user_id",), "historical sales interaction"),
+    ("sales_desk_tasks", ("user_id",), "historical sales follow-up"),
+)
+
+_RETIRED_RETAIN: tuple[tuple[str, tuple[str, ...], str], ...] = (
+    ("subscriptions", ("user_id",), "historical purchased-access accounting fact"),
+    ("payments", ("user_id",), "historical payment/refund/accounting fact"),
+    ("payment_events", ("user_id",), "historical provider payment idempotency fact"),
+    ("payment_reconciliation_retry", ("user_id",), "historical payment fulfilment audit"),
+    ("gift_codes", ("created_by", "recipient_id", "redeemed_by", "claimed_by"), "historical gift accounting fact"),
+    ("gift_claims", ("buyer_user_id", "recipient_user_id"), "historical paid gift ownership fact"),
+    ("bonus_grants", ("user_id", "related_user_id"), "historical reward accounting provenance"),
+    ("practice_wallets", ("user_id",), "historical purchased balance"),
+    ("practice_ledger", ("user_id",), "historical immutable accounting ledger"),
+    ("payment_token_grants", ("user_id",), "historical payment entitlement provenance"),
+    ("practice_reservations", ("user_id",), "historical purchased balance reservation"),
+    ("user_practice_preferences", ("user_id",), "historical purchased-access fulfilment setting"),
+    ("practice_token_lots", ("user_id",), "historical payment-lot provenance"),
+    ("premium_entitlements", ("user_id",), "historical purchased entitlement"),
+    ("premium_delivery_outbox", ("user_id",), "historical purchased fulfilment evidence"),
+    ("consultation_requests", ("user_id",), "historical paid consultation fulfilment"),
+    ("telegram_stars_refunds", ("payment_user_id", "beneficiary_user_id", "requested_by"), "historical provider refund audit"),
+    ("yookassa_refunds", ("user_id",), "historical provider refund audit"),
+    ("sales_lead_revenue", ("user_id",), "historical currency-specific revenue fact"),
+    ("growth_apply_requests", ("requested_by",), "historical administrative approval audit"),
+    ("growth_apply_confirmations", ("admin_id",), "historical administrative confirmation audit"),
+    ("user_roles", ("user_id",), "historical authorization assignment"),
+    ("admin_permissions", ("admin_id", "updated_by"), "historical authorization audit"),
+    ("plan_price_history", ("changed_by",), "historical pricing audit"),
+    ("funnel_copies", ("created_by",), "historical administrative content authorship"),
+)
 
 
 _POLICIES = (
@@ -98,6 +207,16 @@ _POLICIES = (
         "owner-selected control workspace routing state",
         required=True,
     ),
+    *(_policy(table, columns, "erase", reason) for table, columns, reason in _RETIRED_ERASE),
+    *(_policy(table, columns, "retain", reason) for table, columns, reason in _RETIRED_RETAIN),
+    _policy(
+        "sales_leads",
+        ("user_id", "account_id"),
+        "anonymize",
+        "historical sales accounting retained without human-readable identity",
+        anonymize=("username", "campaign", "creative", "closed_reason"),
+        literals=(("display_name", "[deleted user]"),),
+    ),
 )
 
 POLICIES: dict[str, PrivacyPolicy] = {policy.table: policy for policy in _POLICIES}
@@ -124,18 +243,17 @@ def table_columns(conn: Any, table: str) -> set[str]:
 
 
 def discovered_user_owned_tables(conn: Any) -> dict[str, tuple[str, ...]]:
-    existing = _table_names(conn)
-    ownership_columns = {
-        column
-        for policy in POLICIES.values()
-        for column in policy.ownership_columns
-    }
     discovered: dict[str, tuple[str, ...]] = {}
-    for table in existing:
+    for table in sorted(_table_names(conn)):
         columns = table_columns(conn, table)
-        present = tuple(sorted(columns & ownership_columns))
-        if present:
-            discovered[table] = present
+        # business_id is the explicit boundary for the tenant privacy manifest.
+        # A small set of shared authorization/routing surfaces is intentionally
+        # present in both manifests and must still be discovered globally.
+        if "business_id" in columns and table not in POLICIES:
+            continue
+        ownership = tuple(sorted(columns & OWNERSHIP_COLUMN_CANDIDATES))
+        if ownership:
+            discovered[table] = ownership
     return discovered
 
 
@@ -145,19 +263,36 @@ def validate_privacy_manifest(conn: Any, *, strict: bool = True) -> PrivacyManif
     missing_required = tuple(
         sorted(policy.table for policy in POLICIES.values() if policy.required and policy.table not in existing)
     )
-    invalid = tuple(
-        sorted(
-            f"{table}:missing_declared_ownership_column"
-            for table, policy in POLICIES.items()
-            if table in existing and not any(column in table_columns(conn, table) for column in policy.ownership_columns)
+    invalid: list[str] = []
+    for table in sorted(existing & set(POLICIES)):
+        policy = POLICIES[table]
+        columns = table_columns(conn, table)
+        declared_present = tuple(
+            column for column in policy.ownership_columns if column in columns
         )
-    )
+        discovered_columns = discovered.get(table, ())
+        if not declared_present:
+            invalid.append(f"{table}:missing_declared_ownership_column")
+        elif set(discovered_columns) - set(policy.ownership_columns):
+            invalid.append(
+                f"{table}:undeclared_ownership_columns="
+                f"{','.join(sorted(set(discovered_columns) - set(policy.ownership_columns)))}"
+            )
+        declared_anonymize = set(policy.anonymize_columns) | {
+            column for column, _value in policy.anonymize_literals
+        }
+        missing_anonymize = declared_anonymize - columns
+        if missing_anonymize:
+            invalid.append(
+                f"{table}:missing_anonymize_columns={','.join(sorted(missing_anonymize))}"
+            )
+    invalid_policies = tuple(invalid)
     unknown = tuple(sorted(set(discovered) - set(POLICIES)))
     report = PrivacyManifestReport(
         ok=not unknown and not invalid and not missing_required,
         discovered_user_tables=tuple(sorted(discovered)),
         unknown_tables=unknown,
-        invalid_policies=invalid,
+        invalid_policies=invalid_policies,
         missing_required_tables=missing_required,
     )
     if strict and not report.ok:
