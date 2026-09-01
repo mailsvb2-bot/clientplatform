@@ -30,20 +30,13 @@ from . import clientplatform_revenue_attribution
 from . import clientplatform_sales
 from . import clientplatform_sales_ai
 from . import clientplatform_tenancy
-from . import analytics
-from . import funnel
-from . import gifts
-from . import jobs
-from . import payments
-from . import plans
-from . import settings
-from . import users
+from . import shared_runtime
 
-# Execution order matters: legacy users first, then all isolated ClientPlatform
-# tenant/customer/activity/program/connection/admin boundaries, then legacy tables.
-# Additive ClientPlatform schemas never mutate imported Metrotherapy tables.
+# Execution order matters: shared operational primitives first, followed by
+# isolated tenant/customer/activity/program/connection/admin boundaries.
+# Historical product tables are deliberately not recreated by fresh bootstrap.
 PARTS = [
-    users,
+    shared_runtime,
     clientplatform_tenancy,
     clientplatform_customers,
     clientplatform_activity,
@@ -72,13 +65,6 @@ PARTS = [
     clientplatform_bot_provisioning,
     clientplatform_admin_ops,
     clientplatform_automation_policy,
-    plans,
-    payments,
-    gifts,
-    funnel,
-    analytics,
-    jobs,
-    settings,
 ]
 
 

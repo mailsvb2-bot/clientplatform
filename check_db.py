@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parent
-DEFAULT_ENV_FILE = Path("/etc/metrotherapy/metrotherapy.env")
+DEFAULT_ENV_FILE = Path("/etc/clientplatform/clientplatform.env")
 
 
 def _load_env_file(path: Path | None) -> dict[str, str]:
@@ -158,10 +158,10 @@ def _print_human(payload: dict[str, Any]) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Read-only Metrotherapy storage diagnostic")
+    parser = argparse.ArgumentParser(description="Read-only ClientPlatform storage diagnostic")
     parser.add_argument(
         "--env-file",
-        default=os.getenv("METROTHERAPY_ENV_FILE", str(DEFAULT_ENV_FILE)),
+        default=os.getenv("CLIENTPLATFORM_ENV_FILE", str(DEFAULT_ENV_FILE)),
     )
     parser.add_argument(
         "--sqlite-path",

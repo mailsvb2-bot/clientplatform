@@ -2,8 +2,6 @@ FROM python:3.12-slim-bookworm AS python-runtime
 
 FROM postgres:16-bookworm
 
-ARG CLIENTPLATFORM_REQUIRE_AUDIO_ASSETS=0
-
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -44,13 +42,11 @@ RUN apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=60 update \
     && useradd --system --uid 10001 --gid clientplatform --home /var/lib/clientplatform clientplatform \
     && mkdir -p \
        /app \
-       /opt/clientplatform/audio-assets \
        /var/lib/clientplatform \
        /var/log/clientplatform \
        /var/backups/clientplatform \
     && chown -R clientplatform:clientplatform \
        /app \
-       /opt/clientplatform \
        /var/lib/clientplatform \
        /var/log/clientplatform \
        /var/backups/clientplatform
@@ -61,35 +57,18 @@ RUN python -m pip install --disable-pip-version-check --require-hashes -r /app/r
 COPY --chown=clientplatform:clientplatform . /app
 
 RUN set -eu; \
-    audio_args=""; \
-    if [ "$CLIENTPLATFORM_REQUIRE_AUDIO_ASSETS" = "1" ]; then audio_args="--require"; fi; \
-    python -m scripts.clientplatform_container_audio_assets \
-      --root /app \
-      --asset-root /opt/clientplatform/audio-assets \
-      --owner-uid 10001 \
-      --owner-gid 10001 \
-      $audio_args; \
-    if [ "$CLIENTPLATFORM_REQUIRE_AUDIO_ASSETS" = "1" ]; then \
-      test -L /app/audio; \
-      test -r /app/.audio-assets.json; \
-      python -c "import os; os.setgroups([]); os.setgid(10001); os.setuid(10001); from services.audio_asset_integrity import validate_release_assets; validate_release_assets('/app', require_versioned=True)"; \
-    fi; \
     test -r /app/scripts/clientplatform_production_preflight.py; \
-    test -r /app/scripts/clientplatform_monetization_preflight.py; \
     test -r /app/scripts/clientplatform_program_media_preflight.py; \
     test -r /app/scripts/clientplatform_bot_gateway_preflight.py; \
     test -r /app/scripts/clientplatform_ad_connections_preflight.py; \
     test -r /app/scripts/clientplatform_sales_production_smoke.py; \
-    test -r /app/scripts/clientplatform_container_audio_assets.py; \
     test -r /app/deploy/clientplatform/container-entrypoint.sh; \
     python -m py_compile \
        /app/scripts/clientplatform_production_preflight.py \
-       /app/scripts/clientplatform_monetization_preflight.py \
        /app/scripts/clientplatform_program_media_preflight.py \
        /app/scripts/clientplatform_bot_gateway_preflight.py \
        /app/scripts/clientplatform_ad_connections_preflight.py \
-       /app/scripts/clientplatform_sales_production_smoke.py \
-       /app/scripts/clientplatform_container_audio_assets.py; \
+       /app/scripts/clientplatform_sales_production_smoke.py; \
     chmod 0555 /app/deploy/clientplatform/container-entrypoint.sh
 
 USER clientplatform

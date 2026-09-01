@@ -6,8 +6,8 @@ import pytest
 
 
 def _fresh_identity(tmp_path, monkeypatch):
-    monkeypatch.setenv("METRO_DB_PATH", str(tmp_path / "account_identity_atomic.db"))
-    monkeypatch.setenv("METRO_DB_ENGINE", "sqlite")
+    monkeypatch.setenv("CLIENTPLATFORM_DB_PATH", str(tmp_path / "account_identity_atomic.db"))
+    monkeypatch.setenv("CLIENTPLATFORM_DB_ENGINE", "sqlite")
 
     for name in [
         "core.paths",

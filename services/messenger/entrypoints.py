@@ -4,7 +4,6 @@ from dataclasses import dataclass
 
 from services.accounts.identity import resolve_account_for_identity
 from services.store import store
-from services.referrals import set_referral
 from services.events import log_event
 from services.messenger.preferences import record_channel_identity, record_channel_touch, prefer_current_platform
 from services.messenger.bridge import consume_bridge_token_and_link
@@ -23,7 +22,6 @@ class EntryActionResult:
     user_id: int
     platform: str
     payload: StartPayload
-    referral_applied: bool = False
     linked_via_bridge: bool = False
 
 
@@ -31,12 +29,6 @@ def parse_start_payload(raw_payload: str | None) -> StartPayload:
     payload = (raw_payload or "").strip()
     if not payload:
         return StartPayload(raw="", kind="plain", value=None)
-    if payload.startswith("ref_"):
-        value = payload.replace("ref_", "", 1).strip()
-        return StartPayload(raw=payload, kind="referral", value=value or None)
-    if payload.startswith("gift_"):
-        value = payload.replace("gift_", "", 1).strip()
-        return StartPayload(raw=payload, kind="gift", value=value or None)
     if payload.startswith("bridge_"):
         value = payload.replace("bridge_", "", 1).strip()
         return StartPayload(raw=payload, kind="bridge", value=value or None)
@@ -117,12 +109,6 @@ def register_user_entry(
     )
     record_channel_touch(int(canonical_user_id), norm)
 
-    referral_applied = False
-    if parsed.kind == "referral" and parsed.value and parsed.value.isdigit():
-        referrer_id = int(parsed.value)
-        referral_applied = set_referral(referrer_id, int(canonical_user_id))
-        if referral_applied:
-            log_event(int(canonical_user_id), "ref_joined", {"referrer": referrer_id, "platform": norm})
     if linked_via_bridge:
         prefer_current_platform(int(canonical_user_id), norm)
         log_event(int(canonical_user_id), "channel_bridge_linked", {"platform": norm})
@@ -130,6 +116,5 @@ def register_user_entry(
         user_id=int(canonical_user_id),
         platform=norm,
         payload=parsed,
-        referral_applied=referral_applied,
         linked_via_bridge=linked_via_bridge,
     )

@@ -346,12 +346,12 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--env-file",
-        default="/etc/metrotherapy/metrotherapy.env",
+        default="/etc/clientplatform/clientplatform.env",
         help="absolute path to the existing authoritative environment file",
     )
     parser.add_argument(
         "--public-base-url",
-        default="https://metrotherapy-bot.metrotherapy.ru",
+        default="https://clientplatform-bot.clientplatform.ru",
         help="safe HTTPS fallback used only when the existing privacy URL is missing or invalid",
     )
     parser.add_argument(

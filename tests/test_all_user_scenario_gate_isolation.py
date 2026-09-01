@@ -13,8 +13,7 @@ from scripts import all_user_scenario_gate as gate
     [
         ("DATABASE_URL", "postgresql://prod-user:prod-pass@db.internal/prod"),
         ("CLIENTPLATFORM_DB_PATH", "/srv/clientplatform/data/data.db"),
-        ("METRO_DB_PATH", "/srv/metrotherapy/data/data.db"),
-        ("YOOKASSA_SECRET_KEY", "live-yookassa-secret"),
+        ("CLIENTPLATFORM_DB_PATH", "/srv/clientplatform/data/data.db"),
         ("YOOKASSA_WEBHOOK_SECRET", "live-webhook-secret"),
         ("MAX_BOT_TOKEN", "live-max-token"),
         ("MAX_WEBHOOK_SECRET", "live-max-secret"),
@@ -41,11 +40,10 @@ def test_step_env_uses_private_sqlite_and_disables_live_ingress(
 ) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql://prod.example/clientplatform")
     monkeypatch.setenv("CLIENTPLATFORM_DB_PATH", "/srv/clientplatform/data/data.db")
-    monkeypatch.setenv("METRO_DB_PATH", "/srv/metrotherapy/data/data.db")
-    monkeypatch.setenv("YOOKASSA_SECRET_KEY", "live-secret")
+    monkeypatch.setenv("CLIENTPLATFORM_DB_PATH", "/srv/clientplatform/data/data.db")
     target = tmp_path / "scenario.db"
 
-    env = gate._step_env(gate.STEPS[-1], target)
+    env = gate._step_env(target)
 
     assert env["APP_ENV"] == "test"
     assert env["LOAD_DOTENV"] == "0"
@@ -55,17 +53,16 @@ def test_step_env_uses_private_sqlite_and_disables_live_ingress(
     assert env["MESSENGER_WEBHOOK_ENABLED"] == "0"
     assert env["MAX_WEBHOOK_ENABLED"] == "0"
     assert env["VK_WEBHOOK_ENABLED"] == "0"
-    assert env["PAYMENT_HTTP_ENABLED"] == "0"
     assert "live-secret" not in env.values()
     assert "/srv/clientplatform/data/data.db" not in env.values()
-    assert "/srv/metrotherapy/data/data.db" not in env.values()
+    assert "/srv/clientplatform/data/data.db" not in env.values()
 
 
 def test_each_step_gets_distinct_database_path(
     tmp_path: Path,
 ) -> None:
-    first = gate._step_env(gate.STEPS[0], tmp_path / "first.db")
-    second = gate._step_env(gate.STEPS[1], tmp_path / "second.db")
+    first = gate._step_env(tmp_path / "first.db")
+    second = gate._step_env(tmp_path / "second.db")
 
     assert first["CLIENTPLATFORM_DB_PATH"] != second["CLIENTPLATFORM_DB_PATH"]
 

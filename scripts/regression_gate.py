@@ -27,7 +27,7 @@ GENERATED_FILE_SUFFIXES = {".pyc", ".pyo"}
 VIRTUALENV_DIR_NAMES = {".venv", "venv", "env"}
 VIRTUALENV_DIR_PREFIXES = (".venv-", "venv-", "env-")
 SKIP_CLEANUP_DIRS = {".git", *VIRTUALENV_DIR_NAMES}
-PROD_ENV_FILE = Path(os.environ.get("METROTHERAPY_PROD_ENV_FILE", "/etc/metrotherapy/metrotherapy.env"))
+PROD_ENV_FILE = Path(os.environ.get("CLIENTPLATFORM_PROD_ENV_FILE", "/etc/clientplatform/clientplatform.env"))
 FULL_GATE_PROD_OVERRIDE = "ALLOW_FULL_REGRESSION_ON_PROD"
 
 
@@ -52,15 +52,6 @@ STRICT_VALIDATOR_ENV = {
     "APP_ENV": "test",
     "VALIDATOR_RELEASE_MODE": "1",
     "VALIDATOR_GUARDRAILS_STRICT": "1",
-    "VALIDATOR_SKIP_AUDIO": "1",
-}
-
-DEEP_JOURNEY_ENV = {
-    **STRICT_VALIDATOR_ENV,
-    # Hermetic source CI does not ship licensed demo media. These valid tiny WAV
-    # fixtures exercise the real demo selector/delivery flow without weakening
-    # production audio readiness, which always validates configured live media.
-    "DEMO_DIR": "tests/fixtures/audio/demo",
 }
 
 PYTEST_ENV = {
@@ -72,35 +63,19 @@ PROD_LIKE_VALIDATOR_ENV = {
     "LOAD_DOTENV": "0",
     "VALIDATOR_RELEASE_MODE": "1",
     "VALIDATOR_GUARDRAILS_STRICT": "1",
-    "VALIDATOR_SKIP_AUDIO": "1",
 }
 
 HERMETIC_PROD_VALIDATOR_ENV = {
     **PROD_LIKE_VALIDATOR_ENV,
     "APP_ENV": "prod",
-    "METRO_DB_ENGINE": "postgres",
-    "DATABASE_URL": "postgresql://ci:ci@127.0.0.1:5432/metrotherapy_ci_contract",
+    "CLIENTPLATFORM_DB_ENGINE": "postgres",
+    "DATABASE_URL": "postgresql://ci:ci@127.0.0.1:5432/clientplatform_ci_contract",
     "BOT_TOKEN": "000000:CI",
     "ADMIN_IDS": "1",
     "TELEGRAM_TRANSPORT": "polling",
     "TELEGRAM_WEBHOOK_ENABLED": "0",
     "TELEGRAM_LEGACY_TOKEN_WEBHOOK_ENABLED": "0",
-    "TOKEN_ECONOMY_ENABLED": "1",
-    "TOKEN_ENFORCEMENT_MODE": "hard",
-    "PAYMENT_HTTP_ENABLED": "1",
-    "PAYMENT_PUBLIC_BASE_URL": "https://metrotherapy.example",
-    "PAYMENT_CHECKOUT_SIGNING_KEY": "ci-checkout-signing-key-32-bytes-minimum",
-    "PAYMENT_CHECKOUT_INTENT_REQUIRED": "1",
-    "YOOKASSA_SHOP_ID": "ci-shop",
-    "YOOKASSA_SECRET_KEY": "ci-yookassa-secret-key",
-    "YOOKASSA_PROVIDER_VERIFICATION_REQUIRED": "1",
-    "YOOKASSA_RECEIPT_EMAIL": "quality-check@metrotherapy.example",
-    "YOOKASSA_TAX_SYSTEM_CODE": "2",
-    "YOOKASSA_VAT_CODE": "1",
-    "YOOKASSA_PAYMENT_MODE": "full_payment",
-    "YOOKASSA_PAYMENT_SUBJECT": "service",
-    "TELEGRAM_STARS_ENABLED": "1",
-    "TELEGRAM_YOOKASSA_ENABLED": "0",
+    "PRIVACY_EXPORT_HTTP_ENABLED": "1",
 }
 
 STEPS = (
@@ -118,14 +93,9 @@ STEPS = (
         STRICT_VALIDATOR_ENV,
     ),
     GateStep(
-        "user scenario acceptance gate",
-        (sys.executable, "scripts/user_scenario_gate.py"),
+        "canonical ClientPlatform user scenario matrix",
+        (sys.executable, "scripts/all_user_scenario_gate.py"),
         STRICT_VALIDATOR_ENV,
-    ),
-    GateStep(
-        "deep user journey acceptance gate",
-        (sys.executable, "scripts/probe_deep_user_journeys.py"),
-        DEEP_JOURNEY_ENV,
     ),
     GateStep(
         "full pytest regression gate",
@@ -210,7 +180,7 @@ def _is_live_prod_host() -> bool:
     except OSError:
         return False
     app_env = (os.getenv("APP_ENV") or file_env.get("APP_ENV") or "").strip().lower()
-    db_engine = (os.getenv("METRO_DB_ENGINE") or file_env.get("METRO_DB_ENGINE") or "").strip().lower()
+    db_engine = (os.getenv("CLIENTPLATFORM_DB_ENGINE") or file_env.get("CLIENTPLATFORM_DB_ENGINE") or "").strip().lower()
     database_url = (os.getenv("DATABASE_URL") or file_env.get("DATABASE_URL") or "").strip().lower()
     postgres = db_engine in {"postgres", "postgresql", "pg"} or database_url.startswith(("postgresql://", "postgres://"))
     return app_env in {"prod", "production"} and postgres
@@ -221,7 +191,7 @@ def _guard_live_prod_host() -> int:
         return 0
     print(
         "REGRESSION_GATE_REFUSED_ON_LIVE_PROD: full pytest/regression is disabled on the live production deployment.\n"
-        "Use lightweight production checks instead: scripts/user_scenario_gate.py, healthz, readyz, "
+        "Use lightweight production checks instead: scripts/clientplatform_sales_production_smoke.py, healthz, readyz, "
         "and scripts/post_deploy_verify.py --skip-pytest.\n"
         f"Emergency override, only with an approved maintenance window: {FULL_GATE_PROD_OVERRIDE}=1",
         flush=True,

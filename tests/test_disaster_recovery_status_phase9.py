@@ -110,7 +110,7 @@ def test_supported_hash_and_freshness(tmp_path: Path) -> None:
 
 
 def test_missing_and_unreadable_backup_directories(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.delenv("METRO_RESTORE_DRILL_DATABASE_URL", raising=False)
+    monkeypatch.delenv("CLIENTPLATFORM_RESTORE_DRILL_DATABASE_URL", raising=False)
     monkeypatch.delenv("RESTORE_DATABASE_URL", raising=False)
 
     missing = dr.disaster_recovery_status(backup_dir=tmp_path / "missing")
@@ -142,7 +142,7 @@ def test_fresh_yellow_green_stale_and_hash(monkeypatch: pytest.MonkeyPatch, tmp_
     os.utime(old, (now - 7200, now - 7200))
     os.utime(latest, (now - 60, now - 60))
 
-    monkeypatch.delenv("METRO_RESTORE_DRILL_DATABASE_URL", raising=False)
+    monkeypatch.delenv("CLIENTPLATFORM_RESTORE_DRILL_DATABASE_URL", raising=False)
     monkeypatch.delenv("RESTORE_DATABASE_URL", raising=False)
     yellow = dr.disaster_recovery_status(backup_dir=tmp_path, include_hash=True, max_backup_age_hours=1)
     assert yellow.status == "YELLOW"

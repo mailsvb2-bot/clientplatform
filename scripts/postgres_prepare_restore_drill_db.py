@@ -26,8 +26,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
-DEFAULT_ENV_FILE = Path("/etc/metrotherapy/metrotherapy.env")
-FORBIDDEN_DB_NAMES = {"postgres", "template0", "template1", "metrotherapy"}
+DEFAULT_ENV_FILE = Path("/etc/clientplatform/clientplatform.env")
+FORBIDDEN_DB_NAMES = {"postgres", "template0", "template1", "clientplatform"}
 SAFE_DB_NAME_RE = re.compile(r"^[A-Za-z0-9_]+$")
 
 
@@ -87,9 +87,9 @@ def _apply_env(values: dict[str, str]) -> None:
 
 
 def _prod_url() -> str:
-    value = os.getenv("DATABASE_URL") or os.getenv("METRO_DATABASE_URL") or ""
+    value = os.getenv("DATABASE_URL") or os.getenv("CLIENTPLATFORM_DATABASE_URL") or ""
     if not value.strip():
-        raise SystemExit("DATABASE_URL/METRO_DATABASE_URL is required")
+        raise SystemExit("DATABASE_URL/CLIENTPLATFORM_DATABASE_URL is required")
     return value.strip()
 
 
@@ -192,10 +192,10 @@ def prepare_drill_db(*, target_db: str) -> DrillDbPrepareResult:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Prepare non-production Postgres restore-drill database")
-    parser.add_argument("--env-file", default=os.getenv("METROTHERAPY_ENV_FILE", str(DEFAULT_ENV_FILE)))
-    parser.add_argument("--target-db", default=os.getenv("METRO_RESTORE_DRILL_DB", "metrotherapy_restore_drill"))
+    parser.add_argument("--env-file", default=os.getenv("CLIENTPLATFORM_ENV_FILE", str(DEFAULT_ENV_FILE)))
+    parser.add_argument("--target-db", default=os.getenv("CLIENTPLATFORM_RESTORE_DRILL_DB", "clientplatform_restore_drill"))
     parser.add_argument("--json", action="store_true")
-    parser.add_argument("--print-export", action="store_true", help="Print shell export for METRO_RESTORE_DRILL_DATABASE_URL")
+    parser.add_argument("--print-export", action="store_true", help="Print shell export for CLIENTPLATFORM_RESTORE_DRILL_DATABASE_URL")
     args = parser.parse_args()
 
     _apply_env(_load_env_file(args.env_file))
@@ -203,7 +203,7 @@ def main() -> int:
     if args.print_export:
         if not result.ok:
             raise SystemExit("restore drill DB preparation failed: " + "; ".join(result.problems))
-        print("export METRO_RESTORE_DRILL_DATABASE_URL=" + shlex.quote(result.target_url))
+        print("export CLIENTPLATFORM_RESTORE_DRILL_DATABASE_URL=" + shlex.quote(result.target_url))
         return 0
     if args.json:
         print(json.dumps(result.to_safe_dict(), ensure_ascii=False, sort_keys=True))

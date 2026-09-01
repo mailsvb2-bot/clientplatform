@@ -10,6 +10,7 @@ from clientplatform.application.dispatch_worker import DispatchBatchResult, run_
 from clientplatform.application.program_media import run_program_media_cleanup_batch
 from clientplatform.application.sales_followups import run_sales_followup_maintenance_batch
 from clientplatform.runtime.control_bot import control_bot_enabled
+from clientplatform.runtime.booking_reminders import run_booking_reminder_batch
 from clientplatform.runtime.max_two_phase_media import TwoPhaseMaxRuntimeClient
 from clientplatform.runtime.messenger_switch_links import StaffMessengerSwitchLinkService
 from clientplatform.runtime.messenger_provider_clients import VkRuntimeClient
@@ -242,6 +243,14 @@ async def run_configured_dispatch_tick(
     except Exception:  # validator: allow-wide-except - reminder maintenance must not block delivery
         log.exception("Sales follow-up maintenance tick failed")
     try:
+        booking = await run_booking_reminder_batch(
+            limit=max(10, selected.config.batch_size * 2),
+            max_attempts=selected.config.max_attempts,
+        )
+    except Exception:  # validator: allow-wide-except - booking reminders must not block other delivery
+        log.exception("Booking reminder dispatch tick failed")
+        booking = None
+    try:
         await asyncio.to_thread(
             run_program_media_cleanup_batch,
             limit=selected.config.media_cleanup_batch_size,
@@ -250,11 +259,19 @@ async def run_configured_dispatch_tick(
         )
     except Exception:  # validator: allow-wide-except - cleanup must not block customer delivery
         log.exception("Program media cleanup tick failed")
-    return await run_dispatch_batch(
+    dispatch = await run_dispatch_batch(
         credential_provider=selected.credential_provider,
         adapters=selected.adapters,
         limit=selected.config.batch_size,
         max_attempts=selected.config.max_attempts,
         lock_ttl_seconds=selected.config.lock_ttl_seconds,
         interaction_link_resolver=selected.interaction_link_resolver,
+    )
+    if booking is None:
+        return dispatch
+    return DispatchBatchResult(
+        claimed=dispatch.claimed + booking.claimed,
+        sent=dispatch.sent + booking.sent,
+        retried=dispatch.retried + booking.retried,
+        dead=dispatch.dead + booking.dead,
     )

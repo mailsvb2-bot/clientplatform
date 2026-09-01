@@ -8,7 +8,7 @@ from typing import Any
 
 from aiohttp import web
 
-from runtime import messenger_ingress as legacy
+from runtime import messenger_ingress as base_ingress
 from runtime.messenger_payloads import extract_max_message, extract_vk_message, max_event_key
 from runtime.messenger_senders import MaxBotSender
 from services.db import atomic_db
@@ -123,21 +123,21 @@ def _process_clientplatform_entry_and_persist(
 
 
 async def vk_webhook(request: web.Request) -> web.Response:
-    """Add finite extraction retries and ClientPlatform entry routing for VK."""
+    """Add finite extraction retries around the canonical ClientPlatform VK entry."""
 
     payload = _payload_from_body(await request.text())
-    if payload is None or not legacy._vk_secret_ok(payload):
-        return await legacy.vk_webhook(request)
+    if payload is None or not base_ingress._vk_secret_ok(payload):
+        return await base_ingress.vk_webhook(request)
 
     event_type = str(payload.get("type") or "").strip()
-    if event_type not in legacy.VK_PROCESSABLE_EVENT_TYPES:
-        return await legacy.vk_webhook(request)
+    if event_type not in base_ingress.VK_PROCESSABLE_EVENT_TYPES:
+        return await base_ingress.vk_webhook(request)
 
     extracted = extract_vk_message(payload)
     if extracted is None:
         if event_type == "message_event":
-            await legacy._ack_vk_message_event(payload)
-        event_key = legacy._vk_dedupe_key(payload)
+            await base_ingress._ack_vk_message_event(payload)
+        event_key = base_ingress._vk_dedupe_key(payload)
         result = await _record_extraction_failure(
             platform="vk",
             event_key=event_key,
@@ -148,14 +148,14 @@ async def vk_webhook(request: web.Request) -> web.Response:
             return web.Response(status=503, text="retry")
         return web.Response(text="ok")
 
-    entry_text = legacy._entry_start_text(str(extracted.get("text") or ""))
+    entry_text = base_ingress._entry_start_text(str(extracted.get("text") or ""))
     command = parse_clientplatform_entry_command(entry_text, event_type=event_type)
     if command is None:
-        return await legacy.vk_webhook(request)
+        entry_text = "start"
 
     if event_type == "message_event":
-        await legacy._ack_vk_message_event(payload)
-    event_key = legacy._vk_dedupe_key(payload)
+        await base_ingress._ack_vk_message_event(payload)
+    event_key = base_ingress._vk_dedupe_key(payload)
     try:
         processed = await asyncio.to_thread(
             _process_clientplatform_entry_and_persist,
@@ -192,11 +192,11 @@ async def _ack_global_max_owner_callback(payload: dict[str, Any]) -> None:
 
 
 async def max_webhook(request: web.Request) -> web.Response:
-    """Add finite extraction retries and ClientPlatform entry routing for MAX."""
+    """Add finite extraction retries around the canonical ClientPlatform MAX entry."""
 
     payload = _payload_from_body(await request.text())
-    if payload is None or not legacy._max_secret_ok(request, payload):
-        return await legacy.max_webhook(request)
+    if payload is None or not base_ingress._max_secret_ok(request, payload):
+        return await base_ingress.max_webhook(request)
 
     update_type = str(
         payload.get("update_type")
@@ -205,8 +205,8 @@ async def max_webhook(request: web.Request) -> web.Response:
         or payload.get("event")
         or ""
     ).strip()
-    if update_type not in legacy._MAX_PROCESSABLE_UPDATE_TYPES:
-        return await legacy.max_webhook(request)
+    if update_type not in base_ingress._MAX_PROCESSABLE_UPDATE_TYPES:
+        return await base_ingress.max_webhook(request)
 
     extracted = extract_max_message(payload)
     if extracted is None:
@@ -226,10 +226,10 @@ async def max_webhook(request: web.Request) -> web.Response:
             {"ok": True, "attempts": result.attempts, "dead_lettered": result.dead_lettered}
         )
 
-    entry_text = legacy._entry_start_text(str(extracted.get("text") or ""))
+    entry_text = base_ingress._entry_start_text(str(extracted.get("text") or ""))
     command = parse_clientplatform_entry_command(entry_text, event_type=update_type)
     if command is None:
-        return await legacy.max_webhook(request)
+        entry_text = "start"
 
     await _ack_global_max_owner_callback(payload)
     event_key = max_event_key(payload)

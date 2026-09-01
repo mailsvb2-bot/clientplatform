@@ -5,8 +5,8 @@ set -euo pipefail
 # GitHub Actions are optional for this repository; the target-server production
 # gate is the release source of truth.
 
-ROOT_DIR="${METROTHERAPY_ROOT:-/root/metrotherapy}"
-SERVICE_NAME="${METROTHERAPY_SERVICE:-metrotherapy}"
+ROOT_DIR="${CLIENTPLATFORM_ROOT:-/root/clientplatform}"
+SERVICE_NAME="${CLIENTPLATFORM_SERVICE:-clientplatform}"
 BASE_BRANCH="${BASE_BRANCH:-main}"
 PR_NUMBER="${PR_NUMBER:-}"
 MERGE_METHOD="${MERGE_METHOD:-squash}"

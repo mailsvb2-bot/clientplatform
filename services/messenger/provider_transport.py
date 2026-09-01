@@ -178,7 +178,7 @@ def validate_provider_upload_url(url: str) -> urllib.parse.SplitResult:
 
 
 def multipart_bytes(field_name: str, filename: str, content: bytes, *, content_type: str) -> tuple[bytes, str]:
-    boundary = f"----MetrotherapyBoundary{uuid4().hex}"
+    boundary = f"----ClientPlatformBoundary{uuid4().hex}"
     head = (
         f"--{boundary}\r\n"
         f"Content-Disposition: form-data; name=\"{field_name}\"; filename=\"{filename}\"\r\n"
@@ -189,7 +189,7 @@ def multipart_bytes(field_name: str, filename: str, content: bytes, *, content_t
 
 
 def _multipart_parts(field_name: str, filename: str, *, content_type: str) -> tuple[bytes, bytes, str]:
-    boundary = f"----MetrotherapyBoundary{uuid4().hex}"
+    boundary = f"----ClientPlatformBoundary{uuid4().hex}"
     safe_filename = filename.replace('"', "_").replace("\r", "_").replace("\n", "_")
     safe_field = field_name.replace('"', "_").replace("\r", "_").replace("\n", "_")
     head = (

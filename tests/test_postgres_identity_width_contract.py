@@ -73,6 +73,6 @@ def test_account_bigint_migration_selects_all_integer_account_id_columns() -> No
 
 def test_account_bigint_migration_is_registered_after_identity_bigint_v1() -> None:
     source = inspect.getsource(migrations.apply_all_migrations)
-    identity = source.index("_apply_postgres_identity_bigint_v1(conn)")
-    account = source.index("_apply_postgres_account_bigint_v2(conn)")
+    identity = source.index("_apply_postgres_identity_bigint(conn)")
+    account = source.index("_apply_postgres_account_bigint(conn)")
     assert identity < account

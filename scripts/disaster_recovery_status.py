@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_ENV_FILE = Path("/etc/metrotherapy/metrotherapy.env")
+DEFAULT_ENV_FILE = Path("/etc/clientplatform/clientplatform.env")
 
 
 def _load_env_file(path: str | Path | None) -> dict[str, str]:
@@ -45,8 +45,8 @@ def _apply_env(values: dict[str, str]) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Show Metrotherapy backup/disaster-recovery status")
-    parser.add_argument("--env-file", default=os.getenv("METROTHERAPY_ENV_FILE", str(DEFAULT_ENV_FILE)))
+    parser = argparse.ArgumentParser(description="Show ClientPlatform backup/disaster-recovery status")
+    parser.add_argument("--env-file", default=os.getenv("CLIENTPLATFORM_ENV_FILE", str(DEFAULT_ENV_FILE)))
     parser.add_argument("--include-hash", action="store_true")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--strict", action="store_true", help="Exit non-zero when backup proof is not OK")

@@ -12,7 +12,7 @@ def _file_logging_disabled() -> bool:
 
 
 def _default_log_path() -> Path:
-    return Path("/var/log/metrotherapy/app.log")
+    return Path("/var/log/clientplatform/app.log")
 
 
 def _resolve_log_path(raw: str | None) -> Path:

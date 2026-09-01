@@ -11,10 +11,7 @@ from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramNet
 from aiogram.types import CallbackQuery, Message, TelegramObject
 
 from core.task_manager import TaskManager
-from services.behavior import log_interaction, update_behavior
 from services.messenger.observability import classify_messenger_action
-from services.pending import clear_pending, peek_pending
-from services.state_log import log_state
 
 
 class SlowHandlerLogMiddleware(BaseMiddleware):
@@ -171,50 +168,6 @@ class QuickAckCallbackMiddleware(BaseMiddleware):
             _safe_answer.calls = original_answer.calls  # type: ignore[attr-defined]
         object.__setattr__(event, "answer", _safe_answer)  # type: ignore[arg-type]
 
-    @staticmethod
-    async def _dismiss_stale_picker(event: CallbackQuery, data: dict[str, Any]) -> None:
-        cb_data = (event.data or "").strip()
-        if cb_data in {"share:pick", "gift:pick_target", "admin:add_admin"}:
-            return
-        from_user = getattr(event, "from_user", None)
-        if from_user is None:
-            return
-        uid = int(from_user.id)
-        pending = peek_pending(uid)
-        should_clear = bool(pending and pending.kind in {"share", "gift_target"})
-        state = data.get("state")
-        state_name = None
-        if state is not None:
-            try:
-                state_name = await state.get_state()
-            except (
-                TelegramBadRequest,
-                TelegramNetworkError,
-                TelegramAPIError,
-                asyncio.TimeoutError,
-                AttributeError,
-                RuntimeError,
-                ValueError,
-                TypeError,
-            ):
-                state_name = None
-        if state_name == "AdminManageState:waiting_admin_user":
-            should_clear = True
-            try:
-                await state.clear()
-            except (
-                TelegramBadRequest,
-                TelegramNetworkError,
-                TelegramAPIError,
-                asyncio.TimeoutError,
-                AttributeError,
-                RuntimeError,
-                ValueError,
-                TypeError,
-            ):
-                pass
-        if should_clear:
-            clear_pending(uid)
 
     async def __call__(
         self,
@@ -225,74 +178,7 @@ class QuickAckCallbackMiddleware(BaseMiddleware):
         if isinstance(event, CallbackQuery):
             self._patch_callback_answer(event)
             await event.answer(cache_time=0)
-            await self._dismiss_stale_picker(event, data)
         return await handler(event, data)
-
-
-class TimeInputTraceMiddleware(BaseMiddleware):
-    """Diagnose HH:MM routing without retaining the user's selected time."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self._log = logging.getLogger("time_trace")
-
-    async def __call__(
-        self,
-        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
-        event: TelegramObject,
-        data: dict[str, Any],
-    ) -> Any:
-        if isinstance(event, Message) and event.from_user:
-            text = (event.text or "").strip()
-            if len(text) in (4, 5) and ":" in text:
-                try:
-                    hh, mm = text.split(":", 1)
-                    if hh.isdigit() and mm.isdigit() and 0 <= int(hh) <= 23 and 0 <= int(mm) <= 59:
-                        from services import time_trace
-
-                        time_trace.begin(int(event.from_user.id), text)
-                        try:
-                            result = await handler(event, data)
-                        finally:
-                            trace = time_trace.end()
-                            if trace:
-                                if trace.marks:
-                                    self._log.info(
-                                        "HH:MM input uid=%s handled_by=%s",
-                                        trace.uid,
-                                        " > ".join(trace.marks),
-                                    )
-                                else:
-                                    self._log.warning(
-                                        "HH:MM input uid=%s had NO handler marks (possible intercept)",
-                                        trace.uid,
-                                    )
-                        return result
-                except (AttributeError, TypeError, ValueError, KeyError, OSError, RuntimeError):
-                    logging.getLogger(__name__).exception("TimeInputTraceMiddleware failed")
-
-        return await handler(event, data)
-
-
-def _spawn_bg(data: dict[str, Any] | None, fn: Any, *args: Any, **kwargs: Any) -> None:
-    """Run a synchronous analytics function through the application TaskManager."""
-
-    task_manager: TaskManager | None = None
-    if data:
-        task_manager = data.get("task_manager")  # type: ignore[assignment]
-    if task_manager is None:
-        return
-
-    async def _runner() -> None:
-        try:
-            await asyncio.to_thread(fn, *args, **kwargs)
-        except (AttributeError, TypeError, ValueError, KeyError, OSError, RuntimeError):
-            logging.getLogger(__name__).error(
-                "Background middleware task failed function=%s",
-                getattr(fn, "__name__", type(fn).__name__),
-            )
-
-    task_manager.create(_runner())
 
 
 class SoftRateLimitMiddleware(BaseMiddleware):
@@ -356,108 +242,5 @@ class SoftRateLimitMiddleware(BaseMiddleware):
                             logging.getLogger(__name__).debug("Message answer failed", exc_info=True)
                     return None
                 self._last_ts[key] = now
-
-        return await handler(event, data)
-
-
-class StateLogMiddleware(BaseMiddleware):
-    """Store only low-cardinality user state diagnostics."""
-
-    async def __call__(
-        self,
-        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
-        event: TelegramObject,
-        data: dict[str, Any],
-    ) -> Any:
-        try:
-            user_id = None
-            state = None
-            meta: dict[str, Any] = {}
-
-            if isinstance(event, Message) and event.from_user:
-                user_id = event.from_user.id
-                text = (event.text or "").strip()
-                if text == "/start" or text.startswith("/start "):
-                    state = "menu"
-                elif text.startswith("/"):
-                    state = "command"
-                    meta["action"] = classify_messenger_action(text)
-                else:
-                    state = "text"
-
-            elif isinstance(event, CallbackQuery) and event.from_user:
-                user_id = event.from_user.id
-                callback_data = (event.data or "").strip()
-                action = classify_messenger_action(callback_data)
-                meta["action"] = action
-                if callback_data.startswith("demo"):
-                    state = "demo"
-                elif callback_data in ("full", "work", "home") or callback_data.startswith("audio"):
-                    state = "session"
-                elif callback_data.startswith("back"):
-                    state = "menu"
-                else:
-                    state = "callback"
-
-            if user_id and state:
-                _spawn_bg(data, log_state, int(user_id), state, meta or None)
-        except (TypeError, AttributeError, ValueError):
-            logging.getLogger(__name__).error("Middleware state logging failed")
-
-        return await handler(event, data)
-
-
-class InteractionAnalyticsMiddleware(BaseMiddleware):
-    """Collect lightweight timing signals without retaining message content."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self._last_mono: dict[int, float] = {}
-        self._last_cleanup_mono: float = 0.0
-
-    async def __call__(
-        self,
-        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
-        event: TelegramObject,
-        data: dict[str, Any],
-    ) -> Any:
-        user_id: int | None = None
-        kind = None
-        key = None
-
-        if isinstance(event, CallbackQuery) and event.from_user:
-            user_id = int(event.from_user.id)
-            kind = "callback"
-            key = classify_messenger_action((event.data or "").strip())
-        elif isinstance(event, Message) and event.from_user:
-            user_id = int(event.from_user.id)
-            text = (event.text or "").strip()
-            if text.startswith("/"):
-                kind = "command"
-                key = classify_messenger_action(text)
-            else:
-                kind = "message"
-
-        delta_ms: int | None = None
-        if user_id is not None and kind is not None:
-            now_mono = time.monotonic()
-            if (now_mono - self._last_cleanup_mono) > 600 and len(self._last_mono) > 2000:
-                cutoff = now_mono - 7200
-                self._last_mono = {
-                    uid: timestamp
-                    for uid, timestamp in self._last_mono.items()
-                    if timestamp >= cutoff
-                }
-                self._last_cleanup_mono = now_mono
-            last = self._last_mono.get(user_id)
-            if last is not None:
-                delta_ms = int((now_mono - last) * 1000)
-            self._last_mono[user_id] = now_mono
-
-            try:
-                _spawn_bg(data, log_interaction, user_id, kind, key, delta_ms)
-                _spawn_bg(data, update_behavior, user_id, delta_ms)
-            except (RuntimeError, AttributeError):
-                logging.getLogger(__name__).error("Middleware interaction logging failed")
 
         return await handler(event, data)

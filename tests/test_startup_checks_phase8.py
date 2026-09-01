@@ -19,12 +19,12 @@ ENV_KEYS = {
     "MESSENGER_WEBHOOK_ENABLED",
     "TELEGRAM_LEGACY_TOKEN_WEBHOOK_ENABLED",
     "ALLOW_INSECURE_TELEGRAM_WEBHOOK",
-    "METRO_DB_ENGINE",
+    "CLIENTPLATFORM_DB_ENGINE",
     "DATABASE_URL",
-    "METRO_RUNTIME_ROOT",
-    "METRO_WRITABLE_ROOT",
-    "METRO_DATA_DIR",
-    "METRO_LOGS_DIR",
+    "CLIENTPLATFORM_RUNTIME_ROOT",
+    "CLIENTPLATFORM_WRITABLE_ROOT",
+    "CLIENTPLATFORM_DATA_DIR",
+    "CLIENTPLATFORM_LOGS_DIR",
     "MESSENGER_WEBHOOK_HOST",
     "MESSENGER_WEBHOOK_PORT",
     "WEBHOOK_HOST",
@@ -52,7 +52,7 @@ def valid_prod(monkeypatch: pytest.MonkeyPatch) -> None:
         "MESSENGER_WEBHOOK_ENABLED": "0",
         "TELEGRAM_LEGACY_TOKEN_WEBHOOK_ENABLED": "0",
         "ALLOW_INSECURE_TELEGRAM_WEBHOOK": "0",
-        "METRO_DB_ENGINE": "postgres",
+        "CLIENTPLATFORM_DB_ENGINE": "postgres",
         "DATABASE_URL": "postgresql://user:pass@db/app",
     }
     for key, value in values.items():
@@ -84,12 +84,12 @@ def test_env_helpers(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_resolved_db_engine(monkeypatch: pytest.MonkeyPatch) -> None:
     clean_env(monkeypatch)
     for raw in ("postgres", "postgresql", "pg"):
-        monkeypatch.setenv("METRO_DB_ENGINE", raw)
+        monkeypatch.setenv("CLIENTPLATFORM_DB_ENGINE", raw)
         assert startup_checks._resolved_db_engine() == "postgres"
     for raw in ("sqlite", "sqlite3"):
-        monkeypatch.setenv("METRO_DB_ENGINE", raw)
+        monkeypatch.setenv("CLIENTPLATFORM_DB_ENGINE", raw)
         assert startup_checks._resolved_db_engine() == "sqlite"
-    monkeypatch.setenv("METRO_DB_ENGINE", "")
+    monkeypatch.setenv("CLIENTPLATFORM_DB_ENGINE", "")
     monkeypatch.setenv("DATABASE_URL", "postgresql://db")
     assert startup_checks._resolved_db_engine() == "postgres"
     monkeypatch.delenv("DATABASE_URL")
@@ -105,7 +105,7 @@ def test_resolved_db_engine(monkeypatch: pytest.MonkeyPatch) -> None:
         ({"TELEGRAM_WEBHOOK_ENABLED": "1"}, "polling-only"),
         ({"TELEGRAM_LEGACY_TOKEN_WEBHOOK_ENABLED": "1"}, "LEGACY_TOKEN_WEBHOOK"),
         ({"ALLOW_INSECURE_TELEGRAM_WEBHOOK": "1"}, "forbidden in prod"),
-        ({"METRO_DB_ENGINE": "sqlite", "DATABASE_URL": ""}, "must be postgres"),
+        ({"CLIENTPLATFORM_DB_ENGINE": "sqlite", "DATABASE_URL": ""}, "must be postgres"),
         ({"DATABASE_URL": ""}, "DATABASE_URL is required"),
         ({"DATABASE_URL": "sqlite:///data.db"}, "must use postgres"),
     ],
@@ -126,7 +126,7 @@ def test_prod_ingress_accepts_valid_contract(monkeypatch: pytest.MonkeyPatch) ->
     valid_prod(monkeypatch)
     startup_checks._prod_ingress_checks()
     monkeypatch.setenv("APP_ENV", "production")
-    monkeypatch.setenv("METRO_DB_ENGINE", "pg")
+    monkeypatch.setenv("CLIENTPLATFORM_DB_ENGINE", "pg")
     monkeypatch.setenv("DATABASE_URL", "postgres://db/app")
     startup_checks._prod_ingress_checks()
 
@@ -153,7 +153,7 @@ def test_webhook_health_port_collision_and_invalid_port(monkeypatch: pytest.Monk
 
 def make_project(root: Path) -> None:
     for relative in (
-        "services/idempotency_keys.py",
+        "services/job_keys.py",
         "core/task_manager.py",
         "services/db_writer.py",
     ):
@@ -169,8 +169,9 @@ def test_run_startup_checks_clean_deploy(monkeypatch: pytest.MonkeyPatch, tmp_pa
 
     startup_checks.run_startup_checks(tmp_path)
 
-    for relative in ("data", "logs", "audio/demo", "audio/full"):
+    for relative in ("data", "logs"):
         assert (tmp_path / relative).is_dir()
+    assert not (tmp_path / "audio").exists()
 
 
 def test_production_startup_uses_external_writable_state(
@@ -182,7 +183,7 @@ def test_production_startup_uses_external_writable_state(
     release = tmp_path / "release"
     state = tmp_path / "state"
     make_project(release)
-    monkeypatch.setenv("METRO_WRITABLE_ROOT", str(state))
+    monkeypatch.setenv("CLIENTPLATFORM_WRITABLE_ROOT", str(state))
 
     assert paths.resolve_data_dir(release) == state / "data"
     assert paths.resolve_logs_dir(release) == state / "logs"
@@ -204,10 +205,10 @@ def test_production_startup_rejects_writable_paths_inside_release(
     monkeypatch.setenv("BOT_TOKEN", "secret")
     release = tmp_path / "release"
     make_project(release)
-    monkeypatch.setenv("METRO_DATA_DIR", str(release / "data"))
-    monkeypatch.setenv("METRO_LOGS_DIR", str(tmp_path / "state" / "logs"))
+    monkeypatch.setenv("CLIENTPLATFORM_DATA_DIR", str(release / "data"))
+    monkeypatch.setenv("CLIENTPLATFORM_LOGS_DIR", str(tmp_path / "state" / "logs"))
 
-    with pytest.raises(startup_checks.StartupCheckError, match="METRO_DATA_DIR must be outside"):
+    with pytest.raises(startup_checks.StartupCheckError, match="CLIENTPLATFORM_DATA_DIR must be outside"):
         startup_checks.run_startup_checks(release)
 
 

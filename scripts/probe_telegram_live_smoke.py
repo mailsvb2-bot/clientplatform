@@ -27,7 +27,7 @@ from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError, TelegramNetworkError
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_ENV_FILE = Path("/etc/metrotherapy/metrotherapy.env")
+DEFAULT_ENV_FILE = Path("/etc/clientplatform/clientplatform.env")
 PROBE_TYPE = "telegram_live_smoke_probe"
 TELEGRAM_NETWORK_ATTEMPTS = 3
 TELEGRAM_RETRY_BASE_DELAY_SECONDS = 1.0
@@ -194,7 +194,7 @@ async def run_probe(*, chat_id: str | None = None, allow_send: bool = False, kee
                     problems.append("allow_send_without_chat_id")
                 else:
                     send_checked = True
-                    text = f"🧪 Metrotherapy live Telegram smoke OK\nrun={run_id[:12]}\nБез платежей."
+                    text = f"🧪 ClientPlatform live Telegram smoke OK\nrun={run_id[:12]}\nБез платежей."
                     sent = await _retry_telegram_network(
                         "send_message",
                         lambda: bot.send_message(chat_id=target_chat_id, text=text, disable_notification=True),
@@ -239,7 +239,7 @@ async def run_probe(*, chat_id: str | None = None, allow_send: bool = False, kee
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run live Telegram transport smoke through aiogram")
-    parser.add_argument("--env-file", default=os.getenv("METROTHERAPY_ENV_FILE", str(DEFAULT_ENV_FILE)))
+    parser.add_argument("--env-file", default=os.getenv("CLIENTPLATFORM_ENV_FILE", str(DEFAULT_ENV_FILE)))
     parser.add_argument("--chat-id", default="")
     parser.add_argument("--allow-send", action="store_true")
     parser.add_argument("--keep-message", action="store_true")

@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 
 from config.settings import settings
-from core.payment_ingress import resolve_payment_http_enabled
 from services.privacy_export_links import privacy_export_http_enabled
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
@@ -15,19 +14,6 @@ def _optional_env_flag(name: str) -> bool | None:
         return None
     return raw.strip().lower() in _TRUE_VALUES
 
-
-def payment_http_enabled() -> bool:
-    """Return whether the YooKassa HTTP checkout/reconciliation ingress is enabled.
-
-    PAYMENT_HTTP_ENABLED is the canonical flag. The legacy common messenger flag
-    remains a compatibility fallback so existing deployments do not lose payment
-    routes during rollout of the split ingress contract.
-    """
-
-    return resolve_payment_http_enabled(
-        os.environ,
-        legacy_default=bool(getattr(settings, "MESSENGER_WEBHOOK_ENABLED", False) or False),
-    )
 
 
 def max_webhook_enabled() -> bool:
@@ -56,8 +42,7 @@ def vk_webhook_enabled() -> bool:
 
 def http_ingress_enabled() -> bool:
     return bool(
-        payment_http_enabled()
-        or max_webhook_enabled()
+        max_webhook_enabled()
         or vk_webhook_enabled()
         or privacy_export_http_enabled()
     )

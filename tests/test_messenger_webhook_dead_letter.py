@@ -5,8 +5,8 @@ import importlib
 
 def _reload(monkeypatch, tmp_path):
     monkeypatch.setenv("APP_ENV", "test")
-    monkeypatch.setenv("METRO_DB_ENGINE", "sqlite")
-    monkeypatch.setenv("METRO_DB_PATH", str(tmp_path / "webhook-dead-letter.db"))
+    monkeypatch.setenv("CLIENTPLATFORM_DB_ENGINE", "sqlite")
+    monkeypatch.setenv("CLIENTPLATFORM_DB_PATH", str(tmp_path / "webhook-dead-letter.db"))
     monkeypatch.setenv("DATABASE_URL", "")
 
     module_names = [

@@ -5,6 +5,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from scripts.check_clientplatform_product_purity import _forbidden_tokens
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "repair_production_deploy_channel.sh"
@@ -36,8 +38,7 @@ def test_production_deploy_repair_script_is_clientplatform_only_and_secret_safe(
 
     assert 'APP_DIR="${APP_DIR:-/opt/clientplatform}"' in text
     assert 'REPO="${REPO:-mailsvb2-bot/clientplatform}"' in text
-    assert "metrotherapy" not in lowered
-    assert "metro_" not in lowered
+    assert all(token.casefold() not in lowered for token in _forbidden_tokens())
     assert "/github-deploy" not in lowered
     assert "CLIENTPLATFORM_PRODUCTION_SSH_PRIVATE_KEY_FILE" in text
     assert "gh secret set CLIENTPLATFORM_PRODUCTION_SSH_PRIVATE_KEY" in text
@@ -61,7 +62,7 @@ def test_recovery_workflow_uses_dedicated_clientplatform_ssh_and_exact_trigger_s
     text = RECOVERY_WORKFLOW.read_text(encoding="utf-8")
     lowered = text.lower()
 
-    assert "metrotherapy" not in lowered
+    assert all(token.casefold() not in lowered for token in _forbidden_tokens())
     assert "/github-deploy" not in lowered
     assert "secrets.CLIENTPLATFORM_PRODUCTION_SSH_PRIVATE_KEY" in text
     assert "TRIGGER_SHA: ${{ github.sha }}" in text
@@ -79,7 +80,7 @@ def test_topology_probe_is_read_only_clientplatform_ssh_contract() -> None:
     text = TOPOLOGY_WORKFLOW.read_text(encoding="utf-8")
     lowered = text.lower()
 
-    assert "metrotherapy" not in lowered
+    assert all(token.casefold() not in lowered for token in _forbidden_tokens())
     assert "/github-deploy" not in lowered
     assert "secrets.CLIENTPLATFORM_PRODUCTION_SSH_PRIVATE_KEY" in text
     assert "workflow_dispatch:" in text

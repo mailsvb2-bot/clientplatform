@@ -13,7 +13,7 @@ from typing import Sequence
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_TOOL_DIR = Path(os.environ.get("AI_CODE_FILTER_DIR", "/root/_external_ai_code_filter"))
-DEFAULT_AUDIT_DIR = Path(os.environ.get("METROTHERAPY_AUDIT_DIR", "/root/metrotherapy_audits"))
+DEFAULT_AUDIT_DIR = Path(os.environ.get("CLIENTPLATFORM_AUDIT_DIR", "/root/clientplatform_audits"))
 
 
 def _utc_stamp() -> str:
@@ -195,7 +195,7 @@ def run_ai_code_filter_gate(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Run external AI Code Filter advisory gate for Metrotherapy.")
+    parser = argparse.ArgumentParser(description="Run external AI Code Filter advisory gate for ClientPlatform.")
     parser.add_argument("--project-root", default=str(PROJECT_ROOT))
     parser.add_argument("--tool-dir", default=str(DEFAULT_TOOL_DIR))
     parser.add_argument("--audit-dir", default=str(DEFAULT_AUDIT_DIR))

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 The script intentionally prints only non-secret status fields. It validates the
 community token, callback server ownership/status, secret and confirmation-code
-matches, API version, and the two events required by Metrotherapy.
+matches, API version, and the two events required by ClientPlatform.
 """
 
 import hmac

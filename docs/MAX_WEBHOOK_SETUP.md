@@ -62,7 +62,7 @@ Debian/Ubuntu use `update-ca-certificates`; RHEL-family systems use `update-ca-t
 The deployment marker is created only after trust installation and the normal deploy/restart/health cycle succeed:
 
 ```text
-/var/lib/metrotherapy/deploy-migrations/max-mincifry-trust-v1.applied
+/var/lib/clientplatform/deploy-migrations/max-mincifry-trust-v1.applied
 ```
 
 When trust installation fails, the worker publishes one sanitized commit beginning with `[max-trust-install-result]` and then stops. That result commit is explicitly ignored by the next worker invocation, preventing a failure-report loop.
@@ -75,7 +75,7 @@ Load the server environment and run the canonical helper in dry-run mode first:
 
 ```bash
 set -a
-. /etc/metrotherapy/metrotherapy.env
+. /etc/clientplatform/clientplatform.env
 set +a
 python scripts/register_max_webhook.py
 ```

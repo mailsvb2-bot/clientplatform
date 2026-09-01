@@ -3,12 +3,12 @@ set -Eeuo pipefail
 
 MODE="${1:-enforce}"
 RELEASE_PATH="${2:-}"
-SERVICE_NAME="${SERVICE_NAME:-metrotherapy.service}"
-RUNTIME_ROOT="${METRO_RUNTIME_ROOT:-/var/lib/metrotherapy/runtime}"
-STATE_ROOT="${METRO_WRITABLE_ROOT:-$(dirname "$RUNTIME_ROOT")/state}"
-DROPIN="${METRO_RUNTIME_WRITE_GUARD_OVERRIDE:-/etc/systemd/system/$SERVICE_NAME.d/zzz-runtime-write-guard.conf}"
+SERVICE_NAME="${SERVICE_NAME:-clientplatform.service}"
+RUNTIME_ROOT="${CLIENTPLATFORM_RUNTIME_ROOT:-/var/lib/clientplatform/runtime}"
+STATE_ROOT="${CLIENTPLATFORM_WRITABLE_ROOT:-$(dirname "$RUNTIME_ROOT")/state}"
+DROPIN="${CLIENTPLATFORM_RUNTIME_WRITE_GUARD_OVERRIDE:-/etc/systemd/system/$SERVICE_NAME.d/zzz-runtime-write-guard.conf}"
 SYSTEMCTL="${SYSTEMCTL:-/usr/bin/systemctl}"
-CONTRACT_MARKER="${METRO_RUNTIME_STATE_CONTRACT_MARKER:-runtime/RUNTIME_STATE_CONTRACT_V1}"
+CONTRACT_MARKER="${CLIENTPLATFORM_RUNTIME_STATE_CONTRACT_MARKER:-runtime/RUNTIME_STATE_CONTRACT_V1}"
 
 for required in "$RUNTIME_ROOT" "$STATE_ROOT" "$(dirname "$DROPIN")"; do
   [ -n "$required" ] || {
@@ -87,9 +87,9 @@ Environment=PYTHONPYCACHEPREFIX=$STATE_ROOT/python-cache
 Environment=XDG_CACHE_HOME=$STATE_ROOT/xdg-cache
 Environment=MPLCONFIGDIR=$STATE_ROOT/matplotlib
 Environment=TMPDIR=$STATE_ROOT/tmp
-Environment=METRO_WRITABLE_ROOT=$STATE_ROOT
-Environment=METRO_DATA_DIR=$STATE_ROOT/data
-Environment=METRO_LOGS_DIR=$STATE_ROOT/logs
+Environment=CLIENTPLATFORM_WRITABLE_ROOT=$STATE_ROOT
+Environment=CLIENTPLATFORM_DATA_DIR=$STATE_ROOT/data
+Environment=CLIENTPLATFORM_LOGS_DIR=$STATE_ROOT/logs
 ReadOnlyPaths=
 ReadWritePaths=
 EOF

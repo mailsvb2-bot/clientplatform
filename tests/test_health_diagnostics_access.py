@@ -33,9 +33,9 @@ async def test_public_health_probe_omits_internal_diagnostics(
         lambda: (
             {
                 "ok": True,
-                "service": "metrotherapy",
+                "service": "clientplatform",
                 "probe": "health",
-                "db_target": "postgresql://secret-host/metrotherapy",
+                "db_target": "postgresql://secret-host/clientplatform",
                 "legacy_sqlite_path": "/srv/private/data.sqlite",
                 "scheduler_loop_last_error": "RuntimeError: secret detail",
                 "max_preflight_missing": ["MAX_TOKEN"],
@@ -50,7 +50,7 @@ async def test_public_health_probe_omits_internal_diagnostics(
     assert response.status == 200
     assert response.payload == {
         "ok": True,
-        "service": "metrotherapy",
+        "service": "clientplatform",
         "probe": "health",
     }
 
@@ -68,22 +68,22 @@ async def test_public_readiness_preserves_failure_status_without_error_details(
         lambda: (
             {
                 "ok": False,
-                "service": "metrotherapy",
+                "service": "clientplatform",
                 "probe": "readiness",
                 "error": "db:password leaked;ingress:max:missing:MAX_TOKEN",
-                "db_target": "postgresql://private-host/metrotherapy",
+                "db_target": "postgresql://private-host/clientplatform",
                 "required_tables": ("users", "payments"),
             },
             500,
         ),
     )
 
-    response = await health_server._ready(request({"X-Metrotherapy-Diagnostics-Token": "wrong"}))
+    response = await health_server._ready(request({"X-ClientPlatform-Diagnostics-Token": "wrong"}))
 
     assert response.status == 500
     assert response.payload == {
         "ok": False,
-        "service": "metrotherapy",
+        "service": "clientplatform",
         "probe": "readiness",
     }
 
@@ -92,7 +92,7 @@ async def test_public_readiness_preserves_failure_status_without_error_details(
 @pytest.mark.parametrize(
     "headers",
     [
-        {"X-Metrotherapy-Diagnostics-Token": "operator-secret"},
+        {"X-ClientPlatform-Diagnostics-Token": "operator-secret"},
         {"Authorization": "Bearer operator-secret"},
         {"Authorization": "bearer operator-secret"},
     ],
@@ -103,7 +103,7 @@ async def test_authorized_operator_receives_full_health_diagnostics(
 ) -> None:
     detailed = {
         "ok": True,
-        "service": "metrotherapy",
+        "service": "clientplatform",
         "probe": "health",
         "db_engine": "postgres",
         "db_target": "redacted",
@@ -126,7 +126,7 @@ def test_diagnostics_authorization_fails_closed_without_server_token(
     monkeypatch.delenv("HEALTHCHECK_DIAGNOSTICS_TOKEN", raising=False)
 
     assert health_server._diagnostics_authorized(
-        request({"X-Metrotherapy-Diagnostics-Token": "anything"})
+        request({"X-ClientPlatform-Diagnostics-Token": "anything"})
     ) is False
     assert health_server._diagnostics_authorized(
         request({"Authorization": "Bearer anything"})

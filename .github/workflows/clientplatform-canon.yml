@@ -57,6 +57,9 @@ jobs:
           )
           PY
 
+      - name: Verify ClientPlatform product purity
+        run: python scripts/check_clientplatform_product_purity.py
+
       - name: Reject tracked raw secrets
         shell: bash
         run: |
@@ -73,5 +76,4 @@ jobs:
         run: |
           set -euo pipefail
           grep -Fq 'b4ac43c2961fb581078aedc25efeffd2ab4ecb34' docs/BASELINE_PROVENANCE.md
-          grep -Fq 'mailsvb2-bot/metrotherapy-bot-telegram' docs/BASELINE_PROVENANCE.md
           grep -Fq 'mailsvb2-bot/clientplatform' docs/BASELINE_PROVENANCE.md

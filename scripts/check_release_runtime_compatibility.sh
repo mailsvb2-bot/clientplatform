@@ -2,9 +2,9 @@
 set -Eeuo pipefail
 
 RELEASE_DIR="${1:-}"
-ENV_FILE="${METROTHERAPY_ENV_FILE:-/etc/metrotherapy/metrotherapy.env}"
-RUNTIME_ROOT="${METRO_RUNTIME_ROOT:-/var/lib/metrotherapy/runtime}"
-STATE_ROOT="${METRO_WRITABLE_ROOT:-$(dirname "$RUNTIME_ROOT")/state}"
+ENV_FILE="${CLIENTPLATFORM_ENV_FILE:-/etc/clientplatform/clientplatform.env}"
+RUNTIME_ROOT="${CLIENTPLATFORM_RUNTIME_ROOT:-/var/lib/clientplatform/runtime}"
+STATE_ROOT="${CLIENTPLATFORM_WRITABLE_ROOT:-$(dirname "$RUNTIME_ROOT")/state}"
 
 if [ -z "$RELEASE_DIR" ] || [ ! -d "$RELEASE_DIR" ]; then
   echo "RELEASE_RUNTIME_COMPATIBILITY_FAILED release directory is unavailable" >&2
@@ -39,9 +39,9 @@ mkdir -p \
   export XDG_CACHE_HOME="$STATE_ROOT/xdg-cache"
   export MPLCONFIGDIR="$STATE_ROOT/matplotlib"
   export TMPDIR="$STATE_ROOT/tmp"
-  export METRO_WRITABLE_ROOT="$STATE_ROOT"
-  export METRO_DATA_DIR="$STATE_ROOT/data"
-  export METRO_LOGS_DIR="$STATE_ROOT/logs"
+  export CLIENTPLATFORM_WRITABLE_ROOT="$STATE_ROOT"
+  export CLIENTPLATFORM_DATA_DIR="$STATE_ROOT/data"
+  export CLIENTPLATFORM_LOGS_DIR="$STATE_ROOT/logs"
 
   cd "$RELEASE_DIR"
   "$RELEASE_DIR/.venv/bin/python" - <<'PY'

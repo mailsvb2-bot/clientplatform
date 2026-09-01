@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Safe ingress stress probe for Metrotherapy runtime.
+"""Safe ingress stress probe for ClientPlatform runtime.
 
 Default mode deliberately avoids real user-message events and external network
 traffic. It sends concurrent GET requests to local health endpoints only.

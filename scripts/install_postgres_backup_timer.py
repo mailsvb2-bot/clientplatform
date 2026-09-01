@@ -6,9 +6,9 @@ import shutil
 import subprocess  # nosec B404
 from pathlib import Path
 
-SERVICE = "/etc/systemd/system/metrotherapy-postgres-backup.service"
-TIMER = "/etc/systemd/system/metrotherapy-postgres-backup.timer"
-ROOT = Path(os.getenv("METRO_ROOT", "/root/metrotherapy"))
+SERVICE = "/etc/systemd/system/clientplatform-postgres-backup.service"
+TIMER = "/etc/systemd/system/clientplatform-postgres-backup.timer"
+ROOT = Path(os.getenv("CLIENTPLATFORM_ROOT", "/root/clientplatform"))
 PYTHON = ROOT / ".venv/bin/python"
 ENV_FILE = ROOT / ".env"
 
@@ -27,7 +27,7 @@ def _required_bin(name: str, *, env_name: str | None = None) -> str:
 
 def install() -> None:
     service = f"""[Unit]
-Description=Metrotherapy Postgres backup and restore drill
+Description=ClientPlatform Postgres backup and restore drill
 After=network-online.target postgresql.service
 
 [Service]
@@ -38,7 +38,7 @@ ExecStart={PYTHON} scripts/postgres_backup.py
 ExecStart={PYTHON} scripts/postgres_restore_drill.py --latest
 """
     timer = """[Unit]
-Description=Run Metrotherapy Postgres backup and restore drill daily
+Description=Run ClientPlatform Postgres backup and restore drill daily
 
 [Timer]
 OnCalendar=*-*-* 03:25:00
@@ -53,8 +53,8 @@ WantedBy=timers.target
     systemctl = _required_bin("systemctl", env_name="SYSTEMCTL_BIN")
     # Reviewed: fixed systemctl maintenance commands for the known timer unit, no shell.
     subprocess.run([systemctl, "daemon-reload"], check=True)  # nosec B603
-    subprocess.run([systemctl, "enable", "--now", "metrotherapy-postgres-backup.timer"], check=True)  # nosec B603
-    print("POSTGRES_BACKUP_TIMER_INSTALLED metrotherapy-postgres-backup.timer")
+    subprocess.run([systemctl, "enable", "--now", "clientplatform-postgres-backup.timer"], check=True)  # nosec B603
+    print("POSTGRES_BACKUP_TIMER_INSTALLED clientplatform-postgres-backup.timer")
 
 
 def main() -> int:

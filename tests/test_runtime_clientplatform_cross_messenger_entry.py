@@ -125,7 +125,7 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Практика Анны", restored.text)
         self.assertEqual(restored.rows[0][0].command, "cpm:messengers")
         self.assertEqual(replies[0].meta["business_id"], "business-101")
-        self.assertNotIn("Метротерап", restored.text)
+        self.assertIn("ClientPlatform", restored.text)
         render.assert_called_once()
         self.assertEqual(render.call_args.kwargs["raw_text"], "cpm:menu")
 
@@ -892,7 +892,7 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
             },
         }
         with (
-            patch.object(reliability.legacy, "_vk_secret_ok", return_value=True),
+            patch.object(reliability.base_ingress, "_vk_secret_ok", return_value=True),
             patch.object(
                 reliability,
                 "_process_clientplatform_entry_and_persist",
@@ -923,7 +923,7 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
             },
         }
         with (
-            patch.object(reliability.legacy, "_vk_secret_ok", return_value=True),
+            patch.object(reliability.base_ingress, "_vk_secret_ok", return_value=True),
             patch.object(
                 reliability,
                 "_process_clientplatform_entry_and_persist",
@@ -955,7 +955,7 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
                 return {"success": True}
 
         with (
-            patch.object(reliability.legacy, "_max_secret_ok", return_value=True),
+            patch.object(reliability.base_ingress, "_max_secret_ok", return_value=True),
             patch.object(reliability, "MaxBotSender", return_value=FakeMaxSender()),
             patch.object(
                 reliability,
@@ -977,7 +977,7 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
             "user_id": 601,
         }
         with (
-            patch.object(reliability.legacy, "_max_secret_ok", return_value=True),
+            patch.object(reliability.base_ingress, "_max_secret_ok", return_value=True),
             patch.object(
                 reliability,
                 "_process_clientplatform_entry_and_persist",
@@ -1002,7 +1002,7 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
             "payload": "cpo_landing",
         }
         with (
-            patch.object(reliability.legacy, "_max_secret_ok", return_value=True),
+            patch.object(reliability.base_ingress, "_max_secret_ok", return_value=True),
             patch.object(
                 reliability,
                 "_process_clientplatform_entry_and_persist",
@@ -1013,7 +1013,7 @@ class ClientPlatformCrossMessengerEntryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 200)
         process.assert_called_once()
         kwargs = process.call_args.kwargs
-        self.assertEqual(kwargs["text"], "cpo_landing")
+        self.assertEqual(kwargs["text"], "/start cpo_landing")
         self.assertEqual(kwargs["extracted"]["external_user_id"], "602")
 
     def test_owner_mutation_and_outbox_are_atomic_across_retry(self) -> None:

@@ -2,7 +2,7 @@ import importlib
 
 
 def test_preference_resolution(tmp_path, monkeypatch):
-    monkeypatch.setenv('METRO_DB_PATH', str(tmp_path / 'test.db'))
+    monkeypatch.setenv('CLIENTPLATFORM_DB_PATH', str(tmp_path / 'test.db'))
 
     core_paths = importlib.import_module('core.paths')
     db_core = importlib.import_module('services.db.core')

@@ -43,7 +43,6 @@ def privacy_export_public_base_url() -> str:
     raw = (
         os.getenv("PRIVACY_EXPORT_PUBLIC_BASE_URL", "").strip()
         or os.getenv("MESSENGER_PUBLIC_BASE_URL", "").strip()
-        or os.getenv("PAYMENT_PUBLIC_BASE_URL", "").strip()
         or os.getenv("PUBLIC_BASE_URL", "").strip()
         or str(getattr(settings, "MESSENGER_PUBLIC_BASE_URL", "") or "").strip()
         or str(getattr(settings, "TELEGRAM_WEBHOOK_PUBLIC_BASE_URL", "") or "").strip()

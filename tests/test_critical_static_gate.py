@@ -27,46 +27,37 @@ def test_critical_static_gate_direct_entrypoint_runs_manifest() -> None:
     assert "CRITICAL_STATIC_MANIFEST_OK" in proc.stdout
 
 
-def test_recent_payment_privacy_messenger_sales_and_yandex_boundaries_are_covered() -> None:
+def test_canonical_money_privacy_messenger_sales_and_yandex_boundaries_are_covered() -> None:
     required_type_files = {
+        "clientplatform/application/admin_ops.py",
+        "clientplatform/application/outcomes.py",
         "clientplatform/application/owner_booking_journey.py",
         "clientplatform/application/sales_agent.py",
         "clientplatform/application/sales_orchestration.py",
         "clientplatform/application/dispatch_worker.py",
-        "clientplatform/application/max_dispatch_pacing.py",
         "clientplatform/application/native_messenger_onboarding.py",
         "clientplatform/application/yandex_growth_analytics.py",
-        "clientplatform/infrastructure/sales_action_repository.py",
-        "clientplatform/integrations/yandex_direct_analytics.py",
-        "handlers/clientplatform_sales.py",
-        "handlers/clientplatform_yandex_analytics.py",
-        "handlers/info.py",
-        "runtime/messenger_ingress_reliability.py",
-        "runtime/messenger_media_http.py",
-        "runtime/payment_http.py",
-        "runtime/payment_webhook_admission.py",
+        "clientplatform/domain/outcomes.py",
+        "clientplatform/infrastructure/outcome_repository.py",
+        "clientplatform/infrastructure/revenue_attribution_repository.py",
+        "clientplatform/infrastructure/tenancy_repository.py",
+        "clientplatform/privacy_manifest.py",
         "clientplatform/runtime/messenger_channel_ingress.py",
         "clientplatform/runtime/native_messenger_http_admission.py",
         "clientplatform/runtime/native_messenger_reconciliation.py",
         "clientplatform/transport/native_messenger.py",
-        "services/messenger/audio_access.py",
+        "handlers/clientplatform_sales.py",
+        "handlers/clientplatform_yandex_analytics.py",
+        "services/messenger/delivery_outbox.py",
         "services/messenger/webhook_dedupe.py",
-        "services/payments/receipt_contract.py",
-        "services/payments/retry_queue.py",
-        "services/payments/verified_reconciliation.py",
-        "services/privacy_controls.py",
+        "services/migrations/clientplatform_business_payment_outcomes_v1.py",
     }
-    required_security_paths = (
-        required_type_files
-        - {
-            "services/payments/receipt_contract.py",
-            "services/payments/retry_queue.py",
-            "services/payments/verified_reconciliation.py",
-        }
-    ) | {"services/payments"}
+    required_security_paths = set(required_type_files)
 
     assert required_type_files <= set(critical_static_gate.TYPE_CONTRACT_FILES)
     assert required_security_paths <= set(critical_static_gate.SECURITY_SCAN_PATHS)
+
+
 
 
 def test_critical_static_manifest_has_no_duplicates() -> None:

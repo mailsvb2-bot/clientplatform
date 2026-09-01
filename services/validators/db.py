@@ -91,16 +91,9 @@ def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
 
 
 def validate_db_schema(strict: bool = True) -> None:
-    required_tables = {
-        "users",
-        "plans",
-        "plan_price_history",
-        "payments",
-        "telegram_stars_refunds",
-        "yookassa_refunds",
-        "selected_plan",
-        "mood_sessions",
-    }
+    from services.db.schema.readiness import READY_TABLES
+
+    required_tables = set(READY_TABLES)
 
     with get_connection() as conn:
         existing = {
@@ -116,20 +109,13 @@ def validate_db_schema(strict: bool = True) -> None:
                 raise ValidationError(message)
             log.warning(message)
 
-        if "payments" in existing:
-            columns = _table_columns(conn, "payments")
-            required_columns = {
-                "id",
-                "user_id",
-                "payload",
-                "amount",
-                "currency",
-                "created_at",
-            }
+        if "business_payments" in existing:
+            columns = _table_columns(conn, "business_payments")
+            required_columns = {"id", "business_id", "status", "amount_minor", "currency"}
             missing_columns = sorted(required_columns - columns)
             if missing_columns:
                 message = (
-                    "DB schema table payments missing columns: "
+                    "DB schema table business_payments missing columns: "
                     f"{missing_columns}. Existing: {sorted(columns)}"
                 )
                 if strict:

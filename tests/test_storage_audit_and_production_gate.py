@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import os
-import subprocess
 import sys
 
 from scripts import production_gate
@@ -22,10 +20,10 @@ def test_storage_audit_skips_local_virtualenv_variants(tmp_path) -> None:
 
 
 def test_production_gate_restore_target_reads_env_file(tmp_path, monkeypatch) -> None:
-    monkeypatch.delenv("METRO_RESTORE_DRILL_DATABASE_URL", raising=False)
+    monkeypatch.delenv("CLIENTPLATFORM_RESTORE_DRILL_DATABASE_URL", raising=False)
     monkeypatch.delenv("RESTORE_DATABASE_URL", raising=False)
-    env_file = tmp_path / "metrotherapy.env"
-    env_file.write_text("RESTORE_DATABASE_URL='postgresql://restore-user:secret@127.0.0.1:5432/metrotherapy_restore'\n", encoding="utf-8")
+    env_file = tmp_path / "clientplatform.env"
+    env_file.write_text("RESTORE_DATABASE_URL='postgresql://restore-user:secret@127.0.0.1:5432/clientplatform_restore'\n", encoding="utf-8")
 
     gate_env = production_gate._merged_env(env_file)
 
@@ -38,10 +36,6 @@ def test_production_gate_runtime_contract_accepts_owner_vk_without_payment_check
     tmp_path, monkeypatch
 ) -> None:
     for name in (
-        "YOOKASSA_SHOP_ID",
-        "YOOKASSA_SECRET_KEY",
-        "PAYMENT_CHECKOUT_SIGNING_KEY",
-        "CHECKOUT_SIGNING_KEY",
     ):
         monkeypatch.delenv(name, raising=False)
     env_file = tmp_path / "clientplatform.env"
@@ -53,7 +47,6 @@ def test_production_gate_runtime_contract_accepts_owner_vk_without_payment_check
                 "ADMIN_IDS=1",
                 "TELEGRAM_TRANSPORT=polling",
                 "TELEGRAM_WEBHOOK_ENABLED=0",
-                "PAYMENT_HTTP_ENABLED=0",
                 "PRIVACY_EXPORT_HTTP_ENABLED=1",
                 "PRIVACY_EXPORT_PUBLIC_BASE_URL=https://app.example",
                 "PRIVACY_EXPORT_TOKEN_TTL_MINUTES=10",
@@ -63,7 +56,7 @@ def test_production_gate_runtime_contract_accepts_owner_vk_without_payment_check
                 "VK_GROUP_TOKEN=vk-token-for-test",
                 "VK_CONFIRMATION_TOKEN=vk-confirm-for-test",
                 "VK_SECRET=vk-secret-for-test",
-                "METRO_DB_ENGINE=postgres",
+                "CLIENTPLATFORM_DB_ENGINE=postgres",
                 "DATABASE_URL=postgresql:///clientplatform_test",
                 "LOG_PATH=/tmp/clientplatform-test.log",
                 "HEALTHCHECK_ENABLED=1",
@@ -78,18 +71,3 @@ def test_production_gate_runtime_contract_accepts_owner_vk_without_payment_check
         [sys.executable, "scripts/runtime_contract.py"],
         env=gate_env,
     )
-
-def test_payment_reconciliation_import_has_no_messenger_package_cycle() -> None:
-    env = os.environ.copy()
-    env.setdefault("LOAD_DOTENV", "0")
-    completed = subprocess.run(
-        [sys.executable, "-c", "import services.payments.reconciliation; print('ok')"],
-        cwd=os.getcwd(),
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-    assert completed.returncode == 0, completed.stdout + completed.stderr
-    assert completed.stdout.strip() == "ok"

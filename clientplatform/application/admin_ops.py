@@ -7,7 +7,7 @@ import os
 import re
 import sqlite3
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 from typing import Any
 from uuid import NAMESPACE_URL, uuid4, uuid5
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -178,7 +178,7 @@ def _format_publication_timestamp(value: object, *, timezone_name: str) -> str:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     try:
-        zone = ZoneInfo(str(timezone_name or "UTC").strip() or "UTC")
+        zone: tzinfo = ZoneInfo(str(timezone_name or "UTC").strip() or "UTC")
     except (ValueError, ZoneInfoNotFoundError):
         zone = timezone.utc
     return parsed.astimezone(zone).strftime("%d.%m.%Y %H:%M")
@@ -2540,15 +2540,15 @@ def refresh_interaction_alerts(
     route_redundant: bool | None = None,
 ) -> list[AdminAlert]:
     snapshot = interaction_snapshot(actor=actor, window_minutes=window_minutes)
-    p95_limit = int(
-        p95_warning_ms
+    p95_limit = (
+        int(p95_warning_ms)
         if p95_warning_ms is not None
-        else os.getenv("CLIENTPLATFORM_ADMIN_P95_ALERT_MS", "1000")
+        else int(os.getenv("CLIENTPLATFORM_ADMIN_P95_ALERT_MS", "1000"))
     )
-    failure_limit = float(
-        failure_percent_warning
+    failure_limit = (
+        float(failure_percent_warning)
         if failure_percent_warning is not None
-        else os.getenv("CLIENTPLATFORM_ADMIN_FAILURE_ALERT_PERCENT", "1")
+        else float(os.getenv("CLIENTPLATFORM_ADMIN_FAILURE_ALERT_PERCENT", "1"))
     )
     failure_percent = (
         0.0 if snapshot.count == 0 else snapshot.failures * 100.0 / snapshot.count

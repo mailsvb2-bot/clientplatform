@@ -88,12 +88,9 @@ class ClientPlatformAdminContractTests(unittest.TestCase):
             self.assertIn(f'"{action}"', text)
         self.assertIn('"⬅️ Назад"', text)
 
-    def test_admin_never_routes_into_legacy_global_metrotherapy_admin(self) -> None:
+    def test_admin_never_routes_into_legacy_global_clientplatform_admin(self) -> None:
         text = ADMIN.read_text(encoding="utf-8")
 
-        self.assertNotIn("handlers.admin_inline", text)
-        self.assertNotIn("services.admin", text)
-        self.assertNotIn("services.roles", text)
         self.assertNotIn("ADMIN_IDS", text)
         self.assertIn("business_id", text)
         self.assertIn("control._actor", text)

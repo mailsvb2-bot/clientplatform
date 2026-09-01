@@ -7,7 +7,6 @@ def _run(monkeypatch, **env):
     keys = {
         "APP_ENV",
         "BOT_TOKEN",
-        "PAY_PROVIDER_TOKEN",
         "ADMIN_IDS",
         "ADMIN_ID",
         "HEALTHCHECK_ENABLED",
@@ -15,8 +14,6 @@ def _run(monkeypatch, **env):
         "TELEGRAM_WEBHOOK_ENABLED",
         "MESSENGER_WEBHOOK_ENABLED",
         "MESSENGER_PUBLIC_BASE_URL",
-        "PAYMENT_HTTP_ENABLED",
-        "PAYMENT_PUBLIC_BASE_URL",
         "PRIVACY_EXPORT_HTTP_ENABLED",
         "PRIVACY_EXPORT_PUBLIC_BASE_URL",
         "PRIVACY_EXPORT_TOKEN_TTL_MINUTES",
@@ -50,105 +47,13 @@ def _base_dev_env() -> dict[str, str]:
 
 
 
-def test_prod_payment_validation_honors_explicit_disabled_ingress(monkeypatch):
-    mod = importlib.import_module("scripts.prod_readiness_check")
-    monkeypatch.setenv("PAYMENT_HTTP_ENABLED", "0")
-    for name in (
-        "YOOKASSA_SHOP_ID",
-        "YOOKASSA_SECRET_KEY",
-        "PAYMENT_CHECKOUT_SIGNING_KEY",
-        "CHECKOUT_SIGNING_KEY",
-        "PAYMENT_PUBLIC_BASE_URL",
-    ):
-        monkeypatch.delenv(name, raising=False)
-
-    errors: list[str] = []
-    mod._validate_payment_runtime(True, errors)
-
-    assert not any("YOOKASSA" in error for error in errors)
-    assert not any("PAYMENT_CHECKOUT_SIGNING_KEY" in error for error in errors)
-
-
-def test_prod_payment_validation_defaults_fail_closed_when_flag_is_omitted(monkeypatch):
-    mod = importlib.import_module("scripts.prod_readiness_check")
-    monkeypatch.setenv("APP_ENV", "prod")
-    monkeypatch.delenv("PAYMENT_HTTP_ENABLED", raising=False)
-    monkeypatch.delenv("MESSENGER_WEBHOOK_ENABLED", raising=False)
-    for name in (
-        "YOOKASSA_SHOP_ID",
-        "YOOKASSA_SECRET_KEY",
-        "PAYMENT_CHECKOUT_SIGNING_KEY",
-        "CHECKOUT_SIGNING_KEY",
-        "PAYMENT_PUBLIC_BASE_URL",
-        "MESSENGER_PUBLIC_BASE_URL",
-        "PUBLIC_BASE_URL",
-    ):
-        monkeypatch.delenv(name, raising=False)
-
-    errors: list[str] = []
-    mod._validate_payment_runtime(True, errors)
-
-    assert any("YOOKASSA_SHOP_ID" in error for error in errors)
-    assert any("YOOKASSA_SECRET_KEY" in error for error in errors)
-    assert any("PAYMENT_CHECKOUT_SIGNING_KEY" in error for error in errors)
-
-
-def test_prod_readiness_rejects_malformed_payment_flag(monkeypatch):
-    errors, warnings = _run(
-        monkeypatch,
-        APP_ENV="prod",
-        PAYMENT_HTTP_ENABLED="tru",
-        HEALTHCHECK_ENABLED="1",
-        PRIVACY_EXPORT_HTTP_ENABLED="1",
-        PRIVACY_EXPORT_PUBLIC_BASE_URL="https://app.example",
-    )
-
-    assert any("PAYMENT_HTTP_ENABLED" in error for error in errors)
-
-
-def test_prod_payment_validation_stays_fail_closed_when_enabled(monkeypatch):
-    mod = importlib.import_module("scripts.prod_readiness_check")
-    monkeypatch.setenv("PAYMENT_HTTP_ENABLED", "1")
-    for name in (
-        "YOOKASSA_SHOP_ID",
-        "YOOKASSA_SECRET_KEY",
-        "PAYMENT_CHECKOUT_SIGNING_KEY",
-        "CHECKOUT_SIGNING_KEY",
-        "PAYMENT_PUBLIC_BASE_URL",
-        "MESSENGER_PUBLIC_BASE_URL",
-        "PUBLIC_BASE_URL",
-    ):
-        monkeypatch.delenv(name, raising=False)
-
-    errors: list[str] = []
-    mod._validate_payment_runtime(True, errors)
-
-    assert any("YOOKASSA_SHOP_ID" in error for error in errors)
-    assert any("YOOKASSA_SECRET_KEY" in error for error in errors)
-    assert any("PAYMENT_CHECKOUT_SIGNING_KEY" in error for error in errors)
-
-
-def test_readiness_accepts_payment_ingress_without_vk_or_max(monkeypatch):
-    errors, warnings = _run(
-        monkeypatch,
-        **_base_dev_env(),
-        PAYMENT_HTTP_ENABLED="1",
-        PAYMENT_PUBLIC_BASE_URL="https://metrotherapy.ru",
-        MAX_WEBHOOK_ENABLED="0",
-        VK_WEBHOOK_ENABLED="0",
-    )
-
-    assert not any("VK_" in error or "MAX_" in error for error in errors)
-    assert not any("HTTP ingress is disabled" in warning for warning in warnings)
-
 
 def test_readiness_fails_when_enabled_vk_env_is_partial(monkeypatch):
     errors, warnings = _run(
         monkeypatch,
         **_base_dev_env(),
-        PAYMENT_HTTP_ENABLED="0",
         VK_WEBHOOK_ENABLED="1",
-        MESSENGER_PUBLIC_BASE_URL="https://metrotherapy.ru",
+        MESSENGER_PUBLIC_BASE_URL="https://clientplatform.ru",
         VK_GROUP_ID="238191212",
         VK_GROUP_TOKEN="vk-token-for-test",
     )
@@ -160,10 +65,9 @@ def test_readiness_accepts_complete_vk_and_max_env(monkeypatch):
     errors, warnings = _run(
         monkeypatch,
         **_base_dev_env(),
-        PAYMENT_HTTP_ENABLED="0",
         MAX_WEBHOOK_ENABLED="1",
         VK_WEBHOOK_ENABLED="1",
-        MESSENGER_PUBLIC_BASE_URL="https://metrotherapy.ru",
+        MESSENGER_PUBLIC_BASE_URL="https://clientplatform.ru",
         MAX_BOT_TOKEN="max-token-for-test",
         MAX_BOT_LINK_BASE="https://max.example/bot/{payload}",
         VK_GROUP_ID="238191212",
@@ -180,9 +84,8 @@ def test_readiness_warns_when_dev_vk_secret_absent(monkeypatch):
     errors, warnings = _run(
         monkeypatch,
         **_base_dev_env(),
-        PAYMENT_HTTP_ENABLED="0",
         VK_WEBHOOK_ENABLED="1",
-        MESSENGER_PUBLIC_BASE_URL="https://metrotherapy.ru",
+        MESSENGER_PUBLIC_BASE_URL="https://clientplatform.ru",
         VK_GROUP_ID="238191212",
         VK_GROUP_TOKEN="vk-token-for-test",
         VK_CONFIRMATION_TOKEN="confirm-token-for-test",
@@ -190,17 +93,6 @@ def test_readiness_warns_when_dev_vk_secret_absent(monkeypatch):
 
     assert any("VK_SECRET" in warning for warning in warnings)
 
-
-def test_legacy_messenger_flag_keeps_payment_compat_without_enabling_empty_channels(monkeypatch):
-    errors, warnings = _run(
-        monkeypatch,
-        **_base_dev_env(),
-        MESSENGER_WEBHOOK_ENABLED="1",
-        PAYMENT_PUBLIC_BASE_URL="https://metrotherapy.ru",
-    )
-
-    assert not any("VK or MAX" in error for error in errors)
-    assert not any("VK_" in error or "MAX_" in error for error in errors)
 
 
 def test_readiness_requires_privacy_export_in_prod(monkeypatch):
@@ -218,9 +110,8 @@ def test_readiness_accepts_privacy_export_as_only_http_ingress(monkeypatch):
     errors, warnings = _run(
         monkeypatch,
         **_base_dev_env(),
-        PAYMENT_HTTP_ENABLED="0",
         PRIVACY_EXPORT_HTTP_ENABLED="1",
-        PRIVACY_EXPORT_PUBLIC_BASE_URL="https://metrotherapy.ru",
+        PRIVACY_EXPORT_PUBLIC_BASE_URL="https://clientplatform.ru",
         PRIVACY_EXPORT_TOKEN_TTL_MINUTES="10",
         MAX_WEBHOOK_ENABLED="0",
         VK_WEBHOOK_ENABLED="0",
@@ -235,7 +126,7 @@ def test_readiness_rejects_invalid_privacy_export_contract(monkeypatch):
         monkeypatch,
         **_base_dev_env(),
         PRIVACY_EXPORT_HTTP_ENABLED="1",
-        PRIVACY_EXPORT_PUBLIC_BASE_URL="ftp://metrotherapy.ru",
+        PRIVACY_EXPORT_PUBLIC_BASE_URL="ftp://clientplatform.ru",
         PRIVACY_EXPORT_TOKEN_TTL_MINUTES="1",
     )
 

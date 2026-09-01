@@ -33,8 +33,8 @@ _NO_STORE_HEADERS = {
 
 
 def _export_paths() -> tuple[Path, Path]:
-    root = Path(tempfile.mkdtemp(prefix="metrotherapy_privacy_download_"))
-    return root, root / "metrotherapy-user-data.json.gz"
+    root = Path(tempfile.mkdtemp(prefix="clientplatform_privacy_download_"))
+    return root, root / "clientplatform-user-data.json.gz"
 
 
 def _cleanup_export_root(root: Path) -> None:
@@ -50,7 +50,7 @@ def _landing_html(token: str) -> str:
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="referrer" content="no-referrer">
-  <title>Экспорт данных — Метротерапия</title>
+  <title>Экспорт данных — ClientPlatform</title>
   <style>
     body {{ font-family: system-ui, sans-serif; max-width: 640px; margin: 3rem auto; padding: 0 1rem; line-height: 1.5; }}
     button {{ font: inherit; padding: .8rem 1.2rem; cursor: pointer; }}
@@ -129,7 +129,7 @@ async def privacy_export_download(request: web.Request) -> web.StreamResponse:
             headers={
                 **_NO_STORE_HEADERS,
                 "Content-Type": "application/gzip",
-                "Content-Disposition": "attachment; filename=metrotherapy-user-data.json.gz",
+                "Content-Disposition": "attachment; filename=clientplatform-user-data.json.gz",
                 "Content-Length": str(int(result.compressed_size_bytes)),
             },
         )

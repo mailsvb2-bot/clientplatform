@@ -484,7 +484,7 @@ class OmnichannelRuntimeTransportTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(("778899", "book_now", "Анна Иванова"), extracted)
 
-    async def test_canonical_max_text_explicitly_disables_legacy_metrotherapy_ui(self) -> None:
+    async def test_canonical_max_text_explicitly_disables_legacy_clientplatform_ui(self) -> None:
         sender = _FakeMaxSender()
         with patch(
             "clientplatform.runtime.messenger_provider_clients._max_sender",

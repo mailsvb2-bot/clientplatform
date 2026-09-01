@@ -6,18 +6,34 @@ from services.db import get_connection
 from services.db.runtime import CONFIG
 
 READY_TABLES = {
-    'users',
-    'jobs',
-    'plans',
-    'payments',
-    'schema_migrations',
-    'practice_wallets',
-    'payment_token_grants',
-    'payment_reconciliation_retry',
-    'premium_entitlements',
-    'premium_delivery_outbox',
-    'consultation_requests',
+    # Shared operational substrate.
+    "users",
+    "events",
+    "jobs",
+    "engine_state",
+    "idempotency",
+    "schema_migrations",
+    # Canonical identity / tenancy.
+    "accounts",
+    "account_channel_identities",
+    "businesses",
+    "business_members",
+    "customers",
+    "customer_identities",
+    # Canonical money and customer value.
+    "business_payments",
+    "booking_slots",
+    "programs",
+    "lessons",
+    "enrollments",
+    # Canonical messenger ingress / dispatch.
+    "connections",
+    "messenger_ingress_routes",
+    "messenger_webhook_events",
+    "messenger_delivery_outbox",
+    "provider_dispatch_outbox",
 }
+
 
 
 def required_readiness_tables() -> list[str]:

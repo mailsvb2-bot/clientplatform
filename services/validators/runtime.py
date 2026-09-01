@@ -55,8 +55,6 @@ def validate_background_tasks(strict: bool = False) -> None:
     allowed_files = {
         "core/task_manager.py",
         "services/db_writer.py",
-        "services/scheduler.py",
-        "services/background_scheduler.py",
         "services/validators/runtime.py",
     }
 
@@ -83,11 +81,11 @@ def validate_background_tasks(strict: bool = False) -> None:
 
 
 def validate_single_scheduler(strict: bool = True) -> None:
-    """Architectural guardrails (v16.4).
+    """Keep the shared durable jobs layer free of retired scheduler paths.
 
-    - session_timers must never be imported from runtime code
-    - scheduled_jobs must not be read/written outside schema migration / deprecated module
-    - jobs pipeline must not rely on unix-int run_at/time.time/datetime.now
+    The canonical ClientPlatform runtime owns long-lived workers through TaskManager.
+    This compatibility validator only guards the shared jobs table from deprecated
+    session_timers/scheduled_jobs access and unix-time regressions.
     """
     bad_imports: list[str] = []
     import_re = re.compile(r"^\s*(from\s+services\.session_timers\s+import\b|import\s+services\.session_timers\b)")
@@ -112,7 +110,6 @@ def validate_single_scheduler(strict: bool = True) -> None:
         "services/schema.py",
         "services/schema_tables.py",
         "services/migrations/scheduled_jobs_to_jobs_v1.py",
-        "services/session_timers.py",
     }
     bad_scheduled: list[str] = []
     sql_re = re.compile(r"\b(SELECT|INSERT|UPDATE|DELETE|CREATE)\b[^\n;]*\bscheduled_jobs\b", re.IGNORECASE)
@@ -132,7 +129,7 @@ def validate_single_scheduler(strict: bool = True) -> None:
             raise ValidationError(msg)
         log.warning(msg)
 
-    jobs_pipeline = {"services/jobs.py", "core/engine.py"}
+    jobs_pipeline = {"services/jobs.py"}
     unix_markers = ["time.time(", "datetime.now(", "run_at INTEGER", "run_at  INTEGER"]
     bad_unix: list[str] = []
     for p, rel in _project_py_files():
@@ -189,31 +186,18 @@ def validate_wide_except_policy(*, strict: bool = True) -> None:
     allow_files = {
         "main.py",
         "app.py",
-        "core/engine.py",
         "core/middlewares.py",
-        "services/scheduler.py",
         "core/task_manager.py",
-        "core/ai/action_gateway.py",
-        "core/ai/decision_core.py",
         "scripts/validate_project.py",
         "runtime/health_server.py",
         "runtime/messenger_webhooks.py",
-        "runtime/payment_http.py",
         "services/messenger/reply_dispatcher.py",
         "services/db_writer.py",
         "services/validator.py",
         "services/db/core.py",
-        "handlers/menu.py",
-        "handlers/start.py",
-        "services/messenger/audio_delivery.py",
         "services/messenger/text_ui.py",
         "services/migrations/_helpers.py",
-        "services/mood.py",
-        "services/mood_text_flow.py",
         "services/ai/client.py",
-        "services/ai/pricing.py",
-        "services/ai_copywriter.py",
-        "services/weather.py",
     }
     allow_functions = {
         "runtime/messenger_ingress.py": {"_process_and_persist", "vk_webhook", "max_webhook"},

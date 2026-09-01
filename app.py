@@ -63,7 +63,6 @@ async def _rollback_partial_startup(
     *,
     webhook_runtime,
     health_runtime,
-    scheduler_started: bool,
     db_writer_started: bool,
 ) -> None:
     """Best-effort reverse-order rollback without masking startup failure."""
@@ -77,11 +76,6 @@ async def _rollback_partial_startup(
             await webhook_runtime.stop()
         except Exception:  # validator: allow-wide-except
             log.exception("Partial-startup webhook rollback failed")
-    if scheduler_started:
-        try:
-            await stop_scheduler()
-        except Exception:  # validator: allow-wide-except
-            log.exception("Partial-startup scheduler rollback failed")
     if db_writer_started:
         try:
             await stop_db_writer(drain=False)
@@ -111,14 +105,9 @@ async def _safe_answer_callback(cb, *args, **kwargs) -> None:
 from core.environment import is_production_env, normalize_app_env
 from config.settings import settings
 
-from core.ai.decision_core import DecisionCore
-
 from services.schema import init_db
 from services.validator import validate_all
 from services.validators.prod import validate_prod_guardrails
-from services.scheduler import start_scheduler
-from services.prewarm import prewarm_audio_cache, prewarm_matplotlib_cache
-from services.scheduler import stop_scheduler
 from services.db_writer import start_db_writer, stop_db_writer
 from services.bg import bind_task_manager, register_task_manager
 from runtime.messenger_webhooks import start_messenger_webhook_runtime
@@ -132,50 +121,23 @@ from core.startup_checks import run_startup_checks
 
 from core.middlewares import (
     SoftRateLimitMiddleware,
-    StateLogMiddleware,
-    InteractionAnalyticsMiddleware,
-    TimeInputTraceMiddleware,
     SlowHandlerLogMiddleware,
     QuickAckCallbackMiddleware,
 )
 
-# Важно: не называем модуль handlers.settings как `settings`, чтобы не затереть config.settings.settings
-from handlers import (
-    clientplatform_control,
-    start,
-    menu,
-    text_input,
-    payments,
-    demo,
-    audio,
-    admin,
-    admin_release,
-    admin_stats,
-    admin_inline,
-    share,
-    weather,
-    info,
-    micro,
-    settings as settings_router,
-    mood,
-    diagnostics,
-    gift_flow,
-    kb_debug,
-    messenger_audio,
-)
+from handlers import clientplatform_entry
 
 
 async def create_application():
     webhook_runtime = None
     health_runtime = None
-    scheduler_started = False
     db_writer_started = False
     telegram_enabled = telegram_runtime_enabled()
     tm = TaskManager()
     dp: Dispatcher | None = None
 
     async def _on_startup(bot: Bot | None):
-        nonlocal webhook_runtime, health_runtime, scheduler_started, db_writer_started
+        nonlocal webhook_runtime, health_runtime, db_writer_started
         app_env = normalize_app_env()
         production = is_production_env(app_env)
         strict_env = os.getenv("VALIDATOR_STRICT")
@@ -197,13 +159,11 @@ async def create_application():
         if messenger_setup.warnings:
             log.warning('Messenger setup warnings: %s', ' | '.join(messenger_setup.warnings))
         try:
-            # Register the canonical manager before DB writer and scheduler call services.bg.tm().
-            # ClientPlatform owners are started separately after all fatal startup steps succeed.
+            # Register the canonical TaskManager before background ClientPlatform owners start.
+            # All process-owned workers bind here after fatal startup checks succeed.
             register_task_manager(tm)
             start_db_writer()
             db_writer_started = True
-            start_scheduler(bot)
-            scheduler_started = True
             try:
                 webhook_runtime = await start_messenger_webhook_runtime(bot=bot, dispatcher=dp)
             except (OSError, RuntimeError, ValueError, TypeError, AttributeError, KeyError):  # validator: allow-wide-except
@@ -226,17 +186,6 @@ async def create_application():
                     raise
                 log.warning('Continuing without health endpoint in non-prod mode')
 
-            if bot is not None:
-                try:
-                    await prewarm_audio_cache(bot)
-                except (OSError, RuntimeError, ValueError, TypeError, AttributeError, KeyError):  # validator: allow-wide-except
-                    log.exception("Prewarm audio cache failed")
-
-            try:
-                await prewarm_matplotlib_cache()
-            except (OSError, RuntimeError, ValueError, TypeError, AttributeError, KeyError):  # validator: allow-wide-except
-                log.exception("Prewarm matplotlib cache failed")
-
             # Aiogram can run startup again after a polling transport failure.
             # Rebind process-owned ClientPlatform tasks on every successful startup
             # because the matching shutdown cancels them through the TaskManager.
@@ -253,18 +202,16 @@ async def create_application():
             await _rollback_partial_startup(
                 webhook_runtime=webhook_runtime,
                 health_runtime=health_runtime,
-                scheduler_started=scheduler_started,
                 db_writer_started=db_writer_started,
             )
             webhook_runtime = None
             health_runtime = None
-            scheduler_started = False
             db_writer_started = False
             raise
 
     async def _on_shutdown(bot: Bot | None):
         del bot
-        nonlocal webhook_runtime, health_runtime, scheduler_started, db_writer_started
+        nonlocal webhook_runtime, health_runtime, db_writer_started
 
         async def stop_webhook_runtime() -> None:
             nonlocal webhook_runtime
@@ -282,14 +229,6 @@ async def create_application():
             finally:
                 health_runtime = None
 
-        async def stop_scheduler_runtime() -> None:
-            nonlocal scheduler_started
-            try:
-                if scheduler_started:
-                    await stop_scheduler()
-            finally:
-                scheduler_started = False
-
         async def stop_db_writer_runtime() -> None:
             nonlocal db_writer_started
             try:
@@ -302,16 +241,10 @@ async def create_application():
             (
                 ShutdownStep("messenger webhook runtime", stop_webhook_runtime),
                 ShutdownStep("health runtime", stop_health_runtime),
-                ShutdownStep("scheduler", stop_scheduler_runtime),
                 ShutdownStep("database writer", stop_db_writer_runtime),
                 ShutdownStep("task manager", tm.shutdown),
             )
         )
-
-    # Sovereignty (optional): initialize DecisionCore singleton (SelfHealingEngine.tick runs via services.scheduler)
-    sovereign_enabled = os.getenv('SOVEREIGN_ENABLED', '0').strip() in {'1','true','yes','on'}
-    if sovereign_enabled:
-        DecisionCore.instance()
 
     if not telegram_enabled:
         log.info(
@@ -367,32 +300,10 @@ async def create_application():
             message_interval_sec=message_interval_sec,
         )
     )
-    # Диагностика: логируем, какой хендлер "перехватил" ввод HH:MM.
-    dp.update.middleware(TimeInputTraceMiddleware())
-    dp.update.middleware(StateLogMiddleware())
-    dp.update.middleware(InteractionAnalyticsMiddleware())
-
-    dp.include_router(clientplatform_control.router)
-    dp.include_router(start.router)
-    dp.include_router(menu.router)
-    dp.include_router(text_input.router)
-    dp.include_router(demo.router)
-    dp.include_router(audio.router)
-    dp.include_router(payments.router)
-    dp.include_router(admin.router)
-    dp.include_router(admin_release.router)
-    dp.include_router(admin_stats.router)
-    dp.include_router(admin_inline.router)
-    dp.include_router(share.router)
-    dp.include_router(weather.router)
-    dp.include_router(info.router)
-    dp.include_router(micro.router)
-    dp.include_router(settings_router.router)
-    dp.include_router(mood.router)
-    dp.include_router(diagnostics.router)
-    dp.include_router(gift_flow.router)
-    dp.include_router(kb_debug.router)
-    dp.include_router(messenger_audio.router)
+    # The composed ClientPlatform entry router is the only production Telegram
+    # user surface. It includes the owner/customer workspaces and all current
+    # ClientPlatform extensions without registering an inherited product UI.
+    dp.include_router(clientplatform_entry.router)
 
     transport = telegram_transport()
     if transport == 'webhook':

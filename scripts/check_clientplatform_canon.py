@@ -19,14 +19,13 @@ REQUIRED_CANON_FRAGMENTS = (
     "Первый обязательный вертикальный сценарий",
     "Regression Wall",
     "Критерии готовности MVP",
-    "Не подключать ClientPlatform к production-инфраструктуре Метротерапии",
+    "Не подключать ClientPlatform к production-инфраструктуре других продуктов",
 )
 
 REQUIRED_PROVENANCE_FRAGMENTS = (
-    "mailsvb2-bot/metrotherapy-bot-telegram",
     "mailsvb2-bot/clientplatform",
     BASELINE_SHA,
-    "must never use Metrotherapy production",
+    "must use only ClientPlatform-owned production resources",
 )
 
 REQUIRED_README_FRAGMENTS = (
@@ -35,7 +34,7 @@ REQUIRED_README_FRAGMENTS = (
     "docs/CLIENTPLATFORM_CANON_TZ.md",
     "docs/BASELINE_PROVENANCE.md",
     BASELINE_SHA,
-    "запрещено запускать с production-конфигурацией Метротерапии",
+    "разрешено запускать только с собственной production-конфигурацией ClientPlatform",
 )
 
 

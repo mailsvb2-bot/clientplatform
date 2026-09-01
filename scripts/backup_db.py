@@ -144,7 +144,7 @@ def _error_payload(source: Path, code: str) -> dict[str, object]:
 def main() -> int:
     if is_postgres_enabled():
         print(
-            "SKIP: METRO_DB_ENGINE=postgres uses pg_dump backups, not SQLite backup_db.py. "
+            "SKIP: CLIENTPLATFORM_DB_ENGINE=postgres uses pg_dump backups, not SQLite backup_db.py. "
             f"Target={redacted_db_target()}"
         )
         return 0

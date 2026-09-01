@@ -278,7 +278,7 @@ def cancel_post_prompt(user_id: int, session_id: int | str) -> None:
             )
 
 
-def _claim_due_jobs_postgres(*, now_utc_iso: str, stale_before: str, limit: int, token: str) -> list[ClaimedJob]:
+def _claim_due_jobs_postgres(*, now_utc_iso: str, stale_before: str, limit: int, token: str, job_type: str | None = None) -> list[ClaimedJob]:
     """Atomically claim due jobs using native Postgres row locks."""
     with db() as conn:
         with tx(conn):
@@ -290,6 +290,7 @@ def _claim_due_jobs_postgres(*, now_utc_iso: str, stale_before: str, limit: int,
                     WHERE done_at IS NULL
                       AND run_at_utc <= ?
                       AND (locked_at IS NULL OR locked_at <= ?)
+                      AND (? IS NULL OR job_type=?)
                     ORDER BY id ASC
                     LIMIT ?
                     FOR UPDATE SKIP LOCKED
@@ -302,12 +303,12 @@ def _claim_due_jobs_postgres(*, now_utc_iso: str, stale_before: str, limit: int,
                 RETURNING jobs.id, jobs.user_id, jobs.job_type, jobs.run_at_utc,
                           jobs.payload, jobs.job_key, jobs.retries, jobs.lock_token
                 """.strip(),
-                (now_utc_iso, stale_before, int(limit), now_utc_iso, token),
+                (now_utc_iso, stale_before, job_type, job_type, int(limit), now_utc_iso, token),
             ).fetchall()
     return _claimed_jobs_from_rows(list(rows), fallback_token=token)
 
 
-def _claim_due_jobs_sqlite(*, now_utc_iso: str, stale_before: str, limit: int, token: str) -> list[ClaimedJob]:
+def _claim_due_jobs_sqlite(*, now_utc_iso: str, stale_before: str, limit: int, token: str, job_type: str | None = None) -> list[ClaimedJob]:
     with db() as conn:
         with tx(conn):
             rows = conn.execute(
@@ -317,10 +318,11 @@ def _claim_due_jobs_sqlite(*, now_utc_iso: str, stale_before: str, limit: int, t
                 WHERE done_at IS NULL
                   AND run_at_utc <= ?
                   AND (locked_at IS NULL OR locked_at <= ?)
+                  AND (? IS NULL OR job_type=?)
                 ORDER BY id ASC
                 LIMIT ?
                 """.strip(),
-                (now_utc_iso, stale_before, int(limit)),
+                (now_utc_iso, stale_before, job_type, job_type, int(limit)),
             ).fetchall()
 
             if not rows:
@@ -356,7 +358,7 @@ def _claim_due_jobs_sqlite(*, now_utc_iso: str, stale_before: str, limit: int, t
     return _claimed_jobs_from_rows(list(claimed), fallback_token=token)
 
 
-def claim_due_jobs(now_utc_iso: str, *, limit: int = 50, lock_ttl_sec: int = 120) -> list[ClaimedJob]:
+def claim_due_jobs(now_utc_iso: str, *, limit: int = 50, lock_ttl_sec: int = 120, job_type: str | None = None) -> list[ClaimedJob]:
     """Claim due jobs with a DB lock.
 
     In production/Postgres this is a native atomic UPDATE ... RETURNING claim with
@@ -368,8 +370,8 @@ def claim_due_jobs(now_utc_iso: str, *, limit: int = 50, lock_ttl_sec: int = 120
     token = uuid.uuid4().hex
 
     if CONFIG.uses_postgres:
-        return _claim_due_jobs_postgres(now_utc_iso=now_utc_iso, stale_before=stale_before, limit=int(limit), token=token)
-    return _claim_due_jobs_sqlite(now_utc_iso=now_utc_iso, stale_before=stale_before, limit=int(limit), token=token)
+        return _claim_due_jobs_postgres(now_utc_iso=now_utc_iso, stale_before=stale_before, limit=int(limit), token=token, job_type=job_type)
+    return _claim_due_jobs_sqlite(now_utc_iso=now_utc_iso, stale_before=stale_before, limit=int(limit), token=token, job_type=job_type)
 
 
 def lock_job(job_id: int, lock_token: str) -> bool:

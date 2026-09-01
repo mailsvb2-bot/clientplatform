@@ -125,7 +125,6 @@ def _reset_fakes() -> None:
 def _patch_runtime_surface(
     monkeypatch: pytest.MonkeyPatch,
     *,
-    payment: bool = False,
     privacy: bool = False,
     max_enabled: bool = False,
     vk_enabled: bool = False,
@@ -141,7 +140,6 @@ def _patch_runtime_surface(
         "ManagedBotGatewayRuntime",
         FakeGatewayRuntime,
     )
-    monkeypatch.setattr(messenger_webhooks, "payment_http_enabled", lambda: payment)
     monkeypatch.setattr(
         messenger_webhooks,
         "privacy_export_http_enabled",
@@ -364,23 +362,18 @@ async def test_vk_webhook_guard_delegation_and_rejection(
 def test_route_registration_helpers_have_no_telegram_route() -> None:
     app = FakeApplication()
     messenger_webhooks._register_health_routes(app)
-    messenger_webhooks._register_payment_routes(app)
     messenger_webhooks._register_privacy_export_routes(app)
     messenger_webhooks._register_max_routes(app)
     messenger_webhooks._register_vk_routes(app)
-    messenger_webhooks._register_audio_routes(app)
     messenger_webhooks._register_clientplatform_owner_entry_routes(app)
     routes = {(method, path) for method, path, _handler in app.router.routes}
     assert ("GET", "/") in routes
     assert ("GET", "/health") in routes
     assert ("GET", "/healthz") in routes
-    assert ("GET", "/terms") in routes
-    assert ("POST", "/pay/yookassa/webhook") in routes
     assert ("POST", "/webhooks/max") in routes
     assert ("POST", "/webhooks/vk") in routes
     assert ("GET", "/clientplatform/open/{platform}") in routes
     assert all("telegram" not in path for _method, path in routes)
-    assert any(path.endswith("{filename}") for _method, path in routes)
     assert any(path.endswith("{token}") for _method, path in routes)
 
 
@@ -453,7 +446,6 @@ async def test_full_webhook_native_ingress_and_polling_gateway_start_and_stop(
 ) -> None:
     _patch_runtime_surface(
         monkeypatch,
-        payment=True,
         privacy=True,
         max_enabled=True,
         vk_enabled=True,

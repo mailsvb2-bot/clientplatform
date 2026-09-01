@@ -118,7 +118,7 @@ def test_configured_path_requires_dedicated_flag_and_exact_confirmation(
         conn.execute("CREATE TABLE sentinel(value INTEGER NOT NULL)")
         conn.execute("INSERT INTO sentinel(value) VALUES(7)")
         conn.commit()
-    monkeypatch.setenv("METRO_DB_PATH", str(target))
+    monkeypatch.setenv("CLIENTPLATFORM_DB_PATH", str(target))
 
     base_argv = [
         "stress_db.py",

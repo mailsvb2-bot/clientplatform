@@ -36,12 +36,10 @@ class ClientPlatformControlBotContractTests(unittest.TestCase):
         self.assertIn("ContentKind.AUDIO", handler)
         self.assertIn("ContentKind.TEXT", handler)
 
-    def test_control_router_precedes_legacy_start_and_has_explicit_emergency_gate(self) -> None:
+    def test_canonical_entry_router_is_unique_and_control_gate_is_explicit(self) -> None:
         source = Path("app.py").read_text(encoding="utf-8")
-        self.assertLess(
-            source.index("dp.include_router(clientplatform_control.router)"),
-            source.index("dp.include_router(start.router)"),
-        )
+        self.assertEqual(source.count("dp.include_router(clientplatform_entry.router)"), 1)
+        self.assertIn("from handlers import clientplatform_entry", source)
         handler = Path("handlers/clientplatform_control.py").read_text(encoding="utf-8")
         tree = ast.parse(handler)
         runtime = Path("clientplatform/runtime/control_bot.py").read_text(encoding="utf-8")
@@ -89,13 +87,14 @@ class ClientPlatformControlBotContractTests(unittest.TestCase):
             "EnvironmentFile=/etc/clientplatform/clientplatform.env",
             service,
         )
-        self.assertNotIn("/etc/metrotherapy", service)
-        self.assertNotIn("deploy/metrotherapy", service)
+        self.assertEqual(service.count("EnvironmentFile=/etc/clientplatform/clientplatform.env"), 1)
+        self.assertNotIn("deploy/clientplatform", service)
 
-    def test_legacy_start_handler_is_unchanged_and_still_registered(self) -> None:
-        source = Path("handlers/start.py").read_text(encoding="utf-8")
-        self.assertIn("@router.message(CommandStart())", source)
-        self.assertIn("Добро пожаловать в Метротерапию", source)
+    def test_retired_start_handler_is_absent_and_not_registered(self) -> None:
+        self.assertFalse(Path("handlers/start.py").exists())
+        source = Path("app.py").read_text(encoding="utf-8")
+        self.assertNotIn("start.router", source)
+        self.assertEqual(source.count("clientplatform_entry.router"), 1)
 
 
 if __name__ == "__main__":

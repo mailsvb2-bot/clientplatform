@@ -65,9 +65,9 @@ def test_guard_selects_compatibility_for_legacy_and_enforce_for_capable_release(
     env = os.environ.copy()
     env.update(
         {
-            "METRO_RUNTIME_ROOT": str(runtime),
-            "METRO_WRITABLE_ROOT": str(state),
-            "METRO_RUNTIME_WRITE_GUARD_OVERRIDE": str(dropin),
+            "CLIENTPLATFORM_RUNTIME_ROOT": str(runtime),
+            "CLIENTPLATFORM_WRITABLE_ROOT": str(state),
+            "CLIENTPLATFORM_RUNTIME_WRITE_GUARD_OVERRIDE": str(dropin),
             "SYSTEMCTL": str(fake_systemctl),
         }
     )
@@ -93,8 +93,8 @@ def test_guard_selects_compatibility_for_legacy_and_enforce_for_capable_release(
     assert "ReadWritePaths=\n" in compatibility_dropin
     assert f"ReadOnlyPaths={runtime}\n" not in compatibility_dropin
     assert f"ReadWritePaths={state}\n" not in compatibility_dropin
-    assert f"Environment=METRO_DATA_DIR={state / 'data'}\n" in compatibility_dropin
-    assert f"Environment=METRO_LOGS_DIR={state / 'logs'}\n" in compatibility_dropin
+    assert f"Environment=CLIENTPLATFORM_DATA_DIR={state / 'data'}\n" in compatibility_dropin
+    assert f"Environment=CLIENTPLATFORM_LOGS_DIR={state / 'logs'}\n" in compatibility_dropin
 
     capable_result = _run_guard(
         bash,

@@ -23,7 +23,6 @@ from services.db.core import (
 )
 from services.db.read_only import get_db_ro
 
-from services.db import schema
 
 import sys as _sys
 import types as _types

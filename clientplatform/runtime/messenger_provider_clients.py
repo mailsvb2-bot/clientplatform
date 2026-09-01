@@ -188,7 +188,7 @@ async def _materialize_media(reference: str) -> tuple[Path, bool]:
 def _vk_sender(token: str):  # noqa: ANN202
     # Retained provider transport is imported only at the actual provider
     # boundary. Importing canonical ClientPlatform runtime must never pull
-    # Metrotherapy presentation dependencies into dependency-light domains.
+    # ClientPlatform presentation dependencies into dependency-light domains.
     from runtime.messenger_vk_sender import VkBotSender
 
     return VkBotSender(token=token)

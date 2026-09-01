@@ -78,46 +78,19 @@ def test_rate_limit_rejects_nan_and_infinity() -> None:
     assert limiter.message_interval_sec == 0.05
 
 
-@pytest.mark.asyncio
-async def test_state_log_never_persists_callback_capability(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class FakeCallback:
-        def __init__(self) -> None:
-            self.data = "gift_SUPER_SECRET_CAPABILITY"
-            self.from_user = SimpleNamespace(id=8)
-
-    monkeypatch.setattr(middlewares, "CallbackQuery", FakeCallback)
-    captured: list[tuple] = []
-    monkeypatch.setattr(
-        middlewares,
-        "_spawn_bg",
-        lambda _data, fn, *args, **kwargs: captured.append((fn, args, kwargs)),
-    )
-
-    async def handler(_event, _data):
-        return "ok"
-
-    assert await middlewares.StateLogMiddleware()(handler, FakeCallback(), {}) == "ok"
-    assert captured
-    meta = captured[0][1][-1]
-    assert meta == {"action": "start_payload"}
-    assert "SUPER_SECRET_CAPABILITY" not in str(captured)
-
-
 def test_slow_callback_diagnostics_classify_instead_of_logging_payload() -> None:
     FakeCallback = type(
         "CallbackQuery",
         (),
         {
-            "data": "gift_SUPER_SECRET_CAPABILITY",
+            "data": "cpm:SUPER_SECRET_CAPABILITY",
             "from_user": SimpleNamespace(id=9),
         },
     )
 
     details = middlewares.SlowHandlerLogMiddleware._event_details(FakeCallback())
 
-    assert details["payload"] == "callback_action=start_payload"
+    assert details["payload"] == "callback_action=cpm"
     assert "SUPER_SECRET_CAPABILITY" not in str(details)
 
 

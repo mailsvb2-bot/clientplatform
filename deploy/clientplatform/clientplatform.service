@@ -14,7 +14,6 @@ EnvironmentFile=/etc/clientplatform/clientplatform.env
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
 ExecStartPre=/var/lib/clientplatform/runtime/current/.venv/bin/python scripts/clientplatform_production_preflight.py --env-file /etc/clientplatform/clientplatform.env
-ExecStartPre=/var/lib/clientplatform/runtime/current/.venv/bin/python scripts/clientplatform_monetization_preflight.py --env-file /etc/clientplatform/clientplatform.env
 ExecStartPre=/var/lib/clientplatform/runtime/current/.venv/bin/python scripts/clientplatform_program_media_preflight.py --env-file /etc/clientplatform/clientplatform.env
 ExecStartPre=/var/lib/clientplatform/runtime/current/.venv/bin/python scripts/clientplatform_bot_gateway_preflight.py --env-file /etc/clientplatform/clientplatform.env
 ExecStart=/var/lib/clientplatform/runtime/current/.venv/bin/python main.py

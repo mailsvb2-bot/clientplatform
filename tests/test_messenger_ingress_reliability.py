@@ -32,7 +32,7 @@ def _failure(*, attempts: int, retryable: bool, dead_lettered: bool) -> InboundF
 @pytest.mark.asyncio
 async def test_vk_extraction_failure_returns_503_before_dead_letter(monkeypatch) -> None:
     payload = {"type": "message_new", "object": {"message": {"id": 1}}}
-    monkeypatch.setattr(reliability.legacy, "_vk_secret_ok", lambda _payload: True)
+    monkeypatch.setattr(reliability.base_ingress, "_vk_secret_ok", lambda _payload: True)
     monkeypatch.setattr(reliability, "extract_vk_message", lambda _payload: None)
     monkeypatch.setattr(
         reliability,
@@ -49,7 +49,7 @@ async def test_vk_extraction_failure_returns_503_before_dead_letter(monkeypatch)
 @pytest.mark.asyncio
 async def test_vk_dead_letter_is_acknowledged(monkeypatch) -> None:
     payload = {"type": "message_new", "object": {"message": {"id": 2}}}
-    monkeypatch.setattr(reliability.legacy, "_vk_secret_ok", lambda _payload: True)
+    monkeypatch.setattr(reliability.base_ingress, "_vk_secret_ok", lambda _payload: True)
     monkeypatch.setattr(reliability, "extract_vk_message", lambda _payload: None)
     monkeypatch.setattr(
         reliability,
@@ -66,7 +66,7 @@ async def test_vk_dead_letter_is_acknowledged(monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_max_extraction_failure_exposes_retry_state(monkeypatch) -> None:
     payload = {"update_type": "message_created", "message": {"message_id": "m1"}}
-    monkeypatch.setattr(reliability.legacy, "_max_secret_ok", lambda _request, _payload: True)
+    monkeypatch.setattr(reliability.base_ingress, "_max_secret_ok", lambda _request, _payload: True)
     monkeypatch.setattr(reliability, "extract_max_message", lambda _payload: None)
     monkeypatch.setattr(
         reliability,
@@ -84,7 +84,7 @@ async def test_max_extraction_failure_exposes_retry_state(monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_max_dead_letter_is_acknowledged(monkeypatch) -> None:
     payload = {"update_type": "message_created", "message": {"message_id": "m2"}}
-    monkeypatch.setattr(reliability.legacy, "_max_secret_ok", lambda _request, _payload: True)
+    monkeypatch.setattr(reliability.base_ingress, "_max_secret_ok", lambda _request, _payload: True)
     monkeypatch.setattr(reliability, "extract_max_message", lambda _payload: None)
     monkeypatch.setattr(
         reliability,
@@ -100,20 +100,32 @@ async def test_max_dead_letter_is_acknowledged(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_valid_vk_payload_delegates_to_existing_business_handler(monkeypatch) -> None:
+async def test_valid_vk_payload_uses_canonical_clientplatform_entry(monkeypatch) -> None:
     payload = {"type": "message_new", "object": {"message": {"from_id": 42, "text": "start"}}}
-    delegated = False
+    captured: list[dict[str, object]] = []
 
-    async def fake_legacy(_request):
-        nonlocal delegated
-        delegated = True
-        return web.Response(text="ok")
-
-    monkeypatch.setattr(reliability.legacy, "_vk_secret_ok", lambda _payload: True)
-    monkeypatch.setattr(reliability, "extract_vk_message", lambda _payload: {"user_id": 42})
-    monkeypatch.setattr(reliability.legacy, "vk_webhook", fake_legacy)
+    monkeypatch.setattr(reliability.base_ingress, "_vk_secret_ok", lambda _payload: True)
+    monkeypatch.setattr(
+        reliability,
+        "extract_vk_message",
+        lambda _payload: {
+            "user_id": 42,
+            "external_user_id": "42",
+            "text": "start",
+            "username": None,
+            "display_name": "",
+            "first_name": "",
+        },
+    )
+    monkeypatch.setattr(
+        reliability,
+        "_process_clientplatform_entry_and_persist",
+        lambda **kwargs: captured.append(dict(kwargs)) or True,
+    )
 
     response = await reliability.vk_webhook(FakeRequest(payload))
 
     assert response.status == 200
-    assert delegated is True
+    assert response.text == "ok"
+    assert captured and captured[0]["platform"] == "vk"
+    assert captured[0]["text"] == "start"

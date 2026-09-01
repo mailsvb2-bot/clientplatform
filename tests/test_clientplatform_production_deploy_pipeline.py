@@ -10,10 +10,8 @@ from pathlib import Path
 from unittest import mock
 
 from config import settings as runtime_settings
-from scripts import clientplatform_container_audio_assets as container_audio
 from scripts import clientplatform_prepare_production_env as prepare_env
 from scripts import clientplatform_production_deploy as production_deploy
-from services.audio_asset_integrity import validate_release_assets
 
 
 _REQUIRED_ENV = """\
@@ -42,10 +40,8 @@ class ProductionEnvironmentPreparationTests(unittest.TestCase):
             second = path.read_text(encoding="utf-8")
 
             self.assertIn("CLIENTPLATFORM_PROGRAM_MEDIA_INGEST_ENABLED", added)
-            self.assertIn("CLIENTPLATFORM_REQUIRE_AUDIO_ASSETS", added)
             self.assertNotIn("CLIENTPLATFORM_SECRET_MEDIA_SIGNING_KEY", added)
             self.assertIn("CLIENTPLATFORM_SECRET_MEDIA_SIGNING_KEY=existing-key", first)
-            self.assertIn("CLIENTPLATFORM_REQUIRE_AUDIO_ASSETS=1", first)
             self.assertEqual(second_added, ())
             self.assertEqual(first, second)
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
@@ -105,85 +101,7 @@ class ProductionEnvironmentPreparationTests(unittest.TestCase):
             ):
                 prepare_env.prepare(path)
 
-            path.write_text(
-                _REQUIRED_ENV + "CLIENTPLATFORM_REQUIRE_AUDIO_ASSETS=0\n",
-                encoding="utf-8",
-            )
-            os.chmod(path, 0o600)
-            with self.assertRaisesRegex(
-                prepare_env.EnvironmentPreparationError,
-                "mismatched_clientplatform_require_audio_assets",
-            ):
-                prepare_env.prepare(path)
 
-    def test_trusted_proxy_parser_ignores_empty_csv_segments(self) -> None:
-        with mock.patch.dict(
-            os.environ,
-            {
-                "TRUST_PROXY_HEADERS": "1",
-                "PAYMENT_WEBHOOK_TRUSTED_PROXY_CIDRS": ",172.18.0.0/16,,",
-            },
-            clear=False,
-        ):
-            runtime_settings._validate_trusted_proxy_env()
-
-
-class ContainerAudioAssetBuildTests(unittest.TestCase):
-    @staticmethod
-    def _write_audio_tree(root: Path) -> None:
-        audio = root / "audio"
-        (audio / "demo").mkdir(parents=True)
-        (audio / "full").mkdir(parents=True)
-        (audio / "demo" / "work.ogg").write_bytes(b"OggS" + b"w" * 128)
-        (audio / "demo" / "home.ogg").write_bytes(b"OggS" + b"h" * 128)
-        (audio / "full" / "1_work.ogg").write_bytes(b"OggS" + b"1" * 128)
-        (audio / "full" / "2_home.ogg").write_bytes(b"OggS" + b"2" * 128)
-
-    def test_prepare_seals_moves_links_and_verifies_audio(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            root = Path(raw) / "app"
-            assets = Path(raw) / "immutable-audio"
-            root.mkdir()
-            self._write_audio_tree(root)
-
-            first = container_audio.prepare_container_audio_assets(
-                root=root,
-                asset_root=assets,
-                require=True,
-            )
-            second = container_audio.prepare_container_audio_assets(
-                root=root,
-                asset_root=assets,
-                require=True,
-            )
-
-            self.assertIsNotNone(first)
-            self.assertEqual(first, second)
-            assert first is not None
-            self.assertTrue((root / "audio").is_symlink())
-            self.assertEqual((root / "audio").resolve(), assets / first.asset_sha256)
-            self.assertTrue((root / ".audio-assets.json").is_file())
-            self.assertEqual(
-                validate_release_assets(root, require_versioned=True),
-                first,
-            )
-
-    def test_prepare_fails_closed_when_required_audio_is_missing(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            root = Path(raw) / "app"
-            root.mkdir()
-            with self.assertRaisesRegex(
-                container_audio.ContainerAudioAssetError,
-                "container_audio_source_missing",
-            ):
-                container_audio.prepare_container_audio_assets(
-                    root=root,
-                    asset_root=Path(raw) / "immutable-audio",
-                    require=True,
-                )
-
-
-class ProductionDeploymentContractTests(unittest.TestCase):
     def test_backup_checksum_is_streamed(self) -> None:
         payload = b"clientplatform" * 1024
         self.assertEqual(
@@ -677,7 +595,7 @@ class ProductionDeploymentContractTests(unittest.TestCase):
         )
         self.assertNotIn("python3 scripts/clientplatform_production_deploy.py", updater)
 
-    def test_production_image_uses_official_postgres_and_seals_audio(self) -> None:
+    def test_production_image_uses_official_postgres_without_retired_bundled_audio(self) -> None:
         dockerfile = (
             Path(production_deploy.ROOT) / "deploy/clientplatform/Dockerfile"
         ).read_text(encoding="utf-8")
@@ -688,28 +606,19 @@ class ProductionDeploymentContractTests(unittest.TestCase):
         self.assertIn("pg_restore --version", dockerfile)
         self.assertIn("psql --version", dockerfile)
         self.assertIn("Acquire::Retries=5", dockerfile)
-        self.assertIn("ARG CLIENTPLATFORM_REQUIRE_AUDIO_ASSETS=0", dockerfile)
-        self.assertIn("python -m scripts.clientplatform_container_audio_assets", dockerfile)
         self.assertIn("clientplatform_sales_production_smoke.py", dockerfile)
-        self.assertIn("test -L /app/audio", dockerfile)
-        self.assertIn("test -r /app/.audio-assets.json", dockerfile)
+        self.assertNotIn("CLIENTPLATFORM_REQUIRE_AUDIO_ASSETS", dockerfile)
+        self.assertNotIn("clientplatform_container_audio_assets", dockerfile)
         self.assertNotIn("apt.postgresql.org", dockerfile)
         self.assertNotIn("www.postgresql.org", dockerfile)
         self.assertNotIn("ACCC4CF8", dockerfile)
         self.assertNotIn("postgresql-client-16", dockerfile)
 
-    def test_compose_requires_audio_for_app_only(self) -> None:
+    def test_compose_has_no_retired_bundled_audio_build_switch(self) -> None:
         compose = (
             Path(production_deploy.ROOT) / "deploy/clientplatform/compose.production.yml"
         ).read_text(encoding="utf-8")
-        self.assertIn(
-            "CLIENTPLATFORM_REQUIRE_AUDIO_ASSETS: ${CLIENTPLATFORM_REQUIRE_AUDIO_ASSETS:-0}",
-            compose,
-        )
-        self.assertGreaterEqual(
-            compose.count('CLIENTPLATFORM_REQUIRE_AUDIO_ASSETS: "0"'),
-            2,
-        )
+        self.assertNotIn("CLIENTPLATFORM_REQUIRE_AUDIO_ASSETS", compose)
 
     def test_app_image_owns_preflights_and_compose_does_not_override_startup(self) -> None:
         root = Path(production_deploy.ROOT)
@@ -729,7 +638,6 @@ class ProductionDeploymentContractTests(unittest.TestCase):
         )
         for module in (
             "clientplatform_production_preflight",
-            "clientplatform_monetization_preflight",
             "clientplatform_program_media_preflight",
             "clientplatform_bot_gateway_preflight",
         ):
@@ -738,7 +646,6 @@ class ProductionDeploymentContractTests(unittest.TestCase):
         self.assertIn("exec python main.py", entrypoint)
         self.assertNotIn('entrypoint: ["/bin/sh", "-ec"]', compose)
         self.assertNotIn("python scripts/clientplatform_production_preflight.py", compose)
-        self.assertNotIn("python scripts/clientplatform_monetization_preflight.py", compose)
         self.assertNotIn("python scripts/clientplatform_program_media_preflight.py", compose)
         self.assertNotIn("python scripts/clientplatform_bot_gateway_preflight.py", compose)
 

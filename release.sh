@@ -93,14 +93,14 @@ echo "▶ Running strict validator (prod)..."
 export APP_ENV=prod
 export VALIDATOR_RELEASE_MODE=1
 export PYTHONDONTWRITEBYTECODE=1
-TMP_RELEASE_DB="$(mktemp -u "${TMPDIR:-/tmp}/metro_release_db_XXXXXX.sqlite")"
+TMP_RELEASE_DB="$(mktemp -u "${TMPDIR:-/tmp}/clientplatform_release_db_XXXXXX.sqlite")"
 trap '''rm -f "$TMP_RELEASE_DB" "$TMP_RELEASE_DB-journal" "$TMP_RELEASE_DB-wal" "$TMP_RELEASE_DB-shm"''' EXIT
-export METRO_DB_PATH="$TMP_RELEASE_DB"
+export CLIENTPLATFORM_DB_PATH="$TMP_RELEASE_DB"
 python scripts/validate_project.py
 
 echo "▶ Running smoke checks (no polling)..."
 python scripts/smoke.py
-unset METRO_DB_PATH
+unset CLIENTPLATFORM_DB_PATH
 rm -f "$TMP_RELEASE_DB" "$TMP_RELEASE_DB-journal" "$TMP_RELEASE_DB-wal" "$TMP_RELEASE_DB-shm"
 trap - EXIT
 

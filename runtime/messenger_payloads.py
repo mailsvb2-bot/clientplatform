@@ -4,87 +4,23 @@ import hashlib
 import json
 from typing import Any, Mapping
 
-from services.messenger.menu_contract import normalize_menu_command
-
-
-def _format_score(score: int) -> str:
-    return str(int(score))
-
-
-def _score_command_value(value: str) -> str | None:
-    raw = str(value or "").strip().casefold().replace("−", "-")
-    candidate: str | None = None
-    if raw.startswith("score:"):
-        candidate = raw.split(":", 1)[1].strip()
-    elif raw.startswith("score="):
-        candidate = raw.split("=", 1)[1].strip()
-    elif raw.startswith("mood:"):
-        parts = raw.split(":")
-        if len(parts) >= 4 and parts[1] in {"pre", "post"}:
-            candidate = parts[-1].strip()
-    if candidate is None:
-        return None
-    if candidate.startswith("+"):
-        candidate = candidate[1:]
-    try:
-        score = int(candidate)
-    except ValueError:
-        return None
-    if -10 <= score <= 10:
-        return _format_score(score)
-    return None
-
-
-def _plain_score_value(value: str, *, allow_one_two: bool = False) -> str | None:
-    raw = str(value or "").strip().casefold().replace("−", "-")
-    if not raw:
-        return None
-
-    if raw.startswith("+") and raw[1:].isdigit():
-        candidate = raw[1:]
-    elif raw.startswith("-") and raw[1:].isdigit():
-        candidate = raw
-    elif raw == "0" or raw in {"3", "4", "5", "6", "7", "8", "9", "10"}:
-        candidate = raw
-    elif allow_one_two and raw in {"1", "2"}:
-        candidate = raw
-    else:
-        return None
-
-    try:
-        score = int(candidate)
-    except ValueError:
-        return None
-
-    if -10 <= score <= 10:
-        return _format_score(score)
-    return None
-
 
 def normalise_messenger_text(text: str, *, allow_plain_score: bool = False) -> str:
-    raw = (text or "").strip()
+    """Normalize only channel-neutral ClientPlatform entry aliases.
 
-    score_command = _score_command_value(raw)
-    if score_command is not None:
-        return score_command
+    ``allow_plain_score`` remains as a compatibility keyword for callers from
+    older deployments, but ClientPlatform control ingress never interprets bare
+    numbers as a product-specific state machine.
+    """
 
-    plain_score = _plain_score_value(raw, allow_one_two=allow_plain_score)
-    if plain_score is not None:
-        return plain_score
-
-    compact = raw.casefold().replace("ё", "е")
-    compact = " ".join(compact.split())
-
-    command = normalize_menu_command(compact)
-    if command:
-        return "start" if command == "start" else command
-
+    del allow_plain_score
+    raw = str(text or "").strip()
+    compact = " ".join(raw.casefold().replace("ё", "е").split())
     aliases = {
         "/start": "start",
         "start": "start",
         "старт": "start",
         "начать": "start",
-        "🌿 начать": "start",
         "menu": "start",
         "/menu": "start",
         "меню": "start",
@@ -94,65 +30,6 @@ def normalise_messenger_text(text: str, *, allow_plain_score: bool = False) -> s
         "⬅️ меню": "start",
         "menu:main": "start",
         "back": "start",
-        "demo_kind_work": "demo_work",
-        "demo_kind_home": "demo_home",
-        "sub:menu": "pay",
-        "gift:menu": "gift",
-        "settings:menu": "settings",
-        "settings:state": "progress",
-        "share:menu": "share",
-        "weather:show": "weather",
-        "weather:city": "weather_city",
-        "1": "demo_work",
-        "1.": "demo_work",
-        "1️⃣": "demo_work",
-        "1️⃣ утро / дорога": "demo_work",
-        "утро / дорога": "demo_work",
-        "утро": "demo_work",
-        "дорога на работу": "demo_work",
-        "🚗 практика на утро / дорогу": "demo_work",
-        "практика на утро / дорогу": "demo_work",
-        "2": "demo_home",
-        "2.": "demo_home",
-        "2️⃣": "demo_home",
-        "2️⃣ вечер / домой": "demo_home",
-        "вечер / домой": "demo_home",
-        "вечер": "demo_home",
-        "дорога домой": "demo_home",
-        "🌙 практика на вечер / домой": "demo_home",
-        "практика на вечер / домой": "demo_home",
-        "weather_city": "weather_city",
-        "🏙 изменить город": "weather_city",
-        "изменить город": "weather_city",
-        "сменить город": "weather_city",
-        "город": "weather_city",
-        "🔄 обновить погоду": "weather",
-        "обновить погоду": "weather",
-        "💳 оплатить": "pay",
-        "оплатить": "pay",
-        "оплата": "pay",
-        "pay": "pay",
-        "⚙️ настройки": "settings",
-        "settings": "settings",
-        "repeat": "repeat",
-        "/repeat": "repeat",
-        "🔁 повторить": "repeat",
-        "повторить": "repeat",
-        "повторить аудио": "repeat",
-        "слушать снова": "repeat",
-        "📊 прогресс": "progress",
-        "🧾 история": "history",
-        "история": "history",
-        "history": "history",
-        "timeline": "history",
-        "/timeline": "history",
-        "🔁 другой мессенджер": "switch",
-        "другой мессенджер": "switch",
-        "switch": "switch",
-        "❓ помощь": "help",
-        "помощь": "help",
-        "help": "help",
-        "/help": "help",
     }
     return aliases.get(compact, raw)
 
@@ -355,19 +232,6 @@ def max_event_key(payload: dict[str, Any]) -> str:
     return key or stable_payload_key("max", payload)
 
 
-def _has_pending_score_context(user_id: int | None) -> bool:
-    if user_id is None:
-        return False
-    try:
-        from services.mood_text_flow import find_pending_pre_session_id, find_pending_post_session_id
-
-        return bool(find_pending_pre_session_id(int(user_id)) or find_pending_post_session_id(int(user_id)))
-    except RuntimeError:
-        return False
-    except (ImportError, TypeError, ValueError):
-        return False
-
-
 def extract_vk_message(payload: dict[str, Any]) -> dict[str, Any] | None:
     obj = _dict_or_empty(payload.get("object"))
     message = _dict_or_empty(obj.get("message") or obj)
@@ -388,7 +252,7 @@ def extract_vk_message(payload: dict[str, Any]) -> dict[str, Any] | None:
         text = f"/start {ref}"
     else:
         text = (payload_text or message.get("text") or obj.get("text") or "").strip()
-        text = normalise_messenger_text(text, allow_plain_score=_has_pending_score_context(safe_user_id))
+        text = normalise_messenger_text(text)
     return {
         "user_id": safe_user_id,
         "external_user_id": str(from_id),
@@ -433,7 +297,7 @@ def extract_max_message(payload: dict[str, Any]) -> dict[str, Any] | None:
         or text_from_max_payload(payload.get("payload"))
     )
     text = command_text or text or "start"
-    text = normalise_messenger_text(text, allow_plain_score=bool(command_text) or _has_pending_score_context(int(user_id)))
+    text = normalise_messenger_text(text)
     return {
         "user_id": int(user_id),
         "external_user_id": str(user_id),

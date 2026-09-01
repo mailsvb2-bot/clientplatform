@@ -22,17 +22,6 @@ def _value(env: Mapping[str, str], name: str) -> str:
     return str(env.get(name, "") or "").strip()
 
 
-def _preferred_value(
-    env: Mapping[str, str],
-    primary: str,
-    legacy: str | None = None,
-) -> str:
-    value = _value(env, primary)
-    if value or legacy is None:
-        return value
-    return _value(env, legacy)
-
-
 def _truthy(env: Mapping[str, str], name: str) -> bool:
     return _value(env, name).lower() in _TRUE
 
@@ -52,18 +41,6 @@ def _require(env: Mapping[str, str], name: str, errors: list[str]) -> str:
     value = _value(env, name)
     if _looks_placeholder(value):
         errors.append(f"{name} is missing or placeholder")
-    return value
-
-
-def _require_preferred(
-    env: Mapping[str, str],
-    primary: str,
-    legacy: str,
-    errors: list[str],
-) -> str:
-    value = _preferred_value(env, primary, legacy)
-    if _looks_placeholder(value):
-        errors.append(f"{primary} is missing or placeholder")
     return value
 
 
@@ -109,22 +86,6 @@ def _absolute_path(env: Mapping[str, str], name: str, errors: list[str]) -> Path
     return path.resolve()
 
 
-def _absolute_path_preferred(
-    env: Mapping[str, str],
-    primary: str,
-    legacy: str,
-    errors: list[str],
-) -> Path | None:
-    value = _require_preferred(env, primary, legacy, errors)
-    if not value:
-        return None
-    path = Path(value).expanduser()
-    if not path.is_absolute():
-        errors.append(f"{primary} must be an absolute path")
-        return None
-    return path.resolve()
-
-
 def _validate_admin_ids(env: Mapping[str, str], errors: list[str]) -> None:
     raw = _require(env, "ADMIN_IDS", errors)
     values = [part.strip() for part in raw.split(",") if part.strip()]
@@ -160,7 +121,7 @@ def _validate_identity_and_secrets(env: Mapping[str, str], errors: list[str]) ->
 
 
 def _validate_database(env: Mapping[str, str], errors: list[str]) -> None:
-    engine = _preferred_value(env, "CLIENTPLATFORM_DB_ENGINE", "METRO_DB_ENGINE")
+    engine = _value(env, "CLIENTPLATFORM_DB_ENGINE")
     if engine.lower() not in {"postgres", "postgresql", "pg"}:
         errors.append("CLIENTPLATFORM_DB_ENGINE must be postgres")
     raw = _require(env, "DATABASE_URL", errors)
@@ -176,8 +137,6 @@ def _validate_database(env: Mapping[str, str], errors: list[str]) -> None:
         errors.append("DATABASE_URL database must equal CLIENTPLATFORM_DATABASE_NAME")
     if not database_name.startswith("clientplatform"):
         errors.append("production database name must start with clientplatform")
-    if "metrotherapy" in raw.lower():
-        errors.append("ClientPlatform must not reuse the imported product database")
     if _truthy(env, "ALLOW_SQLITE_IN_PROD"):
         errors.append("ALLOW_SQLITE_IN_PROD is forbidden")
 
@@ -245,7 +204,6 @@ def _validate_public_ingress(env: Mapping[str, str], errors: list[str]) -> None:
 
     for name in (
         "MESSENGER_PUBLIC_BASE_URL",
-        "PAYMENT_PUBLIC_BASE_URL",
         "PRIVACY_EXPORT_PUBLIC_BASE_URL",
         "CLIENTPLATFORM_MEDIA_GATEWAY_BASE_URL",
     ):
@@ -303,8 +261,6 @@ def _validate_storage(env: Mapping[str, str], errors: list[str]) -> None:
         errors.append("media gateway allowlist must contain only CLIENTPLATFORM_STORAGE_BUCKET")
     if not bucket.startswith("clientplatform-") or "staging" in bucket:
         errors.append("production storage bucket must be dedicated and start with clientplatform-")
-    if "metrotherapy" in bucket:
-        errors.append("ClientPlatform must not reuse imported product object storage")
 
     expected_references = {
         "CLIENTPLATFORM_MEDIA_GATEWAY_S3_ACCESS_KEY_REFERENCE": (
@@ -333,40 +289,30 @@ def _validate_storage(env: Mapping[str, str], errors: list[str]) -> None:
 
 
 def _validate_runtime_paths(env: Mapping[str, str], errors: list[str]) -> None:
-    runtime_root = _absolute_path(env, "METRO_RUNTIME_ROOT", errors)
-    writable_root = _absolute_path(env, "METRO_WRITABLE_ROOT", errors)
-    data_dir = _absolute_path_preferred(
-        env, "CLIENTPLATFORM_DATA_DIR", "METRO_DATA_DIR", errors
-    )
-    logs_dir = _absolute_path_preferred(
-        env, "CLIENTPLATFORM_LOGS_DIR", "METRO_LOGS_DIR", errors
-    )
+    runtime_root = _absolute_path(env, "CLIENTPLATFORM_RUNTIME_ROOT", errors)
+    writable_root = _absolute_path(env, "CLIENTPLATFORM_WRITABLE_ROOT", errors)
+    data_dir = _absolute_path(env, "CLIENTPLATFORM_DATA_DIR", errors)
+    logs_dir = _absolute_path(env, "CLIENTPLATFORM_LOGS_DIR", errors)
     mpl_dir = _absolute_path(env, "MPLCONFIGDIR", errors)
-    marker = _absolute_path(env, "PREWARM_MARKER_PATH", errors)
     values = {
-        "METRO_RUNTIME_ROOT": runtime_root,
-        "METRO_WRITABLE_ROOT": writable_root,
+        "CLIENTPLATFORM_RUNTIME_ROOT": runtime_root,
+        "CLIENTPLATFORM_WRITABLE_ROOT": writable_root,
         "CLIENTPLATFORM_DATA_DIR": data_dir,
         "CLIENTPLATFORM_LOGS_DIR": logs_dir,
         "MPLCONFIGDIR": mpl_dir,
-        "PREWARM_MARKER_PATH": marker,
     }
-    for name, path in values.items():
-        if path is not None and "metrotherapy" in str(path).lower():
-            errors.append(f"{name} must not point into the imported product runtime")
     expected_runtime = Path("/var/lib/clientplatform/runtime")
     expected_state = Path("/var/lib/clientplatform/state")
     expected_logs = Path("/var/log/clientplatform")
     if runtime_root is not None and runtime_root != expected_runtime:
-        errors.append("METRO_RUNTIME_ROOT must equal /var/lib/clientplatform/runtime")
+        errors.append("CLIENTPLATFORM_RUNTIME_ROOT must equal /var/lib/clientplatform/runtime")
     if writable_root is not None and writable_root != expected_state:
-        errors.append("METRO_WRITABLE_ROOT must equal /var/lib/clientplatform/state")
+        errors.append("CLIENTPLATFORM_WRITABLE_ROOT must equal /var/lib/clientplatform/state")
     if logs_dir is not None and logs_dir != expected_logs:
         errors.append("CLIENTPLATFORM_LOGS_DIR must equal /var/log/clientplatform")
     for name, path in (
         ("CLIENTPLATFORM_DATA_DIR", data_dir),
         ("MPLCONFIGDIR", mpl_dir),
-        ("PREWARM_MARKER_PATH", marker),
     ):
         if path is not None and not path.is_relative_to(expected_state):
             errors.append(f"{name} must stay under /var/lib/clientplatform/state")

@@ -42,7 +42,7 @@ CLIENTPLATFORM_STAGING_TELEGRAM_BOT_TOKEN
 
 ## Security properties
 
-- The staging bot must be separate from Metrotherapy and all production projects.
+- The staging bot must be separate from ClientPlatform and all production projects.
 - The bot token is never accepted through a workflow input and never written to artifacts.
 - The signing key exists only for one workflow run and is masked by GitHub Actions.
 - The media fixture and gateway exist only in the runner temporary directory.
@@ -70,7 +70,7 @@ CLIENTPLATFORM_STAGING_TELEGRAM_BOT_TOKEN
 
 ## Rejected alternatives
 
-### Reuse an existing Metrotherapy bot token
+### Reuse an existing ClientPlatform bot token
 
 Rejected because it violates clientplatform isolation and could send staging content to production users.
 

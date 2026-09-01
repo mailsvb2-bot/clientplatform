@@ -39,9 +39,9 @@ def deploy_governance_problems(
         "git checkout": "production deploy must not change source branches",
         "fetch --prune": "production deploy must not fetch source from GitHub",
         "merge --ff-only": "production deploy must not merge source from GitHub",
-        "/root/metrotherapy": "legacy Metrotherapy source runtime remains",
-        "/etc/metrotherapy": "legacy Metrotherapy production config remains",
-        "metrotherapy.service": "legacy Metrotherapy systemd identity remains",
+        "/root/clientplatform": "obsolete source runtime remains",
+        "/etc/clientplatform": "obsolete production config remains",
+        "clientplatform.service": "obsolete systemd identity remains",
         "scripts/immutable_deploy.sh": "legacy immutable deploy entrypoint remains active",
         "run_deploy_worker.sh": "legacy deploy webhook worker remains active",
     }

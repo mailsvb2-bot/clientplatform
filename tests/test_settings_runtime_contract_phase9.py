@@ -10,18 +10,7 @@ cfg = importlib.import_module("config.settings")
 ENV_NAMES = (
     "ADMIN_IDS",
     "ADMIN_ID",
-    "YOOKASSA_SHOP_ID",
-    "YOOKASSA_SECRET_KEY",
-    "PAYMENT_CHECKOUT_SIGNING_KEY",
-    "CHECKOUT_SIGNING_KEY",
     "MESSENGER_PUBLIC_BASE_URL",
-    "PAYMENT_HTTP_ENABLED",
-    "PAYMENT_PUBLIC_BASE_URL",
-    "PUBLIC_BASE_URL",
-    "ALLOW_UNSIGNED_PAYMENT_CHECKOUT_IN_PROD",
-    "ALLOW_UNVERIFIED_YOOKASSA_WEBHOOK_IN_PROD",
-    "ALLOW_STATIC_PAYMENT_IDEMPOTENCE_KEY_IN_PROD",
-    "PAYMENT_DANGEROUS_OVERRIDES_ALLOWED",
     "MAX_WEBHOOK_ENABLED",
     "VK_WEBHOOK_ENABLED",
 )
@@ -36,11 +25,6 @@ def install_valid_prod(monkeypatch: pytest.MonkeyPatch) -> None:
     clear_env(monkeypatch)
     monkeypatch.setattr(cfg, "APP_ENV", "prod")
     monkeypatch.setenv("ADMIN_IDS", "10")
-    monkeypatch.setenv("PAYMENT_HTTP_ENABLED", "1")
-    monkeypatch.setenv("YOOKASSA_SHOP_ID", "shop")
-    monkeypatch.setenv("YOOKASSA_SECRET_KEY", "secret")
-    monkeypatch.setenv("PAYMENT_CHECKOUT_SIGNING_KEY", "signing")
-    monkeypatch.setenv("PAYMENT_PUBLIC_BASE_URL", "https://pay.example")
 
     monkeypatch.setattr(cfg.settings, "BOT_TOKEN", "bot-token")
     monkeypatch.setattr(cfg.settings, "HEALTHCHECK_ENABLED", True)
@@ -136,19 +120,6 @@ def test_admin_id_list_env_and_field_fallback(monkeypatch: pytest.MonkeyPatch) -
     assert settings.admin_id_list == []
 
 
-def test_payment_base_url_precedence(monkeypatch: pytest.MonkeyPatch) -> None:
-    clear_env(monkeypatch)
-    monkeypatch.setattr(cfg.settings, "MESSENGER_PUBLIC_BASE_URL", "https://settings-messenger/")
-    monkeypatch.setattr(cfg.settings, "TELEGRAM_WEBHOOK_PUBLIC_BASE_URL", "https://telegram/")
-    assert cfg._prod_payment_base_url() == "https://settings-messenger"
-
-    monkeypatch.setenv("PUBLIC_BASE_URL", "https://public/")
-    assert cfg._prod_payment_base_url() == "https://public"
-    monkeypatch.setenv("PAYMENT_PUBLIC_BASE_URL", "https://payment/")
-    assert cfg._prod_payment_base_url() == "https://payment"
-    monkeypatch.setenv("MESSENGER_PUBLIC_BASE_URL", "https://messenger/")
-    assert cfg._prod_payment_base_url() == "https://messenger"
-
 
 def test_fail_fast_skips_non_prod_and_accepts_valid_prod(monkeypatch: pytest.MonkeyPatch) -> None:
     install_valid_prod(monkeypatch)
@@ -163,48 +134,13 @@ def test_fail_fast_aggregates_missing_secrets(monkeypatch: pytest.MonkeyPatch) -
     install_valid_prod(monkeypatch)
     monkeypatch.setattr(cfg.settings, "BOT_TOKEN", "")
     monkeypatch.delenv("ADMIN_IDS", raising=False)
-    monkeypatch.delenv("YOOKASSA_SHOP_ID", raising=False)
-    monkeypatch.delenv("YOOKASSA_SECRET_KEY", raising=False)
-    monkeypatch.delenv("PAYMENT_CHECKOUT_SIGNING_KEY", raising=False)
-    monkeypatch.delenv("PAYMENT_PUBLIC_BASE_URL", raising=False)
 
     with pytest.raises(SystemExit) as exc_info:
         cfg._fail_fast_prod_config()
 
     message = str(exc_info.value)
-    for name in (
-        "ADMIN_IDS",
-        "BOT_TOKEN",
-        "PAYMENT_CHECKOUT_SIGNING_KEY",
-        "PAYMENT_PUBLIC_BASE_URL",
-        "YOOKASSA_SECRET_KEY",
-        "YOOKASSA_SHOP_ID",
-    ):
-        assert name in message
-
-
-def test_fail_fast_rejects_insecure_public_url_and_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
-    install_valid_prod(monkeypatch)
-    monkeypatch.setenv("PAYMENT_PUBLIC_BASE_URL", "http://pay.example")
-    with pytest.raises(SystemExit, match="must start with https"):
-        cfg._fail_fast_prod_config()
-
-    monkeypatch.setenv("PAYMENT_PUBLIC_BASE_URL", "https://pay.example")
-    monkeypatch.setenv("ALLOW_UNSIGNED_PAYMENT_CHECKOUT_IN_PROD", "1")
-    with pytest.raises(SystemExit, match="Dangerous payment override"):
-        cfg._fail_fast_prod_config()
-
-    monkeypatch.setenv("PAYMENT_DANGEROUS_OVERRIDES_ALLOWED", "1")
-    cfg._fail_fast_prod_config()
-
-
-def test_fail_fast_rejects_malformed_payment_flag(monkeypatch: pytest.MonkeyPatch) -> None:
-    install_valid_prod(monkeypatch)
-    monkeypatch.setenv("APP_ENV", "prod")
-    monkeypatch.setenv("PAYMENT_HTTP_ENABLED", "tru")
-
-    with pytest.raises(SystemExit, match="PAYMENT_HTTP_ENABLED"):
-        cfg._fail_fast_prod_config()
+    assert "ADMIN_IDS" in message
+    assert "BOT_TOKEN" in message
 
 
 def test_fail_fast_telegram_webhook_contract(monkeypatch: pytest.MonkeyPatch) -> None:

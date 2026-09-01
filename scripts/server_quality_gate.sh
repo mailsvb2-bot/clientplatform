@@ -4,8 +4,8 @@ set -Eeuo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-LOG_DIR="${LOG_DIR:-/tmp/metrotherapy_quality_logs}"
-VENV_DIR="${VENV_DIR:-/tmp/metrotherapy_quality_venv}"
+LOG_DIR="${LOG_DIR:-/tmp/clientplatform_quality_logs}"
+VENV_DIR="${VENV_DIR:-/tmp/clientplatform_quality_venv}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 mkdir -p "$LOG_DIR"
 
@@ -52,7 +52,6 @@ python -m pip install --disable-pip-version-check pip==26.1.2 >"$LOG_DIR/pip_upg
 python -m pip install --require-hashes -r requirements-dev.txt >"$LOG_DIR/pip_install.log" 2>&1
 
 export PYTHONDONTWRITEBYTECODE=1
-export VALIDATOR_SKIP_AUDIO=1
 
 cleanup_local_artifacts
 
@@ -62,56 +61,43 @@ run_step compile_project python -m compileall services scripts handlers core run
 cleanup_local_artifacts
 
 APP_ENV=test \
-METRO_DB_ENGINE=sqlite \
+CLIENTPLATFORM_DB_ENGINE=sqlite \
 DATABASE_URL= \
 VALIDATOR_RELEASE_MODE=1 \
 VALIDATOR_GUARDRAILS_STRICT=1 \
 ADMIN_IDS=1 \
-YOOKASSA_SHOP_ID=server-check \
-YOOKASSA_SECRET_KEY=server-check \
-PAYMENT_CHECKOUT_SIGNING_KEY=server-check \
-YOOKASSA_WEBHOOK_SECRET=server-check \
-PAYMENT_PUBLIC_BASE_URL=https://metrotherapy.example \
 run_step smoke_sqlite python scripts/smoke.py || failures=$((failures+1))
 cleanup_local_artifacts
 
-APP_ENV=test LOAD_DOTENV=0 METRO_DB_ENGINE=sqlite DATABASE_URL= run_step pytest python -m pytest -q -p no:cacheprovider || failures=$((failures+1))
+APP_ENV=test LOAD_DOTENV=0 CLIENTPLATFORM_DB_ENGINE=sqlite DATABASE_URL= run_step pytest python -m pytest -q -p no:cacheprovider || failures=$((failures+1))
 cleanup_local_artifacts
 
 APP_ENV=test \
-METRO_DB_ENGINE=sqlite \
+CLIENTPLATFORM_DB_ENGINE=sqlite \
 DATABASE_URL= \
 VALIDATOR_RELEASE_MODE=1 \
 VALIDATOR_GUARDRAILS_STRICT=1 \
 ADMIN_IDS=1 \
-YOOKASSA_SHOP_ID=server-check \
-YOOKASSA_SECRET_KEY=server-check \
-PAYMENT_CHECKOUT_SIGNING_KEY=server-check \
-YOOKASSA_WEBHOOK_SECRET=server-check \
-PAYMENT_PUBLIC_BASE_URL=https://metrotherapy.example \
 run_step strict_validation python scripts/validate_project.py || failures=$((failures+1))
 cleanup_local_artifacts
 
 APP_ENV=prod \
-METRO_DB_ENGINE=postgres \
-DATABASE_URL=postgresql://quality-check/metrotherapy \
+CLIENTPLATFORM_DB_ENGINE=postgres \
+DATABASE_URL=postgresql://quality-check/clientplatform \
 VALIDATOR_RELEASE_MODE=1 \
 VALIDATOR_GUARDRAILS_STRICT=1 \
 TELEGRAM_TRANSPORT=polling \
 TELEGRAM_WEBHOOK_ENABLED=0 \
 TELEGRAM_LEGACY_TOKEN_WEBHOOK_ENABLED=0 \
 ADMIN_IDS=1 \
-TOKEN_ECONOMY_ENABLED=1 \
-TOKEN_ENFORCEMENT_MODE=hard \
-YOOKASSA_RECEIPT_EMAIL=quality-check@metrotherapy.example \
 run_step prod_contract python -c 'from services.validators.prod import validate_prod_guardrails; validate_prod_guardrails(strict=True)' || failures=$((failures+1))
 cleanup_local_artifacts
 
 run_step ruff python scripts/check_ruff.py || failures=$((failures+1))
 cleanup_local_artifacts
-run_step mypy_payment_privacy python -m mypy services/payments/checkout_intent.py services/payments/yookassa_provider.py services/payments/verified_reconciliation.py runtime/payment_http.py services/privacy_controls.py || failures=$((failures+1))
+run_step critical_static_mypy python scripts/critical_static_gate.py mypy || failures=$((failures+1))
 cleanup_local_artifacts
-run_step bandit_payment_privacy python -m bandit -q -c pyproject.toml services/payments runtime/payment_http.py services/privacy_controls.py || failures=$((failures+1))
+run_step critical_static_bandit python scripts/critical_static_gate.py bandit || failures=$((failures+1))
 cleanup_local_artifacts
 run_step pip_audit python -m pip_audit -r requirements.txt --progress-spinner off || failures=$((failures+1))
 cleanup_local_artifacts
@@ -119,18 +105,10 @@ run_step release_hygiene_after python scripts/check_release_hygiene.py || failur
 
 if ! is_placeholder_database_url; then
   APP_ENV=prod \
-  METRO_DB_ENGINE=postgres \
+  CLIENTPLATFORM_DB_ENGINE=postgres \
   VALIDATOR_RELEASE_MODE=1 \
   VALIDATOR_GUARDRAILS_STRICT=1 \
   ADMIN_IDS=1 \
-  YOOKASSA_SHOP_ID=server-check \
-  YOOKASSA_SECRET_KEY=server-check \
-  PAYMENT_CHECKOUT_SIGNING_KEY=server-check \
-  YOOKASSA_WEBHOOK_SECRET=server-check \
-  PAYMENT_PUBLIC_BASE_URL=https://metrotherapy.example \
-  TOKEN_ECONOMY_ENABLED=1 \
-  TOKEN_ENFORCEMENT_MODE=hard \
-  YOOKASSA_RECEIPT_EMAIL=quality-check@metrotherapy.example \
   run_step smoke_postgres python scripts/smoke.py || failures=$((failures+1))
 else
   echo "SKIP: smoke_postgres because DATABASE_URL is empty or placeholder"

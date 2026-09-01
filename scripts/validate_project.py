@@ -19,23 +19,17 @@ _RELEASE_MODE = os.getenv("VALIDATOR_RELEASE_MODE") == "1"
 if _RELEASE_MODE:
     import tempfile
 
-    _tmp_dir = Path(tempfile.mkdtemp(prefix="metro_validator_"))
-    if not os.getenv("METRO_DB_PATH"):
-        os.environ["METRO_DB_PATH"] = str(_tmp_dir / "validator.db")
+    _tmp_dir = Path(tempfile.mkdtemp(prefix="clientplatform_validator_"))
+    if not os.getenv("CLIENTPLATFORM_DB_PATH"):
+        os.environ["CLIENTPLATFORM_DB_PATH"] = str(_tmp_dir / "validator.db")
     os.environ.setdefault("LOG_PATH", str(_tmp_dir / "validator_app.log"))
     os.environ.setdefault("STORE_LOG_PATH", str(_tmp_dir / "validator_store.log"))
 
-# In release validation mode, use dummy identity/payment contract values for
-# import-time prod fail-fast checks. This keeps preflight hermetic while still
-# forcing real deployments to provide their own env vars.
+# In release validation mode, use a harmless identity value for import-time
+# production fail-fast checks. Real deployments provide their own credentials.
 if _RELEASE_MODE:
     os.environ.setdefault("BOT_TOKEN", "000000:VALIDATION")
     os.environ.setdefault("ADMIN_IDS", "1")
-    os.environ.setdefault("YOOKASSA_SHOP_ID", "validation-shop")
-    os.environ.setdefault("YOOKASSA_SECRET_KEY", "validation-key")
-    os.environ.setdefault("PAYMENT_CHECKOUT_SIGNING_KEY", "validation-checkout-key")
-    os.environ.setdefault("YOOKASSA_WEBHOOK_SECRET", "validation-webhook-key")
-    os.environ.setdefault("PAYMENT_PUBLIC_BASE_URL", "https://metrotherapy.example")
 
 # A built immutable release intentionally contains deterministic project bytecode.
 # Validation must neither delete those files nor create new bytecode beside them.

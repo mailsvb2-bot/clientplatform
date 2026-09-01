@@ -47,7 +47,7 @@ def _is_prod() -> bool:
 
 
 def _resolved_db_engine() -> str:
-    raw = (os.getenv("METRO_DB_ENGINE") or "").strip().lower()
+    raw = (os.getenv("CLIENTPLATFORM_DB_ENGINE") or "").strip().lower()
     if raw in {"postgres", "postgresql", "pg"}:
         return "postgres"
     if raw in {"sqlite", "sqlite3"}:
@@ -80,7 +80,7 @@ def _prod_ingress_checks() -> None:
             raise StartupCheckError("ALLOW_INSECURE_TELEGRAM_WEBHOOK is forbidden in prod")
 
         if _resolved_db_engine() != "postgres":
-            raise StartupCheckError("METRO_DB_ENGINE must be postgres in prod")
+            raise StartupCheckError("CLIENTPLATFORM_DB_ENGINE must be postgres in prod")
         database_url = (os.getenv("DATABASE_URL") or "").strip()
         if not database_url:
             raise StartupCheckError("DATABASE_URL is required in prod")
@@ -111,10 +111,9 @@ def _assert_outside_release(path: Path, release_root: Path, *, label: str) -> No
 def run_startup_checks(project_root: Path) -> None:
     """Fail fast when production topology or required project files are invalid.
 
-    Development keeps its historical project-local data/log/audio directories.
-    Production releases are content-addressed and read-only: all mutable data and
-    logs must live under the external writable-state root, while audio is a sealed
-    versioned asset pointer prepared by the immutable release builder.
+    Development may use project-local data/log directories. Production keeps all
+    mutable state outside the source tree; program media is owned by the canonical
+    ClientPlatform media gateway rather than a bundled audio directory.
     """
     root = project_root.resolve()
     production = _is_prod()
@@ -122,20 +121,13 @@ def run_startup_checks(project_root: Path) -> None:
     data_dir = resolve_data_dir(root)
     logs_dir = resolve_logs_dir(root)
     if production:
-        _assert_outside_release(data_dir, root, label="METRO_DATA_DIR")
-        _assert_outside_release(logs_dir, root, label="METRO_LOGS_DIR")
+        _assert_outside_release(data_dir, root, label="CLIENTPLATFORM_DATA_DIR")
+        _assert_outside_release(logs_dir, root, label="CLIENTPLATFORM_LOGS_DIR")
     data_dir.mkdir(parents=True, exist_ok=True)
     logs_dir.mkdir(parents=True, exist_ok=True)
 
-    audio_dir = root / "audio"
-    demo_dir = audio_dir / "demo"
-    full_dir = audio_dir / "full"
-    if not production:
-        demo_dir.mkdir(parents=True, exist_ok=True)
-        full_dir.mkdir(parents=True, exist_ok=True)
-
     critical_files = [
-        root / "services" / "idempotency_keys.py",
+        root / "services" / "job_keys.py",
         root / "core" / "task_manager.py",
         root / "services" / "db_writer.py",
     ]

@@ -11,7 +11,7 @@ outbox. It intentionally stopped before real provider I/O. The next boundary
 must resolve credentials at send time, call the Telegram Bot API without
 leaking the token, and own repeated dispatch work without overlapping batches.
 
-The imported Metrotherapy runtime already has a process-wide TaskManager and a
+The imported technical baseline already had a process-wide TaskManager and a
 large scheduler. clientplatform must not silently join that production loop before its own
 runtime is independently testable and explicitly enabled.
 
@@ -71,7 +71,7 @@ TTL are independently bounded by configuration.
 - tasks are created through the canonical process TaskManager.
 
 The owner is implemented and tested but is not wired into the imported
-Metrotherapy startup in this change. Activation requires an explicit later
+baseline startup in this change. Activation requires an explicit later
 runtime composition step and the feature flag.
 
 ## Consequences

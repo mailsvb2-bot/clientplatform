@@ -18,7 +18,7 @@ def _success_call(_token: str, _version: str, method: str, params: dict):
     if method != "groups.getTokenPermissions":
         assert params["group_id"] == 238191212
     if method == "groups.getById":
-        return {"response": {"groups": [{"id": 238191212, "name": "Metrotherapy"}]}}, 200
+        return {"response": {"groups": [{"id": 238191212, "name": "ClientPlatform"}]}}, 200
     if method == "groups.getTokenPermissions":
         return {
             "response": {
@@ -38,7 +38,7 @@ def _success_call(_token: str, _version: str, method: str, params: dict):
                 "items": [
                     {
                         "id": 77,
-                        "title": "Metrotherapy",
+                        "title": "ClientPlatform",
                         "url": "https://bot.example.test/webhooks/vk",
                         "secret_key": "callback-secret",
                         "status": "ok",

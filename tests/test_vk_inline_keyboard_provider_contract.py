@@ -2,28 +2,40 @@ from __future__ import annotations
 
 import json
 
-from runtime.messenger_senders import _strip_one_time_from_vk_inline_keyboard, _vk_provider_keyboard_json
-from runtime.messenger_vk_ui import vk_weather_keyboard_json
+from clientplatform.domain.customer_interactions import (
+    CustomerInteractionButton,
+    CustomerInteractionMessage,
+)
+from runtime.messenger_vk_sender import _callback_keyboard_json
+from services.messenger.reply_dispatcher import _vk_clientplatform_keyboard
 
 
-def test_vk_inline_keyboard_payload_drops_one_time_before_provider_send() -> None:
+def test_vk_inline_keyboard_drops_one_time_before_provider_send() -> None:
     raw = json.dumps(
         {
-            "one_time": True,
-            "inline": True,
-            "buttons": [[{"action": {"type": "callback", "label": "Back", "payload": "{}"}}]],
+            'one_time': True,
+            'inline': True,
+            'buttons': [[{'action': {'type': 'text', 'label': 'Open', 'payload': '{}'}}]],
         }
     )
+    payload = json.loads(_callback_keyboard_json(raw))
+    assert payload['inline'] is True
+    assert 'one_time' not in payload
+    assert payload['buttons'][0][0]['action']['type'] == 'callback'
 
-    payload = json.loads(_strip_one_time_from_vk_inline_keyboard(raw))
 
-    assert payload["inline"] is True
-    assert "one_time" not in payload
-
-
-def test_vk_weather_keyboard_is_provider_valid_after_facade_normalization() -> None:
-    wire = json.loads(_vk_provider_keyboard_json(vk_weather_keyboard_json(), external_user_id="123", text="weather"))
-
-    assert wire["inline"] is True
-    assert "one_time" not in wire
-    assert wire["buttons"]
+def test_canonical_clientplatform_keyboard_is_provider_valid() -> None:
+    interaction = CustomerInteractionMessage(
+        text='ClientPlatform',
+        rows=((CustomerInteractionButton(label='Открыть', command='business'),),),
+    )
+    raw = _vk_clientplatform_keyboard(
+        interaction,
+        button_links={},
+        business_id='',
+    )
+    wire = json.loads(_callback_keyboard_json(raw))
+    assert wire['inline'] is True
+    assert 'one_time' not in wire
+    assert wire['buttons']
+    assert wire['buttons'][0][0]['action']['type'] == 'callback'

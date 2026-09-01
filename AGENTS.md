@@ -38,7 +38,7 @@ Before editing code:
 - Advertising spend, paid AI usage and other money-affecting mutations require the canonical consent/policy boundary. Never infer consent from the existence of a draft, campaign or balance.
 - Store money as integer minor units plus explicit currency. Never silently add mixed/unknown currencies.
 - Do not put real credentials, `.env`, DSN, tokens, private keys, dumps or personal data in GitHub, CI logs, prompts or artifacts.
-- Do not use Metrotherapy, BusinessAIOS or another product as a production runtime dependency unless the owner explicitly approves a separate architectural decision.
+- Do not use BusinessAIOS or another product as a production runtime dependency unless the owner explicitly approves a separate architectural decision.
 - Do not production-deploy without a separate direct owner instruction.
 
 ## Independent AI review discipline

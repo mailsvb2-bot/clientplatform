@@ -29,7 +29,7 @@ jobs:
     env:
       APP_ENV: test
       LOAD_DOTENV: '0'
-      METRO_DB_ENGINE: postgres
+      CLIENTPLATFORM_DB_ENGINE: postgres
       DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/clientplatform_partner_ci
       POSTGRES_REUSE_CONNECTIONS: '1'
       TELEGRAM_TRANSPORT: polling

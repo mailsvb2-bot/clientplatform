@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import unittest
+
+from scripts.check_clientplatform_product_purity import _forbidden_tokens
 from pathlib import Path
 
 
@@ -20,8 +22,8 @@ class ProductionWorkflowIsolationTests(unittest.TestCase):
             with self.subTest(path=path):
                 text = self._text(path)
                 lowered = text.lower()
-                self.assertNotIn("metrotherapy", lowered)
-                self.assertNotIn("metro_", lowered)
+                for token in _forbidden_tokens():
+                    self.assertNotIn(token.casefold(), lowered)
                 self.assertNotIn("/github-deploy", lowered)
 
     def test_topology_probe_targets_dedicated_checkout_and_is_fail_closed(self) -> None:

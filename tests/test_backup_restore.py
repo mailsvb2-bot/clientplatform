@@ -261,14 +261,14 @@ def test_sqlite_backup_script_skips_in_postgres_mode(monkeypatch, capsys):
     monkeypatch.setattr(
         backup_db,
         "redacted_db_target",
-        lambda: "postgresql://metrotherapy:***@127.0.0.1:5432/metrotherapy",
+        lambda: "postgresql://clientplatform:***@127.0.0.1:5432/clientplatform",
     )
 
     assert backup_db.main() == 0
 
     out = capsys.readouterr().out
-    assert "SKIP: METRO_DB_ENGINE=postgres uses pg_dump backups" in out
-    assert "postgresql://metrotherapy:***@127.0.0.1:5432/metrotherapy" in out
+    assert "SKIP: CLIENTPLATFORM_DB_ENGINE=postgres uses pg_dump backups" in out
+    assert "postgresql://clientplatform:***@127.0.0.1:5432/clientplatform" in out
 
 
 def test_sqlite_restore_script_refuses_in_postgres_mode(monkeypatch):
@@ -276,10 +276,10 @@ def test_sqlite_restore_script_refuses_in_postgres_mode(monkeypatch):
     monkeypatch.setattr(
         restore_db,
         "redacted_db_target",
-        lambda: "postgresql://metrotherapy:***@127.0.0.1:5432/metrotherapy",
+        lambda: "postgresql://clientplatform:***@127.0.0.1:5432/clientplatform",
     )
 
     with pytest.raises(SystemExit) as exc:
         restore_db.main([])
 
-    assert "REFUSE: METRO_DB_ENGINE=postgres uses pg_dump/psql restore" in str(exc.value)
+    assert "REFUSE: CLIENTPLATFORM_DB_ENGINE=postgres uses pg_dump/psql restore" in str(exc.value)

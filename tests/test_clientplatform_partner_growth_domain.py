@@ -98,7 +98,7 @@ class PartnerGrowthDomainTests(unittest.TestCase):
         )
         pack = DeterministicPartnerCopyGenerator().generate(
             PartnerCopyContext(
-                business_name="Метротерапия",
+                business_name="ClientPlatform",
                 activity_description="Практики управления состоянием",
                 offerings=("Практический вебинар",),
                 campaign=campaign,

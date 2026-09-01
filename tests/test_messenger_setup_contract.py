@@ -40,14 +40,14 @@ def _reload_setup(monkeypatch, **env):
 def test_vk_and_max_setup_status_is_ready_with_required_env(monkeypatch):
     setup_mod = _reload_setup(
         monkeypatch,
-        TELEGRAM_BOT_USERNAME="metrotherapybot",
+        TELEGRAM_BOT_USERNAME="clientplatformbot",
         MAX_BOT_LINK_BASE="https://max.ru/bot/{payload}",
         MAX_BOT_TOKEN="max-token",
-        MAX_BOT_NAME="metrotherapy",
+        MAX_BOT_NAME="clientplatform",
         VK_GROUP_ID="238191212",
         VK_GROUP_TOKEN="vk-token",
         VK_CONFIRMATION_TOKEN="confirm-token",
-        MESSENGER_PUBLIC_BASE_URL="https://metrotherapy.ru",
+        MESSENGER_PUBLIC_BASE_URL="https://clientplatform.ru",
         MESSENGER_WEBHOOK_ENABLED="1",
     )
 
@@ -56,20 +56,20 @@ def test_vk_and_max_setup_status_is_ready_with_required_env(monkeypatch):
     assert status.max_ok is True
     assert status.vk_ok is True
     assert status.webhook_runtime_ok is True
-    assert status.vk_webhook_url == "https://metrotherapy.ru/webhooks/vk"
-    assert status.max_webhook_url == "https://metrotherapy.ru/webhooks/max"
+    assert status.vk_webhook_url == "https://clientplatform.ru/webhooks/vk"
+    assert status.max_webhook_url == "https://clientplatform.ru/webhooks/max"
     assert status.missing == ()
 
 
 def test_vk_setup_is_not_ready_without_confirmation_token(monkeypatch):
     setup_mod = _reload_setup(
         monkeypatch,
-        TELEGRAM_BOT_USERNAME="metrotherapybot",
+        TELEGRAM_BOT_USERNAME="clientplatformbot",
         MAX_BOT_LINK_BASE="https://max.ru/bot/{payload}",
         MAX_BOT_TOKEN="max-token",
         VK_GROUP_ID="238191212",
         VK_GROUP_TOKEN="vk-token",
-        MESSENGER_PUBLIC_BASE_URL="https://metrotherapy.ru",
+        MESSENGER_PUBLIC_BASE_URL="https://clientplatform.ru",
         MESSENGER_WEBHOOK_ENABLED="1",
     )
 
@@ -82,13 +82,13 @@ def test_vk_setup_is_not_ready_without_confirmation_token(monkeypatch):
 def test_max_setup_warns_when_link_base_has_no_payload_placeholder(monkeypatch):
     setup_mod = _reload_setup(
         monkeypatch,
-        TELEGRAM_BOT_USERNAME="metrotherapybot",
-        MAX_BOT_LINK_BASE="https://max.ru/metrotherapy",
+        TELEGRAM_BOT_USERNAME="clientplatformbot",
+        MAX_BOT_LINK_BASE="https://max.ru/clientplatform",
         MAX_BOT_TOKEN="max-token",
         VK_GROUP_ID="238191212",
         VK_GROUP_TOKEN="vk-token",
         VK_CONFIRMATION_TOKEN="confirm-token",
-        MESSENGER_PUBLIC_BASE_URL="https://metrotherapy.ru",
+        MESSENGER_PUBLIC_BASE_URL="https://clientplatform.ru",
         MESSENGER_WEBHOOK_ENABLED="1",
     )
 
@@ -101,13 +101,13 @@ def test_max_setup_warns_when_link_base_has_no_payload_placeholder(monkeypatch):
 def test_public_base_url_must_be_full_url(monkeypatch):
     setup_mod = _reload_setup(
         monkeypatch,
-        TELEGRAM_BOT_USERNAME="metrotherapybot",
+        TELEGRAM_BOT_USERNAME="clientplatformbot",
         MAX_BOT_LINK_BASE="https://max.ru/bot/{payload}",
         MAX_BOT_TOKEN="max-token",
         VK_GROUP_ID="238191212",
         VK_GROUP_TOKEN="vk-token",
         VK_CONFIRMATION_TOKEN="confirm-token",
-        MESSENGER_PUBLIC_BASE_URL="metrotherapy.ru",
+        MESSENGER_PUBLIC_BASE_URL="clientplatform.ru",
         MESSENGER_WEBHOOK_ENABLED="1",
     )
 
@@ -132,11 +132,11 @@ def test_setup_accepts_canonical_production_telegram_username(monkeypatch):
 def test_max_setup_fails_closed_when_bot_placeholder_has_no_bot_name(monkeypatch):
     setup_mod = _reload_setup(
         monkeypatch,
-        TELEGRAM_BOT_USERNAME="metrotherapybot",
+        TELEGRAM_BOT_USERNAME="clientplatformbot",
         MAX_WEBHOOK_ENABLED="1",
         MAX_BOT_LINK_BASE="https://max.ru/{bot}?payload={payload}",
         MAX_BOT_TOKEN="max-token",
-        MESSENGER_PUBLIC_BASE_URL="https://metrotherapy.ru",
+        MESSENGER_PUBLIC_BASE_URL="https://clientplatform.ru",
     )
 
     status = setup_mod.build_setup_status()

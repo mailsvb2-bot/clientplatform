@@ -12,15 +12,9 @@ ClientPlatform — мультитенантная платформа и цифр
 
 ClientPlatform развивается как отдельный продукт со своей предметной моделью, архитектурой, production-контуром и каноном.
 
-Исторически репозиторий был создан из независимой копии технического baseline `metrotherapy-bot-telegram` на коммите:
+Репозиторий исторически создан из импортированного технического baseline на коммите `b4ac43c2961fb581078aedc25efeffd2ab4ecb34`. Исходная продуктовая идентичность и её пользовательские сценарии намеренно удалены из ClientPlatform. Происхождение фиксируется только как технический факт в [`docs/BASELINE_PROVENANCE.md`](docs/BASELINE_PROVENANCE.md) и не определяет текущую предметную модель.
 
-```text
-b4ac43c2961fb581078aedc25efeffd2ab4ecb34
-```
-
-Происхождение зафиксировано в [`docs/BASELINE_PROVENANCE.md`](docs/BASELINE_PROVENANCE.md), но оно **не определяет текущую предметную модель ClientPlatform**. Канонические продуктовые и архитектурные решения находятся в [`docs/CLIENTPLATFORM_CANON_TZ.md`](docs/CLIENTPLATFORM_CANON_TZ.md).
-
-В репозитории ещё могут встречаться legacy-названия и миграционные артефакты. Они не являются нормативными: при любом противоречии приоритет имеет канон ClientPlatform.
+Канонические продуктовые и архитектурные решения находятся в [`docs/CLIENTPLATFORM_CANON_TZ.md`](docs/CLIENTPLATFORM_CANON_TZ.md). CI запрещает возврат удалённого продуктового бренда, старого runtime namespace и старых пользовательских entry-flow.
 
 Проект имеет отдельный production deployment, fail-closed preflight, автоматизированный rollback, encrypted backup, production-isolation проверки и расширенный CI. Это не означает, что весь долгосрочный roadmap уже завершён: отдельные каналы и продуктовые вертикали продолжают развиваться.
 
@@ -30,7 +24,7 @@ b4ac43c2961fb581078aedc25efeffd2ab4ecb34
 
 ## Критическое ограничение
 
-ClientPlatform **запрещено запускать с production-конфигурацией Метротерапии**. Нельзя использовать её Telegram-токены, PostgreSQL/backup-контур, платёжные credentials, webhook, домены, object storage, systemd units, серверные пути или реальные пользовательские данные.
+ClientPlatform **разрешено запускать только с собственной production-конфигурацией ClientPlatform**. Нельзя использовать токены, базы, backup-контур, платёжные credentials, webhook, домены, object storage, systemd units, серверные пути или реальные пользовательские данные других продуктов.
 
 Репозиторий остаётся публичным по решению владельца. Поэтому реальные секреты, `.env`, DSN, ключи, дампы и пользовательские данные запрещены в GitHub, Actions logs и artifacts.
 
@@ -186,7 +180,7 @@ Production deploy выполняется только по прямому ука
 
 Нельзя:
 
-- использовать production-секреты или данные Метротерапии;
+- использовать production-секреты или данные других продуктов;
 - публиковать секреты, DSN, `.env`, дампы или пользовательские данные в GitHub/Actions;
 - отключать tenant isolation, backup, polling contract или preflight ради deploy;
 - обходить bounded consent для рекламных расходов;

@@ -1,6 +1,6 @@
 # clientplatform Media Gateway — deployment runbook
 
-Этот runbook описывает отдельную clientplatform-конфигурацию. Нельзя использовать production secrets, storage или Telegram bot Метротерапии.
+Этот runbook описывает отдельную clientplatform-конфигурацию. Нельзя использовать production secrets, storage или Telegram bot других продуктов.
 
 ## 1. Общая схема
 
@@ -153,7 +153,7 @@ clientplatform_bot
 CLIENTPLATFORM_STAGING_TELEGRAM_BOT_TOKEN
 ```
 
-Это должен быть токен отдельного тестового бота clientplatform. Нельзя использовать бота Метротерапии или другого production-проекта.
+Это должен быть токен отдельного тестового бота clientplatform. Нельзя использовать production-бот ClientPlatform или бота другого production-проекта.
 
 ### Подготовка Telegram
 
@@ -218,4 +218,4 @@ clientplatform_media_gateway_running=true
 - использовать HTTP для public gateway или S3 endpoint;
 - использовать Cloudflare Quick Tunnel как production endpoint;
 - логировать Authorization header, token-bearing Telegram URL или signed query;
-- направлять clientplatform на инфраструктуру исходной Метротерапии.
+- направлять clientplatform на инфраструктуру другого продукта.
