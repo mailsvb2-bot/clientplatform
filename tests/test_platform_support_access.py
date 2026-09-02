@@ -104,6 +104,96 @@ def test_unauthorized_operator_is_denied_before_database_read(monkeypatch: pytes
         )
 
 
+def test_issue_rejects_invalid_inputs_before_database_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(support, "is_platform_admin", lambda user_id: user_id == 9001)
+
+    def must_not_open():
+        raise AssertionError("invalid request must fail before database open")
+
+    monkeypatch.setattr(support, "get_db", must_not_open)
+    business_id = str(uuid4())
+    common = {
+        "business_id": business_id,
+        "ticket_ref": "INC-VALIDATION",
+        "reason": "validation",
+        "idempotency_key": "validation-key",
+    }
+    with pytest.raises(ValueError, match="timezone-aware"):
+        support.issue_support_session(
+            9001,
+            **common,
+            now_utc=datetime(2026, 9, 2, 12, 0),
+        )
+    with pytest.raises(ValueError, match="ticket_ref must not be empty"):
+        support.issue_support_session(9001, **{**common, "ticket_ref": "  "})
+    with pytest.raises(ValueError, match="reason must be at most 500"):
+        support.issue_support_session(9001, **{**common, "reason": "x" * 501})
+    with pytest.raises(ValueError, match="ttl_seconds must be an integer"):
+        support.issue_support_session(9001, **common, ttl_seconds=True)
+    with pytest.raises(ValueError, match="ttl_seconds must be between"):
+        support.issue_support_session(9001, **common, ttl_seconds=299)
+
+
+def test_read_rejects_invalid_session_id_before_database_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(support, "is_platform_admin", lambda user_id: user_id == 9001)
+
+    def must_not_open():
+        raise AssertionError("invalid session id must fail before database open")
+
+    monkeypatch.setattr(support, "get_db", must_not_open)
+    with pytest.raises(ValueError, match="session_id must be a valid UUID"):
+        support.read_support_business(
+            9001,
+            session_id="not-a-uuid",
+            business_id=str(uuid4()),
+        )
+
+
+def test_session_effective_status_rejects_corrupt_persisted_timestamp() -> None:
+    template = dict(
+        id=str(uuid4()),
+        operator_user_id=9001,
+        business_id=str(uuid4()),
+        ticket_ref="INC-CORRUPT",
+        reason="corrupt timestamp regression",
+        idempotency_key="corrupt-key",
+        request_fingerprint="0" * 64,
+        status="active",
+        issued_at="2026-09-02T12:00:00+00:00",
+        revoked_at=None,
+        revoked_by_user_id=None,
+    )
+    with pytest.raises(RuntimeError, match="timestamp is invalid"):
+        support.PlatformSupportSession(**template, expires_at="not-a-time").effective_status(
+            now_utc=datetime(2026, 9, 2, 12, 1, tzinfo=UTC)
+        )
+    with pytest.raises(RuntimeError, match="timestamp must be timezone-aware"):
+        support.PlatformSupportSession(
+            **template, expires_at="2026-09-02T12:30:00"
+        ).effective_status(now_utc=datetime(2026, 9, 2, 12, 1, tzinfo=UTC))
+
+
+def test_other_platform_operator_cannot_reuse_session(
+    support_db: SupportDb, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    business_id = str(uuid4())
+    support_db.business(business_id=business_id, owner_user_id=101, name="Operator Bound")
+    issued = _issue(business_id)
+    monkeypatch.setattr(support, "is_platform_admin", lambda user_id: user_id in {9001, 9002})
+
+    with pytest.raises(support.PlatformSupportSessionUnavailable):
+        support.read_support_session(
+            9002,
+            session_id=issued.id,
+            business_id=business_id,
+            now_utc=datetime(2026, 9, 2, 12, 1, tzinfo=UTC),
+        )
+
+
 def test_session_is_single_business_read_only_and_audited(support_db: SupportDb) -> None:
     business_id = str(uuid4())
     support_db.business(business_id=business_id, owner_user_id=101, name="North Star")
@@ -128,6 +218,13 @@ def test_session_is_single_business_read_only_and_audited(support_db: SupportDb)
         now_utc=datetime(2026, 9, 2, 12, 6, tzinfo=UTC),
     )
     assert revoked.status == "revoked"
+    replayed_revoke = support.revoke_support_session(
+        9001,
+        session_id=issued.id,
+        business_id=business_id,
+        now_utc=datetime(2026, 9, 2, 12, 6, 30, tzinfo=UTC),
+    )
+    assert replayed_revoke.revoked_at == revoked.revoked_at
     with pytest.raises(support.PlatformSupportSessionUnavailable):
         support.read_support_business(
             9001,
@@ -146,6 +243,7 @@ def test_session_is_single_business_read_only_and_audited(support_db: SupportDb)
         "revoked",
     ]
     assert {str(row["business_id"]) for row in events} == {business_id}
+    assert sum(row["event_type"] == "revoked" for row in events) == 1
 
 
 def test_cross_business_reuse_fails_closed_without_read_audit(support_db: SupportDb) -> None:

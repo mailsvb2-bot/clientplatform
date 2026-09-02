@@ -91,7 +91,7 @@ def _parse_timestamp(value: str) -> datetime:
 
 
 def _operator(user_id: int | None) -> int:
-    if not is_platform_admin(user_id):
+    if user_id is None or not is_platform_admin(user_id):
         raise PlatformSupportPermissionDenied("platform support access required")
     return int(user_id)
 
@@ -180,13 +180,6 @@ def _load_owned_session(conn: Any, *, operator_user_id: int, session_id: str) ->
     if row is None:
         raise PlatformSupportSessionUnavailable("support session is unavailable")
     return _session_from_row(row)
-
-
-def _assert_business(session: PlatformSupportSession, business_id: str) -> str:
-    normalized = normalize_uuid(business_id, field_name="business_id")
-    if normalized != session.business_id:
-        raise PlatformSupportSessionUnavailable("support session business scope mismatch")
-    return normalized
 
 
 def _lock_scoped_session(
