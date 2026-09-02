@@ -14,7 +14,11 @@ from aiogram.types import BotCommand, CallbackQuery, Message
 
 from clientplatform.application.activity import claim_customer_invite
 from clientplatform.application.bookings import list_customer_businesses
-from clientplatform.application.tenancy import list_accessible_businesses
+from clientplatform.application.tenancy import (
+    get_owner_control_workspace,
+    list_accessible_businesses,
+    resolve_tenant_context,
+)
 from clientplatform.domain.activity import ActivityInvariantViolation
 from services.db.core import db_operation_deadline
 
@@ -303,6 +307,78 @@ async def clientplatform_mybot_command(message: Message, state: FSMContext) -> N
     await bot_setup.open_my_bot_command(message, state)
 
 
+def _telegram_support_actor(user_id: int):
+    accesses = list(list_accessible_businesses(user_id=user_id))
+    if not accesses:
+        return None, accesses
+    if len(accesses) == 1:
+        business_id = str(accesses[0].business.id)
+    else:
+        business_id = get_owner_control_workspace(user_id=user_id, platform="telegram")
+        if business_id is None:
+            return None, accesses
+    try:
+        return resolve_tenant_context(user_id=user_id, business_id=business_id), accesses
+    except (ValueError, RuntimeError):
+        return None, accesses
+
+
+@router.message(Command("support"))
+async def clientplatform_support_case_command(message: Message) -> None:
+    """Create/list tenant support cases through the channel-neutral application owner."""
+
+    support_cases = importlib.import_module("clientplatform.application.support_cases")
+    user_id = control._user_id(message)
+    actor, accesses = await asyncio.to_thread(_telegram_support_actor, user_id)
+    if actor is None:
+        if not accesses:
+            await message.answer("Сначала подключите бизнес, затем создайте обращение в поддержку.")
+        else:
+            await message.answer(
+                "У Вас несколько бизнесов. Сначала откройте нужный бизнес через /start, "
+                "затем повторите /support."
+            )
+        return
+    parts = str(getattr(message, "text", "") or "").strip().split(maxsplit=2)
+    if len(parts) >= 2 and parts[1].casefold() == "list":
+        cases = await asyncio.to_thread(support_cases.list_tenant_support_cases, actor=actor, limit=20)
+        if not cases:
+            await message.answer("У этого бизнеса пока нет обращений в поддержку.")
+            return
+        lines = [
+            f"• {case.id} · {case.category.value} · {case.status.value} · {case.summary}"
+            for case in cases
+        ]
+        await message.answer("Обращения в поддержку:\n\n" + "\n".join(lines))
+        return
+    if len(parts) != 3:
+        await message.answer(
+            "Формат: /support <category> <описание>\n"
+            "Категории: general, billing, technical, security, integration\n"
+            "Список: /support list"
+        )
+        return
+    try:
+        case = await asyncio.to_thread(
+            support_cases.create_support_case,
+            actor=actor,
+            category=parts[1].casefold(),
+            summary=parts[2],
+            idempotency_key=_platform_support_idempotency_key(message),
+        )
+    except ValueError:
+        await message.answer(
+            "Не удалось создать обращение. Проверьте категорию и описание (3–1000 символов)."
+        )
+        return
+    await message.answer(
+        "Обращение создано.\n\n"
+        f"Case: {case.id}\n"
+        f"Категория: {case.category.value}\n"
+        f"Статус: {case.status.value}"
+    )
+
+
 @router.message(Command("platformstatus"))
 async def clientplatform_platform_status_command(message: Message) -> None:
     """Expose the read-only platform snapshot only to configured operators."""
@@ -433,6 +509,96 @@ async def clientplatform_platform_support_session_command(message: Message) -> N
         await message.answer("Support session недоступна или больше не активна.")
     except (support.PlatformSupportSessionConflict, ValueError):
         await message.answer("Параметры support session некорректны или конфликтуют.")
+
+
+def _platform_support_queue_usage() -> str:
+    return (
+        "Использование:\n"
+        "/supportqueue list\n"
+        "/supportqueue claim <case_id>\n"
+        "/supportqueue release <case_id>\n"
+        "/supportqueue resolve <case_id>\n"
+        "/supportqueue session <case_id> <причина>"
+    )
+
+
+@router.message(Command("supportqueue"))
+async def clientplatform_platform_support_queue_command(message: Message) -> None:
+    """Hidden platform-operator queue; queue actions never grant tenant access."""
+
+    support_cases = importlib.import_module("clientplatform.application.support_cases")
+    repository = importlib.import_module("clientplatform.infrastructure.support_case_repository")
+    user_id = control._user_id(message)
+    parts = str(getattr(message, "text", "") or "").strip().split(maxsplit=3)
+    if len(parts) < 2:
+        await message.answer(_platform_support_queue_usage())
+        return
+    action = parts[1].casefold()
+    operation_key = _platform_support_idempotency_key(message)
+    try:
+        if action == "list":
+            cases = await asyncio.to_thread(support_cases.list_platform_support_queue, user_id, limit=50)
+            if not cases:
+                await message.answer("Открытых support cases нет.")
+                return
+            lines = [
+                f"• {case.id} · business={case.business_id} · {case.category.value} · "
+                f"{case.status.value} · {case.summary}"
+                for case in cases
+            ]
+            await message.answer("ClientPlatform · support queue\n\n" + "\n".join(lines))
+            return
+        if len(parts) < 3:
+            await message.answer(_platform_support_queue_usage())
+            return
+        case_id = parts[2]
+        if action == "claim":
+            case = await asyncio.to_thread(
+                support_cases.claim_platform_support_case,
+                user_id, case_id=case_id, idempotency_key=operation_key
+            )
+        elif action == "release":
+            case = await asyncio.to_thread(
+                support_cases.release_platform_support_case,
+                user_id, case_id=case_id, idempotency_key=operation_key
+            )
+        elif action == "resolve":
+            case = await asyncio.to_thread(
+                support_cases.resolve_platform_support_case,
+                user_id, case_id=case_id, idempotency_key=operation_key
+            )
+        elif action == "session":
+            if len(parts) != 4:
+                await message.answer(_platform_support_queue_usage())
+                return
+            session = await asyncio.to_thread(
+                support_cases.issue_support_session_for_case,
+                user_id,
+                case_id=case_id,
+                reason=parts[3],
+                idempotency_key=operation_key,
+            )
+            await message.answer(
+                "Support session создана отдельно от queue claim.\n\n"
+                f"Session: {session.id}\n"
+                f"Business: {session.business_id}\n"
+                f"Истекает: {session.expires_at}"
+            )
+            return
+        else:
+            await message.answer(_platform_support_queue_usage())
+            return
+        await message.answer(
+            f"Case: {case.id}\nBusiness: {case.business_id}\nСтатус: {case.status.value}"
+        )
+    except support_cases.PlatformSupportCasePermissionDenied:
+        await message.answer("Доступ к support queue недоступен.")
+    except repository.SupportCaseUnavailable:
+        await message.answer("Support case недоступен или его состояние уже изменилось.")
+    except repository.SupportCaseConflict:
+        await message.answer("Support case уже изменён другим оператором или запрос конфликтует.")
+    except (PermissionError, ValueError):
+        await message.answer("Операция support queue недоступна с указанными параметрами.")
 
 
 @router.message(Command("cancel"))

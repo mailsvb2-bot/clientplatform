@@ -50,6 +50,9 @@ _CLIENTPLATFORM_AUTOMATION_POLICY_FILES = (
 
 
 _CLIENTPLATFORM_PLATFORM_SUPPORT_TYPE_FILES = (
+    "clientplatform/application/support_cases.py",
+    "clientplatform/domain/support_cases.py",
+    "clientplatform/infrastructure/support_case_repository.py",
     "services/platform_support_access.py",
     "services/db/schema/clientplatform_platform_support.py",
 )

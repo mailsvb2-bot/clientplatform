@@ -257,16 +257,29 @@ def _audit(
     )
 
 
-def issue_support_session(
+@dataclass(frozen=True, slots=True)
+class _PreparedSupportSessionIssue:
+    operator_user_id: int
+    business_id: str
+    ticket_ref: str
+    reason: str
+    idempotency_key: str
+    request_fingerprint: str
+    session_id: str
+    issued_at: str
+    expires_at: str
+
+
+def _prepare_support_session_issue(
     user_id: int | None,
     *,
     business_id: str,
     ticket_ref: str,
     reason: str,
     idempotency_key: str,
-    ttl_seconds: int = _DEFAULT_TTL_SECONDS,
-    now_utc: datetime | None = None,
-) -> PlatformSupportSession:
+    ttl_seconds: int,
+    now_utc: datetime | None,
+) -> _PreparedSupportSessionIssue:
     operator_user_id = _operator(user_id)
     normalized_business_id = normalize_uuid(business_id, field_name="business_id")
     normalized_ticket = _text(ticket_ref, field="ticket_ref", maximum=160)
@@ -288,65 +301,128 @@ def issue_support_session(
             f"clientplatform:platform-support-session:{operator_user_id}:{normalized_key}",
         )
     )
+    return _PreparedSupportSessionIssue(
+        operator_user_id=operator_user_id,
+        business_id=normalized_business_id,
+        ticket_ref=normalized_ticket,
+        reason=normalized_reason,
+        idempotency_key=normalized_key,
+        request_fingerprint=request_fingerprint,
+        session_id=session_id,
+        issued_at=issued_at,
+        expires_at=expires_at,
+    )
 
+
+def _persist_support_session_issue(
+    conn: Any,
+    request: _PreparedSupportSessionIssue,
+) -> PlatformSupportSession:
+    # The canonical tenancy repository owns the exact business lookup. No
+    # membership or synthetic TenantContext is created for the operator.
+    TenancyRepository(conn).get_business_for_platform_support(
+        business_id=request.business_id
+    )
+    conn.execute(
+        """
+        INSERT INTO clientplatform_platform_support_sessions(
+            id, operator_user_id, business_id, ticket_ref, reason,
+            idempotency_key, request_fingerprint, status, issued_at, expires_at,
+            revoked_at, revoked_by_user_id
+        ) VALUES(?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, NULL, NULL)
+        ON CONFLICT(id) DO NOTHING
+        """,
+        (
+            request.session_id,
+            request.operator_user_id,
+            request.business_id,
+            request.ticket_ref,
+            request.reason,
+            request.idempotency_key,
+            request.request_fingerprint,
+            request.issued_at,
+            request.expires_at,
+        ),
+    )
+    session = _load_owned_session(
+        conn,
+        operator_user_id=request.operator_user_id,
+        session_id=request.session_id,
+    )
+    if (
+        session.business_id != request.business_id
+        or session.ticket_ref != request.ticket_ref
+        or session.reason != request.reason
+        or session.idempotency_key != request.idempotency_key
+        or session.request_fingerprint != request.request_fingerprint
+    ):
+        raise PlatformSupportSessionConflict(
+            "support session idempotency key belongs to different work"
+        )
+    _audit(
+        conn,
+        session=session,
+        event_type="issued",
+        subject_type="support_session",
+        subject_id=session.id,
+        detail={
+            "expires_at": session.expires_at,
+            "reason": session.reason,
+            "request_fingerprint": session.request_fingerprint,
+            "ticket_ref": session.ticket_ref,
+        },
+        created_at=session.issued_at,
+        deterministic_suffix="issued",
+    )
+    return session
+
+
+def issue_support_session_in_transaction(
+    user_id: int | None,
+    *,
+    conn: Any,
+    business_id: str,
+    ticket_ref: str,
+    reason: str,
+    idempotency_key: str,
+    ttl_seconds: int = _DEFAULT_TTL_SECONDS,
+    now_utc: datetime | None = None,
+) -> PlatformSupportSession:
+    """Issue one M6-002 capability inside a caller-owned canonical DB transaction."""
+
+    request = _prepare_support_session_issue(
+        user_id,
+        business_id=business_id,
+        ticket_ref=ticket_ref,
+        reason=reason,
+        idempotency_key=idempotency_key,
+        ttl_seconds=ttl_seconds,
+        now_utc=now_utc,
+    )
+    return _persist_support_session_issue(conn, request)
+
+
+def issue_support_session(
+    user_id: int | None,
+    *,
+    business_id: str,
+    ticket_ref: str,
+    reason: str,
+    idempotency_key: str,
+    ttl_seconds: int = _DEFAULT_TTL_SECONDS,
+    now_utc: datetime | None = None,
+) -> PlatformSupportSession:
+    request = _prepare_support_session_issue(
+        user_id,
+        business_id=business_id,
+        ticket_ref=ticket_ref,
+        reason=reason,
+        idempotency_key=idempotency_key,
+        ttl_seconds=ttl_seconds,
+        now_utc=now_utc,
+    )
     with get_db() as conn:
-        # The canonical tenancy repository owns the exact business lookup. No
-        # membership or synthetic TenantContext is created for the operator.
-        TenancyRepository(conn).get_business_for_platform_support(
-            business_id=normalized_business_id
-        )
-        conn.execute(
-            """
-            INSERT INTO clientplatform_platform_support_sessions(
-                id, operator_user_id, business_id, ticket_ref, reason,
-                idempotency_key, request_fingerprint, status, issued_at, expires_at,
-                revoked_at, revoked_by_user_id
-            ) VALUES(?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, NULL, NULL)
-            ON CONFLICT(id) DO NOTHING
-            """,
-            (
-                session_id,
-                operator_user_id,
-                normalized_business_id,
-                normalized_ticket,
-                normalized_reason,
-                normalized_key,
-                request_fingerprint,
-                issued_at,
-                expires_at,
-            ),
-        )
-        session = _load_owned_session(
-            conn,
-            operator_user_id=operator_user_id,
-            session_id=session_id,
-        )
-        if (
-            session.business_id != normalized_business_id
-            or session.ticket_ref != normalized_ticket
-            or session.reason != normalized_reason
-            or session.idempotency_key != normalized_key
-            or session.request_fingerprint != request_fingerprint
-        ):
-            raise PlatformSupportSessionConflict(
-                "support session idempotency key belongs to different work"
-            )
-        _audit(
-            conn,
-            session=session,
-            event_type="issued",
-            subject_type="support_session",
-            subject_id=session.id,
-            detail={
-                "expires_at": session.expires_at,
-                "reason": session.reason,
-                "request_fingerprint": session.request_fingerprint,
-                "ticket_ref": session.ticket_ref,
-            },
-            created_at=session.issued_at,
-            deterministic_suffix="issued",
-        )
-        return session
+        return _persist_support_session_issue(conn, request)
 
 
 def read_support_session(
@@ -482,6 +558,7 @@ __all__ = [
     "PlatformSupportSessionConflict",
     "PlatformSupportSessionUnavailable",
     "issue_support_session",
+    "issue_support_session_in_transaction",
     "read_support_business",
     "read_support_session",
     "revoke_support_session",

@@ -10,6 +10,10 @@ from clientplatform.application.native_member_interactions import (
     render_native_member_interaction,
 )
 from clientplatform.application.owner_input import clear_owner_input, get_owner_input_session
+from clientplatform.application.support_cases import (
+    create_support_case,
+    list_tenant_support_cases,
+)
 from clientplatform.application.owner_onboarding import (
     begin_business_name_onboarding,
     cancel_owner_onboarding,
@@ -79,6 +83,8 @@ _PRIVACY_ALIASES = frozenset({"privacy", "/privacy", "конфиденциаль
 _EXPORT_ALIASES = frozenset({"mydata", "/mydata"})
 _DELETE_ALIASES = frozenset({"deletemydata", "/deletemydata"})
 _CANCEL_ALIASES = frozenset({"cancel", "/cancel", "отмена"})
+_SUPPORT_LIST_ALIASES = frozenset({"support list", "/support list", "поддержка список", "мои обращения"})
+_SUPPORT_PREFIXES = ("support ", "/support ", "поддержка ")
 
 _OWNER_CONTROL_ALIASES = frozenset(
     {
@@ -151,6 +157,13 @@ def parse_clientplatform_entry_command(
         return ClientPlatformEntryCommand("privacy_export_confirm")
     if lowered in _DELETE_ALIASES:
         return ClientPlatformEntryCommand("privacy_delete")
+    if lowered in _SUPPORT_LIST_ALIASES:
+        return ClientPlatformEntryCommand("support_list")
+    for prefix in _SUPPORT_PREFIXES:
+        if lowered.startswith(prefix):
+            return ClientPlatformEntryCommand("support_create", raw[len(prefix) :].strip())
+    if lowered in {"support", "/support", "поддержка"}:
+        return ClientPlatformEntryCommand("support_create")
     if lowered in {f"{item} confirm" for item in _DELETE_ALIASES}:
         return ClientPlatformEntryCommand("privacy_delete_confirm")
     for prefix in _BUSINESS_PREFIXES:
@@ -582,6 +595,74 @@ def handle_clientplatform_entry(
         event_key=event_key,
         raw_text=command.value or str(text or command.action),
     )
+    if command.action in {"support_create", "support_list"}:
+        active_business_id = _active_business_id(
+            user_id=canonical_user_id,
+            platform=platform,
+            accesses=accesses,
+        )
+        actor = _business_actor(
+            user_id=canonical_user_id,
+            accesses=accesses,
+            business_id=active_business_id,
+        )
+        if actor is None:
+            if not accesses:
+                return canonical_user_id, [
+                    MessengerReply(text="Сначала подключите бизнес, затем создайте обращение в поддержку.")
+                ]
+            return canonical_user_id, [
+                MessengerReply(text="Сначала выберите бизнес, для которого нужно обращение."),
+                _business_selector_reply(accesses),
+            ]
+        if command.action == "support_list":
+            cases = list_tenant_support_cases(actor=actor, limit=20)
+            if not cases:
+                return canonical_user_id, [MessengerReply(text="У этого бизнеса пока нет обращений в поддержку.")]
+            lines = [
+                f"• {case.id} · {case.category.value} · {case.status.value} · {case.summary}"
+                for case in cases
+            ]
+            return canonical_user_id, [
+                MessengerReply(text="Обращения в поддержку:\n\n" + "\n".join(lines))
+            ]
+        parts = command.value.split(maxsplit=1)
+        if len(parts) != 2:
+            return canonical_user_id, [
+                MessengerReply(
+                    text=(
+                        "Формат: support <category> <описание>\n"
+                        "Категории: general, billing, technical, security, integration"
+                    )
+                )
+            ]
+        try:
+            case = create_support_case(
+                actor=actor,
+                category=parts[0].casefold(),
+                summary=parts[1],
+                idempotency_key=interaction_key,
+            )
+        except ValueError:
+            return canonical_user_id, [
+                MessengerReply(
+                    text=(
+                        "Не удалось создать обращение. Категории: general, billing, "
+                        "technical, security, integration; описание — от 3 до 1000 символов."
+                    )
+                )
+            ]
+        return canonical_user_id, [
+            MessengerReply(
+                text=(
+                    "Обращение создано.\n\n"
+                    f"Case: {case.id}\n"
+                    f"Категория: {case.category.value}\n"
+                    f"Статус: {case.status.value}"
+                )
+            )
+        ]
+
     if command.action == "onboarding_input":
         if onboarding is None:
             return canonical_user_id, [_new_business_entry_reply(platform=platform)]
