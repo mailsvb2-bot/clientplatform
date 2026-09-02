@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
+from threading import Event
+from time import sleep
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -157,7 +159,7 @@ def test_cross_business_reuse_fails_closed_without_read_audit(support_db: Suppor
 
     with pytest.raises(
         support.PlatformSupportSessionUnavailable,
-        match="business scope mismatch",
+        match="support session is unavailable",
     ):
         support.read_support_business(
             9001,
@@ -267,6 +269,58 @@ def test_concurrent_same_request_creates_one_session_and_one_issue_event(support
         "SELECT COUNT(*) FROM clientplatform_platform_support_audit_events WHERE session_id=? AND event_type='issued'",
         (session_id,),
     ) == 1
+
+
+def test_support_read_serializes_with_concurrent_revoke(
+    support_db: SupportDb, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    business_id = str(uuid4())
+    support_db.business(business_id=business_id, owner_user_id=101, name="Serialized")
+    session = _issue(business_id)
+    entered_business_read = Event()
+    release_business_read = Event()
+    original = support.TenancyRepository.get_business_for_platform_support
+
+    def blocking_business_read(self, *, business_id: str):
+        entered_business_read.set()
+        assert release_business_read.wait(timeout=5)
+        return original(self, business_id=business_id)
+
+    monkeypatch.setattr(
+        support.TenancyRepository,
+        "get_business_for_platform_support",
+        blocking_business_read,
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        read_future = pool.submit(
+            support.read_support_business,
+            9001,
+            session_id=session.id,
+            business_id=business_id,
+            now_utc=datetime(2026, 9, 2, 12, 1, tzinfo=UTC),
+        )
+        assert entered_business_read.wait(timeout=5)
+        revoke_future = pool.submit(
+            support.revoke_support_session,
+            9001,
+            session_id=session.id,
+            business_id=business_id,
+            now_utc=datetime(2026, 9, 2, 12, 2, tzinfo=UTC),
+        )
+        sleep(0.15)
+        assert revoke_future.done() is False
+        release_business_read.set()
+        assert read_future.result(timeout=5).business_id == business_id
+        assert revoke_future.result(timeout=5).status == "revoked"
+
+    with pytest.raises(support.PlatformSupportSessionUnavailable):
+        support.read_support_business(
+            9001,
+            session_id=session.id,
+            business_id=business_id,
+            now_utc=datetime(2026, 9, 2, 12, 3, tzinfo=UTC),
+        )
 
 
 def test_schema_and_privacy_manifest_cover_support_capability(support_db: SupportDb) -> None:

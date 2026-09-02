@@ -189,6 +189,38 @@ def _assert_business(session: PlatformSupportSession, business_id: str) -> str:
     return normalized
 
 
+def _lock_scoped_session(
+    conn: Any,
+    *,
+    operator_user_id: int,
+    session_id: str,
+    business_id: str,
+) -> PlatformSupportSession:
+    """Serialize support access with revoke on the exact capability row.
+
+    A no-op UPDATE is portable across the canonical SQLite/PostgreSQL DB layer:
+    SQLite serializes the writer transaction, while PostgreSQL takes a row lock.
+    Revoke and allowed support reads therefore cannot pass each other between
+    authorization and the audited read.
+    """
+
+    cursor = conn.execute(
+        """
+        UPDATE clientplatform_platform_support_sessions
+        SET status=status
+        WHERE id=? AND operator_user_id=? AND business_id=?
+        """,
+        (session_id, operator_user_id, business_id),
+    )
+    if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+        raise PlatformSupportSessionUnavailable("support session is unavailable")
+    return _load_owned_session(
+        conn,
+        operator_user_id=operator_user_id,
+        session_id=session_id,
+    )
+
+
 def _assert_active(session: PlatformSupportSession, *, now_utc: datetime) -> None:
     if session.effective_status(now_utc=now_utc) != "active":
         raise PlatformSupportSessionUnavailable("support session is not active")
@@ -333,14 +365,15 @@ def read_support_session(
 ) -> PlatformSupportSession:
     operator_user_id = _operator(user_id)
     normalized_session_id = _session_id(session_id)
+    normalized_business_id = normalize_uuid(business_id, field_name="business_id")
     current = _clock(now_utc)
     with get_db() as conn:
-        session = _load_owned_session(
+        session = _lock_scoped_session(
             conn,
             operator_user_id=operator_user_id,
             session_id=normalized_session_id,
+            business_id=normalized_business_id,
         )
-        _assert_business(session, business_id)
         _audit(
             conn,
             session=session,
@@ -362,14 +395,15 @@ def read_support_business(
 ) -> PlatformSupportBusinessSnapshot:
     operator_user_id = _operator(user_id)
     normalized_session_id = _session_id(session_id)
+    normalized_business_id = normalize_uuid(business_id, field_name="business_id")
     current = _clock(now_utc)
     with get_db() as conn:
-        session = _load_owned_session(
+        session = _lock_scoped_session(
             conn,
             operator_user_id=operator_user_id,
             session_id=normalized_session_id,
+            business_id=normalized_business_id,
         )
-        _assert_business(session, business_id)
         _assert_active(session, now_utc=current)
         business: Business = TenancyRepository(conn).get_business_for_platform_support(
             business_id=session.business_id
@@ -403,15 +437,16 @@ def revoke_support_session(
 ) -> PlatformSupportSession:
     operator_user_id = _operator(user_id)
     normalized_session_id = _session_id(session_id)
+    normalized_business_id = normalize_uuid(business_id, field_name="business_id")
     current = _clock(now_utc)
     revoked_at = _stamp(current)
     with get_db() as conn:
-        session = _load_owned_session(
+        session = _lock_scoped_session(
             conn,
             operator_user_id=operator_user_id,
             session_id=normalized_session_id,
+            business_id=normalized_business_id,
         )
-        _assert_business(session, business_id)
         if session.revoked_at is None:
             conn.execute(
                 """
