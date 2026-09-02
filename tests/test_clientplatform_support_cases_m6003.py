@@ -46,6 +46,10 @@ class SupportCaseM6003Tests(unittest.TestCase):
         for summary in (
             "api_key=" + long_secret,
             "Authorization: " + alpha_secret,
+            "access_token is " + alpha_secret,
+            "password equals " + alpha_secret,
+            "токен доступа это " + alpha_secret,
+            "пароль равен " + alpha_secret,
             "Bearer " + alpha_secret,
             "123456789:" + telegram_secret,
             "eyJ" + jwt_part + "." + jwt_part + "." + jwt_part,
@@ -58,6 +62,15 @@ class SupportCaseM6003Tests(unittest.TestCase):
                         summary=summary,
                         idempotency_key=f"secret-{len(summary)}-{summary[:4]}",
                     )
+
+    def test_summary_allows_non_secret_natural_language(self) -> None:
+        case = self.repo.create(
+            actor=self.actor_first,
+            category="technical",
+            summary="Password is unavailable after rotation",
+            idempotency_key="non-secret-natural-language",
+        )
+        self.assertEqual(case.summary, "Password is unavailable after rotation")
 
     def test_create_is_idempotent_and_audited_once(self) -> None:
         first = self.repo.create(

@@ -185,6 +185,33 @@ class PlatformSupportCaseSurfaceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(case.business_id, text)
         self.assertIn(case.summary, text)
 
+    async def test_queue_list_chunks_long_summaries_with_bounded_previews(self) -> None:
+        cases = [
+            SimpleNamespace(
+                id=f"00000000-0000-0000-0000-{index:012d}",
+                business_id="ad67e150-0d91-48c9-a879-44a44782250d",
+                category=SupportCaseCategory.TECHNICAL,
+                status=SupportCaseStatus.OPEN,
+                summary=(f"case-{index}-" + "x" * 990),
+            )
+            for index in range(1, 51)
+        ]
+        message = self.message("/supportqueue list", message_id=23)
+        with (
+            patch.object(entry.control, "_user_id", return_value=9001),
+            patch.object(support_cases, "list_platform_support_queue", return_value=cases),
+        ):
+            await entry.clientplatform_platform_support_queue_command(message)
+
+        chunks = [call.args[0] for call in message.answer.await_args_list]
+        self.assertGreater(len(chunks), 1)
+        self.assertTrue(all(len(chunk) <= entry._TELEGRAM_SAFE_TEXT_LIMIT for chunk in chunks))
+        combined = "\n".join(chunks)
+        for case in cases:
+            self.assertIn(case.id, combined)
+        self.assertNotIn(cases[0].summary, combined)
+        self.assertIn("…", combined)
+
     async def test_queue_release_and_resolve_delegate_with_exact_operation_key(self) -> None:
         case = self.case(status=SupportCaseStatus.CLAIMED)
         for action, function_name in (

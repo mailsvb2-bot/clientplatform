@@ -31,6 +31,8 @@ router.callback_query.filter(control.ClientPlatformControlEnabled())
 log = logging.getLogger(__name__)
 _START_TIMEOUT_SECONDS = 12.0
 _START_STORAGE_DEADLINE_SECONDS = 8.0
+_TELEGRAM_SAFE_TEXT_LIMIT = 3900
+_SUPPORT_QUEUE_SUMMARY_PREVIEW = 240
 
 
 async def register_clientplatform_bot_commands(bot: Bot) -> bool:
@@ -522,6 +524,33 @@ def _platform_support_queue_usage() -> str:
     )
 
 
+def _support_queue_summary_preview(value: object) -> str:
+    summary = str(value or "")
+    if len(summary) <= _SUPPORT_QUEUE_SUMMARY_PREVIEW:
+        return summary
+    return summary[: _SUPPORT_QUEUE_SUMMARY_PREVIEW - 1].rstrip() + "…"
+
+
+def _platform_support_queue_chunks(cases: list[Any]) -> list[str]:
+    header = "ClientPlatform · support queue"
+    chunks: list[str] = []
+    current = header
+    for case in cases:
+        line = (
+            f"• {case.id} · business={case.business_id} · {case.category.value} · "
+            f"{case.status.value} · {_support_queue_summary_preview(case.summary)}"
+        )
+        separator = "\n\n" if current.startswith(header) and "\n" not in current else "\n"
+        candidate = current + separator + line
+        if len(candidate) <= _TELEGRAM_SAFE_TEXT_LIMIT:
+            current = candidate
+            continue
+        chunks.append(current)
+        current = header + " · продолжение\n\n" + line
+    chunks.append(current)
+    return chunks
+
+
 @router.message(Command("supportqueue"))
 async def clientplatform_platform_support_queue_command(message: Message) -> None:
     """Hidden platform-operator queue; queue actions never grant tenant access."""
@@ -541,12 +570,8 @@ async def clientplatform_platform_support_queue_command(message: Message) -> Non
             if not cases:
                 await message.answer("Открытых support cases нет.")
                 return
-            lines = [
-                f"• {case.id} · business={case.business_id} · {case.category.value} · "
-                f"{case.status.value} · {case.summary}"
-                for case in cases
-            ]
-            await message.answer("ClientPlatform · support queue\n\n" + "\n".join(lines))
+            for chunk in _platform_support_queue_chunks(cases):
+                await message.answer(chunk)
             return
         if len(parts) < 3:
             await message.answer(_platform_support_queue_usage())

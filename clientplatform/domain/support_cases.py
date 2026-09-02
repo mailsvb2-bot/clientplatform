@@ -7,8 +7,16 @@ from uuid import UUID
 
 
 
+_CREDENTIAL_LABEL = (
+    r"(?:api[_ -]?key|access[_ -]?token|secret|password|authorization|"
+    r"api[ _-]?ключ|ключ[ _-]?api|токен[ _-]?доступа|секрет|пароль)"
+)
 _CREDENTIAL_PATTERNS = (
-    re.compile(r"(?i)\b(?:api[_-]?key|access[_-]?token|secret|password|authorization)\s*[:=]\s*\S{8,}"),
+    re.compile(rf"(?i)\b{_CREDENTIAL_LABEL}\s*[:=]\s*\S{{8,}}"),
+    re.compile(
+        rf"(?i)\b{_CREDENTIAL_LABEL}\s+(?:is|equals?|это|равен|равно)\s+"
+        r"[\"'`]?[^\s\"'`]{16,}"
+    ),
     re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~-]{16,}"),
     re.compile(r"\b\d{6,12}:[A-Za-z0-9_-]{20,}\b"),
     re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b"),
