@@ -275,5 +275,5 @@ def test_schema_and_privacy_manifest_cover_support_capability(support_db: Suppor
     with support_db.connection() as conn:
         report = validate_clientplatform_privacy_manifest(conn, strict=True)
     assert report.ok is True
-    assert "clientplatform_platform_support_sessions" in report.discovered_business_scoped_tables
-    assert "clientplatform_platform_support_audit_events" in report.discovered_business_scoped_tables
+    assert "clientplatform_platform_support_sessions" in report.discovered_business_tables
+    assert "clientplatform_platform_support_audit_events" in report.discovered_business_tables
