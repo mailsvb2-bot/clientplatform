@@ -132,8 +132,58 @@ def test_issue_rejects_invalid_inputs_before_database_open(
         support.issue_support_session(9001, **{**common, "reason": "x" * 501})
     with pytest.raises(ValueError, match="ttl_seconds must be an integer"):
         support.issue_support_session(9001, **common, ttl_seconds=True)
+    with pytest.raises(ValueError, match="ttl_seconds must be an integer"):
+        support.issue_support_session(9001, **common, ttl_seconds="not-an-int")
     with pytest.raises(ValueError, match="ttl_seconds must be between"):
         support.issue_support_session(9001, **common, ttl_seconds=299)
+
+
+def test_load_owned_session_fails_closed_when_row_is_absent() -> None:
+    class MissingCursor:
+        @staticmethod
+        def fetchone():
+            return None
+
+    class MissingConnection:
+        @staticmethod
+        def execute(_sql, _params):
+            return MissingCursor()
+
+    with pytest.raises(
+        support.PlatformSupportSessionUnavailable,
+        match="support session is unavailable",
+    ):
+        support._load_owned_session(
+            MissingConnection(),
+            operator_user_id=9001,
+            session_id=str(uuid4()),
+        )
+
+
+def test_revoke_fails_closed_when_persisted_state_cannot_be_confirmed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = str(uuid4())
+    business_id = str(uuid4())
+    locked = type("Locked", (), {"revoked_at": "2026-09-02T12:00:00+00:00"})()
+    invalid = type("Revoked", (), {"revoked_at": None, "status": "active"})()
+
+    @contextmanager
+    def fake_db():
+        yield object()
+
+    monkeypatch.setattr(support, "is_platform_admin", lambda user_id: user_id == 9001)
+    monkeypatch.setattr(support, "get_db", fake_db)
+    monkeypatch.setattr(support, "_lock_scoped_session", lambda *_args, **_kwargs: locked)
+    monkeypatch.setattr(support, "_load_owned_session", lambda *_args, **_kwargs: invalid)
+
+    with pytest.raises(RuntimeError, match="revocation was not persisted"):
+        support.revoke_support_session(
+            9001,
+            session_id=session_id,
+            business_id=business_id,
+            now_utc=datetime(2026, 9, 2, 12, 1, tzinfo=UTC),
+        )
 
 
 def test_read_rejects_invalid_session_id_before_database_open(
