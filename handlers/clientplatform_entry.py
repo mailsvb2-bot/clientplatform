@@ -323,12 +323,14 @@ async def clientplatform_platform_status_command(message: Message) -> None:
     recovery = snapshot["disaster_recovery"]
     telemetry = snapshot["resource_telemetry"]
     release_report = snapshot["release_contract"]["report"]
+    recovery_status = str(recovery.get("status", "UNKNOWN"))
+    recovery_reason = str(recovery.get("reason", "unknown"))
+    telemetry_status = str(telemetry.get("status", "UNKNOWN"))
     await message.answer(
         "ClientPlatform · состояние платформы\n\n"
         f"{release_report}\n"
-        f"Disaster recovery: {recovery.get("status", "UNKNOWN")} — "
-        f"{recovery.get("reason", "unknown")}\n"
-        f"Resource telemetry: {telemetry.get("status", "UNKNOWN")}"
+        f"Disaster recovery: {recovery_status} — {recovery_reason}\n"
+        f"Resource telemetry: {telemetry_status}"
     )
 
 
