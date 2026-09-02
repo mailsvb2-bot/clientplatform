@@ -62,6 +62,18 @@ _CLIENTPLATFORM_PLATFORM_SUPPORT_SECURITY_FILES = (
     "handlers/clientplatform_entry.py",
 )
 
+_CLIENTPLATFORM_PLATFORM_DIRECTORY_TYPE_FILES = (
+    "clientplatform/application/platform_directory.py",
+    "clientplatform/domain/platform_directory.py",
+    "clientplatform/infrastructure/platform_operator_audit_repository.py",
+    "scripts/postgres_platform_directory_smoke.py",
+)
+
+_CLIENTPLATFORM_PLATFORM_DIRECTORY_SECURITY_FILES = (
+    *_CLIENTPLATFORM_PLATFORM_DIRECTORY_TYPE_FILES,
+    "handlers/clientplatform_entry.py",
+)
+
 
 _CLIENTPLATFORM_MANAGED_BOT_TYPE_FILES = (
     "clientplatform/application/existing_bot_onboarding.py",
@@ -163,6 +175,7 @@ TYPE_CONTRACT_FILES = (
     "services/accounts/identity.py",
     *_CLIENTPLATFORM_AUTOMATION_POLICY_FILES,
     *_CLIENTPLATFORM_PLATFORM_SUPPORT_TYPE_FILES,
+    *_CLIENTPLATFORM_PLATFORM_DIRECTORY_TYPE_FILES,
     *_CLIENTPLATFORM_MANAGED_BOT_TYPE_FILES,
     *_CLIENTPLATFORM_EXTERNAL_PRODUCT_FILES,
     *_CLIENTPLATFORM_EMAIL_OUTBOUND_FILES,
@@ -201,6 +214,7 @@ SECURITY_SCAN_PATHS = (
     "services/accounts/identity.py",
     *_CLIENTPLATFORM_AUTOMATION_POLICY_FILES,
     *_CLIENTPLATFORM_PLATFORM_SUPPORT_SECURITY_FILES,
+    *_CLIENTPLATFORM_PLATFORM_DIRECTORY_SECURITY_FILES,
     *_CLIENTPLATFORM_MANAGED_BOT_SECURITY_FILES,
     *_CLIENTPLATFORM_EXTERNAL_PRODUCT_FILES,
     *_CLIENTPLATFORM_EMAIL_OUTBOUND_FILES,

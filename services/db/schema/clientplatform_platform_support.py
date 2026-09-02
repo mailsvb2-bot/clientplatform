@@ -84,6 +84,32 @@ def ensure(c: sqlite3.Connection) -> None:
     )
     c.execute(
         """
+        CREATE TABLE IF NOT EXISTS clientplatform_platform_operator_audit_events(
+            id TEXT PRIMARY KEY,
+            operator_user_id INTEGER NOT NULL,
+            action TEXT NOT NULL,
+            query_kind TEXT NOT NULL,
+            query_fingerprint TEXT NOT NULL,
+            result_count INTEGER NOT NULL,
+            result_fingerprint TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            CHECK(operator_user_id > 0),
+            CHECK(action='directory_lookup'),
+            CHECK(query_kind IN ('business_id','user_id','business_name')),
+            CHECK(length(query_fingerprint) = 64),
+            CHECK(result_count BETWEEN 0 AND 20),
+            CHECK(length(result_fingerprint) = 64)
+        )
+        """
+    )
+    c.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_platform_operator_audit_recent
+        ON clientplatform_platform_operator_audit_events(operator_user_id, created_at, action)
+        """
+    )
+    c.execute(
+        """
         CREATE TABLE IF NOT EXISTS clientplatform_support_cases(
             id TEXT PRIMARY KEY,
             business_id TEXT NOT NULL,

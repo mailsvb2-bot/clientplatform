@@ -292,6 +292,14 @@ jobs:
           python scripts/probe_postgres_messenger_outbox.py \
             2>&1 | tee "$RUNNER_TEMP/postgres-messenger-outbox.log"
 
+      - name: Postgres platform directory smoke
+        env:
+          POSTGRES_PLATFORM_DIRECTORY_SMOKE: '1'
+        run: |
+          set -o pipefail
+          python scripts/postgres_platform_directory_smoke.py \
+            2>&1 | tee "$RUNNER_TEMP/postgres-platform-directory.log"
+
       - name: Upload Postgres probe logs
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -302,4 +310,5 @@ jobs:
             ${{ runner.temp }}/postgres-money-reuse.log
             ${{ runner.temp }}/postgres-scheduler.log
             ${{ runner.temp }}/postgres-messenger-outbox.log
+            ${{ runner.temp }}/postgres-platform-directory.log
           if-no-files-found: warn

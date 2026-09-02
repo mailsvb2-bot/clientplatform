@@ -4,6 +4,15 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
+from clientplatform.domain.platform_directory import (
+    PLATFORM_DIRECTORY_DEFAULT_RESULTS,
+    PlatformDirectoryMatch,
+    PlatformDirectoryQueryKind,
+    escape_directory_like_literal,
+    normalize_directory_limit,
+    normalize_directory_query,
+)
+
 from clientplatform.domain.tenancy import (
     Business,
     BusinessAccess,
@@ -42,6 +51,23 @@ def _business_from_row(row: Any) -> Business:
         created_by_user_id=int(_value(row, "created_by_user_id", 3)),
         created_at=str(_value(row, "created_at", 4)),
         updated_at=str(_value(row, "updated_at", 5)),
+    )
+
+
+def _platform_directory_match_from_row(row: Any) -> PlatformDirectoryMatch:
+    matched_user = _value(row, "matched_user_id", 6)
+    matched_role = _value(row, "matched_role", 7)
+    matched_status = _value(row, "matched_membership_status", 8)
+    return PlatformDirectoryMatch(
+        business_id=str(_value(row, "business_id", 0)),
+        business_name=str(_value(row, "business_name", 1)),
+        business_status=BusinessStatus(str(_value(row, "business_status", 2))),
+        business_created_at=str(_value(row, "business_created_at", 3)),
+        active_member_count=int(_value(row, "active_member_count", 4)),
+        active_owner_count=int(_value(row, "active_owner_count", 5)),
+        matched_user_id=None if matched_user is None else int(matched_user),
+        matched_role=None if matched_role is None else PlatformRole(str(matched_role)),
+        matched_membership_status=None if matched_status is None else str(matched_status),
     )
 
 
@@ -306,6 +332,83 @@ class TenancyRepository:
         if row is None:
             raise TenantAccessDenied("business was not found")
         return _business_from_row(row)
+
+    def lookup_platform_directory(
+        self,
+        *,
+        query_kind: PlatformDirectoryQueryKind | str,
+        query: object,
+        limit: int = PLATFORM_DIRECTORY_DEFAULT_RESULTS,
+    ) -> list[PlatformDirectoryMatch]:
+        """Return a bounded minimal directory view for an already-authorized operator.
+
+        This repository method never authorizes callers and never manufactures tenant
+        membership. The platform application boundary must pass ``is_platform_admin``
+        before opening the database.
+        """
+
+        kind, normalized_query = normalize_directory_query(query_kind, query)
+        bounded_limit = normalize_directory_limit(limit)
+        if kind == PlatformDirectoryQueryKind.BUSINESS_ID:
+            rows = self._conn.execute(
+                """
+                SELECT b.id AS business_id, b.name AS business_name,
+                       b.status AS business_status, b.created_at AS business_created_at,
+                       (SELECT COUNT(*) FROM business_members cm
+                        WHERE cm.business_id=b.id AND cm.status='active') AS active_member_count,
+                       (SELECT COUNT(*) FROM business_members co
+                        WHERE co.business_id=b.id AND co.status='active' AND co.role='owner')
+                        AS active_owner_count,
+                       NULL AS matched_user_id, NULL AS matched_role,
+                       NULL AS matched_membership_status
+                FROM businesses b
+                WHERE b.id=?
+                ORDER BY b.created_at, b.id
+                LIMIT ?
+                """,
+                (str(normalized_query), bounded_limit),
+            ).fetchall()
+        elif kind == PlatformDirectoryQueryKind.USER_ID:
+            rows = self._conn.execute(
+                """
+                SELECT b.id AS business_id, b.name AS business_name,
+                       b.status AS business_status, b.created_at AS business_created_at,
+                       (SELECT COUNT(*) FROM business_members cm
+                        WHERE cm.business_id=b.id AND cm.status='active') AS active_member_count,
+                       (SELECT COUNT(*) FROM business_members co
+                        WHERE co.business_id=b.id AND co.status='active' AND co.role='owner')
+                        AS active_owner_count,
+                       bm.user_id AS matched_user_id, bm.role AS matched_role,
+                       bm.status AS matched_membership_status
+                FROM business_members bm
+                JOIN businesses b ON b.id=bm.business_id
+                WHERE bm.user_id=?
+                ORDER BY b.created_at, b.id
+                LIMIT ?
+                """,
+                (int(normalized_query), bounded_limit),
+            ).fetchall()
+        else:
+            literal = escape_directory_like_literal(str(normalized_query))
+            rows = self._conn.execute(
+                """
+                SELECT b.id AS business_id, b.name AS business_name,
+                       b.status AS business_status, b.created_at AS business_created_at,
+                       (SELECT COUNT(*) FROM business_members cm
+                        WHERE cm.business_id=b.id AND cm.status='active') AS active_member_count,
+                       (SELECT COUNT(*) FROM business_members co
+                        WHERE co.business_id=b.id AND co.status='active' AND co.role='owner')
+                        AS active_owner_count,
+                       NULL AS matched_user_id, NULL AS matched_role,
+                       NULL AS matched_membership_status
+                FROM businesses b
+                WHERE b.name LIKE ? ESCAPE '\\'
+                ORDER BY b.name, b.created_at, b.id
+                LIMIT ?
+                """,
+                (f"%{literal}%", bounded_limit),
+            ).fetchall()
+        return [_platform_directory_match_from_row(row) for row in rows]
 
     def get_access(self, *, user_id: int, business_id: str) -> BusinessAccess:
         context = self.resolve_context(user_id=user_id, business_id=business_id)
