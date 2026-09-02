@@ -282,6 +282,31 @@ class TenancyRepository:
             return None
         return str(_value(row, "business_id", 0))
 
+    def get_business_for_platform_support(self, *, business_id: str) -> Business:
+        """Return one exact business for an already-authorized platform support read.
+
+        This deliberately does not manufacture a ``TenantContext`` or membership.
+        Callers must establish the separate high-trust platform-support capability
+        before invoking this single-target canonical repository read.
+        """
+
+        normalized_business_id = normalize_uuid(
+            business_id,
+            field_name="business_id",
+        )
+        row = self._conn.execute(
+            """
+            SELECT id, name, status, created_by_user_id, created_at, updated_at
+            FROM businesses
+            WHERE id=?
+            LIMIT 1
+            """,
+            (normalized_business_id,),
+        ).fetchone()
+        if row is None:
+            raise TenantAccessDenied("business was not found")
+        return _business_from_row(row)
+
     def get_access(self, *, user_id: int, business_id: str) -> BusinessAccess:
         context = self.resolve_context(user_id=user_id, business_id=business_id)
         business_row = self._conn.execute(
