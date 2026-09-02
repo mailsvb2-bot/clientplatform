@@ -427,3 +427,40 @@ def test_schema_and_privacy_manifest_cover_support_capability(support_db: Suppor
     assert report.ok is True
     assert "clientplatform_platform_support_sessions" in report.discovered_business_tables
     assert "clientplatform_platform_support_audit_events" in report.discovered_business_tables
+
+
+def test_transaction_issue_uses_caller_owned_canonical_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = object()
+    prepared = object()
+    captured: dict[str, object] = {}
+
+    def fake_prepare(user_id, **kwargs):
+        captured["user_id"] = user_id
+        captured.update(kwargs)
+        return prepared
+
+    def fake_persist(conn, request):
+        assert conn is connection
+        assert request is prepared
+        return "session"
+
+    monkeypatch.setattr(support, "_prepare_support_session_issue", fake_prepare)
+    monkeypatch.setattr(support, "_persist_support_session_issue", fake_persist)
+
+    result = support.issue_support_session_in_transaction(
+        9001,
+        conn=connection,
+        business_id="ad67e150-0d91-48c9-a879-44a44782250d",
+        ticket_ref="support-case:f3b3c9dd-fcb1-43ad-b911-32dfd81222ac",
+        reason="Investigate exact support case",
+        idempotency_key="telegram:77:99",
+        ttl_seconds=1800,
+        now_utc=datetime(2026, 9, 2, 12, 0, tzinfo=UTC),
+    )
+
+    assert result == "session"
+    assert captured["user_id"] == 9001
+    assert captured["business_id"] == "ad67e150-0d91-48c9-a879-44a44782250d"
+    assert captured["ttl_seconds"] == 1800
