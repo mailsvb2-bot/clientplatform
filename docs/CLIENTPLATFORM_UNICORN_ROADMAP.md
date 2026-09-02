@@ -1132,20 +1132,35 @@ Platform-support получает безопасный, ограниченный
 - Inline review threads на final head отсутствовали. Repository-side `AI Review / gate` был green с явным статусом `L3 external AI review temporarily disabled by trusted repository policy`; внешний Codex review не выдаётся за выполненный, поскольку code-review quota была исчерпана.
 - Production deployment **не входил** в M6-002 merge/evidence и этим roadmap-closure не утверждается.
 
-### M6-003 — `NEXT` — Support Case Intake + Operator Queue
+### M6-003 — `DONE` — Support Case Intake + Operator Queue
 
-Следующий и единственный default slice по #263: создать canonical support-case lifecycle, в котором tenant сам явно создаёт обращение, а platform operator видит cross-tenant очередь **только существующих support cases**, а не каталог всех businesses/users. Case является маршрутом к M6-002 capability, но сам claim/просмотр очереди не даёт tenant-доступа.
+Canonical support-case lifecycle позволяет tenant явно создать обращение, а platform operator — работать с cross-tenant очередью **только существующих support cases**, не получая каталог всех businesses/users и не приобретая tenant-доступ от одного факта claim.
 
-Минимальный DONE contract M6-003:
+### Evidence
 
-- business-scoped support case создаётся серверно авторизованным `TenantContext`; case содержит bounded category/summary, status, timestamps и immutable creation evidence без secrets/provider credentials;
-- platform operator может видеть только open/in-progress cases, получить exact `case_id` + `business_id`, атомарно claim/release/resolve case и не может этим действием создать membership или synthetic tenant role;
-- concurrent claim одного case имеет ровно одного owner либо детерминированный idempotent replay; stale/closed/resolved case fail-close;
-- переход из case к business inspection требует отдельную активную M6-002 support session, привязанную к exact `business_id` и case/ticket reference; очередь сама business/customer data не раскрывает;
-- tenant видит только cases своего business; cross-tenant tenant-read/write блокируется regression-тестами;
-- lifecycle/claim/resolve события audit-логируются; privacy/retention/export/erasure contract обновляется для bounded support text;
-- Telegram/VK/MAX используют один application/domain owner; presentation adapters не получают собственные очереди или state stores;
-- в этом slice не строить bulk tenant search, customer browsing, business-domain mutations, provider writes, billing overrides или autonomous support actions.
+- PR #268 (`M6-003: add canonical support case operator queue`) merged в `main` как `5cc038e7b2a6a617e2a07ecfb223d580f4e48ec0`; exact final PR head `07504bf975fcc23ecdf65c793aa9b040d648dc7f`.
+- На exact final head все 16 обязательных workflow завершились `success`; `AI Review / gate` green. Два P1 review finding исправлены до merge: operator queue теперь chunked/bounded ниже Telegram message limit, а secret filter блокирует credential-like natural-language forms без ложного запрета обычных фраз. Threads resolved.
+- Final GitHub coverage ratchet зафиксирован без снижения baseline: `82.19%` combined / `73.93%` branch. PostgreSQL/static-security/regression contour и concurrency gates green.
+- Business-scoped cases создаются через один channel-neutral application owner; Telegram/VK/MAX не получили отдельные stores/queues. Tenant isolation, strict idempotency/stale replay fail-close и atomic claim/release/resolve покрыты regression tests.
+- Claim case не создаёт membership или synthetic `TenantContext`. Business inspection требует отдельную M6-002 support session, выдаваемую для exact case/business в той же canonical DB transaction при lock exact claimed case.
+- Production deploy выполнен на exact merge SHA `5cc038e7b2a6a617e2a07ecfb223d580f4e48ec0`: encrypted backup `/var/backups/clientplatform/postgres/clientplatform-20260902T200530Z.dump.age`, deploy evidence `/var/lib/clientplatform/deploy-evidence/deploy-20260902T200829Z.json`, `CLIENTPLATFORM_UPDATE_STABILITY_OK:20s`, все production containers `running` с `restart_count=0`, internal `/healthz` + `/readyz` = `200`, внешний `https://app.clientplatform.ru/` = `200 ClientPlatform`, публичные health/readiness/webhook остаются `404`.
+
+### M6-004 — `NEXT` — Bounded Platform Directory Search + Access Review
+
+Следующий и единственный default slice по #263 закрывает первую оставшуюся часть family `platform search / users / roles / permissions`: platform operator получает безопасную служебную навигацию к **конкретному** business/account без глобального tenant role и без возможности выгрузить всю платформу.
+
+Минимальный DONE contract M6-004:
+
+- доступ только через отдельную fail-closed `is_platform_admin` границу **до DB read**; tenant OWNER/ADMIN/SUPPORT роли не дают directory access;
+- поиск всегда query-bound: exact business UUID, exact platform user id и bounded normalized business-name search; пустой запрос/`*`/unbounded list запрещены;
+- hard result cap и deterministic ordering; никаких bulk export, cursor для полного обхода всех tenants или фонового dump;
+- результат содержит только минимальный platform-support metadata: business id/name/status/created-at и минимальные account/membership references, необходимые для идентификации; customer records, messages, payments, provider secrets и business-domain data не раскрываются;
+- каждый directory lookup append-only audit-логируется с platform operator, query kind/fingerprint, result count и timestamp; raw secret/credential-like query в audit не сохраняется;
+- lookup сам по себе не создаёт membership, не создаёт synthetic `TenantContext`, не меняет roles/permissions и **не разрешает business inspection**; для чтения business data по-прежнему требуется exact M6-002 support session с reason/ticket;
+- repository/application layer переиспользует canonical tenancy/identity owners и ту же canonical DB; не создавать второй users/business directory store;
+- hidden operator surface не добавляется в публичное user menu; presentation не должна становиться отдельным search brain;
+- privacy/static-security manifests и SQLite/PostgreSQL regressions доказывают deny-before-DB, boundedness, deterministic lookup, audit, no-membership/no-mutation и cross-tenant fail-closed;
+- в этом slice не строить billing overrides, customer browsing, arbitrary SQL/admin console, provider writes, impersonation, role mutation или autonomous support actions.
 
 Единый шаблон для важных автоматических действий:
 
@@ -1751,7 +1766,8 @@ Duplicate tap, retry, worker restart или uncertain provider response не д�
 | M5-002 Canonical Action Approval Boundary | DONE | PR #247 squash-merge `1cbee98d85131c0e6579e292e8413a5ae71b7613`; exact head `6b985a35d73244bebcde56edcc4905efc19e2398`; all final-head PR checks green; 2 review findings resolved; focused 33 tests + full regression `4172 passed, 7 skipped`; coverage locked at 75.02% combined / 66.29% branch; no provider execution or production deploy |
 | M6-001 Platform Operator Read-Only Snapshot | DONE | PR #264 merge `6acdcb62f6b644592aa23301ad1763a747b3b712`; exact head `c2f32fa2914245c732a8bc06d32d334bcb1454fd`; all final-head PR checks green; review P1 resolved with hidden `/platformstatus` + deny/allow surface regressions; full CI `3070 passed, 7 skipped`; coverage locked at 81.99% / 73.64%; exact-SHA production deploy `deploy-20260902T151537Z.json` with encrypted backup, health/readiness, HTTPS/polling-only contract, restart=0 and 20s stability |
 | M6-002 Audited Support Access Session | DONE | PR #266 merge `ddc0bd67ad9e7be549e6c5a840af36f8e5f2a402`; exact head `2e56a1498526b76526a8516cdf5badba3e88f1ae`; all 16 workflows success; GitHub coverage `82.08%` within `82.09%` baseline tolerance and branch `73.73% / 73.73%`; local full suite `3088 passed, 7 skipped`; isolated PostgreSQL 16 replay/read/revoke smoke green; no membership injection or synthetic TenantContext; production deploy not part of slice |
-| M6-003 Support Case Intake + Operator Queue | NEXT | Tenant-created business-scoped support cases; platform queue only for explicit cases; atomic claim/release/resolve; case does not grant tenant access; business inspection still requires exact M6-002 session; no bulk tenant browsing or business/provider mutation |
+| M6-003 Support Case Intake + Operator Queue | DONE | PR #268 merge `5cc038e7b2a6a617e2a07ecfb223d580f4e48ec0`; exact head `07504bf975fcc23ecdf65c793aa9b040d648dc7f`; all 16 workflows + AI Review green; review P1s resolved; coverage locked at 82.19% / 73.93%; exact-SHA production deploy `deploy-20260902T200829Z.json` with encrypted backup, health/readiness, restart=0 and 20s stability |
+| M6-004 Bounded Platform Directory Search + Access Review | NEXT | Query-bound, audited, hard-capped platform operator lookup using canonical tenancy/identity owners; minimal metadata only; no bulk tenant browsing, membership/role mutation, synthetic TenantContext or business inspection without M6-002 support session |
 
 ---
 
