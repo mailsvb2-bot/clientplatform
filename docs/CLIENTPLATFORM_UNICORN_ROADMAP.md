@@ -1111,7 +1111,7 @@ owner who approved
 
 ### Evidence
 
-- PR #264 (`M6-001: add platform operator read-only snapshot`) merge-merged в `main` как `6acdcb62f6b644592aa23301ad1763a747b3b712`; exact final PR head `c2f32fa2914245c732a8bc06d32d334bcb1454fd`.
+- PR #264 (`M6-001: add platform operator read-only snapshot`) merged в `main` как `6acdcb62f6b644592aa23301ad1763a747b3b712`; exact final PR head `c2f32fa2914245c732a8bc06d32d334bcb1454fd`.
 - На exact final head все обязательные PR checks green: Canon, CI quality/coverage + static security, User Scenario Matrix, AutomationPolicy/Ad Spend/Booking/Partner concurrency, Managed Bot Gateway, Bot Provisioning, Production Isolation, Encrypted Backup, Pre-deploy Release Gate, Boundary Diagnostics, Brand Gate и AI Review gate.
 - Full CI: `3070 passed, 7 skipped`; coverage ratchet повышен и зафиксирован на `81.99%` combined / `73.64%` branch.
 - Review P1 «snapshot не подключён к operator surface» закрыт на той же ветке: hidden `/platformstatus` делегирует в canonical `platform_operator_snapshot`; regression доказывает deny-before-read для неавторизованного пользователя и authorized presentation path. Review thread resolved.
