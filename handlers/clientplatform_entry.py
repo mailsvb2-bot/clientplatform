@@ -334,6 +334,107 @@ async def clientplatform_platform_status_command(message: Message) -> None:
     )
 
 
+def _platform_support_command_parts(message: Message) -> list[str]:
+    return str(getattr(message, "text", "") or "").strip().split(maxsplit=4)
+
+
+def _platform_support_idempotency_key(message: Message) -> str:
+    chat = getattr(message, "chat", None)
+    chat_id = getattr(chat, "id", None)
+    message_id = getattr(message, "message_id", None)
+    if chat_id is None or message_id is None:
+        raise ValueError("support command requires Telegram message identity")
+    return f"telegram:{int(chat_id)}:{int(message_id)}"
+
+
+def _platform_support_usage() -> str:
+    return (
+        "Использование:\n"
+        "/supportsession open <business_id> <ticket> <причина>\n"
+        "/supportsession read <session_id> <business_id>\n"
+        "/supportsession revoke <session_id> <business_id>"
+    )
+
+
+@router.message(Command("supportsession"))
+async def clientplatform_platform_support_session_command(message: Message) -> None:
+    """Hidden platform-operator surface for one-business audited support access."""
+
+    support = importlib.import_module("services.platform_support_access")
+    user_id = control._user_id(message)
+    parts = _platform_support_command_parts(message)
+    if len(parts) < 2:
+        await message.answer(_platform_support_usage())
+        return
+
+    action = parts[1].casefold()
+    try:
+        if action == "open":
+            if len(parts) != 5:
+                await message.answer(_platform_support_usage())
+                return
+            session = await asyncio.to_thread(
+                support.issue_support_session,
+                user_id,
+                business_id=parts[2],
+                ticket_ref=parts[3],
+                reason=parts[4],
+                idempotency_key=_platform_support_idempotency_key(message),
+            )
+            await message.answer(
+                "ClientPlatform · support session создана\n\n"
+                f"Session: {session.id}\n"
+                f"Business: {session.business_id}\n"
+                f"Истекает: {session.expires_at}\n"
+                "Режим: read-only"
+            )
+            return
+        if action == "read":
+            if len(parts) != 4:
+                await message.answer(_platform_support_usage())
+                return
+            snapshot = await asyncio.to_thread(
+                support.read_support_business,
+                user_id,
+                session_id=parts[2],
+                business_id=parts[3],
+            )
+            await message.answer(
+                "ClientPlatform · support read\n\n"
+                f"Business: {snapshot.business_name}\n"
+                f"Business ID: {snapshot.business_id}\n"
+                f"Статус: {snapshot.business_status}\n"
+                f"Session: {snapshot.session_id}\n"
+                f"Истекает: {snapshot.session_expires_at}\n"
+                "Доступ: read-only"
+            )
+            return
+        if action == "revoke":
+            if len(parts) != 4:
+                await message.answer(_platform_support_usage())
+                return
+            session = await asyncio.to_thread(
+                support.revoke_support_session,
+                user_id,
+                session_id=parts[2],
+                business_id=parts[3],
+            )
+            await message.answer(
+                "ClientPlatform · support session отозвана\n\n"
+                f"Session: {session.id}\n"
+                f"Business: {session.business_id}\n"
+                f"Отозвана: {session.revoked_at}"
+            )
+            return
+        await message.answer(_platform_support_usage())
+    except support.PlatformSupportPermissionDenied:
+        await message.answer("Доступ к support session недоступен.")
+    except support.PlatformSupportSessionUnavailable:
+        await message.answer("Support session недоступна или больше не активна.")
+    except (support.PlatformSupportSessionConflict, ValueError):
+        await message.answer("Параметры support session некорректны или конфликтуют.")
+
+
 @router.message(Command("cancel"))
 async def clientplatform_cancel_command(message: Message, state: FSMContext) -> None:
     current_state = await state.get_state()

@@ -22,6 +22,7 @@ from . import clientplatform_offer_ladders
 from . import clientplatform_customers
 from . import clientplatform_external_products
 from . import clientplatform_partners
+from . import clientplatform_platform_support
 from . import clientplatform_program_media
 from . import clientplatform_programs
 from . import clientplatform_promotions
@@ -46,6 +47,7 @@ PARTS = [
     clientplatform_attribution,
     clientplatform_revenue_attribution,
     clientplatform_partners,
+    clientplatform_platform_support,
     clientplatform_external_products,
     clientplatform_sales,
     clientplatform_sales_ai,
