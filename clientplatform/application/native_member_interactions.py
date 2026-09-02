@@ -1060,7 +1060,198 @@ def _menu_all_message(actor: TenantContext) -> CustomerInteractionMessage:
     )
 
 def _back_row() -> tuple[CustomerInteractionButton, ...]:
+    # Legacy renderer helper. Runtime responses are normalized by
+    # ``_with_parent_navigation`` so this row becomes a real parent-level Back
+    # button while the direct Home escape remains available where it fits.
     return (_button(nav.HOME.label, "cpm:menu"),)
+
+
+_NATIVE_PARENT_COMMANDS: dict[str, str] = {
+    "menu-all": "cpm:menu",
+    "work": "cpm:menu-all",
+    "work-more": "cpm:work",
+    "today": "cpm:work",
+    "today-full": "cpm:work-more",
+    "customers": "cpm:work",
+    "bookings": "cpm:work",
+    "booking-open": "cpm:bookings",
+    "programs": "cpm:work",
+    "behavior": "cpm:work-more",
+    "attention": "cpm:work-more",
+    "sales": "cpm:work-more",
+    "sales-recent": "cpm:sales",
+    "sales-handoffs": "cpm:sales",
+    "reactivate": "cpm:growth-lifecycle",
+    "ad-spend": "cpm:growth-sales",
+    "growth": "cpm:menu-all",
+    "growth-sales": "cpm:growth",
+    "growth-analysis": "cpm:growth-sales",
+    "growth-more": "cpm:growth",
+    "growth-lifecycle": "cpm:growth-more",
+    "acquire": "cpm:growth",
+    "autopilot": "cpm:growth",
+    "publications": "cpm:growth",
+    "funnel": "cpm:growth-analysis",
+    "funnel2": "cpm:growth-analysis",
+    "money": "cpm:growth-sales",
+    "payments": "cpm:growth-sales",
+    "segments": "cpm:growth-sales",
+    "offers": "cpm:growth-more",
+    "copy": "cpm:growth-more",
+    "prices": "cpm:growth-more",
+    "retention": "cpm:growth-lifecycle",
+    "invites": "cpm:growth-lifecycle",
+    "manage": "cpm:menu-all",
+    "manage-more": "cpm:manage",
+    "release": "cpm:manage",
+    "formats": "cpm:manage",
+    "tariff": "cpm:manage",
+    "recent": "cpm:manage-more",
+    "system": "cpm:manage-more",
+    "team": "cpm:menu-all",
+    "members": "cpm:team",
+    "permissions": "cpm:team",
+    "member-add-help": "cpm:team",
+    "messengers": "cpm:menu-all",
+    "connect-telegram": "cpm:messengers",
+    "connect-vk": "cpm:messengers",
+    "connect-max": "cpm:messengers",
+    "activity-edit-help": "cpm:manage",
+    "publication-new": "cpm:publications",
+    "payment-new": "cpm:payments",
+    "price-set": "cpm:prices",
+    "offering-new": "cpm:offers",
+    "program-create": "cpm:programs:0",
+    "owner-input-invalid": "cpm:menu",
+    "owner-input-cancelled": "cpm:menu",
+}
+
+
+def _native_parent_command(parsed: ParsedMemberInteraction) -> str | None:
+    action = parsed.action
+    args = parsed.args
+    if action == "menu":
+        return None
+    if action == "customer":
+        return "cpm:customers:0"
+    if action == "booking-open-for":
+        return "cpm:booking-open:0"
+    if action == "booking-open-text":
+        return "cpm:bookings"
+    if action == "sales-lead":
+        return "cpm:sales"
+    if action in {
+        "sales-actions", "sales-result-menu", "sales-note-help",
+        "sales-next-help", "sales-close-help", "sales-followup-menu",
+    } and args:
+        return f"cpm:sales-lead:{args[0]}"
+    if action in {"sales-followup-help", "sales-followup-optout-help"} and args:
+        return f"cpm:sales-followup-menu:{args[0]}"
+    if action in {"sales-handoff-claim", "sales-handoff-resolve"}:
+        return "cpm:sales-handoffs"
+    if action in _SALES_TEXT_MUTATION_ACTIONS:
+        # Text commands may carry an abbreviated lead reference. The renderer
+        # resolves it before mutation; navigation must never reuse the raw
+        # abbreviation as an exact lead id. ``_with_parent_navigation``
+        # upgrades this safe list fallback from the rendered full-id card.
+        return "cpm:sales"
+    if action.startswith("sales-") and args:
+        return f"cpm:sales-lead:{args[0]}"
+    if action == "reactivate-approve":
+        return "cpm:reactivate"
+    if action == "ad-spend-launch":
+        return "cpm:ad-spend"
+    if action in {
+        "publication-new-for", "publication-new-text", "publication-publish",
+        "publication-schedule", "publication-schedule-text",
+        "publication-cancel", "publication-cancel-ok",
+    }:
+        return "cpm:publications"
+    if action in {"payment-new-text", "pay-refund", "pay-refund-ok"}:
+        return "cpm:payments"
+    if action == "price-set-text":
+        return "cpm:prices"
+    if action.startswith("automation-") or action in {"autopilot-enable", "autopilot-disable"}:
+        return "cpm:autopilot"
+    if action == "invite-new":
+        return "cpm:invites"
+    if action == "member-add-role":
+        return "cpm:member-add-help"
+    if action == "member-add-text":
+        return "cpm:team"
+    if action in {"member-role", "member-revoke"} and args:
+        return f"cpm:member:{args[0]}"
+    if action == "member" and args:
+        return "cpm:members:0"
+    if action in {"format-enable", "format-disable"}:
+        return "cpm:formats:0"
+    if action == "activity-edit-text":
+        return "cpm:manage"
+    if action in {"program-create-text", "program-publish", "program-deliver", "program-deliver-to", "program-deliver-text"}:
+        return "cpm:programs:0"
+    if action == "program-lesson" and args:
+        return "cpm:programs:0"
+    if action == "program-lesson-kind" and args:
+        return f"cpm:program-lesson:{args[0]}"
+    if action == "program-lesson-text":
+        return "cpm:programs:0"
+    if action == "offering-new-for":
+        return "cpm:offering-new"
+    if action == "offering-new-text":
+        return "cpm:offers"
+    return _NATIVE_PARENT_COMMANDS.get(action, "cpm:menu")
+
+
+_SALES_TEXT_MUTATION_ACTIONS = frozenset(
+    {
+        "sales-note-text",
+        "sales-next-text",
+        "sales-close-text",
+        "sales-followup-text",
+        "sales-followup-optout-text",
+    }
+)
+
+
+def _resolved_sales_lead_parent(
+    message: CustomerInteractionMessage,
+) -> str | None:
+    prefix = "cpm:sales-actions:"
+    for row in message.rows:
+        for button in row:
+            if button.command.startswith(prefix):
+                lead_id = button.command[len(prefix) :]
+                if lead_id:
+                    return f"cpm:sales-lead:{lead_id}"
+    return None
+
+
+def _with_parent_navigation(
+    message: CustomerInteractionMessage,
+    parsed: ParsedMemberInteraction,
+) -> CustomerInteractionMessage:
+    parent_command = _native_parent_command(parsed)
+    if parsed.action in _SALES_TEXT_MUTATION_ACTIONS:
+        parent_command = _resolved_sales_lead_parent(message) or parent_command
+    if parent_command is None:
+        return message
+
+    # Remove only old dedicated navigation rows. Action rows and pagination stay
+    # untouched. The final row always means navigation, never a business action.
+    rows = [
+        row
+        for row in message.rows
+        if not (
+            len(row) == 1
+            and row[0].command in {"cpm:menu", parent_command}
+        )
+    ]
+    total = sum(len(row) for row in rows)
+    navigation = [_button(nav.BACK.label, parent_command)]
+    if parent_command != "cpm:menu" and total + 2 <= 10:
+        navigation.append(_button(nav.HOME.label, "cpm:menu"))
+    rows.append(tuple(navigation))
+    return CustomerInteractionMessage(text=message.text, rows=tuple(rows))
 
 def _permission_message() -> CustomerInteractionMessage:
     return CustomerInteractionMessage(
@@ -2978,7 +3169,7 @@ def _formats_message(actor: TenantContext, page: int = 0) -> CustomerInteraction
             )
     pagination: list[CustomerInteractionButton] = []
     if page > 0:
-        pagination.append(_button("⬅️ Назад", f"cpm:formats:{page - 1}"))
+        pagination.append(_button("◀️ Предыдущая страница", f"cpm:formats:{page - 1}"))
     if page + 1 < count:
         pagination.append(_button("Вперёд ➡️", f"cpm:formats:{page + 1}"))
     if pagination:
@@ -3074,7 +3265,7 @@ def _members_message(actor: TenantContext, page: int) -> CustomerInteractionMess
         rows.append((_button(label, f"cpm:member:{item['user_id']}"),))
     navigation: list[CustomerInteractionButton] = []
     if page > 0:
-        navigation.append(_button("⬅️ Назад", f"cpm:members:{page - 1}"))
+        navigation.append(_button("◀️ Предыдущая страница", f"cpm:members:{page - 1}"))
     if page + 1 < count:
         navigation.append(_button("Вперёд ➡️", f"cpm:members:{page + 1}"))
     if navigation:
@@ -3270,7 +3461,7 @@ def _customers_message(actor: TenantContext, page: int = 0) -> CustomerInteracti
         rows.append((_button(nav.INVITES.label, "cpm:invites"),))
     navigation: list[CustomerInteractionButton] = []
     if page > 0:
-        navigation.append(_button("⬅️ Назад", f"cpm:customers:{page - 1}"))
+        navigation.append(_button("◀️ Предыдущая страница", f"cpm:customers:{page - 1}"))
     if page + 1 < count:
         navigation.append(_button("Вперёд ➡️", f"cpm:customers:{page + 1}"))
     if navigation:
@@ -3345,7 +3536,7 @@ def _booking_open_message(actor: TenantContext, page: int = 0) -> CustomerIntera
     ]
     paging: list[CustomerInteractionButton] = []
     if page > 0:
-        paging.append(_button("⬅️ Раньше", f"cpm:booking-open:{page - 1}"))
+        paging.append(_button("◀️ Предыдущая страница", f"cpm:booking-open:{page - 1}"))
     if page + 1 < page_count:
         paging.append(_button("Дальше ➡️", f"cpm:booking-open:{page + 1}"))
     if paging:
@@ -3505,7 +3696,7 @@ def _programs_message(actor: TenantContext, page: int = 0) -> CustomerInteractio
             rows.append((_button("📤 Выдать клиенту", f"cpm:program-deliver:{item.id}"),))
     pagination: list[CustomerInteractionButton] = []
     if page > 0:
-        pagination.append(_button("⬅️ Назад", f"cpm:programs:{page - 1}"))
+        pagination.append(_button("◀️ Предыдущая страница", f"cpm:programs:{page - 1}"))
     if page + 1 < page_count:
         pagination.append(_button("Вперёд ➡️", f"cpm:programs:{page + 1}"))
     if pagination:
@@ -4503,6 +4694,7 @@ def render_native_member_interaction(
         input_surface="official",
         current_platform=current_platform,
     )
+    interaction = _with_parent_navigation(interaction, parsed)
     if pending is not None and parsed.action != "owner-input-invalid":
         clear_owner_input(
             user_id=current.user_id,
@@ -4548,6 +4740,7 @@ def process_native_member_interaction(
         input_surface=input_surface,
         current_platform=route.platform,
     )
+    interaction = _with_parent_navigation(interaction, parsed)
     if pending is not None and parsed.action != "owner-input-invalid":
         clear_owner_input(
             user_id=actor.user_id,

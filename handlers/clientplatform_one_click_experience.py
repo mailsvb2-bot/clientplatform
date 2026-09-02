@@ -381,7 +381,7 @@ async def get_clients_one_click(callback: CallbackQuery, state: FSMContext) -> N
             reply_markup=control._keyboard(
                 [
                     [("➕ Открыть время", f"cps:firstbook:{token}")],
-                    [(nav.HOME.label, f"cpj:home:{token}")],
+                    [(nav.BACK.label, f"cpj:home:{token}")],
                 ]
             ),
         )
@@ -579,7 +579,7 @@ async def open_more(callback: CallbackQuery) -> None:
                 [(nav.SERVICES_BOOKING.label, f"cpo:work:{token}")],
                 [(nav.CONTENT_PROMOTION.label, f"cpo:content:{token}")],
                 [(nav.BUSINESS_SETTINGS.label, f"cpo:settings:{token}")],
-                [(nav.HOME.label, f"cpj:home:{token}")],
+                [(nav.BACK.label, f"cpj:home:{token}")],
             ]
         ),
     )
@@ -600,7 +600,7 @@ async def open_client_tools(callback: CallbackQuery) -> None:
                 [("💬 Обращения и продажи", f"cps:s:{token}")],
                 [("📅 Записи клиентов", f"cpj:bookings:{token}")],
                 [("🔎 Все клиенты", f"cpa:{token}:customer-list")],
-                [("⬅️ Назад", f"cpo:more:{token}")],
+                [(nav.BACK.label, f"cpo:more:{token}")],
             ]
         ),
     )
@@ -625,7 +625,7 @@ async def open_content_tools(callback: CallbackQuery) -> None:
                 [(nav.OFFERS.label, f"cpa:{token}:offers")],
                 [("📣 Реклама", f"cpo:ads:{token}")],
                 [("🤝 Партнёрства", f"cpg:home:{token}")],
-                [("⬅️ Назад", f"cpo:more:{token}")],
+                [(nav.BACK.label, f"cpo:more:{token}")],
             ]
         ),
     )
@@ -655,7 +655,7 @@ def _settings_rows(token: str, role: PlatformRole) -> list[list[tuple[str, str]]
         rows.append([("👤 Сотрудники и тариф", f"cpa:{token}:menu-team")])
     if role in _SETTINGS_SYSTEM_ROLES:
         rows.append([("🛠 Технические проверки", f"cpa:{token}:menu-system")])
-    rows.append([("⬅️ Назад", f"cpo:more:{token}")])
+    rows.append([(nav.BACK.label, f"cpo:more:{token}")])
     return rows
 
 
@@ -689,7 +689,7 @@ async def open_work_tools(callback: CallbackQuery) -> None:
                 [("🧰 Мои услуги", f"cpj:services:{token}")],
                 [("📅 Мой календарь", f"cpj:calendar:{token}:30")],
                 [("🔗 Моя страница", f"cpj:page:{token}")],
-                [("⬅️ Назад", f"cpo:more:{token}")],
+                [(nav.BACK.label, f"cpo:more:{token}")],
             ]
         ),
     )
@@ -707,7 +707,7 @@ async def open_ad_tools(callback: CallbackQuery) -> None:
                 [("📣 Яндекс Директ", f"cpa:home:{token}")],
                 [("📊 Результаты Яндекс", f"cpy:a:{token}:30")],
                 [("📣 Партнёрские материалы", f"cpg:materials:{token}")],
-                [("⬅️ Назад", f"cpo:more:{token}")],
+                [(nav.BACK.label, f"cpo:more:{token}")],
             ]
         ),
     )

@@ -27,6 +27,7 @@ from clientplatform.application.sales_metrics import get_sales_funnel_snapshot
 from clientplatform.domain.retention import RetentionCohort
 from clientplatform.domain.sales import SalesInvariantViolation
 from clientplatform.domain.tenancy import TenantAccessDenied, TenantPermissionDenied
+from clientplatform.presentation import owner_navigation as nav
 from clientplatform.application.sales_orchestration import (
     approve_and_authorize_sales_outbound,
 )
@@ -131,7 +132,10 @@ def _home_keyboard(business_id: str):
             [("💬 Обращения", f"cps:sw:{token}"), ("🙋 Нужно подключиться", f"cps:sh:{token}")],
             [("📊 Как идут продажи", f"cps:sf:{token}"), ("🧩 Что предлагать", f"cps:sl:{token}")],
             [("♻️ Вернуть клиентов", f"cps:sr:{token}")],
-            [("🏠 В кабинет", f"cp:business:{token}")],
+            [
+                (nav.BACK.label, f"cpo:clients:{token}"),
+                (nav.HOME.label, f"cpj:home:{token}"),
+            ],
         ]
     )
 

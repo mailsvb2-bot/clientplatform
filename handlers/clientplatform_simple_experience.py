@@ -180,6 +180,8 @@ async def send_advanced_dashboard(
             [InlineKeyboardButton(text="📣 Реклама", callback_data=f"cpo:ads:{token}")],
             *base_keyboard.inline_keyboard,
             [InlineKeyboardButton(text="🎨 Фирменный стиль", callback_data=f"cpb:open:{token}")],
+            [InlineKeyboardButton(text=nav.BACK.label, callback_data=f"cpo:settings:{token}")],
+            [InlineKeyboardButton(text=nav.HOME.label, callback_data=f"cpj:home:{token}")],
         ]
     )
     await message.answer(

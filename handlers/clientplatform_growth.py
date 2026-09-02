@@ -12,6 +12,7 @@ from clientplatform.application.tenancy import list_accessible_businesses, resol
 from clientplatform.domain.activity import ActivityError
 from clientplatform.domain.tenancy import TenancyError
 from clientplatform.runtime.control_bot import control_bot_enabled
+from clientplatform.presentation import owner_navigation as nav
 from dashboard.growth_cockpit import telegram_growth_summary
 from handlers.clientplatform_goal_first_safety import ACQUIRE_CLIENTS
 
@@ -76,6 +77,12 @@ def _cockpit_keyboard(*, business_id: str, period_days: int, action_key: str) ->
     if action_key != "none":
         rows.append([("Почему это важно", f"cpg:attention:{token}:{period_days}")])
     rows.append([("Клиенты", f"cp:clients:{token}"), ("Результаты", f"cp:results:{token}")])
+    rows.append(
+        [
+            (nav.BACK.label, f"cpo:more:{token}"),
+            (nav.HOME.label, f"cpj:home:{token}"),
+        ]
+    )
     return _keyboard(rows)
 
 
