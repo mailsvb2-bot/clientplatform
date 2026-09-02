@@ -1101,7 +1101,7 @@ owner who approved
 - Focused M5 suite после review fixes: `33 tests OK`; финальный full coverage regression: `4172 passed, 7 skipped, 33 warnings`; coverage ratchets `75.02%` combined / `66.29%` branch при locked baseline `75.02%` / `66.29%`.
 - PostgreSQL AutomationPolicy concurrency подтверждает restart-safe/idempotent request replay и approve-vs-reject race; stale policy, expiry, cross-tenant и conflicting decisions остаются fail-closed.
 - M5-002 не выполняет provider calls, autonomous scheduling, external execution или money movement; production deploy намеренно не выполнялся.
-- После M5-002 дальнейший scope был отдельно декомпозирован через issue #263; M6-001 ниже уже закрывает первый platform-operator vertical, а единственный текущий `NEXT` — M6-002.
+- После M5-002 дальнейший scope был отдельно декомпозирован через issue #263; M6-001 и M6-002 ниже закрывают platform snapshot и audited one-business support access, а единственный текущий `NEXT` — M6-003.
 
 ## 10.2.1. M6 — Platform parity и безопасный operator/support contour
 
@@ -1117,22 +1117,35 @@ owner who approved
 - Review P1 «snapshot не подключён к operator surface» закрыт на той же ветке: hidden `/platformstatus` делегирует в canonical `platform_operator_snapshot`; regression доказывает deny-before-read для неавторизованного пользователя и authorized presentation path. Review thread resolved.
 - Production deploy выполнен на exact merge SHA `6acdcb62f6b644592aa23301ad1763a747b3b712`: encrypted backup `/var/backups/clientplatform/postgres/clientplatform-20260902T151233Z.dump.age`, deploy evidence `deploy-20260902T151537Z.json`, internal `/healthz` + `/readyz` green, внешний `https://app.clientplatform.ru/` возвращает exact `ClientPlatform`, публичные health/readiness и Telegram webhook остаются `404`, app `restart_count=0`, stability window `20s` завершился успешно.
 
-### M6-002 — `NEXT` — Audited Support Access Session
+### M6-002 — `DONE` — Audited Support Access Session
 
-Следующий и единственный default slice по #263: дать platform-support безопасный, ограниченный по времени доступ к **одному явно выбранному business** через отдельную audited support session, не превращая SUPPORT/tenant role в platform-admin и не создавая второго auth/RBAC/store. Сессия обязана быть привязана к platform operator, exact `business_id`, обязательной причине/ticket reference, `issued_at`, `expires_at`, явному revoke и immutable audit evidence. По умолчанию доступ read-only.
+Platform-support получает безопасный, ограниченный по времени доступ к **одному явно выбранному business** через отдельную audited support session, не превращая SUPPORT/tenant role в platform-admin и не создавая второго auth/RBAC/store. Сессия привязана к platform operator, exact `business_id`, обязательной причине/ticket reference, `issued_at`, `expires_at`, явному revoke и durable audit evidence. Доступ read-only.
 
-Минимальный DONE contract M6-002:
+### Evidence
 
-- create/read/revoke одной support session только через high-trust platform boundary;
-- exact business binding и fail-closed запрет cross-tenant reuse;
-- expiry/revocation действуют немедленно и переживают restart;
-- session не создаёт `business_members`, не меняет `TenantContext.roles` и не делает скрытое impersonation владельца;
-- business/customer data читаются только через существующие tenant-scoped canonical application/repository owners, с session authorization как дополнительным gate, а не новым data owner;
-- durable audit фиксирует operator, business, reason/ticket reference, lifecycle и каждый разрешённый support-read;
-- regressions покрывают happy path, unauthorized platform caller, wrong business, expiry, revoke, replay/conflict, restart и concurrency;
-- в этом slice **не** строить cross-tenant support queue, bulk tenant browsing, business mutations, provider writes или autonomous support actions.
+- PR #266 (`M6-002: add audited platform support sessions`) merged в `main` как `ddc0bd67ad9e7be549e6c5a840af36f8e5f2a402`; exact final PR head `2e56a1498526b76526a8516cdf5badba3e88f1ae`.
+- Все 16 workflow на exact head завершились `success`: CI, Canon, User Scenario Matrix, Critical Static Surface, AutomationPolicy/Ad Spend/Booking/Partner concurrency, Managed Bot Gateway, Bot Provisioning, Production Isolation, Encrypted Backup, Pre-deploy Release Gate, Boundary Diagnostics, Brand Gate и Runner Diagnostic.
+- GitHub commit statuses green: regression contour; combined coverage `82.08%` при ratchet baseline `82.09%` в разрешённой tolerance `0.01`; branch coverage `73.73% / 73.73%`. Локальный полный coverage-прогон перед push: `3088 passed, 7 skipped`, combined `82.09%`, branch `73.73%`; baseline не снижался.
+- Critical static manifest расширен до `102` type-critical файлов и `111` security paths; exact-head mypy, Bandit и dependency audit green.
+- Изолированный PostgreSQL 16 smoke подтвердил restart-safe/idempotent contour: 12 concurrent identical issue requests дали одну durable session и один `issued` audit; allowed read + revoke прошли; `business_members` не изменился. Read-vs-revoke сериализован на exact capability row.
+- Hidden `/supportsession open|read|revoke` не добавлен в публичное command menu. Session не создаёт membership и synthetic `TenantContext`; business metadata читаются через canonical `TenancyRepository`; expiry/revoke/cross-business/operator mismatch fail-close.
+- Inline review threads на final head отсутствовали. Repository-side `AI Review / gate` был green с явным статусом `L3 external AI review temporarily disabled by trusted repository policy`; внешний Codex review не выдаётся за выполненный, поскольку code-review quota была исчерпана.
+- Production deployment **не входил** в M6-002 merge/evidence и этим roadmap-closure не утверждается.
 
-После merge M6-002 roadmap должен сначала получить DONE evidence; только затем декомпозируется следующий один `NEXT`.
+### M6-003 — `NEXT` — Support Case Intake + Operator Queue
+
+Следующий и единственный default slice по #263: создать canonical support-case lifecycle, в котором tenant сам явно создаёт обращение, а platform operator видит cross-tenant очередь **только существующих support cases**, а не каталог всех businesses/users. Case является маршрутом к M6-002 capability, но сам claim/просмотр очереди не даёт tenant-доступа.
+
+Минимальный DONE contract M6-003:
+
+- business-scoped support case создаётся серверно авторизованным `TenantContext`; case содержит bounded category/summary, status, timestamps и immutable creation evidence без secrets/provider credentials;
+- platform operator может видеть только open/in-progress cases, получить exact `case_id` + `business_id`, атомарно claim/release/resolve case и не может этим действием создать membership или synthetic tenant role;
+- concurrent claim одного case имеет ровно одного owner либо детерминированный idempotent replay; stale/closed/resolved case fail-close;
+- переход из case к business inspection требует отдельную активную M6-002 support session, привязанную к exact `business_id` и case/ticket reference; очередь сама business/customer data не раскрывает;
+- tenant видит только cases своего business; cross-tenant tenant-read/write блокируется regression-тестами;
+- lifecycle/claim/resolve события audit-логируются; privacy/retention/export/erasure contract обновляется для bounded support text;
+- Telegram/VK/MAX используют один application/domain owner; presentation adapters не получают собственные очереди или state stores;
+- в этом slice не строить bulk tenant search, customer browsing, business-domain mutations, provider writes, billing overrides или autonomous support actions.
 
 Единый шаблон для важных автоматических действий:
 
@@ -1737,7 +1750,8 @@ Duplicate tap, retry, worker restart или uncertain provider response не д�
 | M5-001 Canonical AutomationPolicy Foundation | DONE | PR #245 squash-merge `0c813605c23e1d8e6f1f5d4c7f85193a9b09a209`; exact head `536d8e35429c8695f110c09f345fd67303c39d85`; all 16 PR workflows success; 2 P1 review findings resolved; focused 14 tests + full coverage regression `4151 passed, 7 skipped`; coverage 75.00% combined / 66.26% branch; no autonomous execution and no production deploy |
 | M5-002 Canonical Action Approval Boundary | DONE | PR #247 squash-merge `1cbee98d85131c0e6579e292e8413a5ae71b7613`; exact head `6b985a35d73244bebcde56edcc4905efc19e2398`; all final-head PR checks green; 2 review findings resolved; focused 33 tests + full regression `4172 passed, 7 skipped`; coverage locked at 75.02% combined / 66.29% branch; no provider execution or production deploy |
 | M6-001 Platform Operator Read-Only Snapshot | DONE | PR #264 merge `6acdcb62f6b644592aa23301ad1763a747b3b712`; exact head `c2f32fa2914245c732a8bc06d32d334bcb1454fd`; all final-head PR checks green; review P1 resolved with hidden `/platformstatus` + deny/allow surface regressions; full CI `3070 passed, 7 skipped`; coverage locked at 81.99% / 73.64%; exact-SHA production deploy `deploy-20260902T151537Z.json` with encrypted backup, health/readiness, HTTPS/polling-only contract, restart=0 and 20s stability |
-| M6-002 Audited Support Access Session | NEXT | One-business, time-bounded, read-only-by-default support session behind platform-admin boundary; immutable audit, exact business binding, expiry/revoke/restart/concurrency regressions; no membership injection, role escalation, cross-tenant queue or provider/business mutation |
+| M6-002 Audited Support Access Session | DONE | PR #266 merge `ddc0bd67ad9e7be549e6c5a840af36f8e5f2a402`; exact head `2e56a1498526b76526a8516cdf5badba3e88f1ae`; all 16 workflows success; GitHub coverage `82.08%` within `82.09%` baseline tolerance and branch `73.73% / 73.73%`; local full suite `3088 passed, 7 skipped`; isolated PostgreSQL 16 replay/read/revoke smoke green; no membership injection or synthetic TenantContext; production deploy not part of slice |
+| M6-003 Support Case Intake + Operator Queue | NEXT | Tenant-created business-scoped support cases; platform queue only for explicit cases; atomic claim/release/resolve; case does not grant tenant access; business inspection still requires exact M6-002 session; no bulk tenant browsing or business/provider mutation |
 
 ---
 
