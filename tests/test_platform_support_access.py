@@ -31,12 +31,10 @@ class SupportDb:
         conn.execute("PRAGMA busy_timeout=10000")
         try:
             yield conn
-        except Exception:
-            conn.rollback()
-            raise
-        else:
             conn.commit()
         finally:
+            if conn.in_transaction:
+                conn.rollback()
             conn.close()
 
     def business(self, *, business_id: str, owner_user_id: int, name: str) -> None:
