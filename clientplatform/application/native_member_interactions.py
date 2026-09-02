@@ -1149,6 +1149,12 @@ def _native_parent_command(parsed: ParsedMemberInteraction) -> str | None:
         return f"cpm:sales-followup-menu:{args[0]}"
     if action in {"sales-handoff-claim", "sales-handoff-resolve"}:
         return "cpm:sales-handoffs"
+    if action in _SALES_TEXT_MUTATION_ACTIONS:
+        # Text commands may carry an abbreviated lead reference. The renderer
+        # resolves it before mutation; navigation must never reuse the raw
+        # abbreviation as an exact lead id. ``_with_parent_navigation``
+        # upgrades this safe list fallback from the rendered full-id card.
+        return "cpm:sales"
     if action.startswith("sales-") and args:
         return f"cpm:sales-lead:{args[0]}"
     if action == "reactivate-approve":
@@ -1196,11 +1202,37 @@ def _native_parent_command(parsed: ParsedMemberInteraction) -> str | None:
     return _NATIVE_PARENT_COMMANDS.get(action, "cpm:menu")
 
 
+_SALES_TEXT_MUTATION_ACTIONS = frozenset(
+    {
+        "sales-note-text",
+        "sales-next-text",
+        "sales-close-text",
+        "sales-followup-text",
+        "sales-followup-optout-text",
+    }
+)
+
+
+def _resolved_sales_lead_parent(
+    message: CustomerInteractionMessage,
+) -> str | None:
+    prefix = "cpm:sales-actions:"
+    for row in message.rows:
+        for button in row:
+            if button.command.startswith(prefix):
+                lead_id = button.command[len(prefix) :]
+                if lead_id:
+                    return f"cpm:sales-lead:{lead_id}"
+    return None
+
+
 def _with_parent_navigation(
     message: CustomerInteractionMessage,
     parsed: ParsedMemberInteraction,
 ) -> CustomerInteractionMessage:
     parent_command = _native_parent_command(parsed)
+    if parsed.action in _SALES_TEXT_MUTATION_ACTIONS:
+        parent_command = _resolved_sales_lead_parent(message) or parent_command
     if parent_command is None:
         return message
 

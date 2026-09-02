@@ -113,6 +113,47 @@ def test_native_pagination_label_is_not_confused_with_hierarchy_back() -> None:
     assert normalized.rows[-1][0].command == "cpm:work"
 
 
+
+def test_sales_text_mutation_back_uses_resolved_full_lead_id() -> None:
+    full_lead_id = str(uuid4())
+    short_reference = full_lead_id[:8]
+    rendered_card = CustomerInteractionMessage(
+        text="✅ Заметка сохранена.",
+        rows=(
+            (
+                CustomerInteractionButton(
+                    label="⋯ Другие действия",
+                    command=f"cpm:sales-actions:{full_lead_id}",
+                ),
+            ),
+            (CustomerInteractionButton(label="💬 К обращениям", command="cpm:sales"),),
+        ),
+    )
+
+    normalized = native._with_parent_navigation(
+        rendered_card,
+        native.ParsedMemberInteraction(
+            "sales-note-text",
+            (short_reference, "Позвонить завтра"),
+        ),
+    )
+
+    assert normalized.rows[-1][0].label == nav.BACK.label
+    assert normalized.rows[-1][0].command == f"cpm:sales-lead:{full_lead_id}"
+    assert short_reference != full_lead_id
+
+
+def test_sales_text_mutation_without_resolved_card_falls_back_to_sales_list() -> None:
+    message = CustomerInteractionMessage(text="Эта кнопка уже неактуальна")
+    normalized = native._with_parent_navigation(
+        message,
+        native.ParsedMemberInteraction(
+            "sales-followup-text",
+            ("abcdef12", "24", "Напомнить клиенту"),
+        ),
+    )
+    assert normalized.rows[-1][0].command == "cpm:sales"
+
 def test_telegram_growth_and_sales_section_menus_have_back_and_home() -> None:
     business_id = str(uuid4())
     growth_buttons = _button_map(
