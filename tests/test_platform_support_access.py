@@ -132,8 +132,58 @@ def test_issue_rejects_invalid_inputs_before_database_open(
         support.issue_support_session(9001, **{**common, "reason": "x" * 501})
     with pytest.raises(ValueError, match="ttl_seconds must be an integer"):
         support.issue_support_session(9001, **common, ttl_seconds=True)
+    with pytest.raises(ValueError, match="ttl_seconds must be an integer"):
+        support.issue_support_session(9001, **common, ttl_seconds="not-an-int")
     with pytest.raises(ValueError, match="ttl_seconds must be between"):
         support.issue_support_session(9001, **common, ttl_seconds=299)
+
+
+def test_load_owned_session_fails_closed_when_row_is_absent() -> None:
+    class MissingCursor:
+        @staticmethod
+        def fetchone():
+            return None
+
+    class MissingConnection:
+        @staticmethod
+        def execute(_sql, _params):
+            return MissingCursor()
+
+    with pytest.raises(
+        support.PlatformSupportSessionUnavailable,
+        match="support session is unavailable",
+    ):
+        support._load_owned_session(
+            MissingConnection(),
+            operator_user_id=9001,
+            session_id=str(uuid4()),
+        )
+
+
+def test_revoke_fails_closed_when_persisted_state_cannot_be_confirmed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = str(uuid4())
+    business_id = str(uuid4())
+    locked = type("Locked", (), {"revoked_at": "2026-09-02T12:00:00+00:00"})()
+    invalid = type("Revoked", (), {"revoked_at": None, "status": "active"})()
+
+    @contextmanager
+    def fake_db():
+        yield object()
+
+    monkeypatch.setattr(support, "is_platform_admin", lambda user_id: user_id == 9001)
+    monkeypatch.setattr(support, "get_db", fake_db)
+    monkeypatch.setattr(support, "_lock_scoped_session", lambda *_args, **_kwargs: locked)
+    monkeypatch.setattr(support, "_load_owned_session", lambda *_args, **_kwargs: invalid)
+
+    with pytest.raises(RuntimeError, match="revocation was not persisted"):
+        support.revoke_support_session(
+            9001,
+            session_id=session_id,
+            business_id=business_id,
+            now_utc=datetime(2026, 9, 2, 12, 1, tzinfo=UTC),
+        )
 
 
 def test_read_rejects_invalid_session_id_before_database_open(
@@ -427,3 +477,40 @@ def test_schema_and_privacy_manifest_cover_support_capability(support_db: Suppor
     assert report.ok is True
     assert "clientplatform_platform_support_sessions" in report.discovered_business_tables
     assert "clientplatform_platform_support_audit_events" in report.discovered_business_tables
+
+
+def test_transaction_issue_uses_caller_owned_canonical_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = object()
+    prepared = object()
+    captured: dict[str, object] = {}
+
+    def fake_prepare(user_id, **kwargs):
+        captured["user_id"] = user_id
+        captured.update(kwargs)
+        return prepared
+
+    def fake_persist(conn, request):
+        assert conn is connection
+        assert request is prepared
+        return "session"
+
+    monkeypatch.setattr(support, "_prepare_support_session_issue", fake_prepare)
+    monkeypatch.setattr(support, "_persist_support_session_issue", fake_persist)
+
+    result = support.issue_support_session_in_transaction(
+        9001,
+        conn=connection,
+        business_id="ad67e150-0d91-48c9-a879-44a44782250d",
+        ticket_ref="support-case:f3b3c9dd-fcb1-43ad-b911-32dfd81222ac",
+        reason="Investigate exact support case",
+        idempotency_key="telegram:77:99",
+        ttl_seconds=1800,
+        now_utc=datetime(2026, 9, 2, 12, 0, tzinfo=UTC),
+    )
+
+    assert result == "session"
+    assert captured["user_id"] == 9001
+    assert captured["business_id"] == "ad67e150-0d91-48c9-a879-44a44782250d"
+    assert captured["ttl_seconds"] == 1800
