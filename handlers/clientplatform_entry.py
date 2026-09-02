@@ -303,6 +303,35 @@ async def clientplatform_mybot_command(message: Message, state: FSMContext) -> N
     await bot_setup.open_my_bot_command(message, state)
 
 
+@router.message(Command("platformstatus"))
+async def clientplatform_platform_status_command(message: Message) -> None:
+    """Expose the read-only platform snapshot only to configured operators."""
+
+    operator = importlib.import_module(
+        "services.platform_operator_dashboard"
+    )
+    user_id = control._user_id(message)
+    try:
+        snapshot = await asyncio.to_thread(
+            operator.platform_operator_snapshot,
+            user_id,
+        )
+    except operator.PlatformOperatorPermissionDenied:
+        await message.answer("Доступ к состоянию платформы недоступен.")
+        return
+
+    recovery = snapshot["disaster_recovery"]
+    telemetry = snapshot["resource_telemetry"]
+    release_report = snapshot["release_contract"]["report"]
+    await message.answer(
+        "ClientPlatform · состояние платформы\n\n"
+        f"{release_report}\n"
+        f"Disaster recovery: {recovery.get("status", "UNKNOWN")} — "
+        f"{recovery.get("reason", "unknown")}\n"
+        f"Resource telemetry: {telemetry.get("status", "UNKNOWN")}"
+    )
+
+
 @router.message(Command("cancel"))
 async def clientplatform_cancel_command(message: Message, state: FSMContext) -> None:
     current_state = await state.get_state()
