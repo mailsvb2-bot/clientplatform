@@ -93,6 +93,10 @@ STEPS = (
         STRICT_VALIDATOR_ENV,
     ),
     GateStep(
+        "capability parity contract",
+        (sys.executable, "scripts/check_clientplatform_capability_parity_manifest.py"),
+    ),
+    GateStep(
         "canonical ClientPlatform user scenario matrix",
         (sys.executable, "scripts/all_user_scenario_gate.py"),
         STRICT_VALIDATOR_ENV,

@@ -1,0 +1,350 @@
+{
+  "schema_version": 1,
+  "donor_sha": "f63b44dd8963c1e6fd71ae8b05b9028d61f172ad",
+  "root_tree_sha": "94c7b3fd47b69e7d819a03e53c588390c102761b",
+  "evidence_digest_sha256": "c04fa0642d928aec1535e90d78be3ea969582537c7eb082423bf50149cf0412e",
+  "entries": [
+    {
+      "path": "deploy/RUNTIME_CONTRACT.md",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "14d805ab7fcc8ab08414216590c9b5e07c6b1813"
+    },
+    {
+      "path": "deploy/deploy.sh",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "23a0814ddc20d7787f823b185adb8a1d9cf4d0f4"
+    },
+    {
+      "path": "handlers/admin_health.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "64062b428c239b8a3b49ff63cffd6ff97cab89cc"
+    },
+    {
+      "path": "handlers/admin_inline_common.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "8a44354dead2fc23a66d14bf2aa71688fa3cfd15"
+    },
+    {
+      "path": "handlers/admin_inline_copy.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "843a66bce55775919412c2248cc1d38eef84184a"
+    },
+    {
+      "path": "handlers/admin_inline_roles.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "fc7c60b799220df0bfe5cc13d579225146293dc6"
+    },
+    {
+      "path": "handlers/admin_inline_users.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "52fda60be1d8d7573685a307ae2bfdad43cf6ceb"
+    },
+    {
+      "path": "handlers/admin_panel.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "8ea57af501674da33d8dce3f5f9b85d29bb1d31d"
+    },
+    {
+      "path": "handlers/admin_reports/growth_autopilot.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "0ce0086dfe32ca2c52e8cd5ddd0077c0feea55cf"
+    },
+    {
+      "path": "handlers/admin_reports/messenger_overview.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "169bf4b6c5642e17b67db11c91e5b345ea834d48"
+    },
+    {
+      "path": "handlers/admin_reports/segments.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "66b53f2853002818708878cbde44c614044000ac"
+    },
+    {
+      "path": "handlers/admin_stats.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "6a668eb519bdd4b496d725eb92d176c6140cc2b5"
+    },
+    {
+      "path": "handlers/admin_visual_creatives.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "2426bf0b6696a86a99b1a7ee5177df6a3ea19bf4"
+    },
+    {
+      "path": "handlers/diagnostics.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "fe187cc4898dd5204f575e9d946ccec164d78d4a"
+    },
+    {
+      "path": "handlers/menu.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "d630c790d0df42856fd166146384b9c159c6a16d"
+    },
+    {
+      "path": "handlers/payments.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "9aff3a62d7f5a0c6f7b2235ad9ff6bda6691499c"
+    },
+    {
+      "path": "handlers/settings.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "9459a75e41fc8e73e792d7d51a9a1871a68fe41a"
+    },
+    {
+      "path": "scripts/account_merge.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "109b5bd806fa88ce156507c47da371520598f039"
+    },
+    {
+      "path": "scripts/audit_messenger_audio_delivery.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "c3a915b94d9e7d6cac56a12165c65306b43a4eb4"
+    },
+    {
+      "path": "scripts/backup_db.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "c476aeaaa824994bdf257b7d6a28751d3ffb8c78"
+    },
+    {
+      "path": "scripts/disaster_recovery_proof.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "9c52cf537116871b999b48a9970922232ffda20b"
+    },
+    {
+      "path": "scripts/immutable_release.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "1d7c0d802833144087b569c56cebc14894b62b4b"
+    },
+    {
+      "path": "services/access.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "7d64e288a0fad2bf629af64fb1a7e685a659a44a"
+    },
+    {
+      "path": "services/accounts/merge.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "a7f698083e52a1ea0ac62cb5006090994bbe4335"
+    },
+    {
+      "path": "services/acquisition_attribution.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "470a77d50dc6a064401665544266946b966a53bb"
+    },
+    {
+      "path": "services/admin.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "7deb4595d9a54cdfa696b2f41f999ccc43c84606"
+    },
+    {
+      "path": "services/admin_ad_links.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "4847dd29e88cb5413b22672a6505e0182aaa0f13"
+    },
+    {
+      "path": "services/admin_growth_ops.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "8c75b094080c6a87f5efa45c7409ebc81661fac4"
+    },
+    {
+      "path": "services/admin_permissions.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "3f1aa9c4fe2dc43d4a1a80e3a86af73f411de6d2"
+    },
+    {
+      "path": "services/admin_retention.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "b6101be69d45d972c58eb8152753ff285b5239d1"
+    },
+    {
+      "path": "services/admin_tariffs.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "be34e3b7dbe5a98c84327b4e86c6359b1da290f2"
+    },
+    {
+      "path": "services/analytics.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "97233c0b77bb40f5da046d1c8a400e1e20ebac05"
+    },
+    {
+      "path": "services/catalog.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "aacdabbbb17e2c249658e0b1b9f42c8bb17e5449"
+    },
+    {
+      "path": "services/disaster_recovery_status.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "e88e82176057379f010175c9ce37825e7b02143c"
+    },
+    {
+      "path": "services/funnel_copies.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "06bbaf44e2290b25db0c1bc66e42e3f8267565e1"
+    },
+    {
+      "path": "services/gifts.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "3a7c2fa9c9cb6f72bc7ff0b66372fc19a68ffb81"
+    },
+    {
+      "path": "services/growth_autopilot.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "44dd6a00b18ff9eb0412f6acfa3a32343dc4d57d"
+    },
+    {
+      "path": "services/growth_click_tracking.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "656b18b96f2379a83ca0eb9f849fe758f33cde96"
+    },
+    {
+      "path": "services/jobs.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "aa954c09359d1de2db885571f5bb93eaba67a829"
+    },
+    {
+      "path": "services/messenger/audio_delivery.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "da29592379758f2a1b04a8a14f707fa380c9d773"
+    },
+    {
+      "path": "services/messenger/delivery_health.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "d241dc46ccbdabdcd108b29ca4565ee2f6edcef9"
+    },
+    {
+      "path": "services/messenger/menu_contract.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "dfcc20c82bd587cf0e086b5624906867293657a0"
+    },
+    {
+      "path": "services/messenger/text_ui_router.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "aaa1da0682e39baf82fe0b7db71c45fc2bbd5354"
+    },
+    {
+      "path": "services/payments/telegram_stars_refunds.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "c901903fb0c7822c55fb4379264cb9ca095cf929"
+    },
+    {
+      "path": "services/payments/yookassa_refunds.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "bef77782a91e19f0210f22a1a587de71c15f4af3"
+    },
+    {
+      "path": "services/premium_delivery.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "40891706e8a289194c6da745befec2d03e82a185"
+    },
+    {
+      "path": "services/privacy_controls.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "ab95557f7cf1b7542ec956d51f267b6d8a4831d4"
+    },
+    {
+      "path": "services/referrals.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "fee1684c1a2c2b59b5ca8fb5de0c129c1f8c2992"
+    },
+    {
+      "path": "services/roles.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "ed577e540d5f7ded059a6d6edcc3dddfd142ec89"
+    },
+    {
+      "path": "services/scheduler.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "e08f2a82f24f202c3505d7e072a5d264980d7d5d"
+    },
+    {
+      "path": "services/segments.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "44b3248d15466b96432ec239add5506515afeaa0"
+    },
+    {
+      "path": "services/storage_legacy_audit.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "238b5134f8e38a30236d6802e84c5891c00055b3"
+    },
+    {
+      "path": "services/subscription.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "6a8162fc2a7b3ac24a36ca0d165de6b904dd22be"
+    },
+    {
+      "path": "services/support_ai.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "cf512c7fc1a12aa2af76714faceaacfe69d929be"
+    },
+    {
+      "path": "services/support_store.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "6443d69509e4035b0ebc274d6e54a02233728241"
+    },
+    {
+      "path": "services/visual_creative_gateway.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "5b5f6bfa09939f8038f8e2f153a000c64f6d16b9"
+    },
+    {
+      "path": "services/visual_creative_render_gateway.py",
+      "mode": "100644",
+      "type": "blob",
+      "object_sha": "d84dde476118e8e7b07ebb9ba31c2a74d16540f7"
+    }
+  ]
+}
