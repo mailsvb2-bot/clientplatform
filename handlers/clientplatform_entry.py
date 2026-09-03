@@ -626,6 +626,86 @@ async def clientplatform_platform_support_queue_command(message: Message) -> Non
         await message.answer("Операция support queue недоступна с указанными параметрами.")
 
 
+def _platform_directory_usage() -> str:
+    return (
+        "Использование:\n"
+        "/platformdirectory business <business_id>\n"
+        "/platformdirectory user <platform_user_id>\n"
+        "/platformdirectory name <часть названия>"
+    )
+
+
+def _platform_directory_chunks(result: Any) -> list[str]:
+    truncation = (
+        "\n⚠️ Показаны первые 20 совпадений; есть дополнительные результаты."
+        if result.truncated
+        else ""
+    )
+    header = f"ClientPlatform · platform directory\nAudit: {result.audit_id}{truncation}"
+    chunks: list[str] = []
+    current = header
+    for item in result.matches:
+        matched = ""
+        if item.matched_user_id is not None:
+            role = "-" if item.matched_role is None else item.matched_role.value
+            membership = item.matched_membership_status or "-"
+            matched = f"\n  user={item.matched_user_id} · role={role} · membership={membership}"
+        block = (
+            f"• {item.business_name}\n"
+            f"  business={item.business_id}\n"
+            f"  status={item.business_status.value} · created={item.business_created_at}\n"
+            f"  active_members={item.active_member_count} · active_owners={item.active_owner_count}"
+            f"{matched}"
+        )
+        candidate = current + "\n\n" + block
+        if len(candidate) <= _TELEGRAM_SAFE_TEXT_LIMIT:
+            current = candidate
+            continue
+        chunks.append(current)
+        current = "ClientPlatform · platform directory · продолжение\n\n" + block
+    chunks.append(current)
+    return chunks
+
+
+@router.message(Command("platformdirectory"))
+async def clientplatform_platform_directory_command(message: Message) -> None:
+    """Hidden, query-bound platform operator directory; it never grants tenant access."""
+
+    directory = importlib.import_module("clientplatform.application.platform_directory")
+    user_id = control._user_id(message)
+    parts = str(getattr(message, "text", "") or "").strip().split(maxsplit=2)
+    if len(parts) != 3:
+        await message.answer(_platform_directory_usage())
+        return
+    kind = {
+        "business": "business_id",
+        "user": "user_id",
+        "name": "business_name",
+    }.get(parts[1].casefold())
+    if kind is None:
+        await message.answer(_platform_directory_usage())
+        return
+    try:
+        result = await asyncio.to_thread(
+            directory.search_platform_directory,
+            user_id,
+            query_kind=kind,
+            query=parts[2],
+            limit=20,
+        )
+    except directory.PlatformDirectoryPermissionDenied:
+        await message.answer("Доступ к platform directory недоступен.")
+        return
+    except ValueError:
+        await message.answer("Параметры platform directory некорректны или слишком широки.")
+        return
+    if not result.matches:
+        await message.answer(f"Совпадений нет.\nAudit: {result.audit_id}")
+        return
+    for chunk in _platform_directory_chunks(result):
+        await message.answer(chunk)
+
+
 @router.message(Command("cancel"))
 async def clientplatform_cancel_command(message: Message, state: FSMContext) -> None:
     current_state = await state.get_state()
