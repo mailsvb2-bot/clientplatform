@@ -34,6 +34,7 @@ def _exercise_directory() -> None:
     suffix = uuid.uuid4().hex[:10]
     operator_user_id = 9_004_000_000 + (uuid.uuid4().int % 100_000_000)
     shared_user_id = 8_004_000_000 + (uuid.uuid4().int % 100_000_000)
+    review_user_id = 7_004_000_000 + (uuid.uuid4().int % 100_000_000)
     base = datetime(2026, 9, 3, 12, 0, tzinfo=UTC)
     business_ids: list[str] = []
 
@@ -62,6 +63,28 @@ def _exercise_directory() -> None:
                 name=f"Pg Directory {suffix} {index:02d}",
                 now=(base + timedelta(minutes=10 + index)).isoformat(),
             )
+        for index in range(20):
+            historic = tenancy.create_business(
+                owner_user_id=review_user_id + 100 + index,
+                name=f"Pg Revoked {suffix} {index:02d}",
+                now=(base - timedelta(days=1, minutes=index)).isoformat(),
+            )
+            historic_actor = tenancy.resolve_context(
+                user_id=historic.business.created_by_user_id,
+                business_id=historic.business.id,
+            )
+            tenancy.grant_member(actor=historic_actor, user_id=review_user_id, role="support")
+            tenancy.revoke_member(actor=historic_actor, user_id=review_user_id)
+        current = tenancy.create_business(
+            owner_user_id=review_user_id + 500,
+            name=f"Pg Active {suffix}",
+            now=(base + timedelta(hours=2)).isoformat(),
+        )
+        current_actor = tenancy.resolve_context(
+            user_id=current.business.created_by_user_id,
+            business_id=current.business.id,
+        )
+        tenancy.grant_member(actor=current_actor, user_id=review_user_id, role="manager")
         before_memberships = int(conn.execute("SELECT COUNT(*) AS n FROM business_members").fetchone()["n"])
     original_auth = directory.is_platform_admin
     directory.is_platform_admin = lambda user_id: user_id == operator_user_id
@@ -85,6 +108,20 @@ def _exercise_directory() -> None:
             limit=20,
             now_utc=base + timedelta(hours=1, seconds=2),
         )
+        casefolded = directory.search_platform_directory(
+            operator_user_id,
+            query_kind="business_name",
+            query=f"pg percent studio {suffix}",
+            limit=20,
+            now_utc=base + timedelta(hours=1, seconds=5),
+        )
+        review_access = directory.search_platform_directory(
+            operator_user_id,
+            query_kind="user_id",
+            query=review_user_id,
+            limit=20,
+            now_utc=base + timedelta(hours=1, seconds=4),
+        )
     finally:
         directory.is_platform_admin = original_auth
 
@@ -94,6 +131,14 @@ def _exercise_directory() -> None:
         raise SystemExit("POSTGRES_PLATFORM_DIRECTORY_SMOKE_FAILED user lookup ordering")
     if [item.business_id for item in literal.matches] != [business_ids[0]]:
         raise SystemExit("POSTGRES_PLATFORM_DIRECTORY_SMOKE_FAILED literal LIKE escaping")
+    if [item.business_id for item in casefolded.matches] != [business_ids[1]]:
+        raise SystemExit("POSTGRES_PLATFORM_DIRECTORY_SMOKE_FAILED case-normalized name search")
+    if not review_access.truncated or len(review_access.matches) != 20:
+        raise SystemExit("POSTGRES_PLATFORM_DIRECTORY_SMOKE_FAILED user truncation evidence")
+    if review_access.matches[0].business_id != current.business.id:
+        raise SystemExit("POSTGRES_PLATFORM_DIRECTORY_SMOKE_FAILED active membership priority")
+    if review_access.matches[0].matched_membership_status != "active":
+        raise SystemExit("POSTGRES_PLATFORM_DIRECTORY_SMOKE_FAILED active membership status")
     directory.is_platform_admin = lambda user_id: user_id == operator_user_id
     try:
         capped = directory.search_platform_directory(
@@ -105,8 +150,8 @@ def _exercise_directory() -> None:
         )
     finally:
         directory.is_platform_admin = original_auth
-    if len(capped.matches) != 20:
-        raise SystemExit("POSTGRES_PLATFORM_DIRECTORY_SMOKE_FAILED hard cap")
+    if len(capped.matches) != 20 or not capped.truncated:
+        raise SystemExit("POSTGRES_PLATFORM_DIRECTORY_SMOKE_FAILED hard cap/truncation")
     if [item.business_name for item in capped.matches] != [f"Pg Directory {suffix} {index:02d}" for index in range(20)]:
         raise SystemExit("POSTGRES_PLATFORM_DIRECTORY_SMOKE_FAILED deterministic ordering")
 
@@ -120,7 +165,7 @@ def _exercise_directory() -> None:
         )
     if after_memberships != before_memberships:
         raise SystemExit("POSTGRES_PLATFORM_DIRECTORY_SMOKE_FAILED membership mutation")
-    if audit_count != 4:
+    if audit_count != 6:
         raise SystemExit("POSTGRES_PLATFORM_DIRECTORY_SMOKE_FAILED audit evidence")
 
 

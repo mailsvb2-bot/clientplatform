@@ -96,6 +96,7 @@ class PlatformDirectoryM6004Tests(unittest.TestCase):
             query=self.alpha.business.id,
         )
         self.assertEqual(len(result.matches), 1)
+        self.assertFalse(result.truncated)
         match = result.matches[0]
         self.assertEqual(match.business_id, self.alpha.business.id)
         self.assertEqual(match.business_name, "Alpha % Studio")
@@ -131,6 +132,39 @@ class PlatformDirectoryM6004Tests(unittest.TestCase):
             ["active", "active"],
         )
 
+    def test_user_lookup_prioritizes_active_membership_and_reports_truncation(self) -> None:
+        user_id = 777
+        for index in range(20):
+            access = self.tenancy.create_business(
+                owner_user_id=2000 + index,
+                name=f"Revoked History {index:02d}",
+                now=f"2026-09-01T10:{index:02d}:00+00:00",
+            )
+            actor = self.tenancy.resolve_context(
+                user_id=access.business.created_by_user_id,
+                business_id=access.business.id,
+            )
+            self.tenancy.grant_member(actor=actor, user_id=user_id, role="support")
+            self.tenancy.revoke_member(actor=actor, user_id=user_id)
+        active = self.tenancy.create_business(
+            owner_user_id=3000,
+            name="Newest Active Access",
+            now="2026-09-03T10:00:00+00:00",
+        )
+        active_actor = self.tenancy.resolve_context(
+            user_id=active.business.created_by_user_id,
+            business_id=active.business.id,
+        )
+        self.tenancy.grant_member(actor=active_actor, user_id=user_id, role="manager")
+
+        result = self._search(query_kind="user_id", query=user_id, limit=20)
+
+        self.assertTrue(result.truncated)
+        self.assertEqual(len(result.matches), 20)
+        self.assertEqual(result.matches[0].business_id, active.business.id)
+        self.assertEqual(result.matches[0].matched_membership_status, "active")
+        self.assertTrue(any(item.matched_membership_status == "revoked" for item in result.matches[1:]))
+
     def test_business_name_search_treats_sql_wildcards_as_literals(self) -> None:
         literal = self._search(query_kind="business_name", query="Alpha %")
         self.assertEqual([item.business_id for item in literal.matches], [self.alpha.business.id])
@@ -139,6 +173,10 @@ class PlatformDirectoryM6004Tests(unittest.TestCase):
             [item.business_id for item in ordinary.matches],
             [self.alpha.business.id, self.literal.business.id],
         )
+
+    def test_business_name_search_is_case_normalized(self) -> None:
+        result = self._search(query_kind="business_name", query="beta studio")
+        self.assertEqual([item.business_id for item in result.matches], [self.beta.business.id])
 
     def test_business_name_search_has_hard_cap_and_deterministic_order(self) -> None:
         for index in range(25):
@@ -153,6 +191,7 @@ class PlatformDirectoryM6004Tests(unittest.TestCase):
             limit=20,
         )
         self.assertEqual(len(result.matches), 20)
+        self.assertTrue(result.truncated)
         self.assertEqual(
             [item.business_name for item in result.matches],
             [f"Directory Studio {index:02d}" for index in range(20)],

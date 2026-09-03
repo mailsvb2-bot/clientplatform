@@ -20,10 +20,11 @@ class PlatformDirectorySurfaceTests(unittest.IsolatedAsyncioTestCase):
         )
 
     @staticmethod
-    def result(*, matches=()):
+    def result(*, matches=(), truncated: bool = False):
         return directory.PlatformDirectorySearchResult(
             query_kind=PlatformDirectoryQueryKind.BUSINESS_NAME,
             matches=tuple(matches),
+            truncated=truncated,
             audit_id="audit-123",
             searched_at="2026-09-03T10:00:00+00:00",
         )
@@ -147,6 +148,22 @@ class PlatformDirectorySurfaceTests(unittest.IsolatedAsyncioTestCase):
         combined = "\n".join(chunks)
         for match in matches:
             self.assertIn(match.business_id, combined)
+
+    def test_directory_surfaces_truncation_warning(self) -> None:
+        match = SimpleNamespace(
+            business_id="4d607378-a479-45e8-b0e2-7d716bb42bcf",
+            business_name="Alpha Studio",
+            business_status=BusinessStatus.ACTIVE,
+            business_created_at="2026-09-02T10:00:00+00:00",
+            active_member_count=3,
+            active_owner_count=1,
+            matched_user_id=555,
+            matched_role=PlatformRole.SUPPORT,
+            matched_membership_status="active",
+        )
+        chunks = entry._platform_directory_chunks(self.result(matches=(match,), truncated=True))
+        self.assertIn("первые 20", chunks[0])
+        self.assertIn("дополнительные результаты", chunks[0])
 
     async def test_platform_directory_stays_out_of_public_command_menu(self) -> None:
         bot = SimpleNamespace(set_my_commands=AsyncMock(return_value=True))

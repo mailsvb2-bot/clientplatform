@@ -636,7 +636,12 @@ def _platform_directory_usage() -> str:
 
 
 def _platform_directory_chunks(result: Any) -> list[str]:
-    header = f"ClientPlatform · platform directory\nAudit: {result.audit_id}"
+    truncation = (
+        "\n⚠️ Показаны первые 20 совпадений; есть дополнительные результаты."
+        if result.truncated
+        else ""
+    )
+    header = f"ClientPlatform · platform directory\nAudit: {result.audit_id}{truncation}"
     chunks: list[str] = []
     current = header
     for item in result.matches:

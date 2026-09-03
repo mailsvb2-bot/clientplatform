@@ -28,6 +28,7 @@ class PlatformDirectoryPermissionDenied(PermissionError):
 class PlatformDirectorySearchResult:
     query_kind: PlatformDirectoryQueryKind
     matches: tuple[PlatformDirectoryMatch, ...]
+    truncated: bool
     audit_id: str
     searched_at: str
 
@@ -55,18 +56,21 @@ def _sha256_json(value: object) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-def _result_fingerprint(matches: list[PlatformDirectoryMatch]) -> str:
+def _result_fingerprint(matches: tuple[PlatformDirectoryMatch, ...], *, truncated: bool) -> str:
     return _sha256_json(
-        [
-            {
-                "business_id": item.business_id,
-                "business_status": item.business_status.value,
-                "matched_membership_status": item.matched_membership_status,
-                "matched_role": None if item.matched_role is None else item.matched_role.value,
-                "matched_user_id": item.matched_user_id,
-            }
-            for item in matches
-        ]
+        {
+            "matches": [
+                {
+                    "business_id": item.business_id,
+                    "business_status": item.business_status.value,
+                    "matched_membership_status": item.matched_membership_status,
+                    "matched_role": None if item.matched_role is None else item.matched_role.value,
+                    "matched_user_id": item.matched_user_id,
+                }
+                for item in matches
+            ],
+            "truncated": truncated,
+        }
     )
 
 
@@ -85,7 +89,7 @@ def search_platform_directory(
     query_fingerprint = _sha256_json({"kind": kind.value, "query": normalized_query})
 
     with get_db() as conn:
-        matches = TenancyRepository(conn).lookup_platform_directory(
+        lookup = TenancyRepository(conn).lookup_platform_directory(
             query_kind=kind,
             query=normalized_query,
             limit=bounded_limit,
@@ -94,13 +98,14 @@ def search_platform_directory(
             operator_user_id=operator_user_id,
             query_kind=kind,
             query_fingerprint=query_fingerprint,
-            result_count=len(matches),
-            result_fingerprint=_result_fingerprint(matches),
+            result_count=len(lookup.matches),
+            result_fingerprint=_result_fingerprint(lookup.matches, truncated=lookup.truncated),
             created_at=searched_at,
         )
     return PlatformDirectorySearchResult(
         query_kind=kind,
-        matches=tuple(matches),
+        matches=lookup.matches,
+        truncated=lookup.truncated,
         audit_id=audit.id,
         searched_at=searched_at,
     )

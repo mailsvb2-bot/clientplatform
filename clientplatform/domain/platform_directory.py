@@ -73,9 +73,16 @@ class PlatformDirectoryMatch:
     matched_membership_status: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class PlatformDirectoryLookupPage:
+    matches: tuple[PlatformDirectoryMatch, ...]
+    truncated: bool
+
+
 __all__ = [
     "PLATFORM_DIRECTORY_DEFAULT_RESULTS",
     "PLATFORM_DIRECTORY_MAX_RESULTS",
+    "PlatformDirectoryLookupPage",
     "PlatformDirectoryMatch",
     "PlatformDirectoryQueryKind",
     "escape_directory_like_literal",

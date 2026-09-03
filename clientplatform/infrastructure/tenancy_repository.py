@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from clientplatform.domain.platform_directory import (
     PLATFORM_DIRECTORY_DEFAULT_RESULTS,
+    PlatformDirectoryLookupPage,
     PlatformDirectoryMatch,
     PlatformDirectoryQueryKind,
     escape_directory_like_literal,
@@ -339,7 +340,7 @@ class TenancyRepository:
         query_kind: PlatformDirectoryQueryKind | str,
         query: object,
         limit: int = PLATFORM_DIRECTORY_DEFAULT_RESULTS,
-    ) -> list[PlatformDirectoryMatch]:
+    ) -> PlatformDirectoryLookupPage:
         """Return a bounded minimal directory view for an already-authorized operator.
 
         This repository method never authorizes callers and never manufactures tenant
@@ -349,6 +350,7 @@ class TenancyRepository:
 
         kind, normalized_query = normalize_directory_query(query_kind, query)
         bounded_limit = normalize_directory_limit(limit)
+        probe_limit = bounded_limit + 1
         if kind == PlatformDirectoryQueryKind.BUSINESS_ID:
             rows = self._conn.execute(
                 """
@@ -366,7 +368,7 @@ class TenancyRepository:
                 ORDER BY b.created_at, b.id
                 LIMIT ?
                 """,
-                (str(normalized_query), bounded_limit),
+                (str(normalized_query), probe_limit),
             ).fetchall()
         elif kind == PlatformDirectoryQueryKind.USER_ID:
             rows = self._conn.execute(
@@ -383,10 +385,11 @@ class TenancyRepository:
                 FROM business_members bm
                 JOIN businesses b ON b.id=bm.business_id
                 WHERE bm.user_id=?
-                ORDER BY b.created_at, b.id
+                ORDER BY CASE WHEN bm.status='active' THEN 0 ELSE 1 END,
+                         b.created_at, b.id, bm.created_at, bm.id
                 LIMIT ?
                 """,
-                (int(normalized_query), bounded_limit),
+                (int(normalized_query), probe_limit),
             ).fetchall()
         else:
             literal = escape_directory_like_literal(str(normalized_query))
@@ -402,13 +405,14 @@ class TenancyRepository:
                        NULL AS matched_user_id, NULL AS matched_role,
                        NULL AS matched_membership_status
                 FROM businesses b
-                WHERE b.name LIKE ? ESCAPE '\\'
-                ORDER BY b.name, b.created_at, b.id
+                WHERE LOWER(b.name) LIKE LOWER(?) ESCAPE '\\'
+                ORDER BY LOWER(b.name), b.name, b.created_at, b.id
                 LIMIT ?
                 """,
-                (f"%{literal}%", bounded_limit),
+                (f"%{literal}%", probe_limit),
             ).fetchall()
-        return [_platform_directory_match_from_row(row) for row in rows]
+        matches = tuple(_platform_directory_match_from_row(row) for row in rows[:bounded_limit])
+        return PlatformDirectoryLookupPage(matches=matches, truncated=len(rows) > bounded_limit)
 
     def get_access(self, *, user_id: int, business_id: str) -> BusinessAccess:
         context = self.resolve_context(user_id=user_id, business_id=business_id)
