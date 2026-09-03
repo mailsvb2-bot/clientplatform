@@ -35,6 +35,8 @@ _BUILD_CACHE_KEEP_STORAGE = "2GB"
 _DEPLOY_DISK_WARN_USED_PERCENT = 70.0
 _DEPLOY_DISK_MAX_USED_PERCENT = 75.0
 _DEPLOY_DISK_MIN_FREE_BYTES = 7 * 1024**3
+_HOST_ONLY_DISK_MAX_USED_PERCENT = 85.0
+_HOST_ONLY_DISK_MIN_FREE_BYTES = 4 * 1024**3
 LOCK_PATH = Path("/run/lock/clientplatform-production-deploy.lock")
 EVIDENCE_DIR = Path("/var/lib/clientplatform/deploy-evidence")
 LOCAL_BACKUP_DIR = Path("/var/backups/clientplatform/predeploy")
@@ -459,10 +461,21 @@ def _disk_capacity() -> DiskCapacity:
     }
 
 
-def _disk_capacity_ready(capacity: DiskCapacity) -> bool:
+def _disk_capacity_limits(rollout_mode: str = "full_runtime") -> tuple[float, int]:
+    if rollout_mode == "host_only_noop":
+        return _HOST_ONLY_DISK_MAX_USED_PERCENT, _HOST_ONLY_DISK_MIN_FREE_BYTES
+    return _DEPLOY_DISK_MAX_USED_PERCENT, _DEPLOY_DISK_MIN_FREE_BYTES
+
+
+def _disk_capacity_ready(
+    capacity: DiskCapacity,
+    *,
+    rollout_mode: str = "full_runtime",
+) -> bool:
+    max_used_percent, min_free_bytes = _disk_capacity_limits(rollout_mode)
     return (
-        float(capacity["used_percent"]) < _DEPLOY_DISK_MAX_USED_PERCENT
-        and int(capacity["free_bytes"]) >= _DEPLOY_DISK_MIN_FREE_BYTES
+        float(capacity["used_percent"]) < max_used_percent
+        and int(capacity["free_bytes"]) >= min_free_bytes
     )
 
 
@@ -470,10 +483,11 @@ def _assert_deploy_disk_capacity(
     capacity: DiskCapacity | None = None,
     *,
     failure_reason: str = "insufficient_disk_capacity_before_deploy",
+    rollout_mode: str = "full_runtime",
 ) -> DiskCapacity:
     resolved = _disk_capacity() if capacity is None else capacity
     used_percent = float(resolved["used_percent"])
-    if not _disk_capacity_ready(resolved):
+    if not _disk_capacity_ready(resolved, rollout_mode=rollout_mode):
         raise DeploymentError(failure_reason)
     if used_percent >= _DEPLOY_DISK_WARN_USED_PERCENT:
         print(
@@ -619,20 +633,23 @@ def _prune_build_cache(*, pressure: bool = False) -> dict[str, str]:
 def _prune_build_cache_for_capacity(
     *,
     failure_reason: str = "insufficient_disk_capacity_before_deploy",
+    rollout_mode: str = "full_runtime",
 ) -> BuildCacheCapacityRetention:
     before_cleanup = _disk_capacity()
     pressure_cleanup: dict[str, str] | None = None
     bounded_cleanup: dict[str, str] | None = None
-    if _disk_capacity_ready(before_cleanup):
+    if _disk_capacity_ready(before_cleanup, rollout_mode=rollout_mode):
         bounded_cleanup = _prune_build_cache()
         after_cleanup = _disk_capacity()
-        if not _disk_capacity_ready(after_cleanup):
+        if not _disk_capacity_ready(after_cleanup, rollout_mode=rollout_mode):
             pressure_cleanup = _prune_build_cache(pressure=True)
             after_cleanup = _disk_capacity()
     else:
         pressure_cleanup = _prune_build_cache(pressure=True)
         after_cleanup = _disk_capacity()
-    _assert_deploy_disk_capacity(after_cleanup, failure_reason=failure_reason)
+    _assert_deploy_disk_capacity(
+        after_cleanup, failure_reason=failure_reason, rollout_mode=rollout_mode
+    )
     selected = pressure_cleanup if pressure_cleanup is not None else bounded_cleanup
     if selected is None:
         raise DeploymentError("build_cache_retention_result_missing")
@@ -661,10 +678,12 @@ def _remove_transient_backup_image() -> dict[str, object]:
     return {"reference": reference, "present": True, "removed": True}
 
 
-def _cleanup_after_encrypted_backup() -> dict[str, object]:
+def _cleanup_after_encrypted_backup(
+    *, rollout_mode: str = "full_runtime"
+) -> dict[str, object]:
     disk_before_cleanup = _disk_capacity()
     transient_backup_image = _remove_transient_backup_image()
-    build_cache_retention = _prune_build_cache_for_capacity()
+    build_cache_retention = _prune_build_cache_for_capacity(rollout_mode=rollout_mode)
     return {
         "transient_backup_image": transient_backup_image,
         "build_cache_retention": build_cache_retention,
@@ -674,12 +693,17 @@ def _cleanup_after_encrypted_backup() -> dict[str, object]:
     }
 
 
-def _post_deploy_retention(target_sha: str) -> dict[str, object]:
+def _post_deploy_retention(
+    target_sha: str,
+    *,
+    rollout_mode: str = "full_runtime",
+) -> dict[str, object]:
     disk_before_cleanup = _disk_capacity()
     image_retention = _prune_deploy_image_history(target_sha)
     transient_backup_image = _remove_transient_backup_image()
     build_cache_retention = _prune_build_cache_for_capacity(
-        failure_reason="insufficient_disk_capacity_after_deploy_cleanup"
+        failure_reason="insufficient_disk_capacity_after_deploy_cleanup",
+        rollout_mode=rollout_mode,
     )
     disk_after_cleanup = build_cache_retention["after_cleanup"].copy()
     return {
@@ -1143,6 +1167,7 @@ def deploy(
         target_sha,
         baseline_ready=baseline_ready,
     )
+    runtime_rollout_mode = str(change_contract.get("mode") or "full_runtime")
 
     # Establish the current running baseline as the new rollback generation before
     # pruning older ClientPlatform rollback images. Tagging is metadata-only and
@@ -1177,7 +1202,9 @@ def deploy(
     predeploy_stale_image_cleanup = _cleanup_stale_project_images()
     image_retention = _prune_deploy_image_history(target_sha)
     predeploy_backup_image_retention = _remove_transient_backup_image()
-    build_cache_retention = _prune_build_cache_for_capacity()
+    build_cache_retention = _prune_build_cache_for_capacity(
+        rollout_mode=runtime_rollout_mode
+    )
     disk_before_deploy = build_cache_retention["after_cleanup"].copy()
 
     _run([*compose, "up", "-d", "postgres"])
@@ -1187,7 +1214,9 @@ def deploy(
     if age_recipient:
         backup_mode = "encrypted"
         backup_reference = _encrypted_backup(compose)
-        backup_artifact_retention = _cleanup_after_encrypted_backup()
+        backup_artifact_retention = _cleanup_after_encrypted_backup(
+            rollout_mode=runtime_rollout_mode
+        )
     elif allow_local_backup:
         backup_mode = "local_plaintext_emergency"
         backup_reference = str(_local_backup(target_sha))
@@ -1199,7 +1228,6 @@ def deploy(
     sales_operations_smoke: dict[str, Any] | None = None
     visual_gateway_image = ""
     post_deploy_retention: dict[str, object] | None = None
-    runtime_rollout_mode = str(change_contract.get("mode") or "full_runtime")
     try:
         if runtime_rollout_mode == "host_only_noop":
             _wait_for_visual_gateway(timeout_seconds)
@@ -1207,7 +1235,9 @@ def deploy(
             _external_https(domain)
             sales_operations_smoke = _sales_operations_smoke()
             visual_gateway_image = _container_image(VISUAL_GATEWAY_CONTAINER)
-            post_deploy_retention = _post_deploy_retention(target_sha)
+            post_deploy_retention = _post_deploy_retention(
+                target_sha, rollout_mode=runtime_rollout_mode
+            )
         else:
             _run([*compose, "build", "visual-gateway"])
             _run([*compose, "build", "app"])
@@ -1229,7 +1259,9 @@ def deploy(
                     f"{VISUAL_GATEWAY_IMAGE}:release-{target_sha}",
                 ]
             )
-            post_deploy_retention = _post_deploy_retention(target_sha)
+            post_deploy_retention = _post_deploy_retention(
+                target_sha, rollout_mode=runtime_rollout_mode
+            )
     except Exception as deployment_error:  # validator: allow-wide-except - rollback must cover every failed gate
         if app_changed and baseline_ready and rollback_tag:
             try:

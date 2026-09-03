@@ -226,6 +226,51 @@ class ProductionEnvironmentPreparationTests(unittest.TestCase):
         with mock.patch.object(production_deploy, "_disk_capacity", return_value=capacity):
             self.assertEqual(production_deploy._assert_deploy_disk_capacity(), capacity)
 
+    def test_host_only_disk_guard_uses_no_build_headroom_without_weakening_full_runtime(self) -> None:
+        capacity = {
+            "total_bytes": 30 * 1024**3,
+            "used_bytes": 24 * 1024**3,
+            "free_bytes": 6 * 1024**3,
+            "used_percent": 80.0,
+        }
+        with mock.patch.object(production_deploy, "_disk_capacity", return_value=capacity):
+            self.assertEqual(
+                production_deploy._assert_deploy_disk_capacity(
+                    rollout_mode="host_only_noop"
+                ),
+                capacity,
+            )
+            with self.assertRaisesRegex(
+                production_deploy.DeploymentError,
+                "insufficient_disk_capacity_before_deploy",
+            ):
+                production_deploy._assert_deploy_disk_capacity(rollout_mode="full_runtime")
+
+    def test_host_only_disk_guard_still_fails_closed_on_real_pressure(self) -> None:
+        capacities = (
+            {
+                "total_bytes": 30 * 1024**3,
+                "used_bytes": 26 * 1024**3,
+                "free_bytes": 4 * 1024**3,
+                "used_percent": 86.0,
+            },
+            {
+                "total_bytes": 30 * 1024**3,
+                "used_bytes": 27 * 1024**3,
+                "free_bytes": 3 * 1024**3,
+                "used_percent": 80.0,
+            },
+        )
+        for capacity in capacities:
+            with self.subTest(capacity=capacity):
+                with self.assertRaisesRegex(
+                    production_deploy.DeploymentError,
+                    "insufficient_disk_capacity_before_deploy",
+                ):
+                    production_deploy._assert_deploy_disk_capacity(
+                        capacity, rollout_mode="host_only_noop"
+                    )
+
     def test_deploy_image_retention_keeps_running_and_recent_rollback_images(self) -> None:
         app_rollbacks = [
             f"{production_deploy.APP_IMAGE}:rollback-20260820T200000Z",
@@ -680,7 +725,7 @@ class ProductionEnvironmentPreparationTests(unittest.TestCase):
             result = production_deploy._cleanup_after_encrypted_backup()
 
         image_cleanup.assert_called_once_with()
-        cache_cleanup.assert_called_once_with()
+        cache_cleanup.assert_called_once_with(rollout_mode="full_runtime")
         self.assertTrue(result["transient_backup_image"]["removed"])
         self.assertEqual(result["disk_before_cleanup"], before)
         self.assertEqual(result["disk_after_cleanup"], after)
@@ -736,7 +781,8 @@ class ProductionEnvironmentPreparationTests(unittest.TestCase):
         image_retention.assert_called_once_with("f" * 40)
         transient_cleanup.assert_called_once_with()
         cache_cleanup.assert_called_once_with(
-            failure_reason="insufficient_disk_capacity_after_deploy_cleanup"
+            failure_reason="insufficient_disk_capacity_after_deploy_cleanup",
+            rollout_mode="full_runtime",
         )
         self.assertEqual(result["disk_before_cleanup"], before)
         self.assertEqual(result["disk_after_cleanup"], after)
@@ -900,7 +946,7 @@ class ProductionEnvironmentPreparationTests(unittest.TestCase):
         image_retention.assert_called_once_with("a" * 40)
         predeploy_backup_cleanup.assert_called_once_with()
         cache_retention.assert_called_once_with()
-        post_retention.assert_called_once_with("a" * 40)
+        post_retention.assert_called_once_with("a" * 40, rollout_mode="full_runtime")
         rollback.assert_not_called()
         self.assertEqual(evidence_payload["image_retention"]["removed_tags"], 7)
         self.assertTrue(evidence_payload["predeploy_backup_image_retention"]["removed"])
@@ -978,7 +1024,7 @@ class ProductionEnvironmentPreparationTests(unittest.TestCase):
             retention_index,
         )
         cache_retention_index = source.index(
-            "build_cache_retention = _prune_build_cache_for_capacity()",
+            "build_cache_retention = _prune_build_cache_for_capacity(",
             predeploy_backup_cleanup_index,
         )
         disk_guard_index = source.index(
@@ -986,7 +1032,7 @@ class ProductionEnvironmentPreparationTests(unittest.TestCase):
         )
         backup_index = source.index("backup_reference =")
         backup_cleanup_index = source.index(
-            "backup_artifact_retention = _cleanup_after_encrypted_backup()",
+            "backup_artifact_retention = _cleanup_after_encrypted_backup(",
             backup_index,
         )
         gateway_build_index = source.index('_run([*compose, "build", "visual-gateway"])')
@@ -1000,7 +1046,7 @@ class ProductionEnvironmentPreparationTests(unittest.TestCase):
             build_index,
         )
         post_retention_index = source.index(
-            "post_deploy_retention = _post_deploy_retention(target_sha)",
+            "post_deploy_retention = _post_deploy_retention(",
             recreate_index,
         )
 
