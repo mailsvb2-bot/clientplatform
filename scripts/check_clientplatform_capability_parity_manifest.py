@@ -6,6 +6,7 @@ The pinned donor is provenance only. This guard never imports, executes, fetches
 or otherwise couples production runtime to donor code.
 """
 
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -13,6 +14,11 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST_PATH = ROOT / "config" / "capability_parity_manifest.json"
+DONOR_SNAPSHOT_PATH = ROOT / "config" / "capability_parity_donor_snapshot.json"
+
+PINNED_DONOR_SHA = "f63b44dd8963c1e6fd71ae8b05b9028d61f172ad"
+PINNED_DONOR_ROOT_TREE_SHA = "94c7b3fd47b69e7d819a03e53c588390c102761b"
+PINNED_DONOR_EVIDENCE_DIGEST_SHA256 = "c04fa0642d928aec1535e90d78be3ea969582537c7eb082423bf50149cf0412e"
 
 EXPECTED_FAMILIES: dict[str, str] = {
     "01_platform_identity_access": "platform search / users / roles / permissions",
@@ -39,6 +45,7 @@ PROVEN_STATUSES = frozenset({"equivalent", "genericized"})
 ALLOWED_LEVELS = frozenset({"business_owner", "platform_operator", "shared"})
 ALLOWED_GAP_DECISIONS = frozenset({"required_slice", "owner_exception"})
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 # Hard ratchet: these capabilities were already demonstrated by shipped slices.
 # Removing them from both the manifest and its own metadata must still fail CI.
@@ -95,6 +102,54 @@ def _require_local_path(value: str, label: str, *, regression_test: bool = False
         _require(relative.name.startswith("test_") and relative.suffix == ".py", f"{label} must be a Python regression test: {value}")
 
 
+def _validate_donor_snapshot(snapshot: dict[str, Any], *, donor_sha: str) -> set[str]:
+    _require(isinstance(snapshot, dict), "donor snapshot root must be an object")
+    _require(snapshot.get("schema_version") == 1, "donor snapshot schema_version must be 1")
+    _require(snapshot.get("donor_sha") == donor_sha, "donor snapshot SHA must match manifest donor baseline")
+    _require(snapshot.get("donor_sha") == PINNED_DONOR_SHA, "donor snapshot SHA must remain pinned")
+    _require(
+        snapshot.get("root_tree_sha") == PINNED_DONOR_ROOT_TREE_SHA,
+        "donor snapshot root tree SHA drifted from the reviewed baseline",
+    )
+
+    declared_digest = _require_text(
+        snapshot.get("evidence_digest_sha256"),
+        "donor_snapshot.evidence_digest_sha256",
+    )
+    _require(bool(SHA256_RE.fullmatch(declared_digest)), "donor snapshot digest must be lowercase SHA-256")
+
+    entries = snapshot.get("entries")
+    _require(isinstance(entries, list) and bool(entries), "donor snapshot entries must be non-empty")
+    seen_paths: set[str] = set()
+    canonical_lines: list[str] = []
+    for index, entry in enumerate(entries):
+        _require(isinstance(entry, dict), f"donor snapshot entry[{index}] must be an object")
+        raw_path = _require_text(entry.get("path"), f"donor_snapshot.entries[{index}].path")
+        _safe_relative_path(raw_path, f"donor_snapshot.entries[{index}].path")
+        _require("\\" not in raw_path, f"donor snapshot path must use POSIX separators: {raw_path}")
+        _require(raw_path not in seen_paths, f"duplicate donor snapshot path: {raw_path}")
+        seen_paths.add(raw_path)
+
+        mode = _require_text(entry.get("mode"), f"donor_snapshot.entries[{index}].mode")
+        _require(mode in {"100644", "100755"}, f"unsupported donor evidence mode for {raw_path}: {mode}")
+        _require(entry.get("type") == "blob", f"donor evidence must be a frozen blob: {raw_path}")
+        object_sha = _require_text(entry.get("object_sha"), f"donor_snapshot.entries[{index}].object_sha")
+        _require(bool(SHA_RE.fullmatch(object_sha)), f"invalid donor object SHA for {raw_path}")
+        canonical_lines.append(f"{raw_path}\t{mode}\tblob\t{object_sha}\n")
+
+    _require(
+        list(seen_paths) != [] and [entry["path"] for entry in entries] == sorted(seen_paths),
+        "donor snapshot entries must be sorted by path",
+    )
+    computed_digest = hashlib.sha256("".join(canonical_lines).encode("utf-8")).hexdigest()
+    _require(computed_digest == declared_digest, "donor snapshot evidence digest does not match its entries")
+    _require(
+        computed_digest == PINNED_DONOR_EVIDENCE_DIGEST_SHA256,
+        "donor snapshot evidence set drifted from the reviewed baseline",
+    )
+    return seen_paths
+
+
 def _validate_baselines(manifest: dict[str, Any]) -> None:
     _require(manifest.get("schema_version") == 1, "schema_version must be 1")
     _require(manifest.get("contract") == "issue-263-capability-parity", "unexpected capability parity contract id")
@@ -107,6 +162,7 @@ def _validate_baselines(manifest: dict[str, Any]) -> None:
     _require(donor.get("id") == "issue-263-pinned-donor", "donor_baseline.id must use neutral pinned provenance")
     donor_sha = _require_text(donor.get("sha"), "donor_baseline.sha")
     _require(bool(SHA_RE.fullmatch(donor_sha)), "donor_baseline.sha must be an exact lowercase 40-hex SHA")
+    _require(donor_sha == PINNED_DONOR_SHA, "donor_baseline.sha must remain pinned to the reviewed issue-263 baseline")
     _require(donor_sha != client_sha, "donor and ClientPlatform baselines must be distinct")
     _require(donor.get("runtime_dependency") is False, "donor runtime dependency is forbidden")
 
@@ -120,6 +176,8 @@ def _validate_capability(
     *,
     family_id: str,
     seen_capability_ids: set[str],
+    donor_snapshot_paths: set[str],
+    seen_donor_evidence_paths: set[str],
 ) -> tuple[str, str]:
     capability_id = _require_text(capability.get("id"), f"{family_id}.capability.id")
     _require(capability_id not in seen_capability_ids, f"duplicate capability id: {capability_id}")
@@ -134,6 +192,8 @@ def _validate_capability(
     donor_evidence = _require_string_list(capability.get("donor_evidence"), f"{capability_id}.donor_evidence")
     for index, path in enumerate(donor_evidence):
         _safe_relative_path(path, f"{capability_id}.donor_evidence[{index}]")
+        _require(path in donor_snapshot_paths, f"{capability_id}.donor_evidence[{index}] is not in the frozen donor snapshot: {path}")
+        seen_donor_evidence_paths.add(path)
 
     if status in PROVEN_STATUSES:
         owners = _require_string_list(capability.get("clientplatform_owner"), f"{capability_id}.clientplatform_owner")
@@ -161,9 +221,16 @@ def _validate_capability(
     return capability_id, status
 
 
-def validate_manifest(manifest: dict[str, Any]) -> dict[str, int]:
+def validate_manifest(
+    manifest: dict[str, Any],
+    *,
+    donor_snapshot: dict[str, Any] | None = None,
+) -> dict[str, int]:
     _require(isinstance(manifest, dict), "manifest root must be an object")
     _validate_baselines(manifest)
+    donor_sha = str(manifest["donor_baseline"]["sha"])
+    snapshot = load_donor_snapshot() if donor_snapshot is None else donor_snapshot
+    donor_snapshot_paths = _validate_donor_snapshot(snapshot, donor_sha=donor_sha)
 
     families = manifest.get("families")
     _require(isinstance(families, list), "families must be a list")
@@ -171,6 +238,7 @@ def validate_manifest(manifest: dict[str, Any]) -> dict[str, int]:
 
     seen_family_ids: set[str] = set()
     seen_capability_ids: set[str] = set()
+    seen_donor_evidence_paths: set[str] = set()
     status_counts = {status: 0 for status in ALLOWED_STATUSES}
 
     for family in families:
@@ -189,6 +257,8 @@ def validate_manifest(manifest: dict[str, Any]) -> dict[str, int]:
                 capability,
                 family_id=family_id,
                 seen_capability_ids=seen_capability_ids,
+                donor_snapshot_paths=donor_snapshot_paths,
+                seen_donor_evidence_paths=seen_donor_evidence_paths,
             )
             status_counts[status] += 1
 
@@ -211,6 +281,11 @@ def validate_manifest(manifest: dict[str, Any]) -> dict[str, int]:
     for capability_id in PROVEN_CAPABILITY_RATCHET:
         _require(status_by_id.get(capability_id) in PROVEN_STATUSES, f"proven capability cannot be downgraded: {capability_id}")
 
+    _require(
+        seen_donor_evidence_paths == donor_snapshot_paths,
+        "frozen donor snapshot must contain exactly the evidence paths referenced by the manifest",
+    )
+
     return {
         "families": len(families),
         "capabilities": len(seen_capability_ids),
@@ -221,13 +296,21 @@ def validate_manifest(manifest: dict[str, Any]) -> dict[str, int]:
     }
 
 
-def load_manifest(path: Path = MANIFEST_PATH) -> dict[str, Any]:
+def _load_json_object(path: Path, label: str) -> dict[str, Any]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise CapabilityParityContractError(f"cannot load capability parity manifest: {exc}") from exc
-    _require(isinstance(payload, dict), "manifest root must be an object")
+        raise CapabilityParityContractError(f"cannot load {label}: {exc}") from exc
+    _require(isinstance(payload, dict), f"{label} root must be an object")
     return payload
+
+
+def load_manifest(path: Path = MANIFEST_PATH) -> dict[str, Any]:
+    return _load_json_object(path, "capability parity manifest")
+
+
+def load_donor_snapshot(path: Path = DONOR_SNAPSHOT_PATH) -> dict[str, Any]:
+    return _load_json_object(path, "capability parity donor snapshot")
 
 
 def main() -> int:
