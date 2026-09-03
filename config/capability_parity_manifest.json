@@ -1,0 +1,344 @@
+{
+  "schema_version": 1,
+  "contract": "issue-263-capability-parity",
+  "clientplatform_baseline_sha": "d484a91218800da8571c01007e22845c9fa2acda",
+  "donor_baseline": {
+    "id": "issue-263-pinned-donor",
+    "sha": "f63b44dd8963c1e6fd71ae8b05b9028d61f172ad",
+    "runtime_dependency": false
+  },
+  "allowed_statuses": [
+    "equivalent",
+    "genericized",
+    "missing",
+    "domain-specific"
+  ],
+  "required_proven_capabilities": [
+    "platform.directory_access_review",
+    "platform.roles_permissions",
+    "support.audited_access_session",
+    "support.case_queue",
+    "release.deploy_rollback_forensics",
+    "messenger.canonical_navigation_parity"
+  ],
+  "families": [
+    {
+      "id": "01_platform_identity_access",
+      "title": "platform search / users / roles / permissions",
+      "capabilities": [
+        {
+          "id": "platform.directory_access_review",
+          "name": "bounded platform directory search and access review",
+          "status": "genericized",
+          "level": "platform_operator",
+          "donor_evidence": ["handlers/admin_users.py", "services/admin.py"],
+          "clientplatform_owner": ["clientplatform/application/admin_ops.py", "handlers/clientplatform_admin.py"],
+          "regression_evidence": ["tests/test_clientplatform_platform_directory_m6004.py", "tests/test_platform_directory_surface.py"],
+          "rationale": "ClientPlatform exposes bounded audited platform directory and access-review behavior under platform RBAC rather than donor-specific admin naming."
+        },
+        {
+          "id": "platform.roles_permissions",
+          "name": "platform roles and permission enforcement",
+          "status": "genericized",
+          "level": "platform_operator",
+          "donor_evidence": ["handlers/admin_users.py", "services/access.py"],
+          "clientplatform_owner": ["clientplatform/application/admin_ops.py", "handlers/clientplatform_admin.py"],
+          "regression_evidence": ["tests/test_admin_access_contract.py", "tests/test_clientplatform_admin_contract.py"],
+          "rationale": "Role-gated platform operations are enforced by the canonical ClientPlatform tenant/RBAC boundary."
+        },
+        {
+          "id": "platform.account_consolidation",
+          "name": "controlled duplicate-account consolidation with dry-run, apply and audit evidence",
+          "status": "missing",
+          "level": "platform_operator",
+          "donor_evidence": ["scripts/account_merge.py", "services/accounts/merge.py"],
+          "gap": {
+            "decision": "required_slice",
+            "priority": "high",
+            "reason": "ClientPlatform has atomic cross-channel identity linking and fail-closed conflict handling, but no explicit audited operator merge-plan/apply workflow for already duplicated accounts."
+          }
+        }
+      ]
+    },
+    {
+      "id": "02_mailing_publications_cohorts",
+      "title": "mailing / broadcasts / publications / recipient cohorts",
+      "capabilities": [
+        {
+          "id": "messaging.broadcast_publication_cohorts",
+          "name": "tenant-scoped broadcasts, publications, scheduling and recipient cohorts",
+          "status": "genericized",
+          "level": "business_owner",
+          "donor_evidence": ["handlers/admin_mailing.py", "services/broadcast_service.py"],
+          "clientplatform_owner": ["clientplatform/application/admin_ops.py", "handlers/clientplatform_admin.py"],
+          "regression_evidence": ["tests/test_clientplatform_publication_scheduling_m4007.py", "tests/test_handlers_clientplatform_admin_full_matrix.py"],
+          "rationale": "ClientPlatform keeps publication and recipient operations tenant-scoped and exposed through the canonical owner admin surface."
+        }
+      ]
+    },
+    {
+      "id": "03_operator_support_handoffs",
+      "title": "operator mode / operator queue / handoffs / support",
+      "capabilities": [
+        {
+          "id": "support.audited_access_session",
+          "name": "audited bounded platform support access session",
+          "status": "genericized",
+          "level": "platform_operator",
+          "donor_evidence": ["handlers/operator.py", "services/admin.py"],
+          "clientplatform_owner": ["clientplatform/application/admin_ops.py", "handlers/clientplatform_admin.py"],
+          "regression_evidence": ["tests/test_platform_support_access.py", "tests/test_platform_support_surface.py"],
+          "rationale": "Support access is explicit, bounded, RBAC-controlled and audited instead of relying on implicit global tenant access."
+        },
+        {
+          "id": "support.case_queue",
+          "name": "canonical support-case intake, operator queue and omnichannel handoff",
+          "status": "genericized",
+          "level": "platform_operator",
+          "donor_evidence": ["handlers/operator.py"],
+          "clientplatform_owner": ["clientplatform/application/admin_ops.py", "handlers/clientplatform_admin.py"],
+          "regression_evidence": ["tests/test_clientplatform_support_cases_m6003.py", "tests/test_clientplatform_support_cases_omnichannel.py"],
+          "rationale": "M6-003 provides a canonical support queue and channel-independent handoff behavior."
+        }
+      ]
+    },
+    {
+      "id": "04_reports_analytics_observability",
+      "title": "reports / analytics / business and platform observability",
+      "capabilities": [
+        {
+          "id": "analytics.business_platform_observability",
+          "name": "business metrics, dispatch observability and platform reporting",
+          "status": "genericized",
+          "level": "shared",
+          "donor_evidence": ["handlers/reports.py", "services/analytics_service.py"],
+          "clientplatform_owner": ["clientplatform/application/admin_ops.py", "handlers/clientplatform_admin.py"],
+          "regression_evidence": ["tests/test_clientplatform_sales_metrics.py", "tests/test_clientplatform_dispatch_observability.py"],
+          "rationale": "ClientPlatform separates tenant business metrics from operator observability while retaining regression evidence for both."
+        }
+      ]
+    },
+    {
+      "id": "05_settings_system_runtime",
+      "title": "settings / system / runtime diagnostics",
+      "capabilities": [
+        {
+          "id": "runtime.settings_diagnostics",
+          "name": "typed settings, health/readiness and runtime diagnostics",
+          "status": "genericized",
+          "level": "platform_operator",
+          "donor_evidence": ["handlers/admin_settings.py", "handlers/settings.py"],
+          "clientplatform_owner": ["config/settings.py", "handlers/clientplatform_admin.py"],
+          "regression_evidence": ["tests/test_settings_runtime_contract_phase9.py", "tests/test_health_diagnostics_access.py"],
+          "rationale": "Runtime settings and diagnostics remain fail-closed and operator-scoped."
+        }
+      ]
+    },
+    {
+      "id": "06_security_audit_access_review",
+      "title": "security / audit / access review",
+      "capabilities": [
+        {
+          "id": "security.audit_access_review",
+          "name": "RBAC, audit hygiene and explicit access review",
+          "status": "genericized",
+          "level": "platform_operator",
+          "donor_evidence": ["services/audit_log.py", "handlers/admin_panel.py"],
+          "clientplatform_owner": ["clientplatform/application/admin_ops.py", "handlers/clientplatform_admin.py"],
+          "regression_evidence": ["tests/test_audit_hygiene_contract.py", "tests/test_admin_access_contract.py"],
+          "rationale": "Security-sensitive platform operations are fail-closed, permissioned and covered by audit/access contracts."
+        }
+      ]
+    },
+    {
+      "id": "07_release_deploy_rollback_forensics",
+      "title": "release / deploy readiness / rollback / runtime forensics",
+      "capabilities": [
+        {
+          "id": "release.deploy_rollback_forensics",
+          "name": "release gate, production readiness, rollback and runtime forensic evidence",
+          "status": "equivalent",
+          "level": "platform_operator",
+          "donor_evidence": ["deploy", "scripts/backup_db.py"],
+          "clientplatform_owner": ["deploy/clientplatform", "deploy/RUNTIME_CONTRACT.md"],
+          "regression_evidence": ["tests/test_clientplatform_production_deploy_pipeline.py", "tests/test_clientplatform_legacy_rollback_readiness.py"],
+          "rationale": "ClientPlatform has a stricter fail-closed deploy/rollback/evidence contract, including host-only and full-runtime modes."
+        }
+      ]
+    },
+    {
+      "id": "08_subscriptions_tariffs_payments_refunds",
+      "title": "subscriptions / tariffs / payments / payment problems / refunds",
+      "capabilities": [
+        {
+          "id": "billing.subscription_payment_outcomes",
+          "name": "tenant subscription/tariff/payment outcomes and payment-problem handling",
+          "status": "genericized",
+          "level": "business_owner",
+          "donor_evidence": ["handlers/payment.py", "handlers/subscription.py", "handlers/tariffs.py"],
+          "clientplatform_owner": ["clientplatform/application/admin_ops.py", "handlers/clientplatform_admin.py"],
+          "regression_evidence": ["tests/test_clientplatform_payment_evidence_m4001.py", "tests/test_clientplatform_business_payment_outcomes_migration.py"],
+          "rationale": "Payment state is expressed as generic business evidence/outcomes rather than donor product billing identity."
+        }
+      ]
+    },
+    {
+      "id": "09_shop_offerings_programs_delivery",
+      "title": "shop / offerings / programs / delivery",
+      "capabilities": [
+        {
+          "id": "commerce.offerings_program_delivery",
+          "name": "offerings, storefront, program builder and delivery",
+          "status": "genericized",
+          "level": "business_owner",
+          "donor_evidence": ["handlers/shop.py", "handlers/sales.py"],
+          "clientplatform_owner": ["clientplatform/application/control.py", "handlers/clientplatform_admin.py"],
+          "regression_evidence": ["tests/test_clientplatform_program_builder_application.py", "tests/test_clientplatform_public_storefront_sales_signal.py"],
+          "rationale": "Domain-specific products are represented as generic tenant offerings/programs with canonical delivery behavior."
+        }
+      ]
+    },
+    {
+      "id": "10_growth_ai_autopilot_nba",
+      "title": "Growth AI / Growth Autopilot / Next Best Action / autonomous growth",
+      "capabilities": [
+        {
+          "id": "growth.goal_first_autopilot_nba",
+          "name": "goal-first growth cockpit, autopilot and economic next-best action",
+          "status": "genericized",
+          "level": "business_owner",
+          "donor_evidence": ["services/growth_ai.py", "services/admin_growth_ops.py"],
+          "clientplatform_owner": ["clientplatform/application/admin_ops.py", "handlers/clientplatform_admin.py"],
+          "regression_evidence": ["tests/test_goal_first_autopilot.py", "tests/test_clientplatform_economic_next_action_m4006.py"],
+          "rationale": "Growth logic remains in canonical ClientPlatform application/domain behavior and preserves the no-second-brain constraint."
+        }
+      ]
+    },
+    {
+      "id": "11_paid_ads_attribution_budget",
+      "title": "paid ads / attribution / budget / orchestration",
+      "capabilities": [
+        {
+          "id": "ads.connection_spend_attribution",
+          "name": "paid-ad connection, spend, attribution, budget and orchestration",
+          "status": "genericized",
+          "level": "business_owner",
+          "donor_evidence": ["handlers/paid_ads.py", "services/admin_ad_links.py"],
+          "clientplatform_owner": ["clientplatform/application/ad_connections.py", "handlers/clientplatform_admin.py"],
+          "regression_evidence": ["tests/test_clientplatform_ad_spend_application.py", "tests/test_clientplatform_attribution.py"],
+          "rationale": "ClientPlatform owns generic advertising connections and economic attribution instead of donor-specific campaign state."
+        }
+      ]
+    },
+    {
+      "id": "12_visual_assets_vendor_review_jobs",
+      "title": "visual generation / assets / vendor / review / media library / jobs",
+      "capabilities": [
+        {
+          "id": "visual.gateway_assets_review_jobs",
+          "name": "visual brief, provider gateway, assets, review and render jobs",
+          "status": "genericized",
+          "level": "shared",
+          "donor_evidence": ["handlers/visual_generation.py"],
+          "clientplatform_owner": ["visual_gateway", "visual_provider_gateway"],
+          "regression_evidence": ["tests/test_visual_creative_gateway_contract.py", "tests/test_clientplatform_visual_brief.py"],
+          "rationale": "Visual generation is isolated behind provider/gateway boundaries with tenant-safe review and job contracts."
+        }
+      ]
+    },
+    {
+      "id": "13_speech_voice_metrics_experiments",
+      "title": "speech / voice providers / metrics / experiments / ops",
+      "capabilities": [
+        {
+          "id": "voice.media_delivery_metrics",
+          "name": "voice/audio media delivery and runtime validation",
+          "status": "genericized",
+          "level": "shared",
+          "donor_evidence": ["services/prewarm.py", "services/demo_analytics.py", "scripts/audit_messenger_audio_delivery.py"],
+          "clientplatform_owner": ["services/messenger", "handlers/clientplatform_admin.py"],
+          "regression_evidence": ["tests/test_clientplatform_voice_media_delivery.py", "tests/test_runtime_state_and_audio_validation.py"],
+          "rationale": "Canonical messenger runtime retains voice/media delivery and operational validation across channels."
+        },
+        {
+          "id": "voice.provider_experiment_ops",
+          "name": "speech/voice provider registry, provider metrics, experiments and operator controls",
+          "status": "missing",
+          "level": "platform_operator",
+          "donor_evidence": ["services/demo_analytics.py", "scripts/audit_messenger_audio_delivery.py"],
+          "gap": {
+            "decision": "required_slice",
+            "priority": "medium",
+            "reason": "Voice delivery exists, but no evidence-backed platform operator surface for provider registry/experiments and provider-level metrics was found on the pinned ClientPlatform baseline."
+          }
+        }
+      ]
+    },
+    {
+      "id": "14_author_content_workspace",
+      "title": "author/content production / assets / export / preview / tasks / workspace",
+      "capabilities": [
+        {
+          "id": "content.production_workspace",
+          "name": "content/program production, editable assets, preview and publication workspace",
+          "status": "genericized",
+          "level": "business_owner",
+          "donor_evidence": ["services/author_content_assets.py", "services/author_content_production.py"],
+          "clientplatform_owner": ["clientplatform/application/admin_ops.py", "handlers/clientplatform_admin.py"],
+          "regression_evidence": ["tests/test_clientplatform_program_draft_lesson_editing.py", "tests/test_clientplatform_publication_scheduling_m4007.py"],
+          "rationale": "Authoring is represented as generic tenant program/content production rather than donor-specific content identity."
+        }
+      ]
+    },
+    {
+      "id": "15_incidents_backup_disaster_recovery",
+      "title": "incidents / backup / disaster recovery / recovery evidence",
+      "capabilities": [
+        {
+          "id": "recovery.encrypted_backup_dr_evidence",
+          "name": "encrypted backups, restore/disaster recovery and recovery evidence",
+          "status": "equivalent",
+          "level": "platform_operator",
+          "donor_evidence": ["scripts/backup_db.py", "deploy"],
+          "clientplatform_owner": ["deploy/clientplatform", ".github/workflows/clientplatform-encrypted-backup.yml"],
+          "regression_evidence": ["tests/test_backup_restore.py", "tests/test_disaster_recovery_status_phase9.py", "tests/test_clientplatform_postgres_backup_crypto.py"],
+          "rationale": "ClientPlatform has encrypted backup, restore, DR status and production acceptance evidence guarded independently of business runtime."
+        }
+      ]
+    },
+    {
+      "id": "16_referrals_gifts_retention_lifecycle",
+      "title": "referrals / gifts / retention / lifecycle / cohorts",
+      "capabilities": [
+        {
+          "id": "lifecycle.referral_retention_cohorts",
+          "name": "partner/referral attribution, retention actions and lifecycle cohorts",
+          "status": "genericized",
+          "level": "business_owner",
+          "donor_evidence": ["handlers/referral.py", "handlers/gift_wheel.py", "handlers/loyalty.py"],
+          "clientplatform_owner": ["clientplatform/application/admin_ops.py", "handlers/clientplatform_admin.py"],
+          "regression_evidence": ["tests/test_clientplatform_retention_u010.py", "tests/test_handlers_clientplatform_partner_referral_surfaces.py"],
+          "rationale": "Referral and lifecycle behavior is tenant-generic and covered by retention and partner surfaces."
+        }
+      ]
+    },
+    {
+      "id": "17_admin_navigation_messenger_parity",
+      "title": "admin navigation, Back/Home, accessibility and mobile limits across Telegram/VK/MAX",
+      "canonical_messenger_behavior": true,
+      "adapters": ["telegram", "vk", "max"],
+      "capabilities": [
+        {
+          "id": "messenger.canonical_navigation_parity",
+          "name": "canonical admin navigation and Back/Home behavior across messenger adapters",
+          "status": "genericized",
+          "level": "shared",
+          "donor_evidence": ["handlers/menu.py", "handlers/home.py", "handlers/operator.py"],
+          "clientplatform_owner": ["clientplatform/application/capability_parity.py", "services/messenger", "handlers/clientplatform_admin.py"],
+          "regression_evidence": ["tests/test_handlers_clientplatform_back_navigation.py", "tests/test_omnichannel_business_parity_contract.py", "tests/test_unified_messenger_contracts.py"],
+          "rationale": "Telegram/VK/MAX share canonical application/domain behavior; adapters expose the same navigation and capability truth rather than independent business implementations."
+        }
+      ]
+    }
+  ]
+}
