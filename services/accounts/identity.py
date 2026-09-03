@@ -7,7 +7,6 @@ from typing import Any
 
 from core.time_utils import utc_now
 from services.db import db, tx
-from services.db.runtime import is_postgres_enabled
 from services.messenger.platforms import normalize_platform, parse_platform
 
 
@@ -21,6 +20,22 @@ class AccountIdentityConflict(RuntimeError):
 
 class AccountIdentityMergeInvariantError(RuntimeError):
     """Raised when a merged-account alias is cyclic, broken, or otherwise unsafe."""
+
+
+def _sqlite_base_connection(conn: Any) -> sqlite3.Connection | None:
+    current = conn
+    seen: set[int] = set()
+    for _ in range(4):
+        if isinstance(current, sqlite3.Connection):
+            return current
+        marker = id(current)
+        if marker in seen:
+            return None
+        seen.add(marker)
+        current = getattr(current, "_conn", None)
+        if current is None:
+            return None
+    return None
 
 
 @dataclass(frozen=True)
@@ -56,10 +71,19 @@ def _account_row_in_conn(conn: Any, identifier: int):
             (value,),
         ).fetchone()
     except sqlite3.OperationalError:
-        # Many isolated SQLite repository tests intentionally create only the
-        # narrow schema they exercise. Production is PostgreSQL and must never
-        # degrade account-alias enforcement if its canonical migration is absent.
-        if is_postgres_enabled():
+        # Some isolated repository tests intentionally create a narrow SQLite
+        # schema without the account authority. Decide from the actual connection
+        # object, not the process-wide DATABASE_URL: CI may expose PostgreSQL while
+        # a contract test still uses an in-memory sqlite3.Connection. Only a truly
+        # absent accounts table is tolerated; a present-but-incompatible account
+        # schema remains fail-closed.
+        sqlite_conn = _sqlite_base_connection(conn)
+        if sqlite_conn is None:
+            raise
+        accounts_table = sqlite_conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='accounts' LIMIT 1"
+        ).fetchone()
+        if accounts_table is not None:
             raise
         return None
 
