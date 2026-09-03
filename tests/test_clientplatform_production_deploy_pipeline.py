@@ -299,6 +299,50 @@ class ProductionEnvironmentPreparationTests(unittest.TestCase):
         self.assertEqual(result["visual_rollbacks_retained_before_deploy"], 1)
         self.assertNotIn(mock.call(["docker", "image", "prune", "--force"]), run.call_args_list)
 
+    def test_predeploy_current_baseline_supersedes_old_rollback_generation(self) -> None:
+        new_app = f"{production_deploy.APP_IMAGE}:rollback-20260903T093900Z"
+        old_app = f"{production_deploy.APP_IMAGE}:rollback-20260903T052203Z"
+        new_visual = f"{production_deploy.VISUAL_GATEWAY_IMAGE}:rollback-20260903T093900Z"
+        old_visual = f"{production_deploy.VISUAL_GATEWAY_IMAGE}:rollback-20260903T052203Z"
+        tags = {
+            production_deploy.APP_IMAGE: [new_app, old_app],
+            production_deploy.VISUAL_GATEWAY_IMAGE: [new_visual, old_visual],
+        }
+        image_ids = {
+            new_app: "sha256:app-current",
+            old_app: "sha256:app-old",
+            new_visual: "sha256:visual-current",
+            old_visual: "sha256:visual-old",
+        }
+        with (
+            mock.patch.object(
+                production_deploy,
+                "_running_image_ids",
+                return_value={"sha256:app-current", "sha256:visual-current"},
+            ),
+            mock.patch.object(
+                production_deploy,
+                "_image_tags",
+                side_effect=lambda repository: tags[repository],
+            ),
+            mock.patch.object(
+                production_deploy,
+                "_image_id",
+                side_effect=lambda reference: image_ids[reference],
+            ),
+            mock.patch.object(production_deploy, "_run") as run,
+        ):
+            result = production_deploy._prune_deploy_image_history("f" * 40)
+
+        removed = [
+            call.args[0][-1]
+            for call in run.call_args_list
+            if call.args and call.args[0][:3] == ["docker", "image", "rm"]
+        ]
+        self.assertEqual(removed, [old_app, old_visual])
+        self.assertEqual(result["app_rollbacks_retained_before_deploy"], 1)
+        self.assertEqual(result["visual_rollbacks_retained_before_deploy"], 1)
+
     def test_build_cache_retention_is_bounded(self) -> None:
         with mock.patch.object(production_deploy, "_run") as run:
             result = production_deploy._prune_build_cache()
@@ -761,9 +805,13 @@ class ProductionEnvironmentPreparationTests(unittest.TestCase):
     def test_deploy_contract_orders_baseline_backup_build_and_recreate(self) -> None:
         source = Path(production_deploy.__file__).read_text(encoding="utf-8")
         baseline_index = source.index("production_not_ready_before_deploy")
+        rollback_tag_index = source.index(
+            '_run(["docker", "image", "tag", previous_image, rollback_tag])',
+            baseline_index,
+        )
         retention_index = source.index(
             "image_retention = _prune_deploy_image_history(target_sha)",
-            baseline_index,
+            rollback_tag_index,
         )
         predeploy_backup_cleanup_index = source.index(
             "predeploy_backup_image_retention = _remove_transient_backup_image()",
@@ -781,9 +829,6 @@ class ProductionEnvironmentPreparationTests(unittest.TestCase):
             "backup_artifact_retention = _cleanup_after_encrypted_backup()",
             backup_index,
         )
-        rollback_tag_index = source.index(
-            '_run(["docker", "image", "tag", previous_image, rollback_tag])'
-        )
         gateway_build_index = source.index('_run([*compose, "build", "visual-gateway"])')
         build_index = source.index('_run([*compose, "build", "app"])')
         gateway_recreate_index = source.index(
@@ -798,14 +843,14 @@ class ProductionEnvironmentPreparationTests(unittest.TestCase):
             "post_deploy_retention = _post_deploy_retention(target_sha)"
         )
 
-        self.assertLess(baseline_index, retention_index)
+        self.assertLess(baseline_index, rollback_tag_index)
+        self.assertLess(rollback_tag_index, retention_index)
         self.assertLess(retention_index, predeploy_backup_cleanup_index)
         self.assertLess(predeploy_backup_cleanup_index, cache_retention_index)
         self.assertLess(cache_retention_index, disk_guard_index)
         self.assertLess(disk_guard_index, backup_index)
         self.assertLess(backup_index, backup_cleanup_index)
-        self.assertLess(backup_cleanup_index, rollback_tag_index)
-        self.assertLess(rollback_tag_index, gateway_build_index)
+        self.assertLess(backup_cleanup_index, gateway_build_index)
         self.assertLess(gateway_build_index, build_index)
         self.assertLess(build_index, gateway_recreate_index)
         self.assertLess(gateway_recreate_index, recreate_index)
