@@ -1219,9 +1219,19 @@ Canonical production deploy теперь различает тяжёлый `full
 - Issue #263 автоматически закрыт merge-событием #282 после того, как manifest уже имел `missing=0`; это соответствует acceptance condition parity contract.
 - Production deploy не входил в code PR; владелец отдельно разрешил exact-main production rollout после merge и roadmap closure.
 
-### M6-008 — `NEXT` — Repository Merge Governance Enforcement
+### M6-008 — `DONE` — Repository Merge Governance Enforcement
 
-После полного capability parity следующий единственный default slice закрывает уже доказанный governance gap: GitHub `main` сейчас `protected=false`, required-status enforcement выключен, repository rulesets отсутствуют. Green-only PR дисциплина должна стать технически enforceable, а не зависеть от ручной осторожности.
+Закрыто 2026-09-03. GitHub `main` теперь защищён для всех, включая administrator path: PR обязателен, strict required checks включены, force-push/deletion запрещены, unresolved review conversations блокируют merge, постоянного bypass нет.
+
+Доказательство закрытия:
+
+- branch API после настройки: `protected=true`, enforcement=`everyone`, `strict=true`;
+- 11 stable required contexts привязаны к GitHub Actions app: regression, combined/branch coverage, quality, PostgreSQL CI, static security, Canon, Brand/Product Purity, Capability Parity, Production Isolation и Pre-deploy Release Gate;
+- safe negative probe: direct push probe commit `6ada870bb59dde57dd5436c3331a94a6952dcbe1` отклонён GitHub `GH006` с требованием PR и 11/11 checks; remote `main` не изменился;
+- live force/delete probe намеренно не выполнялся как потенциально разрушительный; API фиксирует `allow_force_pushes=false`, `allow_deletions=false`;
+- PR #285 стал positive non-deadlock proof: exact head `e3aa3d0f87261d4436cc824d31da8e3933a1e5d4`, 17/17 workflows success, required checks green, unresolved review threads=0, squash-merge `3f768752a75fef95b990d17e08f70db59cddf021` прошёл при активной protection;
+- policy зафиксирована в `docs/REPOSITORY_MERGE_GOVERNANCE.md`; GitHub protection остаётся enforcement authority, документ не создаёт второй release/deploy authority;
+- production runtime/data этим governance slice не менялись.
 
 Минимальный DONE contract M6-008:
 
@@ -1233,6 +1243,24 @@ Canonical production deploy теперь различает тяжёлый `full
 - repository-level proof включает API evidence `protected=true` и активный ruleset/protection, negative probe для запрещённого direct/force path там, где это безопасно, и green PR merge proof без ослабления CI;
 - никакой второй release/deploy authority не создаётся: production по-прежнему разворачивается только canonical exact-SHA deploy path после green merge;
 - production runtime/data не меняются этим governance slice.
+
+
+### M7-001 — `NEXT` — Authenticated Business Cockpit Shell + Server-Authorized Navigation
+
+Первый slice M7 создаёт не второй интерфейсный продукт, а безопасную оболочку над уже существующими canonical application/domain capabilities. Telegram bot остаётся быстрым action surface; Mini App становится понятным business cockpit.
+
+Минимальный DONE contract M7-001:
+
+- Telegram Mini App `initData` проверяется backend по официальной подписи и freshness; непроверенные frontend identity/business параметры не дают доступа;
+- current business/workspace scope и RBAC вычисляются сервером из canonical membership/account authority; frontend `business_id`, role и route никогда не являются авторизацией;
+- mobile-first cockpit shell содержит понятную навигацию к `Home / Today`, Customers, Calendar, Sales, Growth, Content, Automation, Analytics, Connections, Team, Billing, Settings / Privacy, но не дублирует их domain logic;
+- недоступные разделы либо не предлагаются роли, либо дают ясное объяснение; backend deny остаётся обязательным даже при скрытой кнопке;
+- существующие owner/help/onboarding формулировки используются как единая UX-система: у основных действий есть человеческое «что это» и «когда сюда нажимать» без уменьшения скрытого функционала;
+- Telegram bot и Mini App используют одни application services/use-cases; не создаётся второй CRM, customer timeline, automation brain, billing authority или frontend-owned data store;
+- navigation/deep-link state не позволяет tenant switching через URL/query/local storage; sensitive actions продолжают использовать canonical approval/consent boundaries;
+- frontend не получает provider secrets, bot tokens или raw infrastructure credentials;
+- regressions покрывают invalid/expired initData, forged business/role, cross-tenant route, role navigation, deep links, mobile shell, backend deny и отсутствие duplicate business logic;
+- production deploy не является частью code slice без отдельной команды владельца.
 
 Единый шаблон для важных автоматических действий:
 
@@ -1843,7 +1871,8 @@ Duplicate tap, retry, worker restart или uncertain provider response не д�
 | M6-005 Disk-safe Production Deploy Retention | DONE | PRs #275/#276/#277/#278; final merge `48ee169cc72e687d0d8d2e89fbbe748eca41fd8b`; full-runtime 75%/7GiB unchanged; proven host-only no-build deploy accepted in production with encrypted backup, unchanged container IDs/restart=0 and 20s stability |
 | M6-006 Versioned Capability Parity Matrix + Regression Guard | DONE | PR #280 squash-merge `8ffa7699c399aa613e64fffcba2448182e0542fe`; exact head `2ef607e976046a1833d7bf31fa58714776c66abb`; 17/17 workflows + Independent AI Review green; executable matrix = 17 families / 20 capabilities / 19 proven hard-ratcheted / 1 explicit missing; frozen pinned evidence = 57 exact blobs; canonical regression + coverage `82.23% / 73.99%` green; no production deploy |
 | M6-007 Audited Duplicate Account Consolidation | DONE | PR #282 squash-merge `59029646142f96e217778c7a803464766390082e`; exact head `6e269af891f0c3ec8375d83e0671dff85de83552`; 17/17 workflows green; PostgreSQL consolidation concurrency green; parity = 20/20 proven, missing=0; coverage locked at 82.38% / 74.02%; #263 closed at merge |
-| M6-008 Repository Merge Governance Enforcement | NEXT | Enforce the existing green-only/exact-head discipline in GitHub itself: protect `main`, require stable canonical checks, deny direct/force/deletion paths, preserve a proven non-deadlocking PR merge path and keep production deploy authority unchanged |
+| M6-008 Repository Merge Governance Enforcement | DONE | GitHub `main` protected for everyone; strict 11-context required-check set; direct push negative probe rejected with `GH006`; force/delete disabled; PR #285 exact head `e3aa3d0f87261d4436cc824d31da8e3933a1e5d4` passed 17/17 workflows and merged through active protection as `3f768752a75fef95b990d17e08f70db59cddf021`; no production runtime/data change |
+| M7-001 Authenticated Business Cockpit Shell + Server-Authorized Navigation | NEXT | Build the first Mini App cockpit shell on the existing canonical backend: verified Telegram initData, server-derived business scope/RBAC, mobile-first role-aware navigation and help text; no duplicate frontend business logic or second API authority |
 
 ---
 
