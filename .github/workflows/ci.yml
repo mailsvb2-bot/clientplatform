@@ -300,6 +300,14 @@ jobs:
           python scripts/postgres_platform_directory_smoke.py \
             2>&1 | tee "$RUNNER_TEMP/postgres-platform-directory.log"
 
+      - name: Postgres legacy account merge cleanup
+        env:
+          POSTGRES_REUSE_CONNECTIONS: '0'
+        run: |
+          set -o pipefail
+          python -m pytest -q tests/test_account_merge_log_legacy_cleanup_postgres.py \
+            2>&1 | tee "$RUNNER_TEMP/postgres-account-merge-cleanup.log"
+
       - name: Postgres account consolidation concurrency
         env:
           POSTGRES_REUSE_CONNECTIONS: '0'
@@ -320,5 +328,6 @@ jobs:
             ${{ runner.temp }}/postgres-scheduler.log
             ${{ runner.temp }}/postgres-messenger-outbox.log
             ${{ runner.temp }}/postgres-platform-directory.log
+            ${{ runner.temp }}/postgres-account-merge-cleanup.log
             ${{ runner.temp }}/postgres-account-consolidation.log
           if-no-files-found: warn

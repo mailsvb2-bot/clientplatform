@@ -191,6 +191,13 @@ def _exercise() -> dict[str, object]:
 def main() -> int:
     _guard()
     init_db()
+    with get_db() as conn:
+        legacy = conn.execute(
+            "SELECT 1 AS present FROM information_schema.tables "
+            "WHERE table_schema=current_schema() AND table_name='account_merge_log'"
+        ).fetchone()
+        if legacy is not None:
+            raise AssertionError("legacy account_merge_log survived canonical migrations")
     evidence = _exercise()
     print(json.dumps(evidence, sort_keys=True))
     print("POSTGRES_ACCOUNT_CONSOLIDATION_OK")
