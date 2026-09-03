@@ -1202,24 +1202,37 @@ Canonical production deploy теперь различает тяжёлый `full
 - Единственный доказанный `missing` gap — `platform.account_consolidation`: ClientPlatform уже имеет atomic cross-channel identity linking и fail-closed conflict handling, но пока не имеет audited operator dry-run/apply consolidation workflow. Отдельный speech/provider experiment gap не был подтверждён pinned evidence и поэтому не был выдуман.
 - M6-006 не меняет business/domain runtime behavior; production deploy намеренно не выполнялся. Issue #263 остаётся открытым до закрытия последнего `missing` либо явного owner exception.
 
-### M6-007 — `NEXT` — Audited Duplicate Account Consolidation
+### M6-007 — `DONE` — Audited Duplicate Account Consolidation
 
-Следующий и единственный default slice закрывает последний `missing` из executable parity manifest фундаментально, расширяя существующий `services/accounts/identity.py` и canonical `accounts` / `account_channel_identities` authority. Отдельный merge-store, второй identity brain, synthetic TenantContext или global superuser path запрещены.
+Последний proven capability-parity gap закрыт внутри существующего account/identity authority без второго identity store/runtime. Platform operator получил read-only dry-run и exact-plan-bound apply; stale/concurrent/conflicting состояния fail-close, а merged source сохраняет детерминированный redirect в canonical target.
 
-Минимальный DONE contract M6-007:
+### Evidence
 
-- platform-operator получает **read-only dry-run plan** до любой mutation: target/source accounts, identities и полный dependency inventory по durable ссылкам на account/user identity; каждая поверхность классифицируется как `repoint`, `retain-with-alias/provenance` либо `block`, неизвестная/неподдержанная ссылка fail-close;
-- dry-run и apply связаны exact plan fingerprint/version: apply требует явное подтверждение, operator identity, reason и неизменившийся persistent state; stale plan, concurrent mutation или изменившийся dependency set блокируют apply;
-- один durable idempotency/operation key делает повторный apply/retry безопасным; две конкурентные попытки не могут выполнить merge дважды или создать разные результаты;
-- identity collision не разрешается удалением «проигравшей» записи: неоднозначность, конфликт verified identities или потеря channel access всегда fail-close до mutation;
-- source account получает canonical merged/redirect semantics в том же account authority без цепочек/циклов; разрешение старого id детерминированно приводит к target там, где это допустимо, а immutable audit/history сохраняют исходного actor/source для forensic provenance;
-- business memberships/roles и tenant boundaries проверяются до apply. Consolidation не может незаметно повысить роль, создать synthetic membership или обойти обычный RBAC; любое расширение доступа должно быть явно видно в dry-run evidence;
-- текущие durable поверхности — включая messenger identities/bridge/routing/outbox, tenancy/member references, privacy/export state, jobs и иные найденные account/user references — не остаются сиротами; historical append-only audit/outcome records не переписываются без отдельного доказанного canonical правила;
-- apply выполняется атомарно либо через доказанный fail-closed staged protocol с rollback-safe reservation; частично выполненный merge запрещён;
-- append-only audit evidence содержит operator, reason, exact plan hash, before/after counts, conflict decisions, timestamps и final outcome; secrets/PII сверх необходимого evidence не логируются;
-- regression: dry-run no-mutation, happy apply, stale plan, double/retry idempotency, concurrent apply, identity collision, role/membership access expansion, alias cycle rejection, no-orphan dependency check, immutable history preservation и PostgreSQL concurrency;
-- после доказанного M6-007 `platform.account_consolidation` переводится из `missing` в доказанный status и добавляется в hard proven-capability ratchet; только тогда #263 может быть закрыт при отсутствии других `missing`;
-- production deploy не входит в slice без отдельной прямой команды владельца.
+- PR #282 (`M6-007: audited duplicate account consolidation`) squash-merged в `main` как `59029646142f96e217778c7a803464766390082e`; exact final PR head `6e269af891f0c3ec8375d83e0671dff85de83552`.
+- Все 17 PR workflow на exact final head завершились `success`. `CI` полностью green: regression contour, static security, PostgreSQL payment/concurrency и coverage ratchets; отдельный `Postgres account consolidation concurrency` step также `success`.
+- GitHub commit statuses green: `ci/regression-contour`, `AI Review / gate`, combined coverage `82.38% / 82.38%` и branch coverage `74.02% / 74.02%`. Coverage baselines усилены относительно входного `main` (`82.23% / 73.99%`), а environment-dependent logging coverage заменён детерминированным regression contract.
+- Capability parity manifest теперь содержит 17 families / 20 capabilities / 20 proven / 0 missing; `platform.account_consolidation` переведён в proven `genericized` и включён в hard proven-capability ratchet.
+- Consolidation использует canonical `accounts` + `account_channel_identities`: dry-run dependency inventory, exact SHA-256 plan fingerprint, explicit operator/reason/confirmation, durable idempotency, source/target serialization, stale-plan rejection, append-only operation/audit evidence и deterministic merged alias resolution.
+- Identity collisions, same-business membership overlap, unsafe RBAC expansion, active OAuth, locked jobs, sending outbox и неизвестные identity dependencies блокируют apply до mutation. Historical audit/outcome provenance не переписывается; operational references переносятся только по доказанным policy.
+- Messenger/tenancy continuity сохраняется через canonical alias resolution без synthetic membership/TenantContext. SQLite compatibility допускает только действительно отсутствующий account authority в isolated test fixtures; incompatible schema и production PostgreSQL остаются fail-closed.
+- Локальный final-head evidence: full coverage suite `3192 passed, 7 skipped`, `REGRESSION_GATE_OK`, `COVERAGE_RATCHET_OK combined=82.38%/82.38% branch=74.02%/74.02%`, Canon/Product Purity/Capability Parity/Ruff/diff-check green.
+- Issue #263 автоматически закрыт merge-событием #282 после того, как manifest уже имел `missing=0`; это соответствует acceptance condition parity contract.
+- Production deploy не входил в code PR; владелец отдельно разрешил exact-main production rollout после merge и roadmap closure.
+
+### M6-008 — `NEXT` — Repository Merge Governance Enforcement
+
+После полного capability parity следующий единственный default slice закрывает уже доказанный governance gap: GitHub `main` сейчас `protected=false`, required-status enforcement выключен, repository rulesets отсутствуют. Green-only PR дисциплина должна стать технически enforceable, а не зависеть от ручной осторожности.
+
+Минимальный DONE contract M6-008:
+
+- `main` защищён GitHub branch protection/ruleset: direct push, force-push и deletion запрещены обычному пути; изменение production-кода попадает в `main` через PR;
+- required checks закрепляют стабильные canonical gates как минимум для CI regression/security/coverage, Canon, Product Purity/Brand, Capability Parity, Production Isolation и Pre-deploy Release Gate; required contexts не должны зависеть от ephemeral run id;
+- merge разрешён только для актуального exact PR head; stale head/base или красный required check блокируют merge;
+- административный/break-glass bypass, если он вообще нужен, минимален, явно документирован и не превращается в постоянный обход governance;
+- GitHub App/owner workflow сохраняет возможность штатно создавать и мержить green PR; правила не создают deadlock, в котором required status невозможно опубликовать;
+- repository-level proof включает API evidence `protected=true` и активный ruleset/protection, negative probe для запрещённого direct/force path там, где это безопасно, и green PR merge proof без ослабления CI;
+- никакой второй release/deploy authority не создаётся: production по-прежнему разворачивается только canonical exact-SHA deploy path после green merge;
+- production runtime/data не меняются этим governance slice.
 
 Единый шаблон для важных автоматических действий:
 
@@ -1829,7 +1842,8 @@ Duplicate tap, retry, worker restart или uncertain provider response не д�
 | M6-004 Bounded Platform Directory Search + Access Review | DONE | PR #273 merge `6b21f928272e97db5b8b79bb3adc37db62bf5798`; exact head `33f9679907be60c26f7474bcf709367bef456f84`; all 16 workflows green; 2 review findings resolved; full CI `3138 passed, 7 skipped`; coverage `82.23% / 73.99%`; exact-SHA production deploy `deploy-20260903T052535Z.json` with encrypted backup, health/readiness, restart=0 and 20s stability |
 | M6-005 Disk-safe Production Deploy Retention | DONE | PRs #275/#276/#277/#278; final merge `48ee169cc72e687d0d8d2e89fbbe748eca41fd8b`; full-runtime 75%/7GiB unchanged; proven host-only no-build deploy accepted in production with encrypted backup, unchanged container IDs/restart=0 and 20s stability |
 | M6-006 Versioned Capability Parity Matrix + Regression Guard | DONE | PR #280 squash-merge `8ffa7699c399aa613e64fffcba2448182e0542fe`; exact head `2ef607e976046a1833d7bf31fa58714776c66abb`; 17/17 workflows + Independent AI Review green; executable matrix = 17 families / 20 capabilities / 19 proven hard-ratcheted / 1 explicit missing; frozen pinned evidence = 57 exact blobs; canonical regression + coverage `82.23% / 73.99%` green; no production deploy |
-| M6-007 Audited Duplicate Account Consolidation | NEXT | Close the sole proven `platform.account_consolidation` gap through the existing account/identity authority: snapshot-bound dry-run, explicit/idempotent apply, fail-closed conflicts, dependency-safe redirect/repoint semantics, RBAC/audit preservation and PostgreSQL concurrency; no second identity store/brain |
+| M6-007 Audited Duplicate Account Consolidation | DONE | PR #282 squash-merge `59029646142f96e217778c7a803464766390082e`; exact head `6e269af891f0c3ec8375d83e0671dff85de83552`; 17/17 workflows green; PostgreSQL consolidation concurrency green; parity = 20/20 proven, missing=0; coverage locked at 82.38% / 74.02%; #263 closed at merge |
+| M6-008 Repository Merge Governance Enforcement | NEXT | Enforce the existing green-only/exact-head discipline in GitHub itself: protect `main`, require stable canonical checks, deny direct/force/deletion paths, preserve a proven non-deadlocking PR merge path and keep production deploy authority unchanged |
 
 ---
 
