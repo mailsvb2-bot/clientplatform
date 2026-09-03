@@ -190,20 +190,6 @@ def _exercise() -> dict[str, object]:
 
 def main() -> int:
     _guard()
-    with get_db() as conn:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS account_merge_log(
-                id BIGSERIAL PRIMARY KEY,
-                target_account_id INTEGER NOT NULL,
-                source_account_id INTEGER NOT NULL,
-                mode TEXT NOT NULL,
-                status TEXT NOT NULL,
-                evidence_json TEXT NOT NULL,
-                created_at TEXT NOT NULL
-            )
-            """.strip()
-        )
     init_db()
     with get_db() as conn:
         legacy = conn.execute(
