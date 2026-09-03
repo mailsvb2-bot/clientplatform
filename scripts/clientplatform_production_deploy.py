@@ -878,6 +878,36 @@ def deploy(
             if not recover_unavailable_baseline:
                 raise DeploymentError("production_not_ready_before_deploy") from exc
 
+    # Establish the current running baseline as the new rollback generation before
+    # pruning older ClientPlatform rollback images. Tagging is metadata-only and
+    # does not mutate or restart production; it lets the disk guard reclaim the
+    # previous rollback generation without ever dropping rollback coverage.
+    rollback_stamp = _utc_stamp()
+    previous_image = _container_image(APP_CONTAINER) if app_exists else ""
+    rollback_tag = f"{APP_IMAGE}:rollback-{rollback_stamp}" if previous_image else ""
+    if previous_image:
+        _run(["docker", "image", "tag", previous_image, rollback_tag])
+
+    visual_gateway_exists = _container_exists(VISUAL_GATEWAY_CONTAINER)
+    previous_visual_gateway_image = (
+        _optional_container_image(VISUAL_GATEWAY_CONTAINER) if visual_gateway_exists else ""
+    )
+    visual_gateway_rollback_tag = (
+        f"{VISUAL_GATEWAY_IMAGE}:rollback-{rollback_stamp}"
+        if previous_visual_gateway_image
+        else ""
+    )
+    if previous_visual_gateway_image:
+        _run(
+            [
+                "docker",
+                "image",
+                "tag",
+                previous_visual_gateway_image,
+                visual_gateway_rollback_tag,
+            ]
+        )
+
     image_retention = _prune_deploy_image_history(target_sha)
     predeploy_backup_image_retention = _remove_transient_backup_image()
     build_cache_retention = _prune_build_cache_for_capacity()
@@ -896,29 +926,6 @@ def deploy(
         backup_reference = str(_local_backup(target_sha))
     else:
         raise DeploymentError("age_recipient_missing_use_explicit_local_backup_override")
-
-    previous_image = _container_image(APP_CONTAINER) if app_exists else ""
-    rollback_tag = f"{APP_IMAGE}:rollback-{_utc_stamp()}" if previous_image else ""
-    if previous_image:
-        _run(["docker", "image", "tag", previous_image, rollback_tag])
-
-    visual_gateway_exists = _container_exists(VISUAL_GATEWAY_CONTAINER)
-    previous_visual_gateway_image = (
-        _optional_container_image(VISUAL_GATEWAY_CONTAINER) if visual_gateway_exists else ""
-    )
-    visual_gateway_rollback_tag = (
-        f"{VISUAL_GATEWAY_IMAGE}:rollback-{_utc_stamp()}" if previous_visual_gateway_image else ""
-    )
-    if previous_visual_gateway_image:
-        _run(
-            [
-                "docker",
-                "image",
-                "tag",
-                previous_visual_gateway_image,
-                visual_gateway_rollback_tag,
-            ]
-        )
 
     visual_gateway_changed = False
     app_changed = False
