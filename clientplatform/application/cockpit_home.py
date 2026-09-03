@@ -203,7 +203,9 @@ def get_cockpit_home(
             )
         except TenantPermissionDenied:
             sources.append(_source("growth", "restricted", "Результаты и деньги недоступны для текущей роли."))
-        except (OSError, RuntimeError, ValueError):
+        except (OSError, ValueError):
+            sources.append(_source("growth", "unavailable", "Часть результатов сейчас недоступна. Попробуйте обновить позже."))
+        except RuntimeError:
             sources.append(_source("growth", "unavailable", "Часть результатов сейчас недоступна. Попробуйте обновить позже."))
         else:
             metrics.extend(_growth_metrics(growth_snapshot))
@@ -225,7 +227,9 @@ def get_cockpit_home(
             )
         except TenantPermissionDenied:
             sources.append(_source("customer_activity", "restricted", "Данные клиентов недоступны для текущей роли."))
-        except (OSError, RuntimeError, ValueError):
+        except (OSError, ValueError):
+            sources.append(_source("customer_activity", "unavailable", "Активность клиентов сейчас недоступна."))
+        except RuntimeError:
             sources.append(_source("customer_activity", "unavailable", "Активность клиентов сейчас недоступна."))
         else:
             metrics.extend(
@@ -252,7 +256,9 @@ def get_cockpit_home(
             slots = list_booking_slots(actor=actor, include_unavailable=False)
         except TenantPermissionDenied:
             sources.append(_source("bookings", "restricted", "Записи недоступны для текущей роли."))
-        except (OSError, RuntimeError, ValueError):
+        except (OSError, ValueError):
+            sources.append(_source("bookings", "unavailable", "Расписание сейчас недоступно."))
+        except RuntimeError:
             sources.append(_source("bookings", "unavailable", "Расписание сейчас недоступно."))
         else:
             today_slots = [
@@ -280,7 +286,9 @@ def get_cockpit_home(
             )
         except TenantPermissionDenied:
             sources.append(_source("sales", "restricted", "Работа с клиентами недоступна для текущей роли."))
-        except (OSError, RuntimeError, ValueError):
+        except (OSError, ValueError):
+            sources.append(_source("sales", "unavailable", "Рабочая очередь клиентов сейчас недоступна."))
+        except RuntimeError:
             sources.append(_source("sales", "unavailable", "Рабочая очередь клиентов сейчас недоступна."))
         else:
             if sales_actions:
@@ -298,7 +306,9 @@ def get_cockpit_home(
         )
     except TenantPermissionDenied:
         sources.append(_source("automation_approvals", "restricted", "Согласования недоступны для текущей роли."))
-    except (OSError, RuntimeError, ValueError):
+    except (OSError, ValueError):
+        sources.append(_source("automation_approvals", "unavailable", "Согласования сейчас недоступны."))
+    except RuntimeError:
         sources.append(_source("automation_approvals", "unavailable", "Согласования сейчас недоступны."))
     else:
         sources.append(_source("automation_approvals", "available", "Согласования прочитаны из канонического AutomationPolicy."))

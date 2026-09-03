@@ -307,7 +307,9 @@ async def cockpit_home(request: web.Request) -> web.Response:
         projection = await asyncio.to_thread(get_cockpit_home, actor=actor)
     except TenantAccessDenied:
         return _error(403, "business_access_denied")
-    except (OSError, RuntimeError, ValueError):
+    except (OSError, ValueError):
+        return _error(503, "home_unavailable")
+    except RuntimeError:
         return _error(503, "home_unavailable")
     return web.json_response({"ok": True, **projection.as_dict()}, headers=_base_headers())
 
