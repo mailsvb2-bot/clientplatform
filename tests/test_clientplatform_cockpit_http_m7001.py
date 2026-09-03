@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 _AIOHTTP_AVAILABLE = importlib.util.find_spec("aiohttp") is not None
@@ -49,7 +50,11 @@ class CockpitHttpM7001Tests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("URLSearchParams", script)
         self.assertNotIn("localStorage", script)
         self.assertNotIn("innerHTML", script)
+        self.assertNotIn("initDataUnsafe", script)
         self.assertIn("payload.navigation", script)
+        self.assertIn("/clientplatform/cockpit/home", script)
+        self.assertIn("payload.next_action", script)
+        self.assertIn("display_amount", script)
 
     async def test_cockpit_context_authenticates_then_uses_server_context(
         self,
@@ -116,6 +121,33 @@ class CockpitHttpM7001Tests(unittest.IsolatedAsyncioTestCase):
             response.headers["Cache-Control"],
             "no-store, max-age=0",
         )
+
+    async def test_cockpit_home_reauthenticates_and_live_resolves_business(self) -> None:
+        principal = TelegramWebAppPrincipal(user_id=101, auth_date=1, query_id=None)
+        actor = object()
+        projection = SimpleNamespace(as_dict=lambda: {"schema_version": 1, "business_id": _BUSINESS_A})
+        with (
+            patch.object(cockpit_http.settings, "BOT_TOKEN", _TOKEN),
+            patch.object(cockpit_http, "verify_telegram_webapp_init_data", return_value=principal),
+            patch.object(cockpit_http, "resolve_cockpit_actor", return_value=actor) as resolve_actor,
+            patch.object(cockpit_http, "get_cockpit_home", return_value=projection) as get_home,
+        ):
+            app = web.Application()
+            cockpit_http.register_cockpit_routes(app)
+            client = TestClient(TestServer(app))
+            await client.start_server()
+            try:
+                response = await client.post(
+                    "/clientplatform/cockpit/home",
+                    json={"init_data": "verified-by-test", "business_id": _BUSINESS_A},
+                )
+                payload = await response.json()
+            finally:
+                await client.close()
+        self.assertEqual(response.status, 200)
+        self.assertEqual(payload["schema_version"], 1)
+        resolve_actor.assert_called_once_with(telegram_user_id=101, requested_business_id=_BUSINESS_A)
+        get_home.assert_called_once_with(actor=actor)
 
     async def test_cockpit_http_fails_closed_for_invalid_identity_and_tenant(
         self,

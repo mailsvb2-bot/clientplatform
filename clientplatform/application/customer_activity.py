@@ -85,6 +85,8 @@ def _load_activity(
     exclude_platform_admins: bool,
     now: datetime,
     limit: int,
+    today_from: datetime | None = None,
+    today_to: datetime | None = None,
 ) -> CustomerActivitySummary:
     params: tuple[Any, ...]
     where = "WHERE c.status='active'"
@@ -128,7 +130,22 @@ def _load_activity(
         )
         by_customer.setdefault(key, []).append(identity)
 
-    today = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
+    if (today_from is None) != (today_to is None):
+        raise ValueError("today_from and today_to must be supplied together")
+    if today_from is None:
+        day_from = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
+        day_to = day_from + timedelta(days=1)
+    else:
+        day_from = today_from
+        day_to = today_to
+        if day_from.tzinfo is None or day_from.utcoffset() is None:
+            raise ValueError("today_from must be timezone-aware")
+        if day_to.tzinfo is None or day_to.utcoffset() is None:
+            raise ValueError("today_to must be timezone-aware")
+        day_from = day_from.astimezone(timezone.utc)
+        day_to = day_to.astimezone(timezone.utc)
+        if day_to <= day_from:
+            raise ValueError("today_to must be after today_from")
     week_start = now - timedelta(days=7)
     rows: list[CustomerActivityRow] = []
     platform_customers: dict[str, set[tuple[str, str]]] = {}
@@ -192,12 +209,16 @@ def _load_activity(
         parsed = _parse_dt(value)
         return parsed is not None and parsed >= boundary
 
+    def _within(value: str, start: datetime, end: datetime) -> bool:
+        parsed = _parse_dt(value)
+        return parsed is not None and start <= parsed < end
+
     rows.sort(key=lambda item: _parse_dt(item.last_contact_at) or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
     return CustomerActivitySummary(
         total=len(rows),
-        new_today=sum(1 for row in rows if _after(row.first_contact_at, today)),
+        new_today=sum(1 for row in rows if _within(row.first_contact_at, day_from, day_to)),
         new_7d=sum(1 for row in rows if _after(row.first_contact_at, week_start)),
-        active_today=sum(1 for row in rows if _after(row.last_contact_at, today)),
+        active_today=sum(1 for row in rows if _within(row.last_contact_at, day_from, day_to)),
         by_platform={platform: len(keys) for platform, keys in sorted(platform_customers.items())},
         recent=tuple(rows[: max(1, min(int(limit), 100))]),
     )
@@ -208,6 +229,8 @@ def tenant_customer_activity(
     actor: TenantContext,
     now: datetime | None = None,
     limit: int = 25,
+    today_from: datetime | None = None,
+    today_to: datetime | None = None,
 ) -> CustomerActivitySummary:
     """Return only clients in actor's current business; caller cannot override that scope."""
     with get_db_ro() as conn:
@@ -222,6 +245,8 @@ def tenant_customer_activity(
             exclude_platform_admins=True,
             now=(now or _utc_now()).astimezone(timezone.utc),
             limit=limit,
+            today_from=today_from,
+            today_to=today_to,
         )
 
 

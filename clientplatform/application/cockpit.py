@@ -255,10 +255,27 @@ def resolve_cockpit_context(
     )
 
 
+def resolve_cockpit_actor(
+    *,
+    telegram_user_id: int,
+    requested_business_id: str | None = None,
+) -> TenantContext:
+    """Resolve and then live-recheck the canonical actor for a cockpit content request."""
+
+    context = resolve_cockpit_context(
+        telegram_user_id=telegram_user_id,
+        requested_business_id=requested_business_id,
+    )
+    if context.business_id is None:
+        raise TenantAccessDenied("active business membership was not found")
+    return resolve_tenant_context(user_id=context.user_id, business_id=context.business_id)
+
+
 __all__ = [
     "CockpitBusinessOption",
     "CockpitContext",
     "CockpitNavigationItem",
     "cockpit_navigation",
+    "resolve_cockpit_actor",
     "resolve_cockpit_context",
 ]

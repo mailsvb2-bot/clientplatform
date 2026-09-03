@@ -227,3 +227,37 @@ def test_unlinked_contact_does_not_create_shadow_customer_or_identity(monkeypatc
         ).fetchone()[0] == 0
     finally:
         conn.close()
+
+
+def test_tenant_activity_accepts_business_local_day_boundaries(monkeypatch):
+    conn = _new_db()
+    try:
+        created_at = datetime(2026, 9, 3, 20, 30, tzinfo=timezone.utc)
+        active_at = datetime(2026, 9, 3, 22, 30, tzinfo=timezone.utc)
+        day_from = datetime(2026, 9, 3, 21, 0, tzinfo=timezone.utc)
+        day_to = datetime(2026, 9, 4, 21, 0, tzinfo=timezone.utc)
+        actor, _customer = _seed_customer(
+            conn,
+            owner_user_id=50505,
+            business_name="Tallinn Day",
+            external_subject="local-day",
+            created_at=created_at,
+        )
+        monkeypatch.setattr(customer_activity, "get_db", _activity_db(conn))
+        monkeypatch.setattr(customer_activity, "get_db_ro", _activity_db(conn))
+        assert customer_activity.record_customer_contact(
+            business_id=actor.business_id,
+            platform="telegram",
+            external_subject="local-day",
+            at=active_at,
+        ) is True
+        summary = customer_activity.tenant_customer_activity(
+            actor=actor,
+            now=active_at,
+            today_from=day_from,
+            today_to=day_to,
+        )
+        assert summary.new_today == 0
+        assert summary.active_today == 1
+    finally:
+        conn.close()

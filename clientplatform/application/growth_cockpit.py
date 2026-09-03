@@ -334,18 +334,16 @@ def _economic_next_action(
     )
 
 
-def _action_queue(
+def project_sales_actions(
     *,
     handoffs: list[dict[str, object]],
     sales_work: list[dict[str, object]],
-    economics: UnitEconomicsSnapshot,
-    economic_action: GrowthAction | None = None,
     limit: int = 5,
 ) -> tuple[GrowthAction, ...]:
-    """Project a small deterministic owner queue from canonical read models only."""
+    """Reuse the canonical sales/handoff ordering without inventing a second score."""
 
     if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1 or limit > 10:
-        raise ValueError("owner action queue limit must be an integer between 1 and 10")
+        raise ValueError("sales action projection limit must be an integer between 1 and 10")
 
     actions: list[GrowthAction] = []
     handoff_leads: set[str] = set()
@@ -414,6 +412,23 @@ def _action_queue(
                 )
             )
 
+    return tuple(actions[:limit])
+
+
+def _action_queue(
+    *,
+    handoffs: list[dict[str, object]],
+    sales_work: list[dict[str, object]],
+    economics: UnitEconomicsSnapshot,
+    economic_action: GrowthAction | None = None,
+    limit: int = 5,
+) -> tuple[GrowthAction, ...]:
+    """Project a small deterministic owner queue from canonical read models only."""
+
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1 or limit > 10:
+        raise ValueError("owner action queue limit must be an integer between 1 and 10")
+
+    actions = list(project_sales_actions(handoffs=handoffs, sales_work=sales_work, limit=limit))
     if economic_action is not None:
         actions.append(economic_action)
 
@@ -578,4 +593,5 @@ __all__ = [
     "GrowthSourceResult",
     "acquisition_source_label",
     "get_growth_cockpit",
+    "project_sales_actions",
 ]
