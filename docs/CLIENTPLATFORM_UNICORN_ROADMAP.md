@@ -1245,7 +1245,7 @@ Canonical production deploy теперь различает тяжёлый `full
 - production runtime/data не меняются этим governance slice.
 
 
-### M7-001 — `NEXT` — Authenticated Business Cockpit Shell + Server-Authorized Navigation
+### M7-001 — `DONE` — Authenticated Business Cockpit Shell + Server-Authorized Navigation
 
 Первый slice M7 создаёт не второй интерфейсный продукт, а безопасную оболочку над уже существующими canonical application/domain capabilities. Telegram bot остаётся быстрым action surface; Mini App становится понятным business cockpit.
 
@@ -1261,6 +1261,35 @@ Canonical production deploy теперь различает тяжёлый `full
 - frontend не получает provider secrets, bot tokens или raw infrastructure credentials;
 - regressions покрывают invalid/expired initData, forged business/role, cross-tenant route, role navigation, deep links, mobile shell, backend deny и отсутствие duplicate business logic;
 - production deploy не является частью code slice без отдельной команды владельца.
+
+Закрыто 2026-09-03. Доказательство M7-001:
+
+- PR #287 squash-merged через защищённый `main`; final exact PR head `2be2d78c5e88fa6526bd45a51896781603af78d3`, merge `7e01f20ba1c57bd1f4475378eb68727e70fc56b9`; protection/bypass не ослаблялись;
+- final head прошёл 17/17 PR workflows; required regression/security/PostgreSQL/Canon/Brand/Capability Parity/Production Isolation/Pre-deploy checks green; unresolved review threads=0; coverage ratchet `82.42%` combined / `74.07%` branch;
+- Telegram Mini App admission использует raw signed `initData`, bot-token HMAC, constant-time compare, freshness/future-skew и canonical account alias resolution до tenancy; frontend identity/business/role не являются authority;
+- business scope/RBAC и role-aware navigation остаются в существующих account/tenancy owners; cockpit не создаёт второй CRM, billing/automation brain, API process или durable frontend state;
+- первоначальный Canon finding на top-level `pytest` в dependency-light `test_clientplatform_*` закрыт переводом security/HTTP regressions на canonical `unittest`, без исключения тестов из Canon;
+- первоначальный Release Gate finding на wide tuple-except в verifier закрыт семантически узкой обработкой parse/decode ошибок; validator не обходился;
+- при pre-production аудите найден и закрыт реальный proxy gap: broad `/clientplatform/*` media matcher перехватывал бы Mini App; explicit cockpit matcher добавлен перед media route и закреплён regression + real Caddy validation;
+- exact-main production rollout выполнен canonical locked updater с encrypted backup и `full_runtime`; evidence `/var/lib/clientplatform/deploy-evidence/deploy-20260903T201326Z.json`, `ok=true`, `target_sha=7e01f20ba1c57bd1f4475378eb68727e70fc56b9`, baseline ready, 20s stability green, app/Caddy restart count=0;
+- live HTTPS acceptance: `/clientplatform/cockpit`=200 с CSP/no-store, `/clientplatform/cockpit/app.js`=200 без `initDataUnsafe`/`localStorage`, forged `POST /clientplatform/cockpit/context` fail-closed=401 `invalid_init_data`; production dashboard строит единственную `🏠 Открыть кабинет` WebApp-кнопку на `https://app.clientplatform.ru/clientplatform/cockpit`; свежие app/Caddy severe-log scans чистые.
+
+### M7-002 — `NEXT` — Home / Today Cockpit Projection
+
+Первый содержательный экран cockpit должен отвечать на вопрос владельца или сотрудника: «Что происходит сегодня и что мне делать дальше?». Он не создаёт новую task/analytics модель, а собирает разрешённую конкретной роли read-only проекцию из уже существующих canonical owners.
+
+Минимальный DONE contract M7-002:
+
+- каждый Home/Today запрос заново проходит M7-001 verified Telegram identity → canonical account alias → live tenant/RBAC; `business_id`/role/deep-link из frontend не дают дополнительных прав;
+- transport-neutral application projection переиспользует существующие canonical read models: owner operating/action queue из `growth_cockpit`, sales/handoff work, bookings, customer activity, outcomes/unit economics и automation approvals только там, где текущая роль уже имеет право их читать; отдельного home-store/materialized «второго мозга» нет;
+- экран показывает компактно «сегодня», «требует внимания» и «следующий шаг»; deterministic ordering/priority берётся у существующих owners, а не вычисляется новым скрытым score в frontend или HTTP adapter;
+- карточки permission-aware: недоступные роли не получают raw customer/money/advertising facts; partial availability отображается понятным объяснением, а backend deny остаётся обязательным;
+- today boundaries считаются в canonical business timezone; деньги остаются currency-safe и не суммируются через разные/неподтверждённые валюты;
+- page load/read-only refresh не создаёт side effects, approvals, spend, outbound messages или durable tasks; mutation CTA только маршрутизирует в уже существующий canonical use-case/approval boundary;
+- Home/Today API возвращает versioned/bounded payload без provider secrets, raw credentials и инфраструктурных деталей; ошибки отдельного optional source не раскрывают чужие данные и не превращают unavailable signal в ноль/успех;
+- mobile UI объясняет человеческим языком «что произошло», «почему это важно» и «что нажать», сохраняя быстрый Telegram bot action surface;
+- regressions покрывают owner/admin/manager/support/content/marketer/analyst visibility, cross-tenant forged business, stale/revoked membership, business-local day boundary, empty day, partial-source failure, deterministic action order, money/currency safety, no mutation on GET/refresh и deep-link authorization;
+- production deploy выполняется только после green protected merge и отдельной команды владельца.
 
 Единый шаблон для важных автоматических действий:
 
@@ -1872,7 +1901,8 @@ Duplicate tap, retry, worker restart или uncertain provider response не д�
 | M6-006 Versioned Capability Parity Matrix + Regression Guard | DONE | PR #280 squash-merge `8ffa7699c399aa613e64fffcba2448182e0542fe`; exact head `2ef607e976046a1833d7bf31fa58714776c66abb`; 17/17 workflows + Independent AI Review green; executable matrix = 17 families / 20 capabilities / 19 proven hard-ratcheted / 1 explicit missing; frozen pinned evidence = 57 exact blobs; canonical regression + coverage `82.23% / 73.99%` green; no production deploy |
 | M6-007 Audited Duplicate Account Consolidation | DONE | PR #282 squash-merge `59029646142f96e217778c7a803464766390082e`; exact head `6e269af891f0c3ec8375d83e0671dff85de83552`; 17/17 workflows green; PostgreSQL consolidation concurrency green; parity = 20/20 proven, missing=0; coverage locked at 82.38% / 74.02%; #263 closed at merge |
 | M6-008 Repository Merge Governance Enforcement | DONE | GitHub `main` protected for everyone; strict 11-context required-check set; direct push negative probe rejected with `GH006`; force/delete disabled; PR #285 exact head `e3aa3d0f87261d4436cc824d31da8e3933a1e5d4` passed 17/17 workflows and merged through active protection as `3f768752a75fef95b990d17e08f70db59cddf021`; no production runtime/data change |
-| M7-001 Authenticated Business Cockpit Shell + Server-Authorized Navigation | NEXT | Build the first Mini App cockpit shell on the existing canonical backend: verified Telegram initData, server-derived business scope/RBAC, mobile-first role-aware navigation and help text; no duplicate frontend business logic or second API authority |
+| M7-001 Authenticated Business Cockpit Shell + Server-Authorized Navigation | DONE | PR #287 final head `2be2d78c5e88fa6526bd45a51896781603af78d3`, squash-merge `7e01f20ba1c57bd1f4475378eb68727e70fc56b9`; 17/17 workflows green; coverage `82.42% / 74.07%`; exact-SHA full-runtime production deploy `deploy-20260903T201326Z.json` with encrypted backup, restart=0, 20s stability and live cockpit HTTPS/auth acceptance |
+| M7-002 Home / Today Cockpit Projection | NEXT | Build the first content screen by composing existing canonical action queue, sales/handoffs, bookings, customer activity, money/outcomes and approval signals under live role checks; no home-store, hidden score, frontend authorization or side effects on read |
 
 ---
 
