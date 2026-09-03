@@ -15,6 +15,14 @@
         reverse_proxy {$CLIENTPLATFORM_INGRESS_UPSTREAM:127.0.0.1:8181}
     }
 
+    # The authenticated Telegram Mini App is an application HTTP surface, not media.
+    # Keep it ahead of the broad /clientplatform/* media matcher. Tenant and role
+    # authorization still happen server-side on every context bootstrap.
+    @clientplatform_cockpit path /clientplatform/cockpit /clientplatform/cockpit/*
+    handle @clientplatform_cockpit {
+        reverse_proxy {$CLIENTPLATFORM_INGRESS_UPSTREAM:127.0.0.1:8181}
+    }
+
     @ad_oauth path /oauth/yandex-direct/callback
     handle @ad_oauth {
         reverse_proxy {$CLIENTPLATFORM_INGRESS_UPSTREAM:127.0.0.1:8181}
