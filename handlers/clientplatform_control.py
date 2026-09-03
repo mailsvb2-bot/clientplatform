@@ -11,6 +11,7 @@ from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
+    WebAppInfo,
 )
 
 from clientplatform.application.activity import (
@@ -78,6 +79,7 @@ from clientplatform.domain.booking_calendar import (
 from clientplatform.domain.bookings import BookingError, BookingSlotStatus, BookingSlotView
 from clientplatform.domain.programs import ContentKind, ProgramError
 from clientplatform.domain.tenancy import TenancyError
+from clientplatform.runtime.cockpit_links import cockpit_web_app_url
 from clientplatform.runtime.control_bot import control_bot_enabled
 from config.settings import settings
 from services.accounts.identity import resolve_account_for_identity
@@ -309,7 +311,17 @@ def _dashboard_keyboard(business_id: str, capabilities: list[object]) -> InlineK
             [("Изменить деятельность", f"cp:editact:{token}")],
         ]
     )
-    return _keyboard(rows)
+    markup = _keyboard(rows)
+    cockpit_url = cockpit_web_app_url()
+    if cockpit_url is None:
+        return markup
+    cockpit_button = InlineKeyboardButton(
+        text="🏠 Открыть кабинет",
+        web_app=WebAppInfo(url=cockpit_url),
+    )
+    return InlineKeyboardMarkup(
+        inline_keyboard=[*markup.inline_keyboard, [cockpit_button]]
+    )
 
 
 async def _actor(user_id: int, business_id: str):

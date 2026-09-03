@@ -130,6 +130,7 @@ def _patch_runtime_surface(
     vk_enabled: bool = False,
     ingress: bool = True,
     gateway: bool = False,
+    cockpit: bool = False,
 ) -> None:
     _reset_fakes()
     monkeypatch.setattr(messenger_webhooks.web, "Application", FakeApplication)
@@ -156,6 +157,7 @@ def _patch_runtime_surface(
         lambda: vk_enabled,
     )
     monkeypatch.setattr(messenger_webhooks, "http_ingress_enabled", lambda: ingress)
+    monkeypatch.setattr(messenger_webhooks, "cockpit_http_enabled", lambda: cockpit)
     monkeypatch.setattr(
         messenger_webhooks,
         "bot_gateway_runtime_config",
@@ -400,6 +402,29 @@ async def test_start_runtime_returns_none_when_every_ingress_is_disabled(
     _patch_runtime_surface(monkeypatch, ingress=False, gateway=False)
     assert await messenger_webhooks.start_messenger_webhook_runtime() is None
     assert FakeApplication.instances == []
+
+
+@pytest.mark.asyncio
+async def test_cockpit_can_start_first_party_http_runtime_without_other_ingress(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_runtime_surface(monkeypatch, ingress=False, gateway=False, cockpit=True)
+    monkeypatch.setattr(messenger_webhooks, "_omnichannel_ingress_enabled", lambda: False)
+    monkeypatch.setattr(messenger_webhooks, "_acquisition_ingress_enabled", lambda: False)
+    monkeypatch.setattr(messenger_webhooks, "external_product_ingress_enabled", lambda: False)
+    monkeypatch.setattr(messenger_webhooks, "ad_oauth_http_enabled", lambda: False)
+    monkeypatch.setattr(messenger_webhooks, "_ad_publication_worker_enabled", lambda: False)
+
+    runtime = await messenger_webhooks.start_messenger_webhook_runtime()
+
+    assert runtime is not None
+    routes = {
+        (method, path)
+        for method, path, _handler in FakeApplication.instances[-1].router.routes
+    }
+    assert ("GET", "/clientplatform/cockpit") in routes
+    assert ("POST", "/clientplatform/cockpit/context") in routes
+    await runtime.stop()
 
 
 @pytest.mark.asyncio

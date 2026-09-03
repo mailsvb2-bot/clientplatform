@@ -20,6 +20,10 @@ from clientplatform.application.promotions import parse_promotion_start_payload
 from clientplatform.domain.promotions import PromotionError
 from clientplatform.runtime.ad_publication_worker import AdPublicationWorker
 from clientplatform.runtime.bot_gateway import bot_gateway_runtime_config
+from clientplatform.runtime.cockpit_http import (
+    cockpit_http_enabled,
+    register_cockpit_routes,
+)
 from clientplatform.runtime.external_product_http import (
     external_product_event_webhook,
     external_product_ingress_enabled,
@@ -519,6 +523,7 @@ async def start_messenger_webhook_runtime(
     omnichannel_enabled = _omnichannel_ingress_enabled()
     external_product_enabled = external_product_ingress_enabled()
     acquisition_enabled = _acquisition_ingress_enabled()
+    cockpit_enabled = cockpit_http_enabled()
     ad_oauth_enabled = ad_oauth_http_enabled()
     ad_worker_enabled = _ad_publication_worker_enabled()
     gateway_config = bot_gateway_runtime_config()
@@ -531,6 +536,7 @@ async def start_messenger_webhook_runtime(
         or omnichannel_enabled
         or external_product_enabled
         or acquisition_enabled
+        or cockpit_enabled
     )
     if not ingress_enabled:
         return None
@@ -545,6 +551,8 @@ async def start_messenger_webhook_runtime(
     # HTTP ingress runtime exists, even if canonical tenant VK/MAX ingress is
     # intentionally disabled. Each redirect still checks provider readiness.
     _register_clientplatform_owner_entry_routes(app)
+    if cockpit_enabled:
+        register_cockpit_routes(app)
 
     if privacy_export_enabled:
         _register_privacy_export_routes(app)
@@ -617,7 +625,7 @@ async def start_messenger_webhook_runtime(
 
         log.info(
             "HTTP ingress started on %s:%s privacy_export=%s "
-            "max=%s vk=%s omnichannel=%s external_product=%s acquisition=%s "
+            "max=%s vk=%s omnichannel=%s external_product=%s acquisition=%s cockpit=%s "
             "durable_delivery=%s managed_bot_polling=%s ad_oauth=%s "
             "ad_publication_worker=%s max_webhook_reconciliation=%s",
             host,
@@ -628,6 +636,7 @@ async def start_messenger_webhook_runtime(
             omnichannel_enabled,
             external_product_enabled,
             acquisition_enabled,
+            cockpit_enabled,
             delivery_worker_started,
             gateway_started,
             ad_oauth_enabled,
