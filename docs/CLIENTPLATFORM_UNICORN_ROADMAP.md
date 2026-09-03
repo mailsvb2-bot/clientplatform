@@ -1145,22 +1145,36 @@ Canonical support-case lifecycle позволяет tenant явно создат
 - Claim case не создаёт membership или synthetic `TenantContext`. Business inspection требует отдельную M6-002 support session, выдаваемую для exact case/business в той же canonical DB transaction при lock exact claimed case.
 - Production deploy выполнен на exact merge SHA `5cc038e7b2a6a617e2a07ecfb223d580f4e48ec0`: encrypted backup `/var/backups/clientplatform/postgres/clientplatform-20260902T200530Z.dump.age`, deploy evidence `/var/lib/clientplatform/deploy-evidence/deploy-20260902T200829Z.json`, `CLIENTPLATFORM_UPDATE_STABILITY_OK:20s`, все production containers `running` с `restart_count=0`, internal `/healthz` + `/readyz` = `200`, внешний `https://app.clientplatform.ru/` = `200 ClientPlatform`, публичные health/readiness/webhook остаются `404`.
 
-### M6-004 — `NEXT` — Bounded Platform Directory Search + Access Review
+### M6-004 — `DONE` — Bounded Platform Directory Search + Access Review
 
-Следующий и единственный default slice по #263 закрывает первую оставшуюся часть family `platform search / users / roles / permissions`: platform operator получает безопасную служебную навигацию к **конкретному** business/account без глобального tenant role и без возможности выгрузить всю платформу.
+Platform operator получил query-bound служебную навигацию к конкретному business/account без глобального tenant role, bulk tenant browsing или права читать business data без отдельной M6-002 support session.
 
-Минимальный DONE contract M6-004:
+### Evidence
 
-- доступ только через отдельную fail-closed `is_platform_admin` границу **до DB read**; tenant OWNER/ADMIN/SUPPORT роли не дают directory access;
-- поиск всегда query-bound: exact business UUID, exact platform user id и bounded normalized business-name search; пустой запрос/`*`/unbounded list запрещены;
-- hard result cap и deterministic ordering; никаких bulk export, cursor для полного обхода всех tenants или фонового dump;
-- результат содержит только минимальный platform-support metadata: business id/name/status/created-at и минимальные account/membership references, необходимые для идентификации; customer records, messages, payments, provider secrets и business-domain data не раскрываются;
-- каждый directory lookup append-only audit-логируется с platform operator, query kind/fingerprint, result count и timestamp; raw secret/credential-like query в audit не сохраняется;
-- lookup сам по себе не создаёт membership, не создаёт synthetic `TenantContext`, не меняет roles/permissions и **не разрешает business inspection**; для чтения business data по-прежнему требуется exact M6-002 support session с reason/ticket;
-- repository/application layer переиспользует canonical tenancy/identity owners и ту же canonical DB; не создавать второй users/business directory store;
-- hidden operator surface не добавляется в публичное user menu; presentation не должна становиться отдельным search brain;
-- privacy/static-security manifests и SQLite/PostgreSQL regressions доказывают deny-before-DB, boundedness, deterministic lookup, audit, no-membership/no-mutation и cross-tenant fail-closed;
-- в этом slice не строить billing overrides, customer browsing, arbitrary SQL/admin console, provider writes, impersonation, role mutation или autonomous support actions.
+- PR #273 (`M6-004: add bounded platform directory search`) merged в `main` как `6b21f928272e97db5b8b79bb3adc37db62bf5798`; exact final PR head `33f9679907be60c26f7474bcf709367bef456f84`.
+- На exact final head все 16 workflow завершились `success`; repository-side `AI Review / gate` green. External L3 review на этом запуске был отключён trusted repository policy и не выдаётся за выполненный.
+- Два review finding исправлены до merge: active memberships приоритизируются перед revoked history с явным `truncated`, а business-name lookup использует одинаковый case-normalized contract в SQLite и PostgreSQL. Оба review thread resolved.
+- Full CI: `3138 passed, 7 skipped`; coverage ratchet сохранён без ослабления на `82.23%` combined / `73.99%` branch. PostgreSQL platform-directory smoke, static security и regression contour green.
+- Hidden `/platformdirectory business|user|name` использует canonical tenancy/identity owners, не создаёт membership/synthetic `TenantContext`, не меняет roles и не раскрывает customer/payment/provider data; lookup audit append-only и query-bound.
+- Production deploy выполнен на exact merge SHA `6b21f928272e97db5b8b79bb3adc37db62bf5798`: encrypted backup `/var/backups/clientplatform/postgres/clientplatform-20260903T052202Z.dump.age`, deploy evidence `/var/lib/clientplatform/deploy-evidence/deploy-20260903T052535Z.json`, `CLIENTPLATFORM_UPDATE_STABILITY_OK:20s`, restart count `0`, internal `/healthz` + `/readyz` = `200`, внешний root = `ClientPlatform`, публичные health/readiness/Telegram webhook = `404`.
+- Первый deploy attempt fail-closed остановился до production mutation из-за disk-capacity guard. После удаления только воспроизводимых build/package caches и obsolete ClientPlatform image history повторный canonical deploy прошёл без обхода guard; current runtime images, последняя rollback-пара, production volumes и encrypted backups сохранены. После post-deploy build-cache/image-retention cleanup фактическое использование root filesystem `74.331%`, ниже hard gate.
+
+### M6-005 — `NEXT` — Disk-safe Production Deploy Retention
+
+Следующий и единственный default slice закрывает обнаруженный production readiness gap: canonical deploy не должен сам оставлять disposable build artifacts так, чтобы следующий deploy на той же исправной baseline-машине блокировался собственным `75% / 7 GiB` disk guard.
+
+Минимальный DONE contract M6-005:
+
+- не снижать и не обходить существующие pre-deploy disk thresholds; исправлять retention, а не guard;
+- production deploy после использования удаляет только exact transient operations/backup image, если он не используется running container; encrypted DB backup file остаётся нетронутым;
+- build-cache retention становится pressure-aware: обычный bounded cache допускается только при достаточном headroom, а при нарушении hard disk contract автоматически выполняется полный prune **только build cache** и повторная оценка capacity;
+- current app/visual images и один rollback для каждого сохраняются; rollback contract не ослабляется ради места;
+- `docker volume prune`, удаление production named volumes, PostgreSQL data, media/state/log volumes, encrypted backups или чужих project artifacts запрещены;
+- post-deploy evidence явно фиксирует retention mode, удалённый transient image, disk до/после cleanup и итоговую capacity readiness;
+- cleanup idempotent и fail-safe: отсутствие transient image не является ошибкой, running image никогда не удаляется;
+- regressions доказывают normal-headroom и pressure paths, сохранение rollback tags, отсутствие volume-prune команд и backward compatibility существующего deploy evidence;
+- exact-SHA production acceptance после merge должна подтвердить encrypted backup, health/readiness, public isolation, restart=0, 20s stability и disk headroom после встроенного cleanup;
+- в этом slice не менять business/domain функциональность, tenant/RBAC, messenger runtime или provider behavior.
 
 Единый шаблон для важных автоматических действий:
 
@@ -1767,7 +1781,8 @@ Duplicate tap, retry, worker restart или uncertain provider response не д�
 | M6-001 Platform Operator Read-Only Snapshot | DONE | PR #264 merge `6acdcb62f6b644592aa23301ad1763a747b3b712`; exact head `c2f32fa2914245c732a8bc06d32d334bcb1454fd`; all final-head PR checks green; review P1 resolved with hidden `/platformstatus` + deny/allow surface regressions; full CI `3070 passed, 7 skipped`; coverage locked at 81.99% / 73.64%; exact-SHA production deploy `deploy-20260902T151537Z.json` with encrypted backup, health/readiness, HTTPS/polling-only contract, restart=0 and 20s stability |
 | M6-002 Audited Support Access Session | DONE | PR #266 merge `ddc0bd67ad9e7be549e6c5a840af36f8e5f2a402`; exact head `2e56a1498526b76526a8516cdf5badba3e88f1ae`; all 16 workflows success; GitHub coverage `82.08%` within `82.09%` baseline tolerance and branch `73.73% / 73.73%`; local full suite `3088 passed, 7 skipped`; isolated PostgreSQL 16 replay/read/revoke smoke green; no membership injection or synthetic TenantContext; production deploy not part of slice |
 | M6-003 Support Case Intake + Operator Queue | DONE | PR #268 merge `5cc038e7b2a6a617e2a07ecfb223d580f4e48ec0`; exact head `07504bf975fcc23ecdf65c793aa9b040d648dc7f`; all 16 workflows + AI Review green; review P1s resolved; coverage locked at 82.19% / 73.93%; exact-SHA production deploy `deploy-20260902T200829Z.json` with encrypted backup, health/readiness, restart=0 and 20s stability |
-| M6-004 Bounded Platform Directory Search + Access Review | NEXT | Query-bound, audited, hard-capped platform operator lookup using canonical tenancy/identity owners; minimal metadata only; no bulk tenant browsing, membership/role mutation, synthetic TenantContext or business inspection without M6-002 support session |
+| M6-004 Bounded Platform Directory Search + Access Review | DONE | PR #273 merge `6b21f928272e97db5b8b79bb3adc37db62bf5798`; exact head `33f9679907be60c26f7474bcf709367bef456f84`; all 16 workflows green; 2 review findings resolved; full CI `3138 passed, 7 skipped`; coverage `82.23% / 73.99%`; exact-SHA production deploy `deploy-20260903T052535Z.json` with encrypted backup, health/readiness, restart=0 and 20s stability |
+| M6-005 Disk-safe Production Deploy Retention | NEXT | Preserve disk guard and rollback while removing only transient deploy image/build cache under pressure; no volume/data/backups pruning; record post-cleanup disk readiness in deploy evidence |
 
 ---
 
