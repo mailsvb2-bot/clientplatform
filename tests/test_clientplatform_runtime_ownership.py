@@ -118,7 +118,7 @@ class ClientPlatformRuntimeOwnershipTests(unittest.TestCase):
             "backup_reference = str(_local_backup(target_sha))", deploy_start
         )
         build = source.index(
-            '_run([*compose, "build", "app", "backup"])', deploy_start
+            '_run([*compose, "build", "app"])', deploy_start
         )
         rollout = source.index(
             '_run([*compose, "up", "-d", "--force-recreate", "app", "caddy"])',

@@ -79,7 +79,7 @@ def test_canonical_deploy_orders_gateway_before_app_and_versions_release() -> No
     deploy_body = source.split("\ndef deploy(\n", 1)[1].split("\ndef main()", 1)[0]
 
     gateway_build = deploy_body.index('"build", "visual-gateway"')
-    app_build = deploy_body.index('"build", "app", "backup"', gateway_build)
+    app_build = deploy_body.index('"build", "app"', gateway_build)
     gateway_up = deploy_body.index('"--force-recreate", "visual-gateway"', app_build)
     gateway_ready = deploy_body.index("_wait_for_visual_gateway(timeout_seconds)", gateway_up)
     app_up = deploy_body.index('"--force-recreate", "app", "caddy"', gateway_ready)
