@@ -105,6 +105,20 @@ class CapabilityParityManifestTests(unittest.TestCase):
             family["capabilities"] = [item for item in family["capabilities"] if item["id"] != target]
         self.assert_contract_error(manifest, "weakens the hard proven-capability ratchet")
 
+    def test_newly_proven_capability_is_also_hard_ratcheted(self) -> None:
+        manifest = _manifest()
+        capability = _capability(manifest, "analytics.business_platform_observability")
+        capability["status"] = "missing"
+        capability.pop("clientplatform_owner", None)
+        capability.pop("regression_evidence", None)
+        capability.pop("rationale", None)
+        capability["gap"] = {
+            "decision": "required_slice",
+            "priority": "high",
+            "reason": "synthetic regression",
+        }
+        self.assert_contract_error(manifest, "proven capability cannot be downgraded")
+
     def test_proven_capability_cannot_be_downgraded_to_missing(self) -> None:
         manifest = _manifest()
         capability = _capability(manifest, "platform.directory_access_review")

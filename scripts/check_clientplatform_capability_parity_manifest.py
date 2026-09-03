@@ -51,12 +51,25 @@ SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 # Removing them from both the manifest and its own metadata must still fail CI.
 PROVEN_CAPABILITY_RATCHET = frozenset(
     {
-        "platform.directory_access_review",
-        "platform.roles_permissions",
-        "support.audited_access_session",
-        "support.case_queue",
-        "release.deploy_rollback_forensics",
-        "messenger.canonical_navigation_parity",
+        'platform.directory_access_review',
+        'platform.roles_permissions',
+        'messaging.broadcast_publication_cohorts',
+        'support.audited_access_session',
+        'support.case_queue',
+        'analytics.business_platform_observability',
+        'runtime.settings_diagnostics',
+        'security.audit_access_review',
+        'release.deploy_rollback_forensics',
+        'billing.subscription_payment_outcomes',
+        'commerce.offerings_program_delivery',
+        'growth.goal_first_autopilot_nba',
+        'ads.connection_spend_attribution',
+        'visual.gateway_assets_review_jobs',
+        'voice.media_delivery_metrics',
+        'content.production_workspace',
+        'recovery.encrypted_backup_dr_evidence',
+        'lifecycle.referral_retention_cohorts',
+        'messenger.canonical_navigation_parity',
     }
 )
 
