@@ -70,9 +70,12 @@ def verify_telegram_webapp_init_data(
     if not hmac.compare_digest(supplied_hash.lower(), expected_hash):
         raise TelegramWebAppAuthError("initData signature mismatch")
 
+    raw_auth_date = values.get("auth_date")
+    if raw_auth_date is None:
+        raise TelegramWebAppAuthError("invalid initData auth_date")
     try:
-        auth_date = int(values["auth_date"])
-    except (KeyError, TypeError, ValueError) as exc:
+        auth_date = int(raw_auth_date)
+    except ValueError as exc:
         raise TelegramWebAppAuthError("invalid initData auth_date") from exc
     current = int(time.time() if now is None else now)
     if auth_date > current + int(future_skew_seconds):
@@ -80,14 +83,19 @@ def verify_telegram_webapp_init_data(
     if current - auth_date > int(max_age_seconds):
         raise TelegramWebAppAuthError("initData has expired")
 
+    raw_user = values.get("user")
+    if raw_user is None:
+        raise TelegramWebAppAuthError("invalid initData user")
     try:
-        user = json.loads(values["user"])
-    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        user = json.loads(raw_user)
+    except json.JSONDecodeError as exc:
         raise TelegramWebAppAuthError("invalid initData user") from exc
     if not isinstance(user, dict):
         raise TelegramWebAppAuthError("invalid initData user")
     user_id = user.get("id")
     if isinstance(user_id, bool):
+        raise TelegramWebAppAuthError("invalid Telegram user id")
+    if user_id is None:
         raise TelegramWebAppAuthError("invalid Telegram user id")
     try:
         normalized_user_id = int(user_id)
