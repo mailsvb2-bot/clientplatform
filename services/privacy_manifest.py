@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 Disposition = Literal["erase", "retain", "anonymize"]
-MANIFEST_VERSION = "2026-09-01.v2-clientplatform-retired-surfaces"
+MANIFEST_VERSION = "2026-09-03.v3-account-consolidation"
 
 # Global user-owned tables are discovered independently from the currently active
 # policies. This keeps privacy validation fail-closed when a historical or new
@@ -18,6 +18,11 @@ OWNERSHIP_COLUMN_CANDIDATES = frozenset(
         "primary_user_id",
         "canonical_user_id",
         "consumed_account_id",
+        "merged_into_account_id",
+        "source_account_id",
+        "target_account_id",
+        "source_user_id",
+        "target_user_id",
         "buyer_user_id",
         "recipient_user_id",
         "payment_user_id",
@@ -170,9 +175,9 @@ _POLICIES = (
     ),
     _policy(
         "accounts",
-        ("account_id", "primary_user_id"),
+        ("account_id", "primary_user_id", "merged_into_account_id"),
         "retain",
-        "canonical cross-messenger account identity",
+        "canonical cross-messenger account identity and merge alias provenance",
         required=True,
     ),
     _policy(
@@ -181,6 +186,26 @@ _POLICIES = (
         "anonymize",
         "verified external routing identity retained for account continuity",
         anonymize=("username", "display_name"),
+        required=True,
+    ),
+    _policy(
+        "account_consolidation_operations",
+        (
+            "source_account_id",
+            "target_account_id",
+            "source_user_id",
+            "target_user_id",
+            "operator_user_id",
+        ),
+        "retain",
+        "immutable high-trust duplicate-account consolidation evidence",
+        required=True,
+    ),
+    _policy(
+        "account_consolidation_audit_events",
+        ("source_user_id", "target_user_id", "operator_user_id"),
+        "retain",
+        "append-only account consolidation audit evidence",
         required=True,
     ),
     _policy("user_channel_preferences", ("user_id",), "erase", "rebuildable channel preference"),

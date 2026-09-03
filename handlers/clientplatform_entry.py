@@ -706,6 +706,115 @@ async def clientplatform_platform_directory_command(message: Message) -> None:
         await message.answer(chunk)
 
 
+def _account_merge_usage() -> str:
+    return (
+        "Использование:\n"
+        "/accountmerge plan <source_account_id> <target_account_id>\n"
+        "/accountmerge apply <source_account_id> <target_account_id> "
+        "<plan_sha256> <confirmation_code> <operation_key> <причина>"
+    )
+
+
+def _account_merge_plan_chunks(plan: Any) -> list[str]:
+    state = "READY" if plan.can_apply else "BLOCKED"
+    expansion = [
+        f"• business={item.business_id} · role={item.role} · status={item.status}"
+        for item in plan.access_expansions
+    ]
+    blockers = [f"• {item}" for item in plan.blockers]
+    dependencies = [
+        f"• {item.table}.{item.column} · {item.policy} · source={item.source_rows} · target={item.target_rows}"
+        for item in plan.dependencies
+        if item.source_rows or item.target_rows
+    ]
+    lines = [
+        f"ClientPlatform · account consolidation · {state}",
+        f"Source: account={plan.source_account_id} · user={plan.source_user_id} · channels={','.join(plan.source_platforms) or '-'}",
+        f"Target: account={plan.target_account_id} · user={plan.target_user_id} · channels={','.join(plan.target_platforms) or '-'}",
+        f"Plan SHA-256: {plan.plan_fingerprint}",
+    ]
+    if plan.can_apply:
+        lines.append(f"Confirmation: {plan.confirmation_code}")
+    if expansion:
+        lines.extend(["", "Tenant access expansion (явно):", *expansion])
+    if blockers:
+        lines.extend(["", "Blockers:", *blockers])
+    if dependencies:
+        lines.extend(["", "Durable identity dependencies:", *dependencies])
+
+    chunks: list[str] = []
+    current = ""
+    for line in lines:
+        candidate = line if not current else current + "\n" + line
+        if len(candidate) <= _TELEGRAM_SAFE_TEXT_LIMIT:
+            current = candidate
+            continue
+        chunks.append(current)
+        current = "ClientPlatform · account consolidation · продолжение\n" + line
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+@router.message(Command("accountmerge"))
+async def clientplatform_account_merge_command(message: Message) -> None:
+    """Hidden high-trust duplicate-account dry-run/apply surface."""
+
+    account_merge = importlib.import_module("services.accounts.consolidation")
+    user_id = control._user_id(message)
+    raw = str(getattr(message, "text", "") or "").strip()
+    parts = raw.split(maxsplit=7)
+    if len(parts) < 2:
+        await message.answer(_account_merge_usage())
+        return
+    action = parts[1].casefold()
+    try:
+        if action == "plan":
+            if len(parts) != 4:
+                await message.answer(_account_merge_usage())
+                return
+            plan = await asyncio.to_thread(
+                account_merge.plan_account_consolidation,
+                user_id,
+                source_account_id=int(parts[2]),
+                target_account_id=int(parts[3]),
+            )
+            for chunk in _account_merge_plan_chunks(plan):
+                await message.answer(chunk)
+            return
+        if action == "apply":
+            if len(parts) != 8:
+                await message.answer(_account_merge_usage())
+                return
+            result = await asyncio.to_thread(
+                account_merge.apply_account_consolidation,
+                user_id,
+                source_account_id=int(parts[2]),
+                target_account_id=int(parts[3]),
+                expected_plan_fingerprint=parts[4],
+                confirmation_code=parts[5],
+                idempotency_key=parts[6],
+                reason=parts[7],
+            )
+            replay = " · idempotent replay" if result.idempotent_replay else ""
+            await message.answer(
+                "Account consolidation применён.\n"
+                f"Operation: {result.operation_id}{replay}\n"
+                f"Source → Target: {result.source_account_id} → {result.target_account_id}\n"
+                f"Plan: {result.plan_fingerprint}"
+            )
+            return
+        await message.answer(_account_merge_usage())
+    except account_merge.AccountConsolidationPermissionDenied:
+        await message.answer("Доступ к account consolidation недоступен.")
+    except account_merge.AccountConsolidationStalePlan:
+        await message.answer("Dry-run устарел: состояние изменилось. Выполните /accountmerge plan заново.")
+    except account_merge.AccountConsolidationConflict as exc:
+        await message.answer(f"Account consolidation заблокирован: {exc}")
+    except (account_merge.AccountConsolidationUnavailable, ValueError):
+        await message.answer("Account consolidation недоступен с указанными параметрами.")
+
+
 @router.message(Command("cancel"))
 async def clientplatform_cancel_command(message: Message, state: FSMContext) -> None:
     current_state = await state.get_state()

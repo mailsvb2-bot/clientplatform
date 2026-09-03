@@ -53,6 +53,7 @@ PROVEN_CAPABILITY_RATCHET = frozenset(
     {
         'platform.directory_access_review',
         'platform.roles_permissions',
+        'platform.account_consolidation',
         'messaging.broadcast_publication_cohorts',
         'support.audited_access_session',
         'support.case_queue',
