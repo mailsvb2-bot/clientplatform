@@ -150,7 +150,7 @@ async def test_control_filter(monkeypatch: pytest.MonkeyPatch) -> None:
     assert await handlers.ClientPlatformControlEnabled()(object()) is False
 
 
-def test_keyboard_builders_and_content_detection() -> None:
+def test_keyboard_builders_and_content_detection(monkeypatch: pytest.MonkeyPatch) -> None:
     business_id = str(uuid4())
     access = business_access(business_id, "Моя практика")
     choice = handlers._business_choice_keyboard([access])
@@ -173,6 +173,11 @@ def test_keyboard_builders_and_content_detection() -> None:
     assert labels[2].startswith("✅")
     assert labels[-1] == "Готово"
 
+    monkeypatch.setattr(
+        handlers,
+        "cockpit_web_app_url",
+        lambda: "https://app.example.test/clientplatform/cockpit",
+    )
     dashboard = handlers._dashboard_keyboard(
         business_id,
         [
@@ -185,6 +190,16 @@ def test_keyboard_builders_and_content_detection() -> None:
     assert "Services" not in flat
     assert "Клиенты" in flat
     assert "Результаты" in flat
+    assert "🏠 Открыть кабинет" in flat
+    cockpit_button = next(
+        button
+        for row in dashboard.inline_keyboard
+        for button in row
+        if button.text == "🏠 Открыть кабинет"
+    )
+    assert cockpit_button.callback_data is None
+    assert cockpit_button.web_app is not None
+    assert cockpit_button.web_app.url == "https://app.example.test/clientplatform/cockpit"
 
     media = FakeMessage(text="  текст урока  ")
     media.audio = SimpleNamespace(file_id="audio-id")

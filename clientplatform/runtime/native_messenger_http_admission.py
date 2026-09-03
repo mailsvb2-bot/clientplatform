@@ -13,12 +13,15 @@ _WEBHOOK_PREFIXES = (
 )
 _SETUP_PREFIX = "/clientplatform/connect/"
 _EXTERNAL_PRODUCT_PREFIX = "/clientplatform/external-products/"
+_COCKPIT_CONTEXT_PATH = "/clientplatform/cockpit/context"
 _webhook_slots: asyncio.Semaphore | None = None
 _webhook_slots_size = 0
 _setup_slots: asyncio.Semaphore | None = None
 _setup_slots_size = 0
 _external_product_slots: asyncio.Semaphore | None = None
 _external_product_slots_size = 0
+_cockpit_slots: asyncio.Semaphore | None = None
+_cockpit_slots_size = 0
 
 
 def _positive_int(
@@ -54,6 +57,15 @@ def native_setup_body_limit() -> int:
     )
 
 
+def cockpit_body_limit() -> int:
+    return _positive_int(
+        "CLIENTPLATFORM_COCKPIT_MAX_BODY_BYTES",
+        16 * 1024,
+        minimum=4096,
+        maximum=64 * 1024,
+    )
+
+
 def external_product_body_limit() -> int:
     return _positive_int(
         "CLIENTPLATFORM_EXTERNAL_PRODUCT_MAX_BODY_BYTES",
@@ -70,6 +82,8 @@ def _request_kind(request: web.Request) -> str | None:
         return "webhook"
     if request.path.startswith(_SETUP_PREFIX):
         return "setup"
+    if request.path == _COCKPIT_CONTEXT_PATH:
+        return "cockpit"
     if request.path.startswith(_EXTERNAL_PRODUCT_PREFIX):
         return "external_product"
     return None
@@ -79,6 +93,7 @@ def _slots(kind: str) -> asyncio.Semaphore:
     global _webhook_slots, _webhook_slots_size
     global _setup_slots, _setup_slots_size
     global _external_product_slots, _external_product_slots_size
+    global _cockpit_slots, _cockpit_slots_size
 
     if kind == "webhook":
         size = _positive_int(
@@ -91,6 +106,18 @@ def _slots(kind: str) -> asyncio.Semaphore:
             _webhook_slots = asyncio.Semaphore(size)
             _webhook_slots_size = size
         return _webhook_slots
+
+    if kind == "cockpit":
+        size = _positive_int(
+            "CLIENTPLATFORM_COCKPIT_MAX_INFLIGHT",
+            16,
+            minimum=1,
+            maximum=128,
+        )
+        if _cockpit_slots is None or _cockpit_slots_size != size:
+            _cockpit_slots = asyncio.Semaphore(size)
+            _cockpit_slots_size = size
+        return _cockpit_slots
 
     if kind == "external_product":
         size = _positive_int(
@@ -162,6 +189,8 @@ async def native_messenger_http_admission_middleware(
         body_limit = native_webhook_body_limit()
     elif kind == "external_product":
         body_limit = external_product_body_limit()
+    elif kind == "cockpit":
+        body_limit = cockpit_body_limit()
     else:
         body_limit = native_setup_body_limit()
     content_length = request.content_length
@@ -187,15 +216,19 @@ def reset_native_messenger_http_admission_state_for_tests() -> None:
     global _webhook_slots, _webhook_slots_size
     global _setup_slots, _setup_slots_size
     global _external_product_slots, _external_product_slots_size
+    global _cockpit_slots, _cockpit_slots_size
     _webhook_slots = None
     _webhook_slots_size = 0
     _setup_slots = None
     _setup_slots_size = 0
     _external_product_slots = None
     _external_product_slots_size = 0
+    _cockpit_slots = None
+    _cockpit_slots_size = 0
 
 
 __all__ = [
+    "cockpit_body_limit",
     "external_product_body_limit",
     "native_messenger_http_admission_middleware",
     "native_setup_body_limit",
