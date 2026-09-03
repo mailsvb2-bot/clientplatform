@@ -343,6 +343,166 @@ class ProductionEnvironmentPreparationTests(unittest.TestCase):
         self.assertEqual(result["app_rollbacks_retained_before_deploy"], 1)
         self.assertEqual(result["visual_rollbacks_retained_before_deploy"], 1)
 
+    def test_change_contract_allows_only_proven_host_only_diff(self) -> None:
+        previous = "a" * 40
+        target = "b" * 40
+        allowed = (
+            "docs/CLIENTPLATFORM_UNICORN_ROADMAP.md",
+            "scripts/clientplatform_production_deploy.py",
+            "scripts/critical_static_gate.py",
+            "tests/test_clientplatform_production_deploy_pipeline.py",
+        )
+        with (
+            mock.patch.object(
+                production_deploy,
+                "_latest_successful_deploy_sha",
+                return_value=previous,
+            ),
+            mock.patch.object(production_deploy, "_git_is_ancestor", return_value=True),
+            mock.patch.object(
+                production_deploy,
+                "_changed_files_between",
+                return_value=allowed,
+            ),
+        ):
+            result = production_deploy._deployment_change_contract(
+                target,
+                baseline_ready=True,
+            )
+
+        self.assertEqual(result["mode"], "host_only_noop")
+        self.assertEqual(result["previous_successful_deploy_sha"], previous)
+        self.assertEqual(result["changed_files"], list(allowed))
+
+    def test_change_contract_fails_closed_for_runtime_path_or_unproven_ancestry(self) -> None:
+        previous = "a" * 40
+        target = "b" * 40
+        with (
+            mock.patch.object(
+                production_deploy,
+                "_latest_successful_deploy_sha",
+                return_value=previous,
+            ),
+            mock.patch.object(production_deploy, "_git_is_ancestor", return_value=True),
+            mock.patch.object(
+                production_deploy,
+                "_changed_files_between",
+                return_value=("clientplatform/application/control.py",),
+            ),
+        ):
+            runtime = production_deploy._deployment_change_contract(
+                target,
+                baseline_ready=True,
+            )
+        self.assertEqual(runtime["mode"], "full_runtime")
+        self.assertEqual(runtime["reason"], "runtime_paths_changed")
+
+        with (
+            mock.patch.object(
+                production_deploy,
+                "_latest_successful_deploy_sha",
+                return_value=previous,
+            ),
+            mock.patch.object(production_deploy, "_git_is_ancestor", return_value=False),
+            mock.patch.object(production_deploy, "_changed_files_between") as changed,
+        ):
+            unrelated = production_deploy._deployment_change_contract(
+                target,
+                baseline_ready=True,
+            )
+        self.assertEqual(unrelated["mode"], "full_runtime")
+        self.assertEqual(unrelated["reason"], "previous_deploy_not_proven_ancestor")
+        changed.assert_not_called()
+
+    def test_git_ancestor_check_deepens_shallow_history_before_accepting(self) -> None:
+        previous = "a" * 40
+        target = "b" * 40
+        completed = __import__("subprocess").CompletedProcess
+        merge_results = iter([1, 0])
+
+        def run(command: list[str], **kwargs: object):
+            if command[:3] == ["git", "cat-file", "-e"]:
+                return completed(command, 0, "", "")
+            if command[:3] == ["git", "merge-base", "--is-ancestor"]:
+                return completed(command, next(merge_results), "", "")
+            if command[:3] == ["git", "rev-parse", "--is-shallow-repository"]:
+                return completed(command, 0, "true\n", "")
+            if command[:3] == ["git", "fetch", "--no-tags"]:
+                return completed(command, 0, "", "")
+            raise AssertionError(command)
+
+        with mock.patch.object(production_deploy, "_run", side_effect=run) as mocked:
+            self.assertTrue(production_deploy._git_is_ancestor(previous, target))
+        fetch_calls = [
+            call
+            for call in mocked.call_args_list
+            if call.args and call.args[0][:3] == ["git", "fetch", "--no-tags"]
+        ]
+        self.assertEqual(len(fetch_calls), 1)
+        self.assertIn("--deepen=64", fetch_calls[0].args[0])
+
+    def test_stale_project_cleanup_removes_only_nonrunning_owned_candidates(self) -> None:
+        running = "sha256:" + "1" * 64
+        dangling = "sha256:" + "2" * 64
+        visual_candidate = "sha256:" + "3" * 64
+        rollback = "sha256:" + "4" * 64
+        foreign = "sha256:" + "5" * 64
+        shared_tag = "sha256:" + "6" * 64
+        ids = "\n".join((running, dangling, visual_candidate, rollback, foreign, shared_tag)) + "\n"
+        completed = __import__("subprocess").CompletedProcess
+        removed_commands: list[list[str]] = []
+
+        def run(command: list[str], **kwargs: object):
+            if command[:4] == ["docker", "image", "ls", "--all"]:
+                return completed(command, 0, ids, "")
+            if command[:3] == ["docker", "image", "rm"]:
+                removed_commands.append(command)
+                return completed(command, 0, "", "")
+            raise AssertionError(command)
+
+        metadata = {
+            dangling: ({"com.docker.compose.project": "clientplatform-production", "com.docker.compose.service": "app"}, ()),
+            visual_candidate: (
+                {"com.docker.compose.project": "clientplatform-production", "com.docker.compose.service": "visual-gateway"},
+                (f"{production_deploy.VISUAL_GATEWAY_IMAGE}:release-candidate",),
+            ),
+            rollback: (
+                {"com.docker.compose.project": "clientplatform-production", "com.docker.compose.service": "app"},
+                (f"{production_deploy.APP_IMAGE}:rollback-proof",),
+            ),
+            foreign: ({"com.docker.compose.project": "another-project", "com.docker.compose.service": "app"}, ()),
+            shared_tag: (
+                {"com.docker.compose.project": "clientplatform-production", "com.docker.compose.service": "app"},
+                ("foreign-repository:shared",),
+            ),
+        }
+        with (
+            mock.patch.object(production_deploy, "_run", side_effect=run),
+            mock.patch.object(production_deploy, "_running_image_ids", return_value={running}),
+            mock.patch.object(
+                production_deploy,
+                "_image_metadata",
+                side_effect=lambda image_id: metadata.get(image_id),
+            ),
+        ):
+            result = production_deploy._cleanup_stale_project_images()
+
+        self.assertEqual(
+            removed_commands,
+            [
+                ["docker", "image", "rm", dangling],
+                [
+                    "docker",
+                    "image",
+                    "rm",
+                    f"{production_deploy.VISUAL_GATEWAY_IMAGE}:release-candidate",
+                ],
+            ],
+        )
+        self.assertEqual(result["removed_count"], 2)
+        self.assertEqual(result["foreign_skipped_count"], 1)
+        self.assertGreaterEqual(result["protected_count"], 2)
+
     def test_build_cache_retention_is_bounded(self) -> None:
         with mock.patch.object(production_deploy, "_run") as run:
             result = production_deploy._prune_build_cache()
@@ -840,7 +1000,8 @@ class ProductionEnvironmentPreparationTests(unittest.TestCase):
             build_index,
         )
         post_retention_index = source.index(
-            "post_deploy_retention = _post_deploy_retention(target_sha)"
+            "post_deploy_retention = _post_deploy_retention(target_sha)",
+            recreate_index,
         )
 
         self.assertLess(baseline_index, rollback_tag_index)
