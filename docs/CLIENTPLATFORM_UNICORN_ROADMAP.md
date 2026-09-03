@@ -1101,7 +1101,7 @@ owner who approved
 - Focused M5 suite после review fixes: `33 tests OK`; финальный full coverage regression: `4172 passed, 7 skipped, 33 warnings`; coverage ratchets `75.02%` combined / `66.29%` branch при locked baseline `75.02%` / `66.29%`.
 - PostgreSQL AutomationPolicy concurrency подтверждает restart-safe/idempotent request replay и approve-vs-reject race; stale policy, expiry, cross-tenant и conflicting decisions остаются fail-closed.
 - M5-002 не выполняет provider calls, autonomous scheduling, external execution или money movement; production deploy намеренно не выполнялся.
-- После M5-002 дальнейший scope был отдельно декомпозирован через issue #263; M6-001 и M6-002 ниже закрывают platform snapshot и audited one-business support access, а единственный текущий `NEXT` — M6-003.
+- После M5-002 дальнейший scope был отдельно декомпозирован через issue #263. Исторические M6-статусы ниже читаются по evidence каждого slice, а единственный актуальный `NEXT` определяется только текущей status/evidence секцией roadmap, чтобы старый текст не переопределял более позднее закрытие работ.
 
 ## 10.2.1. M6 — Platform parity и безопасный operator/support contour
 
@@ -1174,7 +1174,7 @@ Canonical production deploy теперь различает тяжёлый `full
 - Evidence: `runtime_rollout_mode=host_only_noop`, encrypted backup `/var/backups/clientplatform/postgres/clientplatform-20260903T115730Z.dump.age` (AGE header подтверждён в named backup volume), sales smoke `ok=true`, `disk_before_deploy=75.50%`, `disk_after_deploy=76.99%`, `capacity_ready=true` для host-only contract.
 - Все пять production container ID после deploy **точно совпали** с pre-deploy ID; app/visual/provider/PostgreSQL/Caddy restart count `0`. Internal `/healthz` и `/readyz` = `200`; внешний root = `200 ClientPlatform`; public health/readiness/Telegram webhook = `404`. Runtime не пересобирался и не перезапускался.
 
-### M6-006 — `NEXT` — Versioned Capability Parity Matrix + Regression Guard
+### M6-006 — `DONE` — Versioned Capability Parity Matrix + Regression Guard
 
 Следующий и единственный default slice превращает требование issue #263 о capability parity с закреплённым donor baseline в versioned executable contract, а не ручной список и не сравнение названий кнопок.
 
@@ -1190,6 +1190,36 @@ Canonical production deploy теперь различает тяжёлый `full
 - platform-operator и business-owner capabilities остаются разными уровнями; matrix не может легализовать global TenantContext/superuser или второй store/brain;
 - Telegram/VK/MAX parity оценивается как одно canonical application/domain поведение с adapter surfaces, а не как три независимых реализации;
 - после M6-006 merge следующий `NEXT` выбирается из первого подтверждённого `missing` operational/platform gap по risk/value, не из косметического меню.
+
+### Evidence
+
+- PR #280 (`M6-006: add executable capability parity contract`) squash-merged в `main` как `8ffa7699c399aa613e64fffcba2448182e0542fe`; exact final PR head `2ef607e976046a1833d7bf31fa58714776c66abb`.
+- На exact final head все 17 PR workflow завершились `success`; Independent AI Review / gate также `success`, unresolved review threads = `0`. Canon, Product Purity, Critical Static Surface, User Scenario Matrix, PostgreSQL concurrency, Production Isolation, Encrypted Backup и Pre-deploy Release Gate не ослаблялись.
+- Исполняемый manifest покрывает все 17 capability families и 20 capability rows: `2 equivalent`, `17 genericized`, `1 missing`, `0 domain-specific`. Все 19 доказанных `equivalent/genericized` capability входят в hard ratchet; новая proven capability без явного ratchet-update, downgrade или silent removal ломают guard.
+- Pinned evidence baseline зафиксирован exact SHA `f63b44dd8963c1e6fd71ae8b05b9028d61f172ad`, root tree `94c7b3fd47b69e7d819a03e53c588390c102761b` и SHA-256 `c04fa0642d928aec1535e90d78be3ea969582537c7eb082423bf50149cf0412e` по 57 exact `path → git blob SHA` records. Guard не импортирует и не запускает внешний runtime.
+- Первый вариант manifest был намеренно не смержен после независимой проверки: 22/36 первоначальных evidence paths оказались мёртвыми на pinned SHA. Финальный contract заменил их реальными frozen blob references и отдельно защищает snapshot от одновременной подмены path/object SHA/digest.
+- Отдельный Capability Parity workflow green, и тот же validator встроен в canonical `regression_gate.STEPS`; `ci/regression-contour` success. Coverage ratchets сохранены: `82.23%` combined / `73.99%` branch при тех же locked baselines.
+- Единственный доказанный `missing` gap — `platform.account_consolidation`: ClientPlatform уже имеет atomic cross-channel identity linking и fail-closed conflict handling, но пока не имеет audited operator dry-run/apply consolidation workflow. Отдельный speech/provider experiment gap не был подтверждён pinned evidence и поэтому не был выдуман.
+- M6-006 не меняет business/domain runtime behavior; production deploy намеренно не выполнялся. Issue #263 остаётся открытым до закрытия последнего `missing` либо явного owner exception.
+
+### M6-007 — `NEXT` — Audited Duplicate Account Consolidation
+
+Следующий и единственный default slice закрывает последний `missing` из executable parity manifest фундаментально, расширяя существующий `services/accounts/identity.py` и canonical `accounts` / `account_channel_identities` authority. Отдельный merge-store, второй identity brain, synthetic TenantContext или global superuser path запрещены.
+
+Минимальный DONE contract M6-007:
+
+- platform-operator получает **read-only dry-run plan** до любой mutation: target/source accounts, identities и полный dependency inventory по durable ссылкам на account/user identity; каждая поверхность классифицируется как `repoint`, `retain-with-alias/provenance` либо `block`, неизвестная/неподдержанная ссылка fail-close;
+- dry-run и apply связаны exact plan fingerprint/version: apply требует явное подтверждение, operator identity, reason и неизменившийся persistent state; stale plan, concurrent mutation или изменившийся dependency set блокируют apply;
+- один durable idempotency/operation key делает повторный apply/retry безопасным; две конкурентные попытки не могут выполнить merge дважды или создать разные результаты;
+- identity collision не разрешается удалением «проигравшей» записи: неоднозначность, конфликт verified identities или потеря channel access всегда fail-close до mutation;
+- source account получает canonical merged/redirect semantics в том же account authority без цепочек/циклов; разрешение старого id детерминированно приводит к target там, где это допустимо, а immutable audit/history сохраняют исходного actor/source для forensic provenance;
+- business memberships/roles и tenant boundaries проверяются до apply. Consolidation не может незаметно повысить роль, создать synthetic membership или обойти обычный RBAC; любое расширение доступа должно быть явно видно в dry-run evidence;
+- текущие durable поверхности — включая messenger identities/bridge/routing/outbox, tenancy/member references, privacy/export state, jobs и иные найденные account/user references — не остаются сиротами; historical append-only audit/outcome records не переписываются без отдельного доказанного canonical правила;
+- apply выполняется атомарно либо через доказанный fail-closed staged protocol с rollback-safe reservation; частично выполненный merge запрещён;
+- append-only audit evidence содержит operator, reason, exact plan hash, before/after counts, conflict decisions, timestamps и final outcome; secrets/PII сверх необходимого evidence не логируются;
+- regression: dry-run no-mutation, happy apply, stale plan, double/retry idempotency, concurrent apply, identity collision, role/membership access expansion, alias cycle rejection, no-orphan dependency check, immutable history preservation и PostgreSQL concurrency;
+- после доказанного M6-007 `platform.account_consolidation` переводится из `missing` в доказанный status и добавляется в hard proven-capability ratchet; только тогда #263 может быть закрыт при отсутствии других `missing`;
+- production deploy не входит в slice без отдельной прямой команды владельца.
 
 Единый шаблон для важных автоматических действий:
 
@@ -1798,7 +1828,8 @@ Duplicate tap, retry, worker restart или uncertain provider response не д�
 | M6-003 Support Case Intake + Operator Queue | DONE | PR #268 merge `5cc038e7b2a6a617e2a07ecfb223d580f4e48ec0`; exact head `07504bf975fcc23ecdf65c793aa9b040d648dc7f`; all 16 workflows + AI Review green; review P1s resolved; coverage locked at 82.19% / 73.93%; exact-SHA production deploy `deploy-20260902T200829Z.json` with encrypted backup, health/readiness, restart=0 and 20s stability |
 | M6-004 Bounded Platform Directory Search + Access Review | DONE | PR #273 merge `6b21f928272e97db5b8b79bb3adc37db62bf5798`; exact head `33f9679907be60c26f7474bcf709367bef456f84`; all 16 workflows green; 2 review findings resolved; full CI `3138 passed, 7 skipped`; coverage `82.23% / 73.99%`; exact-SHA production deploy `deploy-20260903T052535Z.json` with encrypted backup, health/readiness, restart=0 and 20s stability |
 | M6-005 Disk-safe Production Deploy Retention | DONE | PRs #275/#276/#277/#278; final merge `48ee169cc72e687d0d8d2e89fbbe748eca41fd8b`; full-runtime 75%/7GiB unchanged; proven host-only no-build deploy accepted in production with encrypted backup, unchanged container IDs/restart=0 and 20s stability |
-| M6-006 Versioned Capability Parity Matrix + Regression Guard | NEXT | Build executable 17-family #263 donor→ClientPlatform matrix with evidence-backed statuses and CI regression guard; next runtime slice must come from a confirmed `missing` gap |
+| M6-006 Versioned Capability Parity Matrix + Regression Guard | DONE | PR #280 squash-merge `8ffa7699c399aa613e64fffcba2448182e0542fe`; exact head `2ef607e976046a1833d7bf31fa58714776c66abb`; 17/17 workflows + Independent AI Review green; executable matrix = 17 families / 20 capabilities / 19 proven hard-ratcheted / 1 explicit missing; frozen pinned evidence = 57 exact blobs; canonical regression + coverage `82.23% / 73.99%` green; no production deploy |
+| M6-007 Audited Duplicate Account Consolidation | NEXT | Close the sole proven `platform.account_consolidation` gap through the existing account/identity authority: snapshot-bound dry-run, explicit/idempotent apply, fail-closed conflicts, dependency-safe redirect/repoint semantics, RBAC/audit preservation and PostgreSQL concurrency; no second identity store/brain |
 
 ---
 
