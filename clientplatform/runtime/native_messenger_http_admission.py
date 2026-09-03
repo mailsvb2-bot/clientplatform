@@ -13,7 +13,10 @@ _WEBHOOK_PREFIXES = (
 )
 _SETUP_PREFIX = "/clientplatform/connect/"
 _EXTERNAL_PRODUCT_PREFIX = "/clientplatform/external-products/"
-_COCKPIT_CONTEXT_PATH = "/clientplatform/cockpit/context"
+_COCKPIT_POST_PATHS = frozenset({
+    "/clientplatform/cockpit/context",
+    "/clientplatform/cockpit/home",
+})
 _webhook_slots: asyncio.Semaphore | None = None
 _webhook_slots_size = 0
 _setup_slots: asyncio.Semaphore | None = None
@@ -82,7 +85,7 @@ def _request_kind(request: web.Request) -> str | None:
         return "webhook"
     if request.path.startswith(_SETUP_PREFIX):
         return "setup"
-    if request.path == _COCKPIT_CONTEXT_PATH:
+    if request.path in _COCKPIT_POST_PATHS:
         return "cockpit"
     if request.path.startswith(_EXTERNAL_PRODUCT_PREFIX):
         return "external_product"

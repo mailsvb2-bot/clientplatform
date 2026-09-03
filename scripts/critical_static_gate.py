@@ -133,6 +133,15 @@ _CLIENTPLATFORM_EMAIL_OUTBOUND_FILES = (
 )
 
 
+_CLIENTPLATFORM_COCKPIT_FILES = (
+    "clientplatform/application/cockpit.py",
+    "clientplatform/application/cockpit_home.py",
+    "clientplatform/runtime/cockpit_http.py",
+    "clientplatform/runtime/cockpit_links.py",
+    "clientplatform/runtime/telegram_webapp_auth.py",
+)
+
+
 _CLIENTPLATFORM_NATIVE_MESSENGER_FILES = (
     "clientplatform/application/dispatch_worker.py",
     "clientplatform/application/max_dispatch_pacing.py",
@@ -180,6 +189,7 @@ TYPE_CONTRACT_FILES = (
     *_CLIENTPLATFORM_EXTERNAL_PRODUCT_FILES,
     *_CLIENTPLATFORM_EMAIL_OUTBOUND_FILES,
     *_CLIENTPLATFORM_NATIVE_MESSENGER_FILES,
+    *_CLIENTPLATFORM_COCKPIT_FILES,
     *_CLIENTPLATFORM_SALES_UI_FILES,
     *_CLIENTPLATFORM_YANDEX_ANALYTICS_FILES,
     *_CLIENTPLATFORM_MONEY_FILES,
@@ -220,6 +230,7 @@ SECURITY_SCAN_PATHS = (
     *_CLIENTPLATFORM_EXTERNAL_PRODUCT_FILES,
     *_CLIENTPLATFORM_EMAIL_OUTBOUND_FILES,
     *_CLIENTPLATFORM_NATIVE_MESSENGER_FILES,
+    *_CLIENTPLATFORM_COCKPIT_FILES,
     *_CLIENTPLATFORM_SALES_UI_FILES,
     *_CLIENTPLATFORM_YANDEX_ANALYTICS_FILES,
     *_CLIENTPLATFORM_MONEY_FILES,
