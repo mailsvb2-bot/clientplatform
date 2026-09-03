@@ -8,12 +8,12 @@ import hashlib
 import json
 import os
 import shutil
-import subprocess
+import subprocess  # nosec B404 - fixed argv operator commands only; shell execution is never used
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, BinaryIO, Sequence
+from typing import Any, BinaryIO, Sequence, TypedDict
 
 ROOT = Path(__file__).resolve().parents[1]
 if __package__ in {None, ""}:
@@ -29,6 +29,7 @@ POSTGRES_CONTAINER = "clientplatform-production-postgres-1"
 VISUAL_GATEWAY_CONTAINER = "clientplatform-production-visual-gateway-1"
 APP_IMAGE = "clientplatform-production-app"
 VISUAL_GATEWAY_IMAGE = "clientplatform-production-visual-gateway"
+BACKUP_IMAGE = "clientplatform-production-backup"
 _ROLLBACK_HISTORY_BEFORE_DEPLOY = 1
 _BUILD_CACHE_KEEP_STORAGE = "2GB"
 _DEPLOY_DISK_WARN_USED_PERCENT = 70.0
@@ -70,6 +71,21 @@ class DeploymentError(RuntimeError):
     """Sanitized deployment failure safe for operator logs."""
 
 
+class DiskCapacity(TypedDict):
+    total_bytes: int
+    used_bytes: int
+    free_bytes: int
+    used_percent: float
+
+
+class BuildCacheCapacityRetention(TypedDict):
+    mode: str
+    keep_storage: str
+    before_cleanup: DiskCapacity
+    after_cleanup: DiskCapacity
+    pressure_cleanup_applied: bool
+
+
 def _run(
     command: Sequence[str],
     *,
@@ -77,7 +93,7 @@ def _run(
     capture: bool = False,
     check: bool = True,
 ) -> subprocess.CompletedProcess[str]:
-    completed = subprocess.run(
+    completed = subprocess.run(  # nosec B603 - canonical argv list; shell=False and no user command strings
         list(command),
         cwd=cwd,
         check=False,
@@ -153,7 +169,7 @@ def _git_sha() -> str:
 
 
 def _assert_tracked_worktree_clean() -> None:
-    completed = subprocess.run(
+    completed = _run(
         [
             "git",
             "status",
@@ -162,9 +178,8 @@ def _assert_tracked_worktree_clean() -> None:
             "--ignore-submodules=none",
         ],
         cwd=ROOT,
+        capture=True,
         check=False,
-        text=True,
-        capture_output=True,
     )
     if completed.returncode != 0:
         raise DeploymentError("tracked_worktree_check_failed")
@@ -172,7 +187,7 @@ def _assert_tracked_worktree_clean() -> None:
         raise DeploymentError("tracked_worktree_dirty")
 
 
-def _disk_capacity() -> dict[str, int | float]:
+def _disk_capacity() -> DiskCapacity:
     usage = shutil.disk_usage("/")
     used_percent = (usage.used / usage.total * 100.0) if usage.total else 100.0
     return {
@@ -183,21 +198,28 @@ def _disk_capacity() -> dict[str, int | float]:
     }
 
 
-def _assert_deploy_disk_capacity() -> dict[str, int | float]:
-    capacity = _disk_capacity()
-    used_percent = float(capacity["used_percent"])
-    free_bytes = int(capacity["free_bytes"])
-    if (
-        used_percent >= _DEPLOY_DISK_MAX_USED_PERCENT
-        or free_bytes < _DEPLOY_DISK_MIN_FREE_BYTES
-    ):
-        raise DeploymentError("insufficient_disk_capacity_before_deploy")
+def _disk_capacity_ready(capacity: DiskCapacity) -> bool:
+    return (
+        float(capacity["used_percent"]) < _DEPLOY_DISK_MAX_USED_PERCENT
+        and int(capacity["free_bytes"]) >= _DEPLOY_DISK_MIN_FREE_BYTES
+    )
+
+
+def _assert_deploy_disk_capacity(
+    capacity: DiskCapacity | None = None,
+    *,
+    failure_reason: str = "insufficient_disk_capacity_before_deploy",
+) -> DiskCapacity:
+    resolved = _disk_capacity() if capacity is None else capacity
+    used_percent = float(resolved["used_percent"])
+    if not _disk_capacity_ready(resolved):
+        raise DeploymentError(failure_reason)
     if used_percent >= _DEPLOY_DISK_WARN_USED_PERCENT:
         print(
             "CLIENTPLATFORM_PRODUCTION_DEPLOY_WARNING:"
             f"disk_usage_high:{used_percent:.2f}"
         )
-    return capacity
+    return resolved
 
 
 def _image_tags(repository: str) -> list[str]:
@@ -318,7 +340,6 @@ def _prune_deploy_image_history(target_sha: str) -> dict[str, int]:
         _run(["docker", "image", "rm", tag])
         removed_tags.append(tag)
 
-    _run(["docker", "image", "prune", "--force"])
     return {
         "removed_tags": len(removed_tags),
         "app_rollbacks_retained_before_deploy": len(protected_app),
@@ -326,19 +347,88 @@ def _prune_deploy_image_history(target_sha: str) -> dict[str, int]:
     }
 
 
-def _prune_build_cache() -> dict[str, str]:
-    _run(
-        [
-            "docker",
-            "builder",
-            "prune",
-            "--force",
-            "--all",
-            "--keep-storage",
-            _BUILD_CACHE_KEEP_STORAGE,
-        ]
+def _prune_build_cache(*, pressure: bool = False) -> dict[str, str]:
+    command = ["docker", "builder", "prune", "--force", "--all"]
+    if not pressure:
+        command.extend(["--keep-storage", _BUILD_CACHE_KEEP_STORAGE])
+    _run(command)
+    return {"keep_storage": "0B" if pressure else _BUILD_CACHE_KEEP_STORAGE}
+
+
+def _prune_build_cache_for_capacity(
+    *,
+    failure_reason: str = "insufficient_disk_capacity_before_deploy",
+) -> BuildCacheCapacityRetention:
+    before_cleanup = _disk_capacity()
+    pressure_cleanup: dict[str, str] | None = None
+    bounded_cleanup: dict[str, str] | None = None
+    if _disk_capacity_ready(before_cleanup):
+        bounded_cleanup = _prune_build_cache()
+        after_cleanup = _disk_capacity()
+        if not _disk_capacity_ready(after_cleanup):
+            pressure_cleanup = _prune_build_cache(pressure=True)
+            after_cleanup = _disk_capacity()
+    else:
+        pressure_cleanup = _prune_build_cache(pressure=True)
+        after_cleanup = _disk_capacity()
+    _assert_deploy_disk_capacity(after_cleanup, failure_reason=failure_reason)
+    selected = pressure_cleanup if pressure_cleanup is not None else bounded_cleanup
+    if selected is None:
+        raise DeploymentError("build_cache_retention_result_missing")
+    return {
+        "mode": "pressure_full" if pressure_cleanup is not None else "bounded",
+        "keep_storage": selected["keep_storage"],
+        "before_cleanup": before_cleanup,
+        "after_cleanup": after_cleanup,
+        "pressure_cleanup_applied": pressure_cleanup is not None,
+    }
+
+
+def _remove_transient_backup_image() -> dict[str, object]:
+    reference = f"{BACKUP_IMAGE}:latest"
+    image_id = _image_id(reference)
+    if not image_id:
+        return {"reference": reference, "present": False, "removed": False}
+    if image_id in _running_image_ids():
+        return {
+            "reference": reference,
+            "present": True,
+            "removed": False,
+            "reason": "running_image",
+        }
+    _run(["docker", "image", "rm", reference])
+    return {"reference": reference, "present": True, "removed": True}
+
+
+def _cleanup_after_encrypted_backup() -> dict[str, object]:
+    disk_before_cleanup = _disk_capacity()
+    transient_backup_image = _remove_transient_backup_image()
+    build_cache_retention = _prune_build_cache_for_capacity()
+    return {
+        "transient_backup_image": transient_backup_image,
+        "build_cache_retention": build_cache_retention,
+        "disk_before_cleanup": disk_before_cleanup,
+        "disk_after_cleanup": build_cache_retention["after_cleanup"].copy(),
+        "capacity_ready": True,
+    }
+
+
+def _post_deploy_retention(target_sha: str) -> dict[str, object]:
+    disk_before_cleanup = _disk_capacity()
+    image_retention = _prune_deploy_image_history(target_sha)
+    transient_backup_image = _remove_transient_backup_image()
+    build_cache_retention = _prune_build_cache_for_capacity(
+        failure_reason="insufficient_disk_capacity_after_deploy_cleanup"
     )
-    return {"keep_storage": _BUILD_CACHE_KEEP_STORAGE}
+    disk_after_cleanup = build_cache_retention["after_cleanup"].copy()
+    return {
+        "image_retention": image_retention,
+        "transient_backup_image": transient_backup_image,
+        "build_cache_retention": build_cache_retention,
+        "disk_before_cleanup": disk_before_cleanup,
+        "disk_after_cleanup": disk_after_cleanup,
+        "capacity_ready": True,
+    }
 
 
 def _container_exists(container: str) -> bool:
@@ -449,10 +539,13 @@ def _local_backup(target_sha: str) -> Path:
     LOCAL_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     os.chmod(LOCAL_BACKUP_DIR, 0o700)
     target = LOCAL_BACKUP_DIR / f"clientplatform-{_utc_stamp()}-{target_sha[:12]}.dump"
+    docker_bin = shutil.which("docker")
+    if not docker_bin:
+        raise DeploymentError("docker_executable_missing")
     with target.open("xb") as handle:
-        completed = subprocess.run(
+        completed = subprocess.run(  # nosec B603 - resolved docker executable plus fixed pg_dump argv
             [
-                "docker",
+                docker_bin,
                 "exec",
                 POSTGRES_CONTAINER,
                 "pg_dump",
@@ -786,15 +879,18 @@ def deploy(
                 raise DeploymentError("production_not_ready_before_deploy") from exc
 
     image_retention = _prune_deploy_image_history(target_sha)
-    build_cache_retention = _prune_build_cache()
-    disk_before_deploy = _assert_deploy_disk_capacity()
+    predeploy_backup_image_retention = _remove_transient_backup_image()
+    build_cache_retention = _prune_build_cache_for_capacity()
+    disk_before_deploy = build_cache_retention["after_cleanup"].copy()
 
     _run([*compose, "up", "-d", "postgres"])
 
     age_recipient = str(values.get("CLIENTPLATFORM_BACKUP_AGE_RECIPIENT", "") or "").strip()
+    backup_artifact_retention: dict[str, object] | None = None
     if age_recipient:
         backup_mode = "encrypted"
         backup_reference = _encrypted_backup(compose)
+        backup_artifact_retention = _cleanup_after_encrypted_backup()
     elif allow_local_backup:
         backup_mode = "local_plaintext_emergency"
         backup_reference = str(_local_backup(target_sha))
@@ -827,9 +923,11 @@ def deploy(
     visual_gateway_changed = False
     app_changed = False
     sales_operations_smoke: dict[str, Any] | None = None
+    visual_gateway_image = ""
+    post_deploy_retention: dict[str, object] | None = None
     try:
         _run([*compose, "build", "visual-gateway"])
-        _run([*compose, "build", "app", "backup"])
+        _run([*compose, "build", "app"])
         _run([*compose, "up", "-d", "--force-recreate", "visual-gateway"])
         visual_gateway_changed = True
         _wait_for_visual_gateway(timeout_seconds)
@@ -838,6 +936,17 @@ def deploy(
         _wait_for_readiness(timeout_seconds)
         _external_https(domain)
         sales_operations_smoke = _sales_operations_smoke()
+        visual_gateway_image = _container_image(VISUAL_GATEWAY_CONTAINER)
+        _run(
+            [
+                "docker",
+                "image",
+                "tag",
+                visual_gateway_image,
+                f"{VISUAL_GATEWAY_IMAGE}:release-{target_sha}",
+            ]
+        )
+        post_deploy_retention = _post_deploy_retention(target_sha)
     except Exception as deployment_error:  # validator: allow-wide-except - rollback must cover every failed gate
         if app_changed and baseline_ready and rollback_tag:
             try:
@@ -917,16 +1026,8 @@ def deploy(
     if sales_operations_smoke is None:
         raise DeploymentError("sales_production_smoke_missing_after_success")
 
-    visual_gateway_image = _container_image(VISUAL_GATEWAY_CONTAINER)
-    _run(
-        [
-            "docker",
-            "image",
-            "tag",
-            visual_gateway_image,
-            f"{VISUAL_GATEWAY_IMAGE}:release-{target_sha}",
-        ]
-    )
+    if post_deploy_retention is None:
+        raise DeploymentError("post_deploy_retention_missing_after_success")
     evidence = _write_evidence(
         {
             "ok": True,
@@ -941,6 +1042,7 @@ def deploy(
             "visual_gateway_ready": True,
             "backup_mode": backup_mode,
             "backup_reference": backup_reference,
+            "backup_artifact_retention": backup_artifact_retention,
             "domain": domain,
             "telegram_transport": "polling",
             "telegram_webhook_prefix": webhook_prefix,
@@ -949,9 +1051,11 @@ def deploy(
             "recovery_mode": bool(app_exists and not baseline_ready),
             "sales_operations_smoke": sales_operations_smoke,
             "image_retention": image_retention,
+            "predeploy_backup_image_retention": predeploy_backup_image_retention,
             "build_cache_retention": build_cache_retention,
             "disk_before_deploy": disk_before_deploy,
-            "disk_after_deploy": _disk_capacity(),
+            "post_deploy_retention": post_deploy_retention,
+            "disk_after_deploy": post_deploy_retention["disk_after_cleanup"],
             "completed_at": _completed_at(),
         }
     )
