@@ -1176,17 +1176,17 @@ Canonical production deploy теперь различает тяжёлый `full
 
 ### M6-006 — `NEXT` — Versioned Capability Parity Matrix + Regression Guard
 
-Следующий и единственный default slice превращает требование issue #263 «ClientPlatform не слабее Metrotherapy по полезным admin/platform capabilities» в versioned executable contract, а не ручной список и не сравнение названий кнопок.
+Следующий и единственный default slice превращает требование issue #263 о capability parity с закреплённым donor baseline в versioned executable contract, а не ручной список и не сравнение названий кнопок.
 
 Минимальный DONE contract M6-006:
 
-- на актуальных `main` ClientPlatform и `mailsvb2-bot/metrotherapy-bot-telegram` построить полную матрицу всех 17 обязательных capability families из #263;
+- на актуальном `main` ClientPlatform и закреплённом в issue #263 donor baseline построить полную матрицу всех 17 обязательных capability families;
 - каждая строка/под-capability имеет ровно один статус: `equivalent`, `genericized`, `missing`, `domain-specific`; неопределённый/пустой статус запрещён;
 - `equivalent` и `genericized` обязаны ссылаться на canonical ClientPlatform owner/surface и конкретный regression evidence/test; документация без исполняемого доказательства не считается паритетом;
 - `domain-specific` обязан явно выделять переносимый generic mechanism либо доказать отсутствие полезного общего поведения; branding/therapy runtime/secrets не переносятся;
 - `missing` не маскируется и не закрывается пустой кнопкой: каждая такая capability становится явным gap с owner decision и последующим отдельным vertical slice либо явно согласованным исключением владельца;
 - machine-readable parity manifest хранится versioned в repository и проверяется CI guard: все 17 families присутствуют, evidence paths/tests существуют, duplicate/unknown status запрещены, удаление уже доказанной capability ломает guard;
-- guard не импортирует/не запускает Metrotherapy runtime и не создаёт cross-repository runtime dependency; donor snapshot фиксируется только как provenance/evidence для сравнения;
+- guard не импортирует/не запускает donor runtime и не создаёт cross-repository runtime dependency; donor snapshot фиксируется только как provenance/evidence для сравнения;
 - platform-operator и business-owner capabilities остаются разными уровнями; matrix не может легализовать global TenantContext/superuser или второй store/brain;
 - Telegram/VK/MAX parity оценивается как одно canonical application/domain поведение с adapter surfaces, а не как три независимых реализации;
 - после M6-006 merge следующий `NEXT` выбирается из первого подтверждённого `missing` operational/platform gap по risk/value, не из косметического меню.
