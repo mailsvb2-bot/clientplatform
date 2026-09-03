@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from core.time_utils import utc_now
-from services.accounts.identity import link_channel_to_account
+from services.accounts.identity import link_channel_to_account, resolve_canonical_user_id
 from services.db import db, tx
 
 from services.messenger.platforms import MessengerPlatform, normalize_platform, parse_platform
@@ -34,7 +34,7 @@ def record_channel_identity(
     # legacy mirror into a different account: re-linking an already-claimed
     # external identity to another account must raise AccountIdentityConflict
     # (paid entitlements must never migrate between accounts implicitly).
-    link_channel_to_account(
+    canonical_user_id = link_channel_to_account(
         int(user_id),
         norm,
         ext,
@@ -52,7 +52,7 @@ def record_channel_identity(
                     DELETE FROM user_channel_identities
                     WHERE platform=? AND external_user_id=? AND user_id<>?
                     '''.strip(),
-                    (norm, ext, int(user_id)),
+                    (norm, ext, int(canonical_user_id)),
                 )
             conn.execute(
                 '''
@@ -65,7 +65,7 @@ def record_channel_identity(
                     display_name=COALESCE(excluded.display_name, user_channel_identities.display_name),
                     last_seen_at=excluded.last_seen_at
                 '''.strip(),
-                (int(user_id), norm, ext, uname, dname, now, now),
+                (int(canonical_user_id), norm, ext, uname, dname, now, now),
             )
 
             conn.execute(
@@ -76,7 +76,7 @@ def record_channel_identity(
                     last_seen_platform=excluded.last_seen_platform,
                     updated_at=excluded.updated_at
                 '''.strip(),
-                (int(user_id), norm, norm, now),
+                (int(canonical_user_id), norm, norm, now),
             )
 
 
@@ -84,6 +84,7 @@ def record_channel_touch(user_id: int, platform: str) -> None:
     norm = parse_platform(platform)
     if norm is None:
         raise ValueError('invalid platform')
+    canonical_user_id = resolve_canonical_user_id(int(user_id))
     now = _iso_now()
     with db() as conn:
         with tx(conn):
@@ -95,7 +96,7 @@ def record_channel_touch(user_id: int, platform: str) -> None:
                     last_seen_platform=excluded.last_seen_platform,
                     updated_at=excluded.updated_at
                 '''.strip(),
-                (int(user_id), norm, norm, now),
+                (int(canonical_user_id), norm, norm, now),
             )
 
 
@@ -103,6 +104,7 @@ def set_preferred_platform(user_id: int, platform: str) -> None:
     norm = parse_platform(platform)
     if norm is None:
         raise ValueError('invalid platform')
+    canonical_user_id = resolve_canonical_user_id(int(user_id))
     now = _iso_now()
     with db() as conn:
         with tx(conn):
@@ -114,15 +116,16 @@ def set_preferred_platform(user_id: int, platform: str) -> None:
                     preferred_platform=excluded.preferred_platform,
                     updated_at=excluded.updated_at
                 '''.strip(),
-                (int(user_id), norm, norm, now),
+                (int(canonical_user_id), norm, norm, now),
             )
 
 
 def get_preferred_platform(user_id: int) -> str:
+    canonical_user_id = resolve_canonical_user_id(int(user_id))
     with db() as conn:
         row = conn.execute(
             'SELECT preferred_platform, last_seen_platform FROM user_channel_preferences WHERE user_id=?',
-            (int(user_id),),
+            (int(canonical_user_id),),
         ).fetchone()
     if not row:
         return MessengerPlatform.TELEGRAM.value
@@ -130,10 +133,11 @@ def get_preferred_platform(user_id: int) -> str:
 
 
 def get_available_platforms(user_id: int) -> list[str]:
+    canonical_user_id = resolve_canonical_user_id(int(user_id))
     with db() as conn:
         rows = conn.execute(
             'SELECT platform FROM user_channel_identities WHERE user_id=? ORDER BY last_seen_at DESC',
-            (int(user_id),),
+            (int(canonical_user_id),),
         ).fetchall()
     out: list[str] = []
     for row in rows:
@@ -154,10 +158,11 @@ def resolve_delivery_platform(user_id: int, *, fallback: str = MessengerPlatform
 
 
 def get_channel_snapshot(user_id: int) -> dict[str, Any]:
+    canonical_user_id = resolve_canonical_user_id(int(user_id))
     with db() as conn:
         pref = conn.execute(
             'SELECT preferred_platform, last_seen_platform, updated_at FROM user_channel_preferences WHERE user_id=?',
-            (int(user_id),),
+            (int(canonical_user_id),),
         ).fetchone()
         ids = conn.execute(
             '''
@@ -166,10 +171,10 @@ def get_channel_snapshot(user_id: int) -> dict[str, Any]:
             WHERE user_id=?
             ORDER BY last_seen_at DESC
             '''.strip(),
-            (int(user_id),),
+            (int(canonical_user_id),),
         ).fetchall()
     return {
-        'user_id': int(user_id),
+        'user_id': int(canonical_user_id),
         'preferred_platform': normalize_platform(pref['preferred_platform']) if pref else MessengerPlatform.TELEGRAM.value,
         'last_seen_platform': normalize_platform(pref['last_seen_platform']) if pref else MessengerPlatform.TELEGRAM.value,
         'updated_at': pref['updated_at'] if pref else None,
@@ -181,6 +186,7 @@ def prefer_current_platform(user_id: int, platform: str) -> None:
     norm = parse_platform(platform)
     if norm is None:
         raise ValueError('invalid platform')
+    canonical_user_id = resolve_canonical_user_id(int(user_id))
     now = _iso_now()
     with db() as conn:
         with tx(conn):
@@ -193,5 +199,5 @@ def prefer_current_platform(user_id: int, platform: str) -> None:
                     last_seen_platform=excluded.last_seen_platform,
                     updated_at=excluded.updated_at
                 '''.strip(),
-                (int(user_id), norm, norm, now),
+                (int(canonical_user_id), norm, norm, now),
             )

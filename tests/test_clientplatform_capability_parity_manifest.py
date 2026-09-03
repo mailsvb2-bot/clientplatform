@@ -37,17 +37,17 @@ class CapabilityParityManifestTests(unittest.TestCase):
             GUARD.validate_manifest(manifest)
         self.assertIn(expected, str(raised.exception))
 
-    def test_repository_manifest_is_complete_and_keeps_missing_gaps_explicit(self) -> None:
+    def test_repository_manifest_is_complete_and_all_capabilities_are_proven(self) -> None:
         stats = GUARD.validate_manifest(_manifest())
         self.assertEqual(stats["families"], 17)
         self.assertEqual(stats["capabilities"], 20)
         self.assertEqual(stats["equivalent"], 2)
-        self.assertEqual(stats["genericized"], 17)
-        self.assertEqual(stats["missing"], 1)
+        self.assertEqual(stats["genericized"], 18)
+        self.assertEqual(stats["missing"], 0)
         self.assertEqual(stats["domain_specific"], 0)
 
 
-    def test_only_evidence_backed_account_consolidation_remains_missing(self) -> None:
+    def test_no_evidence_backed_capability_remains_missing(self) -> None:
         manifest = _manifest()
         missing = [
             capability["id"]
@@ -55,7 +55,7 @@ class CapabilityParityManifestTests(unittest.TestCase):
             for capability in family["capabilities"]
             if capability["status"] == "missing"
         ]
-        self.assertEqual(missing, ["platform.account_consolidation"])
+        self.assertEqual(missing, [])
 
     def test_donor_evidence_must_exist_in_frozen_snapshot(self) -> None:
         manifest = _manifest()
@@ -179,11 +179,19 @@ class CapabilityParityManifestTests(unittest.TestCase):
         family["adapters"] = ["telegram", "vk"]
         self.assert_contract_error(manifest, "exactly telegram/vk/max adapters")
 
-    def test_missing_gap_must_name_follow_on_decision_and_priority(self) -> None:
+    def test_account_consolidation_is_hard_ratcheted_after_m6007(self) -> None:
         manifest = _manifest()
         capability = _capability(manifest, "platform.account_consolidation")
-        capability["gap"].pop("priority")
-        self.assert_contract_error(manifest, "gap.priority must be non-empty text")
+        capability["status"] = "missing"
+        capability.pop("clientplatform_owner", None)
+        capability.pop("regression_evidence", None)
+        capability.pop("rationale", None)
+        capability["gap"] = {
+            "decision": "required_slice",
+            "priority": "high",
+            "reason": "synthetic regression",
+        }
+        self.assert_contract_error(manifest, "proven capability cannot be downgraded")
 
 
 if __name__ == "__main__":

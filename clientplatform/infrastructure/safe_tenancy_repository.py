@@ -7,7 +7,6 @@ from clientplatform.domain.tenancy import (
     PlatformRole,
     TenantContext,
     TenantInvariantViolation,
-    normalize_user_id,
 )
 from clientplatform.infrastructure.tenancy_repository import TenancyRepository as _BaseTenancyRepository
 
@@ -44,7 +43,7 @@ class TenancyRepository(_BaseTenancyRepository):
         now: str | None = None,
     ) -> BusinessMember:
         current_actor = self.resolve_context(user_id=actor.user_id, business_id=actor.business_id)
-        target_user_id = normalize_user_id(user_id)
+        target_user_id = self._canonical_user_id(user_id)
         target_role = current_actor.assert_can_manage_members(role)
         self._lock_business_membership_boundary(current_actor.business_id)
         existing = self._conn.execute(
@@ -92,7 +91,7 @@ class TenancyRepository(_BaseTenancyRepository):
         now: str | None = None,
     ) -> BusinessMember:
         current_actor = self.resolve_context(user_id=actor.user_id, business_id=actor.business_id)
-        target_user_id = normalize_user_id(user_id)
+        target_user_id = self._canonical_user_id(user_id)
         self._lock_business_membership_boundary(current_actor.business_id)
         revoked = super().revoke_member(
             actor=current_actor,

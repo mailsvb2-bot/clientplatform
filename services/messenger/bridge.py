@@ -7,7 +7,7 @@ from typing import Any
 
 from config.settings import settings
 from core.time_utils import utc_now
-from services.accounts.identity import _link_channel_to_account_in_conn, ensure_account
+from services.accounts.identity import _link_channel_to_account_in_conn, _resolve_canonical_user_id_in_conn, ensure_account
 from services.db import db, tx
 from services.messenger.platforms import parse_platform
 
@@ -48,6 +48,7 @@ def issue_bridge_token(
     source = parse_platform(created_from_platform or "") if created_from_platform else None
     with db() as conn:
         with tx(conn):
+            canonical_user_id = _resolve_canonical_user_id_in_conn(conn, int(account_id))
             conn.execute(
                 """
                 INSERT INTO user_channel_bridge_tokens(
@@ -58,7 +59,7 @@ def issue_bridge_token(
                 """.strip(),
                 (
                     token,
-                    int(user_id),
+                    int(canonical_user_id),
                     str(purpose),
                     now,
                     int(account_id),

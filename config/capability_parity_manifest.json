@@ -8,7 +8,7 @@
     "runtime_dependency": false
   },
   "allowed_statuses": ["equivalent", "genericized", "missing", "domain-specific"],
-  "required_proven_capabilities": ["platform.directory_access_review", "platform.roles_permissions", "messaging.broadcast_publication_cohorts", "support.audited_access_session", "support.case_queue", "analytics.business_platform_observability", "runtime.settings_diagnostics", "security.audit_access_review", "release.deploy_rollback_forensics", "billing.subscription_payment_outcomes", "commerce.offerings_program_delivery", "growth.goal_first_autopilot_nba", "ads.connection_spend_attribution", "visual.gateway_assets_review_jobs", "voice.media_delivery_metrics", "content.production_workspace", "recovery.encrypted_backup_dr_evidence", "lifecycle.referral_retention_cohorts", "messenger.canonical_navigation_parity"],
+  "required_proven_capabilities": ["platform.directory_access_review", "platform.roles_permissions", "platform.account_consolidation", "messaging.broadcast_publication_cohorts", "support.audited_access_session", "support.case_queue", "analytics.business_platform_observability", "runtime.settings_diagnostics", "security.audit_access_review", "release.deploy_rollback_forensics", "billing.subscription_payment_outcomes", "commerce.offerings_program_delivery", "growth.goal_first_autopilot_nba", "ads.connection_spend_attribution", "visual.gateway_assets_review_jobs", "voice.media_delivery_metrics", "content.production_workspace", "recovery.encrypted_backup_dr_evidence", "lifecycle.referral_retention_cohorts", "messenger.canonical_navigation_parity"],
   "families": [
     {
       "id": "01_platform_identity_access",
@@ -37,14 +37,12 @@
         {
           "id": "platform.account_consolidation",
           "name": "controlled duplicate-account consolidation with dry-run, apply and audit evidence",
-          "status": "missing",
+          "status": "genericized",
           "level": "platform_operator",
           "donor_evidence": ["scripts/account_merge.py", "services/accounts/merge.py"],
-          "gap": {
-            "decision": "required_slice",
-            "priority": "high",
-            "reason": "ClientPlatform has atomic cross-channel identity linking and fail-closed conflict handling, but no explicit audited operator merge-plan/apply workflow for already duplicated accounts."
-          }
+          "clientplatform_owner": ["services/accounts/consolidation.py", "services/accounts/identity.py", "handlers/clientplatform_entry.py"],
+          "regression_evidence": ["tests/test_account_consolidation_m6007.py", "tests/test_account_consolidation_surface_m6007.py"],
+          "rationale": "ClientPlatform M6-007 generalizes duplicate-account consolidation into the canonical cross-messenger account authority with snapshot-bound dry-run, explicit confirmation, durable idempotency, fail-closed dependency/RBAC handling, immutable audit evidence and PostgreSQL concurrency; no donor runtime or second identity store is introduced."
         }
       ]
     },

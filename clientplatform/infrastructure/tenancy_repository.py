@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
+from services.accounts.identity import _resolve_canonical_user_id_in_conn
+
 from clientplatform.domain.platform_directory import (
     PLATFORM_DIRECTORY_DEFAULT_RESULTS,
     PlatformDirectoryLookupPage,
@@ -92,6 +94,10 @@ class TenancyRepository:
     def __init__(self, conn: Any):
         self._conn = conn
 
+    def _canonical_user_id(self, user_id: int) -> int:
+        normalized = normalize_user_id(user_id)
+        return _resolve_canonical_user_id_in_conn(self._conn, normalized)
+
     def create_business(
         self,
         *,
@@ -100,7 +106,7 @@ class TenancyRepository:
         business_id: str | None = None,
         now: str | None = None,
     ) -> BusinessAccess:
-        owner_id = normalize_user_id(owner_user_id)
+        owner_id = self._canonical_user_id(owner_user_id)
         normalized_name = normalize_business_name(name)
         new_business_id = normalize_uuid(
             business_id or str(uuid4()),
@@ -129,7 +135,7 @@ class TenancyRepository:
         return self.get_access(user_id=owner_id, business_id=new_business_id)
 
     def resolve_context(self, *, user_id: int, business_id: str) -> TenantContext:
-        principal_id = normalize_user_id(user_id)
+        principal_id = self._canonical_user_id(user_id)
         normalized_business_id = normalize_uuid(
             business_id,
             field_name="business_id",
@@ -164,7 +170,7 @@ class TenancyRepository:
         business_id: str,
         now: str | None = None,
     ) -> str:
-        principal_id = normalize_user_id(user_id)
+        principal_id = self._canonical_user_id(user_id)
         normalized_platform = str(platform or "").strip().casefold()
         if normalized_platform not in {"telegram", "vk", "max"}:
             raise ValueError("owner control platform is invalid")
@@ -192,7 +198,7 @@ class TenancyRepository:
         business_id: str | None = None,
         now: str | None = None,
     ) -> OwnerOnboardingSession:
-        principal_id = normalize_user_id(user_id)
+        principal_id = self._canonical_user_id(user_id)
         normalized_platform = str(platform or "").strip().casefold()
         if normalized_platform not in {"telegram", "vk", "max"}:
             raise ValueError("owner onboarding platform is invalid")
@@ -243,7 +249,7 @@ class TenancyRepository:
     def get_owner_onboarding_session(
         self, *, user_id: int, platform: str
     ) -> OwnerOnboardingSession | None:
-        principal_id = normalize_user_id(user_id)
+        principal_id = self._canonical_user_id(user_id)
         normalized_platform = str(platform or "").strip().casefold()
         if normalized_platform not in {"telegram", "vk", "max"}:
             raise ValueError("owner onboarding platform is invalid")
@@ -278,7 +284,7 @@ class TenancyRepository:
         )
 
     def clear_owner_onboarding_session(self, *, user_id: int, platform: str) -> None:
-        principal_id = normalize_user_id(user_id)
+        principal_id = self._canonical_user_id(user_id)
         normalized_platform = str(platform or "").strip().casefold()
         if normalized_platform not in {"telegram", "vk", "max"}:
             raise ValueError("owner onboarding platform is invalid")
@@ -288,7 +294,7 @@ class TenancyRepository:
         )
 
     def get_owner_control_workspace(self, *, user_id: int, platform: str) -> str | None:
-        principal_id = normalize_user_id(user_id)
+        principal_id = self._canonical_user_id(user_id)
         normalized_platform = str(platform or "").strip().casefold()
         if normalized_platform not in {"telegram", "vk", "max"}:
             raise ValueError("owner control platform is invalid")
@@ -443,7 +449,7 @@ class TenancyRepository:
         )
 
     def list_accessible_businesses(self, *, user_id: int) -> list[BusinessAccess]:
-        principal_id = normalize_user_id(user_id)
+        principal_id = self._canonical_user_id(user_id)
         rows = self._conn.execute(
             """
             SELECT
@@ -529,7 +535,7 @@ class TenancyRepository:
             user_id=actor.user_id,
             business_id=actor.business_id,
         )
-        target_user_id = normalize_user_id(user_id)
+        target_user_id = self._canonical_user_id(user_id)
         target_role = current_actor.assert_can_manage_members(role)
         timestamp = str(now or _utc_now())
 
@@ -611,7 +617,7 @@ class TenancyRepository:
             user_id=actor.user_id,
             business_id=actor.business_id,
         )
-        target_user_id = normalize_user_id(user_id)
+        target_user_id = self._canonical_user_id(user_id)
         row = self._conn.execute(
             """
             SELECT id, business_id, user_id, role, status,

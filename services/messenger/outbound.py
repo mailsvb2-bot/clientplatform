@@ -47,16 +47,17 @@ class SenderRegistry:
 
 def build_delivery_plan(user_id: int, *, fallback: str = MessengerPlatform.TELEGRAM.value, preferred_platform: str | None = None) -> DeliveryPlan:
     snapshot = get_channel_snapshot(int(user_id))
-    platform = normalize_platform(preferred_platform) if preferred_platform else resolve_delivery_platform(int(user_id), fallback=fallback)
+    canonical_user_id = int(snapshot['user_id'])
+    platform = normalize_platform(preferred_platform) if preferred_platform else resolve_delivery_platform(canonical_user_id, fallback=fallback)
     for identity in snapshot['identities']:
         if normalize_platform(identity['platform']) == platform:
             external_user_id = (identity.get('external_user_id') or '').strip() or None
             if platform == MessengerPlatform.TELEGRAM.value and not external_user_id:
-                external_user_id = str(int(user_id))
-            return DeliveryPlan(user_id=int(user_id), platform=platform, external_user_id=external_user_id)
+                external_user_id = str(canonical_user_id)
+            return DeliveryPlan(user_id=canonical_user_id, platform=platform, external_user_id=external_user_id)
     if platform == MessengerPlatform.TELEGRAM.value and not snapshot['identities']:
-        return DeliveryPlan(user_id=int(user_id), platform=platform, external_user_id=str(int(user_id)))
-    return DeliveryPlan(user_id=int(user_id), platform=platform, external_user_id=None)
+        return DeliveryPlan(user_id=canonical_user_id, platform=platform, external_user_id=str(canonical_user_id))
+    return DeliveryPlan(user_id=canonical_user_id, platform=platform, external_user_id=None)
 
 
 async def send_text_to_user(
