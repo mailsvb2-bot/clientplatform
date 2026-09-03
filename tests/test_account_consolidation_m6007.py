@@ -519,3 +519,46 @@ def test_alias_cycle_and_missing_target_fail_closed(db_conn) -> None:
     db_conn.commit()
     with pytest.raises(identity.AccountIdentityMergeInvariantError, match="missing"):
         identity._resolve_canonical_account_id_in_conn(db_conn, SOURCE)
+
+
+def test_sqlite_proxy_detection_is_bounded_and_cycle_safe() -> None:
+    class Proxy:
+        def __init__(self, inner=None):
+            self._conn = inner
+
+    conn = sqlite3.connect(":memory:")
+    try:
+        assert identity._sqlite_base_connection(Proxy(Proxy(conn))) is conn
+
+        cycle = Proxy()
+        cycle._conn = cycle
+        assert identity._sqlite_base_connection(cycle) is None
+
+        assert identity._sqlite_base_connection(object()) is None
+
+        too_deep = Proxy(Proxy(Proxy(Proxy(Proxy(conn)))))
+        assert identity._sqlite_base_connection(too_deep) is None
+    finally:
+        conn.close()
+
+
+def test_account_lookup_tolerates_only_truly_absent_sqlite_accounts_table() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    try:
+        assert identity._account_row_in_conn(conn, 101) is None
+
+        conn.execute("CREATE TABLE accounts(account_id INTEGER PRIMARY KEY)")
+        with pytest.raises(sqlite3.OperationalError, match="no such column"):
+            identity._account_row_in_conn(conn, 101)
+    finally:
+        conn.close()
+
+
+def test_account_lookup_non_sqlite_operational_error_stays_fail_closed() -> None:
+    class BrokenConnection:
+        def execute(self, _sql, _params=()):
+            raise sqlite3.OperationalError("synthetic backend failure")
+
+    with pytest.raises(sqlite3.OperationalError, match="synthetic backend failure"):
+        identity._account_row_in_conn(BrokenConnection(), 101)
