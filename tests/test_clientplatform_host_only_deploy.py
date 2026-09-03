@@ -96,12 +96,12 @@ def test_host_only_deploy_keeps_safety_gates_without_runtime_recreate(monkeypatc
     monkeypatch.setattr(
         deploy,
         "_cleanup_after_encrypted_backup",
-        lambda: {"transient_backup_image": {"removed": True}, "build_cache_retention": cache, "disk_before_cleanup": capacity, "disk_after_cleanup": capacity, "capacity_ready": True},
+        lambda **_: {"transient_backup_image": {"removed": True}, "build_cache_retention": cache, "disk_before_cleanup": capacity, "disk_after_cleanup": capacity, "capacity_ready": True},
     )
     monkeypatch.setattr(deploy, "_wait_for_visual_gateway", lambda _: events.append("gateway"))
     monkeypatch.setattr(deploy, "_external_https", lambda _: events.append("https"))
     monkeypatch.setattr(deploy, "_sales_operations_smoke", lambda: sales)
-    monkeypatch.setattr(deploy, "_post_deploy_retention", lambda _: post_retention)
+    monkeypatch.setattr(deploy, "_post_deploy_retention", lambda _, **__: post_retention)
     monkeypatch.setattr(deploy, "_wait_for_readiness", lambda _: events.append("runtime"))
 
     def write_evidence(payload: dict[str, object]) -> Path:
