@@ -103,7 +103,7 @@ class CapabilityParityManifestTests(unittest.TestCase):
         manifest["required_proven_capabilities"].remove(target)
         for family in manifest["families"]:
             family["capabilities"] = [item for item in family["capabilities"] if item["id"] != target]
-        self.assert_contract_error(manifest, "weakens the hard proven-capability ratchet")
+        self.assert_contract_error(manifest, "must match the hard proven-capability ratchet")
 
     def test_newly_proven_capability_is_also_hard_ratcheted(self) -> None:
         manifest = _manifest()
@@ -118,6 +118,29 @@ class CapabilityParityManifestTests(unittest.TestCase):
             "reason": "synthetic regression",
         }
         self.assert_contract_error(manifest, "proven capability cannot be downgraded")
+
+    def test_new_proven_capability_cannot_bypass_hard_ratchet(self) -> None:
+        manifest = _manifest()
+        family = next(
+            item for item in manifest["families"]
+            if item["id"] == "04_reports_analytics_observability"
+        )
+        family["capabilities"].append(
+            {
+                "id": "analytics.synthetic_new_proven_capability",
+                "name": "synthetic future proven capability",
+                "status": "genericized",
+                "level": "shared",
+                "donor_evidence": ["services/analytics.py"],
+                "clientplatform_owner": ["clientplatform/application/admin_ops.py"],
+                "regression_evidence": ["tests/test_clientplatform_sales_metrics.py"],
+                "rationale": "synthetic future regression",
+            }
+        )
+        self.assert_contract_error(
+            manifest,
+            "every equivalent/genericized capability must be hard-ratcheted",
+        )
 
     def test_proven_capability_cannot_be_downgraded_to_missing(self) -> None:
         manifest = _manifest()

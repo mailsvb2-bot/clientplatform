@@ -47,8 +47,8 @@ ALLOWED_GAP_DECISIONS = frozenset({"required_slice", "owner_exception"})
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
-# Hard ratchet: these capabilities were already demonstrated by shipped slices.
-# Removing them from both the manifest and its own metadata must still fail CI.
+# Hard ratchet: these capabilities are proven by shipped slices or the reviewed
+# M6-006 parity evidence. Every equivalent/genericized row must remain in this set.
 PROVEN_CAPABILITY_RATCHET = frozenset(
     {
         'platform.directory_access_review',
@@ -284,7 +284,10 @@ def validate_manifest(
     _require(seen_family_ids == set(EXPECTED_FAMILIES), "one or more required capability families are missing")
 
     declared_ratchet = set(_require_string_list(manifest.get("required_proven_capabilities"), "required_proven_capabilities"))
-    _require(PROVEN_CAPABILITY_RATCHET <= declared_ratchet, "required_proven_capabilities weakens the hard proven-capability ratchet")
+    _require(
+        declared_ratchet == PROVEN_CAPABILITY_RATCHET,
+        "required_proven_capabilities must match the hard proven-capability ratchet",
+    )
     _require(declared_ratchet <= seen_capability_ids, "required_proven_capabilities references a missing capability")
 
     status_by_id: dict[str, str] = {}
@@ -293,6 +296,16 @@ def validate_manifest(
             status_by_id[capability["id"]] = capability["status"]
     for capability_id in PROVEN_CAPABILITY_RATCHET:
         _require(status_by_id.get(capability_id) in PROVEN_STATUSES, f"proven capability cannot be downgraded: {capability_id}")
+
+    proven_in_manifest = {
+        capability_id
+        for capability_id, status in status_by_id.items()
+        if status in PROVEN_STATUSES
+    }
+    _require(
+        proven_in_manifest == PROVEN_CAPABILITY_RATCHET,
+        "every equivalent/genericized capability must be hard-ratcheted",
+    )
 
     _require(
         seen_donor_evidence_paths == donor_snapshot_paths,
