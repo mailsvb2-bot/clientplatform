@@ -45,6 +45,19 @@ _VISUAL_GATEWAY_CAPABILITIES = {
     "render_formats": ["square", "feed", "story", "landscape"],
 }
 _SALES_SMOKE_CONTRACT_VERSION = "u008-u009-sales-operations-v2"
+_HOST_ONLY_ALLOWED_PREFIXES = ("docs/", "tests/")
+_HOST_ONLY_ALLOWED_FILES = frozenset(
+    {
+        "scripts/clientplatform_production_deploy.py",
+        "scripts/critical_static_gate.py",
+    }
+)
+_MANAGED_PROJECT_NAME = "clientplatform-production"
+_MANAGED_PROJECT_IMAGE_SERVICES = frozenset(
+    {"app", "visual-gateway", "visual-provider-gateway", "backup"}
+)
+_MAX_DEPLOY_DIFF_FILES = 512
+_GIT_HISTORY_DEEPEN_STEPS = (64, 256, 1024)
 _SALES_SMOKE_REQUIRED_CHECKS = frozenset(
     {
         "owner_projection",
@@ -185,6 +198,254 @@ def _assert_tracked_worktree_clean() -> None:
         raise DeploymentError("tracked_worktree_check_failed")
     if any(line.strip() for line in completed.stdout.splitlines()):
         raise DeploymentError("tracked_worktree_dirty")
+
+
+def _is_valid_sha(value: object) -> bool:
+    text = str(value or "").strip().lower()
+    return len(text) == 40 and all(ch in "0123456789abcdef" for ch in text)
+
+
+def _latest_successful_deploy_sha() -> str:
+    if not EVIDENCE_DIR.is_dir():
+        return ""
+    for path in sorted(EVIDENCE_DIR.glob("deploy-*.json"), reverse=True):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, TypeError, ValueError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        candidate = str(payload.get("target_sha") or "").strip().lower()
+        if (
+            payload.get("ok") is True
+            and payload.get("operation") == "production_deploy"
+            and _is_valid_sha(candidate)
+        ):
+            return candidate
+    return ""
+
+
+def _git_commit_present(sha: str) -> bool:
+    completed = _run(
+        ["git", "cat-file", "-e", f"{sha}^{{commit}}"],
+        cwd=ROOT,
+        check=False,
+    )
+    return completed.returncode == 0
+
+
+def _git_is_ancestor(ancestor: str, descendant: str) -> bool:
+    if ancestor == descendant:
+        return True
+    if not _git_commit_present(ancestor) or not _git_commit_present(descendant):
+        return False
+
+    def check() -> bool:
+        completed = _run(
+            ["git", "merge-base", "--is-ancestor", ancestor, descendant],
+            cwd=ROOT,
+            check=False,
+        )
+        return completed.returncode == 0
+
+    if check():
+        return True
+    shallow = _run(
+        ["git", "rev-parse", "--is-shallow-repository"],
+        cwd=ROOT,
+        capture=True,
+        check=False,
+    )
+    if shallow.returncode != 0 or shallow.stdout.strip().lower() != "true":
+        return False
+    for deepen in _GIT_HISTORY_DEEPEN_STEPS:
+        fetched = _run(
+            ["git", "fetch", "--no-tags", f"--deepen={deepen}", "origin"],
+            cwd=ROOT,
+            check=False,
+        )
+        if fetched.returncode != 0:
+            return False
+        if check():
+            return True
+    return False
+
+
+def _changed_files_between(previous_sha: str, target_sha: str) -> tuple[str, ...] | None:
+    completed = _run(
+        [
+            "git",
+            "diff",
+            "--name-only",
+            "--diff-filter=ACDMRTUXB",
+            previous_sha,
+            target_sha,
+            "--",
+        ],
+        cwd=ROOT,
+        capture=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        return None
+    files = tuple(line.strip() for line in completed.stdout.splitlines() if line.strip())
+    if len(files) > _MAX_DEPLOY_DIFF_FILES:
+        return None
+    return files
+
+
+def _host_only_path(path: str) -> bool:
+    return path in _HOST_ONLY_ALLOWED_FILES or any(
+        path.startswith(prefix) for prefix in _HOST_ONLY_ALLOWED_PREFIXES
+    )
+
+
+def _deployment_change_contract(
+    target_sha: str,
+    *,
+    baseline_ready: bool,
+) -> dict[str, object]:
+    full_runtime: dict[str, object] = {
+        "mode": "full_runtime",
+        "previous_successful_deploy_sha": "",
+        "changed_files": [],
+        "reason": "runtime_rollout_required",
+    }
+    if not baseline_ready:
+        full_runtime["reason"] = "baseline_not_ready"
+        return full_runtime
+    previous_sha = _latest_successful_deploy_sha()
+    full_runtime["previous_successful_deploy_sha"] = previous_sha
+    if not previous_sha:
+        full_runtime["reason"] = "successful_deploy_evidence_missing"
+        return full_runtime
+    if not _git_is_ancestor(previous_sha, target_sha):
+        full_runtime["reason"] = "previous_deploy_not_proven_ancestor"
+        return full_runtime
+    changed_files = _changed_files_between(previous_sha, target_sha)
+    if changed_files is None:
+        full_runtime["reason"] = "deploy_diff_unavailable_or_too_large"
+        return full_runtime
+    full_runtime["changed_files"] = list(changed_files)
+    if any(not _host_only_path(path) for path in changed_files):
+        full_runtime["reason"] = "runtime_paths_changed"
+        return full_runtime
+    return {
+        "mode": "host_only_noop",
+        "previous_successful_deploy_sha": previous_sha,
+        "changed_files": list(changed_files),
+        "reason": "host_only_diff_proven",
+    }
+
+
+def _image_metadata(image_id: str) -> tuple[dict[str, str], tuple[str, ...]] | None:
+    template = '{"labels":{{json .Config.Labels}},"tags":{{json .RepoTags}}}'
+    completed = _run(
+        ["docker", "image", "inspect", "--format", template, image_id],
+        capture=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        return None
+    try:
+        payload = json.loads(completed.stdout.strip())
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    raw_labels = payload.get("labels")
+    labels = raw_labels if isinstance(raw_labels, dict) else {}
+    raw_tags = payload.get("tags")
+    tags = (
+        tuple(tag for tag in raw_tags if isinstance(tag, str))
+        if isinstance(raw_tags, list)
+        else ()
+    )
+    return ({str(key): str(value) for key, value in labels.items()}, tags)
+
+
+def _is_rollback_tag(tag: str) -> bool:
+    return tag.startswith(f"{APP_IMAGE}:rollback-") or tag.startswith(
+        f"{VISUAL_GATEWAY_IMAGE}:rollback-"
+    )
+
+
+def _managed_tag(tag: str) -> bool:
+    repositories = (
+        APP_IMAGE,
+        VISUAL_GATEWAY_IMAGE,
+        BACKUP_IMAGE,
+        "clientplatform-production-visual-provider-gateway",
+    )
+    return any(tag.startswith(f"{repository}:") for repository in repositories)
+
+
+def _cleanup_stale_project_images() -> dict[str, object]:
+    listed = _run(
+        ["docker", "image", "ls", "--all", "--no-trunc", "--format", "{{.ID}}"],
+        capture=True,
+        check=False,
+    )
+    if listed.returncode != 0:
+        return {
+            "removed": [],
+            "removed_count": 0,
+            "protected_count": 0,
+            "foreign_skipped_count": 0,
+            "scan_failed": True,
+        }
+    try:
+        running = _running_image_ids()
+    except DeploymentError:
+        return {
+            "removed": [],
+            "removed_count": 0,
+            "protected_count": 0,
+            "foreign_skipped_count": 0,
+            "scan_failed": True,
+        }
+    removed: list[str] = []
+    protected: set[str] = set()
+    skipped_foreign: set[str] = set()
+    seen: set[str] = set()
+    for raw in listed.stdout.splitlines():
+        image_id = raw.strip()
+        if not image_id.startswith("sha256:") or image_id in seen:
+            continue
+        seen.add(image_id)
+        if image_id in running:
+            protected.add(image_id)
+            continue
+        metadata = _image_metadata(image_id)
+        if metadata is None:
+            continue
+        labels, tags = metadata
+        if labels.get("com.docker.compose.project") != _MANAGED_PROJECT_NAME:
+            continue
+        if labels.get("com.docker.compose.service", "") not in _MANAGED_PROJECT_IMAGE_SERVICES:
+            continue
+        if any(_is_rollback_tag(tag) for tag in tags):
+            protected.add(image_id)
+            continue
+        if tags and any(not _managed_tag(tag) for tag in tags):
+            skipped_foreign.add(image_id)
+            continue
+        references = list(tags) if tags else [image_id]
+        removed_this_image = False
+        for reference in references:
+            result = _run(["docker", "image", "rm", reference], check=False)
+            if result.returncode == 0:
+                removed.append(reference)
+                removed_this_image = True
+        if not removed_this_image:
+            protected.add(image_id)
+    return {
+        "removed": removed,
+        "removed_count": len(removed),
+        "protected_count": len(protected),
+        "foreign_skipped_count": len(skipped_foreign),
+        "scan_failed": False,
+    }
 
 
 def _disk_capacity() -> DiskCapacity:
@@ -878,6 +1139,11 @@ def deploy(
             if not recover_unavailable_baseline:
                 raise DeploymentError("production_not_ready_before_deploy") from exc
 
+    change_contract = _deployment_change_contract(
+        target_sha,
+        baseline_ready=baseline_ready,
+    )
+
     # Establish the current running baseline as the new rollback generation before
     # pruning older ClientPlatform rollback images. Tagging is metadata-only and
     # does not mutate or restart production; it lets the disk guard reclaim the
@@ -908,6 +1174,7 @@ def deploy(
             ]
         )
 
+    predeploy_stale_image_cleanup = _cleanup_stale_project_images()
     image_retention = _prune_deploy_image_history(target_sha)
     predeploy_backup_image_retention = _remove_transient_backup_image()
     build_cache_retention = _prune_build_cache_for_capacity()
@@ -932,28 +1199,37 @@ def deploy(
     sales_operations_smoke: dict[str, Any] | None = None
     visual_gateway_image = ""
     post_deploy_retention: dict[str, object] | None = None
+    runtime_rollout_mode = str(change_contract.get("mode") or "full_runtime")
     try:
-        _run([*compose, "build", "visual-gateway"])
-        _run([*compose, "build", "app"])
-        _run([*compose, "up", "-d", "--force-recreate", "visual-gateway"])
-        visual_gateway_changed = True
-        _wait_for_visual_gateway(timeout_seconds)
-        _run([*compose, "up", "-d", "--force-recreate", "app", "caddy"])
-        app_changed = True
-        _wait_for_readiness(timeout_seconds)
-        _external_https(domain)
-        sales_operations_smoke = _sales_operations_smoke()
-        visual_gateway_image = _container_image(VISUAL_GATEWAY_CONTAINER)
-        _run(
-            [
-                "docker",
-                "image",
-                "tag",
-                visual_gateway_image,
-                f"{VISUAL_GATEWAY_IMAGE}:release-{target_sha}",
-            ]
-        )
-        post_deploy_retention = _post_deploy_retention(target_sha)
+        if runtime_rollout_mode == "host_only_noop":
+            _wait_for_visual_gateway(timeout_seconds)
+            _wait_for_baseline_readiness(timeout_seconds)
+            _external_https(domain)
+            sales_operations_smoke = _sales_operations_smoke()
+            visual_gateway_image = _container_image(VISUAL_GATEWAY_CONTAINER)
+            post_deploy_retention = _post_deploy_retention(target_sha)
+        else:
+            _run([*compose, "build", "visual-gateway"])
+            _run([*compose, "build", "app"])
+            _run([*compose, "up", "-d", "--force-recreate", "visual-gateway"])
+            visual_gateway_changed = True
+            _wait_for_visual_gateway(timeout_seconds)
+            _run([*compose, "up", "-d", "--force-recreate", "app", "caddy"])
+            app_changed = True
+            _wait_for_readiness(timeout_seconds)
+            _external_https(domain)
+            sales_operations_smoke = _sales_operations_smoke()
+            visual_gateway_image = _container_image(VISUAL_GATEWAY_CONTAINER)
+            _run(
+                [
+                    "docker",
+                    "image",
+                    "tag",
+                    visual_gateway_image,
+                    f"{VISUAL_GATEWAY_IMAGE}:release-{target_sha}",
+                ]
+            )
+            post_deploy_retention = _post_deploy_retention(target_sha)
     except Exception as deployment_error:  # validator: allow-wide-except - rollback must cover every failed gate
         if app_changed and baseline_ready and rollback_tag:
             try:
@@ -966,6 +1242,7 @@ def deploy(
                 )
             except Exception as rollback_error:  # validator: allow-wide-except - surface failed recovery distinctly
                 raise DeploymentError("deployment_failed_and_rollback_failed") from rollback_error
+            rollback_stale_image_cleanup = _cleanup_stale_project_images()
             rollback_evidence = _write_evidence(
                 {
                     "ok": False,
@@ -985,6 +1262,9 @@ def deploy(
                     "failure_class": type(deployment_error).__name__,
                     "rollback_full_readiness": _ready(),
                     "visual_gateway_ready": _visual_gateway_capabilities(),
+                    "rollback_stale_image_cleanup": rollback_stale_image_cleanup,
+                    "runtime_rollout_mode": runtime_rollout_mode,
+                    "change_contract": change_contract,
                     "completed_at": _completed_at(),
                 }
             )
@@ -999,6 +1279,7 @@ def deploy(
                     )
                 else:
                     _remove_first_rollout_visual_gateway(compose)
+                _cleanup_stale_project_images()
             except Exception as rollback_error:  # validator: allow-wide-except - gateway rollback is mandatory
                 raise DeploymentError("visual_gateway_deployment_failed_and_rollback_failed") from rollback_error
         if app_changed and recover_unavailable_baseline and not baseline_ready:
@@ -1020,6 +1301,8 @@ def deploy(
                     "failure_class": type(deployment_error).__name__,
                     "baseline_ready": False,
                     "rollback_skipped": True,
+                    "runtime_rollout_mode": runtime_rollout_mode,
+                    "change_contract": change_contract,
                     "completed_at": _completed_at(),
                 }
             )
@@ -1057,6 +1340,9 @@ def deploy(
             "baseline_ready": baseline_ready,
             "recovery_mode": bool(app_exists and not baseline_ready),
             "sales_operations_smoke": sales_operations_smoke,
+            "runtime_rollout_mode": runtime_rollout_mode,
+            "change_contract": change_contract,
+            "predeploy_stale_image_cleanup": predeploy_stale_image_cleanup,
             "image_retention": image_retention,
             "predeploy_backup_image_retention": predeploy_backup_image_retention,
             "build_cache_retention": build_cache_retention,
