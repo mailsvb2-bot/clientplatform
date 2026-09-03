@@ -1159,22 +1159,37 @@ Platform operator получил query-bound служебную навигаци
 - Production deploy выполнен на exact merge SHA `6b21f928272e97db5b8b79bb3adc37db62bf5798`: encrypted backup `/var/backups/clientplatform/postgres/clientplatform-20260903T052202Z.dump.age`, deploy evidence `/var/lib/clientplatform/deploy-evidence/deploy-20260903T052535Z.json`, `CLIENTPLATFORM_UPDATE_STABILITY_OK:20s`, restart count `0`, internal `/healthz` + `/readyz` = `200`, внешний root = `ClientPlatform`, публичные health/readiness/Telegram webhook = `404`.
 - Первый deploy attempt fail-closed остановился до production mutation из-за disk-capacity guard. После удаления только воспроизводимых build/package caches и obsolete ClientPlatform image history повторный canonical deploy прошёл без обхода guard; current runtime images, последняя rollback-пара, production volumes и encrypted backups сохранены. После post-deploy build-cache/image-retention cleanup фактическое использование root filesystem `74.331%`, ниже hard gate.
 
-### M6-005 — `NEXT` — Disk-safe Production Deploy Retention
+### M6-005 — `DONE` — Disk-safe Production Deploy Retention
 
-Следующий и единственный default slice закрывает обнаруженный production readiness gap: canonical deploy не должен сам оставлять disposable build artifacts так, чтобы следующий deploy на той же исправной baseline-машине блокировался собственным `75% / 7 GiB` disk guard.
+Canonical production deploy теперь различает тяжёлый `full_runtime` rollout и доказанный `host_only_noop`, сохраняет encrypted backup/health/smoke/evidence во всех режимах и не вынуждает host-only governance changes бессмысленно пересобирать runtime images.
 
-Минимальный DONE contract M6-005:
+### Evidence
 
-- не снижать и не обходить существующие pre-deploy disk thresholds; исправлять retention, а не guard;
-- production deploy после использования удаляет только exact transient operations/backup image, если он не используется running container; encrypted DB backup file остаётся нетронутым;
-- build-cache retention становится pressure-aware: обычный bounded cache допускается только при достаточном headroom, а при нарушении hard disk contract автоматически выполняется полный prune **только build cache** и повторная оценка capacity;
-- current app/visual images и один rollback для каждого сохраняются; rollback contract не ослабляется ради места;
-- `docker volume prune`, удаление production named volumes, PostgreSQL data, media/state/log volumes, encrypted backups или чужих project artifacts запрещены;
-- post-deploy evidence явно фиксирует retention mode, удалённый transient image, disk до/после cleanup и итоговую capacity readiness;
-- cleanup idempotent и fail-safe: отсутствие transient image не является ошибкой, running image никогда не удаляется;
-- regressions доказывают normal-headroom и pressure paths, сохранение rollback tags, отсутствие volume-prune команд и backward compatibility существующего deploy evidence;
-- exact-SHA production acceptance после merge должна подтвердить encrypted backup, health/readiness, public isolation, restart=0, 20s stability и disk headroom после встроенного cleanup;
-- в этом slice не менять business/domain функциональность, tenant/RBAC, messenger runtime или provider behavior.
+- Основной slice: PR #275 merged как `93c2d5b99cb5cc12d3b31d081d4adb6a71149613`; corrective production-acceptance PR #276 merged как `be6d3e743e0f85ee8cd49c84ad2c8b09b730ad74`; host-only rollout PR #277 merged как `1b228ae2f843483364a4e9ba324a5a93a92899b0`; финальный rollout-aware disk contract PR #278 merged как `48ee169cc72e687d0d8d2e89fbbe748eca41fd8b`.
+- Финальный PR #278 exact head `7e46785dc73762e2b8610f7cec25edb6afb784d8`: все 16 workflow `success`; `AI Review / gate`, regression contour и coverage ratchets green; coverage удержан на `82.23%` combined / `73.99%` branch.
+- Реальные production acceptance failures #275/#276/#277 не скрывались: hard guard дважды остановил deploy до mutation, #276 full-runtime rollout был безопасно rollback после post-deploy disk gate. Эти результаты использованы для исправления root cause, а не для ослабления full-runtime guard.
+- `full_runtime` hard contract сохранён без изменения: `<75%` root used и `>=7 GiB` free. Только доказанный по latest successful evidence + git ancestry + narrow allowlist `host_only_noop` получает отдельный conservative no-build contract `<85%` / `>=4 GiB`; неизвестный/unproven diff всегда становится `full_runtime`.
+- Host-only deploy не выполняет runtime `build`/`--force-recreate`, но сохраняет canonical encrypted backup, baseline/visual readiness, external HTTPS + polling isolation, sales operations smoke, project-scoped retention и immutable deploy evidence. Глобальные image/volume/system prune запрещены.
+- Финальный exact-SHA production acceptance `48ee169cc72e687d0d8d2e89fbbe748eca41fd8b` стартовал с `75.487%` used / `6.812 GiB` free — то есть ниже full-runtime headroom — и завершился `CLIENTPLATFORM_PRODUCTION_DEPLOY_OK:/var/lib/clientplatform/deploy-evidence/deploy-20260903T115734Z.json` + `CLIENTPLATFORM_UPDATE_STABILITY_OK:20s`.
+- Evidence: `runtime_rollout_mode=host_only_noop`, encrypted backup `/var/backups/clientplatform/postgres/clientplatform-20260903T115730Z.dump.age` (AGE header подтверждён в named backup volume), sales smoke `ok=true`, `disk_before_deploy=75.50%`, `disk_after_deploy=76.99%`, `capacity_ready=true` для host-only contract.
+- Все пять production container ID после deploy **точно совпали** с pre-deploy ID; app/visual/provider/PostgreSQL/Caddy restart count `0`. Internal `/healthz` и `/readyz` = `200`; внешний root = `200 ClientPlatform`; public health/readiness/Telegram webhook = `404`. Runtime не пересобирался и не перезапускался.
+
+### M6-006 — `NEXT` — Versioned Capability Parity Matrix + Regression Guard
+
+Следующий и единственный default slice превращает требование issue #263 о capability parity с закреплённым donor baseline в versioned executable contract, а не ручной список и не сравнение названий кнопок.
+
+Минимальный DONE contract M6-006:
+
+- на актуальном `main` ClientPlatform и закреплённом в issue #263 donor baseline построить полную матрицу всех 17 обязательных capability families;
+- каждая строка/под-capability имеет ровно один статус: `equivalent`, `genericized`, `missing`, `domain-specific`; неопределённый/пустой статус запрещён;
+- `equivalent` и `genericized` обязаны ссылаться на canonical ClientPlatform owner/surface и конкретный regression evidence/test; документация без исполняемого доказательства не считается паритетом;
+- `domain-specific` обязан явно выделять переносимый generic mechanism либо доказать отсутствие полезного общего поведения; branding/therapy runtime/secrets не переносятся;
+- `missing` не маскируется и не закрывается пустой кнопкой: каждая такая capability становится явным gap с owner decision и последующим отдельным vertical slice либо явно согласованным исключением владельца;
+- machine-readable parity manifest хранится versioned в repository и проверяется CI guard: все 17 families присутствуют, evidence paths/tests существуют, duplicate/unknown status запрещены, удаление уже доказанной capability ломает guard;
+- guard не импортирует/не запускает donor runtime и не создаёт cross-repository runtime dependency; donor snapshot фиксируется только как provenance/evidence для сравнения;
+- platform-operator и business-owner capabilities остаются разными уровнями; matrix не может легализовать global TenantContext/superuser или второй store/brain;
+- Telegram/VK/MAX parity оценивается как одно canonical application/domain поведение с adapter surfaces, а не как три независимых реализации;
+- после M6-006 merge следующий `NEXT` выбирается из первого подтверждённого `missing` operational/platform gap по risk/value, не из косметического меню.
 
 Единый шаблон для важных автоматических действий:
 
@@ -1782,7 +1797,8 @@ Duplicate tap, retry, worker restart или uncertain provider response не д�
 | M6-002 Audited Support Access Session | DONE | PR #266 merge `ddc0bd67ad9e7be549e6c5a840af36f8e5f2a402`; exact head `2e56a1498526b76526a8516cdf5badba3e88f1ae`; all 16 workflows success; GitHub coverage `82.08%` within `82.09%` baseline tolerance and branch `73.73% / 73.73%`; local full suite `3088 passed, 7 skipped`; isolated PostgreSQL 16 replay/read/revoke smoke green; no membership injection or synthetic TenantContext; production deploy not part of slice |
 | M6-003 Support Case Intake + Operator Queue | DONE | PR #268 merge `5cc038e7b2a6a617e2a07ecfb223d580f4e48ec0`; exact head `07504bf975fcc23ecdf65c793aa9b040d648dc7f`; all 16 workflows + AI Review green; review P1s resolved; coverage locked at 82.19% / 73.93%; exact-SHA production deploy `deploy-20260902T200829Z.json` with encrypted backup, health/readiness, restart=0 and 20s stability |
 | M6-004 Bounded Platform Directory Search + Access Review | DONE | PR #273 merge `6b21f928272e97db5b8b79bb3adc37db62bf5798`; exact head `33f9679907be60c26f7474bcf709367bef456f84`; all 16 workflows green; 2 review findings resolved; full CI `3138 passed, 7 skipped`; coverage `82.23% / 73.99%`; exact-SHA production deploy `deploy-20260903T052535Z.json` with encrypted backup, health/readiness, restart=0 and 20s stability |
-| M6-005 Disk-safe Production Deploy Retention | NEXT | Preserve disk guard and rollback while removing only transient deploy image/build cache under pressure; no volume/data/backups pruning; record post-cleanup disk readiness in deploy evidence |
+| M6-005 Disk-safe Production Deploy Retention | DONE | PRs #275/#276/#277/#278; final merge `48ee169cc72e687d0d8d2e89fbbe748eca41fd8b`; full-runtime 75%/7GiB unchanged; proven host-only no-build deploy accepted in production with encrypted backup, unchanged container IDs/restart=0 and 20s stability |
+| M6-006 Versioned Capability Parity Matrix + Regression Guard | NEXT | Build executable 17-family #263 donor→ClientPlatform matrix with evidence-backed statuses and CI regression guard; next runtime slice must come from a confirmed `missing` gap |
 
 ---
 
