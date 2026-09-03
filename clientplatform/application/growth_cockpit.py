@@ -334,18 +334,12 @@ def _economic_next_action(
     )
 
 
-def _action_queue(
+def _customer_work_actions(
     *,
     handoffs: list[dict[str, object]],
     sales_work: list[dict[str, object]],
-    economics: UnitEconomicsSnapshot,
-    economic_action: GrowthAction | None = None,
-    limit: int = 5,
-) -> tuple[GrowthAction, ...]:
-    """Project a small deterministic owner queue from canonical read models only."""
-
-    if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1 or limit > 10:
-        raise ValueError("owner action queue limit must be an integer between 1 and 10")
+) -> list[GrowthAction]:
+    """Project customer work in the canonical upstream order without inventing a score."""
 
     actions: list[GrowthAction] = []
     handoff_leads: set[str] = set()
@@ -413,7 +407,38 @@ def _action_queue(
                     source_id=lead_id,
                 )
             )
+    return actions
 
+
+def get_customer_work_actions(
+    *,
+    actor: TenantContext,
+    limit: int = 5,
+) -> tuple[GrowthAction, ...]:
+    """Expose the existing customer-work priority as a transport-neutral read projection."""
+
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1 or limit > 10:
+        raise ValueError("customer work action limit must be an integer between 1 and 10")
+    needs_reply = count_sales_handoff_work(actor=actor)
+    handoffs = list_sales_handoff_work(actor=actor, limit=limit) if needs_reply else []
+    sales_work = list_sales_work(actor=actor, limit=max(limit, 10))
+    return tuple(_customer_work_actions(handoffs=handoffs, sales_work=sales_work)[:limit])
+
+
+def _action_queue(
+    *,
+    handoffs: list[dict[str, object]],
+    sales_work: list[dict[str, object]],
+    economics: UnitEconomicsSnapshot,
+    economic_action: GrowthAction | None = None,
+    limit: int = 5,
+) -> tuple[GrowthAction, ...]:
+    """Project a small deterministic owner queue from canonical read models only."""
+
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1 or limit > 10:
+        raise ValueError("owner action queue limit must be an integer between 1 and 10")
+
+    actions = _customer_work_actions(handoffs=handoffs, sales_work=sales_work)
     if economic_action is not None:
         actions.append(economic_action)
 
@@ -577,5 +602,6 @@ __all__ = [
     "GrowthMoney",
     "GrowthSourceResult",
     "acquisition_source_label",
+    "get_customer_work_actions",
     "get_growth_cockpit",
 ]
