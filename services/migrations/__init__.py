@@ -11,6 +11,7 @@ from services.migrations.user_channel_routing_v1 import apply as _apply_channel_
 from services.migrations.user_channel_bridge_v1 import apply as _apply_channel_bridge
 from services.migrations.account_identity_v1 import apply as _apply_account_identity
 from services.migrations.account_consolidation_v1 import apply as _apply_account_consolidation
+from services.migrations.account_merge_log_legacy_cleanup_v1 import apply as _apply_account_merge_log_legacy_cleanup
 from services.migrations.user_privacy_export_tokens_v1 import apply as _apply_privacy_export_tokens
 from services.migrations.user_messenger_runtime_v3 import apply as _apply_messenger_runtime
 from services.migrations.messenger_delivery_outbox_v1 import apply as _apply_delivery_outbox
@@ -42,6 +43,7 @@ def apply_all_migrations(conn: sqlite3.Connection) -> None:
     _apply_channel_bridge(conn)
     _apply_account_identity(conn)
     _apply_account_consolidation(conn)
+    _apply_account_merge_log_legacy_cleanup(conn)
     _apply_privacy_export_tokens(conn)
     _apply_messenger_runtime(conn)
     _apply_delivery_outbox(conn)
