@@ -64,7 +64,7 @@ class GoalFirstAutopilotTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Главное сейчас", text)
         self.assertIn("Срочных задач сейчас нет", text)
         self.assertIn("свободных времён: 1", text)
-        self.assertEqual(labels, ["🚀 Найти новых клиентов", "🧭 Что можно сделать"])
+        self.assertEqual(labels, ["🚀 Найти новых клиентов", "🧭 Все разделы"])
         self.assertEqual(markup.inline_keyboard[0][0].callback_data, "cpo:start:business-1")
         self.assertEqual(markup.inline_keyboard[1][0].callback_data, "cpo:more:business-1")
 

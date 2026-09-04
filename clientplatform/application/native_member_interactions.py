@@ -1055,7 +1055,7 @@ def _menu_all_message(actor: TenantContext) -> CustomerInteractionMessage:
     if actor.role in _OWNER_ROLES:
         items.append(nav.TEAM)
     return CustomerInteractionMessage(
-        text="🧭 Что можно сделать\n\n" + nav.choice_help(*items),
+        text=f"{nav.ALL.label}\n\n" + nav.choice_help(*items),
         rows=(*_menu_rows(actor.role), _back_row()),
     )
 

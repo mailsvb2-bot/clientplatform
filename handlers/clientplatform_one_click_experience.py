@@ -9,7 +9,7 @@ from urllib.parse import urlencode
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, WebAppInfo
 
 from clientplatform.application.ad_connections import (
     ad_connections_enabled,
@@ -26,6 +26,7 @@ from clientplatform.domain.promotions import PromotionChannel, PromotionError
 from clientplatform.domain.tenancy import PlatformRole, TenantPermissionDenied
 from clientplatform.integrations.yandex_direct import YandexDirectError
 from clientplatform.presentation import owner_navigation as nav
+from clientplatform.runtime.cockpit_links import cockpit_web_app_url
 from config.settings import settings
 
 from . import clientplatform_ad_connections as ad
@@ -559,29 +560,43 @@ async def receive_one_click_region(message: Message, state: FSMContext) -> None:
     await _prepare_draft(message, state, data=data, region_ids=regions)
 
 
+def _more_keyboard(token: str) -> InlineKeyboardMarkup:
+    quick_actions = control._keyboard(
+        [
+            [(nav.MONEY_RESULT.label, f"cpg:period:{token}:7")],
+            [(nav.CLIENTS_SALES.label, f"cpo:clients:{token}")],
+            [(nav.SERVICES_BOOKING.label, f"cpo:work:{token}")],
+            [(nav.CONTENT_PROMOTION.label, f"cpo:content:{token}")],
+            [(nav.BUSINESS_SETTINGS.label, f"cpo:settings:{token}")],
+            [(nav.BACK.label, f"cpj:home:{token}")],
+        ]
+    )
+    cockpit_url = cockpit_web_app_url()
+    if cockpit_url is None:
+        return quick_actions
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🏠 Открыть кабинет",
+                    web_app=WebAppInfo(url=cockpit_url),
+                )
+            ],
+            *quick_actions.inline_keyboard,
+        ]
+    )
+
+
 @router.callback_query(F.data.startswith("cpo:more:"))
 async def open_more(callback: CallbackQuery) -> None:
     token = str(callback.data).split(":", 2)[2]
     await control._actor(int(callback.from_user.id), control._token_uuid(token))
     await control._callback_message(callback).answer(
-        "🧭 Что можно сделать\n\n"
-        + nav.choice_help(
-            nav.MONEY_RESULT,
-            nav.CLIENTS_SALES,
-            nav.SERVICES_BOOKING,
-            nav.CONTENT_PROMOTION,
-            nav.BUSINESS_SETTINGS,
-        ),
-        reply_markup=control._keyboard(
-            [
-                [(nav.MONEY_RESULT.label, f"cpg:period:{token}:7")],
-                [(nav.CLIENTS_SALES.label, f"cpo:clients:{token}")],
-                [(nav.SERVICES_BOOKING.label, f"cpo:work:{token}")],
-                [(nav.CONTENT_PROMOTION.label, f"cpo:content:{token}")],
-                [(nav.BUSINESS_SETTINGS.label, f"cpo:settings:{token}")],
-                [(nav.BACK.label, f"cpj:home:{token}")],
-            ]
-        ),
+        "🏠 Кабинет ClientPlatform\n\n"
+        "Откройте кабинет, чтобы увидеть главное по бизнесу в одном месте: "
+        "что происходит сегодня, клиентов, записи, продажи и настройки.\n\n"
+        "Или выберите быстрое действие прямо в Telegram:",
+        reply_markup=_more_keyboard(token),
     )
 
 

@@ -27,7 +27,7 @@ class ClientPlatformSalesGoalNavigationTests(unittest.IsolatedAsyncioTestCase):
         action = goal_contract.ACQUIRE_CLIENTS
 
         self.assertEqual(by_text[action.label], action.callback(token))
-        self.assertEqual(by_text["🧭 Что можно сделать"], f"cpo:more:{token}")
+        self.assertEqual(by_text["🧭 Все разделы"], f"cpo:more:{token}")
         self.assertEqual(len(buttons), 2)
         self.assertNotIn("💬 Обращения и продажи", by_text)
         self.assertNotIn("👥 Клиенты и запись", by_text)
@@ -49,7 +49,7 @@ class ClientPlatformSalesGoalNavigationTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(buttons[0].text, "🙋 Ответить клиентам")
         self.assertEqual(buttons[0].callback_data, f"cps:sh:{token}")
-        self.assertEqual(buttons[1].text, "🧭 Что можно сделать")
+        self.assertEqual(buttons[1].text, "🧭 Все разделы")
 
 
     def test_owner_primary_action_routes_sales_plan_and_attribution_review(self) -> None:
