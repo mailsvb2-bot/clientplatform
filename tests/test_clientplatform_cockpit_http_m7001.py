@@ -39,6 +39,8 @@ class CockpitHttpM7001Tests(unittest.IsolatedAsyncioTestCase):
             body = await response.text()
             script_response = await client.get("/clientplatform/cockpit/app.js")
             script = await script_response.text()
+            styles_response = await client.get("/clientplatform/cockpit/styles.css")
+            styles = await styles_response.text()
         finally:
             await client.close()
         self.assertEqual(response.status, 200)
@@ -50,6 +52,17 @@ class CockpitHttpM7001Tests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("localStorage", script)
         self.assertNotIn("innerHTML", script)
         self.assertIn("payload.navigation", script)
+        self.assertIn("Главный экран", body)
+        self.assertIn("Обновить", body)
+        self.assertNotIn("Home / Today", body)
+        self.assertIn("tg.BackButton.onClick", script)
+        self.assertIn("loadHome().catch(homeFail)", script)
+        self.assertIn("Роль: ${roleNames[payload.role]", script)
+        self.assertIn("Подробнее:", script)
+        self.assertNotIn("payload.timezone_name", script)
+        self.assertIn("--tg-theme-bg-color", styles)
+        self.assertIn("safe-area-inset-top", styles)
+        self.assertIn("safe-area-inset-bottom", styles)
 
     async def test_cockpit_context_authenticates_then_uses_server_context(
         self,

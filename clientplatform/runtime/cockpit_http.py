@@ -33,18 +33,19 @@ _HTML = """<!doctype html>
 <main class="shell">
 <header><div><p class="eyebrow">ClientPlatform</p><h1>Ваш бизнес</h1></div><span id="role" class="pill">Проверяем доступ…</span></header>
 <section class="business"><label for="business-select">Какой бизнес открыт</label><select id="business-select" disabled><option>Загрузка…</option></select></section>
-<section id="status" class="status">Проверяем безопасный вход через Telegram…</section>
+<section id="status" class="status"><span id="status-text">Проверяем безопасный вход через Telegram…</span><button id="status-action" class="secondary" type="button" hidden>Вернуться в бот</button></section>
 <section id="navigation" class="grid" aria-live="polite"></section>
-<section id="home-view" class="home-view" hidden><button id="home-back" type="button">Назад к разделам</button><div class="home-heading"><p class="eyebrow">Home / Today</p><h2>Сегодня</h2><p id="home-meta"></p></div><div id="home-metrics" class="metrics"></div><div id="home-money" class="money"></div><section class="home-block"><h3>Требует внимания</h3><div id="home-attention"></div></section><section class="home-block"><h3>Что сделать дальше</h3><div id="home-actions"></div></section><p id="home-empty" class="muted"></p><p id="home-limitations" class="muted"></p></section>
-<section id="explanation" class="explanation" hidden><button id="close-explanation" type="button">Назад</button><h2 id="explanation-title"></h2><p id="explanation-summary"></p><p id="explanation-when"></p><p id="explanation-reason"></p></section>
+<section id="home-view" class="home-view" aria-live="polite" hidden><div class="view-toolbar"><button id="home-back" class="secondary" type="button">Все разделы</button><button id="home-refresh" class="secondary" type="button">Обновить</button></div><div class="home-heading"><p class="eyebrow">Главный экран</p><h2>Сегодня</h2><p id="home-meta"></p></div><div id="home-metrics" class="metrics"></div><div id="home-money" class="money"></div><section id="home-attention-block" class="home-block"><h3>Требует внимания</h3><div id="home-attention"></div></section><section id="home-actions-block" class="home-block"><h3>Что посмотреть дальше</h3><div id="home-actions"></div></section><p id="home-empty" class="muted"></p><p id="home-limitations" class="muted"></p></section>
+<section id="explanation" class="explanation" hidden><button id="close-explanation" class="secondary" type="button">К разделам</button><h2 id="explanation-title"></h2><p id="explanation-summary"></p><p id="explanation-when"></p><p id="explanation-reason"></p></section>
 </main></body></html>"""
 
-_CSS = """*{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:#f4f6f8;color:#17202a}.shell{max-width:760px;margin:0 auto;padding:20px 16px 40px}header{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;margin-bottom:18px}.eyebrow{margin:0 0 4px;font-size:13px;font-weight:700;letter-spacing:.04em}h1{margin:0;font-size:30px;line-height:1.1}.pill{font-size:12px;background:#fff;border:1px solid #d9dee5;border-radius:999px;padding:8px 10px}.business,.status,.explanation{background:#fff;border:1px solid #e1e5ea;border-radius:16px;padding:14px;margin-bottom:14px}.business label{display:block;font-size:13px;font-weight:700;margin-bottom:8px}select{width:100%;min-height:44px;border:1px solid #cfd6de;border-radius:12px;background:#fff;padding:0 12px;font:inherit}.status{font-size:14px}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.card{min-height:132px;text-align:left;border:1px solid #e1e5ea;border-radius:16px;background:#fff;padding:15px;font:inherit}.card h2{font-size:17px;margin:0 0 7px}.card p{font-size:13px;line-height:1.35;margin:0;color:#52606d}.card.restricted,.card.planned{opacity:.62}.explanation h2{margin:12px 0 8px}.explanation p{line-height:1.45}.explanation button,.home-view button{min-height:42px;border:0;border-radius:12px;padding:0 14px;font:inherit;font-weight:700}.home-view{background:#fff;border:1px solid #e1e5ea;border-radius:16px;padding:14px}.home-heading h2{margin:12px 0 4px}.home-heading p{margin:0 0 12px}.metrics,.money{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:12px 0}.metric,.money-card,.attention-card{border:1px solid #e1e5ea;border-radius:14px;padding:12px}.metric strong,.money-card strong{display:block;font-size:24px;margin-top:4px}.metric span,.money-card span,.muted{font-size:12px;color:#66717d}.home-block{margin-top:18px}.home-block h3{margin:0 0 9px}.attention-card{margin-bottom:8px}.action-card{display:block;width:100%;text-align:left;background:#eef3f8;margin-bottom:8px}.action-card small{display:block;font-weight:400;margin-top:4px;color:#52606d}@media(max-width:520px){.grid,.metrics,.money{grid-template-columns:1fr}.shell{padding:14px 12px 28px}h1{font-size:27px}}"""
+_CSS = """:root{--bg:var(--tg-theme-bg-color,#f4f6f8);--surface:var(--tg-theme-secondary-bg-color,#fff);--text:var(--tg-theme-text-color,#17202a);--hint:var(--tg-theme-hint-color,#66717d);--link:var(--tg-theme-link-color,#2678d9);--button:var(--tg-theme-button-color,#2678d9);--button-text:var(--tg-theme-button-text-color,#fff);--border:rgba(127,127,127,.24)}*{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:var(--bg);color:var(--text);padding:0 0 env(safe-area-inset-bottom)}button,select{font:inherit;color:inherit}.shell{max-width:760px;margin:0 auto;padding:calc(18px + env(safe-area-inset-top)) 16px calc(40px + env(safe-area-inset-bottom))}header{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:16px}.eyebrow{margin:0 0 4px;font-size:12px;font-weight:800;letter-spacing:.045em;color:var(--hint)}h1{margin:0;font-size:29px;line-height:1.1}h2,h3{color:var(--text)}.pill{font-size:12px;background:var(--surface);border:1px solid var(--border);border-radius:999px;padding:8px 10px;max-width:46%;text-align:center}.business,.status,.explanation,.home-view{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:14px;margin-bottom:14px}.business label{display:block;font-size:13px;font-weight:750;margin-bottom:8px}select{width:100%;min-height:46px;border:1px solid var(--border);border-radius:12px;background:var(--surface);padding:0 12px}.status{font-size:14px;line-height:1.4}.status .secondary{margin-top:10px}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.card{min-height:126px;text-align:left;border:1px solid var(--border);border-radius:16px;background:var(--surface);padding:15px;position:relative}.card h2{font-size:17px;margin:0 0 7px;padding-right:56px}.card p{font-size:13px;line-height:1.38;margin:0;color:var(--hint)}.card.planned{border-style:dashed}.card.restricted{opacity:.72}.badge{position:absolute;right:10px;top:10px;font-size:10px;font-weight:800;border-radius:999px;padding:4px 7px;background:var(--bg);color:var(--hint)}.badge.available{background:var(--button);color:var(--button-text)}.explanation h2{margin:14px 0 8px}.explanation p{line-height:1.5}.secondary,.action-card{min-height:44px;border:1px solid var(--border);border-radius:12px;padding:0 14px;background:var(--bg);font-weight:700}.view-toolbar{display:flex;justify-content:space-between;gap:10px}.home-heading h2{margin:14px 0 4px}.home-heading p{margin:0 0 12px;color:var(--hint)}.metrics,.money{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:12px 0}.metric,.money-card,.attention-card{border:1px solid var(--border);border-radius:14px;padding:12px}.metric strong,.money-card strong{display:block;font-size:24px;margin-top:4px}.metric span,.money-card span,.muted{font-size:12px;color:var(--hint);line-height:1.4}.home-block{margin-top:18px}.home-block h3{margin:0 0 9px;font-size:16px}.attention-card{margin-bottom:8px}.action-card{display:block;width:100%;text-align:left;margin-bottom:8px}.action-card small{display:block;font-weight:400;margin-top:4px;color:var(--hint);line-height:1.35}.busy{opacity:.66;pointer-events:none}@media(max-width:520px){.grid,.metrics,.money{grid-template-columns:1fr}.shell{padding-left:12px;padding-right:12px}h1{font-size:27px}.pill{max-width:52%}.card{min-height:auto}.view-toolbar{position:sticky;top:env(safe-area-inset-top);z-index:2;background:var(--surface);padding:2px 0 8px}}"""
 
 _JS = r"""(() => {
   'use strict';
   const tg = window.Telegram && window.Telegram.WebApp;
-  const status = document.getElementById('status');
+  const statusText = document.getElementById('status-text');
+  const statusAction = document.getElementById('status-action');
   const nav = document.getElementById('navigation');
   const select = document.getElementById('business-select');
   const role = document.getElementById('role');
@@ -56,119 +57,114 @@ _JS = r"""(() => {
   const close = document.getElementById('close-explanation');
   const home = document.getElementById('home-view');
   const homeBack = document.getElementById('home-back');
+  const homeRefresh = document.getElementById('home-refresh');
   const homeMeta = document.getElementById('home-meta');
   const homeMetrics = document.getElementById('home-metrics');
   const homeMoney = document.getElementById('home-money');
+  const homeAttentionBlock = document.getElementById('home-attention-block');
+  const homeActionsBlock = document.getElementById('home-actions-block');
   const homeAttention = document.getElementById('home-attention');
   const homeActions = document.getElementById('home-actions');
   const homeEmpty = document.getElementById('home-empty');
   const homeLimitations = document.getElementById('home-limitations');
   const initData = tg && typeof tg.initData === 'string' ? tg.initData : '';
+  const roleNames = {owner:'Владелец',administrator:'Администратор',manager:'Менеджер',marketer:'Маркетолог',analyst:'Аналитик',content_manager:'Контент-менеджер',support:'Поддержка',customer:'Клиент'};
+  const periodNames = {'7d':'7 дней','30d':'30 дней','today':'сегодня'};
   let navigationItems = [];
+  let currentView = 'home';
+  let lastHomePayload = null;
 
   const text = (node, value) => { node.textContent = value == null ? '' : String(value); };
-  const showNavigation = () => { explanation.hidden = true; home.hidden = true; nav.hidden = false; };
+  const screenStatus = (item) => {
+    if (item.status === 'restricted') return 'restricted';
+    if (item.id === 'home' && item.status === 'available') return 'available';
+    return 'planned';
+  };
+  const syncBackButton = () => {
+    if (!tg || !tg.BackButton) return;
+    if (currentView === 'home') tg.BackButton.hide(); else tg.BackButton.show();
+  };
+  const showNavigation = () => { currentView = 'navigation'; explanation.hidden = true; home.hidden = true; nav.hidden = false; syncBackButton(); };
+  const showHomeView = () => { currentView = 'home'; explanation.hidden = true; nav.hidden = true; home.hidden = false; syncBackButton(); };
+  const setHomeBusy = (busy) => { home.classList.toggle('busy', Boolean(busy)); homeRefresh.disabled = Boolean(busy); home.setAttribute('aria-busy', busy ? 'true' : 'false'); };
+  const closeToBot = () => { if (tg && typeof tg.close === 'function') tg.close(); else window.history.back(); };
+  statusAction.addEventListener('click', closeToBot);
   close.addEventListener('click', showNavigation);
   homeBack.addEventListener('click', showNavigation);
 
   const showExplanation = (item) => {
-    text(title, item.title);
-    text(summary, item.summary);
-    text(when, `Если Вам нужно: ${item.when_to_use}`);
-    text(reason, item.reason || 'Доступ подтверждён сервером. Действия внутри раздела всё равно проверяют свои права отдельно.');
-    nav.hidden = true;
-    home.hidden = true;
-    explanation.hidden = false;
+    const state = screenStatus(item);
+    currentView = 'explanation';
+    text(title, item.title); text(summary, item.summary); text(when, `Когда пригодится: ${item.when_to_use}`);
+    if (state === 'planned') text(reason, 'Экран этого раздела ещё подключается. Пока используйте «Сегодня» и быстрые команды в боте.');
+    else if (state === 'restricted') text(reason, item.reason || 'Для Вашей роли этот раздел недоступен. Если он нужен, попросите владельца бизнеса изменить доступ.');
+    else text(reason, item.reason || 'Раздел доступен.');
+    nav.hidden = true; home.hidden = true; explanation.hidden = false; syncBackButton();
   };
 
   const appendMetric = (container, label, value, note) => {
-    const card = document.createElement('div');
-    card.className = container === homeMoney ? 'money-card' : 'metric';
-    const caption = document.createElement('span');
-    const number = document.createElement('strong');
-    const meaning = document.createElement('span');
-    text(caption, label); text(number, value); text(meaning, note);
-    card.append(caption, number, meaning); container.appendChild(card);
+    const card = document.createElement('div'); card.className = container === homeMoney ? 'money-card' : 'metric';
+    const caption = document.createElement('span'); const number = document.createElement('strong'); const meaning = document.createElement('span');
+    text(caption, label); text(number, value); text(meaning, note); card.append(caption, number, meaning); container.appendChild(card);
   };
 
   const renderHome = (payload) => {
-    homeMetrics.replaceChildren(); homeMoney.replaceChildren();
-    homeAttention.replaceChildren(); homeActions.replaceChildren();
-    text(homeMeta, `${payload.business_name} · ${payload.timezone_name}`);
+    lastHomePayload = payload;
+    homeMetrics.replaceChildren(); homeMoney.replaceChildren(); homeAttention.replaceChildren(); homeActions.replaceChildren();
+    text(homeMeta, `${payload.business_name} · данные на сегодня`);
     for (const item of payload.metrics || []) appendMetric(homeMetrics, item.title, item.value, item.meaning);
-    for (const item of payload.money || []) appendMetric(homeMoney, `Подтверждённая выручка · ${item.period}`, item.display, item.meaning);
-    for (const item of payload.attention || []) {
-      const card = document.createElement('div'); card.className = 'attention-card'; text(card, item); homeAttention.appendChild(card);
-    }
+    for (const item of payload.money || []) appendMetric(homeMoney, `Подтверждённая выручка · ${periodNames[item.period] || item.period}`, item.display, item.meaning);
+    for (const item of payload.attention || []) { const card = document.createElement('div'); card.className = 'attention-card'; text(card, item); homeAttention.appendChild(card); }
+    homeAttentionBlock.hidden = !(payload.attention || []).length;
     for (const item of payload.actions || []) {
+      const target = navigationItems.find((entry) => entry.id === item.section); const state = target ? screenStatus(target) : 'planned';
       const button = document.createElement('button'); button.type = 'button'; button.className = 'action-card';
-      const label = document.createElement('span'); const detail = document.createElement('small');
-      text(label, item.title); text(detail, item.reason); button.append(label, detail);
-      button.addEventListener('click', () => {
-        const target = navigationItems.find((entry) => entry.id === item.section);
-        if (target) showExplanation(target);
-      });
-      homeActions.appendChild(button);
+      const label = document.createElement('span'); const detail = document.createElement('small'); const cleanTitle = String(item.title || '').replace(/^Открыть:\s*/, '');
+      text(label, state === 'available' ? cleanTitle : `Подробнее: ${cleanTitle}`);
+      text(detail, state === 'available' ? item.reason : `${item.reason} Экран раздела пока подключается.`);
+      button.append(label, detail); button.addEventListener('click', () => { if (target) showExplanation(target); }); homeActions.appendChild(button);
     }
+    homeActionsBlock.hidden = !(payload.actions || []).length;
     text(homeEmpty, payload.empty_message || '');
-    text(homeLimitations, (payload.limitations || []).length ? 'Часть источников сейчас недоступна. ClientPlatform не подменяет недостающие данные нулями.' : '');
-    nav.hidden = true; explanation.hidden = true; home.hidden = false;
+    text(homeLimitations, (payload.limitations || []).length ? 'Некоторые данные сейчас временно недоступны. Остальная информация показана без догадок.' : '');
+    showHomeView();
   };
 
   const post = async (path, businessId) => {
-    const body = {init_data: initData};
-    if (businessId) body.business_id = businessId;
+    const body = {init_data: initData}; if (businessId) body.business_id = businessId;
     const response = await fetch(path, {method:'POST', headers:{'Content-Type':'application/json'}, credentials:'same-origin', cache:'no-store', body:JSON.stringify(body)});
-    const payload = await response.json().catch(() => ({error:'invalid_response'}));
-    if (!response.ok) throw new Error(payload.error || 'access_denied');
-    return payload;
+    const payload = await response.json().catch(() => ({error:'invalid_response'})); if (!response.ok) throw new Error(payload.error || 'access_denied'); return payload;
   };
-
-  const loadHome = async () => renderHome(await post('/clientplatform/cockpit/home', select.value));
+  const loadHome = async () => { showHomeView(); setHomeBusy(true); text(homeMeta, 'Обновляем данные…'); try { renderHome(await post('/clientplatform/cockpit/home', select.value)); } finally { setHomeBusy(false); } };
+  homeRefresh.addEventListener('click', () => loadHome().catch(homeFail));
   const homeFail = (error) => {
+    setHomeBusy(false);
     if (error && ['expired_init_data','business_access_denied','access_denied'].includes(error.message)) { fail(error); return; }
-    homeMetrics.replaceChildren(); homeMoney.replaceChildren(); homeAttention.replaceChildren(); homeActions.replaceChildren();
-    text(homeMeta, 'Не удалось обновить сводку');
-    text(homeEmpty, 'Home временно недоступен. Остальные разрешённые разделы кабинета продолжают работать.');
-    text(homeLimitations, 'Вернитесь к разделам и попробуйте обновить сводку позже.');
-    nav.hidden = true; explanation.hidden = true; home.hidden = false;
+    homeMetrics.replaceChildren(); homeMoney.replaceChildren(); homeAttention.replaceChildren(); homeActions.replaceChildren(); homeAttentionBlock.hidden = true; homeActionsBlock.hidden = true;
+    text(homeMeta, 'Не удалось обновить сводку'); text(homeEmpty, 'Сводка временно недоступна. Нажмите «Обновить» или откройте список разделов.'); text(homeLimitations, 'Ваши данные и права доступа не менялись.'); showHomeView();
   };
-  const showItem = (item) => {
-    if (item.id === 'home' && item.status === 'available') { loadHome().catch(homeFail); return; }
-    showExplanation(item);
-  };
+  const showItem = (item) => { if (item.id === 'home' && screenStatus(item) === 'available') { loadHome().catch(homeFail); return; } showExplanation(item); };
 
   const render = (payload) => {
     nav.replaceChildren(); select.replaceChildren(); navigationItems = payload.navigation || [];
-    text(role, payload.role ? `Роль: ${payload.role}` : 'Нужен бизнес');
-    if (payload.onboarding_required) {
-      text(status, 'У Вас пока нет подключённого бизнеса. Вернитесь в бот и выберите «Подключить мой бизнес».');
-      select.disabled = true; return;
-    }
-    for (const business of payload.businesses || []) {
-      const option = document.createElement('option'); option.value = business.id;
-      text(option, `${business.name} · ${business.role}`); option.selected = Boolean(business.selected); select.appendChild(option);
-    }
-    select.disabled = false;
-    text(status, `Открыт бизнес «${payload.business_name}». Начните с «Сегодня» — там видно, что требует внимания.`);
+    text(role, payload.role ? `Роль: ${roleNames[payload.role] || payload.role}` : 'Нужен бизнес'); statusAction.hidden = true;
+    if (payload.onboarding_required) { text(statusText, 'У Вас пока нет подключённого бизнеса. Вернитесь в бот и нажмите «Подключить мой бизнес».'); select.disabled = true; statusAction.hidden = false; showNavigation(); return; }
+    for (const business of payload.businesses || []) { const option = document.createElement('option'); option.value = business.id; text(option, `${business.name} · ${roleNames[business.role] || business.role}`); option.selected = Boolean(business.selected); select.appendChild(option); }
+    select.disabled = false; text(statusText, `Открыт бизнес «${payload.business_name}». Сначала показываем главное на сегодня.`);
     for (const item of navigationItems) {
-      const button = document.createElement('button'); button.type = 'button'; button.className = `card ${item.status}`;
-      const heading = document.createElement('h2'); const copy = document.createElement('p');
-      text(heading, item.title); text(copy, item.summary); button.append(heading, copy);
-      button.addEventListener('click', () => showItem(item)); nav.appendChild(button);
+      const state = screenStatus(item); const button = document.createElement('button'); button.type = 'button'; button.className = `card ${state}`;
+      const heading = document.createElement('h2'); const copy = document.createElement('p'); const badge = document.createElement('span'); badge.className = `badge ${state}`;
+      text(heading, item.title); text(copy, item.summary); text(badge, state === 'available' ? 'Работает' : state === 'planned' ? 'Скоро' : 'Нет доступа'); button.append(heading, copy, badge); button.addEventListener('click', () => showItem(item)); nav.appendChild(button);
     }
-    showNavigation();
+    loadHome().catch(homeFail);
   };
-
-  const load = async (businessId) => render(await post('/clientplatform/cockpit/context', businessId));
+  const load = async (businessId) => { select.disabled = true; text(statusText, 'Проверяем доступ и загружаем бизнес…'); return render(await post('/clientplatform/cockpit/context', businessId)); };
   select.addEventListener('change', () => load(select.value).catch(fail));
   function fail(error) {
-    nav.replaceChildren(); home.hidden = true; explanation.hidden = true; select.disabled = true;
-    text(role, 'Доступ не подтверждён');
-    text(status, error && error.message === 'expired_init_data'
-      ? 'Сессия Telegram устарела. Закройте кабинет и откройте его снова из бота.'
-      : 'Не удалось подтвердить безопасный доступ. Закройте кабинет и откройте его снова из бота.');
+    nav.replaceChildren(); home.hidden = true; explanation.hidden = true; select.disabled = true; currentView = 'navigation'; syncBackButton(); text(role, 'Доступ не подтверждён'); statusAction.hidden = false;
+    text(statusText, error && error.message === 'expired_init_data' ? 'Сессия Telegram устарела. Вернитесь в бот и откройте кабинет ещё раз.' : 'Не удалось подтвердить безопасный доступ. Вернитесь в бот и откройте кабинет ещё раз.');
   }
+  if (tg && tg.BackButton && typeof tg.BackButton.onClick === 'function') tg.BackButton.onClick(() => { if (currentView === 'explanation') showNavigation(); else if (currentView === 'navigation') { if (lastHomePayload) renderHome(lastHomePayload); else loadHome().catch(homeFail); } });
   if (!initData) { fail(new Error('missing_init_data')); }
   else { if (tg) { tg.ready(); tg.expand(); } load(null).catch(fail); }
 })();"""

@@ -203,7 +203,7 @@ async def receive_existing_bot_token(
         f"✅ @{completed.verified_username or 'Ваш бот'} подключён к ClientPlatform.\n\n"
         "Готово — больше никаких технических действий не требуется.",
         reply_markup=control._keyboard(
-            [[("🏠 В кабинет", f"cpb:b:{_business_token(completed.business_id)}")]]
+            [[("К управлению бизнесом", f"cpb:b:{_business_token(completed.business_id)}")]]
         ),
     )
 

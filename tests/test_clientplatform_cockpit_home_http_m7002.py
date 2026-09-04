@@ -136,7 +136,7 @@ class CockpitHomeHttpM7002Tests(unittest.IsolatedAsyncioTestCase):
             await client.close()
         self.assertEqual(shell_response.status, 200)
         self.assertIn("Требует внимания", shell)
-        self.assertIn("Что сделать дальше", shell)
+        self.assertIn("Что посмотреть дальше", shell)
         self.assertIn("/clientplatform/cockpit/home", script)
         self.assertNotIn("localStorage", script)
         self.assertNotIn("URLSearchParams", script)
