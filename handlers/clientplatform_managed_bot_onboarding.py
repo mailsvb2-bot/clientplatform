@@ -221,7 +221,7 @@ async def _send_success(
             [
                 [
                     (
-                        "Открыть кабинет",
+                        "К управлению бизнесом",
                         f"cpb:b:{_business_token(completed.business_id)}",
                     )
                 ],

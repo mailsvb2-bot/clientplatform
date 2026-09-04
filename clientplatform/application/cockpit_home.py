@@ -260,7 +260,7 @@ def build_cockpit_home(
             title="Клиентов всего",
             value=int(getattr(activity, "total", 0)),
             source="customer_activity",
-            meaning="Активные клиенты этого бизнеса; показатель не трактуется как число за сегодня.",
+            meaning="Сколько активных клиентов сейчас есть в этом бизнесе.",
         )
 
     try:
@@ -306,7 +306,7 @@ def build_cockpit_home(
                 title="Свободных окон сегодня",
                 value=open_today,
                 source="booking_slots",
-                meaning="Оставшиеся открытые слоты в локальном сегодняшнем дне бизнеса.",
+                meaning="Сколько свободных окон осталось сегодня.",
             )
             _metric(
                 metrics,
@@ -314,7 +314,7 @@ def build_cockpit_home(
                 title="Предстоящих записей сегодня",
                 value=booked_today,
                 source="booking_slots",
-                meaning="Оставшиеся забронированные слоты в локальном сегодняшнем дне бизнеса.",
+                meaning="Сколько записей ещё запланировано на сегодня.",
             )
 
     if not actions:
@@ -358,7 +358,7 @@ def build_cockpit_home(
             title="Ждут решения по автоматизации",
             value=pending,
             source="automation_policy",
-            meaning="Текущие approval-запросы; Home их не подтверждает и не исполняет.",
+            meaning="Сколько решений по автоматизации ждут Вашего внимания.",
         )
         if pending and len(attention) < _MAX_ATTENTION:
             attention.append(f"Есть решения по автоматизации, ожидающие проверки: {pending}.")
@@ -389,8 +389,8 @@ def build_cockpit_home(
     empty_message = None
     if not has_factual_signals:
         empty_message = (
-            "На сегодня нет доступных Вашей роли срочных сигналов. "
-            "ClientPlatform не расширяет права и не подменяет недоступные данные нулями."
+            "На сегодня нет срочных задач или важных сигналов, доступных Вашей роли. "
+            "Если что-то потребует внимания, это появится здесь."
         )
     return CockpitHomeSnapshot(
         schema_version=_SCHEMA_VERSION,

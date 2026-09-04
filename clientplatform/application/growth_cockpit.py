@@ -146,25 +146,25 @@ def _metrics(snapshot: UnitEconomicsSnapshot) -> tuple[GrowthMetric, ...]:
             key="leads",
             value=snapshot.leads,
             source="durable_outcome_ledger",
-            meaning="Новые лиды, подтверждённые каноническими outcome-событиями.",
+            meaning="Новые обращения за выбранный период.",
         ),
         GrowthMetric(
             key="qualified_leads",
             value=snapshot.qualified_leads,
             source="durable_outcome_ledger",
-            meaning="Лиды, для которых подтверждена квалификация.",
+            meaning="Обращения, по которым подтверждён интерес клиента.",
         ),
         GrowthMetric(
             key="bookings",
             value=snapshot.bookings,
             source="durable_outcome_ledger",
-            meaning="Созданные записи, подтверждённые каноническими outcome-событиями.",
+            meaning="Новые записи за выбранный период.",
         ),
         GrowthMetric(
             key="paid_customers",
             value=snapshot.paid_customers,
             source="durable_outcome_ledger",
-            meaning="Уникальные клиенты с подтверждённой положительной оплатой.",
+            meaning="Клиенты с подтверждённой оплатой.",
         ),
     )
 
@@ -175,7 +175,7 @@ def _revenue(snapshot: UnitEconomicsSnapshot) -> tuple[GrowthMoney, ...]:
             amount_minor=item.amount_minor,
             currency=item.currency,
             source="revenue_attribution",
-            meaning="Выручка из денежных outcome-событий с канонической attribution.",
+            meaning="Подтверждённая выручка по известным источникам.",
         )
         for item in snapshot.revenue_by_currency
     )

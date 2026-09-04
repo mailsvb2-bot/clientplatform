@@ -73,7 +73,7 @@ def _nav_item(
             summary=summary,
             when_to_use=when_to_use,
             status="planned",
-            reason="Раздел уже предусмотрен архитектурой и будет подключаться без создания второго источника данных.",
+            reason="Этот раздел скоро появится в кабинете. Пока используйте «Сегодня» и быстрые команды в боте.",
         )
     if allowed:
         return CockpitNavigationItem(
@@ -89,7 +89,7 @@ def _nav_item(
         summary=summary,
         when_to_use=when_to_use,
         status="restricted",
-        reason="В Вашей текущей роли этот раздел недоступен. Права проверяет сервер, а не интерфейс.",
+        reason="Для Вашей роли этот раздел недоступен. Если он нужен, попросите владельца бизнеса изменить доступ.",
     )
 
 
@@ -123,7 +123,7 @@ def cockpit_navigation(actor: TenantContext) -> tuple[CockpitNavigationItem, ...
         _nav_item(
             id="calendar",
             title="Календарь и записи",
-            summary="Записи, слоты и ближайшие встречи без отдельного календарного мозга.",
+            summary="Ближайшие записи, свободное время и встречи.",
             when_to_use="Если нужно посмотреть или организовать ближайшие записи.",
             allowed=can_customers,
         ),
@@ -144,14 +144,14 @@ def cockpit_navigation(actor: TenantContext) -> tuple[CockpitNavigationItem, ...
         _nav_item(
             id="content",
             title="Контент и материалы",
-            summary="Программы, материалы, публикации и контент-план из канонических данных.",
+            summary="Программы, материалы, публикации и контент-план.",
             when_to_use="Если нужно подготовить, найти или запланировать материалы для клиентов.",
             allowed=can_content,
         ),
         _nav_item(
             id="automation",
             title="Автоматизация",
-            summary="Разрешённая автоматическая работа, лимиты, согласования и остановка.",
+            summary="Рутинные действия, согласования, ограничения и остановка автоматизации.",
             when_to_use="Если хотите поручить рутину системе или проверить, что ей разрешено делать.",
             allowed=can_manage_business,
         ),
@@ -172,7 +172,7 @@ def cockpit_navigation(actor: TenantContext) -> tuple[CockpitNavigationItem, ...
         _nav_item(
             id="team",
             title="Команда и роли",
-            summary="Участники бизнеса и их разрешённые роли без скрытого повышения прав.",
+            summary="Сотрудники бизнеса и их права доступа.",
             when_to_use="Если нужно дать сотруднику доступ или изменить его роль.",
             allowed=can_team,
         ),
