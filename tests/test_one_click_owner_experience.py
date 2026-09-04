@@ -161,26 +161,30 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
             for row in out.answer.await_args.kwargs["reply_markup"].inline_keyboard
             for button in row
         ]
-        self.assertEqual(labels, ["🚀 Найти новых клиентов", "🧭 Что можно сделать"])
+        self.assertEqual(labels, ["🚀 Найти новых клиентов", "🧭 Все разделы"])
         self.assertNotIn("🚀 Получить клиентов", labels)
 
-    async def test_all_capabilities_menu_preserves_former_home_entrypoints(self) -> None:
+    async def test_all_capabilities_menu_leads_with_real_cockpit_and_keeps_quick_actions(self) -> None:
         out = outbound_message()
         cb = callback("cpo:more:business-1", out)
         with (
             patch.object(one_click.control, "_actor", new=AsyncMock(return_value="actor")),
             patch.object(one_click.control, "_token_uuid", side_effect=lambda value: value),
             patch.object(one_click.control, "_callback_message", return_value=out),
+            patch.object(
+                one_click,
+                "cockpit_web_app_url",
+                return_value="https://app.example.test/clientplatform/cockpit",
+            ),
         ):
             await one_click.open_more(cb)
-        labels = [
-            button.text
-            for row in out.answer.await_args.kwargs["reply_markup"].inline_keyboard
-            for button in row
-        ]
+        answer_text = out.answer.await_args.args[0]
+        markup = out.answer.await_args.kwargs["reply_markup"]
+        labels = [button.text for row in markup.inline_keyboard for button in row]
         self.assertEqual(
             labels,
             [
+                "🏠 Открыть кабинет",
                 "💰 Деньги и результат",
                 "👥 Клиенты и продажи",
                 "📅 Услуги и запись",
@@ -189,8 +193,23 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
                 "⬅️ Назад",
             ],
         )
+        self.assertEqual(
+            markup.inline_keyboard[0][0].web_app.url,
+            "https://app.example.test/clientplatform/cockpit",
+        )
+        self.assertIn("🏠 Кабинет ClientPlatform", answer_text)
+        self.assertIn("быстрое действие прямо в Telegram", answer_text)
+        self.assertNotIn("Если Вам нужно:", answer_text)
+        self.assertNotIn("🧭 Что можно сделать", answer_text)
         self.assertNotIn("💬 Подключить мессенджеры", labels)
         self.assertNotIn("📣 Реклама и продвижение", labels)
+
+    def test_all_capabilities_menu_falls_back_to_quick_actions_without_public_cockpit(self) -> None:
+        with patch.object(one_click, "cockpit_web_app_url", return_value=None):
+            markup = one_click._more_keyboard("business-1")
+        labels = [button.text for row in markup.inline_keyboard for button in row]
+        self.assertNotIn("🏠 Открыть кабинет", labels)
+        self.assertEqual(labels[0], "💰 Деньги и результат")
 
     async def test_no_open_slot_reduces_flow_to_one_required_next_action(self) -> None:
         out = outbound_message()
@@ -349,6 +368,7 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             labels,
             [
+                "🏠 Открыть кабинет",
                 "💰 Деньги и результат",
                 "👥 Клиенты и продажи",
                 "📅 Услуги и запись",

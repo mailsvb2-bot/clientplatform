@@ -137,7 +137,7 @@ class NativeMemberParityNavigationTests(unittest.TestCase):
         ):
             message = ui._menu_message(actor, linked=False)
         self.assertIn("Не знаете, что нажать?", message.text)
-        self.assertIn("Что можно сделать", message.text)
+        self.assertIn("Все разделы", message.text)
         self.assertNotIn("главное безопасное действие", message.text)
         self.assertNotIn("вместо догадки", message.text)
 
