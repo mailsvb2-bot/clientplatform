@@ -1274,7 +1274,7 @@ Canonical production deploy теперь различает тяжёлый `full
 - exact-main production rollout выполнен canonical locked updater с encrypted backup и `full_runtime`; evidence `/var/lib/clientplatform/deploy-evidence/deploy-20260903T201326Z.json`, `ok=true`, `target_sha=7e01f20ba1c57bd1f4475378eb68727e70fc56b9`, baseline ready, 20s stability green, app/Caddy restart count=0;
 - live HTTPS acceptance: `/clientplatform/cockpit`=200 с CSP/no-store, `/clientplatform/cockpit/app.js`=200 без `initDataUnsafe`/`localStorage`, forged `POST /clientplatform/cockpit/context` fail-closed=401 `invalid_init_data`; production dashboard строит единственную `🏠 Открыть кабинет` WebApp-кнопку на `https://app.clientplatform.ru/clientplatform/cockpit`; свежие app/Caddy severe-log scans чистые.
 
-### M7-002 — `NEXT` — Home / Today Cockpit Projection
+### M7-002 — `DONE` — Home / Today Cockpit Projection
 
 Первый содержательный экран cockpit должен отвечать на вопрос владельца или сотрудника: «Что происходит сегодня и что мне делать дальше?». Он не создаёт новую task/analytics модель, а собирает разрешённую конкретной роли read-only проекцию из уже существующих canonical owners.
 
@@ -1290,6 +1290,37 @@ Canonical production deploy теперь различает тяжёлый `full
 - mobile UI объясняет человеческим языком «что произошло», «почему это важно» и «что нажать», сохраняя быстрый Telegram bot action surface;
 - regressions покрывают owner/admin/manager/support/content/marketer/analyst visibility, cross-tenant forged business, stale/revoked membership, business-local day boundary, empty day, partial-source failure, deterministic action order, money/currency safety, no mutation on GET/refresh и deep-link authorization;
 - production deploy выполняется только после green protected merge и отдельной команды владельца.
+
+Закрыто 2026-09-04. Доказательство M7-002:
+
+- PR #290 final exact head `6a76a36b9e72fbd218efb3f7f61a01b1066cb45d` прошёл 17/17 pull-request workflows и squash-merged через защищённый `main` как `0b426312541dc5f86e3ef01edc4f5dc74476807b`; protection/bypass не ослаблялись, unresolved review threads=0;
+- combined coverage `82.42%` и branch coverage `74.07%` удержали существующий ratchet без снижения baseline; Canon, Product Purity, Capability Parity 20/20, Production Isolation, Release Gate, PostgreSQL concurrency, critical pinned mypy/Bandit и User Scenario Matrix green;
+- `Home / Today` — versioned bounded read-only projection без отдельного home-store: он композиционно использует существующие growth/action queue, sales/handoff, booking, customer activity, outcome/money и automation-approval owners;
+- customer handoff/sales priority не скопирована: существующая deterministic composition из `growth_cockpit` выделена в один transport-neutral helper и продолжает владеть порядком для старого и нового surface;
+- каждый refresh повторяет signed Telegram initData admission, canonical account alias, business selection и live membership/RBAC; `TenantAccessDenied` никогда не превращается в optional-source warning;
+- role matrix доказана regressions: owner/admin/manager получают разрешённые customer/outcome/money сигналы; support — customer/sales/booking без money; marketer — только разрешённые локальные automation signals; content/analyst не получают customer/money leakage;
+- today boundary вычисляется в canonical business timezone; multi-currency money остаётся раздельным по ISO currency, неизвестная валюта/повреждённый booking source становятся explicit unavailable, а не ложным нулём;
+- Home refresh не вызывает Yandex/provider analytics: provider read path может обновлять credential bundle при refresh токена, поэтому он остаётся только явным Growth surface, а ежедневное открытие Home не имеет скрытых network/credential side effects;
+- UI использует `textContent`, не хранит tenant/role в URL/localStorage, Home CTA только маршрутизирует к уже server-authorized разделу и не выполняет approval/send/spend; cockpit runtime включён в централизованный critical type/security manifest;
+- production deploy M7-002 не выполнялся: текущая команда владельца была на продолжение разработки, а roadmap требует отдельного explicit production command для каждого code slice.
+
+### M7-003 — `NEXT` — Customers & CRM Cockpit
+
+Следующий содержательный экран превращает уже существующую canonical customer/CRM модель в понятный мобильный рабочий surface. Он не создаёт вторую CRM, customer table, timeline store или sales state machine: Mini App только ищет, отображает и маршрутизирует разрешённые действия к существующим owners.
+
+Минимальный DONE contract M7-003:
+
+- каждый list/search/detail/timeline request повторяет M7-001 signed identity → canonical account alias → selected business → live tenant/RBAC; customer UUID из frontend никогда не является authority и cross-tenant/stale membership fail-close;
+- transport-neutral customer projection переиспользует canonical `customers`, `customer_timeline`, sales work/handoff и customer identity owners; никакой второй durable customer index/timeline store не создаётся;
+- список bounded/paginated и безопасно ищется по разрешённым display/identity-derived полям без передачи raw external provider subject/token/credential; поиск не допускает unbounded full-table payload;
+- карточка клиента показывает понятные основные сведения, следующий customer/sales step и последние timeline events; money/attribution fragments появляются только там, где текущая роль уже имеет canonical ledger permission;
+- support/owner/admin/manager visibility сохраняет существующий customer-record permission, а marketer/content/analyst не получают customer PII через скрытые endpoints/deep links; frontend hide не заменяет backend deny;
+- timeline остаётся read-only canonical chronology из существующих facts; порядок/дедупликация принадлежат `get_customer_timeline`, а Mini App не материализует и не переоценивает события;
+- действия из карточки — только deep-link/route к существующим customer/sales/booking use-cases; создание/архивирование/сообщение/оплата/продажа не выполняются GET/list/detail refresh и требуют своих текущих permission/idempotency/approval boundaries;
+- API payload versioned/bounded, no-store, без secrets/raw infrastructure metadata; malformed optional source отображается как unavailable без утечки чужого tenant;
+- mobile UX позволяет дилетанту: найти клиента → понять последнюю историю → увидеть, что делать дальше → перейти в нужное действие, с человеческими «что это»/«когда нажимать»;
+- regressions покрывают owner/admin/manager/support и denied marketer/content/analyst, search pagination/bounds, forged customer/business, revoked membership, timeline role redaction, deterministic order, no raw external identity leakage, no mutation on refresh и authorized action routing;
+- production deploy только после green protected merge и отдельной explicit команды владельца.
 
 Единый шаблон для важных автоматических действий:
 
@@ -1902,7 +1933,8 @@ Duplicate tap, retry, worker restart или uncertain provider response не д�
 | M6-007 Audited Duplicate Account Consolidation | DONE | PR #282 squash-merge `59029646142f96e217778c7a803464766390082e`; exact head `6e269af891f0c3ec8375d83e0671dff85de83552`; 17/17 workflows green; PostgreSQL consolidation concurrency green; parity = 20/20 proven, missing=0; coverage locked at 82.38% / 74.02%; #263 closed at merge |
 | M6-008 Repository Merge Governance Enforcement | DONE | GitHub `main` protected for everyone; strict 11-context required-check set; direct push negative probe rejected with `GH006`; force/delete disabled; PR #285 exact head `e3aa3d0f87261d4436cc824d31da8e3933a1e5d4` passed 17/17 workflows and merged through active protection as `3f768752a75fef95b990d17e08f70db59cddf021`; no production runtime/data change |
 | M7-001 Authenticated Business Cockpit Shell + Server-Authorized Navigation | DONE | PR #287 final head `2be2d78c5e88fa6526bd45a51896781603af78d3`, squash-merge `7e01f20ba1c57bd1f4475378eb68727e70fc56b9`; 17/17 workflows green; coverage `82.42% / 74.07%`; exact-SHA full-runtime production deploy `deploy-20260903T201326Z.json` with encrypted backup, restart=0, 20s stability and live cockpit HTTPS/auth acceptance |
-| M7-002 Home / Today Cockpit Projection | NEXT | Build the first content screen by composing existing canonical action queue, sales/handoffs, bookings, customer activity, money/outcomes and approval signals under live role checks; no home-store, hidden score, frontend authorization or side effects on read |
+| M7-002 Home / Today Cockpit Projection | DONE | PR #290 exact head `6a76a36b9e72fbd218efb3f7f61a01b1066cb45d`, squash-merge `0b426312541dc5f86e3ef01edc4f5dc74476807b`; 17/17 workflows green; coverage `82.42% / 74.07%`; role/timezone/currency/no-side-effect Home contracts proven; no production deploy |
+| M7-003 Customers & CRM Cockpit | NEXT | Build bounded customer list/search/detail/timeline on canonical customer/timeline/sales owners with live RBAC, role-aware money/attribution redaction and action routing; no duplicate CRM/customer store or refresh-side mutation |
 
 ---
 
