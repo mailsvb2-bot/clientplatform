@@ -303,7 +303,7 @@ def _detail_keyboard(
     return control._keyboard(rows)
 
 
-async def _send_detail(
+async def send_sales_lead_view(
     message: Message,
     *,
     user_id: int,
@@ -462,7 +462,7 @@ async def open_sales_lead(callback: CallbackQuery, state: FSMContext) -> None:
     business_id, lead_id = _uuid(parts[2]), _uuid(parts[3])
     await state.clear()
     await callback.answer()
-    await _send_detail(
+    await send_sales_lead_view(
         control._callback_message(callback),
         user_id=int(callback.from_user.id),
         business_id=business_id,
@@ -487,7 +487,7 @@ async def assign_sales_lead_to_self(callback: CallbackQuery, state: FSMContext) 
         return
     await state.clear()
     await callback.answer("Обращение назначено Вам")
-    await _send_detail(
+    await send_sales_lead_view(
         control._callback_message(callback),
         user_id=int(callback.from_user.id),
         business_id=business_id,
@@ -507,7 +507,7 @@ async def unassign_sales_lead_owner(callback: CallbackQuery, state: FSMContext) 
         return
     await state.clear()
     await callback.answer("Ответственный снят")
-    await _send_detail(
+    await send_sales_lead_view(
         control._callback_message(callback),
         user_id=int(callback.from_user.id),
         business_id=business_id,
@@ -559,7 +559,7 @@ async def capture_sales_next_action(message: Message, state: FSMContext) -> None
         return
     await state.clear()
     await message.answer("Следующий шаг сохранён. При необходимости выберите срок в карточке.")
-    await _send_detail(
+    await send_sales_lead_view(
         message,
         user_id=int(message.from_user.id),
         business_id=business_id,
@@ -599,7 +599,7 @@ async def set_sales_due_owner(callback: CallbackQuery, state: FSMContext) -> Non
         return
     await state.clear()
     await callback.answer("Срок обновлён")
-    await _send_detail(
+    await send_sales_lead_view(
         control._callback_message(callback),
         user_id=int(callback.from_user.id),
         business_id=business_id,
@@ -619,7 +619,7 @@ async def clear_sales_next_action_owner(callback: CallbackQuery, state: FSMConte
         return
     await state.clear()
     await callback.answer("Следующий шаг очищен")
-    await _send_detail(
+    await send_sales_lead_view(
         control._callback_message(callback),
         user_id=int(callback.from_user.id),
         business_id=business_id,
@@ -666,7 +666,7 @@ async def capture_sales_note(message: Message, state: FSMContext) -> None:
         return
     await state.clear()
     await message.answer("Заметка сохранена.")
-    await _send_detail(
+    await send_sales_lead_view(
         message,
         user_id=int(message.from_user.id),
         business_id=business_id,
@@ -698,7 +698,7 @@ async def set_sales_stage_owner(callback: CallbackQuery, state: FSMContext) -> N
         return
     await state.clear()
     await callback.answer("Статус обновлён")
-    await _send_detail(
+    await send_sales_lead_view(
         control._callback_message(callback),
         user_id=int(callback.from_user.id),
         business_id=business_id,
@@ -773,7 +773,7 @@ async def capture_reactivation_result(message: Message, state: FSMContext) -> No
         "✅ Возврат клиента подтверждён. Повторная оплата "
         f"{_format_rub_minor(amount_minor)} записана в результатах бизнеса."
     )
-    await _send_detail(
+    await send_sales_lead_view(
         message,
         user_id=int(message.from_user.id),
         business_id=business_id,
@@ -833,7 +833,7 @@ async def capture_close_reason(message: Message, state: FSMContext) -> None:
         return
     await state.clear()
     await message.answer("Результат сохранён.")
-    await _send_detail(
+    await send_sales_lead_view(
         message,
         user_id=int(message.from_user.id),
         business_id=business_id,
@@ -862,7 +862,7 @@ async def reopen_lost_sales_lead(callback: CallbackQuery, state: FSMContext) -> 
         return
     await state.clear()
     await callback.answer("Обращение возвращено в работу")
-    await _send_detail(
+    await send_sales_lead_view(
         control._callback_message(callback),
         user_id=int(callback.from_user.id),
         business_id=business_id,
@@ -970,7 +970,7 @@ async def schedule_sales_followup_owner(callback: CallbackQuery, state: FSMConte
         f"Сообщение запланировано на {_short_time(followup.scheduled_at)}. "
         "Если клиент ответит, запишется, оплатит или попросит не писать, отправка будет остановлена."
     )
-    await _send_detail(
+    await send_sales_lead_view(
         control._callback_message(callback),
         user_id=int(callback.from_user.id),
         business_id=business_id,
@@ -990,7 +990,7 @@ async def cancel_sales_followup_owner(callback: CallbackQuery, state: FSMContext
         return
     await state.clear()
     await callback.answer("Follow-up отменён")
-    await _send_detail(
+    await send_sales_lead_view(
         control._callback_message(callback),
         user_id=int(callback.from_user.id),
         business_id=business_id,
@@ -1033,7 +1033,7 @@ async def apply_sales_followup_opt_out(callback: CallbackQuery, state: FSMContex
         return
     await state.clear()
     await callback.answer("Запрет на follow-up сохранён")
-    await _send_detail(
+    await send_sales_lead_view(
         control._callback_message(callback),
         user_id=int(callback.from_user.id),
         business_id=business_id,

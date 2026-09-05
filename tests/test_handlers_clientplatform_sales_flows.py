@@ -97,7 +97,7 @@ async def test_empty_handoff_queue_has_clear_return_path(monkeypatch: pytest.Mon
     monkeypatch.setattr(sales, "list_sales_handoff_work", lambda **_kwargs: [])
     message = FakeMessage()
 
-    await sales._send_handoffs(message, user_id=101, business_id=business_id)
+    await sales.send_sales_handoff_view(message, user_id=101, business_id=business_id)
 
     text, kwargs = message.answers[-1]
     assert "нет обращений" in text
@@ -121,7 +121,7 @@ async def test_claim_handoff_reuses_core_use_case_then_refreshes(
 
     monkeypatch.setattr(sales, "claim_sales_handoff", claim)
     refresh = AsyncMock()
-    monkeypatch.setattr(sales, "_send_handoffs", refresh)
+    monkeypatch.setattr(sales, "send_sales_handoff_view", refresh)
     state = FakeState({"old": True})
 
     await sales.claim_handoff(callback, state)
@@ -149,7 +149,7 @@ async def test_resolve_handoff_reuses_core_use_case_then_refreshes(
 
     monkeypatch.setattr(sales, "resolve_sales_handoff", resolve)
     refresh = AsyncMock()
-    monkeypatch.setattr(sales, "_send_handoffs", refresh)
+    monkeypatch.setattr(sales, "send_sales_handoff_view", refresh)
 
     await sales.resolve_handoff(callback, FakeState())
 

@@ -304,6 +304,43 @@ class ClientPlatformCustomerBoundaryTests(unittest.TestCase):
                 external_subject="79991112233",
             )
 
+    def test_cockpit_customer_read_role_matrix_is_enforced_by_repository(self) -> None:
+        customer = self.customers.create_customer(
+            actor=self.owner_a, display_name="Role Matrix Customer"
+        )
+        cases = (
+            (301, PlatformRole.ADMINISTRATOR, True),
+            (302, PlatformRole.MANAGER, True),
+            (303, PlatformRole.SUPPORT, True),
+            (304, PlatformRole.MARKETER, False),
+            (305, PlatformRole.CONTENT_MANAGER, False),
+            (306, PlatformRole.ANALYST, False),
+        )
+        for user_id, role, allowed in cases:
+            self.tenancy.grant_member(
+                actor=self.owner_a, user_id=user_id, role=role
+            )
+            actor = self.tenancy.resolve_context(
+                user_id=user_id, business_id=self.business_a.business.id
+            )
+            with self.subTest(role=role.value):
+                if allowed:
+                    page, _has_more = self.customers.search_customers(
+                        actor=actor, limit=20
+                    )
+                    self.assertIn(customer.id, [item.id for item in page])
+                    self.assertEqual(
+                        self.customers.get_customer(
+                            actor=actor, customer_id=customer.id
+                        ).customer.id,
+                        customer.id,
+                    )
+                else:
+                    with self.assertRaises(TenantPermissionDenied):
+                        self.customers.search_customers(actor=actor, limit=20)
+                    with self.assertRaises(TenantPermissionDenied):
+                        self.customers.get_customer(actor=actor, customer_id=customer.id)
+
     def test_content_and_marketing_roles_cannot_read_customer_pii(self) -> None:
         self.tenancy.grant_member(
             actor=self.owner_a,

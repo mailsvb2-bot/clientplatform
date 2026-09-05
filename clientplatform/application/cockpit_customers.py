@@ -5,6 +5,7 @@ from decimal import Decimal
 from typing import Callable
 
 from clientplatform.application.cockpit import resolve_cockpit_context
+from clientplatform.application.cockpit_action_routing import build_cockpit_action_start_payload
 from clientplatform.application.customer_timeline import (
     CustomerTimeline,
     get_customer_timeline,
@@ -84,6 +85,23 @@ class CockpitCustomerAction:
     reason: str
     section: str
     action_key: str
+
+
+@dataclass(frozen=True, slots=True)
+class CockpitCustomerActionRoute:
+    schema_version: str
+    business_id: str
+    role: str
+    customer_id: str
+    action_key: str
+    start_payload: str
+
+    def as_dict(self) -> dict[str, object]:
+        return asdict(self)
+
+
+class CockpitCustomerActionUnavailable(RuntimeError):
+    """The customer's current next action cannot be routed from Cockpit."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -277,6 +295,42 @@ def build_cockpit_customer_detail(
         limitations=tuple(dict.fromkeys(limitations)),
     )
 
+
+def build_cockpit_customer_action_route(
+    *,
+    actor: TenantContext,
+    customer_id: str,
+    expected_action_key: str | None = None,
+    record_loader: Callable[..., CustomerRecord] = get_customer,
+    action_loader: Callable[..., tuple[GrowthAction, ...]] = get_customer_work_actions,
+) -> CockpitCustomerActionRoute:
+    record = record_loader(actor=actor, customer_id=customer_id)
+    actions = action_loader(actor=actor, customer_id=record.customer.id, limit=1)
+    if not actions:
+        raise CockpitCustomerActionUnavailable("customer has no current action")
+    action = actions[0]
+    expected = str(expected_action_key or "").strip()
+    if expected and action.action_key != expected:
+        raise CockpitCustomerActionUnavailable("customer action changed")
+    try:
+        start_payload = build_cockpit_action_start_payload(
+            business_id=actor.business_id,
+            action_key=action.action_key,
+        )
+    except ValueError as exc:
+        raise CockpitCustomerActionUnavailable(
+            "customer action has no supported route"
+        ) from exc
+    return CockpitCustomerActionRoute(
+        schema_version=_SCHEMA_VERSION,
+        business_id=actor.business_id,
+        role=actor.role.value,
+        customer_id=record.customer.id,
+        action_key=action.action_key,
+        start_payload=start_payload,
+    )
+
+
 def _resolve_actor(
     *, telegram_user_id: int, requested_business_id: str | None
 ) -> TenantContext:
@@ -327,15 +381,37 @@ def resolve_cockpit_customer_detail(
     )
 
 
+def resolve_cockpit_customer_action_route(
+    *,
+    telegram_user_id: int,
+    customer_id: str,
+    requested_business_id: str | None = None,
+    expected_action_key: str | None = None,
+) -> CockpitCustomerActionRoute:
+    actor = _resolve_actor(
+        telegram_user_id=telegram_user_id,
+        requested_business_id=requested_business_id,
+    )
+    return build_cockpit_customer_action_route(
+        actor=actor,
+        customer_id=customer_id,
+        expected_action_key=expected_action_key,
+    )
+
+
 __all__ = [
     "CockpitCustomerAction",
+    "CockpitCustomerActionRoute",
+    "CockpitCustomerActionUnavailable",
     "CockpitCustomerContact",
     "CockpitCustomerDetail",
     "CockpitCustomerListItem",
     "CockpitCustomerPage",
     "CockpitCustomerTimelineItem",
+    "build_cockpit_customer_action_route",
     "build_cockpit_customer_detail",
     "build_cockpit_customer_page",
+    "resolve_cockpit_customer_action_route",
     "resolve_cockpit_customer_detail",
     "resolve_cockpit_customer_page",
 ]

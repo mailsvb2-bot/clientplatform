@@ -13,6 +13,8 @@ from clientplatform.application.cockpit_home import (
     resolve_cockpit_home,
 )
 from clientplatform.application.cockpit_customers import (
+    CockpitCustomerActionUnavailable,
+    resolve_cockpit_customer_action_route,
     resolve_cockpit_customer_detail,
     resolve_cockpit_customer_page,
 )
@@ -24,6 +26,8 @@ from clientplatform.runtime.telegram_webapp_auth import (
 )
 from config.settings import settings
 from core.runtime_env import env_int
+from services.messenger.links import build_entry_targets
+from services.messenger.platforms import MessengerPlatform
 
 _COCKPIT_PREFIX = "/clientplatform/cockpit"
 _COCKPIT_APP_KEY = web.AppKey("clientplatform_cockpit", bool)
@@ -233,6 +237,21 @@ def _error(status: int, code: str) -> web.Response:
     return web.json_response({"ok": False, "error": code}, status=status, headers=_base_headers())
 
 
+def _telegram_action_url(start_payload: str) -> str | None:
+    target = next(
+        (
+            item
+            for item in build_entry_targets(start_payload)
+            if item.get("platform") == MessengerPlatform.TELEGRAM.value
+        ),
+        None,
+    )
+    if target is None:
+        return None
+    url = str(target.get("url") or "").strip()
+    return url or None
+
+
 async def _verified_payload_scope(
     request: web.Request,
 ) -> tuple[int, str | None, dict[str, Any]] | web.Response:
@@ -368,6 +387,55 @@ async def cockpit_customer_detail(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, **detail.as_dict()}, headers=_base_headers())
 
 
+async def cockpit_customer_action_route(request: web.Request) -> web.Response:
+    scope = await _verified_payload_scope(request)
+    if isinstance(scope, web.Response):
+        return scope
+    user_id, requested_business, payload = scope
+    customer_id = payload.get("customer_id")
+    expected_action_key = payload.get("expected_action_key")
+    if not isinstance(customer_id, str) or not customer_id.strip():
+        return _error(400, "customer_id_required")
+    if (
+        expected_action_key is not None
+        and (
+            not isinstance(expected_action_key, str)
+            or not expected_action_key.strip()
+            or len(expected_action_key) > 100
+        )
+    ):
+        return _error(400, "invalid_customer_request")
+    try:
+        route = await asyncio.to_thread(
+            resolve_cockpit_customer_action_route,
+            telegram_user_id=user_id,
+            requested_business_id=requested_business,
+            customer_id=customer_id,
+            expected_action_key=expected_action_key,
+        )
+    except TenantAccessDenied:
+        return _error(403, "business_access_denied")
+    except TenantPermissionDenied:
+        return _error(403, "customer_access_denied")
+    except CustomerNotFound:
+        return _error(404, "customer_not_found")
+    except CockpitCustomerActionUnavailable:
+        return _error(409, "customer_action_changed")
+    except ValueError:
+        return _error(400, "invalid_customer_request")
+    route_url = _telegram_action_url(route.start_payload)
+    if route_url is None:
+        return _error(503, "customer_action_route_unavailable")
+    return web.json_response(
+        {
+            "ok": True,
+            "schema_version": route.schema_version,
+            "route_url": route_url,
+        },
+        headers=_base_headers(),
+    )
+
+
 def register_cockpit_routes(app: web.Application) -> None:
     app.router.add_get(_COCKPIT_PREFIX, cockpit_shell)
     app.router.add_get(f"{_COCKPIT_PREFIX}/app.js", cockpit_script)
@@ -379,11 +447,15 @@ def register_cockpit_routes(app: web.Application) -> None:
     app.router.add_post(
         f"{_COCKPIT_PREFIX}/customers/detail", cockpit_customer_detail
     )
+    app.router.add_post(
+        f"{_COCKPIT_PREFIX}/customers/action-route", cockpit_customer_action_route
+    )
     app[_COCKPIT_APP_KEY] = True
 
 
 __all__ = [
     "cockpit_context",
+    "cockpit_customer_action_route",
     "cockpit_customer_detail",
     "cockpit_customers",
     "cockpit_customers_script",

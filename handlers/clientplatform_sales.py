@@ -305,7 +305,7 @@ async def approve_retention_candidate(callback: CallbackQuery, state: FSMContext
     )
 
 
-async def _send_sales_work(
+async def send_sales_work_view(
     message: Message,
     *,
     user_id: int,
@@ -397,7 +397,7 @@ async def open_sales_work(callback: CallbackQuery, state: FSMContext) -> None:
     business_id = _uuid(str(callback.data).split(":", 2)[2])
     await state.clear()
     await callback.answer()
-    await _send_sales_work(
+    await send_sales_work_view(
         control._callback_message(callback),
         user_id=int(callback.from_user.id),
         business_id=business_id,
@@ -426,7 +426,7 @@ async def approve_sales_plan(callback: CallbackQuery, state: FSMContext) -> None
         return
     await state.clear()
     await callback.answer("Одобрено — отправка разрешена")
-    await _send_sales_work(
+    await send_sales_work_view(
         control._callback_message(callback),
         user_id=int(callback.from_user.id),
         business_id=business_id,
@@ -463,7 +463,7 @@ async def toggle_sales_ai(callback: CallbackQuery, state: FSMContext) -> None:
             )
             return
         await callback.answer("ИИ-помощник выключен")
-        await _send_sales_work(
+        await send_sales_work_view(
             control._callback_message(callback),
             user_id=int(callback.from_user.id),
             business_id=business_id,
@@ -520,7 +520,7 @@ async def enable_sales_ai(callback: CallbackQuery, state: FSMContext) -> None:
         return
     await state.clear()
     await callback.answer("ИИ-помощник включён")
-    await _send_sales_work(
+    await send_sales_work_view(
         control._callback_message(callback),
         user_id=int(callback.from_user.id),
         business_id=business_id,
@@ -554,7 +554,7 @@ async def draft_sales_answer(callback: CallbackQuery, state: FSMContext) -> None
     )
 
 
-async def _send_handoffs(
+async def send_sales_handoff_view(
     message: Message,
     *,
     user_id: int,
@@ -595,7 +595,7 @@ async def open_sales_handoffs(callback: CallbackQuery, state: FSMContext) -> Non
     business_id = _uuid(str(callback.data).split(":", 2)[2])
     await state.clear()
     await callback.answer()
-    await _send_handoffs(
+    await send_sales_handoff_view(
         control._callback_message(callback),
         user_id=int(callback.from_user.id),
         business_id=business_id,
@@ -617,7 +617,7 @@ async def claim_handoff(callback: CallbackQuery, state: FSMContext) -> None:
         return
     await state.clear()
     await callback.answer("Взято в работу")
-    await _send_handoffs(
+    await send_sales_handoff_view(
         control._callback_message(callback),
         user_id=int(callback.from_user.id),
         business_id=business_id,
@@ -639,7 +639,7 @@ async def resolve_handoff(callback: CallbackQuery, state: FSMContext) -> None:
         return
     await state.clear()
     await callback.answer("Готово")
-    await _send_handoffs(
+    await send_sales_handoff_view(
         control._callback_message(callback),
         user_id=int(callback.from_user.id),
         business_id=business_id,

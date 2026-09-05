@@ -11,7 +11,11 @@ if _AIOHTTP_AVAILABLE:
     from aiohttp.test_utils import TestClient, TestServer
 
     from clientplatform.application import cockpit_customers
+    from clientplatform.application.cockpit_action_routing import (
+        build_cockpit_action_start_payload,
+    )
     from clientplatform.domain.customers import CustomerNotFound
+    from clientplatform.domain.tenancy import TenantAccessDenied, TenantPermissionDenied
     from clientplatform.runtime import cockpit_http
     from clientplatform.runtime.telegram_webapp_auth import TelegramWebAppPrincipal
 
@@ -156,6 +160,118 @@ class CockpitCustomersHttpM7003Tests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(status, 404)
         self.assertEqual(payload, {"ok": False, "error": "customer_not_found"})
+
+    async def test_action_route_reauthenticates_and_returns_only_first_party_telegram_link(self) -> None:
+        principal = TelegramWebAppPrincipal(user_id=101, auth_date=1, query_id=None)
+        start_payload = build_cockpit_action_start_payload(
+            business_id=_BUSINESS, action_key="sales_handoff"
+        )
+        route = cockpit_customers.CockpitCustomerActionRoute(
+            schema_version="2026-09-05.v1",
+            business_id=_BUSINESS,
+            role="owner",
+            customer_id=_CUSTOMER,
+            action_key="sales_handoff",
+            start_payload=start_payload,
+        )
+        calls: list[dict[str, object]] = []
+
+        def resolve(**kwargs: object):
+            calls.append(dict(kwargs))
+            return route
+
+        with (
+            patch.object(cockpit_http.settings, "BOT_TOKEN", _TOKEN),
+            patch.object(
+                cockpit_http.settings,
+                "TELEGRAM_BOT_USERNAME",
+                "clientplatform_test_bot",
+            ),
+            patch.object(
+                cockpit_http,
+                "verify_telegram_webapp_init_data",
+                return_value=principal,
+            ),
+            patch.object(
+                cockpit_http,
+                "resolve_cockpit_customer_action_route",
+                side_effect=resolve,
+            ),
+        ):
+            status, payload, headers = await self._post(
+                "/clientplatform/cockpit/customers/action-route",
+                {
+                    "init_data": "verified",
+                    "business_id": _BUSINESS,
+                    "customer_id": _CUSTOMER,
+                    "expected_action_key": "sales_handoff",
+                },
+            )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["Cache-Control"], "no-store, max-age=0")
+        self.assertEqual(
+            payload["route_url"],
+            f"https://t.me/clientplatform_test_bot?start={start_payload}",
+        )
+        self.assertNotIn("start_payload", payload)
+        self.assertEqual(calls[0]["telegram_user_id"], 101)
+        self.assertEqual(calls[0]["requested_business_id"], _BUSINESS)
+        self.assertEqual(calls[0]["customer_id"], _CUSTOMER)
+        self.assertEqual(calls[0]["expected_action_key"], "sales_handoff")
+
+    async def test_action_route_fails_closed_when_action_changed(self) -> None:
+        principal = TelegramWebAppPrincipal(user_id=101, auth_date=1, query_id=None)
+        with (
+            patch.object(cockpit_http.settings, "BOT_TOKEN", _TOKEN),
+            patch.object(
+                cockpit_http,
+                "verify_telegram_webapp_init_data",
+                return_value=principal,
+            ),
+            patch.object(
+                cockpit_http,
+                "resolve_cockpit_customer_action_route",
+                side_effect=cockpit_customers.CockpitCustomerActionUnavailable("changed"),
+            ),
+        ):
+            status, payload, _headers = await self._post(
+                "/clientplatform/cockpit/customers/action-route",
+                {"init_data": "verified", "customer_id": _CUSTOMER},
+            )
+        self.assertEqual(status, 409)
+        self.assertEqual(payload["error"], "customer_action_changed")
+
+    async def test_action_route_denies_forged_business_and_forbidden_role(self) -> None:
+        principal = TelegramWebAppPrincipal(user_id=101, auth_date=1, query_id=None)
+        for error, expected in (
+            (TenantAccessDenied("foreign business"), "business_access_denied"),
+            (TenantPermissionDenied("role denied"), "customer_access_denied"),
+        ):
+            with self.subTest(expected=expected):
+                with (
+                    patch.object(cockpit_http.settings, "BOT_TOKEN", _TOKEN),
+                    patch.object(
+                        cockpit_http,
+                        "verify_telegram_webapp_init_data",
+                        return_value=principal,
+                    ),
+                    patch.object(
+                        cockpit_http,
+                        "resolve_cockpit_customer_action_route",
+                        side_effect=error,
+                    ),
+                ):
+                    status, payload, _headers = await self._post(
+                        "/clientplatform/cockpit/customers/action-route",
+                        {
+                            "init_data": "verified",
+                            "business_id": _BUSINESS,
+                            "customer_id": _CUSTOMER,
+                        },
+                    )
+                self.assertEqual(status, 403)
+                self.assertEqual(payload["error"], expected)
 
     async def test_invalid_unbounded_page_is_rejected(self) -> None:
         principal = TelegramWebAppPrincipal(user_id=101, auth_date=1, query_id=None)

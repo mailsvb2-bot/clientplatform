@@ -83,16 +83,27 @@
     showList();
   };
 
-  const openSection = (section) => {
-    const titles = {sales: 'Продажи', calendar: 'Календарь и записи'};
-    const expected = titles[section];
-    if (!expected) return;
-    const cards = Array.from(nav.querySelectorAll('button.card'));
-    const target = cards.find((card) => {
-      const heading = card.querySelector('h2');
-      return heading && heading.textContent === expected;
-    });
-    if (target) target.click();
+  const openActionRoute = async (customerId, expectedActionKey) => {
+    setBusy(true);
+    try {
+      const route = await post('/clientplatform/cockpit/customers/action-route', {
+        customer_id: customerId,
+        expected_action_key: expectedActionKey,
+      });
+      const url = String(route.route_url || '');
+      if (!url.startsWith('https://t.me/')) throw new Error('customer_action_route_unavailable');
+      if (tg && typeof tg.openTelegramLink === 'function') tg.openTelegramLink(url);
+      else window.location.assign(url);
+    } catch (error) {
+      text(
+        limitations,
+        error && error.message === 'customer_action_changed'
+          ? 'Следующий шаг уже изменился. Обновите карточку клиента.'
+          : 'Не удалось открыть следующий шаг. Обновите карточку и попробуйте ещё раз.',
+      );
+    } finally {
+      setBusy(false);
+    }
   };
 
   const renderDetail = (payload) => {
@@ -128,7 +139,9 @@
       text(label, payload.next_action.title);
       text(reason, payload.next_action.reason);
       button.append(label, reason);
-      button.addEventListener('click', () => openSection(payload.next_action.section));
+      button.addEventListener('click', () =>
+        openActionRoute(payload.customer_id, payload.next_action.action_key),
+      );
       action.appendChild(button);
     } else {
       const empty = document.createElement('p');

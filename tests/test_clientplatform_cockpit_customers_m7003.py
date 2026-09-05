@@ -172,12 +172,19 @@ class CockpitCustomersM7003Tests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("/clientplatform/cockpit/customers", script)
         self.assertIn("/clientplatform/cockpit/customers/detail", script)
+        self.assertIn("/clientplatform/cockpit/customers/action-route", script)
+        self.assertIn("openTelegramLink", script)
         self.assertIn('id=\"customers-view\"', transport)
         self.assertNotIn("localStorage", script)
         self.assertNotIn("URLSearchParams", script)
         self.assertNotIn("innerHTML", script)
         self.assertNotIn("/approve", script)
         self.assertNotIn("/send", script)
+        refresh_handler = script.split("refresh.addEventListener", 1)[1].split(
+            "searchForm.addEventListener", 1
+        )[0]
+        self.assertIn("loadPage", refresh_handler)
+        self.assertNotIn("action-route", refresh_handler)
 
     def test_resolver_rechecks_current_tenant_after_cockpit_scope(self) -> None:
         context = type(

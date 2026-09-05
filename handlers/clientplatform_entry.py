@@ -13,6 +13,10 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import BotCommand, CallbackQuery, Message
 
 from clientplatform.application.activity import claim_customer_invite
+from clientplatform.application.cockpit import resolve_cockpit_context
+from clientplatform.application.cockpit_action_routing import (
+    parse_cockpit_action_start_payload,
+)
 from clientplatform.application.bookings import list_customer_businesses
 from clientplatform.application.tenancy import (
     get_owner_control_workspace,
@@ -20,6 +24,7 @@ from clientplatform.application.tenancy import (
     resolve_tenant_context,
 )
 from clientplatform.domain.activity import ActivityInvariantViolation
+from clientplatform.domain.tenancy import TenantAccessDenied, TenantPermissionDenied
 from services.db.core import db_operation_deadline
 
 control = importlib.import_module(".clientplatform_control", __package__)
@@ -145,6 +150,61 @@ async def _dispatch_clientplatform_start(
         return
 
     payload = control._start_payload(message)
+    try:
+        cockpit_route = parse_cockpit_action_start_payload(payload)
+    except ValueError:
+        await state.clear()
+        await message.answer(
+            "Эта ссылка на действие устарела или повреждена. "
+            "Откройте кабинет и выберите клиента ещё раз."
+        )
+        return
+    if cockpit_route is not None:
+        await state.clear()
+        try:
+            cockpit_context = await asyncio.to_thread(
+                resolve_cockpit_context,
+                telegram_user_id=user_id,
+                requested_business_id=cockpit_route.business_id,
+            )
+            if (
+                cockpit_context.onboarding_required
+                or cockpit_context.business_id != cockpit_route.business_id
+            ):
+                raise TenantAccessDenied("cockpit action business is no longer active")
+            canonical_user_id = int(cockpit_context.user_id)
+            if cockpit_route.kind == "h":
+                sales = importlib.import_module(".clientplatform_sales", __package__)
+                await sales.send_sales_handoff_view(
+                    message,
+                    user_id=canonical_user_id,
+                    business_id=cockpit_route.business_id,
+                )
+            elif cockpit_route.kind == "w":
+                sales = importlib.import_module(".clientplatform_sales", __package__)
+                await sales.send_sales_work_view(
+                    message,
+                    user_id=canonical_user_id,
+                    business_id=cockpit_route.business_id,
+                )
+            elif cockpit_route.kind == "l" and cockpit_route.lead_id is not None:
+                operations = importlib.import_module(
+                    ".clientplatform_sales_operations", __package__
+                )
+                await operations.send_sales_lead_view(
+                    message,
+                    user_id=canonical_user_id,
+                    business_id=cockpit_route.business_id,
+                    lead_id=cockpit_route.lead_id,
+                )
+            else:
+                raise ValueError("unsupported cockpit action route")
+        except (TenantAccessDenied, TenantPermissionDenied, ValueError):
+            await message.answer(
+                "Доступ или следующий шаг изменился. "
+                "Откройте кабинет и обновите карточку клиента."
+            )
+        return
     if payload.casefold().startswith("cpo_"):
         # Landing owner links are explicit owner intent. Resolve only owner
         # workspaces here and never let an existing customer relationship
