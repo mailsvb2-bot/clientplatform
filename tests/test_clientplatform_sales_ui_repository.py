@@ -135,6 +135,53 @@ class ClientPlatformSalesUiRepositoryTests(unittest.TestCase):
         self.assertEqual(item["customer_name"], "Анна")
         self.assertEqual(item["stage"], "new")
 
+    def test_customer_scoped_work_and_handoff_do_not_mix_customers(self) -> None:
+        other = CustomerRepository(self.conn).create_customer(
+            actor=self.owner, display_name="Борис"
+        )
+        own_lead = self.sales.create_or_refresh_lead(
+            actor=self.owner,
+            opportunity_key="tg:anna:scoped",
+            customer_id=self.customer.id,
+            source_kind="telegram",
+            contact_basis=ContactBasis.INBOUND,
+        )
+        other_lead = self.sales.create_or_refresh_lead(
+            actor=self.owner,
+            opportunity_key="tg:boris:scoped",
+            customer_id=other.id,
+            source_kind="telegram",
+            contact_basis=ContactBasis.INBOUND,
+        )
+        SalesHandoffRepository(self.conn).open(
+            actor=self.owner,
+            lead_id=other_lead.id,
+            signal=HandoffSignal(
+                HandoffReason.EXPLICIT_REQUEST,
+                HandoffSeverity.URGENT,
+                "Other customer needs a human.",
+            ),
+        )
+        SalesHandoffRepository(self.conn).open(
+            actor=self.owner,
+            lead_id=own_lead.id,
+            signal=HandoffSignal(
+                HandoffReason.EXPLICIT_REQUEST,
+                HandoffSeverity.NORMAL,
+                "Target customer needs a human.",
+            ),
+        )
+
+        work = self.ui.list_open_work(
+            actor=self.owner, customer_id=self.customer.id
+        )
+        handoffs = self.ui.list_handoff_work(
+            actor=self.owner, customer_id=self.customer.id
+        )
+
+        self.assertEqual([own_lead.id], [item["id"] for item in work])
+        self.assertEqual([own_lead.id], [item["lead_id"] for item in handoffs])
+
     def test_handoff_projection_contains_customer_but_not_context_payload(self) -> None:
         lead = self.sales.create_or_refresh_lead(
             actor=self.owner,

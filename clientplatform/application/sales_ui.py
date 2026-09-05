@@ -11,9 +11,12 @@ def list_sales_work(
     *,
     actor: TenantContext,
     limit: int = 12,
+    customer_id: str | None = None,
 ) -> list[dict[str, Any]]:
     with get_db_ro() as conn:
-        return SalesUiRepository(conn).list_open_work(actor=actor, limit=limit)
+        return SalesUiRepository(conn).list_open_work(
+            actor=actor, limit=limit, customer_id=customer_id
+        )
 
 
 def get_sales_work_item(
@@ -43,9 +46,12 @@ def list_sales_handoff_work(
     *,
     actor: TenantContext,
     limit: int = 12,
+    customer_id: str | None = None,
 ) -> list[dict[str, Any]]:
     with get_db_ro() as conn:
-        return SalesUiRepository(conn).list_handoff_work(actor=actor, limit=limit)
+        return SalesUiRepository(conn).list_handoff_work(
+            actor=actor, limit=limit, customer_id=customer_id
+        )
 
 
 def list_commercial_ladders(*, actor: TenantContext) -> list[dict[str, Any]]:

@@ -132,6 +132,66 @@ class ClientPlatformCustomerBoundaryTests(unittest.TestCase):
         self.assertEqual([vk_customer.id], [item.id for item in vk])
         self.assertEqual([max_customer.id], [item.id for item in max_items])
 
+    def test_customer_search_is_bounded_identity_aware_and_tenant_scoped(self) -> None:
+        older = self.customers.create_customer(
+            actor=self.owner_a, display_name="Older Client"
+        )
+        newer = self.customers.create_customer(
+            actor=self.owner_a, display_name="Newer Client"
+        )
+        foreign = self.customers.create_customer(
+            actor=self.owner_b, display_name="Foreign Newer Client"
+        )
+        self.customers.attach_identity(
+            actor=self.owner_a,
+            customer_id=newer.id,
+            platform="email",
+            external_subject="secret.person@example.com",
+            username="target_handle",
+        )
+        self.conn.execute(
+            "UPDATE customers SET last_contact_at=? WHERE id=?",
+            ("2026-09-05T12:00:00+00:00", newer.id),
+        )
+        self.conn.execute(
+            "UPDATE customers SET last_contact_at=? WHERE id=?",
+            ("2026-09-04T12:00:00+00:00", older.id),
+        )
+        self.conn.execute(
+            "UPDATE customers SET last_contact_at=? WHERE id=?",
+            ("2026-09-06T12:00:00+00:00", foreign.id),
+        )
+
+        first, has_more = self.customers.search_customers(
+            actor=self.owner_a, limit=1
+        )
+        second, _ = self.customers.search_customers(
+            actor=self.owner_a, limit=1, offset=1
+        )
+        by_handle, _ = self.customers.search_customers(
+            actor=self.owner_a, query="target_handle"
+        )
+        by_email, _ = self.customers.search_customers(
+            actor=self.owner_a, query="secret.person@example.com"
+        )
+
+        self.assertTrue(has_more)
+        self.assertEqual([newer.id], [item.id for item in first])
+        self.assertEqual([older.id], [item.id for item in second])
+        self.assertEqual([newer.id], [item.id for item in by_handle])
+        self.assertEqual([newer.id], [item.id for item in by_email])
+        self.assertNotIn("secret.person@example.com", repr(by_email))
+
+    def test_customer_search_rejects_unbounded_inputs(self) -> None:
+        for limit in (0, 51, True):
+            with self.assertRaises(ValueError):
+                self.customers.search_customers(actor=self.owner_a, limit=limit)
+        for offset in (-1, 10_001, True):
+            with self.assertRaises(ValueError):
+                self.customers.search_customers(actor=self.owner_a, offset=offset)
+        with self.assertRaises(ValueError):
+            self.customers.search_customers(actor=self.owner_a, query="x" * 101)
+
     def test_cross_business_customer_lookup_is_denied(self) -> None:
         customer_b = self.customers.create_customer(
             actor=self.owner_b,
