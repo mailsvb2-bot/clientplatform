@@ -1332,7 +1332,7 @@ Canonical production deploy теперь различает тяжёлый `full
 - Independent AI Review policy gate завершился `success` с явным trusted-policy verdict `L2 external AI review temporarily disabled by trusted repository policy`; внешний L2/Codex review фактически не выполнялся из-за исчерпанной review quota, что не скрывается в evidence;
 - production deploy M7-003 не выполнялся: он остаётся отдельной explicit owner-командой.
 
-### UX-294 — `NEXT` — Safe retirement of outdated offers and business profile
+### UX-294 — `DONE` — Safe retirement of outdated offers and business profile
 
 Источник: open owner issue #294. Это lifecycle/UX slice, а не новый store или второй business owner.
 
@@ -1345,6 +1345,15 @@ Canonical production deploy теперь различает тяжёлый `full
 - tenant isolation и RBAC проверяются backend-side, forged business/object IDs fail-close; повторное действие идемпотентно и не оставляет частично удалённое состояние;
 - regressions покрывают confirmation/cancel, stale/repeated request, cross-tenant access, preserved financial/audit history, navigation cleanup и clean owner transition;
 - production deploy только после green protected merge и отдельной explicit команды владельца.
+
+Закрыто 2026-09-05. Доказательство UX-294:
+
+- PR #297 final exact head `6cbe13b4870f24d6a75dc722a178311ea0df99df` на GitHub завершил 28/28 exact-head workflow runs с `success` и squash-merged через защищённый `main` как `03590594208cee89009e5a06855808e27d975c6a`; issue #294 закрыт merge, unresolved review threads=0, protection/bypass не ослаблялись;
+- full coverage run: `3257 passed, 8 skipped`; combined coverage сохранён на `82.46%`, branch coverage реально вырос с `74.13%` до `74.15%` и новый ratchet зафиксирован без снижения порогов; `REGRESSION_GATE_OK`, Critical Static (`CRITICAL_MYPY_OK`, `CRITICAL_BANDIT_OK`), Pre-deploy Release Gate, Production Isolation, Capability Parity и PostgreSQL payment/concurrency green;
+- offer/service retirement использует существующий activity owner и переводит canonical offering в `archived`; publication retirement остаётся в canonical `business_publications`; business retirement выполняется существующим tenancy owner, а immutable financial/outcome/audit history физически не удаляется;
+- stale publication schedule/publish callbacks и stale direct booking claims после retirement fail-close; active invites отзываются без удаления evidence, transient workspace/input/onboarding pointers очищаются, поэтому архивированный business не остаётся ложным активным выбором и владелец может пройти существующий onboarding для другого business;
+- Codex code review фактически не выполнялся из-за исчерпанной review quota; бот оставил только служебное сообщение о лимите, поэтому это **не** записывается как AI-review pass; код прошёл обязательные protected checks и ручной architecture/diff review без unresolved threads;
+- production deploy UX-294 не выполнялся: он остаётся отдельной explicit owner-командой; в roadmap нет `QUEUED` successor, поэтому новый `NEXT` не придумывается без отдельного owner/canonical решения.
 
 Единый шаблон для важных автоматических действий:
 
@@ -1959,7 +1968,7 @@ Duplicate tap, retry, worker restart или uncertain provider response не д�
 | M7-001 Authenticated Business Cockpit Shell + Server-Authorized Navigation | DONE | PR #287 final head `2be2d78c5e88fa6526bd45a51896781603af78d3`, squash-merge `7e01f20ba1c57bd1f4475378eb68727e70fc56b9`; 17/17 workflows green; coverage `82.42% / 74.07%`; exact-SHA full-runtime production deploy `deploy-20260903T201326Z.json` with encrypted backup, restart=0, 20s stability and live cockpit HTTPS/auth acceptance |
 | M7-002 Home / Today Cockpit Projection | DONE | PR #290 exact head `6a76a36b9e72fbd218efb3f7f61a01b1066cb45d`, squash-merge `0b426312541dc5f86e3ef01edc4f5dc74476807b`; 17/17 workflows green; coverage `82.42% / 74.07%`; role/timezone/currency/no-side-effect Home contracts proven; no production deploy |
 | M7-003 Customers & CRM Cockpit | DONE | PR #295 final exact head `eeb0136e749650efcb1a6f3dc785d3352b5f946a`, squash-merge `f6e6a0550853b044b48f285ee9561f7c8351d2d8`; 17/17 workflows green; full coverage `3251 passed, 8 skipped`; ratchet raised to `82.46% / 74.13%`; canonical customer/timeline/sales ownership, live RBAC, PII redaction, stale-action fail-close and click-only action routing proven; AI policy gate success under trusted temporary L2-disable policy; no production deploy |
-| UX-294 Safe retirement of outdated offers and business profile | NEXT | Owner issue #294: confirmation-gated retirement/deactivation with preserved financial/audit history, canonical business lifecycle ownership, tenant/RBAC isolation, navigation cleanup and clean transition to another business |
+| UX-294 Safe retirement of outdated offers and business profile | DONE | PR #297 final exact head `6cbe13b4870f24d6a75dc722a178311ea0df99df`, squash-merge `03590594208cee89009e5a06855808e27d975c6a`; 28/28 exact-head workflow runs success; full coverage `3257 passed, 8 skipped`; ratchet `82.46% / 74.15%`; safe canonical offering/publication/business retirement, preserved financial/outcome/audit history, stale-action fail-close, tenant/RBAC isolation and clean owner transition proven; #294 closed; no production deploy |
 
 ---
 
