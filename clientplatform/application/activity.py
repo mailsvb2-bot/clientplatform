@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from uuid import NAMESPACE_URL, uuid5
+
 from clientplatform.domain.activity import (
     ActivityError,
     ActivityInvariantViolation,
@@ -140,6 +142,41 @@ def create_business_offering(
             description=description,
             idempotency_key=idempotency_key,
         )
+
+
+def archive_business_offering(
+    *,
+    actor: TenantContext,
+    offering_id: str,
+) -> BusinessOffering:
+    with get_db() as conn:
+        offering = ActivityRepository(conn).archive_offering(
+            actor=actor, offering_id=offering_id
+        )
+        event_id = str(
+            uuid5(
+                NAMESPACE_URL,
+                f"clientplatform:lifecycle:offering:{offering.business_id}:{offering.id}:archived",
+            )
+        )
+        conn.execute(
+            """
+            INSERT INTO clientplatform_admin_audit_events(
+                id, business_id, actor_user_id, action, subject_type,
+                subject_id, detail, created_at
+            ) VALUES(?, ?, ?, 'offering_archived', 'offering', ?, ?, ?)
+            ON CONFLICT(id) DO NOTHING
+            """,
+            (
+                event_id,
+                offering.business_id,
+                actor.user_id,
+                offering.id,
+                offering.title[:1000],
+                offering.updated_at,
+            ),
+        )
+        return offering
 
 
 def list_business_offerings(

@@ -985,7 +985,7 @@ def schedule_publication(
             """
             SELECT status, scheduled_at
             FROM business_publications
-            WHERE id=? AND business_id=?
+            WHERE id=? AND business_id=? AND retired_at IS NULL
             LIMIT 1
             """,
             (normalized_id, current.business_id),
@@ -1033,7 +1033,7 @@ def schedule_publication(
                 """
                 UPDATE business_publications
                 SET status='scheduled', scheduled_at=?, updated_at=?
-                WHERE id=? AND business_id=? AND status='draft'
+                WHERE id=? AND business_id=? AND status='draft' AND retired_at IS NULL
                 """,
                 (scheduled_at, timestamp, normalized_id, current.business_id),
             )
@@ -1044,7 +1044,7 @@ def schedule_publication(
                 UPDATE business_publications
                 SET scheduled_at=?, updated_at=?
                 WHERE id=? AND business_id=?
-                  AND status='scheduled' AND scheduled_at=?
+                  AND status='scheduled' AND scheduled_at=? AND retired_at IS NULL
                 """,
                 (
                     scheduled_at,
@@ -1144,7 +1144,7 @@ def cancel_publication_schedule(
             """
             SELECT status, scheduled_at
             FROM business_publications
-            WHERE id=? AND business_id=?
+            WHERE id=? AND business_id=? AND retired_at IS NULL
             LIMIT 1
             """,
             (normalized_id, current.business_id),
@@ -1187,7 +1187,7 @@ def cancel_publication_schedule(
             UPDATE business_publications
             SET status='cancelled', updated_at=?
             WHERE id=? AND business_id=?
-              AND status='scheduled' AND scheduled_at=?
+              AND status='scheduled' AND scheduled_at=? AND retired_at IS NULL
             """,
             (timestamp, normalized_id, current.business_id, previous_schedule_text),
         )
@@ -1261,7 +1261,7 @@ def publish_publication(
         existing = conn.execute(
             """
             SELECT status FROM business_publications
-            WHERE id=? AND business_id=?
+            WHERE id=? AND business_id=? AND retired_at IS NULL
             LIMIT 1
             """,
             (normalized_id, current.business_id),
@@ -1277,7 +1277,7 @@ def publish_publication(
             UPDATE business_publications
             SET status='published', published_at=?, updated_at=?,
                 failed_at=NULL, failure_reason=NULL
-            WHERE id=? AND business_id=?
+            WHERE id=? AND business_id=? AND retired_at IS NULL
             """,
             (timestamp, timestamp, normalized_id, current.business_id),
         )
@@ -1308,6 +1308,7 @@ def list_publications(
     *,
     actor: TenantContext,
     limit: int = 20,
+    include_retired: bool = False,
 ) -> list[PublicationRecord]:
     normalized_limit = max(1, min(int(limit), 100))
     with get_db_ro() as conn:
@@ -1318,13 +1319,89 @@ def list_publications(
                    created_at, updated_at, scheduled_at, published_at,
                    failed_at, failure_reason
             FROM business_publications
-            WHERE business_id=?
+            WHERE business_id=? AND (? = 1 OR retired_at IS NULL)
             ORDER BY created_at DESC, id DESC
             LIMIT ?
             """,
-            (current.business_id, normalized_limit),
+            (current.business_id, 1 if include_retired else 0, normalized_limit),
         ).fetchall()
     return [_publication_from_row(row) for row in rows]
+
+
+def retire_publication(
+    *,
+    actor: TenantContext,
+    publication_id: str,
+) -> PublicationRecord:
+    """Retire one publication without erasing its historical delivery state."""
+
+    normalized_id = normalize_uuid(publication_id, field_name="publication_id")
+    timestamp = _utc_now()
+    with get_db() as conn:
+        current = _resolve(conn, actor, allowed_roles=_CONTENT_ROLES)
+        row = conn.execute(
+            """
+            SELECT id, business_id, channel, title, body, status,
+                   created_at, updated_at, scheduled_at, published_at,
+                   failed_at, failure_reason, retired_at
+            FROM business_publications
+            WHERE id=? AND business_id=?
+            LIMIT 1
+            """,
+            (normalized_id, current.business_id),
+        ).fetchone()
+        if row is None:
+            raise ValueError("publication is not available for retirement")
+        retired_at = _value(row, "retired_at", 12)
+        if retired_at is not None:
+            return _publication_from_row(row)
+        status = str(_value(row, "status", 5))
+        cursor = conn.execute(
+            """
+            UPDATE business_publications
+            SET retired_at=?, retired_by_member_id=?, updated_at=?,
+                status=CASE WHEN status='scheduled' THEN 'cancelled' ELSE status END
+            WHERE id=? AND business_id=? AND retired_at IS NULL
+            """,
+            (timestamp, current.membership_id, timestamp, normalized_id, current.business_id),
+        )
+        if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+            latest = conn.execute(
+                """
+                SELECT id, business_id, channel, title, body, status,
+                       created_at, updated_at, scheduled_at, published_at,
+                       failed_at, failure_reason, retired_at
+                FROM business_publications
+                WHERE id=? AND business_id=?
+                LIMIT 1
+                """,
+                (normalized_id, current.business_id),
+            ).fetchone()
+            if latest is not None and _value(latest, "retired_at", 12) is not None:
+                return _publication_from_row(latest)
+            raise ValueError("publication changed concurrently; refresh and retry")
+        _audit(
+            conn,
+            actor=current,
+            action="publication_retired",
+            subject_type="publication",
+            subject_id=normalized_id,
+            detail=status,
+            now=timestamp,
+        )
+        result = conn.execute(
+            """
+            SELECT id, business_id, channel, title, body, status,
+                   created_at, updated_at, scheduled_at, published_at,
+                   failed_at, failure_reason
+            FROM business_publications
+            WHERE id=? AND business_id=?
+            """,
+            (normalized_id, current.business_id),
+        ).fetchone()
+    if result is None:
+        raise RuntimeError("retired publication was not found")
+    return _publication_from_row(result)
 
 
 def get_publication_calendar_projection(
@@ -1351,7 +1428,7 @@ def get_publication_calendar_projection(
             """
             SELECT status, COUNT(*) AS c
             FROM business_publications
-            WHERE business_id=?
+            WHERE business_id=? AND retired_at IS NULL
             GROUP BY status
             """,
             (current.business_id,),
@@ -1363,7 +1440,7 @@ def get_publication_calendar_projection(
         upcoming_rows = conn.execute(
             select_fields
             + """
-            WHERE business_id=? AND status='scheduled' AND scheduled_at IS NOT NULL
+            WHERE business_id=? AND status='scheduled' AND scheduled_at IS NOT NULL AND retired_at IS NULL
             ORDER BY scheduled_at ASC, id ASC
             LIMIT ?
             """,
@@ -1372,7 +1449,7 @@ def get_publication_calendar_projection(
         recent_rows = conn.execute(
             select_fields
             + """
-            WHERE business_id=?
+            WHERE business_id=? AND retired_at IS NULL
               AND NOT (status='scheduled' AND scheduled_at IS NOT NULL)
             ORDER BY COALESCE(published_at, failed_at, updated_at, created_at) DESC, id DESC
             LIMIT ?
@@ -1382,7 +1459,7 @@ def get_publication_calendar_projection(
         draft_rows = conn.execute(
             select_fields
             + """
-            WHERE business_id=? AND status='draft'
+            WHERE business_id=? AND status='draft' AND retired_at IS NULL
             ORDER BY updated_at DESC, id DESC
             LIMIT ?
             """,

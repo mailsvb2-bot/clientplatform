@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import sqlite3
 
+from services.schema_core import _add_col, _cols
+
 
 def ensure(c: sqlite3.Connection) -> None:
     """Create tenant-safe ClientPlatform admin operations and observability tables."""
@@ -47,6 +49,16 @@ def ensure(c: sqlite3.Connection) -> None:
         )
         """
     )
+    # Additive retirement metadata keeps publication history in the canonical row
+    # while allowing active UI/automation projections to hide retired content.
+    have_publications = _cols(c, "business_publications")
+    for column, ddl in {
+        "retired_at": "retired_at TEXT",
+        "retired_by_member_id": "retired_by_member_id TEXT",
+    }.items():
+        if column not in have_publications:
+            _add_col(c, "business_publications", ddl)
+
     c.execute(
         """
         CREATE TABLE IF NOT EXISTS business_payments(

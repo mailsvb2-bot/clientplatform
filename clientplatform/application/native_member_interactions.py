@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from clientplatform.application.activity import (
+    archive_business_offering,
     disable_business_capability,
     enable_business_capability,
     create_business_offering,
@@ -99,6 +100,7 @@ from clientplatform.application.sales_workspace import (
     unassign_sales_workspace,
 )
 from clientplatform.application.tenancy import (
+    archive_business,
     grant_business_member,
     list_accessible_businesses,
     revoke_business_member,
@@ -799,6 +801,14 @@ def parse_native_member_interaction(value: object) -> ParsedMemberInteraction:
             "offering-new",
             "offering-new-for",
             "offering-new-text",
+            "offering-retire-list",
+            "offering-retire",
+            "offering-retire-ok",
+            "publication-retire-list",
+            "publication-retire",
+            "publication-retire-ok",
+            "business-retire",
+            "business-retire-ok",
             "acquire",
         }:
             return ParsedMemberInteraction(action, args)
@@ -1121,6 +1131,9 @@ _NATIVE_PARENT_COMMANDS: dict[str, str] = {
     "payment-new": "cpm:payments",
     "price-set": "cpm:prices",
     "offering-new": "cpm:offers",
+    "offering-retire-list": "cpm:offers",
+    "publication-retire-list": "cpm:publications",
+    "business-retire": "cpm:manage-more",
     "program-create": "cpm:programs:0",
     "owner-input-invalid": "cpm:menu",
     "owner-input-cancelled": "cpm:menu",
@@ -1165,6 +1178,7 @@ def _native_parent_command(parsed: ParsedMemberInteraction) -> str | None:
         "publication-new-for", "publication-new-text", "publication-publish",
         "publication-schedule", "publication-schedule-text",
         "publication-cancel", "publication-cancel-ok",
+        "publication-retire", "publication-retire-ok",
     }:
         return "cpm:publications"
     if action in {"payment-new-text", "pay-refund", "pay-refund-ok"}:
@@ -1197,8 +1211,10 @@ def _native_parent_command(parsed: ParsedMemberInteraction) -> str | None:
         return "cpm:programs:0"
     if action == "offering-new-for":
         return "cpm:offering-new"
-    if action == "offering-new-text":
+    if action in {"offering-new-text", "offering-retire", "offering-retire-ok"}:
         return "cpm:offers"
+    if action == "business-retire-ok":
+        return None
     return _NATIVE_PARENT_COMMANDS.get(action, "cpm:menu")
 
 
@@ -2050,15 +2066,19 @@ def _manage_more_message(actor: TenantContext) -> CustomerInteractionMessage:
     if actor.role not in _CONNECTION_ROLES:
         return _permission_message()
     items = (nav.RECENT, nav.SYSTEM)
-    return CustomerInteractionMessage(
-        text="🛠 Технические проверки\n\nОбычно сюда заходить не нужно.\n\n" + nav.choice_help(*items),
-        rows=(
-            (_button(nav.RECENT.label, "cpm:recent"),),
-            (_button(nav.SYSTEM.label, "cpm:system"),),
-            (_button(nav.SETTINGS.label, "cpm:manage"),),
-            _back_row(),
-        ),
-    )
+    rows: list[tuple[CustomerInteractionButton, ...]] = [
+        (_button(nav.RECENT.label, "cpm:recent"),),
+        (_button(nav.SYSTEM.label, "cpm:system"),),
+    ]
+    text = "🛠 Технические проверки\n\nОбычно сюда заходить не нужно.\n\n" + nav.choice_help(*items)
+    if actor.role == PlatformRole.OWNER:
+        text += (
+            "\n\nЕсли Вам нужно убрать этот бизнес из активной работы → "
+            "«🗑 Убрать этот бизнес». История оплат и аудита при этом не удаляется."
+        )
+        rows.append((_button("🗑 Убрать этот бизнес", "cpm:business-retire"),))
+    rows.extend(((_button(nav.SETTINGS.label, "cpm:manage"),), _back_row()))
+    return CustomerInteractionMessage(text=text, rows=tuple(rows))
 
 def _team_message(actor: TenantContext) -> CustomerInteractionMessage:
     if actor.role not in _OWNER_ROLES:
@@ -2860,7 +2880,8 @@ def _growth_report_message(actor: TenantContext, action: str) -> CustomerInterac
             )
         )
         publication_rows: list[tuple[CustomerInteractionButton, ...]] = [
-            (_button("➕ Создать черновик", "cpm:publication-new"),)
+            (_button("➕ Создать черновик", "cpm:publication-new"),),
+            (_button("🗑 Убрать публикацию", "cpm:publication-retire-list:0"),),
         ]
         for draft_item in projection.actionable_drafts[:2]:
             publication_rows.append(
@@ -3005,6 +3026,7 @@ def _growth_report_message(actor: TenantContext, action: str) -> CustomerInterac
             offer_rows: list[tuple[CustomerInteractionButton, ...]] = []
             if actor.role in _PROGRAM_MANAGEMENT_ROLES:
                 offer_rows.append((_button("➕ Создать предложение", "cpm:offering-new"),))
+                offer_rows.append((_button("🗑 Убрать предложение", "cpm:offering-retire-list:0"),))
             if actor.role in _MARKETING_ROLES:
                 offer_rows.append((_button("💡 Настроить цены", "cpm:prices"),))
             offer_rows.extend(((_button("📈 Рост", "cpm:growth"),), _back_row()))
@@ -4067,6 +4089,200 @@ def _offering_new_result(
         rows=((_button("🧪 Предложения", "cpm:offers"),), _back_row()),
     )
 
+_RETIRE_PAGE_SIZE = 6
+
+
+def _offering_retire_list_message(
+    actor: TenantContext, page: int = 0
+) -> CustomerInteractionMessage:
+    if actor.role not in _PROGRAM_MANAGEMENT_ROLES:
+        return _permission_message()
+    offerings = _native_all_offerings(actor)
+    page = max(0, int(page))
+    start = page * _RETIRE_PAGE_SIZE
+    if start >= len(offerings) and page:
+        return _stale_message()
+    shown = offerings[start : start + _RETIRE_PAGE_SIZE]
+    rows: list[tuple[CustomerInteractionButton, ...]] = [
+        (_button(f"🗑 {item.title[:40]}", f"cpm:offering-retire:{item.id}"),)
+        for item in shown
+    ]
+    pagination: list[CustomerInteractionButton] = []
+    if page:
+        pagination.append(_button("⬅️ Назад", f"cpm:offering-retire-list:{page - 1}"))
+    if start + _RETIRE_PAGE_SIZE < len(offerings):
+        pagination.append(_button("Вперёд ➡️", f"cpm:offering-retire-list:{page + 1}"))
+    if pagination:
+        rows.append(tuple(pagination))
+    rows.append((_button("🧪 К предложениям", "cpm:offers"),))
+    return CustomerInteractionMessage(
+        text=(
+            "🗑 Убрать услугу или предложение\n\n"
+            "Выберите только то, что больше не должно показываться как активное. "
+            "Связанные оплаты и история сохранятся."
+            if offerings
+            else "🗑 Убрать услугу или предложение\n\nАктивных предложений нет."
+        ),
+        rows=tuple(rows),
+    )
+
+
+def _offering_retire_confirm(
+    actor: TenantContext, offering_id: str
+) -> CustomerInteractionMessage:
+    if actor.role not in _PROGRAM_MANAGEMENT_ROLES:
+        return _permission_message()
+    offering = next(
+        (item for item in _native_all_offerings(actor) if item.id == offering_id),
+        None,
+    )
+    if offering is None:
+        return _stale_message()
+    return CustomerInteractionMessage(
+        text=(
+            f"🗑 Убрать «{offering.title}» из активных предложений?\n\n"
+            "Это не удалит оплаты, результаты и историю. Предложение будет архивировано."
+        ),
+        rows=(
+            (_button("✅ Да, убрать", f"cpm:offering-retire-ok:{offering.id}"),),
+            (_button("Отмена", "cpm:offers"),),
+        ),
+    )
+
+
+def _offering_retire_result(
+    actor: TenantContext, offering_id: str
+) -> CustomerInteractionMessage:
+    if actor.role not in _PROGRAM_MANAGEMENT_ROLES:
+        return _permission_message()
+    offering = archive_business_offering(actor=actor, offering_id=offering_id)
+    return CustomerInteractionMessage(
+        text=(
+            f"✅ «{offering.title}» убрано из активных предложений.\n"
+            "История и связанные финансовые данные сохранены."
+        ),
+        rows=((_button("🧪 К предложениям", "cpm:offers"),),),
+    )
+
+
+def _publication_retire_list_message(
+    actor: TenantContext, page: int = 0
+) -> CustomerInteractionMessage:
+    if actor.role not in _CONTENT_ROLES:
+        return _permission_message()
+    publications = [
+        item
+        for item in admin_ops.list_publications(actor=actor, limit=100)
+        if item.status != "cancelled"
+    ]
+    page = max(0, int(page))
+    start = page * _RETIRE_PAGE_SIZE
+    if start >= len(publications) and page:
+        return _stale_message()
+    shown = publications[start : start + _RETIRE_PAGE_SIZE]
+    rows: list[tuple[CustomerInteractionButton, ...]] = [
+        (_button(f"🗑 {item.title[:40]}", f"cpm:publication-retire:{item.id}"),)
+        for item in shown
+    ]
+    pagination: list[CustomerInteractionButton] = []
+    if page:
+        pagination.append(_button("⬅️ Назад", f"cpm:publication-retire-list:{page - 1}"))
+    if start + _RETIRE_PAGE_SIZE < len(publications):
+        pagination.append(_button("Вперёд ➡️", f"cpm:publication-retire-list:{page + 1}"))
+    if pagination:
+        rows.append(tuple(pagination))
+    rows.append((_button("📣 К публикациям", "cpm:publications"),))
+    return CustomerInteractionMessage(
+        text=(
+            "🗑 Убрать публикацию\n\nВыберите публикацию. Исторический статус и аудит сохранятся."
+            if publications
+            else "🗑 Убрать публикацию\n\nАктивных публикаций нет."
+        ),
+        rows=tuple(rows),
+    )
+
+
+def _publication_retire_confirm(
+    actor: TenantContext, publication_id: str
+) -> CustomerInteractionMessage:
+    if actor.role not in _CONTENT_ROLES:
+        return _permission_message()
+    publication = next(
+        (
+            item
+            for item in admin_ops.list_publications(actor=actor, limit=100)
+            if item.id == publication_id and item.status != "cancelled"
+        ),
+        None,
+    )
+    if publication is None:
+        return _stale_message()
+    warning = (
+        "Если она была запланирована, будущая отправка будет отменена. "
+        if publication.status == "scheduled"
+        else ""
+    )
+    return CustomerInteractionMessage(
+        text=(
+            f"🗑 Убрать публикацию «{publication.title}»?\n\n"
+            + warning
+            + "Запись и её фактическая история останутся в системе."
+        ),
+        rows=(
+            (_button("✅ Да, убрать", f"cpm:publication-retire-ok:{publication.id}"),),
+            (_button("Отмена", "cpm:publications"),),
+        ),
+    )
+
+
+def _publication_retire_result(
+    actor: TenantContext, publication_id: str
+) -> CustomerInteractionMessage:
+    if actor.role not in _CONTENT_ROLES:
+        return _permission_message()
+    publication = admin_ops.retire_publication(
+        actor=actor, publication_id=publication_id
+    )
+    return CustomerInteractionMessage(
+        text=(
+            f"✅ Публикация «{publication.title}» убрана из активной работы.\n"
+            "Её история сохранена."
+        ),
+        rows=((_button("📣 К публикациям", "cpm:publications"),),),
+    )
+
+
+def _business_retire_confirm(actor: TenantContext) -> CustomerInteractionMessage:
+    if actor.role != PlatformRole.OWNER:
+        return _permission_message()
+    business_name = _business_name(actor)
+    return CustomerInteractionMessage(
+        text=(
+            f"🗑 Убрать бизнес «{business_name}» из ClientPlatform?\n\n"
+            "Он исчезнет из активной навигации. Оплаты, результаты и аудит не удаляются. "
+            "После этого можно подключить другой бизнес. Это действие требует подтверждения."
+        ),
+        rows=(
+            (_button("✅ Да, убрать бизнес", "cpm:business-retire-ok"),),
+            (_button("Отмена", "cpm:manage-more"),),
+        ),
+    )
+
+
+def _business_retire_result(actor: TenantContext) -> CustomerInteractionMessage:
+    if actor.role != PlatformRole.OWNER:
+        return _permission_message()
+    business = archive_business(actor=actor)
+    return CustomerInteractionMessage(
+        text=(
+            f"✅ Бизнес «{business.name}» убран из активной работы.\n\n"
+            "История сохранена. Отправьте «start» или снова откройте ClientPlatform — "
+            "появится вход для подключения другого бизнеса."
+        ),
+        rows=(),
+    )
+
+
 def _messengers_message(
     actor: TenantContext,
     *,
@@ -4272,6 +4488,10 @@ def _render(
             return _manage_message(actor)
         if parsed.action == "manage-more":
             return _manage_more_message(actor)
+        if parsed.action == "business-retire":
+            return _business_retire_confirm(actor)
+        if parsed.action == "business-retire-ok":
+            return _business_retire_result(actor)
         if parsed.action == "team":
             return _team_message(actor)
         if parsed.action == "today":
@@ -4389,6 +4609,16 @@ def _render(
                 parsed.args[2],
                 interaction_key=setup_key,
             )
+        if parsed.action == "offering-retire-list":
+            return _offering_retire_list_message(actor, _page_number(parsed.args))
+        if parsed.action == "offering-retire":
+            if len(parsed.args) != 1:
+                return _stale_message()
+            return _offering_retire_confirm(actor, parsed.args[0])
+        if parsed.action == "offering-retire-ok":
+            if len(parsed.args) != 1:
+                return _stale_message()
+            return _offering_retire_result(actor, parsed.args[0])
         if parsed.action == "behavior":
             return _behavior_message(actor)
         if parsed.action == "attention":
@@ -4510,6 +4740,16 @@ def _render(
             if len(parsed.args) != 2:
                 return _stale_message()
             return _publication_cancel_result(actor, parsed.args[0], parsed.args[1])
+        if parsed.action == "publication-retire-list":
+            return _publication_retire_list_message(actor, _page_number(parsed.args))
+        if parsed.action == "publication-retire":
+            if len(parsed.args) != 1:
+                return _stale_message()
+            return _publication_retire_confirm(actor, parsed.args[0])
+        if parsed.action == "publication-retire-ok":
+            if len(parsed.args) != 1:
+                return _stale_message()
+            return _publication_retire_result(actor, parsed.args[0])
         if parsed.action == "payment-new":
             return _payment_new_help(
                 actor, current_platform=current_platform, input_surface=input_surface
