@@ -132,6 +132,66 @@ class ClientPlatformCustomerBoundaryTests(unittest.TestCase):
         self.assertEqual([vk_customer.id], [item.id for item in vk])
         self.assertEqual([max_customer.id], [item.id for item in max_items])
 
+    def test_customer_search_is_bounded_identity_aware_and_tenant_scoped(self) -> None:
+        older = self.customers.create_customer(
+            actor=self.owner_a, display_name="Older Client"
+        )
+        newer = self.customers.create_customer(
+            actor=self.owner_a, display_name="Newer Client"
+        )
+        foreign = self.customers.create_customer(
+            actor=self.owner_b, display_name="Foreign Newer Client"
+        )
+        self.customers.attach_identity(
+            actor=self.owner_a,
+            customer_id=newer.id,
+            platform="email",
+            external_subject="secret.person@example.com",
+            username="target_handle",
+        )
+        self.conn.execute(
+            "UPDATE customers SET last_contact_at=? WHERE id=?",
+            ("2026-09-05T12:00:00+00:00", newer.id),
+        )
+        self.conn.execute(
+            "UPDATE customers SET last_contact_at=? WHERE id=?",
+            ("2026-09-04T12:00:00+00:00", older.id),
+        )
+        self.conn.execute(
+            "UPDATE customers SET last_contact_at=? WHERE id=?",
+            ("2026-09-06T12:00:00+00:00", foreign.id),
+        )
+
+        first, has_more = self.customers.search_customers(
+            actor=self.owner_a, limit=1
+        )
+        second, _ = self.customers.search_customers(
+            actor=self.owner_a, limit=1, offset=1
+        )
+        by_handle, _ = self.customers.search_customers(
+            actor=self.owner_a, query="target_handle"
+        )
+        by_email, _ = self.customers.search_customers(
+            actor=self.owner_a, query="secret.person@example.com"
+        )
+
+        self.assertTrue(has_more)
+        self.assertEqual([newer.id], [item.id for item in first])
+        self.assertEqual([older.id], [item.id for item in second])
+        self.assertEqual([newer.id], [item.id for item in by_handle])
+        self.assertEqual([newer.id], [item.id for item in by_email])
+        self.assertNotIn("secret.person@example.com", repr(by_email))
+
+    def test_customer_search_rejects_unbounded_inputs(self) -> None:
+        for limit in (0, 51, True):
+            with self.assertRaises(ValueError):
+                self.customers.search_customers(actor=self.owner_a, limit=limit)
+        for offset in (-1, 10_001, True):
+            with self.assertRaises(ValueError):
+                self.customers.search_customers(actor=self.owner_a, offset=offset)
+        with self.assertRaises(ValueError):
+            self.customers.search_customers(actor=self.owner_a, query="x" * 101)
+
     def test_cross_business_customer_lookup_is_denied(self) -> None:
         customer_b = self.customers.create_customer(
             actor=self.owner_b,
@@ -243,6 +303,43 @@ class ClientPlatformCustomerBoundaryTests(unittest.TestCase):
                 platform="phone",
                 external_subject="79991112233",
             )
+
+    def test_cockpit_customer_read_role_matrix_is_enforced_by_repository(self) -> None:
+        customer = self.customers.create_customer(
+            actor=self.owner_a, display_name="Role Matrix Customer"
+        )
+        cases = (
+            (301, PlatformRole.ADMINISTRATOR, True),
+            (302, PlatformRole.MANAGER, True),
+            (303, PlatformRole.SUPPORT, True),
+            (304, PlatformRole.MARKETER, False),
+            (305, PlatformRole.CONTENT_MANAGER, False),
+            (306, PlatformRole.ANALYST, False),
+        )
+        for user_id, role, allowed in cases:
+            self.tenancy.grant_member(
+                actor=self.owner_a, user_id=user_id, role=role
+            )
+            actor = self.tenancy.resolve_context(
+                user_id=user_id, business_id=self.business_a.business.id
+            )
+            with self.subTest(role=role.value):
+                if allowed:
+                    page, _has_more = self.customers.search_customers(
+                        actor=actor, limit=20
+                    )
+                    self.assertIn(customer.id, [item.id for item in page])
+                    self.assertEqual(
+                        self.customers.get_customer(
+                            actor=actor, customer_id=customer.id
+                        ).customer.id,
+                        customer.id,
+                    )
+                else:
+                    with self.assertRaises(TenantPermissionDenied):
+                        self.customers.search_customers(actor=actor, limit=20)
+                    with self.assertRaises(TenantPermissionDenied):
+                        self.customers.get_customer(actor=actor, customer_id=customer.id)
 
     def test_content_and_marketing_roles_cannot_read_customer_pii(self) -> None:
         self.tenancy.grant_member(

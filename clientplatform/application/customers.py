@@ -47,6 +47,19 @@ def list_customers(
         )
 
 
+def search_customers(
+    *,
+    actor: TenantContext,
+    query: str | None = None,
+    limit: int = 20,
+    offset: int = 0,
+) -> tuple[list[Customer], bool]:
+    with get_db_ro() as conn:
+        return CustomerRepository(conn).search_customers(
+            actor=actor, query=query, limit=limit, offset=offset
+        )
+
+
 def list_customers_with_active_identity(
     *,
     actor: TenantContext,

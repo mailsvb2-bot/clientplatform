@@ -414,14 +414,22 @@ def get_customer_work_actions(
     *,
     actor: TenantContext,
     limit: int = 5,
+    customer_id: str | None = None,
 ) -> tuple[GrowthAction, ...]:
-    """Expose the existing customer-work priority as a transport-neutral read projection."""
+    """Expose canonical customer-work priority, optionally scoped to one customer."""
 
     if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1 or limit > 10:
         raise ValueError("customer work action limit must be an integer between 1 and 10")
-    needs_reply = count_sales_handoff_work(actor=actor)
-    handoffs = list_sales_handoff_work(actor=actor, limit=limit) if needs_reply else []
-    sales_work = list_sales_work(actor=actor, limit=max(limit, 10))
+    if customer_id is None:
+        needs_reply = count_sales_handoff_work(actor=actor)
+        handoffs = list_sales_handoff_work(actor=actor, limit=limit) if needs_reply else []
+    else:
+        handoffs = list_sales_handoff_work(
+            actor=actor, limit=limit, customer_id=customer_id
+        )
+    sales_work = list_sales_work(
+        actor=actor, limit=max(limit, 10), customer_id=customer_id
+    )
     return tuple(_customer_work_actions(handoffs=handoffs, sales_work=sales_work)[:limit])
 
 

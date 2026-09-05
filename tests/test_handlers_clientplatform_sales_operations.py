@@ -220,7 +220,7 @@ async def test_load_detail_manage_and_closed_projections(
     assert await operations._load_item(actor=actor, lead_id=str(uuid4())) is None
 
     detail = FakeMessage()
-    await operations._send_detail(
+    await operations.send_sales_lead_view(
         detail,
         user_id=101,
         business_id=business_id,
@@ -271,7 +271,7 @@ async def test_load_detail_manage_and_closed_projections(
     assert "Закрытых обращений пока нет" in empty_closed.answers[-1][0]
 
     missing = FakeMessage()
-    await operations._send_detail(
+    await operations.send_sales_lead_view(
         missing,
         user_id=101,
         business_id=business_id,
@@ -313,7 +313,7 @@ async def test_navigation_callbacks_dispatch_to_canonical_views(
     detail = AsyncMock()
     monkeypatch.setattr(operations, "_send_manage_work", manage)
     monkeypatch.setattr(operations, "_send_closed_work", closed)
-    monkeypatch.setattr(operations, "_send_detail", detail)
+    monkeypatch.setattr(operations, "send_sales_lead_view", detail)
 
     await operations.open_sales_operations(
         FakeCallback(f"cps:swm:{business_token}"),
@@ -341,7 +341,7 @@ async def test_assignment_unassignment_and_clear_actions(
     business_id, lead_id = str(uuid4()), str(uuid4())
     bt, lt = operations._token(business_id), operations._token(lead_id)
     refreshed = AsyncMock()
-    monkeypatch.setattr(operations, "_send_detail", refreshed)
+    monkeypatch.setattr(operations, "send_sales_lead_view", refreshed)
 
     captured: dict[str, dict[str, Any]] = {}
 
@@ -415,7 +415,7 @@ async def test_next_action_prompt_validation_success_and_failure(
         captured.update(kwargs)
 
     monkeypatch.setattr(operations, "set_sales_next_action", save)
-    monkeypatch.setattr(operations, "_send_detail", AsyncMock())
+    monkeypatch.setattr(operations, "send_sales_lead_view", AsyncMock())
     success = FakeMessage(text="  Позвонить завтра  ")
     success_state = FakeState(
         {"sales_business_id": business_id, "sales_lead_id": lead_id}
@@ -469,7 +469,7 @@ async def test_due_action_guards_and_updates(
         captured.append(kwargs)
 
     monkeypatch.setattr(operations, "set_sales_next_action", save)
-    monkeypatch.setattr(operations, "_send_detail", AsyncMock())
+    monkeypatch.setattr(operations, "send_sales_lead_view", AsyncMock())
 
     no_due = FakeCallback(f"cps:swmd:{bt}:{lt}:n")
     await operations.set_sales_due_owner(no_due, FakeState())
@@ -519,7 +519,7 @@ async def test_note_prompt_and_capture_paths(
         captured.update(kwargs)
 
     monkeypatch.setattr(operations, "add_sales_note", save)
-    monkeypatch.setattr(operations, "_send_detail", AsyncMock())
+    monkeypatch.setattr(operations, "send_sales_lead_view", AsyncMock())
     message = FakeMessage(text="Перезвонить после 18:00")
     success_state = FakeState(
         {"sales_business_id": business_id, "sales_lead_id": lead_id}
@@ -547,7 +547,7 @@ async def test_stage_close_and_reopen_lifecycle_paths(
 ) -> None:
     business_id, lead_id = str(uuid4()), str(uuid4())
     bt, lt = operations._token(business_id), operations._token(lead_id)
-    monkeypatch.setattr(operations, "_send_detail", AsyncMock())
+    monkeypatch.setattr(operations, "send_sales_lead_view", AsyncMock())
 
     invalid_stage = FakeCallback(f"cps:swms:{bt}:{lt}:z")
     await operations.set_sales_stage_owner(invalid_stage, FakeState())
@@ -679,7 +679,7 @@ async def test_followup_owner_prompt_schedule_and_keyboard(
         return SimpleNamespace(scheduled_at="2026-08-21T09:00:00+00:00")
 
     monkeypatch.setattr(operations, "schedule_sales_followup", schedule)
-    monkeypatch.setattr(operations, "_send_detail", AsyncMock())
+    monkeypatch.setattr(operations, "send_sales_lead_view", AsyncMock())
     callback = FakeCallback(f"cps:swft:{bt}:{lt}:24")
     await operations.schedule_sales_followup_owner(callback, state)
     assert captured["lead_id"] == lead_id
@@ -711,7 +711,7 @@ async def test_followup_cancel_and_opt_out_callbacks(
 ) -> None:
     business_id, lead_id = str(uuid4()), str(uuid4())
     bt, lt = operations._token(business_id), operations._token(lead_id)
-    monkeypatch.setattr(operations, "_send_detail", AsyncMock())
+    monkeypatch.setattr(operations, "send_sales_lead_view", AsyncMock())
     calls: dict[str, dict[str, Any]] = {}
 
     def cancel(**kwargs: Any) -> int:
@@ -903,7 +903,7 @@ async def test_capture_reactivation_result_records_exact_rub_minor_units(
         return SimpleNamespace()
 
     monkeypatch.setattr(operations, "record_reactivation_result", record)
-    monkeypatch.setattr(operations, "_send_detail", AsyncMock())
+    monkeypatch.setattr(operations, "send_sales_lead_view", AsyncMock())
     message = FakeMessage(text="2 500,50")
 
     await operations.capture_reactivation_result(message, state)
@@ -913,7 +913,7 @@ async def test_capture_reactivation_result_records_exact_rub_minor_units(
     assert captured["currency"] == "RUB"
     assert state.clear_count == 1
     assert "2 500,50 ₽" in message.answers[-1][0]
-    operations._send_detail.assert_awaited_once()
+    operations.send_sales_lead_view.assert_awaited_once()
 
 
 @pytest.mark.asyncio

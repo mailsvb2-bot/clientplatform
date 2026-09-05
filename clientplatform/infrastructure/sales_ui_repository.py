@@ -270,9 +270,15 @@ class SalesUiRepository:
         *,
         actor: TenantContext,
         limit: int = 12,
+        customer_id: str | None = None,
     ) -> list[dict[str, Any]]:
         current = self._customer_context(actor)
         selected_limit = _bounded_limit(limit)
+        normalized_customer_id = (
+            None
+            if customer_id is None
+            else normalize_uuid(customer_id, field_name="customer_id")
+        )
         rows = self._conn.execute(
             """
             SELECT
@@ -355,6 +361,7 @@ class SalesUiRepository:
             JOIN customers c
               ON c.id=l.customer_id AND c.business_id=l.business_id
             WHERE l.business_id=?
+              AND l.customer_id = COALESCE(?, l.customer_id)
               AND l.stage IN ('new','contacted','qualified','checkout')
             ORDER BY
                 l.due_at IS NULL,
@@ -363,7 +370,7 @@ class SalesUiRepository:
                 l.id DESC
             LIMIT ?
             """,
-            (current.business_id, selected_limit),
+            (current.business_id, normalized_customer_id, selected_limit),
         ).fetchall()
         return [
             self._decorate_work_item(current=current, item=_rowdict(row))
@@ -442,9 +449,15 @@ class SalesUiRepository:
         *,
         actor: TenantContext,
         limit: int = 12,
+        customer_id: str | None = None,
     ) -> list[dict[str, Any]]:
         current = self._customer_context(actor)
         selected_limit = _bounded_limit(limit)
+        normalized_customer_id = (
+            None
+            if customer_id is None
+            else normalize_uuid(customer_id, field_name="customer_id")
+        )
         rows = self._conn.execute(
             """
             SELECT
@@ -462,6 +475,7 @@ class SalesUiRepository:
             JOIN customers c
               ON c.id=l.customer_id AND c.business_id=l.business_id
             WHERE h.business_id=?
+              AND l.customer_id = COALESCE(?, l.customer_id)
               AND h.status IN ('open','claimed')
             ORDER BY
                 CASE h.severity WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 ELSE 2 END,
@@ -469,7 +483,7 @@ class SalesUiRepository:
                 h.id
             LIMIT ?
             """,
-            (current.business_id, selected_limit),
+            (current.business_id, normalized_customer_id, selected_limit),
         ).fetchall()
         return [_rowdict(row) for row in rows]
 

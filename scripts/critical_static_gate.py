@@ -101,6 +101,7 @@ _CLIENTPLATFORM_SALES_UI_FILES = (
     "clientplatform/infrastructure/sales_action_repository.py",
     "clientplatform/infrastructure/sales_ui_repository.py",
     "handlers/clientplatform_sales.py",
+    "handlers/clientplatform_sales_operations.py",
     "handlers/clientplatform_sales_install.py",
 )
 
@@ -135,7 +136,9 @@ _CLIENTPLATFORM_EMAIL_OUTBOUND_FILES = (
 
 _CLIENTPLATFORM_COCKPIT_FILES = (
     "clientplatform/application/cockpit.py",
+    "clientplatform/application/cockpit_action_routing.py",
     "clientplatform/application/cockpit_home.py",
+    "clientplatform/application/cockpit_customers.py",
     "clientplatform/runtime/cockpit_http.py",
     "clientplatform/runtime/cockpit_links.py",
     "clientplatform/runtime/telegram_webapp_auth.py",

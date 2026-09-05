@@ -100,7 +100,7 @@ class SalesAIHandlerTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.object(self.sales.asyncio, "to_thread", _inline_to_thread),
-            patch.object(self.sales, "_send_sales_work", refresh),
+            patch.object(self.sales, "send_sales_work_view", refresh),
             patch.object(
                 sales_ai_drafts,
                 "sales_ai_runtime_available",
@@ -176,7 +176,7 @@ class SalesAIHandlerTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.object(self.sales.asyncio, "to_thread", _inline_to_thread),
-            patch.object(self.sales, "_send_sales_work", refresh),
+            patch.object(self.sales, "send_sales_work_view", refresh),
             patch.object(
                 sales_ai_drafts,
                 "sales_ai_runtime_available",

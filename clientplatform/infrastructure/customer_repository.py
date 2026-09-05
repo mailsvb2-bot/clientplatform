@@ -187,6 +187,64 @@ class CustomerRepository:
             ).fetchall()
         return [_customer_from_row(row) for row in rows]
 
+    def search_customers(
+        self,
+        *,
+        actor: TenantContext,
+        query: str | None = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> tuple[list[Customer], bool]:
+        """Return one bounded tenant customer page without exposing identity subjects."""
+        current = self._resolve_actor(actor, manage=False)
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 50:
+            raise ValueError("limit must be an integer between 1 and 50")
+        if isinstance(offset, bool) or not isinstance(offset, int) or not 0 <= offset <= 10_000:
+            raise ValueError("offset must be an integer between 0 and 10000")
+        normalized_query = " ".join(str(query or "").replace("\x00", " ").split()).strip()
+        if len(normalized_query) > 100:
+            raise ValueError("query must be at most 100 characters")
+
+        where = "c.business_id=? AND c.status='active'"
+        params: list[Any] = [current.business_id]
+        if normalized_query:
+            digits = "".join(char for char in normalized_query if char.isdigit())
+            where += """
+              AND (
+                instr(COALESCE(c.display_name, ''), ?) > 0
+                OR EXISTS (
+                  SELECT 1 FROM customer_identities ci
+                  WHERE ci.business_id=c.business_id
+                    AND ci.customer_id=c.id
+                    AND ci.status='active'
+                    AND (
+                      instr(COALESCE(ci.display_name, ''), ?) > 0
+                      OR instr(lower(COALESCE(ci.username, '')), lower(?)) > 0
+                      OR (ci.platform='email' AND instr(lower(ci.external_subject), lower(?)) > 0)
+                      OR (ci.platform='phone' AND ? <> '' AND instr(ci.external_subject, ?) > 0)
+                    )
+                )
+              )
+            """
+            params.extend(
+                [normalized_query, normalized_query, normalized_query,
+                 normalized_query.casefold(), digits, digits]
+            )
+        params.extend([limit + 1, offset])
+        rows = self._conn.execute(
+            f"""
+            SELECT c.id, c.business_id, c.display_name, c.status,
+                   c.created_by_member_id, c.created_at, c.updated_at, c.archived_at
+            FROM customers c
+            WHERE {where}
+            ORDER BY COALESCE(c.last_contact_at, c.updated_at, c.created_at) DESC, c.id DESC
+            LIMIT ? OFFSET ?
+            """,
+            tuple(params),
+        ).fetchall()
+        has_more = len(rows) > limit
+        return [_customer_from_row(row) for row in rows[:limit]], has_more
+
     def list_customers_with_active_identity(
         self,
         *,

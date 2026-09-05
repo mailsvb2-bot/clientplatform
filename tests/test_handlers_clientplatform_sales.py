@@ -211,7 +211,7 @@ async def test_owner_approval_opens_dispatch_gate_then_refreshes_work(
 
     monkeypatch.setattr(sales, "approve_and_authorize_sales_outbound", approve)
     refresh = AsyncMock()
-    monkeypatch.setattr(sales, "_send_sales_work", refresh)
+    monkeypatch.setattr(sales, "send_sales_work_view", refresh)
     state = FakeState({"stale": True})
 
     await sales.approve_sales_plan(callback, state)
