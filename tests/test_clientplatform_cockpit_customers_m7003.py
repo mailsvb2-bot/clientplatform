@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 from datetime import datetime, timezone
 from unittest.mock import patch
 
@@ -160,6 +161,23 @@ class CockpitCustomersM7003Tests(unittest.TestCase):
             detail.limitations,
             ("timeline_unavailable", "customer_work_unavailable"),
         )
+
+    def test_mobile_asset_is_read_only_and_keeps_authority_on_server(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        script = (
+            root / "clientplatform" / "runtime" / "cockpit_customers.js"
+        ).read_text(encoding="utf-8")
+        transport = (
+            root / "clientplatform" / "runtime" / "cockpit_http.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("/clientplatform/cockpit/customers", script)
+        self.assertIn("/clientplatform/cockpit/customers/detail", script)
+        self.assertIn('id=\"customers-view\"', transport)
+        self.assertNotIn("localStorage", script)
+        self.assertNotIn("URLSearchParams", script)
+        self.assertNotIn("innerHTML", script)
+        self.assertNotIn("/approve", script)
+        self.assertNotIn("/send", script)
 
     def test_resolver_rechecks_live_tenant_after_cockpit_scope(self) -> None:
         context = type(
