@@ -224,7 +224,7 @@ class BookingRepository:
             where += " AND bs.offering_id=?"
             params.append(normalized_offering)
         if not include_unavailable:
-            where += " AND bs.status='open'"
+            where += " AND bs.status='open' AND bo.status='active'"
         rows = self._conn.execute(
             _SLOT_SELECT + where + " ORDER BY bs.starts_at, bs.id",
             tuple(params),
@@ -402,7 +402,8 @@ class BookingRepository:
             subject_id=link.customer_id,
         )
         row = self._conn.execute(
-            _SLOT_SELECT + " WHERE bs.id=? AND bs.business_id=? LIMIT 1",
+            _SLOT_SELECT
+            + " WHERE bs.id=? AND bs.business_id=? AND bo.status='active' LIMIT 1",
             (normalized_slot, link.business_id),
         ).fetchone()
         if row is None:
@@ -437,6 +438,12 @@ class BookingRepository:
             UPDATE booking_slots
             SET status='booked', booked_customer_id=?, booked_at=?, updated_at=?
             WHERE id=? AND business_id=? AND status='open' AND booked_customer_id IS NULL
+              AND EXISTS (
+                  SELECT 1 FROM business_offerings bo
+                  WHERE bo.id=booking_slots.offering_id
+                    AND bo.business_id=booking_slots.business_id
+                    AND bo.status='active'
+              )
             """,
             (
                 link.customer_id,

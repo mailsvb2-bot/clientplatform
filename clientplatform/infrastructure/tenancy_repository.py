@@ -499,6 +499,76 @@ class TenancyRepository:
             )
         return accesses
 
+    def archive_business(
+        self,
+        *,
+        actor: TenantContext,
+        now: str | None = None,
+    ) -> Business:
+        principal_id = self._canonical_user_id(actor.user_id)
+        normalized_business_id = normalize_uuid(actor.business_id, field_name="business_id")
+        row = self._conn.execute(
+            """
+            SELECT b.id, b.name, b.status, b.created_by_user_id, b.created_at, b.updated_at,
+                   bm.role, bm.status AS membership_status
+            FROM businesses b
+            JOIN business_members bm
+              ON bm.business_id=b.id AND bm.user_id=?
+            WHERE b.id=?
+            LIMIT 1
+            """,
+            (principal_id, normalized_business_id),
+        ).fetchone()
+        if row is None or str(_value(row, "membership_status", 7)) != MembershipStatus.ACTIVE.value:
+            raise TenantAccessDenied("active business membership was not found")
+        if PlatformRole(str(_value(row, "role", 6))) != PlatformRole.OWNER:
+            raise TenantPermissionDenied("only the business owner can archive a business")
+        business = _business_from_row(row)
+        if business.status == BusinessStatus.ARCHIVED:
+            return business
+        if business.status != BusinessStatus.ACTIVE:
+            raise TenantInvariantViolation("only an active business can be archived")
+        timestamp = str(now or _utc_now())
+        cursor = self._conn.execute(
+            "UPDATE businesses SET status='archived', updated_at=? "
+            "WHERE id=? AND status='active'",
+            (timestamp, normalized_business_id),
+        )
+        if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+            latest = self.get_business_for_platform_support(business_id=normalized_business_id)
+            if latest.status == BusinessStatus.ARCHIVED:
+                return latest
+            raise TenantInvariantViolation("business changed concurrently; refresh and retry")
+
+        # These rows are transient navigation/input state, not business history.
+        # Remove only ephemeral pointers so an archived workspace cannot remain selected.
+        self._conn.execute(
+            "DELETE FROM clientplatform_owner_control_workspaces "
+            "WHERE business_id=?",
+            (normalized_business_id,),
+        )
+        self._conn.execute(
+            "DELETE FROM clientplatform_owner_onboarding_sessions "
+            "WHERE business_id=?",
+            (normalized_business_id,),
+        )
+        self._conn.execute(
+            "DELETE FROM clientplatform_owner_input_sessions "
+            "WHERE business_id=?",
+            (normalized_business_id,),
+        )
+        # Unclaimed invitations are operational entry points, not immutable history.
+        # Revoke them while retaining the rows and any claimed invite evidence.
+        self._conn.execute(
+            """
+            UPDATE customer_invites
+            SET status='revoked', revoked_at=?
+            WHERE business_id=? AND status='active'
+            """,
+            (timestamp, normalized_business_id),
+        )
+        return self.get_business_for_platform_support(business_id=normalized_business_id)
+
     def rename_business(
         self,
         *,

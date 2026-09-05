@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from uuid import NAMESPACE_URL, uuid5
+
 from clientplatform.domain.tenancy import Business, BusinessAccess, BusinessMember, PlatformRole, TenantContext
 from clientplatform.infrastructure import TenancyRepository
 from services.db import get_db, get_db_ro
@@ -32,6 +34,35 @@ def get_owner_control_workspace(*, user_id: int, platform: str) -> str | None:
         return TenancyRepository(conn).get_owner_control_workspace(
             user_id=user_id, platform=platform
         )
+
+
+def archive_business(*, actor: TenantContext) -> Business:
+    with get_db() as conn:
+        business = TenancyRepository(conn).archive_business(actor=actor)
+        event_id = str(
+            uuid5(
+                NAMESPACE_URL,
+                f"clientplatform:lifecycle:business:{business.id}:archived",
+            )
+        )
+        conn.execute(
+            """
+            INSERT INTO clientplatform_admin_audit_events(
+                id, business_id, actor_user_id, action, subject_type,
+                subject_id, detail, created_at
+            ) VALUES(?, ?, ?, 'business_archived', 'business', ?, ?, ?)
+            ON CONFLICT(id) DO NOTHING
+            """,
+            (
+                event_id,
+                business.id,
+                actor.user_id,
+                business.id,
+                business.name[:1000],
+                business.updated_at,
+            ),
+        )
+        return business
 
 
 def rename_business(*, actor: TenantContext, name: str) -> Business:

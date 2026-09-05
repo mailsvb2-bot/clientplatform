@@ -408,6 +408,35 @@ class ActivityRepository:
             raise ActivityNotFound("business offering was not found")
         return _offering_from_row(row)
 
+    def archive_offering(
+        self,
+        *,
+        actor: TenantContext,
+        offering_id: str,
+        now: str | None = None,
+    ) -> BusinessOffering:
+        current = self._current_actor(actor)
+        current.assert_can_manage_programs()
+        normalized_id = normalize_uuid(offering_id, field_name="offering_id")
+        offering = self.get_offering(actor=current, offering_id=normalized_id)
+        if offering.status == OfferingStatus.ARCHIVED:
+            return offering
+        timestamp = str(now or _utc_now())
+        cursor = self._conn.execute(
+            """
+            UPDATE business_offerings
+            SET status='archived', archived_at=?, updated_at=?
+            WHERE id=? AND business_id=? AND status='active'
+            """,
+            (timestamp, timestamp, normalized_id, current.business_id),
+        )
+        if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+            latest = self.get_offering(actor=current, offering_id=normalized_id)
+            if latest.status == OfferingStatus.ARCHIVED:
+                return latest
+            raise ActivityInvariantViolation("offering changed concurrently; refresh and retry")
+        return self.get_offering(actor=current, offering_id=normalized_id)
+
     def list_offerings(
         self,
         *,
