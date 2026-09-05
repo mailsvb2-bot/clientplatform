@@ -179,7 +179,7 @@ class CockpitCustomersM7003Tests(unittest.TestCase):
         self.assertNotIn("/approve", script)
         self.assertNotIn("/send", script)
 
-    def test_resolver_rechecks_live_tenant_after_cockpit_scope(self) -> None:
+    def test_resolver_rechecks_current_tenant_after_cockpit_scope(self) -> None:
         context = type(
             "Context",
             (),

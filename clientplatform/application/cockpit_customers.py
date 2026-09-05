@@ -233,7 +233,11 @@ def build_cockpit_customer_detail(
         timeline_items = _timeline_items(timeline)
     except (TenantAccessDenied, TenantPermissionDenied):
         raise
-    except (OSError, RuntimeError, ValueError):
+    except OSError:
+        limitations.append("timeline_unavailable")
+    except RuntimeError:
+        limitations.append("timeline_unavailable")
+    except ValueError:
         limitations.append("timeline_unavailable")
 
     next_action = None
@@ -246,7 +250,11 @@ def build_cockpit_customer_detail(
         next_action = _customer_action(actions[0] if actions else None)
     except (TenantAccessDenied, TenantPermissionDenied):
         raise
-    except (OSError, RuntimeError, ValueError):
+    except OSError:
+        limitations.append("customer_work_unavailable")
+    except RuntimeError:
+        limitations.append("customer_work_unavailable")
+    except ValueError:
         limitations.append("customer_work_unavailable")
 
     contacts = tuple(
