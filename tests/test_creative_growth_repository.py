@@ -259,3 +259,56 @@ def test_first_activation_refuses_queued_job_and_rolls_back_aliases() -> None:
         for row in conn.execute("SELECT id, source_url FROM ad_publication_jobs").fetchall()
     }
     assert current_urls == original_urls
+
+
+def test_creative_growth_bounded_page_and_reference_resolution() -> None:
+    conn, owner, analyst, jobs = _db()
+    repo = CreativeGrowthRepository(conn)
+    created = [
+        repo.create(
+            actor=owner,
+            name=f"Bounded {index}",
+            allocations=((jobs[0], 5000), (jobs[1], 5000)),
+        )
+        for index in range(6)
+    ]
+
+    first, first_more = repo.list_page(actor=analyst, limit=4, offset=0)
+    second, second_more = repo.list_page(actor=analyst, limit=4, offset=4)
+    assert len(first) == 4
+    assert first_more is True
+    assert len(second) == 2
+    assert second_more is False
+
+    target = created[0].trial_id
+    assert repo.resolve_reference(actor=analyst, reference=target[:8]) == target
+
+    ambiguous_id = target[:8] + str(uuid4())[8:]
+    conn.execute(
+        "INSERT INTO creative_growth_trials("
+        "id, business_id, name, status, revision, created_by_member_id, created_at, updated_at"
+        ") VALUES(?, ?, 'Ambiguous', 'draft', 1, ?, ?, ?)",
+        (
+            ambiguous_id,
+            owner.business_id,
+            owner.membership_id,
+            "2026-09-05T00:00:00+00:00",
+            "2026-09-05T00:00:00+00:00",
+        ),
+    )
+    with pytest.raises(ValueError, match="stale or ambiguous"):
+        repo.resolve_reference(actor=analyst, reference=target[:8])
+
+
+@pytest.mark.parametrize(
+    ("limit", "offset"),
+    [(0, 0), (51, 0), (True, 0), (4, -1), (4, 10001), (4, True)],
+)
+def test_creative_growth_page_rejects_unbounded_or_invalid_ranges(
+    limit: int,
+    offset: int,
+) -> None:
+    conn, _owner, analyst, _jobs = _db()
+    repo = CreativeGrowthRepository(conn)
+    with pytest.raises(ValueError):
+        repo.list_page(actor=analyst, limit=limit, offset=offset)

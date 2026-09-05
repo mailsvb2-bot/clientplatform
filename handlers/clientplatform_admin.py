@@ -160,6 +160,7 @@ _ADMIN_ROLES = {
     PlatformRole.ADMINISTRATOR,
 }
 _OWNER_ROLES = {PlatformRole.OWNER}
+_PROMOTION_ANALYTICS_ROLES = _CONTENT_ROLES | {PlatformRole.ANALYST}
 
 _SECTION_ROLES = {
     "today": _SUPPORT_ROLES,
@@ -171,6 +172,7 @@ _SECTION_ROLES = {
     "messengers": _SUPPORT_ROLES,
     "messenger-connect": _ADMIN_ROLES,
     "attention": _SUPPORT_ROLES,
+    "sales": _SUPPORT_ROLES,
     "autopilot": _AUTOMATION_ROLES,
     "publications": _CONTENT_ROLES,
     "funnel": _MARKETING_ROLES,
@@ -180,6 +182,8 @@ _SECTION_ROLES = {
     "offers": _CONTENT_ROLES | _MARKETING_ROLES,
     "copy": _CONTENT_ROLES | _MARKETING_ROLES,
     "prices": _MARKETING_ROLES,
+    "promotion": _CONTENT_ROLES,
+    "experiments": _PROMOTION_ANALYTICS_ROLES,
     "release": _ADMIN_ROLES,
     "invites": _ADMIN_ROLES,
     "funnel2": _ADMIN_ROLES,
@@ -256,6 +260,7 @@ _ADMIN_MENU_GROUPS: dict[str, tuple[str, tuple[tuple[str, str], ...]]] = {
             (nav.CUSTOMERS.label, "customer-list"),
             (nav.ATTENTION.label, "attention"),
             (nav.BEHAVIOR.label, "behavior"),
+            (nav.SALES.label, "sales"),
         ),
     ),
     "menu-content": (
@@ -277,6 +282,8 @@ _ADMIN_MENU_GROUPS: dict[str, tuple[str, tuple[tuple[str, str], ...]]] = {
             (nav.PAYMENTS.label, "payments"),
             (nav.SEGMENTS.label, "segments"),
             (nav.PRICES.label, "prices"),
+            (nav.ACQUIRE.label, "promotion"),
+            ("🧪 A/B креативы", "experiments"),
             (nav.INVITES.label, "invites"),
             (nav.RETENTION.label, "retention"),
         ),
@@ -326,6 +333,8 @@ _ADMIN_ACTION_NEEDS = {
     "payments": nav.PAYMENTS.need,
     "segments": nav.SEGMENTS.need,
     "prices": nav.PRICES.need,
+    "promotion": nav.ACQUIRE.need,
+    "experiments": "сравнить рекламные креативы по точным результатам",
     "invites": nav.INVITES.need,
     "retention": nav.RETENTION.need,
     "tariff": nav.TARIFF.need,
@@ -1093,6 +1102,44 @@ async def _render_admin_report(callback: CallbackQuery, state: FSMContext, ctx: 
     await _set_current_section(state, action=action, push=True)
 
 
+async def _render_capability_handoff(
+    callback: CallbackQuery,
+    state: FSMContext,
+    ctx: AdminContext,
+    action: str,
+) -> None:
+    handoffs = {
+        "sales": (
+            nav.SALES.label,
+            "Здесь собраны обращения, ручные подключения, стадии продаж и работа по возврату клиентов.",
+            "Открыть обращения и продажи",
+            f"cps:s:{ctx.business_token}",
+        ),
+        "promotion": (
+            nav.ACQUIRE.label,
+            "Здесь создаются отдельные рекламные ссылки, считаются переходы и записи, а источник сохраняется в атрибуции.",
+            "Открыть привлечение клиентов",
+            f"cpj:promote:{ctx.business_token}",
+        ),
+        "experiments": (
+            "🧪 A/B креативы",
+            "Сравнение использует только точную атрибуцию вариантов; слабые общие данные не превращаются в ложного победителя.",
+            "Открыть A/B креативы",
+            f"cpw:home:{ctx.business_token}",
+        ),
+    }
+    try:
+        title, description, button_label, target = handoffs[action]
+    except KeyError as exc:
+        raise ValueError("unknown admin capability handoff") from exc
+    await _safe_edit(
+        callback,
+        f"{title}\n\n{description}\n\nОткрывается существующий рабочий контур ClientPlatform — отдельная копия бизнес-логики не создаётся.",
+        _back_keyboard(ctx, (button_label, target)),
+    )
+    await _set_current_section(state, action=action, push=True)
+
+
 async def _render_formats(callback: CallbackQuery, state: FSMContext, ctx: AdminContext) -> None:
     capabilities = await asyncio.to_thread(
         list_business_capabilities,
@@ -1414,6 +1461,8 @@ async def admin_gate(callback: CallbackQuery, state: FSMContext) -> None:
             await _render_messenger_connect(callback, state, ctx, payload[0])
         elif action == "attention":
             await _render_attention(callback, state, ctx)
+        elif action in {"sales", "promotion", "experiments"}:
+            await _render_capability_handoff(callback, state, ctx, action)
         elif action in {
             "autopilot",
             "publications",

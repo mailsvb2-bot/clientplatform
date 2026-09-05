@@ -107,6 +107,28 @@ def list_creative_trials(*, actor: TenantContext) -> tuple[CreativeTrafficPlan, 
         return CreativeGrowthRepository(conn).list(actor=actor)
 
 
+def list_creative_trial_page(
+    *,
+    actor: TenantContext,
+    limit: int = 10,
+    offset: int = 0,
+) -> tuple[tuple[CreativeTrafficPlan, ...], bool]:
+    with get_db_ro() as conn:
+        return CreativeGrowthRepository(conn).list_page(
+            actor=actor,
+            limit=limit,
+            offset=offset,
+        )
+
+
+def resolve_creative_trial_reference(*, actor: TenantContext, reference: str) -> str:
+    with get_db_ro() as conn:
+        return CreativeGrowthRepository(conn).resolve_reference(
+            actor=actor,
+            reference=reference,
+        )
+
+
 def resolve_creative_trial_actor(*, user_id: int, trial_id: str) -> TenantContext:
     """Resolve trial ownership and then enforce tenant membership on one connection."""
 
@@ -219,7 +241,9 @@ __all__ = [
     "CreativeWinnerApplyResult",
     "CreativeWinnerPreview",
     "apply_creative_winner",
+    "list_creative_trial_page",
     "list_creative_trials",
     "preview_creative_winner",
+    "resolve_creative_trial_reference",
     "resolve_creative_trial_actor",
 ]
