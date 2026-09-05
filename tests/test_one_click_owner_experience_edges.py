@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, Mock, patch
 from clientplatform.domain.ad_connections import AdConnectionError, AdConnectionStatus
 from clientplatform.domain.bookings import BookingSlotStatus
 from clientplatform.domain.promotions import PromotionChannel, PromotionError
-from clientplatform.domain.tenancy import PlatformRole, TenantContext
+from clientplatform.domain.tenancy import PlatformRole, TenantContext, TenantPermissionDenied
 from handlers import clientplatform_one_click_experience as one_click
 
 
@@ -569,6 +569,94 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
             labels(PlatformRole.MARKETER),
             ["🧩 Бизнес и возможности", "⬅️ Назад"],
         )
+
+
+    async def test_cockpit_section_launchers_cover_all_owner_surfaces(self):
+        target = out()
+        actor = tenant_actor(PlatformRole.OWNER)
+        expected_labels = {
+            "calendar": "📅 Записи клиентов",
+            "sales": "💬 Обращения и продажи",
+            "content": "📚 Материалы и программы",
+            "growth": "🧪 A/B креативы",
+            "analytics": "📊 Результаты Яндекс",
+            "automation": "🤖 Открыть автоматизацию",
+            "connections": "💬 Подключить мессенджеры",
+            "team": "👤 Сотрудники и доступы",
+            "settings": "🧩 Бизнес и возможности",
+        }
+        with (
+            patch.object(one_click.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(one_click.control, "_uuid_token", side_effect=lambda value: value),
+        ):
+            for section, expected in expected_labels.items():
+                with self.subTest(section=section):
+                    target.answer.reset_mock()
+                    await one_click.send_one_click_section(
+                        target,
+                        user_id=101,
+                        business_id="business-1",
+                        section=section,
+                    )
+                    labels = [
+                        button.text
+                        for row in target.answer.await_args.kwargs["reply_markup"].inline_keyboard
+                        for button in row
+                    ]
+                    self.assertIn(expected, labels)
+                    self.assertTrue("🏠 Главная" in labels or "⬅️ Назад" in labels)
+
+    async def test_cockpit_section_launchers_keep_read_only_roles_read_only(self):
+        target = out()
+        analyst = tenant_actor(PlatformRole.ANALYST)
+        with (
+            patch.object(one_click.control, "_actor", new=AsyncMock(return_value=analyst)),
+            patch.object(one_click.control, "_uuid_token", side_effect=lambda value: value),
+        ):
+            await one_click.send_one_click_section(
+                target,
+                user_id=101,
+                business_id="business-1",
+                section="content",
+            )
+            labels = [
+                button.text
+                for row in target.answer.await_args.kwargs["reply_markup"].inline_keyboard
+                for button in row
+            ]
+            self.assertEqual(labels, ["📚 Материалы и программы", "🏠 Главная"])
+
+            target.answer.reset_mock()
+            await one_click.send_one_click_section(
+                target,
+                user_id=101,
+                business_id="business-1",
+                section="analytics",
+            )
+            labels = [
+                button.text
+                for row in target.answer.await_args.kwargs["reply_markup"].inline_keyboard
+                for button in row
+            ]
+            self.assertIn("📊 Результаты Яндекс", labels)
+            self.assertIn("🧪 A/B креативы", labels)
+            self.assertNotIn("💰 Деньги и результат", labels)
+            self.assertNotIn("📣 Реклама и продвижение", labels)
+
+            with self.assertRaises(TenantPermissionDenied):
+                await one_click.send_one_click_section(
+                    target,
+                    user_id=101,
+                    business_id="business-1",
+                    section="team",
+                )
+            with self.assertRaises(ValueError):
+                await one_click.send_one_click_section(
+                    target,
+                    user_id=101,
+                    business_id="business-1",
+                    section="unknown",
+                )
 
 
 if __name__ == "__main__":
