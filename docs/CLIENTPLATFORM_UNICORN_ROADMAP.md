@@ -1304,7 +1304,7 @@ Canonical production deploy теперь различает тяжёлый `full
 - UI использует `textContent`, не хранит tenant/role в URL/localStorage, Home CTA только маршрутизирует к уже server-authorized разделу и не выполняет approval/send/spend; cockpit runtime включён в централизованный critical type/security manifest;
 - production deploy M7-002 не выполнялся: текущая команда владельца была на продолжение разработки, а roadmap требует отдельного explicit production command для каждого code slice.
 
-### M7-003 — `NEXT` — Customers & CRM Cockpit
+### M7-003 — `DONE` — Customers & CRM Cockpit
 
 Следующий содержательный экран превращает уже существующую canonical customer/CRM модель в понятный мобильный рабочий surface. Он не создаёт вторую CRM, customer table, timeline store или sales state machine: Mini App только ищет, отображает и маршрутизирует разрешённые действия к существующим owners.
 
@@ -1320,6 +1320,30 @@ Canonical production deploy теперь различает тяжёлый `full
 - API payload versioned/bounded, no-store, без secrets/raw infrastructure metadata; malformed optional source отображается как unavailable без утечки чужого tenant;
 - mobile UX позволяет дилетанту: найти клиента → понять последнюю историю → увидеть, что делать дальше → перейти в нужное действие, с человеческими «что это»/«когда нажимать»;
 - regressions покрывают owner/admin/manager/support и denied marketer/content/analyst, search pagination/bounds, forged customer/business, revoked membership, timeline role redaction, deterministic order, no raw external identity leakage, no mutation on refresh и authorized action routing;
+- production deploy только после green protected merge и отдельной explicit команды владельца.
+
+Закрыто 2026-09-05. Доказательство M7-003:
+
+- PR #295 final exact head `eeb0136e749650efcb1a6f3dc785d3352b5f946a` прошёл 17/17 pull-request workflows и squash-merged через защищённый `main` как `f6e6a0550853b044b48f285ee9561f7c8351d2d8`; unresolved review threads=0, protection/bypass не ослаблялись;
+- full coverage run: `3251 passed, 8 skipped`; combined coverage поднят и зафиксирован ratchet с `82.42%` до `82.46%`, branch coverage с `74.08%` до `74.13%`; regression contour, Critical Static, Release Gate, Production Isolation, Capability Parity 20/20 и PostgreSQL/concurrency green;
+- customer list/search/detail bounded и tenant-scoped; signed Telegram initData, canonical account alias, selected business и live membership/RBAC повторно проверяются server-side, а marketer/content/analyst не получают customer PII;
+- timeline остаётся canonical `get_customer_timeline`; customer next-step берётся из существующих sales work/handoff owners, raw provider identity/credential metadata не становится frontend authority;
+- действие из карточки re-readится на click, stale action fail-close, затем компактный first-party Telegram deep-link маршрутизирует в существующие handoff/work/lead presentation owners; refresh/list/detail не выполняют sales mutation и не создают второй CRM/sales brain;
+- Independent AI Review policy gate завершился `success` с явным trusted-policy verdict `L2 external AI review temporarily disabled by trusted repository policy`; внешний L2/Codex review фактически не выполнялся из-за исчерпанной review quota, что не скрывается в evidence;
+- production deploy M7-003 не выполнялся: он остаётся отдельной explicit owner-командой.
+
+### UX-294 — `NEXT` — Safe retirement of outdated offers and business profile
+
+Источник: open owner issue #294. Это lifecycle/UX slice, а не новый store или второй business owner.
+
+Минимальный DONE contract UX-294:
+
+- владелец может убрать устаревший offer/service/post из активных пользовательских поверхностей только через явное действие с confirmation;
+- финансовые, outcome, audit и attribution facts не уничтожаются каскадно: retirement/deactivation отделяется от immutable/history-bearing records;
+- удаление/отключение business profile/type не создаёт второй business lifecycle owner и использует canonical tenancy/business membership boundaries;
+- после подтверждённого удаления/retirement старый business не остаётся ложным активным выбором в Telegram/WebApp navigation, а владелец может создать/подключить другой business через существующий onboarding;
+- tenant isolation и RBAC проверяются backend-side, forged business/object IDs fail-close; повторное действие идемпотентно и не оставляет частично удалённое состояние;
+- regressions покрывают confirmation/cancel, stale/repeated request, cross-tenant access, preserved financial/audit history, navigation cleanup и clean owner transition;
 - production deploy только после green protected merge и отдельной explicit команды владельца.
 
 Единый шаблон для важных автоматических действий:
@@ -1934,7 +1958,8 @@ Duplicate tap, retry, worker restart или uncertain provider response не д�
 | M6-008 Repository Merge Governance Enforcement | DONE | GitHub `main` protected for everyone; strict 11-context required-check set; direct push negative probe rejected with `GH006`; force/delete disabled; PR #285 exact head `e3aa3d0f87261d4436cc824d31da8e3933a1e5d4` passed 17/17 workflows and merged through active protection as `3f768752a75fef95b990d17e08f70db59cddf021`; no production runtime/data change |
 | M7-001 Authenticated Business Cockpit Shell + Server-Authorized Navigation | DONE | PR #287 final head `2be2d78c5e88fa6526bd45a51896781603af78d3`, squash-merge `7e01f20ba1c57bd1f4475378eb68727e70fc56b9`; 17/17 workflows green; coverage `82.42% / 74.07%`; exact-SHA full-runtime production deploy `deploy-20260903T201326Z.json` with encrypted backup, restart=0, 20s stability and live cockpit HTTPS/auth acceptance |
 | M7-002 Home / Today Cockpit Projection | DONE | PR #290 exact head `6a76a36b9e72fbd218efb3f7f61a01b1066cb45d`, squash-merge `0b426312541dc5f86e3ef01edc4f5dc74476807b`; 17/17 workflows green; coverage `82.42% / 74.07%`; role/timezone/currency/no-side-effect Home contracts proven; no production deploy |
-| M7-003 Customers & CRM Cockpit | NEXT | Build bounded customer list/search/detail/timeline on canonical customer/timeline/sales owners with live RBAC, role-aware money/attribution redaction and action routing; no duplicate CRM/customer store or refresh-side mutation |
+| M7-003 Customers & CRM Cockpit | DONE | PR #295 final exact head `eeb0136e749650efcb1a6f3dc785d3352b5f946a`, squash-merge `f6e6a0550853b044b48f285ee9561f7c8351d2d8`; 17/17 workflows green; full coverage `3251 passed, 8 skipped`; ratchet raised to `82.46% / 74.13%`; canonical customer/timeline/sales ownership, live RBAC, PII redaction, stale-action fail-close and click-only action routing proven; AI policy gate success under trusted temporary L2-disable policy; no production deploy |
+| UX-294 Safe retirement of outdated offers and business profile | NEXT | Owner issue #294: confirmation-gated retirement/deactivation with preserved financial/audit history, canonical business lifecycle ownership, tenant/RBAC isolation, navigation cleanup and clean transition to another business |
 
 ---
 
