@@ -7,8 +7,20 @@ from clientplatform.application.control_callbacks import token_uuid, uuid_token
 
 _PREFIX = "cpo_c_"
 _TOKEN_RE = r"[A-Za-z0-9_-]{22}"
+_SECTION_KIND = {
+    "calendar": "b",
+    "sales": "s",
+    "growth": "g",
+    "content": "c",
+    "automation": "a",
+    "analytics": "n",
+    "connections": "x",
+    "team": "t",
+    "settings": "e",
+}
+_KIND_SECTION = {value: key for key, value in _SECTION_KIND.items()}
 _PAYLOAD_RE = re.compile(
-    rf"^{_PREFIX}(?P<business>{_TOKEN_RE})_(?P<kind>[hwl])(?:_(?P<target>{_TOKEN_RE}))?$"
+    rf"^{_PREFIX}(?P<business>{_TOKEN_RE})_(?P<kind>[hwlbsgcanxte])(?:_(?P<target>{_TOKEN_RE}))?$"
 )
 
 
@@ -17,6 +29,7 @@ class CockpitActionStartRoute:
     business_id: str
     kind: str
     lead_id: str | None = None
+    section: str | None = None
 
 
 def _strict_uuid_from_token(value: str) -> str:
@@ -48,6 +61,18 @@ def build_cockpit_action_start_payload(*, business_id: str, action_key: str) -> 
     return payload
 
 
+def build_cockpit_section_start_payload(*, business_id: str, section: str) -> str:
+    business_token = uuid_token(business_id)
+    normalized = str(section or "").strip().lower()
+    kind = _SECTION_KIND.get(normalized)
+    if kind is None:
+        raise ValueError("cockpit section has no supported Telegram route")
+    payload = f"{_PREFIX}{business_token}_{kind}"
+    if len(payload) > 64:
+        raise ValueError("cockpit section payload exceeds Telegram start limit")
+    return payload
+
+
 def parse_cockpit_action_start_payload(payload: str | None) -> CockpitActionStartRoute | None:
     raw = str(payload or "").strip()
     if not raw.startswith(_PREFIX):
@@ -70,11 +95,13 @@ def parse_cockpit_action_start_payload(payload: str | None) -> CockpitActionStar
         business_id=business_id,
         kind=kind,
         lead_id=lead_id,
+        section=_KIND_SECTION.get(kind),
     )
 
 
 __all__ = [
     "CockpitActionStartRoute",
     "build_cockpit_action_start_payload",
+    "build_cockpit_section_start_payload",
     "parse_cockpit_action_start_payload",
 ]

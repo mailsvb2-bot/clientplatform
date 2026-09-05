@@ -7,7 +7,10 @@ from typing import Any
 
 from aiohttp import web
 
-from clientplatform.application.cockpit import resolve_cockpit_context
+from clientplatform.application.cockpit import (
+    resolve_cockpit_context,
+    resolve_cockpit_section_start_payload,
+)
 from clientplatform.application.cockpit_home import (
     CockpitHomeUnavailable,
     resolve_cockpit_home,
@@ -96,7 +99,7 @@ _JS = r"""(() => {
   const text = (node, value) => { node.textContent = value == null ? '' : String(value); };
   const screenStatus = (item) => {
     if (item.status === 'restricted') return 'restricted';
-    if (['home','customers'].includes(item.id) && item.status === 'available') return 'available';
+    if (item.status === 'available') return 'available';
     return 'planned';
   };
   const syncBackButton = () => {
@@ -105,6 +108,8 @@ _JS = r"""(() => {
   };
   const showNavigation = () => { currentView = 'navigation'; explanation.hidden = true; home.hidden = true; document.getElementById('customers-view').hidden = true; nav.hidden = false; syncBackButton(); };
   const showHomeView = () => { currentView = 'home'; explanation.hidden = true; document.getElementById('customers-view').hidden = true; nav.hidden = true; home.hidden = false; syncBackButton(); };
+  const enterCustomers = () => { currentView = 'customers'; syncBackButton(); };
+  window.ClientPlatformCockpitNavigation = Object.freeze({showNavigation, enterCustomers});
   const setHomeBusy = (busy) => { home.classList.toggle('busy', Boolean(busy)); homeRefresh.disabled = Boolean(busy); home.setAttribute('aria-busy', busy ? 'true' : 'false'); };
   const closeToBot = () => { if (tg && typeof tg.close === 'function') tg.close(); else window.history.back(); };
   statusAction.addEventListener('click', closeToBot);
@@ -149,8 +154,8 @@ _JS = r"""(() => {
     showHomeView();
   };
 
-  const post = async (path, businessId) => {
-    const body = {init_data: initData}; if (businessId) body.business_id = businessId;
+  const post = async (path, businessId, extra) => {
+    const body = {init_data: initData, ...(extra || {})}; if (businessId) body.business_id = businessId;
     const response = await fetch(path, {method:'POST', headers:{'Content-Type':'application/json'}, credentials:'same-origin', cache:'no-store', body:JSON.stringify(body)});
     const payload = await response.json().catch(() => ({error:'invalid_response'})); if (!response.ok) throw new Error(payload.error || 'access_denied'); return payload;
   };
@@ -162,7 +167,25 @@ _JS = r"""(() => {
     homeMetrics.replaceChildren(); homeMoney.replaceChildren(); homeAttention.replaceChildren(); homeActions.replaceChildren(); homeAttentionBlock.hidden = true; homeActionsBlock.hidden = true;
     text(homeMeta, 'Не удалось обновить сводку'); text(homeEmpty, 'Сводка временно недоступна. Нажмите «Обновить» или откройте список разделов.'); text(homeLimitations, 'Ваши данные и права доступа не менялись.'); showHomeView();
   };
-  const showItem = (item) => { if (item.id === 'home' && screenStatus(item) === 'available') { loadHome().catch(homeFail); return; } if (item.id === 'customers' && screenStatus(item) === 'available' && window.ClientPlatformCustomers) { window.ClientPlatformCustomers.open(); return; } showExplanation(item); };
+  const openSectionRoute = async (item) => {
+    const payload = await post('/clientplatform/cockpit/section-route', select.value, {section:item.id});
+    const url = String(payload.route_url || '');
+    if (!url.startsWith('https://t.me/')) throw new Error('section_route_unavailable');
+    if (tg && typeof tg.openTelegramLink === 'function') tg.openTelegramLink(url);
+    else window.location.assign(url);
+  };
+  const showItem = (item) => {
+    const state = screenStatus(item);
+    if (state !== 'available') { showExplanation(item); return; }
+    if (item.id === 'home') { loadHome().catch(homeFail); return; }
+    if (item.id === 'customers' && window.ClientPlatformCustomers) { window.ClientPlatformCustomers.open(); return; }
+    openSectionRoute(item).catch(() => {
+      currentView = 'explanation';
+      text(title, item.title); text(summary, item.summary); text(when, `Когда пригодится: ${item.when_to_use}`);
+      text(reason, 'Не удалось открыть раздел в боте. Вернитесь к разделам и попробуйте ещё раз.');
+      nav.hidden = true; home.hidden = true; document.getElementById('customers-view').hidden = true; explanation.hidden = false; syncBackButton();
+    });
+  };
 
   const render = (payload) => {
     nav.replaceChildren(); select.replaceChildren(); navigationItems = payload.navigation || [];
@@ -173,7 +196,8 @@ _JS = r"""(() => {
     for (const item of navigationItems) {
       const state = screenStatus(item); const button = document.createElement('button'); button.type = 'button'; button.className = `card ${state}`;
       const heading = document.createElement('h2'); const copy = document.createElement('p'); const badge = document.createElement('span'); badge.className = `badge ${state}`;
-      text(heading, item.title); text(copy, item.summary); text(badge, state === 'available' ? 'Работает' : state === 'planned' ? 'Скоро' : 'Нет доступа'); button.append(heading, copy, badge); button.addEventListener('click', () => showItem(item)); nav.appendChild(button);
+      const nativeHere = ['home','customers'].includes(item.id);
+      text(heading, item.title); text(copy, item.summary); text(badge, state === 'available' ? (nativeHere ? 'Работает' : 'Открыть') : state === 'planned' ? 'Скоро' : 'Нет доступа'); button.append(heading, copy, badge); button.addEventListener('click', () => showItem(item)); nav.appendChild(button);
     }
     loadHome().catch(homeFail);
   };
@@ -183,7 +207,11 @@ _JS = r"""(() => {
     nav.replaceChildren(); home.hidden = true; document.getElementById('customers-view').hidden = true; explanation.hidden = true; select.disabled = true; currentView = 'navigation'; syncBackButton(); text(role, 'Доступ не подтверждён'); statusAction.hidden = false;
     text(statusText, error && error.message === 'expired_init_data' ? 'Сессия Telegram устарела. Вернитесь в бот и откройте кабинет ещё раз.' : 'Не удалось подтвердить безопасный доступ. Вернитесь в бот и откройте кабинет ещё раз.');
   }
-  if (tg && tg.BackButton && typeof tg.BackButton.onClick === 'function') tg.BackButton.onClick(() => { if (currentView === 'explanation') showNavigation(); else if (currentView === 'navigation') { if (lastHomePayload) renderHome(lastHomePayload); else loadHome().catch(homeFail); } });
+  if (tg && tg.BackButton && typeof tg.BackButton.onClick === 'function') tg.BackButton.onClick(() => {
+    if (currentView === 'customers' && window.ClientPlatformCustomers) { window.ClientPlatformCustomers.back(); return; }
+    if (currentView === 'explanation') { showNavigation(); return; }
+    if (currentView === 'navigation') { if (lastHomePayload) renderHome(lastHomePayload); else loadHome().catch(homeFail); }
+  });
   if (!initData) { fail(new Error('missing_init_data')); }
   else { if (tg) { tg.ready(); tg.expand(); } load(null).catch(fail); }
 })();"""
@@ -387,6 +415,33 @@ async def cockpit_customer_detail(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, **detail.as_dict()}, headers=_base_headers())
 
 
+async def cockpit_section_route(request: web.Request) -> web.Response:
+    scope = await _verified_payload_scope(request)
+    if isinstance(scope, web.Response):
+        return scope
+    user_id, requested_business, payload = scope
+    section = payload.get("section")
+    if not isinstance(section, str) or not section.strip() or len(section) > 40:
+        return _error(400, "invalid_section")
+    try:
+        start_payload = await asyncio.to_thread(
+            resolve_cockpit_section_start_payload,
+            telegram_user_id=user_id,
+            requested_business_id=requested_business,
+            section=section,
+        )
+    except TenantAccessDenied:
+        return _error(403, "business_access_denied")
+    except TenantPermissionDenied:
+        return _error(403, "section_access_denied")
+    except ValueError:
+        return _error(400, "invalid_section")
+    route_url = _telegram_action_url(start_payload)
+    if route_url is None:
+        return _error(503, "section_route_unavailable")
+    return web.json_response({"ok": True, "route_url": route_url}, headers=_base_headers())
+
+
 async def cockpit_customer_action_route(request: web.Request) -> web.Response:
     scope = await _verified_payload_scope(request)
     if isinstance(scope, web.Response):
@@ -443,6 +498,7 @@ def register_cockpit_routes(app: web.Application) -> None:
     app.router.add_get(f"{_COCKPIT_PREFIX}/customers.js", cockpit_customers_script)
     app.router.add_post(f"{_COCKPIT_PREFIX}/context", cockpit_context)
     app.router.add_post(f"{_COCKPIT_PREFIX}/home", cockpit_home)
+    app.router.add_post(f"{_COCKPIT_PREFIX}/section-route", cockpit_section_route)
     app.router.add_post(f"{_COCKPIT_PREFIX}/customers", cockpit_customers)
     app.router.add_post(
         f"{_COCKPIT_PREFIX}/customers/detail", cockpit_customer_detail
@@ -462,6 +518,7 @@ __all__ = [
     "cockpit_home",
     "cockpit_http_enabled",
     "cockpit_script",
+    "cockpit_section_route",
     "cockpit_shell",
     "cockpit_styles",
     "register_cockpit_routes",

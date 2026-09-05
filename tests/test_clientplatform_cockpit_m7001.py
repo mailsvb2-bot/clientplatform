@@ -17,6 +17,7 @@ from clientplatform.domain.tenancy import (
     PlatformRole,
     TenantAccessDenied,
     TenantContext,
+    TenantPermissionDenied,
 )
 from clientplatform.runtime import cockpit_links
 from clientplatform.runtime.telegram_webapp_auth import (
@@ -250,6 +251,51 @@ class CockpitM7001Tests(unittest.TestCase):
                 telegram_user_id=101,
                 requested_business_id=_BUSINESS_B,
             )
+
+    def test_cockpit_section_route_uses_role_aware_navigation_as_authority(self) -> None:
+        context = cockpit.CockpitContext(
+            user_id=101,
+            business_id=_BUSINESS_A,
+            business_name="Практика",
+            role="manager",
+            onboarding_required=False,
+            businesses=(),
+            navigation=(
+                cockpit.CockpitNavigationItem(
+                    id="sales",
+                    title="Продажи",
+                    summary="Продажи",
+                    when_to_use="Сейчас",
+                    status="available",
+                ),
+                cockpit.CockpitNavigationItem(
+                    id="settings",
+                    title="Настройки",
+                    summary="Настройки",
+                    when_to_use="Сейчас",
+                    status="restricted",
+                ),
+            ),
+        )
+        with patch.object(cockpit, "resolve_cockpit_context", return_value=context):
+            payload = cockpit.resolve_cockpit_section_start_payload(
+                telegram_user_id=101,
+                requested_business_id=_BUSINESS_A,
+                section="sales",
+            )
+            self.assertTrue(payload.startswith("cpo_c_"))
+            with self.assertRaises(TenantPermissionDenied):
+                cockpit.resolve_cockpit_section_start_payload(
+                    telegram_user_id=101,
+                    requested_business_id=_BUSINESS_A,
+                    section="settings",
+                )
+            with self.assertRaises(ValueError):
+                cockpit.resolve_cockpit_section_start_payload(
+                    telegram_user_id=101,
+                    requested_business_id=_BUSINESS_A,
+                    section="billing-unknown",
+                )
 
     def test_cockpit_without_business_returns_onboarding_not_synthetic_membership(self) -> None:
         with (
