@@ -167,12 +167,124 @@ class NativeFullParityContractTests(unittest.TestCase):
             "cpm:funnel2",
             "cpm:funnel",
             "cpm:retention",
+            "cpm:experiments:0",
         }
         self.assertTrue(expected.issubset(commands))
         for message in (first, sales, analysis, second, lifecycle):
             self.assertLessEqual(len(message.rows), 6)
             self.assertTrue(all(len(row) == 1 for row in message.rows))
 
+
+    def test_native_experiment_list_is_paginated_and_role_guarded(self) -> None:
+        owner = _actor()
+        plans = [
+            SimpleNamespace(
+                trial_id=str(uuid4()),
+                status=SimpleNamespace(value="running"),
+                arms=(1, 2),
+            )
+            for _ in range(6)
+        ]
+        def page(*, actor: TenantContext, limit: int, offset: int):
+            visible = tuple(plans[offset : offset + limit])
+            return visible, offset + limit < len(plans)
+
+        with patch.object(ui, "list_creative_trial_page", side_effect=page):
+            first = ui._experiments_message(owner, 0)
+            second = ui._experiments_message(owner, 1)
+        self.assertEqual(4, sum(command.startswith("cpm:experiment:") for command in _commands(first)))
+        self.assertIn("cpm:experiments:1", _commands(first))
+        self.assertIn("cpm:experiments:0", _commands(second))
+        self.assertLessEqual(sum(len(row) for row in first.rows), 10)
+        denied = ui._experiments_message(_actor(PlatformRole.SUPPORT), 0)
+        self.assertIn("недоступен", denied.text)
+
+    def test_native_experiment_review_and_apply_use_canonical_creative_winner(self) -> None:
+        actor = _actor()
+        trial_id = str(uuid4())
+        job_a = str(uuid4())
+        job_b = str(uuid4())
+        plan = SimpleNamespace(
+            trial_id=trial_id,
+            status=SimpleNamespace(value="running"),
+            revision=3,
+            arms=(
+                SimpleNamespace(variant_id="a", publication_job_id=job_a, allocation_bps=5000),
+                SimpleNamespace(variant_id="b", publication_job_id=job_b, allocation_bps=5000),
+            ),
+        )
+        recommendation = SimpleNamespace(
+            can_apply=True,
+            trial_revision=3,
+            winner_variant_id="a",
+            status=SimpleNamespace(value="ready"),
+            evidence=(
+                SimpleNamespace(publication_job_id=job_a, proposed_allocation_bps=6000),
+                SimpleNamespace(publication_job_id=job_b, proposed_allocation_bps=4000),
+            ),
+        )
+        preview = SimpleNamespace(
+            plan=plan,
+            recommendation=recommendation,
+            variants=(
+                SimpleNamespace(
+                    variant_id="a", attribution_scope=SimpleNamespace(value="variant"),
+                    leads=60, bookings=18, won=9,
+                ),
+                SimpleNamespace(
+                    variant_id="b", attribution_scope=SimpleNamespace(value="variant"),
+                    leads=60, bookings=8, won=3,
+                ),
+            ),
+            date_from="2026-08-01",
+            date_to="2026-08-31",
+            fingerprint="abcdef1234567890",
+        )
+        with (
+            patch.object(ui, "resolve_creative_trial_reference", return_value=trial_id),
+            patch.object(ui, "preview_creative_winner", return_value=preview),
+        ):
+            message = ui._experiment_message(actor, trial_id[:8], "b")
+        apply_command = next(
+            command for command in _commands(message) if command.startswith("cpm:experiment-apply:")
+        )
+        self.assertIn("60%", message.text)
+        self.assertIn("18/60", message.text)
+        self.assertIn("abcdef1234567890", apply_command)
+
+        with (
+            patch.object(ui, "resolve_creative_trial_reference", return_value=trial_id),
+            patch.object(ui, "preview_creative_winner", return_value=preview),
+            patch.object(ui, "apply_creative_winner") as apply_winner,
+        ):
+            result = ui._experiment_apply_message(
+                actor, trial_id[:8], "3", "b", "abcdef1234567890"
+            )
+        apply_winner.assert_called_once_with(
+            actor=actor,
+            trial_id=trial_id,
+            expected_revision=3,
+            expected_fingerprint="abcdef1234567890",
+            confirmed=True,
+            metric=ui.CreativeOptimizationMetric.BOOKINGS,
+        )
+        self.assertTrue(result.text.startswith("✅ Распределение обновлено"))
+
+        analyst = _actor(PlatformRole.ANALYST)
+        with (
+            patch.object(ui, "resolve_creative_trial_reference", return_value=trial_id),
+            patch.object(ui, "preview_creative_winner", return_value=preview),
+        ):
+            analyst_review = ui._experiment_message(analyst, trial_id[:8], "b")
+        self.assertFalse(
+            any(command.startswith("cpm:experiment-apply:") for command in _commands(analyst_review))
+        )
+        with patch.object(ui, "apply_creative_winner") as denied_apply:
+            denied = ui._experiment_apply_message(
+                analyst, trial_id[:8], "3", "b", "abcdef1234567890"
+            )
+        self.assertIn("недоступен", denied.text)
+        denied_apply.assert_not_called()
 
     def test_middle_pages_never_exceed_native_button_ceiling(self) -> None:
         actor = _actor()

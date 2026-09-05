@@ -223,6 +223,56 @@ class CreativeGrowthRepository:
             for row in rows
         )
 
+    def list_page(
+        self,
+        *,
+        actor: TenantContext,
+        limit: int = 10,
+        offset: int = 0,
+    ) -> tuple[tuple[CreativeTrafficPlan, ...], bool]:
+        """Return one bounded trial page and whether a later page exists."""
+        current = self._viewer(actor)
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 50:
+            raise ValueError("limit must be an integer between 1 and 50")
+        if isinstance(offset, bool) or not isinstance(offset, int) or not 0 <= offset <= 10_000:
+            raise ValueError("offset must be an integer between 0 and 10000")
+        rows = self._conn.execute(
+            """
+            SELECT id FROM creative_growth_trials
+            WHERE business_id=?
+            ORDER BY updated_at DESC, id
+            LIMIT ? OFFSET ?
+            """,
+            (current.business_id, limit + 1, offset),
+        ).fetchall()
+        has_more = len(rows) > limit
+        return (
+            tuple(
+                self.get(actor=current, trial_id=str(_value(row, "id", 0)))
+                for row in rows[:limit]
+            ),
+            has_more,
+        )
+
+    def resolve_reference(self, *, actor: TenantContext, reference: str) -> str:
+        """Resolve one short trial-id prefix without scanning the tenant history."""
+        current = self._viewer(actor)
+        raw = str(reference or "").strip().lower()
+        if len(raw) < 6 or any(char not in "0123456789abcdef-" for char in raw):
+            raise ValueError("creative trial reference is invalid")
+        rows = self._conn.execute(
+            """
+            SELECT id FROM creative_growth_trials
+            WHERE business_id=? AND lower(id) LIKE ?
+            ORDER BY id
+            LIMIT 2
+            """,
+            (current.business_id, raw + "%"),
+        ).fetchall()
+        if len(rows) != 1:
+            raise ValueError("creative trial reference is stale or ambiguous")
+        return str(_value(rows[0], "id", 0))
+
     def replace_allocations(
         self,
         *,

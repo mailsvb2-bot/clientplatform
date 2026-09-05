@@ -40,6 +40,14 @@ from clientplatform.application.capability_parity import (
     CapabilityAvailability,
     project_messenger_capabilities,
 )
+from clientplatform.application.creative_growth_optimizer import CreativeOptimizationMetric
+from clientplatform.application.creative_winner import (
+    CreativeWinnerApplyError,
+    apply_creative_winner,
+    list_creative_trial_page,
+    preview_creative_winner,
+    resolve_creative_trial_reference,
+)
 from clientplatform.application.messenger_switching import (
     available_staff_messenger_switches,
     build_staff_switch_command,
@@ -190,6 +198,7 @@ _ACQUISITION_ROLES = frozenset(
         PlatformRole.MARKETER,
     }
 )
+_PROMOTION_ANALYTICS_ROLES = _ACQUISITION_ROLES | {PlatformRole.ANALYST}
 _BOOKING_MANAGEMENT_ROLES = frozenset(
     {
         PlatformRole.OWNER,
@@ -267,6 +276,7 @@ TELEGRAM_NATIVE_ACTION_EQUIVALENTS: dict[str, tuple[str, ...]] = {
     "customer": ("customer",),
     "behavior": ("behavior",),
     "attention": ("attention",),
+    "sales": ("sales",),
     "messengers": ("messengers",),
     "messenger-connect": ("connect-telegram", "connect-vk", "connect-max"),
     "autopilot": ("autopilot",),
@@ -295,6 +305,8 @@ TELEGRAM_NATIVE_ACTION_EQUIVALENTS: dict[str, tuple[str, ...]] = {
     "copy": ("copy", "activity-edit-help", "activity-edit-text"),
     "prices": ("prices",),
     "price-set": ("price-set", "price-set-text"),
+    "promotion": ("acquire",),
+    "experiments": ("experiments",),
     "invites": ("invites", "invite-new"),
     "funnel2": ("funnel2",),
     "retention": ("retention",),
@@ -810,6 +822,9 @@ def parse_native_member_interaction(value: object) -> ParsedMemberInteraction:
             "business-retire",
             "business-retire-ok",
             "acquire",
+            "experiments",
+            "experiment",
+            "experiment-apply",
         }:
             return ParsedMemberInteraction(action, args)
     return ParsedMemberInteraction("menu")
@@ -1099,6 +1114,7 @@ _NATIVE_PARENT_COMMANDS: dict[str, str] = {
     "growth-more": "cpm:growth",
     "growth-lifecycle": "cpm:growth-more",
     "acquire": "cpm:growth",
+    "experiments": "cpm:growth",
     "autopilot": "cpm:growth",
     "publications": "cpm:growth",
     "funnel": "cpm:growth-analysis",
@@ -1174,6 +1190,10 @@ def _native_parent_command(parsed: ParsedMemberInteraction) -> str | None:
         return "cpm:reactivate"
     if action == "ad-spend-launch":
         return "cpm:ad-spend"
+    if action == "experiment":
+        return "cpm:experiments:0"
+    if action == "experiment-apply" and args:
+        return f"cpm:experiment:{args[0]}:{args[2] if len(args) > 2 else 'b'}"
     if action in {
         "publication-new-for", "publication-new-text", "publication-publish",
         "publication-schedule", "publication-schedule-text",
@@ -1925,14 +1945,21 @@ def _growth_analysis_message(actor: TenantContext) -> CustomerInteractionMessage
     if actor.role not in _MARKETING_ROLES:
         return _permission_message()
     items = (nav.JOURNEY, nav.PROGRAM_PROGRESS)
-    return CustomerInteractionMessage(
-        text="📊 Путь и программы\n\n" + nav.choice_help(*items),
-        rows=(
-            (_button(nav.JOURNEY.label, "cpm:funnel2"),),
-            (_button(nav.PROGRAM_PROGRESS.label, "cpm:funnel"),),
+    rows: list[tuple[CustomerInteractionButton, ...]] = [
+        (_button(nav.JOURNEY.label, "cpm:funnel2"),),
+        (_button(nav.PROGRAM_PROGRESS.label, "cpm:funnel"),),
+    ]
+    if actor.role in _PROMOTION_ANALYTICS_ROLES:
+        rows.append((_button("🧪 A/B креативы", "cpm:experiments:0"),))
+    rows.extend(
+        [
             (_button(nav.GROWTH_SALES.label, "cpm:growth-sales"),),
             _back_row(),
-        ),
+        ]
+    )
+    return CustomerInteractionMessage(
+        text="📊 Путь и программы\n\n" + nav.choice_help(*items),
+        rows=tuple(rows),
     )
 
 
@@ -1952,6 +1979,8 @@ def _growth_more_message(actor: TenantContext) -> CustomerInteractionMessage:
     if actor.role in _MARKETING_ROLES:
         rows.append((_button(nav.PRICES.label, "cpm:prices"),))
         items.append(nav.PRICES)
+    if actor.role == PlatformRole.CONTENT_MANAGER:
+        rows.append((_button("🧪 A/B креативы", "cpm:experiments:0"),))
     if actor.role in _CONNECTION_ROLES:
         rows.append((_button(nav.LIFECYCLE.label, "cpm:growth-lifecycle"),))
         items.append(nav.LIFECYCLE)
@@ -2039,6 +2068,244 @@ def _acquisition_message(actor: TenantContext) -> CustomerInteractionMessage:
             "готовый материал и измеряемая ссылка — платная реклама не запускается."
         ),
         rows=((_button("🔄 Обновить", "cpm:acquire"),), (_button("📈 Рост", "cpm:growth"),), _back_row()),
+    )
+
+
+_CREATIVE_TRIAL_STATUS_LABELS = {
+    "draft": "черновик",
+    "running": "идёт",
+    "paused": "на паузе",
+    "completed": "завершён",
+}
+
+
+def _creative_metric_from_code(value: str) -> CreativeOptimizationMetric:
+    if value == "b":
+        return CreativeOptimizationMetric.BOOKINGS
+    if value == "w":
+        return CreativeOptimizationMetric.WON
+    raise ValueError("unknown creative optimization metric")
+
+
+def _creative_recommendation_text(status: object) -> str:
+    value = str(getattr(status, "value", status) or "")
+    messages = {
+        "ready": (
+            "Есть статистически отделившийся лидер. Можно осторожно изменить "
+            "распределение, не увеличивая общий рекламный бюджет."
+        ),
+        "not_running": "Тест сейчас не идёт — распределение не меняется.",
+        "attribution_not_ready": (
+            "Для части вариантов нет точной атрибуции. Общие данные кампании "
+            "не выдаются за победу отдельного креатива."
+        ),
+        "insufficient_data": "Пока недостаточно точных переходов для безопасного решения.",
+        "no_clear_winner": "Разница пока не доказана статистически.",
+        "exploration_floor_reached": (
+            "Проигрывающие варианты уже достигли минимальной контрольной доли."
+        ),
+    }
+    return messages.get(value, "Автоматическое изменение распределения сейчас не предлагается.")
+
+
+def _creative_trial_reference(actor: TenantContext, reference: str) -> str:
+    return resolve_creative_trial_reference(actor=actor, reference=reference)
+
+
+def _experiments_message(actor: TenantContext, page: int = 0) -> CustomerInteractionMessage:
+    if actor.role not in _PROMOTION_ANALYTICS_ROLES:
+        return _permission_message()
+    page_size = 4
+    current_page = max(int(page), 0)
+    offset = current_page * page_size
+    visible, has_more = list_creative_trial_page(
+        actor=actor,
+        limit=page_size,
+        offset=offset,
+    )
+    if not visible:
+        empty_rows = (
+            (
+                (_button(
+                    "◀️ Предыдущая страница",
+                    f"cpm:experiments:{current_page - 1}",
+                ),),
+                _back_row(),
+            )
+            if current_page > 0
+            else (_back_row(),)
+        )
+        return CustomerInteractionMessage(
+            text=(
+                "🧪 A/B креативы\n\n"
+                "Пока нет тестов на этой странице. "
+                "Новые A/B тесты появятся здесь после запуска нескольких креативов."
+            ),
+            rows=empty_rows,
+        )
+
+    rows: list[tuple[CustomerInteractionButton, ...]] = []
+    for index, plan in enumerate(visible, start=offset + 1):
+        token = str(plan.trial_id)[:8]
+        status = _CREATIVE_TRIAL_STATUS_LABELS.get(
+            str(getattr(plan.status, "value", plan.status)),
+            "неизвестно",
+        )
+        rows.append(
+            (
+                _button(
+                    f"🧪 Тест {index} · {status}",
+                    f"cpm:experiment:{token}:b",
+                ),
+            )
+        )
+    paging: list[CustomerInteractionButton] = []
+    if current_page > 0:
+        paging.append(
+            _button("◀️ Предыдущая страница", f"cpm:experiments:{current_page - 1}")
+        )
+    if has_more:
+        paging.append(
+            _button("Следующая страница ▶️", f"cpm:experiments:{current_page + 1}")
+        )
+    if paging:
+        rows.append(tuple(paging))
+    rows.append(_back_row())
+    return CustomerInteractionMessage(
+        text=(
+            "🧪 A/B креативы\n\n"
+            "Сравнение строится только на точной variant-attribution. Слабые или "
+            "общие данные кампании не превращаются в ложного победителя.\n\n"
+            f"Страница {current_page + 1}"
+        ),
+        rows=tuple(rows),
+    )
+
+
+def _experiment_message(
+    actor: TenantContext,
+    reference: str,
+    metric_code: str,
+) -> CustomerInteractionMessage:
+    if actor.role not in _PROMOTION_ANALYTICS_ROLES:
+        return _permission_message()
+    metric = _creative_metric_from_code(metric_code)
+    trial_id = _creative_trial_reference(actor, reference)
+    try:
+        preview = preview_creative_winner(
+            actor=actor,
+            trial_id=trial_id,
+            metric=metric,
+        )
+    except LookupError:
+        return _stale_message()
+
+    recommendation = preview.recommendation
+    plan = preview.plan
+    token = str(plan.trial_id)[:8]
+    by_variant = {item.variant_id: item for item in preview.variants}
+    metric_label = "продаж" if metric == CreativeOptimizationMetric.WON else "записей"
+    evidence: list[str] = []
+    allocation: list[str] = []
+    proposed = {
+        item.publication_job_id: item.proposed_allocation_bps
+        for item in recommendation.evidence
+    }
+    for index, arm in enumerate(plan.arms, start=1):
+        current = arm.allocation_bps / 100.0
+        target = proposed.get(arm.publication_job_id, arm.allocation_bps) / 100.0
+        allocation.append(
+            f"• Вариант {index}: {current:.0f}%"
+            if target == current
+            else f"• Вариант {index}: {current:.0f}% → {target:.0f}%"
+        )
+        item = by_variant.get(arm.variant_id)
+        if item is None or str(getattr(item.attribution_scope, "value", "")) != "variant":
+            evidence.append(f"• Вариант {index}: нет точной атрибуции")
+            continue
+        successes = item.won if metric == CreativeOptimizationMetric.WON else item.bookings
+        rate = (successes / item.leads * 100.0) if item.leads else 0.0
+        marker = " ⭐" if arm.variant_id == recommendation.winner_variant_id else ""
+        evidence.append(
+            f"• Вариант {index}: {successes}/{item.leads} · {rate:.1f}%{marker}"
+        )
+
+    rows: list[tuple[CustomerInteractionButton, ...]] = []
+    if recommendation.can_apply and actor.role in _ACQUISITION_ROLES:
+        rows.append(
+            (
+                _button(
+                    "✅ Применить осторожный сдвиг",
+                    "cpm:experiment-apply:"
+                    f"{token}:{recommendation.trial_revision}:{metric_code}:{preview.fingerprint}",
+                ),
+            )
+        )
+    rows.append(
+        (
+            _button("📅 По записям", f"cpm:experiment:{token}:b"),
+            _button("💰 По продажам", f"cpm:experiment:{token}:w"),
+        )
+    )
+    rows.append((_button("🔄 Пересчитать", f"cpm:experiment:{token}:{metric_code}"),))
+    rows.append(_back_row())
+    status = _CREATIVE_TRIAL_STATUS_LABELS.get(
+        str(getattr(plan.status, "value", plan.status)),
+        "неизвестно",
+    )
+    return CustomerInteractionMessage(
+        text=(
+            "🧪 A/B креативы · рекомендация\n\n"
+            f"Статус теста: {status} · версия {plan.revision}\n"
+            f"Период данных: {preview.date_from} — {preview.date_to}\n"
+            f"Метрика: {metric_label}\n\n"
+            f"{_creative_recommendation_text(recommendation.status)}\n\n"
+            "Распределение:\n"
+            + "\n".join(allocation)
+            + "\n\nТочные данные:\n"
+            + "\n".join(evidence)
+            + "\n\nПеред применением ClientPlatform пересчитывает факты и отклоняет "
+            "устаревшее подтверждение."
+        ),
+        rows=tuple(rows),
+    )
+
+
+def _experiment_apply_message(
+    actor: TenantContext,
+    reference: str,
+    revision: str,
+    metric_code: str,
+    fingerprint: str,
+) -> CustomerInteractionMessage:
+    if actor.role not in _ACQUISITION_ROLES:
+        return _permission_message()
+    metric = _creative_metric_from_code(metric_code)
+    trial_id = _creative_trial_reference(actor, reference)
+    if not str(revision).isdigit() or int(revision) < 1:
+        return _stale_message()
+    try:
+        apply_creative_winner(
+            actor=actor,
+            trial_id=trial_id,
+            expected_revision=int(revision),
+            expected_fingerprint=str(fingerprint),
+            confirmed=True,
+            metric=metric,
+        )
+    except CreativeWinnerApplyError:
+        fresh = _experiment_message(actor, reference, metric_code)
+        return CustomerInteractionMessage(
+            text=(
+                "Данные теста изменились или рекомендация больше не актуальна. "
+                "Ничего не применено.\n\n" + fresh.text
+            ),
+            rows=fresh.rows,
+        )
+    fresh = _experiment_message(actor, reference, metric_code)
+    return CustomerInteractionMessage(
+        text="✅ Распределение обновлено в безопасных границах.\n\n" + fresh.text,
+        rows=fresh.rows,
     )
 
 
@@ -4484,6 +4751,22 @@ def _render(
             return _growth_lifecycle_message(actor)
         if parsed.action == "acquire":
             return _acquisition_message(actor)
+        if parsed.action == "experiments":
+            return _experiments_message(actor, _page_number(parsed.args))
+        if parsed.action == "experiment":
+            if len(parsed.args) != 2:
+                return _stale_message()
+            return _experiment_message(actor, parsed.args[0], parsed.args[1])
+        if parsed.action == "experiment-apply":
+            if len(parsed.args) != 4:
+                return _stale_message()
+            return _experiment_apply_message(
+                actor,
+                parsed.args[0],
+                parsed.args[1],
+                parsed.args[2],
+                parsed.args[3],
+            )
         if parsed.action == "manage":
             return _manage_message(actor)
         if parsed.action == "manage-more":

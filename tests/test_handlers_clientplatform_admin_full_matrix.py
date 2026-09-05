@@ -19,6 +19,7 @@ OWNER_ACTIONS = [
     "behavior",
     "messengers",
     "attention",
+    "sales",
     "autopilot",
     "publications",
     "funnel",
@@ -28,6 +29,8 @@ OWNER_ACTIONS = [
     "offers",
     "copy",
     "prices",
+    "promotion",
+    "experiments",
     "release",
     "invites",
     "funnel2",
@@ -71,7 +74,7 @@ def _ctx() -> Any:
     )
 
 
-def test_owner_menu_groups_all_26_sections_without_surface_sprawl(
+def test_owner_menu_groups_all_sections_without_surface_sprawl(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(admin.control, "_uuid_token", lambda _value: "business-token")
@@ -192,10 +195,104 @@ async def test_real_admin_group_renders_message_and_pushes_history(
         "👥 Открыть клиентов",
         "⚠️ Что требует внимания",
         "🧠 Кто проходит материалы",
+        "💬 Обращения и продажи",
         "⬅️ Назад",
     ]
     assert state.data["cp_admin_section"] == "menu-work"
     assert state.data["cp_admin_history"] == ["menu"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("action", "title", "target"),
+    [
+        ("sales", "💬 Обращения и продажи", "cps:s:business-token"),
+        ("promotion", "🚀 Найти новых клиентов", "cpj:promote:business-token"),
+        ("experiments", "🧪 A/B креативы", "cpw:home:business-token"),
+    ],
+)
+async def test_capability_handoff_reuses_existing_canonical_contour(
+    monkeypatch: pytest.MonkeyPatch,
+    action: str,
+    title: str,
+    target: str,
+) -> None:
+    edits: list[tuple[str, Any]] = []
+
+    async def safe_edit(_callback: Any, text: str, reply_markup: Any) -> None:
+        edits.append((text, reply_markup))
+
+    monkeypatch.setattr(admin, "_safe_edit", safe_edit)
+    state = FakeState({"cp_admin_section": "menu", "cp_admin_history": []})
+    await admin._render_capability_handoff(
+        SimpleNamespace(),
+        state,  # type: ignore[arg-type]
+        _ctx(),
+        action,
+    )
+
+    rendered, markup = edits[-1]
+    assert rendered.startswith(title)
+    assert "отдельная копия бизнес-логики не создаётся" in rendered
+    callbacks = [
+        button.callback_data
+        for row in markup.inline_keyboard
+        for button in row
+    ]
+    assert target in callbacks
+    assert any(str(value).endswith(":back") for value in callbacks)
+    assert state.data["cp_admin_section"] == action
+    assert state.data["cp_admin_history"] == ["menu"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["sales", "promotion", "experiments"])
+async def test_admin_gate_routes_capability_to_existing_handoff(
+    monkeypatch: pytest.MonkeyPatch,
+    action: str,
+) -> None:
+    calls: list[str] = []
+
+    async def load_context(**_kwargs: Any) -> Any:
+        return _ctx()
+
+    async def render_handoff(
+        _callback: Any,
+        _state: Any,
+        _ctx_value: Any,
+        routed_action: str,
+    ) -> None:
+        calls.append(routed_action)
+
+    monkeypatch.setattr(
+        admin,
+        "_parse_callback",
+        lambda _data: (_ctx().business_id, action, ()),
+    )
+    monkeypatch.setattr(admin, "_load_admin_context", load_context)
+    monkeypatch.setattr(admin, "_render_capability_handoff", render_handoff)
+    monkeypatch.setattr(
+        admin.control,
+        "_canonical_telegram_user_id",
+        lambda *_args, **_kwargs: _ctx().user_id,
+    )
+    callback = SimpleNamespace(
+        data=f"cpa:business-token:{action}",
+        from_user=SimpleNamespace(id=900001, username=None, full_name="Owner"),
+    )
+    await admin.admin_gate(callback, FakeState())  # type: ignore[arg-type]
+    assert calls == [action]
+
+
+@pytest.mark.asyncio
+async def test_capability_handoff_rejects_unknown_parallel_surface() -> None:
+    with pytest.raises(ValueError, match="unknown admin capability handoff"):
+        await admin._render_capability_handoff(
+            SimpleNamespace(),
+            FakeState(),  # type: ignore[arg-type]
+            _ctx(),
+            "parallel-copy",
+        )
 
 
 @pytest.mark.asyncio
