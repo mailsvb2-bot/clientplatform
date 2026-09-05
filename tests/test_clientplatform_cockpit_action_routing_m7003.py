@@ -6,6 +6,7 @@ from unittest.mock import patch
 from clientplatform.application import cockpit_customers
 from clientplatform.application.cockpit_action_routing import (
     build_cockpit_action_start_payload,
+    build_cockpit_section_start_payload,
     parse_cockpit_action_start_payload,
 )
 from clientplatform.application.growth_cockpit import GrowthAction
@@ -60,6 +61,35 @@ class CockpitActionRoutingM7003Tests(unittest.TestCase):
                 self.assertEqual(parsed.business_id, _BUSINESS)
                 self.assertEqual(parsed.kind, kind)
                 self.assertEqual(parsed.lead_id, lead_id)
+
+    def test_section_start_payload_round_trips_supported_cockpit_sections(self) -> None:
+        sections = (
+            "calendar",
+            "sales",
+            "growth",
+            "content",
+            "automation",
+            "analytics",
+            "connections",
+            "team",
+            "settings",
+        )
+        for section in sections:
+            with self.subTest(section=section):
+                payload = build_cockpit_section_start_payload(
+                    business_id=_BUSINESS, section=section
+                )
+                self.assertLessEqual(len(payload), 64)
+                parsed = parse_cockpit_action_start_payload(payload)
+                self.assertIsNotNone(parsed)
+                assert parsed is not None
+                self.assertEqual(parsed.business_id, _BUSINESS)
+                self.assertEqual(parsed.section, section)
+                self.assertIsNone(parsed.lead_id)
+        with self.assertRaises(ValueError):
+            build_cockpit_section_start_payload(
+                business_id=_BUSINESS, section="billing"
+            )
 
     def test_route_payload_fails_closed_for_unknown_or_malformed_action(self) -> None:
         with self.assertRaises(ValueError):

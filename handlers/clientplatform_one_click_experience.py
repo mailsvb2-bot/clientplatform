@@ -38,6 +38,18 @@ router = Router(name="clientplatform_one_click_experience")
 router.message.filter(control.ClientPlatformControlEnabled())
 router.callback_query.filter(control.ClientPlatformControlEnabled())
 
+_SETTINGS_MESSENGER_ROLES = frozenset(
+    {
+        PlatformRole.OWNER,
+        PlatformRole.ADMINISTRATOR,
+        PlatformRole.MANAGER,
+        PlatformRole.SUPPORT,
+    }
+)
+_SETTINGS_SYSTEM_ROLES = frozenset({PlatformRole.OWNER, PlatformRole.ADMINISTRATOR})
+_SETTINGS_TEAM_ROLES = frozenset({PlatformRole.OWNER})
+
+
 _REGIONS = {
     "47": (47,),
     "нижний новгород": (47,),
@@ -560,17 +572,33 @@ async def receive_one_click_region(message: Message, state: FSMContext) -> None:
     await _prepare_draft(message, state, data=data, region_ids=regions)
 
 
-def _more_keyboard(token: str) -> InlineKeyboardMarkup:
-    quick_actions = control._keyboard(
-        [
-            [(nav.MONEY_RESULT.label, f"cpg:period:{token}:7")],
-            [(nav.CLIENTS_SALES.label, f"cpo:clients:{token}")],
-            [(nav.SERVICES_BOOKING.label, f"cpo:work:{token}")],
-            [(nav.CONTENT_PROMOTION.label, f"cpo:content:{token}")],
-            [(nav.BUSINESS_SETTINGS.label, f"cpo:settings:{token}")],
-            [(nav.BACK.label, f"cpj:home:{token}")],
-        ]
-    )
+
+def _allowed(actor, check) -> bool:
+    try:
+        check()
+    except TenantPermissionDenied:
+        return False
+    return True
+
+
+def _more_rows(token: str, actor) -> list[list[tuple[str, str]]]:
+    rows: list[list[tuple[str, str]]] = []
+    if _allowed(actor, actor.assert_can_view_outcome_ledger):
+        rows.append([(nav.MONEY_RESULT.label, f"cpg:period:{token}:7")])
+    can_customers = _allowed(actor, actor.assert_can_view_customer_records)
+    if can_customers:
+        rows.append([(nav.CLIENTS_SALES.label, f"cpo:clients:{token}")])
+    if can_customers or _allowed(actor, actor.assert_can_manage_programs):
+        rows.append([(nav.SERVICES_BOOKING.label, f"cpo:work:{token}")])
+    if _allowed(actor, actor.assert_can_manage_promotions):
+        rows.append([(nav.CONTENT_PROMOTION.label, f"cpo:content:{token}")])
+    rows.append([(nav.BUSINESS_SETTINGS.label, f"cpo:settings:{token}")])
+    rows.append([(nav.BACK.label, f"cpj:home:{token}")])
+    return rows
+
+
+def _more_keyboard(token: str, actor) -> InlineKeyboardMarkup:
+    quick_actions = control._keyboard(_more_rows(token, actor))
     cockpit_url = cockpit_web_app_url()
     if cockpit_url is None:
         return quick_actions
@@ -587,113 +615,103 @@ def _more_keyboard(token: str) -> InlineKeyboardMarkup:
     )
 
 
-@router.callback_query(F.data.startswith("cpo:more:"))
-async def open_more(callback: CallbackQuery) -> None:
-    token = str(callback.data).split(":", 2)[2]
-    await control._actor(int(callback.from_user.id), control._token_uuid(token))
-    await control._callback_message(callback).answer(
-        "🏠 Кабинет ClientPlatform\n\n"
-        "Откройте кабинет, чтобы увидеть главное по бизнесу в одном месте: "
-        "что происходит сегодня, клиентов, записи, продажи и настройки.\n\n"
-        "Или выберите быстрое действие прямо в Telegram:",
-        reply_markup=_more_keyboard(token),
+def _client_tools_rows(token: str, actor) -> tuple[list[list[tuple[str, str]]], list[str]]:
+    allowed = _allowed(actor, actor.assert_can_view_customer_records)
+    rows: list[list[tuple[str, str]]] = []
+    help_lines: list[str] = []
+    if allowed:
+        rows.append([("💬 Обращения и продажи", f"cps:s:{token}")])
+        help_lines.append("• ответить на новую заявку или продолжить продажу → «💬 Обращения и продажи»")
+    if allowed:
+        rows.append([("📅 Записи клиентов", f"cpj:bookings:{token}")])
+        help_lines.append("• посмотреть, кто и когда записан → «📅 Записи клиентов»")
+    if allowed:
+        rows.append([("🔎 Все клиенты", f"cpa:{token}:customer-list")])
+        help_lines.append("• найти конкретного человека → «🔎 Все клиенты»")
+    rows.append([(nav.BACK.label, f"cpo:more:{token}")])
+    return rows, help_lines
+
+
+async def _send_client_tools(message: Message, *, token: str, actor) -> None:
+    rows, help_lines = _client_tools_rows(token, actor)
+    body = "\n".join(help_lines) or "Для Вашей роли здесь сейчас нет доступных действий."
+    await message.answer(
+        "👥 Клиенты и продажи\n\nЕсли Вам нужно:\n" + body,
+        reply_markup=control._keyboard(rows),
     )
 
 
-@router.callback_query(F.data.startswith("cpo:clients:"))
-async def open_client_tools(callback: CallbackQuery) -> None:
-    token = str(callback.data).split(":", 2)[2]
-    await control._actor(int(callback.from_user.id), control._token_uuid(token))
-    await control._callback_message(callback).answer(
-        "👥 Клиенты и продажи\n\n"
-        "Если Вам нужно:\n"
-        "• ответить на новую заявку или продолжить продажу → «💬 Обращения и продажи»\n"
-        "• посмотреть, кто и когда записан → «📅 Записи клиентов»\n"
-        "• найти конкретного человека → «🔎 Все клиенты»",
-        reply_markup=control._keyboard(
-            [
-                [("💬 Обращения и продажи", f"cps:s:{token}")],
-                [("📅 Записи клиентов", f"cpj:bookings:{token}")],
-                [("🔎 Все клиенты", f"cpa:{token}:customer-list")],
-                [(nav.BACK.label, f"cpo:more:{token}")],
-            ]
-        ),
-    )
-
-
-@router.callback_query(F.data.startswith("cpo:content:"))
-async def open_content_tools(callback: CallbackQuery) -> None:
-    token = str(callback.data).split(":", 2)[2]
-    await control._actor(int(callback.from_user.id), control._token_uuid(token))
-    await control._callback_message(callback).answer(
-        "📈 Продвижение и контент\n\n"
-        "Если Вам нужно:\n"
-        "• создать или запланировать пост → «📣 Публикации»\n"
-        "• подготовить текст → «✍️ Подготовить текст»\n"
-        "• проверить, что именно Вы предлагаете → «🧪 Услуги и предложения»\n"
-        "• запустить продвижение → «📣 Реклама»\n"
-        "• привлекать через партнёров → «🤝 Партнёрства»",
-        reply_markup=control._keyboard(
+def _content_tools_rows(token: str, actor) -> tuple[list[list[tuple[str, str]]], list[str]]:
+    rows: list[list[tuple[str, str]]] = []
+    help_lines: list[str] = []
+    if _allowed(actor, actor.assert_can_manage_promotions):
+        rows.extend(
             [
                 [("📣 Публикации", f"cpa:{token}:publications")],
                 [(nav.COPY.label, f"cpa:{token}:copy")],
                 [(nav.OFFERS.label, f"cpa:{token}:offers")],
                 [("📣 Реклама", f"cpo:ads:{token}")],
                 [("🤝 Партнёрства", f"cpg:home:{token}")],
-                [(nav.BACK.label, f"cpo:more:{token}")],
             ]
-        ),
-    )
-
-
-_SETTINGS_MESSENGER_ROLES = frozenset(
-    {
-        PlatformRole.OWNER,
-        PlatformRole.ADMINISTRATOR,
-        PlatformRole.MANAGER,
-        PlatformRole.SUPPORT,
-    }
-)
-_SETTINGS_SYSTEM_ROLES = frozenset(
-    {PlatformRole.OWNER, PlatformRole.ADMINISTRATOR}
-)
-
-
-def _settings_rows(token: str, role: PlatformRole) -> list[list[tuple[str, str]]]:
-    # Presentation filtering keeps the screen honest; target handlers still
-    # revalidate the live tenant role before serving any privileged action.
-    rows: list[list[tuple[str, str]]] = []
-    if role in _SETTINGS_MESSENGER_ROLES:
-        rows.append([(nav.MESSENGERS.label, f"cpa:{token}:messengers")])
-    rows.append([("🧩 Бизнес и возможности", f"cps:advanced:{token}")])
-    if role == PlatformRole.OWNER:
-        rows.append([("👤 Сотрудники и тариф", f"cpa:{token}:menu-team")])
-    if role in _SETTINGS_SYSTEM_ROLES:
-        rows.append([("🛠 Технические проверки", f"cpa:{token}:menu-system")])
+        )
+        help_lines.extend(
+            [
+                "• создать или запланировать пост → «📣 Публикации»",
+                f"• подготовить текст → «{nav.COPY.label}»",
+                f"• проверить, что именно Вы предлагаете → «{nav.OFFERS.label}»",
+                "• запустить продвижение → «📣 Реклама»",
+                "• привлекать через партнёров → «🤝 Партнёрства»",
+            ]
+        )
     rows.append([(nav.BACK.label, f"cpo:more:{token}")])
-    return rows
+    return rows, help_lines
 
-
-@router.callback_query(F.data.startswith("cpo:settings:"))
-async def open_settings_tools(callback: CallbackQuery) -> None:
-    token = str(callback.data).split(":", 2)[2]
-    actor = await control._actor(int(callback.from_user.id), control._token_uuid(token))
-    await control._callback_message(callback).answer(
-        "⚙️ Настройки бизнеса\n\n"
-        "Если Вам нужно:\n"
-        "• подключить Telegram, ВКонтакте или MAX → «💬 Подключить мессенджеры»\n"
-        "• настроить услуги и возможности → «🧰 Бизнес и возможности»\n"
-        "• добавить сотрудника или посмотреть тариф → «👤 Сотрудники и тариф»\n"
-        "• проверить техническое состояние → «🛠 Технические проверки»",
-        reply_markup=control._keyboard(_settings_rows(token, actor.role)),
+async def _send_content_tools(message: Message, *, token: str, actor) -> None:
+    rows, help_lines = _content_tools_rows(token, actor)
+    body = "\n".join(help_lines) or "Для Вашей роли здесь сейчас нет доступных действий."
+    await message.answer(
+        "📈 Продвижение и контент\n\nЕсли Вам нужно:\n" + body,
+        reply_markup=control._keyboard(rows),
     )
 
 
-@router.callback_query(F.data.startswith("cpo:work:"))
-async def open_work_tools(callback: CallbackQuery) -> None:
-    token = str(callback.data).split(":", 2)[2]
-    await control._actor(int(callback.from_user.id), control._token_uuid(token))
-    await control._callback_message(callback).answer(
+def _settings_rows(token: str, actor) -> tuple[list[list[tuple[str, str]]], list[str]]:
+    rows: list[list[tuple[str, str]]] = []
+    help_lines: list[str] = []
+    if actor.role in _SETTINGS_MESSENGER_ROLES:
+        rows.append([(nav.MESSENGERS.label, f"cpa:{token}:messengers")])
+        help_lines.append(f"• подключить или проверить Telegram, ВКонтакте или MAX → «{nav.MESSENGERS.label}»")
+    rows.append([("🧩 Бизнес и возможности", f"cps:advanced:{token}")])
+    help_lines.append("• посмотреть услуги и возможности бизнеса → «🧩 Бизнес и возможности»")
+    if actor.role in _SETTINGS_TEAM_ROLES:
+        rows.append([("👤 Сотрудники и доступы", f"cpa:{token}:menu-team")])
+        help_lines.append("• добавить сотрудника или изменить доступ → «👤 Сотрудники и доступы»")
+    if actor.role in _SETTINGS_SYSTEM_ROLES:
+        rows.append([("🛠 Технические проверки", f"cpa:{token}:menu-system")])
+        help_lines.append("• проверить техническое состояние → «🛠 Технические проверки»")
+    rows.append([(nav.BACK.label, f"cpo:more:{token}")])
+    return rows, help_lines
+
+async def _send_settings_tools(message: Message, *, token: str, actor) -> None:
+    rows, help_lines = _settings_rows(token, actor)
+    body = "\n".join(help_lines) or "Для Вашей роли здесь сейчас нет доступных настроек."
+    await message.answer(
+        "⚙️ Настройки бизнеса\n\nЕсли Вам нужно:\n" + body,
+        reply_markup=control._keyboard(rows),
+    )
+
+
+async def _send_work_tools(message: Message, *, token: str, actor) -> None:
+    if not (
+        _allowed(actor, actor.assert_can_view_customer_records)
+        or _allowed(actor, actor.assert_can_manage_programs)
+    ):
+        await message.answer(
+            "📅 Услуги и запись\n\nДля Вашей роли этот раздел недоступен.",
+            reply_markup=control._keyboard([[(nav.BACK.label, f"cpo:more:{token}")]]),
+        )
+        return
+    await message.answer(
         "📅 Услуги и запись\n\n"
         "Если Вам нужно:\n"
         "• настроить то, что можно заказать → «🧰 Мои услуги»\n"
@@ -709,6 +727,131 @@ async def open_work_tools(callback: CallbackQuery) -> None:
         ),
     )
 
+
+@router.callback_query(F.data.startswith("cpo:more:"))
+async def open_more(callback: CallbackQuery) -> None:
+    token = str(callback.data).split(":", 2)[2]
+    actor = await control._actor(int(callback.from_user.id), control._token_uuid(token))
+    await control._callback_message(callback).answer(
+        "🏠 Кабинет ClientPlatform\n\n"
+        "Откройте кабинет, чтобы увидеть главное по бизнесу в одном месте. "
+        "Ниже показаны только те быстрые действия, которые доступны Вашей роли.",
+        reply_markup=_more_keyboard(token, actor),
+    )
+
+
+@router.callback_query(F.data.startswith("cpo:clients:"))
+async def open_client_tools(callback: CallbackQuery) -> None:
+    token = str(callback.data).split(":", 2)[2]
+    actor = await control._actor(int(callback.from_user.id), control._token_uuid(token))
+    await _send_client_tools(control._callback_message(callback), token=token, actor=actor)
+
+
+@router.callback_query(F.data.startswith("cpo:content:"))
+async def open_content_tools(callback: CallbackQuery) -> None:
+    token = str(callback.data).split(":", 2)[2]
+    actor = await control._actor(int(callback.from_user.id), control._token_uuid(token))
+    await _send_content_tools(control._callback_message(callback), token=token, actor=actor)
+
+
+@router.callback_query(F.data.startswith("cpo:settings:"))
+async def open_settings_tools(callback: CallbackQuery) -> None:
+    token = str(callback.data).split(":", 2)[2]
+    actor = await control._actor(int(callback.from_user.id), control._token_uuid(token))
+    await _send_settings_tools(control._callback_message(callback), token=token, actor=actor)
+
+
+@router.callback_query(F.data.startswith("cpo:work:"))
+async def open_work_tools(callback: CallbackQuery) -> None:
+    token = str(callback.data).split(":", 2)[2]
+    actor = await control._actor(int(callback.from_user.id), control._token_uuid(token))
+    await _send_work_tools(control._callback_message(callback), token=token, actor=actor)
+
+
+async def send_one_click_section(
+    message: Message,
+    *,
+    user_id: int,
+    business_id: str,
+    section: str,
+) -> None:
+    """Open a Cockpit section through existing canonical Telegram surfaces."""
+
+    actor = await control._actor(user_id, business_id)
+    normalized = str(section or "").strip().lower()
+    token = control._uuid_token(business_id)
+    if normalized == "calendar":
+        actor.assert_can_view_customer_records()
+        await message.answer(
+            "📅 Календарь и записи\n\nОткройте актуальные записи бизнеса.",
+            reply_markup=control._keyboard(
+                [[("📅 Записи клиентов", f"cpj:bookings:{token}")], [(nav.HOME.label, f"cpj:home:{token}")]]
+            ),
+        )
+        return
+    if normalized == "sales":
+        actor.assert_can_view_customer_records()
+        await _send_client_tools(message, token=token, actor=actor)
+        return
+    if normalized == "content":
+        actor.assert_can_view_programs()
+        rows: list[list[tuple[str, str]]] = [[("📚 Материалы и программы", f"cp:cprograms:{token}")]]
+        if _allowed(actor, actor.assert_can_manage_promotions):
+            rows.append([("📣 Публикации и продвижение", f"cpo:content:{token}")])
+        rows.append([(nav.HOME.label, f"cpj:home:{token}")])
+        await message.answer(
+            "📚 Контент и материалы\n\nПоказаны только действия, доступные Вашей роли.",
+            reply_markup=control._keyboard(rows),
+        )
+        return
+    if normalized in {"growth", "analytics"}:
+        actor.assert_can_view_promotion_analytics()
+        rows = []
+        if _allowed(actor, actor.assert_can_view_outcome_ledger):
+            rows.append([(nav.MONEY_RESULT.label, f"cpg:period:{token}:7")])
+        rows.append([("📊 Результаты Яндекс", f"cpy:a:{token}:30")])
+        rows.append([("🧪 A/B креативы", f"cpa:{token}:experiments")])
+        if _allowed(actor, actor.assert_can_manage_promotions):
+            rows.append([("📣 Реклама и продвижение", f"cpo:ads:{token}")])
+        rows.append([(nav.HOME.label, f"cpj:home:{token}")])
+        await message.answer(
+            "📈 Рост и аналитика\n\nПоказаны только доступные для Вашей роли данные и действия.",
+            reply_markup=control._keyboard(rows),
+        )
+        return
+    if normalized == "automation":
+        actor.assert_can_manage_business()
+        await message.answer(
+            "🤖 Автоматизация\n\nЗдесь можно проверить разрешённые системе действия и изменить границы автоматизации.",
+            reply_markup=control._keyboard(
+                [[("🤖 Открыть автоматизацию", f"cpa:{token}:autopilot")], [(nav.HOME.label, f"cpj:home:{token}")]]
+            ),
+        )
+        return
+    if normalized == "connections":
+        actor.assert_can_manage_business()
+        await message.answer(
+            "💬 Подключения\n\nПодключите или проверьте клиентские мессенджеры бизнеса.",
+            reply_markup=control._keyboard(
+                [[(nav.MESSENGERS.label, f"cpa:{token}:messengers")], [(nav.HOME.label, f"cpj:home:{token}")]]
+            ),
+        )
+        return
+    if normalized == "team":
+        if actor.role != PlatformRole.OWNER:
+            raise TenantPermissionDenied("team controls are owner-only in the current UI")
+        await message.answer(
+            "👤 Команда и роли\n\nУправляйте сотрудниками и их доступами.",
+            reply_markup=control._keyboard(
+                [[("👤 Сотрудники и доступы", f"cpa:{token}:menu-team")], [(nav.HOME.label, f"cpj:home:{token}")]]
+            ),
+        )
+        return
+    if normalized == "settings":
+        actor.assert_can_manage_business()
+        await _send_settings_tools(message, token=token, actor=actor)
+        return
+    raise ValueError("unsupported cockpit section")
 
 @router.callback_query(F.data.startswith("cpo:ads:"))
 async def open_ad_tools(callback: CallbackQuery) -> None:
@@ -749,4 +892,5 @@ __all__ = [
     "install_one_click_experience",
     "router",
     "send_one_click_dashboard",
+    "send_one_click_section",
 ]

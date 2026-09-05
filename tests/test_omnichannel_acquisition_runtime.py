@@ -115,26 +115,53 @@ async def test_owner_landing_redirect_uses_stable_server_route(monkeypatch, plat
 
 
 @pytest.mark.asyncio
-async def test_owner_landing_redirect_fails_closed_when_provider_is_not_ready(monkeypatch) -> None:
+async def test_owner_landing_unavailable_provider_offers_only_ready_alternatives(monkeypatch) -> None:
+    targets = {
+        "telegram": {"platform": "telegram", "url": "https://t.me/clientplatform_bot?start=cpo_landing"},
+        "vk": {"platform": "vk", "url": "https://vk.example"},
+    }
     monkeypatch.setattr(
         messenger_webhooks,
         "build_owner_entry_target",
-        lambda *_args, **_kwargs: {"platform": "vk", "url": "https://vk.example"},
+        lambda requested, source="landing": targets.get(requested),
     )
     monkeypatch.setattr(
         messenger_webhooks,
         "build_setup_status",
         lambda: SimpleNamespace(telegram_ok=True, vk_ok=True, max_ok=True),
     )
+    monkeypatch.setattr(messenger_webhooks, "telegram_runtime_enabled", lambda: True)
     monkeypatch.setattr(messenger_webhooks, "vk_webhook_enabled", lambda: False)
+    monkeypatch.setattr(messenger_webhooks, "max_webhook_enabled", lambda: False)
 
     response = await messenger_webhooks._clientplatform_owner_entry_redirect(
         SimpleNamespace(match_info={"platform": "vk"})
     )
 
+    assert response.status == 200
+    assert "Вход через ВКонтакте сейчас недоступен" in response.text
+    assert "Продолжить в Telegram" in response.text
+    assert "vk.example" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_owner_landing_unavailable_provider_stays_503_without_safe_alternative(monkeypatch) -> None:
+    monkeypatch.setattr(messenger_webhooks, "build_owner_entry_target", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        messenger_webhooks,
+        "build_setup_status",
+        lambda: SimpleNamespace(telegram_ok=True, vk_ok=True, max_ok=True),
+    )
+    monkeypatch.setattr(messenger_webhooks, "telegram_runtime_enabled", lambda: False)
+    monkeypatch.setattr(messenger_webhooks, "vk_webhook_enabled", lambda: False)
+    monkeypatch.setattr(messenger_webhooks, "max_webhook_enabled", lambda: False)
+
+    response = await messenger_webhooks._clientplatform_owner_entry_redirect(
+        SimpleNamespace(match_info={"platform": "max"})
+    )
+
     assert response.status == 503
     assert "пока не подключён" in response.text
-    assert "vk.example" not in response.text
 
 
 @pytest.mark.asyncio

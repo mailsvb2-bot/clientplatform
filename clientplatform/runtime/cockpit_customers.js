@@ -60,13 +60,18 @@
   };
 
   const showNavigation = () => {
-    view.hidden = true;
-    explanation.hidden = true;
-    home.hidden = true;
-    nav.hidden = false;
+    const controller = window.ClientPlatformCockpitNavigation;
+    if (controller && typeof controller.showNavigation === 'function') { controller.showNavigation(); return; }
+    view.hidden = true; explanation.hidden = true; home.hidden = true; nav.hidden = false;
+  };
+
+  const enterCustomers = () => {
+    const controller = window.ClientPlatformCockpitNavigation;
+    if (controller && typeof controller.enterCustomers === 'function') controller.enterCustomers();
   };
 
   const showList = () => {
+    enterCustomers();
     view.hidden = false;
     nav.hidden = true;
     home.hidden = true;
@@ -174,6 +179,7 @@
         ? 'Часть дополнительных данных временно недоступна. Показаны только подтверждённые сведения.'
         : '',
     );
+    enterCustomers();
     listPanel.hidden = true;
     detail.hidden = false;
     view.hidden = false;
@@ -252,6 +258,11 @@
     loadPage(0);
   };
 
+  const handleBack = () => {
+    if (!detail.hidden) { showList(); return; }
+    showNavigation();
+  };
+
   back.addEventListener('click', showNavigation);
   detailBack.addEventListener('click', showList);
   refresh.addEventListener('click', () => loadPage(page ? page.offset : 0));
@@ -266,5 +277,5 @@
     if (page && page.next_offset != null) loadPage(page.next_offset);
   });
 
-  window.ClientPlatformCustomers = Object.freeze({open});
+  window.ClientPlatformCustomers = Object.freeze({open, back:handleBack});
 })();

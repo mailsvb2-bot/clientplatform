@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 from clientplatform.domain.ad_connections import AdConnectionStatus
 from clientplatform.domain.bookings import BookingSlotStatus
-from clientplatform.domain.tenancy import TenantPermissionDenied
+from clientplatform.domain.tenancy import PlatformRole, TenantContext, TenantPermissionDenied
 from handlers import clientplatform_goal_dashboard as dashboard
 from handlers import clientplatform_goal_first_autopilot as goal
 from handlers import clientplatform_one_click_experience as one_click
@@ -52,6 +52,15 @@ def callback(data: str, out):
             get_me=AsyncMock(return_value=SimpleNamespace(username="clientplatform_bot"))
         ),
         message=out,
+    )
+
+
+def tenant_actor(role: PlatformRole = PlatformRole.OWNER) -> TenantContext:
+    return TenantContext(
+        business_id="11111111-1111-4111-8111-111111111111",
+        user_id=101,
+        membership_id="22222222-2222-4222-8222-222222222222",
+        role=role,
     )
 
 
@@ -130,7 +139,7 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 one_click.control,
                 "_actor",
-                new=AsyncMock(return_value="actor"),
+                new=AsyncMock(return_value=tenant_actor()),
             ),
             patch.object(one_click.control, "_callback_message", return_value=out),
         )
@@ -168,7 +177,7 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
         out = outbound_message()
         cb = callback("cpo:more:business-1", out)
         with (
-            patch.object(one_click.control, "_actor", new=AsyncMock(return_value="actor")),
+            patch.object(one_click.control, "_actor", new=AsyncMock(return_value=tenant_actor())),
             patch.object(one_click.control, "_token_uuid", side_effect=lambda value: value),
             patch.object(one_click.control, "_callback_message", return_value=out),
             patch.object(
@@ -198,7 +207,7 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
             "https://app.example.test/clientplatform/cockpit",
         )
         self.assertIn("🏠 Кабинет ClientPlatform", answer_text)
-        self.assertIn("быстрое действие прямо в Telegram", answer_text)
+        self.assertIn("только те быстрые действия", answer_text)
         self.assertNotIn("Если Вам нужно:", answer_text)
         self.assertNotIn("🧭 Что можно сделать", answer_text)
         self.assertNotIn("💬 Подключить мессенджеры", labels)
@@ -206,7 +215,7 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
 
     def test_all_capabilities_menu_falls_back_to_quick_actions_without_public_cockpit(self) -> None:
         with patch.object(one_click, "cockpit_web_app_url", return_value=None):
-            markup = one_click._more_keyboard("business-1")
+            markup = one_click._more_keyboard("business-1", tenant_actor())
         labels = [button.text for row in markup.inline_keyboard for button in row]
         self.assertNotIn("🏠 Открыть кабинет", labels)
         self.assertEqual(labels[0], "💰 Деньги и результат")

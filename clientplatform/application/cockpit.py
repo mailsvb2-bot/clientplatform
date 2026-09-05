@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Callable
 
+from clientplatform.application.cockpit_action_routing import build_cockpit_section_start_payload
+
 from clientplatform.application.tenancy import (
     get_owner_control_workspace,
     list_accessible_businesses,
@@ -104,7 +106,9 @@ def cockpit_navigation(actor: TenantContext) -> tuple[CockpitNavigationItem, ...
     can_growth = _allowed(actor, actor.assert_can_view_promotion_analytics)
     can_content = _allowed(actor, actor.assert_can_view_programs)
     can_manage_business = _allowed(actor, actor.assert_can_manage_business)
-    can_team = _allowed(actor, lambda: actor.assert_can_manage_members(PlatformRole.MANAGER))
+    # The existing owner-facing team UI is owner-only. Keep Cockpit honest
+    # instead of advertising an administrator path that Telegram does not expose.
+    can_team = actor.role == PlatformRole.OWNER
 
     return (
         _nav_item(
@@ -254,6 +258,31 @@ def resolve_cockpit_context(
         navigation=cockpit_navigation(actor),
     )
 
+def resolve_cockpit_section_start_payload(
+    *,
+    telegram_user_id: int,
+    requested_business_id: str | None,
+    section: str,
+) -> str:
+    """Resolve one role-authorized Cockpit section to the canonical Telegram surface."""
+
+    context = resolve_cockpit_context(
+        telegram_user_id=telegram_user_id,
+        requested_business_id=requested_business_id,
+    )
+    if context.onboarding_required or context.business_id is None:
+        raise TenantAccessDenied("active business membership was not found")
+    normalized = str(section or "").strip().lower()
+    item = next((entry for entry in context.navigation if entry.id == normalized), None)
+    if item is None:
+        raise ValueError("unsupported cockpit section")
+    if item.status != "available":
+        raise TenantPermissionDenied("cockpit section is not available for this role")
+    return build_cockpit_section_start_payload(
+        business_id=context.business_id,
+        section=normalized,
+    )
+
 
 __all__ = [
     "CockpitBusinessOption",
@@ -261,4 +290,5 @@ __all__ = [
     "CockpitNavigationItem",
     "cockpit_navigation",
     "resolve_cockpit_context",
+    "resolve_cockpit_section_start_payload",
 ]

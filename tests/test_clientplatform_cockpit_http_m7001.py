@@ -56,6 +56,10 @@ class CockpitHttpM7001Tests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Обновить", body)
         self.assertNotIn("Home / Today", body)
         self.assertIn("tg.BackButton.onClick", script)
+        self.assertIn("currentView === 'customers'", script)
+        self.assertIn("/clientplatform/cockpit/section-route", script)
+        self.assertIn("if (item.status === 'available')", script)
+        self.assertNotIn("['home','customers'].includes(item.id) && item.status", script)
         self.assertIn("loadHome().catch(homeFail)", script)
         self.assertIn("Роль: ${roleNames[payload.role]", script)
         self.assertIn("Подробнее:", script)
@@ -129,6 +133,40 @@ class CockpitHttpM7001Tests(unittest.IsolatedAsyncioTestCase):
             response.headers["Cache-Control"],
             "no-store, max-age=0",
         )
+
+    async def test_cockpit_section_route_revalidates_identity_business_and_section(self) -> None:
+        principal = TelegramWebAppPrincipal(user_id=101, auth_date=1, query_id=None)
+        seen: list[tuple[int, str | None, str]] = []
+
+        def resolve(*, telegram_user_id: int, requested_business_id: str | None, section: str) -> str:
+            seen.append((telegram_user_id, requested_business_id, section))
+            return "cpo_c_ERERERERQRGBEREREREREQ_s"
+
+        with (
+            patch.object(cockpit_http.settings, "BOT_TOKEN", _TOKEN),
+            patch.object(cockpit_http, "verify_telegram_webapp_init_data", return_value=principal),
+            patch.object(cockpit_http, "resolve_cockpit_section_start_payload", side_effect=resolve),
+            patch.object(cockpit_http, "_telegram_action_url", return_value="https://t.me/clientplatform_bot?start=route"),
+        ):
+            app = web.Application()
+            cockpit_http.register_cockpit_routes(app)
+            client = TestClient(TestServer(app))
+            await client.start_server()
+            try:
+                response = await client.post(
+                    "/clientplatform/cockpit/section-route",
+                    json={
+                        "init_data": "verified-by-test",
+                        "business_id": _BUSINESS_A,
+                        "section": "sales",
+                    },
+                )
+                payload = await response.json()
+            finally:
+                await client.close()
+        self.assertEqual(response.status, 200)
+        self.assertEqual(payload["route_url"], "https://t.me/clientplatform_bot?start=route")
+        self.assertEqual(seen, [(101, _BUSINESS_A, "sales")])
 
     async def test_cockpit_http_fails_closed_for_invalid_identity_and_tenant(
         self,

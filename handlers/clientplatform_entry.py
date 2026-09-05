@@ -173,7 +173,17 @@ async def _dispatch_clientplatform_start(
             ):
                 raise TenantAccessDenied("cockpit action business is no longer active")
             canonical_user_id = int(cockpit_context.user_id)
-            if cockpit_route.kind == "h":
+            if cockpit_route.section is not None:
+                one_click = importlib.import_module(
+                    ".clientplatform_one_click_experience", __package__
+                )
+                await one_click.send_one_click_section(
+                    message,
+                    user_id=canonical_user_id,
+                    business_id=cockpit_route.business_id,
+                    section=cockpit_route.section,
+                )
+            elif cockpit_route.kind == "h":
                 sales = importlib.import_module(".clientplatform_sales", __package__)
                 await sales.send_sales_handoff_view(
                     message,
@@ -200,10 +210,16 @@ async def _dispatch_clientplatform_start(
             else:
                 raise ValueError("unsupported cockpit action route")
         except (TenantAccessDenied, TenantPermissionDenied, ValueError):
-            await message.answer(
-                "Доступ или следующий шаг изменился. "
-                "Откройте кабинет и обновите карточку клиента."
-            )
+            if cockpit_route.section is not None:
+                await message.answer(
+                    "Доступ к этому разделу изменился. "
+                    "Вернитесь в кабинет и откройте раздел заново."
+                )
+            else:
+                await message.answer(
+                    "Доступ или следующий шаг изменился. "
+                    "Откройте кабинет и обновите карточку клиента."
+                )
         return
     if payload.casefold().startswith("cpo_"):
         # Landing owner links are explicit owner intent. Resolve only owner

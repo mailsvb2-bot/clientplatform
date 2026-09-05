@@ -342,6 +342,72 @@ def _owner_entry_available(platform: str) -> bool:
     return False
 
 
+def _available_owner_entry_targets(*, exclude: str | None = None) -> tuple[dict[str, str], ...]:
+    items: list[dict[str, str]] = []
+    for platform in ("telegram", "vk", "max"):
+        if platform == exclude or not _owner_entry_available(platform):
+            continue
+        target = build_owner_entry_target(platform, source="landing")
+        if target is not None and str(target.get("url") or "").strip():
+            items.append(target)
+    return tuple(items)
+
+
+def _owner_entry_fallback_response(platform: str) -> web.Response:
+    alternatives = _available_owner_entry_targets(exclude=platform)
+    if not alternatives:
+        return web.Response(
+            status=503,
+            text=(
+                "Этот вход ClientPlatform пока не подключён. "
+                "Попробуйте позже."
+            ),
+            headers={
+                "Cache-Control": "no-store, max-age=0",
+                "Referrer-Policy": "no-referrer",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+    labels = {"telegram": "Telegram", "vk": "ВКонтакте", "max": "MAX"}
+    requested = labels.get(platform, platform.upper())
+    buttons = "".join(
+        '<p><a rel="noreferrer" href="'
+        + escape(str(item["url"]), quote=True)
+        + '">Продолжить в '
+        + escape(labels.get(str(item["platform"]), str(item["platform"]).upper()))
+        + "</a></p>"
+        for item in alternatives
+    )
+    extra = (
+        "<p>MAX можно подключить к Вашему бизнесу после входа через доступный управляющий канал.</p>"
+        if platform == "max"
+        else ""
+    )
+    body = (
+        "<!doctype html><html lang=ru><head><meta charset=utf-8>"
+        "<meta name=viewport content='width=device-width,initial-scale=1'>"
+        "<title>ClientPlatform · вход</title></head><body><main>"
+        f"<h1>Вход через {escape(requested)} сейчас недоступен</h1>"
+        "<p>Ваш бизнес и данные не зависят от выбранного управляющего мессенджера. "
+        "Выберите доступный вход:</p>"
+        + extra
+        + buttons
+        + "</main></body></html>"
+    )
+    return web.Response(
+        text=body,
+        content_type="text/html",
+        charset="utf-8",
+        headers={
+            "Cache-Control": "no-store, max-age=0",
+            "Referrer-Policy": "no-referrer",
+            "X-Content-Type-Options": "nosniff",
+            "X-Frame-Options": "DENY",
+            "Content-Security-Policy": "default-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+        },
+    )
+
+
 async def _clientplatform_owner_entry_redirect(request: web.Request) -> web.Response:
     """Redirect a stable landing URL into the official owner-control bot."""
 
@@ -350,18 +416,7 @@ async def _clientplatform_owner_entry_redirect(request: web.Request) -> web.Resp
         raise web.HTTPNotFound(text="not found")
     target = build_owner_entry_target(platform, source="landing")
     if target is None or not _owner_entry_available(platform):
-        return web.Response(
-            status=503,
-            text=(
-                "Этот вход ClientPlatform пока не подключён. "
-                "Выберите другой мессенджер или попробуйте позже."
-            ),
-            headers={
-                "Cache-Control": "no-store, max-age=0",
-                "Referrer-Policy": "no-referrer",
-                "X-Content-Type-Options": "nosniff",
-            },
-        )
+        return _owner_entry_fallback_response(platform)
     return web.Response(
         status=302,
         headers={

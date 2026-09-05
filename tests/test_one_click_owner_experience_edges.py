@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, Mock, patch
 from clientplatform.domain.ad_connections import AdConnectionError, AdConnectionStatus
 from clientplatform.domain.bookings import BookingSlotStatus
 from clientplatform.domain.promotions import PromotionChannel, PromotionError
-from clientplatform.domain.tenancy import PlatformRole
+from clientplatform.domain.tenancy import PlatformRole, TenantContext, TenantPermissionDenied
 from handlers import clientplatform_one_click_experience as one_click
 
 
@@ -60,6 +60,15 @@ def message(text: str, username="clientplatform_bot"):
         bot=SimpleNamespace(
             get_me=AsyncMock(return_value=SimpleNamespace(username=username))
         ),
+    )
+
+
+def tenant_actor(role: PlatformRole = PlatformRole.OWNER) -> TenantContext:
+    return TenantContext(
+        business_id="11111111-1111-4111-8111-111111111111",
+        user_id=101,
+        membership_id="22222222-2222-4222-8222-222222222222",
+        role=role,
     )
 
 
@@ -143,7 +152,7 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
             patch.object(one_click.asyncio, "to_thread", new=direct),
             patch.object(one_click.control, "_token_uuid", side_effect=lambda value: value),
             patch.object(one_click.control, "_uuid_token", side_effect=lambda value: value),
-            patch.object(one_click.control, "_actor", new=AsyncMock(return_value="actor")),
+            patch.object(one_click.control, "_actor", new=AsyncMock(return_value=tenant_actor())),
             patch.object(one_click.control, "_callback_message", return_value=target),
         )
 
@@ -264,7 +273,7 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
         data = base_data()
         with (
             patch.object(one_click.asyncio, "to_thread", new=direct),
-            patch.object(one_click.control, "_actor", new=AsyncMock(return_value="actor")),
+            patch.object(one_click.control, "_actor", new=AsyncMock(return_value=tenant_actor())),
             patch.object(one_click.control, "_callback_message", return_value=target),
             patch.object(one_click, "create_slot_promotion", side_effect=PromotionError("fail")),
         ):
@@ -278,7 +287,7 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
         target = out()
         with (
             patch.object(one_click.asyncio, "to_thread", new=direct),
-            patch.object(one_click.control, "_actor", new=AsyncMock(return_value="actor")),
+            patch.object(one_click.control, "_actor", new=AsyncMock(return_value=tenant_actor())),
             patch.object(one_click.control, "_callback_message", return_value=target),
             patch.object(one_click, "create_slot_promotion", return_value=promotion()),
         ):
@@ -292,7 +301,7 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
         target.answer.reset_mock()
         with (
             patch.object(one_click.asyncio, "to_thread", new=direct),
-            patch.object(one_click.control, "_actor", new=AsyncMock(return_value="actor")),
+            patch.object(one_click.control, "_actor", new=AsyncMock(return_value=tenant_actor())),
             patch.object(one_click.control, "_callback_message", return_value=target),
             patch.object(one_click, "create_slot_promotion", return_value=promotion()),
             patch.object(one_click, "create_managed_ad_publication_draft", side_effect=AdConnectionError("fail")),
@@ -307,7 +316,7 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
         data = base_data()
         with (
             patch.object(one_click.asyncio, "to_thread", new=direct),
-            patch.object(one_click.control, "_actor", new=AsyncMock(return_value="actor")),
+            patch.object(one_click.control, "_actor", new=AsyncMock(return_value=tenant_actor())),
             patch.object(one_click.control, "_callback_message", return_value=target),
             patch.object(one_click, "list_ad_publications", side_effect=AdConnectionError("down")),
         ):
@@ -324,7 +333,7 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
         prepare = AsyncMock()
         with (
             patch.object(one_click.asyncio, "to_thread", new=direct),
-            patch.object(one_click.control, "_actor", new=AsyncMock(return_value="actor")),
+            patch.object(one_click.control, "_actor", new=AsyncMock(return_value=tenant_actor())),
             patch.object(
                 one_click,
                 "list_ad_publications",
@@ -439,7 +448,7 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
 
         async def labels_for(handler, data: str) -> list[str]:
             target.answer.reset_mock()
-            actor = SimpleNamespace(role=PlatformRole.OWNER)
+            actor = tenant_actor()
             with (
                 common[1],
                 patch.object(
@@ -480,7 +489,7 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
             [
                 "💬 Подключить мессенджеры",
                 "🧩 Бизнес и возможности",
-                "👤 Сотрудники и тариф",
+                "👤 Сотрудники и доступы",
                 "🛠 Технические проверки",
                 "⬅️ Назад",
             ],
@@ -490,11 +499,46 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("🚀 Получить клиентов", ad_labels)
         self.assertIn("📣 Яндекс Директ", ad_labels)
 
+    def test_more_menu_filters_groups_by_canonical_permissions(self):
+        def labels(role: PlatformRole) -> list[str]:
+            markup = one_click._more_keyboard("business-1", tenant_actor(role))
+            return [button.text for row in markup.inline_keyboard for button in row]
+
+        with patch.object(one_click, "cockpit_web_app_url", return_value=None):
+            self.assertEqual(
+                labels(PlatformRole.MARKETER),
+                ["📈 Продвижение и контент", "⚙️ Настройки бизнеса", "⬅️ Назад"],
+            )
+            self.assertEqual(
+                labels(PlatformRole.SUPPORT),
+                ["👥 Клиенты и продажи", "📅 Услуги и запись", "⚙️ Настройки бизнеса", "⬅️ Назад"],
+            )
+            self.assertEqual(
+                labels(PlatformRole.ANALYST),
+                ["⚙️ Настройки бизнеса", "⬅️ Назад"],
+            )
+
+    async def test_settings_help_mentions_only_buttons_visible_for_role(self):
+        target = out()
+        actor = tenant_actor(PlatformRole.MARKETER)
+        await one_click._send_settings_tools(target, token="business-1", actor=actor)
+        text = target.answer.await_args.args[0]
+        labels = [
+            button.text
+            for row in target.answer.await_args.kwargs["reply_markup"].inline_keyboard
+            for button in row
+        ]
+        self.assertEqual(labels, ["🧩 Бизнес и возможности", "⬅️ Назад"])
+        self.assertIn("Бизнес и возможности", text)
+        self.assertNotIn("Подключить мессенджеры", text)
+        self.assertNotIn("Сотрудники и доступы", text)
+        self.assertNotIn("Технические проверки", text)
+
     def test_settings_menu_hides_privileged_rows_by_role(self):
         def labels(role: PlatformRole) -> list[str]:
             return [
                 title
-                for row in one_click._settings_rows("business-1", role)
+                for row in one_click._settings_rows("business-1", tenant_actor(role))[0]
                 for title, _callback_data in row
             ]
 
@@ -503,7 +547,7 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
             [
                 "💬 Подключить мессенджеры",
                 "🧩 Бизнес и возможности",
-                "👤 Сотрудники и тариф",
+                "👤 Сотрудники и доступы",
                 "🛠 Технические проверки",
                 "⬅️ Назад",
             ],
@@ -525,6 +569,94 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
             labels(PlatformRole.MARKETER),
             ["🧩 Бизнес и возможности", "⬅️ Назад"],
         )
+
+
+    async def test_cockpit_section_launchers_cover_all_owner_surfaces(self):
+        target = out()
+        actor = tenant_actor(PlatformRole.OWNER)
+        expected_labels = {
+            "calendar": "📅 Записи клиентов",
+            "sales": "💬 Обращения и продажи",
+            "content": "📚 Материалы и программы",
+            "growth": "🧪 A/B креативы",
+            "analytics": "📊 Результаты Яндекс",
+            "automation": "🤖 Открыть автоматизацию",
+            "connections": "💬 Подключить мессенджеры",
+            "team": "👤 Сотрудники и доступы",
+            "settings": "🧩 Бизнес и возможности",
+        }
+        with (
+            patch.object(one_click.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(one_click.control, "_uuid_token", side_effect=lambda value: value),
+        ):
+            for section, expected in expected_labels.items():
+                with self.subTest(section=section):
+                    target.answer.reset_mock()
+                    await one_click.send_one_click_section(
+                        target,
+                        user_id=101,
+                        business_id="business-1",
+                        section=section,
+                    )
+                    labels = [
+                        button.text
+                        for row in target.answer.await_args.kwargs["reply_markup"].inline_keyboard
+                        for button in row
+                    ]
+                    self.assertIn(expected, labels)
+                    self.assertTrue("🏠 Главная" in labels or "⬅️ Назад" in labels)
+
+    async def test_cockpit_section_launchers_keep_read_only_roles_read_only(self):
+        target = out()
+        analyst = tenant_actor(PlatformRole.ANALYST)
+        with (
+            patch.object(one_click.control, "_actor", new=AsyncMock(return_value=analyst)),
+            patch.object(one_click.control, "_uuid_token", side_effect=lambda value: value),
+        ):
+            await one_click.send_one_click_section(
+                target,
+                user_id=101,
+                business_id="business-1",
+                section="content",
+            )
+            labels = [
+                button.text
+                for row in target.answer.await_args.kwargs["reply_markup"].inline_keyboard
+                for button in row
+            ]
+            self.assertEqual(labels, ["📚 Материалы и программы", "🏠 Главная"])
+
+            target.answer.reset_mock()
+            await one_click.send_one_click_section(
+                target,
+                user_id=101,
+                business_id="business-1",
+                section="analytics",
+            )
+            labels = [
+                button.text
+                for row in target.answer.await_args.kwargs["reply_markup"].inline_keyboard
+                for button in row
+            ]
+            self.assertIn("📊 Результаты Яндекс", labels)
+            self.assertIn("🧪 A/B креативы", labels)
+            self.assertNotIn("💰 Деньги и результат", labels)
+            self.assertNotIn("📣 Реклама и продвижение", labels)
+
+            with self.assertRaises(TenantPermissionDenied):
+                await one_click.send_one_click_section(
+                    target,
+                    user_id=101,
+                    business_id="business-1",
+                    section="team",
+                )
+            with self.assertRaises(ValueError):
+                await one_click.send_one_click_section(
+                    target,
+                    user_id=101,
+                    business_id="business-1",
+                    section="unknown",
+                )
 
 
 if __name__ == "__main__":
