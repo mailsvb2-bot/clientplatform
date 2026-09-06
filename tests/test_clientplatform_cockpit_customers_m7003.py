@@ -172,10 +172,10 @@ class CockpitCustomersM7003Tests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("/clientplatform/cockpit/customers", script)
         self.assertIn("/clientplatform/cockpit/customers/detail", script)
-        self.assertIn("/clientplatform/cockpit/customers/action-route", script)
-        self.assertIn("if (openResolvedTelegramUrl(String(routeUrl || ''))) return;", script)
-        self.assertIn("This path runs after await, so use regular same-window navigation.", script)
-        self.assertIn("openTelegramLink", script)
+        self.assertIn("/clientplatform/cockpit/customers/action-open", script)
+        self.assertIn("await post('/clientplatform/cockpit/customers/action-open'", script)
+        self.assertIn("tg.close()", script)
+        self.assertNotIn("openTelegramLink", script)
         self.assertIn("ClientPlatformCockpitNavigation", script)
         self.assertIn("enterCustomers", script)
         self.assertIn("back:handleBack", script)
@@ -189,7 +189,7 @@ class CockpitCustomersM7003Tests(unittest.TestCase):
             "searchForm.addEventListener", 1
         )[0]
         self.assertIn("loadPage", refresh_handler)
-        self.assertNotIn("action-route", refresh_handler)
+        self.assertNotIn("action-open", refresh_handler)
 
     def test_resolver_rechecks_current_tenant_after_cockpit_scope(self) -> None:
         context = type(

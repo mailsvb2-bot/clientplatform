@@ -203,28 +203,14 @@ async def test_cockpit_action_start_rechecks_alias_and_opens_existing_sales_view
         ),
     )
 
-    async def handoff(_message: Any, *, user_id: int, business_id: str) -> None:
-        calls.append(("handoff", user_id, business_id, None))
+    async def dispatch(_message: Any, *, user_id: int, route: Any) -> None:
+        kind = "handoff" if route.kind == "h" else "work" if route.kind == "w" else "lead"
+        calls.append((kind, user_id, route.business_id, route.lead_id))
 
-    async def work(_message: Any, *, user_id: int, business_id: str) -> None:
-        calls.append(("work", user_id, business_id, None))
-
-    async def lead(
-        _message: Any, *, user_id: int, business_id: str, lead_id: str
-    ) -> None:
-        calls.append(("lead", user_id, business_id, lead_id))
-
-    sales = SimpleNamespace(
-        send_sales_handoff_view=handoff,
-        send_sales_work_view=work,
-    )
-    operations = SimpleNamespace(send_sales_lead_view=lead)
     monkeypatch.setattr(
-        entry.importlib,
-        "import_module",
-        lambda name, _package=None: operations
-        if name == ".clientplatform_sales_operations"
-        else sales,
+        entry.clientplatform_cockpit_dispatch,
+        "send_cockpit_action_route",
+        dispatch,
     )
 
     await entry._dispatch_clientplatform_start(
@@ -254,10 +240,14 @@ async def test_cockpit_action_start_fails_closed_after_membership_revocation(
         ),
     )
 
-    def no_route_import(*_args: Any, **_kwargs: Any):
-        raise AssertionError("revoked membership must stop before sales presentation")
+    async def no_dispatch(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("revoked membership must stop before cockpit presentation")
 
-    monkeypatch.setattr(entry.importlib, "import_module", no_route_import)
+    monkeypatch.setattr(
+        entry.clientplatform_cockpit_dispatch,
+        "send_cockpit_action_route",
+        no_dispatch,
+    )
 
     await entry._dispatch_clientplatform_start(
         message, state, user_id=42, managed_bot_business_id=None

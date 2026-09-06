@@ -38,6 +38,8 @@ from clientplatform.application.sales_ui import (
     list_sales_work,
 )
 
+from .clientplatform_message_target import ClientPlatformMessageTarget
+
 control = importlib.import_module(".clientplatform_control", __package__)
 
 router = Router(name="clientplatform_sales")
@@ -306,7 +308,7 @@ async def approve_retention_candidate(callback: CallbackQuery, state: FSMContext
 
 
 async def send_sales_work_view(
-    message: Message,
+    message: ClientPlatformMessageTarget,
     *,
     user_id: int,
     business_id: str,
@@ -555,7 +557,7 @@ async def draft_sales_answer(callback: CallbackQuery, state: FSMContext) -> None
 
 
 async def send_sales_handoff_view(
-    message: Message,
+    message: ClientPlatformMessageTarget,
     *,
     user_id: int,
     business_id: str,

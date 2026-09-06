@@ -88,24 +88,25 @@
     showList();
   };
 
-  const openResolvedTelegramUrl = (url) => {
-    if (!String(url || '').startsWith('https://t.me/')) return false;
-    if (tg && typeof tg.openTelegramLink === 'function') tg.openTelegramLink(url);
-    else window.location.assign(url);
-    return true;
+  const closeAfterDelivery = () => {
+    if (tg && typeof tg.close === 'function') { tg.close(); return true; }
+    return false;
   };
 
-  const openActionRouteFallback = async (customerId, expectedActionKey) => {
+  const openAction = async (customerId, expectedActionKey, button) => {
     setBusy(true);
+    if (button) button.disabled = true;
     try {
-      const route = await post('/clientplatform/cockpit/customers/action-route', {
+      await post('/clientplatform/cockpit/customers/action-open', {
         customer_id: customerId,
         expected_action_key: expectedActionKey,
       });
-      const url = String(route.route_url || '');
-      if (!url.startsWith('https://t.me/')) throw new Error('customer_action_route_unavailable');
-      // This path runs after await, so use regular same-window navigation.
-      window.location.assign(url);
+      if (tg && tg.HapticFeedback && typeof tg.HapticFeedback.notificationOccurred === 'function') {
+        tg.HapticFeedback.notificationOccurred('success');
+      }
+      if (!closeAfterDelivery()) {
+        text(limitations, 'Следующий шаг открыт в чате с ботом. Вернитесь в Telegram.');
+      }
     } catch (error) {
       text(
         limitations,
@@ -114,13 +115,9 @@
           : 'Не удалось открыть следующий шаг. Обновите карточку и попробуйте ещё раз.',
       );
     } finally {
+      if (button) button.disabled = false;
       setBusy(false);
     }
-  };
-
-  const openActionRoute = (customerId, expectedActionKey, routeUrl) => {
-    if (openResolvedTelegramUrl(String(routeUrl || ''))) return;
-    void openActionRouteFallback(customerId, expectedActionKey);
   };
 
   const renderDetail = (payload) => {
@@ -156,9 +153,9 @@
       text(label, payload.next_action.title);
       text(reason, payload.next_action.reason);
       button.append(label, reason);
-      button.addEventListener('click', () =>
-        openActionRoute(payload.customer_id, payload.next_action.action_key, payload.next_action.route_url),
-      );
+      button.addEventListener('click', () => {
+        void openAction(payload.customer_id, payload.next_action.action_key, button);
+      });
       action.appendChild(button);
     } else {
       const empty = document.createElement('p');

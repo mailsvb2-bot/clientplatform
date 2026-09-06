@@ -37,6 +37,8 @@ from clientplatform.application.sales_ui import (
 )
 from clientplatform.domain.sales import SalesError, SalesLeadStage
 
+from .clientplatform_message_target import ClientPlatformMessageTarget
+
 control = importlib.import_module(".clientplatform_control", __package__)
 
 router = Router(name="clientplatform_sales_operations")
@@ -304,7 +306,7 @@ def _detail_keyboard(
 
 
 async def send_sales_lead_view(
-    message: Message,
+    message: ClientPlatformMessageTarget,
     *,
     user_id: int,
     business_id: str,

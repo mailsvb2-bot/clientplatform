@@ -32,8 +32,15 @@ class NativeProcessSourceContractTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn("assert_native_only_runtime_policy()", source)
+        self.assertIn("start_messenger_webhook_runtime(", source)
+        self.assertIn("bot=bot,", source)
+        self.assertIn("dispatcher=dp,", source)
         self.assertIn(
-            "start_messenger_webhook_runtime(bot=bot, dispatcher=dp)",
+            "cockpit_section_sender=clientplatform_cockpit_dispatch.send_cockpit_section,",
+            source,
+        )
+        self.assertIn(
+            "cockpit_action_sender=clientplatform_cockpit_dispatch.send_cockpit_action_route,",
             source,
         )
         self.assertIn(

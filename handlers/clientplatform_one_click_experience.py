@@ -33,6 +33,7 @@ from . import clientplatform_ad_connections as ad
 from . import clientplatform_control as control
 from . import clientplatform_goal_first_safety as goal_contract
 from . import clientplatform_simple_experience as simple
+from .clientplatform_message_target import ClientPlatformMessageTarget
 
 router = Router(name="clientplatform_one_click_experience")
 router.message.filter(control.ClientPlatformControlEnabled())
@@ -632,7 +633,7 @@ def _client_tools_rows(token: str, actor) -> tuple[list[list[tuple[str, str]]], 
     return rows, help_lines
 
 
-async def _send_client_tools(message: Message, *, token: str, actor) -> None:
+async def _send_client_tools(message: ClientPlatformMessageTarget, *, token: str, actor) -> None:
     rows, help_lines = _client_tools_rows(token, actor)
     body = "\n".join(help_lines) or "Для Вашей роли здесь сейчас нет доступных действий."
     await message.answer(
@@ -666,7 +667,7 @@ def _content_tools_rows(token: str, actor) -> tuple[list[list[tuple[str, str]]],
     rows.append([(nav.BACK.label, f"cpo:more:{token}")])
     return rows, help_lines
 
-async def _send_content_tools(message: Message, *, token: str, actor) -> None:
+async def _send_content_tools(message: ClientPlatformMessageTarget, *, token: str, actor) -> None:
     rows, help_lines = _content_tools_rows(token, actor)
     body = "\n".join(help_lines) or "Для Вашей роли здесь сейчас нет доступных действий."
     await message.answer(
@@ -692,7 +693,7 @@ def _settings_rows(token: str, actor) -> tuple[list[list[tuple[str, str]]], list
     rows.append([(nav.BACK.label, f"cpo:more:{token}")])
     return rows, help_lines
 
-async def _send_settings_tools(message: Message, *, token: str, actor) -> None:
+async def _send_settings_tools(message: ClientPlatformMessageTarget, *, token: str, actor) -> None:
     rows, help_lines = _settings_rows(token, actor)
     body = "\n".join(help_lines) or "Для Вашей роли здесь сейчас нет доступных настроек."
     await message.answer(
@@ -701,7 +702,7 @@ async def _send_settings_tools(message: Message, *, token: str, actor) -> None:
     )
 
 
-async def _send_work_tools(message: Message, *, token: str, actor) -> None:
+async def _send_work_tools(message: ClientPlatformMessageTarget, *, token: str, actor) -> None:
     if not (
         _allowed(actor, actor.assert_can_view_customer_records)
         or _allowed(actor, actor.assert_can_manage_programs)
@@ -769,7 +770,7 @@ async def open_work_tools(callback: CallbackQuery) -> None:
 
 
 async def send_one_click_section(
-    message: Message,
+    message: ClientPlatformMessageTarget,
     *,
     user_id: int,
     business_id: str,

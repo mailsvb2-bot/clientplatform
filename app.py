@@ -126,6 +126,7 @@ from core.middlewares import (
 )
 
 from handlers import clientplatform_entry
+from handlers import clientplatform_cockpit_dispatch
 
 
 async def create_application():
@@ -165,7 +166,12 @@ async def create_application():
             start_db_writer()
             db_writer_started = True
             try:
-                webhook_runtime = await start_messenger_webhook_runtime(bot=bot, dispatcher=dp)
+                webhook_runtime = await start_messenger_webhook_runtime(
+                    bot=bot,
+                    dispatcher=dp,
+                    cockpit_section_sender=clientplatform_cockpit_dispatch.send_cockpit_section,
+                    cockpit_action_sender=clientplatform_cockpit_dispatch.send_cockpit_action_route,
+                )
             except (OSError, RuntimeError, ValueError, TypeError, AttributeError, KeyError):  # validator: allow-wide-except
                 webhook_runtime = None
                 selected_transport = telegram_transport()
