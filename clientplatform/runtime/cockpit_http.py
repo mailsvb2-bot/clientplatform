@@ -21,6 +21,12 @@ from clientplatform.application.cockpit_home import (
     resolve_cockpit_home,
 )
 from clientplatform.application.cockpit_calendar import resolve_cockpit_calendar
+from clientplatform.application.cockpit_calendar_management import (
+    cancel_cockpit_calendar_slot,
+    create_cockpit_calendar_slot,
+    replace_cockpit_calendar_slot,
+    resolve_cockpit_calendar_management,
+)
 from clientplatform.application.cockpit_connections import (
     issue_cockpit_messenger_setup,
     resolve_cockpit_connections,
@@ -36,6 +42,8 @@ from clientplatform.application.cockpit_customers import (
     resolve_cockpit_customer_detail,
     resolve_cockpit_customer_page,
 )
+from clientplatform.domain.activity import ActivityInvariantViolation
+from clientplatform.domain.bookings import BookingInvariantViolation, BookingNotFound
 from clientplatform.domain.customers import CustomerNotFound
 from clientplatform.domain.tenancy import TenantAccessDenied, TenantPermissionDenied
 from clientplatform.runtime.telegram_webapp_auth import (
@@ -107,7 +115,11 @@ _HTML = """<!doctype html>
 <div class="view-toolbar"><button id="calendar-more" class="secondary" type="button">Все разделы</button><button id="calendar-refresh" class="secondary" type="button">Обновить</button></div>
 <div class="home-heading"><p class="eyebrow">Расписание</p><h2>Записи</h2><p id="calendar-meta"></p></div>
 <div id="calendar-list"></div><p id="calendar-empty" class="muted"></p><p id="calendar-limitations" class="muted"></p>
-<button id="calendar-manage" class="primary-cta" type="button">Изменить расписание</button>
+<button id="calendar-manage" class="primary-cta" type="button" hidden>Добавить свободное время</button>
+<section id="calendar-manage-panel" class="home-block" hidden><h3 id="calendar-form-title">Добавить свободное время</h3>
+<form id="calendar-form" class="calendar-form"><label for="calendar-offering">Услуга</label><select id="calendar-offering" required></select><label for="calendar-start">Дата и время бизнеса</label><input id="calendar-start" type="datetime-local" required><label for="calendar-duration">Длительность, минут</label><input id="calendar-duration" type="number" min="15" max="1440" step="5" value="60" required><button id="calendar-save" class="primary-cta" type="submit">Опубликовать время</button><button id="calendar-form-cancel" class="secondary calendar-form-cancel" type="button" hidden>Отменить изменение</button></form>
+<p id="calendar-manage-message" class="muted"></p></section>
+<button id="calendar-advanced" class="secondary calendar-advanced" type="button">Дополнительные действия в боте</button>
 </section>
 <section id="sales-view" class="workspace-view" aria-live="polite" hidden>
 <div class="view-toolbar"><button id="sales-more" class="secondary" type="button">Все разделы</button><button id="sales-refresh" class="secondary" type="button">Обновить</button></div>
@@ -142,7 +154,7 @@ _HTML = """<!doctype html>
 </nav>
 </body></html>"""
 
-_CSS = """:root{--bg:var(--tg-theme-bg-color,#f4f6f8);--surface:var(--tg-theme-secondary-bg-color,#fff);--text:var(--tg-theme-text-color,#17202a);--hint:var(--tg-theme-hint-color,#66717d);--link:var(--tg-theme-link-color,#2678d9);--button:var(--tg-theme-button-color,#2678d9);--button-text:var(--tg-theme-button-text-color,#fff);--border:rgba(127,127,127,.24)}*{box-sizing:border-box}[hidden]{display:none!important}body{margin:0;font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:var(--bg);color:var(--text);padding:0}button,select,input,textarea{font:inherit;color:inherit}.shell{max-width:760px;margin:0 auto;padding:calc(18px + env(safe-area-inset-top)) 16px calc(104px + env(safe-area-inset-bottom))}header{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:16px}.eyebrow{margin:0 0 4px;font-size:12px;font-weight:800;letter-spacing:.045em;color:var(--hint)}h1{margin:0;font-size:29px;line-height:1.1}h2,h3{color:var(--text)}.pill{font-size:12px;background:var(--surface);border:1px solid var(--border);border-radius:999px;padding:8px 10px;max-width:46%;text-align:center}.business,.status,.explanation,.workspace-view{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:14px;margin-bottom:14px}.business label{display:block;font-size:13px;font-weight:750;margin-bottom:8px}select{width:100%;min-height:46px;border:1px solid var(--border);border-radius:12px;background:var(--surface);padding:0 12px}.status{font-size:14px;line-height:1.4}.status .secondary{margin-top:10px}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.card{min-height:126px;text-align:left;border:1px solid var(--border);border-radius:16px;background:var(--surface);padding:15px;position:relative;touch-action:manipulation;cursor:pointer}.card:active,.customer-row:active,.sales-card:active,.action-card:active{transform:scale(.995)}.card:disabled{opacity:.7}.card h2{font-size:17px;margin:0 0 7px;padding-right:56px}.card p{font-size:13px;line-height:1.38;margin:0;color:var(--hint)}.card.planned{border-style:dashed}.card.restricted{opacity:.72}.badge{position:absolute;right:10px;top:10px;font-size:10px;font-weight:800;border-radius:999px;padding:4px 7px;background:var(--bg);color:var(--hint)}.badge.available{background:var(--button);color:var(--button-text)}.explanation h2{margin:14px 0 8px}.explanation p{line-height:1.5}.secondary,.action-card{min-height:44px;border:1px solid var(--border);border-radius:12px;padding:0 14px;background:var(--bg);font-weight:700}.view-toolbar{display:flex;justify-content:space-between;gap:10px}.home-heading h2{margin:14px 0 4px}.home-heading p{margin:0 0 12px;color:var(--hint)}.metrics,.money{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:12px 0}.metric,.money-card,.attention-card{border:1px solid var(--border);border-radius:14px;padding:12px}.metric strong,.money-card strong{display:block;font-size:24px;margin-top:4px}.metric span,.money-card span,.muted{font-size:12px;color:var(--hint);line-height:1.4}.home-block{margin-top:18px}.home-block h3{margin:0 0 9px;font-size:16px}.primary-block{border:1px solid var(--button);border-radius:16px;padding:14px;background:color-mix(in srgb,var(--button) 7%,var(--surface))}.primary-block h3{font-size:19px}.attention-card{margin-bottom:8px}.action-card{display:block;width:100%;text-align:left;margin-bottom:8px;touch-action:manipulation}.action-card.primary-action{min-height:76px;background:var(--button);color:var(--button-text);border-color:var(--button);font-size:16px}.action-card small{display:block;font-weight:400;margin-top:4px;color:var(--hint);line-height:1.35}.action-card.primary-action small{color:var(--button-text);opacity:.84}.customer-search label{display:block;font-size:13px;font-weight:750;margin-bottom:8px}.customer-search>div{display:flex;gap:8px}.customer-search input{min-width:0;flex:1;min-height:44px;border:1px solid var(--border);border-radius:12px;background:var(--surface);color:var(--text);padding:0 12px}.customer-search button,.primary-cta{min-height:46px;border:0;border-radius:12px;background:var(--button);color:var(--button-text);padding:0 16px;font-weight:800}.primary-cta{display:block;width:100%;margin-top:14px}.customer-row,.sales-card{display:block;width:100%;text-align:left;border:1px solid var(--border);border-radius:14px;background:var(--surface);padding:13px;margin-bottom:8px;touch-action:manipulation}.customer-row strong{display:block}.customer-row small,.contact-card small,.timeline-card small,.schedule-card small,.sales-card small{display:block;color:var(--hint);margin-top:4px}.pager{display:flex;justify-content:space-between;gap:10px;margin-top:12px}.contact-card,.timeline-card,.schedule-card{border:1px solid var(--border);border-radius:14px;padding:12px;margin-bottom:8px}.schedule-card-top,.sales-card-top{display:flex;justify-content:space-between;gap:12px;align-items:center}.schedule-card p,.sales-card p{margin:8px 0 0;line-height:1.35}.schedule-status,.sales-stage{font-size:11px;font-weight:800;border-radius:999px;padding:4px 8px;background:var(--bg);white-space:nowrap}.schedule-status.booked{background:var(--button);color:var(--button-text)}.sales-card.overdue{border-color:var(--button)}.connection-card{border:1px solid var(--border);border-radius:14px;padding:13px;margin-bottom:8px}.connection-card-top{display:flex;justify-content:space-between;gap:12px;align-items:center}.connection-card p{margin:8px 0;line-height:1.4}.connection-state{font-size:11px;font-weight:800;border-radius:999px;padding:4px 8px;background:var(--bg);text-align:right}.connection-card.active .connection-state{background:var(--button);color:var(--button-text)}.connection-connect{width:100%;margin-top:6px}.settings-form label{display:block;font-size:13px;font-weight:750;margin:14px 0 7px}.settings-form input,.settings-form textarea{width:100%;border:1px solid var(--border);border-radius:12px;background:var(--surface);padding:11px 12px}.settings-form input{min-height:46px}.settings-form textarea{resize:vertical;line-height:1.4}.primary-nav{position:fixed;left:50%;bottom:0;transform:translateX(-50%);width:min(760px,100%);z-index:30;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));padding:8px 8px calc(8px + env(safe-area-inset-bottom));background:var(--surface);border-top:1px solid var(--border);box-shadow:0 -8px 28px rgba(0,0,0,.08)}.primary-nav button{min-width:0;min-height:52px;border:0;background:transparent;border-radius:12px;color:var(--hint);font-size:11px;font-weight:750;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px}.primary-nav button.active,.primary-nav button[aria-current=page]{color:var(--button);background:var(--bg)}.primary-icon{font-size:12px;line-height:1}.busy{opacity:.66;pointer-events:none}@supports not (color:color-mix(in srgb,black,white)){.primary-block{background:var(--surface)}}@media(max-width:520px){.grid,.metrics,.money{grid-template-columns:1fr}.shell{padding-left:12px;padding-right:12px}h1{font-size:27px}.pill{max-width:52%}.card{min-height:auto}.view-toolbar{position:sticky;top:env(safe-area-inset-top);z-index:2;background:var(--surface);padding:2px 0 8px}.primary-nav{border-radius:16px 16px 0 0}.primary-nav button{padding:4px 1px}}"""
+_CSS = """:root{--bg:var(--tg-theme-bg-color,#f4f6f8);--surface:var(--tg-theme-secondary-bg-color,#fff);--text:var(--tg-theme-text-color,#17202a);--hint:var(--tg-theme-hint-color,#66717d);--link:var(--tg-theme-link-color,#2678d9);--button:var(--tg-theme-button-color,#2678d9);--button-text:var(--tg-theme-button-text-color,#fff);--border:rgba(127,127,127,.24)}*{box-sizing:border-box}[hidden]{display:none!important}body{margin:0;font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:var(--bg);color:var(--text);padding:0}button,select,input,textarea{font:inherit;color:inherit}.shell{max-width:760px;margin:0 auto;padding:calc(18px + env(safe-area-inset-top)) 16px calc(104px + env(safe-area-inset-bottom))}header{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:16px}.eyebrow{margin:0 0 4px;font-size:12px;font-weight:800;letter-spacing:.045em;color:var(--hint)}h1{margin:0;font-size:29px;line-height:1.1}h2,h3{color:var(--text)}.pill{font-size:12px;background:var(--surface);border:1px solid var(--border);border-radius:999px;padding:8px 10px;max-width:46%;text-align:center}.business,.status,.explanation,.workspace-view{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:14px;margin-bottom:14px}.business label{display:block;font-size:13px;font-weight:750;margin-bottom:8px}select{width:100%;min-height:46px;border:1px solid var(--border);border-radius:12px;background:var(--surface);padding:0 12px}.status{font-size:14px;line-height:1.4}.status .secondary{margin-top:10px}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.card{min-height:126px;text-align:left;border:1px solid var(--border);border-radius:16px;background:var(--surface);padding:15px;position:relative;touch-action:manipulation;cursor:pointer}.card:active,.customer-row:active,.sales-card:active,.action-card:active{transform:scale(.995)}.card:disabled{opacity:.7}.card h2{font-size:17px;margin:0 0 7px;padding-right:56px}.card p{font-size:13px;line-height:1.38;margin:0;color:var(--hint)}.card.planned{border-style:dashed}.card.restricted{opacity:.72}.badge{position:absolute;right:10px;top:10px;font-size:10px;font-weight:800;border-radius:999px;padding:4px 7px;background:var(--bg);color:var(--hint)}.badge.available{background:var(--button);color:var(--button-text)}.explanation h2{margin:14px 0 8px}.explanation p{line-height:1.5}.secondary,.action-card{min-height:44px;border:1px solid var(--border);border-radius:12px;padding:0 14px;background:var(--bg);font-weight:700}.view-toolbar{display:flex;justify-content:space-between;gap:10px}.home-heading h2{margin:14px 0 4px}.home-heading p{margin:0 0 12px;color:var(--hint)}.metrics,.money{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:12px 0}.metric,.money-card,.attention-card{border:1px solid var(--border);border-radius:14px;padding:12px}.metric strong,.money-card strong{display:block;font-size:24px;margin-top:4px}.metric span,.money-card span,.muted{font-size:12px;color:var(--hint);line-height:1.4}.home-block{margin-top:18px}.home-block h3{margin:0 0 9px;font-size:16px}.primary-block{border:1px solid var(--button);border-radius:16px;padding:14px;background:color-mix(in srgb,var(--button) 7%,var(--surface))}.primary-block h3{font-size:19px}.attention-card{margin-bottom:8px}.action-card{display:block;width:100%;text-align:left;margin-bottom:8px;touch-action:manipulation}.action-card.primary-action{min-height:76px;background:var(--button);color:var(--button-text);border-color:var(--button);font-size:16px}.action-card small{display:block;font-weight:400;margin-top:4px;color:var(--hint);line-height:1.35}.action-card.primary-action small{color:var(--button-text);opacity:.84}.customer-search label{display:block;font-size:13px;font-weight:750;margin-bottom:8px}.customer-search>div{display:flex;gap:8px}.customer-search input{min-width:0;flex:1;min-height:44px;border:1px solid var(--border);border-radius:12px;background:var(--surface);color:var(--text);padding:0 12px}.customer-search button,.primary-cta{min-height:46px;border:0;border-radius:12px;background:var(--button);color:var(--button-text);padding:0 16px;font-weight:800}.primary-cta{display:block;width:100%;margin-top:14px}.customer-row,.sales-card{display:block;width:100%;text-align:left;border:1px solid var(--border);border-radius:14px;background:var(--surface);padding:13px;margin-bottom:8px;touch-action:manipulation}.customer-row strong{display:block}.customer-row small,.contact-card small,.timeline-card small,.schedule-card small,.sales-card small{display:block;color:var(--hint);margin-top:4px}.pager{display:flex;justify-content:space-between;gap:10px;margin-top:12px}.contact-card,.timeline-card,.schedule-card{border:1px solid var(--border);border-radius:14px;padding:12px;margin-bottom:8px}.schedule-card-top,.sales-card-top{display:flex;justify-content:space-between;gap:12px;align-items:center}.schedule-card p,.sales-card p{margin:8px 0 0;line-height:1.35}.schedule-status,.sales-stage{font-size:11px;font-weight:800;border-radius:999px;padding:4px 8px;background:var(--bg);white-space:nowrap}.schedule-status.booked{background:var(--button);color:var(--button-text)}.sales-card.overdue{border-color:var(--button)}.connection-card{border:1px solid var(--border);border-radius:14px;padding:13px;margin-bottom:8px}.connection-card-top{display:flex;justify-content:space-between;gap:12px;align-items:center}.connection-card p{margin:8px 0;line-height:1.4}.connection-state{font-size:11px;font-weight:800;border-radius:999px;padding:4px 8px;background:var(--bg);text-align:right}.connection-card.active .connection-state{background:var(--button);color:var(--button-text)}.connection-connect{width:100%;margin-top:6px}.settings-form label{display:block;font-size:13px;font-weight:750;margin:14px 0 7px}.settings-form input,.settings-form textarea{width:100%;border:1px solid var(--border);border-radius:12px;background:var(--surface);padding:11px 12px}.settings-form input{min-height:46px}.settings-form textarea{resize:vertical;line-height:1.4}.calendar-form label{display:block;font-size:13px;font-weight:750;margin:14px 0 7px}.calendar-form input,.calendar-form select{width:100%;min-height:46px;border:1px solid var(--border);border-radius:12px;background:var(--surface);padding:0 12px}.calendar-form-cancel{width:100%;margin-top:8px}.calendar-advanced{width:100%;margin-top:10px}.schedule-actions{display:flex;gap:8px;margin-top:10px}.schedule-actions button{flex:1;min-height:40px;border:1px solid var(--border);border-radius:10px;background:var(--bg);font-weight:750}.primary-nav{position:fixed;left:50%;bottom:0;transform:translateX(-50%);width:min(760px,100%);z-index:30;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));padding:8px 8px calc(8px + env(safe-area-inset-bottom));background:var(--surface);border-top:1px solid var(--border);box-shadow:0 -8px 28px rgba(0,0,0,.08)}.primary-nav button{min-width:0;min-height:52px;border:0;background:transparent;border-radius:12px;color:var(--hint);font-size:11px;font-weight:750;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px}.primary-nav button.active,.primary-nav button[aria-current=page]{color:var(--button);background:var(--bg)}.primary-icon{font-size:12px;line-height:1}.busy{opacity:.66;pointer-events:none}@supports not (color:color-mix(in srgb,black,white)){.primary-block{background:var(--surface)}}@media(max-width:520px){.grid,.metrics,.money{grid-template-columns:1fr}.shell{padding-left:12px;padding-right:12px}h1{font-size:27px}.pill{max-width:52%}.card{min-height:auto}.view-toolbar{position:sticky;top:env(safe-area-inset-top);z-index:2;background:var(--surface);padding:2px 0 8px}.primary-nav{border-radius:16px 16px 0 0}.primary-nav button{padding:4px 1px}}"""
 
 _JS = r"""(() => {
   'use strict';
@@ -599,6 +611,148 @@ async def cockpit_calendar(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, **calendar.as_dict()}, headers=_base_headers())
 
 
+async def cockpit_calendar_management(request: web.Request) -> web.Response:
+    scope = await _verified_scope(request)
+    if isinstance(scope, web.Response):
+        return scope
+    user_id, requested_business = scope
+    try:
+        snapshot = await asyncio.to_thread(
+            resolve_cockpit_calendar_management,
+            telegram_user_id=user_id,
+            requested_business_id=requested_business,
+        )
+    except TenantAccessDenied:
+        return _error(403, "business_access_denied")
+    except TenantPermissionDenied:
+        return _error(403, "calendar_manage_denied")
+    except ValueError:
+        return _error(400, "invalid_calendar_request")
+    except OSError:
+        return _error(503, "calendar_unavailable")
+    except RuntimeError:
+        return _error(503, "calendar_unavailable")
+    return web.json_response({"ok": True, **snapshot.as_dict()}, headers=_base_headers())
+
+
+async def cockpit_calendar_create(request: web.Request) -> web.Response:
+    scope = await _verified_payload_scope(request)
+    if isinstance(scope, web.Response):
+        return scope
+    user_id, requested_business, payload = scope
+    offering_id = payload.get("offering_id")
+    local_start = payload.get("local_start")
+    duration = payload.get("duration_minutes")
+    if (
+        not isinstance(offering_id, str)
+        or not isinstance(local_start, str)
+        or isinstance(duration, bool)
+        or not isinstance(duration, int)
+    ):
+        return _error(400, "invalid_calendar_change")
+    try:
+        slot = await asyncio.to_thread(
+            create_cockpit_calendar_slot,
+            telegram_user_id=user_id,
+            requested_business_id=requested_business,
+            offering_id=offering_id,
+            local_start=local_start,
+            duration_minutes=duration,
+        )
+    except TenantAccessDenied:
+        return _error(403, "business_access_denied")
+    except TenantPermissionDenied:
+        return _error(403, "calendar_manage_denied")
+    except BookingNotFound:
+        return _error(404, "calendar_slot_not_found")
+    except BookingInvariantViolation:
+        return _error(409, "calendar_change_rejected")
+    except ActivityInvariantViolation:
+        return _error(409, "calendar_change_rejected")
+    except ValueError:
+        return _error(400, "invalid_calendar_change")
+    except OSError:
+        return _error(503, "calendar_unavailable")
+    except RuntimeError:
+        return _error(503, "calendar_unavailable")
+    return web.json_response({"ok": True, "slot_id": slot.slot.id}, headers=_base_headers())
+
+
+async def cockpit_calendar_replace(request: web.Request) -> web.Response:
+    scope = await _verified_payload_scope(request)
+    if isinstance(scope, web.Response):
+        return scope
+    user_id, requested_business, payload = scope
+    slot_id = payload.get("slot_id")
+    local_start = payload.get("local_start")
+    duration = payload.get("duration_minutes")
+    if (
+        not isinstance(slot_id, str)
+        or not isinstance(local_start, str)
+        or isinstance(duration, bool)
+        or not isinstance(duration, int)
+    ):
+        return _error(400, "invalid_calendar_change")
+    try:
+        slot = await asyncio.to_thread(
+            replace_cockpit_calendar_slot,
+            telegram_user_id=user_id,
+            requested_business_id=requested_business,
+            slot_id=slot_id,
+            local_start=local_start,
+            duration_minutes=duration,
+        )
+    except TenantAccessDenied:
+        return _error(403, "business_access_denied")
+    except TenantPermissionDenied:
+        return _error(403, "calendar_manage_denied")
+    except BookingNotFound:
+        return _error(404, "calendar_slot_not_found")
+    except BookingInvariantViolation:
+        return _error(409, "calendar_change_rejected")
+    except ActivityInvariantViolation:
+        return _error(409, "calendar_change_rejected")
+    except ValueError:
+        return _error(400, "invalid_calendar_change")
+    except OSError:
+        return _error(503, "calendar_unavailable")
+    except RuntimeError:
+        return _error(503, "calendar_unavailable")
+    return web.json_response({"ok": True, "slot_id": slot.slot.id}, headers=_base_headers())
+
+
+async def cockpit_calendar_cancel(request: web.Request) -> web.Response:
+    scope = await _verified_payload_scope(request)
+    if isinstance(scope, web.Response):
+        return scope
+    user_id, requested_business, payload = scope
+    slot_id = payload.get("slot_id")
+    if not isinstance(slot_id, str):
+        return _error(400, "invalid_calendar_change")
+    try:
+        slot = await asyncio.to_thread(
+            cancel_cockpit_calendar_slot,
+            telegram_user_id=user_id,
+            requested_business_id=requested_business,
+            slot_id=slot_id,
+        )
+    except TenantAccessDenied:
+        return _error(403, "business_access_denied")
+    except TenantPermissionDenied:
+        return _error(403, "calendar_manage_denied")
+    except BookingNotFound:
+        return _error(404, "calendar_slot_not_found")
+    except BookingInvariantViolation:
+        return _error(409, "calendar_change_rejected")
+    except ValueError:
+        return _error(400, "invalid_calendar_change")
+    except OSError:
+        return _error(503, "calendar_unavailable")
+    except RuntimeError:
+        return _error(503, "calendar_unavailable")
+    return web.json_response({"ok": True, "slot_id": slot.slot.id}, headers=_base_headers())
+
+
 async def cockpit_sales(request: web.Request) -> web.Response:
     scope = await _verified_payload_scope(request)
     if isinstance(scope, web.Response):
@@ -1049,6 +1203,10 @@ def register_cockpit_routes(
     app.router.add_post(f"{_COCKPIT_PREFIX}/context", cockpit_context)
     app.router.add_post(f"{_COCKPIT_PREFIX}/home", cockpit_home)
     app.router.add_post(f"{_COCKPIT_PREFIX}/calendar", cockpit_calendar)
+    app.router.add_post(f"{_COCKPIT_PREFIX}/calendar/manage", cockpit_calendar_management)
+    app.router.add_post(f"{_COCKPIT_PREFIX}/calendar/create", cockpit_calendar_create)
+    app.router.add_post(f"{_COCKPIT_PREFIX}/calendar/replace", cockpit_calendar_replace)
+    app.router.add_post(f"{_COCKPIT_PREFIX}/calendar/cancel", cockpit_calendar_cancel)
     app.router.add_post(f"{_COCKPIT_PREFIX}/sales", cockpit_sales)
     app.router.add_post(f"{_COCKPIT_PREFIX}/connections", cockpit_connections)
     app.router.add_post(f"{_COCKPIT_PREFIX}/connections/setup", cockpit_connection_setup)
@@ -1078,6 +1236,10 @@ __all__ = [
     "cockpit_connections_script",
     "cockpit_context",
     "cockpit_calendar",
+    "cockpit_calendar_cancel",
+    "cockpit_calendar_create",
+    "cockpit_calendar_management",
+    "cockpit_calendar_replace",
     "cockpit_sales",
     "cockpit_settings",
     "cockpit_settings_script",
