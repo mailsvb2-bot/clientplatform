@@ -20,6 +20,8 @@ from clientplatform.application.cockpit_home import (
     CockpitHomeUnavailable,
     resolve_cockpit_home,
 )
+from clientplatform.application.cockpit_calendar import resolve_cockpit_calendar
+from clientplatform.application.cockpit_sales import resolve_cockpit_sales
 from clientplatform.application.cockpit_customers import (
     CockpitCustomerActionUnavailable,
     resolve_cockpit_customer_action_route,
@@ -43,6 +45,8 @@ _COCKPIT_BOT_APP_KEY = web.AppKey("clientplatform_cockpit_bot", object)
 _COCKPIT_SECTION_SENDER_APP_KEY = web.AppKey("clientplatform_cockpit_section_sender", object)
 _COCKPIT_ACTION_SENDER_APP_KEY = web.AppKey("clientplatform_cockpit_action_sender", object)
 _CUSTOMERS_SCRIPT = Path(__file__).with_name("cockpit_customers.js")
+_CALENDAR_SCRIPT = Path(__file__).with_name("cockpit_calendar.js")
+_SALES_SCRIPT = Path(__file__).with_name("cockpit_sales.js")
 
 
 class _BotMessageTarget:
@@ -63,24 +67,54 @@ _HTML = """<!doctype html>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <script defer src="/clientplatform/cockpit/app.js"></script>
 <script defer src="/clientplatform/cockpit/customers.js"></script>
+<script defer src="/clientplatform/cockpit/calendar.js"></script>
+<script defer src="/clientplatform/cockpit/sales.js"></script>
 </head><body>
 <main class="shell">
 <header><div><p class="eyebrow">ClientPlatform</p><h1>Ваш бизнес</h1></div><span id="role" class="pill">Проверяем доступ…</span></header>
 <section class="business"><label for="business-select">Какой бизнес открыт</label><select id="business-select" disabled><option>Загрузка…</option></select></section>
 <section id="status" class="status"><span id="status-text">Проверяем безопасный вход через Telegram…</span><button id="status-action" class="secondary" type="button" hidden>Вернуться в бот</button></section>
 <section id="navigation" class="grid" aria-live="polite"></section>
-<section id="home-view" class="home-view" aria-live="polite" hidden><div class="view-toolbar"><button id="home-back" class="secondary" type="button">Все разделы</button><button id="home-refresh" class="secondary" type="button">Обновить</button></div><div class="home-heading"><p class="eyebrow">Главный экран</p><h2>Сегодня</h2><p id="home-meta"></p></div><div id="home-metrics" class="metrics"></div><div id="home-money" class="money"></div><section id="home-attention-block" class="home-block"><h3>Требует внимания</h3><div id="home-attention"></div></section><section id="home-actions-block" class="home-block"><h3>Что посмотреть дальше</h3><div id="home-actions"></div></section><p id="home-empty" class="muted"></p><p id="home-limitations" class="muted"></p></section>
-<section id="customers-view" class="customers-view" aria-live="polite" hidden>
+<section id="home-view" class="workspace-view home-view" aria-live="polite" hidden>
+<div class="view-toolbar"><button id="home-back" class="secondary" type="button">Все разделы</button><button id="home-refresh" class="secondary" type="button">Обновить</button></div>
+<div class="home-heading"><p class="eyebrow">Главный экран</p><h2>Сегодня</h2><p id="home-meta"></p></div>
+<section id="home-primary-block" class="home-block primary-block" hidden><p class="eyebrow">Главное действие</p><h3>Что сделать сейчас</h3><div id="home-primary-action"></div></section>
+<div id="home-metrics" class="metrics"></div><div id="home-money" class="money"></div>
+<section id="home-attention-block" class="home-block"><h3>Требует внимания</h3><div id="home-attention"></div></section>
+<section id="home-actions-block" class="home-block"><h3>Что посмотреть дальше</h3><div id="home-actions"></div></section>
+<p id="home-empty" class="muted"></p><p id="home-limitations" class="muted"></p>
+</section>
+<section id="customers-view" class="workspace-view customers-view" aria-live="polite" hidden>
 <div class="view-toolbar"><button id="customers-back" class="secondary" type="button">Все разделы</button><button id="customers-refresh" class="secondary" type="button">Обновить</button></div>
 <div id="customer-list-panel"><div class="home-heading"><p class="eyebrow">CRM</p><h2>Клиенты</h2><p>Найдите человека и сразу увидьте историю и следующий шаг.</p></div>
 <form id="customer-search-form" class="customer-search"><label for="customer-search">Имя, username, email или телефон</label><div><input id="customer-search" type="search" maxlength="100" autocomplete="off" placeholder="Например: Анна"><button type="submit">Найти</button></div></form>
 <p id="customer-list-meta" class="muted"></p><div id="customer-list"></div><div class="pager"><button id="customer-prev" class="secondary" type="button" disabled>Назад</button><button id="customer-next" class="secondary" type="button" disabled>Дальше</button></div></div>
 <section id="customer-detail" hidden><button id="customer-detail-back" class="secondary" type="button">К списку клиентов</button><div class="home-heading"><p class="eyebrow">Карточка клиента</p><h2 id="customer-detail-name">Клиент</h2><p id="customer-detail-meta"></p></div><section class="home-block"><h3>Контакты</h3><div id="customer-contacts"></div></section><section class="home-block"><h3>Следующий шаг</h3><div id="customer-action"></div></section><section class="home-block"><h3>История</h3><div id="customer-timeline"></div></section><p id="customer-limitations" class="muted"></p></section>
 </section>
+<section id="calendar-view" class="workspace-view" aria-live="polite" hidden>
+<div class="view-toolbar"><button id="calendar-more" class="secondary" type="button">Все разделы</button><button id="calendar-refresh" class="secondary" type="button">Обновить</button></div>
+<div class="home-heading"><p class="eyebrow">Расписание</p><h2>Записи</h2><p id="calendar-meta"></p></div>
+<div id="calendar-list"></div><p id="calendar-empty" class="muted"></p><p id="calendar-limitations" class="muted"></p>
+<button id="calendar-manage" class="primary-cta" type="button">Изменить расписание</button>
+</section>
+<section id="sales-view" class="workspace-view" aria-live="polite" hidden>
+<div class="view-toolbar"><button id="sales-more" class="secondary" type="button">Все разделы</button><button id="sales-refresh" class="secondary" type="button">Обновить</button></div>
+<div class="home-heading"><p class="eyebrow">Работа с клиентами</p><h2>Продажи</h2><p id="sales-meta"></p></div>
+<p id="sales-handoff" class="muted"></p><div id="sales-list"></div><p id="sales-empty" class="muted"></p><p id="sales-limitations" class="muted"></p>
+<button id="sales-manage" class="primary-cta" type="button">Открыть все действия по продажам</button>
+</section>
 <section id="explanation" class="explanation" hidden><button id="close-explanation" class="secondary" type="button">К разделам</button><h2 id="explanation-title"></h2><p id="explanation-summary"></p><p id="explanation-when"></p><p id="explanation-reason"></p></section>
-</main></body></html>"""
+</main>
+<nav id="primary-nav" class="primary-nav" aria-label="Основная навигация" hidden>
+<button type="button" data-primary="home"><span class="primary-icon">●</span><span>Сегодня</span></button>
+<button type="button" data-primary="customers"><span class="primary-icon">●</span><span>Клиенты</span></button>
+<button type="button" data-primary="calendar"><span class="primary-icon">●</span><span>Записи</span></button>
+<button type="button" data-primary="sales"><span class="primary-icon">●</span><span>Продажи</span></button>
+<button type="button" data-primary="more"><span class="primary-icon">•••</span><span>Ещё</span></button>
+</nav>
+</body></html>"""
 
-_CSS = """:root{--bg:var(--tg-theme-bg-color,#f4f6f8);--surface:var(--tg-theme-secondary-bg-color,#fff);--text:var(--tg-theme-text-color,#17202a);--hint:var(--tg-theme-hint-color,#66717d);--link:var(--tg-theme-link-color,#2678d9);--button:var(--tg-theme-button-color,#2678d9);--button-text:var(--tg-theme-button-text-color,#fff);--border:rgba(127,127,127,.24)}*{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:var(--bg);color:var(--text);padding:0 0 env(safe-area-inset-bottom)}button,select{font:inherit;color:inherit}.shell{max-width:760px;margin:0 auto;padding:calc(18px + env(safe-area-inset-top)) 16px calc(40px + env(safe-area-inset-bottom))}header{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:16px}.eyebrow{margin:0 0 4px;font-size:12px;font-weight:800;letter-spacing:.045em;color:var(--hint)}h1{margin:0;font-size:29px;line-height:1.1}h2,h3{color:var(--text)}.pill{font-size:12px;background:var(--surface);border:1px solid var(--border);border-radius:999px;padding:8px 10px;max-width:46%;text-align:center}.business,.status,.explanation,.home-view,.customers-view{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:14px;margin-bottom:14px}.business label{display:block;font-size:13px;font-weight:750;margin-bottom:8px}select{width:100%;min-height:46px;border:1px solid var(--border);border-radius:12px;background:var(--surface);padding:0 12px}.status{font-size:14px;line-height:1.4}.status .secondary{margin-top:10px}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.card{min-height:126px;text-align:left;border:1px solid var(--border);border-radius:16px;background:var(--surface);padding:15px;position:relative;touch-action:manipulation;cursor:pointer}.card:active{transform:scale(.995)}.card:disabled{opacity:.7}.card h2{font-size:17px;margin:0 0 7px;padding-right:56px}.card p{font-size:13px;line-height:1.38;margin:0;color:var(--hint)}.card.planned{border-style:dashed}.card.restricted{opacity:.72}.badge{position:absolute;right:10px;top:10px;font-size:10px;font-weight:800;border-radius:999px;padding:4px 7px;background:var(--bg);color:var(--hint)}.badge.available{background:var(--button);color:var(--button-text)}.explanation h2{margin:14px 0 8px}.explanation p{line-height:1.5}.secondary,.action-card{min-height:44px;border:1px solid var(--border);border-radius:12px;padding:0 14px;background:var(--bg);font-weight:700}.view-toolbar{display:flex;justify-content:space-between;gap:10px}.home-heading h2{margin:14px 0 4px}.home-heading p{margin:0 0 12px;color:var(--hint)}.metrics,.money{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:12px 0}.metric,.money-card,.attention-card{border:1px solid var(--border);border-radius:14px;padding:12px}.metric strong,.money-card strong{display:block;font-size:24px;margin-top:4px}.metric span,.money-card span,.muted{font-size:12px;color:var(--hint);line-height:1.4}.home-block{margin-top:18px}.home-block h3{margin:0 0 9px;font-size:16px}.attention-card{margin-bottom:8px}.action-card{display:block;width:100%;text-align:left;margin-bottom:8px}.action-card small{display:block;font-weight:400;margin-top:4px;color:var(--hint);line-height:1.35}.customer-search label{display:block;font-size:13px;font-weight:750;margin-bottom:8px}.customer-search>div{display:flex;gap:8px}.customer-search input{min-width:0;flex:1;min-height:44px;border:1px solid var(--border);border-radius:12px;background:var(--surface);color:var(--text);padding:0 12px}.customer-search button{min-height:44px;border:0;border-radius:12px;background:var(--button);color:var(--button-text);padding:0 16px;font-weight:800}.customer-row{display:block;width:100%;text-align:left;border:1px solid var(--border);border-radius:14px;background:var(--surface);padding:13px;margin-bottom:8px}.customer-row strong{display:block}.customer-row small,.contact-card small,.timeline-card small{display:block;color:var(--hint);margin-top:4px}.pager{display:flex;justify-content:space-between;gap:10px;margin-top:12px}.contact-card,.timeline-card{border:1px solid var(--border);border-radius:14px;padding:12px;margin-bottom:8px}.busy{opacity:.66;pointer-events:none}@media(max-width:520px){.grid,.metrics,.money{grid-template-columns:1fr}.shell{padding-left:12px;padding-right:12px}h1{font-size:27px}.pill{max-width:52%}.card{min-height:auto}.view-toolbar{position:sticky;top:env(safe-area-inset-top);z-index:2;background:var(--surface);padding:2px 0 8px}}"""
+_CSS = """:root{--bg:var(--tg-theme-bg-color,#f4f6f8);--surface:var(--tg-theme-secondary-bg-color,#fff);--text:var(--tg-theme-text-color,#17202a);--hint:var(--tg-theme-hint-color,#66717d);--link:var(--tg-theme-link-color,#2678d9);--button:var(--tg-theme-button-color,#2678d9);--button-text:var(--tg-theme-button-text-color,#fff);--border:rgba(127,127,127,.24)}*{box-sizing:border-box}[hidden]{display:none!important}body{margin:0;font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:var(--bg);color:var(--text);padding:0}button,select,input{font:inherit;color:inherit}.shell{max-width:760px;margin:0 auto;padding:calc(18px + env(safe-area-inset-top)) 16px calc(104px + env(safe-area-inset-bottom))}header{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:16px}.eyebrow{margin:0 0 4px;font-size:12px;font-weight:800;letter-spacing:.045em;color:var(--hint)}h1{margin:0;font-size:29px;line-height:1.1}h2,h3{color:var(--text)}.pill{font-size:12px;background:var(--surface);border:1px solid var(--border);border-radius:999px;padding:8px 10px;max-width:46%;text-align:center}.business,.status,.explanation,.workspace-view{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:14px;margin-bottom:14px}.business label{display:block;font-size:13px;font-weight:750;margin-bottom:8px}select{width:100%;min-height:46px;border:1px solid var(--border);border-radius:12px;background:var(--surface);padding:0 12px}.status{font-size:14px;line-height:1.4}.status .secondary{margin-top:10px}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.card{min-height:126px;text-align:left;border:1px solid var(--border);border-radius:16px;background:var(--surface);padding:15px;position:relative;touch-action:manipulation;cursor:pointer}.card:active,.customer-row:active,.sales-card:active,.action-card:active{transform:scale(.995)}.card:disabled{opacity:.7}.card h2{font-size:17px;margin:0 0 7px;padding-right:56px}.card p{font-size:13px;line-height:1.38;margin:0;color:var(--hint)}.card.planned{border-style:dashed}.card.restricted{opacity:.72}.badge{position:absolute;right:10px;top:10px;font-size:10px;font-weight:800;border-radius:999px;padding:4px 7px;background:var(--bg);color:var(--hint)}.badge.available{background:var(--button);color:var(--button-text)}.explanation h2{margin:14px 0 8px}.explanation p{line-height:1.5}.secondary,.action-card{min-height:44px;border:1px solid var(--border);border-radius:12px;padding:0 14px;background:var(--bg);font-weight:700}.view-toolbar{display:flex;justify-content:space-between;gap:10px}.home-heading h2{margin:14px 0 4px}.home-heading p{margin:0 0 12px;color:var(--hint)}.metrics,.money{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:12px 0}.metric,.money-card,.attention-card{border:1px solid var(--border);border-radius:14px;padding:12px}.metric strong,.money-card strong{display:block;font-size:24px;margin-top:4px}.metric span,.money-card span,.muted{font-size:12px;color:var(--hint);line-height:1.4}.home-block{margin-top:18px}.home-block h3{margin:0 0 9px;font-size:16px}.primary-block{border:1px solid var(--button);border-radius:16px;padding:14px;background:color-mix(in srgb,var(--button) 7%,var(--surface))}.primary-block h3{font-size:19px}.attention-card{margin-bottom:8px}.action-card{display:block;width:100%;text-align:left;margin-bottom:8px;touch-action:manipulation}.action-card.primary-action{min-height:76px;background:var(--button);color:var(--button-text);border-color:var(--button);font-size:16px}.action-card small{display:block;font-weight:400;margin-top:4px;color:var(--hint);line-height:1.35}.action-card.primary-action small{color:var(--button-text);opacity:.84}.customer-search label{display:block;font-size:13px;font-weight:750;margin-bottom:8px}.customer-search>div{display:flex;gap:8px}.customer-search input{min-width:0;flex:1;min-height:44px;border:1px solid var(--border);border-radius:12px;background:var(--surface);color:var(--text);padding:0 12px}.customer-search button,.primary-cta{min-height:46px;border:0;border-radius:12px;background:var(--button);color:var(--button-text);padding:0 16px;font-weight:800}.primary-cta{display:block;width:100%;margin-top:14px}.customer-row,.sales-card{display:block;width:100%;text-align:left;border:1px solid var(--border);border-radius:14px;background:var(--surface);padding:13px;margin-bottom:8px;touch-action:manipulation}.customer-row strong{display:block}.customer-row small,.contact-card small,.timeline-card small,.schedule-card small,.sales-card small{display:block;color:var(--hint);margin-top:4px}.pager{display:flex;justify-content:space-between;gap:10px;margin-top:12px}.contact-card,.timeline-card,.schedule-card{border:1px solid var(--border);border-radius:14px;padding:12px;margin-bottom:8px}.schedule-card-top,.sales-card-top{display:flex;justify-content:space-between;gap:12px;align-items:center}.schedule-card p,.sales-card p{margin:8px 0 0;line-height:1.35}.schedule-status,.sales-stage{font-size:11px;font-weight:800;border-radius:999px;padding:4px 8px;background:var(--bg);white-space:nowrap}.schedule-status.booked{background:var(--button);color:var(--button-text)}.sales-card.overdue{border-color:var(--button)}.primary-nav{position:fixed;left:50%;bottom:0;transform:translateX(-50%);width:min(760px,100%);z-index:30;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));padding:8px 8px calc(8px + env(safe-area-inset-bottom));background:var(--surface);border-top:1px solid var(--border);box-shadow:0 -8px 28px rgba(0,0,0,.08)}.primary-nav button{min-width:0;min-height:52px;border:0;background:transparent;border-radius:12px;color:var(--hint);font-size:11px;font-weight:750;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px}.primary-nav button.active,.primary-nav button[aria-current=page]{color:var(--button);background:var(--bg)}.primary-icon{font-size:12px;line-height:1}.busy{opacity:.66;pointer-events:none}@supports not (color:color-mix(in srgb,black,white)){.primary-block{background:var(--surface)}}@media(max-width:520px){.grid,.metrics,.money{grid-template-columns:1fr}.shell{padding-left:12px;padding-right:12px}h1{font-size:27px}.pill{max-width:52%}.card{min-height:auto}.view-toolbar{position:sticky;top:env(safe-area-inset-top);z-index:2;background:var(--surface);padding:2px 0 8px}.primary-nav{border-radius:16px 16px 0 0}.primary-nav button{padding:4px 1px}}"""
 
 _JS = r"""(() => {
   'use strict';
@@ -88,6 +122,7 @@ _JS = r"""(() => {
   const statusText = document.getElementById('status-text');
   const statusAction = document.getElementById('status-action');
   const nav = document.getElementById('navigation');
+  const primaryNav = document.getElementById('primary-nav');
   const select = document.getElementById('business-select');
   const role = document.getElementById('role');
   const explanation = document.getElementById('explanation');
@@ -97,11 +132,16 @@ _JS = r"""(() => {
   const reason = document.getElementById('explanation-reason');
   const close = document.getElementById('close-explanation');
   const home = document.getElementById('home-view');
+  const customers = document.getElementById('customers-view');
+  const calendar = document.getElementById('calendar-view');
+  const sales = document.getElementById('sales-view');
   const homeBack = document.getElementById('home-back');
   const homeRefresh = document.getElementById('home-refresh');
   const homeMeta = document.getElementById('home-meta');
   const homeMetrics = document.getElementById('home-metrics');
   const homeMoney = document.getElementById('home-money');
+  const homePrimaryBlock = document.getElementById('home-primary-block');
+  const homePrimaryAction = document.getElementById('home-primary-action');
   const homeAttentionBlock = document.getElementById('home-attention-block');
   const homeActionsBlock = document.getElementById('home-actions-block');
   const homeAttention = document.getElementById('home-attention');
@@ -111,6 +151,7 @@ _JS = r"""(() => {
   const initData = tg && typeof tg.initData === 'string' ? tg.initData : '';
   const roleNames = {owner:'Владелец',administrator:'Администратор',manager:'Менеджер',marketer:'Маркетолог',analyst:'Аналитик',content_manager:'Контент-менеджер',support:'Поддержка',customer:'Клиент'};
   const periodNames = {'7d':'7 дней','30d':'30 дней','today':'сегодня'};
+  const nativeSections = new Set(['home','customers','calendar','sales']);
   let navigationItems = [];
   let currentView = 'home';
   let lastHomePayload = null;
@@ -121,14 +162,26 @@ _JS = r"""(() => {
     if (item.status === 'available') return 'available';
     return 'planned';
   };
+  const setPrimaryActive = (id) => {
+    for (const button of primaryNav.querySelectorAll('button[data-primary]')) {
+      const active = button.dataset.primary === id;
+      button.classList.toggle('active', active);
+      if (active) button.setAttribute('aria-current', 'page'); else button.removeAttribute('aria-current');
+    }
+  };
+  const hideViews = () => {
+    nav.hidden = true; home.hidden = true; customers.hidden = true; calendar.hidden = true; sales.hidden = true; explanation.hidden = true;
+  };
   const syncBackButton = () => {
     if (!tg || !tg.BackButton) return;
     if (currentView === 'home') tg.BackButton.hide(); else tg.BackButton.show();
   };
-  const showNavigation = () => { currentView = 'navigation'; explanation.hidden = true; home.hidden = true; document.getElementById('customers-view').hidden = true; nav.hidden = false; syncBackButton(); };
-  const showHomeView = () => { currentView = 'home'; explanation.hidden = true; document.getElementById('customers-view').hidden = true; nav.hidden = true; home.hidden = false; syncBackButton(); };
-  const enterCustomers = () => { currentView = 'customers'; syncBackButton(); };
-  window.ClientPlatformCockpitNavigation = Object.freeze({showNavigation, enterCustomers});
+  const showNavigation = () => { currentView = 'navigation'; hideViews(); nav.hidden = false; setPrimaryActive('more'); syncBackButton(); };
+  const showHomeView = () => { currentView = 'home'; hideViews(); home.hidden = false; setPrimaryActive('home'); syncBackButton(); };
+  const showHome = () => { if (lastHomePayload) renderHome(lastHomePayload); else loadHome().catch(homeFail); };
+  const enterCustomers = () => { currentView = 'customers'; hideViews(); customers.hidden = false; setPrimaryActive('customers'); syncBackButton(); };
+  const enterCalendar = () => { currentView = 'calendar'; hideViews(); calendar.hidden = false; setPrimaryActive('calendar'); syncBackButton(); };
+  const enterSales = () => { currentView = 'sales'; hideViews(); sales.hidden = false; setPrimaryActive('sales'); syncBackButton(); };
   const setHomeBusy = (busy) => { home.classList.toggle('busy', Boolean(busy)); homeRefresh.disabled = Boolean(busy); home.setAttribute('aria-busy', busy ? 'true' : 'false'); };
   const closeToBot = () => { if (tg && typeof tg.close === 'function') tg.close(); else window.history.back(); };
   statusAction.addEventListener('click', closeToBot);
@@ -139,10 +192,10 @@ _JS = r"""(() => {
     const state = screenStatus(item);
     currentView = 'explanation';
     text(title, item.title); text(summary, item.summary); text(when, `Когда пригодится: ${item.when_to_use}`);
-    if (state === 'planned') text(reason, 'Экран этого раздела ещё подключается. Пока используйте «Сегодня» и быстрые команды в боте.');
+    if (state === 'planned') text(reason, 'Этот раздел ещё подключается. Пользуйтесь доступными разделами ниже — данные бизнеса от этого не теряются.');
     else if (state === 'restricted') text(reason, item.reason || 'Для Вашей роли этот раздел недоступен. Если он нужен, попросите владельца бизнеса изменить доступ.');
     else text(reason, item.reason || 'Раздел доступен.');
-    nav.hidden = true; home.hidden = true; document.getElementById('customers-view').hidden = true; explanation.hidden = false; syncBackButton();
+    hideViews(); explanation.hidden = false; setPrimaryActive('more'); syncBackButton();
   };
 
   const appendMetric = (container, label, value, note) => {
@@ -151,23 +204,28 @@ _JS = r"""(() => {
     text(caption, label); text(number, value); text(meaning, note); card.append(caption, number, meaning); container.appendChild(card);
   };
 
+  const appendHomeAction = (item, container, primary) => {
+    const target = navigationItems.find((entry) => entry.id === item.section); const state = target ? screenStatus(target) : 'planned';
+    const button = document.createElement('button'); button.type = 'button'; button.className = primary ? 'action-card primary-action' : 'action-card';
+    const label = document.createElement('span'); const detail = document.createElement('small'); const cleanTitle = String(item.title || '').replace(/^Открыть:\s*/, '');
+    text(label, state === 'available' ? cleanTitle : `Подробнее: ${cleanTitle}`);
+    text(detail, state === 'available' ? item.reason : `${item.reason} Экран раздела пока подключается.`);
+    button.append(label, detail); button.addEventListener('click', () => { if (target) showItem(target, button); }); container.appendChild(button);
+  };
+
   const renderHome = (payload) => {
     lastHomePayload = payload;
-    homeMetrics.replaceChildren(); homeMoney.replaceChildren(); homeAttention.replaceChildren(); homeActions.replaceChildren();
+    homeMetrics.replaceChildren(); homeMoney.replaceChildren(); homePrimaryAction.replaceChildren(); homeAttention.replaceChildren(); homeActions.replaceChildren();
     text(homeMeta, `${payload.business_name} · данные на сегодня`);
+    const actions = payload.actions || [];
+    if (actions.length) appendHomeAction(actions[0], homePrimaryAction, true);
+    homePrimaryBlock.hidden = !actions.length;
     for (const item of payload.metrics || []) appendMetric(homeMetrics, item.title, item.value, item.meaning);
     for (const item of payload.money || []) appendMetric(homeMoney, `Подтверждённая выручка · ${periodNames[item.period] || item.period}`, item.display, item.meaning);
     for (const item of payload.attention || []) { const card = document.createElement('div'); card.className = 'attention-card'; text(card, item); homeAttention.appendChild(card); }
     homeAttentionBlock.hidden = !(payload.attention || []).length;
-    for (const item of payload.actions || []) {
-      const target = navigationItems.find((entry) => entry.id === item.section); const state = target ? screenStatus(target) : 'planned';
-      const button = document.createElement('button'); button.type = 'button'; button.className = 'action-card';
-      const label = document.createElement('span'); const detail = document.createElement('small'); const cleanTitle = String(item.title || '').replace(/^Открыть:\s*/, '');
-      text(label, state === 'available' ? cleanTitle : `Подробнее: ${cleanTitle}`);
-      text(detail, state === 'available' ? item.reason : `${item.reason} Экран раздела пока подключается.`);
-      button.append(label, detail); button.addEventListener('click', () => { if (target) showItem(target, button); }); homeActions.appendChild(button);
-    }
-    homeActionsBlock.hidden = !(payload.actions || []).length;
+    for (const item of actions.slice(1)) appendHomeAction(item, homeActions, false);
+    homeActionsBlock.hidden = actions.length <= 1;
     text(homeEmpty, payload.empty_message || '');
     text(homeLimitations, (payload.limitations || []).length ? 'Некоторые данные сейчас временно недоступны. Остальная информация показана без догадок.' : '');
     showHomeView();
@@ -183,17 +241,15 @@ _JS = r"""(() => {
   const homeFail = (error) => {
     setHomeBusy(false);
     if (error && ['expired_init_data','business_access_denied','access_denied'].includes(error.message)) { fail(error); return; }
-    homeMetrics.replaceChildren(); homeMoney.replaceChildren(); homeAttention.replaceChildren(); homeActions.replaceChildren(); homeAttentionBlock.hidden = true; homeActionsBlock.hidden = true;
-    text(homeMeta, 'Не удалось обновить сводку'); text(homeEmpty, 'Сводка временно недоступна. Нажмите «Обновить» или откройте список разделов.'); text(homeLimitations, 'Ваши данные и права доступа не менялись.'); showHomeView();
+    homeMetrics.replaceChildren(); homeMoney.replaceChildren(); homePrimaryAction.replaceChildren(); homeAttention.replaceChildren(); homeActions.replaceChildren(); homePrimaryBlock.hidden = true; homeAttentionBlock.hidden = true; homeActionsBlock.hidden = true;
+    text(homeMeta, 'Не удалось обновить сводку'); text(homeEmpty, 'Сводка временно недоступна. Нажмите «Обновить» или откройте другой раздел.'); text(homeLimitations, 'Ваши данные и права доступа не менялись.'); showHomeView();
   };
   const closeAfterDelivery = () => {
     if (tg && typeof tg.close === 'function') { tg.close(); return true; }
     return false;
   };
   const notifySuccess = () => {
-    if (tg && tg.HapticFeedback && typeof tg.HapticFeedback.notificationOccurred === 'function') {
-      tg.HapticFeedback.notificationOccurred('success');
-    }
+    if (tg && tg.HapticFeedback && typeof tg.HapticFeedback.notificationOccurred === 'function') tg.HapticFeedback.notificationOccurred('success');
   };
   const openSection = async (item, button) => {
     const badge = button ? button.querySelector('.badge') : null;
@@ -204,49 +260,69 @@ _JS = r"""(() => {
       await post('/clientplatform/cockpit/section-open', select.value, {section:item.id});
       notifySuccess();
       if (closeAfterDelivery()) return;
-      showExplanation({...item, reason:'Раздел открыт в чате с ботом. Вернитесь в Telegram.'});
+      showExplanation({...item, reason:'Полные действия этого раздела открыты в чате с ботом. Вернитесь в Telegram.'});
     } catch (error) {
       const accessChanged = error && ['section_access_denied','business_access_denied'].includes(error.message);
-      showExplanation({...item, reason:accessChanged
-        ? 'Доступ к разделу изменился. Обновите кабинет.'
-        : 'Не удалось открыть раздел в Telegram. Обновите кабинет и попробуйте ещё раз.'});
+      showExplanation({...item, reason:accessChanged ? 'Доступ к разделу изменился. Обновите кабинет.' : 'Не удалось открыть действия в Telegram. Обновите кабинет и попробуйте ещё раз.'});
     } finally {
       if (button) { button.disabled = false; button.removeAttribute('aria-busy'); }
       if (badge) text(badge, priorBadge);
     }
   };
-  const showItem = (item, button = null) => {
-    const state = screenStatus(item);
-    if (state !== 'available') { showExplanation(item); return; }
-    if (item.id === 'home') { loadHome().catch(homeFail); return; }
-    if (item.id === 'customers' && window.ClientPlatformCustomers) { window.ClientPlatformCustomers.open(); return; }
+  const openCanonicalSection = (section, button = null) => {
+    const item = navigationItems.find((entry) => entry.id === section);
+    if (!item) return;
+    if (item.status !== 'available') { showExplanation(item); return; }
     void openSection(item, button);
   };
+  const showItem = (item, button = null) => {
+    if (item.status === 'available') {
+      if (item.id === 'home') { loadHome().catch(homeFail); return; }
+      if (item.id === 'customers' && window.ClientPlatformCustomers) { window.ClientPlatformCustomers.open(); return; }
+      if (item.id === 'calendar' && window.ClientPlatformCalendar) { window.ClientPlatformCalendar.open(); return; }
+      if (item.id === 'sales' && window.ClientPlatformSales) { window.ClientPlatformSales.open(); return; }
+      void openSection(item, button); return;
+    }
+    showExplanation(item);
+  };
+
+  window.ClientPlatformCockpitNavigation = Object.freeze({showNavigation, showHome, enterCustomers, enterCalendar, enterSales, openCanonicalSection});
 
   const render = (payload) => {
     nav.replaceChildren(); select.replaceChildren(); navigationItems = payload.navigation || [];
     text(role, payload.role ? `Роль: ${roleNames[payload.role] || payload.role}` : 'Нужен бизнес'); statusAction.hidden = true;
-    if (payload.onboarding_required) { text(statusText, 'У Вас пока нет подключённого бизнеса. Вернитесь в бот и нажмите «Подключить мой бизнес».'); select.disabled = true; statusAction.hidden = false; showNavigation(); return; }
+    if (payload.onboarding_required) { primaryNav.hidden = true; text(statusText, 'У Вас пока нет подключённого бизнеса. Вернитесь в бот и нажмите «Подключить мой бизнес».'); select.disabled = true; statusAction.hidden = false; showNavigation(); return; }
     for (const business of payload.businesses || []) { const option = document.createElement('option'); option.value = business.id; text(option, `${business.name} · ${roleNames[business.role] || business.role}`); option.selected = Boolean(business.selected); select.appendChild(option); }
-    select.disabled = false; text(statusText, `Открыт бизнес «${payload.business_name}». Сначала показываем главное на сегодня.`);
+    select.disabled = false; primaryNav.hidden = false; text(statusText, `Открыт бизнес «${payload.business_name}». Ниже — главное и рабочие разделы.`);
     for (const item of navigationItems) {
       const state = screenStatus(item); const button = document.createElement('button'); button.type = 'button'; button.className = `card ${state}`;
       const heading = document.createElement('h2'); const copy = document.createElement('p'); const badge = document.createElement('span'); badge.className = `badge ${state}`;
-      const nativeHere = ['home','customers'].includes(item.id);
-      text(heading, item.title); text(copy, item.summary); text(badge, state === 'available' ? (nativeHere ? 'Работает' : 'Открыть') : state === 'planned' ? 'Скоро' : 'Нет доступа'); button.append(heading, copy, badge); button.addEventListener('click', () => showItem(item, button)); nav.appendChild(button);
+      const nativeHere = nativeSections.has(item.id);
+      text(heading, item.title); text(copy, item.summary); text(badge, state === 'available' ? (nativeHere ? 'В кабинете' : 'Открыть') : state === 'planned' ? 'Скоро' : 'Нет доступа'); button.append(heading, copy, badge); button.addEventListener('click', () => showItem(item, button)); nav.appendChild(button);
     }
     loadHome().catch(homeFail);
   };
-  const load = async (businessId) => { select.disabled = true; text(statusText, 'Проверяем доступ и загружаем бизнес…'); return render(await post('/clientplatform/cockpit/context', businessId)); };
+  const load = async (businessId) => { primaryNav.hidden = true; select.disabled = true; text(statusText, 'Проверяем доступ и загружаем бизнес…'); return render(await post('/clientplatform/cockpit/context', businessId)); };
   select.addEventListener('change', () => load(select.value).catch(fail));
+
+  for (const button of primaryNav.querySelectorAll('button[data-primary]')) {
+    button.addEventListener('click', () => {
+      const section = button.dataset.primary;
+      if (section === 'more') { showNavigation(); return; }
+      const item = navigationItems.find((entry) => entry.id === section);
+      if (item) showItem(item, button);
+    });
+  }
+
   function fail(error) {
-    nav.replaceChildren(); home.hidden = true; document.getElementById('customers-view').hidden = true; explanation.hidden = true; select.disabled = true; currentView = 'navigation'; syncBackButton(); text(role, 'Доступ не подтверждён'); statusAction.hidden = false;
+    nav.replaceChildren(); hideViews(); primaryNav.hidden = true; select.disabled = true; currentView = 'navigation'; syncBackButton(); text(role, 'Доступ не подтверждён'); statusAction.hidden = false;
     text(statusText, error && error.message === 'expired_init_data' ? 'Сессия Telegram устарела. Вернитесь в бот и откройте кабинет ещё раз.' : 'Не удалось подтвердить безопасный доступ. Вернитесь в бот и откройте кабинет ещё раз.');
   }
   if (tg && tg.BackButton && typeof tg.BackButton.onClick === 'function') tg.BackButton.onClick(() => {
     if (currentView === 'customers' && window.ClientPlatformCustomers) { window.ClientPlatformCustomers.back(); return; }
-    if (currentView === 'explanation') { showNavigation(); return; }
-    if (currentView === 'navigation') { if (lastHomePayload) renderHome(lastHomePayload); else loadHome().catch(homeFail); }
+    if (currentView === 'calendar' && window.ClientPlatformCalendar) { window.ClientPlatformCalendar.back(); return; }
+    if (currentView === 'sales' && window.ClientPlatformSales) { window.ClientPlatformSales.back(); return; }
+    if (currentView === 'explanation' || currentView === 'navigation') { showHome(); }
   });
   if (!initData) { fail(new Error('missing_init_data')); }
   else { if (tg) { tg.ready(); tg.expand(); } load(null).catch(fail); }
@@ -291,6 +367,24 @@ async def cockpit_styles(_request: web.Request) -> web.Response:
 async def cockpit_customers_script(_request: web.Request) -> web.Response:
     return web.Response(
         text=_CUSTOMERS_SCRIPT.read_text(encoding="utf-8"),
+        content_type="application/javascript",
+        charset="utf-8",
+        headers=_base_headers(),
+    )
+
+
+async def cockpit_calendar_script(_request: web.Request) -> web.Response:
+    return web.Response(
+        text=_CALENDAR_SCRIPT.read_text(encoding="utf-8"),
+        content_type="application/javascript",
+        charset="utf-8",
+        headers=_base_headers(),
+    )
+
+
+async def cockpit_sales_script(_request: web.Request) -> web.Response:
+    return web.Response(
+        text=_SALES_SCRIPT.read_text(encoding="utf-8"),
         content_type="application/javascript",
         charset="utf-8",
         headers=_base_headers(),
@@ -370,7 +464,7 @@ def _context_payload_with_routes(context: Any) -> dict[str, object]:
         if not isinstance(item, dict):
             continue
         section = str(item.get("id") or "").strip().lower()
-        if item.get("status") != "available" or section in {"home", "customers"}:
+        if item.get("status") != "available" or section in {"home", "customers", "calendar", "sales"}:
             continue
         try:
             start_payload = build_cockpit_section_start_payload(
@@ -424,6 +518,52 @@ async def cockpit_home(request: web.Request) -> web.Response:
     except CockpitHomeUnavailable:
         return _error(503, "home_unavailable")
     return web.json_response({"ok": True, **home.as_dict()}, headers=_base_headers())
+
+
+async def cockpit_calendar(request: web.Request) -> web.Response:
+    scope = await _verified_payload_scope(request)
+    if isinstance(scope, web.Response):
+        return scope
+    user_id, requested_business, payload = scope
+    try:
+        calendar = await asyncio.to_thread(
+            resolve_cockpit_calendar,
+            telegram_user_id=user_id,
+            requested_business_id=requested_business,
+            limit=payload.get("limit", 30),
+        )
+    except TenantAccessDenied:
+        return _error(403, "business_access_denied")
+    except TenantPermissionDenied:
+        return _error(403, "calendar_access_denied")
+    except ValueError:
+        return _error(400, "invalid_calendar_request")
+    except (OSError, RuntimeError):
+        return _error(503, "calendar_unavailable")
+    return web.json_response({"ok": True, **calendar.as_dict()}, headers=_base_headers())
+
+
+async def cockpit_sales(request: web.Request) -> web.Response:
+    scope = await _verified_payload_scope(request)
+    if isinstance(scope, web.Response):
+        return scope
+    user_id, requested_business, payload = scope
+    try:
+        sales_snapshot = await asyncio.to_thread(
+            resolve_cockpit_sales,
+            telegram_user_id=user_id,
+            requested_business_id=requested_business,
+            limit=payload.get("limit", 20),
+        )
+    except TenantAccessDenied:
+        return _error(403, "business_access_denied")
+    except TenantPermissionDenied:
+        return _error(403, "sales_access_denied")
+    except ValueError:
+        return _error(400, "invalid_sales_request")
+    except (OSError, RuntimeError):
+        return _error(503, "sales_unavailable")
+    return web.json_response({"ok": True, **sales_snapshot.as_dict()}, headers=_base_headers())
 
 
 async def cockpit_customers(request: web.Request) -> web.Response:
@@ -733,8 +873,12 @@ def register_cockpit_routes(
     app.router.add_get(f"{_COCKPIT_PREFIX}/app.js", cockpit_script)
     app.router.add_get(f"{_COCKPIT_PREFIX}/styles.css", cockpit_styles)
     app.router.add_get(f"{_COCKPIT_PREFIX}/customers.js", cockpit_customers_script)
+    app.router.add_get(f"{_COCKPIT_PREFIX}/calendar.js", cockpit_calendar_script)
+    app.router.add_get(f"{_COCKPIT_PREFIX}/sales.js", cockpit_sales_script)
     app.router.add_post(f"{_COCKPIT_PREFIX}/context", cockpit_context)
     app.router.add_post(f"{_COCKPIT_PREFIX}/home", cockpit_home)
+    app.router.add_post(f"{_COCKPIT_PREFIX}/calendar", cockpit_calendar)
+    app.router.add_post(f"{_COCKPIT_PREFIX}/sales", cockpit_sales)
     app.router.add_post(f"{_COCKPIT_PREFIX}/section-open", cockpit_section_open)
     app.router.add_post(f"{_COCKPIT_PREFIX}/section-route", cockpit_section_route)
     app.router.add_post(f"{_COCKPIT_PREFIX}/customers", cockpit_customers)
@@ -755,6 +899,8 @@ def register_cockpit_routes(
 
 __all__ = [
     "cockpit_context",
+    "cockpit_calendar",
+    "cockpit_sales",
     "cockpit_customer_action_open",
     "cockpit_customer_action_route",
     "cockpit_customer_detail",
