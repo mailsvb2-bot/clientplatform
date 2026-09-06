@@ -173,6 +173,8 @@ class CockpitCustomersM7003Tests(unittest.TestCase):
         self.assertIn("/clientplatform/cockpit/customers", script)
         self.assertIn("/clientplatform/cockpit/customers/detail", script)
         self.assertIn("/clientplatform/cockpit/customers/action-route", script)
+        self.assertIn("if (openResolvedTelegramUrl(String(routeUrl || ''))) return;", script)
+        self.assertIn("This path runs after await, so use regular same-window navigation.", script)
         self.assertIn("openTelegramLink", script)
         self.assertIn("ClientPlatformCockpitNavigation", script)
         self.assertIn("enterCustomers", script)

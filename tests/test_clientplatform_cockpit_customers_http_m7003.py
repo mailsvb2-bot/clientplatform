@@ -135,6 +135,60 @@ class CockpitCustomersHttpM7003Tests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls[0]["customer_id"], _CUSTOMER)
         self.assertEqual(calls[0]["timeline_limit"], 20)
 
+    async def test_customer_detail_precomputes_next_action_route_for_direct_click(self) -> None:
+        principal = TelegramWebAppPrincipal(user_id=101, auth_date=1, query_id=None)
+        action = cockpit_customers.CockpitCustomerAction(
+            title="Продолжить продажу",
+            reason="Есть следующий шаг",
+            section="sales",
+            action_key="sales_handoff",
+        )
+        detail = cockpit_customers.CockpitCustomerDetail(
+            schema_version="2026-09-05.v1",
+            business_id=_BUSINESS,
+            role="owner",
+            customer_id=_CUSTOMER,
+            display_name="Анна",
+            status="active",
+            created_at="2026-09-01T10:00:00+00:00",
+            updated_at="2026-09-05T10:00:00+00:00",
+            contacts=(),
+            timeline=(),
+            next_action=action,
+            limitations=(),
+        )
+        start_payload = build_cockpit_action_start_payload(
+            business_id=_BUSINESS, action_key="sales_handoff"
+        )
+        route = cockpit_customers.CockpitCustomerActionRoute(
+            schema_version="2026-09-05.v1",
+            business_id=_BUSINESS,
+            role="owner",
+            customer_id=_CUSTOMER,
+            action_key="sales_handoff",
+            start_payload=start_payload,
+        )
+        with (
+            patch.object(cockpit_http.settings, "BOT_TOKEN", _TOKEN),
+            patch.object(cockpit_http.settings, "TELEGRAM_BOT_USERNAME", "clientplatform_test_bot"),
+            patch.object(cockpit_http, "verify_telegram_webapp_init_data", return_value=principal),
+            patch.object(cockpit_http, "resolve_cockpit_customer_detail", return_value=detail),
+            patch.object(cockpit_http, "resolve_cockpit_customer_action_route", return_value=route),
+        ):
+            status, payload, _headers = await self._post(
+                "/clientplatform/cockpit/customers/detail",
+                {
+                    "init_data": "verified",
+                    "business_id": _BUSINESS,
+                    "customer_id": _CUSTOMER,
+                },
+            )
+        self.assertEqual(status, 200)
+        self.assertEqual(
+            payload["next_action"]["route_url"],
+            f"https://t.me/clientplatform_test_bot?start={start_payload}",
+        )
+
     async def test_forged_customer_is_not_leaked(self) -> None:
         principal = TelegramWebAppPrincipal(user_id=101, auth_date=1, query_id=None)
         with (

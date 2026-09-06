@@ -88,7 +88,14 @@
     showList();
   };
 
-  const openActionRoute = async (customerId, expectedActionKey) => {
+  const openResolvedTelegramUrl = (url) => {
+    if (!String(url || '').startsWith('https://t.me/')) return false;
+    if (tg && typeof tg.openTelegramLink === 'function') tg.openTelegramLink(url);
+    else window.location.assign(url);
+    return true;
+  };
+
+  const openActionRouteFallback = async (customerId, expectedActionKey) => {
     setBusy(true);
     try {
       const route = await post('/clientplatform/cockpit/customers/action-route', {
@@ -97,8 +104,8 @@
       });
       const url = String(route.route_url || '');
       if (!url.startsWith('https://t.me/')) throw new Error('customer_action_route_unavailable');
-      if (tg && typeof tg.openTelegramLink === 'function') tg.openTelegramLink(url);
-      else window.location.assign(url);
+      // This path runs after await, so use regular same-window navigation.
+      window.location.assign(url);
     } catch (error) {
       text(
         limitations,
@@ -109,6 +116,11 @@
     } finally {
       setBusy(false);
     }
+  };
+
+  const openActionRoute = (customerId, expectedActionKey, routeUrl) => {
+    if (openResolvedTelegramUrl(String(routeUrl || ''))) return;
+    void openActionRouteFallback(customerId, expectedActionKey);
   };
 
   const renderDetail = (payload) => {
@@ -145,7 +157,7 @@
       text(reason, payload.next_action.reason);
       button.append(label, reason);
       button.addEventListener('click', () =>
-        openActionRoute(payload.customer_id, payload.next_action.action_key),
+        openActionRoute(payload.customer_id, payload.next_action.action_key, payload.next_action.route_url),
       );
       action.appendChild(button);
     } else {
