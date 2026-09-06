@@ -6,12 +6,16 @@ from pathlib import Path
 from typing import Any
 
 from aiohttp import web
+from aiogram.exceptions import TelegramAPIError
 
 from clientplatform.application.cockpit import (
     resolve_cockpit_context,
     resolve_cockpit_section_start_payload,
 )
-from clientplatform.application.cockpit_action_routing import build_cockpit_section_start_payload
+from clientplatform.application.cockpit_action_routing import (
+    build_cockpit_section_start_payload,
+    parse_cockpit_action_start_payload,
+)
 from clientplatform.application.cockpit_home import (
     CockpitHomeUnavailable,
     resolve_cockpit_home,
@@ -35,7 +39,21 @@ from services.messenger.platforms import MessengerPlatform
 
 _COCKPIT_PREFIX = "/clientplatform/cockpit"
 _COCKPIT_APP_KEY = web.AppKey("clientplatform_cockpit", bool)
+_COCKPIT_BOT_APP_KEY = web.AppKey("clientplatform_cockpit_bot", object)
+_COCKPIT_SECTION_SENDER_APP_KEY = web.AppKey("clientplatform_cockpit_section_sender", object)
+_COCKPIT_ACTION_SENDER_APP_KEY = web.AppKey("clientplatform_cockpit_action_sender", object)
 _CUSTOMERS_SCRIPT = Path(__file__).with_name("cockpit_customers.js")
+
+
+class _BotMessageTarget:
+    __slots__ = ("_bot", "_chat_id")
+
+    def __init__(self, bot: Any, *, chat_id: int) -> None:
+        self._bot = bot
+        self._chat_id = int(chat_id)
+
+    async def answer(self, text: str, **kwargs: Any) -> Any:
+        return await self._bot.send_message(chat_id=self._chat_id, text=text, **kwargs)
 
 _HTML = """<!doctype html>
 <html lang="ru"><head><meta charset="utf-8">
@@ -62,7 +80,7 @@ _HTML = """<!doctype html>
 <section id="explanation" class="explanation" hidden><button id="close-explanation" class="secondary" type="button">К разделам</button><h2 id="explanation-title"></h2><p id="explanation-summary"></p><p id="explanation-when"></p><p id="explanation-reason"></p></section>
 </main></body></html>"""
 
-_CSS = """:root{--bg:var(--tg-theme-bg-color,#f4f6f8);--surface:var(--tg-theme-secondary-bg-color,#fff);--text:var(--tg-theme-text-color,#17202a);--hint:var(--tg-theme-hint-color,#66717d);--link:var(--tg-theme-link-color,#2678d9);--button:var(--tg-theme-button-color,#2678d9);--button-text:var(--tg-theme-button-text-color,#fff);--border:rgba(127,127,127,.24)}*{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:var(--bg);color:var(--text);padding:0 0 env(safe-area-inset-bottom)}button,select{font:inherit;color:inherit}.shell{max-width:760px;margin:0 auto;padding:calc(18px + env(safe-area-inset-top)) 16px calc(40px + env(safe-area-inset-bottom))}header{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:16px}.eyebrow{margin:0 0 4px;font-size:12px;font-weight:800;letter-spacing:.045em;color:var(--hint)}h1{margin:0;font-size:29px;line-height:1.1}h2,h3{color:var(--text)}.pill{font-size:12px;background:var(--surface);border:1px solid var(--border);border-radius:999px;padding:8px 10px;max-width:46%;text-align:center}.business,.status,.explanation,.home-view,.customers-view{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:14px;margin-bottom:14px}.business label{display:block;font-size:13px;font-weight:750;margin-bottom:8px}select{width:100%;min-height:46px;border:1px solid var(--border);border-radius:12px;background:var(--surface);padding:0 12px}.status{font-size:14px;line-height:1.4}.status .secondary{margin-top:10px}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.card{min-height:126px;text-align:left;border:1px solid var(--border);border-radius:16px;background:var(--surface);padding:15px;position:relative}.card h2{font-size:17px;margin:0 0 7px;padding-right:56px}.card p{font-size:13px;line-height:1.38;margin:0;color:var(--hint)}.card.planned{border-style:dashed}.card.restricted{opacity:.72}.badge{position:absolute;right:10px;top:10px;font-size:10px;font-weight:800;border-radius:999px;padding:4px 7px;background:var(--bg);color:var(--hint)}.badge.available{background:var(--button);color:var(--button-text)}.explanation h2{margin:14px 0 8px}.explanation p{line-height:1.5}.secondary,.action-card{min-height:44px;border:1px solid var(--border);border-radius:12px;padding:0 14px;background:var(--bg);font-weight:700}.view-toolbar{display:flex;justify-content:space-between;gap:10px}.home-heading h2{margin:14px 0 4px}.home-heading p{margin:0 0 12px;color:var(--hint)}.metrics,.money{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:12px 0}.metric,.money-card,.attention-card{border:1px solid var(--border);border-radius:14px;padding:12px}.metric strong,.money-card strong{display:block;font-size:24px;margin-top:4px}.metric span,.money-card span,.muted{font-size:12px;color:var(--hint);line-height:1.4}.home-block{margin-top:18px}.home-block h3{margin:0 0 9px;font-size:16px}.attention-card{margin-bottom:8px}.action-card{display:block;width:100%;text-align:left;margin-bottom:8px}.action-card small{display:block;font-weight:400;margin-top:4px;color:var(--hint);line-height:1.35}.customer-search label{display:block;font-size:13px;font-weight:750;margin-bottom:8px}.customer-search>div{display:flex;gap:8px}.customer-search input{min-width:0;flex:1;min-height:44px;border:1px solid var(--border);border-radius:12px;background:var(--surface);color:var(--text);padding:0 12px}.customer-search button{min-height:44px;border:0;border-radius:12px;background:var(--button);color:var(--button-text);padding:0 16px;font-weight:800}.customer-row{display:block;width:100%;text-align:left;border:1px solid var(--border);border-radius:14px;background:var(--surface);padding:13px;margin-bottom:8px}.customer-row strong{display:block}.customer-row small,.contact-card small,.timeline-card small{display:block;color:var(--hint);margin-top:4px}.pager{display:flex;justify-content:space-between;gap:10px;margin-top:12px}.contact-card,.timeline-card{border:1px solid var(--border);border-radius:14px;padding:12px;margin-bottom:8px}.busy{opacity:.66;pointer-events:none}@media(max-width:520px){.grid,.metrics,.money{grid-template-columns:1fr}.shell{padding-left:12px;padding-right:12px}h1{font-size:27px}.pill{max-width:52%}.card{min-height:auto}.view-toolbar{position:sticky;top:env(safe-area-inset-top);z-index:2;background:var(--surface);padding:2px 0 8px}}"""
+_CSS = """:root{--bg:var(--tg-theme-bg-color,#f4f6f8);--surface:var(--tg-theme-secondary-bg-color,#fff);--text:var(--tg-theme-text-color,#17202a);--hint:var(--tg-theme-hint-color,#66717d);--link:var(--tg-theme-link-color,#2678d9);--button:var(--tg-theme-button-color,#2678d9);--button-text:var(--tg-theme-button-text-color,#fff);--border:rgba(127,127,127,.24)}*{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:var(--bg);color:var(--text);padding:0 0 env(safe-area-inset-bottom)}button,select{font:inherit;color:inherit}.shell{max-width:760px;margin:0 auto;padding:calc(18px + env(safe-area-inset-top)) 16px calc(40px + env(safe-area-inset-bottom))}header{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:16px}.eyebrow{margin:0 0 4px;font-size:12px;font-weight:800;letter-spacing:.045em;color:var(--hint)}h1{margin:0;font-size:29px;line-height:1.1}h2,h3{color:var(--text)}.pill{font-size:12px;background:var(--surface);border:1px solid var(--border);border-radius:999px;padding:8px 10px;max-width:46%;text-align:center}.business,.status,.explanation,.home-view,.customers-view{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:14px;margin-bottom:14px}.business label{display:block;font-size:13px;font-weight:750;margin-bottom:8px}select{width:100%;min-height:46px;border:1px solid var(--border);border-radius:12px;background:var(--surface);padding:0 12px}.status{font-size:14px;line-height:1.4}.status .secondary{margin-top:10px}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.card{min-height:126px;text-align:left;border:1px solid var(--border);border-radius:16px;background:var(--surface);padding:15px;position:relative;touch-action:manipulation;cursor:pointer}.card:active{transform:scale(.995)}.card:disabled{opacity:.7}.card h2{font-size:17px;margin:0 0 7px;padding-right:56px}.card p{font-size:13px;line-height:1.38;margin:0;color:var(--hint)}.card.planned{border-style:dashed}.card.restricted{opacity:.72}.badge{position:absolute;right:10px;top:10px;font-size:10px;font-weight:800;border-radius:999px;padding:4px 7px;background:var(--bg);color:var(--hint)}.badge.available{background:var(--button);color:var(--button-text)}.explanation h2{margin:14px 0 8px}.explanation p{line-height:1.5}.secondary,.action-card{min-height:44px;border:1px solid var(--border);border-radius:12px;padding:0 14px;background:var(--bg);font-weight:700}.view-toolbar{display:flex;justify-content:space-between;gap:10px}.home-heading h2{margin:14px 0 4px}.home-heading p{margin:0 0 12px;color:var(--hint)}.metrics,.money{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:12px 0}.metric,.money-card,.attention-card{border:1px solid var(--border);border-radius:14px;padding:12px}.metric strong,.money-card strong{display:block;font-size:24px;margin-top:4px}.metric span,.money-card span,.muted{font-size:12px;color:var(--hint);line-height:1.4}.home-block{margin-top:18px}.home-block h3{margin:0 0 9px;font-size:16px}.attention-card{margin-bottom:8px}.action-card{display:block;width:100%;text-align:left;margin-bottom:8px}.action-card small{display:block;font-weight:400;margin-top:4px;color:var(--hint);line-height:1.35}.customer-search label{display:block;font-size:13px;font-weight:750;margin-bottom:8px}.customer-search>div{display:flex;gap:8px}.customer-search input{min-width:0;flex:1;min-height:44px;border:1px solid var(--border);border-radius:12px;background:var(--surface);color:var(--text);padding:0 12px}.customer-search button{min-height:44px;border:0;border-radius:12px;background:var(--button);color:var(--button-text);padding:0 16px;font-weight:800}.customer-row{display:block;width:100%;text-align:left;border:1px solid var(--border);border-radius:14px;background:var(--surface);padding:13px;margin-bottom:8px}.customer-row strong{display:block}.customer-row small,.contact-card small,.timeline-card small{display:block;color:var(--hint);margin-top:4px}.pager{display:flex;justify-content:space-between;gap:10px;margin-top:12px}.contact-card,.timeline-card{border:1px solid var(--border);border-radius:14px;padding:12px;margin-bottom:8px}.busy{opacity:.66;pointer-events:none}@media(max-width:520px){.grid,.metrics,.money{grid-template-columns:1fr}.shell{padding-left:12px;padding-right:12px}h1{font-size:27px}.pill{max-width:52%}.card{min-height:auto}.view-toolbar{position:sticky;top:env(safe-area-inset-top);z-index:2;background:var(--surface);padding:2px 0 8px}}"""
 
 _JS = r"""(() => {
   'use strict';
@@ -147,7 +165,7 @@ _JS = r"""(() => {
       const label = document.createElement('span'); const detail = document.createElement('small'); const cleanTitle = String(item.title || '').replace(/^Открыть:\s*/, '');
       text(label, state === 'available' ? cleanTitle : `Подробнее: ${cleanTitle}`);
       text(detail, state === 'available' ? item.reason : `${item.reason} Экран раздела пока подключается.`);
-      button.append(label, detail); button.addEventListener('click', () => { if (target) showItem(target); }); homeActions.appendChild(button);
+      button.append(label, detail); button.addEventListener('click', () => { if (target) showItem(target, button); }); homeActions.appendChild(button);
     }
     homeActionsBlock.hidden = !(payload.actions || []).length;
     text(homeEmpty, payload.empty_message || '');
@@ -168,33 +186,41 @@ _JS = r"""(() => {
     homeMetrics.replaceChildren(); homeMoney.replaceChildren(); homeAttention.replaceChildren(); homeActions.replaceChildren(); homeAttentionBlock.hidden = true; homeActionsBlock.hidden = true;
     text(homeMeta, 'Не удалось обновить сводку'); text(homeEmpty, 'Сводка временно недоступна. Нажмите «Обновить» или откройте список разделов.'); text(homeLimitations, 'Ваши данные и права доступа не менялись.'); showHomeView();
   };
-  const openResolvedTelegramUrl = (url) => {
-    if (!String(url || '').startsWith('https://t.me/')) return false;
-    if (tg && typeof tg.openTelegramLink === 'function') tg.openTelegramLink(url);
-    else window.location.assign(url);
-    return true;
+  const closeAfterDelivery = () => {
+    if (tg && typeof tg.close === 'function') { tg.close(); return true; }
+    return false;
   };
-  const openSectionRouteFallback = async (item) => {
-    try {
-      const payload = await post('/clientplatform/cockpit/section-route', select.value, {section:item.id});
-      const url = String(payload.route_url || '');
-      if (!url.startsWith('https://t.me/')) throw new Error('section_route_unavailable');
-      // This path runs after await, so avoid Telegram's gesture-sensitive bridge.
-      window.location.assign(url);
-    } catch (_error) {
-      showExplanation({...item, reason:'Не удалось открыть раздел. Обновите кабинет и попробуйте ещё раз.'});
+  const notifySuccess = () => {
+    if (tg && tg.HapticFeedback && typeof tg.HapticFeedback.notificationOccurred === 'function') {
+      tg.HapticFeedback.notificationOccurred('success');
     }
   };
-  const openSectionRoute = (item) => {
-    if (openResolvedTelegramUrl(String(item.route_url || ''))) return;
-    void openSectionRouteFallback(item);
+  const openSection = async (item, button) => {
+    const badge = button ? button.querySelector('.badge') : null;
+    const priorBadge = badge ? badge.textContent : '';
+    if (button) { button.disabled = true; button.setAttribute('aria-busy', 'true'); }
+    if (badge) text(badge, 'Открываю…');
+    try {
+      await post('/clientplatform/cockpit/section-open', select.value, {section:item.id});
+      notifySuccess();
+      if (closeAfterDelivery()) return;
+      showExplanation({...item, reason:'Раздел открыт в чате с ботом. Вернитесь в Telegram.'});
+    } catch (error) {
+      const accessChanged = error && ['section_access_denied','business_access_denied'].includes(error.message);
+      showExplanation({...item, reason:accessChanged
+        ? 'Доступ к разделу изменился. Обновите кабинет.'
+        : 'Не удалось открыть раздел в Telegram. Обновите кабинет и попробуйте ещё раз.'});
+    } finally {
+      if (button) { button.disabled = false; button.removeAttribute('aria-busy'); }
+      if (badge) text(badge, priorBadge);
+    }
   };
-  const showItem = (item) => {
+  const showItem = (item, button = null) => {
     const state = screenStatus(item);
     if (state !== 'available') { showExplanation(item); return; }
     if (item.id === 'home') { loadHome().catch(homeFail); return; }
     if (item.id === 'customers' && window.ClientPlatformCustomers) { window.ClientPlatformCustomers.open(); return; }
-    openSectionRoute(item);
+    void openSection(item, button);
   };
 
   const render = (payload) => {
@@ -207,7 +233,7 @@ _JS = r"""(() => {
       const state = screenStatus(item); const button = document.createElement('button'); button.type = 'button'; button.className = `card ${state}`;
       const heading = document.createElement('h2'); const copy = document.createElement('p'); const badge = document.createElement('span'); badge.className = `badge ${state}`;
       const nativeHere = ['home','customers'].includes(item.id);
-      text(heading, item.title); text(copy, item.summary); text(badge, state === 'available' ? (nativeHere ? 'Работает' : 'Открыть') : state === 'planned' ? 'Скоро' : 'Нет доступа'); button.append(heading, copy, badge); button.addEventListener('click', () => showItem(item)); nav.appendChild(button);
+      text(heading, item.title); text(copy, item.summary); text(badge, state === 'available' ? (nativeHere ? 'Работает' : 'Открыть') : state === 'planned' ? 'Скоро' : 'Нет доступа'); button.append(heading, copy, badge); button.addEventListener('click', () => showItem(item, button)); nav.appendChild(button);
     }
     loadHome().catch(homeFail);
   };
@@ -475,6 +501,86 @@ async def cockpit_customer_detail(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, **response_payload}, headers=_base_headers())
 
 
+async def _send_section_to_bot(
+    *,
+    sender: Any,
+    bot: Any,
+    telegram_user_id: int,
+    canonical_user_id: int,
+    business_id: str,
+    section: str,
+) -> None:
+    await sender(
+        _BotMessageTarget(bot, chat_id=telegram_user_id),
+        user_id=canonical_user_id,
+        business_id=business_id,
+        section=section,
+    )
+
+
+async def _send_action_to_bot(
+    *,
+    sender: Any,
+    bot: Any,
+    telegram_user_id: int,
+    canonical_user_id: int,
+    route: Any,
+) -> None:
+    await sender(
+        _BotMessageTarget(bot, chat_id=telegram_user_id),
+        user_id=canonical_user_id,
+        route=route,
+    )
+
+
+async def cockpit_section_open(request: web.Request) -> web.Response:
+    scope = await _verified_payload_scope(request)
+    if isinstance(scope, web.Response):
+        return scope
+    telegram_user_id, requested_business, payload = scope
+    section = payload.get("section")
+    if not isinstance(section, str) or not section.strip() or len(section) > 40:
+        return _error(400, "invalid_section")
+    bot = request.app.get(_COCKPIT_BOT_APP_KEY)
+    sender = request.app.get(_COCKPIT_SECTION_SENDER_APP_KEY)
+    if bot is None or sender is None:
+        return _error(503, "telegram_delivery_unavailable")
+    normalized = section.strip().lower()
+    try:
+        context = await asyncio.to_thread(
+            resolve_cockpit_context,
+            telegram_user_id=telegram_user_id,
+            requested_business_id=requested_business,
+        )
+        if context.onboarding_required or context.business_id is None:
+            raise TenantAccessDenied("active business membership was not found")
+        item = next((entry for entry in context.navigation if entry.id == normalized), None)
+        if item is None:
+            raise ValueError("unsupported cockpit section")
+        if item.status != "available":
+            raise TenantPermissionDenied("cockpit section is not available for this role")
+        await _send_section_to_bot(
+            sender=sender,
+            bot=bot,
+            telegram_user_id=telegram_user_id,
+            canonical_user_id=int(context.user_id),
+            business_id=context.business_id,
+            section=normalized,
+        )
+    except TenantAccessDenied:
+        return _error(403, "business_access_denied")
+    except TenantPermissionDenied:
+        return _error(403, "section_access_denied")
+    except ValueError:
+        return _error(400, "invalid_section")
+    except (TelegramAPIError, OSError):
+        return _error(503, "telegram_delivery_failed")
+    return web.json_response(
+        {"ok": True, "delivery": "telegram_chat", "section": normalized},
+        headers=_base_headers(),
+    )
+
+
 async def cockpit_section_route(request: web.Request) -> web.Response:
     scope = await _verified_payload_scope(request)
     if isinstance(scope, web.Response):
@@ -500,6 +606,71 @@ async def cockpit_section_route(request: web.Request) -> web.Response:
     if route_url is None:
         return _error(503, "section_route_unavailable")
     return web.json_response({"ok": True, "route_url": route_url}, headers=_base_headers())
+
+
+async def cockpit_customer_action_open(request: web.Request) -> web.Response:
+    scope = await _verified_payload_scope(request)
+    if isinstance(scope, web.Response):
+        return scope
+    telegram_user_id, requested_business, payload = scope
+    customer_id = payload.get("customer_id")
+    expected_action_key = payload.get("expected_action_key")
+    if not isinstance(customer_id, str) or not customer_id.strip():
+        return _error(400, "customer_id_required")
+    if (
+        expected_action_key is not None
+        and (
+            not isinstance(expected_action_key, str)
+            or not expected_action_key.strip()
+            or len(expected_action_key) > 100
+        )
+    ):
+        return _error(400, "invalid_customer_request")
+    bot = request.app.get(_COCKPIT_BOT_APP_KEY)
+    sender = request.app.get(_COCKPIT_ACTION_SENDER_APP_KEY)
+    if bot is None or sender is None:
+        return _error(503, "telegram_delivery_unavailable")
+    try:
+        route = await asyncio.to_thread(
+            resolve_cockpit_customer_action_route,
+            telegram_user_id=telegram_user_id,
+            requested_business_id=requested_business,
+            customer_id=customer_id,
+            expected_action_key=expected_action_key,
+        )
+        context = await asyncio.to_thread(
+            resolve_cockpit_context,
+            telegram_user_id=telegram_user_id,
+            requested_business_id=route.business_id,
+        )
+        if context.onboarding_required or context.business_id != route.business_id:
+            raise TenantAccessDenied("customer action business is no longer active")
+        parsed = parse_cockpit_action_start_payload(route.start_payload)
+        if parsed is None or parsed.section is not None:
+            raise ValueError("invalid customer action route")
+        await _send_action_to_bot(
+            sender=sender,
+            bot=bot,
+            telegram_user_id=telegram_user_id,
+            canonical_user_id=int(context.user_id),
+            route=parsed,
+        )
+    except TenantAccessDenied:
+        return _error(403, "business_access_denied")
+    except TenantPermissionDenied:
+        return _error(403, "customer_access_denied")
+    except CustomerNotFound:
+        return _error(404, "customer_not_found")
+    except CockpitCustomerActionUnavailable:
+        return _error(409, "customer_action_changed")
+    except ValueError:
+        return _error(400, "invalid_customer_request")
+    except (TelegramAPIError, OSError):
+        return _error(503, "telegram_delivery_failed")
+    return web.json_response(
+        {"ok": True, "delivery": "telegram_chat", "schema_version": route.schema_version},
+        headers=_base_headers(),
+    )
 
 
 async def cockpit_customer_action_route(request: web.Request) -> web.Response:
@@ -551,26 +722,40 @@ async def cockpit_customer_action_route(request: web.Request) -> web.Response:
     )
 
 
-def register_cockpit_routes(app: web.Application) -> None:
+def register_cockpit_routes(
+    app: web.Application,
+    *,
+    bot: Any = None,
+    section_sender: Any = None,
+    action_sender: Any = None,
+) -> None:
     app.router.add_get(_COCKPIT_PREFIX, cockpit_shell)
     app.router.add_get(f"{_COCKPIT_PREFIX}/app.js", cockpit_script)
     app.router.add_get(f"{_COCKPIT_PREFIX}/styles.css", cockpit_styles)
     app.router.add_get(f"{_COCKPIT_PREFIX}/customers.js", cockpit_customers_script)
     app.router.add_post(f"{_COCKPIT_PREFIX}/context", cockpit_context)
     app.router.add_post(f"{_COCKPIT_PREFIX}/home", cockpit_home)
+    app.router.add_post(f"{_COCKPIT_PREFIX}/section-open", cockpit_section_open)
     app.router.add_post(f"{_COCKPIT_PREFIX}/section-route", cockpit_section_route)
     app.router.add_post(f"{_COCKPIT_PREFIX}/customers", cockpit_customers)
     app.router.add_post(
         f"{_COCKPIT_PREFIX}/customers/detail", cockpit_customer_detail
     )
     app.router.add_post(
+        f"{_COCKPIT_PREFIX}/customers/action-open", cockpit_customer_action_open
+    )
+    app.router.add_post(
         f"{_COCKPIT_PREFIX}/customers/action-route", cockpit_customer_action_route
     )
+    app[_COCKPIT_BOT_APP_KEY] = bot
+    app[_COCKPIT_SECTION_SENDER_APP_KEY] = section_sender
+    app[_COCKPIT_ACTION_SENDER_APP_KEY] = action_sender
     app[_COCKPIT_APP_KEY] = True
 
 
 __all__ = [
     "cockpit_context",
+    "cockpit_customer_action_open",
     "cockpit_customer_action_route",
     "cockpit_customer_detail",
     "cockpit_customers",
@@ -578,6 +763,7 @@ __all__ = [
     "cockpit_home",
     "cockpit_http_enabled",
     "cockpit_script",
+    "cockpit_section_open",
     "cockpit_section_route",
     "cockpit_shell",
     "cockpit_styles",

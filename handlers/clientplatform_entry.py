@@ -27,6 +27,8 @@ from clientplatform.domain.activity import ActivityInvariantViolation
 from clientplatform.domain.tenancy import TenantAccessDenied, TenantPermissionDenied
 from services.db.core import db_operation_deadline
 
+from . import clientplatform_cockpit_dispatch
+
 control = importlib.import_module(".clientplatform_control", __package__)
 
 router = Router(name="clientplatform_entry")
@@ -173,42 +175,14 @@ async def _dispatch_clientplatform_start(
             ):
                 raise TenantAccessDenied("cockpit action business is no longer active")
             canonical_user_id = int(cockpit_context.user_id)
-            if cockpit_route.section is not None:
-                one_click = importlib.import_module(
-                    ".clientplatform_one_click_experience", __package__
-                )
-                await one_click.send_one_click_section(
-                    message,
-                    user_id=canonical_user_id,
-                    business_id=cockpit_route.business_id,
-                    section=cockpit_route.section,
-                )
-            elif cockpit_route.kind == "h":
-                sales = importlib.import_module(".clientplatform_sales", __package__)
-                await sales.send_sales_handoff_view(
-                    message,
-                    user_id=canonical_user_id,
-                    business_id=cockpit_route.business_id,
-                )
-            elif cockpit_route.kind == "w":
-                sales = importlib.import_module(".clientplatform_sales", __package__)
-                await sales.send_sales_work_view(
-                    message,
-                    user_id=canonical_user_id,
-                    business_id=cockpit_route.business_id,
-                )
-            elif cockpit_route.kind == "l" and cockpit_route.lead_id is not None:
-                operations = importlib.import_module(
-                    ".clientplatform_sales_operations", __package__
-                )
-                await operations.send_sales_lead_view(
-                    message,
-                    user_id=canonical_user_id,
-                    business_id=cockpit_route.business_id,
-                    lead_id=cockpit_route.lead_id,
-                )
-            else:
-                raise ValueError("unsupported cockpit action route")
+            cockpit_dispatch = importlib.import_module(
+                ".clientplatform_cockpit_dispatch", __package__
+            )
+            await cockpit_dispatch.send_cockpit_action_route(
+                message,
+                user_id=canonical_user_id,
+                route=cockpit_route,
+            )
         except (TenantAccessDenied, TenantPermissionDenied, ValueError):
             if cockpit_route.section is not None:
                 await message.answer(

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 _AIOHTTP_AVAILABLE = importlib.util.find_spec("aiohttp") is not None
 
@@ -57,9 +57,10 @@ class CockpitHttpM7001Tests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Home / Today", body)
         self.assertIn("tg.BackButton.onClick", script)
         self.assertIn("currentView === 'customers'", script)
-        self.assertIn("/clientplatform/cockpit/section-route", script)
-        self.assertIn("if (openResolvedTelegramUrl(String(item.route_url || ''))) return;", script)
-        self.assertIn("This path runs after await, so avoid Telegram's gesture-sensitive bridge.", script)
+        self.assertIn("/clientplatform/cockpit/section-open", script)
+        self.assertIn("await post('/clientplatform/cockpit/section-open'", script)
+        self.assertIn("tg.close()", script)
+        self.assertNotIn("openTelegramLink", script)
         self.assertIn("if (item.status === 'available')", script)
         self.assertNotIn("['home','customers'].includes(item.id) && item.status", script)
         self.assertIn("loadHome().catch(homeFail)", script)
@@ -193,6 +194,75 @@ class CockpitHttpM7001Tests(unittest.IsolatedAsyncioTestCase):
             response.headers["Cache-Control"],
             "no-store, max-age=0",
         )
+
+    async def test_cockpit_section_open_revalidates_and_delivers_through_canonical_bot_ui(self) -> None:
+        principal = TelegramWebAppPrincipal(user_id=101, auth_date=1, query_id=None)
+        navigation = (
+            cockpit.CockpitNavigationItem(
+                id="sales", title="Продажи", summary="", when_to_use="", status="available"
+            ),
+        )
+        resolved = cockpit.CockpitContext(
+            user_id=202,
+            business_id=_BUSINESS_A,
+            business_name="Практика",
+            role="owner",
+            onboarding_required=False,
+            businesses=(),
+            navigation=navigation,
+        )
+        sender = AsyncMock()
+        bot = object()
+        with (
+            patch.object(cockpit_http.settings, "BOT_TOKEN", _TOKEN),
+            patch.object(cockpit_http, "verify_telegram_webapp_init_data", return_value=principal),
+            patch.object(cockpit_http, "resolve_cockpit_context", return_value=resolved),
+        ):
+            app = web.Application()
+            cockpit_http.register_cockpit_routes(app, bot=bot, section_sender=sender)
+            client = TestClient(TestServer(app))
+            await client.start_server()
+            try:
+                response = await client.post(
+                    "/clientplatform/cockpit/section-open",
+                    json={
+                        "init_data": "verified-by-test",
+                        "business_id": _BUSINESS_A,
+                        "section": "sales",
+                    },
+                )
+                payload = await response.json()
+            finally:
+                await client.close()
+        self.assertEqual(response.status, 200)
+        self.assertEqual(payload["delivery"], "telegram_chat")
+        self.assertEqual(payload["section"], "sales")
+        sender.assert_awaited_once()
+        kwargs = sender.await_args.kwargs
+        self.assertEqual(kwargs["user_id"], 202)
+        self.assertEqual(kwargs["business_id"], _BUSINESS_A)
+        self.assertEqual(kwargs["section"], "sales")
+
+    async def test_cockpit_section_open_fails_closed_without_central_bot(self) -> None:
+        principal = TelegramWebAppPrincipal(user_id=101, auth_date=1, query_id=None)
+        with (
+            patch.object(cockpit_http.settings, "BOT_TOKEN", _TOKEN),
+            patch.object(cockpit_http, "verify_telegram_webapp_init_data", return_value=principal),
+        ):
+            app = web.Application()
+            cockpit_http.register_cockpit_routes(app)
+            client = TestClient(TestServer(app))
+            await client.start_server()
+            try:
+                response = await client.post(
+                    "/clientplatform/cockpit/section-open",
+                    json={"init_data": "verified-by-test", "section": "sales"},
+                )
+                payload = await response.json()
+            finally:
+                await client.close()
+        self.assertEqual(response.status, 503)
+        self.assertEqual(payload["error"], "telegram_delivery_unavailable")
 
     async def test_cockpit_section_route_revalidates_identity_business_and_section(self) -> None:
         principal = TelegramWebAppPrincipal(user_id=101, auth_date=1, query_id=None)

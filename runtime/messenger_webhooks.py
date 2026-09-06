@@ -569,6 +569,9 @@ def _ad_publication_worker_enabled() -> bool:
 async def start_messenger_webhook_runtime(
     bot: "Bot | None" = None,
     dispatcher: "Dispatcher | None" = None,
+    *,
+    cockpit_section_sender: Any = None,
+    cockpit_action_sender: Any = None,
 ) -> MessengerWebhookRuntime | None:
     """Start webhook providers, OAuth callbacks and durable provider workers."""
 
@@ -607,7 +610,12 @@ async def start_messenger_webhook_runtime(
     # intentionally disabled. Each redirect still checks provider readiness.
     _register_clientplatform_owner_entry_routes(app)
     if cockpit_enabled:
-        register_cockpit_routes(app)
+        register_cockpit_routes(
+            app,
+            bot=bot,
+            section_sender=cockpit_section_sender,
+            action_sender=cockpit_action_sender,
+        )
 
     if privacy_export_enabled:
         _register_privacy_export_routes(app)
