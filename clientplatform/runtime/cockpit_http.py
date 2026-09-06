@@ -11,6 +11,7 @@ from clientplatform.application.cockpit import (
     resolve_cockpit_context,
     resolve_cockpit_section_start_payload,
 )
+from clientplatform.application.cockpit_action_routing import build_cockpit_section_start_payload
 from clientplatform.application.cockpit_home import (
     CockpitHomeUnavailable,
     resolve_cockpit_home,
@@ -167,24 +168,33 @@ _JS = r"""(() => {
     homeMetrics.replaceChildren(); homeMoney.replaceChildren(); homeAttention.replaceChildren(); homeActions.replaceChildren(); homeAttentionBlock.hidden = true; homeActionsBlock.hidden = true;
     text(homeMeta, 'Не удалось обновить сводку'); text(homeEmpty, 'Сводка временно недоступна. Нажмите «Обновить» или откройте список разделов.'); text(homeLimitations, 'Ваши данные и права доступа не менялись.'); showHomeView();
   };
-  const openSectionRoute = async (item) => {
-    const payload = await post('/clientplatform/cockpit/section-route', select.value, {section:item.id});
-    const url = String(payload.route_url || '');
-    if (!url.startsWith('https://t.me/')) throw new Error('section_route_unavailable');
+  const openResolvedTelegramUrl = (url) => {
+    if (!String(url || '').startsWith('https://t.me/')) return false;
     if (tg && typeof tg.openTelegramLink === 'function') tg.openTelegramLink(url);
     else window.location.assign(url);
+    return true;
+  };
+  const openSectionRouteFallback = async (item) => {
+    try {
+      const payload = await post('/clientplatform/cockpit/section-route', select.value, {section:item.id});
+      const url = String(payload.route_url || '');
+      if (!url.startsWith('https://t.me/')) throw new Error('section_route_unavailable');
+      // This path runs after await, so avoid Telegram's gesture-sensitive bridge.
+      window.location.assign(url);
+    } catch (_error) {
+      showExplanation({...item, reason:'Не удалось открыть раздел. Обновите кабинет и попробуйте ещё раз.'});
+    }
+  };
+  const openSectionRoute = (item) => {
+    if (openResolvedTelegramUrl(String(item.route_url || ''))) return;
+    void openSectionRouteFallback(item);
   };
   const showItem = (item) => {
     const state = screenStatus(item);
     if (state !== 'available') { showExplanation(item); return; }
     if (item.id === 'home') { loadHome().catch(homeFail); return; }
     if (item.id === 'customers' && window.ClientPlatformCustomers) { window.ClientPlatformCustomers.open(); return; }
-    openSectionRoute(item).catch(() => {
-      currentView = 'explanation';
-      text(title, item.title); text(summary, item.summary); text(when, `Когда пригодится: ${item.when_to_use}`);
-      text(reason, 'Не удалось открыть раздел в боте. Вернитесь к разделам и попробуйте ещё раз.');
-      nav.hidden = true; home.hidden = true; document.getElementById('customers-view').hidden = true; explanation.hidden = false; syncBackButton();
-    });
+    openSectionRoute(item);
   };
 
   const render = (payload) => {
@@ -324,6 +334,31 @@ async def _verified_scope(request: web.Request) -> tuple[int, str | None] | web.
     return user_id, requested_business
 
 
+def _context_payload_with_routes(context: Any) -> dict[str, object]:
+    payload = context.as_dict()
+    business_id = str(payload.get("business_id") or "").strip()
+    navigation = payload.get("navigation")
+    if not business_id or not isinstance(navigation, (list, tuple)):
+        return payload
+    for item in navigation:
+        if not isinstance(item, dict):
+            continue
+        section = str(item.get("id") or "").strip().lower()
+        if item.get("status") != "available" or section in {"home", "customers"}:
+            continue
+        try:
+            start_payload = build_cockpit_section_start_payload(
+                business_id=business_id,
+                section=section,
+            )
+        except ValueError:
+            continue
+        route_url = _telegram_action_url(start_payload)
+        if route_url is not None:
+            item["route_url"] = route_url
+    return payload
+
+
 async def cockpit_context(request: web.Request) -> web.Response:
     scope = await _verified_scope(request)
     if isinstance(scope, web.Response):
@@ -339,7 +374,10 @@ async def cockpit_context(request: web.Request) -> web.Response:
         return _error(403, "business_access_denied")
     except ValueError:
         return _error(400, "invalid_business_id")
-    return web.json_response({"ok": True, **context.as_dict()}, headers=_base_headers())
+    return web.json_response(
+        {"ok": True, **_context_payload_with_routes(context)},
+        headers=_base_headers(),
+    )
 
 
 async def cockpit_home(request: web.Request) -> web.Response:
@@ -412,7 +450,29 @@ async def cockpit_customer_detail(request: web.Request) -> web.Response:
         return _error(404, "customer_not_found")
     except ValueError:
         return _error(400, "invalid_customer_request")
-    return web.json_response({"ok": True, **detail.as_dict()}, headers=_base_headers())
+    response_payload = detail.as_dict()
+    if detail.next_action is not None:
+        try:
+            action_route = await asyncio.to_thread(
+                resolve_cockpit_customer_action_route,
+                telegram_user_id=user_id,
+                requested_business_id=requested_business,
+                customer_id=detail.customer_id,
+                expected_action_key=detail.next_action.action_key,
+            )
+        except (
+            CockpitCustomerActionUnavailable,
+            TenantAccessDenied,
+            TenantPermissionDenied,
+            ValueError,
+        ):
+            action_route = None
+        if action_route is not None:
+            route_url = _telegram_action_url(action_route.start_payload)
+            next_action = response_payload.get("next_action")
+            if route_url is not None and isinstance(next_action, dict):
+                next_action["route_url"] = route_url
+    return web.json_response({"ok": True, **response_payload}, headers=_base_headers())
 
 
 async def cockpit_section_route(request: web.Request) -> web.Response:
