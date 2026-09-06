@@ -538,7 +538,9 @@ async def cockpit_calendar(request: web.Request) -> web.Response:
         return _error(403, "calendar_access_denied")
     except ValueError:
         return _error(400, "invalid_calendar_request")
-    except (OSError, RuntimeError):
+    except OSError:
+        return _error(503, "calendar_unavailable")
+    except RuntimeError:
         return _error(503, "calendar_unavailable")
     return web.json_response({"ok": True, **calendar.as_dict()}, headers=_base_headers())
 
@@ -561,7 +563,9 @@ async def cockpit_sales(request: web.Request) -> web.Response:
         return _error(403, "sales_access_denied")
     except ValueError:
         return _error(400, "invalid_sales_request")
-    except (OSError, RuntimeError):
+    except OSError:
+        return _error(503, "sales_unavailable")
+    except RuntimeError:
         return _error(503, "sales_unavailable")
     return web.json_response({"ok": True, **sales_snapshot.as_dict()}, headers=_base_headers())
 

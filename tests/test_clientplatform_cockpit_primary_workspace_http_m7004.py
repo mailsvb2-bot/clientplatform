@@ -102,7 +102,7 @@ class CockpitPrimaryWorkspaceHttpM7004Tests(unittest.IsolatedAsyncioTestCase):
             [{"telegram_user_id": 202, "requested_business_id": _BUSINESS, "limit": 9}],
         )
 
-    async def test_native_workspace_routes_fail_closed_after_live_permission_change(self) -> None:
+    async def test_native_workspace_routes_fail_closed_after_permission_change(self) -> None:
         principal = TelegramWebAppPrincipal(user_id=101, auth_date=1, query_id=None)
         with (
             patch.object(cockpit_http.settings, "BOT_TOKEN", _TOKEN),

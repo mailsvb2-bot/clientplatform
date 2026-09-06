@@ -88,7 +88,7 @@ class CockpitPrimaryWorkspaceM7004Tests(unittest.TestCase):
         self.assertEqual(result.timezone_name, "Europe/Tallinn")
         self.assertFalse(result.has_more)
 
-    def test_calendar_rechecks_live_permission_before_reading(self) -> None:
+    def test_calendar_rechecks_current_permission_before_reading(self) -> None:
         actor = _actor(PlatformRole.MARKETER)
         called = False
 
