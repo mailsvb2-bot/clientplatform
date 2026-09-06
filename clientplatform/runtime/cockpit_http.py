@@ -21,7 +21,15 @@ from clientplatform.application.cockpit_home import (
     resolve_cockpit_home,
 )
 from clientplatform.application.cockpit_calendar import resolve_cockpit_calendar
+from clientplatform.application.cockpit_connections import (
+    issue_cockpit_messenger_setup,
+    resolve_cockpit_connections,
+)
 from clientplatform.application.cockpit_sales import resolve_cockpit_sales
+from clientplatform.application.cockpit_settings import (
+    resolve_cockpit_settings,
+    update_cockpit_settings,
+)
 from clientplatform.application.cockpit_customers import (
     CockpitCustomerActionUnavailable,
     resolve_cockpit_customer_action_route,
@@ -47,6 +55,8 @@ _COCKPIT_ACTION_SENDER_APP_KEY = web.AppKey("clientplatform_cockpit_action_sende
 _CUSTOMERS_SCRIPT = Path(__file__).with_name("cockpit_customers.js")
 _CALENDAR_SCRIPT = Path(__file__).with_name("cockpit_calendar.js")
 _SALES_SCRIPT = Path(__file__).with_name("cockpit_sales.js")
+_CONNECTIONS_SCRIPT = Path(__file__).with_name("cockpit_connections.js")
+_SETTINGS_SCRIPT = Path(__file__).with_name("cockpit_settings.js")
 
 
 class _BotMessageTarget:
@@ -69,6 +79,8 @@ _HTML = """<!doctype html>
 <script defer src="/clientplatform/cockpit/customers.js"></script>
 <script defer src="/clientplatform/cockpit/calendar.js"></script>
 <script defer src="/clientplatform/cockpit/sales.js"></script>
+<script defer src="/clientplatform/cockpit/connections.js"></script>
+<script defer src="/clientplatform/cockpit/settings.js"></script>
 </head><body>
 <main class="shell">
 <header><div><p class="eyebrow">ClientPlatform</p><h1>Ваш бизнес</h1></div><span id="role" class="pill">Проверяем доступ…</span></header>
@@ -103,6 +115,22 @@ _HTML = """<!doctype html>
 <p id="sales-handoff" class="muted"></p><div id="sales-list"></div><p id="sales-empty" class="muted"></p><p id="sales-limitations" class="muted"></p>
 <button id="sales-manage" class="primary-cta" type="button">Открыть все действия по продажам</button>
 </section>
+<section id="connections-view" class="workspace-view" aria-live="polite" hidden>
+<div class="view-toolbar"><button id="connections-more" class="secondary" type="button">Все разделы</button><button id="connections-refresh" class="secondary" type="button">Обновить</button></div>
+<div class="home-heading"><p class="eyebrow">Каналы бизнеса</p><h2>Подключения</h2><p id="connections-meta"></p></div>
+<p class="muted">Здесь видно реальное состояние Telegram, ВКонтакте и MAX. Новый токен вводится только на защищённой одноразовой HTTPS-странице.</p>
+<div id="connections-list"></div><p id="connections-empty" class="muted"></p>
+</section>
+<section id="settings-view" class="workspace-view" aria-live="polite" hidden>
+<div class="view-toolbar"><button id="settings-more" class="secondary" type="button">Все разделы</button><button id="settings-refresh" class="secondary" type="button">Обновить</button></div>
+<div class="home-heading"><p class="eyebrow">Бизнес</p><h2>Настройки</h2><p id="settings-meta"></p></div>
+<form id="settings-form" class="settings-form">
+<label for="settings-business-name">Название бизнеса</label><input id="settings-business-name" maxlength="160" autocomplete="organization" required>
+<label for="settings-activity">Чем занимается бизнес</label><textarea id="settings-activity" maxlength="2000" rows="5" required></textarea>
+<label for="settings-timezone">Часовой пояс</label><input id="settings-timezone" maxlength="100" autocomplete="off" placeholder="Europe/Moscow" required>
+<button id="settings-save" class="primary-cta" type="submit">Сохранить настройки</button>
+</form><p id="settings-message" class="muted"></p>
+</section>
 <section id="explanation" class="explanation" hidden><button id="close-explanation" class="secondary" type="button">К разделам</button><h2 id="explanation-title"></h2><p id="explanation-summary"></p><p id="explanation-when"></p><p id="explanation-reason"></p></section>
 </main>
 <nav id="primary-nav" class="primary-nav" aria-label="Основная навигация" hidden>
@@ -114,7 +142,7 @@ _HTML = """<!doctype html>
 </nav>
 </body></html>"""
 
-_CSS = """:root{--bg:var(--tg-theme-bg-color,#f4f6f8);--surface:var(--tg-theme-secondary-bg-color,#fff);--text:var(--tg-theme-text-color,#17202a);--hint:var(--tg-theme-hint-color,#66717d);--link:var(--tg-theme-link-color,#2678d9);--button:var(--tg-theme-button-color,#2678d9);--button-text:var(--tg-theme-button-text-color,#fff);--border:rgba(127,127,127,.24)}*{box-sizing:border-box}[hidden]{display:none!important}body{margin:0;font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:var(--bg);color:var(--text);padding:0}button,select,input{font:inherit;color:inherit}.shell{max-width:760px;margin:0 auto;padding:calc(18px + env(safe-area-inset-top)) 16px calc(104px + env(safe-area-inset-bottom))}header{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:16px}.eyebrow{margin:0 0 4px;font-size:12px;font-weight:800;letter-spacing:.045em;color:var(--hint)}h1{margin:0;font-size:29px;line-height:1.1}h2,h3{color:var(--text)}.pill{font-size:12px;background:var(--surface);border:1px solid var(--border);border-radius:999px;padding:8px 10px;max-width:46%;text-align:center}.business,.status,.explanation,.workspace-view{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:14px;margin-bottom:14px}.business label{display:block;font-size:13px;font-weight:750;margin-bottom:8px}select{width:100%;min-height:46px;border:1px solid var(--border);border-radius:12px;background:var(--surface);padding:0 12px}.status{font-size:14px;line-height:1.4}.status .secondary{margin-top:10px}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.card{min-height:126px;text-align:left;border:1px solid var(--border);border-radius:16px;background:var(--surface);padding:15px;position:relative;touch-action:manipulation;cursor:pointer}.card:active,.customer-row:active,.sales-card:active,.action-card:active{transform:scale(.995)}.card:disabled{opacity:.7}.card h2{font-size:17px;margin:0 0 7px;padding-right:56px}.card p{font-size:13px;line-height:1.38;margin:0;color:var(--hint)}.card.planned{border-style:dashed}.card.restricted{opacity:.72}.badge{position:absolute;right:10px;top:10px;font-size:10px;font-weight:800;border-radius:999px;padding:4px 7px;background:var(--bg);color:var(--hint)}.badge.available{background:var(--button);color:var(--button-text)}.explanation h2{margin:14px 0 8px}.explanation p{line-height:1.5}.secondary,.action-card{min-height:44px;border:1px solid var(--border);border-radius:12px;padding:0 14px;background:var(--bg);font-weight:700}.view-toolbar{display:flex;justify-content:space-between;gap:10px}.home-heading h2{margin:14px 0 4px}.home-heading p{margin:0 0 12px;color:var(--hint)}.metrics,.money{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:12px 0}.metric,.money-card,.attention-card{border:1px solid var(--border);border-radius:14px;padding:12px}.metric strong,.money-card strong{display:block;font-size:24px;margin-top:4px}.metric span,.money-card span,.muted{font-size:12px;color:var(--hint);line-height:1.4}.home-block{margin-top:18px}.home-block h3{margin:0 0 9px;font-size:16px}.primary-block{border:1px solid var(--button);border-radius:16px;padding:14px;background:color-mix(in srgb,var(--button) 7%,var(--surface))}.primary-block h3{font-size:19px}.attention-card{margin-bottom:8px}.action-card{display:block;width:100%;text-align:left;margin-bottom:8px;touch-action:manipulation}.action-card.primary-action{min-height:76px;background:var(--button);color:var(--button-text);border-color:var(--button);font-size:16px}.action-card small{display:block;font-weight:400;margin-top:4px;color:var(--hint);line-height:1.35}.action-card.primary-action small{color:var(--button-text);opacity:.84}.customer-search label{display:block;font-size:13px;font-weight:750;margin-bottom:8px}.customer-search>div{display:flex;gap:8px}.customer-search input{min-width:0;flex:1;min-height:44px;border:1px solid var(--border);border-radius:12px;background:var(--surface);color:var(--text);padding:0 12px}.customer-search button,.primary-cta{min-height:46px;border:0;border-radius:12px;background:var(--button);color:var(--button-text);padding:0 16px;font-weight:800}.primary-cta{display:block;width:100%;margin-top:14px}.customer-row,.sales-card{display:block;width:100%;text-align:left;border:1px solid var(--border);border-radius:14px;background:var(--surface);padding:13px;margin-bottom:8px;touch-action:manipulation}.customer-row strong{display:block}.customer-row small,.contact-card small,.timeline-card small,.schedule-card small,.sales-card small{display:block;color:var(--hint);margin-top:4px}.pager{display:flex;justify-content:space-between;gap:10px;margin-top:12px}.contact-card,.timeline-card,.schedule-card{border:1px solid var(--border);border-radius:14px;padding:12px;margin-bottom:8px}.schedule-card-top,.sales-card-top{display:flex;justify-content:space-between;gap:12px;align-items:center}.schedule-card p,.sales-card p{margin:8px 0 0;line-height:1.35}.schedule-status,.sales-stage{font-size:11px;font-weight:800;border-radius:999px;padding:4px 8px;background:var(--bg);white-space:nowrap}.schedule-status.booked{background:var(--button);color:var(--button-text)}.sales-card.overdue{border-color:var(--button)}.primary-nav{position:fixed;left:50%;bottom:0;transform:translateX(-50%);width:min(760px,100%);z-index:30;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));padding:8px 8px calc(8px + env(safe-area-inset-bottom));background:var(--surface);border-top:1px solid var(--border);box-shadow:0 -8px 28px rgba(0,0,0,.08)}.primary-nav button{min-width:0;min-height:52px;border:0;background:transparent;border-radius:12px;color:var(--hint);font-size:11px;font-weight:750;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px}.primary-nav button.active,.primary-nav button[aria-current=page]{color:var(--button);background:var(--bg)}.primary-icon{font-size:12px;line-height:1}.busy{opacity:.66;pointer-events:none}@supports not (color:color-mix(in srgb,black,white)){.primary-block{background:var(--surface)}}@media(max-width:520px){.grid,.metrics,.money{grid-template-columns:1fr}.shell{padding-left:12px;padding-right:12px}h1{font-size:27px}.pill{max-width:52%}.card{min-height:auto}.view-toolbar{position:sticky;top:env(safe-area-inset-top);z-index:2;background:var(--surface);padding:2px 0 8px}.primary-nav{border-radius:16px 16px 0 0}.primary-nav button{padding:4px 1px}}"""
+_CSS = """:root{--bg:var(--tg-theme-bg-color,#f4f6f8);--surface:var(--tg-theme-secondary-bg-color,#fff);--text:var(--tg-theme-text-color,#17202a);--hint:var(--tg-theme-hint-color,#66717d);--link:var(--tg-theme-link-color,#2678d9);--button:var(--tg-theme-button-color,#2678d9);--button-text:var(--tg-theme-button-text-color,#fff);--border:rgba(127,127,127,.24)}*{box-sizing:border-box}[hidden]{display:none!important}body{margin:0;font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:var(--bg);color:var(--text);padding:0}button,select,input,textarea{font:inherit;color:inherit}.shell{max-width:760px;margin:0 auto;padding:calc(18px + env(safe-area-inset-top)) 16px calc(104px + env(safe-area-inset-bottom))}header{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:16px}.eyebrow{margin:0 0 4px;font-size:12px;font-weight:800;letter-spacing:.045em;color:var(--hint)}h1{margin:0;font-size:29px;line-height:1.1}h2,h3{color:var(--text)}.pill{font-size:12px;background:var(--surface);border:1px solid var(--border);border-radius:999px;padding:8px 10px;max-width:46%;text-align:center}.business,.status,.explanation,.workspace-view{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:14px;margin-bottom:14px}.business label{display:block;font-size:13px;font-weight:750;margin-bottom:8px}select{width:100%;min-height:46px;border:1px solid var(--border);border-radius:12px;background:var(--surface);padding:0 12px}.status{font-size:14px;line-height:1.4}.status .secondary{margin-top:10px}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.card{min-height:126px;text-align:left;border:1px solid var(--border);border-radius:16px;background:var(--surface);padding:15px;position:relative;touch-action:manipulation;cursor:pointer}.card:active,.customer-row:active,.sales-card:active,.action-card:active{transform:scale(.995)}.card:disabled{opacity:.7}.card h2{font-size:17px;margin:0 0 7px;padding-right:56px}.card p{font-size:13px;line-height:1.38;margin:0;color:var(--hint)}.card.planned{border-style:dashed}.card.restricted{opacity:.72}.badge{position:absolute;right:10px;top:10px;font-size:10px;font-weight:800;border-radius:999px;padding:4px 7px;background:var(--bg);color:var(--hint)}.badge.available{background:var(--button);color:var(--button-text)}.explanation h2{margin:14px 0 8px}.explanation p{line-height:1.5}.secondary,.action-card{min-height:44px;border:1px solid var(--border);border-radius:12px;padding:0 14px;background:var(--bg);font-weight:700}.view-toolbar{display:flex;justify-content:space-between;gap:10px}.home-heading h2{margin:14px 0 4px}.home-heading p{margin:0 0 12px;color:var(--hint)}.metrics,.money{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:12px 0}.metric,.money-card,.attention-card{border:1px solid var(--border);border-radius:14px;padding:12px}.metric strong,.money-card strong{display:block;font-size:24px;margin-top:4px}.metric span,.money-card span,.muted{font-size:12px;color:var(--hint);line-height:1.4}.home-block{margin-top:18px}.home-block h3{margin:0 0 9px;font-size:16px}.primary-block{border:1px solid var(--button);border-radius:16px;padding:14px;background:color-mix(in srgb,var(--button) 7%,var(--surface))}.primary-block h3{font-size:19px}.attention-card{margin-bottom:8px}.action-card{display:block;width:100%;text-align:left;margin-bottom:8px;touch-action:manipulation}.action-card.primary-action{min-height:76px;background:var(--button);color:var(--button-text);border-color:var(--button);font-size:16px}.action-card small{display:block;font-weight:400;margin-top:4px;color:var(--hint);line-height:1.35}.action-card.primary-action small{color:var(--button-text);opacity:.84}.customer-search label{display:block;font-size:13px;font-weight:750;margin-bottom:8px}.customer-search>div{display:flex;gap:8px}.customer-search input{min-width:0;flex:1;min-height:44px;border:1px solid var(--border);border-radius:12px;background:var(--surface);color:var(--text);padding:0 12px}.customer-search button,.primary-cta{min-height:46px;border:0;border-radius:12px;background:var(--button);color:var(--button-text);padding:0 16px;font-weight:800}.primary-cta{display:block;width:100%;margin-top:14px}.customer-row,.sales-card{display:block;width:100%;text-align:left;border:1px solid var(--border);border-radius:14px;background:var(--surface);padding:13px;margin-bottom:8px;touch-action:manipulation}.customer-row strong{display:block}.customer-row small,.contact-card small,.timeline-card small,.schedule-card small,.sales-card small{display:block;color:var(--hint);margin-top:4px}.pager{display:flex;justify-content:space-between;gap:10px;margin-top:12px}.contact-card,.timeline-card,.schedule-card{border:1px solid var(--border);border-radius:14px;padding:12px;margin-bottom:8px}.schedule-card-top,.sales-card-top{display:flex;justify-content:space-between;gap:12px;align-items:center}.schedule-card p,.sales-card p{margin:8px 0 0;line-height:1.35}.schedule-status,.sales-stage{font-size:11px;font-weight:800;border-radius:999px;padding:4px 8px;background:var(--bg);white-space:nowrap}.schedule-status.booked{background:var(--button);color:var(--button-text)}.sales-card.overdue{border-color:var(--button)}.connection-card{border:1px solid var(--border);border-radius:14px;padding:13px;margin-bottom:8px}.connection-card-top{display:flex;justify-content:space-between;gap:12px;align-items:center}.connection-card p{margin:8px 0;line-height:1.4}.connection-state{font-size:11px;font-weight:800;border-radius:999px;padding:4px 8px;background:var(--bg);text-align:right}.connection-card.active .connection-state{background:var(--button);color:var(--button-text)}.connection-connect{width:100%;margin-top:6px}.settings-form label{display:block;font-size:13px;font-weight:750;margin:14px 0 7px}.settings-form input,.settings-form textarea{width:100%;border:1px solid var(--border);border-radius:12px;background:var(--surface);padding:11px 12px}.settings-form input{min-height:46px}.settings-form textarea{resize:vertical;line-height:1.4}.primary-nav{position:fixed;left:50%;bottom:0;transform:translateX(-50%);width:min(760px,100%);z-index:30;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));padding:8px 8px calc(8px + env(safe-area-inset-bottom));background:var(--surface);border-top:1px solid var(--border);box-shadow:0 -8px 28px rgba(0,0,0,.08)}.primary-nav button{min-width:0;min-height:52px;border:0;background:transparent;border-radius:12px;color:var(--hint);font-size:11px;font-weight:750;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px}.primary-nav button.active,.primary-nav button[aria-current=page]{color:var(--button);background:var(--bg)}.primary-icon{font-size:12px;line-height:1}.busy{opacity:.66;pointer-events:none}@supports not (color:color-mix(in srgb,black,white)){.primary-block{background:var(--surface)}}@media(max-width:520px){.grid,.metrics,.money{grid-template-columns:1fr}.shell{padding-left:12px;padding-right:12px}h1{font-size:27px}.pill{max-width:52%}.card{min-height:auto}.view-toolbar{position:sticky;top:env(safe-area-inset-top);z-index:2;background:var(--surface);padding:2px 0 8px}.primary-nav{border-radius:16px 16px 0 0}.primary-nav button{padding:4px 1px}}"""
 
 _JS = r"""(() => {
   'use strict';
@@ -135,6 +163,8 @@ _JS = r"""(() => {
   const customers = document.getElementById('customers-view');
   const calendar = document.getElementById('calendar-view');
   const sales = document.getElementById('sales-view');
+  const connections = document.getElementById('connections-view');
+  const settingsView = document.getElementById('settings-view');
   const homeBack = document.getElementById('home-back');
   const homeRefresh = document.getElementById('home-refresh');
   const homeMeta = document.getElementById('home-meta');
@@ -151,7 +181,7 @@ _JS = r"""(() => {
   const initData = tg && typeof tg.initData === 'string' ? tg.initData : '';
   const roleNames = {owner:'Владелец',administrator:'Администратор',manager:'Менеджер',marketer:'Маркетолог',analyst:'Аналитик',content_manager:'Контент-менеджер',support:'Поддержка',customer:'Клиент'};
   const periodNames = {'7d':'7 дней','30d':'30 дней','today':'сегодня'};
-  const nativeSections = new Set(['home','customers','calendar','sales']);
+  const nativeSections = new Set(['home','customers','calendar','sales','connections','settings']);
   let navigationItems = [];
   let currentView = 'home';
   let lastHomePayload = null;
@@ -170,7 +200,7 @@ _JS = r"""(() => {
     }
   };
   const hideViews = () => {
-    nav.hidden = true; home.hidden = true; customers.hidden = true; calendar.hidden = true; sales.hidden = true; explanation.hidden = true;
+    nav.hidden = true; home.hidden = true; customers.hidden = true; calendar.hidden = true; sales.hidden = true; connections.hidden = true; settingsView.hidden = true; explanation.hidden = true;
   };
   const syncBackButton = () => {
     if (!tg || !tg.BackButton) return;
@@ -182,6 +212,8 @@ _JS = r"""(() => {
   const enterCustomers = () => { currentView = 'customers'; hideViews(); customers.hidden = false; setPrimaryActive('customers'); syncBackButton(); };
   const enterCalendar = () => { currentView = 'calendar'; hideViews(); calendar.hidden = false; setPrimaryActive('calendar'); syncBackButton(); };
   const enterSales = () => { currentView = 'sales'; hideViews(); sales.hidden = false; setPrimaryActive('sales'); syncBackButton(); };
+  const enterConnections = () => { currentView = 'connections'; hideViews(); connections.hidden = false; setPrimaryActive('more'); syncBackButton(); };
+  const enterSettings = () => { currentView = 'settings'; hideViews(); settingsView.hidden = false; setPrimaryActive('more'); syncBackButton(); };
   const setHomeBusy = (busy) => { home.classList.toggle('busy', Boolean(busy)); homeRefresh.disabled = Boolean(busy); home.setAttribute('aria-busy', busy ? 'true' : 'false'); };
   const closeToBot = () => { if (tg && typeof tg.close === 'function') tg.close(); else window.history.back(); };
   statusAction.addEventListener('click', closeToBot);
@@ -281,12 +313,14 @@ _JS = r"""(() => {
       if (item.id === 'customers' && window.ClientPlatformCustomers) { window.ClientPlatformCustomers.open(); return; }
       if (item.id === 'calendar' && window.ClientPlatformCalendar) { window.ClientPlatformCalendar.open(); return; }
       if (item.id === 'sales' && window.ClientPlatformSales) { window.ClientPlatformSales.open(); return; }
+      if (item.id === 'connections' && window.ClientPlatformConnections) { window.ClientPlatformConnections.open(); return; }
+      if (item.id === 'settings' && window.ClientPlatformSettings) { window.ClientPlatformSettings.open(); return; }
       void openSection(item, button); return;
     }
     showExplanation(item);
   };
 
-  window.ClientPlatformCockpitNavigation = Object.freeze({showNavigation, showHome, enterCustomers, enterCalendar, enterSales, openCanonicalSection});
+  window.ClientPlatformCockpitNavigation = Object.freeze({showNavigation, showHome, enterCustomers, enterCalendar, enterSales, enterConnections, enterSettings, openCanonicalSection});
 
   const render = (payload) => {
     nav.replaceChildren(); select.replaceChildren(); navigationItems = payload.navigation || [];
@@ -322,6 +356,8 @@ _JS = r"""(() => {
     if (currentView === 'customers' && window.ClientPlatformCustomers) { window.ClientPlatformCustomers.back(); return; }
     if (currentView === 'calendar' && window.ClientPlatformCalendar) { window.ClientPlatformCalendar.back(); return; }
     if (currentView === 'sales' && window.ClientPlatformSales) { window.ClientPlatformSales.back(); return; }
+    if (currentView === 'connections' && window.ClientPlatformConnections) { window.ClientPlatformConnections.back(); return; }
+    if (currentView === 'settings' && window.ClientPlatformSettings) { window.ClientPlatformSettings.back(); return; }
     if (currentView === 'explanation' || currentView === 'navigation') { showHome(); }
   });
   if (!initData) { fail(new Error('missing_init_data')); }
@@ -385,6 +421,24 @@ async def cockpit_calendar_script(_request: web.Request) -> web.Response:
 async def cockpit_sales_script(_request: web.Request) -> web.Response:
     return web.Response(
         text=_SALES_SCRIPT.read_text(encoding="utf-8"),
+        content_type="application/javascript",
+        charset="utf-8",
+        headers=_base_headers(),
+    )
+
+
+async def cockpit_connections_script(_request: web.Request) -> web.Response:
+    return web.Response(
+        text=_CONNECTIONS_SCRIPT.read_text(encoding="utf-8"),
+        content_type="application/javascript",
+        charset="utf-8",
+        headers=_base_headers(),
+    )
+
+
+async def cockpit_settings_script(_request: web.Request) -> web.Response:
+    return web.Response(
+        text=_SETTINGS_SCRIPT.read_text(encoding="utf-8"),
         content_type="application/javascript",
         charset="utf-8",
         headers=_base_headers(),
@@ -464,7 +518,7 @@ def _context_payload_with_routes(context: Any) -> dict[str, object]:
         if not isinstance(item, dict):
             continue
         section = str(item.get("id") or "").strip().lower()
-        if item.get("status") != "available" or section in {"home", "customers", "calendar", "sales"}:
+        if item.get("status") != "available" or section in {"home", "customers", "calendar", "sales", "connections", "settings"}:
             continue
         try:
             start_payload = build_cockpit_section_start_payload(
@@ -568,6 +622,117 @@ async def cockpit_sales(request: web.Request) -> web.Response:
     except RuntimeError:
         return _error(503, "sales_unavailable")
     return web.json_response({"ok": True, **sales_snapshot.as_dict()}, headers=_base_headers())
+
+
+async def cockpit_connections(request: web.Request) -> web.Response:
+    scope = await _verified_scope(request)
+    if isinstance(scope, web.Response):
+        return scope
+    user_id, requested_business = scope
+    try:
+        snapshot = await asyncio.to_thread(
+            resolve_cockpit_connections,
+            telegram_user_id=user_id,
+            requested_business_id=requested_business,
+        )
+    except TenantAccessDenied:
+        return _error(403, "business_access_denied")
+    except TenantPermissionDenied:
+        return _error(403, "connections_access_denied")
+    except OSError:
+        return _error(503, "connections_unavailable")
+    except RuntimeError:
+        return _error(503, "connections_unavailable")
+    return web.json_response({"ok": True, **snapshot.as_dict()}, headers=_base_headers())
+
+
+async def cockpit_connection_setup(request: web.Request) -> web.Response:
+    scope = await _verified_payload_scope(request)
+    if isinstance(scope, web.Response):
+        return scope
+    user_id, requested_business, payload = scope
+    platform = payload.get("platform")
+    if not isinstance(platform, str):
+        return _error(400, "invalid_connection_request")
+    public_base = str(getattr(settings, "MESSENGER_PUBLIC_BASE_URL", "") or "").strip().rstrip("/")
+    if not public_base.startswith("https://"):
+        return _error(503, "connections_unavailable")
+    try:
+        issued = await asyncio.to_thread(
+            issue_cockpit_messenger_setup,
+            telegram_user_id=user_id,
+            requested_business_id=requested_business,
+            platform=platform,
+        )
+    except TenantAccessDenied:
+        return _error(403, "business_access_denied")
+    except TenantPermissionDenied:
+        return _error(403, "connections_access_denied")
+    except ValueError:
+        return _error(400, "invalid_connection_request")
+    except RuntimeError:
+        return _error(409, "connection_not_connectable")
+    return web.json_response(
+        {
+            "ok": True,
+            "platform": issued.platform.value,
+            "setup_url": f"{public_base}/clientplatform/connect/{issued.token}",
+            "expires_at": issued.expires_at,
+        },
+        headers=_base_headers(),
+    )
+
+
+async def cockpit_settings(request: web.Request) -> web.Response:
+    scope = await _verified_scope(request)
+    if isinstance(scope, web.Response):
+        return scope
+    user_id, requested_business = scope
+    try:
+        snapshot = await asyncio.to_thread(
+            resolve_cockpit_settings,
+            telegram_user_id=user_id,
+            requested_business_id=requested_business,
+        )
+    except TenantAccessDenied:
+        return _error(403, "business_access_denied")
+    except TenantPermissionDenied:
+        return _error(403, "settings_access_denied")
+    except OSError:
+        return _error(503, "settings_unavailable")
+    except RuntimeError:
+        return _error(503, "settings_unavailable")
+    return web.json_response({"ok": True, **snapshot.as_dict()}, headers=_base_headers())
+
+
+async def cockpit_settings_update(request: web.Request) -> web.Response:
+    scope = await _verified_payload_scope(request)
+    if isinstance(scope, web.Response):
+        return scope
+    user_id, requested_business, payload = scope
+    values = (payload.get("business_name"), payload.get("activity_description"), payload.get("timezone_name"))
+    if not all(isinstance(value, str) for value in values):
+        return _error(400, "invalid_settings_request")
+    try:
+        snapshot = await asyncio.to_thread(
+            update_cockpit_settings,
+            telegram_user_id=user_id,
+            requested_business_id=requested_business,
+            business_name=values[0],
+            activity_description=values[1],
+            timezone_name=values[2],
+        )
+    except TenantAccessDenied:
+        return _error(403, "business_access_denied")
+    except TenantPermissionDenied:
+        return _error(403, "settings_access_denied")
+    except ValueError:
+        return _error(400, "invalid_settings_request")
+    except OSError:
+        return _error(503, "settings_unavailable")
+    except RuntimeError:
+        return _error(503, "settings_unavailable")
+    return web.json_response({"ok": True, **snapshot.as_dict()}, headers=_base_headers())
 
 
 async def cockpit_customers(request: web.Request) -> web.Response:
@@ -879,10 +1044,16 @@ def register_cockpit_routes(
     app.router.add_get(f"{_COCKPIT_PREFIX}/customers.js", cockpit_customers_script)
     app.router.add_get(f"{_COCKPIT_PREFIX}/calendar.js", cockpit_calendar_script)
     app.router.add_get(f"{_COCKPIT_PREFIX}/sales.js", cockpit_sales_script)
+    app.router.add_get(f"{_COCKPIT_PREFIX}/connections.js", cockpit_connections_script)
+    app.router.add_get(f"{_COCKPIT_PREFIX}/settings.js", cockpit_settings_script)
     app.router.add_post(f"{_COCKPIT_PREFIX}/context", cockpit_context)
     app.router.add_post(f"{_COCKPIT_PREFIX}/home", cockpit_home)
     app.router.add_post(f"{_COCKPIT_PREFIX}/calendar", cockpit_calendar)
     app.router.add_post(f"{_COCKPIT_PREFIX}/sales", cockpit_sales)
+    app.router.add_post(f"{_COCKPIT_PREFIX}/connections", cockpit_connections)
+    app.router.add_post(f"{_COCKPIT_PREFIX}/connections/setup", cockpit_connection_setup)
+    app.router.add_post(f"{_COCKPIT_PREFIX}/settings", cockpit_settings)
+    app.router.add_post(f"{_COCKPIT_PREFIX}/settings/update", cockpit_settings_update)
     app.router.add_post(f"{_COCKPIT_PREFIX}/section-open", cockpit_section_open)
     app.router.add_post(f"{_COCKPIT_PREFIX}/section-route", cockpit_section_route)
     app.router.add_post(f"{_COCKPIT_PREFIX}/customers", cockpit_customers)
@@ -902,9 +1073,15 @@ def register_cockpit_routes(
 
 
 __all__ = [
+    "cockpit_connection_setup",
+    "cockpit_connections",
+    "cockpit_connections_script",
     "cockpit_context",
     "cockpit_calendar",
     "cockpit_sales",
+    "cockpit_settings",
+    "cockpit_settings_script",
+    "cockpit_settings_update",
     "cockpit_customer_action_open",
     "cockpit_customer_action_route",
     "cockpit_customer_detail",
