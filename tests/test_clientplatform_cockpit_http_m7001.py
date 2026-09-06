@@ -53,6 +53,13 @@ class CockpitHttpM7001Tests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("innerHTML", script)
         self.assertIn("payload.navigation", script)
         self.assertIn("Главный экран", body)
+        self.assertIn('id="primary-nav"', body)
+        self.assertIn('data-primary="calendar"', body)
+        self.assertIn('data-primary="sales"', body)
+        self.assertIn("Что сделать сейчас", body)
+        self.assertIn("nativeSections", script)
+        self.assertIn("enterCalendar", script)
+        self.assertIn("enterSales", script)
         self.assertIn("Обновить", body)
         self.assertNotIn("Home / Today", body)
         self.assertIn("tg.BackButton.onClick", script)
@@ -81,6 +88,9 @@ class CockpitHttpM7001Tests(unittest.IsolatedAsyncioTestCase):
             ),
             cockpit.CockpitNavigationItem(
                 id="sales", title="Продажи", summary="", when_to_use="", status="available"
+            ),
+            cockpit.CockpitNavigationItem(
+                id="growth", title="Рост", summary="", when_to_use="", status="available"
             ),
             cockpit.CockpitNavigationItem(
                 id="team", title="Команда", summary="", when_to_use="", status="restricted"
@@ -125,7 +135,8 @@ class CockpitHttpM7001Tests(unittest.IsolatedAsyncioTestCase):
         by_id = {item["id"]: item for item in payload["navigation"]}
         self.assertNotIn("route_url", by_id["home"])
         self.assertNotIn("route_url", by_id["customers"])
-        self.assertTrue(by_id["sales"]["route_url"].startswith("https://t.me/clientplatform_test_bot?start=cpo_c_"))
+        self.assertNotIn("route_url", by_id["sales"])
+        self.assertTrue(by_id["growth"]["route_url"].startswith("https://t.me/clientplatform_test_bot?start=cpo_c_"))
         self.assertNotIn("route_url", by_id["team"])
         self.assertNotIn("route_url", by_id["billing"])
 

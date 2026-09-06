@@ -7,6 +7,8 @@
   const nav = document.getElementById('navigation');
   const home = document.getElementById('home-view');
   const explanation = document.getElementById('explanation');
+  const calendar = document.getElementById('calendar-view');
+  const sales = document.getElementById('sales-view');
   const select = document.getElementById('business-select');
   const back = document.getElementById('customers-back');
   const refresh = document.getElementById('customers-refresh');
@@ -26,6 +28,7 @@
   const timeline = document.getElementById('customer-timeline');
   const limitations = document.getElementById('customer-limitations');
   let page = null;
+  let detailReturn = 'customers';
 
   const text = (node, value) => {
     node.textContent = value == null ? '' : String(value);
@@ -62,7 +65,7 @@
   const showNavigation = () => {
     const controller = window.ClientPlatformCockpitNavigation;
     if (controller && typeof controller.showNavigation === 'function') { controller.showNavigation(); return; }
-    view.hidden = true; explanation.hidden = true; home.hidden = true; nav.hidden = false;
+    view.hidden = true; explanation.hidden = true; home.hidden = true; calendar.hidden = true; sales.hidden = true; nav.hidden = false;
   };
 
   const enterCustomers = () => {
@@ -76,6 +79,8 @@
     nav.hidden = true;
     home.hidden = true;
     explanation.hidden = true;
+    calendar.hidden = true;
+    sales.hidden = true;
     listPanel.hidden = false;
     detail.hidden = true;
   };
@@ -195,6 +200,8 @@
     nav.hidden = true;
     home.hidden = true;
     explanation.hidden = true;
+    calendar.hidden = true;
+    sales.hidden = true;
   };
 
   const loadDetail = async (customerId) => {
@@ -234,7 +241,7 @@
       text(label, item.display_name || 'Клиент');
       text(meta, `Обновлено: ${dateText(item.updated_at)}`);
       button.append(label, meta);
-      button.addEventListener('click', () => loadDetail(item.customer_id));
+      button.addEventListener('click', () => { detailReturn = 'customers'; loadDetail(item.customer_id); });
       list.appendChild(button);
     }
     prev.disabled = payload.previous_offset == null;
@@ -263,17 +270,32 @@
   };
 
   const open = () => {
+    detailReturn = 'customers';
     showList();
     loadPage(0);
   };
 
+  const openCustomer = (customerId, returnView = 'customers') => {
+    detailReturn = returnView === 'sales' ? 'sales' : 'customers';
+    showList();
+    void loadDetail(customerId);
+  };
+
+  const returnFromDetail = () => {
+    if (detailReturn === 'sales') {
+      const controller = window.ClientPlatformCockpitNavigation;
+      if (controller && typeof controller.enterSales === 'function') { controller.enterSales(); return; }
+    }
+    showList();
+  };
+
   const handleBack = () => {
-    if (!detail.hidden) { showList(); return; }
+    if (!detail.hidden) { returnFromDetail(); return; }
     showNavigation();
   };
 
   back.addEventListener('click', showNavigation);
-  detailBack.addEventListener('click', showList);
+  detailBack.addEventListener('click', returnFromDetail);
   refresh.addEventListener('click', () => loadPage(page ? page.offset : 0));
   searchForm.addEventListener('submit', (event) => {
     event.preventDefault();
@@ -286,5 +308,5 @@
     if (page && page.next_offset != null) loadPage(page.next_offset);
   });
 
-  window.ClientPlatformCustomers = Object.freeze({open, back:handleBack});
+  window.ClientPlatformCustomers = Object.freeze({open, openCustomer, back:handleBack});
 })();
