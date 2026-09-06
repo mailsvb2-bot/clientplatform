@@ -88,27 +88,30 @@
     showList();
   };
 
-  const openActionRoute = async (customerId, expectedActionKey) => {
-    setBusy(true);
+  const openTelegramRoute = (rawUrl) => {
+    const url = String(rawUrl || '');
+    if (!url.startsWith('https://t.me/')) throw new Error('customer_action_route_unavailable');
+    // Must stay synchronous inside the user's tap on Telegram Android.
+    if (tg && typeof tg.openTelegramLink === 'function') { tg.openTelegramLink(url); return; }
+    window.location.assign(url);
+  };
+
+  const hydrateActionRoute = async (payload) => {
+    if (!payload.next_action) return payload;
     try {
       const route = await post('/clientplatform/cockpit/customers/action-route', {
-        customer_id: customerId,
-        expected_action_key: expectedActionKey,
+        customer_id: payload.customer_id,
+        expected_action_key: payload.next_action.action_key,
       });
       const url = String(route.route_url || '');
       if (!url.startsWith('https://t.me/')) throw new Error('customer_action_route_unavailable');
-      if (tg && typeof tg.openTelegramLink === 'function') tg.openTelegramLink(url);
-      else window.location.assign(url);
+      payload.next_action.route_url = url;
     } catch (error) {
-      text(
-        limitations,
-        error && error.message === 'customer_action_changed'
-          ? 'Следующий шаг уже изменился. Обновите карточку клиента.'
-          : 'Не удалось открыть следующий шаг. Обновите карточку и попробуйте ещё раз.',
-      );
-    } finally {
-      setBusy(false);
+      payload.next_action.route_error = error && error.message === 'customer_action_changed'
+        ? 'Следующий шаг уже изменился. Обновите карточку клиента.'
+        : 'Следующий шаг временно не открывается. Обновите карточку.';
     }
+    return payload;
   };
 
   const renderDetail = (payload) => {
@@ -142,11 +145,14 @@
       button.type = 'button';
       button.className = 'action-card';
       text(label, payload.next_action.title);
-      text(reason, payload.next_action.reason);
+      const routeUrl = String(payload.next_action.route_url || '');
+      text(reason, payload.next_action.route_error || payload.next_action.reason);
       button.append(label, reason);
-      button.addEventListener('click', () =>
-        openActionRoute(payload.customer_id, payload.next_action.action_key),
-      );
+      if (routeUrl.startsWith('https://t.me/')) {
+        button.addEventListener('click', () => openTelegramRoute(routeUrl));
+      } else {
+        button.disabled = true;
+      }
       action.appendChild(button);
     } else {
       const empty = document.createElement('p');
@@ -191,10 +197,11 @@
   const loadDetail = async (customerId) => {
     setBusy(true);
     try {
-      const payload = await post('/clientplatform/cockpit/customers/detail', {
+      let payload = await post('/clientplatform/cockpit/customers/detail', {
         customer_id: customerId,
         timeline_limit: 20,
       });
+      payload = await hydrateActionRoute(payload);
       renderDetail(payload);
     } catch (error) {
       text(listMeta, error && error.message === 'customer_not_found'

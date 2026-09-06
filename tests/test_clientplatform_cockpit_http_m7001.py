@@ -57,7 +57,9 @@ class CockpitHttpM7001Tests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Home / Today", body)
         self.assertIn("tg.BackButton.onClick", script)
         self.assertIn("currentView === 'customers'", script)
-        self.assertIn("/clientplatform/cockpit/section-route", script)
+        self.assertNotIn("post('/clientplatform/cockpit/section-route'", script)
+        self.assertIn("item.route_url", script)
+        self.assertIn("const openSectionRoute = (item)", script)
         self.assertIn("if (item.status === 'available')", script)
         self.assertNotIn("['home','customers'].includes(item.id) && item.status", script)
         self.assertIn("loadHome().catch(homeFail)", script)
@@ -133,6 +135,67 @@ class CockpitHttpM7001Tests(unittest.IsolatedAsyncioTestCase):
             response.headers["Cache-Control"],
             "no-store, max-age=0",
         )
+
+    async def test_cockpit_context_preloads_available_telegram_routes_before_tap(self) -> None:
+        resolved = cockpit.CockpitContext(
+            user_id=202,
+            business_id=_BUSINESS_A,
+            business_name="Практика",
+            role="owner",
+            onboarding_required=False,
+            businesses=(),
+            navigation=(
+                cockpit.CockpitNavigationItem(
+                    id="home",
+                    title="Сегодня",
+                    summary="Главное",
+                    when_to_use="Сначала",
+                    status="available",
+                ),
+                cockpit.CockpitNavigationItem(
+                    id="sales",
+                    title="Продажи",
+                    summary="Продажи",
+                    when_to_use="Когда продаём",
+                    status="available",
+                ),
+                cockpit.CockpitNavigationItem(
+                    id="billing",
+                    title="Тариф",
+                    summary="Тариф",
+                    when_to_use="Позже",
+                    status="planned",
+                ),
+            ),
+        )
+        principal = TelegramWebAppPrincipal(user_id=101, auth_date=1, query_id=None)
+        with (
+            patch.object(cockpit_http.settings, "BOT_TOKEN", _TOKEN),
+            patch.object(cockpit_http, "verify_telegram_webapp_init_data", return_value=principal),
+            patch.object(cockpit_http, "resolve_cockpit_context", return_value=resolved),
+            patch.object(cockpit_http, "_telegram_action_url", return_value="https://t.me/clientplatform_bot?start=sales"),
+        ):
+            app = web.Application()
+            cockpit_http.register_cockpit_routes(app)
+            client = TestClient(TestServer(app))
+            await client.start_server()
+            try:
+                response = await client.post(
+                    "/clientplatform/cockpit/context",
+                    json={"init_data": "verified-by-test", "business_id": _BUSINESS_A},
+                )
+                payload = await response.json()
+            finally:
+                await client.close()
+        self.assertEqual(response.status, 200)
+        navigation = {item["id"]: item for item in payload["navigation"]}
+        self.assertNotIn("route_url", navigation["home"])
+        self.assertEqual(
+            navigation["sales"]["route_url"],
+            "https://t.me/clientplatform_bot?start=sales",
+        )
+        self.assertNotIn("route_url", navigation["billing"])
+        self.assertNotIn("start_payload", repr(payload))
 
     async def test_cockpit_section_route_revalidates_identity_business_and_section(self) -> None:
         principal = TelegramWebAppPrincipal(user_id=101, auth_date=1, query_id=None)

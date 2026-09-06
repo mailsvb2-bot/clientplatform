@@ -8,8 +8,12 @@ from typing import Any
 from aiohttp import web
 
 from clientplatform.application.cockpit import (
+    CockpitContext,
     resolve_cockpit_context,
     resolve_cockpit_section_start_payload,
+)
+from clientplatform.application.cockpit_action_routing import (
+    build_cockpit_section_start_payload,
 )
 from clientplatform.application.cockpit_home import (
     CockpitHomeUnavailable,
@@ -167,24 +171,26 @@ _JS = r"""(() => {
     homeMetrics.replaceChildren(); homeMoney.replaceChildren(); homeAttention.replaceChildren(); homeActions.replaceChildren(); homeAttentionBlock.hidden = true; homeActionsBlock.hidden = true;
     text(homeMeta, 'Не удалось обновить сводку'); text(homeEmpty, 'Сводка временно недоступна. Нажмите «Обновить» или откройте список разделов.'); text(homeLimitations, 'Ваши данные и права доступа не менялись.'); showHomeView();
   };
-  const openSectionRoute = async (item) => {
-    const payload = await post('/clientplatform/cockpit/section-route', select.value, {section:item.id});
-    const url = String(payload.route_url || '');
-    if (!url.startsWith('https://t.me/')) throw new Error('section_route_unavailable');
-    if (tg && typeof tg.openTelegramLink === 'function') tg.openTelegramLink(url);
-    else window.location.assign(url);
+  const openTelegramRoute = (rawUrl, errorCode) => {
+    const url = String(rawUrl || '');
+    if (!url.startsWith('https://t.me/')) throw new Error(errorCode);
+    // Keep this call synchronous inside the original tap. Telegram Android can
+    // ignore openTelegramLink after an awaited fetch because user activation is lost.
+    if (tg && typeof tg.openTelegramLink === 'function') { tg.openTelegramLink(url); return; }
+    window.location.assign(url);
   };
+  const openSectionRoute = (item) => openTelegramRoute(item.route_url, 'section_route_unavailable');
   const showItem = (item) => {
     const state = screenStatus(item);
     if (state !== 'available') { showExplanation(item); return; }
     if (item.id === 'home') { loadHome().catch(homeFail); return; }
     if (item.id === 'customers' && window.ClientPlatformCustomers) { window.ClientPlatformCustomers.open(); return; }
-    openSectionRoute(item).catch(() => {
+    try { openSectionRoute(item); } catch (_error) {
       currentView = 'explanation';
       text(title, item.title); text(summary, item.summary); text(when, `Когда пригодится: ${item.when_to_use}`);
-      text(reason, 'Не удалось открыть раздел в боте. Вернитесь к разделам и попробуйте ещё раз.');
+      text(reason, 'Не удалось открыть раздел в боте. Обновите кабинет и попробуйте ещё раз.');
       nav.hidden = true; home.hidden = true; document.getElementById('customers-view').hidden = true; explanation.hidden = false; syncBackButton();
-    });
+    }
   };
 
   const render = (payload) => {
@@ -280,6 +286,36 @@ def _telegram_action_url(start_payload: str) -> str | None:
     return url or None
 
 
+def _context_payload_with_routes(context: CockpitContext) -> dict[str, object]:
+    payload = context.as_dict()
+    if context.business_id is None:
+        return payload
+    navigation = payload.get("navigation")
+    if not isinstance(navigation, tuple):
+        return payload
+    for item in navigation:
+        if not isinstance(item, dict):
+            continue
+        section = item.get("id")
+        if (
+            item.get("status") != "available"
+            or not isinstance(section, str)
+            or section in {"home", "customers"}
+        ):
+            continue
+        try:
+            start_payload = build_cockpit_section_start_payload(
+                business_id=context.business_id,
+                section=section,
+            )
+        except ValueError:
+            continue
+        route_url = _telegram_action_url(start_payload)
+        if route_url is not None:
+            item["route_url"] = route_url
+    return payload
+
+
 async def _verified_payload_scope(
     request: web.Request,
 ) -> tuple[int, str | None, dict[str, Any]] | web.Response:
@@ -339,7 +375,7 @@ async def cockpit_context(request: web.Request) -> web.Response:
         return _error(403, "business_access_denied")
     except ValueError:
         return _error(400, "invalid_business_id")
-    return web.json_response({"ok": True, **context.as_dict()}, headers=_base_headers())
+    return web.json_response({"ok": True, **_context_payload_with_routes(context)}, headers=_base_headers())
 
 
 async def cockpit_home(request: web.Request) -> web.Response:
