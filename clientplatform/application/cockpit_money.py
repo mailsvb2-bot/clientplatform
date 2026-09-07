@@ -7,7 +7,7 @@ from uuid import UUID
 from clientplatform.application import admin_ops
 from clientplatform.application.activity import list_business_capabilities, list_business_offerings
 from clientplatform.application.cockpit import resolve_cockpit_context
-from clientplatform.application.customers import list_customers
+from clientplatform.application.customers import search_customers
 from clientplatform.application.tenancy import resolve_tenant_context
 from clientplatform.domain.activity import BusinessOffering, CapabilityStatus, OfferingStatus, resolve_activity_connector
 from clientplatform.domain.money import normalize_settlement_currency, settlement_currency_minor_unit_exponent
@@ -120,9 +120,10 @@ def build_cockpit_money(*, actor: TenantContext, business_name: str, limit: int 
         except TenantPermissionDenied:
             pass
         else:
+            customers, _has_more = search_customers(actor=current, limit=50, offset=0)
             customer_choices = [
                 CockpitMoneyChoice(id=item.id, title=item.display_name or "Клиент")
-                for item in list_customers(actor=current)
+                for item in customers
             ]
             customer_choices.sort(key=lambda item: (item.title.casefold(), item.id))
 
