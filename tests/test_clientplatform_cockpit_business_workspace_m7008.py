@@ -110,7 +110,7 @@ class CockpitBusinessWorkspaceM7008Tests(unittest.TestCase):
             patch.object(cockpit_money, "resolve_tenant_context", return_value=actor),
             patch.object(cockpit_money.admin_ops, "payment_summary", return_value=summary),
             patch.object(cockpit_money.admin_ops, "list_payments", return_value=[payment]),
-            patch.object(cockpit_money, "list_customers") as customers,
+            patch.object(cockpit_money, "search_customers") as customers,
             patch.object(cockpit_money, "list_business_capabilities", return_value=[]),
         ):
             snapshot = cockpit_money.build_cockpit_money(actor=actor, business_name="Практика")
@@ -237,6 +237,11 @@ class CockpitBusinessWorkspaceM7008Tests(unittest.TestCase):
         self.assertIn("'services','money','growth','analytics'", transport)
         self.assertIn("/clientplatform/cockpit/money/record", script)
         self.assertIn("/clientplatform/cockpit/services/price", script)
+        self.assertIn("mutationBusiness", script)
+        self.assertIn("servicesRequestId", script)
+        self.assertIn("moneyRequestId", script)
+        self.assertIn('openExactCanonicalRoute("reactivation"', script)
+        self.assertIn('openExactCanonicalRoute("ad-spend"', script)
 
 
 if __name__ == "__main__":
