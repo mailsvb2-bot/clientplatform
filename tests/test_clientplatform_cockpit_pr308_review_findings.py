@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import unittest
 from datetime import date
 from pathlib import Path
@@ -13,7 +14,8 @@ from clientplatform.application.cockpit_action_routing import (
     parse_cockpit_action_start_payload,
 )
 from clientplatform.domain.tenancy import PlatformRole, TenantContext, TenantPermissionDenied
-from handlers import clientplatform_cockpit_dispatch as cockpit_dispatch
+
+_AIOGRAM_AVAILABLE = importlib.util.find_spec("aiogram") is not None
 
 _BUSINESS = "11111111-1111-4111-8111-111111111111"
 _MEMBER = "22222222-2222-4222-8222-222222222222"
@@ -234,8 +236,11 @@ class CockpitPr308ReviewFindingTests(unittest.TestCase):
         self.assertNotIn("resetMoneyRequest();", script[money_catch:script.index("});", money_catch) + 3])
 
 
+@unittest.skipUnless(_AIOGRAM_AVAILABLE, "aiogram runtime dependency is not installed")
 class CockpitPr308CanonicalDispatchTests(unittest.IsolatedAsyncioTestCase):
     async def test_hidden_and_existing_action_routes_dispatch_to_exact_native_interactions(self) -> None:
+        from handlers import clientplatform_cockpit_dispatch as cockpit_dispatch
+
         actor = _actor(PlatformRole.OWNER)
         cases = (
             (CockpitActionStartRoute(business_id=_BUSINESS, kind="q", section="reactivation"), "cpm:reactivate"),
