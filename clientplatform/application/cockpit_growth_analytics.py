@@ -7,6 +7,7 @@ from typing import Any, Iterable
 from clientplatform.application.cockpit import resolve_cockpit_context
 from clientplatform.application.growth_cockpit import get_growth_cockpit
 from clientplatform.application.tenancy import resolve_tenant_context
+from clientplatform.application.yandex_growth_analytics import get_yandex_growth_snapshot
 from clientplatform.domain.money import settlement_currency_minor_unit_exponent
 from clientplatform.domain.tenancy import TenantAccessDenied, TenantContext, TenantPermissionDenied
 
@@ -55,11 +56,11 @@ class CockpitAdvertisingSummary:
 
 @dataclass(frozen=True, slots=True)
 class CockpitJourneySummary:
-    leads: int
-    bookings: int
-    completed_bookings: int
-    paid_customers: int
-    reactivated_customers: int
+    leads: int | None
+    bookings: int | None
+    completed_bookings: int | None
+    paid_customers: int | None
+    reactivated_customers: int | None
     verified_revenue: tuple[CockpitGrowthMoney, ...]
     attributed_revenue: tuple[CockpitGrowthMoney, ...]
     unattributed_revenue: tuple[CockpitGrowthMoney, ...]
@@ -82,6 +83,7 @@ class CockpitGrowthAnalyticsSnapshot:
     journey: CockpitJourneySummary
     limitations: tuple[str, ...]
     can_manage_promotions: bool
+    business_results_available: bool
 
     def as_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -111,31 +113,95 @@ def _current(actor: TenantContext) -> TenantContext:
     return current
 
 
+def _can_manage_promotions(actor: TenantContext) -> bool:
+    try:
+        actor.assert_can_manage_promotions()
+    except TenantPermissionDenied:
+        return False
+    return True
+
+
+def _can_view_business_results(actor: TenantContext) -> bool:
+    try:
+        actor.assert_can_view_outcome_ledger()
+        actor.assert_can_view_attribution_spine()
+    except TenantPermissionDenied:
+        return False
+    return True
+
+
+def _advertising_summary(value: Any | None) -> CockpitAdvertisingSummary | None:
+    if value is None:
+        return None
+    return CockpitAdvertisingSummary(
+        connected_accounts=int(value.connected_accounts),
+        tracked_ads=int(value.tracked_ads),
+        impressions=int(value.impressions),
+        clicks=int(value.clicks),
+        leads=int(value.leads),
+        bookings=int(value.bookings),
+        won=int(value.won),
+        ctr_percent=float(value.ctr_percent),
+    )
+
+
+def _restricted_business_results(
+    *, actor: TenantContext, business_name: str, period_days: int
+) -> CockpitGrowthAnalyticsSnapshot:
+    limitations = ["business_results_restricted_for_role"]
+    advertising = None
+    period_from = ""
+    period_to = ""
+    try:
+        advertising = get_yandex_growth_snapshot(actor=actor, period_days=period_days)
+        period_from = str(advertising.date_from)
+        period_to = str(advertising.date_to)
+        if advertising.connected_accounts > 0:
+            limitations.append("advertising_currency_unverified")
+    except (OSError, RuntimeError, ValueError):
+        limitations.append("advertising_unavailable")
+
+    return CockpitGrowthAnalyticsSnapshot(
+        schema_version=_SCHEMA_VERSION,
+        business_id=actor.business_id,
+        business_name=str(business_name),
+        period_days=int(period_days),
+        period_from=period_from,
+        period_to=period_to,
+        metrics=(),
+        revenue=(),
+        sources=(),
+        attention=(),
+        actions=(),
+        advertising=_advertising_summary(advertising),
+        journey=CockpitJourneySummary(
+            leads=None,
+            bookings=None,
+            completed_bookings=None,
+            paid_customers=None,
+            reactivated_customers=None,
+            verified_revenue=(),
+            attributed_revenue=(),
+            unattributed_revenue=(),
+        ),
+        limitations=tuple(limitations),
+        can_manage_promotions=_can_manage_promotions(actor),
+        business_results_available=False,
+    )
+
+
 def build_cockpit_growth_analytics(
     *, actor: TenantContext, business_name: str, period_days: int = 7
 ) -> CockpitGrowthAnalyticsSnapshot:
     current = _current(actor)
-    snapshot = get_growth_cockpit(actor=current, period_days=period_days)
-    advertising = snapshot.advertising
-    ad_summary = None
-    if advertising is not None:
-        ad_summary = CockpitAdvertisingSummary(
-            connected_accounts=int(advertising.connected_accounts),
-            tracked_ads=int(advertising.tracked_ads),
-            impressions=int(advertising.impressions),
-            clicks=int(advertising.clicks),
-            leads=int(advertising.leads),
-            bookings=int(advertising.bookings),
-            won=int(advertising.won),
-            ctr_percent=float(advertising.ctr_percent),
+    if not _can_view_business_results(current):
+        return _restricted_business_results(
+            actor=current,
+            business_name=business_name,
+            period_days=period_days,
         )
 
-    can_manage_promotions = True
-    try:
-        current.assert_can_manage_promotions()
-    except TenantPermissionDenied:
-        can_manage_promotions = False
-
+    snapshot = get_growth_cockpit(actor=current, period_days=period_days)
     journey = snapshot.journey
     completed = int(journey.completed_bookings)
     if "booking_completion_unavailable" in tuple(journey.limitations):
@@ -172,7 +238,7 @@ def build_cockpit_growth_analytics(
             )
             for item in snapshot.actions
         ),
-        advertising=ad_summary,
+        advertising=_advertising_summary(snapshot.advertising),
         journey=CockpitJourneySummary(
             leads=int(journey.leads),
             bookings=int(journey.bookings),
@@ -184,7 +250,8 @@ def build_cockpit_growth_analytics(
             unattributed_revenue=_money_rows(journey.unattributed_revenue_by_currency),
         ),
         limitations=tuple(dict.fromkeys(str(item) for item in snapshot.limitations)),
-        can_manage_promotions=can_manage_promotions,
+        can_manage_promotions=_can_manage_promotions(current),
+        business_results_available=True,
     )
 
 
