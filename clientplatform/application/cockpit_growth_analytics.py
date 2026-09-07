@@ -158,7 +158,11 @@ def _restricted_business_results(
         period_to = str(advertising.date_to)
         if advertising.connected_accounts > 0:
             limitations.append("advertising_currency_unverified")
-    except (OSError, RuntimeError, ValueError):
+    except OSError:
+        limitations.append("advertising_unavailable")
+    except RuntimeError:
+        limitations.append("advertising_unavailable")
+    except ValueError:
         limitations.append("advertising_unavailable")
 
     return CockpitGrowthAnalyticsSnapshot(
