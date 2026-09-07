@@ -293,11 +293,11 @@ def resolve_cockpit_section_start_payload(
     if context.onboarding_required or context.business_id is None:
         raise TenantAccessDenied("active business membership was not found")
     normalized = str(section or "").strip().lower()
-    actor = resolve_tenant_context(
-        user_id=context.user_id,
-        business_id=context.business_id,
-    )
     if normalized == "reactivation":
+        actor = resolve_tenant_context(
+            user_id=context.user_id,
+            business_id=context.business_id,
+        )
         if actor.role not in {
             PlatformRole.OWNER,
             PlatformRole.ADMINISTRATOR,
@@ -310,6 +310,10 @@ def resolve_cockpit_section_start_payload(
             section=normalized,
         )
     if normalized == "ad-spend":
+        actor = resolve_tenant_context(
+            user_id=context.user_id,
+            business_id=context.business_id,
+        )
         if actor.role != PlatformRole.OWNER:
             raise TenantPermissionDenied("ad spend action is owner-only")
         return build_cockpit_section_start_payload(
