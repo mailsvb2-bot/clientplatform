@@ -160,10 +160,24 @@ class CockpitPrimaryWorkspaceM7004Tests(unittest.TestCase):
             "attribution_source": "must-not-leak-as-authority",
             "next_plan_id": "internal-plan",
         }
+        lost = {
+            "id": "lead-lost",
+            "customer_id": "customer-lost",
+            "customer_name": "Борис",
+            "stage": "lost",
+            "source_kind": "telegram",
+        }
+        won = {
+            "id": "lead-won",
+            "customer_id": "customer-won",
+            "customer_name": "Виктор",
+            "stage": "won",
+            "source_kind": "vk",
+        }
         workspace = SimpleNamespace(
             open_work=(raw,),
             handoff_work=(),
-            recent_closed=(),
+            recent_closed=(won, lost),
             handoff_count=2,
         )
         with (
@@ -182,6 +196,9 @@ class CockpitPrimaryWorkspaceM7004Tests(unittest.TestCase):
             )
         self.assertEqual(result.handoff_count, 2)
         self.assertEqual(len(result.items), 1)
+        self.assertEqual(len(result.recent_lost), 1)
+        self.assertEqual(result.recent_lost[0].lead_id, "lead-lost")
+        self.assertEqual(result.recent_lost[0].stage_label, "Не состоялось")
         item = result.items[0]
         self.assertEqual(item.customer_name, "Анна П.")
         self.assertEqual(item.stage_label, "Интерес подтверждён")

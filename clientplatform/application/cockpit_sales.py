@@ -11,8 +11,9 @@ from clientplatform.application.sales_workspace import sales_workspace_snapshot
 from clientplatform.application.tenancy import resolve_tenant_context
 from clientplatform.domain.tenancy import TenantAccessDenied, TenantContext
 
-_SCHEMA_VERSION = "2026-09-06.v1"
+_SCHEMA_VERSION = "2026-09-07.v2"
 _MAX_ITEMS = 30
+_RECENT_LOST_LIMIT = 5
 class CockpitSalesUnavailable(RuntimeError):
     """Canonical sales projection metadata is unavailable or invalid."""
 
@@ -22,6 +23,8 @@ _STAGE_LABELS = {
     "contacted": "Связались",
     "qualified": "Интерес подтверждён",
     "checkout": "Оформление",
+    "won": "Оплатил / выиграно",
+    "lost": "Не состоялось",
 }
 
 
@@ -47,6 +50,7 @@ class CockpitSalesSnapshot:
     timezone_name: str
     as_of: str
     items: tuple[CockpitSalesItem, ...]
+    recent_lost: tuple[CockpitSalesItem, ...]
     handoff_count: int
     has_more: bool
 
@@ -74,6 +78,38 @@ def _due_projection(value: object, *, zone: ZoneInfo, now: datetime) -> tuple[st
     return raw, due_utc.astimezone(zone).strftime("%d.%m %H:%M"), due_utc <= now
 
 
+def _project_sales_item(
+    raw_item: object,
+    *,
+    zone: ZoneInfo,
+    now: datetime,
+) -> CockpitSalesItem | None:
+    if not isinstance(raw_item, dict):
+        return None
+    stage = str(raw_item.get("stage") or "new")
+    due_at, due_display, overdue = _due_projection(
+        raw_item.get("due_at"),
+        zone=zone,
+        now=now,
+    )
+    next_action = " ".join(str(raw_item.get("next_action") or "").split()) or None
+    return CockpitSalesItem(
+        lead_id=str(raw_item.get("id") or ""),
+        customer_id=str(raw_item.get("customer_id") or ""),
+        customer_name=(
+            " ".join(str(raw_item.get("customer_name") or "Клиент").split())
+            or "Клиент"
+        ),
+        stage=stage,
+        stage_label=_STAGE_LABELS.get(stage, stage),
+        next_action=next_action,
+        due_at=due_at,
+        due_display=due_display,
+        overdue=overdue,
+        source_kind=(str(raw_item.get("source_kind") or "").strip() or None),
+    )
+
+
 def build_cockpit_sales(
     *,
     actor: TenantContext,
@@ -82,7 +118,7 @@ def build_cockpit_sales(
     now: datetime | None = None,
     workspace_loader: Callable[..., object] = sales_workspace_snapshot,
 ) -> CockpitSalesSnapshot:
-    """Project the canonical sales backlog without moving sales authority into the Mini App."""
+    """Project canonical open work plus reopenable recent losses for the Mini App."""
 
     current = resolve_tenant_context(user_id=actor.user_id, business_id=actor.business_id)
     current.assert_can_view_customer_records()
@@ -99,27 +135,25 @@ def build_cockpit_sales(
         raise CockpitSalesUnavailable("business timezone is invalid") from exc
     snapshot = workspace_loader(actor=current, limit=selected_limit + 1)
     open_work = tuple(getattr(snapshot, "open_work", ()))
+    recent_closed = tuple(getattr(snapshot, "recent_closed", ()))
+
     items: list[CockpitSalesItem] = []
     for raw_item in open_work[:selected_limit]:
-        if not isinstance(raw_item, dict):
+        projected = _project_sales_item(raw_item, zone=zone, now=current_time)
+        if projected is not None:
+            items.append(projected)
+
+    recent_lost: list[CockpitSalesItem] = []
+    for raw_item in recent_closed:
+        if not isinstance(raw_item, dict) or str(raw_item.get("stage") or "") != "lost":
             continue
-        stage = str(raw_item.get("stage") or "new")
-        due_at, due_display, overdue = _due_projection(raw_item.get("due_at"), zone=zone, now=current_time)
-        next_action = " ".join(str(raw_item.get("next_action") or "").split()) or None
-        items.append(
-            CockpitSalesItem(
-                lead_id=str(raw_item.get("id") or ""),
-                customer_id=str(raw_item.get("customer_id") or ""),
-                customer_name=" ".join(str(raw_item.get("customer_name") or "Клиент").split()) or "Клиент",
-                stage=stage,
-                stage_label=_STAGE_LABELS.get(stage, stage),
-                next_action=next_action,
-                due_at=due_at,
-                due_display=due_display,
-                overdue=overdue,
-                source_kind=(str(raw_item.get("source_kind") or "").strip() or None),
-            )
-        )
+        projected = _project_sales_item(raw_item, zone=zone, now=current_time)
+        if projected is None:
+            continue
+        recent_lost.append(projected)
+        if len(recent_lost) >= _RECENT_LOST_LIMIT:
+            break
+
     return CockpitSalesSnapshot(
         schema_version=_SCHEMA_VERSION,
         business_id=current.business_id,
@@ -127,6 +161,7 @@ def build_cockpit_sales(
         timezone_name=timezone_name,
         as_of=current_time.isoformat(),
         items=tuple(items),
+        recent_lost=tuple(recent_lost),
         handoff_count=max(0, int(getattr(snapshot, "handoff_count", 0) or 0)),
         has_more=len(open_work) > selected_limit,
     )

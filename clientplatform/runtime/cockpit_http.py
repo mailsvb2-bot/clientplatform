@@ -32,6 +32,16 @@ from clientplatform.application.cockpit_connections import (
     resolve_cockpit_connections,
 )
 from clientplatform.application.cockpit_sales import resolve_cockpit_sales
+from clientplatform.application.cockpit_sales_management import (
+    CockpitSalesLeadManagement,
+    add_cockpit_sales_note,
+    assign_cockpit_sales_lead,
+    reopen_cockpit_sales_lead,
+    resolve_cockpit_sales_lead,
+    set_cockpit_sales_next_action,
+    set_cockpit_sales_stage,
+    unassign_cockpit_sales_lead,
+)
 from clientplatform.application.cockpit_settings import (
     resolve_cockpit_settings,
     update_cockpit_settings,
@@ -45,6 +55,7 @@ from clientplatform.application.cockpit_customers import (
 from clientplatform.domain.activity import ActivityInvariantViolation
 from clientplatform.domain.bookings import BookingInvariantViolation, BookingNotFound
 from clientplatform.domain.customers import CustomerNotFound
+from clientplatform.domain.sales import SalesInvariantViolation, SalesLeadNotFound
 from clientplatform.domain.tenancy import TenantAccessDenied, TenantPermissionDenied
 from clientplatform.runtime.telegram_webapp_auth import (
     TelegramWebAppAuthError,
@@ -123,9 +134,16 @@ _HTML = """<!doctype html>
 </section>
 <section id="sales-view" class="workspace-view" aria-live="polite" hidden>
 <div class="view-toolbar"><button id="sales-more" class="secondary" type="button">Все разделы</button><button id="sales-refresh" class="secondary" type="button">Обновить</button></div>
-<div class="home-heading"><p class="eyebrow">Работа с клиентами</p><h2>Продажи</h2><p id="sales-meta"></p></div>
-<p id="sales-handoff" class="muted"></p><div id="sales-list"></div><p id="sales-empty" class="muted"></p><p id="sales-limitations" class="muted"></p>
-<button id="sales-manage" class="primary-cta" type="button">Открыть все действия по продажам</button>
+<div id="sales-list-panel"><div class="home-heading"><p class="eyebrow">Работа с клиентами</p><h2>Продажи</h2><p id="sales-meta"></p></div>
+<p id="sales-handoff" class="muted"></p><div id="sales-list"></div><p id="sales-empty" class="muted"></p><p id="sales-limitations" class="muted"></p></div>
+<section id="sales-detail" hidden><button id="sales-detail-back" class="secondary" type="button">К очереди продаж</button><div class="home-heading"><p class="eyebrow">Сделка</p><h2 id="sales-detail-name">Клиент</h2><p id="sales-detail-meta"></p></div>
+<div class="sales-detail-actions"><button id="sales-open-customer" class="secondary" type="button">Открыть карточку клиента</button><button id="sales-assignment" class="secondary" type="button"></button></div>
+<section id="sales-stage-block" class="home-block"><h3>Этап продажи</h3><div id="sales-stage-actions" class="sales-stage-actions"></div></section>
+<section id="sales-next-block" class="home-block"><h3>Следующий шаг</h3><form id="sales-next-form" class="sales-form"><label for="sales-next-action">Что сделать</label><input id="sales-next-action" maxlength="500" placeholder="Например: отправить предложение"><label for="sales-next-due">Срок по времени бизнеса</label><input id="sales-next-due" type="datetime-local"><button id="sales-next-save" class="primary-cta" type="submit">Сохранить следующий шаг</button></form></section>
+<section class="home-block"><h3>Заметка</h3><form id="sales-note-form" class="sales-form"><textarea id="sales-note" maxlength="4000" rows="4" placeholder="Что важно помнить по клиенту" required></textarea><button id="sales-note-save" class="secondary sales-wide" type="submit">Добавить заметку</button></form><p id="sales-note-message" class="muted"></p></section>
+<section id="sales-result-block" class="home-block"><h3>Результат</h3><label class="sales-result-label" for="sales-result-reason">Комментарий к результату</label><textarea id="sales-result-reason" maxlength="500" rows="3" placeholder="Например: оплатил счёт / выбрал другой вариант"></textarea><div class="sales-result-actions"><button id="sales-won" type="button">Клиент оплатил</button><button id="sales-lost" class="secondary" type="button">Не состоялось</button></div></section>
+<button id="sales-reopen" class="primary-cta" type="button" hidden>Вернуть в работу</button><p id="sales-detail-message" class="muted"></p></section>
+<button id="sales-manage" class="secondary sales-advanced" type="button">Дополнительные действия в боте</button>
 </section>
 <section id="connections-view" class="workspace-view" aria-live="polite" hidden>
 <div class="view-toolbar"><button id="connections-more" class="secondary" type="button">Все разделы</button><button id="connections-refresh" class="secondary" type="button">Обновить</button></div>
@@ -154,7 +172,7 @@ _HTML = """<!doctype html>
 </nav>
 </body></html>"""
 
-_CSS = """:root{--bg:var(--tg-theme-bg-color,#f4f6f8);--surface:var(--tg-theme-secondary-bg-color,#fff);--text:var(--tg-theme-text-color,#17202a);--hint:var(--tg-theme-hint-color,#66717d);--link:var(--tg-theme-link-color,#2678d9);--button:var(--tg-theme-button-color,#2678d9);--button-text:var(--tg-theme-button-text-color,#fff);--border:rgba(127,127,127,.24)}*{box-sizing:border-box}[hidden]{display:none!important}body{margin:0;font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:var(--bg);color:var(--text);padding:0}button,select,input,textarea{font:inherit;color:inherit}.shell{max-width:760px;margin:0 auto;padding:calc(18px + env(safe-area-inset-top)) 16px calc(104px + env(safe-area-inset-bottom))}header{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:16px}.eyebrow{margin:0 0 4px;font-size:12px;font-weight:800;letter-spacing:.045em;color:var(--hint)}h1{margin:0;font-size:29px;line-height:1.1}h2,h3{color:var(--text)}.pill{font-size:12px;background:var(--surface);border:1px solid var(--border);border-radius:999px;padding:8px 10px;max-width:46%;text-align:center}.business,.status,.explanation,.workspace-view{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:14px;margin-bottom:14px}.business label{display:block;font-size:13px;font-weight:750;margin-bottom:8px}select{width:100%;min-height:46px;border:1px solid var(--border);border-radius:12px;background:var(--surface);padding:0 12px}.status{font-size:14px;line-height:1.4}.status .secondary{margin-top:10px}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.card{min-height:126px;text-align:left;border:1px solid var(--border);border-radius:16px;background:var(--surface);padding:15px;position:relative;touch-action:manipulation;cursor:pointer}.card:active,.customer-row:active,.sales-card:active,.action-card:active{transform:scale(.995)}.card:disabled{opacity:.7}.card h2{font-size:17px;margin:0 0 7px;padding-right:56px}.card p{font-size:13px;line-height:1.38;margin:0;color:var(--hint)}.card.planned{border-style:dashed}.card.restricted{opacity:.72}.badge{position:absolute;right:10px;top:10px;font-size:10px;font-weight:800;border-radius:999px;padding:4px 7px;background:var(--bg);color:var(--hint)}.badge.available{background:var(--button);color:var(--button-text)}.explanation h2{margin:14px 0 8px}.explanation p{line-height:1.5}.secondary,.action-card{min-height:44px;border:1px solid var(--border);border-radius:12px;padding:0 14px;background:var(--bg);font-weight:700}.view-toolbar{display:flex;justify-content:space-between;gap:10px}.home-heading h2{margin:14px 0 4px}.home-heading p{margin:0 0 12px;color:var(--hint)}.metrics,.money{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:12px 0}.metric,.money-card,.attention-card{border:1px solid var(--border);border-radius:14px;padding:12px}.metric strong,.money-card strong{display:block;font-size:24px;margin-top:4px}.metric span,.money-card span,.muted{font-size:12px;color:var(--hint);line-height:1.4}.home-block{margin-top:18px}.home-block h3{margin:0 0 9px;font-size:16px}.primary-block{border:1px solid var(--button);border-radius:16px;padding:14px;background:color-mix(in srgb,var(--button) 7%,var(--surface))}.primary-block h3{font-size:19px}.attention-card{margin-bottom:8px}.action-card{display:block;width:100%;text-align:left;margin-bottom:8px;touch-action:manipulation}.action-card.primary-action{min-height:76px;background:var(--button);color:var(--button-text);border-color:var(--button);font-size:16px}.action-card small{display:block;font-weight:400;margin-top:4px;color:var(--hint);line-height:1.35}.action-card.primary-action small{color:var(--button-text);opacity:.84}.customer-search label{display:block;font-size:13px;font-weight:750;margin-bottom:8px}.customer-search>div{display:flex;gap:8px}.customer-search input{min-width:0;flex:1;min-height:44px;border:1px solid var(--border);border-radius:12px;background:var(--surface);color:var(--text);padding:0 12px}.customer-search button,.primary-cta{min-height:46px;border:0;border-radius:12px;background:var(--button);color:var(--button-text);padding:0 16px;font-weight:800}.primary-cta{display:block;width:100%;margin-top:14px}.customer-row,.sales-card{display:block;width:100%;text-align:left;border:1px solid var(--border);border-radius:14px;background:var(--surface);padding:13px;margin-bottom:8px;touch-action:manipulation}.customer-row strong{display:block}.customer-row small,.contact-card small,.timeline-card small,.schedule-card small,.sales-card small{display:block;color:var(--hint);margin-top:4px}.pager{display:flex;justify-content:space-between;gap:10px;margin-top:12px}.contact-card,.timeline-card,.schedule-card{border:1px solid var(--border);border-radius:14px;padding:12px;margin-bottom:8px}.schedule-card-top,.sales-card-top{display:flex;justify-content:space-between;gap:12px;align-items:center}.schedule-card p,.sales-card p{margin:8px 0 0;line-height:1.35}.schedule-status,.sales-stage{font-size:11px;font-weight:800;border-radius:999px;padding:4px 8px;background:var(--bg);white-space:nowrap}.schedule-status.booked{background:var(--button);color:var(--button-text)}.sales-card.overdue{border-color:var(--button)}.connection-card{border:1px solid var(--border);border-radius:14px;padding:13px;margin-bottom:8px}.connection-card-top{display:flex;justify-content:space-between;gap:12px;align-items:center}.connection-card p{margin:8px 0;line-height:1.4}.connection-state{font-size:11px;font-weight:800;border-radius:999px;padding:4px 8px;background:var(--bg);text-align:right}.connection-card.active .connection-state{background:var(--button);color:var(--button-text)}.connection-connect{width:100%;margin-top:6px}.settings-form label{display:block;font-size:13px;font-weight:750;margin:14px 0 7px}.settings-form input,.settings-form textarea{width:100%;border:1px solid var(--border);border-radius:12px;background:var(--surface);padding:11px 12px}.settings-form input{min-height:46px}.settings-form textarea{resize:vertical;line-height:1.4}.calendar-form label{display:block;font-size:13px;font-weight:750;margin:14px 0 7px}.calendar-form input,.calendar-form select{width:100%;min-height:46px;border:1px solid var(--border);border-radius:12px;background:var(--surface);padding:0 12px}.calendar-form-cancel{width:100%;margin-top:8px}.calendar-advanced{width:100%;margin-top:10px}.schedule-actions{display:flex;gap:8px;margin-top:10px}.schedule-actions button{flex:1;min-height:40px;border:1px solid var(--border);border-radius:10px;background:var(--bg);font-weight:750}.primary-nav{position:fixed;left:50%;bottom:0;transform:translateX(-50%);width:min(760px,100%);z-index:30;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));padding:8px 8px calc(8px + env(safe-area-inset-bottom));background:var(--surface);border-top:1px solid var(--border);box-shadow:0 -8px 28px rgba(0,0,0,.08)}.primary-nav button{min-width:0;min-height:52px;border:0;background:transparent;border-radius:12px;color:var(--hint);font-size:11px;font-weight:750;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px}.primary-nav button.active,.primary-nav button[aria-current=page]{color:var(--button);background:var(--bg)}.primary-icon{font-size:12px;line-height:1}.busy{opacity:.66;pointer-events:none}@supports not (color:color-mix(in srgb,black,white)){.primary-block{background:var(--surface)}}@media(max-width:520px){.grid,.metrics,.money{grid-template-columns:1fr}.shell{padding-left:12px;padding-right:12px}h1{font-size:27px}.pill{max-width:52%}.card{min-height:auto}.view-toolbar{position:sticky;top:env(safe-area-inset-top);z-index:2;background:var(--surface);padding:2px 0 8px}.primary-nav{border-radius:16px 16px 0 0}.primary-nav button{padding:4px 1px}}"""
+_CSS = """:root{--bg:var(--tg-theme-bg-color,#f4f6f8);--surface:var(--tg-theme-secondary-bg-color,#fff);--text:var(--tg-theme-text-color,#17202a);--hint:var(--tg-theme-hint-color,#66717d);--link:var(--tg-theme-link-color,#2678d9);--button:var(--tg-theme-button-color,#2678d9);--button-text:var(--tg-theme-button-text-color,#fff);--border:rgba(127,127,127,.24)}*{box-sizing:border-box}[hidden]{display:none!important}body{margin:0;font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:var(--bg);color:var(--text);padding:0}button,select,input,textarea{font:inherit;color:inherit}.shell{max-width:760px;margin:0 auto;padding:calc(18px + env(safe-area-inset-top)) 16px calc(104px + env(safe-area-inset-bottom))}header{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:16px}.eyebrow{margin:0 0 4px;font-size:12px;font-weight:800;letter-spacing:.045em;color:var(--hint)}h1{margin:0;font-size:29px;line-height:1.1}h2,h3{color:var(--text)}.pill{font-size:12px;background:var(--surface);border:1px solid var(--border);border-radius:999px;padding:8px 10px;max-width:46%;text-align:center}.business,.status,.explanation,.workspace-view{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:14px;margin-bottom:14px}.business label{display:block;font-size:13px;font-weight:750;margin-bottom:8px}select{width:100%;min-height:46px;border:1px solid var(--border);border-radius:12px;background:var(--surface);padding:0 12px}.status{font-size:14px;line-height:1.4}.status .secondary{margin-top:10px}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.card{min-height:126px;text-align:left;border:1px solid var(--border);border-radius:16px;background:var(--surface);padding:15px;position:relative;touch-action:manipulation;cursor:pointer}.card:active,.customer-row:active,.sales-card:active,.action-card:active{transform:scale(.995)}.card:disabled{opacity:.7}.card h2{font-size:17px;margin:0 0 7px;padding-right:56px}.card p{font-size:13px;line-height:1.38;margin:0;color:var(--hint)}.card.planned{border-style:dashed}.card.restricted{opacity:.72}.badge{position:absolute;right:10px;top:10px;font-size:10px;font-weight:800;border-radius:999px;padding:4px 7px;background:var(--bg);color:var(--hint)}.badge.available{background:var(--button);color:var(--button-text)}.explanation h2{margin:14px 0 8px}.explanation p{line-height:1.5}.secondary,.action-card{min-height:44px;border:1px solid var(--border);border-radius:12px;padding:0 14px;background:var(--bg);font-weight:700}.view-toolbar{display:flex;justify-content:space-between;gap:10px}.home-heading h2{margin:14px 0 4px}.home-heading p{margin:0 0 12px;color:var(--hint)}.metrics,.money{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:12px 0}.metric,.money-card,.attention-card{border:1px solid var(--border);border-radius:14px;padding:12px}.metric strong,.money-card strong{display:block;font-size:24px;margin-top:4px}.metric span,.money-card span,.muted{font-size:12px;color:var(--hint);line-height:1.4}.home-block{margin-top:18px}.home-block h3{margin:0 0 9px;font-size:16px}.primary-block{border:1px solid var(--button);border-radius:16px;padding:14px;background:color-mix(in srgb,var(--button) 7%,var(--surface))}.primary-block h3{font-size:19px}.attention-card{margin-bottom:8px}.action-card{display:block;width:100%;text-align:left;margin-bottom:8px;touch-action:manipulation}.action-card.primary-action{min-height:76px;background:var(--button);color:var(--button-text);border-color:var(--button);font-size:16px}.action-card small{display:block;font-weight:400;margin-top:4px;color:var(--hint);line-height:1.35}.action-card.primary-action small{color:var(--button-text);opacity:.84}.customer-search label{display:block;font-size:13px;font-weight:750;margin-bottom:8px}.customer-search>div{display:flex;gap:8px}.customer-search input{min-width:0;flex:1;min-height:44px;border:1px solid var(--border);border-radius:12px;background:var(--surface);color:var(--text);padding:0 12px}.customer-search button,.primary-cta{min-height:46px;border:0;border-radius:12px;background:var(--button);color:var(--button-text);padding:0 16px;font-weight:800}.primary-cta{display:block;width:100%;margin-top:14px}.customer-row,.sales-card{display:block;width:100%;text-align:left;border:1px solid var(--border);border-radius:14px;background:var(--surface);padding:13px;margin-bottom:8px;touch-action:manipulation}.customer-row strong{display:block}.customer-row small,.contact-card small,.timeline-card small,.schedule-card small,.sales-card small{display:block;color:var(--hint);margin-top:4px}.pager{display:flex;justify-content:space-between;gap:10px;margin-top:12px}.contact-card,.timeline-card,.schedule-card{border:1px solid var(--border);border-radius:14px;padding:12px;margin-bottom:8px}.schedule-card-top,.sales-card-top{display:flex;justify-content:space-between;gap:12px;align-items:center}.schedule-card p,.sales-card p{margin:8px 0 0;line-height:1.35}.schedule-status,.sales-stage{font-size:11px;font-weight:800;border-radius:999px;padding:4px 8px;background:var(--bg);white-space:nowrap}.schedule-status.booked{background:var(--button);color:var(--button-text)}.sales-card.overdue{border-color:var(--button)}.connection-card{border:1px solid var(--border);border-radius:14px;padding:13px;margin-bottom:8px}.connection-card-top{display:flex;justify-content:space-between;gap:12px;align-items:center}.connection-card p{margin:8px 0;line-height:1.4}.connection-state{font-size:11px;font-weight:800;border-radius:999px;padding:4px 8px;background:var(--bg);text-align:right}.connection-card.active .connection-state{background:var(--button);color:var(--button-text)}.connection-connect{width:100%;margin-top:6px}.settings-form label{display:block;font-size:13px;font-weight:750;margin:14px 0 7px}.settings-form input,.settings-form textarea{width:100%;border:1px solid var(--border);border-radius:12px;background:var(--surface);padding:11px 12px}.settings-form input{min-height:46px}.settings-form textarea{resize:vertical;line-height:1.4}.calendar-form label{display:block;font-size:13px;font-weight:750;margin:14px 0 7px}.calendar-form input,.calendar-form select{width:100%;min-height:46px;border:1px solid var(--border);border-radius:12px;background:var(--surface);padding:0 12px}.calendar-form-cancel{width:100%;margin-top:8px}.calendar-advanced{width:100%;margin-top:10px}.schedule-actions{display:flex;gap:8px;margin-top:10px}.schedule-actions button{flex:1;min-height:40px;border:1px solid var(--border);border-radius:10px;background:var(--bg);font-weight:750}.sales-detail-actions,.sales-result-actions,.sales-stage-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.sales-detail-actions button,.sales-stage-actions button,.sales-result-actions button{flex:1;min-width:120px;min-height:42px;border:1px solid var(--border);border-radius:10px;background:var(--bg);font-weight:750;padding:0 10px}.sales-stage-actions button.active{background:var(--button);color:var(--button-text);border-color:var(--button)}.sales-result-actions #sales-won{background:var(--button);color:var(--button-text);border-color:var(--button)}.sales-form label,.sales-result-label{display:block;font-size:13px;font-weight:750;margin:12px 0 7px}.sales-form input,.sales-form textarea,#sales-result-reason{width:100%;border:1px solid var(--border);border-radius:12px;background:var(--surface);padding:11px 12px}.sales-form input{min-height:46px}.sales-form textarea,#sales-result-reason{resize:vertical;line-height:1.4}.sales-wide,.sales-advanced{width:100%;margin-top:10px}.sales-card.assigned-to-me{border-color:var(--button)}.sales-recent-heading{margin:18px 0 4px}.sales-recent-hint{margin:0 0 10px}.primary-nav{position:fixed;left:50%;bottom:0;transform:translateX(-50%);width:min(760px,100%);z-index:30;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));padding:8px 8px calc(8px + env(safe-area-inset-bottom));background:var(--surface);border-top:1px solid var(--border);box-shadow:0 -8px 28px rgba(0,0,0,.08)}.primary-nav button{min-width:0;min-height:52px;border:0;background:transparent;border-radius:12px;color:var(--hint);font-size:11px;font-weight:750;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px}.primary-nav button.active,.primary-nav button[aria-current=page]{color:var(--button);background:var(--bg)}.primary-icon{font-size:12px;line-height:1}.busy{opacity:.66;pointer-events:none}@supports not (color:color-mix(in srgb,black,white)){.primary-block{background:var(--surface)}}@media(max-width:520px){.grid,.metrics,.money{grid-template-columns:1fr}.shell{padding-left:12px;padding-right:12px}h1{font-size:27px}.pill{max-width:52%}.card{min-height:auto}.view-toolbar{position:sticky;top:env(safe-area-inset-top);z-index:2;background:var(--surface);padding:2px 0 8px}.primary-nav{border-radius:16px 16px 0 0}.primary-nav button{padding:4px 1px}}"""
 
 _JS = r"""(() => {
   'use strict';
@@ -778,6 +796,194 @@ async def cockpit_sales(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, **sales_snapshot.as_dict()}, headers=_base_headers())
 
 
+
+def _sales_lead_id(payload: dict[str, Any]) -> str | None:
+    lead_id = payload.get("lead_id")
+    if not isinstance(lead_id, str) or not lead_id.strip() or len(lead_id) > 80:
+        return None
+    return lead_id.strip()
+
+
+async def _sales_management_call(
+    operation: Any, **kwargs: Any
+) -> tuple[CockpitSalesLeadManagement | None, web.Response | None]:
+    try:
+        item = await asyncio.to_thread(operation, **kwargs)
+    except TenantAccessDenied:
+        return None, _error(403, "business_access_denied")
+    except TenantPermissionDenied:
+        return None, _error(403, "sales_manage_denied")
+    except SalesLeadNotFound:
+        return None, _error(404, "sales_lead_not_found")
+    except SalesInvariantViolation:
+        return None, _error(409, "sales_change_rejected")
+    except ValueError:
+        return None, _error(400, "invalid_sales_change")
+    except OSError:
+        return None, _error(503, "sales_unavailable")
+    except RuntimeError:
+        return None, _error(503, "sales_unavailable")
+    return item, None
+
+
+async def cockpit_sales_manage(request: web.Request) -> web.Response:
+    scope = await _verified_payload_scope(request)
+    if isinstance(scope, web.Response):
+        return scope
+    user_id, requested_business, payload = scope
+    lead_id = _sales_lead_id(payload)
+    if lead_id is None:
+        return _error(400, "invalid_sales_change")
+    item, error = await _sales_management_call(
+        resolve_cockpit_sales_lead,
+        telegram_user_id=user_id,
+        requested_business_id=requested_business,
+        lead_id=lead_id,
+    )
+    if error is not None:
+        return error
+    if item is None:
+        return _error(503, "sales_unavailable")
+    return web.json_response({"ok": True, **item.as_dict()}, headers=_base_headers())
+
+
+async def cockpit_sales_assignment(request: web.Request) -> web.Response:
+    scope = await _verified_payload_scope(request)
+    if isinstance(scope, web.Response):
+        return scope
+    user_id, requested_business, payload = scope
+    lead_id = _sales_lead_id(payload)
+    action = payload.get("action")
+    if lead_id is None or action not in {"assign", "unassign"}:
+        return _error(400, "invalid_sales_change")
+    operation = assign_cockpit_sales_lead if action == "assign" else unassign_cockpit_sales_lead
+    item, error = await _sales_management_call(
+        operation,
+        telegram_user_id=user_id,
+        requested_business_id=requested_business,
+        lead_id=lead_id,
+    )
+    if error is not None:
+        return error
+    if item is None:
+        return _error(503, "sales_unavailable")
+    return web.json_response({"ok": True, **item.as_dict()}, headers=_base_headers())
+
+
+async def cockpit_sales_stage(request: web.Request) -> web.Response:
+    scope = await _verified_payload_scope(request)
+    if isinstance(scope, web.Response):
+        return scope
+    user_id, requested_business, payload = scope
+    lead_id = _sales_lead_id(payload)
+    stage = payload.get("stage")
+    reason = payload.get("reason")
+    if (
+        lead_id is None
+        or not isinstance(stage, str)
+        or not stage.strip()
+        or len(stage) > 40
+        or (reason is not None and (not isinstance(reason, str) or len(reason) > 500))
+    ):
+        return _error(400, "invalid_sales_change")
+    item, error = await _sales_management_call(
+        set_cockpit_sales_stage,
+        telegram_user_id=user_id,
+        requested_business_id=requested_business,
+        lead_id=lead_id,
+        stage=stage.strip(),
+        reason=reason,
+    )
+    if error is not None:
+        return error
+    if item is None:
+        return _error(503, "sales_unavailable")
+    return web.json_response({"ok": True, **item.as_dict()}, headers=_base_headers())
+
+
+async def cockpit_sales_reopen(request: web.Request) -> web.Response:
+    scope = await _verified_payload_scope(request)
+    if isinstance(scope, web.Response):
+        return scope
+    user_id, requested_business, payload = scope
+    lead_id = _sales_lead_id(payload)
+    if lead_id is None:
+        return _error(400, "invalid_sales_change")
+    item, error = await _sales_management_call(
+        reopen_cockpit_sales_lead,
+        telegram_user_id=user_id,
+        requested_business_id=requested_business,
+        lead_id=lead_id,
+    )
+    if error is not None:
+        return error
+    if item is None:
+        return _error(503, "sales_unavailable")
+    return web.json_response({"ok": True, **item.as_dict()}, headers=_base_headers())
+
+
+async def cockpit_sales_next_action(request: web.Request) -> web.Response:
+    scope = await _verified_payload_scope(request)
+    if isinstance(scope, web.Response):
+        return scope
+    user_id, requested_business, payload = scope
+    lead_id = _sales_lead_id(payload)
+    next_action = payload.get("next_action")
+    due_local = payload.get("due_local")
+    if (
+        lead_id is None
+        or (next_action is not None and (not isinstance(next_action, str) or len(next_action) > 500))
+        or (due_local is not None and (not isinstance(due_local, str) or len(due_local) > 40))
+    ):
+        return _error(400, "invalid_sales_change")
+    item, error = await _sales_management_call(
+        set_cockpit_sales_next_action,
+        telegram_user_id=user_id,
+        requested_business_id=requested_business,
+        lead_id=lead_id,
+        next_action=next_action,
+        due_local=due_local,
+    )
+    if error is not None:
+        return error
+    if item is None:
+        return _error(503, "sales_unavailable")
+    return web.json_response({"ok": True, **item.as_dict()}, headers=_base_headers())
+
+
+async def cockpit_sales_note(request: web.Request) -> web.Response:
+    scope = await _verified_payload_scope(request)
+    if isinstance(scope, web.Response):
+        return scope
+    user_id, requested_business, payload = scope
+    lead_id = _sales_lead_id(payload)
+    note = payload.get("note")
+    interaction_key = payload.get("interaction_key")
+    if (
+        lead_id is None
+        or not isinstance(note, str)
+        or not note.strip()
+        or len(note) > 4000
+        or not isinstance(interaction_key, str)
+        or not interaction_key.strip()
+        or len(interaction_key) > 120
+    ):
+        return _error(400, "invalid_sales_change")
+    item, error = await _sales_management_call(
+        add_cockpit_sales_note,
+        telegram_user_id=user_id,
+        requested_business_id=requested_business,
+        lead_id=lead_id,
+        note=note,
+        interaction_key=interaction_key,
+    )
+    if error is not None:
+        return error
+    if item is None:
+        return _error(503, "sales_unavailable")
+    return web.json_response({"ok": True, **item.as_dict()}, headers=_base_headers())
+
+
 async def cockpit_connections(request: web.Request) -> web.Response:
     scope = await _verified_scope(request)
     if isinstance(scope, web.Response):
@@ -1208,6 +1414,12 @@ def register_cockpit_routes(
     app.router.add_post(f"{_COCKPIT_PREFIX}/calendar/replace", cockpit_calendar_replace)
     app.router.add_post(f"{_COCKPIT_PREFIX}/calendar/cancel", cockpit_calendar_cancel)
     app.router.add_post(f"{_COCKPIT_PREFIX}/sales", cockpit_sales)
+    app.router.add_post(f"{_COCKPIT_PREFIX}/sales/manage", cockpit_sales_manage)
+    app.router.add_post(f"{_COCKPIT_PREFIX}/sales/assignment", cockpit_sales_assignment)
+    app.router.add_post(f"{_COCKPIT_PREFIX}/sales/stage", cockpit_sales_stage)
+    app.router.add_post(f"{_COCKPIT_PREFIX}/sales/reopen", cockpit_sales_reopen)
+    app.router.add_post(f"{_COCKPIT_PREFIX}/sales/next-action", cockpit_sales_next_action)
+    app.router.add_post(f"{_COCKPIT_PREFIX}/sales/note", cockpit_sales_note)
     app.router.add_post(f"{_COCKPIT_PREFIX}/connections", cockpit_connections)
     app.router.add_post(f"{_COCKPIT_PREFIX}/connections/setup", cockpit_connection_setup)
     app.router.add_post(f"{_COCKPIT_PREFIX}/settings", cockpit_settings)
@@ -1241,6 +1453,12 @@ __all__ = [
     "cockpit_calendar_management",
     "cockpit_calendar_replace",
     "cockpit_sales",
+    "cockpit_sales_assignment",
+    "cockpit_sales_manage",
+    "cockpit_sales_next_action",
+    "cockpit_sales_note",
+    "cockpit_sales_reopen",
+    "cockpit_sales_stage",
     "cockpit_settings",
     "cockpit_settings_script",
     "cockpit_settings_update",

@@ -77,6 +77,7 @@ class CockpitPrimaryWorkspaceHttpM7004Tests(unittest.IsolatedAsyncioTestCase):
             timezone_name="Europe/Tallinn",
             as_of="2026-09-06T10:00:00+00:00",
             items=(),
+            recent_lost=(),
             handoff_count=0,
             has_more=False,
         )
