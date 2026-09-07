@@ -28,17 +28,19 @@ async def send_cockpit_section(
     )
 
 
-async def _send_canonical_reactivation(
+async def _send_canonical_native_interaction(
     target: ClientPlatformMessageTarget,
     *,
     user_id: int,
     business_id: str,
+    raw_text: str,
+    interaction_key: str,
 ) -> None:
     actor = resolve_tenant_context(user_id=user_id, business_id=business_id)
     interaction = render_native_member_interaction(
         actor=actor,
-        raw_text="cpm:reactivate",
-        interaction_key=f"cockpit:{business_id}:reactivation",
+        raw_text=raw_text,
+        interaction_key=f"cockpit:{business_id}:{interaction_key}",
         current_platform=ConnectionPlatform.TELEGRAM,
     )
     rows = [
@@ -60,10 +62,21 @@ async def send_cockpit_action_route(
     """Dispatch a validated Cockpit route without duplicating Telegram surfaces."""
 
     if route.section == "reactivation":
-        await _send_canonical_reactivation(
+        await _send_canonical_native_interaction(
             target,
             user_id=user_id,
             business_id=route.business_id,
+            raw_text="cpm:reactivate",
+            interaction_key="reactivation",
+        )
+        return
+    if route.section == "ad-spend":
+        await _send_canonical_native_interaction(
+            target,
+            user_id=user_id,
+            business_id=route.business_id,
+            raw_text="cpm:ad-spend",
+            interaction_key="ad-spend",
         )
         return
     if route.section is not None:
