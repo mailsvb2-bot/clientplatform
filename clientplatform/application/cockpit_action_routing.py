@@ -20,10 +20,11 @@ _SECTION_KIND = {
     "team": "t",
     "settings": "e",
     "reactivation": "r",
+    "ad-spend": "p",
 }
 _KIND_SECTION = {value: key for key, value in _SECTION_KIND.items()}
 _PAYLOAD_RE = re.compile(
-    rf"^{_PREFIX}(?P<business>{_TOKEN_RE})_(?P<kind>[hwrlbsgcanxtevm])(?:_(?P<target>{_TOKEN_RE}))?$"
+    rf"^{_PREFIX}(?P<business>{_TOKEN_RE})_(?P<kind>[hwrplbsgcanxtevm])(?:_(?P<target>{_TOKEN_RE}))?$"
 )
 
 
@@ -53,6 +54,11 @@ def build_cockpit_action_start_payload(*, business_id: str, action_key: str) -> 
         payload = build_cockpit_section_start_payload(
             business_id=business_id,
             section="reactivation",
+        )
+    elif key == "economic_paid_acquisition":
+        payload = build_cockpit_section_start_payload(
+            business_id=business_id,
+            section="ad-spend",
         )
     elif key.startswith("sales_plan:"):
         # Validate the canonical plan identifier even though the Telegram route
