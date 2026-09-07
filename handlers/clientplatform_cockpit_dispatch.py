@@ -61,7 +61,7 @@ async def send_cockpit_action_route(
 ) -> None:
     """Dispatch a validated Cockpit route without duplicating Telegram surfaces."""
 
-    if route.section == "reactivation":
+    if route.section == "reactivation" or route.kind == "r":
         await _send_canonical_native_interaction(
             target,
             user_id=user_id,
@@ -70,7 +70,7 @@ async def send_cockpit_action_route(
             interaction_key="reactivation",
         )
         return
-    if route.section == "ad-spend":
+    if route.section == "ad-spend" or route.kind == "d":
         await _send_canonical_native_interaction(
             target,
             user_id=user_id,
