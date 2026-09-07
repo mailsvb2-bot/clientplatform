@@ -149,7 +149,40 @@
     const api = controller();
     if (api && typeof api.openCanonicalSection === "function") api.openCanonicalSection(section, button);
   };
-  const openCanonicalAction = (actionKey, fallbackSection, button) => {
+
+  const openExactCanonicalRoute = async (section, businessId, button) => {
+    if (!businessId || select.value !== businessId) {
+      text(growthLimitations, "Бизнес переключается или действие устарело. Дождитесь загрузки выбранного бизнеса и повторите действие.");
+      return;
+    }
+    const priorText = button.textContent;
+    button.disabled = true;
+    text(button, "Открываю…");
+    try {
+      const payload = await post("/clientplatform/cockpit/section-route", {section}, businessId);
+      const routeUrl = String(payload && payload.route_url || "").trim();
+      if (!routeUrl.startsWith("https://")) throw new Error("canonical_route_unavailable");
+      window.location.assign(routeUrl);
+    } catch (error) {
+      const accessChanged = error && ["section_access_denied", "business_access_denied"].includes(error.message);
+      text(growthLimitations, accessChanged
+        ? "Доступ к этому действию изменился. Обновите показатели роста."
+        : "Не удалось открыть точное действие в Telegram. Обновите показатели и попробуйте ещё раз.");
+    } finally {
+      button.disabled = false;
+      text(button, priorText);
+    }
+  };
+
+  const openCanonicalAction = (actionKey, fallbackSection, button, businessId) => {
+    if (actionKey === "economic_reactivation") {
+      void openExactCanonicalRoute("reactivation", businessId, button);
+      return;
+    }
+    if (actionKey === "economic_paid_acquisition") {
+      void openExactCanonicalRoute("ad-spend", businessId, button);
+      return;
+    }
     const api = controller();
     if (api && typeof api.openCanonicalAction === "function") {
       api.openCanonicalAction(actionKey, button);
@@ -475,6 +508,7 @@
     } else {
       growthAdvertising.appendChild(card("Реклама", "Подтверждённых рекламных данных за этот период сейчас нет."));
     }
+    const actionBusinessId = renderedBusiness(payload);
     for (const item of payload.actions || []) {
       const node = card(item.title, item.reason);
       const actions = document.createElement("div");
@@ -485,7 +519,7 @@
         : item.action_key.startsWith("sales_") ? "sales"
         : item.action_key.startsWith("sales_plan:") || item.action_key.startsWith("sales_lead:") ? "sales"
         : "growth";
-      const button = actionButton("Открыть нужное действие", () => openCanonicalAction(item.action_key, target, button));
+      const button = actionButton("Открыть нужное действие", () => openCanonicalAction(item.action_key, target, button, actionBusinessId));
       actions.appendChild(button);
       node.appendChild(actions);
       growthActions.appendChild(node);
