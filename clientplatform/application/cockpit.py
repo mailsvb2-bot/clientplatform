@@ -106,6 +106,11 @@ def cockpit_navigation(actor: TenantContext) -> tuple[CockpitNavigationItem, ...
     can_growth = _allowed(actor, actor.assert_can_view_promotion_analytics)
     can_content = _allowed(actor, actor.assert_can_view_programs)
     can_manage_business = _allowed(actor, actor.assert_can_manage_business)
+    can_services = _allowed(actor, actor.assert_can_view_promotion_analytics)
+    can_money = actor.role in {
+        PlatformRole.OWNER, PlatformRole.ADMINISTRATOR, PlatformRole.MANAGER,
+        PlatformRole.MARKETER, PlatformRole.ANALYST,
+    }
     # The existing owner-facing team UI is owner-only. Keep Cockpit honest
     # instead of advertising an administrator path that Telegram does not expose.
     can_team = actor.role == PlatformRole.OWNER
@@ -139,6 +144,13 @@ def cockpit_navigation(actor: TenantContext) -> tuple[CockpitNavigationItem, ...
             allowed=can_customers,
         ),
         _nav_item(
+            id="services",
+            title="Услуги",
+            summary="Что Вы продаёте: услуги, предложения, описания и цены.",
+            when_to_use="Если нужно добавить услугу, изменить цену или убрать предложение из активных.",
+            allowed=can_services,
+        ),
+        _nav_item(
             id="growth",
             title="Рост и реклама",
             summary="Каналы привлечения, кампании и безопасные действия по росту.",
@@ -158,6 +170,13 @@ def cockpit_navigation(actor: TenantContext) -> tuple[CockpitNavigationItem, ...
             summary="Рутинные действия, согласования, ограничения и остановка автоматизации.",
             when_to_use="Если хотите поручить рутину системе или проверить, что ей разрешено делать.",
             allowed=can_manage_business,
+        ),
+        _nav_item(
+            id="money",
+            title="Деньги",
+            summary="Подтверждённые оплаты, выручка, платящие клиенты и возвраты.",
+            when_to_use="Если нужно зафиксировать оплату, посмотреть деньги бизнеса или оформить полный возврат.",
+            allowed=can_money,
         ),
         _nav_item(
             id="analytics",
@@ -258,6 +277,7 @@ def resolve_cockpit_context(
         navigation=cockpit_navigation(actor),
     )
 
+
 def resolve_cockpit_section_start_payload(
     *,
     telegram_user_id: int,
@@ -273,6 +293,33 @@ def resolve_cockpit_section_start_payload(
     if context.onboarding_required or context.business_id is None:
         raise TenantAccessDenied("active business membership was not found")
     normalized = str(section or "").strip().lower()
+    if normalized == "reactivation":
+        actor = resolve_tenant_context(
+            user_id=context.user_id,
+            business_id=context.business_id,
+        )
+        if actor.role not in {
+            PlatformRole.OWNER,
+            PlatformRole.ADMINISTRATOR,
+            PlatformRole.MANAGER,
+            PlatformRole.SUPPORT,
+        }:
+            raise TenantPermissionDenied("reactivation action is unavailable for this role")
+        return build_cockpit_section_start_payload(
+            business_id=context.business_id,
+            section=normalized,
+        )
+    if normalized == "ad-spend":
+        actor = resolve_tenant_context(
+            user_id=context.user_id,
+            business_id=context.business_id,
+        )
+        if actor.role != PlatformRole.OWNER:
+            raise TenantPermissionDenied("ad spend action is owner-only")
+        return build_cockpit_section_start_payload(
+            business_id=context.business_id,
+            section=normalized,
+        )
     item = next((entry for entry in context.navigation if entry.id == normalized), None)
     if item is None:
         raise ValueError("unsupported cockpit section")

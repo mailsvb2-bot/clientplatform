@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from clientplatform.application.cockpit_action_routing import CockpitActionStartRoute
+from clientplatform.application.native_member_interactions import render_native_member_interaction
+from clientplatform.application.tenancy import resolve_tenant_context
+from clientplatform.domain.connections import ConnectionPlatform
 
 from . import clientplatform_one_click_experience as one_click
 from . import clientplatform_sales as sales
@@ -25,6 +28,31 @@ async def send_cockpit_section(
     )
 
 
+async def _send_canonical_native_interaction(
+    target: ClientPlatformMessageTarget,
+    *,
+    user_id: int,
+    business_id: str,
+    raw_text: str,
+    interaction_key: str,
+) -> None:
+    actor = resolve_tenant_context(user_id=user_id, business_id=business_id)
+    interaction = render_native_member_interaction(
+        actor=actor,
+        raw_text=raw_text,
+        interaction_key=f"cockpit:{business_id}:{interaction_key}",
+        current_platform=ConnectionPlatform.TELEGRAM,
+    )
+    rows = [
+        [(button.label, button.command) for button in row]
+        for row in interaction.rows
+    ]
+    await target.answer(
+        interaction.text,
+        reply_markup=one_click.control._keyboard(rows),
+    )
+
+
 async def send_cockpit_action_route(
     target: ClientPlatformMessageTarget,
     *,
@@ -33,6 +61,24 @@ async def send_cockpit_action_route(
 ) -> None:
     """Dispatch a validated Cockpit route without duplicating Telegram surfaces."""
 
+    if route.section == "reactivation" or route.kind == "r":
+        await _send_canonical_native_interaction(
+            target,
+            user_id=user_id,
+            business_id=route.business_id,
+            raw_text="cpm:reactivate",
+            interaction_key="reactivation",
+        )
+        return
+    if route.section == "ad-spend" or route.kind == "d":
+        await _send_canonical_native_interaction(
+            target,
+            user_id=user_id,
+            business_id=route.business_id,
+            raw_text="cpm:ad-spend",
+            interaction_key="ad-spend",
+        )
+        return
     if route.section is not None:
         await send_cockpit_section(
             target,

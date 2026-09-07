@@ -10,6 +10,8 @@ _TOKEN_RE = r"[A-Za-z0-9_-]{22}"
 _SECTION_KIND = {
     "calendar": "b",
     "sales": "s",
+    "services": "v",
+    "money": "m",
     "growth": "g",
     "content": "c",
     "automation": "a",
@@ -17,10 +19,15 @@ _SECTION_KIND = {
     "connections": "x",
     "team": "t",
     "settings": "e",
+    # Hidden Mini App routes. Keep these distinct from action kinds so the
+    # existing customer-action transport continues to parse actions with
+    # section=None.
+    "reactivation": "q",
+    "ad-spend": "p",
 }
 _KIND_SECTION = {value: key for key, value in _SECTION_KIND.items()}
 _PAYLOAD_RE = re.compile(
-    rf"^{_PREFIX}(?P<business>{_TOKEN_RE})_(?P<kind>[hwlbsgcanxte])(?:_(?P<target>{_TOKEN_RE}))?$"
+    rf"^{_PREFIX}(?P<business>{_TOKEN_RE})_(?P<kind>[hwrdqplbsgcanxtevm])(?:_(?P<target>{_TOKEN_RE}))?$"
 )
 
 
@@ -46,6 +53,12 @@ def build_cockpit_action_start_payload(*, business_id: str, action_key: str) -> 
     key = str(action_key or "").strip()
     if key == "sales_handoff":
         payload = f"{_PREFIX}{business_token}_h"
+    elif key == "economic_reactivation":
+        # Preserve the pre-existing action kind used by customer-action routes.
+        payload = f"{_PREFIX}{business_token}_r"
+    elif key == "economic_paid_acquisition":
+        # This is an action, not a visible/hidden section route.
+        payload = f"{_PREFIX}{business_token}_d"
     elif key.startswith("sales_plan:"):
         # Validate the canonical plan identifier even though the Telegram route
         # opens the existing sales-work surface rather than duplicating plan UI.

@@ -369,11 +369,21 @@ def build_cockpit_home(
     limitations = limitations[:_MAX_LIMITATIONS]
     has_factual_signals = bool(metrics or attention or actions)
     if not actions:
+        navigation_by_id = {item.id: item for item in cockpit_navigation(current)}
+        # Keep the established business priority stable even as new Cockpit
+        # sections are added. Navigation presentation order must never silently
+        # redefine the owner's "what next" fallback.
+        fallback_priority = (
+            "customers", "calendar", "sales", "growth", "content",
+            "automation", "analytics", "connections", "team", "settings",
+            "services", "money",
+        )
         fallback = next(
             (
-                item
-                for item in cockpit_navigation(current)
-                if item.id != "home" and item.status == "available"
+                navigation_by_id[item_id]
+                for item_id in fallback_priority
+                if item_id in navigation_by_id
+                and navigation_by_id[item_id].status == "available"
             ),
             None,
         )

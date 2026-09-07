@@ -577,6 +577,8 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
         expected_labels = {
             "calendar": "📅 Записи клиентов",
             "sales": "💬 Обращения и продажи",
+            "services": "🧪 Услуги и предложения",
+            "money": "💰 Выручка и платящие клиенты",
             "content": "📚 Материалы и программы",
             "growth": "🧪 A/B креативы",
             "analytics": "📊 Результаты Яндекс",
@@ -642,6 +644,32 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("🧪 A/B креативы", labels)
             self.assertNotIn("💰 Деньги и результат", labels)
             self.assertNotIn("📣 Реклама и продвижение", labels)
+
+            target.answer.reset_mock()
+            await one_click.send_one_click_section(
+                target,
+                user_id=101,
+                business_id="business-1",
+                section="money",
+            )
+            labels = [
+                button.text
+                for row in target.answer.await_args.kwargs["reply_markup"].inline_keyboard
+                for button in row
+            ]
+            self.assertEqual(labels, ["💰 Выручка и платящие клиенты", "🏠 Главная"])
+
+            content_manager = tenant_actor(PlatformRole.CONTENT_MANAGER)
+            with patch.object(
+                one_click.control, "_actor", new=AsyncMock(return_value=content_manager)
+            ):
+                with self.assertRaises(TenantPermissionDenied):
+                    await one_click.send_one_click_section(
+                        target,
+                        user_id=101,
+                        business_id="business-1",
+                        section="money",
+                    )
 
             with self.assertRaises(TenantPermissionDenied):
                 await one_click.send_one_click_section(
