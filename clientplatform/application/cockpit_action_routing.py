@@ -22,7 +22,7 @@ _SECTION_KIND = {
 }
 _KIND_SECTION = {value: key for key, value in _SECTION_KIND.items()}
 _PAYLOAD_RE = re.compile(
-    rf"^{_PREFIX}(?P<business>{_TOKEN_RE})_(?P<kind>[hwlbsgcanxtevm])(?:_(?P<target>{_TOKEN_RE}))?$"
+    rf"^{_PREFIX}(?P<business>{_TOKEN_RE})_(?P<kind>[hwr lbsgcanxtevm])(?:_(?P<target>{_TOKEN_RE}))?$".replace(" ", "")
 )
 
 
@@ -48,6 +48,8 @@ def build_cockpit_action_start_payload(*, business_id: str, action_key: str) -> 
     key = str(action_key or "").strip()
     if key == "sales_handoff":
         payload = f"{_PREFIX}{business_token}_h"
+    elif key == "economic_reactivation":
+        payload = f"{_PREFIX}{business_token}_r"
     elif key.startswith("sales_plan:"):
         # Validate the canonical plan identifier even though the Telegram route
         # opens the existing sales-work surface rather than duplicating plan UI.
