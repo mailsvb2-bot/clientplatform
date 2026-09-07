@@ -64,12 +64,19 @@
 
   let servicesPayload = null;
   let moneyPayload = null;
+  let servicesRequestId = "";
+  let moneyRequestId = "";
   let growthPeriod = 7;
   let analyticsPeriod = 7;
 
-  const post = async (path, extra = {}) => {
+  const newRequestId = () => window.crypto && typeof window.crypto.randomUUID === "function"
+    ? window.crypto.randomUUID()
+    : "";
+
+  const post = async (path, extra = {}, businessId = null) => {
     const body = {init_data: initData, ...extra};
-    if (select.value) body.business_id = select.value;
+    const targetBusiness = businessId === null ? select.value : businessId;
+    if (targetBusiness) body.business_id = targetBusiness;
     const response = await fetch(path, {
       method: "POST",
       headers: {"Content-Type": "application/json"},
@@ -79,6 +86,23 @@
     });
     const payload = await response.json().catch(() => ({error: "invalid_response"}));
     if (!response.ok) throw new Error(payload.error || "workspace_unavailable");
+    return payload;
+  };
+
+  const renderedBusiness = (payload) => String(payload && payload.business_id || "").trim();
+  const mutationBusiness = (payload, messageNode) => {
+    const businessId = renderedBusiness(payload);
+    if (!businessId || select.value !== businessId) {
+      text(messageNode, "Бизнес переключается или экран устарел. Дождитесь загрузки выбранного бизнеса и повторите действие.");
+      return "";
+    }
+    return businessId;
+  };
+  const acceptSnapshot = (payload, expectedBusinessId) => {
+    const businessId = renderedBusiness(payload);
+    if (!businessId || businessId !== expectedBusinessId || select.value !== expectedBusinessId) {
+      throw new Error("workspace_context_changed");
+    }
     return payload;
   };
 
@@ -125,6 +149,14 @@
     const api = controller();
     if (api && typeof api.openCanonicalSection === "function") api.openCanonicalSection(section, button);
   };
+  const openCanonicalAction = (actionKey, fallbackSection, button) => {
+    const api = controller();
+    if (api && typeof api.openCanonicalAction === "function") {
+      api.openCanonicalAction(actionKey, button);
+      return;
+    }
+    openCanonical(fallbackSection, button);
+  };
 
   const showView = (name) => {
     const api = controller();
@@ -157,12 +189,14 @@
     wrapper.append(amount, currency, save);
     wrapper.addEventListener("submit", async (event) => {
       event.preventDefault();
+      const businessId = mutationBusiness(servicesPayload, servicesMessage);
+      if (!businessId) return;
       try {
         await post("/clientplatform/cockpit/services/price", {
           offering_id: item.id,
           amount: amount.value,
           currency: currency.value,
-        });
+        }, businessId);
         notifySuccess();
         await loadServices();
       } catch (error) {
@@ -221,8 +255,10 @@
     showView("services");
     setBusy(servicesView, servicesRefresh, true);
     text(servicesMeta, "Обновляем услуги…");
-    try { renderServices(await post("/clientplatform/cockpit/services")); }
+    const businessId = select.value;
+    try { renderServices(acceptSnapshot(await post("/clientplatform/cockpit/services", {}, businessId), businessId)); }
     catch (error) {
+      if (error && error.message === "workspace_context_changed") return;
       servicesList.replaceChildren();
       text(servicesMeta, "Не удалось обновить услуги");
       text(servicesEmpty, error && error.message === "services_access_denied"
@@ -232,9 +268,11 @@
   };
 
   const archiveService = async (offeringId) => {
+    const businessId = mutationBusiness(servicesPayload, servicesMessage);
+    if (!businessId) return;
     setBusy(servicesView, servicesRefresh, true);
     try {
-      await post("/clientplatform/cockpit/services/archive", {offering_id: offeringId});
+      await post("/clientplatform/cockpit/services/archive", {offering_id: offeringId}, businessId);
       notifySuccess();
       await loadServices();
       text(servicesMessage, "Услуга убрана из активных. История и финансовые данные сохранены.");
@@ -243,16 +281,27 @@
     } finally { setBusy(servicesView, servicesRefresh, false); }
   };
 
+  const resetServiceRequest = () => { servicesRequestId = ""; };
+  servicesCapability.addEventListener("change", resetServiceRequest);
+  servicesTitle.addEventListener("input", resetServiceRequest);
+  servicesDescription.addEventListener("input", resetServiceRequest);
+
   servicesForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     if (!servicesCapability.value) return;
+    const businessId = mutationBusiness(servicesPayload, servicesMessage);
+    if (!businessId) return;
+    if (!servicesRequestId) servicesRequestId = newRequestId();
+    if (!servicesRequestId) { text(servicesMessage, "Браузер не может безопасно создать идентификатор операции. Откройте кабинет заново."); return; }
     setBusy(servicesView, servicesRefresh, true);
     try {
       await post("/clientplatform/cockpit/services/create", {
         capability_id: servicesCapability.value,
         title: servicesTitle.value,
         description: servicesDescription.value,
-      });
+        request_id: servicesRequestId,
+      }, businessId);
+      resetServiceRequest();
       servicesTitle.value = "";
       servicesDescription.value = "";
       servicesPanel.hidden = true;
@@ -262,7 +311,7 @@
     } catch (error) {
       text(servicesMessage, error && error.message === "services_write_denied"
         ? "Для Вашей роли создание услуг недоступно."
-        : "Не удалось создать услугу. Проверьте название и описание.");
+        : "Не удалось создать услугу. Повтор неизменённой формы использует тот же безопасный идентификатор операции.");
     } finally { setBusy(servicesView, servicesRefresh, false); }
   });
 
@@ -319,8 +368,10 @@
     showView("money");
     setBusy(moneyView, moneyRefresh, true);
     text(moneyMeta, "Обновляем подтверждённые оплаты…");
-    try { renderMoney(await post("/clientplatform/cockpit/money", {limit: 20})); }
+    const businessId = select.value;
+    try { renderMoney(acceptSnapshot(await post("/clientplatform/cockpit/money", {limit: 20}, businessId), businessId)); }
     catch (error) {
+      if (error && error.message === "workspace_context_changed") return;
       moneyTotals.replaceChildren(); moneyList.replaceChildren();
       text(moneyMeta, "Не удалось обновить деньги");
       text(moneyEmpty, error && error.message === "money_access_denied"
@@ -329,22 +380,30 @@
     } finally { setBusy(moneyView, moneyRefresh, false); }
   };
 
+  const resetMoneyRequest = () => { moneyRequestId = ""; };
+  moneyAmount.addEventListener("input", resetMoneyRequest);
+  moneyCurrency.addEventListener("input", resetMoneyRequest);
+  moneyCustomer.addEventListener("change", resetMoneyRequest);
+  moneyOffering.addEventListener("change", resetMoneyRequest);
+  moneyNote.addEventListener("input", resetMoneyRequest);
+
   moneyForm.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const requestId = window.crypto && typeof window.crypto.randomUUID === "function"
-      ? window.crypto.randomUUID()
-      : "";
-    if (!requestId) { text(moneyMessage, "Браузер не может безопасно создать идентификатор операции. Откройте кабинет заново."); return; }
+    const businessId = mutationBusiness(moneyPayload, moneyMessage);
+    if (!businessId) return;
+    if (!moneyRequestId) moneyRequestId = newRequestId();
+    if (!moneyRequestId) { text(moneyMessage, "Браузер не может безопасно создать идентификатор операции. Откройте кабинет заново."); return; }
     setBusy(moneyView, moneyRefresh, true);
     try {
       await post("/clientplatform/cockpit/money/record", {
         amount: moneyAmount.value,
         currency: moneyCurrency.value,
-        request_id: requestId,
+        request_id: moneyRequestId,
         customer_id: moneyCustomer.value || null,
         offering_id: moneyOffering.value || null,
         note: moneyNote.value,
-      });
+      }, businessId);
+      resetMoneyRequest();
       moneyAmount.value = "";
       moneyNote.value = "";
       moneyPanel.hidden = true;
@@ -354,14 +413,16 @@
     } catch (error) {
       text(moneyMessage, error && error.message === "money_write_denied"
         ? "Для Вашей роли запись оплаты недоступна."
-        : "Не удалось сохранить оплату. Проверьте сумму, валюту и выбранные связи.");
+        : "Не удалось подтвердить результат записи. Повтор неизменённой формы использует тот же идентификатор и не создаёт вторую оплату.");
     } finally { setBusy(moneyView, moneyRefresh, false); }
   });
 
   const refundPayment = async (paymentId) => {
+    const businessId = mutationBusiness(moneyPayload, moneyMessage);
+    if (!businessId) return;
     setBusy(moneyView, moneyRefresh, true);
     try {
-      await post("/clientplatform/cockpit/money/refund", {payment_id: paymentId});
+      await post("/clientplatform/cockpit/money/refund", {payment_id: paymentId}, businessId);
       notifySuccess();
       await loadMoney();
       text(moneyMessage, "Полный возврат сохранён отдельным подтверждённым фактом.");
@@ -398,13 +459,17 @@
     growthMetrics.replaceChildren(); growthSources.replaceChildren(); growthAdvertising.replaceChildren(); growthActions.replaceChildren();
     text(growthMeta, `${payload.business_name} · последние ${payload.period_days} дней`);
     setPeriodActive("[data-growth-period]", payload.period_days);
-    for (const item of payload.metrics || []) growthMetrics.appendChild(metricNode(metricLabels[item.key] || item.key, item.value, item.meaning));
-    for (const item of payload.sources || []) growthSources.appendChild(card(item.label, `Подтверждённых результатов: ${item.outcomes}`));
+    if (payload.business_results_available === false) {
+      growthMetrics.appendChild(metricNode("Бизнес-результаты", "—", "Для Вашей роли доступны рекламные показатели, но не клиентский и денежный ledger бизнеса."));
+    } else {
+      for (const item of payload.metrics || []) growthMetrics.appendChild(metricNode(metricLabels[item.key] || item.key, item.value, item.meaning));
+      for (const item of payload.sources || []) growthSources.appendChild(card(item.label, `Подтверждённых результатов: ${item.outcomes}`));
+    }
     if (payload.advertising) {
       const ad = payload.advertising;
       const node = card("Яндекс Директ", `Показы: ${ad.impressions} · клики: ${ad.clicks} · CTR: ${ad.ctr_percent}%`);
       const detail = document.createElement("small");
-      text(detail, `Лиды: ${ad.leads} · записи: ${ad.bookings} · оплаты: ${ad.won}. Денежная стоимость не объединяется с выручкой без подтверждённой валюты провайдера.`);
+      text(detail, `Лиды: ${ad.leads} · записи: ${ad.bookings} · выиграно клиентов: ${ad.won}. Денежная стоимость не объединяется с выручкой без подтверждённой валюты провайдера.`);
       node.appendChild(detail);
       growthAdvertising.appendChild(node);
     } else {
@@ -415,25 +480,27 @@
       const actions = document.createElement("div");
       actions.className = "workspace-actions";
       const target = item.action_key === "economic_open_slots" ? "calendar"
-        : item.action_key === "economic_reactivation" ? "customers"
+        : item.action_key === "economic_reactivation" ? "sales"
         : item.action_key === "attribution_review" ? "analytics"
         : item.action_key.startsWith("sales_") ? "sales"
         : item.action_key.startsWith("sales_plan:") || item.action_key.startsWith("sales_lead:") ? "sales"
         : "growth";
-      const button = actionButton("Открыть нужный раздел", () => openCanonical(target, button));
+      const button = actionButton("Открыть нужное действие", () => openCanonicalAction(item.action_key, target, button));
       actions.appendChild(button);
       node.appendChild(actions);
       growthActions.appendChild(node);
     }
     text(growthLimitations, (payload.limitations || []).length
-      ? "Часть показателей имеет ограничения источников. ClientPlatform не подставляет догадки вместо недоступных данных."
+      ? "Часть показателей ограничена источниками или правами Вашей роли. ClientPlatform не подставляет догадки вместо недоступных данных."
       : "");
   };
 
   const loadGrowth = async () => {
     showView("growth"); setBusy(growthView, growthRefresh, true); text(growthMeta, "Обновляем показатели роста…");
-    try { renderGrowth(await post("/clientplatform/cockpit/growth", {period_days: growthPeriod})); }
+    const businessId = select.value;
+    try { renderGrowth(acceptSnapshot(await post("/clientplatform/cockpit/growth", {period_days: growthPeriod}, businessId), businessId)); }
     catch (error) {
+      if (error && error.message === "workspace_context_changed") return;
       growthMetrics.replaceChildren(); growthSources.replaceChildren(); growthAdvertising.replaceChildren(); growthActions.replaceChildren();
       text(growthMeta, error && error.message === "growth_access_denied" ? "Для Вашей роли раздел недоступен" : "Показатели роста временно недоступны");
     } finally { setBusy(growthView, growthRefresh, false); }
@@ -444,29 +511,55 @@
     text(analyticsMeta, `${payload.business_name} · последние ${payload.period_days} дней`);
     setPeriodActive("[data-analytics-period]", payload.period_days);
     const journey = payload.journey || {};
-    analyticsFunnel.appendChild(metricNode("Обращения", journey.leads || 0, "Вошли в подтверждённый путь клиента"));
-    analyticsFunnel.appendChild(metricNode("Записи", journey.bookings || 0, "Записались"));
-    analyticsFunnel.appendChild(metricNode("Пришли", journey.completed_bookings === -1 ? "—" : (journey.completed_bookings || 0), journey.completed_bookings === -1 ? "Источник завершения записи сейчас недоступен" : "Завершённые записи"));
-    analyticsFunnel.appendChild(metricNode("Оплатили", journey.paid_customers || 0, "Клиенты с подтверждённой оплатой"));
-    analyticsFunnel.appendChild(metricNode("Вернулись", journey.reactivated_customers || 0, "Повторная подтверждённая выручка"));
-    for (const item of journey.verified_revenue || []) {
-      const node = document.createElement("div"); const caption = document.createElement("span"); const value = document.createElement("strong");
-      node.className = "money-card"; text(caption, "Подтверждённая выручка"); text(value, item.display); node.append(caption, value); analyticsMoney.appendChild(node);
+    if (payload.business_results_available === false) {
+      analyticsFunnel.appendChild(metricNode("Бизнес-результаты", "—", "CRM, оплаты и выручка скрыты для этой роли. Ниже остаётся разрешённая рекламная аналитика."));
+      if (payload.advertising) {
+        const ad = payload.advertising;
+        analyticsFunnel.appendChild(metricNode("Показы рекламы", ad.impressions, "Яндекс Директ"));
+        analyticsFunnel.appendChild(metricNode("Клики", ad.clicks, `CTR ${ad.ctr_percent}%`));
+        analyticsFunnel.appendChild(metricNode("Лиды", ad.leads, "Подтверждённая рекламная атрибуция"));
+        analyticsFunnel.appendChild(metricNode("Записи", ad.bookings, "Клиенты с записью после рекламы"));
+        analyticsFunnel.appendChild(metricNode("Выиграно клиентов", ad.won, "Клиенты, дошедшие до won; это не число оплат"));
+      }
+      analyticsSources.appendChild(card("Границы доступа", "Денежный и клиентский ledger не загружался: этот экран не расширяет права роли ради аналитики."));
+    } else {
+      analyticsFunnel.appendChild(metricNode("Обращения", journey.leads || 0, "Вошли в подтверждённый путь клиента"));
+      analyticsFunnel.appendChild(metricNode("Записи", journey.bookings || 0, "Записались"));
+      analyticsFunnel.appendChild(metricNode("Пришли", journey.completed_bookings === -1 ? "—" : (journey.completed_bookings || 0), journey.completed_bookings === -1 ? "Источник завершения записи сейчас недоступен" : "Завершённые записи"));
+      analyticsFunnel.appendChild(metricNode("Оплатили", journey.paid_customers || 0, "Клиенты с подтверждённой оплатой"));
+      analyticsFunnel.appendChild(metricNode("Вернулись", journey.reactivated_customers || 0, "Повторная подтверждённая выручка"));
+      for (const item of journey.verified_revenue || []) {
+        const node = document.createElement("div"); const caption = document.createElement("span"); const value = document.createElement("strong");
+        node.className = "money-card"; text(caption, "Подтверждённая выручка"); text(value, item.display); node.append(caption, value); analyticsMoney.appendChild(node);
+      }
+      for (const item of payload.sources || []) analyticsSources.appendChild(card(item.label, `Подтверждённых результатов: ${item.outcomes}`));
     }
-    for (const item of payload.sources || []) analyticsSources.appendChild(card(item.label, `Подтверждённых результатов: ${item.outcomes}`));
     text(analyticsLimitations, (payload.limitations || []).length
-      ? "Есть неполные источники или неатрибутированные результаты. Такие данные показаны отдельно и не приписываются каналу автоматически."
+      ? "Есть ограничения источников или прав. Недоступные данные не заменяются нулями и не приписываются каналам автоматически."
       : "");
   };
 
   const loadAnalytics = async () => {
     showView("analytics"); setBusy(analyticsView, analyticsRefresh, true); text(analyticsMeta, "Обновляем подтверждённый путь клиента…");
-    try { renderAnalytics(await post("/clientplatform/cockpit/analytics", {period_days: analyticsPeriod})); }
+    const businessId = select.value;
+    try { renderAnalytics(acceptSnapshot(await post("/clientplatform/cockpit/analytics", {period_days: analyticsPeriod}, businessId), businessId)); }
     catch (error) {
+      if (error && error.message === "workspace_context_changed") return;
       analyticsFunnel.replaceChildren(); analyticsMoney.replaceChildren(); analyticsSources.replaceChildren();
       text(analyticsMeta, error && error.message === "analytics_access_denied" ? "Для Вашей роли раздел недоступен" : "Аналитика временно недоступна");
     } finally { setBusy(analyticsView, analyticsRefresh, false); }
   };
+
+  select.addEventListener("change", () => {
+    servicesPayload = null;
+    moneyPayload = null;
+    resetServiceRequest();
+    resetMoneyRequest();
+    servicesPanel.hidden = true;
+    moneyPanel.hidden = true;
+    setBusy(servicesView, servicesRefresh, true);
+    setBusy(moneyView, moneyRefresh, true);
+  });
 
   servicesRefresh.addEventListener("click", () => { void loadServices(); });
   servicesMore.addEventListener("click", () => { const api = controller(); if (api) api.showNavigation(); });
