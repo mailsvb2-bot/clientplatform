@@ -1194,10 +1194,12 @@ async def cockpit_service_create(request: web.Request) -> web.Response:
     capability_id = payload.get("capability_id")
     title = payload.get("title")
     description = payload.get("description")
+    request_id = payload.get("request_id")
     if (
         not isinstance(capability_id, str)
         or not isinstance(title, str)
         or not isinstance(description, str)
+        or not isinstance(request_id, str)
     ):
         return _error(400, "invalid_services_change")
     try:
@@ -1208,6 +1210,7 @@ async def cockpit_service_create(request: web.Request) -> web.Response:
             capability_id=capability_id,
             title=title,
             description=description,
+            request_id=request_id,
         )
     except TenantAccessDenied:
         return _error(403, "business_access_denied")
