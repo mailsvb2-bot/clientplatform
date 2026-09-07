@@ -133,12 +133,12 @@ class CockpitPr308ReviewFindingTests(unittest.TestCase):
                 self.assertEqual(snapshot.advertising.won, 2)
                 self.assertIsNone(snapshot.journey.paid_customers)
 
-    def test_review_action_keys_parse_to_exact_hidden_canonical_sections(self) -> None:
+    def test_existing_action_payloads_remain_actions_not_sections(self) -> None:
         expected = {
-            "economic_reactivation": "reactivation",
-            "economic_paid_acquisition": "ad-spend",
+            "economic_reactivation": "r",
+            "economic_paid_acquisition": "d",
         }
-        for action_key, section in expected.items():
+        for action_key, kind in expected.items():
             with self.subTest(action_key=action_key):
                 payload = build_cockpit_action_start_payload(
                     business_id=_BUSINESS,
@@ -147,7 +147,8 @@ class CockpitPr308ReviewFindingTests(unittest.TestCase):
                 parsed = parse_cockpit_action_start_payload(payload)
                 self.assertIsNotNone(parsed)
                 self.assertEqual(parsed.business_id, _BUSINESS)
-                self.assertEqual(parsed.section, section)
+                self.assertEqual(parsed.kind, kind)
+                self.assertIsNone(parsed.section)
 
     def test_hidden_reactivation_route_preserves_support_roles_but_denies_customer(self) -> None:
         for role in (
@@ -167,7 +168,9 @@ class CockpitPr308ReviewFindingTests(unittest.TestCase):
                         requested_business_id=_BUSINESS,
                         section="reactivation",
                     )
-                self.assertEqual(parse_cockpit_action_start_payload(payload).section, "reactivation")
+                parsed = parse_cockpit_action_start_payload(payload)
+                self.assertEqual(parsed.kind, "q")
+                self.assertEqual(parsed.section, "reactivation")
 
         with (
             patch.object(cockpit, "resolve_cockpit_context", return_value=_context()),
@@ -190,7 +193,9 @@ class CockpitPr308ReviewFindingTests(unittest.TestCase):
                 requested_business_id=_BUSINESS,
                 section="ad-spend",
             )
-        self.assertEqual(parse_cockpit_action_start_payload(payload).section, "ad-spend")
+        parsed = parse_cockpit_action_start_payload(payload)
+        self.assertEqual(parsed.kind, "p")
+        self.assertEqual(parsed.section, "ad-spend")
 
         for role in (PlatformRole.ADMINISTRATOR, PlatformRole.MANAGER, PlatformRole.MARKETER):
             with self.subTest(role=role.value):
@@ -230,13 +235,16 @@ class CockpitPr308ReviewFindingTests(unittest.TestCase):
 
 
 class CockpitPr308CanonicalDispatchTests(unittest.IsolatedAsyncioTestCase):
-    async def test_hidden_routes_dispatch_to_exact_existing_native_interactions(self) -> None:
+    async def test_hidden_and_existing_action_routes_dispatch_to_exact_native_interactions(self) -> None:
         actor = _actor(PlatformRole.OWNER)
-        for section, raw_text in (
-            ("reactivation", "cpm:reactivate"),
-            ("ad-spend", "cpm:ad-spend"),
-        ):
-            with self.subTest(section=section):
+        cases = (
+            (CockpitActionStartRoute(business_id=_BUSINESS, kind="q", section="reactivation"), "cpm:reactivate"),
+            (CockpitActionStartRoute(business_id=_BUSINESS, kind="r", section=None), "cpm:reactivate"),
+            (CockpitActionStartRoute(business_id=_BUSINESS, kind="p", section="ad-spend"), "cpm:ad-spend"),
+            (CockpitActionStartRoute(business_id=_BUSINESS, kind="d", section=None), "cpm:ad-spend"),
+        )
+        for route, raw_text in cases:
+            with self.subTest(kind=route.kind, section=route.section):
                 target = SimpleNamespace(answer=AsyncMock())
                 rendered = SimpleNamespace(
                     text="canonical",
@@ -251,11 +259,7 @@ class CockpitPr308CanonicalDispatchTests(unittest.IsolatedAsyncioTestCase):
                     await cockpit_dispatch.send_cockpit_action_route(
                         target,
                         user_id=101,
-                        route=CockpitActionStartRoute(
-                            business_id=_BUSINESS,
-                            kind="r" if section == "reactivation" else "p",
-                            section=section,
-                        ),
+                        route=route,
                     )
                 self.assertEqual(renderer.call_args.kwargs["raw_text"], raw_text)
                 self.assertEqual(renderer.call_args.kwargs["actor"], actor)
