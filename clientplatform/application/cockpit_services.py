@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from uuid import UUID
 
 from clientplatform.application import admin_ops
 from clientplatform.application.activity import (
@@ -207,6 +208,7 @@ def create_cockpit_service(
     capability_id: str,
     title: str,
     description: str,
+    request_id: str,
 ) -> BusinessOffering:
     actor, _ = _resolve_actor(
         telegram_user_id=telegram_user_id,
@@ -216,11 +218,16 @@ def create_cockpit_service(
     allowed = {item.id for item in _offering_capabilities(actor)}
     if capability_id not in allowed:
         raise ValueError("offering capability is unavailable")
+    try:
+        normalized_request = str(UUID(str(request_id)))
+    except ValueError as exc:
+        raise ValueError("service request id must be a UUID") from exc
     return create_business_offering(
         actor=actor,
         capability_id=capability_id,
         title=title,
         description=description,
+        idempotency_key=f"cockpit-service:{normalized_request}",
     )
 
 
