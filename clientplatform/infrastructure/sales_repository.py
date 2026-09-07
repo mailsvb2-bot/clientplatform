@@ -422,17 +422,24 @@ class SalesRepository:
         ).fetchone()
         if row is None:
             raise ValueError("sales assignee was not found in the active business")
+        if lead.stage in {SalesLeadStage.WON, SalesLeadStage.LOST}:
+            raise SalesInvariantViolation("closed sales lead cannot change assignee")
         if lead.assigned_member_id == normalized_member:
             return lead
         timestamp = str(now or _utc_now())
-        self._conn.execute(
+        cursor = self._conn.execute(
             """
             UPDATE clientplatform_sales_leads
             SET assigned_member_id=?, updated_at=?
             WHERE id=? AND business_id=?
+              AND stage IN ('new','contacted','qualified','checkout')
             """,
             (normalized_member, timestamp, lead.id, current.business_id),
         )
+        if int(getattr(cursor, "rowcount", 1) or 0) != 1:
+            raise SalesInvariantViolation(
+                "sales lead closed concurrently; refresh and retry assignment"
+            )
         self.record_event(
             actor=current,
             lead_id=lead.id,
@@ -461,18 +468,25 @@ class SalesRepository:
     ) -> SalesLead:
         current = self._current(actor, manage=True)
         lead = self.get_lead(actor=current, lead_id=lead_id)
+        if lead.stage in {SalesLeadStage.WON, SalesLeadStage.LOST}:
+            raise SalesInvariantViolation("closed sales lead cannot change assignee")
         if lead.assigned_member_id is None:
             return lead
         timestamp = str(now or _utc_now())
         previous_member_id = lead.assigned_member_id
-        self._conn.execute(
+        cursor = self._conn.execute(
             """
             UPDATE clientplatform_sales_leads
             SET assigned_member_id=NULL, updated_at=?
             WHERE id=? AND business_id=?
+              AND stage IN ('new','contacted','qualified','checkout')
             """,
             (timestamp, lead.id, current.business_id),
         )
+        if int(getattr(cursor, "rowcount", 1) or 0) != 1:
+            raise SalesInvariantViolation(
+                "sales lead closed concurrently; refresh and retry assignment"
+            )
         self.record_event(
             actor=current,
             lead_id=lead.id,
@@ -509,11 +523,12 @@ class SalesRepository:
         if lead.next_action == normalized_action and lead.due_at == normalized_due:
             return lead
         timestamp = str(now or _utc_now())
-        self._conn.execute(
+        cursor = self._conn.execute(
             """
             UPDATE clientplatform_sales_leads
             SET next_action=?, due_at=?, updated_at=?
             WHERE id=? AND business_id=?
+              AND stage IN ('new','contacted','qualified','checkout')
             """,
             (
                 normalized_action,
@@ -523,6 +538,10 @@ class SalesRepository:
                 current.business_id,
             ),
         )
+        if int(getattr(cursor, "rowcount", 1) or 0) != 1:
+            raise SalesInvariantViolation(
+                "sales lead closed concurrently; refresh and retry next action"
+            )
         self.record_event(
             actor=current,
             lead_id=lead.id,
