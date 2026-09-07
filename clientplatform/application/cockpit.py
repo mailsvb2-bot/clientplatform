@@ -277,6 +277,7 @@ def resolve_cockpit_context(
         navigation=cockpit_navigation(actor),
     )
 
+
 def resolve_cockpit_section_start_payload(
     *,
     telegram_user_id: int,
@@ -292,6 +293,16 @@ def resolve_cockpit_section_start_payload(
     if context.onboarding_required or context.business_id is None:
         raise TenantAccessDenied("active business membership was not found")
     normalized = str(section or "").strip().lower()
+    if normalized == "reactivation":
+        actor = resolve_tenant_context(
+            user_id=context.user_id,
+            business_id=context.business_id,
+        )
+        actor.assert_can_view_customer_records()
+        return build_cockpit_section_start_payload(
+            business_id=context.business_id,
+            section=normalized,
+        )
     item = next((entry for entry in context.navigation if entry.id == normalized), None)
     if item is None:
         raise ValueError("unsupported cockpit section")
