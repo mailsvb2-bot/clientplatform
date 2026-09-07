@@ -20,6 +20,20 @@ from clientplatform.application.cockpit_home import (
     CockpitHomeUnavailable,
     resolve_cockpit_home,
 )
+from clientplatform.application.cockpit_services import (
+    archive_cockpit_service,
+    create_cockpit_service,
+    resolve_cockpit_services,
+    set_cockpit_service_price,
+)
+from clientplatform.application.cockpit_money import (
+    record_cockpit_payment,
+    refund_cockpit_payment,
+    resolve_cockpit_money,
+)
+from clientplatform.application.cockpit_growth_analytics import (
+    resolve_cockpit_growth_analytics,
+)
 from clientplatform.application.cockpit_calendar import resolve_cockpit_calendar
 from clientplatform.application.cockpit_calendar_management import (
     cancel_cockpit_calendar_slot,
@@ -76,6 +90,7 @@ _CALENDAR_SCRIPT = Path(__file__).with_name("cockpit_calendar.js")
 _SALES_SCRIPT = Path(__file__).with_name("cockpit_sales.js")
 _CONNECTIONS_SCRIPT = Path(__file__).with_name("cockpit_connections.js")
 _SETTINGS_SCRIPT = Path(__file__).with_name("cockpit_settings.js")
+_BUSINESS_WORKSPACE_SCRIPT = Path(__file__).with_name("cockpit_business_workspace.js")
 
 
 class _BotMessageTarget:
@@ -100,6 +115,7 @@ _HTML = """<!doctype html>
 <script defer src="/clientplatform/cockpit/sales.js"></script>
 <script defer src="/clientplatform/cockpit/connections.js"></script>
 <script defer src="/clientplatform/cockpit/settings.js"></script>
+<script defer src="/clientplatform/cockpit/business-workspace.js"></script>
 </head><body>
 <main class="shell">
 <header><div><p class="eyebrow">ClientPlatform</p><h1>Ваш бизнес</h1></div><span id="role" class="pill">Проверяем доступ…</span></header>
@@ -145,6 +161,35 @@ _HTML = """<!doctype html>
 <button id="sales-reopen" class="primary-cta" type="button" hidden>Вернуть в работу</button><p id="sales-detail-message" class="muted"></p></section>
 <button id="sales-manage" class="secondary sales-advanced" type="button">Дополнительные действия в боте</button>
 </section>
+<section id="services-view" class="workspace-view" aria-live="polite" hidden>
+<div class="view-toolbar"><button id="services-more" class="secondary" type="button">Все разделы</button><button id="services-refresh" class="secondary" type="button">Обновить</button></div>
+<div class="home-heading"><p class="eyebrow">Что продаём</p><h2>Услуги</h2><p id="services-meta"></p></div>
+<div id="services-list"></div><p id="services-empty" class="muted"></p>
+<button id="services-add" class="primary-cta" type="button" hidden>Добавить услугу</button>
+<section id="services-form-panel" class="home-block" hidden><h3>Новая услуга</h3><form id="services-form" class="workspace-form"><label for="services-capability">Формат работы</label><select id="services-capability" required></select><label for="services-title">Название</label><input id="services-title" maxlength="200" required><label for="services-description">Короткое описание</label><textarea id="services-description" maxlength="2000" rows="4" required></textarea><button class="primary-cta" type="submit">Создать услугу</button></form><p id="services-message" class="muted"></p></section>
+<button id="services-advanced" class="secondary workspace-advanced" type="button">Дополнительные действия в боте</button>
+</section>
+<section id="money-view" class="workspace-view" aria-live="polite" hidden>
+<div class="view-toolbar"><button id="money-more" class="secondary" type="button">Все разделы</button><button id="money-refresh" class="secondary" type="button">Обновить</button></div>
+<div class="home-heading"><p class="eyebrow">Финансы</p><h2>Деньги</h2><p id="money-meta"></p></div>
+<div id="money-totals" class="money"></div><p id="money-summary" class="muted"></p>
+<button id="money-add" class="primary-cta" type="button" hidden>Зафиксировать оплату</button>
+<section id="money-form-panel" class="home-block" hidden><h3>Новая оплата</h3><form id="money-form" class="workspace-form"><label for="money-amount">Сумма</label><input id="money-amount" inputmode="decimal" maxlength="40" placeholder="3500" required><label for="money-currency">Валюта</label><input id="money-currency" maxlength="3" value="RUB" required><label for="money-customer">Клиент (необязательно)</label><select id="money-customer"><option value="">Без привязки</option></select><label for="money-offering">Услуга (необязательно)</label><select id="money-offering"><option value="">Без привязки</option></select><label for="money-note">Комментарий</label><input id="money-note" maxlength="500" placeholder="Например: консультация"><button class="primary-cta" type="submit">Сохранить оплату</button></form><p id="money-message" class="muted"></p></section>
+<section class="home-block"><h3>Последние операции</h3><div id="money-list"></div><p id="money-empty" class="muted"></p></section>
+<button id="money-advanced" class="secondary workspace-advanced" type="button">Дополнительные действия в боте</button>
+</section>
+<section id="growth-view" class="workspace-view" aria-live="polite" hidden>
+<div class="view-toolbar"><button id="growth-more" class="secondary" type="button">Все разделы</button><button id="growth-refresh" class="secondary" type="button">Обновить</button></div>
+<div class="home-heading"><p class="eyebrow">Привлечение</p><h2>Рост и реклама</h2><p id="growth-meta"></p></div><div class="period-switch"><button type="button" data-growth-period="7">7 дней</button><button type="button" data-growth-period="30">30 дней</button></div>
+<div id="growth-metrics" class="metrics"></div><section class="home-block"><h3>Что сработало</h3><div id="growth-sources"></div></section><section class="home-block"><h3>Реклама</h3><div id="growth-advertising"></div></section><section class="home-block"><h3>Что делать дальше</h3><div id="growth-actions"></div></section><p id="growth-limitations" class="muted"></p>
+<button id="growth-advanced" class="secondary workspace-advanced" type="button">Полное управление рекламой в боте</button>
+</section>
+<section id="analytics-view" class="workspace-view" aria-live="polite" hidden>
+<div class="view-toolbar"><button id="analytics-more" class="secondary" type="button">Все разделы</button><button id="analytics-refresh" class="secondary" type="button">Обновить</button></div>
+<div class="home-heading"><p class="eyebrow">Результат</p><h2>Аналитика</h2><p id="analytics-meta"></p></div><div class="period-switch"><button type="button" data-analytics-period="7">7 дней</button><button type="button" data-analytics-period="30">30 дней</button></div>
+<div id="analytics-funnel" class="metrics"></div><section class="home-block"><h3>Подтверждённая выручка</h3><div id="analytics-money" class="money"></div></section><section class="home-block"><h3>Источники результата</h3><div id="analytics-sources"></div></section><p id="analytics-limitations" class="muted"></p>
+<button id="analytics-advanced" class="secondary workspace-advanced" type="button">Расширенная аналитика в боте</button>
+</section>
 <section id="connections-view" class="workspace-view" aria-live="polite" hidden>
 <div class="view-toolbar"><button id="connections-more" class="secondary" type="button">Все разделы</button><button id="connections-refresh" class="secondary" type="button">Обновить</button></div>
 <div class="home-heading"><p class="eyebrow">Каналы бизнеса</p><h2>Подключения</h2><p id="connections-meta"></p></div>
@@ -172,7 +217,7 @@ _HTML = """<!doctype html>
 </nav>
 </body></html>"""
 
-_CSS = """:root{--bg:var(--tg-theme-bg-color,#f4f6f8);--surface:var(--tg-theme-secondary-bg-color,#fff);--text:var(--tg-theme-text-color,#17202a);--hint:var(--tg-theme-hint-color,#66717d);--link:var(--tg-theme-link-color,#2678d9);--button:var(--tg-theme-button-color,#2678d9);--button-text:var(--tg-theme-button-text-color,#fff);--border:rgba(127,127,127,.24)}*{box-sizing:border-box}[hidden]{display:none!important}body{margin:0;font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:var(--bg);color:var(--text);padding:0}button,select,input,textarea{font:inherit;color:inherit}.shell{max-width:760px;margin:0 auto;padding:calc(18px + env(safe-area-inset-top)) 16px calc(104px + env(safe-area-inset-bottom))}header{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:16px}.eyebrow{margin:0 0 4px;font-size:12px;font-weight:800;letter-spacing:.045em;color:var(--hint)}h1{margin:0;font-size:29px;line-height:1.1}h2,h3{color:var(--text)}.pill{font-size:12px;background:var(--surface);border:1px solid var(--border);border-radius:999px;padding:8px 10px;max-width:46%;text-align:center}.business,.status,.explanation,.workspace-view{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:14px;margin-bottom:14px}.business label{display:block;font-size:13px;font-weight:750;margin-bottom:8px}select{width:100%;min-height:46px;border:1px solid var(--border);border-radius:12px;background:var(--surface);padding:0 12px}.status{font-size:14px;line-height:1.4}.status .secondary{margin-top:10px}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.card{min-height:126px;text-align:left;border:1px solid var(--border);border-radius:16px;background:var(--surface);padding:15px;position:relative;touch-action:manipulation;cursor:pointer}.card:active,.customer-row:active,.sales-card:active,.action-card:active{transform:scale(.995)}.card:disabled{opacity:.7}.card h2{font-size:17px;margin:0 0 7px;padding-right:56px}.card p{font-size:13px;line-height:1.38;margin:0;color:var(--hint)}.card.planned{border-style:dashed}.card.restricted{opacity:.72}.badge{position:absolute;right:10px;top:10px;font-size:10px;font-weight:800;border-radius:999px;padding:4px 7px;background:var(--bg);color:var(--hint)}.badge.available{background:var(--button);color:var(--button-text)}.explanation h2{margin:14px 0 8px}.explanation p{line-height:1.5}.secondary,.action-card{min-height:44px;border:1px solid var(--border);border-radius:12px;padding:0 14px;background:var(--bg);font-weight:700}.view-toolbar{display:flex;justify-content:space-between;gap:10px}.home-heading h2{margin:14px 0 4px}.home-heading p{margin:0 0 12px;color:var(--hint)}.metrics,.money{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:12px 0}.metric,.money-card,.attention-card{border:1px solid var(--border);border-radius:14px;padding:12px}.metric strong,.money-card strong{display:block;font-size:24px;margin-top:4px}.metric span,.money-card span,.muted{font-size:12px;color:var(--hint);line-height:1.4}.home-block{margin-top:18px}.home-block h3{margin:0 0 9px;font-size:16px}.primary-block{border:1px solid var(--button);border-radius:16px;padding:14px;background:color-mix(in srgb,var(--button) 7%,var(--surface))}.primary-block h3{font-size:19px}.attention-card{margin-bottom:8px}.action-card{display:block;width:100%;text-align:left;margin-bottom:8px;touch-action:manipulation}.action-card.primary-action{min-height:76px;background:var(--button);color:var(--button-text);border-color:var(--button);font-size:16px}.action-card small{display:block;font-weight:400;margin-top:4px;color:var(--hint);line-height:1.35}.action-card.primary-action small{color:var(--button-text);opacity:.84}.customer-search label{display:block;font-size:13px;font-weight:750;margin-bottom:8px}.customer-search>div{display:flex;gap:8px}.customer-search input{min-width:0;flex:1;min-height:44px;border:1px solid var(--border);border-radius:12px;background:var(--surface);color:var(--text);padding:0 12px}.customer-search button,.primary-cta{min-height:46px;border:0;border-radius:12px;background:var(--button);color:var(--button-text);padding:0 16px;font-weight:800}.primary-cta{display:block;width:100%;margin-top:14px}.customer-row,.sales-card{display:block;width:100%;text-align:left;border:1px solid var(--border);border-radius:14px;background:var(--surface);padding:13px;margin-bottom:8px;touch-action:manipulation}.customer-row strong{display:block}.customer-row small,.contact-card small,.timeline-card small,.schedule-card small,.sales-card small{display:block;color:var(--hint);margin-top:4px}.pager{display:flex;justify-content:space-between;gap:10px;margin-top:12px}.contact-card,.timeline-card,.schedule-card{border:1px solid var(--border);border-radius:14px;padding:12px;margin-bottom:8px}.schedule-card-top,.sales-card-top{display:flex;justify-content:space-between;gap:12px;align-items:center}.schedule-card p,.sales-card p{margin:8px 0 0;line-height:1.35}.schedule-status,.sales-stage{font-size:11px;font-weight:800;border-radius:999px;padding:4px 8px;background:var(--bg);white-space:nowrap}.schedule-status.booked{background:var(--button);color:var(--button-text)}.sales-card.overdue{border-color:var(--button)}.connection-card{border:1px solid var(--border);border-radius:14px;padding:13px;margin-bottom:8px}.connection-card-top{display:flex;justify-content:space-between;gap:12px;align-items:center}.connection-card p{margin:8px 0;line-height:1.4}.connection-state{font-size:11px;font-weight:800;border-radius:999px;padding:4px 8px;background:var(--bg);text-align:right}.connection-card.active .connection-state{background:var(--button);color:var(--button-text)}.connection-connect{width:100%;margin-top:6px}.settings-form label{display:block;font-size:13px;font-weight:750;margin:14px 0 7px}.settings-form input,.settings-form textarea{width:100%;border:1px solid var(--border);border-radius:12px;background:var(--surface);padding:11px 12px}.settings-form input{min-height:46px}.settings-form textarea{resize:vertical;line-height:1.4}.calendar-form label{display:block;font-size:13px;font-weight:750;margin:14px 0 7px}.calendar-form input,.calendar-form select{width:100%;min-height:46px;border:1px solid var(--border);border-radius:12px;background:var(--surface);padding:0 12px}.calendar-form-cancel{width:100%;margin-top:8px}.calendar-advanced{width:100%;margin-top:10px}.schedule-actions{display:flex;gap:8px;margin-top:10px}.schedule-actions button{flex:1;min-height:40px;border:1px solid var(--border);border-radius:10px;background:var(--bg);font-weight:750}.sales-detail-actions,.sales-result-actions,.sales-stage-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.sales-detail-actions button,.sales-stage-actions button,.sales-result-actions button{flex:1;min-width:120px;min-height:42px;border:1px solid var(--border);border-radius:10px;background:var(--bg);font-weight:750;padding:0 10px}.sales-stage-actions button.active{background:var(--button);color:var(--button-text);border-color:var(--button)}.sales-result-actions #sales-won{background:var(--button);color:var(--button-text);border-color:var(--button)}.sales-form label,.sales-result-label{display:block;font-size:13px;font-weight:750;margin:12px 0 7px}.sales-form input,.sales-form textarea,#sales-result-reason{width:100%;border:1px solid var(--border);border-radius:12px;background:var(--surface);padding:11px 12px}.sales-form input{min-height:46px}.sales-form textarea,#sales-result-reason{resize:vertical;line-height:1.4}.sales-wide,.sales-advanced{width:100%;margin-top:10px}.sales-card.assigned-to-me{border-color:var(--button)}.sales-recent-heading{margin:18px 0 4px}.sales-recent-hint{margin:0 0 10px}.primary-nav{position:fixed;left:50%;bottom:0;transform:translateX(-50%);width:min(760px,100%);z-index:30;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));padding:8px 8px calc(8px + env(safe-area-inset-bottom));background:var(--surface);border-top:1px solid var(--border);box-shadow:0 -8px 28px rgba(0,0,0,.08)}.primary-nav button{min-width:0;min-height:52px;border:0;background:transparent;border-radius:12px;color:var(--hint);font-size:11px;font-weight:750;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px}.primary-nav button.active,.primary-nav button[aria-current=page]{color:var(--button);background:var(--bg)}.primary-icon{font-size:12px;line-height:1}.busy{opacity:.66;pointer-events:none}@supports not (color:color-mix(in srgb,black,white)){.primary-block{background:var(--surface)}}@media(max-width:520px){.grid,.metrics,.money{grid-template-columns:1fr}.shell{padding-left:12px;padding-right:12px}h1{font-size:27px}.pill{max-width:52%}.card{min-height:auto}.view-toolbar{position:sticky;top:env(safe-area-inset-top);z-index:2;background:var(--surface);padding:2px 0 8px}.primary-nav{border-radius:16px 16px 0 0}.primary-nav button{padding:4px 1px}}"""
+_CSS = """:root{--bg:var(--tg-theme-bg-color,#f4f6f8);--surface:var(--tg-theme-secondary-bg-color,#fff);--text:var(--tg-theme-text-color,#17202a);--hint:var(--tg-theme-hint-color,#66717d);--link:var(--tg-theme-link-color,#2678d9);--button:var(--tg-theme-button-color,#2678d9);--button-text:var(--tg-theme-button-text-color,#fff);--border:rgba(127,127,127,.24)}*{box-sizing:border-box}[hidden]{display:none!important}body{margin:0;font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:var(--bg);color:var(--text);padding:0}button,select,input,textarea{font:inherit;color:inherit}.shell{max-width:760px;margin:0 auto;padding:calc(18px + env(safe-area-inset-top)) 16px calc(104px + env(safe-area-inset-bottom))}header{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:16px}.eyebrow{margin:0 0 4px;font-size:12px;font-weight:800;letter-spacing:.045em;color:var(--hint)}h1{margin:0;font-size:29px;line-height:1.1}h2,h3{color:var(--text)}.pill{font-size:12px;background:var(--surface);border:1px solid var(--border);border-radius:999px;padding:8px 10px;max-width:46%;text-align:center}.business,.status,.explanation,.workspace-view{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:14px;margin-bottom:14px}.business label{display:block;font-size:13px;font-weight:750;margin-bottom:8px}select{width:100%;min-height:46px;border:1px solid var(--border);border-radius:12px;background:var(--surface);padding:0 12px}.status{font-size:14px;line-height:1.4}.status .secondary{margin-top:10px}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.card{min-height:126px;text-align:left;border:1px solid var(--border);border-radius:16px;background:var(--surface);padding:15px;position:relative;touch-action:manipulation;cursor:pointer}.card:active,.customer-row:active,.sales-card:active,.action-card:active{transform:scale(.995)}.card:disabled{opacity:.7}.card h2{font-size:17px;margin:0 0 7px;padding-right:56px}.card p{font-size:13px;line-height:1.38;margin:0;color:var(--hint)}.card.planned{border-style:dashed}.card.restricted{opacity:.72}.badge{position:absolute;right:10px;top:10px;font-size:10px;font-weight:800;border-radius:999px;padding:4px 7px;background:var(--bg);color:var(--hint)}.badge.available{background:var(--button);color:var(--button-text)}.explanation h2{margin:14px 0 8px}.explanation p{line-height:1.5}.secondary,.action-card{min-height:44px;border:1px solid var(--border);border-radius:12px;padding:0 14px;background:var(--bg);font-weight:700}.view-toolbar{display:flex;justify-content:space-between;gap:10px}.home-heading h2{margin:14px 0 4px}.home-heading p{margin:0 0 12px;color:var(--hint)}.metrics,.money{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:12px 0}.metric,.money-card,.attention-card{border:1px solid var(--border);border-radius:14px;padding:12px}.metric strong,.money-card strong{display:block;font-size:24px;margin-top:4px}.metric span,.money-card span,.muted{font-size:12px;color:var(--hint);line-height:1.4}.home-block{margin-top:18px}.home-block h3{margin:0 0 9px;font-size:16px}.primary-block{border:1px solid var(--button);border-radius:16px;padding:14px;background:color-mix(in srgb,var(--button) 7%,var(--surface))}.primary-block h3{font-size:19px}.attention-card{margin-bottom:8px}.action-card{display:block;width:100%;text-align:left;margin-bottom:8px;touch-action:manipulation}.action-card.primary-action{min-height:76px;background:var(--button);color:var(--button-text);border-color:var(--button);font-size:16px}.action-card small{display:block;font-weight:400;margin-top:4px;color:var(--hint);line-height:1.35}.action-card.primary-action small{color:var(--button-text);opacity:.84}.customer-search label{display:block;font-size:13px;font-weight:750;margin-bottom:8px}.customer-search>div{display:flex;gap:8px}.customer-search input{min-width:0;flex:1;min-height:44px;border:1px solid var(--border);border-radius:12px;background:var(--surface);color:var(--text);padding:0 12px}.customer-search button,.primary-cta{min-height:46px;border:0;border-radius:12px;background:var(--button);color:var(--button-text);padding:0 16px;font-weight:800}.primary-cta{display:block;width:100%;margin-top:14px}.customer-row,.sales-card{display:block;width:100%;text-align:left;border:1px solid var(--border);border-radius:14px;background:var(--surface);padding:13px;margin-bottom:8px;touch-action:manipulation}.customer-row strong{display:block}.customer-row small,.contact-card small,.timeline-card small,.schedule-card small,.sales-card small{display:block;color:var(--hint);margin-top:4px}.pager{display:flex;justify-content:space-between;gap:10px;margin-top:12px}.contact-card,.timeline-card,.schedule-card{border:1px solid var(--border);border-radius:14px;padding:12px;margin-bottom:8px}.schedule-card-top,.sales-card-top{display:flex;justify-content:space-between;gap:12px;align-items:center}.schedule-card p,.sales-card p{margin:8px 0 0;line-height:1.35}.schedule-status,.sales-stage{font-size:11px;font-weight:800;border-radius:999px;padding:4px 8px;background:var(--bg);white-space:nowrap}.schedule-status.booked{background:var(--button);color:var(--button-text)}.sales-card.overdue{border-color:var(--button)}.connection-card{border:1px solid var(--border);border-radius:14px;padding:13px;margin-bottom:8px}.connection-card-top{display:flex;justify-content:space-between;gap:12px;align-items:center}.connection-card p{margin:8px 0;line-height:1.4}.connection-state{font-size:11px;font-weight:800;border-radius:999px;padding:4px 8px;background:var(--bg);text-align:right}.connection-card.active .connection-state{background:var(--button);color:var(--button-text)}.connection-connect{width:100%;margin-top:6px}.settings-form label{display:block;font-size:13px;font-weight:750;margin:14px 0 7px}.settings-form input,.settings-form textarea{width:100%;border:1px solid var(--border);border-radius:12px;background:var(--surface);padding:11px 12px}.settings-form input{min-height:46px}.settings-form textarea{resize:vertical;line-height:1.4}.calendar-form label{display:block;font-size:13px;font-weight:750;margin:14px 0 7px}.calendar-form input,.calendar-form select{width:100%;min-height:46px;border:1px solid var(--border);border-radius:12px;background:var(--surface);padding:0 12px}.calendar-form-cancel{width:100%;margin-top:8px}.calendar-advanced{width:100%;margin-top:10px}.schedule-actions{display:flex;gap:8px;margin-top:10px}.schedule-actions button{flex:1;min-height:40px;border:1px solid var(--border);border-radius:10px;background:var(--bg);font-weight:750}.sales-detail-actions,.sales-result-actions,.sales-stage-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.sales-detail-actions button,.sales-stage-actions button,.sales-result-actions button{flex:1;min-width:120px;min-height:42px;border:1px solid var(--border);border-radius:10px;background:var(--bg);font-weight:750;padding:0 10px}.sales-stage-actions button.active{background:var(--button);color:var(--button-text);border-color:var(--button)}.sales-result-actions #sales-won{background:var(--button);color:var(--button-text);border-color:var(--button)}.sales-form label,.sales-result-label{display:block;font-size:13px;font-weight:750;margin:12px 0 7px}.sales-form input,.sales-form textarea,#sales-result-reason{width:100%;border:1px solid var(--border);border-radius:12px;background:var(--surface);padding:11px 12px}.sales-form input{min-height:46px}.sales-form textarea,#sales-result-reason{resize:vertical;line-height:1.4}.sales-wide,.sales-advanced{width:100%;margin-top:10px}.sales-card.assigned-to-me{border-color:var(--button)}.sales-recent-heading{margin:18px 0 4px}.sales-recent-hint{margin:0 0 10px}.workspace-form label{display:block;font-size:13px;font-weight:750;margin:14px 0 7px}.workspace-form input,.workspace-form textarea,.workspace-form select{width:100%;border:1px solid var(--border);border-radius:12px;background:var(--surface);padding:11px 12px}.workspace-form input,.workspace-form select{min-height:46px}.workspace-form textarea{resize:vertical;line-height:1.4}.workspace-advanced{width:100%;margin-top:12px}.workspace-card{border:1px solid var(--border);border-radius:14px;padding:13px;margin-bottom:8px}.workspace-card p{margin:7px 0 0;line-height:1.4}.workspace-card small{display:block;color:var(--hint);margin-top:4px}.workspace-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.workspace-actions button{flex:1;min-width:110px;min-height:40px;border:1px solid var(--border);border-radius:10px;background:var(--bg);font-weight:750;padding:0 10px}.period-switch{display:flex;gap:8px;margin:10px 0 14px}.period-switch button{flex:1;min-height:40px;border:1px solid var(--border);border-radius:10px;background:var(--bg);font-weight:750}.period-switch button.active{background:var(--button);color:var(--button-text);border-color:var(--button)}.primary-nav{position:fixed;left:50%;bottom:0;transform:translateX(-50%);width:min(760px,100%);z-index:30;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));padding:8px 8px calc(8px + env(safe-area-inset-bottom));background:var(--surface);border-top:1px solid var(--border);box-shadow:0 -8px 28px rgba(0,0,0,.08)}.primary-nav button{min-width:0;min-height:52px;border:0;background:transparent;border-radius:12px;color:var(--hint);font-size:11px;font-weight:750;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px}.primary-nav button.active,.primary-nav button[aria-current=page]{color:var(--button);background:var(--bg)}.primary-icon{font-size:12px;line-height:1}.busy{opacity:.66;pointer-events:none}@supports not (color:color-mix(in srgb,black,white)){.primary-block{background:var(--surface)}}@media(max-width:520px){.grid,.metrics,.money{grid-template-columns:1fr}.shell{padding-left:12px;padding-right:12px}h1{font-size:27px}.pill{max-width:52%}.card{min-height:auto}.view-toolbar{position:sticky;top:env(safe-area-inset-top);z-index:2;background:var(--surface);padding:2px 0 8px}.primary-nav{border-radius:16px 16px 0 0}.primary-nav button{padding:4px 1px}}"""
 
 _JS = r"""(() => {
   'use strict';
@@ -193,6 +238,10 @@ _JS = r"""(() => {
   const customers = document.getElementById('customers-view');
   const calendar = document.getElementById('calendar-view');
   const sales = document.getElementById('sales-view');
+  const services = document.getElementById('services-view');
+  const moneyView = document.getElementById('money-view');
+  const growth = document.getElementById('growth-view');
+  const analytics = document.getElementById('analytics-view');
   const connections = document.getElementById('connections-view');
   const settingsView = document.getElementById('settings-view');
   const homeBack = document.getElementById('home-back');
@@ -211,7 +260,7 @@ _JS = r"""(() => {
   const initData = tg && typeof tg.initData === 'string' ? tg.initData : '';
   const roleNames = {owner:'Владелец',administrator:'Администратор',manager:'Менеджер',marketer:'Маркетолог',analyst:'Аналитик',content_manager:'Контент-менеджер',support:'Поддержка',customer:'Клиент'};
   const periodNames = {'7d':'7 дней','30d':'30 дней','today':'сегодня'};
-  const nativeSections = new Set(['home','customers','calendar','sales','connections','settings']);
+  const nativeSections = new Set(['home','customers','calendar','sales','services','money','growth','analytics','connections','settings']);
   let navigationItems = [];
   let currentView = 'home';
   let lastHomePayload = null;
@@ -230,7 +279,7 @@ _JS = r"""(() => {
     }
   };
   const hideViews = () => {
-    nav.hidden = true; home.hidden = true; customers.hidden = true; calendar.hidden = true; sales.hidden = true; connections.hidden = true; settingsView.hidden = true; explanation.hidden = true;
+    nav.hidden = true; home.hidden = true; customers.hidden = true; calendar.hidden = true; sales.hidden = true; services.hidden = true; moneyView.hidden = true; growth.hidden = true; analytics.hidden = true; connections.hidden = true; settingsView.hidden = true; explanation.hidden = true;
   };
   const syncBackButton = () => {
     if (!tg || !tg.BackButton) return;
@@ -242,6 +291,10 @@ _JS = r"""(() => {
   const enterCustomers = () => { currentView = 'customers'; hideViews(); customers.hidden = false; setPrimaryActive('customers'); syncBackButton(); };
   const enterCalendar = () => { currentView = 'calendar'; hideViews(); calendar.hidden = false; setPrimaryActive('calendar'); syncBackButton(); };
   const enterSales = () => { currentView = 'sales'; hideViews(); sales.hidden = false; setPrimaryActive('sales'); syncBackButton(); };
+  const enterServices = () => { currentView = 'services'; hideViews(); services.hidden = false; setPrimaryActive('more'); syncBackButton(); };
+  const enterMoney = () => { currentView = 'money'; hideViews(); moneyView.hidden = false; setPrimaryActive('more'); syncBackButton(); };
+  const enterGrowth = () => { currentView = 'growth'; hideViews(); growth.hidden = false; setPrimaryActive('more'); syncBackButton(); };
+  const enterAnalytics = () => { currentView = 'analytics'; hideViews(); analytics.hidden = false; setPrimaryActive('more'); syncBackButton(); };
   const enterConnections = () => { currentView = 'connections'; hideViews(); connections.hidden = false; setPrimaryActive('more'); syncBackButton(); };
   const enterSettings = () => { currentView = 'settings'; hideViews(); settingsView.hidden = false; setPrimaryActive('more'); syncBackButton(); };
   const setHomeBusy = (busy) => { home.classList.toggle('busy', Boolean(busy)); homeRefresh.disabled = Boolean(busy); home.setAttribute('aria-busy', busy ? 'true' : 'false'); };
@@ -343,6 +396,10 @@ _JS = r"""(() => {
       if (item.id === 'customers' && window.ClientPlatformCustomers) { window.ClientPlatformCustomers.open(); return; }
       if (item.id === 'calendar' && window.ClientPlatformCalendar) { window.ClientPlatformCalendar.open(); return; }
       if (item.id === 'sales' && window.ClientPlatformSales) { window.ClientPlatformSales.open(); return; }
+      if (window.ClientPlatformBusinessWorkspace && item.id === 'services') { window.ClientPlatformBusinessWorkspace.openServices(); return; }
+      if (window.ClientPlatformBusinessWorkspace && item.id === 'money') { window.ClientPlatformBusinessWorkspace.openMoney(); return; }
+      if (window.ClientPlatformBusinessWorkspace && item.id === 'growth') { window.ClientPlatformBusinessWorkspace.openGrowth(); return; }
+      if (window.ClientPlatformBusinessWorkspace && item.id === 'analytics') { window.ClientPlatformBusinessWorkspace.openAnalytics(); return; }
       if (item.id === 'connections' && window.ClientPlatformConnections) { window.ClientPlatformConnections.open(); return; }
       if (item.id === 'settings' && window.ClientPlatformSettings) { window.ClientPlatformSettings.open(); return; }
       void openSection(item, button); return;
@@ -350,7 +407,7 @@ _JS = r"""(() => {
     showExplanation(item);
   };
 
-  window.ClientPlatformCockpitNavigation = Object.freeze({showNavigation, showHome, enterCustomers, enterCalendar, enterSales, enterConnections, enterSettings, openCanonicalSection});
+  window.ClientPlatformCockpitNavigation = Object.freeze({showNavigation, showHome, enterCustomers, enterCalendar, enterSales, enterServices, enterMoney, enterGrowth, enterAnalytics, enterConnections, enterSettings, openCanonicalSection});
 
   const render = (payload) => {
     nav.replaceChildren(); select.replaceChildren(); navigationItems = payload.navigation || [];
@@ -386,6 +443,7 @@ _JS = r"""(() => {
     if (currentView === 'customers' && window.ClientPlatformCustomers) { window.ClientPlatformCustomers.back(); return; }
     if (currentView === 'calendar' && window.ClientPlatformCalendar) { window.ClientPlatformCalendar.back(); return; }
     if (currentView === 'sales' && window.ClientPlatformSales) { window.ClientPlatformSales.back(); return; }
+    if (['services','money','growth','analytics'].includes(currentView) && window.ClientPlatformBusinessWorkspace) { window.ClientPlatformBusinessWorkspace.back(); return; }
     if (currentView === 'connections' && window.ClientPlatformConnections) { window.ClientPlatformConnections.back(); return; }
     if (currentView === 'settings' && window.ClientPlatformSettings) { window.ClientPlatformSettings.back(); return; }
     if (currentView === 'explanation' || currentView === 'navigation') { showHome(); }
@@ -469,6 +527,15 @@ async def cockpit_connections_script(_request: web.Request) -> web.Response:
 async def cockpit_settings_script(_request: web.Request) -> web.Response:
     return web.Response(
         text=_SETTINGS_SCRIPT.read_text(encoding="utf-8"),
+        content_type="application/javascript",
+        charset="utf-8",
+        headers=_base_headers(),
+    )
+
+
+async def cockpit_business_workspace_script(_request: web.Request) -> web.Response:
+    return web.Response(
+        text=_BUSINESS_WORKSPACE_SCRIPT.read_text(encoding="utf-8"),
         content_type="application/javascript",
         charset="utf-8",
         headers=_base_headers(),
@@ -1095,6 +1162,273 @@ async def cockpit_settings_update(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, **snapshot.as_dict()}, headers=_base_headers())
 
 
+async def cockpit_services(request: web.Request) -> web.Response:
+    scope = await _verified_scope(request)
+    if isinstance(scope, web.Response):
+        return scope
+    user_id, requested_business = scope
+    try:
+        snapshot = await asyncio.to_thread(
+            resolve_cockpit_services,
+            telegram_user_id=user_id,
+            requested_business_id=requested_business,
+        )
+    except TenantAccessDenied:
+        return _error(403, "business_access_denied")
+    except TenantPermissionDenied:
+        return _error(403, "services_access_denied")
+    except ValueError:
+        return _error(400, "invalid_services_request")
+    except OSError:
+        return _error(503, "services_unavailable")
+    except RuntimeError:
+        return _error(503, "services_unavailable")
+    return web.json_response({"ok": True, **snapshot.as_dict()}, headers=_base_headers())
+
+
+async def cockpit_service_create(request: web.Request) -> web.Response:
+    scope = await _verified_payload_scope(request)
+    if isinstance(scope, web.Response):
+        return scope
+    user_id, requested_business, payload = scope
+    capability_id = payload.get("capability_id")
+    title = payload.get("title")
+    description = payload.get("description")
+    if (
+        not isinstance(capability_id, str)
+        or not isinstance(title, str)
+        or not isinstance(description, str)
+    ):
+        return _error(400, "invalid_services_change")
+    try:
+        offering = await asyncio.to_thread(
+            create_cockpit_service,
+            telegram_user_id=user_id,
+            requested_business_id=requested_business,
+            capability_id=capability_id,
+            title=title,
+            description=description,
+        )
+    except TenantAccessDenied:
+        return _error(403, "business_access_denied")
+    except TenantPermissionDenied:
+        return _error(403, "services_write_denied")
+    except ActivityInvariantViolation:
+        return _error(409, "services_change_rejected")
+    except ValueError:
+        return _error(400, "invalid_services_change")
+    except OSError:
+        return _error(503, "services_unavailable")
+    except RuntimeError:
+        return _error(503, "services_unavailable")
+    return web.json_response({"ok": True, "offering_id": offering.id}, headers=_base_headers())
+
+
+async def cockpit_service_archive(request: web.Request) -> web.Response:
+    scope = await _verified_payload_scope(request)
+    if isinstance(scope, web.Response):
+        return scope
+    user_id, requested_business, payload = scope
+    offering_id = payload.get("offering_id")
+    if not isinstance(offering_id, str) or not offering_id.strip():
+        return _error(400, "invalid_services_change")
+    try:
+        offering = await asyncio.to_thread(
+            archive_cockpit_service,
+            telegram_user_id=user_id,
+            requested_business_id=requested_business,
+            offering_id=offering_id,
+        )
+    except TenantAccessDenied:
+        return _error(403, "business_access_denied")
+    except TenantPermissionDenied:
+        return _error(403, "services_write_denied")
+    except ActivityInvariantViolation:
+        return _error(409, "services_change_rejected")
+    except ValueError:
+        return _error(400, "invalid_services_change")
+    except OSError:
+        return _error(503, "services_unavailable")
+    except RuntimeError:
+        return _error(503, "services_unavailable")
+    return web.json_response({"ok": True, "offering_id": offering.id}, headers=_base_headers())
+
+
+async def cockpit_service_price(request: web.Request) -> web.Response:
+    scope = await _verified_payload_scope(request)
+    if isinstance(scope, web.Response):
+        return scope
+    user_id, requested_business, payload = scope
+    offering_id = payload.get("offering_id")
+    amount = payload.get("amount")
+    currency = payload.get("currency")
+    if (
+        not isinstance(offering_id, str)
+        or not isinstance(amount, str)
+        or not isinstance(currency, str)
+    ):
+        return _error(400, "invalid_services_change")
+    try:
+        price = await asyncio.to_thread(
+            set_cockpit_service_price,
+            telegram_user_id=user_id,
+            requested_business_id=requested_business,
+            offering_id=offering_id,
+            amount=amount,
+            currency=currency,
+        )
+    except TenantAccessDenied:
+        return _error(403, "business_access_denied")
+    except TenantPermissionDenied:
+        return _error(403, "services_write_denied")
+    except ValueError:
+        return _error(400, "invalid_services_change")
+    except OSError:
+        return _error(503, "services_unavailable")
+    except RuntimeError:
+        return _error(503, "services_unavailable")
+    return web.json_response({"ok": True, "price_id": price.id}, headers=_base_headers())
+
+
+async def cockpit_money(request: web.Request) -> web.Response:
+    scope = await _verified_payload_scope(request)
+    if isinstance(scope, web.Response):
+        return scope
+    user_id, requested_business, payload = scope
+    limit = payload.get("limit", 20)
+    if isinstance(limit, bool) or not isinstance(limit, int):
+        return _error(400, "invalid_money_request")
+    try:
+        snapshot = await asyncio.to_thread(
+            resolve_cockpit_money,
+            telegram_user_id=user_id,
+            requested_business_id=requested_business,
+            limit=limit,
+        )
+    except TenantAccessDenied:
+        return _error(403, "business_access_denied")
+    except TenantPermissionDenied:
+        return _error(403, "money_access_denied")
+    except ValueError:
+        return _error(400, "invalid_money_request")
+    except OSError:
+        return _error(503, "money_unavailable")
+    except RuntimeError:
+        return _error(503, "money_unavailable")
+    return web.json_response({"ok": True, **snapshot.as_dict()}, headers=_base_headers())
+
+
+async def cockpit_money_record(request: web.Request) -> web.Response:
+    scope = await _verified_payload_scope(request)
+    if isinstance(scope, web.Response):
+        return scope
+    user_id, requested_business, payload = scope
+    amount = payload.get("amount")
+    currency = payload.get("currency")
+    request_id = payload.get("request_id")
+    note = payload.get("note", "")
+    customer_id = payload.get("customer_id")
+    offering_id = payload.get("offering_id")
+    if (
+        not isinstance(amount, str)
+        or not isinstance(currency, str)
+        or not isinstance(request_id, str)
+        or not isinstance(note, str)
+    ):
+        return _error(400, "invalid_money_change")
+    if customer_id is not None and not isinstance(customer_id, str):
+        return _error(400, "invalid_money_change")
+    if offering_id is not None and not isinstance(offering_id, str):
+        return _error(400, "invalid_money_change")
+    try:
+        payment = await asyncio.to_thread(
+            record_cockpit_payment,
+            telegram_user_id=user_id,
+            requested_business_id=requested_business,
+            amount=amount,
+            currency=currency,
+            request_id=request_id,
+            customer_id=customer_id,
+            offering_id=offering_id,
+            note=note,
+        )
+    except TenantAccessDenied:
+        return _error(403, "business_access_denied")
+    except TenantPermissionDenied:
+        return _error(403, "money_write_denied")
+    except ValueError:
+        return _error(400, "invalid_money_change")
+    except OSError:
+        return _error(503, "money_unavailable")
+    except RuntimeError:
+        return _error(409, "money_change_rejected")
+    return web.json_response({"ok": True, "payment_id": payment.id}, headers=_base_headers())
+
+
+async def cockpit_money_refund(request: web.Request) -> web.Response:
+    scope = await _verified_payload_scope(request)
+    if isinstance(scope, web.Response):
+        return scope
+    user_id, requested_business, payload = scope
+    payment_id = payload.get("payment_id")
+    if not isinstance(payment_id, str) or not payment_id.strip():
+        return _error(400, "invalid_money_change")
+    try:
+        payment = await asyncio.to_thread(
+            refund_cockpit_payment,
+            telegram_user_id=user_id,
+            requested_business_id=requested_business,
+            payment_id=payment_id,
+        )
+    except TenantAccessDenied:
+        return _error(403, "business_access_denied")
+    except TenantPermissionDenied:
+        return _error(403, "money_write_denied")
+    except ValueError:
+        return _error(409, "money_change_rejected")
+    except OSError:
+        return _error(503, "money_unavailable")
+    except RuntimeError:
+        return _error(409, "money_change_rejected")
+    return web.json_response({"ok": True, "payment_id": payment.id}, headers=_base_headers())
+
+
+async def _cockpit_growth_payload(request: web.Request, *, access_code: str) -> web.Response:
+    scope = await _verified_payload_scope(request)
+    if isinstance(scope, web.Response):
+        return scope
+    user_id, requested_business, payload = scope
+    period_days = payload.get("period_days", 7)
+    if isinstance(period_days, bool) or not isinstance(period_days, int) or period_days not in {7, 30}:
+        return _error(400, "invalid_growth_request")
+    try:
+        snapshot = await asyncio.to_thread(
+            resolve_cockpit_growth_analytics,
+            telegram_user_id=user_id,
+            requested_business_id=requested_business,
+            period_days=period_days,
+        )
+    except TenantAccessDenied:
+        return _error(403, "business_access_denied")
+    except TenantPermissionDenied:
+        return _error(403, access_code)
+    except ValueError:
+        return _error(400, "invalid_growth_request")
+    except OSError:
+        return _error(503, "growth_unavailable")
+    except RuntimeError:
+        return _error(503, "growth_unavailable")
+    return web.json_response({"ok": True, **snapshot.as_dict()}, headers=_base_headers())
+
+
+async def cockpit_growth(request: web.Request) -> web.Response:
+    return await _cockpit_growth_payload(request, access_code="growth_access_denied")
+
+
+async def cockpit_analytics(request: web.Request) -> web.Response:
+    return await _cockpit_growth_payload(request, access_code="analytics_access_denied")
+
+
 async def cockpit_customers(request: web.Request) -> web.Response:
     scope = await _verified_payload_scope(request)
     if isinstance(scope, web.Response):
@@ -1406,6 +1740,7 @@ def register_cockpit_routes(
     app.router.add_get(f"{_COCKPIT_PREFIX}/sales.js", cockpit_sales_script)
     app.router.add_get(f"{_COCKPIT_PREFIX}/connections.js", cockpit_connections_script)
     app.router.add_get(f"{_COCKPIT_PREFIX}/settings.js", cockpit_settings_script)
+    app.router.add_get(f"{_COCKPIT_PREFIX}/business-workspace.js", cockpit_business_workspace_script)
     app.router.add_post(f"{_COCKPIT_PREFIX}/context", cockpit_context)
     app.router.add_post(f"{_COCKPIT_PREFIX}/home", cockpit_home)
     app.router.add_post(f"{_COCKPIT_PREFIX}/calendar", cockpit_calendar)
@@ -1424,6 +1759,15 @@ def register_cockpit_routes(
     app.router.add_post(f"{_COCKPIT_PREFIX}/connections/setup", cockpit_connection_setup)
     app.router.add_post(f"{_COCKPIT_PREFIX}/settings", cockpit_settings)
     app.router.add_post(f"{_COCKPIT_PREFIX}/settings/update", cockpit_settings_update)
+    app.router.add_post(f"{_COCKPIT_PREFIX}/services", cockpit_services)
+    app.router.add_post(f"{_COCKPIT_PREFIX}/services/create", cockpit_service_create)
+    app.router.add_post(f"{_COCKPIT_PREFIX}/services/archive", cockpit_service_archive)
+    app.router.add_post(f"{_COCKPIT_PREFIX}/services/price", cockpit_service_price)
+    app.router.add_post(f"{_COCKPIT_PREFIX}/money", cockpit_money)
+    app.router.add_post(f"{_COCKPIT_PREFIX}/money/record", cockpit_money_record)
+    app.router.add_post(f"{_COCKPIT_PREFIX}/money/refund", cockpit_money_refund)
+    app.router.add_post(f"{_COCKPIT_PREFIX}/growth", cockpit_growth)
+    app.router.add_post(f"{_COCKPIT_PREFIX}/analytics", cockpit_analytics)
     app.router.add_post(f"{_COCKPIT_PREFIX}/section-open", cockpit_section_open)
     app.router.add_post(f"{_COCKPIT_PREFIX}/section-route", cockpit_section_route)
     app.router.add_post(f"{_COCKPIT_PREFIX}/customers", cockpit_customers)
@@ -1443,6 +1787,8 @@ def register_cockpit_routes(
 
 
 __all__ = [
+    "cockpit_analytics",
+    "cockpit_business_workspace_script",
     "cockpit_connection_setup",
     "cockpit_connections",
     "cockpit_connections_script",
@@ -1452,6 +1798,10 @@ __all__ = [
     "cockpit_calendar_create",
     "cockpit_calendar_management",
     "cockpit_calendar_replace",
+    "cockpit_service_archive",
+    "cockpit_service_create",
+    "cockpit_service_price",
+    "cockpit_services",
     "cockpit_sales",
     "cockpit_sales_assignment",
     "cockpit_sales_manage",
@@ -1467,7 +1817,11 @@ __all__ = [
     "cockpit_customer_detail",
     "cockpit_customers",
     "cockpit_customers_script",
+    "cockpit_growth",
     "cockpit_home",
+    "cockpit_money",
+    "cockpit_money_record",
+    "cockpit_money_refund",
     "cockpit_http_enabled",
     "cockpit_script",
     "cockpit_section_open",

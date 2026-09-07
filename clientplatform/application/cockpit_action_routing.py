@@ -10,6 +10,8 @@ _TOKEN_RE = r"[A-Za-z0-9_-]{22}"
 _SECTION_KIND = {
     "calendar": "b",
     "sales": "s",
+    "services": "v",
+    "money": "m",
     "growth": "g",
     "content": "c",
     "automation": "a",
@@ -20,7 +22,7 @@ _SECTION_KIND = {
 }
 _KIND_SECTION = {value: key for key, value in _SECTION_KIND.items()}
 _PAYLOAD_RE = re.compile(
-    rf"^{_PREFIX}(?P<business>{_TOKEN_RE})_(?P<kind>[hwlbsgcanxte])(?:_(?P<target>{_TOKEN_RE}))?$"
+    rf"^{_PREFIX}(?P<business>{_TOKEN_RE})_(?P<kind>[hwlbsgcanxtevm])(?:_(?P<target>{_TOKEN_RE}))?$"
 )
 
 

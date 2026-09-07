@@ -805,6 +805,25 @@ async def send_one_click_section(
             reply_markup=control._keyboard(rows),
         )
         return
+    if normalized == "services":
+        actor.assert_can_view_promotion_analytics()
+        await message.answer(
+            "🧰 Услуги\n\nПолное управление предложениями и ценами остаётся доступно в существующем интерфейсе.",
+            reply_markup=control._keyboard(
+                [[(nav.OFFERS.label, f"cpa:{token}:offers")], [(nav.PRICES.label, f"cpa:{token}:prices")], [(nav.HOME.label, f"cpj:home:{token}")]]
+            ),
+        )
+        return
+    if normalized == "money":
+        if actor.role not in {PlatformRole.OWNER, PlatformRole.ADMINISTRATOR, PlatformRole.MANAGER, PlatformRole.MARKETER, PlatformRole.ANALYST}:
+            raise TenantPermissionDenied("finance view is not available for this role")
+        await message.answer(
+            "💰 Деньги\n\nОткройте существующий финансовый экран со всеми расширенными действиями.",
+            reply_markup=control._keyboard(
+                [[(nav.MONEY.label, f"cpa:{token}:money")], [(nav.HOME.label, f"cpj:home:{token}")]]
+            ),
+        )
+        return
     if normalized in {"growth", "analytics"}:
         actor.assert_can_view_promotion_analytics()
         rows = []
