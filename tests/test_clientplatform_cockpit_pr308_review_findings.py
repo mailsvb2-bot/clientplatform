@@ -152,7 +152,7 @@ class CockpitPr308ReviewFindingTests(unittest.TestCase):
                 self.assertEqual(parsed.kind, kind)
                 self.assertIsNone(parsed.section)
 
-    def test_hidden_reactivation_route_preserves_support_roles_but_denies_customer(self) -> None:
+    def test_hidden_reactivation_route_preserves_support_roles_but_denies_marketer(self) -> None:
         for role in (
             PlatformRole.OWNER,
             PlatformRole.ADMINISTRATOR,
@@ -176,7 +176,7 @@ class CockpitPr308ReviewFindingTests(unittest.TestCase):
 
         with (
             patch.object(cockpit, "resolve_cockpit_context", return_value=_context()),
-            patch.object(cockpit, "resolve_tenant_context", return_value=_actor(PlatformRole.CUSTOMER)),
+            patch.object(cockpit, "resolve_tenant_context", return_value=_actor(PlatformRole.MARKETER)),
         ):
             with self.assertRaises(TenantPermissionDenied):
                 cockpit.resolve_cockpit_section_start_payload(
