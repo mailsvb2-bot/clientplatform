@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 from scripts import clientplatform_prepare_production_env as prepare_env
-from scripts.clientplatform_bot_gateway_preflight import validate_environment
+from scripts.clientplatform_bot_gateway_contract import validate_environment
 
 
+ROOT = Path(__file__).resolve().parents[1]
 _REQUIRED_ENV = """\
 APP_ENV=prod
 CLIENTPLATFORM_DOMAIN=clientplatform.example.test
@@ -58,6 +61,33 @@ class ClientPlatformProductionBotGatewayPreparationTests(unittest.TestCase):
                 self.assertIn(key, added)
                 self.assertEqual(values.get(key), value)
         self.assertEqual(validate_environment(values), [])
+
+    def test_prepare_cli_reads_env_file_before_any_runtime_config_import(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            path = Path(raw) / "clientplatform.env"
+            path.write_text(_REQUIRED_ENV, encoding="utf-8")
+            os.chmod(path, 0o600)
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "clientplatform_prepare_production_env.py"),
+                    str(path),
+                ],
+                cwd=ROOT,
+                env={
+                    "APP_ENV": "prod",
+                    "PATH": os.environ.get("PATH", ""),
+                },
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(
+                completed.returncode,
+                0,
+                msg=completed.stdout + completed.stderr,
+            )
+            self.assertIn("CLIENTPLATFORM_PRODUCTION_ENV_OK", completed.stdout)
 
     def test_prepare_rejects_invalid_existing_gateway_limit(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
