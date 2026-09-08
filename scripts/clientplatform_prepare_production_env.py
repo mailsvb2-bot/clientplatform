@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.clientplatform_bot_gateway_preflight import (  # noqa: E402
+from scripts.clientplatform_bot_gateway_contract import (  # noqa: E402
     validate_environment as validate_bot_gateway_environment,
 )
 
