@@ -93,3 +93,22 @@ curl -fsS http://127.0.0.1:8082/healthz
 curl -fsS http://127.0.0.1:8082/readyz
 python scripts/clientplatform_production_preflight.py
 ```
+
+## 2026-09-08 Bot Gateway recovery
+
+A production restart exposed a stale/incomplete Bot Gateway environment contract.
+The production env preparer now fills the canonical polling/Gateway defaults and
+runs the same side-effect-free validation contract before Docker restart. Runtime
+age-identity validation remains in the runtime preflight.
+
+When the existing production baseline is already unavailable, use only the
+canonical recovery mode:
+
+```bash
+python3 scripts/clientplatform_production_deploy.py \
+  --recover-unavailable-baseline \
+  --timeout-seconds 240
+```
+
+Do not bypass the Bot Gateway preflight and do not restore a baseline that the
+deploy pipeline has classified as unavailable.
