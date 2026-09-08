@@ -20,6 +20,7 @@ class ClientPlatformManagedBotSecuritySurfaceTests(unittest.TestCase):
             "clientplatform/runtime/secrets.py",
             "handlers/clientplatform_existing_bot_onboarding.py",
             "handlers/clientplatform_managed_bot_onboarding.py",
+            "scripts/clientplatform_bot_gateway_contract.py",
             "scripts/clientplatform_bot_gateway_preflight.py",
             "services/migrations/clientplatform_managed_bot_provider_v1.py",
         )

@@ -81,6 +81,7 @@ _CLIENTPLATFORM_MANAGED_BOT_TYPE_FILES = (
     "clientplatform/infrastructure/managed_bot_credentials.py",
     "clientplatform/infrastructure/managed_bot_onboarding_repository.py",
     "clientplatform/runtime/secrets.py",
+    "scripts/clientplatform_bot_gateway_contract.py",
     "services/migrations/clientplatform_managed_bot_provider_v1.py",
 )
 
