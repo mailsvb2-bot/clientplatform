@@ -6,8 +6,17 @@ import argparse
 import os
 import re
 import secrets
+import sys
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts.clientplatform_bot_gateway_preflight import (  # noqa: E402
+    validate_environment as validate_bot_gateway_environment,
+)
 
 _KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
@@ -18,7 +27,6 @@ _MANAGED_BOT_IDENTITY_FILE = "/run/secrets/clientplatform-managed-bot/identity.t
 _MANAGED_BOT_HOST_DIR = "/var/lib/clientplatform/managed-bot-secrets"
 _MAX_API2_BASE_URL = "https://platform-api2.max.ru"
 _MAX_CA_BUNDLE_FILE = "/run/secrets/clientplatform-managed-bot/max-ca.pem"
-
 
 
 class EnvironmentPreparationError(RuntimeError):
@@ -130,6 +138,14 @@ def _validate_managed_bot_auto_provisioning(values: dict[str, str]) -> None:
         )
 
 
+def _validate_bot_gateway(values: dict[str, str]) -> None:
+    errors = validate_bot_gateway_environment(values)
+    if errors:
+        raise EnvironmentPreparationError(
+            "invalid_bot_gateway_environment:" + "|".join(errors)
+        )
+
+
 def _validate_native_omnichannel_security(values: dict[str, str]) -> None:
     if not _enabled(values, "CLIENTPLATFORM_OMNICHANNEL_INGRESS_ENABLED"):
         return
@@ -200,6 +216,20 @@ def prepare(path: Path) -> tuple[str, ...]:
     defaults = {
         "CLIENTPLATFORM_PUBLIC_BASE_URL": expected_public,
         "CLIENTPLATFORM_TELEGRAM_RUNTIME_ENABLED": "1",
+        "TELEGRAM_TRANSPORT": "polling",
+        "TELEGRAM_WEBHOOK_ENABLED": "0",
+        "TELEGRAM_LEGACY_TOKEN_WEBHOOK_ENABLED": "0",
+        "CLIENTPLATFORM_BOT_GATEWAY_ENABLED": "1",
+        "CLIENTPLATFORM_BOT_GATEWAY_BATCH_SIZE": "10",
+        "CLIENTPLATFORM_BOT_GATEWAY_INTERVAL_SEC": "0.5",
+        "CLIENTPLATFORM_BOT_GATEWAY_TICK_TIMEOUT_SEC": "30",
+        "CLIENTPLATFORM_BOT_GATEWAY_LOCK_TTL_SEC": "300",
+        "CLIENTPLATFORM_BOT_GATEWAY_MAX_ATTEMPTS": "5",
+        "CLIENTPLATFORM_BOT_GATEWAY_PER_BOT_PER_MINUTE": "120",
+        "CLIENTPLATFORM_BOT_GATEWAY_PER_BOT_QUEUE_LIMIT": "1000",
+        "CLIENTPLATFORM_BOT_GATEWAY_MAX_PAYLOAD_BYTES": "262144",
+        "CLIENTPLATFORM_BOT_GATEWAY_POLL_TIMEOUT_SEC": "20",
+        "CLIENTPLATFORM_BOT_GATEWAY_RECONCILE_INTERVAL_SEC": "2",
         "CLIENTPLATFORM_MEDIA_GATEWAY_ENABLED": "1",
         "CLIENTPLATFORM_MEDIA_GATEWAY_BASE_URL": expected_media,
         "CLIENTPLATFORM_MEDIA_GATEWAY_STORAGE_MODE": "s3",
@@ -265,6 +295,7 @@ def prepare(path: Path) -> tuple[str, ...]:
         values[key] = value
 
     _validate_managed_bot_auto_provisioning(values)
+    _validate_bot_gateway(values)
     _validate_native_omnichannel_security(values)
     _validate_ad_connections(values, domain=domain)
 
