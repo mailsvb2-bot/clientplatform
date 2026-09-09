@@ -327,6 +327,28 @@ class CockpitM7001Tests(unittest.TestCase):
         self.assertTrue(
             all(item.summary and item.when_to_use for item in navigation.values())
         )
+        self.assertEqual(
+            tuple(navigation),
+            (
+                "home",
+                "customers",
+                "calendar",
+                "sales",
+                "services",
+                "growth",
+                "content",
+                "automation",
+                "money",
+                "analytics",
+                "connections",
+                "team",
+                "billing",
+                "settings",
+            ),
+        )
+        self.assertEqual(navigation["automation"].title, "Автоматические действия")
+        self.assertEqual(navigation["team"].title, "Сотрудники и доступы")
+        self.assertEqual(navigation["settings"].title, "Настройки бизнеса и данные")
 
     def test_cockpit_url_reuses_first_party_https_base(self) -> None:
         with patch.object(
