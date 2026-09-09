@@ -209,6 +209,9 @@ class CockpitConnectionsSettingsM7005Tests(unittest.TestCase):
         self.assertIn('/clientplatform/cockpit/connections', connections)
         self.assertIn('/clientplatform/cockpit/settings/update', settings)
         self.assertIn('syncBusinessName', transport)
+        self.assertIn("option.dataset.businessRole = String(business.role || '')", transport)
+        self.assertIn("current.dataset.businessRole", transport)
+        self.assertNotIn("split(' · ')", transport)
         self.assertIn('api.syncBusinessName(payload.business_name)', settings)
         for script in (connections, settings):
             self.assertNotIn("localStorage", script)
