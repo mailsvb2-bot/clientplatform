@@ -78,11 +78,8 @@
         timezone_name: timezone.value,
       });
       render(payload);
-      const current = select.options[select.selectedIndex];
-      if (current) {
-        const suffix = String(current.textContent || "").split(" · ").slice(1).join(" · ");
-        text(current, suffix ? `${payload.business_name} · ${suffix}` : payload.business_name);
-      }
+      const api = controller();
+      if (api && typeof api.syncBusinessName === "function") api.syncBusinessName(payload.business_name);
       text(message, "Сохранено. Новые данные сразу используются каноническими сервисами бизнеса.");
       if (tg && tg.HapticFeedback && typeof tg.HapticFeedback.notificationOccurred === "function") {
         tg.HapticFeedback.notificationOccurred("success");

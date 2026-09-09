@@ -208,6 +208,8 @@ class CockpitConnectionsSettingsM7005Tests(unittest.TestCase):
         self.assertIn("'connections','settings'", transport)
         self.assertIn('/clientplatform/cockpit/connections', connections)
         self.assertIn('/clientplatform/cockpit/settings/update', settings)
+        self.assertIn('syncBusinessName', transport)
+        self.assertIn('api.syncBusinessName(payload.business_name)', settings)
         for script in (connections, settings):
             self.assertNotIn("localStorage", script)
             self.assertNotIn("sessionStorage", script)

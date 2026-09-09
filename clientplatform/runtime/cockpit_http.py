@@ -288,6 +288,15 @@ _JS = r"""(() => {
       if (active) button.setAttribute('aria-current', 'page'); else button.removeAttribute('aria-current');
     }
   };
+  const syncBusinessName = (businessName) => {
+    const normalized = String(businessName || '').trim();
+    if (!normalized) return;
+    text(businessTitle, normalized);
+    const current = select.options[select.selectedIndex];
+    if (!current) return;
+    const suffix = String(current.textContent || '').split(' · ').slice(1).join(' · ');
+    text(current, suffix ? `${normalized} · ${suffix}` : normalized);
+  };
   const hideViews = () => {
     navigationShell.hidden = true; home.hidden = true; customers.hidden = true; calendar.hidden = true; sales.hidden = true; services.hidden = true; moneyView.hidden = true; growth.hidden = true; analytics.hidden = true; connections.hidden = true; settingsView.hidden = true; explanation.hidden = true;
   };
@@ -417,7 +426,7 @@ _JS = r"""(() => {
     showExplanation(item);
   };
 
-  window.ClientPlatformCockpitNavigation = Object.freeze({showNavigation, showHome, enterCustomers, enterCalendar, enterSales, enterServices, enterMoney, enterGrowth, enterAnalytics, enterConnections, enterSettings, openCanonicalSection});
+  window.ClientPlatformCockpitNavigation = Object.freeze({showNavigation, showHome, enterCustomers, enterCalendar, enterSales, enterServices, enterMoney, enterGrowth, enterAnalytics, enterConnections, enterSettings, openCanonicalSection, syncBusinessName});
 
   const appendNavigationCard = (item) => {
     const state = screenStatus(item); const button = document.createElement('button'); button.type = 'button'; button.className = `card ${state}`;
@@ -448,7 +457,7 @@ _JS = r"""(() => {
     if (payload.onboarding_required) { primaryNav.hidden = true; businessContext.hidden = true; statusPanel.hidden = false; text(businessTitle, 'Ваш бизнес'); text(statusText, 'У Вас пока нет подключённого бизнеса. Вернитесь в бот и нажмите «Подключить мой бизнес».'); select.disabled = true; statusAction.hidden = false; currentView = 'navigation'; hideViews(); syncBackButton(); return; }
     const businesses = payload.businesses || [];
     for (const business of businesses) { const option = document.createElement('option'); option.value = business.id; text(option, `${business.name} · ${roleNames[business.role] || business.role}`); option.selected = Boolean(business.selected); select.appendChild(option); }
-    text(businessTitle, payload.business_name || 'Ваш бизнес');
+    syncBusinessName(payload.business_name || 'Ваш бизнес');
     businessContext.hidden = businesses.length <= 1;
     select.disabled = false; primaryNav.hidden = false; statusPanel.hidden = true; text(statusText, `Открыт бизнес «${payload.business_name}».`);
     renderNavigation();
