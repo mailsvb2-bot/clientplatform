@@ -1958,7 +1958,7 @@ def _growth_analysis_message(actor: TenantContext) -> CustomerInteractionMessage
         ]
     )
     return CustomerInteractionMessage(
-        text="📊 Путь и программы\n\n" + nav.choice_help(*items),
+        text="📊 Путь клиента и программы\n\n" + nav.choice_help(*items),
         rows=tuple(rows),
     )
 
@@ -2337,7 +2337,7 @@ def _manage_more_message(actor: TenantContext) -> CustomerInteractionMessage:
         (_button(nav.RECENT.label, "cpm:recent"),),
         (_button(nav.SYSTEM.label, "cpm:system"),),
     ]
-    text = "🛠 Технические проверки\n\nОбычно сюда заходить не нужно.\n\n" + nav.choice_help(*items)
+    text = "🛠 Состояние и история\n\nОбычно сюда заходить не нужно.\n\n" + nav.choice_help(*items)
     if actor.role == PlatformRole.OWNER:
         text += (
             "\n\nЕсли Вам нужно убрать этот бизнес из активной работы → "
@@ -3099,10 +3099,10 @@ def _growth_report_message(actor: TenantContext, action: str) -> CustomerInterac
             key=lambda item: (item.status.value != "pending", item.requested_at, item.id),
         )[:3]
         lines = [
-            "🤖 Автоматизация",
+            "🤖 Автоматические действия",
             "",
             f"Статус: {'включён' if enabled else 'выключен'}",
-            "Политика задаёт и проверяет границы автоматизации. Внешние действия сами не запускаются.",
+            "Здесь видно, какие действия система может выполнять автоматически. Внешние действия без разрешения не запускаются.",
         ]
         rows: list[tuple[CustomerInteractionButton, ...]] = []
         if approvals:
