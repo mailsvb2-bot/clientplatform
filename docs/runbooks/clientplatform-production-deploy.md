@@ -35,6 +35,10 @@ CLIENTPLATFORM_EXPECTED_SHA=<MERGED_SHA> CLIENTPLATFORM_TARGET_REF=main CLIENTPL
 CLIENTPLATFORM_EXPECTED_SHA=<MERGED_SHA> sh /opt/clientplatform/deploy/clientplatform/update-production.sh
 ```
 
+## GitHub marker-gated production deploy
+
+When the dedicated GitHub-to-production SSH channel is healthy, a protected merge to `main` whose merge commit message contains `[recover-production-deploy]` triggers `.github/workflows/production-deploy-recovery.yml`. The workflow pins deployment to the merge SHA, fast-forwards only the dedicated `/opt/clientplatform` checkout, and runs the canonical production deploy with recovery support. Use this only for a reviewed release carrier after the target code SHA has passed the required checks.
+
 ## Required age setup before enabling offsite backup
 
 Generate an age X25519 identity on a trusted operator device, not in the application container. Store the private identity in at least two protected offline locations. Put only the public `age1...` recipient in:
