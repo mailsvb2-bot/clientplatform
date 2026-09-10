@@ -211,6 +211,16 @@ def _load_clientplatform_modules() -> tuple[ModuleType, ModuleType]:
         simple_experience.router.include_router(visual_brand.router)
         simple_experience._visual_brand_composed = True
 
+    creative_studio = importlib.import_module(
+        ".clientplatform_creative_studio",
+        __name__,
+    )
+    globals()["clientplatform_creative_studio"] = creative_studio
+    creative_studio.install_creative_studio_visibility(one_click)
+    if not bool(getattr(simple_experience, "_creative_studio_composed", False)):
+        simple_experience.router.include_router(creative_studio.router)
+        simple_experience._creative_studio_composed = True
+
     goal_schedule = importlib.import_module(
         ".clientplatform_goal_schedule",
         __name__,
@@ -252,6 +262,7 @@ def _load_clientplatform_modules() -> tuple[ModuleType, ModuleType]:
         __name__,
     )
     goal_first_safety.install_goal_first_safety(interaction_safety)
+    creative_studio.install_creative_studio_safety(interaction_safety)
 
     ad_media_monitor = importlib.import_module(
         "clientplatform.runtime.ad_media_monitor"
@@ -339,6 +350,9 @@ def __getattr__(name: str) -> ModuleType:
     if name == "clientplatform_goal_launch":
         _load_clientplatform_modules()
         return globals()["clientplatform_goal_launch"]
+    if name == "clientplatform_creative_studio":
+        _load_clientplatform_modules()
+        return globals()["clientplatform_creative_studio"]
     raise AttributeError(name)
 
 
@@ -350,6 +364,7 @@ __all__ = [
     "clientplatform_bot_lifecycle",
     "clientplatform_bot_setup",
     "clientplatform_control",
+    "clientplatform_creative_studio",
     "clientplatform_creative_winner",
     "clientplatform_existing_bot_onboarding",
     "clientplatform_first_result",

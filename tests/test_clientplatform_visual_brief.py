@@ -39,6 +39,54 @@ class VisualCreativeApplicationTests(unittest.TestCase):
         self.assertEqual(brief.preferred_provider, "runway")
         self.assertIn("vertical advertising video", brief.prompt)
 
+    def test_business_image_brief_accepts_plain_owner_language_and_brand(self) -> None:
+        brief = visual_creatives.build_business_image_brief(
+            request="спокойная реалистичная фотография кабинета без текста",
+            brand_context="Brand name: Practice. Tone: calm, human.",
+            country_code="RU",
+        )
+        self.assertEqual(brief.kind, "image")
+        self.assertEqual(brief.aspect_ratio, "4:5")
+        self.assertEqual(brief.country_code, "RU")
+        self.assertIn("Owner request", brief.prompt)
+        self.assertIn("кабинета", brief.prompt)
+        self.assertEqual(brief.brand_context, "Brand name: Practice. Tone: calm, human.")
+        self.assertIn("fake reviews", brief.prompt)
+
+    def test_business_image_request_is_bounded(self) -> None:
+        self.assertEqual(
+            visual_creatives.normalize_business_image_request("  живая   фотография  "),
+            "живая фотография",
+        )
+        with self.assertRaises(ValueError):
+            visual_creatives.normalize_business_image_request(" ")
+        with self.assertRaises(ValueError):
+            visual_creatives.normalize_business_image_request("x" * 1501)
+
+    def test_create_business_image_reuses_shared_gateway_and_idempotency(self) -> None:
+        expected = VisualCreativeJob(
+            id="owner-image-1",
+            provider="fake",
+            scope_id="business-id",
+            kind="image",
+            status="queued",
+        )
+        with patch.object(visual_creatives, "submit_visual", return_value=expected) as submit:
+            result = visual_creatives.create_business_image(
+                request="clean editorial portrait",
+                scope_id="business-id",
+                idempotency_key="clientplatform:owner-image:abcdef12",
+                brand_context="Tone: human.",
+                wait_seconds=999,
+            )
+        self.assertIs(result, expected)
+        self.assertEqual(submit.call_args.kwargs["scope_id"], "business-id")
+        self.assertEqual(
+            submit.call_args.kwargs["idempotency_key"],
+            "clientplatform:owner-image:abcdef12",
+        )
+        self.assertEqual(submit.call_args.kwargs["wait_seconds"], 60)
+
     def test_invalid_visual_kind_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "image or video"):
             visual_creatives.build_ad_visual_brief(
