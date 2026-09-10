@@ -476,6 +476,7 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             await labels_for(one_click.open_content_tools, "cpo:content:business-1"),
             [
+                "🎨 Создать картинку",
                 "📣 Публикации",
                 "✍️ Подготовить текст",
                 "🧪 Услуги и предложения",
@@ -507,7 +508,7 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(one_click, "cockpit_web_app_url", return_value=None):
             self.assertEqual(
                 labels(PlatformRole.MARKETER),
-                ["📈 Продвижение и контент", "⚙️ Настройки бизнеса", "⬅️ Назад"],
+                ["🎨 Создать картинку", "📈 Продвижение и контент", "⚙️ Настройки бизнеса", "⬅️ Назад"],
             )
             self.assertEqual(
                 labels(PlatformRole.SUPPORT),

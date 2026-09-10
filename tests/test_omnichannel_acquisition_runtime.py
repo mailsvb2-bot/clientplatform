@@ -213,7 +213,7 @@ def _promotion_fixture() -> tuple[sqlite3.Connection, object, str, str]:
     slot = bookings.create_slot(
         actor=actor,
         offering_id=offering.id,
-        local_start="10.09.2026 12:00",
+        local_start="10.09.2030 12:00",
         duration_minutes=60,
         now="2026-08-26T10:00:00+00:00",
     )

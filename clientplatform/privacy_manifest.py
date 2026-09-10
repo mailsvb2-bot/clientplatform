@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 TenantDisposition = Literal["erase", "retain", "anonymize"]
-CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-09-02.v43-support-cases"
+CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-09-10.v44-creative-generation-recovery"
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +75,7 @@ _POLICIES = (
     _required("ad_publication_jobs", "retain", "business-owned provider publication intent and bounded delivery evidence"),
     _required("ad_publication_assets", "erase", "user-provided or generated advertising media, local storage references and provider media identifiers"),
     _required("creative_variant_bindings", "anonymize", "business-owned creative selection and generation lineage retained while selecting member linkage is anonymized"),
+    _required("creative_generation_receipts", "erase", "short-lived tenant creative request, frozen provider brief and generation recovery receipt; deleted after failure or delivery"),
     _required("creative_growth_trials", "anonymize", "business-owned creative trial configuration retained while creator linkage is anonymized"),
     _required("creative_growth_trial_variants", "retain", "business-owned deterministic creative allocation and exact source routing without customer identity"),
     _required("ad_spend_authorizations", "retain", "business-owned advertising limits, provider snapshot and authorization lifecycle"),

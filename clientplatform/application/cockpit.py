@@ -105,6 +105,7 @@ def cockpit_navigation(actor: TenantContext) -> tuple[CockpitNavigationItem, ...
     can_customers = _allowed(actor, actor.assert_can_view_customer_records)
     can_growth = _allowed(actor, actor.assert_can_view_promotion_analytics)
     can_content = _allowed(actor, actor.assert_can_view_programs)
+    can_creatives = _allowed(actor, actor.assert_can_manage_promotions)
     can_manage_business = _allowed(actor, actor.assert_can_manage_business)
     can_services = _allowed(actor, actor.assert_can_view_promotion_analytics)
     can_money = actor.role in {
@@ -153,15 +154,31 @@ def cockpit_navigation(actor: TenantContext) -> tuple[CockpitNavigationItem, ...
         _nav_item(
             id="growth",
             title="Новые клиенты и реклама",
-            summary="Каналы привлечения, кампании и безопасные действия по росту.",
-            when_to_use="Если хотите привлечь больше клиентов или проверить, что работает в рекламе.",
+            summary=(
+                "Каналы привлечения, реклама и создание визуалов для продвижения."
+                if can_creatives
+                else "Каналы привлечения, кампании и безопасные действия по росту."
+            ),
+            when_to_use=(
+                "Если хотите привлечь клиентов, создать рекламную картинку или проверить рекламу."
+                if can_creatives
+                else "Если хотите проверить, что работает в привлечении и рекламе."
+            ),
             allowed=can_growth,
         ),
         _nav_item(
             id="content",
             title="Материалы и публикации",
-            summary="Программы, материалы, публикации и контент-план.",
-            when_to_use="Если нужно подготовить, найти или запланировать материалы для клиентов.",
+            summary=(
+                "Программы, публикации, материалы и создание картинок для контента."
+                if can_creatives
+                else "Программы, материалы, публикации и контент-план."
+            ),
+            when_to_use=(
+                "Если нужно подготовить публикацию, картинку или материал для клиентов."
+                if can_creatives
+                else "Если нужно найти или проверить материалы для клиентов."
+            ),
             allowed=can_content,
         ),
         _nav_item(

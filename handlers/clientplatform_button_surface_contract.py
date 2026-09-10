@@ -139,6 +139,7 @@ def install_button_surface_contract(safety: ModuleType) -> None:
         "cpcm:",
         "cpg:",
         "cpo:",
+        "cpc:",
     )
     _extend_tuple(
         safety,
