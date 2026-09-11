@@ -1,0 +1,50 @@
+name: Temporary record PR316 roadmap evidence
+
+on:
+  push:
+    branches:
+      - docs/record-pr316-roadmap-evidence
+
+permissions:
+  contents: write
+
+jobs:
+  record-roadmap-evidence:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout exact branch head
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      - name: Record PR316 evidence and remove temporary workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('docs/CLIENTPLATFORM_UNICORN_ROADMAP.md')
+          text = path.read_text(encoding='utf-8')
+          marker = '| UX-316 Production cockpit UX hardening + required-status targeting |'
+          row = '| UX-316 Production cockpit UX hardening + required-status targeting | DONE | PR #316 final exact head `c188309662b0166859d737472e96bbaba5ab909e`, protected-main merge `4cd53f5a6d552b3e4c10158db1d5266ca1099301`, exact tree `faaa41244aa8e531599a04fabc7c6842cccbec3c`; 17/17 final-head PR workflows success; post-merge main CI success; coverage ratchets `82.88%` combined / `74.66%` branch; cockpit business-context race hardening, role-aware canonical Creative Studio route, progressive-disclosure/accessibility UX and exact PR-head targeting for all three custom required statuses proven by regression contract; repository `AI Review / gate` success under trusted-repository policy, while external Codex code review was unavailable because review quota was exhausted and is not claimed as PASS; production deploy intentionally not performed; no new `NEXT` invented |'
+          if marker not in text:
+              lines = text.splitlines()
+              index = next(
+                  (i for i, line in enumerate(lines) if line.startswith('| UX-294 Safe retirement of outdated offers and business profile |')),
+                  None,
+              )
+              if index is None:
+                  raise SystemExit('UX-294 evidence anchor not found')
+              lines.insert(index + 1, row)
+              path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+          PY
+          rm .github/workflows/_temporary_record_pr316_roadmap.yml
+          git diff --check
+          git diff -- docs/CLIENTPLATFORM_UNICORN_ROADMAP.md
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add docs/CLIENTPLATFORM_UNICORN_ROADMAP.md .github/workflows/_temporary_record_pr316_roadmap.yml
+          git commit -m 'Record PR #316 roadmap evidence'
+          git push origin HEAD:docs/record-pr316-roadmap-evidence
