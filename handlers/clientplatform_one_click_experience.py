@@ -635,7 +635,7 @@ def _client_tools_rows(token: str, actor) -> tuple[list[list[tuple[str, str]]], 
 
 async def _send_client_tools(message: ClientPlatformMessageTarget, *, token: str, actor) -> None:
     rows, help_lines = _client_tools_rows(token, actor)
-    body = "\n".join(help_lines) or "Для Вашей роли здесь сейчас нет доступных действий."
+    body = "\n".join(line for line in help_lines if line) or "Для Вашей роли здесь сейчас нет доступных действий."
     await message.answer(
         "👥 Клиенты и продажи\n\nЕсли Вам нужно:\n" + body,
         reply_markup=control._keyboard(rows),
@@ -646,18 +646,24 @@ def _content_tools_rows(token: str, actor) -> tuple[list[list[tuple[str, str]]],
     rows: list[list[tuple[str, str]]] = []
     help_lines: list[str] = []
     if _allowed(actor, actor.assert_can_manage_promotions):
+        can_manage_business = _allowed(actor, actor.assert_can_manage_business)
+        publication_row = [("📣 Публикации", f"cpa:{token}:publications")]
+        if can_manage_business:
+            publication_row.append(("🎥 Онлайн-мероприятие", f"cpev:new:{token}"))
         rows.extend(
             [
-                [("📣 Публикации", f"cpa:{token}:publications")],
+                publication_row,
                 [(nav.COPY.label, f"cpa:{token}:copy")],
                 [(nav.OFFERS.label, f"cpa:{token}:offers")],
                 [("📣 Реклама", f"cpo:ads:{token}")],
                 [("🤝 Партнёрства", f"cpg:home:{token}")],
             ]
         )
+        help_lines.append("• создать или запланировать пост → «📣 Публикации»")
+        if can_manage_business:
+            help_lines.append("• провести вебинар или другой онлайн-эфир → «🎥 Онлайн-мероприятие»")
         help_lines.extend(
             [
-                "• создать или запланировать пост → «📣 Публикации»",
                 f"• подготовить текст → «{nav.COPY.label}»",
                 f"• проверить, что именно Вы предлагаете → «{nav.OFFERS.label}»",
                 "• запустить продвижение → «📣 Реклама»",

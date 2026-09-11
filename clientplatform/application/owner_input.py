@@ -95,6 +95,21 @@ def resolve_owner_input(session: OwnerInputSession, value: object) -> OwnerInput
             ),
         )
 
+    if session.action == "online_event":
+        parts = [part.strip() for part in raw_text.split("|")]
+        if len(parts) not in {3, 4} or not all(parts[:3]):
+            raise ValueError("event title, time and join URL are required")
+        title, local_time, join_url = parts[:3]
+        offer_url = parts[3] if len(parts) == 4 else ""
+        if len(title) > 180:
+            raise ValueError("event title is too long")
+        if offer_url == "-":
+            offer_url = ""
+        return OwnerInputResolution(
+            "event-create-text",
+            (title, local_time, join_url, offer_url),
+        )
+
     if session.action == "booking_time":
         match = re.fullmatch(
             r"([0-3][0-9]\.[01][0-9]\.[0-9]{4}\s+[0-2][0-9]:[0-5][0-9])(?:\s+([1-9][0-9]{0,2}))?",

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 TenantDisposition = Literal["erase", "retain", "anonymize"]
-CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-09-10.v44-creative-generation-recovery"
+CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-09-10.v45-provider-neutral-events"
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,6 +52,9 @@ _POLICIES = (
     _required("business_payment_outcome_evidence", "anonymize", "idempotent payment-to-outcome evidence retained for accounting while provider references are anonymized"),
     _required("customer_invites", "erase", "expiring customer connection capability and claim routing"),
     _required("booking_slots", "anonymize", "business availability and customer appointment fulfilment"),
+    _required("clientplatform_events", "retain", "business-owned online event configuration, provider routing and publication state"),
+    _required("clientplatform_event_registrations", "erase", "public event registration PII, consent, CRM linkage and attendance signals"),
+    _required("clientplatform_event_conversion_links", "anonymize", "verified event-to-payment attribution retained without public registration PII"),
     _required("business_outcome_events", "anonymize", "canonical business outcome ledger retained while customer linkage and free-form metadata are anonymized"),
     _required("promotion_campaigns", "retain", "business-owned advertising copy, source channel and campaign lifecycle without customer identity"),
     _required("promotion_source_aliases", "retain", "business-owned source routing aliases for exact creative and placement attribution without customer identity"),

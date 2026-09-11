@@ -55,7 +55,7 @@ def ensure(c: sqlite3.Connection) -> None:
                 REFERENCES partner_candidates(id, business_id, campaign_id)
                 ON DELETE CASCADE,
             CHECK(platform IN ('telegram', 'vk', 'max', 'email')),
-            CHECK(source_kind IN ('lesson_delivery', 'partner_outreach', 'sales_followup', 'customer_interaction', 'member_interaction')),
+            CHECK(source_kind IN ('lesson_delivery', 'partner_outreach', 'sales_followup', 'customer_interaction', 'member_interaction', 'event_message')),
             CHECK(recipient_kind IN ('customer_identity', 'external_subject')),
             CHECK(payload_kind IN (
                 'audio', 'video', 'text', 'document', 'image',
@@ -88,7 +88,7 @@ def ensure(c: sqlite3.Connection) -> None:
                     AND sales_followup_id IS NOT NULL
                     AND source_id=sales_followup_id)
                 OR
-                (source_kind IN ('customer_interaction','member_interaction')
+                (source_kind IN ('customer_interaction','member_interaction','event_message')
                     AND logical_delivery_id IS NULL
                     AND partner_campaign_id IS NULL
                     AND partner_candidate_id IS NULL

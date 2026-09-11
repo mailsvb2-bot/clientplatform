@@ -140,6 +140,7 @@ def install_button_surface_contract(safety: ModuleType) -> None:
         "cpg:",
         "cpo:",
         "cpc:",
+        "cpev:",
     )
     _extend_tuple(
         safety,
@@ -231,6 +232,9 @@ def install_button_surface_contract(safety: ModuleType) -> None:
                 return True
         if current_state.startswith("OneClickOwnerState:waiting_region"):
             if callback_data.startswith("cpo:region:"):
+                return True
+        if current_state.startswith("ClientPlatformEventState:waiting_details"):
+            if callback_data.startswith("cpev:cancel:"):
                 return True
         if current_state.startswith("AdConnectionState:confirming_publication"):
             if callback_data.startswith("cpa:creative:"):

@@ -43,6 +43,7 @@ from clientplatform.runtime.native_messenger_setup_http import (
     native_messenger_setup_post,
 )
 from clientplatform.runtime.partner_aware_bot_gateway import ManagedBotGatewayRuntime
+from clientplatform.runtime.public_events import register_public_event_routes
 from config.settings import settings
 from core.runtime_env import env_float, env_int
 from core.task_manager import TaskManager
@@ -141,6 +142,8 @@ async def _health(request: web.Request) -> web.Response:
         payload["omnichannel_ingress"] = True
     if request.app.get("clientplatform_acquisition_ingress") is True:
         payload["acquisition_ingress"] = True
+    if request.app.get("clientplatform_event_ingress") is True:
+        payload["event_ingress"] = True
     reconciliation_task = request.app.get(
         "clientplatform_max_webhook_reconciliation_task"
     )
@@ -581,6 +584,7 @@ async def start_messenger_webhook_runtime(
     omnichannel_enabled = _omnichannel_ingress_enabled()
     external_product_enabled = external_product_ingress_enabled()
     acquisition_enabled = _acquisition_ingress_enabled()
+    event_enabled = acquisition_enabled
     cockpit_enabled = cockpit_http_enabled()
     ad_oauth_enabled = ad_oauth_http_enabled()
     ad_worker_enabled = _ad_publication_worker_enabled()
@@ -594,6 +598,7 @@ async def start_messenger_webhook_runtime(
         or omnichannel_enabled
         or external_product_enabled
         or acquisition_enabled
+        or event_enabled
         or cockpit_enabled
     )
     if not ingress_enabled:
@@ -629,6 +634,8 @@ async def start_messenger_webhook_runtime(
         _register_external_product_routes(app)
     if acquisition_enabled:
         _register_acquisition_routes(app)
+    if event_enabled:
+        register_public_event_routes(app)
     if ad_oauth_enabled:
         if bot is None:
             raise RuntimeError("Advertising OAuth callback requires the central bot")
@@ -688,7 +695,7 @@ async def start_messenger_webhook_runtime(
 
         log.info(
             "HTTP ingress started on %s:%s privacy_export=%s "
-            "max=%s vk=%s omnichannel=%s external_product=%s acquisition=%s cockpit=%s "
+            "max=%s vk=%s omnichannel=%s external_product=%s acquisition=%s events=%s cockpit=%s "
             "durable_delivery=%s managed_bot_polling=%s ad_oauth=%s "
             "ad_publication_worker=%s max_webhook_reconciliation=%s",
             host,
@@ -699,6 +706,7 @@ async def start_messenger_webhook_runtime(
             omnichannel_enabled,
             external_product_enabled,
             acquisition_enabled,
+            event_enabled,
             cockpit_enabled,
             delivery_worker_started,
             gateway_started,

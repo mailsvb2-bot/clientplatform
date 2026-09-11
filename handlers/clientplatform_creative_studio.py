@@ -633,9 +633,20 @@ def install_creative_studio_visibility(one_click: ModuleType) -> None:
         rows = [list(row) for row in rows]
         help_lines = list(help_lines)
         if _allowed(actor, actor.assert_can_manage_promotions):
-            creative_row = [(nav.CREATIVES.label, f"cpc:open:{token}")]
-            if creative_row not in rows:
-                rows.insert(0, creative_row)
+            creative_button = (nav.CREATIVES.label, f"cpc:open:{token}")
+            if not any(creative_button in row for row in rows):
+                publication_index = next(
+                    (
+                        index
+                        for index, row in enumerate(rows)
+                        if row and str(row[0][1]).endswith(":publications")
+                    ),
+                    None,
+                )
+                if publication_index is None:
+                    rows.insert(0, [creative_button])
+                else:
+                    rows[publication_index].insert(0, creative_button)
             help_line = (
                 f"• создать изображение для поста или рекламы → «{nav.CREATIVES.label}»"
             )

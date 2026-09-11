@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from datetime import datetime
 import logging
 import re
 from dataclasses import dataclass
@@ -36,6 +37,10 @@ from clientplatform.application.admin_ops import (
     schedule_publication,
 )
 from clientplatform.application.bookings import create_booking_slot, list_booking_slots
+from clientplatform.application.event_owner_flow import (
+    OnlineEventCreateRequest,
+    create_and_publish_online_event,
+)
 from clientplatform.application.capability_parity import (
     CapabilityAvailability,
     project_messenger_capabilities,
@@ -122,7 +127,7 @@ from clientplatform.domain.activity import (
 )
 from clientplatform.domain.automation_policy import AutomationPolicyError
 from clientplatform.domain.ad_spend import AdSpendAuthorizationStatus, AdSpendError
-from clientplatform.domain.bookings import BookingError, BookingSlotStatus
+from clientplatform.domain.bookings import BookingError, BookingSlotStatus, parse_local_booking_start
 from clientplatform.domain.connections import ConnectionPlatform
 from clientplatform.domain.customer_interactions import (
     CustomerInteractionButton,
@@ -262,6 +267,8 @@ _ALIASES = {
     "мессенджеры": "messengers",
     "обращения": "sales",
     "продажи": "sales",
+    "вебинар": "event-new",
+    "онлайн-мероприятие": "event-new",
     "обращения и продажи": "sales",
 }
 _COMMAND_PREFIX = "cpm:"
@@ -306,6 +313,7 @@ TELEGRAM_NATIVE_ACTION_EQUIVALENTS: dict[str, tuple[str, ...]] = {
     "prices": ("prices",),
     "price-set": ("price-set", "price-set-text"),
     "promotion": ("acquire",),
+    "online-event": ("event-new", "event-create-text"),
     "experiments": ("experiments",),
     "invites": ("invites", "invite-new"),
     "funnel2": ("funnel2",),
@@ -711,6 +719,8 @@ def parse_native_member_interaction(value: object) -> ParsedMemberInteraction:
             "growth-sales",
             "growth-analysis",
             "growth-lifecycle",
+            "event-new",
+            "event-create-text",
             "work-more",
             "manage-more",
             "manage",
@@ -839,6 +849,7 @@ _NATIVE_MEMBER_TEXT_ENTRY_ACTIONS = frozenset(
         "sales-followup-optout-text",
         "publication-schedule-text",
         "booking-open-text",
+        "event-create-text",
         "publication-new-text",
         "payment-new-text",
         "price-set-text",
@@ -915,6 +926,7 @@ def _owner_input_invalid_message(action: str) -> CustomerInteractionMessage:
         "program_lesson": "Напишите: Название | Материал.",
         "publication_draft": "Напишите: Заголовок | Текст публикации.",
         "booking_time": "Напишите дату и время: ДД.ММ.ГГГГ ЧЧ:ММ. При желании добавьте длительность в минутах.",
+        "online_event": "Напишите: Название | ДД.ММ.ГГГГ ЧЧ:ММ | HTTPS-ссылка на эфир | необязательная HTTPS-ссылка предложения. Последнее поле можно заменить на -.",
         "price": "Напишите сумму и валюту, например: 5000 RUB.",
         "payment": "Напишите сумму и валюту, например: 3500 RUB | консультация.",
         "member_user": "Напишите номер аккаунта ClientPlatform сотрудника — только цифры. Сотрудник увидит свой номер в разделе «Сотрудники и доступы».",
@@ -1113,6 +1125,8 @@ _NATIVE_PARENT_COMMANDS: dict[str, str] = {
     "growth-analysis": "cpm:growth-sales",
     "growth-more": "cpm:growth",
     "growth-lifecycle": "cpm:growth-more",
+    "event-new": "cpm:growth-more",
+    "event-create-text": "cpm:growth-more",
     "acquire": "cpm:growth",
     "experiments": "cpm:growth",
     "autopilot": "cpm:growth",
@@ -1963,6 +1977,82 @@ def _growth_analysis_message(actor: TenantContext) -> CustomerInteractionMessage
     )
 
 
+def _event_new_message(
+    actor: TenantContext,
+    *,
+    current_platform: ConnectionPlatform,
+    input_surface: str,
+) -> CustomerInteractionMessage:
+    try:
+        actor.assert_can_manage_business()
+    except TenantPermissionDenied:
+        return _permission_message()
+    profile = get_business_profile(actor=actor)
+    return _begin_owner_input_message(
+        actor,
+        platform=current_platform,
+        surface=input_surface,
+        action="online_event",
+        text=(
+            "🎥 Новое онлайн-мероприятие\n\n"
+            f"Часовой пояс бизнеса: {profile.timezone}.\n"
+            "Напишите одной строкой:\n"
+            "Название | ДД.ММ.ГГГГ ЧЧ:ММ | HTTPS-ссылка на эфир | ссылка предложения или -\n\n"
+            "Площадка определяется по ссылке автоматически; неизвестная площадка безопасно сохранится как external."
+        ),
+        rows=((_button("📈 К росту", "cpm:growth-more"),), _back_row()),
+    )
+
+
+def _event_create_result(
+    actor: TenantContext,
+    title: str,
+    local_time: str,
+    join_url: str,
+    offer_url: str,
+) -> CustomerInteractionMessage:
+    try:
+        actor.assert_can_manage_business()
+        profile = get_business_profile(actor=actor)
+        starts_at = datetime.fromisoformat(
+            parse_local_booking_start(local_time, timezone_name=profile.timezone)
+        )
+        created = create_and_publish_online_event(
+            actor=actor,
+            request=OnlineEventCreateRequest(
+                title=title,
+                starts_at=starts_at,
+                timezone_name=profile.timezone,
+                join_url=join_url,
+                offer_url=offer_url or None,
+                provider_key=None,
+            ),
+        )
+        public_base = str(getattr(settings, "MESSENGER_PUBLIC_BASE_URL", "") or "").strip()
+        registration_url = created.registration_url(public_base)
+    except (TenantPermissionDenied, ValueError, RuntimeError):
+        return CustomerInteractionMessage(
+            text=(
+                "Не удалось создать онлайн-мероприятие. Проверьте дату, HTTPS-ссылку и настройки e-mail. "
+                "Если подключено несколько SMTP, выберите один в настройках интеграций."
+            ),
+            rows=((_button("🎥 Попробовать снова", "cpm:event-new"),), (_button("📈 К росту", "cpm:growth-more"),), _back_row()),
+        )
+    reminder = (
+        "E-mail напоминания включены."
+        if created.email_notifications_enabled
+        else "E-mail напоминания пока выключены: активный SMTP не подключён."
+    )
+    return CustomerInteractionMessage(
+        text=(
+            f"✅ Онлайн-мероприятие опубликовано.\n\n{title}\n"
+            f"{local_time} · площадка: {created.provider_key}\n\n"
+            f"Регистрация: {registration_url}\n\n{reminder}"
+        ),
+        rows=((_button("🎥 Создать ещё", "cpm:event-new"),), (_button("📈 К росту", "cpm:growth-more"),), _back_row()),
+    )
+
+
 def _growth_more_message(actor: TenantContext) -> CustomerInteractionMessage:
     if actor.role not in (_MARKETING_ROLES | _CONTENT_ROLES | _AUTOMATION_ROLES):
         return _permission_message()
@@ -1995,14 +2085,22 @@ def _growth_lifecycle_message(actor: TenantContext) -> CustomerInteractionMessag
     if actor.role not in _CONNECTION_ROLES:
         return _permission_message()
     items = (nav.INVITES, nav.RETENTION)
+    rows: list[tuple[CustomerInteractionButton, ...]] = [
+        (_button(nav.INVITES.label, "cpm:invites"),),
+        (_button(nav.RETENTION.label, "cpm:retention"),),
+    ]
+    event_help = ""
+    try:
+        actor.assert_can_manage_business()
+    except TenantPermissionDenied:
+        pass
+    else:
+        rows.append((_button("🎥 Онлайн-мероприятие", "cpm:event-new"),))
+        event_help = "\n• провести вебинар или другой онлайн-эфир → «🎥 Онлайн-мероприятие»"
+    rows.extend([(_button(nav.GROWTH.label, "cpm:growth"),), _back_row()])
     return CustomerInteractionMessage(
-        text="♻️ Вернуть и удержать клиентов\n\n" + nav.choice_help(*items),
-        rows=(
-            (_button(nav.INVITES.label, "cpm:invites"),),
-            (_button(nav.RETENTION.label, "cpm:retention"),),
-            (_button(nav.GROWTH.label, "cpm:growth"),),
-            _back_row(),
-        ),
+        text="♻️ Вернуть и удержать клиентов\n\n" + nav.choice_help(*items) + event_help,
+        rows=tuple(rows),
     )
 
 def _acquisition_message(actor: TenantContext) -> CustomerInteractionMessage:
@@ -4749,6 +4847,16 @@ def _render(
             return _growth_more_message(actor)
         if parsed.action == "growth-lifecycle":
             return _growth_lifecycle_message(actor)
+        if parsed.action == "event-new":
+            return _event_new_message(
+                actor,
+                current_platform=current_platform,
+                input_surface=input_surface,
+            )
+        if parsed.action == "event-create-text":
+            if len(parsed.args) != 4:
+                return _stale_message()
+            return _event_create_result(actor, *parsed.args)
         if parsed.action == "acquire":
             return _acquisition_message(actor)
         if parsed.action == "experiments":
