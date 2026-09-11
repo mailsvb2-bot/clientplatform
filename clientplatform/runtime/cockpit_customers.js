@@ -33,6 +33,15 @@
   const text = (node, value) => {
     node.textContent = value == null ? '' : String(value);
   };
+  const controller = () => window.ClientPlatformCockpitNavigation;
+  const captureContext = () => controller().captureBusinessContext();
+  const assertCurrent = (snapshot, payload = null) => {
+    controller().assertBusinessContextCurrent(snapshot);
+    const payloadBusiness = String(payload && payload.business_id || '').trim();
+    if (payloadBusiness && payloadBusiness !== snapshot.businessId) throw new Error('workspace_context_changed');
+  };
+  const contextChanged = (error) => controller().isContextChangedError(error);
+  const focusView = () => controller().focusRegion(view);
 
   const setBusy = (busy) => {
     view.classList.toggle('busy', Boolean(busy));
@@ -41,9 +50,9 @@
     view.setAttribute('aria-busy', busy ? 'true' : 'false');
   };
 
-  const post = async (path, extra) => {
+  const post = async (path, extra, businessId) => {
     const body = {init_data: initData, ...(extra || {})};
-    if (select.value) body.business_id = select.value;
+    if (businessId) body.business_id = businessId;
     const response = await fetch(path, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
@@ -63,14 +72,14 @@
   };
 
   const showNavigation = () => {
-    const controller = window.ClientPlatformCockpitNavigation;
-    if (controller && typeof controller.showNavigation === 'function') { controller.showNavigation(); return; }
+    const api = controller();
+    if (api && typeof api.showNavigation === 'function') { api.showNavigation(); return; }
     view.hidden = true; explanation.hidden = true; home.hidden = true; calendar.hidden = true; sales.hidden = true; nav.hidden = false;
   };
 
   const enterCustomers = () => {
-    const controller = window.ClientPlatformCockpitNavigation;
-    if (controller && typeof controller.enterCustomers === 'function') controller.enterCustomers();
+    const api = controller();
+    if (api && typeof api.enterCustomers === 'function') api.enterCustomers();
   };
 
   const showList = () => {
@@ -99,13 +108,15 @@
   };
 
   const openAction = async (customerId, expectedActionKey, button) => {
+    const snapshot = captureContext();
     setBusy(true);
     if (button) button.disabled = true;
     try {
       await post('/clientplatform/cockpit/customers/action-open', {
         customer_id: customerId,
         expected_action_key: expectedActionKey,
-      });
+      }, snapshot.businessId);
+      assertCurrent(snapshot);
       if (tg && tg.HapticFeedback && typeof tg.HapticFeedback.notificationOccurred === 'function') {
         tg.HapticFeedback.notificationOccurred('success');
       }
@@ -113,6 +124,7 @@
         text(limitations, 'Следующий шаг открыт в чате с ботом. Вернитесь в Telegram.');
       }
     } catch (error) {
+      if (contextChanged(error)) return;
       text(
         limitations,
         error && error.message === 'customer_action_changed'
@@ -121,7 +133,7 @@
       );
     } finally {
       if (button) button.disabled = false;
-      setBusy(false);
+      if (controller().isBusinessContextCurrent(snapshot)) setBusy(false);
     }
   };
 
@@ -205,20 +217,23 @@
   };
 
   const loadDetail = async (customerId) => {
+    const snapshot = captureContext();
     setBusy(true);
     try {
       const payload = await post('/clientplatform/cockpit/customers/detail', {
         customer_id: customerId,
         timeline_limit: 20,
-      });
-      renderDetail(payload);
+      }, snapshot.businessId);
+      assertCurrent(snapshot, payload);
+      renderDetail(payload); focusView();
     } catch (error) {
+      if (contextChanged(error)) return;
       text(listMeta, error && error.message === 'customer_not_found'
         ? 'Клиент больше недоступен в этом бизнесе.'
         : 'Не удалось открыть карточку клиента.');
       showList();
     } finally {
-      setBusy(false);
+      if (controller().isBusinessContextCurrent(snapshot)) setBusy(false);
     }
   };
 
@@ -250,22 +265,26 @@
   };
 
   const loadPage = async (offset) => {
+    const snapshot = captureContext();
     setBusy(true);
+    list.replaceChildren(); text(listMeta, 'Обновляем клиентов…'); prev.disabled = true; next.disabled = true;
     try {
       const payload = await post('/clientplatform/cockpit/customers', {
         query: search.value.trim(),
         limit: 20,
         offset: Number.isInteger(offset) ? offset : 0,
-      });
-      renderPage(payload);
+      }, snapshot.businessId);
+      assertCurrent(snapshot, payload);
+      renderPage(payload); focusView();
     } catch (error) {
+      if (contextChanged(error)) return;
       if (error && error.message === 'customer_access_denied') {
         showFailure('Для Вашей роли список клиентов недоступен.');
       } else {
         showFailure('Не удалось обновить список клиентов. Нажмите «Обновить».');
       }
     } finally {
-      setBusy(false);
+      if (controller().isBusinessContextCurrent(snapshot)) setBusy(false);
     }
   };
 
@@ -283,8 +302,8 @@
 
   const returnFromDetail = () => {
     if (detailReturn === 'sales') {
-      const controller = window.ClientPlatformCockpitNavigation;
-      if (controller && typeof controller.enterSales === 'function') { controller.enterSales(); return; }
+      const api = controller();
+      if (api && typeof api.enterSales === 'function') { api.enterSales(); return; }
     }
     showList();
   };
@@ -306,6 +325,11 @@
   });
   next.addEventListener('click', () => {
     if (page && page.next_offset != null) loadPage(page.next_offset);
+  });
+
+  window.addEventListener('clientplatform:business-context-changing', () => {
+    page = null; detailReturn = 'customers'; list.replaceChildren(); contacts.replaceChildren(); action.replaceChildren(); timeline.replaceChildren();
+    listPanel.hidden = false; detail.hidden = true; text(listMeta, ''); text(limitations, '');
   });
 
   window.ClientPlatformCustomers = Object.freeze({open, openCustomer, back:handleBack});

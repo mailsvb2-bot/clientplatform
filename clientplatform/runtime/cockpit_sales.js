@@ -25,6 +25,7 @@
   const nextForm = document.getElementById("sales-next-form");
   const nextAction = document.getElementById("sales-next-action");
   const nextDue = document.getElementById("sales-next-due");
+  const noteBlock = document.getElementById("sales-note-block");
   const noteForm = document.getElementById("sales-note-form");
   const note = document.getElementById("sales-note");
   const noteMessage = document.getElementById("sales-note-message");
@@ -48,9 +49,17 @@
 
   const text = (node, value) => { node.textContent = value == null ? "" : String(value); };
   const controller = () => window.ClientPlatformCockpitNavigation;
-  const businessBody = () => {
+  const captureContext = () => controller().captureBusinessContext();
+  const assertCurrent = (snapshot, payload = null) => {
+    controller().assertBusinessContextCurrent(snapshot);
+    const payloadBusiness = String(payload && payload.business_id || "").trim();
+    if (payloadBusiness && payloadBusiness !== snapshot.businessId) throw new Error("workspace_context_changed");
+  };
+  const contextChanged = (error) => controller().isContextChangedError(error);
+  const focusView = () => controller().focusRegion(view);
+  const businessBody = (businessId) => {
     const body = {init_data: initData};
-    if (select.value) body.business_id = select.value;
+    if (businessId) body.business_id = businessId;
     return body;
   };
 
@@ -61,13 +70,13 @@
     view.setAttribute("aria-busy", busy ? "true" : "false");
   };
 
-  const post = async (path, fields = {}) => {
+  const post = async (path, fields = {}, businessId = String(select.value || "").trim()) => {
     const response = await fetch(path, {
       method: "POST",
       headers: {"Content-Type": "application/json"},
       credentials: "same-origin",
       cache: "no-store",
-      body: JSON.stringify(Object.assign(businessBody(), fields)),
+      body: JSON.stringify(Object.assign(businessBody(businessId), fields)),
     });
     const payload = await response.json().catch(() => ({error: "invalid_response"}));
     if (!response.ok) {
@@ -91,6 +100,11 @@
     const api = controller();
     if (api && typeof api.enterSales === "function") api.enterSales();
     else view.hidden = false;
+  };
+
+  const confirmAction = (message, action) => {
+    if (tg && typeof tg.showConfirm === "function") { tg.showConfirm(message, (confirmed) => { if (confirmed) action(); }); return; }
+    if (window.confirm(message)) action();
   };
 
   const showList = () => {
@@ -173,7 +187,9 @@
     for (const [value, label] of stageChoices) {
       const button = document.createElement("button");
       button.type = "button";
-      button.classList.toggle("active", payload.stage === value);
+      const active = payload.stage === value;
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-pressed", active ? "true" : "false");
       text(button, label);
       button.addEventListener("click", () => { void changeStage(value, null); });
       stageActions.appendChild(button);
@@ -205,11 +221,13 @@
       nextDue.value = payload.due_local_value || "";
     }
     resultReason.value = "";
+    noteBlock.open = false; resultBlock.open = false;
     text(detailMessage, payload.closed ? "Сделка закрыта. Заметки по ней по-прежнему можно добавлять." : "Изменения сохраняются в общей истории продаж и сразу видны сотрудникам.");
   };
 
-  const refreshQueue = async () => {
-    const payload = await post("/clientplatform/cockpit/sales", {limit: 20});
+  const refreshQueue = async (snapshot) => {
+    const payload = await post("/clientplatform/cockpit/sales", {limit: 20}, snapshot.businessId);
+    assertCurrent(snapshot, payload);
     renderList(payload);
     return payload;
   };
@@ -225,44 +243,45 @@
   };
 
   const load = async () => {
-    show();
-    showList();
-    setBusy(true);
-    text(meta, "Обновляем очередь продаж…");
-    try { await refreshQueue(); }
-    catch (error) { fail(error); }
-    finally { setBusy(false); }
+    const snapshot = captureContext();
+    show(); showList(); setBusy(true);
+    list.replaceChildren(); text(meta, "Обновляем очередь продаж…"); text(handoff, ""); text(empty, ""); text(limitations, "");
+    try { await refreshQueue(snapshot); focusView(); }
+    catch (error) { if (!contextChanged(error)) fail(error); }
+    finally { if (controller().isBusinessContextCurrent(snapshot)) setBusy(false); }
   };
 
   const openLead = async (leadId) => {
     if (!leadId) return;
+    const snapshot = captureContext();
     setBusy(true);
     text(detailMessage, "Открываем сделку…");
     try {
-      const payload = await post("/clientplatform/cockpit/sales/manage", {lead_id: leadId});
-      renderDetail(payload);
+      const payload = await post("/clientplatform/cockpit/sales/manage", {lead_id: leadId}, snapshot.businessId);
+      assertCurrent(snapshot, payload); renderDetail(payload); focusView();
     } catch (error) {
-      showList();
-      text(limitations, friendlyError(error));
+      if (contextChanged(error)) return;
+      showList(); text(limitations, friendlyError(error));
     } finally {
-      setBusy(false);
+      if (controller().isBusinessContextCurrent(snapshot)) setBusy(false);
     }
   };
 
   const mutate = async (path, fields, successText) => {
     if (!activeLead) return null;
+    const snapshot = captureContext();
     setBusy(true);
     try {
-      const payload = await post(path, Object.assign({lead_id: activeLead}, fields));
-      renderDetail(payload);
-      text(detailMessage, successText);
-      try { await refreshQueue(); } catch (_error) { /* detail is already canonical */ }
+      const payload = await post(path, Object.assign({lead_id: activeLead}, fields), snapshot.businessId);
+      assertCurrent(snapshot, payload); renderDetail(payload); text(detailMessage, successText);
+      try { await refreshQueue(snapshot); } catch (error) { if (!contextChanged(error)) { /* detail is already canonical */ } }
+      assertCurrent(snapshot);
       return payload;
     } catch (error) {
-      text(detailMessage, friendlyError(error));
-      return null;
+      if (contextChanged(error)) return null;
+      text(detailMessage, friendlyError(error)); return null;
     } finally {
-      setBusy(false);
+      if (controller().isBusinessContextCurrent(snapshot)) setBusy(false);
     }
   };
 
@@ -306,30 +325,31 @@
     event.preventDefault();
     const value = note.value.trim();
     if (!value || !activeLead) return;
+    const snapshot = captureContext();
     setBusy(true);
     const key = noteKey(value);
     try {
-      const payload = await post("/clientplatform/cockpit/sales/note", {lead_id: activeLead, note: value, interaction_key: key});
-      renderDetail(payload);
+      const payload = await post("/clientplatform/cockpit/sales/note", {lead_id: activeLead, note: value, interaction_key: key}, snapshot.businessId);
+      assertCurrent(snapshot, payload); renderDetail(payload);
       note.value = "";
       pendingNoteKey = null;
       pendingNoteText = null;
       text(noteMessage, "Заметка добавлена в общую историю сделки.");
     } catch (error) {
-      text(noteMessage, friendlyError(error));
+      if (!contextChanged(error)) text(noteMessage, friendlyError(error));
     } finally {
-      setBusy(false);
+      if (controller().isBusinessContextCurrent(snapshot)) setBusy(false);
     }
   });
   won.addEventListener("click", () => {
     const reason = resultReason.value.trim();
     if (!reason) { text(detailMessage, "Для результата укажите короткий комментарий — например, что оплатил клиент."); return; }
-    void changeStage("won", reason);
+    confirmAction("Подтвердить результат «Клиент оплатил»? Этап сделки будет закрыт как успешный.", () => { void changeStage("won", reason); });
   });
   lost.addEventListener("click", () => {
     const reason = resultReason.value.trim();
     if (!reason) { text(detailMessage, "Укажите, почему продажа не состоялась. Это сохранится в истории."); return; }
-    void changeStage("lost", reason);
+    confirmAction("Подтвердить «Не состоялось»? Сделка будет закрыта, но её можно будет вернуть в работу.", () => { void changeStage("lost", reason); });
   });
   reopen.addEventListener("click", () => { void mutate("/clientplatform/cockpit/sales/reopen", {}, "Сделка возвращена в работу."); });
   advanced.addEventListener("click", () => {
@@ -343,6 +363,11 @@
     const api = controller();
     if (api && typeof api.showHome === "function") api.showHome();
   };
+
+  window.addEventListener("clientplatform:business-context-changing", () => {
+    activeLead = null; activeCustomerId = null; pendingNoteKey = null; pendingNoteText = null;
+    list.replaceChildren(); stageActions.replaceChildren(); showList(); text(meta, ""); text(handoff, ""); text(empty, ""); text(limitations, "");
+  });
 
   window.ClientPlatformSales = Object.freeze({open, back: handleBack});
 })();

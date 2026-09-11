@@ -5,6 +5,15 @@
   const select = document.getElementById("business-select");
   const initData = tg && typeof tg.initData === "string" ? tg.initData : "";
   const controller = () => window.ClientPlatformCockpitNavigation;
+  const captureContext = () => controller().captureBusinessContext();
+  const assertCurrent = (snapshot, payload = null) => {
+    controller().assertBusinessContextCurrent(snapshot);
+    const payloadBusiness = String(payload && payload.business_id || "").trim();
+    if (payloadBusiness && payloadBusiness !== snapshot.businessId) throw new Error("workspace_context_changed");
+    return payload;
+  };
+  const contextChanged = (error) => controller().isContextChangedError(error);
+  const focusView = (view) => controller().focusRegion(view);
   const text = (node, value) => { node.textContent = value == null ? "" : String(value); };
 
   const servicesView = document.getElementById("services-view");
@@ -50,6 +59,7 @@
   const growthAdvertising = document.getElementById("growth-advertising");
   const growthActions = document.getElementById("growth-actions");
   const growthLimitations = document.getElementById("growth-limitations");
+  const growthCreative = document.getElementById("growth-creative");
   const growthAdvanced = document.getElementById("growth-advanced");
 
   const analyticsView = document.getElementById("analytics-view");
@@ -90,20 +100,14 @@
   };
 
   const renderedBusiness = (payload) => String(payload && payload.business_id || "").trim();
-  const mutationBusiness = (payload, messageNode) => {
+  const mutationContext = (payload, messageNode) => {
+    const snapshot = captureContext();
     const businessId = renderedBusiness(payload);
-    if (!businessId || select.value !== businessId) {
+    if (!businessId || businessId !== snapshot.businessId) {
       text(messageNode, "Бизнес переключается или экран устарел. Дождитесь загрузки выбранного бизнеса и повторите действие.");
-      return "";
+      return null;
     }
-    return businessId;
-  };
-  const acceptSnapshot = (payload, expectedBusinessId) => {
-    const businessId = renderedBusiness(payload);
-    if (!businessId || businessId !== expectedBusinessId || select.value !== expectedBusinessId) {
-      throw new Error("workspace_context_changed");
-    }
-    return payload;
+    return snapshot;
   };
 
   const notifySuccess = () => {
@@ -151,7 +155,8 @@
   };
 
   const openExactCanonicalRoute = async (section, businessId, button) => {
-    if (!businessId || select.value !== businessId) {
+    const snapshot = captureContext();
+    if (!businessId || snapshot.businessId !== businessId) {
       text(growthLimitations, "Бизнес переключается или действие устарело. Дождитесь загрузки выбранного бизнеса и повторите действие.");
       return;
     }
@@ -159,18 +164,19 @@
     button.disabled = true;
     text(button, "Открываю…");
     try {
-      const payload = await post("/clientplatform/cockpit/section-route", {section}, businessId);
+      const payload = await post("/clientplatform/cockpit/section-route", {section}, snapshot.businessId);
+      assertCurrent(snapshot);
       const routeUrl = String(payload && payload.route_url || "").trim();
       if (!routeUrl.startsWith("https://")) throw new Error("canonical_route_unavailable");
       window.location.assign(routeUrl);
     } catch (error) {
+      if (contextChanged(error)) return;
       const accessChanged = error && ["section_access_denied", "business_access_denied"].includes(error.message);
       text(growthLimitations, accessChanged
         ? "Доступ к этому действию изменился. Обновите показатели роста."
         : "Не удалось открыть точное действие в Telegram. Обновите показатели и попробуйте ещё раз.");
     } finally {
-      button.disabled = false;
-      text(button, priorText);
+      if (controller().isBusinessContextCurrent(snapshot)) { button.disabled = false; text(button, priorText); }
     }
   };
 
@@ -207,7 +213,12 @@
     const amount = document.createElement("input");
     const currency = document.createElement("input");
     const save = document.createElement("button");
-    wrapper.className = "workspace-form";
+    const amountLabel = document.createElement("label");
+    const currencyLabel = document.createElement("label");
+    const suffix = String(item.id || "price").replace(/[^A-Za-z0-9_-]/g, "");
+    amount.id = `service-price-amount-${suffix}`;
+    currency.id = `service-price-currency-${suffix}`;
+    wrapper.className = "workspace-form price-editor";
     amount.inputMode = "decimal";
     amount.maxLength = 40;
     amount.required = true;
@@ -216,23 +227,27 @@
     currency.maxLength = 3;
     currency.required = true;
     currency.value = item.price_currency || "RUB";
+    amountLabel.htmlFor = amount.id; text(amountLabel, "Цена");
+    currencyLabel.htmlFor = currency.id; text(currencyLabel, "Валюта");
     save.type = "submit";
     save.className = "secondary";
     text(save, "Сохранить цену");
-    wrapper.append(amount, currency, save);
+    wrapper.append(amountLabel, amount, currencyLabel, currency, save);
     wrapper.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const businessId = mutationBusiness(servicesPayload, servicesMessage);
-      if (!businessId) return;
+      const snapshot = mutationContext(servicesPayload, servicesMessage);
+      if (!snapshot) return;
       try {
         await post("/clientplatform/cockpit/services/price", {
           offering_id: item.id,
           amount: amount.value,
           currency: currency.value,
-        }, businessId);
+        }, snapshot.businessId);
+        assertCurrent(snapshot);
         notifySuccess();
         await loadServices();
       } catch (error) {
+        if (contextChanged(error)) return;
         text(servicesMessage, error && error.message === "services_write_denied"
           ? "Для Вашей роли изменение цены недоступно."
           : "Не удалось сохранить цену. Проверьте сумму и валюту.");
@@ -285,33 +300,34 @@
   };
 
   const loadServices = async () => {
-    showView("services");
-    setBusy(servicesView, servicesRefresh, true);
-    text(servicesMeta, "Обновляем услуги…");
-    const businessId = select.value;
-    try { renderServices(acceptSnapshot(await post("/clientplatform/cockpit/services", {}, businessId), businessId)); }
-    catch (error) {
-      if (error && error.message === "workspace_context_changed") return;
+    const snapshot = captureContext();
+    showView("services"); setBusy(servicesView, servicesRefresh, true);
+    servicesPayload = null; servicesList.replaceChildren(); servicesCapability.replaceChildren();
+    text(servicesMeta, "Обновляем услуги…"); text(servicesEmpty, ""); text(servicesMessage, "");
+    try {
+      const payload = await post("/clientplatform/cockpit/services", {}, snapshot.businessId);
+      assertCurrent(snapshot, payload); renderServices(payload); focusView(servicesView);
+    } catch (error) {
+      if (contextChanged(error)) return;
       servicesList.replaceChildren();
       text(servicesMeta, "Не удалось обновить услуги");
       text(servicesEmpty, error && error.message === "services_access_denied"
         ? "Для Вашей роли услуги недоступны."
         : "Услуги временно недоступны. Данные не изменялись.");
-    } finally { setBusy(servicesView, servicesRefresh, false); }
+    } finally { if (controller().isBusinessContextCurrent(snapshot)) setBusy(servicesView, servicesRefresh, false); }
   };
 
   const archiveService = async (offeringId) => {
-    const businessId = mutationBusiness(servicesPayload, servicesMessage);
-    if (!businessId) return;
+    const snapshot = mutationContext(servicesPayload, servicesMessage);
+    if (!snapshot) return;
     setBusy(servicesView, servicesRefresh, true);
     try {
-      await post("/clientplatform/cockpit/services/archive", {offering_id: offeringId}, businessId);
-      notifySuccess();
-      await loadServices();
-      text(servicesMessage, "Услуга убрана из активных. История и финансовые данные сохранены.");
-    } catch (_error) {
-      text(servicesMessage, "Не удалось убрать услугу. Обновите экран и попробуйте снова.");
-    } finally { setBusy(servicesView, servicesRefresh, false); }
+      await post("/clientplatform/cockpit/services/archive", {offering_id: offeringId}, snapshot.businessId);
+      assertCurrent(snapshot); notifySuccess(); await loadServices();
+      if (controller().isBusinessContextCurrent(snapshot)) text(servicesMessage, "Услуга убрана из активных. История и финансовые данные сохранены.");
+    } catch (error) {
+      if (!contextChanged(error)) text(servicesMessage, "Не удалось убрать услугу. Обновите экран и попробуйте снова.");
+    } finally { if (controller().isBusinessContextCurrent(snapshot)) setBusy(servicesView, servicesRefresh, false); }
   };
 
   const resetServiceRequest = () => { servicesRequestId = ""; };
@@ -322,8 +338,8 @@
   servicesForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     if (!servicesCapability.value) return;
-    const businessId = mutationBusiness(servicesPayload, servicesMessage);
-    if (!businessId) return;
+    const snapshot = mutationContext(servicesPayload, servicesMessage);
+    if (!snapshot) return;
     if (!servicesRequestId) servicesRequestId = newRequestId();
     if (!servicesRequestId) { text(servicesMessage, "Браузер не может безопасно создать идентификатор операции. Откройте кабинет заново."); return; }
     setBusy(servicesView, servicesRefresh, true);
@@ -333,7 +349,8 @@
         title: servicesTitle.value,
         description: servicesDescription.value,
         request_id: servicesRequestId,
-      }, businessId);
+      }, snapshot.businessId);
+      assertCurrent(snapshot);
       resetServiceRequest();
       servicesTitle.value = "";
       servicesDescription.value = "";
@@ -342,10 +359,11 @@
       await loadServices();
       text(servicesMessage, "Новая услуга создана.");
     } catch (error) {
+      if (contextChanged(error)) return;
       text(servicesMessage, error && error.message === "services_write_denied"
         ? "Для Вашей роли создание услуг недоступно."
         : "Не удалось создать услугу. Повтор неизменённой формы использует тот же безопасный идентификатор операции.");
-    } finally { setBusy(servicesView, servicesRefresh, false); }
+    } finally { if (controller().isBusinessContextCurrent(snapshot)) setBusy(servicesView, servicesRefresh, false); }
   });
 
   const addOption = (target, value, label) => {
@@ -398,19 +416,21 @@
   };
 
   const loadMoney = async () => {
-    showView("money");
-    setBusy(moneyView, moneyRefresh, true);
-    text(moneyMeta, "Обновляем подтверждённые оплаты…");
-    const businessId = select.value;
-    try { renderMoney(acceptSnapshot(await post("/clientplatform/cockpit/money", {limit: 20}, businessId), businessId)); }
-    catch (error) {
-      if (error && error.message === "workspace_context_changed") return;
+    const snapshot = captureContext();
+    showView("money"); setBusy(moneyView, moneyRefresh, true);
+    moneyPayload = null; moneyTotals.replaceChildren(); moneyList.replaceChildren();
+    text(moneyMeta, "Обновляем подтверждённые оплаты…"); text(moneySummary, ""); text(moneyEmpty, ""); text(moneyMessage, "");
+    try {
+      const payload = await post("/clientplatform/cockpit/money", {limit: 20}, snapshot.businessId);
+      assertCurrent(snapshot, payload); renderMoney(payload); focusView(moneyView);
+    } catch (error) {
+      if (contextChanged(error)) return;
       moneyTotals.replaceChildren(); moneyList.replaceChildren();
       text(moneyMeta, "Не удалось обновить деньги");
       text(moneyEmpty, error && error.message === "money_access_denied"
         ? "Для Вашей роли финансовые данные недоступны."
         : "Финансовые данные временно недоступны. Ничего не изменялось.");
-    } finally { setBusy(moneyView, moneyRefresh, false); }
+    } finally { if (controller().isBusinessContextCurrent(snapshot)) setBusy(moneyView, moneyRefresh, false); }
   };
 
   const resetMoneyRequest = () => { moneyRequestId = ""; };
@@ -422,8 +442,8 @@
 
   moneyForm.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const businessId = mutationBusiness(moneyPayload, moneyMessage);
-    if (!businessId) return;
+    const snapshot = mutationContext(moneyPayload, moneyMessage);
+    if (!snapshot) return;
     if (!moneyRequestId) moneyRequestId = newRequestId();
     if (!moneyRequestId) { text(moneyMessage, "Браузер не может безопасно создать идентификатор операции. Откройте кабинет заново."); return; }
     setBusy(moneyView, moneyRefresh, true);
@@ -435,7 +455,8 @@
         customer_id: moneyCustomer.value || null,
         offering_id: moneyOffering.value || null,
         note: moneyNote.value,
-      }, businessId);
+      }, snapshot.businessId);
+      assertCurrent(snapshot);
       resetMoneyRequest();
       moneyAmount.value = "";
       moneyNote.value = "";
@@ -444,24 +465,24 @@
       await loadMoney();
       text(moneyMessage, "Оплата сохранена как подтверждённый денежный факт.");
     } catch (error) {
+      if (contextChanged(error)) return;
       text(moneyMessage, error && error.message === "money_write_denied"
         ? "Для Вашей роли запись оплаты недоступна."
         : "Не удалось подтвердить результат записи. Повтор неизменённой формы использует тот же идентификатор и не создаёт вторую оплату.");
-    } finally { setBusy(moneyView, moneyRefresh, false); }
+    } finally { if (controller().isBusinessContextCurrent(snapshot)) setBusy(moneyView, moneyRefresh, false); }
   });
 
   const refundPayment = async (paymentId) => {
-    const businessId = mutationBusiness(moneyPayload, moneyMessage);
-    if (!businessId) return;
+    const snapshot = mutationContext(moneyPayload, moneyMessage);
+    if (!snapshot) return;
     setBusy(moneyView, moneyRefresh, true);
     try {
-      await post("/clientplatform/cockpit/money/refund", {payment_id: paymentId}, businessId);
-      notifySuccess();
-      await loadMoney();
-      text(moneyMessage, "Полный возврат сохранён отдельным подтверждённым фактом.");
-    } catch (_error) {
-      text(moneyMessage, "Возврат не выполнен. Оплата могла уже измениться; обновите экран.");
-    } finally { setBusy(moneyView, moneyRefresh, false); }
+      await post("/clientplatform/cockpit/money/refund", {payment_id: paymentId}, snapshot.businessId);
+      assertCurrent(snapshot); notifySuccess(); await loadMoney();
+      if (controller().isBusinessContextCurrent(snapshot)) text(moneyMessage, "Полный возврат сохранён отдельным подтверждённым фактом.");
+    } catch (error) {
+      if (!contextChanged(error)) text(moneyMessage, "Возврат не выполнен. Оплата могла уже измениться; обновите экран.");
+    } finally { if (controller().isBusinessContextCurrent(snapshot)) setBusy(moneyView, moneyRefresh, false); }
   };
 
   const metricLabels = {
@@ -484,13 +505,16 @@
 
   const setPeriodActive = (selector, value) => {
     for (const button of document.querySelectorAll(selector)) {
-      button.classList.toggle("active", Number(button.dataset.growthPeriod || button.dataset.analyticsPeriod) === value);
+      const active = Number(button.dataset.growthPeriod || button.dataset.analyticsPeriod) === value;
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-pressed", active ? "true" : "false");
     }
   };
 
   const renderGrowth = (payload) => {
     growthMetrics.replaceChildren(); growthSources.replaceChildren(); growthAdvertising.replaceChildren(); growthActions.replaceChildren();
     text(growthMeta, `${payload.business_name} · последние ${payload.period_days} дней`);
+    growthCreative.hidden = !controller().hasAvailableSection("creative");
     setPeriodActive("[data-growth-period]", payload.period_days);
     if (payload.business_results_available === false) {
       growthMetrics.appendChild(metricNode("Бизнес-результаты", "—", "Для Вашей роли доступны рекламные показатели, но не клиентский и денежный ledger бизнеса."));
@@ -530,14 +554,18 @@
   };
 
   const loadGrowth = async () => {
-    showView("growth"); setBusy(growthView, growthRefresh, true); text(growthMeta, "Обновляем показатели роста…");
-    const businessId = select.value;
-    try { renderGrowth(acceptSnapshot(await post("/clientplatform/cockpit/growth", {period_days: growthPeriod}, businessId), businessId)); }
-    catch (error) {
-      if (error && error.message === "workspace_context_changed") return;
+    const snapshot = captureContext();
+    showView("growth"); setBusy(growthView, growthRefresh, true); growthCreative.hidden = true;
+    growthMetrics.replaceChildren(); growthSources.replaceChildren(); growthAdvertising.replaceChildren(); growthActions.replaceChildren();
+    text(growthMeta, "Обновляем показатели роста…"); text(growthLimitations, "");
+    try {
+      const payload = await post("/clientplatform/cockpit/growth", {period_days: growthPeriod}, snapshot.businessId);
+      assertCurrent(snapshot, payload); renderGrowth(payload); focusView(growthView);
+    } catch (error) {
+      if (contextChanged(error)) return;
       growthMetrics.replaceChildren(); growthSources.replaceChildren(); growthAdvertising.replaceChildren(); growthActions.replaceChildren();
       text(growthMeta, error && error.message === "growth_access_denied" ? "Для Вашей роли раздел недоступен" : "Показатели роста временно недоступны");
-    } finally { setBusy(growthView, growthRefresh, false); }
+    } finally { if (controller().isBusinessContextCurrent(snapshot)) setBusy(growthView, growthRefresh, false); }
   };
 
   const renderAnalytics = (payload) => {
@@ -574,25 +602,27 @@
   };
 
   const loadAnalytics = async () => {
-    showView("analytics"); setBusy(analyticsView, analyticsRefresh, true); text(analyticsMeta, "Обновляем подтверждённый путь клиента…");
-    const businessId = select.value;
-    try { renderAnalytics(acceptSnapshot(await post("/clientplatform/cockpit/analytics", {period_days: analyticsPeriod}, businessId), businessId)); }
-    catch (error) {
-      if (error && error.message === "workspace_context_changed") return;
+    const snapshot = captureContext();
+    showView("analytics"); setBusy(analyticsView, analyticsRefresh, true);
+    analyticsFunnel.replaceChildren(); analyticsMoney.replaceChildren(); analyticsSources.replaceChildren();
+    text(analyticsMeta, "Обновляем подтверждённый путь клиента…"); text(analyticsLimitations, "");
+    try {
+      const payload = await post("/clientplatform/cockpit/analytics", {period_days: analyticsPeriod}, snapshot.businessId);
+      assertCurrent(snapshot, payload); renderAnalytics(payload); focusView(analyticsView);
+    } catch (error) {
+      if (contextChanged(error)) return;
       analyticsFunnel.replaceChildren(); analyticsMoney.replaceChildren(); analyticsSources.replaceChildren();
       text(analyticsMeta, error && error.message === "analytics_access_denied" ? "Для Вашей роли раздел недоступен" : "Аналитика временно недоступна");
-    } finally { setBusy(analyticsView, analyticsRefresh, false); }
+    } finally { if (controller().isBusinessContextCurrent(snapshot)) setBusy(analyticsView, analyticsRefresh, false); }
   };
 
-  select.addEventListener("change", () => {
-    servicesPayload = null;
-    moneyPayload = null;
-    resetServiceRequest();
-    resetMoneyRequest();
-    servicesPanel.hidden = true;
-    moneyPanel.hidden = true;
-    setBusy(servicesView, servicesRefresh, true);
-    setBusy(moneyView, moneyRefresh, true);
+  window.addEventListener("clientplatform:business-context-changing", () => {
+    servicesPayload = null; moneyPayload = null; resetServiceRequest(); resetMoneyRequest();
+    servicesPanel.hidden = true; moneyPanel.hidden = true; growthCreative.hidden = true;
+    servicesList.replaceChildren(); servicesCapability.replaceChildren(); moneyTotals.replaceChildren(); moneyList.replaceChildren();
+    growthMetrics.replaceChildren(); growthSources.replaceChildren(); growthAdvertising.replaceChildren(); growthActions.replaceChildren();
+    analyticsFunnel.replaceChildren(); analyticsMoney.replaceChildren(); analyticsSources.replaceChildren();
+    text(servicesMeta, ""); text(moneyMeta, ""); text(growthMeta, ""); text(analyticsMeta, "");
   });
 
   servicesRefresh.addEventListener("click", () => { void loadServices(); });
@@ -605,6 +635,7 @@
   moneyAdvanced.addEventListener("click", () => openCanonical("money", moneyAdvanced));
   growthRefresh.addEventListener("click", () => { void loadGrowth(); });
   growthMore.addEventListener("click", () => { const api = controller(); if (api) api.showNavigation(); });
+  growthCreative.addEventListener("click", () => openCanonical("creative", growthCreative));
   growthAdvanced.addEventListener("click", () => openCanonical("growth", growthAdvanced));
   analyticsRefresh.addEventListener("click", () => { void loadAnalytics(); });
   analyticsMore.addEventListener("click", () => { const api = controller(); if (api) api.showNavigation(); });

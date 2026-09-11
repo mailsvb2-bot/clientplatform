@@ -120,8 +120,8 @@ _HTML = """<!doctype html>
 <main class="shell">
 <header><div><p class="eyebrow">ClientPlatform</p><h1 id="business-title">Ваш бизнес</h1></div><span id="role" class="pill">Проверяем доступ…</span></header>
 <section id="business-context" class="business"><label for="business-select">Переключить бизнес</label><select id="business-select" disabled><option>Загрузка…</option></select></section>
-<section id="status" class="status"><span id="status-text">Проверяем безопасный вход через Telegram…</span><button id="status-action" class="secondary" type="button" hidden>Вернуться в бот</button></section>
-<section id="navigation-shell" class="navigation-shell" aria-live="polite" hidden><div class="home-heading"><p class="eyebrow">Все возможности</p><h2>Что Вы хотите сделать?</h2><p>Выберите задачу. Ни одна функция не скрыта и не отключена — сложные инструменты просто собраны по смыслу.</p></div><div id="navigation" class="grid"></div></section>
+<section id="status" class="status" role="status" aria-live="polite"><p id="status-text">Проверяем безопасный вход через Telegram…</p><button id="status-action" class="secondary" type="button" hidden>Вернуться в бот</button></section>
+<section id="navigation-shell" class="navigation-shell" aria-live="polite" hidden><div class="home-heading"><p class="eyebrow">Все возможности</p><h2>Что Вы хотите сделать?</h2><p>Здесь собраны доступные и готовящиеся возможности. Частые действия открываются сразу, остальные — по смысловым разделам.</p></div><div id="navigation" class="navigation-groups"></div></section>
 <section id="home-view" class="workspace-view home-view" aria-live="polite" hidden>
 <div class="view-toolbar"><button id="home-back" class="secondary" type="button">Все возможности</button><button id="home-refresh" class="secondary" type="button">Обновить</button></div>
 <div class="home-heading"><p class="eyebrow">Главный экран</p><h2>Сегодня</h2><p id="home-meta"></p></div>
@@ -141,12 +141,12 @@ _HTML = """<!doctype html>
 <section id="calendar-view" class="workspace-view" aria-live="polite" hidden>
 <div class="view-toolbar"><button id="calendar-more" class="secondary" type="button">Все возможности</button><button id="calendar-refresh" class="secondary" type="button">Обновить</button></div>
 <div class="home-heading"><p class="eyebrow">Расписание</p><h2>Записи</h2><p id="calendar-meta"></p></div>
+<button id="calendar-manage" class="primary-cta section-primary-action" type="button" hidden>Добавить свободное время</button>
 <div id="calendar-list"></div><p id="calendar-empty" class="muted"></p><p id="calendar-limitations" class="muted"></p>
-<button id="calendar-manage" class="primary-cta" type="button" hidden>Добавить свободное время</button>
 <section id="calendar-manage-panel" class="home-block" hidden><h3 id="calendar-form-title">Добавить свободное время</h3>
 <form id="calendar-form" class="calendar-form"><label for="calendar-offering">Услуга</label><select id="calendar-offering" required></select><label for="calendar-start">Дата и время бизнеса</label><input id="calendar-start" type="datetime-local" required><label for="calendar-duration">Длительность, минут</label><input id="calendar-duration" type="number" min="15" max="1440" step="5" value="60" required><button id="calendar-save" class="primary-cta" type="submit">Опубликовать время</button><button id="calendar-form-cancel" class="secondary calendar-form-cancel" type="button" hidden>Отменить изменение</button></form>
 <p id="calendar-manage-message" class="muted"></p></section>
-<button id="calendar-advanced" class="secondary calendar-advanced" type="button">Все возможности раздела</button>
+<button id="calendar-advanced" class="secondary calendar-advanced" type="button">Продолжить в Telegram</button>
 </section>
 <section id="sales-view" class="workspace-view" aria-live="polite" hidden>
 <div class="view-toolbar"><button id="sales-more" class="secondary" type="button">Все возможности</button><button id="sales-refresh" class="secondary" type="button">Обновить</button></div>
@@ -156,18 +156,18 @@ _HTML = """<!doctype html>
 <div class="sales-detail-actions"><button id="sales-open-customer" class="secondary" type="button">Открыть карточку клиента</button><button id="sales-assignment" class="secondary" type="button"></button></div>
 <section id="sales-stage-block" class="home-block"><h3>Этап продажи</h3><div id="sales-stage-actions" class="sales-stage-actions"></div></section>
 <section id="sales-next-block" class="home-block"><h3>Следующий шаг</h3><form id="sales-next-form" class="sales-form"><label for="sales-next-action">Что сделать</label><input id="sales-next-action" maxlength="500" placeholder="Например: отправить предложение"><label for="sales-next-due">Срок по времени бизнеса</label><input id="sales-next-due" type="datetime-local"><button id="sales-next-save" class="primary-cta" type="submit">Сохранить следующий шаг</button></form></section>
-<section class="home-block"><h3>Заметка</h3><form id="sales-note-form" class="sales-form"><textarea id="sales-note" maxlength="4000" rows="4" placeholder="Что важно помнить по клиенту" required></textarea><button id="sales-note-save" class="secondary sales-wide" type="submit">Добавить заметку</button></form><p id="sales-note-message" class="muted"></p></section>
-<section id="sales-result-block" class="home-block"><h3>Результат</h3><label class="sales-result-label" for="sales-result-reason">Комментарий к результату</label><textarea id="sales-result-reason" maxlength="500" rows="3" placeholder="Например: оплатил счёт / выбрал другой вариант"></textarea><div class="sales-result-actions"><button id="sales-won" type="button">Клиент оплатил</button><button id="sales-lost" class="secondary" type="button">Не состоялось</button></div></section>
+<details id="sales-note-block" class="home-block disclosure"><summary>Добавить заметку</summary><form id="sales-note-form" class="sales-form"><label for="sales-note">Заметка о клиенте</label><textarea id="sales-note" maxlength="4000" rows="4" placeholder="Что важно помнить по клиенту" required></textarea><button id="sales-note-save" class="secondary sales-wide" type="submit">Добавить заметку</button></form><p id="sales-note-message" class="muted"></p></details>
+<details id="sales-result-block" class="home-block disclosure"><summary>Закрыть сделку</summary><label class="sales-result-label" for="sales-result-reason">Комментарий к результату</label><textarea id="sales-result-reason" maxlength="500" rows="3" placeholder="Например: оплатил счёт / выбрал другой вариант"></textarea><div class="sales-result-actions"><button id="sales-won" type="button">Клиент оплатил</button><button id="sales-lost" class="secondary" type="button">Не состоялось</button></div></details>
 <button id="sales-reopen" class="primary-cta" type="button" hidden>Вернуть в работу</button><p id="sales-detail-message" class="muted"></p></section>
-<button id="sales-manage" class="secondary sales-advanced" type="button">Все возможности раздела</button>
+<button id="sales-manage" class="secondary sales-advanced" type="button">Продолжить в Telegram</button>
 </section>
 <section id="services-view" class="workspace-view" aria-live="polite" hidden>
 <div class="view-toolbar"><button id="services-more" class="secondary" type="button">Все возможности</button><button id="services-refresh" class="secondary" type="button">Обновить</button></div>
 <div class="home-heading"><p class="eyebrow">Что продаём</p><h2>Услуги</h2><p id="services-meta"></p></div>
+<button id="services-add" class="primary-cta section-primary-action" type="button" hidden>Добавить услугу</button>
 <div id="services-list"></div><p id="services-empty" class="muted"></p>
-<button id="services-add" class="primary-cta" type="button" hidden>Добавить услугу</button>
 <section id="services-form-panel" class="home-block" hidden><h3>Новая услуга</h3><form id="services-form" class="workspace-form"><label for="services-capability">Формат работы</label><select id="services-capability" required></select><label for="services-title">Название</label><input id="services-title" maxlength="200" required><label for="services-description">Короткое описание</label><textarea id="services-description" maxlength="2000" rows="4" required></textarea><button class="primary-cta" type="submit">Создать услугу</button></form><p id="services-message" class="muted"></p></section>
-<button id="services-advanced" class="secondary workspace-advanced" type="button">Все возможности раздела</button>
+<button id="services-advanced" class="secondary workspace-advanced" type="button">Продолжить в Telegram</button>
 </section>
 <section id="money-view" class="workspace-view" aria-live="polite" hidden>
 <div class="view-toolbar"><button id="money-more" class="secondary" type="button">Все возможности</button><button id="money-refresh" class="secondary" type="button">Обновить</button></div>
@@ -176,19 +176,19 @@ _HTML = """<!doctype html>
 <button id="money-add" class="primary-cta" type="button" hidden>Зафиксировать оплату</button>
 <section id="money-form-panel" class="home-block" hidden><h3>Новая оплата</h3><form id="money-form" class="workspace-form"><label for="money-amount">Сумма</label><input id="money-amount" inputmode="decimal" maxlength="40" placeholder="3500" required><label for="money-currency">Валюта</label><input id="money-currency" maxlength="3" value="RUB" required><label for="money-customer">Клиент (необязательно)</label><select id="money-customer"><option value="">Без привязки</option></select><label for="money-offering">Услуга (необязательно)</label><select id="money-offering"><option value="">Без привязки</option></select><label for="money-note">Комментарий</label><input id="money-note" maxlength="500" placeholder="Например: консультация"><button class="primary-cta" type="submit">Сохранить оплату</button></form><p id="money-message" class="muted"></p></section>
 <section class="home-block"><h3>Последние операции</h3><div id="money-list"></div><p id="money-empty" class="muted"></p></section>
-<button id="money-advanced" class="secondary workspace-advanced" type="button">Все возможности раздела</button>
+<button id="money-advanced" class="secondary workspace-advanced" type="button">Продолжить в Telegram</button>
 </section>
 <section id="growth-view" class="workspace-view" aria-live="polite" hidden>
 <div class="view-toolbar"><button id="growth-more" class="secondary" type="button">Все возможности</button><button id="growth-refresh" class="secondary" type="button">Обновить</button></div>
-<div class="home-heading"><p class="eyebrow">Привлечение</p><h2>Новые клиенты и реклама</h2><p id="growth-meta"></p></div><div class="period-switch"><button type="button" data-growth-period="7">7 дней</button><button type="button" data-growth-period="30">30 дней</button></div>
+<div class="home-heading"><p class="eyebrow">Привлечение</p><h2>Новые клиенты и реклама</h2><p id="growth-meta"></p></div><button id="growth-creative" class="primary-cta section-primary-action" type="button" hidden>🎨 Создать картинку</button><div class="period-switch" aria-label="Период показателей"><button type="button" data-growth-period="7" aria-pressed="false">7 дней</button><button type="button" data-growth-period="30" aria-pressed="false">30 дней</button></div>
 <div id="growth-metrics" class="metrics"></div><section class="home-block"><h3>Что сработало</h3><div id="growth-sources"></div></section><section class="home-block"><h3>Реклама</h3><div id="growth-advertising"></div></section><section class="home-block"><h3>Что делать дальше</h3><div id="growth-actions"></div></section><p id="growth-limitations" class="muted"></p>
-<button id="growth-advanced" class="secondary workspace-advanced" type="button">Все инструменты продвижения</button>
+<button id="growth-advanced" class="secondary workspace-advanced" type="button">Продолжить продвижение в Telegram</button>
 </section>
 <section id="analytics-view" class="workspace-view" aria-live="polite" hidden>
 <div class="view-toolbar"><button id="analytics-more" class="secondary" type="button">Все возможности</button><button id="analytics-refresh" class="secondary" type="button">Обновить</button></div>
-<div class="home-heading"><p class="eyebrow">Результат</p><h2>Что приносит результат</h2><p id="analytics-meta"></p></div><div class="period-switch"><button type="button" data-analytics-period="7">7 дней</button><button type="button" data-analytics-period="30">30 дней</button></div>
+<div class="home-heading"><p class="eyebrow">Результат</p><h2>Что приносит результат</h2><p id="analytics-meta"></p></div><div class="period-switch" aria-label="Период аналитики"><button type="button" data-analytics-period="7" aria-pressed="false">7 дней</button><button type="button" data-analytics-period="30" aria-pressed="false">30 дней</button></div>
 <div id="analytics-funnel" class="metrics"></div><section class="home-block"><h3>Подтверждённая выручка</h3><div id="analytics-money" class="money"></div></section><section class="home-block"><h3>Источники результата</h3><div id="analytics-sources"></div></section><p id="analytics-limitations" class="muted"></p>
-<button id="analytics-advanced" class="secondary workspace-advanced" type="button">Все показатели и отчёты</button>
+<button id="analytics-advanced" class="secondary workspace-advanced" type="button">Продолжить в Telegram</button>
 </section>
 <section id="connections-view" class="workspace-view" aria-live="polite" hidden>
 <div class="view-toolbar"><button id="connections-more" class="secondary" type="button">Все возможности</button><button id="connections-refresh" class="secondary" type="button">Обновить</button></div>
@@ -202,7 +202,7 @@ _HTML = """<!doctype html>
 <form id="settings-form" class="settings-form">
 <label for="settings-business-name">Название бизнеса</label><input id="settings-business-name" maxlength="160" autocomplete="organization" required>
 <label for="settings-activity">Чем занимается бизнес</label><textarea id="settings-activity" maxlength="2000" rows="5" required></textarea>
-<label for="settings-timezone">Часовой пояс</label><input id="settings-timezone" maxlength="100" autocomplete="off" placeholder="Europe/Moscow" required>
+<label for="settings-timezone">Часовой пояс</label><select id="settings-timezone" required></select><p id="settings-timezone-help" class="field-help">Выберите город — техническое название часового пояса ClientPlatform сохранит сам.</p>
 <button id="settings-save" class="primary-cta" type="submit">Сохранить настройки</button>
 </form><p id="settings-message" class="muted"></p>
 </section>
@@ -217,7 +217,12 @@ _HTML = """<!doctype html>
 </nav>
 </body></html>"""
 
-_CSS = """:root{--bg:var(--tg-theme-bg-color,#f4f6f8);--surface:var(--tg-theme-secondary-bg-color,#fff);--text:var(--tg-theme-text-color,#17202a);--hint:var(--tg-theme-hint-color,#66717d);--link:var(--tg-theme-link-color,#2678d9);--button:var(--tg-theme-button-color,#2678d9);--button-text:var(--tg-theme-button-text-color,#fff);--border:rgba(127,127,127,.24)}*{box-sizing:border-box}[hidden]{display:none!important}body{margin:0;font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:var(--bg);color:var(--text);padding:0}button,select,input,textarea{font:inherit;color:inherit}.shell{max-width:760px;margin:0 auto;padding:calc(18px + env(safe-area-inset-top)) 16px calc(104px + env(safe-area-inset-bottom))}header{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:16px}.eyebrow{margin:0 0 4px;font-size:12px;font-weight:800;letter-spacing:.045em;color:var(--hint)}h1{margin:0;font-size:29px;line-height:1.1}h2,h3{color:var(--text)}.pill{font-size:12px;background:var(--surface);border:1px solid var(--border);border-radius:999px;padding:8px 10px;max-width:46%;text-align:center}.business,.status,.explanation,.workspace-view{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:14px;margin-bottom:14px}.business label{display:block;font-size:13px;font-weight:750;margin-bottom:8px}select{width:100%;min-height:46px;border:1px solid var(--border);border-radius:12px;background:var(--surface);padding:0 12px}.status{font-size:14px;line-height:1.4}.status .secondary{margin-top:10px}.navigation-shell{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:14px;margin-bottom:14px}.navigation-shell .grid{margin-top:8px}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.nav-group-heading{grid-column:1/-1;padding:12px 2px 2px}.nav-group-heading:first-child{padding-top:2px}.nav-group-heading strong{display:block;font-size:15px}.nav-group-heading span{display:block;margin-top:3px;font-size:12px;line-height:1.35;color:var(--hint)}.card{min-height:126px;text-align:left;border:1px solid var(--border);border-radius:16px;background:var(--surface);padding:15px;position:relative;touch-action:manipulation;cursor:pointer}.card:active,.customer-row:active,.sales-card:active,.action-card:active{transform:scale(.995)}.card:disabled{opacity:.7}.card h2{font-size:17px;margin:0 0 7px;padding-right:56px}.card p{font-size:13px;line-height:1.38;margin:0;color:var(--hint)}.card.planned{border-style:dashed}.card.restricted{opacity:.72}.badge{position:absolute;right:10px;top:10px;font-size:10px;font-weight:800;border-radius:999px;padding:4px 7px;background:var(--bg);color:var(--hint)}.badge.available{background:var(--button);color:var(--button-text)}.explanation h2{margin:14px 0 8px}.explanation p{line-height:1.5}.secondary,.action-card{min-height:44px;border:1px solid var(--border);border-radius:12px;padding:0 14px;background:var(--bg);font-weight:700}.view-toolbar{display:flex;justify-content:space-between;gap:10px}.home-heading h2{margin:14px 0 4px}.home-heading p{margin:0 0 12px;color:var(--hint)}.metrics,.money{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:12px 0}.metric,.money-card,.attention-card{border:1px solid var(--border);border-radius:14px;padding:12px}.metric strong,.money-card strong{display:block;font-size:24px;margin-top:4px}.metric span,.money-card span,.muted{font-size:12px;color:var(--hint);line-height:1.4}.home-block{margin-top:18px}.home-block h3{margin:0 0 9px;font-size:16px}.primary-block{border:1px solid var(--button);border-radius:16px;padding:14px;background:color-mix(in srgb,var(--button) 7%,var(--surface))}.primary-block h3{font-size:19px}.attention-card{margin-bottom:8px}.action-card{display:block;width:100%;text-align:left;margin-bottom:8px;touch-action:manipulation}.action-card.primary-action{min-height:76px;background:var(--button);color:var(--button-text);border-color:var(--button);font-size:16px}.action-card small{display:block;font-weight:400;margin-top:4px;color:var(--hint);line-height:1.35}.action-card.primary-action small{color:var(--button-text);opacity:.84}.customer-search label{display:block;font-size:13px;font-weight:750;margin-bottom:8px}.customer-search>div{display:flex;gap:8px}.customer-search input{min-width:0;flex:1;min-height:44px;border:1px solid var(--border);border-radius:12px;background:var(--surface);color:var(--text);padding:0 12px}.customer-search button,.primary-cta{min-height:46px;border:0;border-radius:12px;background:var(--button);color:var(--button-text);padding:0 16px;font-weight:800}.primary-cta{display:block;width:100%;margin-top:14px}.customer-row,.sales-card{display:block;width:100%;text-align:left;border:1px solid var(--border);border-radius:14px;background:var(--surface);padding:13px;margin-bottom:8px;touch-action:manipulation}.customer-row strong{display:block}.customer-row small,.contact-card small,.timeline-card small,.schedule-card small,.sales-card small{display:block;color:var(--hint);margin-top:4px}.pager{display:flex;justify-content:space-between;gap:10px;margin-top:12px}.contact-card,.timeline-card,.schedule-card{border:1px solid var(--border);border-radius:14px;padding:12px;margin-bottom:8px}.schedule-card-top,.sales-card-top{display:flex;justify-content:space-between;gap:12px;align-items:center}.schedule-card p,.sales-card p{margin:8px 0 0;line-height:1.35}.schedule-status,.sales-stage{font-size:11px;font-weight:800;border-radius:999px;padding:4px 8px;background:var(--bg);white-space:nowrap}.schedule-status.booked{background:var(--button);color:var(--button-text)}.sales-card.overdue{border-color:var(--button)}.connection-card{border:1px solid var(--border);border-radius:14px;padding:13px;margin-bottom:8px}.connection-card-top{display:flex;justify-content:space-between;gap:12px;align-items:center}.connection-card p{margin:8px 0;line-height:1.4}.connection-state{font-size:11px;font-weight:800;border-radius:999px;padding:4px 8px;background:var(--bg);text-align:right}.connection-card.active .connection-state{background:var(--button);color:var(--button-text)}.connection-connect{width:100%;margin-top:6px}.settings-form label{display:block;font-size:13px;font-weight:750;margin:14px 0 7px}.settings-form input,.settings-form textarea{width:100%;border:1px solid var(--border);border-radius:12px;background:var(--surface);padding:11px 12px}.settings-form input{min-height:46px}.settings-form textarea{resize:vertical;line-height:1.4}.calendar-form label{display:block;font-size:13px;font-weight:750;margin:14px 0 7px}.calendar-form input,.calendar-form select{width:100%;min-height:46px;border:1px solid var(--border);border-radius:12px;background:var(--surface);padding:0 12px}.calendar-form-cancel{width:100%;margin-top:8px}.calendar-advanced{width:100%;margin-top:10px}.schedule-actions{display:flex;gap:8px;margin-top:10px}.schedule-actions button{flex:1;min-height:40px;border:1px solid var(--border);border-radius:10px;background:var(--bg);font-weight:750}.sales-detail-actions,.sales-result-actions,.sales-stage-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.sales-detail-actions button,.sales-stage-actions button,.sales-result-actions button{flex:1;min-width:120px;min-height:42px;border:1px solid var(--border);border-radius:10px;background:var(--bg);font-weight:750;padding:0 10px}.sales-stage-actions button.active{background:var(--button);color:var(--button-text);border-color:var(--button)}.sales-result-actions #sales-won{background:var(--button);color:var(--button-text);border-color:var(--button)}.sales-form label,.sales-result-label{display:block;font-size:13px;font-weight:750;margin:12px 0 7px}.sales-form input,.sales-form textarea,#sales-result-reason{width:100%;border:1px solid var(--border);border-radius:12px;background:var(--surface);padding:11px 12px}.sales-form input{min-height:46px}.sales-form textarea,#sales-result-reason{resize:vertical;line-height:1.4}.sales-wide,.sales-advanced{width:100%;margin-top:10px}.sales-card.assigned-to-me{border-color:var(--button)}.sales-recent-heading{margin:18px 0 4px}.sales-recent-hint{margin:0 0 10px}.workspace-form label{display:block;font-size:13px;font-weight:750;margin:14px 0 7px}.workspace-form input,.workspace-form textarea,.workspace-form select{width:100%;border:1px solid var(--border);border-radius:12px;background:var(--surface);padding:11px 12px}.workspace-form input,.workspace-form select{min-height:46px}.workspace-form textarea{resize:vertical;line-height:1.4}.workspace-advanced{width:100%;margin-top:12px}.workspace-card{border:1px solid var(--border);border-radius:14px;padding:13px;margin-bottom:8px}.workspace-card p{margin:7px 0 0;line-height:1.4}.workspace-card small{display:block;color:var(--hint);margin-top:4px}.workspace-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.workspace-actions button{flex:1;min-width:110px;min-height:40px;border:1px solid var(--border);border-radius:10px;background:var(--bg);font-weight:750;padding:0 10px}.period-switch{display:flex;gap:8px;margin:10px 0 14px}.period-switch button{flex:1;min-height:40px;border:1px solid var(--border);border-radius:10px;background:var(--bg);font-weight:750}.period-switch button.active{background:var(--button);color:var(--button-text);border-color:var(--button)}.primary-nav{position:fixed;left:50%;bottom:0;transform:translateX(-50%);width:min(760px,100%);z-index:30;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));padding:8px 8px calc(8px + env(safe-area-inset-bottom));background:var(--surface);border-top:1px solid var(--border);box-shadow:0 -8px 28px rgba(0,0,0,.08)}.primary-nav button{min-width:0;min-height:52px;border:0;background:transparent;border-radius:12px;color:var(--hint);font-size:11px;font-weight:750;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px}.primary-nav button.active,.primary-nav button[aria-current=page]{color:var(--button);background:var(--bg)}.primary-icon{font-size:17px;line-height:1}.busy{opacity:.66;pointer-events:none}@supports not (color:color-mix(in srgb,black,white)){.primary-block{background:var(--surface)}}@media(max-width:520px){.grid,.metrics,.money{grid-template-columns:1fr}.shell{padding-left:12px;padding-right:12px}h1{font-size:27px}.pill{max-width:52%}.card{min-height:auto}.view-toolbar{position:sticky;top:env(safe-area-inset-top);z-index:2;background:var(--surface);padding:2px 0 8px}.primary-nav{border-radius:16px 16px 0 0}.primary-nav button{padding:4px 1px}}"""
+_CSS = """:root{--bg:var(--tg-theme-bg-color,#f4f6f8);--surface:var(--tg-theme-secondary-bg-color,#fff);--text:var(--tg-theme-text-color,#17202a);--hint:var(--tg-theme-hint-color,#596775);--link:var(--tg-theme-link-color,#1f6fcf);--button:var(--tg-theme-button-color,#1f6fcf);--button-text:var(--tg-theme-button-text-color,#fff);--border:rgba(74,85,104,.30);--focus:#0b57d0}
+*{box-sizing:border-box}[hidden]{display:none!important}html{scroll-padding-bottom:96px}body{margin:0;font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:var(--bg);color:var(--text);padding:0}button,select,input,textarea{font:inherit;color:inherit}button{touch-action:manipulation;cursor:pointer}button:disabled{cursor:default}.shell{max-width:980px;margin:0 auto;padding:calc(18px + env(safe-area-inset-top)) 20px calc(104px + env(safe-area-inset-bottom))}header{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:16px;min-width:0}header>div{min-width:0}.eyebrow{margin:0 0 4px;font-size:12px;font-weight:800;letter-spacing:.045em;color:var(--hint)}h1{margin:0;font-size:29px;line-height:1.1;overflow-wrap:anywhere}h2,h3{color:var(--text)}.pill{font-size:12px;background:var(--surface);border:1px solid var(--border);border-radius:999px;padding:8px 10px;max-width:46%;text-align:center;flex:0 0 auto}.business,.status,.explanation,.workspace-view,.navigation-shell{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:14px;margin-bottom:14px}.business label{display:block;font-size:13px;font-weight:750;margin-bottom:8px}select{width:100%;min-height:46px;border:1px solid var(--border);border-radius:12px;background:var(--surface);padding:0 12px}.status{font-size:14px;line-height:1.4}.status p{margin:0}.status .secondary{display:block;margin-top:12px}.navigation-shell .home-heading{margin-bottom:10px}.nav-group{border-top:1px solid var(--border)}.nav-group:first-of-type{border-top:0}.nav-group>summary{list-style:none;padding:14px 2px;cursor:pointer;min-height:48px;display:flex;align-items:center;justify-content:space-between;gap:10px;font-weight:800}.nav-group>summary::-webkit-details-marker{display:none}.nav-group>summary::after{content:'+';font-size:20px;line-height:1;color:var(--hint)}.nav-group[open]>summary::after{content:'−'}.nav-group-title span{display:block;margin-top:3px;font-size:12px;line-height:1.35;color:var(--hint);font-weight:400}.nav-group-grid{padding:0 0 14px}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.card{min-height:118px;text-align:left;border:1px solid var(--border);border-radius:16px;background:var(--surface);padding:15px;position:relative}.card:active,.customer-row:active,.sales-card:active,.action-card:active{transform:scale(.995)}.card:disabled{opacity:.7}.card h2{font-size:17px;margin:0 0 7px;padding-right:56px}.card p{font-size:13px;line-height:1.38;margin:0;color:var(--hint)}.card.planned{border-style:dashed}.card.restricted{opacity:.72}.badge{position:absolute;right:10px;top:10px;font-size:10px;font-weight:800;border-radius:999px;padding:4px 7px;background:var(--bg);color:var(--hint)}.badge.available{background:var(--button);color:var(--button-text)}.explanation h2{margin:14px 0 8px}.explanation p{line-height:1.5}.secondary,.action-card{min-height:46px;border:1px solid var(--border);border-radius:12px;padding:0 14px;background:var(--bg);font-weight:700}.view-toolbar{display:flex;justify-content:space-between;gap:10px}.home-heading h2{margin:14px 0 4px}.home-heading p{margin:0 0 12px;color:var(--hint)}.metrics,.money{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:12px 0}.metric,.money-card,.attention-card{border:1px solid var(--border);border-radius:14px;padding:12px}.metric strong,.money-card strong{display:block;font-size:24px;margin-top:4px}.metric span,.money-card span,.muted,.field-help{font-size:12px;color:var(--hint);line-height:1.4}.field-help{margin:6px 0 0}.home-block{margin-top:18px}.home-block h3{margin:0 0 9px;font-size:16px}.primary-block{border:1px solid var(--button);border-radius:16px;padding:14px;background:color-mix(in srgb,var(--button) 7%,var(--surface))}.primary-block h3{font-size:19px}.attention-card{margin-bottom:8px}.action-card{display:block;width:100%;text-align:left;margin-bottom:8px}.action-card.primary-action{min-height:76px;background:var(--button);color:var(--button-text);border-color:var(--button);font-size:16px}.action-card small{display:block;font-weight:400;margin-top:4px;color:var(--hint);line-height:1.35}.action-card.primary-action small{color:var(--button-text);opacity:.9}.section-primary-action{margin:10px 0 14px}.customer-search label{display:block;font-size:13px;font-weight:750;margin-bottom:8px}.customer-search>div{display:flex;gap:8px}.customer-search input{min-width:0;flex:1;min-height:46px;border:1px solid var(--border);border-radius:12px;background:var(--surface);color:var(--text);padding:0 12px}.customer-search button,.primary-cta{min-height:48px;border:0;border-radius:12px;background:var(--button);color:var(--button-text);padding:0 16px;font-weight:800}.primary-cta{display:block;width:100%;margin-top:14px}.customer-row,.sales-card{display:block;width:100%;text-align:left;border:1px solid var(--border);border-radius:14px;background:var(--surface);padding:13px;margin-bottom:8px;min-height:48px}.customer-row strong{display:block}.customer-row small,.contact-card small,.timeline-card small,.schedule-card small,.sales-card small{display:block;color:var(--hint);margin-top:4px}.pager{display:flex;justify-content:space-between;gap:10px;margin-top:12px}.contact-card,.timeline-card,.schedule-card{border:1px solid var(--border);border-radius:14px;padding:12px;margin-bottom:8px}.schedule-card-top,.sales-card-top{display:flex;justify-content:space-between;gap:12px;align-items:center}.schedule-card p,.sales-card p{margin:8px 0 0;line-height:1.35}.schedule-status,.sales-stage{font-size:11px;font-weight:800;border-radius:999px;padding:4px 8px;background:var(--bg);white-space:nowrap}.schedule-status.booked{background:var(--button);color:var(--button-text)}.sales-card.overdue{border-color:var(--button)}.connection-card{border:1px solid var(--border);border-radius:14px;padding:13px;margin-bottom:8px}.connection-card-top{display:flex;justify-content:space-between;gap:12px;align-items:center}.connection-card p{margin:8px 0;line-height:1.4}.connection-state{font-size:11px;font-weight:800;border-radius:999px;padding:4px 8px;background:var(--bg);text-align:right}.connection-card.active .connection-state{background:var(--button);color:var(--button-text)}.connection-connect{width:100%;margin-top:6px}.settings-form label,.calendar-form label,.workspace-form label,.sales-form label,.sales-result-label{display:block;font-size:13px;font-weight:750;margin:14px 0 7px}.settings-form input,.settings-form textarea,.settings-form select,.calendar-form input,.calendar-form select,.workspace-form input,.workspace-form textarea,.workspace-form select,.sales-form input,.sales-form textarea,#sales-result-reason{width:100%;border:1px solid var(--border);border-radius:12px;background:var(--surface);padding:11px 12px}.settings-form input,.settings-form select,.calendar-form input,.calendar-form select,.workspace-form input,.workspace-form select,.sales-form input{min-height:46px}.settings-form textarea,.workspace-form textarea,.sales-form textarea,#sales-result-reason{resize:vertical;line-height:1.4}.calendar-form-cancel,.calendar-advanced,.sales-wide,.sales-advanced,.workspace-advanced{width:100%;margin-top:10px}.schedule-actions,.sales-detail-actions,.sales-result-actions,.sales-stage-actions,.workspace-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.schedule-actions button,.sales-detail-actions button,.sales-stage-actions button,.sales-result-actions button,.workspace-actions button{flex:1;min-width:110px;min-height:46px;border:1px solid var(--border);border-radius:10px;background:var(--bg);font-weight:750;padding:0 10px}.sales-stage-actions button.active{background:var(--button);color:var(--button-text);border-color:var(--button)}.sales-result-actions #sales-won{background:var(--button);color:var(--button-text);border-color:var(--button)}.sales-card.assigned-to-me{border-color:var(--button)}.sales-recent-heading{margin:18px 0 4px}.sales-recent-hint{margin:0 0 10px}.disclosure{border:1px solid var(--border);border-radius:14px;padding:0 12px}.disclosure>summary{min-height:48px;display:flex;align-items:center;font-weight:800;cursor:pointer}.disclosure[open]{padding-bottom:12px}.workspace-card{border:1px solid var(--border);border-radius:14px;padding:13px;margin-bottom:8px}.workspace-card p{margin:7px 0 0;line-height:1.4}.workspace-card small{display:block;color:var(--hint);margin-top:4px}.period-switch{display:flex;gap:8px;margin:10px 0 14px}.period-switch button{flex:1;min-height:46px;border:1px solid var(--border);border-radius:10px;background:var(--bg);font-weight:750}.period-switch button.active{background:var(--button);color:var(--button-text);border-color:var(--button)}.primary-nav{position:fixed;left:50%;bottom:0;transform:translateX(-50%);width:min(980px,100%);z-index:30;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));padding:8px 8px calc(8px + env(safe-area-inset-bottom));background:var(--surface);border-top:1px solid var(--border);box-shadow:0 -8px 28px rgba(0,0,0,.08)}.primary-nav button{min-width:0;min-height:54px;border:0;background:transparent;border-radius:12px;color:var(--hint);font-size:11px;font-weight:750;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px}.primary-nav button.active,.primary-nav button[aria-current=page]{color:var(--button);background:var(--bg)}.primary-icon{font-size:17px;line-height:1}.busy{opacity:.66;pointer-events:none}
+button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,summary:focus-visible,[tabindex="-1"]:focus-visible{outline:3px solid var(--focus);outline-offset:2px}
+@supports not (color:color-mix(in srgb,black,white)){.primary-block{background:var(--surface)}}
+@media(max-width:520px){.grid{grid-template-columns:1fr}.money{grid-template-columns:1fr}.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.shell{padding-left:12px;padding-right:12px}header{align-items:flex-start}.pill{max-width:42%;font-size:11px}.card{min-height:auto}.view-toolbar{position:sticky;top:env(safe-area-inset-top);z-index:2;background:var(--surface);padding:2px 0 8px}.primary-nav{border-radius:16px 16px 0 0}.primary-nav button{padding:4px 1px}.metric strong{font-size:21px}}
+@media(max-width:360px){header{display:block}.pill{display:inline-block;max-width:100%;margin-top:10px}.metrics{grid-template-columns:1fr}}"""
 
 _JS = r"""(() => {
   'use strict';
@@ -268,12 +273,28 @@ _JS = r"""(() => {
   const navigationGroups = Object.freeze([
     {title:'Работа с клиентами', hint:'Ежедневные задачи: клиенты, записи и продажи.', ids:['home','customers','calendar','sales']},
     {title:'Услуги и деньги', hint:'Что Вы продаёте, оплаты и фактический результат.', ids:['services','money','analytics']},
-    {title:'Рост и общение', hint:'Привлечение, материалы и каналы связи с клиентами.', ids:['growth','content','connections']},
+    {title:'Рост и общение', hint:'Привлечение, визуалы, материалы и каналы связи с клиентами.', ids:['growth','creative','content','connections']},
     {title:'Управление бизнесом', hint:'Автоматические действия, сотрудники, тариф и настройки.', ids:['automation','team','billing','settings']},
   ]);
   let navigationItems = [];
   let currentView = 'home';
   let lastHomePayload = null;
+  let businessContextGeneration = 0;
+
+  const currentBusinessId = () => String(select.value || '').trim();
+  const contextChangedError = () => { const error = new Error('workspace_context_changed'); error.code = 'workspace_context_changed'; return error; };
+  const isContextChangedError = (error) => Boolean(error && (error.code || error.message) === 'workspace_context_changed');
+  const captureBusinessContext = () => Object.freeze({businessId:currentBusinessId(), generation:businessContextGeneration});
+  const isBusinessContextCurrent = (snapshot) => Boolean(snapshot && snapshot.generation === businessContextGeneration && snapshot.businessId === currentBusinessId());
+  const assertBusinessContextCurrent = (snapshot) => { if (!isBusinessContextCurrent(snapshot)) throw contextChangedError(); return snapshot.businessId; };
+  const focusRegion = (region) => {
+    if (!region || region.hidden) return;
+    const heading = region.querySelector('h2, h3');
+    if (!heading) return;
+    heading.setAttribute('tabindex', '-1');
+    queueMicrotask(() => { if (!region.hidden && document.contains(heading)) heading.focus({preventScroll:true}); });
+  };
+  const hasAvailableSection = (section) => navigationItems.some((item) => item.id === section && item.status === 'available');
 
   const text = (node, value) => { node.textContent = value == null ? '' : String(value); };
   const screenStatus = (item) => {
@@ -301,11 +322,24 @@ _JS = r"""(() => {
   const hideViews = () => {
     navigationShell.hidden = true; home.hidden = true; customers.hidden = true; calendar.hidden = true; sales.hidden = true; services.hidden = true; moneyView.hidden = true; growth.hidden = true; analytics.hidden = true; connections.hidden = true; settingsView.hidden = true; explanation.hidden = true;
   };
+  const resetHomeContent = () => {
+    homeMetrics.replaceChildren(); homeMoney.replaceChildren(); homePrimaryAction.replaceChildren(); homeAttention.replaceChildren(); homeActions.replaceChildren();
+    homePrimaryBlock.hidden = true; homeAttentionBlock.hidden = true; homeActionsBlock.hidden = true;
+    text(homeMeta, ''); text(homeEmpty, ''); text(homeLimitations, '');
+  };
+  const beginBusinessContextChange = () => {
+    businessContextGeneration += 1;
+    lastHomePayload = null; resetHomeContent();
+    for (const view of document.querySelectorAll('.workspace-view')) { view.classList.remove('busy'); view.setAttribute('aria-busy', 'false'); }
+    hideViews();
+    window.dispatchEvent(new CustomEvent('clientplatform:business-context-changing', {detail:{generation:businessContextGeneration}}));
+    return businessContextGeneration;
+  };
   const syncBackButton = () => {
     if (!tg || !tg.BackButton) return;
     if (currentView === 'home') tg.BackButton.hide(); else tg.BackButton.show();
   };
-  const showNavigation = () => { currentView = 'navigation'; hideViews(); navigationShell.hidden = false; setPrimaryActive('more'); syncBackButton(); };
+  const showNavigation = () => { currentView = 'navigation'; hideViews(); navigationShell.hidden = false; setPrimaryActive('more'); syncBackButton(); focusRegion(navigationShell); };
   const showHomeView = () => { currentView = 'home'; hideViews(); home.hidden = false; setPrimaryActive('home'); syncBackButton(); };
   const showHome = () => { if (lastHomePayload) renderHome(lastHomePayload); else loadHome().catch(homeFail); };
   const enterCustomers = () => { currentView = 'customers'; hideViews(); customers.hidden = false; setPrimaryActive('customers'); syncBackButton(); };
@@ -363,7 +397,7 @@ _JS = r"""(() => {
     homeActionsBlock.hidden = actions.length <= 1;
     text(homeEmpty, payload.empty_message || '');
     text(homeLimitations, (payload.limitations || []).length ? 'Некоторые данные сейчас временно недоступны. Остальная информация показана без догадок.' : '');
-    showHomeView();
+    showHomeView(); focusRegion(home);
   };
 
   const post = async (path, businessId, extra) => {
@@ -371,9 +405,19 @@ _JS = r"""(() => {
     const response = await fetch(path, {method:'POST', headers:{'Content-Type':'application/json'}, credentials:'same-origin', cache:'no-store', body:JSON.stringify(body)});
     const payload = await response.json().catch(() => ({error:'invalid_response'})); if (!response.ok) throw new Error(payload.error || 'access_denied'); return payload;
   };
-  const loadHome = async () => { showHomeView(); setHomeBusy(true); text(homeMeta, 'Обновляем данные…'); try { renderHome(await post('/clientplatform/cockpit/home', select.value)); } finally { setHomeBusy(false); } };
+  const loadHome = async () => {
+    const snapshot = captureBusinessContext();
+    showHomeView(); resetHomeContent(); setHomeBusy(true); text(homeMeta, 'Обновляем данные…');
+    try {
+      const payload = await post('/clientplatform/cockpit/home', snapshot.businessId);
+      assertBusinessContextCurrent(snapshot);
+      if (String(payload && payload.business_id || '').trim() !== snapshot.businessId) throw contextChangedError();
+      renderHome(payload);
+    } finally { if (isBusinessContextCurrent(snapshot)) setHomeBusy(false); }
+  };
   homeRefresh.addEventListener('click', () => loadHome().catch(homeFail));
   const homeFail = (error) => {
+    if (isContextChangedError(error)) return;
     setHomeBusy(false);
     if (error && ['expired_init_data','business_access_denied','access_denied'].includes(error.message)) { fail(error); return; }
     homeMetrics.replaceChildren(); homeMoney.replaceChildren(); homePrimaryAction.replaceChildren(); homeAttention.replaceChildren(); homeActions.replaceChildren(); homePrimaryBlock.hidden = true; homeAttentionBlock.hidden = true; homeActionsBlock.hidden = true;
@@ -387,21 +431,26 @@ _JS = r"""(() => {
     if (tg && tg.HapticFeedback && typeof tg.HapticFeedback.notificationOccurred === 'function') tg.HapticFeedback.notificationOccurred('success');
   };
   const openSection = async (item, button) => {
+    const snapshot = captureBusinessContext();
     const badge = button ? button.querySelector('.badge') : null;
     const priorBadge = badge ? badge.textContent : '';
     if (button) { button.disabled = true; button.setAttribute('aria-busy', 'true'); }
     if (badge) text(badge, 'Открываю…');
     try {
-      await post('/clientplatform/cockpit/section-open', select.value, {section:item.id});
+      await post('/clientplatform/cockpit/section-open', snapshot.businessId, {section:item.id});
+      assertBusinessContextCurrent(snapshot);
       notifySuccess();
       if (closeAfterDelivery()) return;
-      showExplanation({...item, reason:'Полные действия этого раздела открыты в чате с ботом. Вернитесь в Telegram.'});
+      showExplanation({...item, reason:'Действие открыто в чате с ботом. Продолжите в Telegram.'});
     } catch (error) {
+      if (isContextChangedError(error)) return;
       const accessChanged = error && ['section_access_denied','business_access_denied'].includes(error.message);
-      showExplanation({...item, reason:accessChanged ? 'Доступ к разделу изменился. Обновите кабинет.' : 'Не удалось открыть действия в Telegram. Обновите кабинет и попробуйте ещё раз.'});
+      showExplanation({...item, reason:accessChanged ? 'Доступ к разделу изменился. Обновите кабинет.' : 'Не удалось открыть действие в Telegram. Обновите кабинет и попробуйте ещё раз.'});
     } finally {
-      if (button) { button.disabled = false; button.removeAttribute('aria-busy'); }
-      if (badge) text(badge, priorBadge);
+      if (isBusinessContextCurrent(snapshot)) {
+        if (button) { button.disabled = false; button.removeAttribute('aria-busy'); }
+        if (badge) text(badge, priorBadge);
+      }
     }
   };
   const openCanonicalSection = (section, button = null) => {
@@ -427,27 +476,29 @@ _JS = r"""(() => {
     showExplanation(item);
   };
 
-  window.ClientPlatformCockpitNavigation = Object.freeze({showNavigation, showHome, enterCustomers, enterCalendar, enterSales, enterServices, enterMoney, enterGrowth, enterAnalytics, enterConnections, enterSettings, openCanonicalSection, syncBusinessName});
+  window.ClientPlatformCockpitNavigation = Object.freeze({showNavigation, showHome, enterCustomers, enterCalendar, enterSales, enterServices, enterMoney, enterGrowth, enterAnalytics, enterConnections, enterSettings, openCanonicalSection, syncBusinessName, captureBusinessContext, assertBusinessContextCurrent, isBusinessContextCurrent, isContextChangedError, focusRegion, hasAvailableSection});
 
-  const appendNavigationCard = (item) => {
+  const appendNavigationCard = (item, container) => {
     const state = screenStatus(item); const button = document.createElement('button'); button.type = 'button'; button.className = `card ${state}`;
     const heading = document.createElement('h2'); const copy = document.createElement('p'); const badge = document.createElement('span'); badge.className = `badge ${state}`;
     const nativeHere = nativeSections.has(item.id);
-    text(heading, item.title); text(copy, item.summary); text(badge, state === 'available' ? (nativeHere ? 'Здесь' : 'Открыть') : state === 'planned' ? 'Скоро' : 'Нет доступа');
-    button.append(heading, copy, badge); button.addEventListener('click', () => showItem(item, button)); nav.appendChild(button);
+    text(heading, item.title); text(copy, item.summary); text(badge, state === 'available' ? (nativeHere ? 'Здесь' : 'В боте') : state === 'planned' ? 'Скоро' : 'Нет доступа');
+    button.append(heading, copy, badge); button.addEventListener('click', () => showItem(item, button)); container.appendChild(button);
   };
-  const appendNavigationGroup = (group, items) => {
+  const appendNavigationGroup = (group, items, openByDefault = false) => {
     if (!items.length) return;
-    const heading = document.createElement('div'); const titleNode = document.createElement('strong'); const hint = document.createElement('span');
-    heading.className = 'nav-group-heading'; text(titleNode, group.title); text(hint, group.hint); heading.append(titleNode, hint); nav.appendChild(heading);
-    for (const item of items) appendNavigationCard(item);
+    const details = document.createElement('details'); const summaryNode = document.createElement('summary'); const titleNode = document.createElement('div'); const hint = document.createElement('span'); const grid = document.createElement('div');
+    details.className = 'nav-group'; details.open = Boolean(openByDefault); titleNode.className = 'nav-group-title'; grid.className = 'grid nav-group-grid';
+    const strong = document.createElement('strong'); text(strong, group.title); text(hint, group.hint); titleNode.append(strong, hint); summaryNode.appendChild(titleNode); details.append(summaryNode, grid);
+    for (const item of items) appendNavigationCard(item, grid);
+    nav.appendChild(details);
   };
   const renderNavigation = () => {
-    nav.replaceChildren(); const represented = new Set();
+    nav.replaceChildren(); const represented = new Set(); let groupIndex = 0;
     for (const group of navigationGroups) {
       const items = navigationItems.filter((item) => group.ids.includes(item.id));
       for (const item of items) represented.add(item.id);
-      appendNavigationGroup(group, items);
+      appendNavigationGroup(group, items, groupIndex === 0); groupIndex += 1;
     }
     appendNavigationGroup({title:'Другие возможности', hint:'Остальные доступные функции ClientPlatform.'}, navigationItems.filter((item) => !represented.has(item.id)));
   };
@@ -462,10 +513,18 @@ _JS = r"""(() => {
     businessContext.hidden = businesses.length <= 1;
     select.disabled = false; primaryNav.hidden = false; statusPanel.hidden = true; text(statusText, `Открыт бизнес «${payload.business_name}».`);
     renderNavigation();
+    window.dispatchEvent(new CustomEvent('clientplatform:navigation-ready'));
     loadHome().catch(homeFail);
   };
-  const load = async (businessId) => { primaryNav.hidden = true; statusPanel.hidden = false; select.disabled = true; text(statusText, 'Проверяем доступ и загружаем бизнес…'); return render(await post('/clientplatform/cockpit/context', businessId)); };
-  select.addEventListener('change', () => load(select.value).catch(fail));
+  const load = async (businessId) => {
+    const generation = beginBusinessContextChange();
+    primaryNav.hidden = true; statusPanel.hidden = false; select.disabled = true; text(statusText, 'Проверяем доступ и загружаем бизнес…');
+    const payload = await post('/clientplatform/cockpit/context', businessId);
+    if (generation !== businessContextGeneration) throw contextChangedError();
+    render(payload);
+  };
+  const contextLoadFail = (error) => { if (!isContextChangedError(error)) fail(error); };
+  select.addEventListener('change', () => load(select.value).catch(contextLoadFail));
 
   for (const button of primaryNav.querySelectorAll('button[data-primary]')) {
     button.addEventListener('click', () => {
@@ -477,8 +536,9 @@ _JS = r"""(() => {
   }
 
   function fail(error) {
-    nav.replaceChildren(); hideViews(); primaryNav.hidden = true; businessContext.hidden = true; statusPanel.hidden = false; select.disabled = true; currentView = 'navigation'; syncBackButton(); text(role, 'Доступ не подтверждён'); statusAction.hidden = false;
+    nav.replaceChildren(); resetHomeContent(); hideViews(); primaryNav.hidden = true; businessContext.hidden = true; statusPanel.hidden = false; select.disabled = true; currentView = 'navigation'; syncBackButton(); text(businessTitle, 'Ваш бизнес'); text(role, 'Доступ не подтверждён'); statusAction.hidden = false;
     text(statusText, error && error.message === 'expired_init_data' ? 'Сессия Telegram устарела. Вернитесь в бот и откройте кабинет ещё раз.' : 'Не удалось подтвердить безопасный доступ. Вернитесь в бот и откройте кабинет ещё раз.');
+    queueMicrotask(() => statusAction.focus({preventScroll:true}));
   }
   if (tg && tg.BackButton && typeof tg.BackButton.onClick === 'function') tg.BackButton.onClick(() => {
     if (currentView === 'customers' && window.ClientPlatformCustomers) { window.ClientPlatformCustomers.back(); return; }
@@ -490,7 +550,7 @@ _JS = r"""(() => {
     if (currentView === 'explanation' || currentView === 'navigation') { showHome(); }
   });
   if (!initData) { fail(new Error('missing_init_data')); }
-  else { if (tg) { tg.ready(); tg.expand(); } load(null).catch(fail); }
+  else { if (tg) { tg.ready(); tg.expand(); } load(null).catch(contextLoadFail); }
 })();"""
 
 

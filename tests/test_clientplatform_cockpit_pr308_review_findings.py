@@ -217,7 +217,10 @@ class CockpitPr308ReviewFindingTests(unittest.TestCase):
         script = (root / "clientplatform" / "runtime" / "cockpit_business_workspace.js").read_text(
             encoding="utf-8"
         )
-        self.assertIn("if (!businessId || select.value !== businessId)", script)
+        self.assertIn("const snapshot = mutationContext", script)
+        self.assertIn("captureContext", script)
+        self.assertIn("assertCurrent(snapshot)", script)
+        self.assertIn("isBusinessContextCurrent(snapshot)", script)
         self.assertIn("if (!servicesRequestId) servicesRequestId = newRequestId();", script)
         self.assertIn("if (!moneyRequestId) moneyRequestId = newRequestId();", script)
         self.assertIn("request_id: servicesRequestId", script)
@@ -238,6 +241,31 @@ class CockpitPr308ReviewFindingTests(unittest.TestCase):
 
 @unittest.skipUnless(_AIOGRAM_AVAILABLE, "aiogram runtime dependency is not installed")
 class CockpitPr308CanonicalDispatchTests(unittest.IsolatedAsyncioTestCase):
+    async def test_creative_route_delegates_to_existing_creative_studio(self) -> None:
+        from handlers import clientplatform_cockpit_dispatch as cockpit_dispatch
+
+        target = SimpleNamespace(answer=AsyncMock())
+        route = CockpitActionStartRoute(
+            business_id=_BUSINESS,
+            kind="i",
+            section="creative",
+        )
+        with (
+            patch.object(cockpit_dispatch.creative_studio, "send_creative_studio_menu", new=AsyncMock()) as creative,
+            patch.object(cockpit_dispatch.one_click, "send_one_click_section", new=AsyncMock()) as generic,
+        ):
+            await cockpit_dispatch.send_cockpit_action_route(
+                target,
+                user_id=101,
+                route=route,
+            )
+        creative.assert_awaited_once_with(
+            target,
+            user_id=101,
+            business_id=_BUSINESS,
+        )
+        generic.assert_not_awaited()
+
     async def test_hidden_and_existing_action_routes_dispatch_to_exact_native_interactions(self) -> None:
         from handlers import clientplatform_cockpit_dispatch as cockpit_dispatch
 

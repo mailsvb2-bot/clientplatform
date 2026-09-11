@@ -291,8 +291,8 @@ class CockpitSalesManagementM7007Tests(unittest.TestCase):
         ):
             self.assertIn(endpoint, sales_js)
             self.assertIn(endpoint.removeprefix("/clientplatform/cockpit/"), shell)
-        self.assertIn("Все возможности раздела", shell)
-        self.assertNotIn("Дополнительные действия в боте", shell)
+        self.assertIn("Продолжить в Telegram", shell)
+        self.assertNotIn("Все возможности раздела", shell)
         self.assertIn("Открыть карточку клиента", shell)
         self.assertIn('openCanonicalSection("sales"', sales_js)
         self.assertIn('openCustomer(activeCustomerId)', sales_js)

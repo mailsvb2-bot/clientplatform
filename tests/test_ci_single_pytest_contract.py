@@ -37,3 +37,14 @@ def test_ci_regression_contour_keeps_capability_parity_mandatory() -> None:
     assert parity_step.cmd[1:] == (
         "scripts/check_clientplatform_capability_parity_manifest.py",
     )
+
+
+def test_ci_required_statuses_target_pull_request_head_sha() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+
+    assert (
+        "REQUIRED_STATUS_SHA: ${{ github.event_name == 'pull_request' && "
+        "github.event.pull_request.head.sha || github.sha }}"
+    ) in workflow
+    assert workflow.count("sha: process.env.REQUIRED_STATUS_SHA,") == 3
+    assert "sha: context.sha," not in workflow

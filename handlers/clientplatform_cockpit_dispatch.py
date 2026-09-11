@@ -6,6 +6,7 @@ from clientplatform.application.tenancy import resolve_tenant_context
 from clientplatform.domain.connections import ConnectionPlatform
 
 from . import clientplatform_one_click_experience as one_click
+from . import clientplatform_creative_studio as creative_studio
 from . import clientplatform_sales as sales
 from . import clientplatform_sales_operations as sales_operations
 from .clientplatform_message_target import ClientPlatformMessageTarget
@@ -20,6 +21,13 @@ async def send_cockpit_section(
 ) -> None:
     """Render one Cockpit section through the existing canonical Telegram UI."""
 
+    if section == "creative":
+        await creative_studio.send_creative_studio_menu(
+            target,
+            user_id=user_id,
+            business_id=business_id,
+        )
+        return
     await one_click.send_one_click_section(
         target,
         user_id=user_id,
