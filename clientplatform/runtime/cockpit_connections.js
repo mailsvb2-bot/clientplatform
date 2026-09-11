@@ -13,10 +13,18 @@
 
   const text = (node, value) => { node.textContent = value == null ? "" : String(value); };
   const controller = () => window.ClientPlatformCockpitNavigation;
+  const captureContext = () => controller().captureBusinessContext();
+  const assertCurrent = (snapshot, payload = null) => {
+    controller().assertBusinessContextCurrent(snapshot);
+    const payloadBusiness = String(payload && payload.business_id || "").trim();
+    if (payloadBusiness && payloadBusiness !== snapshot.businessId) throw new Error("workspace_context_changed");
+  };
+  const contextChanged = (error) => controller().isContextChangedError(error);
+  const focusView = () => controller().focusRegion(view);
 
-  const post = async (path, extra) => {
+  const post = async (path, extra, businessId = String(select.value || "").trim()) => {
     const body = {init_data: initData, ...(extra || {})};
-    if (select.value) body.business_id = select.value;
+    if (businessId) body.business_id = businessId;
     const response = await fetch(path, {
       method: "POST",
       headers: {"Content-Type": "application/json"},
@@ -36,19 +44,21 @@
   };
 
   const openSetup = async (platform, button) => {
+    const snapshot = captureContext();
     button.disabled = true;
     const prior = button.textContent;
     text(button, "Готовим защищённое подключение…");
     try {
-      const payload = await post("/clientplatform/cockpit/connections/setup", {platform});
+      const payload = await post("/clientplatform/cockpit/connections/setup", {platform}, snapshot.businessId);
+      assertCurrent(snapshot, payload);
       if (typeof payload.setup_url !== "string" || !payload.setup_url.startsWith("https://")) {
         throw new Error("invalid_setup_url");
       }
       window.location.assign(payload.setup_url);
-    } catch (_error) {
-      text(empty, "Не удалось подготовить подключение. Обновите состояние каналов и попробуйте ещё раз.");
-      button.disabled = false;
-      text(button, prior);
+    } catch (error) {
+      if (!contextChanged(error)) text(empty, "Не удалось подготовить подключение. Обновите состояние каналов и попробуйте ещё раз.");
+    } finally {
+      if (controller().isBusinessContextCurrent(snapshot)) { button.disabled = false; text(button, prior); }
     }
   };
 
@@ -94,17 +104,19 @@
   };
 
   const load = async () => {
-    show();
-    setBusy(true);
+    const snapshot = captureContext();
+    show(); setBusy(true); list.replaceChildren(); text(empty, "");
     text(meta, "Проверяем реальные подключения…");
-    try { render(await post("/clientplatform/cockpit/connections")); }
-    catch (error) {
-      list.replaceChildren();
-      text(meta, "Не удалось проверить подключения");
+    try {
+      const payload = await post("/clientplatform/cockpit/connections", {}, snapshot.businessId);
+      assertCurrent(snapshot, payload); render(payload); focusView();
+    } catch (error) {
+      if (contextChanged(error)) return;
+      list.replaceChildren(); text(meta, "Не удалось проверить подключения");
       text(empty, error && error.message === "connections_access_denied"
         ? "Для Вашей роли управление подключениями недоступно."
         : "Состояние каналов временно недоступно. Нажмите «Обновить».");
-    } finally { setBusy(false); }
+    } finally { if (controller().isBusinessContextCurrent(snapshot)) setBusy(false); }
   };
 
   refresh.addEventListener("click", () => { void load(); });
@@ -112,6 +124,8 @@
     const api = controller();
     if (api && typeof api.showNavigation === "function") api.showNavigation();
   });
+
+  window.addEventListener("clientplatform:business-context-changing", () => { list.replaceChildren(); text(meta, ""); text(empty, ""); });
 
   window.ClientPlatformConnections = Object.freeze({
     open: () => { void load(); },

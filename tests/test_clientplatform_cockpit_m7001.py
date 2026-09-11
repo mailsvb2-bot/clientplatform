@@ -336,6 +336,7 @@ class CockpitM7001Tests(unittest.TestCase):
                 "sales",
                 "services",
                 "growth",
+                "creative",
                 "content",
                 "automation",
                 "money",
@@ -348,7 +349,8 @@ class CockpitM7001Tests(unittest.TestCase):
         )
         self.assertEqual(navigation["automation"].title, "Автоматические действия")
         self.assertEqual(navigation["team"].title, "Сотрудники и доступы")
-        self.assertEqual(navigation["settings"].title, "Настройки бизнеса и данные")
+        self.assertEqual(navigation["settings"].title, "Настройки бизнеса")
+        self.assertEqual(navigation["creative"].status, "restricted")
 
     def test_cockpit_url_reuses_first_party_https_base(self) -> None:
         with patch.object(

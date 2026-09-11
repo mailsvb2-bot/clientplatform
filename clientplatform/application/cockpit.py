@@ -167,6 +167,13 @@ def cockpit_navigation(actor: TenantContext) -> tuple[CockpitNavigationItem, ...
             allowed=can_growth,
         ),
         _nav_item(
+            id="creative",
+            title="Создать картинку",
+            summary="Изображение для рекламы, поста или другого материала — в фирменном стиле бизнеса.",
+            when_to_use="Если нужен готовый визуал без отдельного графического редактора.",
+            allowed=can_creatives,
+        ),
+        _nav_item(
             id="content",
             title="Материалы и публикации",
             summary=(
@@ -225,9 +232,9 @@ def cockpit_navigation(actor: TenantContext) -> tuple[CockpitNavigationItem, ...
         ),
         _nav_item(
             id="settings",
-            title="Настройки бизнеса и данные",
-            summary="Настройки бизнеса, данные, экспорт и приватность.",
-            when_to_use="Если нужно изменить настройки бизнеса или управлять своими данными.",
+            title="Настройки бизнеса",
+            summary="Название, описание деятельности и часовой пояс бизнеса.",
+            when_to_use="Если нужно изменить основные данные бизнеса.",
             allowed=can_manage_business,
         ),
     )

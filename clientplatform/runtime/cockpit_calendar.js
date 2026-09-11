@@ -30,6 +30,14 @@
 
   const text = (node, value) => { node.textContent = value == null ? "" : String(value); };
   const controller = () => window.ClientPlatformCockpitNavigation;
+  const captureContext = () => controller().captureBusinessContext();
+  const assertCurrent = (snapshot, payload = null) => {
+    controller().assertBusinessContextCurrent(snapshot);
+    const payloadBusiness = String(payload && payload.business_id || "").trim();
+    if (payloadBusiness && payloadBusiness !== snapshot.businessId) throw new Error("workspace_context_changed");
+  };
+  const contextChanged = (error) => controller().isContextChangedError(error);
+  const focusView = () => controller().focusRegion(view);
 
   const setBusy = (busy) => {
     view.classList.toggle("busy", Boolean(busy));
@@ -40,9 +48,10 @@
     view.setAttribute("aria-busy", busy ? "true" : "false");
   };
 
-  const post = async (path, extra = {}) => {
+  const post = async (path, extra = {}, businessId = null) => {
     const body = {init_data: initData, ...extra};
-    if (select.value) body.business_id = select.value;
+    const targetBusiness = businessId === null ? String(select.value || "").trim() : businessId;
+    if (targetBusiness) body.business_id = targetBusiness;
     const response = await fetch(path, {
       method: "POST",
       headers: {"Content-Type": "application/json"},
@@ -125,18 +134,21 @@
   };
 
   const mutate = async (path, payload, successText) => {
+    const snapshot = captureContext();
     setBusy(true);
     text(manageMessage, "Сохраняем изменение…");
     try {
-      await post(path, payload);
+      await post(path, payload, snapshot.businessId);
+      assertCurrent(snapshot);
       notifySuccess();
       editingSlotId = null;
       await load();
-      text(manageMessage, successText);
+      if (controller().isBusinessContextCurrent(snapshot)) text(manageMessage, successText);
     } catch (error) {
+      if (contextChanged(error)) return;
       text(manageMessage, mutationErrorText(error));
     } finally {
-      setBusy(false);
+      if (controller().isBusinessContextCurrent(snapshot)) setBusy(false);
     }
   };
 
@@ -219,24 +231,29 @@
   };
 
   const load = async () => {
-    show();
-    setBusy(true);
-    text(meta, "Обновляем ближайшие записи…");
+    const snapshot = captureContext();
+    show(); setBusy(true);
+    list.replaceChildren(); panel.hidden = true; manage.hidden = true;
+    text(meta, "Обновляем ближайшие записи…"); text(empty, ""); text(limitations, "");
     try {
-      const calendar = await post("/clientplatform/cockpit/calendar", {limit: 30});
+      const calendar = await post("/clientplatform/cockpit/calendar", {limit: 30}, snapshot.businessId);
+      assertCurrent(snapshot, calendar);
       management = null;
       managementUnavailable = false;
       try {
-        management = await post("/clientplatform/cockpit/calendar/manage");
+        const managePayload = await post("/clientplatform/cockpit/calendar/manage", {}, snapshot.businessId);
+        assertCurrent(snapshot, managePayload);
+        management = managePayload;
       } catch (error) {
+        if (contextChanged(error)) throw error;
         if (!error || error.message !== "calendar_manage_denied") managementUnavailable = true;
       }
-      renderManagement();
-      render(calendar);
+      assertCurrent(snapshot);
+      renderManagement(); render(calendar); focusView();
     } catch (error) {
-      fail(error);
+      if (!contextChanged(error)) fail(error);
     } finally {
-      setBusy(false);
+      if (controller().isBusinessContextCurrent(snapshot)) setBusy(false);
     }
   };
 
@@ -297,6 +314,12 @@
     const api = controller();
     if (api && typeof api.showHome === "function") api.showHome();
   };
+
+  window.addEventListener("clientplatform:business-context-changing", () => {
+    calendarPayload = null; management = null; managementUnavailable = false; editingSlotId = null;
+    list.replaceChildren(); offering.replaceChildren(); panel.hidden = true; manage.hidden = true;
+    text(meta, ""); text(empty, ""); text(limitations, ""); text(manageMessage, "");
+  });
 
   window.ClientPlatformCalendar = Object.freeze({open, back: handleBack});
 })();
