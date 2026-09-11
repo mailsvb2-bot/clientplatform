@@ -1,0 +1,62 @@
+name: Provider-neutral events materialize
+
+on:
+  push:
+    branches:
+      - feat/provider-neutral-events
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    if: contains(github.event.head_commit.message, '[materialize-provider-events]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact branch head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+
+      - name: Verify exact patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'b6fe57b173e83bcb8669185012108feed226e02489b9ee61b02b652672d7322e  .github/provider-neutral-existing-files.patch' | sha256sum -c -
+          git apply --check .github/provider-neutral-existing-files.patch
+
+      - name: Materialize exact tested tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          git apply .github/provider-neutral-existing-files.patch
+          git diff --check
+          git rm .github/provider-neutral-existing-files.patch
+          git rm .github/workflows/provider-neutral-events-materialize.yml
+          git add -A
+          tree_sha="$(git write-tree)"
+          echo "materialized tree: ${tree_sha}"
+          test "${tree_sha}" = '3cb846fd39e48761fd069a32e55f332852f13830'
+
+      - name: Verify event regression contour
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pytest -q \
+            tests/test_clientplatform_events_provider_neutral.py \
+            tests/test_clientplatform_events_flow.py \
+            tests/test_clientplatform_public_events.py \
+            tests/test_handlers_clientplatform_events.py \
+            tests/test_clientplatform_event_dispatch_safety.py
+
+      - name: Commit exact product tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Add provider-neutral online events'
+          test "$(git rev-parse HEAD^{tree})" = '3cb846fd39e48761fd069a32e55f332852f13830'
+          git push origin "HEAD:${GITHUB_REF_NAME}"
