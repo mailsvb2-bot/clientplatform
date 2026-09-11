@@ -138,6 +138,8 @@ def _provider_claim_can_cross_provider_boundary(item: object) -> bool:
             return repository.partner_dispatch_still_authorized(item)
         if item.dispatch.source_kind == "sales_followup":
             return repository.sales_followup_claim_can_cross_provider_boundary(item)
+        if item.dispatch.source_kind == "event_message":
+            return repository.event_message_claim_can_cross_provider_boundary(item)
         if item.dispatch.source_kind in {
             "customer_interaction",
             "member_interaction",

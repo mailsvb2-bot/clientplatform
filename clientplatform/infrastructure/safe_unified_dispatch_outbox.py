@@ -48,6 +48,12 @@ _CUSTOMER_INTERACTION_PROVIDER_BOUNDARY_MARKER = (
 _CUSTOMER_INTERACTION_AMBIGUOUS_ERROR = (
     "customer_interaction_delivery_outcome_ambiguous_manual_reconciliation_required"
 )
+_EVENT_EMAIL_PROVIDER_BOUNDARY_MARKER = (
+    "event_email_provider_call_started_non_idempotent"
+)
+_EVENT_EMAIL_AMBIGUOUS_ERROR = (
+    "event_email_delivery_outcome_ambiguous_manual_reconciliation_required"
+)
 
 
 _RETURNING_PROVIDER_COLUMNS = """
@@ -922,6 +928,31 @@ class DispatchOutboxRepository(_UnifiedDispatchOutboxRepository):
                 )
             return True
         if (
+            item.dispatch.source_kind == "event_message"
+            and item.dispatch.platform.value == "email"
+        ):
+            timestamp = str(now or _utc_now().isoformat())
+            cursor = self._conn.execute(
+                """
+                UPDATE provider_dispatch_outbox
+                SET last_error=?,updated_at=?
+                WHERE id=? AND business_id=? AND source_kind='event_message'
+                  AND platform='email' AND status='sending' AND lock_token=?
+                """,
+                (
+                    _EVENT_EMAIL_PROVIDER_BOUNDARY_MARKER,
+                    timestamp,
+                    item.dispatch.id,
+                    item.dispatch.business_id,
+                    item.dispatch.lock_token,
+                ),
+            )
+            if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+                raise DispatchLeaseLost(
+                    "event email lease was lost before provider boundary"
+                )
+            return True
+        if (
             item.dispatch.source_kind != "customer_interaction"
             or item.dispatch.platform.value != "max"
         ):
@@ -1223,6 +1254,87 @@ class DispatchOutboxRepository(_UnifiedDispatchOutboxRepository):
         )
         return max(0, int(getattr(cursor, "rowcount", 0) or 0))
 
+    def _quarantine_stale_event_email_boundaries(
+        self,
+        *,
+        stale_before: str,
+        now: str,
+    ) -> int:
+        """Never replay event SMTP work after an ambiguous provider boundary."""
+
+        cursor = self._conn.execute(
+            """
+            UPDATE provider_dispatch_outbox
+            SET status='dead',dead_at=?,updated_at=?,locked_at=NULL,lock_token=NULL,
+                last_error=?
+            WHERE source_kind='event_message' AND platform='email'
+              AND status='sending' AND locked_at IS NOT NULL AND locked_at<=?
+              AND last_error=?
+            """,
+            (
+                now,
+                now,
+                _EVENT_EMAIL_AMBIGUOUS_ERROR,
+                stale_before,
+                _EVENT_EMAIL_PROVIDER_BOUNDARY_MARKER,
+            ),
+        )
+        return max(0, int(getattr(cursor, "rowcount", 0) or 0))
+
+    def event_message_claim_can_cross_provider_boundary(
+        self,
+        item: ClaimedProviderDispatch,
+        *,
+        now: str | None = None,
+    ) -> bool:
+        """Cancel a leased event message if the event/registration was revoked."""
+
+        if item.dispatch.source_kind != "event_message":
+            return True
+        row = self._conn.execute(
+            """
+            SELECT 1
+            FROM provider_dispatch_outbox d
+            JOIN clientplatform_event_registrations r
+              ON r.id=d.source_id AND r.business_id=d.business_id
+             AND r.status='registered' AND r.email=d.external_subject
+            JOIN clientplatform_events e
+              ON e.id=r.event_id AND e.business_id=r.business_id
+             AND e.status IN ('published','completed')
+            JOIN connections c
+              ON c.id=d.connection_id AND c.business_id=d.business_id
+             AND c.platform='email' AND c.connection_type='email_smtp'
+             AND c.status='active'
+            WHERE d.id=? AND d.business_id=? AND d.source_kind='event_message'
+              AND d.platform='email' AND d.status='sending' AND d.lock_token=?
+            LIMIT 1
+            """,
+            (
+                item.dispatch.id,
+                item.dispatch.business_id,
+                item.dispatch.lock_token,
+            ),
+        ).fetchone()
+        if row is not None:
+            return True
+        timestamp = str(now or _utc_now().isoformat())
+        self._conn.execute(
+            """
+            UPDATE provider_dispatch_outbox
+            SET status='cancelled',updated_at=?,locked_at=NULL,lock_token=NULL,
+                last_error='event_message_revoked'
+            WHERE id=? AND business_id=? AND source_kind='event_message'
+              AND status='sending' AND lock_token=?
+            """,
+            (
+                timestamp,
+                item.dispatch.id,
+                item.dispatch.business_id,
+                item.dispatch.lock_token,
+            ),
+        )
+        return False
+
     def _quarantine_stale_customer_interaction_boundaries(
         self,
         *,
@@ -1269,6 +1381,10 @@ class DispatchOutboxRepository(_UnifiedDispatchOutboxRepository):
             now=now_iso,
         )
         self._quarantine_stale_partner_email_boundaries(
+            stale_before=stale_before,
+            now=now_iso,
+        )
+        self._quarantine_stale_event_email_boundaries(
             stale_before=stale_before,
             now=now_iso,
         )

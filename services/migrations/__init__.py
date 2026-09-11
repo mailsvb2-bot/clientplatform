@@ -29,6 +29,7 @@ from services.migrations.clientplatform_messenger_setup_telegram_v1 import apply
 from services.migrations.clientplatform_business_payment_outcomes_v1 import apply as _apply_business_payment_outcomes
 from services.migrations.clientplatform_promotion_channel_max_v1 import apply as _apply_promotion_max
 from services.migrations.clientplatform_email_outbound_v1 import apply as _apply_email_outbound
+from services.migrations.clientplatform_provider_dispatch_event_message_v1 import apply as _apply_provider_event_message
 
 
 def apply_all_migrations(conn: sqlite3.Connection) -> None:
@@ -61,6 +62,7 @@ def apply_all_migrations(conn: sqlite3.Connection) -> None:
     _apply_business_payment_outcomes(conn)
     _apply_promotion_max(conn)
     _apply_email_outbound(conn)
+    _apply_provider_event_message(conn)
 
 
 __all__ = ["apply_all_migrations"]

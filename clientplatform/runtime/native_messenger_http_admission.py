@@ -13,6 +13,7 @@ _WEBHOOK_PREFIXES = (
 )
 _SETUP_PREFIX = "/clientplatform/connect/"
 _EXTERNAL_PRODUCT_PREFIX = "/clientplatform/external-products/"
+_EVENT_PREFIX = "/e/"
 _COCKPIT_POST_PATHS = frozenset({
     "/clientplatform/cockpit/context",
     "/clientplatform/cockpit/home",
@@ -25,6 +26,8 @@ _external_product_slots: asyncio.Semaphore | None = None
 _external_product_slots_size = 0
 _cockpit_slots: asyncio.Semaphore | None = None
 _cockpit_slots_size = 0
+_event_registration_slots: asyncio.Semaphore | None = None
+_event_registration_slots_size = 0
 
 
 def _positive_int(
@@ -48,6 +51,15 @@ def native_webhook_body_limit() -> int:
         262_144,
         minimum=4096,
         maximum=1024 * 1024,
+    )
+
+
+def event_registration_body_limit() -> int:
+    return _positive_int(
+        "CLIENTPLATFORM_EVENT_REGISTRATION_MAX_BODY_BYTES",
+        32 * 1024,
+        minimum=4096,
+        maximum=64 * 1024,
     )
 
 
@@ -89,6 +101,14 @@ def _request_kind(request: web.Request) -> str | None:
         return "cockpit"
     if request.path.startswith(_EXTERNAL_PRODUCT_PREFIX):
         return "external_product"
+    parts = [part for part in request.path.split("/") if part]
+    if (
+        request.path.startswith(_EVENT_PREFIX)
+        and len(parts) == 3
+        and parts[0] == "e"
+        and parts[2] == "register"
+    ):
+        return "event_registration"
     return None
 
 
@@ -97,6 +117,7 @@ def _slots(kind: str) -> asyncio.Semaphore:
     global _setup_slots, _setup_slots_size
     global _external_product_slots, _external_product_slots_size
     global _cockpit_slots, _cockpit_slots_size
+    global _event_registration_slots, _event_registration_slots_size
 
     if kind == "webhook":
         size = _positive_int(
@@ -136,6 +157,21 @@ def _slots(kind: str) -> asyncio.Semaphore:
             _external_product_slots = asyncio.Semaphore(size)
             _external_product_slots_size = size
         return _external_product_slots
+
+    if kind == "event_registration":
+        size = _positive_int(
+            "CLIENTPLATFORM_EVENT_REGISTRATION_MAX_INFLIGHT",
+            16,
+            minimum=1,
+            maximum=128,
+        )
+        if (
+            _event_registration_slots is None
+            or _event_registration_slots_size != size
+        ):
+            _event_registration_slots = asyncio.Semaphore(size)
+            _event_registration_slots_size = size
+        return _event_registration_slots
 
     size = _positive_int(
         "CLIENTPLATFORM_NATIVE_SETUP_MAX_INFLIGHT",
@@ -190,6 +226,8 @@ async def native_messenger_http_admission_middleware(
 
     if kind == "webhook":
         body_limit = native_webhook_body_limit()
+    elif kind == "event_registration":
+        body_limit = event_registration_body_limit()
     elif kind == "external_product":
         body_limit = external_product_body_limit()
     elif kind == "cockpit":
@@ -220,6 +258,7 @@ def reset_native_messenger_http_admission_state_for_tests() -> None:
     global _setup_slots, _setup_slots_size
     global _external_product_slots, _external_product_slots_size
     global _cockpit_slots, _cockpit_slots_size
+    global _event_registration_slots, _event_registration_slots_size
     _webhook_slots = None
     _webhook_slots_size = 0
     _setup_slots = None
@@ -228,10 +267,13 @@ def reset_native_messenger_http_admission_state_for_tests() -> None:
     _external_product_slots_size = 0
     _cockpit_slots = None
     _cockpit_slots_size = 0
+    _event_registration_slots = None
+    _event_registration_slots_size = 0
 
 
 __all__ = [
     "cockpit_body_limit",
+    "event_registration_body_limit",
     "external_product_body_limit",
     "native_messenger_http_admission_middleware",
     "native_setup_body_limit",

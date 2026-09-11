@@ -478,6 +478,7 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
             [
                 "🎨 Создать картинку",
                 "📣 Публикации",
+                "🎥 Онлайн-мероприятие",
                 "✍️ Подготовить текст",
                 "🧪 Услуги и предложения",
                 "📣 Реклама",
