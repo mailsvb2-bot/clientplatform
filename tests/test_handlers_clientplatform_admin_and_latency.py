@@ -90,6 +90,16 @@ def stable_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
         "_token_uuid",
         lambda value: uuid_by_token.get(str(value), BUSINESS_ID),
     )
+    commerce = SimpleNamespace(
+        staff=SimpleNamespace(
+            requires_upgrade=False, used=1, allowance=5, projected_total=2
+        ),
+        customers=SimpleNamespace(
+            requires_upgrade=False, used=10, allowance=500, projected_total=11
+        ),
+        expansion_recommended=False,
+    )
+    monkeypatch.setattr(admin, "get_commerce_overview", lambda **_kwargs: commerce)
 
 
 def labels(markup: InlineKeyboardMarkup) -> list[str]:
@@ -717,6 +727,67 @@ async def test_add_member_input_is_validated_and_persisted(
     assert granted == [(88, PlatformRole.SUPPORT)]
     assert await state.get_state() is None
     assert any("Сотрудник добавлен" in item for item in answers)
+
+
+@pytest.mark.asyncio
+async def test_add_member_stops_before_role_selection_when_seat_limit_is_exhausted(
+    monkeypatch: pytest.MonkeyPatch,
+    capture_edits: list[tuple[str, InlineKeyboardMarkup]],
+) -> None:
+    commerce = SimpleNamespace(
+        staff=SimpleNamespace(
+            requires_upgrade=True, used=5, allowance=5, projected_total=6
+        ),
+        customers=SimpleNamespace(
+            requires_upgrade=False, used=20, allowance=500, projected_total=21
+        ),
+        expansion_recommended=True,
+    )
+    monkeypatch.setattr(admin, "get_commerce_overview", lambda **_kwargs: commerce)
+    state = fsm_context()
+    ctx = admin_context()
+
+    await admin._begin_add_member(telegram_callback(), state, ctx)
+
+    text, markup = capture_edits[-1]
+    assert "Следующий сотрудник уже требует расширения тарифа" in text
+    assert "Менеджер" not in labels(markup)
+    assert "🛟 Запросить расширение" in labels(markup)
+
+
+@pytest.mark.asyncio
+async def test_tariff_upgrade_callback_creates_support_request_without_auto_change(
+    monkeypatch: pytest.MonkeyPatch,
+    capture_edits: list[tuple[str, InlineKeyboardMarkup]],
+) -> None:
+    ctx = admin_context()
+    monkeypatch.setattr(
+        admin,
+        "_load_admin_context",
+        lambda **_kwargs: _async_value(ctx),
+    )
+    monkeypatch.setattr(
+        admin.control,
+        "_canonical_telegram_user_id",
+        lambda *_args, **_kwargs: ctx.user_id,
+    )
+    calls: list[str] = []
+
+    def request(*, actor: TenantContext) -> Any:
+        calls.append(actor.business_id)
+        return SimpleNamespace(id="case-123")
+
+    monkeypatch.setattr(admin, "request_subscription_expansion", request)
+    callback = telegram_callback(data=admin._callback(ctx, "tariff-upgrade"))
+    state = fsm_context()
+
+    await admin.admin_gate(callback, state)
+
+    assert calls == [BUSINESS_ID]
+    text, markup = capture_edits[-1]
+    assert "Запрос на расширение тарифа создан" in text
+    assert "Никаких списаний" in text
+    assert "💳 К тарифу" in labels(markup)
 
 
 @pytest.mark.asyncio

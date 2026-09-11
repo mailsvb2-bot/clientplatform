@@ -834,8 +834,19 @@ async def _enhanced_tariff(
             actor=ctx.actor,
         ),
     )
+    commerce = await asyncio.to_thread(admin.get_commerce_overview, actor=ctx.actor)
     plan_label = _SUBSCRIPTION_PLAN_LABELS.get(subscription.plan_key, subscription.plan_key)
     status_label = _SUBSCRIPTION_STATUS_LABELS.get(subscription.status, subscription.status)
+    staff_next = (
+        "⚠️ потребуется расширение"
+        if commerce.staff.requires_upgrade
+        else f"✅ входит ({commerce.staff.projected_total}/{commerce.staff.allowance})"
+    )
+    customer_next = (
+        "⚠️ потребуется расширение"
+        if commerce.customers.requires_upgrade
+        else f"✅ входит ({commerce.customers.projected_total}/{commerce.customers.allowance})"
+    )
     text = (
         "💳 Тариф ClientPlatform\n\n"
         f"Тариф: {plan_label}\n"
@@ -843,9 +854,16 @@ async def _enhanced_tariff(
         f"Сотрудники: {insights.active_staff} из {subscription.included_staff}\n"
         f"Клиенты: {insights.active_customers} из {subscription.included_customers}\n"
         f"Начало: {subscription.started_at}\n"
-        f"Следующее обновление: {subscription.renews_at or 'не назначено'}"
+        f"Следующее обновление: {subscription.renews_at or 'не назначено'}\n\n"
+        "🧠 Умный контроль тарифа\n"
+        f"Следующий сотрудник: {staff_next}\n"
+        f"Следующий клиент: {customer_next}\n\n"
+        "ClientPlatform ничего не покупает и не меняет тариф автоматически."
     )
-    await admin._safe_edit(callback, text, admin._back_keyboard(ctx))
+    extra = []
+    if commerce.expansion_recommended:
+        extra.append(("🛟 Запросить расширение", admin._callback(ctx, "tariff-upgrade")))
+    await admin._safe_edit(callback, text, admin._back_keyboard(ctx, *extra))
     await admin._set_current_section(state, action="tariff", push=True)
 
 

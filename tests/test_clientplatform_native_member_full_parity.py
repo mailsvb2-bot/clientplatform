@@ -447,7 +447,14 @@ class NativeFullParityMutationTests(unittest.TestCase):
     def test_owner_can_add_change_and_revoke_member_using_canonical_tenancy_api(self) -> None:
         actor = _actor()
         member = SimpleNamespace(user_id=202, role=PlatformRole.SUPPORT)
-        with patch.object(ui, "grant_business_member", return_value=member) as grant:
+        commerce = SimpleNamespace(
+            staff=SimpleNamespace(requires_upgrade=False),
+            customers=SimpleNamespace(requires_upgrade=False),
+        )
+        with (
+            patch.object(ui, "get_commerce_overview", return_value=commerce),
+            patch.object(ui, "grant_business_member", return_value=member) as grant,
+        ):
             added = ui._member_add_result(actor, "202", "support")
         grant.assert_called_once_with(actor=actor, user_id=202, role=PlatformRole.SUPPORT)
         self.assertIn("добавлен", added.text)

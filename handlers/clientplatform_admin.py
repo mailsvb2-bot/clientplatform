@@ -26,6 +26,10 @@ from clientplatform.application.admin_ops import (
     get_publication_calendar_projection,
 )
 from clientplatform.application.bookings import list_booking_slots
+from clientplatform.application.ai_commerce import (
+    get_commerce_overview,
+    request_subscription_expansion,
+)
 from clientplatform.application.messenger_switching import (
     available_staff_messenger_switches,
     build_staff_switch_command,
@@ -191,6 +195,7 @@ _SECTION_ROLES = {
     "recent": _ADMIN_ROLES,
     "system": _ADMIN_ROLES,
     "tariff": _OWNER_ROLES,
+    "tariff-upgrade": _OWNER_ROLES,
     "add-member": _OWNER_ROLES,
     "add-role": _OWNER_ROLES,
     "members": _OWNER_ROLES,
@@ -338,6 +343,7 @@ _ADMIN_ACTION_NEEDS = {
     "invites": nav.INVITES.need,
     "retention": nav.RETENTION.need,
     "tariff": nav.TARIFF.need,
+    "tariff-upgrade": "запросить расширение тарифа",
     "add-member": nav.ADD_MEMBER.need,
     "members": nav.MEMBERS.need,
     "permissions": nav.PERMISSIONS.need,
@@ -1245,6 +1251,24 @@ async def _render_permissions(callback: CallbackQuery, state: FSMContext, ctx: A
 
 
 async def _begin_add_member(callback: CallbackQuery, state: FSMContext, ctx: AdminContext) -> None:
+    commerce = await asyncio.to_thread(get_commerce_overview, actor=ctx.actor)
+    if commerce.staff.requires_upgrade:
+        await _safe_edit(
+            callback,
+            "👥 Добавить сотрудника\n\n"
+            f"Сейчас занято {commerce.staff.used} из {commerce.staff.allowance} мест. "
+            "Следующий сотрудник уже требует расширения тарифа. "
+            "ClientPlatform не запускает добавление сверх лимита молча.",
+            _keyboard(
+                [
+                    [("💳 Тариф и лимиты", _callback(ctx, "tariff"))],
+                    [("🛟 Запросить расширение", _callback(ctx, "tariff-upgrade"))],
+                    [("⬅️ Назад", _callback(ctx, "back"))],
+                ]
+            ),
+        )
+        await _set_current_section(state, action="add-member", push=True)
+        return
     rows = [
         [(_role_label(role), _callback(ctx, "add-role", code))]
         for code, role in _ROLE_CODES.items()
@@ -1252,7 +1276,10 @@ async def _begin_add_member(callback: CallbackQuery, state: FSMContext, ctx: Adm
     rows.append([("⬅️ Назад", _callback(ctx, "back"))])
     await _safe_edit(
         callback,
-        "👥 Добавить сотрудника\n\nСначала выберите роль:",
+        "👥 Добавить сотрудника\n\n"
+        f"Следующий сотрудник входит в текущий тариф: "
+        f"{commerce.staff.projected_total} из {commerce.staff.allowance}.\n\n"
+        "Сначала выберите роль:",
         _keyboard(rows),
     )
     await _set_current_section(state, action="add-member", push=True)
@@ -1317,6 +1344,21 @@ async def receive_member_user(message: Message, state: FSMContext) -> None:
         await message.answer(
             "Не понял, кого добавить. Отправьте числовой Telegram ID, @username "
             "или перешлите сообщение сотрудника."
+        )
+        return
+    commerce = await asyncio.to_thread(get_commerce_overview, actor=ctx.actor)
+    if commerce.staff.requires_upgrade:
+        await state.clear()
+        await message.answer(
+            "Лимит сотрудников изменился, пока Вы заполняли данные. "
+            f"Сейчас занято {commerce.staff.used} из {commerce.staff.allowance}. "
+            "Сотрудник не добавлен.",
+            reply_markup=_keyboard(
+                [
+                    [("💳 Тариф и лимиты", _callback(ctx, "tariff"))],
+                    [("🛟 Запросить расширение", _callback(ctx, "tariff-upgrade"))],
+                ]
+            ),
         )
         return
     member = await asyncio.to_thread(
@@ -1503,6 +1545,16 @@ async def admin_gate(callback: CallbackQuery, state: FSMContext) -> None:
             )
         elif action == "tariff":
             await _render_tariff(callback, state, ctx)
+        elif action == "tariff-upgrade":
+            case = await asyncio.to_thread(request_subscription_expansion, actor=ctx.actor)
+            await _safe_edit(
+                callback,
+                "✅ Запрос на расширение тарифа создан.\n\n"
+                f"Номер обращения: {case.id}\n"
+                "Никаких списаний или изменений тарифа автоматически не выполнено.",
+                _back_keyboard(ctx, ("💳 К тарифу", _callback(ctx, "tariff"))),
+            )
+            await _set_current_section(state, action="tariff", push=True)
         elif action == "add-member":
             await _begin_add_member(callback, state, ctx)
         elif action == "add-role":
