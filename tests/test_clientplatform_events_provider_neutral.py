@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
-import pytest
+import unittest
 
 from clientplatform.domain.events import (
     Event,
@@ -27,9 +27,9 @@ def test_known_providers_are_hints_not_an_enum() -> None:
 
 
 def test_provider_neutral_url_boundary_is_https_only() -> None:
-    with pytest.raises(EventValidationError):
+    with unittest.TestCase().assertRaises(EventValidationError):
         validate_external_https_url("http://example.org/room")
-    with pytest.raises(EventValidationError):
+    with unittest.TestCase().assertRaises(EventValidationError):
         validate_external_https_url("https://user:secret@example.org/room")
 
 

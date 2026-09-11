@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 from uuid import uuid4
 
-import pytest
+import unittest
 
 from clientplatform.application.event_analytics import (
     get_event_funnel_in_transaction,
@@ -220,7 +220,7 @@ def test_funnel_is_tenant_scoped_and_revenue_is_not_mixed_between_currencies() -
         ("RUB", 150_000),
         ("USD", 1_000),
     }
-    with pytest.raises(EventNotFound):
+    with unittest.TestCase().assertRaises(EventNotFound):
         get_event_funnel_in_transaction(conn, actor=actor_b, event_id=event.id)
     conn.close()
 
