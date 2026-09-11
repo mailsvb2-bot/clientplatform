@@ -472,6 +472,16 @@ def render_contract(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(extension.admin_ops, "refresh_interaction_alerts", lambda **_kwargs: [])
     monkeypatch.setattr(extension.admin_ops, "list_open_alerts", lambda **_kwargs: [])
     monkeypatch.setattr(extension.admin_ops, "get_subscription_state", lambda **_kwargs: subscription)
+    commerce = SimpleNamespace(
+        staff=SimpleNamespace(
+            requires_upgrade=False, used=2, allowance=5, projected_total=3
+        ),
+        customers=SimpleNamespace(
+            requires_upgrade=False, used=20, allowance=500, projected_total=21
+        ),
+        expansion_recommended=False,
+    )
+    monkeypatch.setattr(admin, "get_commerce_overview", lambda **_kwargs: commerce)
     monkeypatch.setattr(admin, "business_delivery_summary", lambda **_kwargs: SimpleNamespace(dispatch_attention=0, dispatch_pending=0))
     return rendered
 
@@ -719,6 +729,8 @@ async def test_attention_and_tariff_render_real_state(
     )
     assert render_contract[-1][0].startswith("💳 Тариф ClientPlatform")
     assert "пока не активирован" not in render_contract[-1][0].casefold()
+    assert "🧠 Умный контроль тарифа" in render_contract[-1][0]
+    assert "Следующий сотрудник: ✅ входит" in render_contract[-1][0]
     assert render_contract[-1][1].inline_keyboard[-1][0].text == "⬅️ Назад"
 
 

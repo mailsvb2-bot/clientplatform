@@ -28,6 +28,10 @@ from clientplatform.application.acquisition_destination import (
     prepare_nearest_acquisition_destination,
 )
 from clientplatform.application import admin_ops
+from clientplatform.application.ai_commerce import (
+    get_commerce_overview,
+    request_subscription_expansion,
+)
 from clientplatform.application.admin_ops import (
     cancel_publication_schedule,
     decode_publication_schedule_version,
@@ -325,6 +329,7 @@ TELEGRAM_NATIVE_ACTION_EQUIVALENTS: dict[str, tuple[str, ...]] = {
     "formats": ("formats",),
     "formats-edit": ("format-enable", "format-disable"),
     "tariff": ("tariff",),
+    "tariff-upgrade": ("tariff-upgrade",),
     "add-member": ("member-add-help", "member-add-text"),
     "add-role": ("member-add-help", "member-add-text"),
     "members": ("members",),
@@ -756,6 +761,7 @@ def parse_native_member_interaction(value: object) -> ParsedMemberInteraction:
             "system",
             "formats",
             "tariff",
+            "tariff-upgrade",
             "members",
             "member",
             "permissions",
@@ -1146,6 +1152,7 @@ _NATIVE_PARENT_COMMANDS: dict[str, str] = {
     "release": "cpm:manage",
     "formats": "cpm:manage",
     "tariff": "cpm:manage",
+    "tariff-upgrade": "cpm:tariff",
     "recent": "cpm:manage-more",
     "system": "cpm:manage-more",
     "team": "cpm:menu-all",
@@ -3122,6 +3129,16 @@ def _member_add_role_message(
     role = _MEMBER_ROLE_CODES.get(role_code)
     if role is None:
         return _stale_message()
+    commerce = get_commerce_overview(actor=actor)
+    if commerce.staff.requires_upgrade:
+        return CustomerInteractionMessage(
+            text=(
+                "👥 Добавить сотрудника\n\n"
+                f"Сейчас занято {commerce.staff.used} из {commerce.staff.allowance} мест. "
+                "Следующий сотрудник требует расширения тарифа, поэтому ввод данных не начат."
+            ),
+            rows=((_button(nav.TARIFF.label, "cpm:tariff"),), _back_row()),
+        )
     return _begin_owner_input_message(
         actor,
         platform=current_platform,
@@ -3144,6 +3161,16 @@ def _member_add_result(actor: TenantContext, user_id: str, role_code: str) -> Cu
     role = _MEMBER_ROLE_CODES.get(role_code)
     if role is None:
         return _stale_message()
+    commerce = get_commerce_overview(actor=actor)
+    if commerce.staff.requires_upgrade:
+        return CustomerInteractionMessage(
+            text=(
+                "Лимит сотрудников изменился до завершения операции. "
+                f"Сейчас занято {commerce.staff.used} из {commerce.staff.allowance}; "
+                "сотрудник не добавлен."
+            ),
+            rows=((_button(nav.TARIFF.label, "cpm:tariff"),), _back_row()),
+        )
     member = grant_business_member(actor=actor, user_id=int(user_id), role=role)
     return CustomerInteractionMessage(
         text=f"✅ Сотрудник добавлен. Номер аккаунта: {member.user_id}. Роль: {_ROLE_LABELS[member.role]}.",
@@ -3597,13 +3624,48 @@ def _format_toggle_result(actor: TenantContext, connector_key: str, *, enabled: 
 def _tariff_message(actor: TenantContext) -> CustomerInteractionMessage:
     if actor.role not in _OWNER_ROLES:
         return _permission_message()
+    subscription = admin_ops.get_subscription_state(actor=actor)
+    commerce = get_commerce_overview(actor=actor)
+    staff_next = (
+        "потребуется расширение"
+        if commerce.staff.requires_upgrade
+        else f"входит ({commerce.staff.projected_total}/{commerce.staff.allowance})"
+    )
+    customer_next = (
+        "потребуется расширение"
+        if commerce.customers.requires_upgrade
+        else f"входит ({commerce.customers.projected_total}/{commerce.customers.allowance})"
+    )
+    rows: list[tuple[CustomerInteractionButton, ...]] = []
+    if commerce.expansion_recommended:
+        rows.append((_button("🛟 Запросить расширение", "cpm:tariff-upgrade"),))
+    rows.extend(((_button(nav.SETTINGS.label, "cpm:manage"),), _back_row()))
     return CustomerInteractionMessage(
         text=(
             "💳 Тариф и лимиты\n\n"
-            "Для этого бизнеса тариф пока не назначен. Ничего делать не нужно: "
-            "текущие данные и настройки продолжают работать."
+            f"Тариф: {subscription.plan_key} · {subscription.status}\n"
+            f"Сотрудники: {commerce.staff.used} из {commerce.staff.allowance}\n"
+            f"Клиенты: {commerce.customers.used} из {commerce.customers.allowance}\n\n"
+            "🧠 Умный контроль тарифа\n"
+            f"Следующий сотрудник: {staff_next}\n"
+            f"Следующий клиент: {customer_next}\n\n"
+            "ClientPlatform не меняет тариф и не списывает деньги автоматически."
         ),
-        rows=((_button(nav.SETTINGS.label, "cpm:manage"),), _back_row()),
+        rows=tuple(rows),
+    )
+
+
+def _tariff_upgrade_message(actor: TenantContext) -> CustomerInteractionMessage:
+    if actor.role not in _OWNER_ROLES:
+        return _permission_message()
+    case = request_subscription_expansion(actor=actor)
+    return CustomerInteractionMessage(
+        text=(
+            "✅ Запрос на расширение тарифа создан.\n\n"
+            f"Номер обращения: {case.id}\n"
+            "Никаких списаний или изменений тарифа автоматически не выполнено."
+        ),
+        rows=((_button(nav.TARIFF.label, "cpm:tariff"),), _back_row()),
     )
 
 
@@ -5245,6 +5307,8 @@ def _render(
             )
         if parsed.action == "tariff":
             return _tariff_message(actor)
+        if parsed.action == "tariff-upgrade":
+            return _tariff_upgrade_message(actor)
         if parsed.action == "members":
             return _members_message(actor, _page_number(parsed.args))
         if parsed.action == "member":

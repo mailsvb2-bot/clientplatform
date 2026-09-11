@@ -1523,6 +1523,8 @@ BillingEvent
 
 Metering не должен мешать бизнес-инвариантам: исчерпание quota fail-closed и объяснимо, без потери данных.
 
+Первый vertical slice AI Commerce использует именно этот принцип: contextual proposal строится поверх существующего subscription state и реального tenant usage без второго ledger. Seat-limit проверяется до пользовательского добавления сотрудника; customer allowance остаётся мягким metering-сигналом, чтобы входящий лид не потерялся. Любое фактическое изменение тарифа/оплата остаётся отдельным canonical billing действием.
+
 ---
 
 # 14. M9 — Partner / Agency / Distribution Platform
