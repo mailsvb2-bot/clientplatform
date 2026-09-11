@@ -18,6 +18,7 @@ jobs:
       PYTHONDONTWRITEBYTECODE: '1'
       TELEGRAM_TRANSPORT: polling
       TELEGRAM_WEBHOOK_ENABLED: '0'
+      REQUIRED_STATUS_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -57,7 +58,7 @@ jobs:
             await github.rest.repos.createCommitStatus({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              sha: context.sha,
+              sha: process.env.REQUIRED_STATUS_SHA,
               state,
               context: 'ci/regression-contour',
               description: state === 'success'
@@ -121,7 +122,7 @@ jobs:
             await github.rest.repos.createCommitStatus({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              sha: context.sha,
+              sha: process.env.REQUIRED_STATUS_SHA,
               state,
               context: 'ci/coverage-ratchet',
               description,
@@ -157,7 +158,7 @@ jobs:
             await github.rest.repos.createCommitStatus({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              sha: context.sha,
+              sha: process.env.REQUIRED_STATUS_SHA,
               state,
               context: 'ci/branch-coverage-ratchet',
               description,
