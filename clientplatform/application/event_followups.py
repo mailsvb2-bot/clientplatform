@@ -33,6 +33,7 @@ _STAGE_GRACE = timedelta(hours=36)
 _DEFAULT_PRIORITY = ("max", "vk", "email")
 _ALLOWED_PRIORITY = frozenset({"max", "vk", "email", "telegram"})
 _COMMERCIAL_PROVIDER_BOUNDARY_MARKER = "event_commercial_provider_call_started_non_idempotent"
+_SCAN_SCOPE = "commercial-event-followups:v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -373,16 +374,60 @@ def _dispatch_key(candidate: EventFollowupCandidate, *, stage: int) -> str:
     )
 
 
-def _already_materialized(conn: Any, candidate: EventFollowupCandidate, *, stage: int) -> bool:
+def _stage_dispatch_state(
+    conn: Any, candidate: EventFollowupCandidate, *, stage: int
+) -> tuple[str, str | None] | None:
     row = conn.execute(
         """
-        SELECT 1 FROM provider_dispatch_outbox
+        SELECT status,sent_at FROM provider_dispatch_outbox
         WHERE business_id=? AND idempotency_key=?
         LIMIT 1
         """,
         (candidate.business_id, _dispatch_key(candidate, stage=stage)),
     ).fetchone()
-    return row is not None
+    if row is None:
+        return None
+    sent_at = _value(row, "sent_at", 1)
+    return (
+        str(_value(row, "status", 0)),
+        None if sent_at is None else str(sent_at),
+    )
+
+
+def _next_due_stage(
+    conn: Any,
+    candidate: EventFollowupCandidate,
+    *,
+    current: datetime,
+) -> tuple[int | None, str]:
+    """Return at most one stage, chained to the previous successful delivery."""
+
+    previous_sent_at: datetime | None = None
+    previous_offset = timedelta(0)
+    for stage, offset in _stage_offsets(candidate.segment):
+        state = _stage_dispatch_state(conn, candidate, stage=stage)
+        if state is not None:
+            status, sent_at = state
+            if status != "sent" or sent_at is None:
+                return None, "waiting"
+            previous_sent_at = normalize_utc(sent_at, field_name="sent_at")
+            previous_offset = offset
+            continue
+
+        if stage == 1:
+            due_at = candidate.event_end_at + offset
+        else:
+            if previous_sent_at is None:
+                return None, "waiting"
+            due_at = previous_sent_at + (offset - previous_offset)
+
+        if current < due_at:
+            return None, "future"
+        if current > due_at + _STAGE_GRACE:
+            return None, "expired"
+        return stage, "due"
+
+    return None, "complete"
 
 
 def _delivery_payload(
@@ -545,42 +590,60 @@ def cancel_commercial_followups_for_registration_in_transaction(
     return max(0, int(getattr(cursor, "rowcount", 0) or 0))
 
 
-def materialize_due_event_followups_in_transaction(
+def _load_scan_cursor(conn: Any) -> tuple[str | None, str | None, str | None]:
+    row = conn.execute(
+        """
+        SELECT cursor_starts_at,cursor_event_id,cursor_registration_id
+        FROM clientplatform_event_followup_scan_state
+        WHERE scope=?
+        LIMIT 1
+        """,
+        (_SCAN_SCOPE,),
+    ).fetchone()
+    if row is None:
+        return None, None, None
+    return (
+        None if _value(row, "cursor_starts_at", 0) is None else str(_value(row, "cursor_starts_at", 0)),
+        None if _value(row, "cursor_event_id", 1) is None else str(_value(row, "cursor_event_id", 1)),
+        None if _value(row, "cursor_registration_id", 2) is None else str(_value(row, "cursor_registration_id", 2)),
+    )
+
+
+def _store_scan_cursor(
     conn: Any,
     *,
-    limit: int = 100,
-    now: datetime | str | None = None,
-) -> EventFollowupBatchResult:
-    bounded_limit = max(1, min(int(limit), 1000))
-    current = normalize_utc(now or datetime.now(timezone.utc), field_name="now")
-    now_iso = current.replace(microsecond=0).isoformat()
+    cursor_start: str | None,
+    cursor_event: str | None,
+    cursor_registration: str | None,
+    now_iso: str,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO clientplatform_event_followup_scan_state(
+            scope,cursor_starts_at,cursor_event_id,cursor_registration_id,updated_at
+        ) VALUES(?,?,?,?,?)
+        ON CONFLICT(scope) DO UPDATE SET
+            cursor_starts_at=excluded.cursor_starts_at,
+            cursor_event_id=excluded.cursor_event_id,
+            cursor_registration_id=excluded.cursor_registration_id,
+            updated_at=excluded.updated_at
+        """,
+        (_SCAN_SCOPE, cursor_start, cursor_event, cursor_registration, now_iso),
+    )
 
-    # The old v2 `after` message contains an offer, so it is commercial work.
-    # Cancel it even while the new engine is disabled; the kill switch must never
-    # revive legacy advertising that had no channel-scoped marketing consent.
-    legacy_cancelled = _cancel_legacy_after_messages(conn, now_iso=now_iso)
-    if not commercial_event_followups_enabled():
-        return EventFollowupBatchResult(
-            scanned=0, queued=0, not_due=0, expired=0, no_consent=0, no_route=0,
-            legacy_after_cancelled=legacy_cancelled, authority_cancelled=0, policy_blocked=0,
-        )
 
-    authority_cancelled = _cancel_invalid_commercial_messages(conn, now_iso=now_iso)
-    page_size = max(100, min(1000, bounded_limit * 4))
-    cursor_start: str | None = None
-    cursor_event: str | None = None
-    cursor_registration: str | None = None
-
-    scanned = 0
-    queued = 0
-    not_due = 0
-    expired = 0
-    no_consent = 0
-    no_route = 0
-    policy_blocked = 0
-
-    while scanned < bounded_limit:
-        rows = conn.execute(
+def _scan_candidate_rows(
+    conn: Any,
+    *,
+    current: datetime,
+    now_iso: str,
+    cursor_start: str | None,
+    cursor_event: str | None,
+    cursor_registration: str | None,
+    limit: int,
+) -> list[Any]:
+    return list(
+        conn.execute(
             """
             SELECT e.business_id,
                    e.id AS event_id,
@@ -629,91 +692,132 @@ def materialize_due_event_followups_in_transaction(
                 cursor_start,
                 cursor_event,
                 cursor_registration,
-                page_size,
+                int(limit),
             ),
         ).fetchall()
-        if not rows:
-            break
+    )
 
-        for row in rows:
-            cursor_start = str(_value(row, "starts_at", 9))
-            cursor_event = str(_value(row, "event_id", 1))
-            cursor_registration = str(_value(row, "registration_id", 3))
-            candidate = _candidate_from_row(row)
-            consent_channels = active_event_commercial_channels(
-                conn,
-                business_id=candidate.business_id,
-                event_id=candidate.event_id,
-                registration_id=candidate.registration_id,
-            )
-            if not consent_channels:
-                no_consent += 1
-                continue
 
-            due_stages: list[int] = []
-            candidate_had_future_stage = False
-            candidate_had_expired_stage = False
-            for stage, offset in _stage_offsets(candidate.segment):
-                if _already_materialized(conn, candidate, stage=stage):
-                    continue
-                due_at = candidate.event_end_at + offset
-                if current < due_at:
-                    candidate_had_future_stage = True
-                    continue
-                if current > due_at + _STAGE_GRACE:
-                    candidate_had_expired_stage = True
-                    continue
-                due_stages.append(stage)
+def materialize_due_event_followups_in_transaction(
+    conn: Any,
+    *,
+    limit: int = 100,
+    now: datetime | str | None = None,
+) -> EventFollowupBatchResult:
+    bounded_limit = max(1, min(int(limit), 1000))
+    current = normalize_utc(now or datetime.now(timezone.utc), field_name="now")
+    now_iso = current.replace(microsecond=0).isoformat()
 
-            if not due_stages:
-                if candidate_had_future_stage:
-                    not_due += 1
-                elif candidate_had_expired_stage:
-                    expired += 1
-                continue
+    # The old v2 `after` message contains an offer, so it is commercial work.
+    # Cancel it even while the new engine is disabled; the kill switch must never
+    # revive legacy advertising that had no channel-scoped marketing consent.
+    legacy_cancelled = _cancel_legacy_after_messages(conn, now_iso=now_iso)
+    if not commercial_event_followups_enabled():
+        return EventFollowupBatchResult(
+            scanned=0, queued=0, not_due=0, expired=0, no_consent=0, no_route=0,
+            legacy_after_cancelled=legacy_cancelled, authority_cancelled=0, policy_blocked=0,
+        )
 
-            target = _resolve_target(
-                conn,
-                candidate,
-                consent_channels=consent_channels,
-            )
-            if target is None:
-                no_route += 1
-                continue
+    authority_cancelled = _cancel_invalid_commercial_messages(conn, now_iso=now_iso)
+    cursor_start, cursor_event, cursor_registration = _load_scan_cursor(conn)
+    rows = _scan_candidate_rows(
+        conn,
+        current=current,
+        now_iso=now_iso,
+        cursor_start=cursor_start,
+        cursor_event=cursor_event,
+        cursor_registration=cursor_registration,
+        limit=bounded_limit,
+    )
+    if not rows and cursor_start is not None:
+        # One bounded wrap per tick. The durable cursor prevents an ineligible
+        # prefix from being rescanned forever while keeping inspection bounded.
+        cursor_start = cursor_event = cursor_registration = None
+        _store_scan_cursor(
+            conn,
+            cursor_start=None,
+            cursor_event=None,
+            cursor_registration=None,
+            now_iso=now_iso,
+        )
+        rows = _scan_candidate_rows(
+            conn,
+            current=current,
+            now_iso=now_iso,
+            cursor_start=None,
+            cursor_event=None,
+            cursor_registration=None,
+            limit=bounded_limit,
+        )
 
-            authorized_stages: list[int] = []
-            for stage in due_stages:
-                if _automation_followup_authorized(
-                    conn,
-                    candidate=candidate,
-                    target=target,
-                    stage=stage,
-                    scheduled_at=now_iso,
-                ):
-                    authorized_stages.append(stage)
-                else:
-                    policy_blocked += 1
-            if not authorized_stages:
-                continue
+    scanned = 0
+    queued = 0
+    not_due = 0
+    expired = 0
+    no_consent = 0
+    no_route = 0
+    policy_blocked = 0
 
-            # `limit` bounds actionable registrations, not the stable prefix of
-            # ineligible rows. Keyset paging keeps memory bounded while ensuring
-            # early no-consent/no-route/already-done rows cannot starve later work.
-            scanned += 1
-            for stage in authorized_stages:
-                if _materialize(
-                    conn,
-                    candidate=candidate,
-                    target=target,
-                    stage=stage,
-                    now_iso=now_iso,
-                ):
-                    queued += 1
-            if scanned >= bounded_limit:
-                break
+    for row in rows:
+        scanned += 1
+        cursor_start = str(_value(row, "starts_at", 9))
+        cursor_event = str(_value(row, "event_id", 1))
+        cursor_registration = str(_value(row, "registration_id", 3))
+        candidate = _candidate_from_row(row)
+        consent_channels = active_event_commercial_channels(
+            conn,
+            business_id=candidate.business_id,
+            event_id=candidate.event_id,
+            registration_id=candidate.registration_id,
+        )
+        if not consent_channels:
+            no_consent += 1
+            continue
 
-        if scanned >= bounded_limit or len(rows) < page_size:
-            break
+        stage, stage_state = _next_due_stage(conn, candidate, current=current)
+        if stage is None:
+            if stage_state == "future":
+                not_due += 1
+            elif stage_state == "expired":
+                expired += 1
+            continue
+
+        target = _resolve_target(
+            conn,
+            candidate,
+            consent_channels=consent_channels,
+        )
+        if target is None:
+            no_route += 1
+            continue
+
+        if not _automation_followup_authorized(
+            conn,
+            candidate=candidate,
+            target=target,
+            stage=stage,
+            scheduled_at=now_iso,
+        ):
+            policy_blocked += 1
+            continue
+
+        if _materialize(
+            conn,
+            candidate=candidate,
+            target=target,
+            stage=stage,
+            now_iso=now_iso,
+        ):
+            queued += 1
+
+    if rows:
+        _store_scan_cursor(
+            conn,
+            cursor_start=cursor_start,
+            cursor_event=cursor_event,
+            cursor_registration=cursor_registration,
+            now_iso=now_iso,
+        )
 
     return EventFollowupBatchResult(
         scanned=scanned,

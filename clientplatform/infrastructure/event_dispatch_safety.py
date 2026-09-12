@@ -131,6 +131,12 @@ def event_commercial_policy_authorized(
         policy = repository.effective(actor=owner, now=current)
         if policy is None:
             return False
+        # `candidate.scheduled_at` is part of the exact approval identity, but
+        # quiet-hours are a live provider-boundary constraint. A message queued
+        # before quiet hours must not cross the provider boundary after quiet
+        # hours begin merely because its original schedule was permitted.
+        if not policy.spec.schedule.permits(current):
+            return False
         check = evaluate_automation_policy(
             policy=policy,
             candidate=automation_candidate,

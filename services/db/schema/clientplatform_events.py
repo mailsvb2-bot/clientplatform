@@ -132,3 +132,15 @@ def ensure(c: sqlite3.Connection) -> None:
         ON clientplatform_event_conversion_links(business_id, event_id, occurred_at)
         """
     )
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS clientplatform_event_followup_scan_state(
+            scope TEXT PRIMARY KEY,
+            cursor_starts_at TEXT,
+            cursor_event_id TEXT,
+            cursor_registration_id TEXT,
+            updated_at TEXT NOT NULL,
+            CHECK(length(scope) BETWEEN 1 AND 80)
+        )
+        """
+    )

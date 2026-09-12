@@ -45,6 +45,10 @@ def _conn(*, with_max: bool = True) -> sqlite3.Connection:
             business_id TEXT,event_id TEXT,registration_id TEXT,payment_ref TEXT,
             PRIMARY KEY(business_id,event_id,registration_id,payment_ref)
         );
+        CREATE TABLE clientplatform_event_followup_scan_state(
+            scope TEXT PRIMARY KEY,cursor_starts_at TEXT,cursor_event_id TEXT,
+            cursor_registration_id TEXT,updated_at TEXT NOT NULL
+        );
         CREATE TABLE connections(
             id TEXT PRIMARY KEY,business_id TEXT,platform TEXT,connection_type TEXT,
             status TEXT,created_at TEXT
@@ -259,7 +263,7 @@ def test_disabled_new_engine_still_cancels_legacy_commercial_after_message(monke
     assert row[0] == "cancelled"
 
 
-def test_keyset_scan_reaches_later_eligible_registration_past_ineligible_prefix(monkeypatch) -> None:
+def test_durable_scan_cursor_bounds_work_and_reaches_later_eligible_registration(monkeypatch) -> None:
     conn = _conn(with_max=False)
     for index in range(120):
         registration_id = f"r{index:03d}"
@@ -284,16 +288,79 @@ def test_keyset_scan_reaches_later_eligible_registration_past_ineligible_prefix(
         "clientplatform.application.event_followups._automation_followup_authorized",
         lambda *args, **kwargs: True,
     )
-    result = materialize_due_event_followups_in_transaction(
-        conn, limit=1, now="2026-09-11T13:00:00+00:00"
-    )
-    assert result.queued == 1
-    assert result.scanned == 1
+
+    results = []
+    for _ in range(8):
+        result = materialize_due_event_followups_in_transaction(
+            conn, limit=25, now="2026-09-11T13:00:00+00:00"
+        )
+        results.append(result)
+        assert result.scanned <= 25
+        if result.queued:
+            break
+
+    assert sum(result.queued for result in results) == 1
+    assert len(results) > 1
     row = conn.execute(
         "SELECT source_id FROM provider_dispatch_outbox WHERE idempotency_key LIKE '%:post:v4:stage:1'"
     ).fetchone()
     assert row[0] == "r119"
+    cursor = conn.execute(
+        "SELECT cursor_registration_id FROM clientplatform_event_followup_scan_state "
+        "WHERE scope='commercial-event-followups:v1'"
+    ).fetchone()
+    assert cursor is not None
+    assert cursor[0] == "r119"
 
+
+def test_followup_stages_are_serialized_by_previous_delivery_time(monkeypatch) -> None:
+    conn = _conn(with_max=False)
+    grant_event_commercial_consent_in_transaction(
+        conn, business_id="b", event_id="e", registration_id="r",
+        channels=("email",), now="2026-09-11T09:00:00+00:00",
+    )
+    monkeypatch.setenv("CLIENTPLATFORM_EVENT_COMMERCIAL_FOLLOWUPS_ENABLED", "true")
+    monkeypatch.setattr(
+        "clientplatform.application.event_followups._public_base_url",
+        lambda: "https://clientplatform.example",
+    )
+    monkeypatch.setattr(
+        "clientplatform.application.event_followups._automation_followup_authorized",
+        lambda *args, **kwargs: True,
+    )
+
+    first = materialize_due_event_followups_in_transaction(
+        conn, now="2026-09-11T13:00:00+00:00"
+    )
+    assert first.queued == 1
+    conn.execute(
+        "UPDATE provider_dispatch_outbox SET status='sent',sent_at=?,updated_at=? "
+        "WHERE idempotency_key LIKE '%:post:v4:stage:1'",
+        ("2026-09-11T13:00:00+00:00", "2026-09-11T13:00:00+00:00"),
+    )
+
+    second = materialize_due_event_followups_in_transaction(
+        conn, now="2026-09-13T12:00:00+00:00"
+    )
+    assert second.queued == 1
+    stages = conn.execute(
+        "SELECT idempotency_key,status FROM provider_dispatch_outbox ORDER BY idempotency_key"
+    ).fetchall()
+    assert [row[0].rsplit(':', 1)[-1] for row in stages] == ["1", "2"]
+    conn.execute(
+        "UPDATE provider_dispatch_outbox SET status='sent',sent_at=?,updated_at=? "
+        "WHERE idempotency_key LIKE '%:post:v4:stage:2'",
+        ("2026-09-13T12:00:00+00:00", "2026-09-13T12:00:00+00:00"),
+    )
+
+    immediate = materialize_due_event_followups_in_transaction(
+        conn, now="2026-09-13T12:01:00+00:00"
+    )
+    assert immediate.queued == 0
+    assert conn.execute(
+        "SELECT COUNT(*) FROM provider_dispatch_outbox "
+        "WHERE idempotency_key LIKE '%:post:v4:stage:3'"
+    ).fetchone()[0] == 0
 
 def test_enabling_new_engine_cancels_legacy_offer_after_message(monkeypatch) -> None:
     conn = _conn(with_max=False)
@@ -391,6 +458,15 @@ def test_event_followup_requires_owner_approved_policy_and_honors_quiet_hours(mo
         platform="email",
         payload_ref=payload_ref,
         scheduled_at="2026-09-12T23:00:00+00:00",
+        now="2026-09-12T23:00:00+00:00",
+    )
+    assert not event_commercial_policy_authorized(
+        conn,
+        business_id=owner.business_id,
+        registration_id=registration_id,
+        platform="email",
+        payload_ref=payload_ref,
+        scheduled_at="2026-09-12T12:00:00+00:00",
         now="2026-09-12T23:00:00+00:00",
     )
     conn.close()
