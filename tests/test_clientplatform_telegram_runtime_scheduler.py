@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from clientplatform.application.dispatch_worker import DispatchBatchResult
 from clientplatform.runtime.dispatch_runtime import (
@@ -181,6 +181,20 @@ class ClientPlatformTelegramHttpClientTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ClientPlatformDispatchRuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_enabled_tick_materializes_event_followups_without_blocking_dispatch(self) -> None:
+        dispatch_result = DispatchBatchResult(claimed=1, sent=1, retried=0, dead=0)
+        with (
+            patch("clientplatform.runtime.dispatch_runtime.run_sales_followup_maintenance_batch"),
+            patch("clientplatform.runtime.dispatch_runtime.materialize_due_event_followups", side_effect=RuntimeError("followup maintenance unavailable")) as event_followups,
+            patch("clientplatform.runtime.dispatch_runtime.run_booking_reminder_batch", new=AsyncMock(return_value=None)),
+            patch("clientplatform.runtime.dispatch_runtime.run_program_media_cleanup_batch"),
+            patch("clientplatform.runtime.dispatch_runtime.run_dispatch_batch", new=AsyncMock(return_value=dispatch_result)) as dispatch,
+        ):
+            result = await run_configured_dispatch_tick(_runtime(enabled=True))
+        self.assertEqual(result, dispatch_result)
+        event_followups.assert_called_once_with(limit=20)
+        dispatch.assert_awaited_once()
+
     async def test_disabled_runtime_is_a_noop_without_database_or_network(self) -> None:
         result = await run_configured_dispatch_tick(_runtime(enabled=False))
         self.assertEqual(

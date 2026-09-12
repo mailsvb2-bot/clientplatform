@@ -4,6 +4,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from clientplatform.application.event_followups import (
+    cancel_commercial_followups_for_registration_in_transaction,
+)
 from clientplatform.domain.events import normalize_utc
 from clientplatform.domain.tenancy import TenantContext, normalize_uuid
 from clientplatform.infrastructure.event_repository import EventRepository
@@ -170,7 +173,18 @@ def link_verified_payment_in_transaction(
             timestamp,
         ),
     )
-    return int(getattr(cursor, "rowcount", 0) or 0) == 1
+    inserted = int(getattr(cursor, "rowcount", 0) or 0) == 1
+    # PAID is terminal for this event offer. Stop every not-yet-started
+    # commercial touch immediately; the provider boundary checks payment again
+    # for an already-leased item.
+    cancel_commercial_followups_for_registration_in_transaction(
+        conn,
+        business_id=business,
+        registration_id=registration,
+        reason="event_paid_stop_sales",
+        now=timestamp,
+    )
+    return inserted
 
 
 def link_verified_payment(**kwargs: Any) -> bool:

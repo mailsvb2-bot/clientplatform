@@ -335,6 +335,7 @@ class CockpitM7001Tests(unittest.TestCase):
                 "calendar",
                 "sales",
                 "services",
+                "events",
                 "growth",
                 "creative",
                 "content",

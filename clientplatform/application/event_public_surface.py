@@ -3,6 +3,10 @@ from __future__ import annotations
 from html import escape
 from urllib.parse import quote
 
+from clientplatform.application.event_commercial_consent import (
+    build_event_commercial_consent_text,
+    commercial_consent_text_sha256,
+)
 from clientplatform.domain.events import PublicEvent
 
 
@@ -23,10 +27,26 @@ def render_event_landing_body(
     *,
     source: object = "",
     campaign_ref: object = "",
+    advertiser_label: object | None = None,
 ) -> str:
     source_value = str(source or "").strip()[:160]
     campaign_value = str(campaign_ref or "").strip()[:240]
     action = f"/e/{quote(event.public_slug, safe='')}/register"
+    marketing_block = ""
+    if advertiser_label:
+        consent_text = build_event_commercial_consent_text(advertiser_label)
+        consent_hash = commercial_consent_text_sha256(advertiser_label)
+        marketing_block = (
+            "<fieldset><legend>Необязательное согласие на сообщения о предложениях</legend>"
+            f"<input type=hidden name=marketing_consent_hash value='{escape(consent_hash, quote=True)}'>"
+            f"<label><input style='width:auto' type=checkbox name=marketing_consent value=yes> "
+            f"{escape(consent_text)}</label>"
+            "<p>Каналы:</p>"
+            "<label><input style='width:auto' type=checkbox name=marketing_channel value=email checked> E-mail</label> "
+            "<label><input style='width:auto' type=checkbox name=marketing_channel value=max> MAX</label> "
+            "<label><input style='width:auto' type=checkbox name=marketing_channel value=vk> VK</label>"
+            "</fieldset>"
+        )
     return (
         f"<h1>{escape(event.title)}</h1>"
         f"<p>{escape(event.description)}</p>"
@@ -41,7 +61,8 @@ def render_event_landing_body(
         "об этом мероприятии.</label>"
         f"<input type=hidden name=source value='{escape(source_value, quote=True)}'>"
         f"<input type=hidden name=campaign_ref value='{escape(campaign_value, quote=True)}'>"
-        "<button type=submit>Зарегистрироваться</button></form>"
+        + marketing_block
+        + "<button type=submit>Зарегистрироваться</button></form>"
     )
 
 

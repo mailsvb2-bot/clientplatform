@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
+
 from clientplatform.application.cockpit_action_routing import CockpitActionStartRoute
+from clientplatform.application.cockpit_events import resolve_cockpit_events
 from clientplatform.application.native_member_interactions import render_native_member_interaction
 from clientplatform.application.tenancy import resolve_tenant_context
 from clientplatform.domain.connections import ConnectionPlatform
@@ -26,6 +29,43 @@ async def send_cockpit_section(
             target,
             user_id=user_id,
             business_id=business_id,
+        )
+        return
+    if section == "events":
+        snapshot = await asyncio.to_thread(
+            resolve_cockpit_events,
+            telegram_user_id=user_id,
+            requested_business_id=business_id,
+            limit=5,
+        )
+        lines = ["🎥 Вебинары", ""]
+        if snapshot.items:
+            lines.append("Последние мероприятия:")
+            for item in snapshot.items[:5]:
+                revenue = ", ".join(row.display for row in item.revenue) or "—"
+                lines.extend(
+                    [
+                        f"• {item.title} · {item.local_start}",
+                        (
+                            f"  регистрации {item.registered} · входы {item.join_clicked} · "
+                            f"участие {item.attendance_confirmed} · оффер {item.offer_clicked} · "
+                            f"оплаты {item.paid} · выручка {revenue}"
+                        ),
+                    ]
+                )
+        else:
+            lines.append("Пока нет опубликованных мероприятий.")
+        if snapshot.limitations:
+            lines.extend(["", *snapshot.limitations])
+        token = one_click.control._uuid_token(business_id)
+        rows: list[list[tuple[str, str]]] = []
+        if snapshot.can_manage:
+            rows.append([("🎥 Создать вебинар", f"cpev:new:{token}")])
+        rows.append([("📈 К росту", f"cpo:content:{token}")])
+        rows.append([("🏠 В кабинет", f"cpj:home:{token}")])
+        await target.answer(
+            "\n".join(lines),
+            reply_markup=one_click.control._keyboard(rows),
         )
         return
     await one_click.send_one_click_section(

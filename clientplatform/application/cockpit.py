@@ -103,6 +103,11 @@ def cockpit_navigation(actor: TenantContext) -> tuple[CockpitNavigationItem, ...
     """
 
     can_customers = _allowed(actor, actor.assert_can_view_customer_records)
+    can_event_funnel = (
+        can_customers
+        and _allowed(actor, actor.assert_can_view_outcome_ledger)
+        and _allowed(actor, actor.assert_can_view_attribution_spine)
+    )
     can_growth = _allowed(actor, actor.assert_can_view_promotion_analytics)
     can_content = _allowed(actor, actor.assert_can_view_programs)
     can_creatives = _allowed(actor, actor.assert_can_manage_promotions)
@@ -150,6 +155,13 @@ def cockpit_navigation(actor: TenantContext) -> tuple[CockpitNavigationItem, ...
             summary="Что Вы продаёте: услуги, предложения, описания и цены.",
             when_to_use="Если нужно добавить услугу, изменить цену или убрать предложение из активных.",
             allowed=can_services,
+        ),
+        _nav_item(
+            id="events",
+            title="Вебинары",
+            summary="Создание вебинаров, регистрация, участие, предложения и оплаты в одной воронке.",
+            when_to_use="Если хотите провести вебинар и видеть путь от рекламы до подтверждённой оплаты.",
+            allowed=can_event_funnel,
         ),
         _nav_item(
             id="growth",

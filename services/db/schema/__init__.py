@@ -17,6 +17,8 @@ from . import clientplatform_bot_gateway
 from . import clientplatform_bot_provisioning
 from . import clientplatform_connections
 from . import clientplatform_events
+from . import clientplatform_event_commercial_consents
+from . import clientplatform_event_owner_requests
 from . import clientplatform_messenger_channels
 from . import clientplatform_provider_dispatch
 from . import clientplatform_offer_ladders
@@ -65,6 +67,8 @@ PARTS = [
     clientplatform_messenger_channels,
     clientplatform_provider_dispatch,
     clientplatform_events,
+    clientplatform_event_commercial_consents,
+    clientplatform_event_owner_requests,
     clientplatform_bot_gateway,
     clientplatform_bot_provisioning,
     clientplatform_admin_ops,
