@@ -1401,7 +1401,9 @@ class DispatchOutboxRepository(_UnifiedDispatchOutboxRepository):
                      AND c.platform=d.platform AND c.status='active'
                     LEFT JOIN partner_candidates p
                       ON p.id=d.partner_candidate_id AND p.business_id=d.business_id
-                    WHERE ({_PARTNER_AUTHORIZATION_SQL}) AND (
+                    WHERE ({_PARTNER_AUTHORIZATION_SQL})
+                      AND COALESCE(d.last_error,'') NOT LIKE '%provider_call_started_non_idempotent%'
+                      AND (
                         (d.status IN ('pending','retry') AND d.available_at<=?)
                         OR (d.status='sending' AND d.locked_at IS NOT NULL
                             AND d.locked_at<=?)
@@ -1430,7 +1432,9 @@ class DispatchOutboxRepository(_UnifiedDispatchOutboxRepository):
                  AND c.platform=d.platform AND c.status='active'
                 LEFT JOIN partner_candidates p
                   ON p.id=d.partner_candidate_id AND p.business_id=d.business_id
-                WHERE ({_PARTNER_AUTHORIZATION_SQL}) AND (
+                WHERE ({_PARTNER_AUTHORIZATION_SQL})
+                  AND COALESCE(d.last_error,'') NOT LIKE '%provider_call_started_non_idempotent%'
+                  AND (
                     (d.status IN ('pending','retry') AND d.available_at<=?)
                     OR (d.status='sending' AND d.locked_at IS NOT NULL
                         AND d.locked_at<=?)
@@ -1448,6 +1452,7 @@ class DispatchOutboxRepository(_UnifiedDispatchOutboxRepository):
                 "UPDATE provider_dispatch_outbox "
                 "SET status='sending',locked_at=?,lock_token=?,updated_at=? "
                 f"WHERE id IN ({placeholders}) AND "  # nosec B608 - placeholders only
+                "COALESCE(last_error,'') NOT LIKE '%provider_call_started_non_idempotent%' AND "
                 "((status IN ('pending','retry') AND available_at<=?) OR "
                 "(status='sending' AND locked_at IS NOT NULL AND locked_at<=?))",
                 [now_iso, token, now_iso, *ids, now_iso, stale_before],

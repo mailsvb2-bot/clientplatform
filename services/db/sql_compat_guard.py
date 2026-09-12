@@ -16,12 +16,20 @@ _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _TABLE_INFO_RE = re.compile(r"(?is)^PRAGMA\s+table_info\(([^)]+)\)\s*;?\s*$")
 
 
-def rewrite_qmark_placeholders(sql: str) -> tuple[str, int]:
-    """Replace real SQLite ``?`` parameters while preserving SQL text.
+def rewrite_qmark_placeholders(
+    sql: str,
+    *,
+    escape_psycopg_percent_literals: bool = False,
+) -> tuple[str, int]:
+    """Replace real SQLite ``?`` parameters while preserving SQL semantics.
 
     This is deliberately a small lexical scanner, not a general SQL parser. It
     distinguishes quoted strings, quoted identifiers and both SQL comment forms
     so a question mark in text or a comment cannot become a psycopg parameter.
+    When requested for driver execution, original percent characters are doubled
+    because psycopg treats every bare ``%`` as client-side placeholder syntax,
+    even inside SQL literals and comments. Generated qmark replacements stay
+    as the intended ``%s`` placeholders.
     """
 
     out: list[str] = []
@@ -32,6 +40,11 @@ def rewrite_qmark_placeholders(sql: str) -> tuple[str, int]:
     while index < len(sql):
         char = sql[index]
         following = sql[index + 1] if index + 1 < len(sql) else ""
+
+        if escape_psycopg_percent_literals and char == "%":
+            out.append("%%")
+            index += 1
+            continue
 
         if state == "single":
             out.append(char)
@@ -99,7 +112,10 @@ def rewrite_qmark_placeholders(sql: str) -> tuple[str, int]:
 
 
 def replace_qmark_placeholders(sql: str) -> str:
-    return rewrite_qmark_placeholders(sql)[0]
+    return rewrite_qmark_placeholders(
+        sql,
+        escape_psycopg_percent_literals=True,
+    )[0]
 
 
 def count_qmark_placeholders(sql: str) -> int:

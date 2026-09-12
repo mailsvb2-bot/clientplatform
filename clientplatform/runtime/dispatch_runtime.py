@@ -7,6 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from clientplatform.application.dispatch_worker import DispatchBatchResult, run_dispatch_batch
+from clientplatform.application.event_followups import materialize_due_event_followups
 from clientplatform.application.program_media import run_program_media_cleanup_batch
 from clientplatform.application.sales_followups import run_sales_followup_maintenance_batch
 from clientplatform.runtime.control_bot import control_bot_enabled
@@ -242,6 +243,14 @@ async def run_configured_dispatch_tick(
         )
     except Exception:  # validator: allow-wide-except - reminder maintenance must not block delivery
         log.exception("Sales follow-up maintenance tick failed")
+    try:
+        await asyncio.to_thread(
+            materialize_due_event_followups,
+            limit=max(20, selected.config.batch_size * 5),
+            lock_ttl_seconds=selected.config.lock_ttl_seconds,
+        )
+    except Exception:  # validator: allow-wide-except - event follow-ups must not block delivery
+        log.exception("Event follow-up maintenance tick failed")
     try:
         booking = await run_booking_reminder_batch(
             limit=max(10, selected.config.batch_size * 2),

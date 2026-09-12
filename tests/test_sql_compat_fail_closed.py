@@ -68,6 +68,25 @@ def test_qmark_rewrite_preserves_literals_identifiers_and_comments() -> None:
     assert core.translate_sql_for_postgres(sql) == translated
 
 
+def test_driver_rewrite_escapes_original_percent_without_touching_qmark_params() -> None:
+    sql = (
+        "SELECT ? WHERE note LIKE '%provider_call_started_non_idempotent%' "
+        "-- operator % in documentation\n"
+        "AND remainder=(10 % 3)"
+    )
+
+    lexical, count = rewrite_qmark_placeholders(sql)
+    driver_safe = core._replace_qmark_placeholders(sql)
+
+    assert count == 1
+    assert lexical.count("%s") == 1
+    assert "LIKE '%provider_call_started_non_idempotent%'" in lexical
+    assert driver_safe.count("%s") == 1
+    assert "LIKE '%%provider_call_started_non_idempotent%%'" in driver_safe
+    assert "-- operator %% in documentation" in driver_safe
+    assert "remainder=(10 %% 3)" in driver_safe
+
+
 def test_sqlite_master_counts_only_real_parameters() -> None:
     sql = (
         "SELECT name FROM sqlite_master WHERE type='table' "

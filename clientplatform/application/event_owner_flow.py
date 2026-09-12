@@ -88,45 +88,56 @@ def _resolve_notification_connection(
     return str(row["id"] if hasattr(row, "keys") else row[0])
 
 
-def create_and_publish_online_event(
+def create_and_publish_online_event_in_transaction(
+    conn: Any,
     *,
     actor: TenantContext,
     request: OnlineEventCreateRequest,
 ) -> OnlineEventCreated:
     join_url = validate_external_https_url(request.join_url, field_name="join_url")
     provider_key = normalize_provider_key(request.provider_key, join_url=join_url)
+    notification_connection_id = _resolve_notification_connection(
+        conn,
+        actor=actor,
+        requested_connection_id=request.notification_connection_id,
+        enabled=bool(request.enable_email_notifications),
+    )
+    event = create_event_in_transaction(
+        conn,
+        actor=actor,
+        title=request.title,
+        starts_at=request.starts_at,
+        timezone_name=request.timezone_name,
+        join_url=join_url,
+        description=request.description,
+        ends_at=request.ends_at,
+        offer_url=request.offer_url,
+        kind=request.kind,
+        provider_key=provider_key,
+        provider_label=request.provider_label,
+        notification_connection_id=notification_connection_id,
+    )
+    event = publish_event_in_transaction(
+        conn,
+        actor=actor,
+        event_id=event.id,
+    )
+    return OnlineEventCreated(
+        event_id=event.id,
+        public_slug=event.public_slug,
+        provider_key=event.provider_key,
+        email_notifications_enabled=event.notification_connection_id is not None,
+    )
+
+
+def create_and_publish_online_event(
+    *,
+    actor: TenantContext,
+    request: OnlineEventCreateRequest,
+) -> OnlineEventCreated:
     with atomic_db() as conn:
-        notification_connection_id = _resolve_notification_connection(
-            conn,
-            actor=actor,
-            requested_connection_id=request.notification_connection_id,
-            enabled=bool(request.enable_email_notifications),
-        )
-        event = create_event_in_transaction(
-            conn,
-            actor=actor,
-            title=request.title,
-            starts_at=request.starts_at,
-            timezone_name=request.timezone_name,
-            join_url=join_url,
-            description=request.description,
-            ends_at=request.ends_at,
-            offer_url=request.offer_url,
-            kind=request.kind,
-            provider_key=provider_key,
-            provider_label=request.provider_label,
-            notification_connection_id=notification_connection_id,
-        )
-        event = publish_event_in_transaction(
-            conn,
-            actor=actor,
-            event_id=event.id,
-        )
-        return OnlineEventCreated(
-            event_id=event.id,
-            public_slug=event.public_slug,
-            provider_key=event.provider_key,
-            email_notifications_enabled=event.notification_connection_id is not None,
+        return create_and_publish_online_event_in_transaction(
+            conn, actor=actor, request=request
         )
 
 
@@ -134,4 +145,5 @@ __all__ = [
     "OnlineEventCreateRequest",
     "OnlineEventCreated",
     "create_and_publish_online_event",
+    "create_and_publish_online_event_in_transaction",
 ]

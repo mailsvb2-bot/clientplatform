@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 TenantDisposition = Literal["erase", "retain", "anonymize"]
-CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-09-10.v45-provider-neutral-events"
+CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-09-12.v46-consent-aware-events"
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,6 +55,10 @@ _POLICIES = (
     _required("clientplatform_events", "retain", "business-owned online event configuration, provider routing and publication state"),
     _required("clientplatform_event_registrations", "erase", "public event registration PII, consent, CRM linkage and attendance signals"),
     _required("clientplatform_event_conversion_links", "anonymize", "verified event-to-payment attribution retained without public registration PII"),
+    _required("clientplatform_event_commercial_consent_events", "erase", "registration-linked commercial consent evidence is erased with the public registration and contains no independent send authority"),
+    _required("clientplatform_event_commercial_channel_state", "erase", "registration-linked current commercial messaging authority and revocation state"),
+    _required("clientplatform_event_owner_requests", "retain", "business-owned replay protection for owner event creation without customer identity or message payloads"),
+    _required("clientplatform_event_followup_scan_state", "retain", "technical bounded scheduler cursor containing only internal event and registration identifiers"),
     _required("business_outcome_events", "anonymize", "canonical business outcome ledger retained while customer linkage and free-form metadata are anonymized"),
     _required("promotion_campaigns", "retain", "business-owned advertising copy, source channel and campaign lifecycle without customer identity"),
     _required("promotion_source_aliases", "retain", "business-owned source routing aliases for exact creative and placement attribution without customer identity"),

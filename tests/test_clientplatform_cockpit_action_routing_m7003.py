@@ -67,6 +67,7 @@ class CockpitActionRoutingM7003Tests(unittest.TestCase):
             "calendar",
             "sales",
             "growth",
+            "events",
             "content",
             "automation",
             "analytics",
