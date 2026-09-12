@@ -133,7 +133,7 @@ async def public_event_register(request: web.Request) -> web.Response:
                 consent=one("consent").lower() in {"yes", "1", "true", "on"},
             )
             marketing_recorded = False
-            if marketing_requested:
+            if marketing_requested and result.created:
                 try:
                     with ambient_savepoint(conn):
                         grant_event_commercial_consent_in_transaction(
@@ -165,7 +165,12 @@ async def public_event_register(request: web.Request) -> web.Response:
         "<p>Согласие на сообщения о предложениях сохранено. В каждом таком сообщении будет ссылка для отказа.</p>"
         if marketing_requested and marketing_recorded
         else (
-            "<p>Согласие на рекламные сообщения не было сохранено; такие сообщения отправляться не будут.</p>"
+            (
+                "<p>Повторная регистрация не изменяет рекламное согласие. "
+                "Для управления им используйте персональную ссылку из сообщения.</p>"
+                if marketing_requested and not result.created
+                else "<p>Согласие на рекламные сообщения не было сохранено; такие сообщения отправляться не будут.</p>"
+            )
             if marketing_requested
             else ""
         )

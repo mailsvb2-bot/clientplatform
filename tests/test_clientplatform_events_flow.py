@@ -127,6 +127,7 @@ def test_registration_is_idempotent_and_queues_canonical_email_dispatches() -> N
     assert len(rows) >= 4
     assert {row["platform"] for row in rows} == {"email"}
     assert len({row["idempotency_key"] for row in rows}) == len(rows)
+    assert not any(":message:after:" in row["idempotency_key"] for row in rows)
     conn.close()
 
 

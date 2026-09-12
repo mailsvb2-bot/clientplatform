@@ -20,6 +20,7 @@ from clientplatform.application.event_commercial_consent import (
 )
 from clientplatform.domain.email_outbound import EmailPayload
 from clientplatform.domain.events import normalize_utc
+from clientplatform.infrastructure.event_dispatch_safety import event_commercial_policy_authorized
 from services.db import get_db
 
 
@@ -65,6 +66,7 @@ class EventFollowupBatchResult:
     no_route: int
     legacy_after_cancelled: int
     authority_cancelled: int
+    policy_blocked: int = 0
 
 
 def commercial_event_followups_enabled() -> bool:
@@ -380,6 +382,38 @@ def _already_materialized(conn: Any, candidate: EventFollowupCandidate, *, stage
     return row is not None
 
 
+def _delivery_payload(
+    candidate: EventFollowupCandidate,
+    target: EventFollowupTarget,
+    *,
+    stage: int,
+) -> tuple[str, str]:
+    subject, body = _render(candidate, stage=stage)
+    if target.platform == "email":
+        return "mixed", EmailPayload(subject=subject, body=body).to_json()
+    return "text", body
+
+
+def _automation_followup_authorized(
+    conn: Any,
+    *,
+    candidate: EventFollowupCandidate,
+    target: EventFollowupTarget,
+    stage: int,
+    scheduled_at: datetime | str,
+) -> bool:
+    payload_kind, payload_ref = _delivery_payload(candidate, target, stage=stage)
+    del payload_kind
+    return event_commercial_policy_authorized(
+        conn,
+        business_id=candidate.business_id,
+        registration_id=candidate.registration_id,
+        platform=target.platform,
+        payload_ref=payload_ref,
+        scheduled_at=scheduled_at,
+        now=scheduled_at,
+    )
+
 def _materialize(
     conn: Any,
     *,
@@ -388,13 +422,7 @@ def _materialize(
     stage: int,
     now_iso: str,
 ) -> bool:
-    subject, body = _render(candidate, stage=stage)
-    if target.platform == "email":
-        payload_kind = "mixed"
-        payload_ref = EmailPayload(subject=subject, body=body).to_json()
-    else:
-        payload_kind = "text"
-        payload_ref = body
+    payload_kind, payload_ref = _delivery_payload(candidate, target, stage=stage)
     key = _dispatch_key(candidate, stage=stage)
     cursor = conn.execute(
         """
@@ -521,53 +549,24 @@ def materialize_due_event_followups_in_transaction(
     now: datetime | str | None = None,
 ) -> EventFollowupBatchResult:
     bounded_limit = max(1, min(int(limit), 1000))
-    if not commercial_event_followups_enabled():
-        return EventFollowupBatchResult(0, 0, 0, 0, 0, 0, 0, 0)
-
     current = normalize_utc(now or datetime.now(timezone.utc), field_name="now")
     now_iso = current.replace(microsecond=0).isoformat()
-    legacy_cancelled = _cancel_legacy_after_messages(conn, now_iso=now_iso)
-    authority_cancelled = _cancel_invalid_commercial_messages(conn, now_iso=now_iso)
 
-    rows = conn.execute(
-        """
-        SELECT e.business_id,
-               e.id AS event_id,
-               e.title AS event_title,
-               r.id AS registration_id,
-               r.customer_id,
-               r.name,
-               r.email,
-               r.token,
-               e.notification_connection_id AS email_connection_id,
-               e.starts_at,
-               e.ends_at,
-               r.first_join_click_at,
-               r.attendance_confirmed_at,
-               r.offer_clicked_at
-        FROM clientplatform_events e
-        JOIN clientplatform_event_registrations r
-          ON r.event_id=e.id AND r.business_id=e.business_id
-         AND r.status='registered'
-        WHERE e.status IN ('published','completed')
-          AND e.offer_url IS NOT NULL
-          AND e.starts_at<=?
-          AND e.starts_at>=?
-          AND NOT EXISTS (
-              SELECT 1 FROM clientplatform_event_conversion_links p
-              WHERE p.business_id=r.business_id
-                AND p.event_id=r.event_id
-                AND p.registration_id=r.id
-          )
-        ORDER BY e.starts_at,e.id,r.id
-        LIMIT ?
-        """,
-        (
-            now_iso,
-            (current - timedelta(days=7)).isoformat(),
-            max(bounded_limit * 4, bounded_limit),
-        ),
-    ).fetchall()
+    # The old v2 `after` message contains an offer, so it is commercial work.
+    # Cancel it even while the new engine is disabled; the kill switch must never
+    # revive legacy advertising that had no channel-scoped marketing consent.
+    legacy_cancelled = _cancel_legacy_after_messages(conn, now_iso=now_iso)
+    if not commercial_event_followups_enabled():
+        return EventFollowupBatchResult(
+            scanned=0, queued=0, not_due=0, expired=0, no_consent=0, no_route=0,
+            legacy_after_cancelled=legacy_cancelled, authority_cancelled=0, policy_blocked=0,
+        )
+
+    authority_cancelled = _cancel_invalid_commercial_messages(conn, now_iso=now_iso)
+    page_size = max(100, min(1000, bounded_limit * 4))
+    cursor_start: str | None = None
+    cursor_event: str | None = None
+    cursor_registration: str | None = None
 
     scanned = 0
     queued = 0
@@ -575,58 +574,143 @@ def materialize_due_event_followups_in_transaction(
     expired = 0
     no_consent = 0
     no_route = 0
-    for row in rows:
-        if scanned >= bounded_limit:
+    policy_blocked = 0
+
+    while scanned < bounded_limit:
+        rows = conn.execute(
+            """
+            SELECT e.business_id,
+                   e.id AS event_id,
+                   e.title AS event_title,
+                   r.id AS registration_id,
+                   r.customer_id,
+                   r.name,
+                   r.email,
+                   r.token,
+                   e.notification_connection_id AS email_connection_id,
+                   e.starts_at,
+                   e.ends_at,
+                   r.first_join_click_at,
+                   r.attendance_confirmed_at,
+                   r.offer_clicked_at
+            FROM clientplatform_events e
+            JOIN clientplatform_event_registrations r
+              ON r.event_id=e.id AND r.business_id=e.business_id
+             AND r.status='registered'
+            WHERE e.status IN ('published','completed')
+              AND e.offer_url IS NOT NULL
+              AND e.starts_at<=?
+              AND e.starts_at>=?
+              AND NOT EXISTS (
+                  SELECT 1 FROM clientplatform_event_conversion_links p
+                  WHERE p.business_id=r.business_id
+                    AND p.event_id=r.event_id
+                    AND p.registration_id=r.id
+              )
+              AND (
+                  ? IS NULL
+                  OR e.starts_at>?
+                  OR (e.starts_at=? AND e.id>?)
+                  OR (e.starts_at=? AND e.id=? AND r.id>?)
+              )
+            ORDER BY e.starts_at,e.id,r.id
+            LIMIT ?
+            """,
+            (
+                now_iso,
+                (current - timedelta(days=7)).isoformat(),
+                cursor_start,
+                cursor_start,
+                cursor_start,
+                cursor_event,
+                cursor_start,
+                cursor_event,
+                cursor_registration,
+                page_size,
+            ),
+        ).fetchall()
+        if not rows:
             break
-        scanned += 1
-        candidate = _candidate_from_row(row)
-        consent_channels = active_event_commercial_channels(
-            conn,
-            business_id=candidate.business_id,
-            event_id=candidate.event_id,
-            registration_id=candidate.registration_id,
-        )
-        if not consent_channels:
-            no_consent += 1
-            continue
 
-        target = _resolve_target(
-            conn,
-            candidate,
-            consent_channels=consent_channels,
-        )
-        if target is None:
-            no_route += 1
-            continue
-
-        candidate_had_due_stage = False
-        candidate_had_future_stage = False
-        candidate_had_expired_stage = False
-        for stage, offset in _stage_offsets(candidate.segment):
-            if _already_materialized(conn, candidate, stage=stage):
-                continue
-            due_at = candidate.event_end_at + offset
-            if current < due_at:
-                candidate_had_future_stage = True
-                continue
-            if current > due_at + _STAGE_GRACE:
-                candidate_had_expired_stage = True
-                continue
-            candidate_had_due_stage = True
-            if _materialize(
+        for row in rows:
+            cursor_start = str(_value(row, "starts_at", 9))
+            cursor_event = str(_value(row, "event_id", 1))
+            cursor_registration = str(_value(row, "registration_id", 3))
+            candidate = _candidate_from_row(row)
+            consent_channels = active_event_commercial_channels(
                 conn,
-                candidate=candidate,
-                target=target,
-                stage=stage,
-                now_iso=now_iso,
-            ):
-                queued += 1
+                business_id=candidate.business_id,
+                event_id=candidate.event_id,
+                registration_id=candidate.registration_id,
+            )
+            if not consent_channels:
+                no_consent += 1
+                continue
 
-        if not candidate_had_due_stage:
-            if candidate_had_future_stage:
-                not_due += 1
-            elif candidate_had_expired_stage:
-                expired += 1
+            due_stages: list[int] = []
+            candidate_had_future_stage = False
+            candidate_had_expired_stage = False
+            for stage, offset in _stage_offsets(candidate.segment):
+                if _already_materialized(conn, candidate, stage=stage):
+                    continue
+                due_at = candidate.event_end_at + offset
+                if current < due_at:
+                    candidate_had_future_stage = True
+                    continue
+                if current > due_at + _STAGE_GRACE:
+                    candidate_had_expired_stage = True
+                    continue
+                due_stages.append(stage)
+
+            if not due_stages:
+                if candidate_had_future_stage:
+                    not_due += 1
+                elif candidate_had_expired_stage:
+                    expired += 1
+                continue
+
+            target = _resolve_target(
+                conn,
+                candidate,
+                consent_channels=consent_channels,
+            )
+            if target is None:
+                no_route += 1
+                continue
+
+            authorized_stages: list[int] = []
+            for stage in due_stages:
+                if _automation_followup_authorized(
+                    conn,
+                    candidate=candidate,
+                    target=target,
+                    stage=stage,
+                    scheduled_at=now_iso,
+                ):
+                    authorized_stages.append(stage)
+                else:
+                    policy_blocked += 1
+            if not authorized_stages:
+                continue
+
+            # `limit` bounds actionable registrations, not the stable prefix of
+            # ineligible rows. Keyset paging keeps memory bounded while ensuring
+            # early no-consent/no-route/already-done rows cannot starve later work.
+            scanned += 1
+            for stage in authorized_stages:
+                if _materialize(
+                    conn,
+                    candidate=candidate,
+                    target=target,
+                    stage=stage,
+                    now_iso=now_iso,
+                ):
+                    queued += 1
+            if scanned >= bounded_limit:
+                break
+
+        if scanned >= bounded_limit or len(rows) < page_size:
+            break
 
     return EventFollowupBatchResult(
         scanned=scanned,
@@ -637,8 +721,8 @@ def materialize_due_event_followups_in_transaction(
         no_route=no_route,
         legacy_after_cancelled=legacy_cancelled,
         authority_cancelled=authority_cancelled,
+        policy_blocked=policy_blocked,
     )
-
 
 def materialize_due_event_followups(
     *,

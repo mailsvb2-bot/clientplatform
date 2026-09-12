@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime, timezone
+from uuid import uuid4
 
 from clientplatform.application.event_commercial_consent import (
     grant_event_commercial_consent_in_transaction,
@@ -10,7 +12,15 @@ from clientplatform.application.event_followups import (
     commercial_event_followups_enabled,
     materialize_due_event_followups_in_transaction,
 )
-from services.db.schema import clientplatform_event_commercial_consents
+from clientplatform.domain.automation_policy import (
+    AutomationMode,
+    AutomationPolicySpec,
+    AutomationSchedule,
+)
+from clientplatform.infrastructure.automation_policy_repository import AutomationPolicyRepository
+from clientplatform.infrastructure.event_dispatch_safety import event_commercial_policy_authorized
+from clientplatform.infrastructure.tenancy_repository import TenancyRepository
+from services.db.schema import clientplatform_event_commercial_consents, create_or_update_tables
 
 
 def _conn(*, with_max: bool = True) -> sqlite3.Connection:
@@ -150,6 +160,10 @@ def test_followup_prefers_consented_max_and_includes_unsubscribe(monkeypatch) ->
         "clientplatform.application.event_followups._public_base_url",
         lambda: "https://clientplatform.example",
     )
+    monkeypatch.setattr(
+        "clientplatform.application.event_followups._automation_followup_authorized",
+        lambda *args, **kwargs: True,
+    )
     result = materialize_due_event_followups_in_transaction(
         conn, now="2026-09-11T13:00:00+00:00"
     )
@@ -183,6 +197,10 @@ def test_followup_falls_back_to_consented_email_when_native_route_is_ambiguous(
         "clientplatform.application.event_followups._public_base_url",
         lambda: "https://clientplatform.example",
     )
+    monkeypatch.setattr(
+        "clientplatform.application.event_followups._automation_followup_authorized",
+        lambda *args, **kwargs: True,
+    )
     result = materialize_due_event_followups_in_transaction(
         conn, now="2026-09-11T13:00:00+00:00"
     )
@@ -214,6 +232,69 @@ def test_paid_registration_is_terminal_and_never_queues_followup(monkeypatch) ->
     assert conn.execute("SELECT COUNT(*) FROM provider_dispatch_outbox").fetchone()[0] == 0
 
 
+def test_disabled_new_engine_still_cancels_legacy_commercial_after_message(monkeypatch) -> None:
+    conn = _conn(with_max=False)
+    conn.execute(
+        """
+        INSERT INTO provider_dispatch_outbox(
+            id,business_id,platform,source_kind,source_id,connection_id,recipient_kind,
+            external_subject,payload_kind,payload_ref,idempotency_key,status,attempts,
+            available_at,created_at,updated_at
+        ) VALUES(
+            'legacy-off','b','email','event_message','r','emailc','external_subject',
+            'ivan@example.test','mixed','{}',
+            'event:e:registration:r:message:after:v2','pending',0,
+            '2026-09-11T12:15:00+00:00','2026-09-11T00:00:00+00:00','2026-09-11T00:00:00+00:00'
+        )
+        """
+    )
+    monkeypatch.delenv("CLIENTPLATFORM_EVENT_COMMERCIAL_FOLLOWUPS_ENABLED", raising=False)
+    result = materialize_due_event_followups_in_transaction(
+        conn, now="2026-09-11T13:00:00+00:00"
+    )
+    assert result.legacy_after_cancelled == 1
+    row = conn.execute(
+        "SELECT status FROM provider_dispatch_outbox WHERE id='legacy-off'"
+    ).fetchone()
+    assert row[0] == "cancelled"
+
+
+def test_keyset_scan_reaches_later_eligible_registration_past_ineligible_prefix(monkeypatch) -> None:
+    conn = _conn(with_max=False)
+    for index in range(120):
+        registration_id = f"r{index:03d}"
+        conn.execute(
+            "INSERT INTO clientplatform_event_registrations VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                registration_id, "e", "b", None, "registered", f"User {index}",
+                f"user{index}@example.test", f"token{index:027d}", f"{index + 1:064x}",
+                "yandex", "campaign-1", None, "2026-09-11T10:05:00+00:00", None,
+            ),
+        )
+    grant_event_commercial_consent_in_transaction(
+        conn, business_id="b", event_id="e", registration_id="r119",
+        channels=("email",), now="2026-09-11T09:00:00+00:00",
+    )
+    monkeypatch.setenv("CLIENTPLATFORM_EVENT_COMMERCIAL_FOLLOWUPS_ENABLED", "true")
+    monkeypatch.setattr(
+        "clientplatform.application.event_followups._public_base_url",
+        lambda: "https://clientplatform.example",
+    )
+    monkeypatch.setattr(
+        "clientplatform.application.event_followups._automation_followup_authorized",
+        lambda *args, **kwargs: True,
+    )
+    result = materialize_due_event_followups_in_transaction(
+        conn, limit=1, now="2026-09-11T13:00:00+00:00"
+    )
+    assert result.queued == 1
+    assert result.scanned == 1
+    row = conn.execute(
+        "SELECT source_id FROM provider_dispatch_outbox WHERE idempotency_key LIKE '%:post:v4:stage:1'"
+    ).fetchone()
+    assert row[0] == "r119"
+
+
 def test_enabling_new_engine_cancels_legacy_offer_after_message(monkeypatch) -> None:
     conn = _conn(with_max=False)
     conn.execute(
@@ -242,3 +323,74 @@ def test_enabling_new_engine_cancels_legacy_offer_after_message(monkeypatch) -> 
         "cancelled",
         "replaced_by_consent_aware_event_followup",
     )
+
+
+def test_event_followup_requires_owner_approved_policy_and_honors_quiet_hours(monkeypatch) -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys=ON")
+    create_or_update_tables(conn)
+    tenancy = TenancyRepository(conn)
+    access = tenancy.create_business(
+        owner_user_id=901,
+        name="Policy Event",
+        now="2026-09-12T09:00:00+00:00",
+    )
+    owner = tenancy.resolve_context(user_id=901, business_id=access.business.id)
+    registration_id = str(uuid4())
+    payload_ref = "commercial-payload"
+
+    assert not event_commercial_policy_authorized(
+        conn,
+        business_id=owner.business_id,
+        registration_id=registration_id,
+        platform="email",
+        payload_ref=payload_ref,
+        scheduled_at="2026-09-12T12:00:00+00:00",
+        now="2026-09-12T12:00:00+00:00",
+    )
+
+    spec = AutomationPolicySpec(
+        mode=AutomationMode.AUTOPILOT,
+        allowed_actions=("sales.followup",),
+        forbidden_actions=(),
+        allowed_channels=("email",),
+        allowed_audiences=("prospect_opted_in",),
+        schedule=AutomationSchedule(
+            timezone_name="UTC",
+            quiet_start="22:00",
+            quiet_end="08:00",
+        ),
+        expires_at="2026-10-12T00:00:00+00:00",
+        allowed_content_topics=("service_offer",),
+        stop_conditions=("owner_stop", "business_suspended"),
+    )
+    repository = AutomationPolicyRepository(conn)
+    draft = repository.create_draft(
+        actor=owner, spec=spec, expected_latest_version=0,
+        now="2026-09-12T09:00:00+00:00",
+    )
+    repository.approve(
+        actor=owner, policy_id=draft.id, expected_policy_hash=draft.policy_hash,
+        now="2026-09-12T09:01:00+00:00",
+    )
+
+    assert event_commercial_policy_authorized(
+        conn,
+        business_id=owner.business_id,
+        registration_id=registration_id,
+        platform="email",
+        payload_ref=payload_ref,
+        scheduled_at="2026-09-12T12:00:00+00:00",
+        now="2026-09-12T12:00:00+00:00",
+    )
+    assert not event_commercial_policy_authorized(
+        conn,
+        business_id=owner.business_id,
+        registration_id=registration_id,
+        platform="email",
+        payload_ref=payload_ref,
+        scheduled_at="2026-09-12T23:00:00+00:00",
+        now="2026-09-12T23:00:00+00:00",
+    )
+    conn.close()

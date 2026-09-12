@@ -5,9 +5,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
-from clientplatform.application.event_followups import (
-    commercial_event_followups_enabled,
-)
 from clientplatform.domain.email_outbound import EmailPayload
 from clientplatform.domain.events import Event, EventRegistration, normalize_utc
 
@@ -42,7 +39,6 @@ def _render(
 ) -> tuple[str, str]:
     when = event.local_start_label()
     join = _event_url(f"/e/join/{registration.token}")
-    offer = _event_url(f"/e/offer/{registration.token}")
     name = registration.name
 
     if kind == "registration_confirmed":
@@ -66,13 +62,6 @@ def _render(
         return (
             f"Через 15 минут: {event.title}",
             f"{name}, начинаем примерно через 15 минут.\n\nВойти: {join}",
-        )
-    if kind == "after":
-        if not event.offer_url:
-            raise ValueError("after-event message requires offer_url")
-        return (
-            f"Спасибо за участие: {event.title}",
-            f"{name}, спасибо за интерес к мероприятию.\n\nПодробнее: {offer}",
         )
     raise ValueError("unsupported event notification kind")
 
@@ -155,12 +144,6 @@ def enqueue_event_notifications(
         ("3h", event.starts_at - timedelta(hours=3)),
         ("15m", event.starts_at - timedelta(minutes=15)),
     ]
-    if event.offer_url and not commercial_event_followups_enabled():
-        # Once the consent-aware engine is enabled, the legacy generic offer
-        # e-mail is suppressed. Organizational reminders remain unchanged.
-        base = event.ends_at or (event.starts_at + timedelta(hours=2))
-        schedule.append(("after", base + timedelta(minutes=15)))
-
     queued = 0
     skipped_past = 0
     for kind, run_at in schedule:

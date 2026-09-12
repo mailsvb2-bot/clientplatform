@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 import sqlite3
+from unittest.mock import patch
 
 from clientplatform.domain.connections import ConnectionPlatform, DispatchStatus
 from clientplatform.domain.programs import ContentKind
@@ -9,6 +11,9 @@ from clientplatform.infrastructure.event_dispatch_safety import (
     event_commercial_claim_can_cross_provider_boundary,
     mark_event_commercial_non_replay_boundary,
     quarantine_stale_event_commercial_boundaries,
+)
+from clientplatform.infrastructure.event_safe_dispatch_outbox import (
+    DispatchOutboxRepository as EventSafeDispatchOutboxRepository,
 )
 from clientplatform.infrastructure.unified_dispatch_outbox import (
     ClaimedProviderDispatch,
@@ -76,7 +81,11 @@ def _item() -> ClaimedProviderDispatch:
 
 def test_commercial_event_authority_rechecks_consent_and_paid_state() -> None:
     conn = _db(); item = _item()
-    assert event_commercial_claim_can_cross_provider_boundary(conn, item)
+    with patch(
+        "clientplatform.infrastructure.event_dispatch_safety.event_commercial_policy_authorized",
+        return_value=True,
+    ):
+        assert event_commercial_claim_can_cross_provider_boundary(conn, item)
     conn.execute("INSERT INTO clientplatform_event_conversion_links VALUES('b','e','r')")
     assert not event_commercial_claim_can_cross_provider_boundary(conn, item, now='2026-09-12T10:01:00+00:00')
     row = conn.execute("SELECT status,last_error FROM provider_dispatch_outbox WHERE id='d'").fetchone()
@@ -120,3 +129,39 @@ def test_quarantine_does_not_write_shared_outbox_without_stale_event_work() -> N
         statement.lstrip().startswith("UPDATE PROVIDER_DISPATCH_OUTBOX")
         for statement in normalized
     )
+
+
+def test_commercial_event_policy_is_rechecked_at_provider_boundary() -> None:
+    conn = _db(); item = _item()
+    with patch(
+        "clientplatform.infrastructure.event_dispatch_safety.event_commercial_policy_authorized",
+        return_value=False,
+    ):
+        assert not event_commercial_claim_can_cross_provider_boundary(
+            conn, item, now='2026-09-12T10:01:00+00:00'
+        )
+    row = conn.execute(
+        "SELECT status,last_error FROM provider_dispatch_outbox WHERE id='d'"
+    ).fetchone()
+    assert tuple(row) == ('cancelled','event_commercial_policy_not_authorized')
+
+
+def test_legacy_offer_email_is_suppressed_at_provider_boundary() -> None:
+    conn = _db(); item = _item()
+    legacy_key = 'event:e:registration:r:message:after:v2'
+    conn.execute(
+        "UPDATE provider_dispatch_outbox SET idempotency_key=? WHERE id='d'",
+        (legacy_key,),
+    )
+    legacy_item = ClaimedProviderDispatch(
+        dispatch=replace(item.dispatch, idempotency_key=legacy_key),
+        external_subject=item.external_subject,
+        credential_reference=item.credential_reference,
+    )
+    assert not EventSafeDispatchOutboxRepository(conn).event_message_claim_can_cross_provider_boundary(
+        legacy_item, now='2026-09-12T10:01:00+00:00'
+    )
+    row = conn.execute(
+        "SELECT status,last_error FROM provider_dispatch_outbox WHERE id='d'"
+    ).fetchone()
+    assert tuple(row) == ('cancelled','legacy_event_offer_suppressed')
