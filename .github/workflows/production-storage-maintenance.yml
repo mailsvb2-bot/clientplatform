@@ -1,0 +1,164 @@
+name: Production storage maintenance
+
+# Marker-gated production storage audit/cleanup using the same dedicated,
+# pinned SSH identity as production recovery. Cleanup intentionally excludes
+# application data, databases, Docker images/containers/volumes and backups.
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: clientplatform-production-storage-maintenance
+  cancel-in-progress: false
+
+jobs:
+  maintain:
+    if: >-
+      contains(github.event.head_commit.message, '[audit-production-storage]') ||
+      contains(github.event.head_commit.message, '[clean-production-storage]')
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    env:
+      SSH_HOST: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_HOST }}
+      SSH_USER: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_USER }}
+      SSH_PRIVATE_KEY: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_KNOWN_HOSTS }}
+      SSH_PORT_SECRET: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_PORT }}
+      CLEAN_REQUESTED: ${{ contains(github.event.head_commit.message, '[clean-production-storage]') }}
+
+    steps:
+      - name: Require dedicated ClientPlatform SSH credentials
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          : "${SSH_HOST:?CLIENTPLATFORM_PRODUCTION_SSH_HOST is required}"
+          : "${SSH_USER:?CLIENTPLATFORM_PRODUCTION_SSH_USER is required}"
+          : "${SSH_PRIVATE_KEY:?CLIENTPLATFORM_PRODUCTION_SSH_PRIVATE_KEY is required}"
+          : "${SSH_KNOWN_HOSTS:?CLIENTPLATFORM_PRODUCTION_SSH_KNOWN_HOSTS is required}"
+          SSH_PORT="${SSH_PORT_SECRET:-22}"
+          case "$SSH_PORT" in *[!0-9]*|'') exit 2;; esac
+          if [ "$SSH_PORT" -lt 1 ] || [ "$SSH_PORT" -gt 65535 ]; then exit 2; fi
+          echo "SSH_PORT=$SSH_PORT" >> "$GITHUB_ENV"
+
+      - name: Configure pinned production SSH identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          key="$RUNNER_TEMP/clientplatform-production-ssh-key"
+          known_hosts="$RUNNER_TEMP/clientplatform-production-known-hosts"
+          umask 077
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$key"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$known_hosts"
+          chmod 600 "$key" "$known_hosts"
+          ssh-keygen -y -f "$key" >/dev/null
+
+      - name: Audit or conservatively clean production storage
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          key="$RUNNER_TEMP/clientplatform-production-ssh-key"
+          known_hosts="$RUNNER_TEMP/clientplatform-production-known-hosts"
+          mode=audit
+          if [ "$CLEAN_REQUESTED" = "true" ]; then mode=clean; fi
+
+          ssh \
+            -p "$SSH_PORT" \
+            -i "$key" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$known_hosts" \
+            -o ConnectTimeout=10 \
+            "$SSH_USER@$SSH_HOST" "bash -s -- '$mode'" <<'REMOTE'
+          set -Eeuo pipefail
+          mode="$1"
+          case "$mode" in audit|clean) ;; *) exit 10;; esac
+
+          repo=/opt/clientplatform
+          if [ ! -e "$repo/.git" ]; then
+            echo "ClientPlatform production checkout is missing" >&2
+            exit 11
+          fi
+          origin="$(git -C "$repo" remote get-url origin 2>/dev/null || true)"
+          case "$origin" in
+            https://github.com/mailsvb2-bot/clientplatform|https://github.com/mailsvb2-bot/clientplatform.git|git@github.com:mailsvb2-bot/clientplatform|git@github.com:mailsvb2-bot/clientplatform.git|ssh://git@github.com/mailsvb2-bot/clientplatform|ssh://git@github.com/mailsvb2-bot/clientplatform.git) ;;
+            *) echo "Unexpected production repository origin" >&2; exit 12;;
+          esac
+
+          run_root() {
+            if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo -n "$@"; fi
+          }
+          print_snapshot() {
+            label="$1"
+            echo "===== STORAGE $label ====="
+            df -hT /
+            df -B1 / | tail -1 | awk '{print "ROOT_BYTES total=" $2 " used=" $3 " free=" $4 " use=" $5}'
+            echo "--- Docker accounting ---"
+            run_root docker system df 2>/dev/null || true
+            echo "--- Journal accounting ---"
+            run_root journalctl --disk-usage 2>/dev/null || true
+            echo "--- /tmp top level ---"
+            run_root du -xhd1 /tmp 2>/dev/null | sort -h | tail -20 || true
+            echo "--- /var cache/log ---"
+            run_root du -xhd1 /var/cache /var/log 2>/dev/null | sort -h | tail -20 || true
+            echo "--- /opt top level ---"
+            run_root du -xhd1 /opt 2>/dev/null | sort -h | tail -20 || true
+          }
+
+          print_snapshot BEFORE
+          if [ "$mode" = audit ]; then
+            echo "AUDIT_ONLY no files were removed"
+            exit 0
+          fi
+
+          # Never clean while a deploy or image build is active.
+          if pgrep -af 'clientplatform_production_deploy.py|docker([[:space:]]+compose)?[[:space:]].*build' >/tmp/clientplatform-storage-active.$$ 2>/dev/null; then
+            echo "Refusing cleanup while deploy/build activity is present:" >&2
+            cat /tmp/clientplatform-storage-active.$$ >&2
+            rm -f /tmp/clientplatform-storage-active.$$
+            exit 20
+          fi
+          rm -f /tmp/clientplatform-storage-active.$$
+
+          # 1) APT package archives are download cache only.
+          run_root apt-get clean
+
+          # 2) Keep newest journal data and cap only excessive historical logs.
+          run_root journalctl --vacuum-size=256M >/dev/null 2>&1 || true
+
+          # 3) Remove only Docker builder cache unused for at least seven days.
+          #    No image/container/network/volume prune is performed.
+          run_root docker builder prune -f --filter until=168h || true
+
+          # 4) Remove Rust target/ only inside /tmp Git worktrees when Git itself
+          #    confirms target is ignored and no process currently references it.
+          path_in_use() {
+            root="$1"
+            for link in /proc/[0-9]*/cwd /proc/[0-9]*/fd/*; do
+              destination="$(readlink -f "$link" 2>/dev/null || true)"
+              case "$destination" in "$root"|"$root"/*) return 0;; esac
+            done
+            return 1
+          }
+          for target in /tmp/*/target; do
+            [ -d "$target" ] || continue
+            [ ! -L "$target" ] || continue
+            worktree="${target%/target}"
+            [ -e "$worktree/.git" ] || continue
+            git -C "$worktree" check-ignore -q target || continue
+            if path_in_use "$target"; then
+              echo "KEEP active ignored build output: $target"
+              continue
+            fi
+            size="$(du -sh "$target" 2>/dev/null | awk '{print $1}' || true)"
+            echo "REMOVE ignored reproducible build output: $target size=${size:-unknown}"
+            run_root rm -rf --one-file-system -- "$target"
+          done
+
+          print_snapshot AFTER
+          echo "CLEANUP_COMPLETE databases=untouched docker_volumes=untouched docker_images=untouched backups=untouched source=untouched"
+          REMOTE
