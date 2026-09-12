@@ -247,6 +247,7 @@ async def run_configured_dispatch_tick(
         await asyncio.to_thread(
             materialize_due_event_followups,
             limit=max(20, selected.config.batch_size * 5),
+            lock_ttl_seconds=selected.config.lock_ttl_seconds,
         )
     except Exception:  # validator: allow-wide-except - event follow-ups must not block delivery
         log.exception("Event follow-up maintenance tick failed")

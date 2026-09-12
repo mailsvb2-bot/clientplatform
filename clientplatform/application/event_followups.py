@@ -20,7 +20,10 @@ from clientplatform.application.event_commercial_consent import (
 )
 from clientplatform.domain.email_outbound import EmailPayload
 from clientplatform.domain.events import normalize_utc
-from clientplatform.infrastructure.event_dispatch_safety import event_commercial_policy_authorized
+from clientplatform.infrastructure.event_dispatch_safety import (
+    event_commercial_policy_authorized,
+    quarantine_stale_event_commercial_boundaries,
+)
 from services.db import get_db
 
 
@@ -727,9 +730,20 @@ def materialize_due_event_followups_in_transaction(
 def materialize_due_event_followups(
     *,
     limit: int = 100,
+    lock_ttl_seconds: int = 900,
     now: datetime | str | None = None,
 ) -> EventFollowupBatchResult:
     with get_db() as conn:
+        quarantine_now = (
+            None
+            if now is None
+            else normalize_utc(now, field_name="now")
+        )
+        quarantine_stale_event_commercial_boundaries(
+            conn,
+            lock_ttl_seconds=lock_ttl_seconds,
+            now=quarantine_now,
+        )
         return materialize_due_event_followups_in_transaction(conn, limit=limit, now=now)
 
 

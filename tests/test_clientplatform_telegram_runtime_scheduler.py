@@ -192,7 +192,7 @@ class ClientPlatformDispatchRuntimeTests(unittest.IsolatedAsyncioTestCase):
         ):
             result = await run_configured_dispatch_tick(_runtime(enabled=True))
         self.assertEqual(result, dispatch_result)
-        event_followups.assert_called_once_with(limit=20)
+        event_followups.assert_called_once_with(limit=20, lock_ttl_seconds=60)
         dispatch.assert_awaited_once()
 
     async def test_disabled_runtime_is_a_noop_without_database_or_network(self) -> None:

@@ -1,14 +1,10 @@
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Any
-
 from clientplatform.infrastructure.event_dispatch_safety import (
     event_commercial_claim_can_cross_provider_boundary,
     is_commercial_event_dispatch,
     is_legacy_event_offer_dispatch,
     mark_event_commercial_non_replay_boundary,
-    quarantine_stale_event_commercial_boundaries,
     suppress_legacy_event_offer_dispatch,
 )
 from clientplatform.infrastructure.safe_member_dispatch_outbox import (
@@ -50,24 +46,6 @@ class DispatchOutboxRepository(_SafeMemberDispatchOutboxRepository):
                 now=now,
             )
         return super().mark_provider_non_replay_boundary(item, now=now)
-
-    def claim_due(
-        self,
-        *,
-        limit: int = 10,
-        lock_ttl_seconds: int = 900,
-        now: datetime | None = None,
-    ) -> list[Any]:
-        quarantine_stale_event_commercial_boundaries(
-            self._conn,
-            lock_ttl_seconds=lock_ttl_seconds,
-            now=now,
-        )
-        return super().claim_due(
-            limit=limit,
-            lock_ttl_seconds=lock_ttl_seconds,
-            now=now,
-        )
 
 
 __all__ = ["DispatchOutboxRepository"]

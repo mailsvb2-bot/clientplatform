@@ -349,6 +349,53 @@ class ClientPlatformEmailOutboundTests(unittest.TestCase):
             "partner_email_delivery_outcome_ambiguous_manual_reconciliation_required",
         )
 
+    def test_unknown_non_idempotent_boundary_marker_is_never_stale_reclaimed(self) -> None:
+        candidate = self.fx.candidate(
+            email="non-replay@example.org",
+            basis=ContactBasis.OPTED_IN,
+        )
+        dispatch = self.fx.outbox.materialize_partner_outreach(
+            actor=self.fx.actor,
+            candidate_id=candidate.id,
+            connection_id=self.fx.connection.id,
+            now="2026-08-28T16:00:00+00:00",
+        )
+        start = datetime(2026, 8, 28, 16, 0, tzinfo=timezone.utc)
+        claimed = self.fx.outbox.claim_due(
+            limit=10, lock_ttl_seconds=60, now=start
+        )
+        item = next(
+            row
+            for row in claimed
+            if isinstance(row, ClaimedProviderDispatch)
+            and row.dispatch.id == dispatch.id
+        )
+        marker = "future_provider_call_started_non_idempotent"
+        self.fx.conn.execute(
+            "UPDATE provider_dispatch_outbox SET last_error=? WHERE id=? AND lock_token=?",
+            (marker, dispatch.id, item.dispatch.lock_token),
+        )
+
+        replay = self.fx.outbox.claim_due(
+            limit=10,
+            lock_ttl_seconds=60,
+            now=start + timedelta(seconds=61),
+        )
+        self.assertFalse(
+            any(
+                isinstance(row, ClaimedProviderDispatch)
+                and row.dispatch.id == dispatch.id
+                for row in replay
+            )
+        )
+        row = self.fx.conn.execute(
+            "SELECT status,last_error,lock_token FROM provider_dispatch_outbox WHERE id=?",
+            (dispatch.id,),
+        ).fetchone()
+        self.assertEqual(row["status"], "sending")
+        self.assertEqual(row["last_error"], marker)
+        self.assertEqual(row["lock_token"], item.dispatch.lock_token)
+
     def test_email_adapter_uses_payload_snapshot_and_idempotency_key(self) -> None:
         candidate = self.fx.candidate(email="send@example.org")
         dispatch = self.fx.outbox.materialize_partner_outreach(

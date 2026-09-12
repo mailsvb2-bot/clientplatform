@@ -130,6 +130,13 @@ def test_quarantine_does_not_write_shared_outbox_without_stale_event_work() -> N
         for statement in normalized
     )
 
+def test_event_safe_outbox_does_not_hook_generic_claim_path() -> None:
+    # Event maintenance must not run inside every provider claim. Partner, booking,
+    # lesson and other workers share this repository and require their native
+    # PostgreSQL claim concurrency semantics unchanged.
+    assert "claim_due" not in EventSafeDispatchOutboxRepository.__dict__
+
+
 
 def test_commercial_event_policy_is_rechecked_at_provider_boundary() -> None:
     conn = _db(); item = _item()
