@@ -155,6 +155,20 @@ def quarantine_stale_event_commercial_boundaries(
         claim_now - timedelta(seconds=max(1, int(lock_ttl_seconds)))
     ).isoformat()
     try:
+        candidate = execute(
+            """
+            SELECT 1
+            FROM provider_dispatch_outbox
+            WHERE source_kind='event_message'
+              AND idempotency_key LIKE 'event:%:message:post:v4:stage:%'
+              AND status='sending' AND locked_at IS NOT NULL AND locked_at<=?
+              AND last_error=?
+            LIMIT 1
+            """,
+            (stale_before, _PROVIDER_BOUNDARY_MARKER),
+        ).fetchone()
+        if candidate is None:
+            return 0
         cursor = execute(
             """
             UPDATE provider_dispatch_outbox

@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 
-import pytest
+import unittest
 
 from clientplatform.application.event_commercial_consent import (
     CURRENT_EVENT_MARKETING_CONSENT_VERSION,
@@ -67,18 +67,18 @@ def test_public_channel_normalization_is_fail_closed() -> None:
         "email",
         "max",
     )
-    with pytest.raises(ValueError):
+    with unittest.TestCase().assertRaises(ValueError):
         normalize_marketing_channels([], public_form=True)
-    with pytest.raises(ValueError):
+    with unittest.TestCase().assertRaises(ValueError):
         normalize_marketing_channels(["sms"], public_form=True)
-    with pytest.raises(ValueError):
+    with unittest.TestCase().assertRaises(ValueError):
         normalize_marketing_channels(["telegram"], public_form=True)
 
 
 
 def test_grant_rejects_a_consent_copy_hash_that_no_longer_matches() -> None:
     conn = _conn()
-    with pytest.raises(ValueError, match="consent text changed"):
+    with unittest.TestCase().assertRaisesRegex(ValueError, "consent text changed"):
         grant_event_commercial_consent_in_transaction(
             conn,
             business_id="b",

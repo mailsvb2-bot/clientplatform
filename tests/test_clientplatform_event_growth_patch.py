@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import pytest
+import unittest
 
 from clientplatform.application.event_analytics import CurrencyRevenue
 from clientplatform.application.event_growth import (
@@ -37,7 +37,7 @@ def test_event_registration_url_encodes_dimensions() -> None:
 
 
 def test_event_registration_url_rejects_non_https_base() -> None:
-    with pytest.raises(EventValidationError):
+    with unittest.TestCase().assertRaises(EventValidationError):
         build_event_registration_url(
             public_base_url="http://clientplatform.example",
             public_slug="AbCdEf0123456789_-AbCdEf0123456789",
@@ -75,10 +75,10 @@ def test_yandex_event_url_uses_provider_campaign_id_as_attribution_reference() -
 
 
 def test_event_registration_url_rejects_unicode_slug_even_if_isalnum() -> None:
-    import pytest
+    import unittest
     from clientplatform.domain.events import EventValidationError
 
-    with pytest.raises(EventValidationError):
+    with unittest.TestCase().assertRaises(EventValidationError):
         build_event_registration_url(
             public_base_url="https://clientplatform.example",
             public_slug="я" * 24,

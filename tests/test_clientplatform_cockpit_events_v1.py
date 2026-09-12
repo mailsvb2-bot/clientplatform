@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 from uuid import uuid4
 
-import pytest
+import unittest
 
 from clientplatform.application import cockpit_events
 from clientplatform.application.cockpit import cockpit_navigation
@@ -83,7 +83,7 @@ def test_event_creation_rejects_reused_request_id_for_different_payload() -> Non
         patch.object(cockpit_events, "parse_local_booking_start", return_value="2026-09-15T16:00:00+00:00"),
         patch.object(cockpit_events, "atomic_db", return_value=nullcontext(conn)),
     ):
-        with pytest.raises(ValueError, match="request_id"):
+        with unittest.TestCase().assertRaisesRegex(ValueError, "request_id"):
             cockpit_events.create_cockpit_event(
                 telegram_user_id=101, requested_business_id=_BUSINESS, request_id=request_id,
                 title="Другое название", starts_at_local="15.09.2026 19:00",

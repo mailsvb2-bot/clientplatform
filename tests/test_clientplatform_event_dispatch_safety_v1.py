@@ -102,3 +102,21 @@ def test_revoked_commercial_consent_blocks_provider_boundary() -> None:
     conn = _db(); item = _item()
     conn.execute("UPDATE clientplatform_event_commercial_channel_state SET status='revoked'")
     assert not event_commercial_claim_can_cross_provider_boundary(conn, item)
+
+
+def test_quarantine_does_not_write_shared_outbox_without_stale_event_work() -> None:
+    conn = _db()
+    statements: list[str] = []
+    conn.set_trace_callback(statements.append)
+    quarantined = quarantine_stale_event_commercial_boundaries(
+        conn,
+        lock_ttl_seconds=60,
+        now=datetime(2026, 9, 12, 10, 2, tzinfo=timezone.utc),
+    )
+    assert quarantined == 0
+    normalized = [statement.upper() for statement in statements]
+    assert any("SELECT 1" in statement for statement in normalized)
+    assert not any(
+        statement.lstrip().startswith("UPDATE PROVIDER_DISPATCH_OUTBOX")
+        for statement in normalized
+    )
