@@ -145,7 +145,9 @@ def _run_concurrently(function) -> list[object]:
     while not queue.empty():
         ok, value = queue.get_nowait()
         if not ok:
-            raise ProbeFailure(f"partner dispatch worker failed: {type(value).__name__}")
+            raise ProbeFailure(
+                f"partner dispatch worker failed: {type(value).__name__}: {value}"
+            ) from value
         results.append(value)
     if len(results) != 2:
         raise ProbeFailure(f"expected two concurrency results, got {len(results)}")
