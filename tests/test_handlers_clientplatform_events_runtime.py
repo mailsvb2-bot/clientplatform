@@ -37,6 +37,34 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(events.settings, "MESSENGER_PUBLIC_BASE_URL", "https://events.example.test/"):
             self.assertEqual(events._public_base_url(), "https://events.example.test")
 
+    def test_cancel_keyboard_uses_business_scoped_callback(self) -> None:
+        with (
+            patch.object(events.control, "_uuid_token", return_value=TOKEN),
+            patch.object(events.control, "_keyboard", side_effect=lambda rows: rows),
+        ):
+            self.assertEqual(
+                events._cancel_keyboard(BUSINESS_ID),
+                [[("✖️ Отмена", f"cpev:cancel:{TOKEN}")]],
+            )
+
+    async def test_webinar_hub_routes_to_canonical_events_screen(self) -> None:
+        callback = _callback()
+        callback.data = f"cpev:home:{TOKEN}"
+        reply = SimpleNamespace(answer=AsyncMock())
+        with (
+            patch.object(events.control, "_token_uuid", return_value=BUSINESS_ID),
+            patch.object(events.control, "_callback_message", return_value=reply),
+            patch(
+                "handlers.clientplatform_cockpit_dispatch.send_cockpit_section",
+                new=AsyncMock(),
+            ) as send,
+        ):
+            await events.open_event_hub(callback)
+        callback.answer.assert_awaited_once_with()
+        send.assert_awaited_once_with(
+            reply, user_id=101, business_id=BUSINESS_ID, section="events"
+        )
+
     async def test_start_wizard_denies_member_without_management_permission(self) -> None:
         callback = _callback()
         state = AsyncMock()
@@ -129,7 +157,7 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
             ),
             patch.object(events, "create_and_publish_online_event", return_value=created) as create,
             patch.object(events, "_public_base_url", return_value="https://clientplatform.example.test"),
-            patch.object(events.control, "_keyboard", return_value="keyboard"),
+            patch.object(events.control, "_keyboard", side_effect=lambda rows: rows) as keyboard,
             patch.object(events.control, "_uuid_token", return_value=TOKEN),
         ):
             await events.receive_event_details(message, state)
@@ -143,6 +171,9 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("future_stage_2030", answer)
         self.assertIn("https://clientplatform.example.test/e/public-slug", answer)
         self.assertIn("Напоминания по e-mail включены", answer)
+        post_create_rows = keyboard.call_args.args[0]
+        self.assertEqual(post_create_rows[0], [("🎥 К вебинарам", f"cpev:home:{TOKEN}")])
+        self.assertIn(("🎥 Создать ещё", f"cpev:new:{TOKEN}"), post_create_rows[1])
 
     async def test_receive_details_supports_external_provider_without_offer_or_email(self) -> None:
         message = _message("Эфир | 15.09.2026 19:00 | https://stream.example/room | -")
@@ -168,6 +199,30 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
         answer = message.answer.await_args.args[0]
         self.assertIn("внешняя площадка", answer)
         self.assertIn("E-mail не подключён", answer)
+
+    async def test_toggle_autosend_is_idempotent_when_preference_already_matches(self) -> None:
+        callback = _callback()
+        callback.data = f"cpev:followups:off:{TOKEN}"
+        actor = MagicMock(unsafe=True)
+        reply = SimpleNamespace(answer=AsyncMock())
+        stored = SimpleNamespace(enabled=False)
+        with (
+            patch.object(events.control, "_token_uuid", return_value=BUSINESS_ID),
+            patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(events, "get_business_event_followup_settings", return_value=stored),
+            patch.object(events, "set_business_event_followups_enabled") as setter,
+            patch.object(events.control, "_callback_message", return_value=reply),
+            patch(
+                "handlers.clientplatform_cockpit_dispatch.send_cockpit_section",
+                new=AsyncMock(),
+            ) as refresh,
+        ):
+            await events.toggle_event_followups(callback)
+        setter.assert_not_called()
+        callback.answer.assert_awaited_once_with("Автоматические сообщения выключены")
+        refresh.assert_awaited_once_with(
+            reply, user_id=101, business_id=BUSINESS_ID, section="events"
+        )
 
     async def test_toggle_autosend_enables_business_setting_and_refreshes_events(self) -> None:
         callback = _callback()
@@ -300,12 +355,16 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
             patch.object(events.control, "_token_uuid", return_value=BUSINESS_ID),
             patch.object(events.control, "_actor", new=AsyncMock()),
             patch.object(events.control, "_callback_message", return_value=reply),
-            patch.object(events.control, "_keyboard", return_value="keyboard"),
+            patch.object(events.control, "_keyboard", side_effect=lambda rows: rows) as keyboard,
         ):
             await events.cancel_event_wizard(callback, state)
         state.clear.assert_awaited_once_with()
         callback.answer.assert_awaited_once_with("Создание отменено")
         reply.answer.assert_awaited_once()
+        self.assertEqual(
+            keyboard.call_args.args[0],
+            [[("⬅️ К вебинарам", f"cpev:home:{TOKEN}")]],
+        )
 
 
 if __name__ == "__main__":

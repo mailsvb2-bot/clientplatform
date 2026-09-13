@@ -162,6 +162,7 @@ def install_button_surface_contract(safety: ModuleType) -> None:
         "cpo:more:",
         "cpo:work:",
         "cpo:ads:",
+        "cpev:home:",
     )
     _extend_tuple(
         safety,
@@ -179,6 +180,7 @@ def install_button_surface_contract(safety: ModuleType) -> None:
         "cpo:more:",
         "cpo:work:",
         "cpo:ads:",
+        "cpev:home:",
     )
     _extend_tuple(
         safety,

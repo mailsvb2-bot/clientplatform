@@ -85,14 +85,14 @@ async def send_cockpit_section(
             ("attended_unpaid", "Были на вебинаре, но не купили"),
             ("offer_clicked_unpaid", "Открыли предложение, но не купили"),
         )
-        lines.append("Кому писать:")
+        lines.append("Кому писать:" if followups_enabled else "После включения — кому писать:")
         lines.extend(
             f"{'✅' if key in followup_segments else '▫️'} {label}"
             for key, label in segment_labels
         )
         channel_labels = (("email", "Email"), ("max", "MAX"), ("vk", "VK"))
         lines.append(
-            "Каналы: "
+            ("Каналы: " if followups_enabled else "После включения — каналы: ")
             + " · ".join(
                 f"{'✅' if key in followup_channels else '▫️'} {label}"
                 for key, label in channel_labels

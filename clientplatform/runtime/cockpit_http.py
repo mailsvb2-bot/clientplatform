@@ -273,7 +273,7 @@ _JS = r"""(() => {
   const navigationGroups = Object.freeze([
     {title:'Работа с клиентами', hint:'Ежедневные задачи: клиенты, записи и продажи.', ids:['home','customers','calendar','sales']},
     {title:'Услуги и деньги', hint:'Что Вы продаёте, оплаты и фактический результат.', ids:['services','money','analytics']},
-    {title:'Рост и общение', hint:'Привлечение, визуалы, материалы и каналы связи с клиентами.', ids:['growth','creative','content','connections']},
+    {title:'Рост и общение', hint:'Привлечение, визуалы, материалы и каналы связи с клиентами.', ids:['growth','events','creative','content','connections']},
     {title:'Управление бизнесом', hint:'Автоматические действия, сотрудники, тариф и настройки.', ids:['automation','team','billing','settings']},
   ]);
   let navigationItems = [];

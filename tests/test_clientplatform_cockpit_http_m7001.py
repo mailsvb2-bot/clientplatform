@@ -61,6 +61,7 @@ class CockpitHttpM7001Tests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('id="business-title"', body)
         self.assertIn('id="business-context"', body)
         self.assertIn("navigationGroups", script)
+        self.assertIn("ids:['growth','events','creative','content','connections']", script)
         self.assertIn("Другие возможности", script)
         self.assertIn("renderNavigation()", script)
         self.assertIn("businesses.length <= 1", script)
