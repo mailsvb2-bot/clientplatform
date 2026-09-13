@@ -1,0 +1,116 @@
+name: ClientPlatform Production Disk Maintenance
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Production disk operation
+        required: true
+        default: audit
+        type: choice
+        options:
+          - audit
+          - cleanup
+
+permissions:
+  contents: read
+
+concurrency:
+  group: clientplatform-production-disk-maintenance
+  cancel-in-progress: false
+
+jobs:
+  maintain:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    env:
+      SSH_HOST: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_HOST }}
+      SSH_USER: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_USER }}
+      SSH_PRIVATE_KEY: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_KNOWN_HOSTS }}
+      SSH_PORT_SECRET: ${{ secrets.CLIENTPLATFORM_PRODUCTION_SSH_PORT }}
+
+    steps:
+      - name: Require dedicated ClientPlatform SSH credentials
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          : "${SSH_HOST:?CLIENTPLATFORM_PRODUCTION_SSH_HOST is required}"
+          : "${SSH_USER:?CLIENTPLATFORM_PRODUCTION_SSH_USER is required}"
+          : "${SSH_PRIVATE_KEY:?CLIENTPLATFORM_PRODUCTION_SSH_PRIVATE_KEY is required}"
+          : "${SSH_KNOWN_HOSTS:?CLIENTPLATFORM_PRODUCTION_SSH_KNOWN_HOSTS is required}"
+          SSH_PORT="${SSH_PORT_SECRET:-22}"
+          case "$SSH_PORT" in ''|*[!0-9]*) exit 2 ;; esac
+          if [ "$SSH_PORT" -lt 1 ] || [ "$SSH_PORT" -gt 65535 ]; then exit 2; fi
+          echo "SSH_PORT=$SSH_PORT" >> "$GITHUB_ENV"
+
+      - name: Configure pinned production SSH identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          key="$RUNNER_TEMP/clientplatform-production-ssh-key"
+          known_hosts="$RUNNER_TEMP/clientplatform-production-known-hosts"
+          umask 077
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$key"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$known_hosts"
+          chmod 600 "$key" "$known_hosts"
+          ssh-keygen -y -f "$key" >/dev/null
+
+      - name: Audit or safely clean production disk
+        shell: bash
+        env:
+          MODE: ${{ inputs.mode }}
+        run: |
+          set -Eeuo pipefail
+          key="$RUNNER_TEMP/clientplatform-production-ssh-key"
+          known_hosts="$RUNNER_TEMP/clientplatform-production-known-hosts"
+          ssh \
+            -p "$SSH_PORT" \
+            -i "$key" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$known_hosts" \
+            -o ConnectTimeout=10 \
+            "$SSH_USER@$SSH_HOST" "bash -s -- '$MODE'" <<'REMOTE'
+          set -Eeuo pipefail
+          mode="$1"
+          case "$mode" in audit|cleanup) ;; *) echo "unsupported mode" >&2; exit 20 ;; esac
+          repo=/opt/clientplatform
+          if [ ! -d "$repo/.git" ]; then echo "production checkout missing" >&2; exit 21; fi
+          cd "$repo"
+          if [ "$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)" != "main" ]; then
+            echo "production checkout is not on main" >&2; exit 22
+          fi
+          if [ -n "$(git status --porcelain=v1 --untracked-files=no --ignore-submodules=none)" ]; then
+            echo "tracked production worktree is dirty" >&2; exit 23
+          fi
+          privileged() {
+            if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo -n "$@"; fi
+          }
+          snapshot() {
+            echo "CLIENTPLATFORM_DISK_SNAPSHOT_BEGIN"
+            df -hPT /
+            echo "--- docker system df ---"
+            privileged docker system df || true
+            echo "--- journal ---"
+            privileged journalctl --disk-usage || true
+            echo "--- major directories ---"
+            privileged du -x -B1 --max-depth=1 /var/lib /var/log /var/backups /opt 2>/dev/null \
+              | sort -nr | head -40 || true
+            echo "CLIENTPLATFORM_DISK_SNAPSHOT_END"
+          }
+          snapshot
+          if [ "$mode" = "cleanup" ]; then
+            echo "CLIENTPLATFORM_DISK_CLEANUP_BEGIN"
+            privileged docker builder prune --force --all --keep-storage 512MB
+            privileged docker image prune --force
+            privileged docker container prune --force
+            privileged docker network prune --force
+            privileged journalctl --vacuum-size=256M || true
+            privileged apt-get clean || true
+            echo "CLIENTPLATFORM_DISK_CLEANUP_END"
+            snapshot
+          fi
+          echo "CLIENTPLATFORM_PRODUCTION_DISK_MAINTENANCE_OK mode=$mode head_sha=$(git rev-parse HEAD)"
+          REMOTE
