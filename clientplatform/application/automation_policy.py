@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import json
+from typing import Any
 
 from clientplatform.domain.automation_policy import (
     AutomationActionApproval,
     AutomationActionAuthorization,
+    AutomationActionScope,
     AutomationCandidateAction,
     AutomationMode,
     AutomationPolicy,
@@ -236,28 +239,169 @@ def _business_timezone(conn, *, business_id: str) -> str:
     return str(value or "UTC").strip() or "UTC"
 
 
+
+_EVENT_FOLLOWUP_ACTION = "events.commercial_followup"
+_EVENT_FOLLOWUP_CHANNELS = ("email", "max", "vk")
+_EVENT_FOLLOWUP_AUDIENCE = "prospect_opted_in"
+_EVENT_FOLLOWUP_TOPIC = "service_offer"
+_GROWTH_ACTION = "growth.read_only_analysis"
+
+
+def _event_action_scope(*, timezone_name: str, channels: tuple[str, ...]) -> AutomationActionScope:
+    selected = tuple(sorted(set(channels)))
+    if not selected or not set(selected).issubset(_EVENT_FOLLOWUP_CHANNELS):
+        raise ValueError("event autosend channels are invalid")
+    return AutomationActionScope(
+        action=_EVENT_FOLLOWUP_ACTION,
+        allowed_channels=selected,
+        allowed_audiences=(_EVENT_FOLLOWUP_AUDIENCE,),
+        allowed_content_topics=(_EVENT_FOLLOWUP_TOPIC,),
+        schedule=AutomationSchedule(
+            timezone_name=timezone_name,
+            quiet_start="22:00",
+            quiet_end="08:00",
+        ),
+    )
+
+
+def _growth_action_scope() -> AutomationActionScope:
+    return AutomationActionScope(
+        action=_GROWTH_ACTION,
+        allowed_channels=("internal",),
+        allowed_audiences=("business_owner",),
+    )
+
+
+def _replace_action_scope(payload: dict[str, Any], scope: AutomationActionScope) -> None:
+    scopes = [
+        AutomationActionScope.from_payload(dict(item))
+        for item in (payload.get("action_scopes") or ())
+    ]
+    scopes = [item for item in scopes if item.action != scope.action]
+    scopes.append(scope)
+    payload["action_scopes"] = [item.payload() for item in sorted(scopes, key=lambda item: item.action)]
+
+
+def _drop_action_scope(payload: dict[str, Any], action: str) -> None:
+    scopes = [
+        AutomationActionScope.from_payload(dict(item))
+        for item in (payload.get("action_scopes") or ())
+    ]
+    remaining = [item for item in scopes if item.action != action]
+    if remaining:
+        payload["action_scopes"] = [
+            item.payload() for item in sorted(remaining, key=lambda item: item.action)
+        ]
+    else:
+        payload.pop("action_scopes", None)
+
+
+def _commit_composed_owner_policy(
+    repository: AutomationPolicyRepository,
+    *,
+    actor: TenantContext,
+    effective: AutomationPolicy | None,
+    latest: AutomationPolicy | None,
+    spec: AutomationPolicySpec,
+    now: datetime,
+) -> AutomationPolicy:
+    if effective is not None and spec.policy_hash == effective.policy_hash:
+        return effective
+    draft = repository.create_draft(
+        actor=actor,
+        spec=spec,
+        expected_latest_version=None if latest is None else latest.version,
+        now=now,
+    )
+    return repository.approve(
+        actor=actor,
+        policy_id=draft.id,
+        expected_policy_hash=draft.policy_hash,
+        now=now,
+    )
+
+
+def set_owner_event_autosend_policy_in_conn(
+    conn,
+    *,
+    actor: TenantContext,
+    allowed_channels: tuple[str, ...],
+    now: datetime,
+) -> AutomationPolicy:
+    """Grant only the selected event autosend channels in the canonical policy."""
+
+    repository = AutomationPolicyRepository(conn)
+    current, effective, latest = repository.locked_policy_state(actor=actor, now=now)
+    growth_enabled = repository.autopilot_enabled_projection(actor=current, now=now)
+    timezone_name = _business_timezone(conn, business_id=current.business_id)
+    event_scope = _event_action_scope(timezone_name=timezone_name, channels=allowed_channels)
+    if effective is None:
+        actions = {_EVENT_FOLLOWUP_ACTION}
+        scopes = [event_scope]
+        if growth_enabled:
+            actions.add(_GROWTH_ACTION)
+            scopes.append(_growth_action_scope())
+        spec = AutomationPolicySpec(
+            mode=AutomationMode.AUTOPILOT if growth_enabled else AutomationMode.NORMAL,
+            allowed_actions=tuple(sorted(actions)),
+            forbidden_actions=(),
+            allowed_channels=(),
+            allowed_audiences=(),
+            schedule=AutomationSchedule(timezone_name=timezone_name),
+            expires_at=(now + timedelta(days=365)).isoformat(timespec="seconds"),
+            stop_conditions=("business_suspended", "owner_stop"),
+            action_scopes=tuple(scopes),
+        )
+    else:
+        if _EVENT_FOLLOWUP_ACTION in effective.spec.forbidden_actions:
+            raise ValueError("Текущая политика автоматизации запрещает автоматические сообщения после мероприятия")
+        if _EVENT_FOLLOWUP_ACTION in effective.spec.approval_required_actions:
+            raise ValueError("Текущая политика требует ручного одобрения каждого сообщения после мероприятия")
+        if set(allowed_channels) & set(effective.spec.approval_required_channels):
+            raise ValueError("Текущая политика требует ручного одобрения выбранных каналов автоматических сообщений")
+        payload = effective.spec.payload()
+        actions = set(payload["allowed_actions"])
+        if growth_enabled:
+            actions.add(_GROWTH_ACTION)
+            _replace_action_scope(payload, _growth_action_scope())
+        else:
+            actions.discard(_GROWTH_ACTION)
+            _drop_action_scope(payload, _GROWTH_ACTION)
+        if effective.spec.mode == AutomationMode.CAUTIOUS:
+            unrelated = actions - {_EVENT_FOLLOWUP_ACTION}
+            if unrelated:
+                raise ValueError(
+                    "Текущая политика работает в осторожном режиме; для автоматических сообщений "
+                    "после мероприятия сначала пересмотрите другие автоматические действия"
+                )
+            payload["mode"] = AutomationMode.NORMAL.value
+        actions.add(_EVENT_FOLLOWUP_ACTION)
+        payload["allowed_actions"] = sorted(actions)
+        _replace_action_scope(payload, event_scope)
+        spec = AutomationPolicySpec.from_json(json.dumps(payload, ensure_ascii=False))
+    return _commit_composed_owner_policy(
+        repository, actor=current, effective=effective, latest=latest, spec=spec, now=now
+    )
+
+
 def _safe_growth_policy_spec(
     *,
     mode: AutomationMode,
     timezone_name: str,
     now: datetime,
 ) -> AutomationPolicySpec:
-    """Owner-toggle policy for the current read-only Growth Autopilot surface.
-
-    M5-001 intentionally authorizes no external write and no money action. Future
-    execution slices must add explicit actions/limits through a newly owner-approved
-    policy instead of interpreting this mode switch as provider permission.
-    """
+    """Owner-toggle policy for the current read-only Growth Autopilot surface."""
 
     return AutomationPolicySpec(
         mode=mode,
-        allowed_actions=("growth.read_only_analysis",),
+        allowed_actions=(_GROWTH_ACTION,),
         forbidden_actions=(),
-        allowed_channels=("internal",),
-        allowed_audiences=("business_owner",),
+        allowed_channels=(),
+        allowed_audiences=(),
         schedule=AutomationSchedule(timezone_name=timezone_name),
         expires_at=(now + timedelta(days=30)).isoformat(),
         stop_conditions=("business_suspended", "owner_stop"),
+        action_scopes=(_growth_action_scope(),),
     )
 
 
@@ -277,25 +421,48 @@ def set_owner_autopilot_enabled(
     with get_db() as conn:
         with tx(conn):
             repository = AutomationPolicyRepository(conn)
-            timezone_name = _business_timezone(conn, business_id=actor.business_id)
-            latest = repository.latest(actor=actor)
-            draft = repository.create_draft(
+            current, effective, latest = repository.locked_policy_state(
                 actor=actor,
-                spec=_safe_growth_policy_spec(
+                now=timestamp,
+            )
+            timezone_name = _business_timezone(conn, business_id=current.business_id)
+            if effective is None:
+                spec = _safe_growth_policy_spec(
                     mode=AutomationMode.AUTOPILOT if enabled else AutomationMode.CAUTIOUS,
                     timezone_name=timezone_name,
                     now=timestamp,
-                ),
-                expected_latest_version=None if latest is None else latest.version,
+                )
+            else:
+                payload = effective.spec.payload()
+                actions = set(payload["allowed_actions"])
+                if enabled:
+                    actions.add(_GROWTH_ACTION)
+                    _replace_action_scope(payload, _growth_action_scope())
+                    if effective.spec.mode == AutomationMode.CAUTIOUS:
+                        unrelated = actions - {_GROWTH_ACTION}
+                        if unrelated:
+                            raise ValueError(
+                                "Текущая осторожная политика содержит другие действия; "
+                                "включение Growth Autopilot требует отдельного пересмотра политики"
+                            )
+                        payload["mode"] = AutomationMode.AUTOPILOT.value
+                else:
+                    actions.discard(_GROWTH_ACTION)
+                    _drop_action_scope(payload, _GROWTH_ACTION)
+                    if not actions:
+                        payload["mode"] = AutomationMode.CAUTIOUS.value
+                payload["allowed_actions"] = sorted(actions)
+                spec = AutomationPolicySpec.from_json(
+                    json.dumps(payload, ensure_ascii=False)
+                )
+            return _commit_composed_owner_policy(
+                repository,
+                actor=current,
+                effective=effective,
+                latest=latest,
+                spec=spec,
                 now=timestamp,
             )
-            return repository.approve(
-                actor=actor,
-                policy_id=draft.id,
-                expected_policy_hash=draft.policy_hash,
-                now=timestamp,
-            )
-
 
 def toggle_owner_autopilot(
     *,
@@ -336,5 +503,6 @@ __all__ = [
     "revoke_effective_automation_policy",
     "save_automation_policy_draft",
     "set_owner_autopilot_enabled",
+    "set_owner_event_autosend_policy_in_conn",
     "toggle_owner_autopilot",
 ]

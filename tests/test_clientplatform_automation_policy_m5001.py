@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from clientplatform.application import automation_policy as application
 from clientplatform.domain.automation_policy import (
+    AutomationActionScope,
     AutomationApprovalThreshold,
     AutomationCandidateAction,
     AutomationMode,
@@ -107,6 +108,58 @@ class AutomationPolicyDomainTests(unittest.TestCase):
         self.assertEqual(spec, restored)
         self.assertEqual(spec.policy_hash, restored.policy_hash)
         self.assertEqual(64, len(spec.policy_hash))
+
+    def test_empty_action_scopes_preserve_legacy_policy_json_and_hash(self) -> None:
+        spec = _spec()
+        self.assertNotIn("action_scopes", spec.payload())
+        restored = AutomationPolicySpec.from_json(spec.to_json())
+        self.assertEqual((), restored.action_scopes)
+        self.assertEqual(spec.policy_hash, restored.policy_hash)
+
+    def test_action_scope_does_not_expand_other_action_channels(self) -> None:
+        business_id = _id()
+        owner_member = _id()
+        spec = AutomationPolicySpec(
+            mode=AutomationMode.NORMAL,
+            allowed_actions=("sales.followup", "events.commercial_followup"),
+            forbidden_actions=(),
+            allowed_channels=("email",),
+            allowed_audiences=("prospect_opted_in",),
+            schedule=AutomationSchedule(timezone_name="Europe/Tallinn"),
+            expires_at=(_NOW + timedelta(days=30)).isoformat(),
+            action_scopes=(
+                AutomationActionScope(
+                    action="events.commercial_followup",
+                    allowed_channels=("email", "max", "vk"),
+                    allowed_audiences=("prospect_opted_in",),
+                    allowed_content_topics=("service_offer",),
+                ),
+            ),
+        )
+        policy = AutomationPolicy(
+            id=_id(), business_id=business_id, version=1,
+            status=AutomationPolicyStatus.APPROVED, spec=spec,
+            policy_hash=spec.policy_hash, created_by_member_id=owner_member,
+            approved_by_member_id=owner_member, created_at=_NOW.isoformat(),
+            updated_at=_NOW.isoformat(), approved_at=_NOW.isoformat(),
+        )
+        event_candidate = AutomationCandidateAction(
+            business_id=business_id, action="events.commercial_followup",
+            external_write=True, channel="max", audience="prospect_opted_in",
+            scheduled_at=_NOW, content_topics=("service_offer",),
+        )
+        self.assertEqual(
+            PolicyDecision.ALLOW,
+            evaluate_automation_policy(policy=policy, candidate=event_candidate, now=_NOW).decision,
+        )
+        sales_candidate = AutomationCandidateAction(
+            business_id=business_id, action="sales.followup",
+            external_write=True, channel="max", audience="prospect_opted_in",
+            scheduled_at=_NOW,
+        )
+        sales_check = evaluate_automation_policy(policy=policy, candidate=sales_candidate, now=_NOW)
+        self.assertEqual(PolicyDecision.DENY, sales_check.decision)
+        self.assertIn("channel_not_allowed", sales_check.violations)
 
     def test_explicit_allowed_action_can_pass_without_external_execution(self) -> None:
         policy = _policy()

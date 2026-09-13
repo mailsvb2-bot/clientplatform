@@ -9,9 +9,9 @@ paid registrations are proactively cancelled and also blocked at the provider
 boundary.
 """
 
+import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-import os
 from typing import Any
 from uuid import uuid4
 
@@ -19,10 +19,16 @@ from clientplatform.application.event_commercial_consent import (
     active_event_commercial_channels,
 )
 from clientplatform.domain.email_outbound import EmailPayload
+from clientplatform.domain.event_followup import classify_event_followup_segment
 from clientplatform.domain.events import normalize_utc
 from clientplatform.infrastructure.event_dispatch_safety import (
     event_commercial_policy_authorized,
     quarantine_stale_event_commercial_boundaries,
+)
+from clientplatform.infrastructure.event_followup_settings_repository import (
+    EventFollowupSettings,
+    EventFollowupSettingsRepository,
+    event_followups_platform_enabled,
 )
 from services.db import get_db
 
@@ -71,14 +77,17 @@ class EventFollowupBatchResult:
     legacy_after_cancelled: int
     authority_cancelled: int
     policy_blocked: int = 0
+    business_disabled: int = 0
+    strategy_blocked: int = 0
 
 
 def commercial_event_followups_enabled() -> bool:
-    """Kill switch. Consent alone never silently enables a new send surface."""
+    """Compatibility projection of the platform-wide emergency gate.
 
-    return str(
-        os.getenv("CLIENTPLATFORM_EVENT_COMMERCIAL_FOLLOWUPS_ENABLED") or ""
-    ).strip().lower() in {"1", "true", "yes", "on"}
+    Tenant-owned settings remain OFF until an owner explicitly enables them.
+    """
+
+    return event_followups_platform_enabled()
 
 
 def _channel_priority() -> tuple[str, ...]:
@@ -95,23 +104,6 @@ def _channel_priority() -> tuple[str, ...]:
 
 def _value(row: Any, key: str, position: int) -> Any:
     return row[key] if hasattr(row, "keys") else row[position]
-
-
-def classify_event_followup_segment(
-    *,
-    first_join_click_at: object | None,
-    attendance_confirmed_at: object | None,
-    offer_clicked_at: object | None,
-) -> str:
-    """Classify only observed facts; a join redirect is not attendance."""
-
-    if offer_clicked_at:
-        return "offer_clicked_unpaid"
-    if attendance_confirmed_at:
-        return "attended_unpaid"
-    if first_join_click_at:
-        return "join_signal_unpaid"
-    return "no_show"
 
 
 def _stage_offsets(segment: str) -> tuple[tuple[int, timedelta], ...]:
@@ -716,6 +708,7 @@ def materialize_due_event_followups_in_transaction(
         return EventFollowupBatchResult(
             scanned=0, queued=0, not_due=0, expired=0, no_consent=0, no_route=0,
             legacy_after_cancelled=legacy_cancelled, authority_cancelled=0, policy_blocked=0,
+            business_disabled=0, strategy_blocked=0,
         )
 
     authority_cancelled = _cancel_invalid_commercial_messages(conn, now_iso=now_iso)
@@ -757,6 +750,10 @@ def materialize_due_event_followups_in_transaction(
     no_consent = 0
     no_route = 0
     policy_blocked = 0
+    business_disabled = 0
+    strategy_blocked = 0
+    settings_repository = EventFollowupSettingsRepository(conn)
+    business_settings_cache: dict[str, EventFollowupSettings | None] = {}
 
     for row in rows:
         scanned += 1
@@ -764,6 +761,18 @@ def materialize_due_event_followups_in_transaction(
         cursor_event = str(_value(row, "event_id", 1))
         cursor_registration = str(_value(row, "registration_id", 3))
         candidate = _candidate_from_row(row)
+        if candidate.business_id not in business_settings_cache:
+            business_settings_cache[candidate.business_id] = settings_repository.get(
+                business_id=candidate.business_id
+            )
+        followup_settings = business_settings_cache[candidate.business_id]
+        if followup_settings is None or not followup_settings.enabled:
+            business_disabled += 1
+            continue
+        if candidate.segment not in followup_settings.enabled_segments:
+            strategy_blocked += 1
+            continue
+
         consent_channels = active_event_commercial_channels(
             conn,
             business_id=candidate.business_id,
@@ -772,6 +781,13 @@ def materialize_due_event_followups_in_transaction(
         )
         if not consent_channels:
             no_consent += 1
+            continue
+        strategy_channels = tuple(
+            channel for channel in consent_channels
+            if channel in followup_settings.enabled_channels
+        )
+        if not strategy_channels:
+            strategy_blocked += 1
             continue
 
         stage, stage_state = _next_due_stage(conn, candidate, current=current)
@@ -785,7 +801,7 @@ def materialize_due_event_followups_in_transaction(
         target = _resolve_target(
             conn,
             candidate,
-            consent_channels=consent_channels,
+            consent_channels=strategy_channels,
         )
         if target is None:
             no_route += 1
@@ -829,6 +845,8 @@ def materialize_due_event_followups_in_transaction(
         legacy_after_cancelled=legacy_cancelled,
         authority_cancelled=authority_cancelled,
         policy_blocked=policy_blocked,
+        business_disabled=business_disabled,
+        strategy_blocked=strategy_blocked,
     )
 
 def materialize_due_event_followups(

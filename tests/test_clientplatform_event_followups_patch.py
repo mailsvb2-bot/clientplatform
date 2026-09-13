@@ -49,6 +49,13 @@ def _conn(*, with_max: bool = True) -> sqlite3.Connection:
             scope TEXT PRIMARY KEY,cursor_starts_at TEXT,cursor_event_id TEXT,
             cursor_registration_id TEXT,updated_at TEXT NOT NULL
         );
+        CREATE TABLE clientplatform_event_followup_settings(
+            business_id TEXT PRIMARY KEY,enabled INTEGER NOT NULL,
+            segment_no_show INTEGER NOT NULL DEFAULT 1,segment_join_signal INTEGER NOT NULL DEFAULT 1,
+            segment_attended INTEGER NOT NULL DEFAULT 1,segment_offer_clicked INTEGER NOT NULL DEFAULT 1,
+            channel_email INTEGER NOT NULL DEFAULT 1,channel_max INTEGER NOT NULL DEFAULT 1,channel_vk INTEGER NOT NULL DEFAULT 1,
+            settings_epoch INTEGER NOT NULL,updated_by_member_id TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL
+        );
         CREATE TABLE connections(
             id TEXT PRIMARY KEY,business_id TEXT,platform TEXT,connection_type TEXT,
             status TEXT,created_at TEXT
@@ -71,6 +78,10 @@ def _conn(*, with_max: bool = True) -> sqlite3.Connection:
     clientplatform_event_commercial_consents.ensure(conn)
     conn.execute("INSERT INTO businesses VALUES('b','Business','active')")
     conn.execute("INSERT INTO business_profiles VALUES('b','Brand')")
+    conn.execute(
+        "INSERT INTO clientplatform_event_followup_settings(business_id,enabled,settings_epoch,updated_by_member_id,created_at,updated_at) VALUES(?,?,?,?,?,?)",
+        ("b", 1, 1, "owner-member", "2026-09-01T00:00:00+00:00", "2026-09-01T00:00:00+00:00"),
+    )
     conn.execute(
         "INSERT INTO connections VALUES('emailc','b','email','email_smtp','active','2026-09-01T00:00:00+00:00')"
     )
@@ -129,11 +140,24 @@ def _conn(*, with_max: bool = True) -> sqlite3.Connection:
     return conn
 
 
-def test_event_followup_feature_is_fail_closed(monkeypatch) -> None:
+def test_event_followup_platform_gate_defaults_available_but_explicit_false_kills(monkeypatch) -> None:
     monkeypatch.delenv("CLIENTPLATFORM_EVENT_COMMERCIAL_FOLLOWUPS_ENABLED", raising=False)
+    assert commercial_event_followups_enabled() is True
+    monkeypatch.setenv("CLIENTPLATFORM_EVENT_COMMERCIAL_FOLLOWUPS_ENABLED", "false")
     assert commercial_event_followups_enabled() is False
     monkeypatch.setenv("CLIENTPLATFORM_EVENT_COMMERCIAL_FOLLOWUPS_ENABLED", "true")
     assert commercial_event_followups_enabled() is True
+
+
+def test_event_followup_business_setting_defaults_off_even_when_platform_available(monkeypatch) -> None:
+    conn = _conn(with_max=False)
+    conn.execute("DELETE FROM clientplatform_event_followup_settings")
+    monkeypatch.delenv("CLIENTPLATFORM_EVENT_COMMERCIAL_FOLLOWUPS_ENABLED", raising=False)
+    result = materialize_due_event_followups_in_transaction(
+        conn, now="2026-09-11T13:00:00+00:00"
+    )
+    assert result.queued == 0
+    assert result.business_disabled == 1
 
 
 def test_event_followup_segments_do_not_confuse_join_with_attendance() -> None:
@@ -419,7 +443,7 @@ def test_event_followup_requires_owner_approved_policy_and_honors_quiet_hours(mo
 
     spec = AutomationPolicySpec(
         mode=AutomationMode.AUTOPILOT,
-        allowed_actions=("sales.followup",),
+        allowed_actions=("events.commercial_followup",),
         forbidden_actions=(),
         allowed_channels=("email",),
         allowed_audiences=("prospect_opted_in",),
@@ -470,3 +494,47 @@ def test_event_followup_requires_owner_approved_policy_and_honors_quiet_hours(mo
         now="2026-09-12T23:00:00+00:00",
     )
     conn.close()
+
+
+def test_disabled_participant_group_never_queues_message(monkeypatch) -> None:
+    conn = _conn(with_max=True)
+    conn.execute(
+        "UPDATE clientplatform_event_followup_settings SET segment_offer_clicked=0 WHERE business_id='b'"
+    )
+    grant_event_commercial_consent_in_transaction(
+        conn, business_id="b", event_id="e", registration_id="r",
+        channels=("email", "max"), now="2026-09-11T09:00:00+00:00",
+    )
+    monkeypatch.setenv("CLIENTPLATFORM_EVENT_COMMERCIAL_FOLLOWUPS_ENABLED", "true")
+    result = materialize_due_event_followups_in_transaction(
+        conn, now="2026-09-11T13:00:00+00:00"
+    )
+    assert result.queued == 0
+    assert result.strategy_blocked == 1
+    assert conn.execute("SELECT COUNT(*) FROM provider_dispatch_outbox").fetchone()[0] == 0
+
+
+def test_disabled_max_channel_falls_back_to_email(monkeypatch) -> None:
+    conn = _conn(with_max=True)
+    conn.execute(
+        "UPDATE clientplatform_event_followup_settings SET channel_max=0 WHERE business_id='b'"
+    )
+    grant_event_commercial_consent_in_transaction(
+        conn, business_id="b", event_id="e", registration_id="r",
+        channels=("email", "max"), now="2026-09-11T09:00:00+00:00",
+    )
+    monkeypatch.setenv("CLIENTPLATFORM_EVENT_COMMERCIAL_FOLLOWUPS_ENABLED", "true")
+    monkeypatch.setattr(
+        "clientplatform.application.event_followups._public_base_url",
+        lambda: "https://clientplatform.example",
+    )
+    monkeypatch.setattr(
+        "clientplatform.application.event_followups._automation_followup_authorized",
+        lambda *args, **kwargs: True,
+    )
+    result = materialize_due_event_followups_in_transaction(
+        conn, now="2026-09-11T13:00:00+00:00"
+    )
+    assert result.queued == 1
+    row = conn.execute("SELECT platform FROM provider_dispatch_outbox").fetchone()
+    assert row[0] == "email"

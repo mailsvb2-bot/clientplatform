@@ -10,7 +10,12 @@ from uuid import UUID
 from clientplatform.application.activity import get_business_profile
 from clientplatform.application.cockpit import resolve_cockpit_context
 from clientplatform.application.event_analytics import get_event_funnel_in_transaction
-from clientplatform.application.event_followups import commercial_event_followups_enabled
+from clientplatform.application.event_followup_settings import (
+    get_business_event_followup_settings,
+    get_business_event_followups_enabled,
+)
+from clientplatform.domain.event_followup import EVENT_FOLLOWUP_CHANNELS, EVENT_FOLLOWUP_SEGMENTS
+from clientplatform.infrastructure.event_followup_settings_repository import event_followups_platform_enabled
 from clientplatform.application.event_growth import get_event_acquisition_breakdown_in_transaction
 from clientplatform.application.event_owner_flow import (
     OnlineEventCreateRequest,
@@ -21,13 +26,13 @@ from clientplatform.application.tenancy import resolve_tenant_context
 from clientplatform.domain.bookings import parse_local_booking_start
 from clientplatform.domain.events import validate_external_https_url
 from clientplatform.domain.money import settlement_currency_minor_unit_exponent
-from clientplatform.domain.tenancy import TenantAccessDenied, TenantContext, TenantPermissionDenied
+from clientplatform.domain.tenancy import PlatformRole, TenantAccessDenied, TenantContext, TenantPermissionDenied
 from clientplatform.infrastructure.event_repository import EventRepository
 from config.settings import settings
 from services.db import get_db_ro
 from services.db.core import atomic_db
 
-_SCHEMA_VERSION = "2026-09-12.events.v1"
+_SCHEMA_VERSION = "2026-09-12.events.v2-followup-toggle"
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,7 +78,13 @@ class CockpitEventsSnapshot:
     business_name: str
     timezone_name: str
     can_manage: bool
+    can_enable_commercial_followups: bool
+    can_expand_commercial_followups: bool
     commercial_followups_enabled: bool
+    commercial_followups_effective: bool
+    commercial_followups_platform_available: bool
+    commercial_followup_segments: tuple[str, ...]
+    commercial_followup_channels: tuple[str, ...]
     items: tuple[CockpitEventItem, ...]
     limitations: tuple[str, ...]
 
@@ -195,13 +206,36 @@ def resolve_cockpit_events(
                     ),
                 )
             )
+    followup_settings = get_business_event_followup_settings(actor=actor)
+    followup_preference = bool(followup_settings and followup_settings.enabled)
+    followup_segments = (
+        EVENT_FOLLOWUP_SEGMENTS
+        if followup_settings is None
+        else followup_settings.enabled_segments
+    )
+    followup_channels = (
+        EVENT_FOLLOWUP_CHANNELS
+        if followup_settings is None
+        else followup_settings.enabled_channels
+    )
+    platform_available = event_followups_platform_enabled()
     return CockpitEventsSnapshot(
         schema_version=_SCHEMA_VERSION,
         business_id=actor.business_id,
         business_name=business_name,
         timezone_name=profile.timezone,
         can_manage=_can_manage(actor),
-        commercial_followups_enabled=commercial_event_followups_enabled(),
+        can_enable_commercial_followups=(
+            actor.role == PlatformRole.OWNER and platform_available
+        ),
+        can_expand_commercial_followups=(actor.role == PlatformRole.OWNER),
+        commercial_followups_enabled=followup_preference,
+        commercial_followups_effective=(
+            followup_preference and get_business_event_followups_enabled(actor=actor)
+        ),
+        commercial_followups_platform_available=platform_available,
+        commercial_followup_segments=tuple(followup_segments),
+        commercial_followup_channels=tuple(followup_channels),
         items=tuple(items),
         limitations=tuple(limitations),
     )

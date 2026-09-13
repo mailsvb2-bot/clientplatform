@@ -188,10 +188,10 @@ def _item_text(item: dict[str, Any], *, user_id: int) -> str:
         lines.append(f"Метка источника: {source_ref}")
     lines.append(f"Атрибуция: {_attribution_line(item)}")
     if item.get("followup_suppressed"):
-        lines.append("Follow-up: не отправлять — клиент попросил больше не писать")
+        lines.append("Напоминания клиенту: не отправлять — клиент попросил больше не писать")
     elif item.get("active_followup_id"):
         lines.append(
-            f"Follow-up: запланирован на {_short_time(item.get('active_followup_scheduled_at'))}"
+            f"Напоминание клиенту: запланировано на {_short_time(item.get('active_followup_scheduled_at'))}"
         )
     if closure_reason:
         lines.append(f"Причина закрытия: {closure_reason}")
@@ -246,7 +246,7 @@ def _detail_keyboard(
         )
         if item.get("active_followup_id"):
             rows.append(
-                [("✖️ Отменить follow-up", f"cps:swfz:{business_token}:{lead_token}")]
+                [("✖️ Отменить напоминание", f"cps:swfz:{business_token}:{lead_token}")]
             )
         elif followup_allowed:
             rows.append(
@@ -885,7 +885,7 @@ async def begin_sales_followup(callback: CallbackQuery, state: FSMContext) -> No
         or bool(item.get("followup_suppressed"))
         or item.get("active_followup_id")
     ):
-        await callback.answer("Follow-up сейчас недоступен. Обновите карточку.", show_alert=True)
+        await callback.answer("Напоминание клиенту сейчас недоступно. Обновите карточку.", show_alert=True)
         return
     await state.set_state(ClientPlatformSalesOperationsState.followup_text)
     await state.update_data(sales_business_id=business_id, sales_lead_id=lead_id)
@@ -946,7 +946,7 @@ async def schedule_sales_followup_owner(callback: CallbackQuery, state: FSMConte
         or not text
     ):
         await state.clear()
-        await callback.answer("Карточка follow-up устарела. Начните заново.", show_alert=True)
+        await callback.answer("Карточка напоминания устарела. Начните заново.", show_alert=True)
         return
     actor = await control._actor(int(callback.from_user.id), business_id)
     due_at = datetime.now(timezone.utc) + timedelta(hours=hours)
@@ -962,12 +962,12 @@ async def schedule_sales_followup_owner(callback: CallbackQuery, state: FSMConte
     except (SalesError, PermissionError, ValueError):
         await state.clear()
         await callback.answer(
-            "Не удалось запланировать follow-up: проверьте канал, согласие клиента и актуальность обращения.",
+            "Не удалось запланировать напоминание: проверьте канал, согласие клиента и актуальность обращения.",
             show_alert=True,
         )
         return
     await state.clear()
-    await callback.answer("Follow-up запланирован")
+    await callback.answer("Напоминание запланировано")
     await control._callback_message(callback).answer(
         f"Сообщение запланировано на {_short_time(followup.scheduled_at)}. "
         "Если клиент ответит, запишется, оплатит или попросит не писать, отправка будет остановлена."
@@ -988,10 +988,10 @@ async def cancel_sales_followup_owner(callback: CallbackQuery, state: FSMContext
     try:
         await asyncio.to_thread(cancel_sales_followup, actor=actor, lead_id=lead_id)
     except (SalesError, PermissionError, ValueError):
-        await callback.answer("Не удалось отменить follow-up. Обновите карточку.", show_alert=True)
+        await callback.answer("Не удалось отменить напоминание. Обновите карточку.", show_alert=True)
         return
     await state.clear()
-    await callback.answer("Follow-up отменён")
+    await callback.answer("Напоминание отменено")
     await send_sales_lead_view(
         control._callback_message(callback),
         user_id=int(callback.from_user.id),
@@ -1008,7 +1008,7 @@ async def confirm_sales_followup_opt_out(callback: CallbackQuery, state: FSMCont
     await callback.answer()
     await control._callback_message(callback).answer(
         "Клиент действительно попросил больше не писать ему по этому каналу? "
-        "После подтверждения активный follow-up будет остановлен.",
+        "После подтверждения активное напоминание будет остановлено.",
         reply_markup=control._keyboard(
             [
                 [("Да, больше не писать", f"cps:swfoc:{parts[2]}:{parts[3]}")],
@@ -1034,7 +1034,7 @@ async def apply_sales_followup_opt_out(callback: CallbackQuery, state: FSMContex
         await callback.answer("Не удалось сохранить запрет. Обновите карточку.", show_alert=True)
         return
     await state.clear()
-    await callback.answer("Запрет на follow-up сохранён")
+    await callback.answer("Запрет на сообщения сохранён")
     await send_sales_lead_view(
         control._callback_message(callback),
         user_id=int(callback.from_user.id),

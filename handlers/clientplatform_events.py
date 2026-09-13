@@ -13,6 +13,12 @@ from clientplatform.application.event_owner_flow import (
     OnlineEventCreateRequest,
     create_and_publish_online_event,
 )
+from clientplatform.application.event_followup_settings import (
+    get_business_event_followup_settings,
+    set_business_event_followup_channel_enabled,
+    set_business_event_followup_segment_enabled,
+    set_business_event_followups_enabled,
+)
 from clientplatform.domain.bookings import parse_local_booking_start
 from clientplatform.domain.tenancy import TenantPermissionDenied
 from config.settings import settings
@@ -109,6 +115,121 @@ async def receive_event_details(message: Message, state: FSMContext) -> None:
     )
 
 
+@router.callback_query(F.data.startswith("cpev:followups:"))
+async def toggle_event_followups(callback: CallbackQuery) -> None:
+    parts = str(callback.data or "").split(":", 3)
+    if len(parts) != 4 or parts[2] not in {"on", "off"}:
+        await callback.answer("Переключатель устарел", show_alert=True)
+        return
+    desired = parts[2] == "on"
+    business_id = control._token_uuid(parts[3])
+    actor = await control._actor(int(callback.from_user.id), business_id)
+    try:
+        stored = await asyncio.to_thread(
+            get_business_event_followup_settings, actor=actor
+        )
+        current = bool(stored and stored.enabled)
+        if current != desired:
+            await asyncio.to_thread(
+                set_business_event_followups_enabled,
+                actor=actor,
+                enabled=desired,
+            )
+    except TenantPermissionDenied:
+        await callback.answer(
+            "Включить автоматические сообщения после мероприятия может владелец бизнеса",
+            show_alert=True,
+        )
+        return
+    except ValueError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+
+    await callback.answer("Автоматические сообщения включены" if desired else "Автоматические сообщения выключены")
+    from .clientplatform_cockpit_dispatch import send_cockpit_section
+
+    await send_cockpit_section(
+        control._callback_message(callback),
+        user_id=int(callback.from_user.id),
+        business_id=business_id,
+        section="events",
+    )
+
+
+@router.callback_query(F.data.startswith("cpev:seg:"))
+async def toggle_event_followup_segment(callback: CallbackQuery) -> None:
+    parts = str(callback.data or "").split(":", 4)
+    if len(parts) != 5 or parts[3] not in {"on", "off"}:
+        await callback.answer("Настройка устарела", show_alert=True)
+        return
+    segment = parts[2]
+    desired = parts[3] == "on"
+    business_id = control._token_uuid(parts[4])
+    actor = await control._actor(int(callback.from_user.id), business_id)
+    try:
+        await asyncio.to_thread(
+            set_business_event_followup_segment_enabled,
+            actor=actor,
+            segment=segment,
+            enabled=desired,
+        )
+    except TenantPermissionDenied:
+        await callback.answer(
+            "Расширить группы участников вебинара может только владелец бизнеса",
+            show_alert=True,
+        )
+        return
+    except ValueError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    await callback.answer("Настройка участников сохранена")
+    from .clientplatform_cockpit_dispatch import send_cockpit_section
+
+    await send_cockpit_section(
+        control._callback_message(callback),
+        user_id=int(callback.from_user.id),
+        business_id=business_id,
+        section="events",
+    )
+
+
+@router.callback_query(F.data.startswith("cpev:ch:"))
+async def toggle_event_followup_channel(callback: CallbackQuery) -> None:
+    parts = str(callback.data or "").split(":", 4)
+    if len(parts) != 5 or parts[3] not in {"on", "off"}:
+        await callback.answer("Настройка устарела", show_alert=True)
+        return
+    channel = parts[2]
+    desired = parts[3] == "on"
+    business_id = control._token_uuid(parts[4])
+    actor = await control._actor(int(callback.from_user.id), business_id)
+    try:
+        await asyncio.to_thread(
+            set_business_event_followup_channel_enabled,
+            actor=actor,
+            channel=channel,
+            enabled=desired,
+        )
+    except TenantPermissionDenied:
+        await callback.answer(
+            "Расширить каналы сообщений участникам вебинара может только владелец бизнеса",
+            show_alert=True,
+        )
+        return
+    except ValueError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    await callback.answer("Настройка канала сохранена")
+    from .clientplatform_cockpit_dispatch import send_cockpit_section
+
+    await send_cockpit_section(
+        control._callback_message(callback),
+        user_id=int(callback.from_user.id),
+        business_id=business_id,
+        section="events",
+    )
+
+
 @router.callback_query(F.data.startswith("cpev:cancel:"))
 async def cancel_event_wizard(callback: CallbackQuery, state: FSMContext) -> None:
     token = str(callback.data).split(":", 2)[2]
@@ -127,4 +248,13 @@ async def cancel_event_wizard(callback: CallbackQuery, state: FSMContext) -> Non
     )
 
 
-__all__ = ["ClientPlatformEventState", "cancel_event_wizard", "receive_event_details", "router", "start_event_wizard"]
+__all__ = [
+    "ClientPlatformEventState",
+    "cancel_event_wizard",
+    "receive_event_details",
+    "router",
+    "start_event_wizard",
+    "toggle_event_followup_channel",
+    "toggle_event_followup_segment",
+    "toggle_event_followups",
+]

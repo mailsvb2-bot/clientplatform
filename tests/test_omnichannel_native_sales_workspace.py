@@ -282,7 +282,7 @@ def test_native_followup_optout_requires_explicit_confirmation(monkeypatch) -> N
         parsed,
         interaction_key="route:event:optout",
     )
-    assert "Запрет на follow-up сохранён" in message.text
+    assert "Запрет на сообщения сохранён" in message.text
     assert calls == [{"actor": actor, "lead_id": lead_id}]
 
 
