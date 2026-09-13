@@ -11,8 +11,14 @@ from clientplatform.domain.automation_policy import (
     evaluate_automation_policy,
 )
 from clientplatform.domain.connections import DispatchLeaseLost
+from clientplatform.domain.event_followup import classify_event_followup_segment
 from clientplatform.domain.tenancy import PlatformRole, TenantContext
 from clientplatform.infrastructure.automation_policy_repository import AutomationPolicyRepository
+from clientplatform.infrastructure.event_followup_settings_repository import (
+    EventFollowupSettingsRepository,
+    event_followups_enabled_in_conn,
+    event_followups_platform_enabled,
+)
 from clientplatform.infrastructure.unified_dispatch_outbox import ClaimedProviderDispatch
 
 _COMMERCIAL_KEY_FRAGMENT = ":message:post:v4:stage:"
@@ -99,6 +105,35 @@ def _owner_actor(conn: Any, *, business_id: str) -> TenantContext | None:
         return None
 
 
+def event_commercial_strategy_authorized(
+    conn: Any,
+    *,
+    business_id: str,
+    registration_id: str,
+    platform: str,
+) -> bool:
+    settings = EventFollowupSettingsRepository(conn).get(business_id=business_id)
+    if settings is None or not settings.enabled or str(platform) not in settings.enabled_channels:
+        return False
+    row = conn.execute(
+        """
+        SELECT first_join_click_at,attendance_confirmed_at,offer_clicked_at
+        FROM clientplatform_event_registrations
+        WHERE id=? AND business_id=? AND status='registered'
+        LIMIT 1
+        """,
+        (registration_id, business_id),
+    ).fetchone()
+    if row is None:
+        return False
+    segment = classify_event_followup_segment(
+        first_join_click_at=_value(row, "first_join_click_at", 0),
+        attendance_confirmed_at=_value(row, "attendance_confirmed_at", 1),
+        offer_clicked_at=_value(row, "offer_clicked_at", 2),
+    )
+    return segment in settings.enabled_segments
+
+
 def event_commercial_policy_authorized(
     conn: Any,
     *,
@@ -118,7 +153,7 @@ def event_commercial_policy_authorized(
     try:
         automation_candidate = AutomationCandidateAction(
             business_id=business_id,
-            action="sales.followup",
+            action="events.commercial_followup",
             external_write=True,
             channel=str(platform),
             audience="prospect_opted_in",
@@ -184,12 +219,45 @@ def mark_event_commercial_non_replay_boundary(
     if not is_commercial_event_dispatch(item):
         return False
     timestamp = str(now or _utc_now().isoformat())
+    if not event_followups_platform_enabled():
+        conn.execute(
+            """
+            UPDATE provider_dispatch_outbox
+            SET status='cancelled',updated_at=?,locked_at=NULL,lock_token=NULL,
+                last_error='event_commercial_business_disabled'
+            WHERE id=? AND business_id=? AND source_kind='event_message'
+              AND status='sending' AND lock_token=?
+            """,
+            (timestamp, item.dispatch.id, item.dispatch.business_id, item.dispatch.lock_token),
+        )
+        return False
     cursor = conn.execute(
         """
         UPDATE provider_dispatch_outbox
         SET last_error=?,updated_at=?
         WHERE id=? AND business_id=? AND source_kind='event_message'
           AND status='sending' AND lock_token=?
+          AND EXISTS (
+              SELECT 1
+              FROM clientplatform_event_followup_settings s
+              JOIN clientplatform_event_registrations r
+                ON r.id=provider_dispatch_outbox.source_id
+               AND r.business_id=provider_dispatch_outbox.business_id
+               AND r.status='registered'
+              WHERE s.business_id=provider_dispatch_outbox.business_id
+                AND s.enabled=1
+                AND (
+                    (provider_dispatch_outbox.platform='email' AND s.channel_email=1)
+                    OR (provider_dispatch_outbox.platform='max' AND s.channel_max=1)
+                    OR (provider_dispatch_outbox.platform='vk' AND s.channel_vk=1)
+                )
+                AND (
+                    (r.offer_clicked_at IS NOT NULL AND s.segment_offer_clicked=1)
+                    OR (r.offer_clicked_at IS NULL AND r.attendance_confirmed_at IS NOT NULL AND s.segment_attended=1)
+                    OR (r.offer_clicked_at IS NULL AND r.attendance_confirmed_at IS NULL AND r.first_join_click_at IS NOT NULL AND s.segment_join_signal=1)
+                    OR (r.offer_clicked_at IS NULL AND r.attendance_confirmed_at IS NULL AND r.first_join_click_at IS NULL AND s.segment_no_show=1)
+                )
+          )
         """,
         (
             _PROVIDER_BOUNDARY_MARKER,
@@ -199,9 +267,38 @@ def mark_event_commercial_non_replay_boundary(
             item.dispatch.lock_token,
         ),
     )
-    if int(getattr(cursor, "rowcount", 0) or 0) != 1:
-        raise DispatchLeaseLost("commercial event lease was lost before provider boundary")
-    return True
+    if int(getattr(cursor, "rowcount", 0) or 0) == 1:
+        return True
+    if not event_followups_enabled_in_conn(conn, business_id=item.dispatch.business_id):
+        conn.execute(
+            """
+            UPDATE provider_dispatch_outbox
+            SET status='cancelled',updated_at=?,locked_at=NULL,lock_token=NULL,
+                last_error='event_commercial_business_disabled'
+            WHERE id=? AND business_id=? AND source_kind='event_message'
+              AND status='sending' AND lock_token=?
+            """,
+            (timestamp, item.dispatch.id, item.dispatch.business_id, item.dispatch.lock_token),
+        )
+        return False
+    if not event_commercial_strategy_authorized(
+        conn,
+        business_id=item.dispatch.business_id,
+        registration_id=item.dispatch.source_id,
+        platform=str(item.dispatch.platform),
+    ):
+        conn.execute(
+            """
+            UPDATE provider_dispatch_outbox
+            SET status='cancelled',updated_at=?,locked_at=NULL,lock_token=NULL,
+                last_error='event_commercial_strategy_disabled'
+            WHERE id=? AND business_id=? AND source_kind='event_message'
+              AND status='sending' AND lock_token=?
+            """,
+            (timestamp, item.dispatch.id, item.dispatch.business_id, item.dispatch.lock_token),
+        )
+        return False
+    raise DispatchLeaseLost("commercial event lease was lost before provider boundary")
 
 
 def event_commercial_claim_can_cross_provider_boundary(
@@ -214,6 +311,26 @@ def event_commercial_claim_can_cross_provider_boundary(
 
     if not is_commercial_event_dispatch(item):
         return True
+    timestamp = str(now or _utc_now().isoformat())
+    if not event_followups_enabled_in_conn(
+        conn, business_id=item.dispatch.business_id
+    ):
+        conn.execute(
+            """
+            UPDATE provider_dispatch_outbox
+            SET status='cancelled',updated_at=?,locked_at=NULL,lock_token=NULL,
+                last_error='event_commercial_business_disabled'
+            WHERE id=? AND business_id=? AND source_kind='event_message'
+              AND status='sending' AND lock_token=?
+            """,
+            (
+                timestamp,
+                item.dispatch.id,
+                item.dispatch.business_id,
+                item.dispatch.lock_token,
+            ),
+        )
+        return False
     row = conn.execute(
         """
         SELECT 1
@@ -226,6 +343,8 @@ def event_commercial_claim_can_cross_provider_boundary(
          AND e.status IN ('published','completed')
         JOIN businesses b
           ON b.id=d.business_id AND b.status='active'
+        JOIN clientplatform_event_followup_settings s
+          ON s.business_id=d.business_id AND s.enabled=1
         JOIN connections c
           ON c.id=d.connection_id AND c.business_id=d.business_id
          AND c.platform=d.platform AND c.status='active'
@@ -234,6 +353,17 @@ def event_commercial_claim_can_cross_provider_boundary(
          AND ci.platform=d.platform AND ci.status='active'
         WHERE d.id=? AND d.business_id=? AND d.source_kind='event_message'
           AND d.status='sending' AND d.lock_token=?
+          AND (
+              (d.platform='email' AND s.channel_email=1)
+              OR (d.platform='max' AND s.channel_max=1)
+              OR (d.platform='vk' AND s.channel_vk=1)
+          )
+          AND (
+              (r.offer_clicked_at IS NOT NULL AND s.segment_offer_clicked=1)
+              OR (r.offer_clicked_at IS NULL AND r.attendance_confirmed_at IS NOT NULL AND s.segment_attended=1)
+              OR (r.offer_clicked_at IS NULL AND r.attendance_confirmed_at IS NULL AND r.first_join_click_at IS NOT NULL AND s.segment_join_signal=1)
+              OR (r.offer_clicked_at IS NULL AND r.attendance_confirmed_at IS NULL AND r.first_join_click_at IS NULL AND s.segment_no_show=1)
+          )
           AND NOT EXISTS (
               SELECT 1 FROM clientplatform_event_conversion_links p
               WHERE p.business_id=r.business_id
@@ -296,17 +426,28 @@ def event_commercial_claim_can_cross_provider_boundary(
             ),
         )
         return False
-    timestamp = str(now or _utc_now().isoformat())
+    strategy_allowed = event_commercial_strategy_authorized(
+        conn,
+        business_id=item.dispatch.business_id,
+        registration_id=item.dispatch.source_id,
+        platform=str(item.dispatch.platform),
+    )
+    last_error = (
+        "event_commercial_strategy_disabled"
+        if not strategy_allowed
+        else "event_message_authority_revoked_or_paid"
+    )
     conn.execute(
         """
         UPDATE provider_dispatch_outbox
         SET status='cancelled',updated_at=?,locked_at=NULL,lock_token=NULL,
-            last_error='event_message_authority_revoked_or_paid'
+            last_error=?
         WHERE id=? AND business_id=? AND source_kind='event_message'
           AND status='sending' AND lock_token=?
         """,
         (
             timestamp,
+            last_error,
             item.dispatch.id,
             item.dispatch.business_id,
             item.dispatch.lock_token,

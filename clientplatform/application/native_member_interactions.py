@@ -1915,7 +1915,7 @@ def _sales_mutation_message(
         suppress_sales_workspace_followup(actor=actor, lead_id=lead_id)
         card = _sales_lead_message(actor, lead_id)
         return CustomerInteractionMessage(
-            text="✅ Запрет на follow-up сохранён.\n\n" + card.text, rows=card.rows
+            text="✅ Запрет на сообщения сохранён.\n\n" + card.text, rows=card.rows
         )
     return _stale_message()
 

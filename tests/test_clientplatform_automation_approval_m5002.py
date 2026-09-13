@@ -547,7 +547,7 @@ class AutomationActionApprovalTests(unittest.TestCase):
         approval = fx.request(key="m5002:copy")
         rendered = admin_ops.format_automation_action_approval(approval, timezone_name="UTC")
         assert "Нужно Ваше подтверждение" in rendered
-        assert "Отправить клиенту follow-up" in rendered
+        assert "Отправить клиенту напоминание" in rendered
         assert "Канал: email" in rendered
         assert "Почему:" in rendered
         assert f"Цель: {approval.candidate.subject_ref}" in rendered

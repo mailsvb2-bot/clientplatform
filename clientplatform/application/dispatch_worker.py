@@ -15,6 +15,7 @@ from clientplatform.domain.connections import (
 from clientplatform.domain.customer_interactions import CustomerInteractionMessage
 from clientplatform.domain.programs import ContentKind
 from clientplatform.infrastructure import DispatchOutboxRepository
+from clientplatform.infrastructure.event_dispatch_safety import is_commercial_event_dispatch
 from clientplatform.infrastructure.safe_dispatch_outbox import (
     mark_non_replay_safe_dispatch_boundary,
 )
@@ -342,11 +343,23 @@ async def run_dispatch_batch(
                 )
                 if not allowed:
                     continue
+            elif (
+                isinstance(item, ClaimedProviderDispatch)
+                and item.dispatch.source_kind == "event_message"
+            ):
+                allowed = await asyncio.to_thread(
+                    _provider_claim_can_cross_provider_boundary,
+                    item,
+                )
+                if not allowed:
+                    continue
 
             non_replay_boundary_crossed = await asyncio.to_thread(
                 _mark_non_replay_boundary,
                 item,
             )
+            if is_commercial_event_dispatch(item) and not non_replay_boundary_crossed:
+                continue
             if two_phase_adapter is not None:
                 if prepared is None:
                     raise RuntimeError("two-phase adapter returned no prepared dispatch")

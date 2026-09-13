@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 TenantDisposition = Literal["erase", "retain", "anonymize"]
-CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-09-12.v46-consent-aware-events"
+CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-09-12.v48-event-followup-strategy"
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +59,7 @@ _POLICIES = (
     _required("clientplatform_event_commercial_channel_state", "erase", "registration-linked current commercial messaging authority and revocation state"),
     _required("clientplatform_event_owner_requests", "retain", "business-owned replay protection for owner event creation without customer identity or message payloads"),
     _required("clientplatform_event_followup_scan_state", "retain", "technical bounded scheduler cursor containing only internal event and registration identifiers"),
+    _required("clientplatform_event_followup_settings", "retain", "business-owned switch, participant-group and channel strategy, actor and revision epoch for commercial event automation"),
     _required("business_outcome_events", "anonymize", "canonical business outcome ledger retained while customer linkage and free-form metadata are anonymized"),
     _required("promotion_campaigns", "retain", "business-owned advertising copy, source channel and campaign lifecycle without customer identity"),
     _required("promotion_source_aliases", "retain", "business-owned source routing aliases for exact creative and placement attribution without customer identity"),

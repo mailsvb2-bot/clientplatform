@@ -88,6 +88,10 @@ _ACTION_SEMANTICS = {
         action="sales.followup",
         external_write=True,
     ),
+    "events.commercial_followup": AutomationActionSemantics(
+        action="events.commercial_followup",
+        external_write=True,
+    ),
     "payments.refund": AutomationActionSemantics(
         action="payments.refund",
         external_write=True,
@@ -306,6 +310,57 @@ class AutomationSchedule:
 
 
 @dataclass(frozen=True, slots=True)
+class AutomationActionScope:
+    action: str
+    allowed_channels: tuple[str, ...] = ()
+    allowed_audiences: tuple[str, ...] = ()
+    allowed_content_topics: tuple[str, ...] = ()
+    schedule: AutomationSchedule | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "action", _token(self.action, "action_scope.action"))
+        for name in ("allowed_channels", "allowed_audiences", "allowed_content_topics"):
+            object.__setattr__(
+                self,
+                name,
+                _tokens(list(getattr(self, name)), f"action_scope.{name}"),
+            )
+        if self.schedule is not None and not isinstance(self.schedule, AutomationSchedule):
+            raise ValueError("action scope schedule is invalid")
+        semantics = automation_action_semantics(self.action)
+        if semantics is not None and semantics.external_write:
+            if not self.allowed_channels:
+                raise ValueError("external action scope requires at least one channel")
+            if not self.allowed_audiences:
+                raise ValueError("external action scope requires at least one audience")
+
+    def payload(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "action": self.action,
+            "allowed_channels": list(self.allowed_channels),
+            "allowed_audiences": list(self.allowed_audiences),
+            "allowed_content_topics": list(self.allowed_content_topics),
+        }
+        if self.schedule is not None:
+            payload["schedule"] = self.schedule.payload()
+        return payload
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any]) -> AutomationActionScope:
+        return cls(
+            action=str(payload.get("action") or ""),
+            allowed_channels=tuple(payload.get("allowed_channels") or ()),
+            allowed_audiences=tuple(payload.get("allowed_audiences") or ()),
+            allowed_content_topics=tuple(payload.get("allowed_content_topics") or ()),
+            schedule=(
+                None
+                if payload.get("schedule") is None
+                else AutomationSchedule.from_payload(dict(payload["schedule"]))
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class AutomationPolicySpec:
     mode: AutomationMode
     allowed_actions: tuple[str, ...]
@@ -323,6 +378,7 @@ class AutomationPolicySpec:
     allowed_content_topics: tuple[str, ...] = ()
     forbidden_claims: tuple[str, ...] = ()
     stop_conditions: tuple[str, ...] = ()
+    action_scopes: tuple[AutomationActionScope, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "mode", AutomationMode(self.mode))
@@ -341,6 +397,13 @@ class AutomationPolicySpec:
         overlap = set(self.allowed_actions) & set(self.forbidden_actions)
         if overlap:
             raise ValueError("an automation action cannot be both allowed and forbidden")
+        scopes = tuple(sorted(self.action_scopes, key=lambda item: item.action))
+        if len({scope.action for scope in scopes}) != len(scopes):
+            raise ValueError("duplicate automation action scopes are not allowed")
+        unknown_scopes = tuple(scope.action for scope in scopes if scope.action not in self.allowed_actions)
+        if unknown_scopes:
+            raise ValueError("automation action scope requires an explicitly allowed action")
+        object.__setattr__(self, "action_scopes", scopes)
         limits = tuple(sorted(self.money_limits, key=lambda item: (item.action, item.currency)))
         if len({(item.action, item.currency) for item in limits}) != len(limits):
             raise ValueError("duplicate money limits are not allowed")
@@ -378,7 +441,7 @@ class AutomationPolicySpec:
             object.__setattr__(self, "ai_usage_currency", _currency(self.ai_usage_currency, "ai_usage_currency"))
 
     def payload(self) -> dict[str, Any]:
-        return {
+        payload = {
             "mode": self.mode.value,
             "allowed_actions": list(self.allowed_actions),
             "forbidden_actions": list(self.forbidden_actions),
@@ -396,6 +459,10 @@ class AutomationPolicySpec:
             "forbidden_claims": list(self.forbidden_claims),
             "stop_conditions": list(self.stop_conditions),
         }
+        # Omit empty action_scopes so pre-scope policy JSON and hashes remain stable.
+        if self.action_scopes:
+            payload["action_scopes"] = [scope.payload() for scope in self.action_scopes]
+        return payload
 
     @property
     def policy_hash(self) -> str:
@@ -432,6 +499,9 @@ class AutomationPolicySpec:
         )
         data["approval_thresholds"] = tuple(
             AutomationApprovalThreshold.from_payload(dict(item)) for item in data.get("approval_thresholds") or ()
+        )
+        data["action_scopes"] = tuple(
+            AutomationActionScope.from_payload(dict(item)) for item in data.get("action_scopes") or ()
         )
         return cls(**data)
 
@@ -886,6 +956,26 @@ def evaluate_automation_policy(
         violations.append("policy_not_effective")
 
     spec = policy.spec
+    action_scope = next(
+        (scope for scope in spec.action_scopes if scope.action == candidate.action),
+        None,
+    )
+    allowed_channels = (
+        action_scope.allowed_channels if action_scope is not None else spec.allowed_channels
+    )
+    allowed_audiences = (
+        action_scope.allowed_audiences if action_scope is not None else spec.allowed_audiences
+    )
+    allowed_content_topics = (
+        action_scope.allowed_content_topics
+        if action_scope is not None and action_scope.allowed_content_topics
+        else spec.allowed_content_topics
+    )
+    effective_schedule = (
+        action_scope.schedule
+        if action_scope is not None and action_scope.schedule is not None
+        else spec.schedule
+    )
     semantics = automation_action_semantics(candidate.action)
     if semantics is None:
         violations.append("action_semantics_unknown")
@@ -902,21 +992,21 @@ def evaluate_automation_policy(
         violations.append("action_not_explicitly_allowed")
     if effective_external_write and candidate.channel is None:
         violations.append("external_channel_required")
-    elif candidate.channel is not None and candidate.channel not in spec.allowed_channels:
+    elif candidate.channel is not None and candidate.channel not in allowed_channels:
         violations.append("channel_not_allowed")
     if effective_external_write and candidate.audience is None:
         violations.append("external_audience_required")
-    elif candidate.audience is not None and candidate.audience not in spec.allowed_audiences:
+    elif candidate.audience is not None and candidate.audience not in allowed_audiences:
         violations.append("audience_not_allowed")
 
     scheduled = candidate.scheduled_at or _timestamp(now, "now")
-    if not spec.schedule.permits(scheduled):
+    if not effective_schedule.permits(scheduled):
         violations.append("schedule_or_quiet_hours_block")
 
     active_stops = set(candidate.active_stop_conditions) & set(spec.stop_conditions)
     if active_stops:
         violations.append("stop_condition_active")
-    if spec.allowed_content_topics and not set(candidate.content_topics).issubset(spec.allowed_content_topics):
+    if allowed_content_topics and not set(candidate.content_topics).issubset(allowed_content_topics):
         violations.append("content_topic_not_allowed")
     if set(candidate.claims) & set(spec.forbidden_claims):
         violations.append("forbidden_claim")
@@ -987,6 +1077,7 @@ def evaluate_automation_policy(
 __all__ = [
     "AutomationActionApproval",
     "AutomationActionAuthorization",
+    "AutomationActionScope",
     "AutomationActionSemantics",
     "AutomationApprovalConflict",
     "AutomationApprovalNotFound",

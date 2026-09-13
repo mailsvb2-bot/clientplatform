@@ -55,12 +55,87 @@ async def send_cockpit_section(
                 )
         else:
             lines.append("Пока нет опубликованных мероприятий.")
+        followups_enabled = bool(getattr(snapshot, "commercial_followups_enabled", False))
+        followups_effective = bool(
+            getattr(snapshot, "commercial_followups_effective", followups_enabled)
+        )
+        followups_available = bool(
+            getattr(snapshot, "commercial_followups_platform_available", True)
+        )
+        followup_segments = set(
+            getattr(
+                snapshot,
+                "commercial_followup_segments",
+                ("no_show", "join_signal_unpaid", "attended_unpaid", "offer_clicked_unpaid"),
+            )
+        )
+        followup_channels = set(
+            getattr(snapshot, "commercial_followup_channels", ("email", "max", "vk"))
+        )
+        if followups_enabled and not followups_effective:
+            followup_status = "Автоматические сообщения после мероприятия: 🟡 ВКЛ, временно приостановлены"
+        elif followups_enabled:
+            followup_status = "Автоматические сообщения после мероприятия: 🟢 ВКЛ"
+        else:
+            followup_status = "Автоматические сообщения после мероприятия: ⚪️ ВЫКЛ"
+        lines.extend(["", followup_status])
+        segment_labels = (
+            ("no_show", "Зарегистрировались, но не пришли"),
+            ("join_signal_unpaid", "Перешли к эфиру, участие не подтверждено"),
+            ("attended_unpaid", "Были на вебинаре, но не купили"),
+            ("offer_clicked_unpaid", "Открыли предложение, но не купили"),
+        )
+        lines.append("Кому писать:")
+        lines.extend(
+            f"{'✅' if key in followup_segments else '▫️'} {label}"
+            for key, label in segment_labels
+        )
+        channel_labels = (("email", "Email"), ("max", "MAX"), ("vk", "VK"))
+        lines.append(
+            "Каналы: "
+            + " · ".join(
+                f"{'✅' if key in followup_channels else '▫️'} {label}"
+                for key, label in channel_labels
+            )
+        )
+        if not followups_available:
+            if followups_enabled:
+                lines.append(
+                    "Платформа временно остановила отправку; настройка бизнеса сохранена. "
+                    "Вы можете выключить её сейчас, чтобы сообщения не возобновились автоматически."
+                )
+            else:
+                lines.append("Автосерия временно отключена на уровне платформы.")
         if snapshot.limitations:
             lines.extend(["", *snapshot.limitations])
         token = one_click.control._uuid_token(business_id)
         rows: list[list[tuple[str, str]]] = []
         if snapshot.can_manage:
             rows.append([("🎥 Создать вебинар", f"cpev:new:{token}")])
+            if followups_enabled:
+                rows.append([("🔴 Выключить автосообщения", f"cpev:followups:off:{token}")])
+            elif bool(getattr(snapshot, "can_enable_commercial_followups", False)):
+                rows.append([("🟢 Включить автосообщения", f"cpev:followups:on:{token}")])
+            can_expand = bool(getattr(snapshot, "can_expand_commercial_followups", False))
+            for key, label in segment_labels:
+                active = key in followup_segments
+                if active or can_expand:
+                    rows.append([
+                        (
+                            f"{'✅' if active else '▫️'} {label}",
+                            f"cpev:seg:{key}:{'off' if active else 'on'}:{token}",
+                        )
+                    ])
+            channel_row = []
+            for key, label in channel_labels:
+                active = key in followup_channels
+                if active or can_expand:
+                    channel_row.append((
+                        f"{'✅' if active else '▫️'} {label}",
+                        f"cpev:ch:{key}:{'off' if active else 'on'}:{token}",
+                    ))
+            if channel_row:
+                rows.append(channel_row)
         rows.append([("📈 К росту", f"cpo:content:{token}")])
         rows.append([("🏠 В кабинет", f"cpj:home:{token}")])
         await target.answer(

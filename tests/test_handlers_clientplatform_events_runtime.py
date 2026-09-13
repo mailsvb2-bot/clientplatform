@@ -169,6 +169,115 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("внешняя площадка", answer)
         self.assertIn("E-mail не подключён", answer)
 
+    async def test_toggle_autosend_enables_business_setting_and_refreshes_events(self) -> None:
+        callback = _callback()
+        callback.data = f"cpev:followups:on:{TOKEN}"
+        actor = MagicMock(unsafe=True)
+        reply = SimpleNamespace(answer=AsyncMock())
+        with (
+            patch.object(events.control, "_token_uuid", return_value=BUSINESS_ID),
+            patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(events, "get_business_event_followup_settings", return_value=None),
+            patch.object(events, "set_business_event_followups_enabled", return_value=True) as setter,
+            patch.object(events.control, "_callback_message", return_value=reply),
+            patch("handlers.clientplatform_cockpit_dispatch.send_cockpit_section", new=AsyncMock()) as refresh,
+        ):
+            await events.toggle_event_followups(callback)
+        setter.assert_called_once_with(actor=actor, enabled=True)
+        callback.answer.assert_awaited_once_with("Автоматические сообщения включены")
+        refresh.assert_awaited_once_with(
+            reply, user_id=101, business_id=BUSINESS_ID, section="events"
+        )
+
+    async def test_toggle_event_segment_updates_strategy_and_refreshes_events(self) -> None:
+        callback = _callback()
+        callback.data = f"cpev:seg:attended_unpaid:off:{TOKEN}"
+        actor = MagicMock(unsafe=True)
+        reply = SimpleNamespace(answer=AsyncMock())
+        with (
+            patch.object(events.control, "_token_uuid", return_value=BUSINESS_ID),
+            patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(events, "set_business_event_followup_segment_enabled") as setter,
+            patch.object(events.control, "_callback_message", return_value=reply),
+            patch("handlers.clientplatform_cockpit_dispatch.send_cockpit_section", new=AsyncMock()) as refresh,
+        ):
+            await events.toggle_event_followup_segment(callback)
+        setter.assert_called_once_with(actor=actor, segment="attended_unpaid", enabled=False)
+        callback.answer.assert_awaited_once_with("Настройка участников сохранена")
+        refresh.assert_awaited_once_with(
+            reply, user_id=101, business_id=BUSINESS_ID, section="events"
+        )
+
+    async def test_toggle_event_channel_updates_strategy_and_refreshes_events(self) -> None:
+        callback = _callback()
+        callback.data = f"cpev:ch:max:off:{TOKEN}"
+        actor = MagicMock(unsafe=True)
+        reply = SimpleNamespace(answer=AsyncMock())
+        with (
+            patch.object(events.control, "_token_uuid", return_value=BUSINESS_ID),
+            patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(events, "set_business_event_followup_channel_enabled") as setter,
+            patch.object(events.control, "_callback_message", return_value=reply),
+            patch("handlers.clientplatform_cockpit_dispatch.send_cockpit_section", new=AsyncMock()) as refresh,
+        ):
+            await events.toggle_event_followup_channel(callback)
+        setter.assert_called_once_with(actor=actor, channel="max", enabled=False)
+        callback.answer.assert_awaited_once_with("Настройка канала сохранена")
+        refresh.assert_awaited_once_with(
+            reply, user_id=101, business_id=BUSINESS_ID, section="events"
+        )
+
+    async def test_event_autosend_callbacks_surface_stale_permission_and_validation_errors(self) -> None:
+        stale = _callback()
+        stale.data = "cpev:followups:maybe:broken"
+        await events.toggle_event_followups(stale)
+        stale.answer.assert_awaited_once_with("Переключатель устарел", show_alert=True)
+
+        actor = MagicMock(unsafe=True)
+        for error, expected in (
+            (TenantPermissionDenied("denied"), "Включить автоматические сообщения после мероприятия может владелец бизнеса"),
+            (ValueError("platform stop"), "platform stop"),
+        ):
+            callback = _callback()
+            callback.data = f"cpev:followups:on:{TOKEN}"
+            with (
+                patch.object(events.control, "_token_uuid", return_value=BUSINESS_ID),
+                patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
+                patch.object(events, "get_business_event_followup_settings", return_value=None),
+                patch.object(events, "set_business_event_followups_enabled", side_effect=error),
+            ):
+                await events.toggle_event_followups(callback)
+            callback.answer.assert_awaited_once_with(expected, show_alert=True)
+
+    async def test_event_strategy_callbacks_surface_stale_permission_and_validation_errors(self) -> None:
+        stale_segment = _callback()
+        stale_segment.data = "cpev:seg:attended_unpaid:maybe:broken"
+        await events.toggle_event_followup_segment(stale_segment)
+        stale_segment.answer.assert_awaited_once_with("Настройка устарела", show_alert=True)
+
+        stale_channel = _callback()
+        stale_channel.data = "cpev:ch:max:maybe:broken"
+        await events.toggle_event_followup_channel(stale_channel)
+        stale_channel.answer.assert_awaited_once_with("Настройка устарела", show_alert=True)
+
+        actor = MagicMock(unsafe=True)
+        cases = (
+            (events.toggle_event_followup_segment, "cpev:seg:attended_unpaid:on", "set_business_event_followup_segment_enabled", TenantPermissionDenied("denied"), "Расширить группы участников вебинара может только владелец бизнеса"),
+            (events.toggle_event_followup_segment, "cpev:seg:attended_unpaid:off", "set_business_event_followup_segment_enabled", ValueError("last segment"), "last segment"),
+            (events.toggle_event_followup_channel, "cpev:ch:max:on", "set_business_event_followup_channel_enabled", TenantPermissionDenied("denied"), "Расширить каналы сообщений участникам вебинара может только владелец бизнеса"),
+            (events.toggle_event_followup_channel, "cpev:ch:max:off", "set_business_event_followup_channel_enabled", ValueError("last channel"), "last channel"),
+        )
+        for handler, prefix, setter_name, error, expected in cases:
+            callback = _callback()
+            callback.data = f"{prefix}:{TOKEN}"
+            with (
+                patch.object(events.control, "_token_uuid", return_value=BUSINESS_ID),
+                patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
+                patch.object(events, setter_name, side_effect=error),
+            ):
+                await handler(callback)
+            callback.answer.assert_awaited_once_with(expected, show_alert=True)
+
     async def test_cancel_rejects_stale_business_and_clears_matching_state(self) -> None:
         callback = _callback()
         callback.data = f"cpev:cancel:{TOKEN}"

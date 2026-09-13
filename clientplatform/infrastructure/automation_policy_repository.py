@@ -234,6 +234,26 @@ class AutomationPolicyRepository:
         ).fetchone()
         return None if row is None else _policy_from_row(row)
 
+    def locked_policy_state(
+        self,
+        *,
+        actor: TenantContext,
+        now: datetime | str | None = None,
+    ) -> tuple[TenantContext, AutomationPolicy | None, AutomationPolicy | None]:
+        """Lock the business before cloning any canonical policy state.
+
+        Revocation, approval and owner-toggle mutations all serialize on the same
+        business row. Callers must keep the surrounding database transaction open
+        while deriving and approving the replacement policy.
+        """
+
+        current = self._current(actor, manage=True)
+        timestamp = _utc_now(now)
+        self._lock_business(current.business_id)
+        effective = self.effective(actor=current, now=timestamp)
+        latest = self.latest(actor=current)
+        return current, effective, latest
+
     def effective(self, *, actor: TenantContext, now: datetime | str | None = None) -> AutomationPolicy | None:
         current = self._current(actor)
         timestamp = _utc_now(now)
@@ -267,7 +287,10 @@ class AutomationPolicyRepository:
         current = self._current(actor)
         effective = self.effective(actor=current, now=now)
         if effective is not None:
-            return effective.spec.mode == AutomationMode.AUTOPILOT
+            return (
+                "growth.read_only_analysis" in effective.spec.allowed_actions
+                and effective.spec.mode != AutomationMode.CAUTIOUS
+            )
         owner_authority_row = self._conn.execute(
             """
             SELECT 1

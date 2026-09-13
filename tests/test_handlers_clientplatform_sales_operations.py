@@ -685,7 +685,7 @@ async def test_followup_owner_prompt_schedule_and_keyboard(
     assert captured["lead_id"] == lead_id
     assert captured["message_text"] == "Анна, добрый день. Подсказать?"
     assert captured["request_key"] == "telegram-callback:callback-1"
-    assert callback.answers[-1][0][0] == "Follow-up запланирован"
+    assert callback.answers[-1][0][0] == "Напоминание запланировано"
     assert state.clear_count == 1
 
     active = dict(item)
@@ -693,7 +693,7 @@ async def test_followup_owner_prompt_schedule_and_keyboard(
     active_labels = _labels(
         operations._detail_keyboard(business_id, active, user_id=101)
     )
-    assert "✖️ Отменить follow-up" in active_labels
+    assert "✖️ Отменить напоминание" in active_labels
     assert "✉️ Напомнить клиенту" not in active_labels
 
     suppressed = dict(item)
@@ -728,7 +728,7 @@ async def test_followup_cancel_and_opt_out_callbacks(
     cancel_callback = FakeCallback(f"cps:swfz:{bt}:{lt}")
     await operations.cancel_sales_followup_owner(cancel_callback, FakeState())
     assert calls["cancel"]["lead_id"] == lead_id
-    assert cancel_callback.answers[-1][0][0] == "Follow-up отменён"
+    assert cancel_callback.answers[-1][0][0] == "Напоминание отменено"
 
     confirm = FakeCallback(f"cps:swfoq:{bt}:{lt}")
     await operations.confirm_sales_followup_opt_out(confirm, FakeState())
@@ -740,7 +740,7 @@ async def test_followup_cancel_and_opt_out_callbacks(
     await operations.apply_sales_followup_opt_out(apply_callback, FakeState())
     assert calls["suppress"]["lead_id"] == lead_id
     assert calls["suppress"]["reason"] == "opt_out"
-    assert apply_callback.answers[-1][0][0] == "Запрет на follow-up сохранён"
+    assert apply_callback.answers[-1][0][0] == "Запрет на сообщения сохранён"
 
 
 @pytest.mark.asyncio
@@ -765,7 +765,7 @@ async def test_followup_owner_fail_closed_edges(
     begin = FakeCallback(f"cps:swff:{bt}:{lt}")
     await operations.begin_sales_followup(begin, FakeState())
     assert begin.answers[-1][1]["show_alert"] is True
-    assert "недоступен" in begin.answers[-1][0][0]
+    assert "недоступ" in begin.answers[-1][0][0]
     assert "запланирован" in operations._item_text(blocked, user_id=101)
 
     suppressed = dict(blocked)

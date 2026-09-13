@@ -144,3 +144,56 @@ def ensure(c: sqlite3.Connection) -> None:
         )
         """
     )
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS clientplatform_event_followup_settings(
+            business_id TEXT PRIMARY KEY,
+            enabled INTEGER NOT NULL DEFAULT 0,
+            segment_no_show INTEGER NOT NULL DEFAULT 1,
+            segment_join_signal INTEGER NOT NULL DEFAULT 1,
+            segment_attended INTEGER NOT NULL DEFAULT 1,
+            segment_offer_clicked INTEGER NOT NULL DEFAULT 1,
+            channel_email INTEGER NOT NULL DEFAULT 1,
+            channel_max INTEGER NOT NULL DEFAULT 1,
+            channel_vk INTEGER NOT NULL DEFAULT 1,
+            settings_epoch INTEGER NOT NULL DEFAULT 1,
+            updated_by_member_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(business_id) REFERENCES businesses(id) ON DELETE CASCADE,
+            FOREIGN KEY(updated_by_member_id, business_id)
+                REFERENCES business_members(id, business_id),
+            CHECK(enabled IN (0,1)),
+            CHECK(segment_no_show IN (0,1)),
+            CHECK(segment_join_signal IN (0,1)),
+            CHECK(segment_attended IN (0,1)),
+            CHECK(segment_offer_clicked IN (0,1)),
+            CHECK(channel_email IN (0,1)),
+            CHECK(channel_max IN (0,1)),
+            CHECK(channel_vk IN (0,1)),
+            CHECK(settings_epoch >= 1)
+        )
+        """
+    )
+    # Existing production databases already have the master switch table.
+    # Grow it in place so strategy settings are available without recreating data.
+    followup_columns = {
+        str(row["name"] if hasattr(row, "keys") else row[1])
+        for row in c.execute(
+            "PRAGMA table_info(clientplatform_event_followup_settings)"
+        ).fetchall()
+    }
+    for column in (
+        "segment_no_show",
+        "segment_join_signal",
+        "segment_attended",
+        "segment_offer_clicked",
+        "channel_email",
+        "channel_max",
+        "channel_vk",
+    ):
+        if column not in followup_columns:
+            c.execute(
+                f"ALTER TABLE clientplatform_event_followup_settings "  # nosec B608
+                f"ADD COLUMN {column} INTEGER NOT NULL DEFAULT 1"
+            )

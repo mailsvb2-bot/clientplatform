@@ -127,7 +127,8 @@ _PUBLICATION_STATUS_LABELS = {
 _AUTOMATION_ACTION_LABELS = {
     "growth.read_only_analysis": "Проанализировать рост",
     "ads.adjust_budget": "Изменить рекламный бюджет",
-    "sales.followup": "Отправить клиенту follow-up",
+    "sales.followup": "Отправить клиенту напоминание",
+    "events.commercial_followup": "Отправить автоматическое сообщение после мероприятия",
     "payments.refund": "Оформить возврат",
 }
 _AUTOMATION_CHANNEL_LABELS = {
