@@ -3,9 +3,8 @@ from __future__ import annotations
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import sqlite3
+import unittest
 from unittest.mock import patch
-
-import pytest
 
 from clientplatform.application import event_followup_settings as settings_app
 from clientplatform.infrastructure.automation_policy_repository import AutomationPolicyRepository
@@ -175,7 +174,7 @@ def test_platform_kill_switch_blocks_owner_enable(monkeypatch) -> None:
     monkeypatch.setenv("CLIENTPLATFORM_EVENT_COMMERCIAL_FOLLOWUPS_ENABLED", "false")
     assert event_followups_platform_enabled() is False
     with patch.object(settings_app, "get_db", side_effect=lambda: _shared(conn)):
-        with pytest.raises(ValueError, match="уровне платформы"):
+        with unittest.TestCase().assertRaisesRegex(ValueError, "уровне платформы"):
             settings_app.set_business_event_followups_enabled(
                 actor=owner,
                 enabled=True,
@@ -337,7 +336,7 @@ def test_policy_source_is_read_after_business_lock(monkeypatch) -> None:
 def test_settings_repository_validation_and_platform_gate(monkeypatch) -> None:
     conn, owner = _owner_db()
     repository = EventFollowupSettingsRepository(conn)
-    with pytest.raises(ValueError, match="enabled must be boolean"):
+    with unittest.TestCase().assertRaisesRegex(ValueError, "enabled must be boolean"):
         repository.set_enabled(
             business_id=owner.business_id,
             enabled=1,  # type: ignore[arg-type]
@@ -411,12 +410,12 @@ def test_event_strategy_flags_are_durable_and_require_nonempty_active_strategy(m
             if scope.action == "events.commercial_followup"
         )
         assert event_scope.allowed_channels == ("email",)
-        with pytest.raises(ValueError, match="хотя бы одна группа"):
+        with unittest.TestCase().assertRaisesRegex(ValueError, "хотя бы одна группа"):
             settings_app.set_business_event_followup_segment_enabled(
                 actor=owner, segment="attended_unpaid", enabled=False,
                 now=datetime(2026, 9, 12, 12, 3, tzinfo=timezone.utc),
             )
-        with pytest.raises(ValueError, match="хотя бы один канал"):
+        with unittest.TestCase().assertRaisesRegex(ValueError, "хотя бы один канал"):
             settings_app.set_business_event_followup_channel_enabled(
                 actor=owner, channel="email", enabled=False,
                 now=datetime(2026, 9, 12, 12, 4, tzinfo=timezone.utc),
