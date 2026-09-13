@@ -169,6 +169,8 @@ from clientplatform.presentation.event_ui import (
     event_creation_success_text,
     event_hub_actions,
     event_hub_text,
+    event_settings_actions,
+    event_settings_text,
 )
 from config.settings import settings
 from services.accounts.identity import resolve_account_for_identity
@@ -743,6 +745,7 @@ def parse_native_member_interaction(value: object) -> ParsedMemberInteraction:
             "growth-analysis",
             "growth-lifecycle",
             "events",
+            "event-settings",
             "event-followups",
             "event-segment",
             "event-channel",
@@ -1163,9 +1166,10 @@ _NATIVE_PARENT_COMMANDS: dict[str, str] = {
     "growth-more": "cpm:growth",
     "growth-lifecycle": "cpm:growth-more",
     "events": "cpm:growth",
-    "event-followups": "cpm:growth",
-    "event-segment": "cpm:growth",
-    "event-channel": "cpm:growth",
+    "event-settings": "cpm:events",
+    "event-followups": "cpm:events",
+    "event-segment": "cpm:events",
+    "event-channel": "cpm:events",
     "event-new": "cpm:events",
     "event-create-text": "cpm:events",
     "acquire": "cpm:growth",
@@ -1342,9 +1346,9 @@ def _with_parent_navigation(
         )
     ]
     total = sum(len(row) for row in rows)
-    if parsed.action in {"events", "event-followups", "event-segment", "event-channel"}:
+    if parsed.action == "events":
         back_label = BACK_TO_GROWTH_LABEL
-    elif parsed.action in {"event-new", "event-create-text"} or (
+    elif parsed.action in {"event-settings", "event-followups", "event-segment", "event-channel", "event-new", "event-create-text"} or (
         parsed.action in {"owner-input-invalid", "owner-input-cancelled"}
         and parsed.args
         and parsed.args[0] == "online_event"
@@ -2040,6 +2044,8 @@ def _growth_analysis_message(actor: TenantContext) -> CustomerInteractionMessage
 def _event_action_command(action: EventHubAction) -> str:
     if action.kind == "create":
         return "cpm:event-new"
+    if action.kind == "settings":
+        return "cpm:event-settings"
     if action.kind == "followups":
         return f"cpm:event-followups:{'on' if action.enabled else 'off'}"
     if action.kind == "segment" and action.key is not None:
@@ -2049,24 +2055,76 @@ def _event_action_command(action: EventHubAction) -> str:
     raise ValueError("unsupported event hub action")
 
 
-def _events_message(actor: TenantContext) -> CustomerInteractionMessage:
-    snapshot = resolve_events_snapshot(
-        actor=actor,
-        business_name=_business_name(actor),
-        limit=5,
-    )
+def _event_projection_fallback(actor: TenantContext) -> CustomerInteractionMessage:
     rows: list[tuple[CustomerInteractionButton, ...]] = []
-    channel_row: list[CustomerInteractionButton] = []
-    for action in event_hub_actions(snapshot):
-        button = _button(action.label, _event_action_command(action))
-        if action.kind == "channel":
-            channel_row.append(button)
-        else:
-            rows.append((button,))
-    if channel_row:
-        rows.append(tuple(channel_row))
+    try:
+        actor.assert_can_manage_business()
+    except TenantPermissionDenied:
+        pass
+    else:
+        rows.append((_button("🎥 Создать вебинар", "cpm:event-new"),))
     rows.append(_back_row())
-    return CustomerInteractionMessage(text=event_hub_text(snapshot), rows=tuple(rows))
+    return CustomerInteractionMessage(
+        text=(
+            "🎥 Вебинары\n\n"
+            "Раздел открыт, но статистику сейчас не удалось загрузить. "
+            "Можно создать новый вебинар или вернуться сюда позже."
+        ),
+        rows=tuple(rows),
+    )
+
+
+def _events_message(actor: TenantContext) -> CustomerInteractionMessage:
+    try:
+        snapshot = resolve_events_snapshot(
+            actor=actor,
+            business_name=_business_name(actor),
+            limit=5,
+        )
+        rows: list[tuple[CustomerInteractionButton, ...]] = []
+        for action in event_hub_actions(snapshot):
+            rows.append((_button(action.label, _event_action_command(action)),))
+        rows.append(_back_row())
+        return CustomerInteractionMessage(text=event_hub_text(snapshot), rows=tuple(rows))
+    except ValueError:
+        log.exception(
+            "Native webinar overview projection failed",
+            extra={"business_id": actor.business_id, "member_user_id": actor.user_id},
+        )
+        return _event_projection_fallback(actor)
+
+
+def _event_settings_message(actor: TenantContext) -> CustomerInteractionMessage:
+    try:
+        snapshot = resolve_events_snapshot(
+            actor=actor,
+            business_name=_business_name(actor),
+            limit=5,
+        )
+        rows: list[tuple[CustomerInteractionButton, ...]] = []
+        channel_row: list[CustomerInteractionButton] = []
+        for action in event_settings_actions(snapshot):
+            button = _button(action.label, _event_action_command(action))
+            if action.kind == "channel":
+                channel_row.append(button)
+            else:
+                rows.append((button,))
+        if channel_row:
+            rows.append(tuple(channel_row))
+        rows.append(_back_row())
+        return CustomerInteractionMessage(text=event_settings_text(snapshot), rows=tuple(rows))
+    except ValueError:
+        log.exception(
+            "Native webinar settings projection failed",
+            extra={"business_id": actor.business_id, "member_user_id": actor.user_id},
+        )
+        return CustomerInteractionMessage(
+            text=(
+                "⚙️ Автосообщения после вебинара\n\n"
+                "Настройки сейчас не удалось загрузить. Вернитесь к вебинарам и попробуйте позже."
+            ),
+            rows=(_back_row(),),
+        )
 
 def _event_followups_action(
     actor: TenantContext, args: tuple[str, ...]
@@ -2080,7 +2138,7 @@ def _event_followups_action(
             text=f"Не удалось изменить автосообщения: {exc}",
             rows=((_button(BACK_TO_EVENTS_LABEL, "cpm:events"),), _back_row()),
         )
-    return _events_message(actor)
+    return _event_settings_message(actor)
 
 
 def _event_segment_action(
@@ -2099,7 +2157,7 @@ def _event_segment_action(
             text=f"Не удалось изменить группу участников: {exc}",
             rows=((_button(BACK_TO_EVENTS_LABEL, "cpm:events"),), _back_row()),
         )
-    return _events_message(actor)
+    return _event_settings_message(actor)
 
 
 def _event_channel_action(
@@ -2118,7 +2176,7 @@ def _event_channel_action(
             text=f"Не удалось изменить канал: {exc}",
             rows=((_button(BACK_TO_EVENTS_LABEL, "cpm:events"),), _back_row()),
         )
-    return _events_message(actor)
+    return _event_settings_message(actor)
 
 
 def _event_new_message(
@@ -5039,6 +5097,8 @@ def _render(
             return _growth_lifecycle_message(actor)
         if parsed.action == "events":
             return _events_message(actor)
+        if parsed.action == "event-settings":
+            return _event_settings_message(actor)
         if parsed.action == "event-followups":
             return _event_followups_action(actor, parsed.args)
         if parsed.action == "event-segment":

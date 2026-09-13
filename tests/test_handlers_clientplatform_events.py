@@ -60,10 +60,12 @@ def test_event_hub_is_repeatable_navigation_but_creation_remains_a_mutation() ->
     surface_contract.install_button_surface_contract(safety)
     assert safety._is_clientplatform_callback(f"cpev:home:{_TOKEN}")
     assert safety._is_repeatable_navigation(f"cpev:home:{_TOKEN}")
+    assert safety._is_repeatable_navigation(f"cpev:settings:{_TOKEN}")
     assert not safety._is_repeatable_navigation(f"cpev:new:{_TOKEN}")
     state_name = "ClientPlatformControlState:activity_description"
     assert not safety._callback_conflicts_with_state(state_name, f"cpev:home:{_TOKEN}")
     assert safety._callback_should_clear_state(state_name, f"cpev:home:{_TOKEN}")
+    assert safety._callback_should_clear_state(state_name, f"cpev:settings:{_TOKEN}")
     assert safety._state_local_callback_allowed(
         "ClientPlatformEventState:waiting_details",
         f"cpev:cancel:{_TOKEN}",
