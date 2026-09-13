@@ -592,7 +592,7 @@ def _more_rows(token: str, actor) -> list[list[tuple[str, str]]]:
         rows.append([(nav.CLIENTS_SALES.label, f"cpo:clients:{token}")])
     if can_customers or _allowed(actor, actor.assert_can_manage_programs):
         rows.append([(nav.SERVICES_BOOKING.label, f"cpo:work:{token}")])
-    if _allowed(actor, actor.assert_can_manage_promotions):
+    if _allowed(actor, actor.assert_can_manage_promotions) or _event_funnel_visible(actor):
         rows.append([(nav.CONTENT_PROMOTION.label, f"cpo:content:{token}")])
     rows.append([(nav.BUSINESS_SETTINGS.label, f"cpo:settings:{token}")])
     rows.append([(nav.BACK.label, f"cpj:home:{token}")])

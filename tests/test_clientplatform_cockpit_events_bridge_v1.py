@@ -173,5 +173,31 @@ class CockpitEventsBridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(any(callback.startswith("cpev:new:") for _label, callback in flattened))
 
 
+    async def test_events_section_rejects_unknown_semantic_action(self) -> None:
+        snapshot = SimpleNamespace(items=())
+        target = SimpleNamespace(answer=AsyncMock())
+        unknown = SimpleNamespace(kind="unknown", label="Неизвестно", key=None, enabled=None)
+        with (
+            patch.object(cockpit_dispatch, "resolve_cockpit_events", return_value=snapshot),
+            patch.object(cockpit_dispatch, "event_hub_actions", return_value=(unknown,)),
+        ):
+            with self.assertRaisesRegex(ValueError, "unsupported event hub action"):
+                await cockpit_dispatch.send_cockpit_section(
+                    target, user_id=101, business_id=_BUSINESS, section="events"
+                )
+        target.answer.assert_not_awaited()
+
+    async def test_cockpit_action_route_rejects_unknown_route(self) -> None:
+        target = SimpleNamespace(answer=AsyncMock())
+        route = SimpleNamespace(
+            section=None, kind="unknown", lead_id=None, business_id=_BUSINESS
+        )
+        with self.assertRaisesRegex(ValueError, "unsupported cockpit action route"):
+            await cockpit_dispatch.send_cockpit_action_route(
+                target, user_id=101, route=route
+            )
+        target.answer.assert_not_awaited()
+
+
 if __name__ == "__main__":
     unittest.main()

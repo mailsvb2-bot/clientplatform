@@ -21,6 +21,14 @@ from clientplatform.application.event_followup_settings import (
 )
 from clientplatform.domain.bookings import parse_local_booking_start
 from clientplatform.domain.tenancy import TenantPermissionDenied
+from clientplatform.presentation.event_ui import (
+    BACK_TO_EVENTS_LABEL,
+    BACK_TO_GROWTH_LABEL,
+    EVENT_CREATION_INPUT_GUIDANCE,
+    event_creation_failure_text,
+    event_creation_prompt,
+    event_creation_success_text,
+)
 from config.settings import settings
 
 from . import clientplatform_control as control
@@ -36,7 +44,7 @@ class ClientPlatformEventState(StatesGroup):
 
 def _cancel_keyboard(business_id: str):
     token = control._uuid_token(business_id)
-    return control._keyboard([[("✖️ Отмена", f"cpev:cancel:{token}")]])
+    return control._keyboard([[(BACK_TO_EVENTS_LABEL, f"cpev:cancel:{token}")]])
 
 
 def _public_base_url() -> str:
@@ -71,16 +79,13 @@ async def start_event_wizard(callback: CallbackQuery, state: FSMContext) -> None
     except TenantPermissionDenied:
         await callback.answer("Создавать мероприятия может владелец или администратор", show_alert=True)
         return
+    profile = await asyncio.to_thread(get_business_profile, actor=actor)
     await state.clear()
     await state.set_state(ClientPlatformEventState.waiting_details)
     await state.update_data(event_business_id=business_id)
     await callback.answer()
     await control._callback_message(callback).answer(
-        "🎥 Новое онлайн-мероприятие\n\n"
-        "Отправьте одной строкой:\n"
-        "Название | ДД.ММ.ГГГГ ЧЧ:ММ | HTTPS-ссылка на эфир | ссылка предложения\n\n"
-        "Последнее поле необязательно — вместо него можно поставить -.\n"
-        "Площадка может быть любой: Zoom, Webinar.ru, МТС Линк, Телемост, VK, YouTube, RuTube или другой HTTPS-сервис.",
+        event_creation_prompt(profile.timezone),
         reply_markup=_cancel_keyboard(business_id),
     )
 
@@ -95,9 +100,23 @@ async def receive_event_details(message: Message, state: FSMContext) -> None:
         return
     actor = await control._actor(int(message.from_user.id), business_id)
     actor.assert_can_manage_business()
+    if " ".join(str(message.text or "").strip().split()).casefold() in {"отмена", "cancel"}:
+        await state.clear()
+        await message.answer(
+            "Создание вебинара отменено. Данные не изменены.",
+            reply_markup=control._keyboard(
+                [[(BACK_TO_EVENTS_LABEL, f"cpev:home:{control._uuid_token(business_id)}")]]
+            ),
+        )
+        return
     parts = [part.strip() for part in str(message.text or "").split("|")]
     if len(parts) not in {3, 4} or not all(parts[:3]):
-        await message.answer("Нужны 3–4 поля через |. Пример: Вебинар | 15.09.2026 19:00 | https://example.com/room | -", reply_markup=_cancel_keyboard(business_id))
+        await message.answer(
+            "Не получилось понять ответ.\n\n"
+            + EVENT_CREATION_INPUT_GUIDANCE
+            + "\n\nЧтобы выйти без изменений, отправьте «Отмена» или нажмите «🎥 К вебинарам».",
+            reply_markup=_cancel_keyboard(business_id),
+        )
         return
     title, local_time, join_url = parts[:3]
     offer_url = None if len(parts) == 3 or parts[3] in {"", "-"} else parts[3]
@@ -118,19 +137,28 @@ async def receive_event_details(message: Message, state: FSMContext) -> None:
             ),
         )
         registration_url = created.registration_url(_public_base_url())
-    except (ValueError, RuntimeError) as exc:
-        await message.answer(f"Не удалось создать мероприятие: {exc}\n\nИсправьте строку и отправьте её ещё раз.", reply_markup=_cancel_keyboard(business_id))
+    except (ValueError, RuntimeError):
+        await message.answer(
+            event_creation_failure_text()
+            + "\n\nИсправьте строку и отправьте её ещё раз.",
+            reply_markup=_cancel_keyboard(business_id),
+        )
         return
     await state.clear()
-    provider = created.provider_key if created.provider_key != "external" else "внешняя площадка"
-    mail_note = "Напоминания по e-mail включены." if created.email_notifications_enabled else "E-mail не подключён — регистрация и ссылка входа всё равно работают."
+    token = control._uuid_token(business_id)
     await message.answer(
-        f"✅ Мероприятие опубликовано.\n\nПлощадка: {provider}\nРегистрация: {registration_url}\n\n{mail_note}",
+        event_creation_success_text(
+            title=title,
+            local_time=local_time,
+            provider_key=created.provider_key,
+            registration_url=registration_url,
+            email_notifications_enabled=created.email_notifications_enabled,
+        ),
         reply_markup=control._keyboard(
             [
-                [("🎥 К вебинарам", f"cpev:home:{control._uuid_token(business_id)}")],
-                [("🎥 Создать ещё", f"cpev:new:{control._uuid_token(business_id)}")],
-                [("⬅️ К продвижению", f"cpo:content:{control._uuid_token(business_id)}")],
+                [(BACK_TO_EVENTS_LABEL, f"cpev:home:{token}")],
+                [("🎥 Создать ещё", f"cpev:new:{token}")],
+                [(BACK_TO_GROWTH_LABEL, f"cpo:content:{token}")],
             ]
         ),
     )
@@ -264,8 +292,8 @@ async def cancel_event_wizard(callback: CallbackQuery, state: FSMContext) -> Non
     await state.clear()
     await callback.answer("Создание отменено")
     await control._callback_message(callback).answer(
-        "Создание мероприятия отменено.",
-        reply_markup=control._keyboard([[('⬅️ К вебинарам', f'cpev:home:{token}')]]),
+        "Создание вебинара отменено. Данные не изменены.",
+        reply_markup=control._keyboard([[(BACK_TO_EVENTS_LABEL, f"cpev:home:{token}")]]),
     )
 
 
