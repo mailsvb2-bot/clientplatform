@@ -44,7 +44,7 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
         ):
             self.assertEqual(
                 events._cancel_keyboard(BUSINESS_ID),
-                [[("✖️ Отмена", f"cpev:cancel:{TOKEN}")]],
+                [[("🎥 К вебинарам", f"cpev:cancel:{TOKEN}")]],
             )
 
     async def test_webinar_hub_routes_to_canonical_events_screen(self) -> None:
@@ -89,6 +89,9 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch.object(events.control, "_token_uuid", return_value=BUSINESS_ID),
             patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(
+                events, "get_business_profile", return_value=SimpleNamespace(timezone="Europe/Moscow")
+            ),
             patch.object(events.control, "_callback_message", return_value=reply),
             patch.object(events, "_cancel_keyboard", return_value="cancel"),
         ):
@@ -118,7 +121,8 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
         ):
             await events.receive_event_details(message, state)
         actor.assert_can_manage_business.assert_called_once_with()
-        self.assertIn("Нужны 3–4 поля", message.answer.await_args.args[0])
+        self.assertIn("Не получилось понять ответ", message.answer.await_args.args[0])
+        self.assertIn("Последнее поле можно заменить на -", message.answer.await_args.args[0])
 
     async def test_receive_details_reports_validation_error_without_clearing_state(self) -> None:
         message = _message("Эфир | 15.09.2026 19:00 | http://unsafe.example")
@@ -132,7 +136,7 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
             patch.object(events, "_cancel_keyboard", return_value="cancel"),
         ):
             await events.receive_event_details(message, state)
-        self.assertIn("Не удалось создать мероприятие", message.answer.await_args.args[0])
+        self.assertIn("Не удалось создать вебинар", message.answer.await_args.args[0])
         state.clear.assert_not_awaited()
 
     async def test_receive_details_creates_provider_neutral_event_and_returns_registration(self) -> None:
@@ -170,7 +174,7 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
         answer = message.answer.await_args.args[0]
         self.assertIn("future_stage_2030", answer)
         self.assertIn("https://clientplatform.example.test/e/public-slug", answer)
-        self.assertIn("Напоминания по e-mail включены", answer)
+        self.assertIn("E-mail напоминания включены", answer)
         post_create_rows = keyboard.call_args.args[0]
         self.assertEqual(post_create_rows[0], [("🎥 К вебинарам", f"cpev:home:{TOKEN}")])
         self.assertIn(("🎥 Создать ещё", f"cpev:new:{TOKEN}"), post_create_rows[1])
@@ -199,6 +203,24 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
         answer = message.answer.await_args.args[0]
         self.assertIn("внешняя площадка", answer)
         self.assertIn("E-mail не подключён", answer)
+
+    async def test_typed_cancel_exits_creation_and_returns_to_webinars(self) -> None:
+        message = _message("Отмена")
+        state = AsyncMock()
+        state.get_data.return_value = {"event_business_id": BUSINESS_ID}
+        actor = MagicMock(unsafe=True)
+        with (
+            patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(events.control, "_uuid_token", return_value=TOKEN),
+            patch.object(events.control, "_keyboard", side_effect=lambda rows: rows),
+        ):
+            await events.receive_event_details(message, state)
+        state.clear.assert_awaited_once_with()
+        self.assertIn("Создание вебинара отменено", message.answer.await_args.args[0])
+        self.assertEqual(
+            message.answer.await_args.kwargs["reply_markup"],
+            [[("🎥 К вебинарам", f"cpev:home:{TOKEN}")]],
+        )
 
     async def test_toggle_autosend_is_idempotent_when_preference_already_matches(self) -> None:
         callback = _callback()
@@ -363,7 +385,7 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
         reply.answer.assert_awaited_once()
         self.assertEqual(
             keyboard.call_args.args[0],
-            [[("⬅️ К вебинарам", f"cpev:home:{TOKEN}")]],
+            [[("🎥 К вебинарам", f"cpev:home:{TOKEN}")]],
         )
 
 
