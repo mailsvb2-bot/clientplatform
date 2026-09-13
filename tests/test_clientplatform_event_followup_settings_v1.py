@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from clientplatform.application import event_followup_settings as settings_app
 from clientplatform.infrastructure.automation_policy_repository import AutomationPolicyRepository
+from clientplatform.infrastructure.event_dispatch_safety import event_commercial_policy_authorized
 from clientplatform.infrastructure.event_followup_settings_repository import (
     EventFollowupSettingsRepository,
     event_followups_enabled_in_conn,
@@ -300,6 +301,37 @@ def test_stored_preference_remains_visible_during_platform_kill_switch(monkeypat
     with patch.object(settings_app, "get_db_ro", side_effect=lambda: _shared(conn)):
         visible = settings_app.get_business_event_followup_settings(actor=owner)
     assert visible is not None and visible.enabled is True
+    conn.close()
+
+
+def test_action_scoped_quiet_hours_are_rechecked_at_provider_boundary(monkeypatch) -> None:
+    conn, owner = _owner_db()
+    monkeypatch.delenv("CLIENTPLATFORM_EVENT_COMMERCIAL_FOLLOWUPS_ENABLED", raising=False)
+    with patch.object(settings_app, "get_db", side_effect=lambda: _shared(conn)):
+        settings_app.set_business_event_followups_enabled(
+            actor=owner,
+            enabled=True,
+            now=datetime(2026, 9, 12, 12, 0, tzinfo=timezone.utc),
+        )
+
+    assert event_commercial_policy_authorized(
+        conn,
+        business_id=owner.business_id,
+        registration_id="provider-boundary-quiet-hours",
+        platform="email",
+        payload_ref="commercial-payload",
+        scheduled_at="2026-09-12T12:00:00+00:00",
+        now="2026-09-12T12:05:00+00:00",
+    )
+    assert not event_commercial_policy_authorized(
+        conn,
+        business_id=owner.business_id,
+        registration_id="provider-boundary-quiet-hours",
+        platform="email",
+        payload_ref="commercial-payload",
+        scheduled_at="2026-09-12T12:00:00+00:00",
+        now="2026-09-12T23:00:00+00:00",
+    )
     conn.close()
 
 

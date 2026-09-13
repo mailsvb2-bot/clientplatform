@@ -200,6 +200,7 @@ def set_business_event_followups_enabled(
             )
             current.assert_can_manage_business()
             repository = EventFollowupSettingsRepository(conn)
+            repository.lock_business(business_id=current.business_id)
             existing = repository.get(business_id=current.business_id)
             if enabled:
                 if current.role != PlatformRole.OWNER:
@@ -269,6 +270,7 @@ def set_business_event_followup_segment_enabled(
             if enabled and current.role != PlatformRole.OWNER:
                 raise TenantPermissionDenied("расширить группы автосообщений может только владелец")
             repository = EventFollowupSettingsRepository(conn)
+            repository.lock_business(business_id=current.business_id)
             existing = repository.get(business_id=current.business_id)
             if (
                 not enabled
@@ -328,6 +330,7 @@ def set_business_event_followup_channel_enabled(
             if enabled and current.role != PlatformRole.OWNER:
                 raise TenantPermissionDenied("расширить каналы автосообщений может только владелец")
             repository = EventFollowupSettingsRepository(conn)
+            repository.lock_business(business_id=current.business_id)
             existing = repository.get(business_id=current.business_id)
             if (
                 not enabled

@@ -167,10 +167,12 @@ def event_commercial_policy_authorized(
         if policy is None:
             return False
         # `candidate.scheduled_at` is part of the exact approval identity, but
-        # quiet-hours are a live provider-boundary constraint. A message queued
-        # before quiet hours must not cross the provider boundary after quiet
-        # hours begin merely because its original schedule was permitted.
-        if not policy.spec.schedule.permits(current):
+        # schedule/quiet-hour authority is a live provider-boundary constraint.
+        # Revalidate the canonical schedule for this exact action at `current`
+        # without changing the immutable candidate hash used by approvals.
+        if not policy.spec.schedule_for_action(
+            "events.commercial_followup"
+        ).permits(current):
             return False
         check = evaluate_automation_policy(
             policy=policy,

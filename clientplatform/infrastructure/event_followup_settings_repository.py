@@ -66,6 +66,17 @@ class EventFollowupSettingsRepository:
     def __init__(self, conn: Any):
         self._conn = conn
 
+    def lock_business(self, *, business_id: str) -> None:
+        business = str(business_id or "").strip()
+        if not business:
+            raise ValueError("business_id is required")
+        cursor = self._conn.execute(
+            "UPDATE businesses SET updated_at=updated_at WHERE id=? AND status='active'",
+            (business,),
+        )
+        if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+            raise ValueError("event follow-up business is inactive")
+
     def get(self, *, business_id: str) -> EventFollowupSettings | None:
         business = str(business_id or "").strip()
         if not business:
@@ -117,6 +128,12 @@ class EventFollowupSettingsRepository:
         if not business or not member:
             raise ValueError("business_id and member_id are required")
         timestamp = str(now or _utc_now())
+        self.lock_business(business_id=business)
+        existing = self.get(business_id=business)
+        if enabled and existing is not None and not existing.enabled_segments:
+            raise ValueError("Для включённых автосообщений нужна хотя бы одна группа получателей")
+        if enabled and existing is not None and not existing.enabled_channels:
+            raise ValueError("Для включённых автосообщений нужен хотя бы один канал")
         self._conn.execute(
             """
             INSERT INTO clientplatform_event_followup_settings(
@@ -152,6 +169,8 @@ class EventFollowupSettingsRepository:
             raise ValueError("unsupported event follow-up segment")
         return self._set_strategy_flag(
             business_id=business_id,
+            strategy_kind="segment",
+            strategy_key=key,
             column=column,
             enabled=enabled,
             updated_by_member_id=updated_by_member_id,
@@ -175,6 +194,8 @@ class EventFollowupSettingsRepository:
             raise ValueError("unsupported event follow-up channel")
         return self._set_strategy_flag(
             business_id=business_id,
+            strategy_kind="channel",
+            strategy_key=key,
             column=column,
             enabled=enabled,
             updated_by_member_id=updated_by_member_id,
@@ -185,6 +206,8 @@ class EventFollowupSettingsRepository:
         self,
         *,
         business_id: str,
+        strategy_kind: str,
+        strategy_key: str,
         column: str,
         enabled: bool,
         updated_by_member_id: str,
@@ -197,6 +220,21 @@ class EventFollowupSettingsRepository:
         timestamp = str(now or _utc_now())
         if column not in set(_SEGMENT_COLUMNS.values()) | set(_CHANNEL_COLUMNS.values()):
             raise ValueError("unsupported event follow-up strategy column")
+        self.lock_business(business_id=business)
+        existing = self.get(business_id=business)
+        if not enabled and existing is not None and existing.enabled:
+            if (
+                strategy_kind == "segment"
+                and existing.segment_enabled(strategy_key)
+                and len(existing.enabled_segments) == 1
+            ):
+                raise ValueError("Для включённых автосообщений нужна хотя бы одна группа получателей")
+            if (
+                strategy_kind == "channel"
+                and existing.channel_enabled(strategy_key)
+                and len(existing.enabled_channels) == 1
+            ):
+                raise ValueError("Для включённых автосообщений нужен хотя бы один канал")
         self._conn.execute(
             f"INSERT INTO clientplatform_event_followup_settings("  # nosec B608
             f"business_id,enabled,{column},settings_epoch,updated_by_member_id,created_at,updated_at) "

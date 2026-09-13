@@ -464,6 +464,13 @@ class AutomationPolicySpec:
             payload["action_scopes"] = [scope.payload() for scope in self.action_scopes]
         return payload
 
+    def schedule_for_action(self, action: object) -> AutomationSchedule:
+        key = _token(action, "action")
+        scope = next((item for item in self.action_scopes if item.action == key), None)
+        if scope is not None and scope.schedule is not None:
+            return scope.schedule
+        return self.schedule
+
     @property
     def policy_hash(self) -> str:
         return _stable_hash(self.payload())
@@ -971,11 +978,7 @@ def evaluate_automation_policy(
         if action_scope is not None and action_scope.allowed_content_topics
         else spec.allowed_content_topics
     )
-    effective_schedule = (
-        action_scope.schedule
-        if action_scope is not None and action_scope.schedule is not None
-        else spec.schedule
-    )
+    effective_schedule = spec.schedule_for_action(candidate.action)
     semantics = automation_action_semantics(candidate.action)
     if semantics is None:
         violations.append("action_semantics_unknown")

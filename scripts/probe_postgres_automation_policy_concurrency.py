@@ -23,6 +23,7 @@ from clientplatform.domain.automation_policy import (
     AutomationSchedule,
 )
 from clientplatform.infrastructure.automation_policy_repository import AutomationPolicyRepository
+from clientplatform.infrastructure.event_followup_settings_repository import EventFollowupSettingsRepository
 from clientplatform.infrastructure.safe_tenancy_repository import TenancyRepository
 from services.db import db
 from services.db.runtime import CONFIG
@@ -87,6 +88,92 @@ def main() -> int:
     init_db()
     actor = _seed()
     try:
+        with db() as conn:
+            settings_repo = EventFollowupSettingsRepository(conn)
+            settings_repo.set_enabled(
+                business_id=actor.business_id,
+                enabled=True,
+                updated_by_member_id=actor.membership_id,
+                now=_NOW.isoformat(),
+            )
+            settings_repo.set_segment(
+                business_id=actor.business_id,
+                segment="no_show",
+                enabled=False,
+                updated_by_member_id=actor.membership_id,
+                now=_NOW.isoformat(),
+            )
+            settings_repo.set_segment(
+                business_id=actor.business_id,
+                segment="join_signal_unpaid",
+                enabled=False,
+                updated_by_member_id=actor.membership_id,
+                now=_NOW.isoformat(),
+            )
+            settings_repo.set_channel(
+                business_id=actor.business_id,
+                channel="email",
+                enabled=False,
+                updated_by_member_id=actor.membership_id,
+                now=_NOW.isoformat(),
+            )
+
+        segment_gate = Barrier(2)
+        segment_targets = ("attended_unpaid", "offer_clicked_unpaid")
+
+        def disable_last_segment(index: int) -> str:
+            segment_gate.wait(timeout=15)
+            try:
+                with db() as conn:
+                    settings = EventFollowupSettingsRepository(conn).set_segment(
+                        business_id=actor.business_id,
+                        segment=segment_targets[index],
+                        enabled=False,
+                        updated_by_member_id=actor.membership_id,
+                        now=(_NOW + timedelta(seconds=index)).isoformat(),
+                    )
+                return "updated:" + ",".join(settings.enabled_segments)
+            except ValueError as exc:
+                return f"blocked:{exc}"
+
+        segment_results = _run_pair(disable_last_segment)
+        assert len([item for item in segment_results if item.startswith("updated:")]) == 1, segment_results
+        assert len([item for item in segment_results if item.startswith("blocked:")]) == 1, segment_results
+        with db() as conn:
+            after_segment_race = EventFollowupSettingsRepository(conn).get(
+                business_id=actor.business_id
+            )
+        assert after_segment_race is not None
+        assert len(after_segment_race.enabled_segments) == 1, after_segment_race
+
+        channel_gate = Barrier(2)
+        channel_targets = ("max", "vk")
+
+        def disable_last_channel(index: int) -> str:
+            channel_gate.wait(timeout=15)
+            try:
+                with db() as conn:
+                    settings = EventFollowupSettingsRepository(conn).set_channel(
+                        business_id=actor.business_id,
+                        channel=channel_targets[index],
+                        enabled=False,
+                        updated_by_member_id=actor.membership_id,
+                        now=(_NOW + timedelta(seconds=10 + index)).isoformat(),
+                    )
+                return "updated:" + ",".join(settings.enabled_channels)
+            except ValueError as exc:
+                return f"blocked:{exc}"
+
+        channel_results = _run_pair(disable_last_channel)
+        assert len([item for item in channel_results if item.startswith("updated:")]) == 1, channel_results
+        assert len([item for item in channel_results if item.startswith("blocked:")]) == 1, channel_results
+        with db() as conn:
+            after_channel_race = EventFollowupSettingsRepository(conn).get(
+                business_id=actor.business_id
+            )
+        assert after_channel_race is not None
+        assert len(after_channel_race.enabled_channels) == 1, after_channel_race
+
         create_gate = Barrier(2)
 
         def create_draft(index: int) -> str:
@@ -323,6 +410,8 @@ def main() -> int:
                     "action_approval_row_count": approval_row_count,
                     "action_request_audit": request_audit,
                     "action_decision_audit": decision_audit,
+                    "event_segment_race": segment_results,
+                    "event_channel_race": channel_results,
                 },
                 sort_keys=True,
             )
