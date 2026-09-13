@@ -69,11 +69,20 @@ def test_event_hub_semantics_are_single_source_for_all_messengers() -> None:
     labels = [action.label for action in event_hub_actions(snapshot)]
     assert "🎥 Вебинары" in text
     assert "Зарегистрировались, но не пришли" in text
-    assert "Перешли к эфиру, участие не подтверждено" in text
+    assert "Вошли в эфир, участие не подтверждено" in text
     assert labels[0] == "🎥 Создать вебинар"
     assert "🟢 Включить автосообщения" in labels
     assert "✅ MAX" in labels
     assert "✅ VK" in labels
+
+
+def test_shared_event_action_labels_fit_native_transport_limit_without_truncation() -> None:
+    active = _snapshot()
+    inactive = SimpleNamespace(**{**vars(active), "commercial_followup_segments": (), "commercial_followup_channels": ()})
+    for snapshot in (active, inactive):
+        for action in event_hub_actions(snapshot):
+            assert len(action.label) <= 40, action.label
+            assert native_ui._button(action.label, "cpm:events").label == action.label
 
 
 def test_vk_and_max_event_hub_render_identically_before_transport() -> None:

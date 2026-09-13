@@ -9,7 +9,7 @@ from clientplatform.domain.event_followup import (
 
 EVENT_SEGMENT_LABELS = (
     ("no_show", "Зарегистрировались, но не пришли"),
-    ("join_signal_unpaid", "Перешли к эфиру, участие не подтверждено"),
+    ("join_signal_unpaid", "Вошли в эфир, участие не подтверждено"),
     ("attended_unpaid", "Были на вебинаре, но не купили"),
     ("offer_clicked_unpaid", "Открыли предложение, но не купили"),
 )
