@@ -594,3 +594,97 @@ class NativeMemberIngressTests(unittest.IsolatedAsyncioTestCase):
         customer_admission.assert_not_called()
         sales.assert_not_called()
         complete.assert_called_once()
+
+
+class NativeEventHubParityTests(unittest.TestCase):
+    @staticmethod
+    def _snapshot(*, can_manage: bool = True, can_enable: bool = True):
+        return SimpleNamespace(
+            items=(
+                SimpleNamespace(
+                    title="Вебинар",
+                    local_start="15.09.2026 19:00",
+                    registered=10,
+                    join_clicked=8,
+                    attendance_confirmed=6,
+                    offer_clicked=4,
+                    paid=2,
+                    revenue=(SimpleNamespace(display="10 000 RUB"),),
+                ),
+            ),
+            commercial_followups_enabled=False,
+            commercial_followups_effective=False,
+            commercial_followups_platform_available=True,
+            commercial_followup_segments=(
+                "no_show",
+                "join_signal_unpaid",
+                "attended_unpaid",
+                "offer_clicked_unpaid",
+            ),
+            commercial_followup_channels=("email", "max", "vk"),
+            can_manage=can_manage,
+            can_enable_commercial_followups=can_enable,
+            can_expand_commercial_followups=can_enable,
+            limitations=(),
+        )
+
+    def test_webinar_alias_opens_hub_instead_of_creation_wizard(self) -> None:
+        self.assertEqual(parse_native_member_interaction("вебинар").action, "events")
+        self.assertEqual(parse_native_member_interaction("онлайн-мероприятие").action, "events")
+
+    def test_growth_menu_uses_canonical_webinar_hub_for_manager(self) -> None:
+        route = _route(ConnectionPlatform.VK)
+        manager = replace(_actor(route), role=PlatformRole.MANAGER)
+        message = native_member_ui._growth_message(manager)
+        commands = {button.command for row in message.rows for button in row}
+        self.assertIn("cpm:events", commands)
+        self.assertNotIn("cpm:event-new", commands)
+
+    def test_event_hub_separates_read_access_from_creation(self) -> None:
+        route = _route(ConnectionPlatform.MAX)
+        manager = replace(_actor(route), role=PlatformRole.MANAGER)
+        with (
+            patch.object(native_member_ui, "_business_name", return_value="Бизнес"),
+            patch.object(
+                native_member_ui,
+                "resolve_events_snapshot",
+                return_value=self._snapshot(can_manage=False, can_enable=False),
+            ) as resolve,
+        ):
+            message = native_member_ui._events_message(manager)
+        resolve.assert_called_once_with(actor=manager, business_name="Бизнес", limit=5)
+        self.assertIn("регистрации 10", message.text)
+        self.assertIn("После включения — кому писать", message.text)
+        commands = {button.command for row in message.rows for button in row}
+        self.assertNotIn("cpm:event-new", commands)
+        self.assertNotIn("cpm:event-followups:on", commands)
+
+    def test_owner_event_hub_exposes_creation_and_canonical_autosend_action(self) -> None:
+        route = _route(ConnectionPlatform.VK)
+        owner = _actor(route)
+        with (
+            patch.object(native_member_ui, "_business_name", return_value="Бизнес"),
+            patch.object(
+                native_member_ui,
+                "resolve_events_snapshot",
+                return_value=self._snapshot(),
+            ),
+        ):
+            message = native_member_ui._events_message(owner)
+        commands = {button.command for row in message.rows for button in row}
+        self.assertIn("cpm:event-new", commands)
+        self.assertIn("cpm:event-followups:on", commands)
+        self.assertIn("cpm:event-channel:max:off", commands)
+
+    def test_native_autosend_mutation_uses_canonical_setter_then_refreshes_hub(self) -> None:
+        route = _route(ConnectionPlatform.MAX)
+        owner = _actor(route)
+        refreshed = CustomerInteractionMessage(text="refreshed")
+        with (
+            patch.object(native_member_ui, "set_business_event_followups_enabled") as setter,
+            patch.object(native_member_ui, "_events_message", return_value=refreshed) as refresh,
+        ):
+            result = native_member_ui._event_followups_action(owner, ("on",))
+        setter.assert_called_once_with(actor=owner, enabled=True)
+        refresh.assert_called_once_with(owner)
+        self.assertIs(result, refreshed)

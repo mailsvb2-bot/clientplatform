@@ -41,9 +41,16 @@ from clientplatform.application.admin_ops import (
     schedule_publication,
 )
 from clientplatform.application.bookings import create_booking_slot, list_booking_slots
+from clientplatform.application.cockpit import cockpit_navigation
+from clientplatform.application.cockpit_events import resolve_events_snapshot
 from clientplatform.application.event_owner_flow import (
     OnlineEventCreateRequest,
     create_and_publish_online_event,
+)
+from clientplatform.application.event_followup_settings import (
+    set_business_event_followup_channel_enabled,
+    set_business_event_followup_segment_enabled,
+    set_business_event_followups_enabled,
 )
 from clientplatform.application.capability_parity import (
     CapabilityAvailability,
@@ -271,8 +278,8 @@ _ALIASES = {
     "мессенджеры": "messengers",
     "обращения": "sales",
     "продажи": "sales",
-    "вебинар": "event-new",
-    "онлайн-мероприятие": "event-new",
+    "вебинар": "events",
+    "онлайн-мероприятие": "events",
     "обращения и продажи": "sales",
 }
 _COMMAND_PREFIX = "cpm:"
@@ -317,7 +324,7 @@ TELEGRAM_NATIVE_ACTION_EQUIVALENTS: dict[str, tuple[str, ...]] = {
     "prices": ("prices",),
     "price-set": ("price-set", "price-set-text"),
     "promotion": ("acquire",),
-    "online-event": ("event-new", "event-create-text"),
+    "online-event": ("events", "event-new", "event-create-text"),
     "experiments": ("experiments",),
     "invites": ("invites", "invite-new"),
     "funnel2": ("funnel2",),
@@ -724,6 +731,10 @@ def parse_native_member_interaction(value: object) -> ParsedMemberInteraction:
             "growth-sales",
             "growth-analysis",
             "growth-lifecycle",
+            "events",
+            "event-followups",
+            "event-segment",
+            "event-channel",
             "event-new",
             "event-create-text",
             "work-more",
@@ -1131,8 +1142,12 @@ _NATIVE_PARENT_COMMANDS: dict[str, str] = {
     "growth-analysis": "cpm:growth-sales",
     "growth-more": "cpm:growth",
     "growth-lifecycle": "cpm:growth-more",
-    "event-new": "cpm:growth-more",
-    "event-create-text": "cpm:growth-more",
+    "events": "cpm:growth",
+    "event-followups": "cpm:events",
+    "event-segment": "cpm:events",
+    "event-channel": "cpm:events",
+    "event-new": "cpm:events",
+    "event-create-text": "cpm:events",
     "acquire": "cpm:growth",
     "experiments": "cpm:growth",
     "autopilot": "cpm:growth",
@@ -1928,15 +1943,19 @@ def _growth_message(actor: TenantContext) -> CustomerInteractionMessage:
     if actor.role in _ACQUISITION_ROLES:
         rows.append((_button(nav.ACQUIRE.label, "cpm:acquire"),))
         items.append(nav.ACQUIRE)
+    event_visible = any(
+        item.id == "events" and item.status == "available"
+        for item in cockpit_navigation(actor)
+    )
     if actor.role in _CONTENT_ROLES:
         rows.append((_button(nav.PUBLICATIONS.label, "cpm:publications"),))
         items.append(nav.PUBLICATIONS)
+    if event_visible:
+        rows.append((_button(nav.EVENTS.label, "cpm:events"),))
+        items.append(nav.EVENTS)
     if actor.role in _MARKETING_ROLES:
         rows.append((_button(nav.GROWTH_SALES.label, "cpm:growth-sales"),))
         items.append(nav.GROWTH_SALES)
-    if actor.role in _AUTOMATION_ROLES:
-        rows.append((_button(nav.AUTOMATION.label, "cpm:autopilot"),))
-        items.append(nav.AUTOMATION)
     if actor.role in (_CONTENT_ROLES | _MARKETING_ROLES):
         rows.append((_button(nav.GROWTH_MORE.label, "cpm:growth-more"),))
         items.append(nav.GROWTH_MORE)
@@ -1984,6 +2003,160 @@ def _growth_analysis_message(actor: TenantContext) -> CustomerInteractionMessage
     )
 
 
+
+_EVENT_SEGMENT_LABELS = (
+    ("no_show", "Не пришли"),
+    ("join_signal_unpaid", "Вошли, не подтвердили участие"),
+    ("attended_unpaid", "Были, не купили"),
+    ("offer_clicked_unpaid", "Открыли предложение, не купили"),
+)
+_EVENT_CHANNEL_LABELS = (("email", "Email"), ("max", "MAX"), ("vk", "VK"))
+
+
+def _events_message(actor: TenantContext) -> CustomerInteractionMessage:
+    snapshot = resolve_events_snapshot(
+        actor=actor,
+        business_name=_business_name(actor),
+        limit=5,
+    )
+    lines = [nav.EVENTS.label, ""]
+    if snapshot.items:
+        lines.append("Последние мероприятия:")
+        for item in snapshot.items:
+            revenue = ", ".join(row.display for row in item.revenue) or "—"
+            lines.extend(
+                [
+                    f"• {item.title} · {item.local_start}",
+                    (
+                        f"  регистрации {item.registered} · входы {item.join_clicked} · "
+                        f"участие {item.attendance_confirmed} · оффер {item.offer_clicked} · "
+                        f"оплаты {item.paid} · выручка {revenue}"
+                    ),
+                ]
+            )
+    else:
+        lines.append("Пока нет опубликованных мероприятий.")
+
+    enabled = snapshot.commercial_followups_enabled
+    effective = snapshot.commercial_followups_effective
+    if enabled and not effective:
+        status = "Автоматические сообщения после мероприятия: 🟡 ВКЛ, временно приостановлены"
+    elif enabled:
+        status = "Автоматические сообщения после мероприятия: 🟢 ВКЛ"
+    else:
+        status = "Автоматические сообщения после мероприятия: ⚪️ ВЫКЛ"
+    lines.extend(["", status])
+    lines.append("Кому писать:" if enabled else "После включения — кому писать:")
+    active_segments = set(snapshot.commercial_followup_segments)
+    lines.extend(
+        f"{'✅' if key in active_segments else '▫️'} {label}"
+        for key, label in _EVENT_SEGMENT_LABELS
+    )
+    active_channels = set(snapshot.commercial_followup_channels)
+    lines.append(
+        ("Каналы: " if enabled else "После включения — каналы: ")
+        + " · ".join(
+            f"{'✅' if key in active_channels else '▫️'} {label}"
+            for key, label in _EVENT_CHANNEL_LABELS
+        )
+    )
+    if not snapshot.commercial_followups_platform_available:
+        if enabled:
+            lines.append(
+                "Платформа временно остановила отправку; настройка бизнеса сохранена. "
+                "Её можно выключить сейчас, чтобы сообщения не возобновились автоматически."
+            )
+        else:
+            lines.append("Автосерия временно отключена на уровне платформы.")
+    lines.extend(snapshot.limitations)
+
+    rows: list[tuple[CustomerInteractionButton, ...]] = []
+    if snapshot.can_manage:
+        rows.append((_button("🎥 Создать вебинар", "cpm:event-new"),))
+        if enabled:
+            rows.append((_button("🔴 Выключить автосообщения", "cpm:event-followups:off"),))
+        elif snapshot.can_enable_commercial_followups:
+            rows.append((_button("🟢 Включить автосообщения", "cpm:event-followups:on"),))
+        for key, label in _EVENT_SEGMENT_LABELS:
+            active = key in active_segments
+            if active or snapshot.can_expand_commercial_followups:
+                rows.append(
+                    (
+                        _button(
+                            f"{'✅' if active else '▫️'} {label}",
+                            f"cpm:event-segment:{key}:{'off' if active else 'on'}",
+                        ),
+                    )
+                )
+        channel_buttons = []
+        for key, label in _EVENT_CHANNEL_LABELS:
+            active = key in active_channels
+            if active or snapshot.can_expand_commercial_followups:
+                channel_buttons.append(
+                    _button(
+                        f"{'✅' if active else '▫️'} {label}",
+                        f"cpm:event-channel:{key}:{'off' if active else 'on'}",
+                    )
+                )
+        if channel_buttons:
+            rows.append(tuple(channel_buttons))
+    rows.append(_back_row())
+    return CustomerInteractionMessage(text="\n".join(lines), rows=tuple(rows))
+
+
+def _event_followups_action(
+    actor: TenantContext, args: tuple[str, ...]
+) -> CustomerInteractionMessage:
+    if len(args) != 1 or args[0] not in {"on", "off"}:
+        return _stale_message()
+    try:
+        set_business_event_followups_enabled(actor=actor, enabled=args[0] == "on")
+    except ValueError as exc:
+        return CustomerInteractionMessage(
+            text=f"Не удалось изменить автосообщения: {exc}",
+            rows=((_button("🎥 К вебинарам", "cpm:events"),), _back_row()),
+        )
+    return _events_message(actor)
+
+
+def _event_segment_action(
+    actor: TenantContext, args: tuple[str, ...]
+) -> CustomerInteractionMessage:
+    if len(args) != 2 or args[1] not in {"on", "off"}:
+        return _stale_message()
+    try:
+        set_business_event_followup_segment_enabled(
+            actor=actor,
+            segment=args[0],
+            enabled=args[1] == "on",
+        )
+    except ValueError as exc:
+        return CustomerInteractionMessage(
+            text=f"Не удалось изменить группу участников: {exc}",
+            rows=((_button("🎥 К вебинарам", "cpm:events"),), _back_row()),
+        )
+    return _events_message(actor)
+
+
+def _event_channel_action(
+    actor: TenantContext, args: tuple[str, ...]
+) -> CustomerInteractionMessage:
+    if len(args) != 2 or args[1] not in {"on", "off"}:
+        return _stale_message()
+    try:
+        set_business_event_followup_channel_enabled(
+            actor=actor,
+            channel=args[0],
+            enabled=args[1] == "on",
+        )
+    except ValueError as exc:
+        return CustomerInteractionMessage(
+            text=f"Не удалось изменить канал: {exc}",
+            rows=((_button("🎥 К вебинарам", "cpm:events"),), _back_row()),
+        )
+    return _events_message(actor)
+
+
 def _event_new_message(
     actor: TenantContext,
     *,
@@ -2007,7 +2180,7 @@ def _event_new_message(
             "Название | ДД.ММ.ГГГГ ЧЧ:ММ | HTTPS-ссылка на эфир | ссылка предложения или -\n\n"
             "Площадка определяется по ссылке автоматически; неизвестная площадка безопасно сохранится как external."
         ),
-        rows=((_button("📈 К росту", "cpm:growth-more"),), _back_row()),
+        rows=((_button("🎥 К вебинарам", "cpm:events"),), _back_row()),
     )
 
 
@@ -2043,7 +2216,7 @@ def _event_create_result(
                 "Не удалось создать онлайн-мероприятие. Проверьте дату, HTTPS-ссылку и настройки e-mail. "
                 "Если подключено несколько SMTP, выберите один в настройках интеграций."
             ),
-            rows=((_button("🎥 Попробовать снова", "cpm:event-new"),), (_button("📈 К росту", "cpm:growth-more"),), _back_row()),
+            rows=((_button("🎥 Попробовать снова", "cpm:event-new"),), (_button("🎥 К вебинарам", "cpm:events"),), _back_row()),
         )
     reminder = (
         "E-mail напоминания включены."
@@ -2056,7 +2229,7 @@ def _event_create_result(
             f"{local_time} · площадка: {created.provider_key}\n\n"
             f"Регистрация: {registration_url}\n\n{reminder}"
         ),
-        rows=((_button("🎥 Создать ещё", "cpm:event-new"),), (_button("📈 К росту", "cpm:growth-more"),), _back_row()),
+        rows=((_button("🎥 К вебинарам", "cpm:events"),), (_button("🎥 Создать ещё", "cpm:event-new"),), _back_row()),
     )
 
 
@@ -2078,10 +2251,12 @@ def _growth_more_message(actor: TenantContext) -> CustomerInteractionMessage:
         items.append(nav.PRICES)
     if actor.role == PlatformRole.CONTENT_MANAGER:
         rows.append((_button("🧪 A/B креативы", "cpm:experiments:0"),))
+    if actor.role in _AUTOMATION_ROLES:
+        rows.append((_button(nav.AUTOMATION.label, "cpm:autopilot"),))
+        items.append(nav.AUTOMATION)
     if actor.role in _CONNECTION_ROLES:
         rows.append((_button(nav.LIFECYCLE.label, "cpm:growth-lifecycle"),))
         items.append(nav.LIFECYCLE)
-    rows.append((_button(nav.GROWTH.label, "cpm:growth"),))
     rows.append(_back_row())
     return CustomerInteractionMessage(
         text="⋯ Тексты, цены и возврат клиентов\n\n" + nav.choice_help(*items),
@@ -2091,22 +2266,20 @@ def _growth_more_message(actor: TenantContext) -> CustomerInteractionMessage:
 def _growth_lifecycle_message(actor: TenantContext) -> CustomerInteractionMessage:
     if actor.role not in _CONNECTION_ROLES:
         return _permission_message()
-    items = (nav.INVITES, nav.RETENTION)
+    items = [nav.INVITES, nav.RETENTION]
     rows: list[tuple[CustomerInteractionButton, ...]] = [
         (_button(nav.INVITES.label, "cpm:invites"),),
         (_button(nav.RETENTION.label, "cpm:retention"),),
     ]
-    event_help = ""
-    try:
-        actor.assert_can_manage_business()
-    except TenantPermissionDenied:
-        pass
-    else:
-        rows.append((_button("🎥 Онлайн-мероприятие", "cpm:event-new"),))
-        event_help = "\n• провести вебинар или другой онлайн-эфир → «🎥 Онлайн-мероприятие»"
+    if any(
+        item.id == "events" and item.status == "available"
+        for item in cockpit_navigation(actor)
+    ):
+        rows.append((_button(nav.EVENTS.label, "cpm:events"),))
+        items.append(nav.EVENTS)
     rows.extend([(_button(nav.GROWTH.label, "cpm:growth"),), _back_row()])
     return CustomerInteractionMessage(
-        text="♻️ Вернуть и удержать клиентов\n\n" + nav.choice_help(*items) + event_help,
+        text="♻️ Вернуть и удержать клиентов\n\n" + nav.choice_help(*items),
         rows=tuple(rows),
     )
 
@@ -4909,6 +5082,14 @@ def _render(
             return _growth_more_message(actor)
         if parsed.action == "growth-lifecycle":
             return _growth_lifecycle_message(actor)
+        if parsed.action == "events":
+            return _events_message(actor)
+        if parsed.action == "event-followups":
+            return _event_followups_action(actor, parsed.args)
+        if parsed.action == "event-segment":
+            return _event_segment_action(actor, parsed.args)
+        if parsed.action == "event-channel":
+            return _event_channel_action(actor, parsed.args)
         if parsed.action == "event-new":
             return _event_new_message(
                 actor,

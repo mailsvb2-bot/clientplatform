@@ -144,13 +144,17 @@ def _active_commercial_consents(conn: object, *, business_id: str, event_id: str
     return int((row[0] if row is not None else 0) or 0)
 
 
-def resolve_cockpit_events(
-    *, telegram_user_id: int, requested_business_id: str | None = None, limit: int = 30
+def resolve_events_snapshot(
+    *,
+    actor: TenantContext,
+    business_name: str = "",
+    limit: int = 30,
 ) -> CockpitEventsSnapshot:
-    actor, business_name = _resolve_actor(
-        telegram_user_id=telegram_user_id,
-        requested_business_id=requested_business_id,
-    )
+    """Build the canonical event UI projection for any authenticated member surface."""
+
+    actor.assert_can_view_customer_records()
+    actor.assert_can_view_outcome_ledger()
+    actor.assert_can_view_attribution_spine()
     profile = get_business_profile(actor=actor)
     bounded_limit = max(1, min(int(limit), 100))
     public_base = _public_base_url(required=False)
@@ -222,7 +226,7 @@ def resolve_cockpit_events(
     return CockpitEventsSnapshot(
         schema_version=_SCHEMA_VERSION,
         business_id=actor.business_id,
-        business_name=business_name,
+        business_name=str(business_name or ""),
         timezone_name=profile.timezone,
         can_manage=_can_manage(actor),
         can_enable_commercial_followups=(
@@ -240,6 +244,19 @@ def resolve_cockpit_events(
         limitations=tuple(limitations),
     )
 
+
+def resolve_cockpit_events(
+    *, telegram_user_id: int, requested_business_id: str | None = None, limit: int = 30
+) -> CockpitEventsSnapshot:
+    actor, business_name = _resolve_actor(
+        telegram_user_id=telegram_user_id,
+        requested_business_id=requested_business_id,
+    )
+    return resolve_events_snapshot(
+        actor=actor,
+        business_name=business_name,
+        limit=limit,
+    )
 
 def _request_hash(*, request: OnlineEventCreateRequest) -> str:
     canonical = {
@@ -359,4 +376,5 @@ __all__ = [
     "cancel_cockpit_event",
     "create_cockpit_event",
     "resolve_cockpit_events",
+    "resolve_events_snapshot",
 ]

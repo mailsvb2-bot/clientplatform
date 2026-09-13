@@ -11,6 +11,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, WebAppInfo
 
+from clientplatform.application.cockpit import cockpit_navigation
 from clientplatform.application.ad_connections import (
     ad_connections_enabled,
     create_managed_ad_publication_draft,
@@ -642,14 +643,22 @@ async def _send_client_tools(message: ClientPlatformMessageTarget, *, token: str
     )
 
 
+def _event_funnel_visible(actor) -> bool:
+    return any(
+        item.id == "events" and item.status == "available"
+        for item in cockpit_navigation(actor)
+    )
+
+
 def _content_tools_rows(token: str, actor) -> tuple[list[list[tuple[str, str]]], list[str]]:
     rows: list[list[tuple[str, str]]] = []
     help_lines: list[str] = []
-    if _allowed(actor, actor.assert_can_manage_promotions):
-        can_manage_business = _allowed(actor, actor.assert_can_manage_business)
+    can_manage_promotions = _allowed(actor, actor.assert_can_manage_promotions)
+    can_view_events = _event_funnel_visible(actor)
+    if can_manage_promotions:
         publication_row = [("📣 Публикации", f"cpa:{token}:publications")]
-        if can_manage_business:
-            publication_row.append(("🎥 Онлайн-мероприятие", f"cpev:new:{token}"))
+        if can_view_events:
+            publication_row.append((nav.EVENTS.label, f"cpev:home:{token}"))
         rows.extend(
             [
                 publication_row,
@@ -660,8 +669,10 @@ def _content_tools_rows(token: str, actor) -> tuple[list[list[tuple[str, str]]],
             ]
         )
         help_lines.append("• создать или запланировать пост → «📣 Публикации»")
-        if can_manage_business:
-            help_lines.append("• провести вебинар или другой онлайн-эфир → «🎥 Онлайн-мероприятие»")
+        if can_view_events:
+            help_lines.append(
+                f"• посмотреть вебинары, воронку и автосообщения → «{nav.EVENTS.label}»"
+            )
         help_lines.extend(
             [
                 f"• подготовить текст → «{nav.COPY.label}»",
@@ -669,6 +680,11 @@ def _content_tools_rows(token: str, actor) -> tuple[list[list[tuple[str, str]]],
                 "• запустить продвижение → «📣 Реклама»",
                 "• привлекать через партнёров → «🤝 Партнёрства»",
             ]
+        )
+    elif can_view_events:
+        rows.append([(nav.EVENTS.label, f"cpev:home:{token}")])
+        help_lines.append(
+            f"• посмотреть вебинары, воронку и автосообщения → «{nav.EVENTS.label}»"
         )
     rows.append([(nav.BACK.label, f"cpo:more:{token}")])
     return rows, help_lines

@@ -52,6 +52,8 @@ class CockpitEventsBridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("оплаты 5", text)
         self.assertIn("25 000 RUB", text)
         self.assertIn("Автоматические сообщения после мероприятия", text)
+        self.assertIn("После включения — кому писать:", text)
+        self.assertIn("После включения — каналы:", text)
         self.assertNotIn("follow-up", text.lower())
         flattened = [button for row in captured_rows for button in row]
         self.assertIn(("🟢 Включить автосообщения", f"cpev:followups:on:{cockpit_dispatch.one_click.control._uuid_token(_BUSINESS)}"), flattened)
@@ -113,6 +115,8 @@ class CockpitEventsBridgeTests(unittest.IsolatedAsyncioTestCase):
             )
         text = target.answer.await_args.args[0]
         self.assertIn("Автоматические сообщения после мероприятия: 🟢 ВКЛ", text)
+        self.assertIn("Кому писать:", text)
+        self.assertNotIn("После включения — кому писать:", text)
         flattened = [button for row in captured_rows for button in row]
         self.assertIn(("🔴 Выключить автосообщения", f"cpev:followups:off:{cockpit_dispatch.one_click.control._uuid_token(_BUSINESS)}"), flattened)
 

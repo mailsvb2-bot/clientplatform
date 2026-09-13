@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from unittest.mock import patch
+
 from clientplatform.domain.tenancy import PlatformRole, TenantContext
 from handlers import clientplatform_button_surface_contract as surface_contract
 from handlers import clientplatform_interaction_safety as safety
@@ -23,19 +25,43 @@ def _callbacks(rows):
     return [callback for row in rows for _label, callback in row]
 
 
-def test_online_event_entry_is_visible_only_to_business_management_roles() -> None:
-    owner_rows, _ = one_click._content_tools_rows(_TOKEN, _actor(PlatformRole.OWNER))
+def test_webinar_hub_entry_matches_canonical_event_funnel_roles() -> None:
+    owner_rows, owner_help = one_click._content_tools_rows(_TOKEN, _actor(PlatformRole.OWNER))
     admin_rows, _ = one_click._content_tools_rows(_TOKEN, _actor(PlatformRole.ADMINISTRATOR))
-    manager_rows, _ = one_click._content_tools_rows(_TOKEN, _actor(PlatformRole.MANAGER))
-    assert f"cpev:new:{_TOKEN}" in _callbacks(owner_rows)
-    assert f"cpev:new:{_TOKEN}" in _callbacks(admin_rows)
-    assert f"cpev:new:{_TOKEN}" not in _callbacks(manager_rows)
+    manager_rows, manager_help = one_click._content_tools_rows(_TOKEN, _actor(PlatformRole.MANAGER))
+    marketer_rows, _ = one_click._content_tools_rows(_TOKEN, _actor(PlatformRole.MARKETER))
+    analyst_rows, analyst_help = one_click._content_tools_rows(_TOKEN, _actor(PlatformRole.ANALYST))
+
+    for rows in (owner_rows, admin_rows, manager_rows):
+        assert f"cpev:home:{_TOKEN}" in _callbacks(rows)
+        assert f"cpev:new:{_TOKEN}" not in _callbacks(rows)
+    assert f"cpev:home:{_TOKEN}" not in _callbacks(marketer_rows)
+    assert _callbacks(analyst_rows) == [f"cpo:more:{_TOKEN}"]
+    assert analyst_help == []
+    assert any("воронку и автосообщения" in line for line in owner_help)
+    assert any("воронку и автосообщения" in line for line in manager_help)
     assert len(owner_rows) <= 6
 
 
-def test_event_cancel_callback_participates_in_interaction_safety() -> None:
+def test_webinar_hub_remains_visible_if_event_access_outlives_promotion_management() -> None:
+    actor = _actor(PlatformRole.ANALYST)
+    with (
+        patch.object(one_click, "_allowed", return_value=False),
+        patch.object(one_click, "_event_funnel_visible", return_value=True),
+    ):
+        rows, help_lines = one_click._content_tools_rows(_TOKEN, actor)
+    assert _callbacks(rows) == [f"cpev:home:{_TOKEN}", f"cpo:more:{_TOKEN}"]
+    assert any("воронку и автосообщения" in line for line in help_lines)
+
+
+def test_event_hub_is_repeatable_navigation_but_creation_remains_a_mutation() -> None:
     surface_contract.install_button_surface_contract(safety)
-    assert safety._is_clientplatform_callback(f"cpev:new:{_TOKEN}")
+    assert safety._is_clientplatform_callback(f"cpev:home:{_TOKEN}")
+    assert safety._is_repeatable_navigation(f"cpev:home:{_TOKEN}")
+    assert not safety._is_repeatable_navigation(f"cpev:new:{_TOKEN}")
+    state_name = "ClientPlatformControlState:activity_description"
+    assert not safety._callback_conflicts_with_state(state_name, f"cpev:home:{_TOKEN}")
+    assert safety._callback_should_clear_state(state_name, f"cpev:home:{_TOKEN}")
     assert safety._state_local_callback_allowed(
         "ClientPlatformEventState:waiting_details",
         f"cpev:cancel:{_TOKEN}",

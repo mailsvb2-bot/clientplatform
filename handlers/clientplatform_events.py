@@ -46,6 +46,21 @@ def _public_base_url() -> str:
     return value
 
 
+@router.callback_query(F.data.startswith("cpev:home:"))
+async def open_event_hub(callback: CallbackQuery) -> None:
+    token = str(callback.data or "").split(":", 2)[2]
+    business_id = control._token_uuid(token)
+    await callback.answer()
+    from .clientplatform_cockpit_dispatch import send_cockpit_section
+
+    await send_cockpit_section(
+        control._callback_message(callback),
+        user_id=int(callback.from_user.id),
+        business_id=business_id,
+        section="events",
+    )
+
+
 @router.callback_query(F.data.startswith("cpev:new:"))
 async def start_event_wizard(callback: CallbackQuery, state: FSMContext) -> None:
     token = str(callback.data).split(":", 2)[2]
@@ -111,7 +126,13 @@ async def receive_event_details(message: Message, state: FSMContext) -> None:
     mail_note = "Напоминания по e-mail включены." if created.email_notifications_enabled else "E-mail не подключён — регистрация и ссылка входа всё равно работают."
     await message.answer(
         f"✅ Мероприятие опубликовано.\n\nПлощадка: {provider}\nРегистрация: {registration_url}\n\n{mail_note}",
-        reply_markup=control._keyboard([[("🎥 Создать ещё", f"cpev:new:{control._uuid_token(business_id)}")], [("⬅️ К продвижению", f"cpo:content:{control._uuid_token(business_id)}")]]),
+        reply_markup=control._keyboard(
+            [
+                [("🎥 К вебинарам", f"cpev:home:{control._uuid_token(business_id)}")],
+                [("🎥 Создать ещё", f"cpev:new:{control._uuid_token(business_id)}")],
+                [("⬅️ К продвижению", f"cpo:content:{control._uuid_token(business_id)}")],
+            ]
+        ),
     )
 
 
@@ -244,13 +265,14 @@ async def cancel_event_wizard(callback: CallbackQuery, state: FSMContext) -> Non
     await callback.answer("Создание отменено")
     await control._callback_message(callback).answer(
         "Создание мероприятия отменено.",
-        reply_markup=control._keyboard([[('⬅️ К продвижению', f'cpo:content:{token}')]]),
+        reply_markup=control._keyboard([[('⬅️ К вебинарам', f'cpev:home:{token}')]]),
     )
 
 
 __all__ = [
     "ClientPlatformEventState",
     "cancel_event_wizard",
+    "open_event_hub",
     "receive_event_details",
     "router",
     "start_event_wizard",

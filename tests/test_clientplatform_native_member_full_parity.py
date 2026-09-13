@@ -157,6 +157,7 @@ class NativeFullParityContractTests(unittest.TestCase):
             "cpm:acquire",
             "cpm:autopilot",
             "cpm:publications",
+            "cpm:events",
             "cpm:money",
             "cpm:payments",
             "cpm:segments",
