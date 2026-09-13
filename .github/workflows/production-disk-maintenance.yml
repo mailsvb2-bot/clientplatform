@@ -102,15 +102,36 @@ jobs:
           }
           snapshot
           if [ "$mode" = "cleanup" ]; then
-            echo "CLIENTPLATFORM_DISK_CLEANUP_BEGIN"
-            privileged docker builder prune --force --all --keep-storage 512MB
-            privileged docker image prune --force
-            privileged docker container prune --force
-            privileged docker network prune --force
-            privileged journalctl --vacuum-size=256M || true
-            privileged apt-get clean || true
-            echo "CLIENTPLATFORM_DISK_CLEANUP_END"
-            snapshot
+            lock=/run/lock/clientplatform-production-deploy.lock
+            cleanup_script="$(mktemp /tmp/clientplatform-disk-cleanup.XXXXXX)"
+            trap 'rm -f "$cleanup_script"' EXIT
+            cat > "$cleanup_script" <<'CLEANUP'
+          set -Eeuo pipefail
+          echo "CLIENTPLATFORM_DISK_CLEANUP_BEGIN"
+          # Build cache is rebuildable and the canonical deploy already prunes it.
+          # Do not prune images, containers, networks, volumes, backups, or application data here.
+          docker builder prune --force --all --keep-storage 512MB
+          journalctl --vacuum-size=256M || true
+          apt-get clean || true
+          echo "CLIENTPLATFORM_DISK_CLEANUP_END"
+          echo "CLIENTPLATFORM_DISK_SNAPSHOT_BEGIN"
+          df -hPT /
+          echo "--- docker system df ---"
+          docker system df || true
+          echo "--- journal ---"
+          journalctl --disk-usage || true
+          echo "--- major directories ---"
+          du -x -B1 --max-depth=1 /var/lib /var/log /var/backups /opt 2>/dev/null \
+            | sort -nr | head -40 || true
+          echo "CLIENTPLATFORM_DISK_SNAPSHOT_END"
+          CLEANUP
+            if [ "$(id -u)" -eq 0 ]; then
+              flock -w 300 -x "$lock" bash "$cleanup_script"
+            else
+              sudo -n flock -w 300 -x "$lock" bash "$cleanup_script"
+            fi
+            rm -f "$cleanup_script"
+            trap - EXIT
           fi
           echo "CLIENTPLATFORM_PRODUCTION_DISK_MAINTENANCE_OK mode=$mode head_sha=$(git rev-parse HEAD)"
           REMOTE
