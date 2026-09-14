@@ -60,12 +60,18 @@ from clientplatform.application.cockpit_settings import (
     resolve_cockpit_settings,
     update_cockpit_settings,
 )
+from clientplatform.application.cockpit_automation import (
+    decide_cockpit_automation_approval,
+    resolve_cockpit_automation,
+    set_cockpit_autopilot,
+)
 from clientplatform.application.cockpit_customers import (
     CockpitCustomerActionUnavailable,
     resolve_cockpit_customer_action_route,
     resolve_cockpit_customer_detail,
     resolve_cockpit_customer_page,
 )
+from clientplatform.domain.automation_policy import AutomationPolicyError
 from clientplatform.domain.activity import ActivityInvariantViolation
 from clientplatform.domain.bookings import BookingInvariantViolation, BookingNotFound
 from clientplatform.domain.customers import CustomerNotFound
@@ -90,6 +96,7 @@ _CALENDAR_SCRIPT = Path(__file__).with_name("cockpit_calendar.js")
 _SALES_SCRIPT = Path(__file__).with_name("cockpit_sales.js")
 _CONNECTIONS_SCRIPT = Path(__file__).with_name("cockpit_connections.js")
 _SETTINGS_SCRIPT = Path(__file__).with_name("cockpit_settings.js")
+_AUTOMATION_SCRIPT = Path(__file__).with_name("cockpit_automation.js")
 _BUSINESS_WORKSPACE_SCRIPT = Path(__file__).with_name("cockpit_business_workspace.js")
 
 
@@ -115,6 +122,7 @@ _HTML = """<!doctype html>
 <script defer src="/clientplatform/cockpit/sales.js"></script>
 <script defer src="/clientplatform/cockpit/connections.js"></script>
 <script defer src="/clientplatform/cockpit/settings.js"></script>
+<script defer src="/clientplatform/cockpit/automation.js"></script>
 <script defer src="/clientplatform/cockpit/business-workspace.js"></script>
 </head><body>
 <main class="shell">
@@ -190,6 +198,13 @@ _HTML = """<!doctype html>
 <div id="analytics-funnel" class="metrics"></div><section class="home-block"><h3>Подтверждённая выручка</h3><div id="analytics-money" class="money"></div></section><section class="home-block"><h3>Источники результата</h3><div id="analytics-sources"></div></section><p id="analytics-limitations" class="muted"></p>
 <button id="analytics-advanced" class="secondary workspace-advanced" type="button">Продолжить в Telegram</button>
 </section>
+<section id="automation-view" class="workspace-view" aria-live="polite" hidden>
+<div class="view-toolbar"><button id="automation-more" class="secondary" type="button">Все возможности</button><button id="automation-refresh" class="secondary" type="button">Обновить</button></div>
+<div class="home-heading"><p class="eyebrow">Безопасная автоматизация</p><h2>Автоматические действия</h2><p id="automation-meta"></p></div>
+<section class="home-block"><h3>Границы и режим</h3><p id="automation-state" class="muted"></p><button id="automation-toggle" class="primary-cta" type="button" hidden>Включить автопилот анализа</button></section>
+<section class="home-block"><h3>Решения владельца</h3><div id="automation-approvals"></div><p id="automation-empty" class="muted"></p></section>
+<p id="automation-note" class="muted"></p><button id="automation-advanced" class="secondary workspace-advanced" type="button">Расширенные настройки в Telegram</button>
+</section>
 <section id="connections-view" class="workspace-view" aria-live="polite" hidden>
 <div class="view-toolbar"><button id="connections-more" class="secondary" type="button">Все возможности</button><button id="connections-refresh" class="secondary" type="button">Обновить</button></div>
 <div class="home-heading"><p class="eyebrow">Каналы бизнеса</p><h2>Мессенджеры и подключения</h2><p id="connections-meta"></p></div>
@@ -253,6 +268,7 @@ _JS = r"""(() => {
   const analytics = document.getElementById('analytics-view');
   const connections = document.getElementById('connections-view');
   const settingsView = document.getElementById('settings-view');
+  const automation = document.getElementById('automation-view');
   const homeBack = document.getElementById('home-back');
   const homeRefresh = document.getElementById('home-refresh');
   const homeMeta = document.getElementById('home-meta');
@@ -269,7 +285,7 @@ _JS = r"""(() => {
   const initData = tg && typeof tg.initData === 'string' ? tg.initData : '';
   const roleNames = {owner:'Владелец',administrator:'Администратор',manager:'Менеджер',marketer:'Маркетолог',analyst:'Аналитик',content_manager:'Контент-менеджер',support:'Поддержка',customer:'Клиент'};
   const periodNames = {'7d':'7 дней','30d':'30 дней','today':'сегодня'};
-  const nativeSections = new Set(['home','customers','calendar','sales','services','money','growth','analytics','connections','settings']);
+  const nativeSections = new Set(['home','customers','calendar','sales','services','money','growth','analytics','automation','connections','settings']);
   const navigationGroups = Object.freeze([
     {title:'Работа с клиентами', hint:'Ежедневные задачи: клиенты, записи и продажи.', ids:['home','customers','calendar','sales']},
     {title:'Услуги и деньги', hint:'Что Вы продаёте, оплаты и фактический результат.', ids:['services','money','analytics']},
@@ -320,7 +336,7 @@ _JS = r"""(() => {
     text(current, roleLabel ? `${normalized} · ${roleLabel}` : normalized);
   };
   const hideViews = () => {
-    navigationShell.hidden = true; home.hidden = true; customers.hidden = true; calendar.hidden = true; sales.hidden = true; services.hidden = true; moneyView.hidden = true; growth.hidden = true; analytics.hidden = true; connections.hidden = true; settingsView.hidden = true; explanation.hidden = true;
+    navigationShell.hidden = true; home.hidden = true; customers.hidden = true; calendar.hidden = true; sales.hidden = true; services.hidden = true; moneyView.hidden = true; growth.hidden = true; analytics.hidden = true; automation.hidden = true; connections.hidden = true; settingsView.hidden = true; explanation.hidden = true;
   };
   const resetHomeContent = () => {
     homeMetrics.replaceChildren(); homeMoney.replaceChildren(); homePrimaryAction.replaceChildren(); homeAttention.replaceChildren(); homeActions.replaceChildren();
@@ -349,6 +365,7 @@ _JS = r"""(() => {
   const enterMoney = () => { currentView = 'money'; hideViews(); moneyView.hidden = false; setPrimaryActive('more'); syncBackButton(); };
   const enterGrowth = () => { currentView = 'growth'; hideViews(); growth.hidden = false; setPrimaryActive('more'); syncBackButton(); };
   const enterAnalytics = () => { currentView = 'analytics'; hideViews(); analytics.hidden = false; setPrimaryActive('more'); syncBackButton(); };
+  const enterAutomation = () => { currentView = 'automation'; hideViews(); automation.hidden = false; setPrimaryActive('more'); syncBackButton(); };
   const enterConnections = () => { currentView = 'connections'; hideViews(); connections.hidden = false; setPrimaryActive('more'); syncBackButton(); };
   const enterSettings = () => { currentView = 'settings'; hideViews(); settingsView.hidden = false; setPrimaryActive('more'); syncBackButton(); };
   const setHomeBusy = (busy) => { home.classList.toggle('busy', Boolean(busy)); homeRefresh.disabled = Boolean(busy); home.setAttribute('aria-busy', busy ? 'true' : 'false'); };
@@ -469,6 +486,7 @@ _JS = r"""(() => {
       if (window.ClientPlatformBusinessWorkspace && item.id === 'money') { window.ClientPlatformBusinessWorkspace.openMoney(); return; }
       if (window.ClientPlatformBusinessWorkspace && item.id === 'growth') { window.ClientPlatformBusinessWorkspace.openGrowth(); return; }
       if (window.ClientPlatformBusinessWorkspace && item.id === 'analytics') { window.ClientPlatformBusinessWorkspace.openAnalytics(); return; }
+      if (item.id === 'automation' && window.ClientPlatformAutomation) { window.ClientPlatformAutomation.open(); return; }
       if (item.id === 'connections' && window.ClientPlatformConnections) { window.ClientPlatformConnections.open(); return; }
       if (item.id === 'settings' && window.ClientPlatformSettings) { window.ClientPlatformSettings.open(); return; }
       void openSection(item, button); return;
@@ -476,7 +494,7 @@ _JS = r"""(() => {
     showExplanation(item);
   };
 
-  window.ClientPlatformCockpitNavigation = Object.freeze({showNavigation, showHome, enterCustomers, enterCalendar, enterSales, enterServices, enterMoney, enterGrowth, enterAnalytics, enterConnections, enterSettings, openCanonicalSection, syncBusinessName, captureBusinessContext, assertBusinessContextCurrent, isBusinessContextCurrent, isContextChangedError, focusRegion, hasAvailableSection});
+  window.ClientPlatformCockpitNavigation = Object.freeze({showNavigation, showHome, enterCustomers, enterCalendar, enterSales, enterServices, enterMoney, enterGrowth, enterAnalytics, enterAutomation, enterConnections, enterSettings, openCanonicalSection, syncBusinessName, captureBusinessContext, assertBusinessContextCurrent, isBusinessContextCurrent, isContextChangedError, focusRegion, hasAvailableSection});
 
   const appendNavigationCard = (item, container) => {
     const state = screenStatus(item); const button = document.createElement('button'); button.type = 'button'; button.className = `card ${state}`;
@@ -545,6 +563,7 @@ _JS = r"""(() => {
     if (currentView === 'calendar' && window.ClientPlatformCalendar) { window.ClientPlatformCalendar.back(); return; }
     if (currentView === 'sales' && window.ClientPlatformSales) { window.ClientPlatformSales.back(); return; }
     if (['services','money','growth','analytics'].includes(currentView) && window.ClientPlatformBusinessWorkspace) { window.ClientPlatformBusinessWorkspace.back(); return; }
+    if (currentView === 'automation' && window.ClientPlatformAutomation) { window.ClientPlatformAutomation.back(); return; }
     if (currentView === 'connections' && window.ClientPlatformConnections) { window.ClientPlatformConnections.back(); return; }
     if (currentView === 'settings' && window.ClientPlatformSettings) { window.ClientPlatformSettings.back(); return; }
     if (currentView === 'explanation' || currentView === 'navigation') { showHome(); }
@@ -628,6 +647,15 @@ async def cockpit_connections_script(_request: web.Request) -> web.Response:
 async def cockpit_settings_script(_request: web.Request) -> web.Response:
     return web.Response(
         text=_SETTINGS_SCRIPT.read_text(encoding="utf-8"),
+        content_type="application/javascript",
+        charset="utf-8",
+        headers=_base_headers(),
+    )
+
+
+async def cockpit_automation_script(_request: web.Request) -> web.Response:
+    return web.Response(
+        text=_AUTOMATION_SCRIPT.read_text(encoding="utf-8"),
         content_type="application/javascript",
         charset="utf-8",
         headers=_base_headers(),
@@ -1150,6 +1178,102 @@ async def cockpit_sales_note(request: web.Request) -> web.Response:
     if item is None:
         return _error(503, "sales_unavailable")
     return web.json_response({"ok": True, **item.as_dict()}, headers=_base_headers())
+
+
+async def cockpit_automation(request: web.Request) -> web.Response:
+    scope = await _verified_scope(request)
+    if isinstance(scope, web.Response):
+        return scope
+    user_id, requested_business = scope
+    try:
+        snapshot = await asyncio.to_thread(
+            resolve_cockpit_automation,
+            telegram_user_id=user_id,
+            requested_business_id=requested_business,
+        )
+    except TenantAccessDenied:
+        return _error(403, "business_access_denied")
+    except TenantPermissionDenied:
+        return _error(403, "automation_access_denied")
+    except ValueError:
+        return _error(400, "invalid_automation_request")
+    except OSError:
+        return _error(503, "automation_unavailable")
+    except RuntimeError:
+        return _error(503, "automation_unavailable")
+    return web.json_response({"ok": True, **snapshot.as_dict()}, headers=_base_headers())
+
+
+async def cockpit_automation_autopilot(request: web.Request) -> web.Response:
+    scope = await _verified_payload_scope(request)
+    if isinstance(scope, web.Response):
+        return scope
+    user_id, requested_business, payload = scope
+    enabled = payload.get("enabled")
+    if not isinstance(enabled, bool):
+        return _error(400, "invalid_automation_change")
+    try:
+        snapshot = await asyncio.to_thread(
+            set_cockpit_autopilot,
+            telegram_user_id=user_id,
+            requested_business_id=requested_business,
+            enabled=enabled,
+        )
+    except TenantAccessDenied:
+        return _error(403, "business_access_denied")
+    except TenantPermissionDenied:
+        return _error(403, "automation_change_denied")
+    except AutomationPolicyError:
+        return _error(409, "automation_change_rejected")
+    except ValueError:
+        return _error(400, "invalid_automation_change")
+    except OSError:
+        return _error(503, "automation_unavailable")
+    except RuntimeError:
+        return _error(409, "automation_change_rejected")
+    return web.json_response({"ok": True, **snapshot.as_dict()}, headers=_base_headers())
+
+
+async def cockpit_automation_decision(request: web.Request) -> web.Response:
+    scope = await _verified_payload_scope(request)
+    if isinstance(scope, web.Response):
+        return scope
+    user_id, requested_business, payload = scope
+    approval_id = payload.get("approval_id")
+    request_fingerprint = payload.get("request_fingerprint")
+    decision = payload.get("decision")
+    if (
+        not isinstance(approval_id, str)
+        or not approval_id.strip()
+        or len(approval_id) > 80
+        or not isinstance(request_fingerprint, str)
+        or len(request_fingerprint) != 64
+        or any(char not in "0123456789abcdefABCDEF" for char in request_fingerprint)
+        or decision not in {"approve", "reject", "revoke"}
+    ):
+        return _error(400, "invalid_automation_change")
+    try:
+        snapshot = await asyncio.to_thread(
+            decide_cockpit_automation_approval,
+            telegram_user_id=user_id,
+            requested_business_id=requested_business,
+            approval_id=approval_id.strip(),
+            request_fingerprint=request_fingerprint.lower(),
+            decision=str(decision),
+        )
+    except TenantAccessDenied:
+        return _error(403, "business_access_denied")
+    except TenantPermissionDenied:
+        return _error(403, "automation_change_denied")
+    except AutomationPolicyError:
+        return _error(409, "automation_change_rejected")
+    except ValueError:
+        return _error(400, "invalid_automation_change")
+    except OSError:
+        return _error(503, "automation_unavailable")
+    except RuntimeError:
+        return _error(409, "automation_change_rejected")
+    return web.json_response({"ok": True, **snapshot.as_dict()}, headers=_base_headers())
 
 
 async def cockpit_connections(request: web.Request) -> web.Response:
@@ -1844,6 +1968,7 @@ def register_cockpit_routes(
     app.router.add_get(f"{_COCKPIT_PREFIX}/sales.js", cockpit_sales_script)
     app.router.add_get(f"{_COCKPIT_PREFIX}/connections.js", cockpit_connections_script)
     app.router.add_get(f"{_COCKPIT_PREFIX}/settings.js", cockpit_settings_script)
+    app.router.add_get(f"{_COCKPIT_PREFIX}/automation.js", cockpit_automation_script)
     app.router.add_get(f"{_COCKPIT_PREFIX}/business-workspace.js", cockpit_business_workspace_script)
     app.router.add_post(f"{_COCKPIT_PREFIX}/context", cockpit_context)
     app.router.add_post(f"{_COCKPIT_PREFIX}/home", cockpit_home)
@@ -1863,6 +1988,9 @@ def register_cockpit_routes(
     app.router.add_post(f"{_COCKPIT_PREFIX}/connections/setup", cockpit_connection_setup)
     app.router.add_post(f"{_COCKPIT_PREFIX}/settings", cockpit_settings)
     app.router.add_post(f"{_COCKPIT_PREFIX}/settings/update", cockpit_settings_update)
+    app.router.add_post(f"{_COCKPIT_PREFIX}/automation", cockpit_automation)
+    app.router.add_post(f"{_COCKPIT_PREFIX}/automation/autopilot", cockpit_automation_autopilot)
+    app.router.add_post(f"{_COCKPIT_PREFIX}/automation/decision", cockpit_automation_decision)
     app.router.add_post(f"{_COCKPIT_PREFIX}/services", cockpit_services)
     app.router.add_post(f"{_COCKPIT_PREFIX}/services/create", cockpit_service_create)
     app.router.add_post(f"{_COCKPIT_PREFIX}/services/archive", cockpit_service_archive)
