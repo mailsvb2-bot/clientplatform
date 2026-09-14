@@ -4,8 +4,9 @@ import asyncio
 import json
 import os
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any, Protocol
 from urllib.parse import urlsplit, urlunsplit
 
@@ -17,13 +18,49 @@ from clientplatform.runtime.secrets import (
 
 
 UCR_PINNED_REVISION = "8097b41e69634c944c225f7071e80b991d4ddc02"
+UCR_INTEGRATION_SERVICE = "ucr.v1.IntegrationService"
+UCR_CALL_SERVICE = "ucr.v1.CallService"
 _DEFAULT_TOKEN_REFERENCE = "secret://env/CLIENTPLATFORM_SECRET_UCR_GATEWAY_TOKEN"
 _DEFAULT_TIMEOUT_SECONDS = 5.0
 _DEFAULT_MAX_RESPONSE_BYTES = 128 * 1024
+_MAX_REQUEST_BYTES = 64 * 1024
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 _IDEMPOTENCY_KEY_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{7,127}")
-_OPAQUE_KEY_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:@/-]{0,191}")
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+_RPC_PATH = "/v1/rpc"
+
+
+class UcrIntegrationMethod(str, Enum):
+    SUBMIT_COMMAND = "SubmitCommand"
+    CREATE_IDENTITY = "CreateIdentity"
+    LINK_IDENTITY = "LinkIdentity"
+    GET_IDENTITY = "GetIdentity"
+    RESOLVE_IDENTITY_BINDING = "ResolveIdentityBinding"
+    CREATE_CONVERSATION = "CreateConversation"
+    GET_CONVERSATION = "GetConversation"
+    SEND_MESSAGE = "SendMessage"
+    GET_MESSAGE = "GetMessage"
+    CREATE_COMMUNICATION_INTENT = "CreateCommunicationIntent"
+    GET_COMMUNICATION_INTENT = "GetCommunicationIntent"
+
+
+class UcrCallMethod(str, Enum):
+    START_CALL = "StartCall"
+    GET_CALL = "GetCall"
+    SIGNAL_CALL = "SignalCall"
+
+
+_INTEGRATION_MUTATIONS = frozenset(
+    {
+        UcrIntegrationMethod.SUBMIT_COMMAND,
+        UcrIntegrationMethod.CREATE_IDENTITY,
+        UcrIntegrationMethod.LINK_IDENTITY,
+        UcrIntegrationMethod.CREATE_CONVERSATION,
+        UcrIntegrationMethod.SEND_MESSAGE,
+        UcrIntegrationMethod.CREATE_COMMUNICATION_INTENT,
+    }
+)
+_CALL_MUTATIONS = frozenset({UcrCallMethod.START_CALL, UcrCallMethod.SIGNAL_CALL})
 
 
 class UcrGatewayError(RuntimeError):
@@ -139,11 +176,12 @@ class AiohttpUcrGatewayTransport:
 
 
 class UcrGatewayClient:
-    """Fail-closed ClientPlatform adapter for a separately deployed UCR gateway.
+    """Fail-closed adapter to a thin gateway over UCR public services.
 
-    ClientPlatform remains the owner of CRM, tenant, automation, consent and business
-    semantics. The gateway receives opaque references plus idempotency keys and owns only
-    UCR canonical communication runtime operations.
+    ClientPlatform owns tenant, CRM, automation, consent, billing and provider-delivery
+    semantics. This adapter may invoke only versioned public UCR RPCs. It deliberately
+    does not infer Device, Group, membership or CallSession state that the public UCR
+    service contract did not receive from the caller.
     """
 
     def __init__(
@@ -160,70 +198,67 @@ class UcrGatewayClient:
     async def health(self) -> dict[str, Any]:
         return await self._request(method="GET", path="/v1/health")
 
-    async def ensure_communication_context(
+    async def invoke_integration(
         self,
         *,
-        tenant_key: str,
-        identity_key: str,
-        device_key: str,
-        group_key: str,
-        member_identity_keys: Sequence[str],
-        idempotency_key: str,
+        method: UcrIntegrationMethod,
+        request: Mapping[str, Any],
+        idempotency_key: str | None = None,
     ) -> dict[str, Any]:
-        members = [
-            _normalize_opaque_key(value, field="member_identity_key")
-            for value in member_identity_keys
-        ]
-        if not members:
-            raise ValueError("member_identity_keys must not be empty")
-        if len(members) > 1000:
-            raise ValueError("member_identity_keys exceeds the gateway limit")
-        if len(set(members)) != len(members):
-            raise ValueError("member_identity_keys must be unique")
-        payload = {
-            "version": 1,
-            "tenant_key": _normalize_opaque_key(tenant_key, field="tenant_key"),
-            "identity_key": _normalize_opaque_key(identity_key, field="identity_key"),
-            "device_key": _normalize_opaque_key(device_key, field="device_key"),
-            "group_key": _normalize_opaque_key(group_key, field="group_key"),
-            "member_identity_keys": members,
-        }
-        return await self._request(
-            method="POST",
-            path="/v1/communication-contexts",
-            payload=payload,
+        normalized_method = _require_enum(method, UcrIntegrationMethod)
+        return await self._invoke_rpc(
+            service=UCR_INTEGRATION_SERVICE,
+            method=normalized_method.value,
+            request=request,
+            mutating=normalized_method in _INTEGRATION_MUTATIONS,
             idempotency_key=idempotency_key,
         )
 
-    async def start_call(
+    async def invoke_call(
         self,
         *,
-        tenant_key: str,
-        context_key: str,
-        participant_identity_keys: Sequence[str],
-        idempotency_key: str,
+        method: UcrCallMethod,
+        request: Mapping[str, Any],
+        idempotency_key: str | None = None,
     ) -> dict[str, Any]:
-        participants = [
-            _normalize_opaque_key(value, field="participant_identity_key")
-            for value in participant_identity_keys
-        ]
-        if len(participants) < 2:
-            raise ValueError("a UCR call requires at least two participants")
-        if len(participants) > 1000:
-            raise ValueError("participant_identity_keys exceeds the gateway limit")
-        if len(set(participants)) != len(participants):
-            raise ValueError("participant_identity_keys must be unique")
+        normalized_method = _require_enum(method, UcrCallMethod)
+        return await self._invoke_rpc(
+            service=UCR_CALL_SERVICE,
+            method=normalized_method.value,
+            request=request,
+            mutating=normalized_method in _CALL_MUTATIONS,
+            idempotency_key=idempotency_key,
+        )
+
+    async def _invoke_rpc(
+        self,
+        *,
+        service: str,
+        method: str,
+        request: Mapping[str, Any],
+        mutating: bool,
+        idempotency_key: str | None,
+    ) -> dict[str, Any]:
+        request_object = _normalize_rpc_request(request)
+        if mutating:
+            normalized_key = _normalize_idempotency_key(idempotency_key)
+        elif idempotency_key is not None:
+            raise ValueError("read-only UCR RPC must not use an idempotency key")
+        else:
+            normalized_key = None
         payload = {
             "version": 1,
-            "tenant_key": _normalize_opaque_key(tenant_key, field="tenant_key"),
-            "context_key": _normalize_opaque_key(context_key, field="context_key"),
-            "participant_identity_keys": participants,
+            "service": service,
+            "method": method,
+            "request": request_object,
         }
         return await self._request(
             method="POST",
-            path="/v1/calls",
+            path=_RPC_PATH,
             payload=payload,
-            idempotency_key=idempotency_key,
+            idempotency_key=normalized_key,
+            expected_service=service,
+            expected_method=method,
         )
 
     async def _request(
@@ -233,11 +268,11 @@ class UcrGatewayClient:
         path: str,
         payload: Mapping[str, Any] | None = None,
         idempotency_key: str | None = None,
+        expected_service: str | None = None,
+        expected_method: str | None = None,
     ) -> dict[str, Any]:
         if not self.config.enabled:
             raise UcrGatewayConfigurationError("UCR gateway is disabled")
-        if method != "GET":
-            idempotency_key = _normalize_idempotency_key(idempotency_key)
         token = self._resolve_token()
         headers = {
             "Accept": "application/json",
@@ -245,12 +280,8 @@ class UcrGatewayClient:
             "X-ClientPlatform-UCR-Revision": self.config.pinned_revision,
         }
         if payload is not None:
-            encoded = json.dumps(
-                payload,
-                separators=(",", ":"),
-                ensure_ascii=False,
-            ).encode("utf-8")
-            if len(encoded) > 64 * 1024:
+            encoded = _encode_request(payload)
+            if len(encoded) > _MAX_REQUEST_BYTES:
                 raise ValueError("UCR gateway request payload exceeds 65536 bytes")
             headers["Content-Type"] = "application/json"
         if idempotency_key is not None:
@@ -280,6 +311,12 @@ class UcrGatewayClient:
         revision = str(response.get("ucr_revision") or "").strip().lower()
         if revision != self.config.pinned_revision:
             raise UcrGatewayProtocolError("ucr_gateway_revision_mismatch")
+        if expected_service is not None:
+            _validate_rpc_response(
+                response,
+                expected_service=expected_service,
+                expected_method=expected_method,
+            )
         return response
 
     def _resolve_token(self) -> str:
@@ -358,11 +395,22 @@ def _is_secret_reference(value: str) -> bool:
     return raw.startswith(("secret://env/", "vault://connection/"))
 
 
-def _normalize_opaque_key(value: str, *, field: str) -> str:
-    raw = str(value or "").strip()
-    if not _OPAQUE_KEY_RE.fullmatch(raw):
-        raise ValueError(f"{field} is invalid")
-    return raw
+def _require_enum[T: Enum](value: T, enum_type: type[T]) -> T:
+    if not isinstance(value, enum_type):
+        raise ValueError(f"unsupported UCR method for {enum_type.__name__}")
+    return value
+
+
+def _normalize_rpc_request(request: Mapping[str, Any]) -> dict[str, Any]:
+    if not isinstance(request, Mapping):
+        raise ValueError("UCR RPC request must be a mapping")
+    normalized = dict(request)
+    if not normalized:
+        raise ValueError("UCR RPC request must not be empty")
+    if not all(isinstance(key, str) and key for key in normalized):
+        raise ValueError("UCR RPC request keys must be non-empty strings")
+    _encode_request(normalized)
+    return normalized
 
 
 def _normalize_idempotency_key(value: str | None) -> str:
@@ -370,6 +418,18 @@ def _normalize_idempotency_key(value: str | None) -> str:
     if not _IDEMPOTENCY_KEY_RE.fullmatch(raw):
         raise ValueError("UCR gateway idempotency key is invalid")
     return raw
+
+
+def _encode_request(payload: Mapping[str, Any]) -> bytes:
+    try:
+        return json.dumps(
+            payload,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise ValueError("UCR gateway request must be valid finite JSON") from exc
 
 
 def _decode_response(body: bytes) -> dict[str, Any]:
@@ -382,6 +442,20 @@ def _decode_response(body: bytes) -> dict[str, Any]:
     return decoded
 
 
+def _validate_rpc_response(
+    response: Mapping[str, Any],
+    *,
+    expected_service: str,
+    expected_method: str | None,
+) -> None:
+    if response.get("service") != expected_service:
+        raise UcrGatewayProtocolError("ucr_gateway_service_mismatch")
+    if expected_method is None or response.get("method") != expected_method:
+        raise UcrGatewayProtocolError("ucr_gateway_method_mismatch")
+    if not isinstance(response.get("result"), Mapping):
+        raise UcrGatewayProtocolError("ucr_gateway_result_missing")
+
+
 def _safe_error_code(response: Mapping[str, Any]) -> str:
     raw = str(response.get("error") or "ucr_gateway_rejected").strip().lower()
     if not re.fullmatch(r"[a-z0-9_.:-]{1,96}", raw):
@@ -391,7 +465,10 @@ def _safe_error_code(response: Mapping[str, Any]) -> str:
 
 __all__ = [
     "AiohttpUcrGatewayTransport",
+    "UCR_CALL_SERVICE",
+    "UCR_INTEGRATION_SERVICE",
     "UCR_PINNED_REVISION",
+    "UcrCallMethod",
     "UcrGatewayClient",
     "UcrGatewayConfig",
     "UcrGatewayConfigurationError",
@@ -399,5 +476,6 @@ __all__ = [
     "UcrGatewayProtocolError",
     "UcrGatewayRejected",
     "UcrGatewayUnavailable",
+    "UcrIntegrationMethod",
     "ucr_gateway_config",
 ]
