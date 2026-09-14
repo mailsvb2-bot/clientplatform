@@ -7,7 +7,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Protocol
+from typing import Any, Protocol, TypeVar
 from urllib.parse import urlsplit, urlunsplit
 
 from clientplatform.runtime.secrets import (
@@ -28,6 +28,7 @@ _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 _IDEMPOTENCY_KEY_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{7,127}")
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 _RPC_PATH = "/v1/rpc"
+_EnumT = TypeVar("_EnumT", bound=Enum)
 
 
 class UcrIntegrationMethod(str, Enum):
@@ -395,7 +396,7 @@ def _is_secret_reference(value: str) -> bool:
     return raw.startswith(("secret://env/", "vault://connection/"))
 
 
-def _require_enum[T: Enum](value: T, enum_type: type[T]) -> T:
+def _require_enum(value: _EnumT, enum_type: type[_EnumT]) -> _EnumT:
     if not isinstance(value, enum_type):
         raise ValueError(f"unsupported UCR method for {enum_type.__name__}")
     return value
