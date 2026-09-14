@@ -11,6 +11,7 @@ from ucr_gateway_sidecar.server import (
     SidecarConfig,
     UCR_INTEGRATION_SERVICE,
     UCR_PINNED_REVISION,
+    _canonical_error_to_gateway_error,
     load_config,
 )
 
@@ -56,10 +57,17 @@ def headers(**extra: str) -> dict[str, str]:
 
 
 class SidecarTests(unittest.IsolatedAsyncioTestCase):
-    async def test_health_authenticates_before_upstream(self) -> None:
+    async def test_health_authenticates_before_revision_or_upstream(self) -> None:
         backend = FakeBackend()
         service = GatewayService(config=config(), backend=backend)
         status, payload = await service.health(headers={})
+        self.assertEqual(status, 401)
+        self.assertEqual(backend.health_calls, 0)
+        self.assertEqual(payload["error"], "ucr_gateway_unauthorized")
+
+        status, payload = await service.health(
+            headers={"Authorization": "Bearer " + ("t" * 32)}
+        )
         self.assertEqual(status, 409)
         self.assertEqual(backend.health_calls, 0)
         self.assertEqual(payload["error"], "ucr_gateway_revision_mismatch")
@@ -198,6 +206,27 @@ class ConfigTests(unittest.TestCase):
         ).decode()
         with self.assertRaises(GatewayConfigurationError):
             load_config(broken)
+
+    def test_canonical_ucr_error_envelopes_never_become_success(self) -> None:
+        permission_denied = _canonical_error_to_gateway_error(
+            {
+                "code": "ERROR_CODE_PERMISSION_DENIED",
+                "diagnosticDomain": "must-not-leak",
+            }
+        )
+        self.assertEqual(permission_denied.status_code, 403)
+        self.assertEqual(permission_denied.error_code, "ucr_error_permission_denied")
+        self.assertNotIn("must-not-leak", str(permission_denied))
+
+        rate_limited = _canonical_error_to_gateway_error(
+            {"code": "ERROR_CODE_RATE_LIMITED", "retryAfterMs": "500"}
+        )
+        self.assertEqual(rate_limited.status_code, 429)
+        self.assertEqual(rate_limited.error_code, "ucr_error_rate_limited")
+
+        unknown = _canonical_error_to_gateway_error({"code": "ERROR_CODE_UNSPECIFIED"})
+        self.assertEqual(unknown.status_code, 502)
+        self.assertEqual(unknown.error_code, "ucr_error_unspecified")
 
 
 if __name__ == "__main__":
