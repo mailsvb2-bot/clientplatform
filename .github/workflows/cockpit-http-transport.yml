@@ -1,9 +1,9 @@
 name: Cockpit HTTP transport
 
 on:
-  push:
+  pull_request:
     branches:
-      - feature/cockpit-automation-approvals
+      - main
     paths:
       - .github/workflows/cockpit-http-transport.yml
       - .github/transport/cockpit_http.patch
@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   apply-exact-patch:
-    if: github.actor != 'github-actions[bot]'
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout exact feature head
