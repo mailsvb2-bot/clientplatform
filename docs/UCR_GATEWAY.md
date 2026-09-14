@@ -37,7 +37,7 @@ Every successful response includes the exact pinned revision:
 
 A mismatch fails closed so an unreviewed UCR upgrade cannot silently change ClientPlatform communication semantics.
 
-Requests authenticate with `Authorization: Bearer <resolved secret>` and send `X-ClientPlatform-UCR-Revision` with the pinned revision. Mutating RPCs additionally require a gateway `Idempotency-Key`. The key protects ClientPlatform retry/restart behavior; it does not replace canonical UCR IDs or UCR's own duplicate/conflict rules.
+Requests authenticate with `Authorization: Bearer <resolved secret>` and send `X-ClientPlatform-UCR-Revision` with the pinned revision. Mutating RPCs additionally require a gateway `Idempotency-Key`. The key is a mandatory stable retry-correlation guard at the ClientPlatform HTTP boundary; the sidecar does not claim durable deduplication from that header. Callers must reuse canonical UCR request IDs for retries, and UCR remains the owner of duplicate/conflict semantics.
 
 ## Health
 
@@ -80,7 +80,7 @@ A successful RPC response must echo the exact service and method and provide a J
 }
 ```
 
-Service/method mismatch or a missing object result is a protocol failure.
+Service/method mismatch or a missing object result is a protocol failure. A canonical UCR protobuf response carrying its `error` oneof is never promoted to `ok: true`; the prepared sidecar maps that error envelope to a bounded HTTP rejection/unavailability result without echoing UCR diagnostics.
 
 ## Allowed public UCR surface
 
@@ -149,6 +149,7 @@ The boundary is deliberately fail-closed:
 - responses are capped by configuration;
 - 401/403/409/422 become explicit rejections;
 - 429 and 5xx become temporary unavailability;
+- canonical UCR `ErrorEnvelope` responses fail closed instead of becoming transport success;
 - invalid JSON, unexpected success shapes, service/method mismatch and revision drift become protocol failures;
 - gateway error details are not echoed into ClientPlatform exceptions, preventing accidental secret leakage.
 
@@ -156,7 +157,9 @@ UCR availability is optional. When the feature flag is off, all existing ClientP
 
 ## Deployment boundary
 
-The pinned UCR repository contains public Tonic service bindings and interoperability harnesses, but ClientPlatform does not treat a test harness as a production listener. A production UCR gateway/listener, its durable UCR storage, service-principal provisioning, TLS/network policy and rollout evidence are a separate deployment slice and require an explicit owner decision. This document does not authorize production deployment.
+`ucr_gateway_sidecar/` now contains a prepared executable HTTP→gRPC adapter. Its container build fetches the exact pinned UCR commit, verifies the fetched SHA and generates Python bindings from that revision's public protobuf files instead of vendoring another schema copy into ClientPlatform. The sidecar authenticates upstream with UCR's canonical binary Service Principal metadata and requires TLS for non-loopback gRPC targets.
+
+Prepared does not mean deployed. The sidecar is not wired into `deploy/clientplatform/compose.production.yml`, the ClientPlatform feature flag remains disabled by default, and this repository still does not create a production UCR listener. A production UCR listener, durable UCR storage, Service Principal grants/quota, TLS/network policy and rollout evidence remain a separate deployment slice requiring an explicit owner decision. This document does not authorize production deployment.
 
 ## Upgrade rule
 
