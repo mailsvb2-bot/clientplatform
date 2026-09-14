@@ -9,8 +9,6 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 from urllib.parse import urlsplit, urlunsplit
 
-import aiohttp
-
 from clientplatform.runtime.secrets import (
     CredentialProvider,
     EnvironmentCredentialProvider,
@@ -86,7 +84,11 @@ class UcrGatewayTransport(Protocol):
 
 
 class AiohttpUcrGatewayTransport:
-    """Small HTTP transport with finite time and response budgets."""
+    """Small HTTP transport with finite time and response budgets.
+
+    aiohttp is imported lazily so architecture and contract checks that only import the
+    optional UCR boundary do not acquire a full application-runtime dependency.
+    """
 
     async def request(
         self,
@@ -98,30 +100,42 @@ class AiohttpUcrGatewayTransport:
         timeout_seconds: float,
         max_response_bytes: int,
     ) -> tuple[int, Mapping[str, str], bytes]:
+        try:
+            import aiohttp
+        except ModuleNotFoundError as exc:
+            raise UcrGatewayUnavailable(
+                "aiohttp is required for the UCR HTTP transport"
+            ) from exc
+
         timeout = aiohttp.ClientTimeout(total=float(timeout_seconds))
         kwargs: dict[str, Any] = {"headers": dict(headers)}
         if payload is not None:
             kwargs["json"] = dict(payload)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.request(method, url, **kwargs) as response:
-                declared = response.headers.get("Content-Length")
-                if declared:
-                    try:
-                        declared_bytes = int(declared)
-                    except ValueError as exc:
-                        raise UcrGatewayProtocolError(
-                            "UCR gateway returned an invalid content length"
-                        ) from exc
-                    if declared_bytes < 0 or declared_bytes > max_response_bytes:
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.request(method, url, **kwargs) as response:
+                    declared = response.headers.get("Content-Length")
+                    if declared:
+                        try:
+                            declared_bytes = int(declared)
+                        except ValueError as exc:
+                            raise UcrGatewayProtocolError(
+                                "UCR gateway returned an invalid content length"
+                            ) from exc
+                        if declared_bytes < 0 or declared_bytes > max_response_bytes:
+                            raise UcrGatewayProtocolError(
+                                "UCR gateway response exceeded the configured limit"
+                            )
+                    body = await response.content.read(max_response_bytes + 1)
+                    if len(body) > max_response_bytes:
                         raise UcrGatewayProtocolError(
                             "UCR gateway response exceeded the configured limit"
                         )
-                body = await response.content.read(max_response_bytes + 1)
-                if len(body) > max_response_bytes:
-                    raise UcrGatewayProtocolError(
-                        "UCR gateway response exceeded the configured limit"
-                    )
-                return response.status, dict(response.headers), body
+                    return response.status, dict(response.headers), body
+        except UcrGatewayError:
+            raise
+        except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as exc:
+            raise UcrGatewayUnavailable("UCR gateway request failed") from exc
 
 
 class UcrGatewayClient:
@@ -156,7 +170,10 @@ class UcrGatewayClient:
         member_identity_keys: Sequence[str],
         idempotency_key: str,
     ) -> dict[str, Any]:
-        members = [_normalize_opaque_key(value, field="member_identity_key") for value in member_identity_keys]
+        members = [
+            _normalize_opaque_key(value, field="member_identity_key")
+            for value in member_identity_keys
+        ]
         if not members:
             raise ValueError("member_identity_keys must not be empty")
         if len(members) > 1000:
@@ -228,7 +245,11 @@ class UcrGatewayClient:
             "X-ClientPlatform-UCR-Revision": self.config.pinned_revision,
         }
         if payload is not None:
-            encoded = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+            encoded = json.dumps(
+                payload,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
             if len(encoded) > 64 * 1024:
                 raise ValueError("UCR gateway request payload exceeds 65536 bytes")
             headers["Content-Type"] = "application/json"
@@ -245,7 +266,7 @@ class UcrGatewayClient:
             )
         except UcrGatewayError:
             raise
-        except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as exc:
+        except (asyncio.TimeoutError, OSError) as exc:
             raise UcrGatewayUnavailable("UCR gateway request failed") from exc
         response = _decode_response(body)
         if status in {401, 403, 409, 422}:
@@ -263,9 +284,13 @@ class UcrGatewayClient:
 
     def _resolve_token(self) -> str:
         try:
-            token = str(self._credential_provider.resolve(self.config.token_reference) or "").strip()
+            token = str(
+                self._credential_provider.resolve(self.config.token_reference) or ""
+            ).strip()
         except SecretReferenceError as exc:
-            raise UcrGatewayUnavailable("UCR gateway credential is unavailable") from exc
+            raise UcrGatewayUnavailable(
+                "UCR gateway credential is unavailable"
+            ) from exc
         if len(token.encode("utf-8")) < 32:
             raise UcrGatewayUnavailable("UCR gateway credential is unavailable")
         return token
@@ -273,18 +298,30 @@ class UcrGatewayClient:
 
 def ucr_gateway_config(environment: Mapping[str, str] | None = None) -> UcrGatewayConfig:
     env = environment if environment is not None else os.environ
-    enabled = str(env.get("CLIENTPLATFORM_UCR_GATEWAY_ENABLED") or "").strip().lower() in _TRUE_VALUES
+    enabled = (
+        str(env.get("CLIENTPLATFORM_UCR_GATEWAY_ENABLED") or "").strip().lower()
+        in _TRUE_VALUES
+    )
     base_url = str(env.get("CLIENTPLATFORM_UCR_GATEWAY_URL") or "").strip()
     token_reference = str(
-        env.get("CLIENTPLATFORM_UCR_GATEWAY_TOKEN_REFERENCE") or _DEFAULT_TOKEN_REFERENCE
+        env.get("CLIENTPLATFORM_UCR_GATEWAY_TOKEN_REFERENCE")
+        or _DEFAULT_TOKEN_REFERENCE
     ).strip()
-    raw_timeout = str(env.get("CLIENTPLATFORM_UCR_GATEWAY_TIMEOUT_SEC") or _DEFAULT_TIMEOUT_SECONDS).strip()
-    raw_limit = str(env.get("CLIENTPLATFORM_UCR_GATEWAY_MAX_RESPONSE_BYTES") or _DEFAULT_MAX_RESPONSE_BYTES).strip()
+    raw_timeout = str(
+        env.get("CLIENTPLATFORM_UCR_GATEWAY_TIMEOUT_SEC")
+        or _DEFAULT_TIMEOUT_SECONDS
+    ).strip()
+    raw_limit = str(
+        env.get("CLIENTPLATFORM_UCR_GATEWAY_MAX_RESPONSE_BYTES")
+        or _DEFAULT_MAX_RESPONSE_BYTES
+    ).strip()
     try:
         timeout_seconds = float(raw_timeout)
         max_response_bytes = int(raw_limit)
     except ValueError as exc:
-        raise UcrGatewayConfigurationError("UCR gateway numeric configuration is invalid") from exc
+        raise UcrGatewayConfigurationError(
+            "UCR gateway numeric configuration is invalid"
+        ) from exc
     return UcrGatewayConfig(
         enabled=enabled,
         base_url=base_url,
@@ -302,12 +339,16 @@ def _normalize_base_url(value: str) -> str:
     if parsed.username is not None or parsed.password is not None:
         raise UcrGatewayConfigurationError("UCR gateway URL must not contain credentials")
     if parsed.query or parsed.fragment:
-        raise UcrGatewayConfigurationError("UCR gateway URL must not contain query or fragment")
+        raise UcrGatewayConfigurationError(
+            "UCR gateway URL must not contain query or fragment"
+        )
     host = str(parsed.hostname).lower()
     if parsed.scheme != "https" and host not in _LOOPBACK_HOSTS:
         raise UcrGatewayConfigurationError("UCR gateway requires HTTPS outside loopback")
     normalized_path = parsed.path.rstrip("/")
-    return urlunsplit((parsed.scheme, parsed.netloc, normalized_path, "", "")).rstrip("/")
+    return urlunsplit(
+        (parsed.scheme, parsed.netloc, normalized_path, "", "")
+    ).rstrip("/")
 
 
 def _is_secret_reference(value: str) -> bool:
