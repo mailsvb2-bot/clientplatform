@@ -1,17 +1,22 @@
 from __future__ import annotations
 
+import json
 import unittest
 from typing import Any, Mapping
 
 from clientplatform.runtime.secrets import SecretReferenceError
 from clientplatform.runtime.ucr_gateway import (
+    UCR_CALL_SERVICE,
+    UCR_INTEGRATION_SERVICE,
     UCR_PINNED_REVISION,
+    UcrCallMethod,
     UcrGatewayClient,
     UcrGatewayConfig,
     UcrGatewayConfigurationError,
     UcrGatewayProtocolError,
     UcrGatewayRejected,
     UcrGatewayUnavailable,
+    UcrIntegrationMethod,
     ucr_gateway_config,
 )
 
@@ -75,6 +80,23 @@ def _config(**overrides: Any) -> UcrGatewayConfig:
     return UcrGatewayConfig(**values)
 
 
+def _rpc_body(
+    *,
+    service: str,
+    method: str,
+    result: Mapping[str, Any] | None = None,
+) -> bytes:
+    return json.dumps(
+        {
+            "ok": True,
+            "ucr_revision": UCR_PINNED_REVISION,
+            "service": service,
+            "method": method,
+            "result": dict(result or {"accepted": True}),
+        }
+    ).encode("utf-8")
+
+
 class ClientPlatformUcrGatewayConfigTests(unittest.TestCase):
     def test_disabled_default_does_not_require_a_url(self) -> None:
         config = ucr_gateway_config({})
@@ -114,6 +136,28 @@ class ClientPlatformUcrGatewayConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(UcrGatewayConfigurationError, "repository pin"):
             _config(pinned_revision="main")
 
+    def test_public_rpc_whitelists_match_pinned_ucr_proto(self) -> None:
+        self.assertEqual(
+            {method.value for method in UcrIntegrationMethod},
+            {
+                "SubmitCommand",
+                "CreateIdentity",
+                "LinkIdentity",
+                "GetIdentity",
+                "ResolveIdentityBinding",
+                "CreateConversation",
+                "GetConversation",
+                "SendMessage",
+                "GetMessage",
+                "CreateCommunicationIntent",
+                "GetCommunicationIntent",
+            },
+        )
+        self.assertEqual(
+            {method.value for method in UcrCallMethod},
+            {"StartCall", "GetCall", "SignalCall"},
+        )
+
 
 class ClientPlatformUcrGatewayClientTests(unittest.IsolatedAsyncioTestCase):
     async def test_health_uses_secret_reference_and_revision_header(self) -> None:
@@ -145,70 +189,198 @@ class ClientPlatformUcrGatewayClientTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertNotIn("Idempotency-Key", call["headers"])
 
-    async def test_context_bootstrap_is_bounded_and_idempotent(self) -> None:
-        transport = _Transport()
+    async def test_integration_mutation_is_exact_rpc_and_idempotent(self) -> None:
+        request = {
+            "conversation": {
+                "scope": {"tenant_id": {"value": "tenant-a"}},
+                "conversation_id": {"value": "conversation-a"},
+            }
+        }
+        transport = _Transport(
+            body=_rpc_body(
+                service=UCR_INTEGRATION_SERVICE,
+                method="CreateConversation",
+                result=request,
+            )
+        )
         client = UcrGatewayClient(
             config=_config(),
             credential_provider=_CredentialProvider(),
             transport=transport,
         )
 
-        await client.ensure_communication_context(
-            tenant_key="business:11111111-1111-1111-1111-111111111111",
-            identity_key="customer:22222222-2222-2222-2222-222222222222",
-            device_key="clientplatform:service-device",
-            group_key="conversation:33333333-3333-3333-3333-333333333333",
-            member_identity_keys=("customer:a", "staff:b"),
-            idempotency_key="context:33333333-3333-3333-3333-333333333333",
+        response = await client.invoke_integration(
+            method=UcrIntegrationMethod.CREATE_CONVERSATION,
+            request=request,
+            idempotency_key="conversation:abcdefgh",
         )
 
+        self.assertTrue(response["ok"])
         call = transport.calls[0]
-        self.assertEqual(call["method"], "POST")
-        self.assertEqual(call["headers"]["Idempotency-Key"], "context:33333333-3333-3333-3333-333333333333")
-        self.assertEqual(call["payload"]["version"], 1)
-        self.assertEqual(call["payload"]["member_identity_keys"], ["customer:a", "staff:b"])
-        self.assertNotIn("token", call["payload"])
+        self.assertEqual(call["url"], "https://ucr-gateway.example.test/root/v1/rpc")
+        self.assertEqual(call["headers"]["Idempotency-Key"], "conversation:abcdefgh")
+        self.assertEqual(
+            call["payload"],
+            {
+                "version": 1,
+                "service": UCR_INTEGRATION_SERVICE,
+                "method": "CreateConversation",
+                "request": request,
+            },
+        )
 
-    async def test_context_rejects_duplicate_members_before_network(self) -> None:
+    async def test_integration_read_needs_no_idempotency_key(self) -> None:
+        transport = _Transport(
+            body=_rpc_body(
+                service=UCR_INTEGRATION_SERVICE,
+                method="GetConversation",
+            )
+        )
+        client = UcrGatewayClient(
+            config=_config(),
+            credential_provider=_CredentialProvider(),
+            transport=transport,
+        )
+
+        await client.invoke_integration(
+            method=UcrIntegrationMethod.GET_CONVERSATION,
+            request={
+                "scope": {"tenant_id": {"value": "tenant-a"}},
+                "conversation_id": {"value": "conversation-a"},
+            },
+        )
+
+        self.assertNotIn("Idempotency-Key", transport.calls[0]["headers"])
+
+    async def test_call_request_is_forwarded_without_inventing_call_state(self) -> None:
+        request = {
+            "call": {
+                "scope": {"tenant_id": {"value": "tenant-a"}},
+                "call_id": {"value": "call-a"},
+                "conversation": {"conversation_id": {"value": "conversation-a"}},
+                "initiated_by": {"principal_id": {"value": "principal-a"}},
+                "participants": [
+                    {"principal_id": {"value": "principal-a"}},
+                    {"principal_id": {"value": "principal-b"}},
+                ],
+            }
+        }
+        transport = _Transport(
+            body=_rpc_body(service=UCR_CALL_SERVICE, method="StartCall", result=request)
+        )
+        client = UcrGatewayClient(
+            config=_config(),
+            credential_provider=_CredentialProvider(),
+            transport=transport,
+        )
+
+        await client.invoke_call(
+            method=UcrCallMethod.START_CALL,
+            request=request,
+            idempotency_key="call:abcdefgh",
+        )
+
+        self.assertEqual(transport.calls[0]["payload"]["request"], request)
+        self.assertNotIn("tenant_key", transport.calls[0]["payload"])
+        self.assertNotIn("participant_identity_keys", transport.calls[0]["payload"])
+
+    async def test_mutation_without_idempotency_key_fails_before_network(self) -> None:
         transport = _Transport()
         client = UcrGatewayClient(
             config=_config(),
             credential_provider=_CredentialProvider(),
             transport=transport,
         )
-        with self.assertRaisesRegex(ValueError, "must be unique"):
-            await client.ensure_communication_context(
-                tenant_key="business:a",
-                identity_key="customer:a",
-                device_key="device:a",
-                group_key="conversation:a",
-                member_identity_keys=("customer:a", "customer:a"),
-                idempotency_key="context:abcdefgh",
+        with self.assertRaisesRegex(ValueError, "idempotency key is invalid"):
+            await client.invoke_integration(
+                method=UcrIntegrationMethod.CREATE_IDENTITY,
+                request={"identity": {"identity_id": {"value": "identity-a"}}},
             )
         self.assertEqual(transport.calls, [])
 
-    async def test_call_requires_two_unique_participants(self) -> None:
+    async def test_read_rejects_idempotency_key_before_network(self) -> None:
         transport = _Transport()
         client = UcrGatewayClient(
             config=_config(),
             credential_provider=_CredentialProvider(),
             transport=transport,
         )
-        with self.assertRaisesRegex(ValueError, "at least two"):
-            await client.start_call(
-                tenant_key="business:a",
-                context_key="conversation:a",
-                participant_identity_keys=("customer:a",),
-                idempotency_key="call:abcdefgh",
-            )
-        with self.assertRaisesRegex(ValueError, "must be unique"):
-            await client.start_call(
-                tenant_key="business:a",
-                context_key="conversation:a",
-                participant_identity_keys=("customer:a", "customer:a"),
-                idempotency_key="call:abcdefgh",
+        with self.assertRaisesRegex(ValueError, "read-only UCR RPC"):
+            await client.invoke_call(
+                method=UcrCallMethod.GET_CALL,
+                request={"call_id": {"value": "call-a"}},
+                idempotency_key="callread:abcdefgh",
             )
         self.assertEqual(transport.calls, [])
+
+    async def test_unknown_method_cannot_escape_public_rpc_whitelist(self) -> None:
+        transport = _Transport()
+        client = UcrGatewayClient(
+            config=_config(),
+            credential_provider=_CredentialProvider(),
+            transport=transport,
+        )
+        with self.assertRaisesRegex(ValueError, "unsupported UCR method"):
+            await client.invoke_integration(
+                method="RegisterDevice",  # type: ignore[arg-type]
+                request={"device": {"id": "device-a"}},
+                idempotency_key="device:abcdefgh",
+            )
+        self.assertEqual(transport.calls, [])
+
+    async def test_empty_or_nonfinite_request_fails_before_network(self) -> None:
+        transport = _Transport()
+        client = UcrGatewayClient(
+            config=_config(),
+            credential_provider=_CredentialProvider(),
+            transport=transport,
+        )
+        with self.assertRaisesRegex(ValueError, "must not be empty"):
+            await client.invoke_integration(
+                method=UcrIntegrationMethod.GET_IDENTITY,
+                request={},
+            )
+        with self.assertRaisesRegex(ValueError, "valid finite JSON"):
+            await client.invoke_integration(
+                method=UcrIntegrationMethod.GET_IDENTITY,
+                request={"score": float("nan")},
+            )
+        self.assertEqual(transport.calls, [])
+
+    async def test_rpc_response_must_echo_exact_service_method_and_result(self) -> None:
+        cases = (
+            (
+                _rpc_body(service=UCR_CALL_SERVICE, method="GetConversation"),
+                "service_mismatch",
+            ),
+            (
+                _rpc_body(service=UCR_INTEGRATION_SERVICE, method="GetIdentity"),
+                "method_mismatch",
+            ),
+            (
+                json.dumps(
+                    {
+                        "ok": True,
+                        "ucr_revision": UCR_PINNED_REVISION,
+                        "service": UCR_INTEGRATION_SERVICE,
+                        "method": "GetConversation",
+                    }
+                ).encode("utf-8"),
+                "result_missing",
+            ),
+        )
+        for body, error in cases:
+            with self.subTest(error=error):
+                client = UcrGatewayClient(
+                    config=_config(),
+                    credential_provider=_CredentialProvider(),
+                    transport=_Transport(body=body),
+                )
+                with self.assertRaisesRegex(UcrGatewayProtocolError, error):
+                    await client.invoke_integration(
+                        method=UcrIntegrationMethod.GET_CONVERSATION,
+                        request={"conversation_id": {"value": "conversation-a"}},
+                    )
 
     async def test_missing_or_short_credential_fails_closed(self) -> None:
         for provider in (
@@ -221,7 +393,10 @@ class ClientPlatformUcrGatewayClientTests(unittest.IsolatedAsyncioTestCase):
                     credential_provider=provider,
                     transport=_Transport(),
                 )
-                with self.assertRaisesRegex(UcrGatewayUnavailable, "credential is unavailable"):
+                with self.assertRaisesRegex(
+                    UcrGatewayUnavailable,
+                    "credential is unavailable",
+                ):
                     await client.health()
 
     async def test_revision_mismatch_is_rejected(self) -> None:
@@ -244,7 +419,10 @@ class ClientPlatformUcrGatewayClientTests(unittest.IsolatedAsyncioTestCase):
             credential_provider=_CredentialProvider(),
             transport=transport,
         )
-        with self.assertRaisesRegex(UcrGatewayRejected, "authentication_failed") as caught:
+        with self.assertRaisesRegex(
+            UcrGatewayRejected,
+            "authentication_failed",
+        ) as caught:
             await client.health()
         self.assertNotIn("secret-value", str(caught.exception))
 
