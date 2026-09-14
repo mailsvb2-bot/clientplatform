@@ -65,6 +65,79 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
             reply, user_id=101, business_id=BUSINESS_ID, section="events"
         )
 
+    async def test_webinar_settings_callback_opens_dedicated_settings_screen(self) -> None:
+        callback = _callback()
+        callback.data = f"cpev:settings:{TOKEN}"
+        reply = SimpleNamespace(answer=AsyncMock())
+        with (
+            patch.object(events.control, "_token_uuid", return_value=BUSINESS_ID),
+            patch.object(events.control, "_callback_message", return_value=reply),
+            patch.object(events, "_send_event_settings", new=AsyncMock()) as send,
+        ):
+            await events.open_event_settings(callback)
+        callback.answer.assert_awaited_once_with()
+        send.assert_awaited_once_with(
+            reply, user_id=101, business_id=BUSINESS_ID
+        )
+
+    def test_event_settings_rows_keep_mutations_inside_settings_and_offer_back_to_hub(self) -> None:
+        snapshot = SimpleNamespace(
+            can_manage=True,
+            can_enable_commercial_followups=True,
+            can_expand_commercial_followups=True,
+            commercial_followups_enabled=False,
+            commercial_followup_segments=("no_show",),
+            commercial_followup_channels=("email",),
+        )
+        with patch.object(events.control, "_keyboard", side_effect=lambda rows: rows):
+            rows = events._settings_rows(snapshot, token=TOKEN)
+        callbacks = [callback for row in rows for _label, callback in row]
+        self.assertIn(f"cpev:followups:on:{TOKEN}", callbacks)
+        self.assertIn(f"cpev:home:{TOKEN}", callbacks)
+        self.assertNotIn(f"cpev:settings:{TOKEN}", callbacks)
+
+    async def test_send_event_settings_renders_dedicated_screen(self) -> None:
+        target = SimpleNamespace(answer=AsyncMock())
+        snapshot = SimpleNamespace(
+            can_manage=True,
+            can_enable_commercial_followups=True,
+            can_expand_commercial_followups=True,
+            commercial_followups_enabled=False,
+            commercial_followups_effective=False,
+            commercial_followups_platform_available=True,
+            commercial_followup_segments=("no_show",),
+            commercial_followup_channels=("email",),
+            limitations=(),
+        )
+        with (
+            patch.object(events, "resolve_cockpit_events", return_value=snapshot) as resolve,
+            patch.object(events.control, "_uuid_token", return_value=TOKEN),
+            patch.object(events.control, "_keyboard", side_effect=lambda rows: rows),
+        ):
+            await events._send_event_settings(
+                target, user_id=101, business_id=BUSINESS_ID
+            )
+        resolve.assert_called_once_with(
+            telegram_user_id=101, requested_business_id=BUSINESS_ID, limit=5
+        )
+        text = target.answer.await_args.args[0]
+        rows = target.answer.await_args.kwargs["reply_markup"]
+        callbacks = [callback for row in rows for _label, callback in row]
+        self.assertIn("⚙️ Автосообщения после вебинара", text)
+        self.assertIn(f"cpev:followups:on:{TOKEN}", callbacks)
+        self.assertEqual(rows[-1], [("🎥 К вебинарам", f"cpev:home:{TOKEN}")])
+
+    def test_event_settings_rows_reject_unknown_semantic_action(self) -> None:
+        unknown = SimpleNamespace(kind="unknown", label="Неизвестно", key=None, enabled=None)
+        with patch.object(events, "event_settings_actions", return_value=(unknown,)):
+            with self.assertRaisesRegex(ValueError, "unsupported event settings action"):
+                events._settings_rows(SimpleNamespace(), token=TOKEN)
+
+    def test_event_settings_rows_for_read_only_snapshot_offer_only_back(self) -> None:
+        snapshot = SimpleNamespace(can_manage=False)
+        rows = events._settings_rows(snapshot, token=TOKEN)
+        self.assertEqual(rows, [[("🎥 К вебинарам", f"cpev:home:{TOKEN}")]])
+
     async def test_start_wizard_denies_member_without_management_permission(self) -> None:
         callback = _callback()
         state = AsyncMock()
@@ -234,16 +307,13 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
             patch.object(events, "get_business_event_followup_settings", return_value=stored),
             patch.object(events, "set_business_event_followups_enabled") as setter,
             patch.object(events.control, "_callback_message", return_value=reply),
-            patch(
-                "handlers.clientplatform_cockpit_dispatch.send_cockpit_section",
-                new=AsyncMock(),
-            ) as refresh,
+            patch.object(events, "_send_event_settings", new=AsyncMock()) as refresh,
         ):
             await events.toggle_event_followups(callback)
         setter.assert_not_called()
         callback.answer.assert_awaited_once_with("Автоматические сообщения выключены")
         refresh.assert_awaited_once_with(
-            reply, user_id=101, business_id=BUSINESS_ID, section="events"
+            reply, user_id=101, business_id=BUSINESS_ID
         )
 
     async def test_toggle_autosend_enables_business_setting_and_refreshes_events(self) -> None:
@@ -257,13 +327,13 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
             patch.object(events, "get_business_event_followup_settings", return_value=None),
             patch.object(events, "set_business_event_followups_enabled", return_value=True) as setter,
             patch.object(events.control, "_callback_message", return_value=reply),
-            patch("handlers.clientplatform_cockpit_dispatch.send_cockpit_section", new=AsyncMock()) as refresh,
+            patch.object(events, "_send_event_settings", new=AsyncMock()) as refresh,
         ):
             await events.toggle_event_followups(callback)
         setter.assert_called_once_with(actor=actor, enabled=True)
         callback.answer.assert_awaited_once_with("Автоматические сообщения включены")
         refresh.assert_awaited_once_with(
-            reply, user_id=101, business_id=BUSINESS_ID, section="events"
+            reply, user_id=101, business_id=BUSINESS_ID
         )
 
     async def test_toggle_event_segment_updates_strategy_and_refreshes_events(self) -> None:
@@ -276,13 +346,13 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
             patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
             patch.object(events, "set_business_event_followup_segment_enabled") as setter,
             patch.object(events.control, "_callback_message", return_value=reply),
-            patch("handlers.clientplatform_cockpit_dispatch.send_cockpit_section", new=AsyncMock()) as refresh,
+            patch.object(events, "_send_event_settings", new=AsyncMock()) as refresh,
         ):
             await events.toggle_event_followup_segment(callback)
         setter.assert_called_once_with(actor=actor, segment="attended_unpaid", enabled=False)
         callback.answer.assert_awaited_once_with("Настройка участников сохранена")
         refresh.assert_awaited_once_with(
-            reply, user_id=101, business_id=BUSINESS_ID, section="events"
+            reply, user_id=101, business_id=BUSINESS_ID
         )
 
     async def test_toggle_event_channel_updates_strategy_and_refreshes_events(self) -> None:
@@ -295,13 +365,13 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
             patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
             patch.object(events, "set_business_event_followup_channel_enabled") as setter,
             patch.object(events.control, "_callback_message", return_value=reply),
-            patch("handlers.clientplatform_cockpit_dispatch.send_cockpit_section", new=AsyncMock()) as refresh,
+            patch.object(events, "_send_event_settings", new=AsyncMock()) as refresh,
         ):
             await events.toggle_event_followup_channel(callback)
         setter.assert_called_once_with(actor=actor, channel="max", enabled=False)
         callback.answer.assert_awaited_once_with("Настройка канала сохранена")
         refresh.assert_awaited_once_with(
-            reply, user_id=101, business_id=BUSINESS_ID, section="events"
+            reply, user_id=101, business_id=BUSINESS_ID
         )
 
     async def test_event_autosend_callbacks_surface_stale_permission_and_validation_errors(self) -> None:

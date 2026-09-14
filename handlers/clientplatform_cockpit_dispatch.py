@@ -46,25 +46,14 @@ async def send_cockpit_section(
         )
         token = one_click.control._uuid_token(business_id)
         rows: list[list[tuple[str, str]]] = []
-        channel_row: list[tuple[str, str]] = []
         for action in event_hub_actions(snapshot):
             if action.kind == "create":
                 callback = f"cpev:new:{token}"
-            elif action.kind == "followups":
-                callback = f"cpev:followups:{'on' if action.enabled else 'off'}:{token}"
-            elif action.kind == "segment" and action.key is not None:
-                callback = f"cpev:seg:{action.key}:{'on' if action.enabled else 'off'}:{token}"
-            elif action.kind == "channel" and action.key is not None:
-                callback = f"cpev:ch:{action.key}:{'on' if action.enabled else 'off'}:{token}"
+            elif action.kind == "settings":
+                callback = f"cpev:settings:{token}"
             else:
                 raise ValueError("unsupported event hub action")
-            button = (action.label, callback)
-            if action.kind == "channel":
-                channel_row.append(button)
-            else:
-                rows.append([button])
-        if channel_row:
-            rows.append(channel_row)
+            rows.append([(action.label, callback)])
         rows.append([(BACK_TO_GROWTH_LABEL, f"cpo:content:{token}")])
         rows.append([(nav.HOME.label, f"cpj:home:{token}")])
         await target.answer(

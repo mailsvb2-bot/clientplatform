@@ -654,12 +654,13 @@ class NativeEventHubParityTests(unittest.TestCase):
             message = native_member_ui._events_message(manager)
         resolve.assert_called_once_with(actor=manager, business_name="Бизнес", limit=5)
         self.assertIn("регистрации 10", message.text)
-        self.assertIn("После включения — кому писать", message.text)
+        self.assertNotIn("После включения — кому писать", message.text)
+        self.assertIn("Вы можете смотреть результаты", message.text)
         commands = {button.command for row in message.rows for button in row}
         self.assertNotIn("cpm:event-new", commands)
-        self.assertNotIn("cpm:event-followups:on", commands)
+        self.assertNotIn("cpm:event-settings", commands)
 
-    def test_owner_event_hub_exposes_creation_and_canonical_autosend_action(self) -> None:
+    def test_owner_event_hub_exposes_creation_and_settings_entry(self) -> None:
         route = _route(ConnectionPlatform.VK)
         owner = _actor(route)
         with (
@@ -673,16 +674,33 @@ class NativeEventHubParityTests(unittest.TestCase):
             message = native_member_ui._events_message(owner)
         commands = {button.command for row in message.rows for button in row}
         self.assertIn("cpm:event-new", commands)
+        self.assertIn("cpm:event-settings", commands)
+        self.assertNotIn("cpm:event-followups:on", commands)
+        self.assertNotIn("cpm:event-channel:max:off", commands)
+
+    def test_owner_event_settings_exposes_canonical_autosend_actions(self) -> None:
+        route = _route(ConnectionPlatform.VK)
+        owner = _actor(route)
+        with (
+            patch.object(native_member_ui, "_business_name", return_value="Бизнес"),
+            patch.object(
+                native_member_ui,
+                "resolve_events_snapshot",
+                return_value=self._snapshot(),
+            ),
+        ):
+            message = native_member_ui._event_settings_message(owner)
+        commands = {button.command for row in message.rows for button in row}
         self.assertIn("cpm:event-followups:on", commands)
         self.assertIn("cpm:event-channel:max:off", commands)
 
-    def test_native_autosend_mutation_uses_canonical_setter_then_refreshes_hub(self) -> None:
+    def test_native_autosend_mutation_uses_canonical_setter_then_refreshes_settings(self) -> None:
         route = _route(ConnectionPlatform.MAX)
         owner = _actor(route)
         refreshed = CustomerInteractionMessage(text="refreshed")
         with (
             patch.object(native_member_ui, "set_business_event_followups_enabled") as setter,
-            patch.object(native_member_ui, "_events_message", return_value=refreshed) as refresh,
+            patch.object(native_member_ui, "_event_settings_message", return_value=refreshed) as refresh,
         ):
             result = native_member_ui._event_followups_action(owner, ("on",))
         setter.assert_called_once_with(actor=owner, enabled=True)

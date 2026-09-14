@@ -9,6 +9,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
 from clientplatform.application.activity import get_business_profile
+from clientplatform.application.cockpit_events import resolve_cockpit_events
 from clientplatform.application.event_owner_flow import (
     OnlineEventCreateRequest,
     create_and_publish_online_event,
@@ -28,6 +29,8 @@ from clientplatform.presentation.event_ui import (
     event_creation_failure_text,
     event_creation_prompt,
     event_creation_success_text,
+    event_settings_actions,
+    event_settings_text,
 )
 from config.settings import settings
 
@@ -45,6 +48,47 @@ class ClientPlatformEventState(StatesGroup):
 def _cancel_keyboard(business_id: str):
     token = control._uuid_token(business_id)
     return control._keyboard([[(BACK_TO_EVENTS_LABEL, f"cpev:cancel:{token}")]])
+
+
+
+
+def _settings_rows(snapshot: object, *, token: str) -> list[list[tuple[str, str]]]:
+    rows: list[list[tuple[str, str]]] = []
+    channel_row: list[tuple[str, str]] = []
+    for action in event_settings_actions(snapshot):
+        if action.kind == "followups":
+            callback = f"cpev:followups:{'on' if action.enabled else 'off'}:{token}"
+        elif action.kind == "segment" and action.key is not None:
+            callback = f"cpev:seg:{action.key}:{'on' if action.enabled else 'off'}:{token}"
+        elif action.kind == "channel" and action.key is not None:
+            callback = f"cpev:ch:{action.key}:{'on' if action.enabled else 'off'}:{token}"
+        else:
+            raise ValueError("unsupported event settings action")
+        button = (action.label, callback)
+        if action.kind == "channel":
+            channel_row.append(button)
+        else:
+            rows.append([button])
+    if channel_row:
+        rows.append(channel_row)
+    rows.append([(BACK_TO_EVENTS_LABEL, f"cpev:home:{token}")])
+    return rows
+
+
+async def _send_event_settings(
+    target, *, user_id: int, business_id: str
+) -> None:
+    snapshot = await asyncio.to_thread(
+        resolve_cockpit_events,
+        telegram_user_id=user_id,
+        requested_business_id=business_id,
+        limit=5,
+    )
+    token = control._uuid_token(business_id)
+    await target.answer(
+        event_settings_text(snapshot),
+        reply_markup=control._keyboard(_settings_rows(snapshot, token=token)),
+    )
 
 
 def _public_base_url() -> str:
@@ -66,6 +110,18 @@ async def open_event_hub(callback: CallbackQuery) -> None:
         user_id=int(callback.from_user.id),
         business_id=business_id,
         section="events",
+    )
+
+
+@router.callback_query(F.data.startswith("cpev:settings:"))
+async def open_event_settings(callback: CallbackQuery) -> None:
+    token = str(callback.data or "").split(":", 2)[2]
+    business_id = control._token_uuid(token)
+    await callback.answer()
+    await _send_event_settings(
+        control._callback_message(callback),
+        user_id=int(callback.from_user.id),
+        business_id=business_id,
     )
 
 
@@ -195,13 +251,10 @@ async def toggle_event_followups(callback: CallbackQuery) -> None:
         return
 
     await callback.answer("Автоматические сообщения включены" if desired else "Автоматические сообщения выключены")
-    from .clientplatform_cockpit_dispatch import send_cockpit_section
-
-    await send_cockpit_section(
+    await _send_event_settings(
         control._callback_message(callback),
         user_id=int(callback.from_user.id),
         business_id=business_id,
-        section="events",
     )
 
 
@@ -232,13 +285,10 @@ async def toggle_event_followup_segment(callback: CallbackQuery) -> None:
         await callback.answer(str(exc), show_alert=True)
         return
     await callback.answer("Настройка участников сохранена")
-    from .clientplatform_cockpit_dispatch import send_cockpit_section
-
-    await send_cockpit_section(
+    await _send_event_settings(
         control._callback_message(callback),
         user_id=int(callback.from_user.id),
         business_id=business_id,
-        section="events",
     )
 
 
@@ -269,13 +319,10 @@ async def toggle_event_followup_channel(callback: CallbackQuery) -> None:
         await callback.answer(str(exc), show_alert=True)
         return
     await callback.answer("Настройка канала сохранена")
-    from .clientplatform_cockpit_dispatch import send_cockpit_section
-
-    await send_cockpit_section(
+    await _send_event_settings(
         control._callback_message(callback),
         user_id=int(callback.from_user.id),
         business_id=business_id,
-        section="events",
     )
 
 
@@ -301,6 +348,7 @@ __all__ = [
     "ClientPlatformEventState",
     "cancel_event_wizard",
     "open_event_hub",
+    "open_event_settings",
     "receive_event_details",
     "router",
     "start_event_wizard",

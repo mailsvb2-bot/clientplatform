@@ -48,15 +48,15 @@ class CockpitEventsBridgeTests(unittest.IsolatedAsyncioTestCase):
         text = target.answer.await_args.args[0]
         self.assertIn("Вебинары", text)
         self.assertIn("регистрации 42", text)
-        self.assertIn("участие 24", text)
+        self.assertIn("пришли 24", text)
         self.assertIn("оплаты 5", text)
         self.assertIn("25 000 RUB", text)
-        self.assertIn("Автоматические сообщения после мероприятия", text)
-        self.assertIn("После включения — кому писать:", text)
-        self.assertIn("После включения — каналы:", text)
-        self.assertNotIn("follow-up", text.lower())
+        self.assertIn("Автосообщения после вебинара: ⚪️ выключены", text)
+        self.assertNotIn("После включения — кому писать:", text)
+        self.assertNotIn("После включения — каналы:", text)
         flattened = [button for row in captured_rows for button in row]
-        self.assertIn(("🟢 Включить автосообщения", f"cpev:followups:on:{cockpit_dispatch.one_click.control._uuid_token(_BUSINESS)}"), flattened)
+        token = cockpit_dispatch.one_click.control._uuid_token(_BUSINESS)
+        self.assertIn(("⚙️ Автосообщения", f"cpev:settings:{token}"), flattened)
         self.assertTrue(any(
             label == "🎥 Создать вебинар" and callback.startswith("cpev:new:")
             for label, callback in flattened
@@ -86,10 +86,10 @@ class CockpitEventsBridgeTests(unittest.IsolatedAsyncioTestCase):
                 target, user_id=101, business_id=_BUSINESS, section="events"
             )
         text = target.answer.await_args.args[0]
-        self.assertIn("Автоматические сообщения после мероприятия: 🟡 ВКЛ, временно приостановлены", text)
-        self.assertIn("настройка бизнеса сохранена", text)
+        self.assertIn("Автосообщения после вебинара: 🟡 включены, временно приостановлены", text)
         flattened = [button for row in captured_rows for button in row]
-        self.assertIn(("🔴 Выключить автосообщения", f"cpev:followups:off:{cockpit_dispatch.one_click.control._uuid_token(_BUSINESS)}"), flattened)
+        self.assertIn(("⚙️ Автосообщения", f"cpev:settings:{cockpit_dispatch.one_click.control._uuid_token(_BUSINESS)}"), flattened)
+        self.assertFalse(any(callback.startswith("cpev:followups:") for _label, callback in flattened))
 
     async def test_events_section_shows_active_autosend_and_disable_button(self) -> None:
         snapshot = SimpleNamespace(
@@ -114,11 +114,10 @@ class CockpitEventsBridgeTests(unittest.IsolatedAsyncioTestCase):
                 target, user_id=101, business_id=_BUSINESS, section="events"
             )
         text = target.answer.await_args.args[0]
-        self.assertIn("Автоматические сообщения после мероприятия: 🟢 ВКЛ", text)
-        self.assertIn("Кому писать:", text)
-        self.assertNotIn("После включения — кому писать:", text)
+        self.assertIn("Автосообщения после вебинара: 🟢 включены", text)
+        self.assertNotIn("Кому писать:", text)
         flattened = [button for row in captured_rows for button in row]
-        self.assertIn(("🔴 Выключить автосообщения", f"cpev:followups:off:{cockpit_dispatch.one_click.control._uuid_token(_BUSINESS)}"), flattened)
+        self.assertIn(("⚙️ Автосообщения", f"cpev:settings:{cockpit_dispatch.one_click.control._uuid_token(_BUSINESS)}"), flattened)
 
     async def test_events_section_shows_platform_pause_when_preference_is_off(self) -> None:
         snapshot = SimpleNamespace(
@@ -143,9 +142,8 @@ class CockpitEventsBridgeTests(unittest.IsolatedAsyncioTestCase):
                 target, user_id=101, business_id=_BUSINESS, section="events"
             )
         text = target.answer.await_args.args[0]
-        self.assertIn("Автоматические сообщения после мероприятия: ⚪️ ВЫКЛ", text)
-        self.assertIn("Автосерия временно отключена на уровне платформы.", text)
-        self.assertIn("Ограничение тестового бизнеса", text)
+        self.assertIn("Автосообщения после вебинара: ⚪️ выключены", text)
+        self.assertNotIn("Ограничение тестового бизнеса", text)
 
     async def test_events_section_hides_creation_for_read_only_snapshot(self) -> None:
         snapshot = SimpleNamespace(
