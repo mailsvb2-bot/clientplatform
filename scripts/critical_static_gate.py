@@ -138,6 +138,7 @@ _CLIENTPLATFORM_EMAIL_OUTBOUND_FILES = (
 _CLIENTPLATFORM_COCKPIT_FILES = (
     "clientplatform/application/cockpit.py",
     "clientplatform/application/cockpit_action_routing.py",
+    "clientplatform/application/cockpit_automation.py",
     "clientplatform/application/cockpit_home.py",
     "clientplatform/application/cockpit_customers.py",
     "clientplatform/runtime/cockpit_http.py",
