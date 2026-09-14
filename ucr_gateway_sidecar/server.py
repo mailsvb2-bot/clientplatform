@@ -57,6 +57,26 @@ _MUTATING_METHODS = frozenset(
         (UCR_CALL_SERVICE, "SignalCall"),
     }
 )
+_UCR_CANONICAL_ERROR_MAP = {
+    "ERROR_CODE_INVALID_ARGUMENT": (422, "ucr_error_invalid_argument"),
+    "ERROR_CODE_MALFORMED_FRAME": (422, "ucr_error_malformed_frame"),
+    "ERROR_CODE_UNSUPPORTED_PROTOCOL_VERSION": (422, "ucr_error_unsupported_protocol_version"),
+    "ERROR_CODE_DOWNGRADE_REJECTED": (422, "ucr_error_downgrade_rejected"),
+    "ERROR_CODE_UNSUPPORTED_CRITICAL_EXTENSION": (422, "ucr_error_unsupported_critical_extension"),
+    "ERROR_CODE_CAPABILITY_MISMATCH": (422, "ucr_error_capability_mismatch"),
+    "ERROR_CODE_UNAUTHENTICATED": (403, "ucr_error_unauthenticated"),
+    "ERROR_CODE_PERMISSION_DENIED": (403, "ucr_error_permission_denied"),
+    "ERROR_CODE_POLICY_DENIED": (403, "ucr_error_policy_denied"),
+    "ERROR_CODE_RATE_LIMITED": (429, "ucr_error_rate_limited"),
+    "ERROR_CODE_RESOURCE_EXHAUSTED": (429, "ucr_error_resource_exhausted"),
+    "ERROR_CODE_DEADLINE_EXCEEDED": (503, "ucr_error_deadline_exceeded"),
+    "ERROR_CODE_CANCELLED": (503, "ucr_error_cancelled"),
+    "ERROR_CODE_TEMPORARILY_UNAVAILABLE": (503, "ucr_error_temporarily_unavailable"),
+    "ERROR_CODE_INTEGRITY_FAILURE": (422, "ucr_error_integrity_failure"),
+    "ERROR_CODE_CONFLICT": (409, "ucr_error_conflict"),
+    "ERROR_CODE_NOT_FOUND": (422, "ucr_error_not_found"),
+    "ERROR_CODE_INTERNAL": (502, "ucr_error_internal"),
+}
 
 
 class GatewayConfigurationError(RuntimeError):
@@ -204,6 +224,11 @@ class GrpcUcrBackend:
         )
         if not isinstance(result, dict):
             raise GatewayUpstreamError(502, "ucr_grpc_response_invalid")
+        canonical_error = result.get("error")
+        if canonical_error is not None:
+            if not isinstance(canonical_error, Mapping):
+                raise GatewayUpstreamError(502, "ucr_grpc_response_invalid")
+            raise _canonical_error_to_gateway_error(canonical_error)
         return result
 
     async def close(self) -> None:
@@ -270,9 +295,6 @@ class GatewayService:
         return 200, payload
 
     def _authorize(self, headers: Mapping[str, str]) -> tuple[int, dict[str, Any]] | None:
-        presented_revision = str(headers.get("X-ClientPlatform-UCR-Revision") or "").strip()
-        if presented_revision != UCR_PINNED_REVISION:
-            return 409, {"ok": False, "error": "ucr_gateway_revision_mismatch"}
         authorization = str(headers.get("Authorization") or "")
         scheme, separator, token = authorization.partition(" ")
         if separator != " " or scheme.lower() != "bearer" or not token:
@@ -281,6 +303,9 @@ class GatewayService:
             token.encode("utf-8"), self._config.client_token.encode("utf-8")
         ):
             return 401, {"ok": False, "error": "ucr_gateway_unauthorized"}
+        presented_revision = str(headers.get("X-ClientPlatform-UCR-Revision") or "").strip()
+        if presented_revision != UCR_PINNED_REVISION:
+            return 409, {"ok": False, "error": "ucr_gateway_revision_mismatch"}
         return None
 
 
@@ -424,6 +449,14 @@ def _is_loopback_host(host: str) -> bool:
         return ipaddress.ip_address(normalized).is_loopback
     except ValueError:
         return False
+
+
+def _canonical_error_to_gateway_error(error: Mapping[str, Any]) -> GatewayUpstreamError:
+    code = str(error.get("code") or "ERROR_CODE_UNSPECIFIED").strip()
+    status_code, error_code = _UCR_CANONICAL_ERROR_MAP.get(
+        code, (502, "ucr_error_unspecified")
+    )
+    return GatewayUpstreamError(status_code, error_code)
 
 
 def _map_grpc_error(grpc: Any, exc: Any) -> GatewayUpstreamError:
