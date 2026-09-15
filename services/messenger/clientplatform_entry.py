@@ -3,7 +3,11 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 
-from clientplatform.application.activity import get_business_profile, save_business_profile
+from clientplatform.application.activity import (
+    get_business_profile,
+    list_business_capabilities,
+    save_business_profile,
+)
 from clientplatform.application.control_callbacks import token_uuid, uuid_token
 from clientplatform.application.native_member_interactions import (
     recognizes_native_member_interaction,
@@ -36,8 +40,13 @@ from clientplatform.domain.customer_interactions import (
 from clientplatform.domain.tenancy import (
     OwnerOnboardingSession,
     OwnerOnboardingStep,
+    TenantContext,
     TenantPermissionDenied,
     TenancyError,
+)
+from clientplatform.presentation.owner_quick_menu import (
+    build_owner_quick_actions,
+    quick_menu_intro,
 )
 from clientplatform.runtime.native_messenger_setup_links import (
     NativeMessengerSetupLinkService,
@@ -403,6 +412,69 @@ def _official_interaction_key(
     return f"official:{normalized_platform}:{int(canonical_user_id)}:{digest}"
 
 
+def _quick_home_requested(raw_text: object) -> bool:
+    normalized = " ".join(
+        str(raw_text or "").strip().casefold().replace("ё", "е").split()
+    )
+    return normalized in {
+        "cpm:menu",
+        "menu",
+        "/menu",
+        "меню",
+        "кабинет",
+        "админ",
+        "/admin",
+    }
+
+
+def _personalized_owner_home(
+    *,
+    actor: TenantContext,
+    accesses: list[object],
+) -> CustomerInteractionMessage | None:
+    role = getattr(actor, "role", None)
+    business_id = str(getattr(actor, "business_id", "") or "")
+    if role is None or not business_id:
+        return None
+    try:
+        profile = get_business_profile(actor=actor)
+        capabilities = list_business_capabilities(actor=actor)
+    except (ActivityNotFound, TenantPermissionDenied, ValueError):
+        return None
+
+    access = next(
+        (
+            item
+            for item in accesses
+            if str(getattr(getattr(item, "business", None), "id", "")) == business_id
+        ),
+        None,
+    )
+    business_name = getattr(getattr(access, "business", None), "name", "ClientPlatform")
+    commands = {
+        "customers": "cpm:customers",
+        "booking": "cpm:bookings",
+        "events": "cpm:events",
+        "programs": "cpm:programs",
+        "acquire": "cpm:acquire",
+        "sales": "cpm:sales",
+        "results": "cpm:today",
+        "all": "cpm:menu-all",
+    }
+    actions = build_owner_quick_actions(
+        activity_description=profile.activity_description,
+        capabilities=capabilities,
+        role=role,
+    )
+    return CustomerInteractionMessage(
+        text=quick_menu_intro(business_name=business_name),
+        rows=tuple(
+            (CustomerInteractionButton(label=action.label, command=commands[action.key]),)
+            for action in actions
+        ),
+    )
+
+
 def _owner_control_reply(
     *,
     canonical_user_id: int,
@@ -435,14 +507,18 @@ def _owner_control_reply(
             idempotency_key=setup_key,
         )
 
-    interaction = render_native_member_interaction(
-        actor=actor,
-        raw_text=raw_text or "cpm:menu",
-        interaction_key=interaction_key,
-        current_platform=_connection_platform(platform),
-        setup_issuer=_issue_setup_command,
-        resolve_pending_input=resolve_pending_input,
-    )
+    interaction = None
+    if _quick_home_requested(raw_text):
+        interaction = _personalized_owner_home(actor=actor, accesses=accesses)
+    if interaction is None:
+        interaction = render_native_member_interaction(
+            actor=actor,
+            raw_text=raw_text or "cpm:menu",
+            interaction_key=interaction_key,
+            current_platform=_connection_platform(platform),
+            setup_issuer=_issue_setup_command,
+            resolve_pending_input=resolve_pending_input,
+        )
     return _interaction_reply(interaction, business_id=actor.business_id)
 
 
