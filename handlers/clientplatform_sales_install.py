@@ -27,14 +27,21 @@ def install_sales_ui(simple_module: _SimpleExperienceModule) -> None:
         return
     original_keyboard = simple_module._simple_keyboard
 
-    def sales_keyboard(business_id: str) -> InlineKeyboardMarkup:
-        current = original_keyboard(business_id)
+    def sales_keyboard(business_id: str, **kwargs: object) -> InlineKeyboardMarkup:
+        current = original_keyboard(business_id, **kwargs)
         rows = [list(row) for row in current.inline_keyboard]
         token = simple_module.control._uuid_token(business_id)
+        sales_callback = f"cps:s:{token}"
+        if any(
+            button.callback_data == sales_callback
+            for row in rows
+            for button in row
+        ):
+            return current
         sales_row = [
             InlineKeyboardButton(
                 text="💬 Обращения и продажи",
-                callback_data=f"cps:s:{token}",
+                callback_data=sales_callback,
             )
         ]
         insertion = max(0, len(rows) - 1)
