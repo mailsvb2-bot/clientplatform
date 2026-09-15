@@ -29,6 +29,17 @@ def install_sales_ui(simple_module: _SimpleExperienceModule) -> None:
 
     def sales_keyboard(business_id: str, **kwargs: object) -> InlineKeyboardMarkup:
         current = original_keyboard(business_id, **kwargs)
+
+        # A personalized quick menu already owns its complete visible shortcut
+        # set. Do not let this legacy installer append a transport-specific
+        # eighth action after handler composition. Calls without personalization
+        # kwargs keep the historical sales shortcut for backward compatibility.
+        if all(
+            kwargs.get(name) is not None
+            for name in ("activity_description", "capabilities", "role")
+        ):
+            return current
+
         rows = [list(row) for row in current.inline_keyboard]
         token = simple_module.control._uuid_token(business_id)
         sales_callback = f"cps:s:{token}"
