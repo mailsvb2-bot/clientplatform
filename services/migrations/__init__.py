@@ -27,6 +27,7 @@ from services.migrations.clientplatform_provider_dispatch_sales_followup_v1 impo
 from services.migrations.clientplatform_provider_dispatch_interactions_v1 import apply as _apply_provider_interactions
 from services.migrations.clientplatform_messenger_setup_telegram_v1 import apply as _apply_messenger_setup_telegram
 from services.migrations.clientplatform_business_payment_outcomes_v1 import apply as _apply_business_payment_outcomes
+from services.migrations.clientplatform_offering_process_backfill_v1 import apply as _apply_offering_process_backfill
 from services.migrations.clientplatform_promotion_channel_max_v1 import apply as _apply_promotion_max
 from services.migrations.clientplatform_email_outbound_v1 import apply as _apply_email_outbound
 from services.migrations.clientplatform_provider_dispatch_event_message_v1 import apply as _apply_provider_event_message
@@ -37,6 +38,7 @@ def apply_all_migrations(conn: sqlite3.Connection) -> None:
 
     db_schema.create_or_update_tables(conn)
     ensure_prod_tables(conn)
+    _apply_offering_process_backfill(conn)
     _apply_scheduled_jobs(conn)
     _apply_jobs_unique(conn)
     _apply_events(conn)
