@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 from . import clientplatform_activity
+from . import clientplatform_offering_processes
 from . import clientplatform_ad_connections
 from . import clientplatform_ad_managed_campaigns
 from . import clientplatform_ad_publication_assets
@@ -44,6 +45,7 @@ PARTS = [
     clientplatform_tenancy,
     clientplatform_customers,
     clientplatform_activity,
+    clientplatform_offering_processes,
     clientplatform_bookings,
     clientplatform_outcomes,
     clientplatform_promotions,

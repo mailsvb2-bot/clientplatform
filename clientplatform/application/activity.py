@@ -10,9 +10,12 @@ from clientplatform.domain.activity import (
     BusinessProfile,
     InviteClaim,
     IssuedCustomerInvite,
+    OfferingStatus,
 )
+from clientplatform.domain.offering_process import BusinessOfferingProcess
 from clientplatform.domain.customers import CustomerPlatform, normalize_identity_subject
 from clientplatform.domain.tenancy import TenantContext
+from clientplatform.infrastructure.offering_process_repository import OfferingProcessRepository
 from clientplatform.infrastructure.postgres_safe_activity_repository import ActivityRepository
 from services.accounts.identity import resolve_account_for_identity
 from services.db import get_db, get_db_ro
@@ -50,6 +53,41 @@ _REPOSITORY_INVITE_PUBLIC_ERRORS = {
     "customer invite is not active": _CUSTOMER_INVITE_INACTIVE_MESSAGE,
     "customer invite was claimed concurrently": _CUSTOMER_INVITE_CONCURRENT_MESSAGE,
 }
+
+
+def _audit_offering_action(
+    conn,
+    *,
+    actor: TenantContext,
+    offering: BusinessOffering,
+    action: str,
+    detail: str,
+) -> None:
+    event_id = str(
+        uuid5(
+            NAMESPACE_URL,
+            f"clientplatform:lifecycle:offering:{offering.business_id}:"
+            f"{offering.id}:{action}:{offering.updated_at}",
+        )
+    )
+    conn.execute(
+        """
+        INSERT INTO clientplatform_admin_audit_events(
+            id, business_id, actor_user_id, action, subject_type,
+            subject_id, detail, created_at
+        ) VALUES(?, ?, ?, ?, 'offering', ?, ?, ?)
+        ON CONFLICT(id) DO NOTHING
+        """,
+        (
+            event_id,
+            offering.business_id,
+            actor.user_id,
+            action,
+            offering.id,
+            str(detail)[:1000],
+            offering.updated_at,
+        ),
+    )
 
 
 def customer_invite_error_message(exc: Exception) -> str:
@@ -133,61 +171,152 @@ def create_business_offering(
     title: str,
     description: str,
     idempotency_key: str | None = None,
+    now: str | None = None,
 ) -> BusinessOffering:
     with get_db() as conn:
-        return ActivityRepository(conn).create_offering(
+        offering = ActivityRepository(conn).create_offering(
             actor=actor,
             capability_id=capability_id,
             title=title,
             description=description,
             idempotency_key=idempotency_key,
+            now=now,
         )
+        if offering.status == OfferingStatus.ACTIVE:
+            OfferingProcessRepository(conn).ensure(
+                business_id=offering.business_id,
+                offering_id=offering.id,
+                created_by_member_id=offering.created_by_member_id,
+                now=now,
+            )
+        return offering
+
+
+def rename_business_offering(
+    *,
+    actor: TenantContext,
+    offering_id: str,
+    title: str,
+    now: str | None = None,
+) -> BusinessOffering:
+    with get_db() as conn:
+        repository = ActivityRepository(conn)
+        before = repository.get_offering(actor=actor, offering_id=offering_id)
+        offering = repository.rename_offering(
+            actor=actor,
+            offering_id=offering_id,
+            title=title,
+            now=now,
+        )
+        if before.title != offering.title:
+            _audit_offering_action(
+                conn,
+                actor=actor,
+                offering=offering,
+                action="offering_renamed",
+                detail=f"{before.title} -> {offering.title}",
+            )
+        return offering
 
 
 def archive_business_offering(
     *,
     actor: TenantContext,
     offering_id: str,
+    now: str | None = None,
 ) -> BusinessOffering:
     with get_db() as conn:
-        offering = ActivityRepository(conn).archive_offering(
-            actor=actor, offering_id=offering_id
+        repository = ActivityRepository(conn)
+        offering = repository.archive_offering(
+            actor=actor, offering_id=offering_id, now=now
         )
-        event_id = str(
-            uuid5(
-                NAMESPACE_URL,
-                f"clientplatform:lifecycle:offering:{offering.business_id}:{offering.id}:archived",
-            )
+        process_repository = OfferingProcessRepository(conn)
+        process_repository.ensure(
+            business_id=offering.business_id,
+            offering_id=offering.id,
+            created_by_member_id=offering.created_by_member_id,
+            now=now,
         )
-        conn.execute(
-            """
-            INSERT INTO clientplatform_admin_audit_events(
-                id, business_id, actor_user_id, action, subject_type,
-                subject_id, detail, created_at
-            ) VALUES(?, ?, ?, 'offering_archived', 'offering', ?, ?, ?)
-            ON CONFLICT(id) DO NOTHING
-            """,
-            (
-                event_id,
-                offering.business_id,
-                actor.user_id,
-                offering.id,
-                offering.title[:1000],
-                offering.updated_at,
+        process = process_repository.freeze(
+            business_id=offering.business_id,
+            offering_id=offering.id,
+            now=now,
+        )
+        _audit_offering_action(
+            conn,
+            actor=actor,
+            offering=offering,
+            action="offering_archived",
+            detail=(
+                f"{offering.title} | process={process.state.value}"
+                + (f" until {process.purge_after}" if process.purge_after else "")
             ),
         )
         return offering
+
+
+def restore_business_offering(
+    *,
+    actor: TenantContext,
+    offering_id: str,
+    now: str | None = None,
+) -> BusinessOffering:
+    with get_db() as conn:
+        repository = ActivityRepository(conn)
+        offering = repository.restore_offering(
+            actor=actor,
+            offering_id=offering_id,
+            now=now,
+        )
+        process, rebuilt = OfferingProcessRepository(conn).restore_or_rebuild(
+            business_id=offering.business_id,
+            offering_id=offering.id,
+            created_by_member_id=offering.created_by_member_id,
+            now=now,
+        )
+        _audit_offering_action(
+            conn,
+            actor=actor,
+            offering=offering,
+            action="offering_restored",
+            detail=f"{offering.title} | process={'rebuilt' if rebuilt else 'restored'} | revision={process.revision}",
+        )
+        return offering
+
+
+def get_business_offering_process(
+    *,
+    actor: TenantContext,
+    offering_id: str,
+) -> BusinessOfferingProcess:
+    with get_db_ro() as conn:
+        offering = ActivityRepository(conn).get_offering(actor=actor, offering_id=offering_id)
+        return OfferingProcessRepository(conn).get(
+            business_id=offering.business_id,
+            offering_id=offering.id,
+        )
+
+
+def run_offering_process_retention_batch(
+    *,
+    now: str | None = None,
+    limit: int = 100,
+) -> int:
+    with get_db() as conn:
+        return OfferingProcessRepository(conn).purge_due(now=now, limit=limit)
 
 
 def list_business_offerings(
     *,
     actor: TenantContext,
     capability_id: str,
+    include_archived: bool = False,
 ) -> list[BusinessOffering]:
     with get_db_ro() as conn:
         return ActivityRepository(conn).list_offerings(
             actor=actor,
             capability_id=capability_id,
+            include_archived=include_archived,
         )
 
 

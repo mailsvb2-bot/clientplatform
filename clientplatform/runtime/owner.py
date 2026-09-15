@@ -32,6 +32,7 @@ _CLIENTPLATFORM_REQUIRED_TABLES = frozenset(
         "business_profiles",
         "business_capabilities",
         "business_offerings",
+        "business_offering_processes",
         "customer_invites",
         "booking_slots",
         "programs",

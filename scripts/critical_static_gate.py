@@ -49,6 +49,15 @@ _CLIENTPLATFORM_AUTOMATION_POLICY_FILES = (
 )
 
 
+_CLIENTPLATFORM_OFFERING_PROCESS_FILES = (
+    "clientplatform/application/activity.py",
+    "clientplatform/domain/offering_process.py",
+    "clientplatform/infrastructure/activity_repository.py",
+    "clientplatform/infrastructure/offering_process_repository.py",
+    "services/db/schema/clientplatform_offering_processes.py",
+)
+
+
 _CLIENTPLATFORM_PLATFORM_SUPPORT_TYPE_FILES = (
     "clientplatform/application/support_cases.py",
     "clientplatform/domain/support_cases.py",
@@ -188,6 +197,7 @@ TYPE_CONTRACT_FILES = (
     "scripts/stress_db.py",
     "services/accounts/identity.py",
     *_CLIENTPLATFORM_AUTOMATION_POLICY_FILES,
+    *_CLIENTPLATFORM_OFFERING_PROCESS_FILES,
     *_CLIENTPLATFORM_PLATFORM_SUPPORT_TYPE_FILES,
     *_CLIENTPLATFORM_PLATFORM_DIRECTORY_TYPE_FILES,
     *_CLIENTPLATFORM_MANAGED_BOT_TYPE_FILES,
@@ -229,6 +239,7 @@ SECURITY_SCAN_PATHS = (
     "scripts/stress_db.py",
     "services/accounts/identity.py",
     *_CLIENTPLATFORM_AUTOMATION_POLICY_FILES,
+    *_CLIENTPLATFORM_OFFERING_PROCESS_FILES,
     *_CLIENTPLATFORM_PLATFORM_SUPPORT_SECURITY_FILES,
     *_CLIENTPLATFORM_PLATFORM_DIRECTORY_SECURITY_FILES,
     *_CLIENTPLATFORM_MANAGED_BOT_SECURITY_FILES,

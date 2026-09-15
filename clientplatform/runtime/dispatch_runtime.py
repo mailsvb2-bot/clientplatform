@@ -6,6 +6,7 @@ import os
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from clientplatform.application.activity import run_offering_process_retention_batch
 from clientplatform.application.dispatch_worker import DispatchBatchResult, run_dispatch_batch
 from clientplatform.application.event_followups import materialize_due_event_followups
 from clientplatform.application.program_media import run_program_media_cleanup_batch
@@ -251,6 +252,13 @@ async def run_configured_dispatch_tick(
         )
     except Exception:  # validator: allow-wide-except - event follow-ups must not block delivery
         log.exception("Event follow-up maintenance tick failed")
+    try:
+        await asyncio.to_thread(
+            run_offering_process_retention_batch,
+            limit=max(20, selected.config.batch_size * 5),
+        )
+    except Exception:  # validator: allow-wide-except - retention cleanup must not block delivery
+        log.exception("Offering process retention tick failed")
     try:
         booking = await run_booking_reminder_batch(
             limit=max(10, selected.config.batch_size * 2),
