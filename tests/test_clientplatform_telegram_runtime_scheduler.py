@@ -186,6 +186,7 @@ class ClientPlatformDispatchRuntimeTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch("clientplatform.runtime.dispatch_runtime.run_sales_followup_maintenance_batch"),
             patch("clientplatform.runtime.dispatch_runtime.materialize_due_event_followups", side_effect=RuntimeError("followup maintenance unavailable")) as event_followups,
+            patch("clientplatform.runtime.dispatch_runtime.run_offering_process_retention_batch") as offering_retention,
             patch("clientplatform.runtime.dispatch_runtime.run_booking_reminder_batch", new=AsyncMock(return_value=None)),
             patch("clientplatform.runtime.dispatch_runtime.run_program_media_cleanup_batch"),
             patch("clientplatform.runtime.dispatch_runtime.run_dispatch_batch", new=AsyncMock(return_value=dispatch_result)) as dispatch,
@@ -193,6 +194,7 @@ class ClientPlatformDispatchRuntimeTests(unittest.IsolatedAsyncioTestCase):
             result = await run_configured_dispatch_tick(_runtime(enabled=True))
         self.assertEqual(result, dispatch_result)
         event_followups.assert_called_once_with(limit=20, lock_ttl_seconds=60)
+        offering_retention.assert_called_once_with(limit=20)
         dispatch.assert_awaited_once()
 
     async def test_disabled_runtime_is_a_noop_without_database_or_network(self) -> None:

@@ -408,6 +408,74 @@ class ActivityRepository:
             raise ActivityNotFound("business offering was not found")
         return _offering_from_row(row)
 
+    def rename_offering(
+        self,
+        *,
+        actor: TenantContext,
+        offering_id: str,
+        title: str,
+        now: str | None = None,
+    ) -> BusinessOffering:
+        current = self._current_actor(actor)
+        current.assert_can_manage_programs()
+        normalized_id = normalize_uuid(offering_id, field_name="offering_id")
+        normalized_title = normalize_offering_title(title)
+        offering = self.get_offering(actor=current, offering_id=normalized_id)
+        if offering.status != OfferingStatus.ACTIVE:
+            raise ActivityInvariantViolation("archived offering must be restored before renaming")
+        if offering.title == normalized_title:
+            return offering
+        timestamp = str(now or _utc_now())
+        cursor = self._conn.execute(
+            """
+            UPDATE business_offerings
+            SET title=?, updated_at=?
+            WHERE id=? AND business_id=? AND status='active' AND updated_at=?
+            """,
+            (
+                normalized_title,
+                timestamp,
+                normalized_id,
+                current.business_id,
+                offering.updated_at,
+            ),
+        )
+        if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+            latest = self.get_offering(actor=current, offering_id=normalized_id)
+            if latest.title == normalized_title and latest.status == OfferingStatus.ACTIVE:
+                return latest
+            raise ActivityInvariantViolation("offering changed concurrently; refresh and retry")
+        return self.get_offering(actor=current, offering_id=normalized_id)
+
+    def restore_offering(
+        self,
+        *,
+        actor: TenantContext,
+        offering_id: str,
+        now: str | None = None,
+    ) -> BusinessOffering:
+        current = self._current_actor(actor)
+        current.assert_can_manage_programs()
+        normalized_id = normalize_uuid(offering_id, field_name="offering_id")
+        offering = self.get_offering(actor=current, offering_id=normalized_id)
+        if offering.status == OfferingStatus.ACTIVE:
+            return offering
+        timestamp = str(now or _utc_now())
+        cursor = self._conn.execute(
+            """
+            UPDATE business_offerings
+            SET status='active', archived_at=NULL, updated_at=?
+            WHERE id=? AND business_id=? AND status='archived' AND updated_at=?
+            """,
+            (timestamp, normalized_id, current.business_id, offering.updated_at),
+        )
+        if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+            latest = self.get_offering(actor=current, offering_id=normalized_id)
+            if latest.status == OfferingStatus.ACTIVE:
+                return latest
+            raise ActivityInvariantViolation("offering changed concurrently; refresh and retry")
+        return self.get_offering(actor=current, offering_id=normalized_id)
+
     def archive_offering(
         self,
         *,
