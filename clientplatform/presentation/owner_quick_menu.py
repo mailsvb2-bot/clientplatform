@@ -150,9 +150,11 @@ def build_owner_quick_actions(
 ) -> tuple[OwnerQuickAction, ...]:
     """Return a stable quick menu for one business and staff role.
 
-    ``limit`` includes the final ``all`` escape. The function deliberately does
-    not inspect current alerts, campaign metrics or recent behavior, so the
-    everyday menu remains predictable between visits.
+    ``limit`` includes the final full-surface escape. The function deliberately
+    does not inspect current alerts, campaign metrics or recent behavior, so the
+    everyday menu remains predictable between visits. Every visible quick action
+    must also be reachable for the supplied role; a forbidden shortcut is worse
+    UX than omitting it and leaving the full capability surface available.
     """
 
     if limit < 2:
@@ -226,14 +228,16 @@ def build_owner_quick_actions(
         seen.add(item.key)
         unique.append(item)
 
-    visible = unique[: max(0, limit - 2)]
-    visible.append(
-        OwnerQuickAction(
-            "results",
-            "📊 Результаты",
-            "увидеть, что происходит и что требует внимания",
+    reserved = 2 if role in _SUPPORT_ROLES else 1
+    visible = unique[: max(0, limit - reserved)]
+    if role in _SUPPORT_ROLES:
+        visible.append(
+            OwnerQuickAction(
+                "results",
+                "📊 Результаты",
+                "увидеть, что происходит и что требует внимания",
+            )
         )
-    )
     visible.append(
         OwnerQuickAction(
             "all",
