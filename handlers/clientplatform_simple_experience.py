@@ -11,7 +11,13 @@ from urllib.parse import urlencode
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+    WebAppInfo,
+)
 
 from clientplatform.application.capability_parity import (
     CapabilityAvailability,
@@ -22,7 +28,13 @@ from clientplatform.application.managed_bot_onboarding import (
 )
 from clientplatform.domain.activity import CapabilityStatus
 from clientplatform.domain.bookings import BookingSlotStatus
+from clientplatform.domain.tenancy import PlatformRole
 from clientplatform.presentation import owner_navigation as nav
+from clientplatform.presentation.owner_quick_menu import (
+    build_owner_quick_actions,
+    quick_menu_intro,
+)
+from clientplatform.runtime.cockpit_links import cockpit_web_app_url
 
 control = importlib.import_module(".clientplatform_control", __package__)
 builder = importlib.import_module(".clientplatform_program_builder", __package__)
@@ -81,18 +93,62 @@ def welcome_text() -> str:
     )
 
 
-def _simple_keyboard(business_id: str):
+def _simple_keyboard(
+    business_id: str,
+    *,
+    activity_description: object | None = None,
+    capabilities: list[object] | None = None,
+    role: PlatformRole | None = None,
+):
     token = control._uuid_token(business_id)
-    return control._keyboard(
-        [
-            [("✨ Помочь выбрать первый шаг", f"cps:firstgoal:{token}")],
-            [(nav.CUSTOMERS.label, f"cp:clients:{token}")],
-            [(nav.PROGRAMS.label, f"cps:programs:{token}")],
-            [(nav.BOOKINGS.label, f"cps:booking:{token}")],
-            [(nav.TODAY.label, f"cp:results:{token}")],
-            [(nav.ALL.label, f"cps:advanced:{token}")],
-        ]
+    if activity_description is None or capabilities is None or role is None:
+        return control._keyboard(
+            [
+                [("✨ Помочь выбрать первый шаг", f"cps:firstgoal:{token}")],
+                [(nav.CUSTOMERS.label, f"cp:clients:{token}")],
+                [(nav.PROGRAMS.label, f"cps:programs:{token}")],
+                [(nav.BOOKINGS.label, f"cps:booking:{token}")],
+                [(nav.TODAY.label, f"cp:results:{token}")],
+                [(nav.ALL.label, f"cps:advanced:{token}")],
+            ]
+        )
+    actions = build_owner_quick_actions(
+        activity_description=activity_description,
+        capabilities=capabilities,
+        role=role,
     )
+    callbacks = {
+        "customers": f"cp:clients:{token}",
+        "booking": f"cps:booking:{token}",
+        "events": f"cpev:home:{token}",
+        "programs": f"cps:programs:{token}",
+        "acquire": f"cpo:start:{token}",
+        "sales": f"cps:s:{token}",
+        "results": f"cp:results:{token}",
+        "all": f"cps:advanced:{token}",
+    }
+    rows: list[list[InlineKeyboardButton]] = []
+    cockpit_url = cockpit_web_app_url()
+    for action in actions:
+        if action.key == "all" and cockpit_url is not None:
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=action.label,
+                        web_app=WebAppInfo(url=cockpit_url),
+                    )
+                ]
+            )
+            continue
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=action.label,
+                    callback_data=callbacks[action.key],
+                )
+            ]
+        )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def _telegram_share_url(url: str, text: str) -> str:
@@ -121,23 +177,21 @@ async def send_simple_dashboard(
     user_id: int,
     business_id: str,
 ) -> None:
-    _actor, access, profile, _capabilities, customers, programs, slots = (
+    actor, access, profile, capabilities, customers, programs, slots = (
         await _business_snapshot(user_id=user_id, business_id=business_id)
     )
     open_slots = sum(item.slot.status == BookingSlotStatus.OPEN for item in slots)
     await message.answer(
-        f"🏠 {access.business.name}\n\n"
-        f"Чем Вы занимаетесь: {profile.activity_description}\n\n"
-        "Что можно сделать прямо сейчас:\n"
-        "• подключить клиента;\n"
-        "• создать и выдать материалы;\n"
-        "• открыть время для записи;\n"
-        "• посмотреть результат.\n\n"
-        f"Клиентов: {len(customers)} · программ: {len(programs)} · "
-        f"свободных времён: {open_slots}\n\n"
-        "Совсем не знаете, с чего начать? Нажмите «✨ Помочь выбрать первый шаг» — "
-        "ClientPlatform проведёт по минимальному числу действий.",
-        reply_markup=_simple_keyboard(business_id),
+        quick_menu_intro(business_name=access.business.name)
+        + "\n\n"
+        + f"Клиентов: {len(customers)} · программ: {len(programs)} · "
+        + f"свободных времён: {open_slots}",
+        reply_markup=_simple_keyboard(
+            business_id,
+            activity_description=profile.activity_description,
+            capabilities=capabilities,
+            role=actor.role,
+        ),
     )
 
 
