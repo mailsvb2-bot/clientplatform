@@ -56,7 +56,11 @@ class ProductionWorkflowIsolationTests(unittest.TestCase):
             "/opt/clientplatform",
             "mailsvb2-bot/clientplatform",
             "${{ github.sha }}",
-            "git fetch --prune origin main",
+            "persist-credentials: false",
+            "fetch-depth: 0",
+            'git bundle create "$source_bundle" "$source_ref"',
+            'git bundle verify "$source_bundle"',
+            'git fetch "$source_bundle" "$source_ref:refs/remotes/origin/main"',
             "git merge --ff-only origin/main",
             'fetched_sha" != "$expected_sha"',
             "scripts/clientplatform_production_deploy.py",
@@ -69,6 +73,8 @@ class ProductionWorkflowIsolationTests(unittest.TestCase):
         ):
             with self.subTest(required=required):
                 self.assertIn(required, text)
+        self.assertNotIn("git fetch --prune origin main", text)
+        self.assertNotIn("git fetch origin", text)
 
     def test_repair_bootstrap_only_configures_dedicated_clientplatform_ssh(self) -> None:
         text = self._text(REPAIR)
