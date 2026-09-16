@@ -10,7 +10,13 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, User
 
 control = importlib.import_module(".clientplatform_control", __package__)
-owner = importlib.import_module(".clientplatform_owner_journey", __package__)
+
+
+def _owner_module():
+    # Lazy import keeps this UX module import-order independent: owner_journey
+    # imports the canonical entry router, which composes this router.
+    return importlib.import_module(".clientplatform_owner_journey", __package__)
+
 
 router = Router(name="clientplatform_booking_wizard_ux")
 router.message.filter(control.ClientPlatformControlEnabled())
@@ -122,7 +128,7 @@ async def choose_quick_duration(callback: CallbackQuery, state: FSMContext) -> N
     message = control._callback_message(callback)
     await _remove_keyboard(message)
     await callback.answer(f"{duration} минут")
-    await owner.receive_owner_booking_duration(
+    await _owner_module().receive_owner_booking_duration(
         _DurationMessageProxy(message, callback.from_user, duration),
         state,
     )
@@ -181,7 +187,7 @@ async def cancel_booking_wizard(callback: CallbackQuery, state: FSMContext) -> N
     await _remove_keyboard(message)
     await state.clear()
     await callback.answer("Настройка отменена")
-    await owner.send_owner_dashboard(
+    await _owner_module().send_owner_dashboard(
         message,
         user_id=int(callback.from_user.id),
         business_id=business_id,

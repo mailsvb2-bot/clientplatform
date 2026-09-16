@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
@@ -122,7 +123,11 @@ async def test_quick_duration_reuses_canonical_booking_completion() -> None:
     with (
         patch.object(wizard.control, "_actor", new=AsyncMock(return_value=object())),
         patch.object(wizard.control, "_callback_message", return_value=message),
-        patch.object(wizard.owner, "receive_owner_booking_duration", new=completion),
+        patch.object(
+            wizard,
+            "_owner_module",
+            return_value=SimpleNamespace(receive_owner_booking_duration=completion),
+        ),
     ):
         await wizard.choose_quick_duration(callback, state)
 
@@ -214,7 +219,11 @@ async def test_visible_cancel_clears_wizard_and_returns_owner_home() -> None:
     with (
         patch.object(wizard.control, "_actor", new=AsyncMock(return_value=object())),
         patch.object(wizard.control, "_callback_message", return_value=message),
-        patch.object(wizard.owner, "send_owner_dashboard", new=dashboard),
+        patch.object(
+            wizard,
+            "_owner_module",
+            return_value=SimpleNamespace(send_owner_dashboard=dashboard),
+        ),
     ):
         await wizard.cancel_booking_wizard(callback, state)
 
@@ -253,8 +262,6 @@ async def test_stale_business_callback_fails_closed(handler, callback_data: str)
 
 
 def test_booking_wizard_router_precedes_legacy_simple_router() -> None:
-    from pathlib import Path
-
     source = (Path(__file__).resolve().parents[1] / "handlers/clientplatform_entry.py").read_text(
         encoding="utf-8"
     )
@@ -263,3 +270,9 @@ def test_booking_wizard_router_precedes_legacy_simple_router() -> None:
     assert wizard_include in source
     assert simple_include in source
     assert source.index(wizard_include) < source.index(simple_include)
+
+
+def test_booking_wizard_keeps_owner_journey_lazy_to_avoid_router_cycle() -> None:
+    source = Path(wizard.__file__).read_text(encoding="utf-8")
+    assert 'owner = importlib.import_module(".clientplatform_owner_journey"' not in source
+    assert 'def _owner_module()' in source
