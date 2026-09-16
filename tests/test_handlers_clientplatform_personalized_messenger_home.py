@@ -62,7 +62,6 @@ class TelegramPersonalizedMessengerHomeTests(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 
-
 class TelegramComposedOwnerDashboardTests(unittest.IsolatedAsyncioTestCase):
     async def test_final_composed_owner_home_uses_shared_quick_menu(self) -> None:
         from unittest.mock import AsyncMock
