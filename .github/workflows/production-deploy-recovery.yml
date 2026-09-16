@@ -1,7 +1,8 @@
 name: Production deploy recovery
 
 # Marker-gated recovery for the dedicated ClientPlatform production checkout.
-# This workflow never calls another product's webhook or public health endpoint.
+# Source synchronization is performed by the GitHub runner through a verified
+# Git bundle, so production never needs GitHub credentials or an outbound fetch.
 on:
   push:
     branches:
@@ -72,6 +73,36 @@ jobs:
           fi
           echo "SSH_PORT=$SSH_PORT" >> "$GITHUB_ENV"
 
+      - name: Checkout exact recovery source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Build verified exact source bundle
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          checkout_sha="$(git rev-parse HEAD)"
+          if [ "$checkout_sha" != "$TRIGGER_SHA" ]; then
+            echo "Runner checkout does not match recovery trigger SHA" >&2
+            exit 4
+          fi
+
+          source_ref=refs/heads/clientplatform-recovery-source
+          source_bundle="$RUNNER_TEMP/clientplatform-recovery-$TRIGGER_SHA.bundle"
+          git update-ref "$source_ref" "$TRIGGER_SHA"
+          git bundle create "$source_bundle" "$source_ref"
+          git bundle verify "$source_bundle"
+          bundle_sha="$(git bundle list-heads "$source_bundle" "$source_ref" | awk '{print $1}')"
+          if [ "$bundle_sha" != "$TRIGGER_SHA" ]; then
+            echo "Recovery source bundle does not contain the trigger SHA" >&2
+            exit 5
+          fi
+          test -s "$source_bundle"
+          echo "SOURCE_BUNDLE=$source_bundle" >> "$GITHUB_ENV"
+
       - name: Configure pinned production SSH identity
         shell: bash
         run: |
@@ -84,13 +115,14 @@ jobs:
           chmod 600 "$key" "$known_hosts"
           ssh-keygen -y -f "$key" >/dev/null
 
-      - name: Fast-forward and recover dedicated ClientPlatform production
+      - name: Fast-forward from exact bundle and recover dedicated ClientPlatform production
         id: recover
         shell: bash
         run: |
           set -Eeuo pipefail
           key="$RUNNER_TEMP/clientplatform-production-ssh-key"
           known_hosts="$RUNNER_TEMP/clientplatform-production-known-hosts"
+          remote_bundle="/tmp/clientplatform-recovery-$TRIGGER_SHA.bundle"
 
           ssh \
             -p "$SSH_PORT" \
@@ -100,10 +132,22 @@ jobs:
             -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile="$known_hosts" \
             -o ConnectTimeout=10 \
-            "$SSH_USER@$SSH_HOST" "bash -s -- '$TRIGGER_SHA'" <<'REMOTE'
+            "$SSH_USER@$SSH_HOST" "umask 077; cat > '$remote_bundle'" < "$SOURCE_BUNDLE"
+
+          ssh \
+            -p "$SSH_PORT" \
+            -i "$key" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$known_hosts" \
+            -o ConnectTimeout=10 \
+            "$SSH_USER@$SSH_HOST" "bash -s -- '$TRIGGER_SHA' '$remote_bundle'" <<'REMOTE'
           set -Eeuo pipefail
           expected_sha="$1"
+          source_bundle="$2"
           repo=/opt/clientplatform
+          source_ref=refs/heads/clientplatform-recovery-source
 
           case "$expected_sha" in
             ''|*[!0-9a-f]*)
@@ -115,9 +159,16 @@ jobs:
             echo "Expected SHA is invalid" >&2
             exit 10
           fi
+          expected_bundle="/tmp/clientplatform-recovery-$expected_sha.bundle"
+          if [ "$source_bundle" != "$expected_bundle" ] || [ ! -s "$source_bundle" ]; then
+            echo "ClientPlatform recovery source bundle is missing or unexpected" >&2
+            exit 11
+          fi
+          trap 'rm -f -- "$source_bundle"' EXIT
+
           if [ ! -d "$repo/.git" ]; then
             echo "ClientPlatform production checkout is not a git worktree: $repo" >&2
-            exit 11
+            exit 12
           fi
           cd "$repo"
 
@@ -128,36 +179,43 @@ jobs:
             git@github.com:mailsvb2-bot/clientplatform|\
             git@github.com:mailsvb2-bot/clientplatform.git|\
             ssh://git@github.com/mailsvb2-bot/clientplatform|\
-            ssh://git@github.com:mailsvb2-bot/clientplatform.git)
+            ssh://git@github.com/mailsvb2-bot/clientplatform.git)
               ;;
             *)
               echo "Unexpected production repository origin" >&2
-              exit 12
+              exit 13
               ;;
           esac
 
           current_branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
           if [ "$current_branch" != "main" ]; then
             echo "Expected production checkout on main; got $current_branch" >&2
-            exit 13
+            exit 14
           fi
           if [ -n "$(git status --porcelain=v1 --untracked-files=no --ignore-submodules=none)" ]; then
             echo "Tracked ClientPlatform production worktree is dirty" >&2
-            exit 14
+            exit 15
           fi
 
-          git fetch --prune origin main
+          git bundle verify "$source_bundle"
+          bundle_sha="$(git bundle list-heads "$source_bundle" "$source_ref" | awk '{print $1}')"
+          if [ "$bundle_sha" != "$expected_sha" ]; then
+            echo "Recovery source bundle does not match the recovery trigger SHA" >&2
+            exit 16
+          fi
+
+          git fetch "$source_bundle" "$source_ref:refs/remotes/origin/main"
           fetched_sha="$(git rev-parse origin/main)"
           if [ "$fetched_sha" != "$expected_sha" ]; then
-            echo "Fetched origin/main does not match the recovery trigger SHA" >&2
-            exit 15
+            echo "Bundle-synchronized origin/main does not match the recovery trigger SHA" >&2
+            exit 17
           fi
 
           git merge --ff-only origin/main
           deployed_source_sha="$(git rev-parse HEAD)"
           if [ "$deployed_source_sha" != "$expected_sha" ]; then
             echo "Production source checkout did not reach the recovery trigger SHA" >&2
-            exit 16
+            exit 18
           fi
 
           if [ "$(id -u)" -eq 0 ]; then
