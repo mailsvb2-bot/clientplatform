@@ -86,6 +86,14 @@ class DeploymentError(RuntimeError):
     """Sanitized deployment failure safe for operator logs."""
 
 
+def _safe_failure_reason(exc: Exception) -> str:
+    """Return only operator-safe deployment reasons; never arbitrary exception text."""
+    if isinstance(exc, DeploymentError):
+        reason = str(exc).strip()
+        return reason or "deployment_error_unspecified"
+    return "unexpected_deployment_error"
+
+
 class DiskCapacity(TypedDict):
     total_bytes: int
     used_bytes: int
@@ -1292,6 +1300,7 @@ def deploy(
                     "telegram_webhook_prefix": webhook_prefix,
                     "telegram_webhook_absent": True,
                     "failure_class": type(deployment_error).__name__,
+                    "failure_reason": _safe_failure_reason(deployment_error),
                     "rollback_full_readiness": _ready(),
                     "visual_gateway_ready": _visual_gateway_capabilities(),
                     "rollback_stale_image_cleanup": rollback_stale_image_cleanup,
@@ -1331,6 +1340,7 @@ def deploy(
                     "telegram_transport": "polling",
                     "telegram_webhook_prefix": webhook_prefix,
                     "failure_class": type(deployment_error).__name__,
+                    "failure_reason": _safe_failure_reason(deployment_error),
                     "baseline_ready": False,
                     "rollback_skipped": True,
                     "runtime_rollout_mode": runtime_rollout_mode,
@@ -1338,8 +1348,10 @@ def deploy(
                     "completed_at": _completed_at(),
                 }
             )
+            failure_reason = _safe_failure_reason(deployment_error)
             print(
-                f"CLIENTPLATFORM_PRODUCTION_RECOVERY_FAILED:{recovery_evidence}",
+                "CLIENTPLATFORM_PRODUCTION_RECOVERY_FAILED:"
+                f"{failure_reason}:{recovery_evidence}",
                 file=sys.stderr,
             )
             raise DeploymentError("production_recovery_failed") from deployment_error
