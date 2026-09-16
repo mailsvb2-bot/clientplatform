@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from clientplatform.domain.ad_connections import AdConnectionError
 from clientplatform.domain.ad_publication_assets import AdPublicationAssetError
+from clientplatform.domain.tenancy import PlatformRole
 from handlers import clientplatform_goal_dashboard as dashboard
 from handlers import clientplatform_goal_first_autopilot as goal
 
@@ -69,7 +70,7 @@ class GoalFirstAutopilotHardeningTests(unittest.IsolatedAsyncioTestCase):
     async def test_dashboard_preserves_status_when_no_time_is_open(self) -> None:
         out = target()
         snapshot = (
-            "actor",
+            SimpleNamespace(role=PlatformRole.OWNER),
             SimpleNamespace(business=SimpleNamespace(name="Мой бизнес")),
             SimpleNamespace(activity_description="Помогаю клиентам"),
             [],

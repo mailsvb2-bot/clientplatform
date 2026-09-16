@@ -159,6 +159,10 @@ from clientplatform.domain.tenancy import (
 )
 from clientplatform.infrastructure import DispatchOutboxRepository, TenancyRepository
 from clientplatform.presentation import owner_navigation as nav
+from clientplatform.presentation.owner_quick_menu import (
+    build_owner_quick_actions,
+    quick_menu_intro,
+)
 from clientplatform.presentation.event_ui import (
     BACK_TO_EVENTS_LABEL,
     BACK_TO_GROWTH_LABEL,
@@ -1097,11 +1101,53 @@ def _native_primary_action(actor: TenantContext) -> CustomerInteractionButton:
     return _button(nav.PROGRAMS.label, "cpm:programs")
 
 
+def _personalized_menu_message(actor: TenantContext) -> CustomerInteractionMessage | None:
+    try:
+        profile = get_business_profile(actor=actor)
+        capabilities = list_business_capabilities(actor=actor)
+    except (ActivityError, TenantPermissionDenied, ValueError):
+        return None
+    commands = {
+        "customers": "cpm:customers",
+        "booking": "cpm:bookings",
+        "events": "cpm:events",
+        "programs": "cpm:programs",
+        "acquire": "cpm:acquire",
+        "sales": "cpm:sales",
+        "results": "cpm:today",
+        "all": "cpm:menu-all",
+    }
+    actions = build_owner_quick_actions(
+        activity_description=profile.activity_description,
+        capabilities=capabilities,
+        role=actor.role,
+    )
+    return CustomerInteractionMessage(
+        text=quick_menu_intro(business_name=_business_name(actor)),
+        rows=tuple(
+            (_button(action.label, commands[action.key]),)
+            for action in actions
+        ),
+    )
+
+
 def _menu_message(
     actor: TenantContext,
     *,
     linked: bool,
 ) -> CustomerInteractionMessage:
+    personalized = _personalized_menu_message(actor)
+    if personalized is not None:
+        heading = (
+            "✅ Этот мессенджер подключён к Вашему рабочему аккаунту.\n\n"
+            if linked
+            else ""
+        )
+        return CustomerInteractionMessage(
+            text=heading + personalized.text,
+            rows=personalized.rows,
+        )
+
     heading = (
         "✅ Этот мессенджер подключён к Вашему рабочему аккаунту.\n\n"
         if linked
@@ -1112,10 +1158,7 @@ def _menu_message(
         text=(
             heading
             + f"🏠 {_business_name(actor)}\n\n"
-            + "Не знаете, что нажать? Начните с первой кнопки — "
-            + "ClientPlatform выбрала её как следующий полезный шаг по текущему состоянию бизнеса.\n\n"
-            + f"Если сейчас нужно другое, нажмите «{nav.ALL.label}». Там простыми словами объяснено, "
-            + "для чего нужен каждый раздел."
+            + "Выберите нужное действие или откройте полный список возможностей."
         ),
         rows=(
             (primary,),

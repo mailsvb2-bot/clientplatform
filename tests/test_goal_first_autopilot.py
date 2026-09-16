@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from clientplatform.domain.bookings import BookingSlotStatus
+from clientplatform.domain.tenancy import PlatformRole
 from handlers import clientplatform_goal_first_autopilot as goal
 
 
@@ -36,7 +37,7 @@ class GoalFirstAutopilotTests(unittest.IsolatedAsyncioTestCase):
             offering_title="Консультация",
         )
         snapshot = (
-            "actor",
+            SimpleNamespace(role=PlatformRole.OWNER),
             SimpleNamespace(business=SimpleNamespace(name="Мой бизнес")),
             SimpleNamespace(activity_description="Помогаю клиентам решать задачи"),
             [],
@@ -64,9 +65,17 @@ class GoalFirstAutopilotTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Главное сейчас", text)
         self.assertIn("Срочных задач сейчас нет", text)
         self.assertIn("свободных времён: 1", text)
-        self.assertEqual(labels, ["🚀 Найти новых клиентов", "🧭 Все разделы"])
-        self.assertEqual(markup.inline_keyboard[0][0].callback_data, "cpo:start:business-1")
-        self.assertEqual(markup.inline_keyboard[1][0].callback_data, "cpo:more:business-1")
+        self.assertEqual(
+            labels,
+            [
+                "💬 Клиенты и обращения",
+                "👥 Найти клиентов",
+                "💰 Продажи",
+                "📊 Результаты",
+                "▦ Все возможности",
+            ],
+        )
+        self.assertNotIn("Не знаете, что нажать?", text)
 
     async def test_first_region_question_does_not_ask_for_yandex_campaign(self) -> None:
         out = SimpleNamespace(answer=AsyncMock())

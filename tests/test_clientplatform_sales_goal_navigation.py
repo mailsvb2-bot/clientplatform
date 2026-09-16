@@ -6,6 +6,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
+from clientplatform.domain.tenancy import PlatformRole
+
 
 _AIOGRAM_AVAILABLE = importlib.util.find_spec("aiogram") is not None
 
@@ -119,7 +121,7 @@ class ClientPlatformSalesGoalNavigationTests(unittest.IsolatedAsyncioTestCase):
         )
         message = SimpleNamespace(answer=AsyncMock())
         snapshot = (
-            object(),
+            SimpleNamespace(role=PlatformRole.OWNER),
             SimpleNamespace(business=SimpleNamespace(name="Практика")),
             SimpleNamespace(activity_description="Помогаю клиентам"),
             [],
@@ -141,8 +143,17 @@ class ClientPlatformSalesGoalNavigationTests(unittest.IsolatedAsyncioTestCase):
         buttons = _buttons(message.answer.await_args.kwargs["reply_markup"])
         self.assertIn(action.title, text)
         self.assertIn(action.reason, text)
-        self.assertEqual(buttons[0].text, "💬 Продолжить работу с клиентом")
-        self.assertEqual(len(buttons), 2)
+        self.assertNotIn("💬 Продолжить работу с клиентом", [button.text for button in buttons])
+        self.assertEqual(
+            [button.text for button in buttons],
+            [
+                "💬 Клиенты и обращения",
+                "👥 Найти клиентов",
+                "💰 Продажи",
+                "📊 Результаты",
+                "▦ Все возможности",
+            ],
+        )
 
     def test_goal_schedule_resume_uses_same_acquisition_callback(self) -> None:
         from handlers import clientplatform_goal_first_safety as goal_contract
