@@ -41,6 +41,9 @@ LOCK_PATH = Path("/run/lock/clientplatform-production-deploy.lock")
 EVIDENCE_DIR = Path("/var/lib/clientplatform/deploy-evidence")
 LOCAL_BACKUP_DIR = Path("/var/backups/clientplatform/predeploy")
 _DEFAULT_TELEGRAM_WEBHOOK_PREFIX = "/telegram-webhook"
+_TRUE_ENV_VALUES = frozenset({"1", "true", "yes", "on"})
+_CANONICAL_OMNICHANNEL_PROBE_ROUTE_ID = "production-deploy-probe"
+_CANONICAL_OMNICHANNEL_PROVIDERS = ("vk", "max")
 _VISUAL_GATEWAY_CAPABILITIES = {
     "contract_version": "1.0",
     "capabilities": ["generation", "render_pack", "usage"],
@@ -152,6 +155,10 @@ def _env_values(path: Path) -> dict[str, str]:
         key, value = line.split("=", 1)
         values[key.strip()] = value.strip()
     return values
+
+
+def _env_flag_enabled(values: dict[str, str], name: str) -> bool:
+    return str(values.get(name, "") or "").strip().lower() in _TRUE_ENV_VALUES
 
 
 def _telegram_webhook_prefix(values: dict[str, str] | None = None) -> str:
@@ -1010,6 +1017,55 @@ def _external_https(domain: str) -> None:
     _external_polling_absence(domain, _telegram_webhook_prefix())
 
 
+def _external_post_only_guard(domain: str, path: str, *, failure_reason: str) -> None:
+    completed = _run(
+        [
+            "curl",
+            "--proto",
+            "=https",
+            "--tlsv1.2",
+            "--silent",
+            "--show-error",
+            "--dump-header",
+            "-",
+            "--output",
+            "/dev/null",
+            "--max-time",
+            "20",
+            "--request",
+            "GET",
+            f"https://{domain}{path}",
+        ],
+        capture=True,
+        check=False,
+    )
+    lines = [line.strip() for line in completed.stdout.replace("\r", "").splitlines()]
+    status_indexes = [index for index, line in enumerate(lines) if line.startswith("HTTP/")]
+    status = 0
+    allow = ""
+    if status_indexes:
+        last_status_index = status_indexes[-1]
+        parts = lines[last_status_index].split()
+        if len(parts) >= 2 and parts[1].isdigit():
+            status = int(parts[1])
+        for line in lines[last_status_index + 1 :]:
+            if line.lower().startswith("allow:"):
+                allow = line.split(":", 1)[1].strip()
+                break
+    allowed_methods = {item.strip().upper() for item in allow.split(",") if item.strip()}
+    if completed.returncode != 0 or status != 405 or "POST" not in allowed_methods:
+        raise DeploymentError(failure_reason)
+
+
+def _external_omnichannel_method_guards(domain: str) -> None:
+    for provider in _CANONICAL_OMNICHANNEL_PROVIDERS:
+        _external_post_only_guard(
+            domain,
+            f"/clientplatform/webhooks/{provider}/{_CANONICAL_OMNICHANNEL_PROBE_ROUTE_ID}",
+            failure_reason=f"external_canonical_{provider}_webhook_guard_failed",
+        )
+
+
 def _sales_operations_smoke() -> dict[str, Any]:
     completed = _run(
         [
@@ -1155,6 +1211,9 @@ def deploy(
     if not domain or domain.endswith("your-domain.ru"):
         raise DeploymentError("production_domain_missing")
     webhook_prefix = _telegram_webhook_prefix(values)
+    omnichannel_enabled = _env_flag_enabled(
+        values, "CLIENTPLATFORM_OMNICHANNEL_INGRESS_ENABLED"
+    )
 
     target_sha = _git_sha()
     compose = _compose()
@@ -1241,6 +1300,8 @@ def deploy(
             _wait_for_visual_gateway(timeout_seconds)
             _wait_for_baseline_readiness(timeout_seconds)
             _external_https(domain)
+            if omnichannel_enabled:
+                _external_omnichannel_method_guards(domain)
             sales_operations_smoke = _sales_operations_smoke()
             visual_gateway_image = _container_image(VISUAL_GATEWAY_CONTAINER)
             post_deploy_retention = _post_deploy_retention(
@@ -1256,6 +1317,8 @@ def deploy(
             app_changed = True
             _wait_for_readiness(timeout_seconds)
             _external_https(domain)
+            if omnichannel_enabled:
+                _external_omnichannel_method_guards(domain)
             sales_operations_smoke = _sales_operations_smoke()
             visual_gateway_image = _container_image(VISUAL_GATEWAY_CONTAINER)
             _run(
@@ -1381,6 +1444,8 @@ def deploy(
             "telegram_transport": "polling",
             "telegram_webhook_prefix": webhook_prefix,
             "telegram_webhook_absent": True,
+            "canonical_omnichannel_ingress_enabled": omnichannel_enabled,
+            "canonical_omnichannel_routes_proven": omnichannel_enabled,
             "baseline_ready": baseline_ready,
             "recovery_mode": bool(app_exists and not baseline_ready),
             "sales_operations_smoke": sales_operations_smoke,
