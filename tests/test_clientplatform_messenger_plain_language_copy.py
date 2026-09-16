@@ -30,3 +30,14 @@ def test_native_messenger_dispatch_hides_internal_refund_jargon() -> None:
     )
     assert "возврат в результатах бизнеса" in rendered.text
     assert "каноничес" not in rendered.text.casefold()
+
+
+def test_native_messenger_dispatch_hides_internal_publication_status_jargon() -> None:
+    rendered = _render(
+        "⛔ Отменить запланированную публикацию?\n\n"
+        "Это только изменит канонический статус; отправка не запускается."
+    )
+    assert "Это отменит запланированную отправку" in rendered.text
+    assert "Ничего не будет отправлено" in rendered.text
+    assert "каноничес" not in rendered.text.casefold()
+    assert rendered.rows[0][0].command == "cpm:payments"
