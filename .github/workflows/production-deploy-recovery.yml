@@ -134,6 +134,8 @@ jobs:
             -o ConnectTimeout=10 \
             "$SSH_USER@$SSH_HOST" "umask 077; cat > '$remote_bundle'" < "$SOURCE_BUNDLE"
 
+          recovery_log="$RUNNER_TEMP/clientplatform-production-recovery.log"
+          set +e
           ssh \
             -p "$SSH_PORT" \
             -i "$key" \
@@ -142,7 +144,7 @@ jobs:
             -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile="$known_hosts" \
             -o ConnectTimeout=10 \
-            "$SSH_USER@$SSH_HOST" "bash -s -- '$TRIGGER_SHA' '$remote_bundle'" <<'REMOTE'
+            "$SSH_USER@$SSH_HOST" "bash -s -- '$TRIGGER_SHA' '$remote_bundle'" 2>&1 <<'REMOTE' | tee "$recovery_log"
           set -Eeuo pipefail
           expected_sha="$1"
           source_bundle="$2"
@@ -228,15 +230,55 @@ jobs:
               --timeout-seconds 240
           fi
           REMOTE
+          recovery_status=${PIPESTATUS[0]}
+          set -e
+          if [ "$recovery_status" -ne 0 ]; then
+            failure_marker="$(grep -E '^CLIENTPLATFORM_PRODUCTION_(RECOVERY|DEPLOY)_FAILED:' "$recovery_log" | tail -n 1 || true)"
+            if [ -z "$failure_marker" ]; then
+              failure_marker="CLIENTPLATFORM_PRODUCTION_RECOVERY_FAILED:remote_recovery_failed_without_safe_marker"
+            fi
+            if grep -Eqi 'no space left on device' "$recovery_log"; then
+              failure_hint="no_space_left_on_device"
+            elif grep -Eqi 'temporary failure resolving|could not resolve|name or service not known' "$recovery_log"; then
+              failure_hint="name_resolution_failed"
+            elif grep -Eqi 'TLS handshake timeout|i/o timeout|connection timed out|network is unreachable' "$recovery_log"; then
+              failure_hint="network_timeout_or_unreachable"
+            elif grep -Eqi '429 Too Many Requests|too many requests' "$recovery_log"; then
+              failure_hint="upstream_rate_limited"
+            elif grep -Eqi 'exit code: 137|killed process|out of memory|oom-kill' "$recovery_log"; then
+              failure_hint="build_killed_or_oom"
+            elif grep -Eqi 'exit code: 100' "$recovery_log"; then
+              failure_hint="package_install_failed"
+            else
+              failure_hint="safe_marker_only"
+            fi
+            printf 'failure_marker=%s\n' "$failure_marker" >> "$GITHUB_OUTPUT"
+            printf 'failure_hint=%s\n' "$failure_hint" >> "$GITHUB_OUTPUT"
+            {
+              echo '### Production deploy recovery failure'
+              printf -- '- Safe marker: `%s`\n' "$failure_marker"
+              printf -- '- Safe hint: `%s`\n' "$failure_hint"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit "$recovery_status"
+          fi
 
       - name: Publish deploy recovery status
         if: always()
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         env:
           RECOVERY_OUTCOME: ${{ steps.recover.outcome }}
+          RECOVERY_FAILURE_MARKER: ${{ steps.recover.outputs.failure_marker }}
+          RECOVERY_FAILURE_HINT: ${{ steps.recover.outputs.failure_hint }}
         with:
           script: |
             const ok = process.env.RECOVERY_OUTCOME === 'success';
+            const marker = process.env.RECOVERY_FAILURE_MARKER || '';
+            const hint = process.env.RECOVERY_FAILURE_HINT || '';
+            const failureDescription = hint
+              ? `Recovery failed: ${hint}`
+              : marker
+                ? `Recovery failed: ${marker}`
+                : 'ClientPlatform production deploy recovery failed';
             await github.rest.repos.createCommitStatus({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -245,6 +287,6 @@ jobs:
               context: 'ops/clientplatform-production-deploy-recovery',
               description: ok
                 ? 'Dedicated ClientPlatform production recovery completed'
-                : 'ClientPlatform production deploy recovery failed',
+                : failureDescription.slice(0, 140),
               target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
             });
