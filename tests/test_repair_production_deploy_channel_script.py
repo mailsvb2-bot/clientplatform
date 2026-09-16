@@ -67,8 +67,14 @@ def test_recovery_workflow_uses_dedicated_clientplatform_ssh_and_exact_trigger_s
     assert "secrets.CLIENTPLATFORM_PRODUCTION_SSH_PRIVATE_KEY" in text
     assert "TRIGGER_SHA: ${{ github.sha }}" in text
     assert "GitHub recovery trigger SHA is invalid" in text
+    assert "persist-credentials: false" in text
+    assert "fetch-depth: 0" in text
+    assert 'git bundle create "$source_bundle" "$source_ref"' in text
+    assert 'git bundle verify "$source_bundle"' in text
+    assert 'git fetch "$source_bundle" "$source_ref:refs/remotes/origin/main"' in text
     assert 'fetched_sha" != "$expected_sha"' in text
-    assert "git fetch --prune origin main" in text
+    assert "git fetch --prune origin main" not in text
+    assert "git fetch origin" not in text
     assert "git merge --ff-only origin/main" in text
     assert "scripts/clientplatform_production_deploy.py" in text
     assert "--recover-unavailable-baseline" in text
