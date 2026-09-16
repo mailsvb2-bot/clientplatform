@@ -1,0 +1,225 @@
+name: Apply messenger plain-language patch
+
+on:
+  push:
+    branches:
+      - fix/messenger-plain-language-copy
+    paths:
+      - .github/workflows/apply-messenger-plain-language-patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout exact branch source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Apply exact locally-proven UX patch
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD^)" = "1053d48a47a590a1a8dddda3c3fe503bf8070f5f"
+          cat > /tmp/messenger-plain-language.patch <<'PATCH'
+          diff --git a/handlers/clientplatform_admin_extension.py b/handlers/clientplatform_admin_extension.py
+          index 2db6675..9fc2c96 100644
+          --- a/handlers/clientplatform_admin_extension.py
+          +++ b/handlers/clientplatform_admin_extension.py
+          @@ -1182,8 +1182,8 @@ async def admin_ops_gate(callback: CallbackQuery, state: FSMContext) -> None:
+                   await admin._safe_edit(
+                       callback,
+                       "↩️ Полный возврат\n\n"
+          -            "Подтвердите возврат. Он изменит статус оплаты и создаст "
+          -            "отдельный канонический факт возврата; повторное нажатие "
+          +            "Подтвердите возврат. Он изменит статус оплаты и отдельно учтёт "
+          +            "возврат в результатах бизнеса; повторное нажатие "
+                       "не создаст дубль.",
+                       _flow_keyboard(
+                           admin,
+          @@ -1491,7 +1491,7 @@ async def receive_payment_value(message: Message, state: FSMContext) -> None:
+               await state.clear()
+               outcome_id = getattr(payment, "outcome_event_id", None)
+               evidence = (
+          -        " Канонический факт выручки подтверждён."
+          +        " Выручка учтена в результатах бизнеса."
+                   if outcome_id is not None
+                   else ""
+               )
+          diff --git a/handlers/clientplatform_partner_growth.py b/handlers/clientplatform_partner_growth.py
+          index 1328aa5..fb118cc 100644
+          --- a/handlers/clientplatform_partner_growth.py
+          +++ b/handlers/clientplatform_partner_growth.py
+          @@ -56,6 +56,19 @@ _TERMINAL_CONTACT_STATUSES = {
+               PartnerCandidateStatus.DO_NOT_CONTACT,
+               PartnerCandidateStatus.INVALID,
+           }
+          +_DISPATCH_STATUS_LABELS = {
+          +    "pending": "ожидает отправки",
+          +    "sending": "отправляется",
+          +    "retry": "ожидает повторной попытки",
+          +    "sent": "отправлено",
+          +    "dead": "не отправлено",
+          +    "cancelled": "отменено",
+          +}
+          +
+          +
+          +def _dispatch_status_label(status: object) -> str:
+          +    raw = str(getattr(status, "value", status) or "").strip().lower()
+          +    return _DISPATCH_STATUS_LABELS.get(raw, "состояние обновлено")
+           
+           
+           def _token(value: str) -> str:
+          @@ -290,8 +303,8 @@ async def _queue_selected_connection(
+                   return
+               await callback.answer("Поставлено в очередь")
+               await control._callback_message(callback).answer(
+          -        "📨 Предложение поставлено в каноническую очередь отправки.\n\n"
+          -        f"Статус dispatch: {dispatch.status.value}. "
+          +        "📨 Предложение поставлено в очередь отправки.\n\n"
+          +        f"Статус отправки: {_dispatch_status_label(dispatch.status)}. "
+                   "Повторное нажатие не создаст дубль.",
+                   reply_markup=control._keyboard(
+                       [[("Открыть партнёра", f"cpg:c:{business_token}:{candidate_token}")]]
+          diff --git a/services/messenger/reply_dispatcher.py b/services/messenger/reply_dispatcher.py
+          index 15a580e..d0d0b18 100644
+          --- a/services/messenger/reply_dispatcher.py
+          +++ b/services/messenger/reply_dispatcher.py
+          @@ -139,6 +139,25 @@ def _max_clientplatform_attachments(
+               return [{"type": "inline_keyboard", "payload": {"buttons": rows}}]
+           
+           
+          +_OWNER_COPY_REPLACEMENTS = {
+          +    "Канонический факт выручки подтверждён.": "Выручка учтена в результатах бизнеса.",
+          +    "Подтверждение изменит статус оплаты и создаст отдельный канонический факт возврата.": (
+          +        "Подтверждение изменит статус оплаты и отдельно учтёт возврат в результатах бизнеса."
+          +    ),
+          +}
+          +
+          +
+          +def _plain_language_clientplatform_interaction(
+          +    interaction: CustomerInteractionMessage,
+          +) -> CustomerInteractionMessage:
+          +    text = interaction.text
+          +    for technical, human in _OWNER_COPY_REPLACEMENTS.items():
+          +        text = text.replace(technical, human)
+          +    if text == interaction.text:
+          +        return interaction
+          +    return CustomerInteractionMessage(text=text, rows=interaction.rows)
+          +
+          +
+           async def _send_clientplatform_interaction(
+               *,
+               platform: str,
+          @@ -153,7 +172,9 @@ async def _send_clientplatform_interaction(
+                   raise MessengerTransportError(
+                       "ClientPlatform interaction reply is missing canonical metadata"
+                   )
+          -    interaction = CustomerInteractionMessage.from_json(raw_interaction)
+          +    interaction = _plain_language_clientplatform_interaction(
+          +        CustomerInteractionMessage.from_json(raw_interaction)
+          +    )
+               try:
+                   link_commands = {
+                       button.command
+          diff --git a/tests/test_clientplatform_messenger_plain_language_copy.py b/tests/test_clientplatform_messenger_plain_language_copy.py
+          new file mode 100644
+          index 0000000..cc01e53
+          --- /dev/null
+          +++ b/tests/test_clientplatform_messenger_plain_language_copy.py
+          @@ -0,0 +1,32 @@
+          +from __future__ import annotations
+          +
+          +from clientplatform.domain.customer_interactions import (
+          +    CustomerInteractionButton,
+          +    CustomerInteractionMessage,
+          +)
+          +from services.messenger.reply_dispatcher import _plain_language_clientplatform_interaction
+          +
+          +
+          +def _render(text: str) -> CustomerInteractionMessage:
+          +    return _plain_language_clientplatform_interaction(
+          +        CustomerInteractionMessage(
+          +            text=text,
+          +            rows=((CustomerInteractionButton(label="Оплаты", command="cpm:payments"),),),
+          +        )
+          +    )
+          +
+          +
+          +def test_native_messenger_dispatch_hides_internal_revenue_jargon() -> None:
+          +    rendered = _render(
+          +        "✅ Оплата сохранена: 3 500.00 RUB. Канонический факт выручки подтверждён."
+          +    )
+          +    assert "Выручка учтена в результатах бизнеса" in rendered.text
+          +    assert "каноничес" not in rendered.text.casefold()
+          +
+          +
+          +def test_native_messenger_dispatch_hides_internal_refund_jargon() -> None:
+          +    rendered = _render(
+          +        "Подтверждение изменит статус оплаты и создаст отдельный канонический факт возврата."
+          +    )
+          +    assert "возврат в результатах бизнеса" in rendered.text
+          +    assert "каноничес" not in rendered.text.casefold()
+          diff --git a/tests/test_handlers_clientplatform_admin_extension_coverage.py b/tests/test_handlers_clientplatform_admin_extension_coverage.py
+          index 92be6be..fa1c82d 100644
+          --- a/tests/test_handlers_clientplatform_admin_extension_coverage.py
+          +++ b/tests/test_handlers_clientplatform_admin_extension_coverage.py
+          @@ -868,7 +868,7 @@ async def test_payment_and_price_input_handlers_cover_invalid_and_success(
+               payment = FakeMessage("3500 RUB консультация")
+               await extension.receive_payment_value(payment, payment_state)
+               assert "3 500,00 RUB" in payment.answers[-1]
+          -    assert "Канонический факт выручки подтверждён" in payment.answers[-1]
+          +    assert "Выручка учтена в результатах бизнеса" in payment.answers[-1]
+               assert recorded_payments[0]["idempotency_key"] == "telegram-payment:701:0"
+           
+               invalid_price = FakeMessage("0")
+          @@ -941,7 +941,10 @@ async def test_payment_refund_requires_confirmation_and_is_idempotent(
+           ) -> None:
+               state = FakeState()
+               await extension.admin_ops_gate(_callback("pay-refund", "payment"), state)
+          -    assert "Подтвердите возврат" in fake_admin.edits[-1][0]
+          +    refund_text = fake_admin.edits[-1][0]
+          +    assert "Подтвердите возврат" in refund_text
+          +    assert "возврат в результатах бизнеса" in refund_text
+          +    assert "каноничес" not in refund_text.casefold()
+           
+               calls: list[dict[str, Any]] = []
+               rendered: list[str] = []
+          diff --git a/tests/test_handlers_clientplatform_partner_growth_surfaces.py b/tests/test_handlers_clientplatform_partner_growth_surfaces.py
+          index 3d20ef7..576958a 100644
+          --- a/tests/test_handlers_clientplatform_partner_growth_surfaces.py
+          +++ b/tests/test_handlers_clientplatform_partner_growth_surfaces.py
+          @@ -454,7 +454,12 @@ class PartnerGrowthSurfaceTests(unittest.IsolatedAsyncioTestCase):
+                           connection_id="connection",
+                       )
+                   callback.answer.assert_awaited_once_with("Поставлено в очередь")
+          -        self.assertIn("Повторное нажатие не создаст дубль", self.output.answer.await_args.args[0])
+          +        text = self.output.answer.await_args.args[0]
+          +        self.assertIn("Предложение поставлено в очередь отправки", text)
+          +        self.assertIn("Статус отправки: ожидает отправки", text)
+          +        self.assertNotIn("каноничес", text.casefold())
+          +        self.assertNotIn("dispatch", text.casefold())
+          +        self.assertIn("Повторное нажатие не создаст дубль", text)
+           
+               async def test_start_discovery_failure_is_fail_closed(self) -> None:
+                   callback = _callback("cpg:start:business")
+          PATCH
+
+          sed -i 's/^          //' /tmp/messenger-plain-language.patch
+          git apply --check /tmp/messenger-plain-language.patch
+          git apply /tmp/messenger-plain-language.patch
+          rm .github/workflows/apply-messenger-plain-language-patch.yml
+          git diff --check
+          git add -A
+          tree="$(git write-tree)"
+          test "$tree" = "9be6933e0f968a9db7d13f867295eff064138494"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix: use plain language in messenger owner copy'
+          git push origin HEAD:fix/messenger-plain-language-copy
