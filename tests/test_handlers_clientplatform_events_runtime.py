@@ -11,6 +11,8 @@ from handlers import clientplatform_events as events
 
 BUSINESS_ID = "11111111-1111-4111-8111-111111111111"
 TOKEN = "ERERERERQRGBEREREREREQ"
+EVENT_ID = "33333333-3333-4333-8333-333333333333"
+EVENT_TOKEN = "MzMzMzMzQzODMzMzMzMzMzMzMz"
 
 
 def _callback() -> SimpleNamespace:
@@ -455,6 +457,182 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
         reply.answer.assert_awaited_once()
         self.assertEqual(
             keyboard.call_args.args[0],
+            [[("🎥 К вебинарам", f"cpev:home:{TOKEN}")]],
+        )
+
+
+    async def test_receive_details_without_join_target_offers_join_and_announce(self) -> None:
+        message = _message("Эфир | 15.09.2026 19:00 | - | -")
+        state = AsyncMock()
+        state.get_data.return_value = {"event_business_id": BUSINESS_ID}
+        actor = MagicMock(unsafe=True)
+        created = SimpleNamespace(
+            event_id=EVENT_ID,
+            join_ready=False,
+            provider_key="pending",
+            email_notifications_enabled=False,
+            registration_url=lambda base: f"{base}/e/public-slug",
+        )
+
+        def token(value: str) -> str:
+            return EVENT_TOKEN if value == EVENT_ID else TOKEN
+
+        with (
+            patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(events, "get_business_profile", return_value=SimpleNamespace(timezone="Europe/Moscow")),
+            patch.object(events, "parse_local_booking_start", return_value="2026-09-15T16:00:00+00:00"),
+            patch.object(events, "create_and_publish_online_event", return_value=created) as create,
+            patch.object(events, "_public_base_url", return_value="https://clientplatform.example.test"),
+            patch.object(events.control, "_keyboard", side_effect=lambda rows: rows),
+            patch.object(events.control, "_uuid_token", side_effect=token),
+        ):
+            await events.receive_event_details(message, state)
+
+        self.assertIsNone(create.call_args.kwargs["request"].join_url)
+        self.assertIsNone(create.call_args.kwargs["request"].offer_url)
+        rows = message.answer.await_args.kwargs["reply_markup"]
+        callbacks = [callback for row in rows for _label, callback in row]
+        self.assertIn(f"cpev:join:{EVENT_TOKEN}:{TOKEN}", callbacks)
+        self.assertIn(f"cpev:announce:{EVENT_TOKEN}:{TOKEN}", callbacks)
+        self.assertIn("ссылку на эфир можно добавить позже", message.answer.await_args.args[0].casefold())
+
+    async def test_announcement_callback_covers_success_stale_and_safe_failure(self) -> None:
+        reply = SimpleNamespace(answer=AsyncMock())
+        actor = MagicMock(unsafe=True)
+        draft = SimpleNamespace(
+            title="Вебинар",
+            text="AI-анонс по подтверждённым фактам",
+            generated_by="ai:test:model",
+            registration_url=lambda *, public_base_url, source: f"{public_base_url}/e/demo?source={source}",
+        )
+        callback = _callback()
+        callback.data = f"cpev:announce:{EVENT_TOKEN}:{TOKEN}"
+
+        def decode(value: str) -> str:
+            return EVENT_ID if value == EVENT_TOKEN else BUSINESS_ID
+
+        with (
+            patch.object(events.control, "_token_uuid", side_effect=decode),
+            patch.object(events.control, "_uuid_token", return_value=TOKEN),
+            patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(events, "draft_event_announcement", new=AsyncMock(return_value=draft)),
+            patch.object(events, "_public_base_url", return_value="https://clientplatform.example.test"),
+            patch.object(events.control, "_callback_message", return_value=reply),
+        ):
+            await events.create_event_announcement(callback)
+
+        actor.assert_can_manage_business.assert_called_once_with()
+        callback.answer.assert_awaited_once_with("Анонс готов")
+        text = reply.answer.await_args.args[0]
+        self.assertIn("требует Вашего подтверждения", text)
+        markup = reply.answer.await_args.kwargs["reply_markup"]
+        urls = [row[0].url for row in markup.inline_keyboard[:3]]
+        self.assertTrue(any("source%3Dtelegram" in (url or "") for url in urls))
+        self.assertTrue(any("source%3Dvk" in (url or "") for url in urls))
+        self.assertTrue(any("source%3Dmax" in (url or "") for url in urls))
+
+        stale = _callback()
+        stale.data = "cpev:announce:broken"
+        await events.create_event_announcement(stale)
+        stale.answer.assert_awaited_once_with("Кнопка устарела", show_alert=True)
+
+        failed = _callback()
+        failed.data = f"cpev:announce:{EVENT_TOKEN}:{TOKEN}"
+        with (
+            patch.object(events.control, "_token_uuid", side_effect=decode),
+            patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(events, "draft_event_announcement", new=AsyncMock(side_effect=ValueError("bad"))),
+        ):
+            await events.create_event_announcement(failed)
+        failed.answer.assert_awaited_once_with("Не удалось подготовить анонс", show_alert=True)
+
+    async def test_join_target_start_covers_success_stale_and_permission_denial(self) -> None:
+        state = AsyncMock()
+        reply = SimpleNamespace(answer=AsyncMock())
+        actor = MagicMock(unsafe=True)
+        callback = _callback()
+        callback.data = f"cpev:join:{EVENT_TOKEN}:{TOKEN}"
+
+        def decode(value: str) -> str:
+            return EVENT_ID if value == EVENT_TOKEN else BUSINESS_ID
+
+        with (
+            patch.object(events.control, "_token_uuid", side_effect=decode),
+            patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(events.control, "_callback_message", return_value=reply),
+            patch.object(events, "_cancel_keyboard", return_value="cancel"),
+        ):
+            await events.start_event_join_target(callback, state)
+        actor.assert_can_manage_business.assert_called_once_with()
+        state.clear.assert_awaited_once_with()
+        state.set_state.assert_awaited_once_with(events.ClientPlatformEventState.waiting_join_url)
+        state.update_data.assert_awaited_once_with(event_business_id=BUSINESS_ID, event_id=EVENT_ID)
+        callback.answer.assert_awaited_once_with()
+        self.assertIn("HTTPS-ссылку", reply.answer.await_args.args[0])
+
+        stale = _callback()
+        stale.data = "cpev:join:broken"
+        await events.start_event_join_target(stale, AsyncMock())
+        stale.answer.assert_awaited_once_with("Кнопка устарела", show_alert=True)
+
+        denied = _callback()
+        denied.data = f"cpev:join:{EVENT_TOKEN}:{TOKEN}"
+        denied_actor = MagicMock(unsafe=True)
+        denied_actor.assert_can_manage_business.side_effect = TenantPermissionDenied("denied")
+        with (
+            patch.object(events.control, "_token_uuid", side_effect=decode),
+            patch.object(events.control, "_actor", new=AsyncMock(return_value=denied_actor)),
+        ):
+            await events.start_event_join_target(denied, AsyncMock())
+        denied.answer.assert_awaited_once_with(
+            "Изменить ссылку может владелец или администратор", show_alert=True
+        )
+
+    async def test_join_target_receive_covers_missing_invalid_and_success(self) -> None:
+        missing = _message("https://stream.example/live")
+        missing_state = AsyncMock()
+        missing_state.get_data.return_value = {}
+        await events.receive_event_join_target(missing, missing_state)
+        missing_state.clear.assert_awaited_once_with()
+        self.assertIn("Откройте вебинары заново", missing.answer.await_args.args[0])
+
+        invalid = _message("http://unsafe.example/live")
+        invalid_state = AsyncMock()
+        invalid_state.get_data.return_value = {
+            "event_business_id": BUSINESS_ID,
+            "event_id": EVENT_ID,
+        }
+        actor = MagicMock(unsafe=True)
+        with (
+            patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(events, "set_event_join_target", side_effect=ValueError("https required")),
+            patch.object(events, "_cancel_keyboard", return_value="cancel"),
+        ):
+            await events.receive_event_join_target(invalid, invalid_state)
+        invalid_state.clear.assert_not_awaited()
+        self.assertIn("полный HTTPS-адрес", invalid.answer.await_args.args[0])
+
+        success = _message("https://stream.example/live")
+        success_state = AsyncMock()
+        success_state.get_data.return_value = {
+            "event_business_id": BUSINESS_ID,
+            "event_id": EVENT_ID,
+        }
+        updated = SimpleNamespace(provider_key="external")
+        with (
+            patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(events, "set_event_join_target", return_value=updated) as setter,
+            patch.object(events.control, "_uuid_token", return_value=TOKEN),
+            patch.object(events.control, "_keyboard", side_effect=lambda rows: rows),
+        ):
+            await events.receive_event_join_target(success, success_state)
+        setter.assert_called_once_with(
+            actor=actor, event_id=EVENT_ID, join_url="https://stream.example/live"
+        )
+        success_state.clear.assert_awaited_once_with()
+        self.assertIn("Площадка: external", success.answer.await_args.args[0])
+        self.assertEqual(
+            success.answer.await_args.kwargs["reply_markup"],
             [[("🎥 К вебинарам", f"cpev:home:{TOKEN}")]],
         )
 

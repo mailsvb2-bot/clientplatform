@@ -5,8 +5,13 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
+from clientplatform.application.event_delivery_targets import (
+    EventDeliveryTarget,
+    resolve_event_organizational_targets,
+)
 from clientplatform.domain.email_outbound import EmailPayload
 from clientplatform.domain.events import Event, EventRegistration, normalize_utc
+from clientplatform.infrastructure.event_repository import EventRepository
 
 
 @dataclass(frozen=True, slots=True)
@@ -14,6 +19,7 @@ class EventNotificationPlan:
     queued: int
     skipped_past: int
     enabled: bool
+    channels: tuple[str, ...] = ()
 
 
 def _public_base_url() -> str:
@@ -66,35 +72,31 @@ def _render(
     raise ValueError("unsupported event notification kind")
 
 
-def _connection_is_active(conn: Any, *, event: Event) -> bool:
-    if event.notification_connection_id is None:
-        return False
-    row = conn.execute(
-        """
-        SELECT 1 FROM connections
-        WHERE id=? AND business_id=? AND platform='email'
-          AND connection_type='email_smtp' AND status='active'
-        LIMIT 1
-        """,
-        (event.notification_connection_id, event.business_id),
-    ).fetchone()
-    return row is not None
-
-
 def _materialize(
     conn: Any,
     *,
     event: Event,
     registration: EventRegistration,
+    target: EventDeliveryTarget,
     kind: str,
     scheduled_at: datetime,
 ) -> bool:
-    if event.notification_connection_id is None:
-        return False
     subject, body = _render(kind=kind, event=event, registration=registration)
-    payload_ref = EmailPayload(subject=subject, body=body).to_json()
+    if target.platform == "email":
+        payload_kind = "mixed"
+        payload_ref = EmailPayload(subject=subject, body=body).to_json()
+    else:
+        payload_kind = "text"
+        payload_ref = body
     timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-    idempotency_key = f"event:{event.id}:registration:{registration.id}:message:{kind}:v2"
+    idempotency_key = (
+        f"event:{event.id}:registration:{registration.id}:message:{kind}:v2"
+        if target.platform == "email"
+        else (
+            f"event:{event.id}:registration:{registration.id}:"
+            f"message:org:v3:{kind}:{target.platform}"
+        )
+    )
     cursor = conn.execute(
         """
         INSERT INTO provider_dispatch_outbox(
@@ -105,8 +107,7 @@ def _materialize(
             attempts,available_at,locked_at,lock_token,provider_message_id,
             last_error,created_at,updated_at,sent_at,dead_at
         ) VALUES(
-            ?,?,'email','event_message',?,NULL,NULL,NULL,NULL,?,
-            'external_subject',NULL,?,'mixed',?,?,'pending',0,?,
+            ?,?,?,'event_message',?,NULL,NULL,NULL,NULL,?,?,?,?,?,?,?,'pending',0,?,
             NULL,NULL,NULL,NULL,?,?,NULL,NULL
         )
         ON CONFLICT(business_id,idempotency_key) DO NOTHING
@@ -114,9 +115,13 @@ def _materialize(
         (
             str(uuid4()),
             event.business_id,
+            target.platform,
             registration.id,
-            event.notification_connection_id,
-            registration.email,
+            target.connection_id,
+            target.recipient_kind,
+            target.customer_identity_id,
+            target.external_subject,
+            payload_kind,
             payload_ref,
             idempotency_key,
             scheduled_at.isoformat(),
@@ -135,8 +140,13 @@ def enqueue_event_notifications(
     now: datetime | None = None,
 ) -> EventNotificationPlan:
     current = normalize_utc(now or datetime.now(timezone.utc), field_name="now")
-    if not _connection_is_active(conn, event=event):
-        return EventNotificationPlan(queued=0, skipped_past=0, enabled=False)
+    targets = resolve_event_organizational_targets(
+        conn, event=event, registration=registration
+    )
+    if not targets:
+        return EventNotificationPlan(
+            queued=0, skipped_past=0, enabled=False, channels=()
+        )
 
     schedule: list[tuple[str, datetime]] = [
         ("registration_confirmed", current),
@@ -150,16 +160,63 @@ def enqueue_event_notifications(
         if kind != "registration_confirmed" and run_at <= current:
             skipped_past += 1
             continue
-        queued += int(
-            _materialize(
-                conn,
-                event=event,
-                registration=registration,
-                kind=kind,
-                scheduled_at=run_at,
+        for target in targets:
+            queued += int(
+                _materialize(
+                    conn,
+                    event=event,
+                    registration=registration,
+                    target=target,
+                    kind=kind,
+                    scheduled_at=run_at,
+                )
             )
-        )
-    return EventNotificationPlan(queued=queued, skipped_past=skipped_past, enabled=True)
+    return EventNotificationPlan(
+        queued=queued,
+        skipped_past=skipped_past,
+        enabled=True,
+        channels=tuple(target.platform for target in targets),
+    )
 
 
-__all__ = ["EventNotificationPlan", "enqueue_event_notifications"]
+def reconcile_future_event_notifications_for_customer(
+    conn: Any,
+    *,
+    business_id: str,
+    customer_id: str,
+    now: datetime | None = None,
+) -> int:
+    """Idempotently materialize still-relevant event notices after channel linking."""
+
+    current = normalize_utc(now or datetime.now(timezone.utc), field_name="now")
+    rows = conn.execute(
+        """
+        SELECT r.token,e.public_slug
+        FROM clientplatform_event_registrations r
+        JOIN clientplatform_events e
+          ON e.id=r.event_id AND e.business_id=r.business_id
+        WHERE r.business_id=? AND r.customer_id=? AND r.status='registered'
+          AND e.status='published' AND e.starts_at>?
+        ORDER BY e.starts_at,r.id
+        LIMIT 100
+        """,
+        (business_id, customer_id, current.isoformat()),
+    ).fetchall()
+    repository = EventRepository(conn)
+    queued = 0
+    for row in rows:
+        token = str(row["token"] if hasattr(row, "keys") else row[0])
+        public_slug = str(row["public_slug"] if hasattr(row, "keys") else row[1])
+        registration = repository.get_registration_by_token(token=token)
+        event = repository.get_public_owner_event(public_slug=public_slug)
+        queued += enqueue_event_notifications(
+            conn, event=event, registration=registration, now=current
+        ).queued
+    return queued
+
+
+__all__ = [
+    "EventNotificationPlan",
+    "enqueue_event_notifications",
+    "reconcile_future_event_notifications_for_customer",
+]

@@ -49,7 +49,7 @@ def _event_from_row(row: Any) -> Event:
         timezone_name=str(_value(row, "timezone_name", 9)),
         provider_key=str(_value(row, "provider_key", 10)),
         provider_label=_optional(row, "provider_label", 11),
-        join_url=str(_value(row, "join_url", 12)),
+        join_url=(str(_value(row, "join_url", 12)).strip() or None),
         offer_url=_optional(row, "offer_url", 13),
         public_slug=str(_value(row, "public_slug", 14)),
         consent_version=str(_value(row, "consent_version", 15)),
@@ -148,7 +148,7 @@ class EventRepository:
                 event.timezone_name,
                 event.provider_key,
                 event.provider_label,
-                event.join_url,
+                event.join_url or "",
                 event.offer_url,
                 event.public_slug,
                 event.consent_version,
@@ -158,6 +158,37 @@ class EventRepository:
             ),
         )
         return self.get(actor=current, event_id=event.id)
+
+    def set_join_target(
+        self,
+        *,
+        actor: TenantContext,
+        event_id: str,
+        join_url: str,
+        provider_key: str,
+        provider_label: str | None = None,
+        now: datetime | None = None,
+    ) -> Event:
+        current = self._actor(actor, manage=True)
+        normalized = normalize_uuid(event_id, field_name="event_id")
+        timestamp = normalize_utc(now or datetime.now(timezone.utc), field_name="now").isoformat()
+        cursor = self._conn.execute(
+            """
+            UPDATE clientplatform_events
+            SET join_url=?,provider_key=?,provider_label=?,updated_at=?
+            WHERE id=? AND business_id=? AND status IN ('draft','published')
+            """,
+            (join_url, provider_key, provider_label, timestamp, normalized, current.business_id),
+        )
+        if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+            existing = self._conn.execute(
+                "SELECT status FROM clientplatform_events WHERE id=? AND business_id=? LIMIT 1",
+                (normalized, current.business_id),
+            ).fetchone()
+            if existing is None:
+                raise EventNotFound("event was not found in the active business")
+            raise EventStateConflict("event join target cannot be changed in its current state")
+        return self.get(actor=current, event_id=normalized)
 
     def get(self, *, actor: TenantContext, event_id: str) -> Event:
         current = self._actor(actor, manage=False)

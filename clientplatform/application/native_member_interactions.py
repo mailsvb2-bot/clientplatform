@@ -43,10 +43,12 @@ from clientplatform.application.admin_ops import (
 from clientplatform.application.bookings import create_booking_slot, list_booking_slots
 from clientplatform.application.cockpit import cockpit_navigation
 from clientplatform.application.cockpit_events import resolve_events_snapshot
+from clientplatform.application.event_announcements import draft_event_announcement_template
 from clientplatform.application.event_owner_flow import (
     OnlineEventCreateRequest,
     create_and_publish_online_event,
 )
+from clientplatform.application.events import set_event_join_target
 from clientplatform.application.event_followup_settings import (
     set_business_event_followup_channel_enabled,
     set_business_event_followup_segment_enabled,
@@ -755,6 +757,9 @@ def parse_native_member_interaction(value: object) -> ParsedMemberInteraction:
             "event-channel",
             "event-new",
             "event-create-text",
+            "event-announce",
+            "event-join",
+            "event-join-text",
             "work-more",
             "manage-more",
             "manage",
@@ -885,6 +890,7 @@ _NATIVE_MEMBER_TEXT_ENTRY_ACTIONS = frozenset(
         "publication-schedule-text",
         "booking-open-text",
         "event-create-text",
+        "event-join-text",
         "publication-new-text",
         "payment-new-text",
         "price-set-text",
@@ -1215,6 +1221,9 @@ _NATIVE_PARENT_COMMANDS: dict[str, str] = {
     "event-channel": "cpm:events",
     "event-new": "cpm:events",
     "event-create-text": "cpm:events",
+    "event-announce": "cpm:events",
+    "event-join": "cpm:events",
+    "event-join-text": "cpm:events",
     "acquire": "cpm:growth",
     "experiments": "cpm:growth",
     "autopilot": "cpm:growth",
@@ -1391,7 +1400,7 @@ def _with_parent_navigation(
     total = sum(len(row) for row in rows)
     if parsed.action == "events":
         back_label = BACK_TO_GROWTH_LABEL
-    elif parsed.action in {"event-settings", "event-followups", "event-segment", "event-channel", "event-new", "event-create-text"} or (
+    elif parsed.action in {"event-settings", "event-followups", "event-segment", "event-channel", "event-new", "event-create-text", "event-announce", "event-join", "event-join-text"} or (
         parsed.action in {"owner-input-invalid", "owner-input-cancelled"}
         and parsed.args
         and parsed.args[0] == "online_event"
@@ -2087,6 +2096,10 @@ def _growth_analysis_message(actor: TenantContext) -> CustomerInteractionMessage
 def _event_action_command(action: EventHubAction) -> str:
     if action.kind == "create":
         return "cpm:event-new"
+    if action.kind == "join" and action.key is not None:
+        return f"cpm:event-join:{action.key}"
+    if action.kind == "announce" and action.key is not None:
+        return f"cpm:event-announce:{action.key}"
     if action.kind == "settings":
         return "cpm:event-settings"
     if action.kind == "followups":
@@ -2222,6 +2235,36 @@ def _event_channel_action(
     return _event_settings_message(actor)
 
 
+def _event_announcement_message(
+    actor: TenantContext,
+    event_id: str,
+    *,
+    current_platform: ConnectionPlatform,
+) -> CustomerInteractionMessage:
+    try:
+        actor.assert_can_manage_business()
+        draft = draft_event_announcement_template(actor=actor, event_id=event_id)
+        public_base = str(getattr(settings, "MESSENGER_PUBLIC_BASE_URL", "") or "").strip()
+        registration_url = draft.registration_url(
+            public_base_url=public_base,
+            source=current_platform.value,
+        )
+    except (TenantPermissionDenied, ValueError, RuntimeError):
+        return CustomerInteractionMessage(
+            text="Не удалось подготовить анонс. Вернитесь к вебинарам и попробуйте ещё раз.",
+            rows=((_button(BACK_TO_EVENTS_LABEL, "cpm:events"),), _back_row()),
+        )
+    return CustomerInteractionMessage(
+        text=(
+            "✨ Анонс готов\n\n"
+            f"{draft.text}\n\n"
+            f"Регистрация: {registration_url}\n\n"
+            "Ссылка помечена текущим каналом, поэтому ClientPlatform сохранит источник регистрации."
+        ),
+        rows=((_button(BACK_TO_EVENTS_LABEL, "cpm:events"),), _back_row()),
+    )
+
+
 def _event_new_message(
     actor: TenantContext,
     *,
@@ -2263,7 +2306,7 @@ def _event_create_result(
                 title=title,
                 starts_at=starts_at,
                 timezone_name=profile.timezone,
-                join_url=join_url,
+                join_url=join_url or None,
                 offer_url=offer_url or None,
                 provider_key=None,
             ),
@@ -2282,8 +2325,61 @@ def _event_create_result(
             provider_key=created.provider_key,
             registration_url=registration_url,
             email_notifications_enabled=created.email_notifications_enabled,
+            join_ready=created.join_ready,
         ),
-        rows=((_button(BACK_TO_EVENTS_LABEL, "cpm:events"),), (_button("🎥 Создать ещё", "cpm:event-new"),), _back_row()),
+        rows=(
+            *(((_button("🔗 Добавить ссылку на эфир", f"cpm:event-join:{created.event_id}"),),) if not created.join_ready else ()),
+            (_button(BACK_TO_EVENTS_LABEL, "cpm:events"),),
+            (_button("🎥 Создать ещё", "cpm:event-new"),),
+            _back_row(),
+        ),
+    )
+
+
+def _event_join_message(
+    actor: TenantContext,
+    event_id: str,
+    *,
+    current_platform: ConnectionPlatform,
+    input_surface: str,
+) -> CustomerInteractionMessage:
+    try:
+        actor.assert_can_manage_business()
+    except TenantPermissionDenied:
+        return _permission_message()
+    return _begin_owner_input_message(
+        actor,
+        platform=current_platform,
+        surface=input_surface,
+        action="event_join_url",
+        context={"event_id": event_id},
+        text=(
+            "🔗 Пришлите HTTPS-ссылку на эфир. После сохранения все персональные "
+            "ссылки участников начнут вести на неё."
+        ),
+        rows=((_button(BACK_TO_EVENTS_LABEL, "cpm:events"),), _back_row()),
+        append_exit_hint=False,
+    )
+
+
+def _event_join_result(
+    actor: TenantContext, event_id: str, join_url: str
+) -> CustomerInteractionMessage:
+    try:
+        updated = set_event_join_target(
+            actor=actor, event_id=event_id, join_url=join_url
+        )
+    except (TenantPermissionDenied, ValueError, RuntimeError):
+        return CustomerInteractionMessage(
+            text="Не удалось сохранить ссылку на эфир. Проверьте полный HTTPS-адрес.",
+            rows=((_button(BACK_TO_EVENTS_LABEL, "cpm:events"),), _back_row()),
+        )
+    return CustomerInteractionMessage(
+        text=(
+            f"✅ Ссылка на эфир сохранена. Площадка: {updated.provider_key}. "
+            "Персональные ссылки участников уже ведут на неё."
+        ),
+        rows=((_button(BACK_TO_EVENTS_LABEL, "cpm:events"),), _back_row()),
     )
 
 
@@ -5148,6 +5244,12 @@ def _render(
             return _event_segment_action(actor, parsed.args)
         if parsed.action == "event-channel":
             return _event_channel_action(actor, parsed.args)
+        if parsed.action == "event-announce":
+            if len(parsed.args) != 1:
+                return _stale_message()
+            return _event_announcement_message(
+                actor, parsed.args[0], current_platform=current_platform
+            )
         if parsed.action == "event-new":
             return _event_new_message(
                 actor,
@@ -5158,6 +5260,19 @@ def _render(
             if len(parsed.args) != 4:
                 return _stale_message()
             return _event_create_result(actor, *parsed.args)
+        if parsed.action == "event-join":
+            if len(parsed.args) != 1:
+                return _stale_message()
+            return _event_join_message(
+                actor,
+                parsed.args[0],
+                current_platform=current_platform,
+                input_surface=input_surface,
+            )
+        if parsed.action == "event-join-text":
+            if len(parsed.args) != 2:
+                return _stale_message()
+            return _event_join_result(actor, parsed.args[0], parsed.args[1])
         if parsed.action == "acquire":
             return _acquisition_message(actor)
         if parsed.action == "experiments":

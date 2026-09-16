@@ -454,6 +454,99 @@ class DeepSeekChatCompletionsSalesAIProvider(OpenAICompatibleChatSalesAIProvider
         return {"thinking": {"type": "disabled"}}
 
 
+
+async def generate_bounded_marketing_text(
+    config: SalesAIRuntimeConfig,
+    *,
+    instructions: str,
+    input_payload: Mapping[str, Any],
+    credential_provider: EnvironmentCredentialProvider | None = None,
+    transport: JSONPostTransport | None = None,
+) -> str:
+    """Generate one bounded owner-requested marketing draft through configured AI.
+
+    This helper has no execution authority: it returns text only. The caller keeps
+    provider publishing behind an explicit owner action.
+    """
+
+    if not config.enabled:
+        raise ValueError("sales AI runtime is disabled")
+    if credential_provider is None:
+        from clientplatform.runtime.secrets import EnvironmentCredentialProvider
+
+        credential_provider = EnvironmentCredentialProvider()
+    selected_transport = transport or AiohttpJSONPostTransport()
+    api_key = credential_provider.resolve(config.api_key_reference)
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    bounded_instructions = str(instructions or "").strip()[:6000]
+    if not bounded_instructions:
+        raise ValueError("marketing instructions must not be empty")
+    payload = dict(input_payload)
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {"text": {"type": "string", "minLength": 1, "maxLength": 2500}},
+        "required": ["text"],
+    }
+    example = {"text": "Короткий анонс мероприятия без выдуманных фактов."}
+    if config.provider == "openai":
+        body = {
+            "model": config.model,
+            "store": False,
+            "max_output_tokens": config.max_output_tokens,
+            "instructions": bounded_instructions,
+            "input": [{
+                "role": "user",
+                "content": [{
+                    "type": "input_text",
+                    "text": json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+                }],
+            }],
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": "clientplatform_event_announcement",
+                    "strict": True,
+                    "schema": schema,
+                }
+            },
+        }
+        response = await selected_transport.post_json(
+            url=f"{config.base_url}/responses",
+            headers=headers,
+            payload=body,
+            timeout_seconds=config.request_timeout_seconds,
+        )
+        data = _structured_payload(_responses_output_text(response))
+    else:
+        system = _json_mode_instructions(bounded_instructions, example)
+        body = {
+            "model": config.model,
+            "stream": False,
+            "max_tokens": config.max_output_tokens,
+            "messages": [
+                {"role": "system", "content": system},
+                {
+                    "role": "user",
+                    "content": json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+                },
+            ],
+            "response_format": {"type": "json_object"},
+        }
+        if config.provider == "deepseek":
+            body["thinking"] = {"type": "disabled"}
+        response = await selected_transport.post_json(
+            url=f"{config.base_url}/chat/completions",
+            headers=headers,
+            payload=body,
+            timeout_seconds=config.request_timeout_seconds,
+        )
+        data = _structured_payload(_chat_output_text(response))
+    text = str(data.get("text") or "").strip()
+    if not text or len(text) > 2500:
+        raise SalesAIProviderError("event announcement failed bounded validation")
+    return text
+
 def build_sales_ai_provider(
     config: SalesAIRuntimeConfig,
     *,
@@ -490,4 +583,5 @@ __all__ = [
     "SalesAIProvider",
     "SalesAIProviderError",
     "build_sales_ai_provider",
+    "generate_bounded_marketing_text",
 ]

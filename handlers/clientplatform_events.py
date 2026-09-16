@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
+from urllib.parse import quote
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from clientplatform.application.activity import get_business_profile
 from clientplatform.application.cockpit_events import resolve_cockpit_events
+from clientplatform.application.event_announcements import draft_event_announcement
+from clientplatform.application.events import set_event_join_target
 from clientplatform.application.event_owner_flow import (
     OnlineEventCreateRequest,
     create_and_publish_online_event,
@@ -43,6 +46,7 @@ router.callback_query.filter(control.ClientPlatformControlEnabled())
 
 class ClientPlatformEventState(StatesGroup):
     waiting_details = State()
+    waiting_join_url = State()
 
 
 def _cancel_keyboard(business_id: str):
@@ -50,6 +54,53 @@ def _cancel_keyboard(business_id: str):
     return control._keyboard([[(BACK_TO_EVENTS_LABEL, f"cpev:cancel:{token}")]])
 
 
+
+
+def _announcement_share_markup(
+    *,
+    text: str,
+    title: str,
+    telegram_url: str,
+    vk_url: str,
+    max_url: str,
+    business_token: str,
+) -> InlineKeyboardMarkup:
+    telegram_share = (
+        "https://t.me/share/url?url="
+        + quote(telegram_url, safe="")
+        + "&text="
+        + quote(text, safe="")
+    )
+    vk_share = (
+        "https://vk.com/share.php?url="
+        + quote(vk_url, safe="")
+        + "&title="
+        + quote(title, safe="")
+        + "&comment="
+        + quote(text, safe="")
+    )
+    max_share = "https://max.ru/:share?text=" + quote(
+        f"{text}\n\nРегистрация: {max_url}", safe=""
+    )
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="✈️ Опубликовать в Telegram", url=telegram_share)],
+            [InlineKeyboardButton(text="🔵 Опубликовать во ВКонтакте", url=vk_share)],
+            [InlineKeyboardButton(text="🟣 Опубликовать в MAX", url=max_share)],
+            [
+                InlineKeyboardButton(
+                    text="📣 Запустить рекламу",
+                    callback_data=f"cpj:promote:{business_token}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=BACK_TO_EVENTS_LABEL,
+                    callback_data=f"cpev:home:{business_token}",
+                )
+            ],
+        ]
+    )
 
 
 def _settings_rows(snapshot: object, *, token: str) -> list[list[tuple[str, str]]]:
@@ -166,7 +217,7 @@ async def receive_event_details(message: Message, state: FSMContext) -> None:
         )
         return
     parts = [part.strip() for part in str(message.text or "").split("|")]
-    if len(parts) not in {3, 4} or not all(parts[:3]):
+    if len(parts) not in {2, 3, 4} or not all(parts[:2]):
         await message.answer(
             "Не получилось понять ответ.\n\n"
             + EVENT_CREATION_INPUT_GUIDANCE
@@ -174,8 +225,9 @@ async def receive_event_details(message: Message, state: FSMContext) -> None:
             reply_markup=_cancel_keyboard(business_id),
         )
         return
-    title, local_time, join_url = parts[:3]
-    offer_url = None if len(parts) == 3 or parts[3] in {"", "-"} else parts[3]
+    title, local_time = parts[:2]
+    join_url = None if len(parts) < 3 or parts[2] in {"", "-"} else parts[2]
+    offer_url = None if len(parts) < 4 or parts[3] in {"", "-"} else parts[3]
     try:
         profile = await asyncio.to_thread(get_business_profile, actor=actor)
         starts_at = datetime.fromisoformat(
@@ -202,6 +254,30 @@ async def receive_event_details(message: Message, state: FSMContext) -> None:
         return
     await state.clear()
     token = control._uuid_token(business_id)
+    join_ready = bool(getattr(created, "join_ready", True))
+    created_event_id = str(getattr(created, "event_id", "") or "").strip()
+    event_rows: list[list[tuple[str, str]]] = []
+    if created_event_id and not join_ready:
+        event_rows.append(
+            [(
+                "🔗 Добавить ссылку на эфир",
+                f"cpev:join:{control._uuid_token(created_event_id)}:{token}",
+            )]
+        )
+    if created_event_id:
+        event_rows.append(
+            [(
+                "✨ Сделать анонс",
+                f"cpev:announce:{control._uuid_token(created_event_id)}:{token}",
+            )]
+        )
+    event_rows.extend(
+        [
+            [(BACK_TO_EVENTS_LABEL, f"cpev:home:{token}")],
+            [("🎥 Создать ещё", f"cpev:new:{token}")],
+            [(BACK_TO_GROWTH_LABEL, f"cpo:content:{token}")],
+        ]
+    )
     await message.answer(
         event_creation_success_text(
             title=title,
@@ -209,13 +285,108 @@ async def receive_event_details(message: Message, state: FSMContext) -> None:
             provider_key=created.provider_key,
             registration_url=registration_url,
             email_notifications_enabled=created.email_notifications_enabled,
+            join_ready=join_ready,
         ),
+        reply_markup=control._keyboard(event_rows),
+    )
+
+
+@router.callback_query(F.data.startswith("cpev:announce:"))
+async def create_event_announcement(callback: CallbackQuery) -> None:
+    parts = str(callback.data or "").split(":", 3)
+    if len(parts) != 4:
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    event_id = control._token_uuid(parts[2])
+    business_id = control._token_uuid(parts[3])
+    actor = await control._actor(int(callback.from_user.id), business_id)
+    try:
+        actor.assert_can_manage_business()
+        draft = await draft_event_announcement(actor=actor, event_id=event_id)
+        public_base = _public_base_url()
+        telegram_url = draft.registration_url(
+            public_base_url=public_base, source="telegram"
+        )
+        vk_url = draft.registration_url(public_base_url=public_base, source="vk")
+        max_url = draft.registration_url(public_base_url=public_base, source="max")
+    except (TenantPermissionDenied, ValueError, RuntimeError):
+        await callback.answer("Не удалось подготовить анонс", show_alert=True)
+        return
+    business_token = control._uuid_token(business_id)
+    source_note = (
+        "Текст подготовлен AI и требует Вашего подтверждения перед публикацией."
+        if draft.generated_by.startswith("ai:")
+        else "Подготовлен безопасный текст. Перед публикацией его можно отредактировать в выбранном мессенджере."
+    )
+    await callback.answer("Анонс готов")
+    await control._callback_message(callback).answer(
+        "✨ Анонс готов\n\n"
+        f"{draft.text}\n\n"
+        f"{source_note}\n\n"
+        "Каждая кнопка использует отдельную ссылку регистрации, поэтому ClientPlatform увидит, откуда пришёл человек.",
+        reply_markup=_announcement_share_markup(
+            text=draft.text,
+            title=draft.title,
+            telegram_url=telegram_url,
+            vk_url=vk_url,
+            max_url=max_url,
+            business_token=business_token,
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("cpev:join:"))
+async def start_event_join_target(callback: CallbackQuery, state: FSMContext) -> None:
+    parts = str(callback.data or "").split(":", 3)
+    if len(parts) != 4:
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    event_id = control._token_uuid(parts[2])
+    business_id = control._token_uuid(parts[3])
+    actor = await control._actor(int(callback.from_user.id), business_id)
+    try:
+        actor.assert_can_manage_business()
+    except TenantPermissionDenied:
+        await callback.answer("Изменить ссылку может владелец или администратор", show_alert=True)
+        return
+    await state.clear()
+    await state.set_state(ClientPlatformEventState.waiting_join_url)
+    await state.update_data(event_business_id=business_id, event_id=event_id)
+    await callback.answer()
+    await control._callback_message(callback).answer(
+        "🔗 Пришлите HTTPS-ссылку на эфир. После сохранения все персональные ссылки участников начнут вести на неё.",
+        reply_markup=_cancel_keyboard(business_id),
+    )
+
+
+@router.message(ClientPlatformEventState.waiting_join_url)
+async def receive_event_join_target(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    business_id = str(data.get("event_business_id") or "")
+    event_id = str(data.get("event_id") or "")
+    if not business_id or not event_id:
+        await state.clear()
+        await message.answer("Не удалось продолжить. Откройте вебинары заново.")
+        return
+    actor = await control._actor(int(message.from_user.id), business_id)
+    try:
+        updated = await asyncio.to_thread(
+            set_event_join_target,
+            actor=actor,
+            event_id=event_id,
+            join_url=str(message.text or "").strip(),
+        )
+    except (ValueError, RuntimeError):
+        await message.answer(
+            "Не удалось сохранить ссылку. Пришлите полный HTTPS-адрес площадки.",
+            reply_markup=_cancel_keyboard(business_id),
+        )
+        return
+    await state.clear()
+    await message.answer(
+        f"✅ Ссылка на эфир сохранена. Площадка: {updated.provider_key}. Персональные ссылки участников уже ведут на неё.",
         reply_markup=control._keyboard(
-            [
-                [(BACK_TO_EVENTS_LABEL, f"cpev:home:{token}")],
-                [("🎥 Создать ещё", f"cpev:new:{token}")],
-                [(BACK_TO_GROWTH_LABEL, f"cpo:content:{token}")],
-            ]
+            [[(BACK_TO_EVENTS_LABEL, f"cpev:home:{control._uuid_token(business_id)}")]]
         ),
     )
 

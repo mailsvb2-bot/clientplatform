@@ -52,7 +52,7 @@ def create_event_in_transaction(
     title: str,
     starts_at: datetime,
     timezone_name: str,
-    join_url: str,
+    join_url: str | None,
     provider_key: str | None = None,
     provider_label: str | None = None,
     kind: str = "webinar",
@@ -73,7 +73,7 @@ def create_event_in_transaction(
     if start <= timestamp:
         raise ValueError("event must start in the future")
     end = None if ends_at is None else normalize_utc(ends_at, field_name="ends_at")
-    join = validate_external_https_url(join_url, field_name="join_url")
+    join = None if not str(join_url or "").strip() else validate_external_https_url(join_url, field_name="join_url")
     event = Event(
         id=str(uuid4()),
         business_id=current.business_id,
@@ -126,6 +126,49 @@ def publish_event_in_transaction(
         status="published",
         now=timestamp,
     )
+
+
+def set_event_join_target_in_transaction(
+    conn: Any,
+    *,
+    actor: TenantContext,
+    event_id: str,
+    join_url: str,
+    provider_key: str | None = None,
+    provider_label: str | None = None,
+    now: datetime | None = None,
+) -> Event:
+    join = validate_external_https_url(join_url, field_name="join_url")
+    key = normalize_provider_key(provider_key, join_url=join)
+    return EventRepository(conn).set_join_target(
+        actor=actor,
+        event_id=event_id,
+        join_url=join,
+        provider_key=key,
+        provider_label=normalize_provider_label(provider_label),
+        now=now,
+    )
+
+
+def set_event_join_target(
+    *,
+    actor: TenantContext,
+    event_id: str,
+    join_url: str,
+    provider_key: str | None = None,
+    provider_label: str | None = None,
+    now: datetime | None = None,
+) -> Event:
+    with get_db() as conn:
+        return set_event_join_target_in_transaction(
+            conn,
+            actor=actor,
+            event_id=event_id,
+            join_url=join_url,
+            provider_key=provider_key,
+            provider_label=provider_label,
+            now=now,
+        )
 
 
 def publish_event(*, actor: TenantContext, event_id: str, now: datetime | None = None) -> Event:
@@ -269,4 +312,6 @@ __all__ = [
     "publish_event_in_transaction",
     "register_public_attendee",
     "register_public_attendee_in_transaction",
+    "set_event_join_target",
+    "set_event_join_target_in_transaction",
 ]

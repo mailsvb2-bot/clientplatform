@@ -197,5 +197,36 @@ class CockpitEventsBridgeTests(unittest.IsolatedAsyncioTestCase):
         target.answer.assert_not_awaited()
 
 
+    async def test_events_section_routes_join_and_announce_actions(self) -> None:
+        snapshot = SimpleNamespace(items=())
+        target = SimpleNamespace(answer=AsyncMock())
+        event_id = "33333333-3333-4333-8333-333333333333"
+        event_token = "MzMzMzMzQzODMzMzMzMzMzMzMz"
+        business_token = "ERERERERQRGBEREREREREQ"
+        actions = (
+            SimpleNamespace(kind="join", label="🔗 Добавить ссылку", key=event_id),
+            SimpleNamespace(kind="announce", label="✨ Сделать анонс", key=event_id),
+        )
+
+        def token(value: str) -> str:
+            return event_token if value == event_id else business_token
+
+        with (
+            patch.object(cockpit_dispatch, "resolve_cockpit_events", return_value=snapshot),
+            patch.object(cockpit_dispatch, "event_hub_actions", return_value=actions),
+            patch.object(cockpit_dispatch, "event_hub_text", return_value="Вебинары"),
+            patch.object(cockpit_dispatch.one_click.control, "_uuid_token", side_effect=token),
+            patch.object(cockpit_dispatch.one_click.control, "_keyboard", side_effect=lambda rows: rows),
+        ):
+            await cockpit_dispatch.send_cockpit_section(
+                target, user_id=101, business_id=_BUSINESS, section="events"
+            )
+
+        rows = target.answer.await_args.kwargs["reply_markup"]
+        flattened = [button for row in rows for button in row]
+        self.assertIn(("🔗 Добавить ссылку", f"cpev:join:{event_token}:{business_token}"), flattened)
+        self.assertIn(("✨ Сделать анонс", f"cpev:announce:{event_token}:{business_token}"), flattened)
+
+
 if __name__ == "__main__":
     unittest.main()

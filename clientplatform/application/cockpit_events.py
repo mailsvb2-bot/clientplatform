@@ -60,6 +60,7 @@ class CockpitEventItem:
     provider_key: str
     registration_url: str | None
     has_offer: bool
+    join_ready: bool
     email_notifications_enabled: bool
     registered: int
     join_clicked: int
@@ -182,6 +183,7 @@ def resolve_events_snapshot(
                         None if public_base is None else f"{public_base}/e/{event.public_slug}"
                     ),
                     has_offer=bool(event.offer_url),
+                    join_ready=event.join_is_ready,
                     email_notifications_enabled=event.notification_connection_id is not None,
                     registered=funnel.registered,
                     join_clicked=funnel.join_clicked,
@@ -284,7 +286,7 @@ def create_cockpit_event(
     request_id: str,
     title: str,
     starts_at_local: str,
-    join_url: str,
+    join_url: str | None,
     offer_url: str | None,
     description: str,
     enable_email_notifications: bool,
@@ -307,7 +309,11 @@ def create_cockpit_event(
         title=str(title or "").strip(),
         starts_at=starts_at,
         timezone_name=profile.timezone,
-        join_url=validate_external_https_url(join_url, field_name="join_url"),
+        join_url=(
+            None
+            if not str(join_url or "").strip()
+            else validate_external_https_url(join_url, field_name="join_url")
+        ),
         offer_url=normalized_offer,
         description=str(description or "").strip(),
         enable_email_notifications=bool(enable_email_notifications),

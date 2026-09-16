@@ -19,7 +19,7 @@ class OnlineEventCreateRequest:
     title: str
     starts_at: datetime
     timezone_name: str
-    join_url: str
+    join_url: str | None = None
     description: str = ""
     ends_at: datetime | None = None
     offer_url: str | None = None
@@ -36,6 +36,7 @@ class OnlineEventCreated:
     public_slug: str
     provider_key: str
     email_notifications_enabled: bool
+    join_ready: bool
 
     def registration_url(self, public_base_url: str) -> str:
         base = validate_external_https_url(public_base_url, field_name="public_base_url").rstrip("/")
@@ -94,7 +95,11 @@ def create_and_publish_online_event_in_transaction(
     actor: TenantContext,
     request: OnlineEventCreateRequest,
 ) -> OnlineEventCreated:
-    join_url = validate_external_https_url(request.join_url, field_name="join_url")
+    join_url = (
+        None
+        if not str(request.join_url or "").strip()
+        else validate_external_https_url(request.join_url, field_name="join_url")
+    )
     provider_key = normalize_provider_key(request.provider_key, join_url=join_url)
     notification_connection_id = _resolve_notification_connection(
         conn,
@@ -127,6 +132,7 @@ def create_and_publish_online_event_in_transaction(
         public_slug=event.public_slug,
         provider_key=event.provider_key,
         email_notifications_enabled=event.notification_connection_id is not None,
+        join_ready=event.join_is_ready,
     )
 
 
