@@ -868,7 +868,7 @@ async def test_payment_and_price_input_handlers_cover_invalid_and_success(
     payment = FakeMessage("3500 RUB консультация")
     await extension.receive_payment_value(payment, payment_state)
     assert "3 500,00 RUB" in payment.answers[-1]
-    assert "Канонический факт выручки подтверждён" in payment.answers[-1]
+    assert "Выручка учтена в результатах бизнеса" in payment.answers[-1]
     assert recorded_payments[0]["idempotency_key"] == "telegram-payment:701:0"
 
     invalid_price = FakeMessage("0")
@@ -941,7 +941,10 @@ async def test_payment_refund_requires_confirmation_and_is_idempotent(
 ) -> None:
     state = FakeState()
     await extension.admin_ops_gate(_callback("pay-refund", "payment"), state)
-    assert "Подтвердите возврат" in fake_admin.edits[-1][0]
+    refund_text = fake_admin.edits[-1][0]
+    assert "Подтвердите возврат" in refund_text
+    assert "возврат в результатах бизнеса" in refund_text
+    assert "каноничес" not in refund_text.casefold()
 
     calls: list[dict[str, Any]] = []
     rendered: list[str] = []

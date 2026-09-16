@@ -454,7 +454,12 @@ class PartnerGrowthSurfaceTests(unittest.IsolatedAsyncioTestCase):
                 connection_id="connection",
             )
         callback.answer.assert_awaited_once_with("Поставлено в очередь")
-        self.assertIn("Повторное нажатие не создаст дубль", self.output.answer.await_args.args[0])
+        text = self.output.answer.await_args.args[0]
+        self.assertIn("Предложение поставлено в очередь отправки", text)
+        self.assertIn("Статус отправки: ожидает отправки", text)
+        self.assertNotIn("каноничес", text.casefold())
+        self.assertNotIn("dispatch", text.casefold())
+        self.assertIn("Повторное нажатие не создаст дубль", text)
 
     async def test_start_discovery_failure_is_fail_closed(self) -> None:
         callback = _callback("cpg:start:business")

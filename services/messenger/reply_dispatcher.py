@@ -139,6 +139,25 @@ def _max_clientplatform_attachments(
     return [{"type": "inline_keyboard", "payload": {"buttons": rows}}]
 
 
+_OWNER_COPY_REPLACEMENTS = {
+    "Канонический факт выручки подтверждён.": "Выручка учтена в результатах бизнеса.",
+    "Подтверждение изменит статус оплаты и создаст отдельный канонический факт возврата.": (
+        "Подтверждение изменит статус оплаты и отдельно учтёт возврат в результатах бизнеса."
+    ),
+}
+
+
+def _plain_language_clientplatform_interaction(
+    interaction: CustomerInteractionMessage,
+) -> CustomerInteractionMessage:
+    text = interaction.text
+    for technical, human in _OWNER_COPY_REPLACEMENTS.items():
+        text = text.replace(technical, human)
+    if text == interaction.text:
+        return interaction
+    return CustomerInteractionMessage(text=text, rows=interaction.rows)
+
+
 async def _send_clientplatform_interaction(
     *,
     platform: str,
@@ -153,7 +172,9 @@ async def _send_clientplatform_interaction(
         raise MessengerTransportError(
             "ClientPlatform interaction reply is missing canonical metadata"
         )
-    interaction = CustomerInteractionMessage.from_json(raw_interaction)
+    interaction = _plain_language_clientplatform_interaction(
+        CustomerInteractionMessage.from_json(raw_interaction)
+    )
     try:
         link_commands = {
             button.command

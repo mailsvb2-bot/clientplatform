@@ -56,6 +56,19 @@ _TERMINAL_CONTACT_STATUSES = {
     PartnerCandidateStatus.DO_NOT_CONTACT,
     PartnerCandidateStatus.INVALID,
 }
+_DISPATCH_STATUS_LABELS = {
+    "pending": "ожидает отправки",
+    "sending": "отправляется",
+    "retry": "ожидает повторной попытки",
+    "sent": "отправлено",
+    "dead": "не отправлено",
+    "cancelled": "отменено",
+}
+
+
+def _dispatch_status_label(status: object) -> str:
+    raw = str(getattr(status, "value", status) or "").strip().lower()
+    return _DISPATCH_STATUS_LABELS.get(raw, "состояние обновлено")
 
 
 def _token(value: str) -> str:
@@ -290,8 +303,8 @@ async def _queue_selected_connection(
         return
     await callback.answer("Поставлено в очередь")
     await control._callback_message(callback).answer(
-        "📨 Предложение поставлено в каноническую очередь отправки.\n\n"
-        f"Статус dispatch: {dispatch.status.value}. "
+        "📨 Предложение поставлено в очередь отправки.\n\n"
+        f"Статус отправки: {_dispatch_status_label(dispatch.status)}. "
         "Повторное нажатие не создаст дубль.",
         reply_markup=control._keyboard(
             [[("Открыть партнёра", f"cpg:c:{business_token}:{candidate_token}")]]
