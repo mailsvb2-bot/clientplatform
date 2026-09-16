@@ -1,0 +1,48 @@
+name: Apply messenger plain-language patch v5
+
+on:
+  push:
+    branches:
+      - fix/messenger-plain-language-copy
+    paths:
+      - .github/workflows/apply-messenger-plain-language-patch-v5.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout exact branch source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Correct only the proven materializer anchor
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('scripts/_tmp_apply_messenger_plain_language_patch.py')
+          text = p.read_text(encoding='utf-8')
+          old = 'marker = "_TERMINAL_CONTACT_STATUSES = {\\n    PartnerCandidateStatus.DO_NOT_CONTACT,\\n    PartnerCandidateStatus.INVALID,\\n}\\n"'
+          new = 'marker = "_TERMINAL_CONTACT_STATUSES = {\\n    PartnerCandidateStatus.DECLINED,\\n    PartnerCandidateStatus.DO_NOT_CONTACT,\\n    PartnerCandidateStatus.INVALID,\\n}\\n"'
+          if text.count(old) != 1:
+              raise SystemExit('expected materializer marker not found exactly once')
+          text = text.replace(old, new, 1)
+          v4 = '    ".github/workflows/apply-messenger-plain-language-patch-v4.yml",\n'
+          v5 = v4 + '    ".github/workflows/apply-messenger-plain-language-patch-v5.yml",\n'
+          if text.count(v4) != 1:
+              raise SystemExit('materializer allow-list anchor missing')
+          p.write_text(text.replace(v4, v5, 1), encoding='utf-8')
+          PY
+      - name: Materialize exact locally-proven UX tree
+        run: python3 scripts/_tmp_apply_messenger_plain_language_patch.py
+      - name: Commit exact tree
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix: use plain language in messenger owner copy'
+          git push origin HEAD:fix/messenger-plain-language-copy
