@@ -62,9 +62,15 @@ class TelegramPersonalizedMessengerHomeTests(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 
+
 class TelegramComposedOwnerDashboardTests(unittest.IsolatedAsyncioTestCase):
     async def test_final_composed_owner_home_uses_shared_quick_menu(self) -> None:
         from unittest.mock import AsyncMock
+        import handlers
+
+        # Exercise the same lazy composition path used by production rather than
+        # relying on another test to have composed handlers first.
+        handlers._load_clientplatform_modules()
         import handlers.clientplatform_goal_dashboard as goal
         import handlers.clientplatform_owner_journey as owner
 
