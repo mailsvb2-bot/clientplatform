@@ -1182,8 +1182,8 @@ async def admin_ops_gate(callback: CallbackQuery, state: FSMContext) -> None:
         await admin._safe_edit(
             callback,
             "↩️ Полный возврат\n\n"
-            "Подтвердите возврат. Он изменит статус оплаты и создаст "
-            "отдельный канонический факт возврата; повторное нажатие "
+            "Подтвердите возврат. Он изменит статус оплаты и отдельно учтёт "
+            "возврат в результатах бизнеса; повторное нажатие "
             "не создаст дубль.",
             _flow_keyboard(
                 admin,
@@ -1491,7 +1491,7 @@ async def receive_payment_value(message: Message, state: FSMContext) -> None:
     await state.clear()
     outcome_id = getattr(payment, "outcome_event_id", None)
     evidence = (
-        " Канонический факт выручки подтверждён."
+        " Выручка учтена в результатах бизнеса."
         if outcome_id is not None
         else ""
     )
