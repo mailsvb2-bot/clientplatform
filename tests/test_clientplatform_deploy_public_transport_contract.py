@@ -130,6 +130,60 @@ class DeployPublicTransportContractTests(unittest.TestCase):
                             "/telegram-webhook",
                         )
 
+    def test_env_flag_enabled_is_explicit_and_fail_closed(self) -> None:
+        for value in ("1", "true", "TRUE", "yes", "on"):
+            with self.subTest(value=value):
+                self.assertTrue(
+                    production_deploy._env_flag_enabled(
+                        {"CLIENTPLATFORM_OMNICHANNEL_INGRESS_ENABLED": value},
+                        "CLIENTPLATFORM_OMNICHANNEL_INGRESS_ENABLED",
+                    )
+                )
+        for value in ("", "0", "false", "off", "unexpected"):
+            with self.subTest(value=value):
+                self.assertFalse(
+                    production_deploy._env_flag_enabled(
+                        {"CLIENTPLATFORM_OMNICHANNEL_INGRESS_ENABLED": value},
+                        "CLIENTPLATFORM_OMNICHANNEL_INGRESS_ENABLED",
+                    )
+                )
+
+    def test_canonical_omnichannel_method_guards_are_inert_gets(self) -> None:
+        success = subprocess.CompletedProcess(
+            args=["curl"], returncode=0,
+            stdout="HTTP/2 405\r\nallow: POST\r\ncontent-length: 0\r\n\r\n", stderr="",
+        )
+        with mock.patch.object(
+            production_deploy, "_run", side_effect=[success, success]
+        ) as run:
+            production_deploy._external_omnichannel_method_guards(
+                "clientplatform.example.test"
+            )
+        commands = [call.args[0] for call in run.call_args_list]
+        self.assertEqual(len(commands), 2)
+        self.assertEqual(commands[0][-1], "https://clientplatform.example.test/clientplatform/webhooks/vk/production-deploy-probe")
+        self.assertEqual(commands[1][-1], "https://clientplatform.example.test/clientplatform/webhooks/max/production-deploy-probe")
+        for command in commands:
+            self.assertIn("GET", command)
+            self.assertNotIn("POST", command)
+            self.assertNotIn("--data-binary", command)
+
+    def test_canonical_omnichannel_method_guard_fails_closed(self) -> None:
+        bad_responses = (
+            subprocess.CompletedProcess(args=["curl"], returncode=0, stdout="HTTP/2 404\r\ncontent-length: 0\r\n\r\n", stderr=""),
+            subprocess.CompletedProcess(args=["curl"], returncode=0, stdout="HTTP/2 405\r\nallow: GET\r\n\r\n", stderr=""),
+            subprocess.CompletedProcess(args=["curl"], returncode=28, stdout="", stderr="timeout"),
+        )
+        for response in bad_responses:
+            with self.subTest(returncode=response.returncode, stdout=response.stdout):
+                with mock.patch.object(production_deploy, "_run", return_value=response):
+                    with self.assertRaisesRegex(production_deploy.DeploymentError, "external_canonical_vk_webhook_guard_failed"):
+                        production_deploy._external_post_only_guard(
+                            "clientplatform.example.test",
+                            "/clientplatform/webhooks/vk/production-deploy-probe",
+                            failure_reason="external_canonical_vk_webhook_guard_failed",
+                        )
+
     def test_full_external_contract_orders_root_before_absence(self) -> None:
         calls: list[tuple[str, object]] = []
         with (
@@ -180,23 +234,27 @@ class DeployPublicTransportContractTests(unittest.TestCase):
             "except Exception as deployment_error",
             deploy_gate_start,
         )
-        self.assertIn(
-            "_external_https(domain)",
-            source[deploy_gate_start:deploy_gate_end],
+        current_deploy_gate = source[deploy_gate_start:deploy_gate_end]
+        self.assertIn("_external_https(domain)", current_deploy_gate)
+        self.assertEqual(
+            current_deploy_gate.count("_external_omnichannel_method_guards(domain)"),
+            2,
         )
+        self.assertIn("if omnichannel_enabled:", current_deploy_gate)
 
         rollback_start = source.index("def _rollback(")
         rollback_end = source.index("def deploy(", rollback_start)
-        self.assertIn(
-            "_external_https(domain)",
-            source[rollback_start:rollback_end],
-        )
+        rollback = source[rollback_start:rollback_end]
+        self.assertIn("_external_https(domain)", rollback)
+        self.assertNotIn("_external_omnichannel_method_guards(domain)", rollback)
 
     def test_deploy_evidence_records_polling_contract(self) -> None:
         source = Path(production_deploy.__file__).read_text(encoding="utf-8")
         self.assertIn('"telegram_transport": "polling"', source)
         self.assertIn('"telegram_webhook_prefix": webhook_prefix', source)
         self.assertIn('"telegram_webhook_absent": True', source)
+        self.assertIn('"canonical_omnichannel_ingress_enabled": omnichannel_enabled', source)
+        self.assertIn('"canonical_omnichannel_routes_proven": omnichannel_enabled', source)
         self.assertIn("external_telegram_webhook_absence_failed", source)
 
 
