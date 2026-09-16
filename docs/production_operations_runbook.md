@@ -14,7 +14,7 @@ The deploy script and production acceptance checks enforce this contract.
 
 ## Do not run full regression on the live VPS
 
-Do not run these on `/root/clientplatform` during normal production operation:
+Do not run these on `/opt/clientplatform` during normal production operation:
 
 ```bash
 python scripts/regression_gate.py
@@ -26,8 +26,7 @@ Allowed lightweight checks on production:
 
 ```bash
 python scripts/clientplatform_production_preflight.py
-curl -fsS http://127.0.0.1:8082/healthz
-curl -fsS http://127.0.0.1:8082/readyz
+python scripts/production_acceptance.py --public-base-url https://app.clientplatform.ru
 CLIENTPLATFORM_PROBE_ALLOW_LIVE_DB_MUTATION=1 python scripts/post_deploy_verify.py --skip-pytest
 ```
 
@@ -86,12 +85,11 @@ APPROVED_REBOOT_WINDOW="YYYY-MM-DD HH:MM TZ" bash ops/reboot_after_approval.sh
 After the host returns:
 
 ```bash
-cd /root/clientplatform
+cd /opt/clientplatform
 systemctl status clientplatform.service --no-pager -l | sed -n '1,80p'
 systemctl status github-deploy-webhook.service --no-pager -l | sed -n '1,80p'
-curl -fsS http://127.0.0.1:8082/healthz
-curl -fsS http://127.0.0.1:8082/readyz
 python scripts/clientplatform_production_preflight.py
+python scripts/production_acceptance.py --public-base-url https://app.clientplatform.ru
 ```
 
 ## 2026-09-08 Bot Gateway recovery
