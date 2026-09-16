@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import sqlite3
+import unittest
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -23,7 +25,10 @@ from clientplatform.domain.tenancy import PlatformRole, TenantContext
 from clientplatform.infrastructure.customer_repository import CustomerRepository
 from clientplatform.infrastructure.tenancy_repository import TenancyRepository
 from clientplatform.presentation.event_ui import EventHubAction, event_creation_prompt
-from handlers.clientplatform_events import _announcement_share_markup
+_AIOGRAM_AVAILABLE = importlib.util.find_spec("aiogram") is not None
+
+if _AIOGRAM_AVAILABLE:
+    from handlers.clientplatform_events import _announcement_share_markup
 from services.db.schema import create_or_update_tables
 
 
@@ -357,6 +362,7 @@ def test_announcement_uses_configured_ai_but_never_auto_publishes() -> None:
     ai.assert_awaited_once()
 
 
+@unittest.skipUnless(_AIOGRAM_AVAILABLE, "aiogram runtime dependency is not installed")
 def test_share_buttons_use_explicit_owner_share_intents() -> None:
     markup = _announcement_share_markup(
         text="Текст анонса",
