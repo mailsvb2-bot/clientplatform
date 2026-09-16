@@ -144,10 +144,14 @@ def infer_provider_key(join_url: object) -> str:
     return "external"
 
 
-def normalize_provider_key(value: object | None, *, join_url: object) -> str:
+def normalize_provider_key(value: object | None, *, join_url: object | None) -> str:
     raw = str(value or "").strip().lower()
+    join = str(join_url or "").strip()
+    if not join:
+        if not raw or raw in {"auto", "pending"}:
+            return "pending"
     if not raw or raw == "auto":
-        return infer_provider_key(join_url)
+        return infer_provider_key(join)
     normalized = _PROVIDER_ALIASES.get(raw, raw)
     normalized = normalized.replace(" ", "_")
     if not _PROVIDER_KEY_RE.fullmatch(normalized):
@@ -182,7 +186,7 @@ class Event:
     timezone_name: str
     provider_key: str
     provider_label: str | None
-    join_url: str
+    join_url: str | None
     offer_url: str | None
     public_slug: str
     consent_version: str
@@ -214,7 +218,8 @@ class Event:
         object.__setattr__(self, "starts_at", start)
         object.__setattr__(self, "ends_at", end)
         object.__setattr__(self, "timezone_name", normalize_timezone_name(self.timezone_name))
-        join_url = validate_external_https_url(self.join_url, field_name="join_url")
+        raw_join = str(self.join_url or "").strip()
+        join_url = None if not raw_join else validate_external_https_url(raw_join, field_name="join_url")
         object.__setattr__(self, "join_url", join_url)
         object.__setattr__(
             self,
@@ -244,6 +249,10 @@ class Event:
             )
         object.__setattr__(self, "created_at", normalize_utc(self.created_at, field_name="created_at"))
         object.__setattr__(self, "updated_at", normalize_utc(self.updated_at, field_name="updated_at"))
+
+    @property
+    def join_is_ready(self) -> bool:
+        return bool(self.join_url) and self.provider_key != "pending"
 
     def accepts_registrations(self, *, now: datetime | None = None) -> bool:
         current = normalize_utc(now or datetime.now(timezone.utc), field_name="now")

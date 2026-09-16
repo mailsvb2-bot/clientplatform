@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime
+import logging
 from typing import Any, Mapping
 
+from clientplatform.application.event_notifications import reconcile_future_event_notifications_for_customer
 from clientplatform.domain.bookings import CustomerBusinessLink
 from clientplatform.domain.bot_gateway import (
     AdmittedIngressEvent,
@@ -20,6 +22,10 @@ from clientplatform.infrastructure.messenger_channel_repository import Messenger
 from clientplatform.infrastructure.safe_bot_gateway_repository import BotGatewayRepository
 from clientplatform.infrastructure.safe_tenancy_repository import TenancyRepository
 from services.db import get_db, get_db_ro
+from services.db.core import ambient_savepoint
+log = logging.getLogger(__name__)
+
+
 from services.messenger.bridge import (
     consume_bridge_token_and_link_in_conn,
     resolve_bridge_token_in_conn,
@@ -222,6 +228,19 @@ def consume_telegram_customer_channel_link(
             display_name=display_name,
             now=now,
         )
+        try:
+            with ambient_savepoint(conn):
+                reconcile_future_event_notifications_for_customer(
+                    conn,
+                    business_id=current.business_id,
+                    customer_id=identity.customer_id,
+                    now=now,
+                )
+        except Exception:  # validator: allow-wide-except - channel link remains durable
+            log.exception(
+                "Event reminder reconciliation failed after Telegram link",
+                extra={"business_id": current.business_id},
+            )
         business = conn.execute(
             "SELECT name FROM businesses WHERE id=? AND status='active' LIMIT 1",
             (current.business_id,),

@@ -57,9 +57,10 @@ def event_hub_text(snapshot: object) -> str:
         lines.extend(["", "Последние вебинары:"])
         for item in items[:3]:
             revenue = ", ".join(row.display for row in item.revenue) or "—"
+            join_note = "" if bool(getattr(item, "join_ready", True)) else " · 🔗 ссылка на эфир не добавлена"
             lines.extend(
                 [
-                    f"• {item.title} · {item.local_start}",
+                    f"• {item.title} · {item.local_start}{join_note}",
                     (
                         f"  регистрации {item.registered} · пришли {item.attendance_confirmed} · "
                         f"оплаты {item.paid} · выручка {revenue}"
@@ -84,10 +85,28 @@ def event_hub_text(snapshot: object) -> str:
 def event_hub_actions(snapshot: object) -> tuple[EventHubAction, ...]:
     if not bool(getattr(snapshot, "can_manage", False)):
         return ()
-    return (
-        EventHubAction("create", CREATE_EVENT_LABEL),
-        EventHubAction("settings", EVENT_SETTINGS_LABEL),
-    )
+    actions: list[EventHubAction] = [EventHubAction("create", CREATE_EVENT_LABEL)]
+    items = tuple(getattr(snapshot, "items", ()))
+    for item in items:
+        if not bool(getattr(item, "join_ready", True)):
+            actions.append(
+                EventHubAction(
+                    "join",
+                    f"🔗 Добавить ссылку · {str(item.title)[:18]}",
+                    key=str(item.id),
+                )
+            )
+            break
+    if items and getattr(items[0], "id", None):
+        actions.append(
+            EventHubAction(
+                "announce",
+                f"✨ Сделать анонс · {str(items[0].title)[:17]}",
+                key=str(items[0].id),
+            )
+        )
+    actions.append(EventHubAction("settings", EVENT_SETTINGS_LABEL))
+    return tuple(actions)
 
 
 def event_settings_text(snapshot: object) -> str:
@@ -168,22 +187,24 @@ def event_creation_prompt(timezone_name: str) -> str:
         "🎥 Новый вебинар\n\n"
         f"Часовой пояс бизнеса: {timezone_name}.\n"
         "Отправьте одной строкой:\n"
-        "Название | ДД.ММ.ГГГГ ЧЧ:ММ | HTTPS-ссылка на эфир | ссылка предложения или -\n\n"
+        "Название | ДД.ММ.ГГГГ ЧЧ:ММ | HTTPS-ссылка на эфир или - | ссылка предложения или -\n\n"
+        "Если площадка ещё не выбрана, поставьте -: регистрация уже будет работать, а ссылку на эфир добавите позже.\n"
         "Площадка может быть любой: Zoom, Webinar.ru, МТС Линк, Телемост, VK, "
-        "YouTube, RuTube или другой HTTPS-сервис.\n\n"
+        "YouTube, RuTube или другой HTTPS-сервис. Если ссылка на эфир ещё не готова, "
+        "укажите - — её можно добавить позже, регистрация уже будет работать.\n\n"
         "Чтобы выйти без изменений, отправьте «Отмена» или нажмите «🎥 К вебинарам»."
     )
 
 
 EVENT_CREATION_INPUT_GUIDANCE = (
-    "Напишите: Название | ДД.ММ.ГГГГ ЧЧ:ММ | HTTPS-ссылка на эфир | "
+    "Напишите: Название | ДД.ММ.ГГГГ ЧЧ:ММ | HTTPS-ссылка на эфир или - | "
     "необязательная HTTPS-ссылка предложения. Последнее поле можно заменить на -."
 )
 
 
 def event_creation_failure_text() -> str:
     return (
-        "Не удалось создать вебинар. Проверьте дату и время, HTTPS-ссылку на эфир "
+        "Не удалось создать вебинар. Проверьте дату и время, ссылку на эфир (или -) "
         "и, если указана, ссылку предложения. Если ошибка повторяется, проверьте "
         "настройки e-mail."
     )
@@ -191,6 +212,8 @@ def event_creation_failure_text() -> str:
 
 def event_provider_label(provider_key: object) -> str:
     value = str(provider_key or "").strip()
+    if value == "pending":
+        return "добавить позже"
     return "внешняя площадка" if not value or value == "external" else value
 
 
@@ -201,17 +224,23 @@ def event_creation_success_text(
     provider_key: object,
     registration_url: str,
     email_notifications_enabled: bool,
+    join_ready: bool = True,
 ) -> str:
     mail_note = (
         "E-mail напоминания включены."
         if email_notifications_enabled
         else "E-mail не подключён — регистрация и ссылка входа всё равно работают."
     )
+    join_note = (
+        "Ссылка на эфир уже добавлена."
+        if join_ready
+        else "Ссылку на эфир можно добавить позже — регистрация уже открыта."
+    )
     return (
         "✅ Вебинар опубликован.\n\n"
         f"{title}\n"
         f"{local_time} · площадка: {event_provider_label(provider_key)}\n\n"
-        f"Регистрация: {registration_url}\n\n{mail_note}"
+        f"Регистрация: {registration_url}\n\n{join_note}\n{mail_note}"
     )
 
 

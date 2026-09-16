@@ -97,17 +97,29 @@ def resolve_owner_input(session: OwnerInputSession, value: object) -> OwnerInput
 
     if session.action == "online_event":
         parts = [part.strip() for part in raw_text.split("|")]
-        if len(parts) not in {3, 4} or not all(parts[:3]):
-            raise ValueError("event title, time and join URL are required")
-        title, local_time, join_url = parts[:3]
+        if len(parts) not in {2, 3, 4} or not all(parts[:2]):
+            raise ValueError("event title and time are required")
+        title, local_time = parts[:2]
+        join_url = parts[2] if len(parts) >= 3 else ""
         offer_url = parts[3] if len(parts) == 4 else ""
         if len(title) > 180:
             raise ValueError("event title is too long")
+        if join_url == "-":
+            join_url = ""
         if offer_url == "-":
             offer_url = ""
         return OwnerInputResolution(
             "event-create-text",
             (title, local_time, join_url, offer_url),
+        )
+
+    if session.action == "event_join_url":
+        join_url = str(raw_text or "").strip()
+        if not join_url:
+            raise ValueError("event join URL is required")
+        return OwnerInputResolution(
+            "event-join-text",
+            (session.context["event_id"], join_url),
         )
 
     if session.action == "booking_time":

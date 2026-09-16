@@ -49,6 +49,10 @@ async def send_cockpit_section(
         for action in event_hub_actions(snapshot):
             if action.kind == "create":
                 callback = f"cpev:new:{token}"
+            elif action.kind == "join" and action.key is not None:
+                callback = f"cpev:join:{one_click.control._uuid_token(action.key)}:{token}"
+            elif action.kind == "announce" and action.key is not None:
+                callback = f"cpev:announce:{one_click.control._uuid_token(action.key)}:{token}"
             elif action.kind == "settings":
                 callback = f"cpev:settings:{token}"
             else:

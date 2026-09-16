@@ -15,6 +15,9 @@ from clientplatform.application.event_public_surface import (
     SECURITY_HEADERS,
     render_event_landing_body,
 )
+from clientplatform.application.event_reminder_channels import (
+    issue_event_reminder_channel_links_in_transaction,
+)
 from clientplatform.application.events import (
     EventUnavailable,
     get_public_event,
@@ -23,6 +26,7 @@ from clientplatform.application.events import (
 from clientplatform.infrastructure.event_repository import EventNotFound, EventRepository
 from services.db import get_db, get_db_ro
 from services.db.core import ambient_savepoint
+from services.messenger.links import build_entry_targets
 
 
 LOGGER = logging.getLogger(__name__)
@@ -38,7 +42,9 @@ def _page(title: str, body: str, *, status: int = 200) -> web.Response:
         "<style>body{font-family:system-ui,sans-serif;max-width:760px;margin:40px auto;"
         "padding:0 18px;line-height:1.5}.card{border:1px solid #ddd;border-radius:18px;"
         "padding:28px}input,button{width:100%;box-sizing:border-box;padding:13px;"
-        "margin:7px 0;font-size:16px}button{font-weight:700;cursor:pointer}.hp{position:absolute;"
+        "margin:7px 0;font-size:16px}button{font-weight:700;cursor:pointer}"
+        ".channel-link{display:block;padding:12px 14px;margin:8px 0;border:1px solid #ccc;"
+        "border-radius:12px;text-decoration:none;color:inherit;font-weight:700}.hp{position:absolute;"
         "left:-10000px}</style></head><body><main class=card>"
         + body
         + "</main></body></html>"
@@ -120,6 +126,7 @@ async def public_event_register(request: web.Request) -> web.Response:
                 "<h1>Выберите хотя бы один канал для рекламных сообщений</h1>",
                 status=400,
             )
+    reminder_channel_links = ()
     try:
         with get_db() as conn:
             result = register_public_attendee_in_transaction(
@@ -155,6 +162,22 @@ async def public_event_register(request: web.Request) -> web.Response:
                             "event_id": result.registration.event_id,
                         },
                     )
+            if getattr(result, "customer_id", None) is not None:
+                try:
+                    with ambient_savepoint(conn):
+                        reminder_channel_links = issue_event_reminder_channel_links_in_transaction(
+                            conn,
+                            registration=result.registration,
+                            skip_platforms=tuple(getattr(result.notifications, "channels", ()) or ()),
+                        )
+                except Exception:  # validator: allow-wide-except - registration remains durable
+                    LOGGER.exception(
+                        "event reminder channel-link issuance failed",
+                        extra={
+                            "business_id": result.registration.business_id,
+                            "event_id": result.registration.event_id,
+                        },
+                    )
     except EventUnavailable:
         return _page("Регистрация закрыта", "<h1>Регистрация уже закрыта</h1>", status=410)
     except (ValueError, EventNotFound):
@@ -175,14 +198,47 @@ async def public_event_register(request: web.Request) -> web.Response:
             else ""
         )
     )
+    channel_labels = {
+        "email": "E-mail",
+        "telegram": "Telegram",
+        "vk": "VK",
+        "max": "MAX",
+    }
+    active_channels = [
+        channel_labels.get(channel, channel)
+        for channel in tuple(getattr(result.notifications, "channels", ()) or ())
+    ]
     note = (
-        "<p>Организационные письма будут отправлены на указанный e-mail.</p>"
-        if result.notifications.enabled
+        "<p>Организационные напоминания будут отправлены: "
+        + escape(", ".join(active_channels))
+        + ".</p>"
+        if result.notifications.enabled and active_channels
         else "<p>Регистрация сохранена. Организатор сообщит детали входа отдельно.</p>"
     )
+    entry_by_platform: dict[str, str] = {}
+    for issued in reminder_channel_links:
+        payload = f"cplink_{issued.token}"
+        target = next(
+            (item for item in build_entry_targets(payload) if item.get("platform") == issued.platform),
+            None,
+        )
+        if target is not None and str(target.get("url") or "").strip():
+            entry_by_platform[issued.platform] = str(target["url"])
+    labels = {"telegram": "Telegram", "vk": "ВКонтакте", "max": "MAX"}
+    reminder_opt_in = ""
+    if entry_by_platform:
+        links = "".join(
+            f"<a class='channel-link' href='{escape(url, quote=True)}'>Получать напоминания в {escape(labels[platform])}</a>"
+            for platform, url in entry_by_platform.items()
+        )
+        reminder_opt_in = (
+            "<h2>Куда присылать напоминания?</h2>"
+            "<p>Можно привязать мессенджер. Ссылка одноразовая и действует ограниченное время.</p>"
+            + links
+        )
     return _page(
         "Готово",
-        f"<h1>Регистрация {state}</h1>{note}{marketing_note}",
+        f"<h1>Регистрация {state}</h1>{note}{reminder_opt_in}{marketing_note}",
     )
 
 
@@ -231,6 +287,13 @@ async def public_event_join(request: web.Request) -> web.Response:
                 raise EventNotFound("event not found")
             slug = str(row["public_slug"] if hasattr(row, "keys") else row[0])
             event = repository.get_public_owner_event(public_slug=slug)
+            if not event.join_is_ready or not event.join_url:
+                return _page(
+                    "Ссылка на эфир ещё не добавлена",
+                    "<h1>Ссылка на эфир появится здесь позже</h1>"
+                    "<p>Регистрация сохранена. Откройте эту же персональную ссылку ближе к началу мероприятия.</p>",
+                    status=200,
+                )
             repository.mark_join_click(
                 registration=registration,
                 event=event,

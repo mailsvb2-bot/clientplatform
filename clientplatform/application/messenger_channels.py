@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import logging
+
+from clientplatform.application.event_notifications import reconcile_future_event_notifications_for_customer
 from clientplatform.domain.connections import ConnectionPlatform
 from clientplatform.domain.customers import CustomerIdentity, CustomerPlatform
 from clientplatform.domain.messenger_channels import IssuedCustomerLink, MessengerIngressRoute
 from clientplatform.domain.tenancy import TenantContext
 from clientplatform.infrastructure.messenger_channel_repository import MessengerChannelRepository
 from services.db import get_db, get_db_ro
+from services.db.core import ambient_savepoint
+
+
+log = logging.getLogger(__name__)
 
 
 def register_messenger_ingress_route(
@@ -94,10 +101,23 @@ def consume_customer_channel_link(
         )
         if current_route != route:
             raise ValueError("messenger route changed before customer link consume")
-        return MessengerChannelRepository(conn).consume_customer_link(
+        identity = MessengerChannelRepository(conn).consume_customer_link(
             context=current_route.customer_context,
             token=token,
             external_subject=external_subject,
             username=username,
             display_name=display_name,
         )
+        try:
+            with ambient_savepoint(conn):
+                reconcile_future_event_notifications_for_customer(
+                    conn,
+                    business_id=current_route.business_id,
+                    customer_id=identity.customer_id,
+                )
+        except Exception:  # validator: allow-wide-except - identity link remains durable
+            log.exception(
+                "Event reminder reconciliation failed after messenger link",
+                extra={"business_id": current_route.business_id, "platform": current_route.platform.value},
+            )
+        return identity

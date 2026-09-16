@@ -13,7 +13,7 @@ from clientplatform.infrastructure.event_repository import EventRepository
 log = logging.getLogger(__name__)
 
 
-def _automation_actor(conn: Any, *, event: Event) -> TenantContext | None:
+def resolve_event_automation_actor(conn: Any, *, event: Event) -> TenantContext | None:
     """Select an active staff principal for canonical CRM writes.
 
     Prefer the member who created the event. If that membership was later
@@ -60,7 +60,7 @@ def attach_event_registration_to_customer(
     safely retry this function; e-mail identity uniqueness makes it idempotent.
     """
 
-    actor = _automation_actor(conn, event=event)
+    actor = resolve_event_automation_actor(conn, event=event)
     if actor is None:
         log.warning(
             "Event registration CRM projection skipped: no active staff principal",
@@ -108,4 +108,4 @@ def attach_event_registration_to_customer(
     return customer.id
 
 
-__all__ = ["attach_event_registration_to_customer"]
+__all__ = ["attach_event_registration_to_customer", "resolve_event_automation_actor"]
