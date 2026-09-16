@@ -4,7 +4,7 @@ This checklist is the final gate after deploying a ClientPlatform release and be
 
 ## Automated gate
 
-Run from the project root:
+Run as the production operator from `/opt/clientplatform` (Docker access is required):
 
 ```bash
 python scripts/production_acceptance.py
@@ -13,10 +13,10 @@ python scripts/production_acceptance.py
 Expected result:
 
 ```text
-PRODUCTION ACCEPTANCE: OK
+AUTOMATED ACCEPTANCE: GREEN (pytest skipped)
 ```
 
-The runner composes existing checks instead of creating another validation owner: compile, tests, production readiness, runtime observability, health/readiness, and configured messenger probes.
+The runner composes existing checks instead of creating another validation owner: compile, container-scoped production readiness and runtime observability, the canonical deploy health/readiness/runtime-marker probes, the transactional sales smoke, the public `app.clientplatform.ru` root, and the VK/MAX webhook method guards. Internal health ports stay container-only and are not published on the host.
 
 ## Required manual live-flow checks
 
