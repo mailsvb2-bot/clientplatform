@@ -13,6 +13,7 @@ from clientplatform.domain.activity import (
 )
 from clientplatform.domain.bookings import BookingInvariantViolation, BookingSlotStatus
 from clientplatform.domain.programs import ContentKind
+from clientplatform.domain.tenancy import PlatformRole
 from handlers import clientplatform_control as handlers
 from handlers import clientplatform_goal_dashboard as goal_dashboard
 
@@ -225,7 +226,7 @@ def test_keyboard_builders_and_content_detection(monkeypatch: pytest.MonkeyPatch
 @pytest.mark.asyncio
 async def test_setup_dashboard_and_resume_paths(monkeypatch: pytest.MonkeyPatch) -> None:
     business_id = str(uuid4())
-    actor = object()
+    actor = SimpleNamespace(role=PlatformRole.OWNER)
 
     async def fake_actor(_uid: int, _bid: str) -> object:
         return actor

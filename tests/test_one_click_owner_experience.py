@@ -147,7 +147,7 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
     async def test_dashboard_separates_acquisition_sales_and_secondary_actions(self) -> None:
         out = outbound_message()
         snapshot = (
-            "actor",
+            tenant_actor(),
             SimpleNamespace(business=SimpleNamespace(name="Мой бизнес")),
             SimpleNamespace(activity_description="Помогаю клиентам решать задачи"),
             [],
@@ -170,7 +170,16 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
             for row in out.answer.await_args.kwargs["reply_markup"].inline_keyboard
             for button in row
         ]
-        self.assertEqual(labels, ["🚀 Найти новых клиентов", "🧭 Все разделы"])
+        self.assertEqual(
+            labels,
+            [
+                "💬 Клиенты и обращения",
+                "👥 Найти клиентов",
+                "💰 Продажи",
+                "📊 Результаты",
+                "▦ Все возможности",
+            ],
+        )
         self.assertNotIn("🚀 Получить клиентов", labels)
 
     async def test_all_capabilities_menu_leads_with_real_cockpit_and_keeps_quick_actions(self) -> None:

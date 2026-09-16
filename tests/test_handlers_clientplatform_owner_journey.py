@@ -16,6 +16,7 @@ from clientplatform.domain.bookings import (
     BookingSlotView,
     CustomerBusinessLink,
 )
+from clientplatform.domain.tenancy import PlatformRole
 
 control = importlib.import_module("handlers.clientplatform_control")
 simple = importlib.import_module("handlers.clientplatform_simple_experience")
@@ -166,7 +167,7 @@ async def test_owner_dashboard_keeps_status_and_separates_acquisition_from_sales
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     business_id = str(uuid4())
-    actor = object()
+    actor = SimpleNamespace(role=PlatformRole.OWNER)
     capability = SimpleNamespace(
         id=str(uuid4()),
         connector_key="services",
@@ -193,9 +194,15 @@ async def test_owner_dashboard_keeps_status_and_separates_acquisition_from_sales
     assert "свободных времён: 1" in text
     markup = kwargs["reply_markup"]
     labels = [button.text for row in markup.inline_keyboard for button in row]
-    assert labels == ["🚀 Найти новых клиентов", "🧭 Все разделы"]
-    assert str(markup.inline_keyboard[0][0].callback_data).startswith("cpo:start:")
-    assert str(markup.inline_keyboard[1][0].callback_data).startswith("cpo:more:")
+    assert labels == [
+        "💬 Клиенты и обращения",
+        "📅 Запись клиентов",
+        "👥 Найти клиентов",
+        "💰 Продажи",
+        "📊 Результаты",
+        "▦ Все возможности",
+    ]
+    assert "Не знаете, что нажать?" not in text
 
 
 @pytest.mark.asyncio

@@ -26,16 +26,37 @@ def _commands(message) -> list[str]:
 
 
 class NativeMemberParityNavigationTests(unittest.TestCase):
-    def test_owner_home_has_one_primary_action_and_preserves_all_sections_behind_more(self) -> None:
+    def test_owner_home_uses_stable_business_aware_quick_actions(self) -> None:
         actor = _actor(PlatformRole.OWNER)
-        primary = ui._button("🚀 Найти новых клиентов", "cpm:acquire")
+        profile = SimpleNamespace(
+            activity_description="Я психолог. Провожу консультации, вебинары и обучающие программы."
+        )
+        capabilities = [
+            SimpleNamespace(connector_key="consultations", status="active"),
+            SimpleNamespace(connector_key="programs", status="active"),
+        ]
         with (
             patch.object(ui, "_business_name", return_value="Практика"),
-            patch.object(ui, "_native_primary_action", return_value=primary),
+            patch.object(ui, "get_business_profile", return_value=profile),
+            patch.object(ui, "list_business_capabilities", return_value=capabilities),
+            patch.object(ui, "_native_primary_action") as primary,
         ):
             message = ui._menu_message(actor, linked=False)
-        self.assertEqual(["cpm:acquire", "cpm:menu-all"], _commands(message))
-        self.assertEqual(sum(len(row) for row in message.rows), 2)
+        self.assertEqual(
+            [
+                "cpm:customers",
+                "cpm:bookings",
+                "cpm:events",
+                "cpm:programs",
+                "cpm:acquire",
+                "cpm:today",
+                "cpm:menu-all",
+            ],
+            _commands(message),
+        )
+        self.assertEqual(sum(len(row) for row in message.rows), 7)
+        self.assertIn("Быстрые действия подобраны под этот бизнес", message.text)
+        primary.assert_not_called()
 
         advanced = ui._menu_all_message(actor)
         commands = _commands(advanced)
@@ -128,28 +149,48 @@ class NativeMemberParityNavigationTests(unittest.TestCase):
         self.assertNotIn("Release gate", visible)
         self.assertNotIn("Growth Autopilot", visible)
 
-    def test_owner_home_copy_is_plain_language_not_internal_safety_explanation(self) -> None:
+    def test_owner_home_copy_is_plain_language_and_does_not_restore_old_one_button_prompt(self) -> None:
         actor = _actor(PlatformRole.OWNER)
-        primary = ui._button("🚀 Новые клиенты", "cpm:acquire")
         with (
             patch.object(ui, "_business_name", return_value="Сантехник"),
-            patch.object(ui, "_native_primary_action", return_value=primary),
+            patch.object(
+                ui,
+                "get_business_profile",
+                return_value=SimpleNamespace(activity_description="Оказываю услуги сантехника и ремонт"),
+            ),
+            patch.object(
+                ui,
+                "list_business_capabilities",
+                return_value=[SimpleNamespace(connector_key="services", status="active")],
+            ),
         ):
             message = ui._menu_message(actor, linked=False)
-        self.assertIn("Не знаете, что нажать?", message.text)
-        self.assertIn("Все разделы", message.text)
-        self.assertNotIn("главное безопасное действие", message.text)
-        self.assertNotIn("вместо догадки", message.text)
+        self.assertIn("Что нужно сделать?", message.text)
+        self.assertNotIn("Не знаете, что нажать?", message.text)
+        self.assertIn("cpm:bookings", _commands(message))
+        self.assertIn("cpm:menu-all", _commands(message))
 
-    def test_support_home_has_one_primary_action_without_exposing_management(self) -> None:
+    def test_support_home_is_personalized_without_exposing_management_actions(self) -> None:
         actor = _actor(PlatformRole.SUPPORT)
-        primary = ui._button("📊 Проверить, что происходит", "cpm:today")
         with (
             patch.object(ui, "_business_name", return_value="Практика"),
-            patch.object(ui, "_native_primary_action", return_value=primary),
+            patch.object(
+                ui,
+                "get_business_profile",
+                return_value=SimpleNamespace(activity_description="Консультации"),
+            ),
+            patch.object(
+                ui,
+                "list_business_capabilities",
+                return_value=[SimpleNamespace(connector_key="consultations", status="active")],
+            ),
         ):
             message = ui._menu_message(actor, linked=False)
-        self.assertEqual(["cpm:today", "cpm:menu-all"], _commands(message))
+        self.assertEqual(
+            ["cpm:customers", "cpm:sales", "cpm:today", "cpm:menu-all"],
+            _commands(message),
+        )
+        self.assertNotIn("cpm:bookings", _commands(message))
         self.assertEqual(["cpm:work", "cpm:messengers", "cpm:menu"], _commands(ui._menu_all_message(actor)))
 
     def test_native_home_falls_back_to_role_safe_manual_read_when_cockpit_is_unavailable(self) -> None:

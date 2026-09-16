@@ -101,7 +101,7 @@ async def send_goal_dashboard(
     user_id: int,
     business_id: str,
 ) -> None:
-    actor, access, profile, _capabilities, customers, programs, slots = (
+    actor, access, profile, capabilities, customers, programs, slots = (
         await one_click.simple._business_snapshot(
             user_id=user_id,
             business_id=business_id,
@@ -109,8 +109,6 @@ async def send_goal_dashboard(
     )
     next_action = await asyncio.to_thread(_owner_next_action, actor)
     open_slots = [item for item in slots if item.slot.status == BookingSlotStatus.OPEN]
-    primary_label, _primary_callback = _primary_action(business_id, next_action)
-
     if next_action is None or next_action.action_key == "none":
         main_title = "Можно заняться ростом бизнеса"
         main_reason = "Срочных задач сейчас нет — ClientPlatform подготовит следующий шаг для привлечения клиентов."
@@ -119,16 +117,19 @@ async def send_goal_dashboard(
         main_reason = next_action.reason
 
     await message.answer(
-        f"🏠 {access.business.name}\n\n"
-        f"{profile.activity_description}\n\n"
-        "Главное сейчас\n"
-        f"• {main_title}\n"
-        f"  {main_reason}\n\n"
-        f"Клиентов: {len(customers)} · свободных времён: {len(open_slots)} · "
-        f"материалов и программ: {len(programs)}\n\n"
-        f"Не знаете, что нажать? «{primary_label}» — рекомендуемый следующий шаг.\n"
-        f"Если Вам сейчас нужно другое, нажмите «{nav.ALL.label}» — там каждая кнопка объяснена простыми словами.",
-        reply_markup=_goal_keyboard(business_id, next_action),
+        one_click.simple.quick_menu_intro(business_name=access.business.name)
+        + f"\n\n{profile.activity_description}"
+        + "\n\nГлавное сейчас\n"
+        + f"• {main_title}\n"
+        + f"  {main_reason}\n\n"
+        + f"Клиентов: {len(customers)} · свободных времён: {len(open_slots)} · "
+        + f"материалов и программ: {len(programs)}",
+        reply_markup=one_click.simple._simple_keyboard(
+            business_id,
+            activity_description=profile.activity_description,
+            capabilities=capabilities,
+            role=actor.role,
+        ),
     )
 
 

@@ -141,15 +141,17 @@ async def send_owner_dashboard(
         else f"Ближайшее время: {nearest.local_start} · {nearest.offering_title}"
     )
     await message.answer(
-        f"🏠 {access.business.name}\n\n"
-        f"{profile.activity_description}\n\n"
-        f"Услуг: {len(offerings)} · свободных времён: {len(open_slots)} · "
-        f"записей клиентов: {len(booked_slots)}\n"
-        f"Материалов и программ: {len(programs)} · клиентов: {len(customers)}\n\n"
-        f"{nearest_line}\n\n"
-        "Здесь виден весь путь: что Вы предлагаете, когда можно записаться, "
-        "как это выглядит для клиента и какую ссылку отправлять людям.",
-        reply_markup=_owner_keyboard(business_id),
+        simple.quick_menu_intro(business_name=access.business.name)
+        + "\n\nСейчас\n"
+        + f"Клиентов: {len(customers)} · записей: {len(booked_slots)} · "
+        + f"свободных времён: {len(open_slots)}\n"
+        + f"{nearest_line}",
+        reply_markup=simple._simple_keyboard(
+            business_id,
+            activity_description=profile.activity_description,
+            capabilities=capabilities,
+            role=actor.role,
+        ),
     )
 
 
