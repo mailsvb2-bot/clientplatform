@@ -35,7 +35,11 @@ def test_production_recovery_bundle_is_fail_closed_and_ephemeral() -> None:
     workflow = _workflow()
 
     assert 'expected_bundle="/tmp/clientplatform-recovery-$expected_sha.bundle"' in workflow
-    assert 'if [ "$source_bundle" != "$expected_bundle" ] || [ ! -s "$source_bundle" ]; then' in workflow
+    expected_bundle_guard = (
+        'if [ "$source_bundle" != "$expected_bundle" ] || '
+        '[ ! -s "$source_bundle" ]; then'
+    )
+    assert expected_bundle_guard in workflow
     assert "trap 'rm -f -- \"$source_bundle\"' EXIT" in workflow
     assert 'if [ "$bundle_sha" != "$expected_sha" ]; then' in workflow
     assert 'if [ "$fetched_sha" != "$expected_sha" ]; then' in workflow
