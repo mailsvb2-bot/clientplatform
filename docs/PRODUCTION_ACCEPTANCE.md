@@ -16,7 +16,7 @@ Expected result:
 AUTOMATED ACCEPTANCE: GREEN (pytest skipped)
 ```
 
-The runner composes existing checks instead of creating another validation owner: compile, container-scoped production readiness and runtime observability, the canonical deploy health/readiness/runtime-marker probes, the transactional sales smoke, the public `app.clientplatform.ru` root, and the VK/MAX webhook method guards. Internal health ports stay container-only and are not published on the host.
+The runner composes existing checks instead of creating another validation owner: compile, container-scoped production readiness and runtime observability, the canonical deploy health/readiness/runtime-marker probes, the transactional sales smoke, the public `app.clientplatform.ru` root, and the canonical tenant-scoped VK/MAX webhook method guards under `/clientplatform/webhooks/{provider}/{route_id}`. Legacy global `/webhooks/max` is not required when native omnichannel ingress is active. Internal health ports stay container-only and are not published on the host.
 
 ## Required manual live-flow checks
 
