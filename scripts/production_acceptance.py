@@ -19,6 +19,7 @@ from typing import Callable
 
 from scripts.clientplatform_production_deploy import (
     APP_CONTAINER,
+    DeploymentError,
     _healthy as canonical_healthy,
     _ready as canonical_ready,
     _runtime_markers as canonical_runtime_markers,
@@ -69,7 +70,7 @@ def _container_python(*args: str) -> list[str]:
 def _canonical_bool(name: str, probe: Callable[[], bool]) -> AcceptanceResult:
     try:
         ok = probe() is True
-    except Exception as exc:  # pragma: no cover - operator boundary
+    except DeploymentError as exc:
         return AcceptanceResult(name=name, ok=False, detail=f"{type(exc).__name__}")
     return AcceptanceResult(name=name, ok=ok, detail="canonical_probe=true" if ok else "canonical_probe=false")
 
@@ -77,7 +78,7 @@ def _canonical_bool(name: str, probe: Callable[[], bool]) -> AcceptanceResult:
 def _canonical_sales() -> AcceptanceResult:
     try:
         payload = canonical_sales_operations_smoke()
-    except Exception as exc:  # pragma: no cover - operator boundary
+    except DeploymentError as exc:
         return AcceptanceResult(name="clientplatform_sales_smoke", ok=False, detail=f"{type(exc).__name__}")
     return AcceptanceResult(
         name="clientplatform_sales_smoke",
