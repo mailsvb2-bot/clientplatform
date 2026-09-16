@@ -27,6 +27,7 @@ from scripts.clientplatform_production_deploy import (
 )
 
 DEFAULT_PUBLIC_BASE_URL = "https://app.clientplatform.ru"
+_CANONICAL_OMNICHANNEL_PROBE_ROUTE_ID = "production-acceptance-probe"
 
 
 @dataclass(frozen=True)
@@ -143,8 +144,14 @@ def collect_results(*, include_pytest: bool = False, public_base_url: str | None
             _canonical_bool("runtime:markers", canonical_runtime_markers),
             _canonical_sales(),
             _public_root("http:public_root", public_base),
-            _method_probe("http:vk_webhook_get_rejected", f"{public_base}/webhooks/vk"),
-            _method_probe("http:max_webhook_get_rejected", f"{public_base}/webhooks/max"),
+            _method_probe(
+                "http:canonical_vk_webhook_get_rejected",
+                f"{public_base}/clientplatform/webhooks/vk/{_CANONICAL_OMNICHANNEL_PROBE_ROUTE_ID}",
+            ),
+            _method_probe(
+                "http:canonical_max_webhook_get_rejected",
+                f"{public_base}/clientplatform/webhooks/max/{_CANONICAL_OMNICHANNEL_PROBE_ROUTE_ID}",
+            ),
         ]
     )
     return results

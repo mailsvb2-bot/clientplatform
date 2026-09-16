@@ -36,7 +36,7 @@ class ProductionAcceptanceRuntimeContractTests(unittest.TestCase):
         self.assertIn("canonical_runtime_markers", source)
         self.assertIn("canonical_sales_operations_smoke", source)
 
-    def test_collect_keeps_vk_and_max_public_route_gates(self) -> None:
+    def test_collect_keeps_canonical_vk_and_max_public_route_gates(self) -> None:
         ok = acceptance.AcceptanceResult("stub", True, "ok")
         probed: list[str] = []
 
@@ -60,10 +60,11 @@ class ProductionAcceptanceRuntimeContractTests(unittest.TestCase):
         self.assertEqual(
             probed,
             [
-                "https://app.clientplatform.ru/webhooks/vk",
-                "https://app.clientplatform.ru/webhooks/max",
+                "https://app.clientplatform.ru/clientplatform/webhooks/vk/production-acceptance-probe",
+                "https://app.clientplatform.ru/clientplatform/webhooks/max/production-acceptance-probe",
             ],
         )
+        self.assertNotIn("https://app.clientplatform.ru/webhooks/max", probed)
 
 
 if __name__ == "__main__":
