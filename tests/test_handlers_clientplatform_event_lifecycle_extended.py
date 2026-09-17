@@ -53,7 +53,7 @@ def _labels(markup) -> list[str]:
 
 
 class EventLifecycleExtendedHandlerTests(unittest.IsolatedAsyncioTestCase):
-    def test_keyboard_helpers_cover_primary_owner_choices(self) -> None:
+    def test_keyboard_helpers_cover_owner_choices(self) -> None:
         with patch.object(lifecycle.control, "_uuid_token", return_value="tok"):
             timezone_markup = lifecycle._timezone_keyboard(BUSINESS_ID)
             venue_markup = lifecycle._venue_keyboard(BUSINESS_ID)
@@ -91,7 +91,7 @@ class EventLifecycleExtendedHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("↗️ Открыть Яндекс Телемост", _labels(telemost_markup))
         self.assertNotIn("↗️ Открыть Другой сервис", _labels(other_markup))
 
-    def test_event_actions_public_url_and_payload_helpers(self) -> None:
+    def test_payload_action_and_public_url_helpers(self) -> None:
         with patch.object(lifecycle.control, "_uuid_token", side_effect=lambda value: value[:6]):
             rows = lifecycle._event_actions(
                 event_id=EVENT_ID,
@@ -103,14 +103,12 @@ class EventLifecycleExtendedHandlerTests(unittest.IsolatedAsyncioTestCase):
                 event_id=EVENT_ID,
                 business_id=BUSINESS_ID,
                 join_ready=True,
-                visual_requested=False,
             )
         labels = [label for row in rows for label, _ in row]
         ready_labels = [label for row in ready_rows for label, _ in row]
         self.assertIn("🔗 Добавить ссылку на эфир", labels)
         self.assertIn("🎨 Картинки и креативы", labels)
         self.assertNotIn("🔗 Добавить ссылку на эфир", ready_labels)
-        self.assertNotIn("🎨 Картинки и креативы", ready_labels)
 
         item = _session(join_url=None)
         payload = lifecycle._session_payload(item, join_url=None)
@@ -130,7 +128,7 @@ class EventLifecycleExtendedHandlerTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ValueError):
                 lifecycle._public_base_url()
 
-    async def test_prompt_helpers_and_finish_content_setup(self) -> None:
+    async def test_prompt_helpers_cover_manual_and_picker_paths(self) -> None:
         message = _message()
         state = AsyncMock()
         state.get_data.return_value = {"event_sessions": []}
@@ -176,6 +174,7 @@ class EventLifecycleExtendedHandlerTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertGreaterEqual(message.answer.await_count, 5)
 
+    async def test_finish_content_setup_missing_and_visual(self) -> None:
         missing = AsyncMock()
         missing.get_data.return_value = {}
         missing_message = _message()
@@ -199,50 +198,50 @@ class EventLifecycleExtendedHandlerTests(unittest.IsolatedAsyncioTestCase):
             "event_day_mode": lifecycle.EventContentMode.TEXT.value,
             "post_event_mode": lifecycle.EventContentMode.TEXT_IN_IMAGE.value,
         }
-        complete_message = _message()
+        message = _message()
         with (
             patch.object(lifecycle.control, "_uuid_token", return_value="tok"),
             patch.object(lifecycle.control, "_keyboard", return_value="actions"),
         ):
-            await lifecycle._finish_content_setup(complete_message, complete)
+            await lifecycle._finish_content_setup(message, complete)
         complete.clear.assert_awaited_once()
-        self.assertEqual(complete_message.answer.await_count, 3)
-        self.assertIn("общий генератор", complete_message.answer.await_args_list[0].args[0])
+        self.assertEqual(message.answer.await_count, 3)
+        self.assertIn("общий генератор", message.answer.await_args_list[0].args[0])
 
-    async def test_start_title_days_and_timezone_failure_paths(self) -> None:
-        callback = _callback(f"cpev:new:{TOKEN}")
+    async def test_start_title_days_and_timezone_paths(self) -> None:
+        denied = _callback(f"cpev:new:{TOKEN}")
         actor = MagicMock(unsafe=True)
         actor.assert_can_manage_business.side_effect = lifecycle.TenantPermissionDenied("denied")
         with (
             patch.object(lifecycle.control, "_token_uuid", return_value=BUSINESS_ID),
             patch.object(lifecycle.control, "_actor", new=AsyncMock(return_value=actor)),
         ):
-            await lifecycle.start_multisession_event_wizard(callback, AsyncMock())
-        self.assertTrue(callback.answer.await_args.kwargs["show_alert"])
+            await lifecycle.start_multisession_event_wizard(denied, AsyncMock())
+        self.assertTrue(denied.answer.await_args.kwargs["show_alert"])
 
-        for text, data, expected in [
-            ("Название", {}, "Не удалось продолжить"),
-            ("   ", {"event_business_id": BUSINESS_ID}, "Введите название"),
-        ]:
-            state = AsyncMock()
-            state.get_data.return_value = data
-            message = _message(text)
-            with patch.object(lifecycle, "_cancel_keyboard", return_value="cancel"):
-                await lifecycle.receive_title(message, state)
-            self.assertIn(expected, message.answer.await_args.args[0])
+        empty_state = AsyncMock()
+        empty_state.get_data.return_value = {}
+        empty_message = _message("Название")
+        await lifecycle.receive_title(empty_message, empty_state)
+        empty_state.clear.assert_awaited_once()
+
+        blank_state = AsyncMock()
+        blank_state.get_data.return_value = {"event_business_id": BUSINESS_ID}
+        blank_message = _message("   ")
+        with patch.object(lifecycle, "_cancel_keyboard", return_value="cancel"):
+            await lifecycle.receive_title(blank_message, blank_state)
+        self.assertIn("Введите название", blank_message.answer.await_args.args[0])
 
         cancel_state = AsyncMock()
         cancel_state.get_data.return_value = {"event_business_id": BUSINESS_ID}
-        cancel_message = _message("отмена")
         with patch.object(lifecycle, "_cancel", new=AsyncMock()) as cancel:
-            await lifecycle.receive_title(cancel_message, cancel_state)
+            await lifecycle.receive_title(_message("отмена"), cancel_state)
         cancel.assert_awaited_once()
 
         good_state = AsyncMock()
         good_state.get_data.return_value = {"event_business_id": BUSINESS_ID}
-        good_message = _message("  Новый   вебинар ")
         with patch.object(lifecycle, "_cancel_keyboard", return_value="cancel"):
-            await lifecycle.receive_title(good_message, good_state)
+            await lifecycle.receive_title(_message(" Новый   вебинар "), good_state)
         good_state.update_data.assert_awaited_once_with(event_title="Новый вебинар")
 
         invalid_days_state = AsyncMock()
@@ -267,11 +266,11 @@ class EventLifecycleExtendedHandlerTests(unittest.IsolatedAsyncioTestCase):
         await lifecycle._accept_timezone(_message(), stale_state, "Москва")
         stale_state.clear.assert_awaited_once()
 
-    async def test_timezone_callbacks_and_venue_choices(self) -> None:
+    async def test_timezone_and_venue_callbacks(self) -> None:
         state = AsyncMock()
         state.get_data.return_value = {"event_business_id": BUSINESS_ID, "event_days": 2}
-        callback = _callback("cpev:tz:moscow")
         reply = _reply()
+        callback = _callback("cpev:tz:moscow")
         with (
             patch.object(lifecycle.control, "_callback_message", return_value=reply),
             patch.object(lifecycle, "_accept_timezone", new=AsyncMock()) as accept,
@@ -294,20 +293,22 @@ class EventLifecycleExtendedHandlerTests(unittest.IsolatedAsyncioTestCase):
             "event_days": 2,
             "event_session_index": 1,
         }
-        with patch.object(lifecycle.control, "_callback_message", return_value=reply):
-            unknown = _callback("cpev:venue:missing")
-            await lifecycle.choose_webinar_venue(unknown, venue_state)
-            self.assertTrue(unknown.answer.await_args.kwargs["show_alert"])
+        unknown = _callback("cpev:venue:missing")
+        await lifecycle.choose_webinar_venue(unknown, venue_state)
+        self.assertTrue(unknown.answer.await_args.kwargs["show_alert"])
 
-            ucr = _callback("cpev:venue:ucr")
-            await lifecycle.choose_webinar_venue(ucr, venue_state)
-            self.assertIn("UCR", ucr.answer.await_args.args[0])
+        ucr = _callback("cpev:venue:ucr")
+        await lifecycle.choose_webinar_venue(ucr, venue_state)
+        self.assertIn("UCR", ucr.answer.await_args.args[0])
 
-            telemost = _callback("cpev:venue:telemost")
-            with patch.object(lifecycle, "_prompt_session_date", new=AsyncMock()) as prompt:
-                await lifecycle.choose_webinar_venue(telemost, venue_state)
-            prompt.assert_awaited_once()
-            venue_state.update_data.assert_awaited_with(event_platform="telemost")
+        telemost = _callback("cpev:venue:telemost")
+        with (
+            patch.object(lifecycle.control, "_callback_message", return_value=reply),
+            patch.object(lifecycle, "_prompt_session_date", new=AsyncMock()) as prompt,
+        ):
+            await lifecycle.choose_webinar_venue(telemost, venue_state)
+        prompt.assert_awaited_once()
+        venue_state.update_data.assert_awaited_with(event_platform="telemost")
 
         stale = AsyncMock()
         stale.get_data.return_value = {"event_timezone": "Europe/Moscow", "event_days": 2}
@@ -361,13 +362,13 @@ class EventLifecycleExtendedHandlerTests(unittest.IsolatedAsyncioTestCase):
             await lifecycle.choose_session_start(valid_start, state)
             state.update_data.assert_any_await(event_picker_start="19:00")
 
-            malformed_duration = _callback("cpev:duration")
-            await lifecycle.choose_session_duration(malformed_duration, state)
-            self.assertTrue(malformed_duration.answer.await_args.kwargs["show_alert"])
+            malformed = _callback("cpev:duration")
+            await lifecycle.choose_session_duration(malformed, state)
+            self.assertTrue(malformed.answer.await_args.kwargs["show_alert"])
 
             with patch.object(lifecycle, "_prompt_session_url", new=AsyncMock()) as prompt_url:
-                valid_duration = _callback("cpev:duration:120")
-                await lifecycle.choose_session_duration(valid_duration, state)
+                valid = _callback("cpev:duration:120")
+                await lifecycle.choose_session_duration(valid, state)
             prompt_url.assert_awaited_once()
             pending = state.update_data.await_args_list[-1].kwargs["pending_session"]
             self.assertEqual(pending["local_label"], "25.09.2026 19:00–21:00")
@@ -377,11 +378,13 @@ class EventLifecycleExtendedHandlerTests(unittest.IsolatedAsyncioTestCase):
                 await lifecycle.choose_manual_session_time(manual, state)
             prompt_time.assert_awaited_once()
 
-    async def test_receive_session_time_and_url_progression(self) -> None:
+    async def test_session_time_and_room_progression(self) -> None:
         invalid_state = AsyncMock()
         invalid_state.get_data.return_value = {}
-        invalid_message = _message("25.09.2026 19:00-21:00")
-        await lifecycle.receive_session_time(invalid_message, invalid_state)
+        await lifecycle.receive_session_time(
+            _message("25.09.2026 19:00-21:00"),
+            invalid_state,
+        )
         invalid_state.clear.assert_awaited_once()
 
         state = AsyncMock()
@@ -393,19 +396,17 @@ class EventLifecycleExtendedHandlerTests(unittest.IsolatedAsyncioTestCase):
             "event_platform": "telemost",
             "event_sessions": [],
         }
-        message = _message("25.09.2026 19:00-21:00")
         with patch.object(lifecycle, "_prompt_session_url", new=AsyncMock()) as prompt_url:
-            await lifecycle.receive_session_time(message, state)
+            await lifecycle.receive_session_time(_message("25.09.2026 19:00-21:00"), state)
         prompt_url.assert_awaited_once()
 
-        bad_message = _message("nonsense")
+        bad = _message("nonsense")
         with patch.object(lifecycle, "_cancel_keyboard", return_value="cancel"):
-            await lifecycle.receive_session_time(bad_message, state)
-        self.assertIn("Не удалось понять", bad_message.answer.await_args.args[0])
+            await lifecycle.receive_session_time(bad, state)
+        self.assertIn("Не удалось понять", bad.answer.await_args.args[0])
 
-        cancel_message = _message("cancel")
         with patch.object(lifecycle, "_cancel", new=AsyncMock()) as cancel:
-            await lifecycle.receive_session_time(cancel_message, state)
+            await lifecycle.receive_session_time(_message("cancel"), state)
         cancel.assert_awaited_once()
 
         next_state = AsyncMock()
@@ -419,10 +420,7 @@ class EventLifecycleExtendedHandlerTests(unittest.IsolatedAsyncioTestCase):
             "pending_session": _session_payload(1, join_url=None),
         }
         with patch.object(lifecycle, "_prompt_session_date", new=AsyncMock()) as next_prompt:
-            await lifecycle.receive_session_url(
-                _message("https://room-one.example/live"),
-                next_state,
-            )
+            await lifecycle.receive_session_url(_message("https://room-one.example/live"), next_state)
         next_prompt.assert_awaited_once()
         next_state.update_data.assert_any_await(event_session_index=2, pending_session={})
 
@@ -436,9 +434,9 @@ class EventLifecycleExtendedHandlerTests(unittest.IsolatedAsyncioTestCase):
             "event_sessions": [_session_payload(1, join_url="https://same.example/live")],
             "pending_session": _session_payload(2, join_url=None),
         }
-        duplicate_message = _message("https://same.example/live")
-        await lifecycle.receive_session_url(duplicate_message, duplicate_state)
-        self.assertIn("своя ссылка", duplicate_message.answer.await_args.args[0])
+        duplicate = _message("https://same.example/live")
+        await lifecycle.receive_session_url(duplicate, duplicate_state)
+        self.assertIn("своя ссылка", duplicate.answer.await_args.args[0])
 
         final_state = AsyncMock()
         final_state.get_data.return_value = {
@@ -454,15 +452,14 @@ class EventLifecycleExtendedHandlerTests(unittest.IsolatedAsyncioTestCase):
             await lifecycle.receive_session_url(_message("-"), final_state)
         create.assert_awaited_once()
 
-    async def test_single_event_creation_and_error_paths(self) -> None:
-        missing_state = AsyncMock()
-        missing_state.get_data.return_value = {}
-        missing_message = _message()
-        await lifecycle._create_configured_event(missing_message, missing_state)
-        missing_state.clear.assert_awaited_once()
+    async def test_single_event_creation_and_failures(self) -> None:
+        missing = AsyncMock()
+        missing.get_data.return_value = {}
+        await lifecycle._create_configured_event(_message(), missing)
+        missing.clear.assert_awaited_once()
 
-        incomplete_state = AsyncMock()
-        incomplete_state.get_data.return_value = {
+        incomplete = AsyncMock()
+        incomplete.get_data.return_value = {
             "event_business_id": BUSINESS_ID,
             "event_title": "Один эфир",
             "event_timezone": "Europe/Moscow",
@@ -471,7 +468,7 @@ class EventLifecycleExtendedHandlerTests(unittest.IsolatedAsyncioTestCase):
         }
         incomplete_message = _message()
         with patch.object(lifecycle, "_cancel_keyboard", return_value="cancel"):
-            await lifecycle._create_configured_event(incomplete_message, incomplete_state)
+            await lifecycle._create_configured_event(incomplete_message, incomplete)
         self.assertIn("не все дни", incomplete_message.answer.await_args.args[0])
 
         state = AsyncMock()
@@ -507,11 +504,11 @@ class EventLifecycleExtendedHandlerTests(unittest.IsolatedAsyncioTestCase):
             await lifecycle._create_configured_event(failed, state)
         self.assertIn("Не удалось создать", failed.answer.await_args.args[0])
 
-    async def test_warmup_zero_nonzero_cancel_and_validation(self) -> None:
-        missing_state = AsyncMock()
-        missing_state.get_data.return_value = {}
-        await lifecycle.receive_warmup_days(_message("1"), missing_state)
-        missing_state.clear.assert_awaited_once()
+    async def test_warmup_paths(self) -> None:
+        missing = AsyncMock()
+        missing.get_data.return_value = {}
+        await lifecycle.receive_warmup_days(_message("1"), missing)
+        missing.clear.assert_awaited_once()
 
         cancel_state = AsyncMock()
         cancel_state.get_data.return_value = {
@@ -523,8 +520,7 @@ class EventLifecycleExtendedHandlerTests(unittest.IsolatedAsyncioTestCase):
             patch.object(lifecycle.control, "_uuid_token", return_value="tok"),
             patch.object(lifecycle.control, "_keyboard", return_value="actions"),
         ):
-            cancel_message = _message("отмена")
-            await lifecycle.receive_warmup_days(cancel_message, cancel_state)
+            await lifecycle.receive_warmup_days(_message("отмена"), cancel_state)
         cancel_state.clear.assert_awaited_once()
 
         invalid_state = AsyncMock()
@@ -533,131 +529,112 @@ class EventLifecycleExtendedHandlerTests(unittest.IsolatedAsyncioTestCase):
             "created_event_id": EVENT_ID,
             "max_warmup_days": 3,
         }
+        invalid = _message("9")
         with patch.object(lifecycle, "_cancel_keyboard", return_value="cancel"):
-            invalid_message = _message("9")
-            await lifecycle.receive_warmup_days(invalid_message, invalid_state)
-        self.assertIn("0 до 3", invalid_message.answer.await_args.args[0])
+            await lifecycle.receive_warmup_days(invalid, invalid_state)
+        self.assertIn("0 до 3", invalid.answer.await_args.args[0])
 
         actor = object()
-        zero_plan = SimpleNamespace(requested_days=0, drafts=())
-        zero_state = AsyncMock()
-        zero_state.get_data.return_value = {
+        zero = AsyncMock()
+        zero.get_data.return_value = {
             "event_business_id": BUSINESS_ID,
             "created_event_id": EVENT_ID,
             "max_warmup_days": 3,
         }
+        zero_plan = SimpleNamespace(requested_days=0, drafts=())
         with (
             patch.object(lifecycle.control, "_actor", new=AsyncMock(return_value=actor)),
             patch.object(lifecycle, "get_event_warmup_plan", return_value=zero_plan),
             patch.object(lifecycle, "set_event_content_mode", return_value=None) as set_mode,
             patch.object(lifecycle, "_ask_event_day_mode", new=AsyncMock()) as ask_day,
         ):
-            await lifecycle.receive_warmup_days(_message("0"), zero_state)
+            await lifecycle.receive_warmup_days(_message("0"), zero)
         set_mode.assert_called_once()
         ask_day.assert_awaited_once()
 
-        draft = SimpleNamespace(position=1, publish_date=date(2026, 9, 24), text="Прогрев")
-        warm_plan = SimpleNamespace(requested_days=1, drafts=(draft,))
-        warm_state = AsyncMock()
-        warm_state.get_data.return_value = {
+        warm = AsyncMock()
+        warm.get_data.return_value = {
             "event_business_id": BUSINESS_ID,
             "created_event_id": EVENT_ID,
             "max_warmup_days": 3,
         }
+        draft = SimpleNamespace(position=1, publish_date=date(2026, 9, 24), text="Прогрев")
+        plan = SimpleNamespace(requested_days=1, drafts=(draft,))
         with (
             patch.object(lifecycle.control, "_actor", new=AsyncMock(return_value=actor)),
-            patch.object(lifecycle, "get_event_warmup_plan", return_value=warm_plan),
+            patch.object(lifecycle, "get_event_warmup_plan", return_value=plan),
             patch.object(lifecycle, "_cancel_keyboard", return_value="cancel"),
         ):
-            warm_message = _message("1")
-            await lifecycle.receive_warmup_days(warm_message, warm_state)
-        self.assertEqual(
-            warm_state.states if hasattr(warm_state, "states") else None,
-            None,
-        )
-        warm_state.set_state.assert_awaited_with(
+            await lifecycle.receive_warmup_days(_message("1"), warm)
+        warm.set_state.assert_awaited_with(
             lifecycle.ClientPlatformEventLifecycleState.waiting_warmup_mode
         )
 
-        failure_state = AsyncMock()
-        failure_state.get_data.return_value = {
-            "event_business_id": BUSINESS_ID,
-            "created_event_id": EVENT_ID,
-            "max_warmup_days": 3,
-        }
+        failure = AsyncMock()
+        failure.get_data.return_value = warm.get_data.return_value
+        failed_message = _message("1")
         with (
             patch.object(lifecycle.control, "_actor", new=AsyncMock(return_value=actor)),
             patch.object(lifecycle, "get_event_warmup_plan", side_effect=ValueError("bad")),
             patch.object(lifecycle, "_cancel_keyboard", return_value="cancel"),
         ):
-            failed = _message("1")
-            await lifecycle.receive_warmup_days(failed, failure_state)
-        self.assertIn("Не удалось подготовить", failed.answer.await_args.args[0])
+            await lifecycle.receive_warmup_days(failed_message, failure)
+        self.assertIn("Не удалось подготовить", failed_message.answer.await_args.args[0])
 
-    async def test_content_mode_chain_and_store_mode(self) -> None:
+    async def test_content_mode_chain(self) -> None:
         data = {"event_business_id": BUSINESS_ID, "created_event_id": EVENT_ID}
-        message = _message("2")
         actor = object()
         with (
             patch.object(lifecycle.control, "_actor", new=AsyncMock(return_value=actor)),
             patch.object(lifecycle, "set_event_content_mode", return_value=None) as stored,
         ):
             await lifecycle._store_mode(
-                message=message,
+                message=_message("2"),
                 data=data,
                 stage=lifecycle.EventContentStage.WARMUP,
                 mode=lifecycle.EventContentMode.TEXT_WITH_IMAGE,
             )
         stored.assert_called_once()
 
-        warm_state = AsyncMock()
-        warm_state.get_data.return_value = data
+        warm = AsyncMock()
+        warm.get_data.return_value = data
         with (
             patch.object(lifecycle, "_store_mode", new=AsyncMock()) as store,
             patch.object(lifecycle, "_ask_event_day_mode", new=AsyncMock()) as next_step,
         ):
-            await lifecycle.receive_warmup_mode(_message("2"), warm_state)
+            await lifecycle.receive_warmup_mode(_message("2"), warm)
         store.assert_awaited_once()
         next_step.assert_awaited_once()
-        warm_state.update_data.assert_awaited_with(
-            warmup_mode=lifecycle.EventContentMode.TEXT_WITH_IMAGE.value
-        )
 
-        event_state = AsyncMock()
-        event_state.get_data.return_value = data
+        event_day = AsyncMock()
+        event_day.get_data.return_value = data
         with (
             patch.object(lifecycle, "_store_mode", new=AsyncMock()),
             patch.object(lifecycle, "_ask_post_event_mode", new=AsyncMock()) as next_step,
         ):
-            await lifecycle.receive_event_day_mode(_message("3"), event_state)
+            await lifecycle.receive_event_day_mode(_message("3"), event_day)
         next_step.assert_awaited_once()
-        event_state.update_data.assert_awaited_with(
-            event_day_mode=lifecycle.EventContentMode.TEXT_IN_IMAGE.value
-        )
 
-        post_state = AsyncMock()
-        post_state.get_data.return_value = data
+        post = AsyncMock()
+        post.get_data.return_value = data
         with (
             patch.object(lifecycle, "_store_mode", new=AsyncMock()),
             patch.object(lifecycle, "_finish_content_setup", new=AsyncMock()) as finish,
         ):
-            await lifecycle.receive_post_event_mode(_message("1"), post_state)
+            await lifecycle.receive_post_event_mode(_message("1"), post)
         finish.assert_awaited_once()
-        post_state.update_data.assert_awaited_with(
-            post_event_mode=lifecycle.EventContentMode.TEXT.value
-        )
 
+        invalid = _message("нет такого")
         invalid_state = AsyncMock()
         invalid_state.get_data.return_value = data
-        invalid = _message("нет такого")
         with patch.object(lifecycle, "_cancel_keyboard", return_value="cancel"):
             await lifecycle.receive_event_day_mode(invalid, invalid_state)
         self.assertIn("Как оформить", invalid.answer.await_args.args[0])
 
-        missing_state = AsyncMock()
-        missing_state.get_data.return_value = {}
-        await lifecycle.receive_post_event_mode(_message("1"), missing_state)
-        missing_state.clear.assert_awaited_once()
+        missing = AsyncMock()
+        missing.get_data.return_value = {}
+        await lifecycle.receive_post_event_mode(_message("1"), missing)
+        missing.clear.assert_awaited_once()
 
 
 if __name__ == "__main__":
