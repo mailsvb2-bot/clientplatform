@@ -178,7 +178,7 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
         callback.answer.assert_awaited_once_with()
         reply.answer.assert_awaited_once()
 
-    async def test_receive_details_handles_missing_state_and_bad_shape(self) -> None:
+    async def test_receive_details_handles_missing_state_and_starts_mobile_flow(self) -> None:
         message = _message("bad")
         state = AsyncMock()
         state.get_data.return_value = {}
@@ -192,12 +192,142 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
         actor = MagicMock(unsafe=True)
         with (
             patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(
+                events,
+                "get_business_profile",
+                return_value=SimpleNamespace(timezone="Europe/Moscow"),
+            ),
             patch.object(events, "_cancel_keyboard", return_value="cancel"),
         ):
             await events.receive_event_details(message, state)
         actor.assert_can_manage_business.assert_called_once_with()
-        self.assertIn("Не получилось понять ответ", message.answer.await_args.args[0])
-        self.assertIn("Последнее поле можно заменить на -", message.answer.await_args.args[0])
+        state.update_data.assert_awaited_once_with(event_title="только одно поле")
+        state.set_state.assert_awaited_once_with(events.ClientPlatformEventState.waiting_time)
+        state.clear.assert_not_awaited()
+        answer = message.answer.await_args.args[0]
+        self.assertIn("Когда провести вебинар?", answer)
+        self.assertIn("Europe/Moscow", answer)
+        self.assertIn("Добавить ссылку на эфир", answer)
+
+    async def test_receive_time_requires_complete_business_scoped_state(self) -> None:
+        message = _message("16.09.2026 23:30")
+        state = AsyncMock()
+        state.get_data.return_value = {"event_business_id": BUSINESS_ID}
+
+        await events.receive_event_time(message, state)
+
+        state.clear.assert_awaited_once_with()
+        self.assertIn("Откройте вебинары заново", message.answer.await_args.args[0])
+
+    async def test_receive_time_cancel_returns_to_webinars(self) -> None:
+        message = _message("Отмена")
+        state = AsyncMock()
+        state.get_data.return_value = {
+            "event_business_id": BUSINESS_ID,
+            "event_title": "Простой вебинар",
+        }
+        actor = MagicMock(unsafe=True)
+        with (
+            patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(events.control, "_uuid_token", return_value=TOKEN),
+            patch.object(events.control, "_keyboard", side_effect=lambda rows: rows),
+        ):
+            await events.receive_event_time(message, state)
+
+        actor.assert_can_manage_business.assert_called_once_with()
+        state.clear.assert_awaited_once_with()
+        self.assertIn("Создание вебинара отменено", message.answer.await_args.args[0])
+        self.assertEqual(
+            message.answer.await_args.kwargs["reply_markup"],
+            [[("🎥 К вебинарам", f"cpev:home:{TOKEN}")]],
+        )
+
+    async def test_receive_time_reports_bad_date_without_clearing_state(self) -> None:
+        message = _message("когда-нибудь вечером")
+        state = AsyncMock()
+        state.get_data.return_value = {
+            "event_business_id": BUSINESS_ID,
+            "event_title": "Простой вебинар",
+        }
+        actor = MagicMock(unsafe=True)
+        with (
+            patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(
+                events,
+                "get_business_profile",
+                return_value=SimpleNamespace(timezone="Europe/Moscow"),
+            ),
+            patch.object(
+                events, "parse_local_booking_start", side_effect=ValueError("bad time")
+            ),
+            patch.object(events, "_cancel_keyboard", return_value="cancel"),
+        ):
+            await events.receive_event_time(message, state)
+
+        actor.assert_can_manage_business.assert_called_once_with()
+        state.clear.assert_not_awaited()
+        self.assertIn("Не удалось понять дату и время", message.answer.await_args.args[0])
+
+    async def test_receive_time_creates_event_without_requiring_join_url(self) -> None:
+        message = _message("16.09.2026 23:30")
+        state = AsyncMock()
+        state.get_data.return_value = {
+            "event_business_id": BUSINESS_ID,
+            "event_title": "Простой вебинар",
+        }
+        actor = MagicMock(unsafe=True)
+        created = SimpleNamespace(
+            event_id=EVENT_ID,
+            provider_key="pending",
+            email_notifications_enabled=False,
+            registration_url=lambda base: f"{base}/e/public-slug",
+        )
+
+        def _token(value: str) -> str:
+            return EVENT_TOKEN if value == EVENT_ID else TOKEN
+
+        with (
+            patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(
+                events,
+                "get_business_profile",
+                return_value=SimpleNamespace(timezone="Europe/Moscow"),
+            ),
+            patch.object(
+                events,
+                "parse_local_booking_start",
+                return_value="2026-09-16T20:30:00+00:00",
+            ),
+            patch.object(
+                events, "create_and_publish_online_event", return_value=created
+            ) as create,
+            patch.object(
+                events, "_public_base_url", return_value="https://clientplatform.example.test"
+            ),
+            patch.object(events.control, "_keyboard", side_effect=lambda rows: rows) as keyboard,
+            patch.object(events.control, "_uuid_token", side_effect=_token),
+        ):
+            await events.receive_event_time(message, state)
+
+        actor.assert_can_manage_business.assert_called_once_with()
+        request = create.call_args.kwargs["request"]
+        self.assertEqual(request.title, "Простой вебинар")
+        self.assertEqual(request.timezone_name, "Europe/Moscow")
+        self.assertIsNone(request.join_url)
+        self.assertIsNone(request.offer_url)
+        state.clear.assert_awaited_once_with()
+        answer = message.answer.await_args.args[0]
+        self.assertIn("✅ Вебинар опубликован", answer)
+        self.assertIn("Ссылку на эфир можно добавить позже", answer)
+        rows = keyboard.call_args.args[0]
+        self.assertEqual(
+            rows[0],
+            [("🔗 Добавить ссылку на эфир", f"cpev:join:{EVENT_TOKEN}:{TOKEN}")],
+        )
+        self.assertEqual(
+            rows[1],
+            [("✨ Сделать анонс", f"cpev:announce:{EVENT_TOKEN}:{TOKEN}")],
+        )
 
     async def test_receive_details_reports_validation_error_without_clearing_state(self) -> None:
         message = _message("Эфир | 15.09.2026 19:00 | http://unsafe.example")
