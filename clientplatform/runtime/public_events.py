@@ -18,12 +18,14 @@ from clientplatform.application.event_public_surface import (
 from clientplatform.application.event_reminder_channels import (
     issue_event_reminder_channel_links_in_transaction,
 )
+from clientplatform.application.event_sessions import select_event_session_for_join
 from clientplatform.application.events import (
     EventUnavailable,
     get_public_event,
     register_public_attendee_in_transaction,
 )
 from clientplatform.infrastructure.event_repository import EventNotFound, EventRepository
+from clientplatform.infrastructure.event_session_repository import EventSessionRepository
 from services.db import get_db, get_db_ro
 from services.db.core import ambient_savepoint
 from services.messenger.links import build_entry_targets
@@ -110,7 +112,6 @@ async def public_event_register(request: web.Request) -> web.Response:
 
     one = lambda key: str(form.get(key) or "").strip()
     if one("company"):
-        # Honeypot: do not persist PII and do not reveal bot detection.
         return _page("Готово", "<h1>Регистрация принята</h1>")
     marketing_requested = one("marketing_consent").lower() in {"yes", "1", "true", "on"}
     marketing_channels: tuple[str, ...] = ()
@@ -153,8 +154,6 @@ async def public_event_register(request: web.Request) -> web.Response:
                         )
                     marketing_recorded = True
                 except Exception:  # validator: allow-wide-except
-                    # Registration remains valid. Commercial messaging fails closed
-                    # because no active consent state is persisted.
                     LOGGER.exception(
                         "event commercial consent persistence failed; follow-up stays disabled",
                         extra={
@@ -246,7 +245,6 @@ async def public_event_marketing_unsubscribe(request: web.Request) -> web.Respon
     token = str(request.match_info.get("token") or "").strip()
     if not token:
         return _page("Ссылка недействительна", "<h1>Ссылка недействительна</h1>", status=404)
-    # GET only asks for confirmation. Mail/security link scanners must not revoke consent.
     action = f"/e/marketing/unsubscribe/{token}"
     return _page(
         "Отключить рекламные сообщения",
@@ -275,6 +273,14 @@ async def public_event_marketing_unsubscribe_confirm(request: web.Request) -> we
 
 async def public_event_join(request: web.Request) -> web.Response:
     token = str(request.match_info.get("token") or "").strip()
+    raw_position = str(request.match_info.get("position") or "").strip()
+    try:
+        position = int(raw_position) if raw_position else None
+        if position is not None and position < 1:
+            raise ValueError("invalid session position")
+    except ValueError:
+        return _page("Ссылка недействительна", "<h1>Ссылка недействительна</h1>", status=404)
+
     try:
         with get_db() as conn:
             repository = EventRepository(conn)
@@ -287,7 +293,12 @@ async def public_event_join(request: web.Request) -> web.Response:
                 raise EventNotFound("event not found")
             slug = str(row["public_slug"] if hasattr(row, "keys") else row[0])
             event = repository.get_public_owner_event(public_slug=slug)
-            if not event.join_is_ready or not event.join_url:
+            sessions = EventSessionRepository(conn).list_for_event_record(event=event)
+            try:
+                session = select_event_session_for_join(sessions, position=position)
+            except (LookupError, ValueError) as exc:
+                raise EventNotFound("event session not found") from exc
+            if not session.join_is_ready or not session.join_url:
                 return _page(
                     "Ссылка на эфир ещё не добавлена",
                     "<h1>Ссылка на эфир появится здесь позже</h1>"
@@ -298,7 +309,7 @@ async def public_event_join(request: web.Request) -> web.Response:
                 registration=registration,
                 event=event,
             )
-            location = event.join_url
+            location = session.join_url
     except EventNotFound:
         return _page("Ссылка недействительна", "<h1>Ссылка недействительна</h1>", status=404)
     return web.Response(
@@ -343,6 +354,7 @@ def register_public_event_routes(app: web.Application) -> None:
     app.router.add_post(
         "/e/marketing/unsubscribe/{token}", public_event_marketing_unsubscribe_confirm
     )
+    app.router.add_get("/e/join/{token}/{position}", public_event_join)
     app.router.add_get("/e/join/{token}", public_event_join)
     app.router.add_get("/e/offer/{token}", public_event_offer)
     app["clientplatform_event_ingress"] = True

@@ -4,14 +4,17 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from clientplatform.application.event_delivery_targets import (
     EventDeliveryTarget,
     resolve_event_organizational_targets,
 )
 from clientplatform.domain.email_outbound import EmailPayload
+from clientplatform.domain.event_sessions import EventSession
 from clientplatform.domain.events import Event, EventRegistration, normalize_utc
 from clientplatform.infrastructure.event_repository import EventRepository
+from clientplatform.infrastructure.event_session_repository import EventSessionRepository
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,37 +40,50 @@ def _event_url(path: str) -> str:
     return f"{_public_base_url()}{path}"
 
 
+def _session_local_start_label(*, event: Event, session: EventSession) -> str:
+    return session.starts_at.astimezone(ZoneInfo(event.timezone_name)).strftime(
+        "%d.%m.%Y %H:%M"
+    )
+
+
 def _render(
     *,
     kind: str,
     event: Event,
     registration: EventRegistration,
+    session: EventSession | None = None,
+    session_count: int = 1,
 ) -> tuple[str, str]:
-    when = event.local_start_label()
-    join = _event_url(f"/e/join/{registration.token}")
     name = registration.name
-
     if kind == "registration_confirmed":
+        when = event.local_start_label()
+        join = _event_url(f"/e/join/{registration.token}")
         return (
             f"Вы зарегистрированы: {event.title}",
             f"{name}, регистрация подтверждена.\n\n{event.title}\n{when}\n\n"
             f"Войти в эфир: {join}\n\n"
             "Сохраните эту персональную ссылку: она работает даже при поздней регистрации.",
         )
+    if session is None:
+        raise ValueError("event session is required for a reminder")
+
+    when = _session_local_start_label(event=event, session=session)
+    join = _event_url(f"/e/join/{registration.token}/{session.position}")
+    day = f"День {session.position} из {session_count}.\n" if session_count > 1 else ""
     if kind == "24h":
         return (
             f"Скоро: {event.title}",
-            f"{name}, напоминаем о мероприятии.\n\n{event.title}\n{when}\n\nВойти: {join}",
+            f"{name}, напоминаем о мероприятии.\n\n{event.title}\n{day}{when}\n\nВойти: {join}",
         )
     if kind == "3h":
         return (
             f"Через 3 часа: {event.title}",
-            f"{name}, начинаем примерно через 3 часа.\n\nВойти: {join}",
+            f"{name}, {day.lower()}начинаем примерно через 3 часа.\n\nВойти: {join}",
         )
     if kind == "15m":
         return (
             f"Через 15 минут: {event.title}",
-            f"{name}, начинаем примерно через 15 минут.\n\nВойти: {join}",
+            f"{name}, {day.lower()}начинаем примерно через 15 минут.\n\nВойти: {join}",
         )
     raise ValueError("unsupported event notification kind")
 
@@ -80,8 +96,16 @@ def _materialize(
     target: EventDeliveryTarget,
     kind: str,
     scheduled_at: datetime,
+    session: EventSession | None = None,
+    session_count: int = 1,
 ) -> bool:
-    subject, body = _render(kind=kind, event=event, registration=registration)
+    subject, body = _render(
+        kind=kind,
+        event=event,
+        registration=registration,
+        session=session,
+        session_count=session_count,
+    )
     if target.platform == "email":
         payload_kind = "mixed"
         payload_ref = EmailPayload(subject=subject, body=body).to_json()
@@ -89,14 +113,25 @@ def _materialize(
         payload_kind = "text"
         payload_ref = body
     timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-    idempotency_key = (
-        f"event:{event.id}:registration:{registration.id}:message:{kind}:v2"
-        if target.platform == "email"
-        else (
-            f"event:{event.id}:registration:{registration.id}:"
-            f"message:org:v3:{kind}:{target.platform}"
+    if kind == "registration_confirmed" or session is None or session.position == 1:
+        idempotency_key = (
+            f"event:{event.id}:registration:{registration.id}:message:{kind}:v2"
+            if target.platform == "email"
+            else (
+                f"event:{event.id}:registration:{registration.id}:"
+                f"message:org:v3:{kind}:{target.platform}"
+            )
         )
-    )
+    else:
+        idempotency_key = (
+            f"event:{event.id}:registration:{registration.id}:"
+            f"message:session:{session.position}:{kind}:v1"
+            if target.platform == "email"
+            else (
+                f"event:{event.id}:registration:{registration.id}:"
+                f"message:org:v4:session:{session.position}:{kind}:{target.platform}"
+            )
+        )
     cursor = conn.execute(
         """
         INSERT INTO provider_dispatch_outbox(
@@ -148,29 +183,46 @@ def enqueue_event_notifications(
             queued=0, skipped_past=0, enabled=False, channels=()
         )
 
-    schedule: list[tuple[str, datetime]] = [
-        ("registration_confirmed", current),
-        ("24h", event.starts_at - timedelta(hours=24)),
-        ("3h", event.starts_at - timedelta(hours=3)),
-        ("15m", event.starts_at - timedelta(minutes=15)),
-    ]
+    sessions = EventSessionRepository(conn).list_for_event_record(event=event)
     queued = 0
     skipped_past = 0
-    for kind, run_at in schedule:
-        if kind != "registration_confirmed" and run_at <= current:
-            skipped_past += 1
-            continue
-        for target in targets:
-            queued += int(
-                _materialize(
-                    conn,
-                    event=event,
-                    registration=registration,
-                    target=target,
-                    kind=kind,
-                    scheduled_at=run_at,
-                )
+    for target in targets:
+        queued += int(
+            _materialize(
+                conn,
+                event=event,
+                registration=registration,
+                target=target,
+                kind="registration_confirmed",
+                scheduled_at=current,
             )
+        )
+
+    session_count = len(sessions)
+    offsets = (
+        ("24h", timedelta(hours=24)),
+        ("3h", timedelta(hours=3)),
+        ("15m", timedelta(minutes=15)),
+    )
+    for session in sessions:
+        for kind, offset in offsets:
+            run_at = session.starts_at - offset
+            if run_at <= current:
+                skipped_past += 1
+                continue
+            for target in targets:
+                queued += int(
+                    _materialize(
+                        conn,
+                        event=event,
+                        registration=registration,
+                        target=target,
+                        kind=kind,
+                        scheduled_at=run_at,
+                        session=session,
+                        session_count=session_count,
+                    )
+                )
     return EventNotificationPlan(
         queued=queued,
         skipped_past=skipped_past,
@@ -196,11 +248,23 @@ def reconcile_future_event_notifications_for_customer(
         JOIN clientplatform_events e
           ON e.id=r.event_id AND e.business_id=r.business_id
         WHERE r.business_id=? AND r.customer_id=? AND r.status='registered'
-          AND e.status='published' AND e.starts_at>?
+          AND e.status='published'
+          AND (
+              e.starts_at>?
+              OR EXISTS(
+                  SELECT 1 FROM clientplatform_event_sessions s
+                  WHERE s.event_id=e.id AND s.business_id=e.business_id AND s.starts_at>?
+              )
+          )
         ORDER BY e.starts_at,r.id
         LIMIT 100
         """,
-        (business_id, customer_id, current.isoformat()),
+        (
+            business_id,
+            customer_id,
+            current.isoformat(),
+            current.isoformat(),
+        ),
     ).fetchall()
     repository = EventRepository(conn)
     queued = 0

@@ -4,6 +4,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from clientplatform.application.event_sessions import (
+    EventSessionSpec,
+    configure_event_sessions_in_transaction,
+)
 from clientplatform.application.events import (
     create_event_in_transaction,
     publish_event_in_transaction,
@@ -26,6 +30,27 @@ class OnlineEventCreateRequest:
     kind: str = "webinar"
     provider_key: str | None = None
     provider_label: str | None = None
+    enable_email_notifications: bool = True
+    notification_connection_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class OnlineEventSessionCreateRequest:
+    starts_at: datetime
+    ends_at: datetime | None = None
+    join_url: str | None = None
+    provider_key: str | None = None
+    provider_label: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class MultiSessionOnlineEventCreateRequest:
+    title: str
+    timezone_name: str
+    sessions: tuple[OnlineEventSessionCreateRequest, ...]
+    description: str = ""
+    offer_url: str | None = None
+    kind: str = "webinar"
     enable_email_notifications: bool = True
     notification_connection_id: str | None = None
 
@@ -136,6 +161,75 @@ def create_and_publish_online_event_in_transaction(
     )
 
 
+def create_and_publish_multisession_online_event_in_transaction(
+    conn: Any,
+    *,
+    actor: TenantContext,
+    request: MultiSessionOnlineEventCreateRequest,
+) -> OnlineEventCreated:
+    sessions = tuple(request.sessions)
+    if not sessions:
+        raise ValueError("event must have at least one session")
+    if len(sessions) > 31:
+        raise ValueError("event has too many sessions")
+
+    first = sessions[0]
+    first_join_url = (
+        None
+        if not str(first.join_url or "").strip()
+        else validate_external_https_url(first.join_url, field_name="join_url")
+    )
+    first_provider_key = normalize_provider_key(first.provider_key, join_url=first_join_url)
+    notification_connection_id = _resolve_notification_connection(
+        conn,
+        actor=actor,
+        requested_connection_id=request.notification_connection_id,
+        enabled=bool(request.enable_email_notifications),
+    )
+    event = create_event_in_transaction(
+        conn,
+        actor=actor,
+        title=request.title,
+        starts_at=first.starts_at,
+        timezone_name=request.timezone_name,
+        join_url=first_join_url,
+        description=request.description,
+        ends_at=first.ends_at,
+        offer_url=request.offer_url,
+        kind=request.kind,
+        provider_key=first_provider_key,
+        provider_label=first.provider_label,
+        notification_connection_id=notification_connection_id,
+    )
+    configured = configure_event_sessions_in_transaction(
+        conn,
+        actor=actor,
+        event_id=event.id,
+        sessions=tuple(
+            EventSessionSpec(
+                starts_at=session.starts_at,
+                ends_at=session.ends_at,
+                join_url=session.join_url,
+                provider_key=session.provider_key,
+                provider_label=session.provider_label,
+            )
+            for session in sessions
+        ),
+    )
+    event = publish_event_in_transaction(
+        conn,
+        actor=actor,
+        event_id=event.id,
+    )
+    return OnlineEventCreated(
+        event_id=event.id,
+        public_slug=event.public_slug,
+        provider_key=event.provider_key,
+        email_notifications_enabled=event.notification_connection_id is not None,
+        join_ready=all(session.join_is_ready for session in configured),
+    )
+
+
 def create_and_publish_online_event(
     *,
     actor: TenantContext,
@@ -147,9 +241,24 @@ def create_and_publish_online_event(
         )
 
 
+def create_and_publish_multisession_online_event(
+    *,
+    actor: TenantContext,
+    request: MultiSessionOnlineEventCreateRequest,
+) -> OnlineEventCreated:
+    with atomic_db() as conn:
+        return create_and_publish_multisession_online_event_in_transaction(
+            conn, actor=actor, request=request
+        )
+
+
 __all__ = [
+    "MultiSessionOnlineEventCreateRequest",
     "OnlineEventCreateRequest",
     "OnlineEventCreated",
+    "OnlineEventSessionCreateRequest",
+    "create_and_publish_multisession_online_event",
+    "create_and_publish_multisession_online_event_in_transaction",
     "create_and_publish_online_event",
     "create_and_publish_online_event_in_transaction",
 ]
