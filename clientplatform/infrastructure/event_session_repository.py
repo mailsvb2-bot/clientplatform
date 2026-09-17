@@ -9,6 +9,7 @@ from clientplatform.domain.event_sessions import (
     validate_event_session_sequence,
 )
 from clientplatform.domain.events import (
+    Event,
     normalize_provider_key,
     normalize_provider_label,
     normalize_utc,
@@ -73,18 +74,31 @@ class EventSessionRepository:
             current.assert_can_view_customer_records()
         return current
 
-    def list_for_event(self, *, actor: TenantContext, event_id: str) -> tuple[EventSession, ...]:
-        current = self._actor(actor, manage=False)
-        normalized = normalize_uuid(event_id, field_name="event_id")
+    def _list_for_event_record(self, *, event: Event) -> tuple[EventSession, ...]:
         rows = self._conn.execute(
             f"SELECT {_SESSION_COLUMNS} FROM clientplatform_event_sessions "
             "WHERE event_id=? AND business_id=? ORDER BY position ASC",  # nosec B608
-            (normalized, current.business_id),
+            (event.id, event.business_id),
         ).fetchall()
         if rows:
             return tuple(_session_from_row(row) for row in rows)
-        event = self._events.get(actor=current, event_id=normalized)
         return (legacy_event_session(event),)
+
+    def list_for_event_record(self, *, event: Event) -> tuple[EventSession, ...]:
+        """List sessions for an Event that was already authorized by its caller.
+
+        Public registration flows first resolve the event through the registration's
+        exact business/event pair. This method preserves that scope without creating
+        a synthetic tenant actor, while still falling back to the legacy root event.
+        """
+
+        return self._list_for_event_record(event=event)
+
+    def list_for_event(self, *, actor: TenantContext, event_id: str) -> tuple[EventSession, ...]:
+        current = self._actor(actor, manage=False)
+        normalized = normalize_uuid(event_id, field_name="event_id")
+        event = self._events.get(actor=current, event_id=normalized)
+        return self._list_for_event_record(event=event)
 
     def replace_for_event(
         self,
