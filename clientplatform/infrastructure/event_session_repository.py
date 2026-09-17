@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from clientplatform.domain.event_sessions import (
@@ -85,12 +85,7 @@ class EventSessionRepository:
         return (legacy_event_session(event),)
 
     def list_for_event_record(self, *, event: Event) -> tuple[EventSession, ...]:
-        """List sessions for an Event that was already authorized by its caller.
-
-        Public registration flows first resolve the event through the registration's
-        exact business/event pair. This method preserves that scope without creating
-        a synthetic tenant actor, while still falling back to the legacy root event.
-        """
+        """List sessions for an Event that was already authorized by its caller."""
 
         return self._list_for_event_record(event=event)
 
@@ -120,6 +115,8 @@ class EventSessionRepository:
         )
         timestamp = normalize_utc(now or datetime.now(timezone.utc), field_name="now")
         first = ordered[0]
+        last = ordered[-1]
+        root_ends_at = last.ends_at or (last.starts_at + timedelta(hours=2))
 
         self._conn.execute(
             "DELETE FROM clientplatform_event_sessions WHERE event_id=? AND business_id=?",
@@ -156,7 +153,7 @@ class EventSessionRepository:
             """,
             (
                 first.starts_at.isoformat(),
-                None if first.ends_at is None else first.ends_at.isoformat(),
+                root_ends_at.isoformat(),
                 first.provider_key,
                 first.provider_label,
                 first.join_url or "",
