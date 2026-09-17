@@ -66,10 +66,11 @@ def test_event_hub_is_repeatable_navigation_but_creation_remains_a_mutation() ->
     assert not safety._callback_conflicts_with_state(state_name, f"cpev:home:{_TOKEN}")
     assert safety._callback_should_clear_state(state_name, f"cpev:home:{_TOKEN}")
     assert safety._callback_should_clear_state(state_name, f"cpev:settings:{_TOKEN}")
-    assert safety._state_local_callback_allowed(
-        "ClientPlatformEventState:waiting_details",
-        f"cpev:cancel:{_TOKEN}",
-    )
+    for event_state in ("waiting_details", "waiting_time", "waiting_join_url"):
+        assert safety._state_local_callback_allowed(
+            f"ClientPlatformEventState:{event_state}",
+            f"cpev:cancel:{_TOKEN}",
+        )
 
 
 def test_client_tools_hide_customer_actions_without_customer_record_access() -> None:
