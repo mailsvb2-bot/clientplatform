@@ -802,6 +802,11 @@ async def choose_session_duration(callback: CallbackQuery, state: FSMContext) ->
     total = int(data.get("event_days") or 0)
     position = int(data.get("event_session_index") or 0)
     venue_key = str(data.get("event_platform") or "other")
+    callback_parts = str(callback.data or "").split(":", 2)
+    if len(callback_parts) != 3:
+        await callback.answer("Не удалось собрать время эфира. Выберите дату заново.", show_alert=True)
+        return
+    duration_token = callback_parts[2]
     try:
         minimum = parse_calendar_date(
             str(data.get("event_picker_min_date") or ""),
@@ -812,7 +817,7 @@ async def choose_session_duration(callback: CallbackQuery, state: FSMContext) ->
             minimum=minimum,
         )
         start_time = parse_quick_time(data.get("event_picker_start"))
-        duration = parse_quick_duration(str(callback.data or "").split(":", 2)[2])
+        duration = parse_quick_duration(duration_token)
         session = parse_session_window(
             session_window_text(
                 selected_date=selected,
@@ -824,7 +829,7 @@ async def choose_session_duration(callback: CallbackQuery, state: FSMContext) ->
         )
         configured = _configured_sessions(data)
         validate_session_sequence(session, previous=configured[-1] if configured else None)
-    except (IndexError, KeyError, TypeError, ValueError):
+    except (KeyError, TypeError, ValueError):
         await callback.answer("Не удалось собрать время эфира. Выберите дату заново.", show_alert=True)
         return
     await state.update_data(
