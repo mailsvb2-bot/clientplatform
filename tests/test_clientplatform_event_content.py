@@ -173,7 +173,7 @@ class EventContentApplicationTests(unittest.TestCase):
         self.assertIs(plan.event_day, EventContentMode.TEXT)
         self.assertIs(plan.post_event, EventContentMode.TEXT)
 
-    def test_text_mode_never_prepares_paid_visual(self) -> None:
+    def test_text_mode_never_loads_visual_stack_or_prepares_paid_visual(self) -> None:
         text_plan = plans.EventContentPlan(
             event_id=EVENT_ID,
             warmup=EventContentMode.TEXT,
@@ -182,6 +182,8 @@ class EventContentApplicationTests(unittest.TestCase):
         )
         with (
             patch.object(plans, "get_event_content_plan", return_value=text_plan),
+            patch.object(plans, "_load_goal_visual_brand") as load_brand,
+            patch.object(plans, "_freeze_business_image_payload") as freeze,
             patch.object(plans, "prepare_creative_generation") as prepare,
         ):
             result = plans.prepare_event_stage_visual(
@@ -193,6 +195,8 @@ class EventContentApplicationTests(unittest.TestCase):
                 message_text="Текст",
             )
         self.assertIsNone(result)
+        load_brand.assert_not_called()
+        freeze.assert_not_called()
         prepare.assert_not_called()
 
     def test_visual_mode_freezes_receipt_but_does_not_submit_paid_job(self) -> None:
@@ -207,8 +211,8 @@ class EventContentApplicationTests(unittest.TestCase):
         with (
             patch.object(plans, "get_event_content_plan", return_value=visual_plan),
             patch.object(plans, "event_visual_request", return_value="REQUEST"),
-            patch.object(plans, "load_goal_visual_brand", return_value=brand),
-            patch.object(plans, "freeze_business_image_payload", return_value="FROZEN") as freeze,
+            patch.object(plans, "_load_goal_visual_brand", return_value=brand),
+            patch.object(plans, "_freeze_business_image_payload", return_value="FROZEN") as freeze,
             patch.object(plans, "prepare_creative_generation", return_value=receipt) as prepare,
         ):
             result = plans.prepare_event_stage_visual(
