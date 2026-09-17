@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 TenantDisposition = Literal["erase", "retain", "anonymize"]
-CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-09-15.v49-offering-process-retention"
+CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-09-17.v50-event-sessions-retention"
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,6 +54,7 @@ _POLICIES = (
     _required("customer_invites", "erase", "expiring customer connection capability and claim routing"),
     _required("booking_slots", "anonymize", "business availability and customer appointment fulfilment"),
     _required("clientplatform_events", "retain", "business-owned online event configuration, provider routing and publication state"),
+    _required("clientplatform_event_sessions", "retain", "business-owned multi-session event schedule and provider routing without participant identity"),
     _required("clientplatform_event_registrations", "erase", "public event registration PII, consent, CRM linkage and attendance signals"),
     _required("clientplatform_event_conversion_links", "anonymize", "verified event-to-payment attribution retained without public registration PII"),
     _required("clientplatform_event_commercial_consent_events", "erase", "registration-linked commercial consent evidence is erased with the public registration and contains no independent send authority"),
