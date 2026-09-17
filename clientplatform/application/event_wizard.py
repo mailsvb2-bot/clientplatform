@@ -64,7 +64,7 @@ def normalize_event_timezone(value: object) -> str:
         MOSCOW_TIMEZONE.casefold(),
     }:
         return MOSCOW_TIMEZONE
-    if not raw or len(raw) > 80 or "/" not in raw:
+    if not raw or len(raw) > 80:
         raise ValueError("timezone must be Moscow or a valid IANA timezone")
     try:
         ZoneInfo(raw)
@@ -117,7 +117,7 @@ def normalize_session_join_url(
     existing_urls: tuple[str, ...] = (),
 ) -> str | None:
     raw = str(value or "").strip()
-    if raw in {"", "-", "позже", "Позже"}:
+    if raw.casefold() in {"", "-", "позже"}:
         return None
     if not raw.startswith("https://"):
         raise ValueError("join URL must use HTTPS")
