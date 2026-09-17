@@ -4,8 +4,6 @@ import re
 from dataclasses import dataclass
 
 from clientplatform.application.creative_generation import prepare_creative_generation
-from clientplatform.application.creative_studio_publication import load_goal_visual_brand
-from clientplatform.application.visual_creatives import freeze_business_image_payload
 from clientplatform.domain.event_content import (
     EventContentMode,
     EventContentPreference,
@@ -38,6 +36,30 @@ class EventVisualPreparation:
     receipt_id: str
     request_text: str
     prepared_for_requested_visual: bool
+
+
+def _load_goal_visual_brand(*, actor: TenantContext):
+    # Keep this module dependency-light. The publication asset stack imports Pillow,
+    # which is intentionally absent from dependency-light Canon jobs. Import it only
+    # after the owner has explicitly selected a visual mode.
+    from clientplatform.application.creative_studio_publication import load_goal_visual_brand
+
+    return load_goal_visual_brand(actor=actor)
+
+
+def _freeze_business_image_payload(
+    *,
+    request: str,
+    brand_context: str,
+    country_code: str,
+) -> str:
+    from clientplatform.application.visual_creatives import freeze_business_image_payload
+
+    return freeze_business_image_payload(
+        request=request,
+        brand_context=brand_context,
+        country_code=country_code,
+    )
 
 
 def set_event_content_mode(
@@ -124,9 +146,9 @@ def prepare_event_stage_visual(
         message_text=message_text,
         session_label=session_label,
     )
-    brand = load_goal_visual_brand(actor=actor)
+    brand = _load_goal_visual_brand(actor=actor)
     brand_context = brand.prompt_context()
-    provider_payload_json = freeze_business_image_payload(
+    provider_payload_json = _freeze_business_image_payload(
         request=request_text,
         brand_context=brand_context,
         country_code=country_code,
