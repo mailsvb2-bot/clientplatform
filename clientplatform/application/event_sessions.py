@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -64,6 +64,40 @@ def validate_warmup_days(requested_days: int, *, max_warmup_days: int) -> int:
     if requested_days > max_warmup_days:
         raise ValueError("warmup days exceed the time remaining before the event")
     return requested_days
+
+
+def select_event_session_for_join(
+    sessions: tuple[EventSession, ...] | list[EventSession],
+    *,
+    position: int | None = None,
+    now: datetime | None = None,
+    default_duration: timedelta = timedelta(hours=2),
+) -> EventSession:
+    """Resolve an exact or current/upcoming session for a personal join link.
+
+    Explicit reminder links use ``position`` and therefore can never leak another
+    day's room. Legacy personal links without a position remain useful: before the
+    event they open day 1, during a session they open that session, between days
+    they advance to the next one, and after the event they resolve to the last day.
+    """
+
+    ordered = tuple(sessions)
+    if not ordered:
+        raise ValueError("event sessions are required")
+    if position is not None:
+        if isinstance(position, bool) or not isinstance(position, int) or position < 1:
+            raise ValueError("position must be a positive integer")
+        for session in ordered:
+            if session.position == position:
+                return session
+        raise LookupError("event session was not found")
+
+    current = normalize_utc(now or datetime.now(timezone.utc), field_name="now")
+    for session in ordered:
+        effective_end = session.ends_at or (session.starts_at + default_duration)
+        if current < effective_end:
+            return session
+    return ordered[-1]
 
 
 def configure_event_sessions_in_transaction(
@@ -184,6 +218,7 @@ __all__ = [
     "configure_event_sessions_in_transaction",
     "get_event_warmup_window",
     "list_event_sessions",
+    "select_event_session_for_join",
     "set_event_session_join_target",
     "validate_warmup_days",
     "warmup_window_for_sessions",
