@@ -28,7 +28,6 @@ from clientplatform.domain.tenancy import TenantPermissionDenied
 from clientplatform.presentation.event_ui import (
     BACK_TO_EVENTS_LABEL,
     BACK_TO_GROWTH_LABEL,
-    EVENT_CREATION_INPUT_GUIDANCE,
     event_creation_failure_text,
     event_creation_prompt,
     event_creation_success_text,
@@ -46,13 +45,13 @@ router.callback_query.filter(control.ClientPlatformControlEnabled())
 
 class ClientPlatformEventState(StatesGroup):
     waiting_details = State()
+    waiting_time = State()
     waiting_join_url = State()
 
 
 def _cancel_keyboard(business_id: str):
     token = control._uuid_token(business_id)
     return control._keyboard([[(BACK_TO_EVENTS_LABEL, f"cpev:cancel:{token}")]])
-
 
 
 
@@ -216,18 +215,33 @@ async def receive_event_details(message: Message, state: FSMContext) -> None:
             ),
         )
         return
-    parts = [part.strip() for part in str(message.text or "").split("|")]
-    if len(parts) not in {2, 3, 4} or not all(parts[:2]):
+    raw = str(message.text or "").strip()
+    parts = [part.strip() for part in raw.split("|")]
+    if len(parts) in {2, 3, 4} and all(parts[:2]):
+        # Keep the old one-line form as an expert shortcut, but do not require it.
+        title, local_time = parts[:2]
+        join_url = None if len(parts) < 3 or parts[2] in {"", "-"} else parts[2]
+        offer_url = None if len(parts) < 4 or parts[3] in {"", "-"} else parts[3]
+    else:
+        title = raw
+        if not title:
+            await message.answer(
+                "Введите название вебинара.",
+                reply_markup=_cancel_keyboard(business_id),
+            )
+            return
+        await state.update_data(event_title=title)
+        await state.set_state(ClientPlatformEventState.waiting_time)
+        profile = await asyncio.to_thread(get_business_profile, actor=actor)
         await message.answer(
-            "Не получилось понять ответ.\n\n"
-            + EVENT_CREATION_INPUT_GUIDANCE
-            + "\n\nЧтобы выйти без изменений, отправьте «Отмена» или нажмите «🎥 К вебинарам».",
+            "Когда провести вебинар?\n\n"
+            "Напишите дату и время, например: 16.09.2026 23:30\n"
+            f"Часовой пояс бизнеса: {profile.timezone}.\n\n"
+            "Ссылку на Zoom, Webinar.ru или другую площадку сейчас вводить не нужно — "
+            "после создания появится отдельная кнопка «🔗 Добавить ссылку на эфир».",
             reply_markup=_cancel_keyboard(business_id),
         )
         return
-    title, local_time = parts[:2]
-    join_url = None if len(parts) < 3 or parts[2] in {"", "-"} else parts[2]
-    offer_url = None if len(parts) < 4 or parts[3] in {"", "-"} else parts[3]
     try:
         profile = await asyncio.to_thread(get_business_profile, actor=actor)
         starts_at = datetime.fromisoformat(
@@ -286,6 +300,87 @@ async def receive_event_details(message: Message, state: FSMContext) -> None:
             registration_url=registration_url,
             email_notifications_enabled=created.email_notifications_enabled,
             join_ready=join_ready,
+        ),
+        reply_markup=control._keyboard(event_rows),
+    )
+
+
+@router.message(ClientPlatformEventState.waiting_time)
+async def receive_event_time(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    business_id = str(data.get("event_business_id") or "")
+    title = str(data.get("event_title") or "").strip()
+    if not business_id or not title:
+        await state.clear()
+        await message.answer("Не удалось продолжить создание вебинара. Откройте вебинары заново.")
+        return
+    actor = await control._actor(int(message.from_user.id), business_id)
+    actor.assert_can_manage_business()
+    local_time = " ".join(str(message.text or "").strip().split())
+    if local_time.casefold() in {"отмена", "cancel"}:
+        await state.clear()
+        await message.answer(
+            "Создание вебинара отменено. Данные не изменены.",
+            reply_markup=control._keyboard(
+                [[(BACK_TO_EVENTS_LABEL, f"cpev:home:{control._uuid_token(business_id)}")]]
+            ),
+        )
+        return
+    try:
+        profile = await asyncio.to_thread(get_business_profile, actor=actor)
+        starts_at = datetime.fromisoformat(
+            parse_local_booking_start(local_time, timezone_name=profile.timezone)
+        )
+        created = await asyncio.to_thread(
+            create_and_publish_online_event,
+            actor=actor,
+            request=OnlineEventCreateRequest(
+                title=title,
+                starts_at=starts_at,
+                timezone_name=profile.timezone,
+                join_url=None,
+                offer_url=None,
+            ),
+        )
+        registration_url = created.registration_url(_public_base_url())
+    except (ValueError, RuntimeError):
+        await message.answer(
+            "Не удалось понять дату и время. Напишите, например: 16.09.2026 23:30",
+            reply_markup=_cancel_keyboard(business_id),
+        )
+        return
+    await state.clear()
+    token = control._uuid_token(business_id)
+    created_event_id = str(getattr(created, "event_id", "") or "").strip()
+    event_rows: list[list[tuple[str, str]]] = []
+    if created_event_id:
+        event_rows.append(
+            [(
+                "🔗 Добавить ссылку на эфир",
+                f"cpev:join:{control._uuid_token(created_event_id)}:{token}",
+            )]
+        )
+        event_rows.append(
+            [(
+                "✨ Сделать анонс",
+                f"cpev:announce:{control._uuid_token(created_event_id)}:{token}",
+            )]
+        )
+    event_rows.extend(
+        [
+            [(BACK_TO_EVENTS_LABEL, f"cpev:home:{token}")],
+            [("🎥 Создать ещё", f"cpev:new:{token}")],
+            [(BACK_TO_GROWTH_LABEL, f"cpo:content:{token}")],
+        ]
+    )
+    await message.answer(
+        event_creation_success_text(
+            title=title,
+            local_time=local_time,
+            provider_key=created.provider_key,
+            registration_url=registration_url,
+            email_notifications_enabled=created.email_notifications_enabled,
+            join_ready=False,
         ),
         reply_markup=control._keyboard(event_rows),
     )
