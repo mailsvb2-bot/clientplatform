@@ -6,6 +6,7 @@ from uuid import uuid4
 
 import pytest
 
+from clientplatform.application.event_sessions import select_event_session_for_join
 from clientplatform.domain.event_sessions import (
     EventSession,
     legacy_event_session,
@@ -59,23 +60,27 @@ def _session(event: Event, *, position: int, day_offset: int, join_url: str) -> 
     )
 
 
+def _two_day_sessions(event: Event) -> tuple[EventSession, EventSession]:
+    return (
+        _session(
+            event,
+            position=1,
+            day_offset=0,
+            join_url="https://day1.example.test/room",
+        ),
+        _session(
+            event,
+            position=2,
+            day_offset=1,
+            join_url="https://day2.example.test/room",
+        ),
+    )
+
+
 def test_two_day_event_sessions_keep_distinct_join_targets() -> None:
     event = _event()
     sessions = validate_event_session_sequence(
-        [
-            _session(
-                event,
-                position=1,
-                day_offset=0,
-                join_url="https://day1.example.test/room",
-            ),
-            _session(
-                event,
-                position=2,
-                day_offset=1,
-                join_url="https://day2.example.test/room",
-            ),
-        ],
+        _two_day_sessions(event),
         business_id=event.business_id,
         event_id=event.id,
     )
@@ -85,6 +90,40 @@ def test_two_day_event_sessions_keep_distinct_join_targets() -> None:
     assert sessions[1].join_url == "https://day2.example.test/room"
     assert sessions[0].starts_at < sessions[1].starts_at
     assert all(session.join_is_ready for session in sessions)
+
+
+def test_legacy_personal_join_advances_from_day_one_to_day_two() -> None:
+    event = _event()
+    day_one, day_two = _two_day_sessions(event)
+
+    assert select_event_session_for_join(
+        (day_one, day_two), now=day_one.starts_at - timedelta(hours=1)
+    ) == day_one
+    assert select_event_session_for_join(
+        (day_one, day_two), now=day_one.starts_at + timedelta(hours=1)
+    ) == day_one
+    assert select_event_session_for_join(
+        (day_one, day_two), now=day_one.ends_at + timedelta(minutes=1)
+    ) == day_two
+    assert select_event_session_for_join(
+        (day_one, day_two), now=day_two.ends_at + timedelta(minutes=1)
+    ) == day_two
+
+
+def test_session_specific_personal_join_never_leaks_another_day_room() -> None:
+    event = _event()
+    day_one, day_two = _two_day_sessions(event)
+
+    selected = select_event_session_for_join(
+        (day_one, day_two),
+        position=2,
+        now=day_one.starts_at - timedelta(days=2),
+    )
+
+    assert selected.position == 2
+    assert selected.join_url == "https://day2.example.test/room"
+    with pytest.raises(LookupError, match="not found"):
+        select_event_session_for_join((day_one, day_two), position=3, now=NOW)
 
 
 def test_legacy_event_is_exposed_as_deterministic_single_session() -> None:
