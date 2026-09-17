@@ -8,7 +8,6 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
-from clientplatform.application.activity import get_business_profile
 from clientplatform.application.event_owner_flow import (
     MultiSessionOnlineEventCreateRequest,
     OnlineEventCreateRequest,
@@ -18,7 +17,16 @@ from clientplatform.application.event_owner_flow import (
 )
 from clientplatform.application.event_sessions import get_event_warmup_window
 from clientplatform.application.event_warmups import get_event_warmup_plan
-from clientplatform.domain.bookings import parse_local_booking_start
+from clientplatform.application.event_wizard import (
+    MAX_EVENT_SESSIONS,
+    MOSCOW_TIMEZONE,
+    EventWizardSession,
+    normalize_event_timezone,
+    normalize_session_join_url,
+    parse_session_count,
+    parse_session_window,
+    validate_session_sequence,
+)
 from clientplatform.domain.tenancy import TenantPermissionDenied
 from clientplatform.presentation.event_ui import BACK_TO_EVENTS_LABEL
 from config.settings import settings
@@ -34,10 +42,9 @@ router.callback_query.filter(control.ClientPlatformControlEnabled())
 class ClientPlatformEventLifecycleState(StatesGroup):
     waiting_title = State()
     waiting_days = State()
-    waiting_day1_time = State()
-    waiting_day1_url = State()
-    waiting_day2_time = State()
-    waiting_day2_url = State()
+    waiting_timezone = State()
+    waiting_session_time = State()
+    waiting_session_url = State()
     waiting_warmup_days = State()
 
 
@@ -71,12 +78,6 @@ async def _cancel(message: Message, state: FSMContext, business_id: str) -> None
     )
 
 
-def _parse_local_time(value: str, *, timezone_name: str) -> datetime:
-    return datetime.fromisoformat(
-        parse_local_booking_start(value, timezone_name=timezone_name)
-    )
-
-
 def _event_actions(
     *,
     event_id: str,
@@ -92,6 +93,53 @@ def _event_actions(
     rows.append([(BACK_TO_EVENTS_LABEL, f"cpev:home:{business_token}")])
     rows.append([("🎥 Создать ещё", f"cpev:new:{business_token}")])
     return rows
+
+
+def _session_from_payload(value: object) -> EventWizardSession:
+    if not isinstance(value, dict):
+        raise ValueError("invalid session payload")
+    return EventWizardSession(
+        position=int(value["position"]),
+        starts_at=datetime.fromisoformat(str(value["starts_at"])),
+        ends_at=datetime.fromisoformat(str(value["ends_at"])),
+        local_label=str(value["local_label"]),
+        join_url=(None if not str(value.get("join_url") or "").strip() else str(value["join_url"])),
+    )
+
+
+def _session_payload(session: EventWizardSession, *, join_url: str | None) -> dict[str, object]:
+    return {
+        "position": session.position,
+        "starts_at": session.starts_at.isoformat(),
+        "ends_at": session.ends_at.isoformat(),
+        "local_label": session.local_label,
+        "join_url": join_url,
+    }
+
+
+def _configured_sessions(data: dict[str, object]) -> tuple[EventWizardSession, ...]:
+    raw = data.get("event_sessions") or []
+    if not isinstance(raw, list):
+        raise ValueError("invalid session collection")
+    return tuple(_session_from_payload(item) for item in raw)
+
+
+async def _prompt_session_time(
+    message: Message,
+    state: FSMContext,
+    *,
+    business_id: str,
+    position: int,
+    total: int,
+    timezone_name: str,
+) -> None:
+    await state.set_state(ClientPlatformEventLifecycleState.waiting_session_time)
+    await message.answer(
+        f"День {position} из {total}: когда эфир начинается и заканчивается?\n\n"
+        "Напишите одной строкой, например: 25.09.2026 19:00-21:00\n"
+        f"Часовой пояс: {timezone_name}.",
+        reply_markup=_cancel_keyboard(business_id),
+    )
 
 
 async def _begin_warmup_choice(
@@ -169,7 +217,7 @@ async def receive_title(message: Message, state: FSMContext) -> None:
     await state.update_data(event_title=title)
     await state.set_state(ClientPlatformEventLifecycleState.waiting_days)
     await message.answer(
-        "Сколько дней идёт мероприятие?\n\nВведите 1 или 2.",
+        f"Сколько дней/эфиров будет в мероприятии?\n\nВведите число от 1 до {MAX_EVENT_SESSIONS}.",
         reply_markup=_cancel_keyboard(business_id),
     )
 
@@ -185,106 +233,152 @@ async def receive_days(message: Message, state: FSMContext) -> None:
     if _is_cancel(message):
         await _cancel(message, state, business_id)
         return
-    raw = _normalized_text(message).casefold()
-    if raw in {"1", "1 день", "один", "один день"}:
-        days = 1
-    elif raw in {"2", "2 дня", "два", "два дня"}:
-        days = 2
-    else:
-        await message.answer("Введите 1 или 2.", reply_markup=_cancel_keyboard(business_id))
+    try:
+        days = parse_session_count(_normalized_text(message))
+    except ValueError:
+        await message.answer(
+            f"Введите число от 1 до {MAX_EVENT_SESSIONS}.",
+            reply_markup=_cancel_keyboard(business_id),
+        )
         return
-    actor = await control._actor(int(message.from_user.id), business_id)
-    profile = await asyncio.to_thread(get_business_profile, actor=actor)
-    await state.update_data(event_days=days, event_timezone=profile.timezone)
-    await state.set_state(ClientPlatformEventLifecycleState.waiting_day1_time)
+    await state.update_data(event_days=days, event_sessions=[], event_session_index=1)
+    await state.set_state(ClientPlatformEventLifecycleState.waiting_timezone)
     await message.answer(
-        "Когда начинается день 1?\n\n"
-        "Напишите дату и время, например: 25.09.2026 19:00\n"
-        f"Часовой пояс бизнеса: {profile.timezone}.",
+        "По какому времени идут эфиры?\n\n"
+        "Напишите «Москва» для московского времени. Если время другое — укажите часовой пояс, например Europe/Amsterdam или Asia/Yekaterinburg.",
         reply_markup=_cancel_keyboard(business_id),
     )
 
 
-@router.message(ClientPlatformEventLifecycleState.waiting_day1_time)
-async def receive_day1_time(message: Message, state: FSMContext) -> None:
+@router.message(ClientPlatformEventLifecycleState.waiting_timezone)
+async def receive_timezone(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    business_id = str(data.get("event_business_id") or "")
+    days = int(data.get("event_days") or 0)
+    if not business_id or days < 1:
+        await state.clear()
+        await message.answer("Не удалось продолжить. Откройте вебинары заново.")
+        return
+    if _is_cancel(message):
+        await _cancel(message, state, business_id)
+        return
+    try:
+        timezone_name = normalize_event_timezone(_normalized_text(message))
+    except ValueError:
+        await message.answer(
+            "Не удалось определить часовой пояс. Напишите «Москва» или IANA-зону, например Europe/Amsterdam.",
+            reply_markup=_cancel_keyboard(business_id),
+        )
+        return
+    await state.update_data(event_timezone=timezone_name, event_session_index=1)
+    await _prompt_session_time(
+        message,
+        state,
+        business_id=business_id,
+        position=1,
+        total=days,
+        timezone_name=timezone_name,
+    )
+
+
+@router.message(ClientPlatformEventLifecycleState.waiting_session_time)
+async def receive_session_time(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     business_id = str(data.get("event_business_id") or "")
     timezone_name = str(data.get("event_timezone") or "")
-    if not business_id or not timezone_name:
+    total = int(data.get("event_days") or 0)
+    position = int(data.get("event_session_index") or 0)
+    if not business_id or not timezone_name or total < 1 or position < 1 or position > total:
         await state.clear()
         await message.answer("Не удалось продолжить. Откройте вебинары заново.")
         return
     if _is_cancel(message):
         await _cancel(message, state, business_id)
         return
-    local_time = _normalized_text(message)
     try:
-        starts_at = _parse_local_time(local_time, timezone_name=timezone_name)
-    except ValueError:
+        session = parse_session_window(
+            _normalized_text(message),
+            timezone_name=timezone_name,
+            position=position,
+        )
+        previous_sessions = _configured_sessions(data)
+        previous = previous_sessions[-1] if previous_sessions else None
+        validate_session_sequence(session, previous=previous)
+    except (KeyError, TypeError, ValueError):
         await message.answer(
-            "Не удалось понять дату и время. Напишите, например: 25.09.2026 19:00",
+            "Не удалось понять интервал. Напишите дату, начало и окончание, например: 25.09.2026 19:00-21:00. Следующий эфир не должен пересекаться с предыдущим.",
             reply_markup=_cancel_keyboard(business_id),
         )
         return
-    await state.update_data(day1_local_time=local_time, day1_starts_at=starts_at.isoformat())
-    await state.set_state(ClientPlatformEventLifecycleState.waiting_day1_url)
-    days = int(data.get("event_days") or 1)
-    optional = " Можно отправить «-», если ссылка появится позже." if days == 1 else ""
+    await state.update_data(
+        pending_session={
+            "position": session.position,
+            "starts_at": session.starts_at.isoformat(),
+            "ends_at": session.ends_at.isoformat(),
+            "local_label": session.local_label,
+        }
+    )
+    await state.set_state(ClientPlatformEventLifecycleState.waiting_session_url)
     await message.answer(
-        "Пришлите HTTPS-ссылку на комнату дня 1." + optional,
+        f"Пришлите HTTPS-ссылку на комнату дня {position}.\n"
+        "Если ссылка появится позже — отправьте «-»; добавить её можно будет до эфира.",
         reply_markup=_cancel_keyboard(business_id),
     )
 
 
-@router.message(ClientPlatformEventLifecycleState.waiting_day1_url)
-async def receive_day1_url(message: Message, state: FSMContext) -> None:
+async def _create_configured_event(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     business_id = str(data.get("event_business_id") or "")
-    if not business_id:
+    title = str(data.get("event_title") or "").strip()
+    timezone_name = str(data.get("event_timezone") or "")
+    if not business_id or not title or not timezone_name:
         await state.clear()
-        await message.answer("Не удалось продолжить. Откройте вебинары заново.")
+        await message.answer("Не удалось завершить создание. Откройте вебинары заново.")
         return
-    if _is_cancel(message):
-        await _cancel(message, state, business_id)
-        return
-    days = int(data.get("event_days") or 1)
-    raw_url = str(message.text or "").strip()
-    day1_url = None if raw_url == "-" else raw_url
-    if days == 2 and not day1_url:
+    try:
+        sessions = _configured_sessions(data)
+    except (KeyError, TypeError, ValueError):
+        sessions = ()
+    expected_count = int(data.get("event_days") or 0)
+    if len(sessions) != expected_count or not sessions:
         await message.answer(
-            "Для двухдневного вебинара нужна отдельная HTTPS-ссылка дня 1.",
+            "Не удалось завершить создание: заполнены не все дни.",
             reply_markup=_cancel_keyboard(business_id),
         )
         return
-    if day1_url and not day1_url.startswith("https://"):
-        await message.answer("Ссылка должна начинаться с https://", reply_markup=_cancel_keyboard(business_id))
-        return
-    await state.update_data(day1_url=day1_url)
-    if days == 2:
-        await state.set_state(ClientPlatformEventLifecycleState.waiting_day2_time)
-        await message.answer(
-            "Когда начинается день 2?\n\nНапишите дату и время второго дня.",
-            reply_markup=_cancel_keyboard(business_id),
-        )
-        return
-    await _create_single_day_event(message, state)
 
-
-async def _create_single_day_event(message: Message, state: FSMContext) -> None:
-    data = await state.get_data()
-    business_id = str(data["event_business_id"])
     actor = await control._actor(int(message.from_user.id), business_id)
     try:
-        created = await asyncio.to_thread(
-            create_and_publish_online_event,
-            actor=actor,
-            request=OnlineEventCreateRequest(
-                title=str(data["event_title"]),
-                starts_at=datetime.fromisoformat(str(data["day1_starts_at"])),
-                timezone_name=str(data["event_timezone"]),
-                join_url=data.get("day1_url"),
-            ),
-        )
+        if len(sessions) == 1:
+            session = sessions[0]
+            created = await asyncio.to_thread(
+                create_and_publish_online_event,
+                actor=actor,
+                request=OnlineEventCreateRequest(
+                    title=title,
+                    starts_at=session.starts_at,
+                    ends_at=session.ends_at,
+                    timezone_name=timezone_name,
+                    join_url=session.join_url,
+                ),
+            )
+        else:
+            created = await asyncio.to_thread(
+                create_and_publish_multisession_online_event,
+                actor=actor,
+                request=MultiSessionOnlineEventCreateRequest(
+                    title=title,
+                    timezone_name=timezone_name,
+                    sessions=tuple(
+                        OnlineEventSessionCreateRequest(
+                            starts_at=session.starts_at,
+                            ends_at=session.ends_at,
+                            join_url=session.join_url,
+                        )
+                        for session in sessions
+                    ),
+                ),
+            )
         registration_url = created.registration_url(_public_base_url())
         await _begin_warmup_choice(
             message,
@@ -292,111 +386,79 @@ async def _create_single_day_event(message: Message, state: FSMContext) -> None:
             actor=actor,
             business_id=business_id,
             event_id=created.event_id,
-            title=str(data["event_title"]),
-            local_times=(str(data["day1_local_time"]),),
+            title=title,
+            local_times=tuple(session.local_label for session in sessions),
             registration_url=registration_url,
             provider_key=created.provider_key,
             join_ready=created.join_ready,
         )
     except (ValueError, RuntimeError):
         await message.answer(
-            "Не удалось создать вебинар. Проверьте дату и HTTPS-ссылку.",
+            "Не удалось создать вебинар. Проверьте даты, время окончания и HTTPS-ссылки.",
             reply_markup=_cancel_keyboard(business_id),
         )
 
 
-@router.message(ClientPlatformEventLifecycleState.waiting_day2_time)
-async def receive_day2_time(message: Message, state: FSMContext) -> None:
+@router.message(ClientPlatformEventLifecycleState.waiting_session_url)
+async def receive_session_url(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     business_id = str(data.get("event_business_id") or "")
+    total = int(data.get("event_days") or 0)
+    position = int(data.get("event_session_index") or 0)
     timezone_name = str(data.get("event_timezone") or "")
-    if not business_id or not timezone_name:
+    if not business_id or total < 1 or position < 1 or position > total or not timezone_name:
         await state.clear()
         await message.answer("Не удалось продолжить. Откройте вебинары заново.")
         return
     if _is_cancel(message):
         await _cancel(message, state, business_id)
         return
-    local_time = _normalized_text(message)
     try:
-        starts_at = _parse_local_time(local_time, timezone_name=timezone_name)
-        day1 = datetime.fromisoformat(str(data["day1_starts_at"]))
-        if starts_at <= day1:
-            raise ValueError("day 2 must start after day 1")
-    except (KeyError, ValueError):
-        await message.answer(
-            "День 2 должен начинаться позже дня 1. Проверьте дату и время.",
-            reply_markup=_cancel_keyboard(business_id),
+        configured = _configured_sessions(data)
+        pending = _session_from_payload(data.get("pending_session"))
+        existing_urls = tuple(
+            session.join_url for session in configured if session.join_url is not None
         )
+        join_url = normalize_session_join_url(
+            str(message.text or "").strip(),
+            existing_urls=existing_urls,
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        text = str(exc)
+        if "own room" in text:
+            answer = "Для каждого дня нужна своя ссылка на комнату. Эта ссылка уже используется другим днём."
+        else:
+            answer = "Ссылка должна начинаться с https://. Если её пока нет — отправьте «-»."
+        await message.answer(answer, reply_markup=_cancel_keyboard(business_id))
         return
-    await state.update_data(day2_local_time=local_time, day2_starts_at=starts_at.isoformat())
-    await state.set_state(ClientPlatformEventLifecycleState.waiting_day2_url)
-    await message.answer(
-        "Пришлите HTTPS-ссылку на комнату дня 2. Она должна отличаться от ссылки дня 1.",
-        reply_markup=_cancel_keyboard(business_id),
+
+    completed = EventWizardSession(
+        position=pending.position,
+        starts_at=pending.starts_at,
+        ends_at=pending.ends_at,
+        local_label=pending.local_label,
+        join_url=join_url,
     )
+    payloads = [
+        _session_payload(session, join_url=session.join_url) for session in configured
+    ]
+    payloads.append(_session_payload(completed, join_url=join_url))
+    await state.update_data(event_sessions=payloads)
 
-
-@router.message(ClientPlatformEventLifecycleState.waiting_day2_url)
-async def receive_day2_url(message: Message, state: FSMContext) -> None:
-    data = await state.get_data()
-    business_id = str(data.get("event_business_id") or "")
-    if not business_id:
-        await state.clear()
-        await message.answer("Не удалось продолжить. Откройте вебинары заново.")
-        return
-    if _is_cancel(message):
-        await _cancel(message, state, business_id)
-        return
-    day2_url = str(message.text or "").strip()
-    day1_url = str(data.get("day1_url") or "").strip()
-    if not day2_url.startswith("https://"):
-        await message.answer("Ссылка должна начинаться с https://", reply_markup=_cancel_keyboard(business_id))
-        return
-    if day2_url == day1_url:
-        await message.answer(
-            "Для дня 2 нужна другая ссылка на комнату.",
-            reply_markup=_cancel_keyboard(business_id),
-        )
-        return
-    actor = await control._actor(int(message.from_user.id), business_id)
-    try:
-        created = await asyncio.to_thread(
-            create_and_publish_multisession_online_event,
-            actor=actor,
-            request=MultiSessionOnlineEventCreateRequest(
-                title=str(data["event_title"]),
-                timezone_name=str(data["event_timezone"]),
-                sessions=(
-                    OnlineEventSessionCreateRequest(
-                        starts_at=datetime.fromisoformat(str(data["day1_starts_at"])),
-                        join_url=day1_url,
-                    ),
-                    OnlineEventSessionCreateRequest(
-                        starts_at=datetime.fromisoformat(str(data["day2_starts_at"])),
-                        join_url=day2_url,
-                    ),
-                ),
-            ),
-        )
-        registration_url = created.registration_url(_public_base_url())
-        await _begin_warmup_choice(
+    if position < total:
+        next_position = position + 1
+        await state.update_data(event_session_index=next_position, pending_session={})
+        await _prompt_session_time(
             message,
             state,
-            actor=actor,
             business_id=business_id,
-            event_id=created.event_id,
-            title=str(data["event_title"]),
-            local_times=(str(data["day1_local_time"]), str(data["day2_local_time"])),
-            registration_url=registration_url,
-            provider_key=created.provider_key,
-            join_ready=created.join_ready,
+            position=next_position,
+            total=total,
+            timezone_name=timezone_name,
         )
-    except (KeyError, ValueError, RuntimeError):
-        await message.answer(
-            "Не удалось создать двухдневный вебинар. Проверьте даты и обе HTTPS-ссылки.",
-            reply_markup=_cancel_keyboard(business_id),
-        )
+        return
+
+    await _create_configured_event(message, state)
 
 
 @router.message(ClientPlatformEventLifecycleState.waiting_warmup_days)
