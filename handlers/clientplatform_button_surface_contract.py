@@ -237,7 +237,11 @@ def install_button_surface_contract(safety: ModuleType) -> None:
         if current_state.startswith("OneClickOwnerState:waiting_region"):
             if callback_data.startswith("cpo:region:"):
                 return True
-        if current_state.startswith("ClientPlatformEventState:waiting_details"):
+        if current_state.startswith((
+            "ClientPlatformEventState:waiting_details",
+            "ClientPlatformEventState:waiting_time",
+            "ClientPlatformEventState:waiting_join_url",
+        )):
             if callback_data.startswith("cpev:cancel:"):
                 return True
         if current_state.startswith("AdConnectionState:confirming_publication"):
