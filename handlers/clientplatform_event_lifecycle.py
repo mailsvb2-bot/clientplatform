@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from clientplatform.application.event_content_plans import set_event_content_mode
 from clientplatform.application.event_owner_flow import (
@@ -34,6 +35,23 @@ from clientplatform.domain.event_content import (
     parse_event_content_mode,
 )
 from clientplatform.domain.tenancy import TenantPermissionDenied
+from clientplatform.presentation.event_schedule_picker import (
+    MAX_CALENDAR_MONTHS,
+    QUICK_DURATIONS,
+    QUICK_START_TIMES,
+    WEBINAR_VENUES,
+    calendar_days,
+    local_today,
+    month_distance,
+    month_key,
+    parse_calendar_date,
+    parse_month_key,
+    parse_quick_duration,
+    parse_quick_time,
+    session_window_text,
+    shift_month,
+    webinar_venue,
+)
 from clientplatform.presentation.event_ui import BACK_TO_EVENTS_LABEL
 from config.settings import settings
 
@@ -57,9 +75,157 @@ class ClientPlatformEventLifecycleState(StatesGroup):
     waiting_post_event_mode = State()
 
 
+_RU_MONTHS = (
+    "",
+    "Январь",
+    "Февраль",
+    "Март",
+    "Апрель",
+    "Май",
+    "Июнь",
+    "Июль",
+    "Август",
+    "Сентябрь",
+    "Октябрь",
+    "Ноябрь",
+    "Декабрь",
+)
+
+
 def _cancel_keyboard(business_id: str):
     token = control._uuid_token(business_id)
     return control._keyboard([[(BACK_TO_EVENTS_LABEL, f"cpev:cancel:{token}")]])
+
+
+def _timezone_keyboard(business_id: str):
+    token = control._uuid_token(business_id)
+    return control._keyboard(
+        [
+            [("🕒 Москва", "cpev:tz:moscow"), ("🌍 Другое время", "cpev:tz:other")],
+            [(BACK_TO_EVENTS_LABEL, f"cpev:cancel:{token}")],
+        ]
+    )
+
+
+def _venue_keyboard(business_id: str):
+    token = control._uuid_token(business_id)
+    rows: list[list[tuple[str, str]]] = []
+    pair: list[tuple[str, str]] = []
+    for venue in WEBINAR_VENUES:
+        pair.append((venue.label, f"cpev:venue:{venue.key}"))
+        if len(pair) == 2:
+            rows.append(pair)
+            pair = []
+    if pair:
+        rows.append(pair)
+    rows.append([(BACK_TO_EVENTS_LABEL, f"cpev:cancel:{token}")])
+    return control._keyboard(rows)
+
+
+def _calendar_keyboard(
+    *,
+    business_id: str,
+    timezone_name: str,
+    year: int,
+    month: int,
+    minimum_date,
+) -> InlineKeyboardMarkup:
+    token = control._uuid_token(business_id)
+    rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton(text=f"{_RU_MONTHS[month]} {year}", callback_data="cpev:noop")],
+        [
+            InlineKeyboardButton(text=label, callback_data="cpev:noop")
+            for label in ("Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс")
+        ],
+    ]
+    for week in calendar_days(year=year, month=month, minimum=minimum_date):
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=str(cell.day) if cell.day else "·",
+                    callback_data=f"cpev:date:{cell.value}" if cell.enabled else "cpev:noop",
+                )
+                for cell in week
+            ]
+        )
+    distance = month_distance(minimum_date, year=year, month=month)
+    navigation: list[InlineKeyboardButton] = []
+    if distance > 0:
+        previous_year, previous_month = shift_month(year, month, -1)
+        navigation.append(
+            InlineKeyboardButton(
+                text="‹",
+                callback_data=f"cpev:month:{month_key(previous_year, previous_month)}",
+            )
+        )
+    if distance < MAX_CALENDAR_MONTHS:
+        next_year, next_month = shift_month(year, month, 1)
+        navigation.append(
+            InlineKeyboardButton(
+                text="›",
+                callback_data=f"cpev:month:{month_key(next_year, next_month)}",
+            )
+        )
+    if navigation:
+        rows.append(navigation)
+    rows.append(
+        [InlineKeyboardButton(text="✍️ Ввести вручную", callback_data="cpev:manual-time")]
+    )
+    rows.append(
+        [InlineKeyboardButton(text=BACK_TO_EVENTS_LABEL, callback_data=f"cpev:cancel:{token}")]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _start_time_keyboard(business_id: str) -> InlineKeyboardMarkup:
+    token = control._uuid_token(business_id)
+    rows = [
+        [
+            InlineKeyboardButton(text=value, callback_data=f"cpev:start:{value.replace(':', '')}")
+            for value in QUICK_START_TIMES[index : index + 3]
+        ]
+        for index in range(0, len(QUICK_START_TIMES), 3)
+    ]
+    rows.append(
+        [InlineKeyboardButton(text="✍️ Ввести вручную", callback_data="cpev:manual-time")]
+    )
+    rows.append(
+        [InlineKeyboardButton(text=BACK_TO_EVENTS_LABEL, callback_data=f"cpev:cancel:{token}")]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _duration_keyboard(business_id: str) -> InlineKeyboardMarkup:
+    token = control._uuid_token(business_id)
+    labels = {30: "30 мин", 60: "1 час", 90: "1,5 часа", 120: "2 часа", 180: "3 часа"}
+    rows = [
+        [
+            InlineKeyboardButton(text=labels[value], callback_data=f"cpev:duration:{value}")
+            for value in QUICK_DURATIONS[index : index + 3]
+        ]
+        for index in range(0, len(QUICK_DURATIONS), 3)
+    ]
+    rows.append(
+        [InlineKeyboardButton(text="✍️ Ввести вручную", callback_data="cpev:manual-time")]
+    )
+    rows.append(
+        [InlineKeyboardButton(text=BACK_TO_EVENTS_LABEL, callback_data=f"cpev:cancel:{token}")]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _session_url_keyboard(*, business_id: str, venue_key: str) -> InlineKeyboardMarkup:
+    venue = webinar_venue(venue_key)
+    token = control._uuid_token(business_id)
+    rows: list[list[InlineKeyboardButton]] = []
+    if venue.open_url:
+        rows.append(
+            [InlineKeyboardButton(text=f"↗️ Открыть {venue.label}", url=venue.open_url)]
+        )
+    rows.append(
+        [InlineKeyboardButton(text=BACK_TO_EVENTS_LABEL, callback_data=f"cpev:cancel:{token}")]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def _public_base_url() -> str:
@@ -162,6 +328,85 @@ async def _prompt_session_time(
         "Напишите одной строкой, например: 25.09.2026 19:00-21:00\n"
         f"Часовой пояс: {timezone_name}.",
         reply_markup=_cancel_keyboard(business_id),
+    )
+
+
+async def _prompt_venue(
+    message: Message,
+    state: FSMContext,
+    *,
+    business_id: str,
+    timezone_name: str,
+) -> None:
+    await state.update_data(event_timezone=timezone_name, event_session_index=1)
+    await state.set_state(ClientPlatformEventLifecycleState.waiting_session_time)
+    await message.answer(
+        "Где будете проводить вебинар?\n\n"
+        "Выберите площадку один раз — ClientPlatform будет открывать её для каждого дня. "
+        "Ссылку не нужно печатать: после создания комнаты просто вернитесь и вставьте её из буфера.",
+        reply_markup=_venue_keyboard(business_id),
+    )
+
+
+async def _prompt_session_date(
+    message: Message,
+    state: FSMContext,
+    *,
+    business_id: str,
+    position: int,
+    total: int,
+    timezone_name: str,
+) -> None:
+    data = await state.get_data()
+    minimum = local_today(timezone_name)
+    configured = _configured_sessions(data)
+    if configured:
+        previous_date = configured[-1].starts_at.astimezone(ZoneInfo(timezone_name)).date()
+        if previous_date > minimum:
+            minimum = previous_date
+    await state.update_data(
+        event_picker_min_date=minimum.isoformat(),
+        event_picker_month=month_key(minimum.year, minimum.month),
+        event_picker_date="",
+        event_picker_start="",
+    )
+    await state.set_state(ClientPlatformEventLifecycleState.waiting_session_time)
+    await message.answer(
+        f"День {position} из {total}: выберите дату.\nЧасовой пояс: {timezone_name}.",
+        reply_markup=_calendar_keyboard(
+            business_id=business_id,
+            timezone_name=timezone_name,
+            year=minimum.year,
+            month=minimum.month,
+            minimum_date=minimum,
+        ),
+    )
+
+
+async def _prompt_session_url(
+    message: Message,
+    state: FSMContext,
+    *,
+    business_id: str,
+    position: int,
+    total: int,
+    venue_key: str,
+) -> None:
+    venue = webinar_venue(venue_key)
+    await state.set_state(ClientPlatformEventLifecycleState.waiting_session_url)
+    later_note = (
+        "Если ссылка появится позже — отправьте «-»; добавить её можно будет до эфира."
+        if total == 1
+        else "Для многодневного мероприятия у каждого дня должна быть своя комната."
+    )
+    open_note = (
+        f"Нажмите «Открыть {venue.label}», создайте комнату, вернитесь сюда и вставьте скопированную HTTPS-ссылку."
+        if venue.open_url
+        else "Создайте комнату в выбранном сервисе и вставьте сюда её HTTPS-ссылку."
+    )
+    await message.answer(
+        f"Комната для дня {position}.\n\n{open_note}\n{later_note}",
+        reply_markup=_session_url_keyboard(business_id=business_id, venue_key=venue_key),
     )
 
 
@@ -357,13 +602,12 @@ async def receive_days(message: Message, state: FSMContext) -> None:
     await state.set_state(ClientPlatformEventLifecycleState.waiting_timezone)
     await message.answer(
         "По какому времени идут эфиры?\n\n"
-        "Напишите «Москва» для московского времени. Если время другое — укажите часовой пояс, например Europe/Amsterdam или Asia/Yekaterinburg.",
-        reply_markup=_cancel_keyboard(business_id),
+        "Нажмите «Москва» или «Другое время». При необходимости часовой пояс можно ввести вручную.",
+        reply_markup=_timezone_keyboard(business_id),
     )
 
 
-@router.message(ClientPlatformEventLifecycleState.waiting_timezone)
-async def receive_timezone(message: Message, state: FSMContext) -> None:
+async def _accept_timezone(message: Message, state: FSMContext, timezone_value: str) -> None:
     data = await state.get_data()
     business_id = str(data.get("event_business_id") or "")
     days = int(data.get("event_days") or 0)
@@ -371,24 +615,254 @@ async def receive_timezone(message: Message, state: FSMContext) -> None:
         await state.clear()
         await message.answer("Не удалось продолжить. Откройте вебинары заново.")
         return
-    if _is_cancel(message):
-        await _cancel(message, state, business_id)
-        return
     try:
-        timezone_name = normalize_event_timezone(_normalized_text(message))
+        timezone_name = normalize_event_timezone(timezone_value)
     except ValueError:
         await message.answer(
             "Не удалось определить часовой пояс. Напишите «Москва» или IANA-зону, например Europe/Amsterdam.",
-            reply_markup=_cancel_keyboard(business_id),
+            reply_markup=_timezone_keyboard(business_id),
         )
         return
-    await state.update_data(event_timezone=timezone_name, event_session_index=1)
-    await _prompt_session_time(
+    await _prompt_venue(
         message,
         state,
         business_id=business_id,
-        position=1,
-        total=days,
+        timezone_name=timezone_name,
+    )
+
+
+@router.callback_query(
+    ClientPlatformEventLifecycleState.waiting_timezone,
+    F.data == "cpev:tz:moscow",
+)
+async def choose_moscow_timezone(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    await _accept_timezone(control._callback_message(callback), state, "Москва")
+
+
+@router.callback_query(
+    ClientPlatformEventLifecycleState.waiting_timezone,
+    F.data == "cpev:tz:other",
+)
+async def choose_other_timezone(callback: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    business_id = str(data.get("event_business_id") or "")
+    await callback.answer()
+    await control._callback_message(callback).answer(
+        "Напишите ваш часовой пояс, например Europe/Amsterdam или Asia/Yekaterinburg.",
+        reply_markup=_timezone_keyboard(business_id) if business_id else None,
+    )
+
+
+@router.message(ClientPlatformEventLifecycleState.waiting_timezone)
+async def receive_timezone(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    business_id = str(data.get("event_business_id") or "")
+    if not business_id:
+        await state.clear()
+        await message.answer("Не удалось продолжить. Откройте вебинары заново.")
+        return
+    if _is_cancel(message):
+        await _cancel(message, state, business_id)
+        return
+    await _accept_timezone(message, state, _normalized_text(message))
+
+
+@router.callback_query(
+    ClientPlatformEventLifecycleState.waiting_session_time,
+    F.data.startswith("cpev:venue:"),
+)
+async def choose_webinar_venue(callback: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    business_id = str(data.get("event_business_id") or "")
+    timezone_name = str(data.get("event_timezone") or "")
+    total = int(data.get("event_days") or 0)
+    position = int(data.get("event_session_index") or 1)
+    key = str(callback.data or "").split(":", 2)[2]
+    try:
+        venue = webinar_venue(key)
+    except ValueError:
+        await callback.answer("Неизвестная площадка", show_alert=True)
+        return
+    if not venue.public_room_supported:
+        await callback.answer(venue.note, show_alert=True)
+        return
+    if not business_id or not timezone_name or total < 1:
+        await callback.answer("Мастер устарел. Откройте вебинары заново.", show_alert=True)
+        return
+    await state.update_data(event_platform=venue.key)
+    await callback.answer()
+    await _prompt_session_date(
+        control._callback_message(callback),
+        state,
+        business_id=business_id,
+        position=position,
+        total=total,
+        timezone_name=timezone_name,
+    )
+
+
+@router.callback_query(F.data == "cpev:noop")
+async def ignore_event_picker_noop(callback: CallbackQuery) -> None:
+    await callback.answer()
+
+
+@router.callback_query(
+    ClientPlatformEventLifecycleState.waiting_session_time,
+    F.data.startswith("cpev:month:"),
+)
+async def choose_calendar_month(callback: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    business_id = str(data.get("event_business_id") or "")
+    timezone_name = str(data.get("event_timezone") or "")
+    try:
+        minimum = parse_calendar_date(
+            str(data.get("event_picker_min_date") or ""),
+            minimum=local_today(timezone_name),
+        )
+        year, month = parse_month_key(str(callback.data or "").split(":", 2)[2])
+        calendar_days(year=year, month=month, minimum=minimum)
+    except (IndexError, ValueError):
+        await callback.answer("Этот месяц недоступен", show_alert=True)
+        return
+    await state.update_data(event_picker_month=month_key(year, month))
+    await callback.answer()
+    await control._callback_message(callback).edit_reply_markup(
+        reply_markup=_calendar_keyboard(
+            business_id=business_id,
+            timezone_name=timezone_name,
+            year=year,
+            month=month,
+            minimum_date=minimum,
+        )
+    )
+
+
+@router.callback_query(
+    ClientPlatformEventLifecycleState.waiting_session_time,
+    F.data.startswith("cpev:date:"),
+)
+async def choose_calendar_date(callback: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    business_id = str(data.get("event_business_id") or "")
+    timezone_name = str(data.get("event_timezone") or "")
+    try:
+        minimum = parse_calendar_date(
+            str(data.get("event_picker_min_date") or ""),
+            minimum=local_today(timezone_name),
+        )
+        selected = parse_calendar_date(
+            str(callback.data or "").split(":", 2)[2],
+            minimum=minimum,
+        )
+    except (IndexError, ValueError):
+        await callback.answer("Эта дата недоступна", show_alert=True)
+        return
+    await state.update_data(event_picker_date=selected.isoformat(), event_picker_start="")
+    await callback.answer()
+    await control._callback_message(callback).answer(
+        f"Дата: {selected.strftime('%d.%m.%Y')}. Во сколько начинаем?",
+        reply_markup=_start_time_keyboard(business_id),
+    )
+
+
+@router.callback_query(
+    ClientPlatformEventLifecycleState.waiting_session_time,
+    F.data.startswith("cpev:start:"),
+)
+async def choose_session_start(callback: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    business_id = str(data.get("event_business_id") or "")
+    raw = str(callback.data or "").split(":", 2)[2]
+    if len(raw) != 4 or not raw.isdigit():
+        await callback.answer("Время недоступно", show_alert=True)
+        return
+    value = f"{raw[:2]}:{raw[2:]}"
+    try:
+        start_time = parse_quick_time(value)
+    except ValueError:
+        await callback.answer("Время недоступно", show_alert=True)
+        return
+    await state.update_data(event_picker_start=start_time)
+    await callback.answer()
+    await control._callback_message(callback).answer(
+        f"Начало: {start_time}. Сколько длится эфир?",
+        reply_markup=_duration_keyboard(business_id),
+    )
+
+
+@router.callback_query(
+    ClientPlatformEventLifecycleState.waiting_session_time,
+    F.data.startswith("cpev:duration:"),
+)
+async def choose_session_duration(callback: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    business_id = str(data.get("event_business_id") or "")
+    timezone_name = str(data.get("event_timezone") or "")
+    total = int(data.get("event_days") or 0)
+    position = int(data.get("event_session_index") or 0)
+    venue_key = str(data.get("event_platform") or "other")
+    try:
+        minimum = parse_calendar_date(
+            str(data.get("event_picker_min_date") or ""),
+            minimum=local_today(timezone_name),
+        )
+        selected = parse_calendar_date(
+            str(data.get("event_picker_date") or ""),
+            minimum=minimum,
+        )
+        start_time = parse_quick_time(data.get("event_picker_start"))
+        duration = parse_quick_duration(str(callback.data or "").split(":", 2)[2])
+        session = parse_session_window(
+            session_window_text(
+                selected_date=selected,
+                start_time=start_time,
+                duration_minutes=duration,
+            ),
+            timezone_name=timezone_name,
+            position=position,
+        )
+        configured = _configured_sessions(data)
+        validate_session_sequence(session, previous=configured[-1] if configured else None)
+    except (IndexError, KeyError, TypeError, ValueError):
+        await callback.answer("Не удалось собрать время эфира. Выберите дату заново.", show_alert=True)
+        return
+    await state.update_data(
+        pending_session={
+            "position": session.position,
+            "starts_at": session.starts_at.isoformat(),
+            "ends_at": session.ends_at.isoformat(),
+            "local_label": session.local_label,
+        }
+    )
+    await callback.answer()
+    await _prompt_session_url(
+        control._callback_message(callback),
+        state,
+        business_id=business_id,
+        position=position,
+        total=total,
+        venue_key=venue_key,
+    )
+
+
+@router.callback_query(
+    ClientPlatformEventLifecycleState.waiting_session_time,
+    F.data == "cpev:manual-time",
+)
+async def choose_manual_session_time(callback: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    business_id = str(data.get("event_business_id") or "")
+    timezone_name = str(data.get("event_timezone") or "")
+    total = int(data.get("event_days") or 0)
+    position = int(data.get("event_session_index") or 0)
+    await callback.answer()
+    await _prompt_session_time(
+        control._callback_message(callback),
+        state,
+        business_id=business_id,
+        position=position,
+        total=total,
         timezone_name=timezone_name,
     )
 
@@ -400,6 +874,7 @@ async def receive_session_time(message: Message, state: FSMContext) -> None:
     timezone_name = str(data.get("event_timezone") or "")
     total = int(data.get("event_days") or 0)
     position = int(data.get("event_session_index") or 0)
+    venue_key = str(data.get("event_platform") or "other")
     if not business_id or not timezone_name or total < 1 or position < 1 or position > total:
         await state.clear()
         await message.answer("Не удалось продолжить. Откройте вебинары заново.")
@@ -430,15 +905,13 @@ async def receive_session_time(message: Message, state: FSMContext) -> None:
             "local_label": session.local_label,
         }
     )
-    await state.set_state(ClientPlatformEventLifecycleState.waiting_session_url)
-    later_note = (
-        "Если ссылка появится позже — отправьте «-»; добавить её можно будет до эфира."
-        if total == 1
-        else "Для многодневного мероприятия ссылка обязательна: у каждого дня должна быть своя комната."
-    )
-    await message.answer(
-        f"Пришлите HTTPS-ссылку на комнату дня {position}.\n{later_note}",
-        reply_markup=_cancel_keyboard(business_id),
+    await _prompt_session_url(
+        message,
+        state,
+        business_id=business_id,
+        position=position,
+        total=total,
+        venue_key=venue_key,
     )
 
 
@@ -522,6 +995,7 @@ async def receive_session_url(message: Message, state: FSMContext) -> None:
     total = int(data.get("event_days") or 0)
     position = int(data.get("event_session_index") or 0)
     timezone_name = str(data.get("event_timezone") or "")
+    venue_key = str(data.get("event_platform") or "other")
     if not business_id or total < 1 or position < 1 or position > total or not timezone_name:
         await state.clear()
         await message.answer("Не удалось продолжить. Откройте вебинары заново.")
@@ -553,7 +1027,10 @@ async def receive_session_url(message: Message, state: FSMContext) -> None:
                 if total == 1
                 else "Ссылка должна начинаться с https:// и быть отдельной для этого дня."
             )
-        await message.answer(answer, reply_markup=_cancel_keyboard(business_id))
+        await message.answer(
+            answer,
+            reply_markup=_session_url_keyboard(business_id=business_id, venue_key=venue_key),
+        )
         return
 
     completed = EventWizardSession(
@@ -572,7 +1049,7 @@ async def receive_session_url(message: Message, state: FSMContext) -> None:
     if position < total:
         next_position = position + 1
         await state.update_data(event_session_index=next_position, pending_session={})
-        await _prompt_session_time(
+        await _prompt_session_date(
             message,
             state,
             business_id=business_id,
