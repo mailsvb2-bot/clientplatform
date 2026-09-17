@@ -1,8 +1,7 @@
 from __future__ import annotations
 
+import unittest
 from datetime import datetime, timezone
-
-import pytest
 
 from clientplatform.application.event_warmups import build_event_warmup_plan
 
@@ -36,7 +35,7 @@ def test_warmup_plan_matches_requested_days_and_stops_before_event() -> None:
 
 
 def test_warmup_plan_rejects_more_days_than_time_remaining() -> None:
-    with pytest.raises(ValueError, match="exceed"):
+    with unittest.TestCase().assertRaisesRegex(ValueError, "exceed"):
         build_event_warmup_plan(
             event_id="event-1",
             title="Практический вебинар",

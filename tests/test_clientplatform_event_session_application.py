@@ -1,8 +1,7 @@
 from __future__ import annotations
 
+import unittest
 from datetime import datetime, timedelta, timezone
-
-import pytest
 
 from clientplatform.application.event_sessions import (
     validate_warmup_days,
@@ -70,7 +69,7 @@ def test_warmup_window_never_becomes_negative() -> None:
 def test_warmup_days_cannot_exceed_remaining_window() -> None:
     assert validate_warmup_days(0, max_warmup_days=3) == 0
     assert validate_warmup_days(3, max_warmup_days=3) == 3
-    with pytest.raises(ValueError, match="exceed"):
+    with unittest.TestCase().assertRaisesRegex(ValueError, "exceed"):
         validate_warmup_days(4, max_warmup_days=3)
-    with pytest.raises(ValueError, match="negative"):
+    with unittest.TestCase().assertRaisesRegex(ValueError, "negative"):
         validate_warmup_days(-1, max_warmup_days=3)

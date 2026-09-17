@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import sqlite3
+import unittest
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
-
-import pytest
 
 from clientplatform.application.event_sessions import select_event_session_for_join
 from clientplatform.domain.event_sessions import (
@@ -122,7 +121,7 @@ def test_session_specific_personal_join_never_leaks_another_day_room() -> None:
 
     assert selected.position == 2
     assert selected.join_url == "https://day2.example.test/room"
-    with pytest.raises(LookupError, match="not found"):
+    with unittest.TestCase().assertRaisesRegex(LookupError, "not found"):
         select_event_session_for_join((day_one, day_two), position=3, now=NOW)
 
 
@@ -155,7 +154,7 @@ def test_session_sequence_rejects_gaps_and_reverse_time() -> None:
         day_offset=2,
         join_url="https://day3.example.test/room",
     )
-    with pytest.raises(EventValidationError, match="positions"):
+    with unittest.TestCase().assertRaisesRegex(EventValidationError, "positions"):
         validate_event_session_sequence(
             [first, gap],
             business_id=event.business_id,
@@ -168,7 +167,7 @@ def test_session_sequence_rejects_gaps_and_reverse_time() -> None:
         day_offset=0,
         join_url="https://day2.example.test/room",
     )
-    with pytest.raises(EventValidationError, match="chronological"):
+    with unittest.TestCase().assertRaisesRegex(EventValidationError, "chronological"):
         validate_event_session_sequence(
             [first, earlier_second],
             business_id=event.business_id,
@@ -178,7 +177,7 @@ def test_session_sequence_rejects_gaps_and_reverse_time() -> None:
 
 def test_event_session_rejects_insecure_join_url() -> None:
     event = _event()
-    with pytest.raises(EventValidationError, match="HTTPS"):
+    with unittest.TestCase().assertRaisesRegex(EventValidationError, "HTTPS"):
         _session(
             event,
             position=1,
