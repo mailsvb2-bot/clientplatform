@@ -8,6 +8,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
+from clientplatform.application.event_content_plans import set_event_content_mode
 from clientplatform.application.event_owner_flow import (
     MultiSessionOnlineEventCreateRequest,
     OnlineEventCreateRequest,
@@ -19,13 +20,18 @@ from clientplatform.application.event_sessions import get_event_warmup_window
 from clientplatform.application.event_warmups import get_event_warmup_plan
 from clientplatform.application.event_wizard import (
     MAX_EVENT_SESSIONS,
-    MOSCOW_TIMEZONE,
     EventWizardSession,
     normalize_event_timezone,
     normalize_session_join_url,
     parse_session_count,
     parse_session_window,
     validate_session_sequence,
+)
+from clientplatform.domain.event_content import (
+    EventContentMode,
+    EventContentStage,
+    event_content_mode_label,
+    parse_event_content_mode,
 )
 from clientplatform.domain.tenancy import TenantPermissionDenied
 from clientplatform.presentation.event_ui import BACK_TO_EVENTS_LABEL
@@ -46,6 +52,9 @@ class ClientPlatformEventLifecycleState(StatesGroup):
     waiting_session_time = State()
     waiting_session_url = State()
     waiting_warmup_days = State()
+    waiting_warmup_mode = State()
+    waiting_event_day_mode = State()
+    waiting_post_event_mode = State()
 
 
 def _cancel_keyboard(business_id: str):
@@ -83,6 +92,7 @@ def _event_actions(
     event_id: str,
     business_id: str,
     join_ready: bool,
+    visual_requested: bool = False,
 ) -> list[list[tuple[str, str]]]:
     business_token = control._uuid_token(business_id)
     event_token = control._uuid_token(event_id)
@@ -90,6 +100,8 @@ def _event_actions(
     if not join_ready:
         rows.append([("🔗 Добавить ссылку на эфир", f"cpev:join:{event_token}:{business_token}")])
     rows.append([("✨ Сделать анонс", f"cpev:announce:{event_token}:{business_token}")])
+    if visual_requested:
+        rows.append([("🎨 Картинки и креативы", f"cpc:open:{business_token}")])
     rows.append([(BACK_TO_EVENTS_LABEL, f"cpev:home:{business_token}")])
     rows.append([("🎥 Создать ещё", f"cpev:new:{business_token}")])
     return rows
@@ -98,12 +110,13 @@ def _event_actions(
 def _session_from_payload(value: object) -> EventWizardSession:
     if not isinstance(value, dict):
         raise ValueError("invalid session payload")
+    raw_join_url = str(value.get("join_url") or "").strip()
     return EventWizardSession(
         position=int(value["position"]),
         starts_at=datetime.fromisoformat(str(value["starts_at"])),
         ends_at=datetime.fromisoformat(str(value["ends_at"])),
         local_label=str(value["local_label"]),
-        join_url=(None if not str(value.get("join_url") or "").strip() else str(value["join_url"])),
+        join_url=raw_join_url or None,
     )
 
 
@@ -122,6 +135,16 @@ def _configured_sessions(data: dict[str, object]) -> tuple[EventWizardSession, .
     if not isinstance(raw, list):
         raise ValueError("invalid session collection")
     return tuple(_session_from_payload(item) for item in raw)
+
+
+def _mode_prompt(stage_label: str) -> str:
+    return (
+        f"Как оформить {stage_label}?\n\n"
+        "1) Только текст\n"
+        "2) Текст + картинка\n"
+        "3) Текст в тематической картинке\n\n"
+        "Можно ответить цифрой или названием варианта."
+    )
 
 
 async def _prompt_session_time(
@@ -177,6 +200,95 @@ async def _begin_warmup_choice(
         "0 — пропустить прогрев. ClientPlatform подготовит тексты как черновики владельца и ничего не разошлёт без разрешённого канала.",
         reply_markup=_cancel_keyboard(business_id),
     )
+
+
+async def _store_mode(
+    *,
+    message: Message,
+    data: dict[str, object],
+    stage: EventContentStage,
+    mode: EventContentMode,
+) -> None:
+    actor = await control._actor(
+        int(message.from_user.id),
+        str(data["event_business_id"]),
+    )
+    await asyncio.to_thread(
+        set_event_content_mode,
+        actor=actor,
+        event_id=str(data["created_event_id"]),
+        stage=stage,
+        mode=mode,
+    )
+
+
+async def _ask_event_day_mode(message: Message, state: FSMContext, business_id: str) -> None:
+    await state.set_state(ClientPlatformEventLifecycleState.waiting_event_day_mode)
+    await message.answer(
+        _mode_prompt("анонс в день мероприятия"),
+        reply_markup=_cancel_keyboard(business_id),
+    )
+
+
+async def _ask_post_event_mode(message: Message, state: FSMContext, business_id: str) -> None:
+    await state.set_state(ClientPlatformEventLifecycleState.waiting_post_event_mode)
+    await message.answer(
+        _mode_prompt("дожим после мероприятия"),
+        reply_markup=_cancel_keyboard(business_id),
+    )
+
+
+async def _finish_content_setup(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    business_id = str(data.get("event_business_id") or "")
+    event_id = str(data.get("created_event_id") or "")
+    if not business_id or not event_id:
+        await state.clear()
+        await message.answer("Настройки сохранены не полностью. Откройте вебинары заново.")
+        return
+    title = str(data.get("created_title") or "Вебинар")
+    local_times = tuple(str(item) for item in data.get("created_local_times", []))
+    registration_url = str(data.get("created_registration_url") or "")
+    join_ready = bool(data.get("created_join_ready"))
+    requested_days = int(data.get("warmup_requested_days") or 0)
+    drafts_raw = data.get("warmup_drafts") or []
+    drafts = tuple(item for item in drafts_raw if isinstance(item, dict))
+    warmup_mode = EventContentMode(str(data.get("warmup_mode") or EventContentMode.TEXT.value))
+    event_day_mode = EventContentMode(str(data.get("event_day_mode") or EventContentMode.TEXT.value))
+    post_event_mode = EventContentMode(str(data.get("post_event_mode") or EventContentMode.TEXT.value))
+    visual_requested = any(
+        mode is not EventContentMode.TEXT
+        for mode in (warmup_mode, event_day_mode, post_event_mode)
+    )
+    await state.clear()
+    schedule = "\n".join(
+        f"День {index}: {value}" for index, value in enumerate(local_times, start=1)
+    )
+    visual_note = (
+        "\n\nДля выбранных визуальных режимов ClientPlatform использует общий генератор. "
+        "Перед каждым платным AI-вызовом будет отдельное подтверждение — скрытых генераций не будет."
+        if visual_requested
+        else ""
+    )
+    await message.answer(
+        f"✅ {title}\n{schedule}\n\nРегистрация: {registration_url}\n\n"
+        f"Прогрев: {requested_days} дн. — {event_content_mode_label(warmup_mode)}\n"
+        f"В день мероприятия — {event_content_mode_label(event_day_mode)}\n"
+        f"После мероприятия — {event_content_mode_label(post_event_mode)}."
+        f"{visual_note}",
+        reply_markup=control._keyboard(
+            _event_actions(
+                event_id=event_id,
+                business_id=business_id,
+                join_ready=join_ready,
+                visual_requested=visual_requested,
+            )
+        ),
+    )
+    for draft in drafts:
+        await message.answer(
+            f"🔥 Прогрев {int(draft['position'])}/{requested_days} — {draft['publish_date']}\n\n{draft['text']}"
+        )
 
 
 @router.callback_query(F.data.startswith("cpev:new:"))
@@ -319,9 +431,13 @@ async def receive_session_time(message: Message, state: FSMContext) -> None:
         }
     )
     await state.set_state(ClientPlatformEventLifecycleState.waiting_session_url)
+    later_note = (
+        "Если ссылка появится позже — отправьте «-»; добавить её можно будет до эфира."
+        if total == 1
+        else "Для многодневного мероприятия ссылка обязательна: у каждого дня должна быть своя комната."
+    )
     await message.answer(
-        f"Пришлите HTTPS-ссылку на комнату дня {position}.\n"
-        "Если ссылка появится позже — отправьте «-»; добавить её можно будет до эфира.",
+        f"Пришлите HTTPS-ссылку на комнату дня {position}.\n{later_note}",
         reply_markup=_cancel_keyboard(business_id),
     )
 
@@ -423,12 +539,20 @@ async def receive_session_url(message: Message, state: FSMContext) -> None:
             str(message.text or "").strip(),
             existing_urls=existing_urls,
         )
+        if total > 1 and join_url is None:
+            raise ValueError("multi-session event requires a room for every session")
     except (KeyError, TypeError, ValueError) as exc:
         text = str(exc)
         if "own room" in text:
             answer = "Для каждого дня нужна своя ссылка на комнату. Эта ссылка уже используется другим днём."
+        elif "requires a room" in text:
+            answer = "Для многодневного мероприятия нужна отдельная HTTPS-ссылка на комнату каждого дня."
         else:
-            answer = "Ссылка должна начинаться с https://. Если её пока нет — отправьте «-»."
+            answer = (
+                "Ссылка должна начинаться с https://. Если её пока нет — отправьте «-»."
+                if total == 1
+                else "Ссылка должна начинаться с https:// и быть отдельной для этого дня."
+            )
         await message.answer(answer, reply_markup=_cancel_keyboard(business_id))
         return
 
@@ -509,29 +633,102 @@ async def receive_warmup_days(message: Message, state: FSMContext) -> None:
         )
         return
 
-    title = str(data.get("created_title") or "Вебинар")
-    local_times = tuple(str(item) for item in data.get("created_local_times", []))
-    registration_url = str(data.get("created_registration_url") or "")
-    join_ready = bool(data.get("created_join_ready"))
-    await state.clear()
-    schedule = "\n".join(
-        f"День {index}: {value}" for index, value in enumerate(local_times, start=1)
+    await state.update_data(
+        warmup_requested_days=plan.requested_days,
+        warmup_drafts=[
+            {
+                "position": int(draft.position),
+                "publish_date": draft.publish_date.strftime("%d.%m.%Y"),
+                "text": str(draft.text),
+            }
+            for draft in plan.drafts
+        ],
     )
-    await message.answer(
-        f"✅ {title}\n{schedule}\n\nРегистрация: {registration_url}\n\n"
-        f"Прогрев: {plan.requested_days} дн. Напоминания участникам будут привязаны к каждому дню и его собственной комнате.",
-        reply_markup=control._keyboard(
-            _event_actions(
-                event_id=event_id,
-                business_id=business_id,
-                join_ready=join_ready,
-            )
-        ),
-    )
-    for draft in plan.drafts:
-        await message.answer(
-            f"🔥 Прогрев {draft.position}/{plan.requested_days} — {draft.publish_date.strftime('%d.%m.%Y')}\n\n{draft.text}"
+    if plan.requested_days == 0:
+        await asyncio.to_thread(
+            set_event_content_mode,
+            actor=actor,
+            event_id=event_id,
+            stage=EventContentStage.WARMUP,
+            mode=EventContentMode.TEXT,
         )
+        await state.update_data(warmup_mode=EventContentMode.TEXT.value)
+        await _ask_event_day_mode(message, state, business_id)
+        return
+    await state.set_state(ClientPlatformEventLifecycleState.waiting_warmup_mode)
+    await message.answer(
+        _mode_prompt("прогрев"),
+        reply_markup=_cancel_keyboard(business_id),
+    )
+
+
+@router.message(ClientPlatformEventLifecycleState.waiting_warmup_mode)
+async def receive_warmup_mode(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    business_id = str(data.get("event_business_id") or "")
+    if not business_id or not data.get("created_event_id"):
+        await state.clear()
+        await message.answer("Не удалось продолжить. Откройте вебинары заново.")
+        return
+    if _is_cancel(message):
+        await _cancel(message, state, business_id)
+        return
+    try:
+        mode = parse_event_content_mode(_normalized_text(message))
+        await _store_mode(message=message, data=data, stage=EventContentStage.WARMUP, mode=mode)
+    except (KeyError, ValueError, RuntimeError):
+        await message.answer(_mode_prompt("прогрев"), reply_markup=_cancel_keyboard(business_id))
+        return
+    await state.update_data(warmup_mode=mode.value)
+    await _ask_event_day_mode(message, state, business_id)
+
+
+@router.message(ClientPlatformEventLifecycleState.waiting_event_day_mode)
+async def receive_event_day_mode(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    business_id = str(data.get("event_business_id") or "")
+    if not business_id or not data.get("created_event_id"):
+        await state.clear()
+        await message.answer("Не удалось продолжить. Откройте вебинары заново.")
+        return
+    if _is_cancel(message):
+        await _cancel(message, state, business_id)
+        return
+    try:
+        mode = parse_event_content_mode(_normalized_text(message))
+        await _store_mode(message=message, data=data, stage=EventContentStage.EVENT_DAY, mode=mode)
+    except (KeyError, ValueError, RuntimeError):
+        await message.answer(
+            _mode_prompt("анонс в день мероприятия"),
+            reply_markup=_cancel_keyboard(business_id),
+        )
+        return
+    await state.update_data(event_day_mode=mode.value)
+    await _ask_post_event_mode(message, state, business_id)
+
+
+@router.message(ClientPlatformEventLifecycleState.waiting_post_event_mode)
+async def receive_post_event_mode(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    business_id = str(data.get("event_business_id") or "")
+    if not business_id or not data.get("created_event_id"):
+        await state.clear()
+        await message.answer("Не удалось продолжить. Откройте вебинары заново.")
+        return
+    if _is_cancel(message):
+        await _cancel(message, state, business_id)
+        return
+    try:
+        mode = parse_event_content_mode(_normalized_text(message))
+        await _store_mode(message=message, data=data, stage=EventContentStage.POST_EVENT, mode=mode)
+    except (KeyError, ValueError, RuntimeError):
+        await message.answer(
+            _mode_prompt("дожим после мероприятия"),
+            reply_markup=_cancel_keyboard(business_id),
+        )
+        return
+    await state.update_data(post_event_mode=mode.value)
+    await _finish_content_setup(message, state)
 
 
 __all__ = ["ClientPlatformEventLifecycleState", "router"]
