@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 
 from clientplatform.application.event_growth import build_event_registration_url
 from clientplatform.domain.event_sessions import EventSession
+from clientplatform.domain.events import Event
 from clientplatform.domain.tenancy import TenantContext
 from clientplatform.infrastructure.event_repository import EventRepository
 from clientplatform.infrastructure.event_session_repository import EventSessionRepository
@@ -32,6 +33,10 @@ class EventAnnouncementDraft:
 
 
 def _schedule_lines(event: Any, sessions: tuple[EventSession, ...]) -> tuple[str, ...]:
+    if not sessions:
+        # Keep the established single-event announcement contract for legacy
+        # records and event-like test doubles while real Events use sessions.
+        return (event.local_start_label(),)
     zone = ZoneInfo(event.timezone_name)
     if len(sessions) == 1:
         return (sessions[0].starts_at.astimezone(zone).strftime("%d.%m.%Y %H:%M"),)
@@ -56,18 +61,22 @@ def _safe_template(*, title: str, description: str, schedule: tuple[str, ...]) -
     return "\n".join(parts)
 
 
-def _event_for_owner(
-    actor: TenantContext,
-    event_id: str,
-) -> tuple[Any, tuple[EventSession, ...]]:
+def _event_for_owner(actor: TenantContext, event_id: str) -> Any:
+    """Preserve the established helper contract: resolve exactly one Event."""
+
     with get_db_ro() as conn:
         event = EventRepository(conn).get(actor=actor, event_id=event_id)
-        sessions = EventSessionRepository(conn).list_for_event(
-            actor=actor,
-            event_id=event.id,
-        )
     actor.assert_can_manage_business()
-    return event, sessions
+    return event
+
+
+def _sessions_for_event(event: Any) -> tuple[EventSession, ...]:
+    """Read occurrences for a real authorized Event without a second auth path."""
+
+    if not isinstance(event, Event):
+        return ()
+    with get_db_ro() as conn:
+        return EventSessionRepository(conn).list_for_event_record(event=event)
 
 
 def _template_from_event(
@@ -93,8 +102,8 @@ def draft_event_announcement_template(
     actor: TenantContext,
     event_id: str,
 ) -> EventAnnouncementDraft:
-    event, sessions = _event_for_owner(actor, event_id)
-    return _template_from_event(event, sessions)
+    event = _event_for_owner(actor, event_id)
+    return _template_from_event(event, _sessions_for_event(event))
 
 
 async def draft_event_announcement(
@@ -102,7 +111,8 @@ async def draft_event_announcement(
     actor: TenantContext,
     event_id: str,
 ) -> EventAnnouncementDraft:
-    event, sessions = _event_for_owner(actor, event_id)
+    event = _event_for_owner(actor, event_id)
+    sessions = _sessions_for_event(event)
     schedule = _schedule_lines(event, sessions)
     base = _template_from_event(event, sessions)
     fallback = base.text

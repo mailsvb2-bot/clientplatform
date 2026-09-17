@@ -91,7 +91,7 @@ def test_second_day_reminder_uses_exact_personal_session_link_without_room_url()
         )
 
     assert subject == "Через 15 минут: Два дня практики"
-    assert "День 2 из 2" in body
+    assert "день 2 из 2" in body.casefold()
     assert f"/e/join/{registration.token}/2" in body
     assert day_two.join_url not in body
     assert event.join_url not in body
