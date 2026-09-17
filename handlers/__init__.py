@@ -221,6 +221,15 @@ def _load_clientplatform_modules() -> tuple[ModuleType, ModuleType]:
         simple_experience.router.include_router(creative_studio.router)
         simple_experience._creative_studio_composed = True
 
+    event_lifecycle = importlib.import_module(
+        ".clientplatform_event_lifecycle",
+        __name__,
+    )
+    globals()["clientplatform_event_lifecycle"] = event_lifecycle
+    if not bool(getattr(simple_experience, "_event_lifecycle_composed", False)):
+        simple_experience.router.include_router(event_lifecycle.router)
+        simple_experience._event_lifecycle_composed = True
+
     events_ui = importlib.import_module(
         ".clientplatform_events",
         __name__,
