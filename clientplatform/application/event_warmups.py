@@ -47,11 +47,13 @@ _WARMUP_GRACE = timedelta(hours=18)
 @dataclass(frozen=True, slots=True)
 class EventWarmupDraft:
     position: int
+    slot_key: str
     publish_date: date
     scheduled_at: datetime
     days_before_event: int
     text: str
     source: str = "template"
+    revision: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,8 +123,8 @@ def _scheduled_at(*, publish_date: date, timezone_name: str) -> datetime:
     )
 
 
-def _slot_key(position: int) -> str:
-    return f"day:{int(position)}"
+def _slot_key(days_before_event: int) -> str:
+    return f"before:{int(days_before_event)}"
 
 
 def build_event_warmup_plan(
@@ -157,6 +159,7 @@ def build_event_warmup_plan(
     drafts = tuple(
         EventWarmupDraft(
             position=index + 1,
+            slot_key=_slot_key(selected - index),
             publish_date=first_publish_date + timedelta(days=index),
             scheduled_at=_scheduled_at(
                 publish_date=first_publish_date + timedelta(days=index),
@@ -240,7 +243,7 @@ def get_event_warmup_plan(
     by_key = {item.slot_key: item for item in stored}
     drafts: list[EventWarmupDraft] = []
     for draft in base.drafts:
-        item = by_key.get(_slot_key(draft.position))
+        item = by_key.get(draft.slot_key)
         if item is None:
             drafts.append(draft)
             continue
@@ -255,6 +258,7 @@ def get_event_warmup_plan(
                 scheduled_at=scheduled,
                 text=item.text,
                 source=item.source,
+                revision=item.revision,
             )
         )
     return replace(base, drafts=tuple(drafts))
@@ -286,7 +290,7 @@ def save_event_warmup_plan(
         }
         keep: list[str] = []
         for draft in base.drafts:
-            key = _slot_key(draft.position)
+            key = draft.slot_key
             keep.append(key)
             current = existing.get(key)
             body = draft.text
@@ -355,11 +359,13 @@ def get_saved_event_warmup_plan(
         drafts.append(
             EventWarmupDraft(
                 position=item.position,
+                slot_key=item.slot_key,
                 publish_date=publish_date,
                 scheduled_at=scheduled,
                 days_before_event=max((first_local_date - publish_date).days, 0),
                 text=item.text,
                 source=item.source,
+                revision=item.revision,
             )
         )
     return EventWarmupPlan(
@@ -379,22 +385,21 @@ def set_event_warmup_text(
     text: str,
 ) -> EventWarmupDraft:
     actor.assert_can_manage_business()
-    key = _slot_key(position)
     with get_db() as conn:
         repository = EventContentMessageRepository(conn)
-        current = repository.get(
+        messages = repository.list_for_stage(
             actor=actor,
             event_id=event_id,
             stage=EventContentStage.WARMUP,
-            slot_key=key,
         )
+        current = next((item for item in messages if item.position == position), None)
         if current is None:
             raise ValueError("сначала выберите длительность прогрева")
         repository.upsert(
             actor=actor,
             event_id=event_id,
             stage=EventContentStage.WARMUP,
-            slot_key=key,
+            slot_key=current.slot_key,
             position=current.position,
             text=text,
             source="owner",
@@ -444,11 +449,11 @@ def reset_event_warmup_text(
         total=len(messages),
     )
     with get_db() as conn:
-        EventContentMessageRepository(conn).upsert(
+        updated = EventContentMessageRepository(conn).upsert(
             actor=actor,
             event_id=event.id,
             stage=EventContentStage.WARMUP,
-            slot_key=_slot_key(position),
+            slot_key=current.slot_key,
             position=position,
             text=body,
             source="template",
@@ -456,11 +461,13 @@ def reset_event_warmup_text(
         )
     return EventWarmupDraft(
         position=position,
+        slot_key=current.slot_key,
         publish_date=publish_date,
         scheduled_at=scheduled,
         days_before_event=days_before_event,
         text=body,
         source="template",
+        revision=updated.revision,
     )
 
 
@@ -539,11 +546,13 @@ def _dispatch_key(
     *,
     event_id: str,
     registration_id: str,
-    position: int,
+    slot_key: str,
+    revision: int,
 ) -> str:
+    normalized_slot = str(slot_key).replace(":", "-")
     return (
         f"event:{event_id}:registration:{registration_id}:"
-        f"message:warmup:v1:position:{position}"
+        f"message:warmup:v2:slot:{normalized_slot}:revision:{int(revision)}"
     )
 
 
@@ -553,7 +562,8 @@ def _materialize(
     event: Event,
     registration: EventRegistration,
     target: EventDeliveryTarget,
-    position: int,
+    slot_key: str,
+    revision: int,
     text: str,
     now_iso: str,
 ) -> bool:
@@ -571,7 +581,8 @@ def _materialize(
     key = _dispatch_key(
         event_id=event.id,
         registration_id=registration.id,
-        position=position,
+        slot_key=slot_key,
+        revision=revision,
     )
     cursor = conn.execute(
         """
@@ -622,7 +633,7 @@ def materialize_due_event_warmups_in_transaction(
 
     rows = conn.execute(
         """
-        SELECT m.business_id,m.event_id,m.position,m.scheduled_at,m.text,
+        SELECT m.business_id,m.event_id,m.position,m.slot_key,m.revision,m.scheduled_at,m.text,
                e.public_slug,e.timezone_name,r.id AS registration_id,r.token
         FROM clientplatform_event_content_messages m
         JOIN clientplatform_events e
@@ -653,7 +664,8 @@ def materialize_due_event_warmups_in_transaction(
               WHERE d.business_id=r.business_id
                 AND d.idempotency_key=(
                     'event:' || e.id || ':registration:' || r.id ||
-                    ':message:warmup:v1:position:' || CAST(m.position AS TEXT)
+                    ':message:warmup:v2:slot:' || REPLACE(m.slot_key, ':', '-') ||
+                    ':revision:' || CAST(m.revision AS TEXT)
                 )
           )
         ORDER BY m.scheduled_at,m.event_id,m.position,r.id
@@ -678,14 +690,16 @@ def materialize_due_event_warmups_in_transaction(
         business_id = str(row["business_id"] if hasattr(row, "keys") else row[0])
         event_id = str(row["event_id"] if hasattr(row, "keys") else row[1])
         position = int(row["position"] if hasattr(row, "keys") else row[2])
+        slot_key = str(row["slot_key"] if hasattr(row, "keys") else row[3])
+        revision = int(row["revision"] if hasattr(row, "keys") else row[4])
         scheduled_at = normalize_utc(
-            str(row["scheduled_at"] if hasattr(row, "keys") else row[3]),
+            str(row["scheduled_at"] if hasattr(row, "keys") else row[5]),
             field_name="scheduled_at",
         )
-        text = str(row["text"] if hasattr(row, "keys") else row[4])
-        public_slug = str(row["public_slug"] if hasattr(row, "keys") else row[5])
-        timezone_name = str(row["timezone_name"] if hasattr(row, "keys") else row[6])
-        token = str(row["token"] if hasattr(row, "keys") else row[8])
+        text = str(row["text"] if hasattr(row, "keys") else row[6])
+        public_slug = str(row["public_slug"] if hasattr(row, "keys") else row[7])
+        timezone_name = str(row["timezone_name"] if hasattr(row, "keys") else row[8])
+        token = str(row["token"] if hasattr(row, "keys") else row[10])
 
         zone = ZoneInfo(timezone_name)
         if current.astimezone(zone).date() != scheduled_at.astimezone(zone).date():
@@ -695,9 +709,10 @@ def materialize_due_event_warmups_in_transaction(
         key = _dispatch_key(
             event_id=event_id,
             registration_id=str(
-                row["registration_id"] if hasattr(row, "keys") else row[7]
+                row["registration_id"] if hasattr(row, "keys") else row[9]
             ),
-            position=position,
+            slot_key=slot_key,
+            revision=revision,
         )
         existing = conn.execute(
             """
@@ -778,7 +793,8 @@ def materialize_due_event_warmups_in_transaction(
             event=event,
             registration=registration,
             target=target,
-            position=position,
+            slot_key=slot_key,
+            revision=revision,
             text=text,
             now_iso=now_iso,
         ):
