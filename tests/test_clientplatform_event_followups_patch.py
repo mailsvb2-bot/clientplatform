@@ -208,6 +208,57 @@ def test_followup_prefers_consented_max_and_includes_unsubscribe(monkeypatch) ->
     assert row["idempotency_key"].endswith(":message:post:v4:stage:1")
 
 
+def test_followup_dispatch_uses_owner_text_and_revisioned_key(monkeypatch) -> None:
+    conn = _conn(with_max=False)
+    conn.execute(
+        """
+        CREATE TABLE clientplatform_event_content_messages(
+            business_id TEXT,event_id TEXT,stage TEXT,slot_key TEXT,revision INTEGER,
+            text TEXT,source TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO clientplatform_event_content_messages
+        VALUES(
+            'b','e','post_event_followup','offer_clicked_unpaid:1',3,
+            'Свой дожим для {name}: {offer}','owner'
+        )
+        """
+    )
+    grant_event_commercial_consent_in_transaction(
+        conn,
+        business_id="b",
+        event_id="e",
+        registration_id="r",
+        channels=("email",),
+        now="2026-09-11T09:00:00+00:00",
+    )
+    monkeypatch.setenv("CLIENTPLATFORM_EVENT_COMMERCIAL_FOLLOWUPS_ENABLED", "true")
+    monkeypatch.setattr(
+        "clientplatform.application.event_followups._public_base_url",
+        lambda: "https://clientplatform.example",
+    )
+    monkeypatch.setattr(
+        "clientplatform.application.event_followups._automation_followup_authorized",
+        lambda *args, **kwargs: True,
+    )
+
+    result = materialize_due_event_followups_in_transaction(
+        conn, now="2026-09-11T13:00:00+00:00"
+    )
+    assert result.queued == 1
+    row = conn.execute(
+        "SELECT payload_ref,idempotency_key FROM provider_dispatch_outbox"
+    ).fetchone()
+    assert "Свой дожим для Ivan:" in row["payload_ref"]
+    assert "https://clientplatform.example/e/offer/" in row["payload_ref"]
+    assert row["idempotency_key"].endswith(
+        ":message:post:v5:stage:1:slot:offer_clicked_unpaid-1:revision:3"
+    )
+
+
 def test_followup_falls_back_to_consented_email_when_native_route_is_ambiguous(
     monkeypatch,
 ) -> None:
