@@ -778,6 +778,21 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
         )
 
 
+    def test_webinar_callback_payloads_fit_telegram_limit(self) -> None:
+        samples = (
+            f"cpev:content:{EVENT_TOKEN}:{TOKEN}",
+            f"cpev:fp:{EVENT_TOKEN}:{TOKEN}",
+            f"cpev:ws:{EVENT_TOKEN}:{TOKEN}",
+            f"cpev:wd:{EVENT_TOKEN}:14:{TOKEN}",
+            f"cpev:wo:{EVENT_TOKEN}:{TOKEN}",
+            f"cpev:wt:{EVENT_TOKEN}:14:{TOKEN}",
+            f"cpev:we:{EVENT_TOKEN}:14:{TOKEN}",
+            f"cpev:wr:{EVENT_TOKEN}:14:{TOKEN}",
+            f"cpev:announce:{EVENT_TOKEN}:{TOKEN}",
+        )
+        for payload in samples:
+            self.assertLessEqual(len(payload.encode("utf-8")), 64, payload)
+
     def test_content_plan_helpers_cover_warmup_and_empty_states(self) -> None:
         item = SimpleNamespace(id=EVENT_ID, title="Вебинар")
         snapshot = SimpleNamespace(items=(SimpleNamespace(id="other"), item))
@@ -799,7 +814,7 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 business_id=BUSINESS_ID,
                 has_warmup=False,
             )
-        self.assertIn("cpev:warmtxt:", warm[0][0][1])
+        self.assertIn("cpev:wt:", warm[0][0][1])
         self.assertIn("Изменить дни", warm[1][0][0])
         self.assertIn("Настроить прогрев", empty[0][0][0])
         self.assertEqual(warm[-1][0][1], f"cpev:home:{TOKEN}")
@@ -1008,12 +1023,12 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
         )
 
         stale_follow = _callback()
-        stale_follow.data = "cpev:followplan:broken"
+        stale_follow.data = "cpev:fp:broken"
         await events.open_followup_content_plan(stale_follow)
         stale_follow.answer.assert_awaited_once_with("Кнопка устарела", show_alert=True)
 
         follow = _callback()
-        follow.data = f"cpev:followplan:{EVENT_TOKEN}:{TOKEN}"
+        follow.data = f"cpev:fp:{EVENT_TOKEN}:{TOKEN}"
         with (
             patch.object(events.control, "_token_uuid", side_effect=decode),
             patch.object(events.control, "_callback_message", return_value=reply),
@@ -1039,7 +1054,7 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         for maximum in (6, 0):
             callback = _callback()
-            callback.data = f"cpev:warmsetup:{EVENT_TOKEN}:{TOKEN}"
+            callback.data = f"cpev:ws:{EVENT_TOKEN}:{TOKEN}"
             state = AsyncMock()
             reply = SimpleNamespace(answer=AsyncMock())
             with (
@@ -1067,7 +1082,7 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
             callback.answer.assert_awaited_once_with()
 
         stale = _callback()
-        stale.data = "cpev:warmsetup:broken"
+        stale.data = "cpev:ws:broken"
         await events.open_warmup_setup(stale, AsyncMock())
         stale.answer.assert_awaited_once_with("Кнопка устарела", show_alert=True)
 
@@ -1079,12 +1094,12 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
             return EVENT_ID if value == EVENT_TOKEN else BUSINESS_ID
 
         stale = _callback()
-        stale.data = f"cpev:warmdays:{EVENT_TOKEN}:x:{TOKEN}"
+        stale.data = f"cpev:wd:{EVENT_TOKEN}:x:{TOKEN}"
         await events.set_warmup_days(stale, AsyncMock())
         stale.answer.assert_awaited_once_with("Кнопка устарела", show_alert=True)
 
         invalid = _callback()
-        invalid.data = f"cpev:warmdays:{EVENT_TOKEN}:9:{TOKEN}"
+        invalid.data = f"cpev:wd:{EVENT_TOKEN}:9:{TOKEN}"
         with (
             patch.object(events.control, "_token_uuid", side_effect=decode),
             patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
@@ -1094,7 +1109,7 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
         invalid.answer.assert_awaited_once_with("слишком много", show_alert=True)
 
         callback = _callback()
-        callback.data = f"cpev:warmdays:{EVENT_TOKEN}:3:{TOKEN}"
+        callback.data = f"cpev:wd:{EVENT_TOKEN}:3:{TOKEN}"
         state = AsyncMock()
         with (
             patch.object(events.control, "_token_uuid", side_effect=decode),
@@ -1117,12 +1132,12 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
             return EVENT_ID if value == EVENT_TOKEN else BUSINESS_ID
 
         stale = _callback()
-        stale.data = "cpev:warmother:broken"
+        stale.data = "cpev:wo:broken"
         await events.request_custom_warmup_days(stale, AsyncMock())
         stale.answer.assert_awaited_once_with("Кнопка устарела", show_alert=True)
 
         callback = _callback()
-        callback.data = f"cpev:warmother:{EVENT_TOKEN}:{TOKEN}"
+        callback.data = f"cpev:wo:{EVENT_TOKEN}:{TOKEN}"
         state = AsyncMock()
         with (
             patch.object(events.control, "_token_uuid", side_effect=decode),
@@ -1190,12 +1205,12 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
             return EVENT_ID if value == EVENT_TOKEN else BUSINESS_ID
 
         stale_open = _callback()
-        stale_open.data = f"cpev:warmtxt:{EVENT_TOKEN}:x:{TOKEN}"
+        stale_open.data = f"cpev:wt:{EVENT_TOKEN}:x:{TOKEN}"
         await events.open_warmup_text(stale_open)
         stale_open.answer.assert_awaited_once_with("Кнопка устарела", show_alert=True)
 
         opened = _callback()
-        opened.data = f"cpev:warmtxt:{EVENT_TOKEN}:2:{TOKEN}"
+        opened.data = f"cpev:wt:{EVENT_TOKEN}:2:{TOKEN}"
         with (
             patch.object(events.control, "_token_uuid", side_effect=decode),
             patch.object(events.control, "_callback_message", return_value=reply),
@@ -1211,12 +1226,12 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
         )
 
         stale_edit = _callback()
-        stale_edit.data = f"cpev:warmedit:{EVENT_TOKEN}:x:{TOKEN}"
+        stale_edit.data = f"cpev:we:{EVENT_TOKEN}:x:{TOKEN}"
         await events.edit_warmup_text(stale_edit, AsyncMock())
         stale_edit.answer.assert_awaited_once_with("Кнопка устарела", show_alert=True)
 
         edit = _callback()
-        edit.data = f"cpev:warmedit:{EVENT_TOKEN}:2:{TOKEN}"
+        edit.data = f"cpev:we:{EVENT_TOKEN}:2:{TOKEN}"
         edit_state = AsyncMock()
         with (
             patch.object(events.control, "_token_uuid", side_effect=decode),
@@ -1292,12 +1307,12 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
         preview.assert_awaited_once()
 
         stale_reset = _callback()
-        stale_reset.data = f"cpev:warmreset:{EVENT_TOKEN}:x:{TOKEN}"
+        stale_reset.data = f"cpev:wr:{EVENT_TOKEN}:x:{TOKEN}"
         await events.reset_warmup_text(stale_reset)
         stale_reset.answer.assert_awaited_once_with("Кнопка устарела", show_alert=True)
 
         reset_error = _callback()
-        reset_error.data = f"cpev:warmreset:{EVENT_TOKEN}:2:{TOKEN}"
+        reset_error.data = f"cpev:wr:{EVENT_TOKEN}:2:{TOKEN}"
         with (
             patch.object(events.control, "_token_uuid", side_effect=decode),
             patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
@@ -1307,7 +1322,7 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
         reset_error.answer.assert_awaited_once_with("нет текста", show_alert=True)
 
         reset = _callback()
-        reset.data = f"cpev:warmreset:{EVENT_TOKEN}:2:{TOKEN}"
+        reset.data = f"cpev:wr:{EVENT_TOKEN}:2:{TOKEN}"
         with (
             patch.object(events.control, "_token_uuid", side_effect=decode),
             patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),

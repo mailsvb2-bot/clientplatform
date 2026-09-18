@@ -178,14 +178,14 @@ def _content_plan_rows(
     business_token = control._uuid_token(business_id)
     rows: list[list[tuple[str, str]]] = []
     if has_warmup:
-        rows.append([("🔥 Тексты прогрева", f"cpev:warmtxt:{event_token}:1:{business_token}")])
-        rows.append([("🗓 Изменить дни прогрева", f"cpev:warmsetup:{event_token}:{business_token}")])
+        rows.append([("🔥 Тексты прогрева", f"cpev:wt:{event_token}:1:{business_token}")])
+        rows.append([("🗓 Изменить дни прогрева", f"cpev:ws:{event_token}:{business_token}")])
     else:
-        rows.append([("🔥 Настроить прогрев", f"cpev:warmsetup:{event_token}:{business_token}")])
+        rows.append([("🔥 Настроить прогрев", f"cpev:ws:{event_token}:{business_token}")])
     rows.extend(
         [
             [("✨ Анонс", f"cpev:announce:{event_token}:{business_token}")],
-            [("💬 Тексты дожима", f"cpev:followplan:{event_token}:{business_token}")],
+            [("💬 Тексты дожима", f"cpev:fp:{event_token}:{business_token}")],
             [("⚙️ Автосообщения", f"cpev:settings:{business_token}")],
             [(BACK_TO_EVENTS_LABEL, f"cpev:home:{business_token}")],
         ]
@@ -295,17 +295,17 @@ async def _send_warmup_preview(
     rows: list[list[tuple[str, str]]] = []
     nav: list[tuple[str, str]] = []
     if index > 0:
-        nav.append(("⬅️", f"cpev:warmtxt:{event_token}:{index}:{business_token}"))
+        nav.append(("⬅️", f"cpev:wt:{event_token}:{index}:{business_token}"))
     if index + 1 < len(plan.drafts):
-        nav.append(("➡️", f"cpev:warmtxt:{event_token}:{index + 2}:{business_token}"))
+        nav.append(("➡️", f"cpev:wt:{event_token}:{index + 2}:{business_token}"))
     if nav:
         rows.append(nav)
     rows.append(
-        [("✏️ Изменить / написать свой", f"cpev:warmedit:{event_token}:{draft.position}:{business_token}")]
+        [("✏️ Изменить / написать свой", f"cpev:we:{event_token}:{draft.position}:{business_token}")]
     )
     if draft.source == "owner":
         rows.append(
-            [("♻️ Вернуть автотекст", f"cpev:warmreset:{event_token}:{draft.position}:{business_token}")]
+            [("♻️ Вернуть автотекст", f"cpev:wr:{event_token}:{draft.position}:{business_token}")]
         )
     rows.append([("🗓 К контент-плану", f"cpev:content:{event_token}:{business_token}")])
     local_at = draft.scheduled_at.astimezone(ZoneInfo(plan.timezone_name))
@@ -404,7 +404,7 @@ async def open_event_content_plan(callback: CallbackQuery) -> None:
     )
 
 
-@router.callback_query(F.data.startswith("cpev:warmsetup:"))
+@router.callback_query(F.data.startswith("cpev:ws:"))
 async def open_warmup_setup(callback: CallbackQuery, state: FSMContext) -> None:
     parts = str(callback.data or "").split(":", 3)
     if len(parts) != 4:
@@ -428,13 +428,13 @@ async def open_warmup_setup(callback: CallbackQuery, state: FSMContext) -> None:
     business_token = control._uuid_token(business_id)
     rows = [
         [
-            (str(value), f"cpev:warmdays:{event_token}:{value}:{business_token}")
+            (str(value), f"cpev:wd:{event_token}:{value}:{business_token}")
             for value in values[index : index + 3]
         ]
         for index in range(0, len(values), 3)
     ]
     if maximum > 0:
-        rows.append([("✍️ Другое число", f"cpev:warmother:{event_token}:{business_token}")])
+        rows.append([("✍️ Другое число", f"cpev:wo:{event_token}:{business_token}")])
     rows.append([("🗓 К контент-плану", f"cpev:content:{event_token}:{business_token}")])
     await state.clear()
     await callback.answer()
@@ -447,7 +447,7 @@ async def open_warmup_setup(callback: CallbackQuery, state: FSMContext) -> None:
     )
 
 
-@router.callback_query(F.data.startswith("cpev:warmdays:"))
+@router.callback_query(F.data.startswith("cpev:wd:"))
 async def set_warmup_days(callback: CallbackQuery, state: FSMContext) -> None:
     parts = str(callback.data or "").split(":", 4)
     if len(parts) != 5 or not parts[3].isdigit():
@@ -477,7 +477,7 @@ async def set_warmup_days(callback: CallbackQuery, state: FSMContext) -> None:
     )
 
 
-@router.callback_query(F.data.startswith("cpev:warmother:"))
+@router.callback_query(F.data.startswith("cpev:wo:"))
 async def request_custom_warmup_days(callback: CallbackQuery, state: FSMContext) -> None:
     parts = str(callback.data or "").split(":", 3)
     if len(parts) != 4:
@@ -541,7 +541,7 @@ async def receive_custom_warmup_days(message: Message, state: FSMContext) -> Non
     )
 
 
-@router.callback_query(F.data.startswith("cpev:warmtxt:"))
+@router.callback_query(F.data.startswith("cpev:wt:"))
 async def open_warmup_text(callback: CallbackQuery) -> None:
     parts = str(callback.data or "").split(":", 4)
     if len(parts) != 5 or not parts[3].isdigit():
@@ -559,7 +559,7 @@ async def open_warmup_text(callback: CallbackQuery) -> None:
     )
 
 
-@router.callback_query(F.data.startswith("cpev:warmedit:"))
+@router.callback_query(F.data.startswith("cpev:we:"))
 async def edit_warmup_text(callback: CallbackQuery, state: FSMContext) -> None:
     parts = str(callback.data or "").split(":", 4)
     if len(parts) != 5 or not parts[3].isdigit():
@@ -628,7 +628,7 @@ async def receive_warmup_text(message: Message, state: FSMContext) -> None:
     )
 
 
-@router.callback_query(F.data.startswith("cpev:warmreset:"))
+@router.callback_query(F.data.startswith("cpev:wr:"))
 async def reset_warmup_text(callback: CallbackQuery) -> None:
     parts = str(callback.data or "").split(":", 4)
     if len(parts) != 5 or not parts[3].isdigit():
@@ -658,7 +658,7 @@ async def reset_warmup_text(callback: CallbackQuery) -> None:
     )
 
 
-@router.callback_query(F.data.startswith("cpev:followplan:"))
+@router.callback_query(F.data.startswith("cpev:fp:"))
 async def open_followup_content_plan(callback: CallbackQuery) -> None:
     parts = str(callback.data or "").split(":", 3)
     if len(parts) != 4:
