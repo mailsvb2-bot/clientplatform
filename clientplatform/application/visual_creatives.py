@@ -57,6 +57,7 @@ def freeze_business_visual_payload(
     brand_context: str = "",
     country_code: str = "",
     preferred_provider: str = "",
+    binding: dict[str, str] | None = None,
 ) -> str:
     """Freeze the exact versioned image/video brief before owner paid consent."""
 
@@ -67,11 +68,26 @@ def freeze_business_visual_payload(
         country_code=country_code,
         preferred_provider=preferred_provider,
     )
-    value = {
+    value: dict[str, object] = {
         "version": _BUSINESS_IMAGE_BRIEF_VERSION,
         "brief": _brief_dict(brief),
         "wait_seconds": _BUSINESS_IMAGE_WAIT_SECONDS,
     }
+    if binding is not None:
+        normalized_binding = {str(key): str(item) for key, item in binding.items()}
+        required = {"type", "event_id", "stage", "slot_key", "kind"}
+        if set(normalized_binding) != required:
+            raise ValueError("frozen business visual binding is invalid")
+        if normalized_binding["type"] != "event_content":
+            raise ValueError("frozen business visual binding is invalid")
+        if normalized_binding["kind"] != brief.kind:
+            raise ValueError("frozen business visual binding kind mismatch")
+        if any(
+            not value or len(value) > 200 or any(ord(char) < 32 for char in value)
+            for value in normalized_binding.values()
+        ):
+            raise ValueError("frozen business visual binding is invalid")
+        value["binding"] = normalized_binding
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
@@ -112,7 +128,10 @@ def _load_frozen_business_visual_payload(value: str) -> tuple[VisualCreativeBrie
         raw = json.loads(str(value or ""))
     except json.JSONDecodeError as exc:
         raise ValueError("frozen business image payload is invalid") from exc
-    if not isinstance(raw, dict) or set(raw) != {"version", "brief", "wait_seconds"}:
+    if not isinstance(raw, dict) or set(raw) not in (
+        {"version", "brief", "wait_seconds"},
+        {"version", "brief", "wait_seconds", "binding"},
+    ):
         raise ValueError("frozen business image payload is invalid")
     if raw.get("version") != _BUSINESS_IMAGE_BRIEF_VERSION:
         raise ValueError("unsupported frozen business image payload version")
@@ -155,6 +174,23 @@ def _load_frozen_business_image_payload(value: str) -> tuple[VisualCreativeBrief
 def frozen_business_visual_kind(value: str) -> str:
     brief, _ = _load_frozen_business_visual_payload(value)
     return brief.kind
+
+
+def frozen_business_visual_binding(value: str) -> dict[str, str] | None:
+    _load_frozen_business_visual_payload(value)
+    raw = json.loads(str(value or ""))
+    binding = raw.get("binding")
+    if binding is None:
+        return None
+    if not isinstance(binding, dict):
+        raise ValueError("frozen business visual binding is invalid")
+    normalized = {str(key): str(item) for key, item in binding.items()}
+    required = {"type", "event_id", "stage", "slot_key", "kind"}
+    if set(normalized) != required or normalized["type"] != "event_content":
+        raise ValueError("frozen business visual binding is invalid")
+    if normalized["kind"] != frozen_business_visual_kind(value):
+        raise ValueError("frozen business visual binding kind mismatch")
+    return normalized
 
 
 def normalize_business_image_request(value: str) -> str:
@@ -402,6 +438,7 @@ __all__ = [
     "freeze_business_image_payload",
     "freeze_business_video_payload",
     "frozen_business_visual_kind",
+    "frozen_business_visual_binding",
     "normalize_business_image_request",
     "build_ad_visual_brief",
     "create_ad_visual",
