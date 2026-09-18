@@ -179,6 +179,38 @@ class OwnerInputResolutionTests(unittest.TestCase):
                 resolved = resolve_owner_input(session, raw)
                 self.assertEqual((resolved.action, resolved.args), (action, args))
 
+    def test_warmup_owner_inputs_preserve_custom_text_and_validate_days(self) -> None:
+        text = resolve_owner_input(
+            self.session(
+                "event_warmup_text",
+                event_id="event-1",
+                requested_days="3",
+                position="2",
+            ),
+            "Мой текст\n\nС новой строки",
+        )
+        self.assertEqual(
+            (text.action, text.args),
+            (
+                "event-warmup-edit-text",
+                ("event-1", "3", "2", "Мой текст\n\nС новой строки"),
+            ),
+        )
+
+        days = resolve_owner_input(
+            self.session("event_warmup_days", event_id="event-1", maximum="10"),
+            "6",
+        )
+        self.assertEqual(
+            (days.action, days.args),
+            ("event-warmup-days-text", ("event-1", "6")),
+        )
+        with self.assertRaises(ValueError):
+            resolve_owner_input(
+                self.session("event_warmup_days", event_id="event-1", maximum="5"),
+                "6",
+            )
+
     def test_webinar_wizard_input_resolution_is_step_scoped(self) -> None:
         cases = (
             ("title", "Большой интенсив", "event-wizard-title-text", ("Большой интенсив",)),

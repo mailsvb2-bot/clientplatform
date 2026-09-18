@@ -16,6 +16,7 @@ from clientplatform.domain.event_content import (
 )
 from clientplatform.domain.tenancy import PlatformRole, TenantContext
 from clientplatform.infrastructure.event_content_repository import (
+    EventContentMessageRepository,
     EventContentPreferenceRepository,
 )
 from services.db.schema import clientplatform_event_content
@@ -157,6 +158,52 @@ class EventContentRepositoryTests(unittest.TestCase):
                 stage=EventContentStage.WARMUP,
                 mode=EventContentMode.TEXT,
             )
+
+    def test_editable_message_slots_preserve_owner_source_and_schedule(self) -> None:
+        repo = EventContentMessageRepository(self.conn)
+        created = repo.upsert(
+            actor=_actor(),
+            event_id=EVENT_ID,
+            stage=EventContentStage.WARMUP,
+            slot_key="day:1",
+            position=1,
+            text="Автотекст",
+            source="template",
+            scheduled_at="2026-09-20T09:00:00+00:00",
+            now="2026-09-18T10:00:00+00:00",
+        )
+        self.assertEqual(created.source, "template")
+        updated = repo.upsert(
+            actor=_actor(),
+            event_id=EVENT_ID,
+            stage=EventContentStage.WARMUP,
+            slot_key="day:1",
+            position=1,
+            text="Мой собственный прогрев",
+            source="owner",
+            scheduled_at="2026-09-20T09:00:00+00:00",
+            now="2026-09-18T10:05:00+00:00",
+        )
+        self.assertEqual(updated.text, "Мой собственный прогрев")
+        self.assertEqual(updated.source, "owner")
+        self.assertEqual(updated.scheduled_at, "2026-09-20T09:00:00+00:00")
+        self.assertEqual(
+            repo.list_for_stage(
+                actor=_actor(),
+                event_id=EVENT_ID,
+                stage=EventContentStage.WARMUP,
+            ),
+            (updated,),
+        )
+        self.assertEqual(
+            repo.delete_missing_slots(
+                actor=_actor(),
+                event_id=EVENT_ID,
+                stage=EventContentStage.WARMUP,
+                keep_slot_keys=(),
+            ),
+            1,
+        )
 
 
 class EventContentApplicationTests(unittest.TestCase):
