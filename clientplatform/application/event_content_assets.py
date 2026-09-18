@@ -33,13 +33,17 @@ def get_event_content_asset(
     stage: EventContentStage,
     slot_key: str,
 ) -> EventContentAsset | None:
-    with get_db_ro() as conn:
-        return EventContentAssetRepository(conn).get(
-            actor=actor,
-            event_id=event_id,
-            stage=stage,
-            slot_key=slot_key,
-        )
+    try:
+        with get_db_ro() as conn:
+            return EventContentAssetRepository(conn).get(
+                actor=actor,
+                event_id=event_id,
+                stage=stage,
+                slot_key=slot_key,
+            )
+    except sqlite3.Error:
+        # Optional visual projection must not break legacy/partial-schema reads.
+        return None
 
 
 def _queue_replaced(reference: str, *, business_id: str, reason: str) -> None:
