@@ -49,6 +49,23 @@ class OwnerInputRepositoryTests(unittest.TestCase):
         )
         self.assertIsNone(self.repo.get(user_id=101, platform="max"))
 
+        event_input = self.repo.set(
+            user_id=101,
+            platform="max",
+            business_id=self.first.business.id,
+            action="online_event",
+            context={"step": "legacy-compatible"},
+        )
+        self.assertEqual(event_input.action, "online_event")
+        join_input = self.repo.set(
+            user_id=101,
+            platform="max",
+            business_id=self.first.business.id,
+            action="event_join_url",
+            context={"event_id": "event-1"},
+        )
+        self.assertEqual(join_input.action, "event_join_url")
+
         with self.assertRaises(TenantAccessDenied):
             self.repo.set(
                 user_id=101,
@@ -143,6 +160,18 @@ class OwnerInputResolutionTests(unittest.TestCase):
                 "123456",
                 "member-add-text",
                 ("123456", "manager"),
+            ),
+            (
+                self.session("online_event"),
+                "Вебинар | 25.09.2026 19:00 | - | -",
+                "event-create-text",
+                ("Вебинар", "25.09.2026 19:00", "", ""),
+            ),
+            (
+                self.session("event_join_url", event_id="event-1"),
+                "https://example.test/live",
+                "event-join-text",
+                ("event-1", "https://example.test/live"),
             ),
         )
         for session, raw, action, args in cases:
