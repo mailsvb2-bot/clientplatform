@@ -164,6 +164,11 @@ def install_button_surface_contract(safety: ModuleType) -> None:
         "cpo:ads:",
         "cpev:home:",
         "cpev:settings:",
+        # Canonical webinar wizard state lives in durable owner_input, not
+        # Telegram FSM. These buttons may clear only an ordinary stale Telegram
+        # text state before dispatch. Sensitive states remain blocked by
+        # _callback_can_escape_state.
+        "cpm:event-wizard:",
     )
     _extend_tuple(
         safety,
