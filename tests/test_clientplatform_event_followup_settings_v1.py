@@ -186,7 +186,7 @@ def test_disabling_event_autosend_cancels_pending_warmup_too(monkeypatch) -> Non
         SET idempotency_key=REPLACE(
             idempotency_key,
             ':message:post:v4:stage:1',
-            ':message:warmup:v1:position:1'
+            ':message:warmup:v2:slot:before-1:revision:1'
         )
         WHERE id='warmup-dispatch'
         """

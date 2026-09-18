@@ -39,7 +39,7 @@ def _cancel_pending_followups(
           AND status IN ('pending','retry')
           AND (
               idempotency_key LIKE 'event:%:message:post:v4:stage:%'
-              OR idempotency_key LIKE 'event:%:message:warmup:v1:position:%'
+              OR idempotency_key LIKE 'event:%:message:warmup:v2:slot:%'
           )
         """,
         (timestamp, business_id),
@@ -63,7 +63,7 @@ def _cancel_pending_for_channel(
           AND status IN ('pending','retry')
           AND (
               idempotency_key LIKE 'event:%:message:post:v4:stage:%'
-              OR idempotency_key LIKE 'event:%:message:warmup:v1:position:%'
+              OR idempotency_key LIKE 'event:%:message:warmup:v2:slot:%'
           )
         """,
         (timestamp, business_id, channel),

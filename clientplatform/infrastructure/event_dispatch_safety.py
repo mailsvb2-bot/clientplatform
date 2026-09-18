@@ -22,7 +22,7 @@ from clientplatform.infrastructure.event_followup_settings_repository import (
 from clientplatform.infrastructure.unified_dispatch_outbox import ClaimedProviderDispatch
 
 _COMMERCIAL_POST_KEY_FRAGMENT = ":message:post:v4:stage:"
-_COMMERCIAL_WARMUP_KEY_FRAGMENT = ":message:warmup:v1:position:"
+_COMMERCIAL_WARMUP_KEY_FRAGMENT = ":message:warmup:v2:slot:"
 _LEGACY_OFFER_KEY_SUFFIX = ":message:after:v2"
 _PROVIDER_BOUNDARY_MARKER = "event_commercial_provider_call_started_non_idempotent"
 _AMBIGUOUS_ERROR = (
@@ -279,6 +279,43 @@ def mark_event_commercial_non_replay_boundary(
     raise DispatchLeaseLost("commercial event lease was lost before provider boundary")
 
 
+def _warmup_claim_is_current(
+    conn: Any,
+    item: ClaimedProviderDispatch,
+) -> bool:
+    if not is_event_warmup_dispatch(item):
+        return True
+    try:
+        row = conn.execute(
+            """
+            SELECT 1
+            FROM provider_dispatch_outbox d
+            JOIN clientplatform_event_registrations r
+              ON r.id=d.source_id AND r.business_id=d.business_id
+            JOIN clientplatform_event_content_messages m
+              ON m.business_id=r.business_id
+             AND m.event_id=r.event_id
+             AND m.stage='warmup'
+            WHERE d.id=? AND d.business_id=? AND d.source_kind='event_message'
+              AND d.status='sending' AND d.lock_token=?
+              AND d.idempotency_key=(
+                  'event:' || m.event_id || ':registration:' || r.id ||
+                  ':message:warmup:v2:slot:' || REPLACE(m.slot_key, ':', '-') ||
+                  ':revision:' || CAST(m.revision AS TEXT)
+              )
+            LIMIT 1
+            """,
+            (
+                item.dispatch.id,
+                item.dispatch.business_id,
+                item.dispatch.lock_token,
+            ),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return False
+    return row is not None
+
+
 def event_commercial_claim_can_cross_provider_boundary(
     conn: Any,
     item: ClaimedProviderDispatch,
@@ -298,6 +335,24 @@ def event_commercial_claim_can_cross_provider_boundary(
             UPDATE provider_dispatch_outbox
             SET status='cancelled',updated_at=?,locked_at=NULL,lock_token=NULL,
                 last_error='event_commercial_business_disabled'
+            WHERE id=? AND business_id=? AND source_kind='event_message'
+              AND status='sending' AND lock_token=?
+            """,
+            (
+                timestamp,
+                item.dispatch.id,
+                item.dispatch.business_id,
+                item.dispatch.lock_token,
+            ),
+        )
+        return False
+
+    if is_event_warmup_dispatch(item) and not _warmup_claim_is_current(conn, item):
+        conn.execute(
+            """
+            UPDATE provider_dispatch_outbox
+            SET status='cancelled',updated_at=?,locked_at=NULL,lock_token=NULL,
+                last_error='event_warmup_revision_superseded'
             WHERE id=? AND business_id=? AND source_kind='event_message'
               AND status='sending' AND lock_token=?
             """,
@@ -448,7 +503,7 @@ def quarantine_stale_event_commercial_boundaries(
             WHERE source_kind='event_message'
               AND (
                   idempotency_key LIKE 'event:%:message:post:v4:stage:%'
-                  OR idempotency_key LIKE 'event:%:message:warmup:v1:position:%'
+                  OR idempotency_key LIKE 'event:%:message:warmup:v2:slot:%'
               )
               AND status='sending' AND locked_at IS NOT NULL AND locked_at<=?
               AND last_error=?
@@ -466,7 +521,7 @@ def quarantine_stale_event_commercial_boundaries(
             WHERE source_kind='event_message'
               AND (
                   idempotency_key LIKE 'event:%:message:post:v4:stage:%'
-                  OR idempotency_key LIKE 'event:%:message:warmup:v1:position:%'
+                  OR idempotency_key LIKE 'event:%:message:warmup:v2:slot:%'
               )
               AND status='sending' AND locked_at IS NOT NULL AND locked_at<=?
               AND last_error=?
