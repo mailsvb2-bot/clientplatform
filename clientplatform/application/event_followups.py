@@ -215,7 +215,9 @@ def _template_body(segment: str, *, stage: int) -> str:
     if segment == "offer_clicked_unpaid":
         if stage == 1:
             return (
-                "{name}, вы открывали предложение после «{title}».\n\n"
+                "{name}, вы открывали предложение после «{title}».
+
+"
                 "Если хотите вернуться к нему: {offer}"
             )
         if stage == 2:
@@ -231,7 +233,9 @@ def _template_body(segment: str, *, stage: int) -> str:
     if segment == "attended_unpaid":
         if stage == 1:
             return (
-                "{name}, спасибо, что были на «{title}».\n\n"
+                "{name}, спасибо, что были на «{title}».
+
+"
                 "Продолжить и посмотреть предложение: {offer}"
             )
         if stage == 2:
@@ -397,7 +401,9 @@ def _render(
     body = body.replace("{name}", candidate.name)
     body = body.replace("{title}", candidate.event_title)
     body = body.replace("{offer}", offer)
-    footer = f"\n\nОтказаться от рекламных сообщений: {unsubscribe}"
+    footer = f"
+
+Отказаться от рекламных сообщений: {unsubscribe}"
     return (_subject(candidate.segment, title=candidate.event_title), body + footer)
 
 
@@ -788,7 +794,8 @@ def _cancel_invalid_commercial_messages(conn: Any, *, now_iso: str) -> int:
             last_error='event_commercial_authority_revoked_or_paid'
         WHERE d.source_kind='event_message'
           AND d.status IN ('pending','retry')
-          AND (d.idempotency_key LIKE 'event:%:message:post:v4:stage:%'\n               OR d.idempotency_key LIKE 'event:%:message:post:v5:stage:%')
+          AND (d.idempotency_key LIKE 'event:%:message:post:v4:stage:%'
+               OR d.idempotency_key LIKE 'event:%:message:post:v5:stage:%')
           AND (
               EXISTS (
                   SELECT 1
@@ -832,7 +839,8 @@ def cancel_commercial_followups_for_registration_in_transaction(
         SET status='cancelled',updated_at=?,locked_at=NULL,lock_token=NULL,last_error=?
         WHERE business_id=? AND source_kind='event_message' AND source_id=?
           AND status IN ('pending','retry')
-          AND (idempotency_key LIKE 'event:%:message:post:v4:stage:%'\n               OR idempotency_key LIKE 'event:%:message:post:v5:stage:%')
+          AND (idempotency_key LIKE 'event:%:message:post:v4:stage:%'
+               OR idempotency_key LIKE 'event:%:message:post:v5:stage:%')
         """,
         (
             stamp,
