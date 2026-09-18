@@ -22,7 +22,7 @@ def ensure(c: sqlite3.Connection) -> None:
             FOREIGN KEY(updated_by_member_id, business_id)
                 REFERENCES business_members(id, business_id),
             CHECK(stage IN ('warmup','event_day_announcement','post_event_followup')),
-            CHECK(mode IN ('text','text_with_image','text_in_image'))
+            CHECK(mode IN ('text','text_with_image','text_in_image','text_with_video'))
         )
         """
     )
