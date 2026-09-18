@@ -322,7 +322,7 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
         rows = keyboard.call_args.args[0]
         self.assertEqual(
             rows[0],
-            [("🔗 Добавить ссылку на эфир", f"cpev:join:{EVENT_TOKEN}:{TOKEN}")],
+            [("🗓 Контент-план", f"cpev:content:{EVENT_TOKEN}:{TOKEN}")],
         )
         self.assertEqual(
             rows[1],
@@ -623,7 +623,12 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
         rows = message.answer.await_args.kwargs["reply_markup"]
         callbacks = [callback for row in rows for _label, callback in row]
         self.assertIn(f"cpev:join:{EVENT_TOKEN}:{TOKEN}", callbacks)
+        self.assertIn(f"cpev:content:{EVENT_TOKEN}:{TOKEN}", callbacks)
         self.assertIn(f"cpev:announce:{EVENT_TOKEN}:{TOKEN}", callbacks)
+        self.assertEqual(
+            callbacks.count(f"cpev:content:{EVENT_TOKEN}:{TOKEN}"),
+            1,
+        )
         self.assertIn("ссылку на эфир можно добавить позже", message.answer.await_args.args[0].casefold())
 
     async def test_announcement_callback_covers_success_stale_and_safe_failure(self) -> None:
