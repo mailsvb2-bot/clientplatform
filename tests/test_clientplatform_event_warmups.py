@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from contextlib import nullcontext
 import sqlite3
 from datetime import timedelta
@@ -21,8 +23,6 @@ from clientplatform.infrastructure.event_followup_settings_repository import (
 from clientplatform.infrastructure.event_repository import EventRepository
 from clientplatform.infrastructure.tenancy_repository import TenancyRepository
 from services.db.schema import create_or_update_tables
-
-from __future__ import annotations
 
 import unittest
 from datetime import datetime, timezone
