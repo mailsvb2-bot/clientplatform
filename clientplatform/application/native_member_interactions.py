@@ -1325,7 +1325,7 @@ def _native_parent_command(parsed: ParsedMemberInteraction) -> str | None:
     if action == "menu":
         return None
     if action in {"owner-input-invalid", "owner-input-cancelled"} and args:
-        if args[0] == "online_event":
+        if args[0] in {"online_event", "event_warmup_text", "event_warmup_days"}:
             return "cpm:events"
     if action == "customer":
         return "cpm:customers:0"
