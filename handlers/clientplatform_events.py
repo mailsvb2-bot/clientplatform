@@ -347,6 +347,13 @@ async def _send_warmup_preview(
         return
     index = max(0, min(position - 1, len(plan.drafts) - 1))
     draft = plan.drafts[index]
+    asset = await asyncio.to_thread(
+        get_event_content_asset,
+        actor=actor,
+        event_id=event_id,
+        stage=EventContentStage.WARMUP,
+        slot_key=draft.slot_key,
+    )
     event_token = control._uuid_token(event_id)
     business_token = control._uuid_token(business_id)
     rows: list[list[tuple[str, str]]] = []
@@ -381,10 +388,14 @@ async def _send_warmup_preview(
     rows.append([("🗓 К контент-плану", f"cpev:content:{event_token}:{business_token}")])
     local_at = draft.scheduled_at.astimezone(ZoneInfo(plan.timezone_name))
     source_label = "Ваш текст" if draft.source == "owner" else "Автотекст"
+    asset_line = ""
+    if asset is not None:
+        asset_source = "Ваше видео" if asset.source == "owner" else "AI-визуал"
+        asset_line = f"\nВизуал: ✅ {asset_source}"
     await target.answer(
         f"🔥 Прогрев {draft.position}/{plan.requested_days}\n"
         f"Отправка: {local_at.strftime('%d.%m.%Y %H:%M')} ({plan.timezone_name})\n"
-        f"Источник: {source_label}\n\n"
+        f"Источник: {source_label}{asset_line}\n\n"
         f"{draft.text}\n\n"
         "Можно использовать {name}, {title}, {join_url}. "
         "Если {join_url} не указан, персональная ссылка на эфир добавится автоматически.",
@@ -423,6 +434,13 @@ async def _send_followup_plan(
         return
     current = max(0, min(int(index), len(previews) - 1))
     preview = previews[current]
+    asset = await asyncio.to_thread(
+        get_event_content_asset,
+        actor=actor,
+        event_id=event_id,
+        stage=EventContentStage.POST_EVENT,
+        slot_key=preview.slot_key,
+    )
     body = (
         preview.text.replace("{name}", "Имя")
         .replace("{title}", item.title)
@@ -435,6 +453,7 @@ async def _send_followup_plan(
         f"Группа: {preview.segment_label}",
         f"Когда: {preview.offset_label}",
         f"Источник: {source}",
+        *((f"Визуал: ✅ {'Ваше видео' if asset.source == 'owner' else 'AI-визуал'}",) if asset is not None else ()),
         "",
         body,
         "",
@@ -520,7 +539,7 @@ async def _prepare_event_visual_for_owner(
 @router.callback_query(F.data.startswith("cpev:vis:"))
 async def prepare_event_visual(callback: CallbackQuery) -> None:
     parts = str(callback.data or "").split(":")
-    if len(parts) not in {6, 7}:
+    if len(parts) != 6:
         await callback.answer("Кнопка устарела", show_alert=True)
         return
     target = parts[2]
