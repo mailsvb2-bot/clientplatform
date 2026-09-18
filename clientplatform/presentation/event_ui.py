@@ -55,7 +55,7 @@ def event_hub_text(snapshot: object) -> str:
     lines = [
         "🎥 Вебинары",
         "",
-        "Здесь можно создать вебинар, посмотреть результат и настроить сообщения после эфира.",
+        "Здесь можно создать вебинар, посмотреть результат и настроить весь контент-план.",
     ]
     items = tuple(getattr(snapshot, "items", ()))
     if items:
@@ -78,7 +78,7 @@ def event_hub_text(snapshot: object) -> str:
     lines.extend(
         [
             "",
-            f"Автосообщения после вебинара: {_followup_status(snapshot)}",
+            f"Автосообщения вебинара: {_followup_status(snapshot)}",
             "Выберите действие ниже.",
         ]
     )
@@ -125,12 +125,13 @@ def event_settings_text(snapshot: object) -> str:
     enabled = bool(getattr(snapshot, "commercial_followups_enabled", False))
     available = bool(getattr(snapshot, "commercial_followups_platform_available", True))
     lines = [
-        "⚙️ Автосообщения после вебинара",
+        "⚙️ Автосообщения вебинара",
         "",
-        "ClientPlatform может автоматически написать участникам после эфира.",
+        "ClientPlatform может автоматически отправлять согласованные прогревы до эфира "
+        "и дожимы после него.",
         f"Статус: {_followup_status(snapshot)}",
         "",
-        "Кому писать:" if enabled else "После включения — кому писать:",
+        "Кому отправлять дожим:" if enabled else "После включения — кому отправлять дожим:",
     ]
     segments = _segments(snapshot)
     lines.extend(f"{'✅' if key in segments else '▫️'} {label}" for key, label in EVENT_SEGMENT_LABELS)

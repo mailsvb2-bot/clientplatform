@@ -37,7 +37,10 @@ def _cancel_pending_followups(
             last_error='event_commercial_business_disabled'
         WHERE business_id=? AND source_kind='event_message'
           AND status IN ('pending','retry')
-          AND idempotency_key LIKE 'event:%:message:post:v4:stage:%'
+          AND (
+              idempotency_key LIKE 'event:%:message:post:v4:stage:%'
+              OR idempotency_key LIKE 'event:%:message:warmup:v1:position:%'
+          )
         """,
         (timestamp, business_id),
     )
@@ -58,7 +61,10 @@ def _cancel_pending_for_channel(
             last_error='event_commercial_strategy_disabled'
         WHERE business_id=? AND source_kind='event_message' AND platform=?
           AND status IN ('pending','retry')
-          AND idempotency_key LIKE 'event:%:message:post:v4:stage:%'
+          AND (
+              idempotency_key LIKE 'event:%:message:post:v4:stage:%'
+              OR idempotency_key LIKE 'event:%:message:warmup:v1:position:%'
+          )
         """,
         (timestamp, business_id, channel),
     )
@@ -205,7 +211,7 @@ def set_business_event_followups_enabled(
             if enabled:
                 if current.role != PlatformRole.OWNER:
                     raise TenantPermissionDenied(
-                        "включить автоматические сообщения участникам вебинара может только владелец"
+                        "включить автоматические сообщения вебинара может только владелец"
                     )
                 if not event_followups_platform_enabled():
                     raise ValueError("Автосерия временно отключена на уровне платформы")
@@ -328,7 +334,7 @@ def set_business_event_followup_channel_enabled(
             )
             current.assert_can_manage_business()
             if enabled and current.role != PlatformRole.OWNER:
-                raise TenantPermissionDenied("расширить каналы автосообщений может только владелец")
+                raise TenantPermissionDenied("расширить каналы автосообщений вебинара может только владелец")
             repository = EventFollowupSettingsRepository(conn)
             repository.lock_business(business_id=current.business_id)
             existing = repository.get(business_id=current.business_id)
