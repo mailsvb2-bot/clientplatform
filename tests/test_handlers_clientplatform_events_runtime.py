@@ -382,8 +382,11 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("https://clientplatform.example.test/e/public-slug", answer)
         self.assertIn("E-mail напоминания включены", answer)
         post_create_rows = keyboard.call_args.args[0]
-        self.assertEqual(post_create_rows[0], [("🎥 К вебинарам", f"cpev:home:{TOKEN}")])
-        self.assertIn(("🎥 Создать ещё", f"cpev:new:{TOKEN}"), post_create_rows[1])
+        callbacks = [callback for row in post_create_rows for _label, callback in row]
+        self.assertIn(f"cpev:content:{TOKEN}:{TOKEN}", callbacks)
+        self.assertIn(f"cpev:announce:{TOKEN}:{TOKEN}", callbacks)
+        self.assertIn(f"cpev:home:{TOKEN}", callbacks)
+        self.assertIn(f"cpev:new:{TOKEN}", callbacks)
 
     async def test_receive_details_supports_external_provider_without_offer_or_email(self) -> None:
         message = _message("Эфир | 15.09.2026 19:00 | https://stream.example/room | -")
