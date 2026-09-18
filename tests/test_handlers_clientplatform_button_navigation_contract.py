@@ -242,6 +242,20 @@ def test_admin_token_first_menu_is_recognized_as_repeatable_navigation() -> None
     )
 
 
+def test_native_webinar_wizard_buttons_escape_only_ordinary_stale_fsm() -> None:
+    ordinary = "ClientPlatformControlState:activity_description"
+    timezone = "cpm:event-wizard:timezone:moscow"
+    custom_timezone = "cpm:event-wizard:timezone:other"
+
+    assert not _callback_conflicts_with_state(ordinary, timezone)
+    assert _callback_should_clear_state(ordinary, timezone)
+    assert not _callback_conflicts_with_state(ordinary, custom_timezone)
+    assert _callback_should_clear_state(ordinary, custom_timezone)
+
+    assert _callback_conflicts_with_state("ManagedBotSetupState:username", timezone)
+    assert _callback_conflicts_with_state("AdSpendConsentState:confirming_consent", timezone)
+
+
 def test_owner_group_navigation_escapes_stale_ordinary_wizards() -> None:
     state_name = "ClientPlatformControlState:activity_description"
     for data in (
