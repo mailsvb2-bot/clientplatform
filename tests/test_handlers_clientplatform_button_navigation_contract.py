@@ -242,6 +242,20 @@ def test_admin_token_first_menu_is_recognized_as_repeatable_navigation() -> None
     )
 
 
+def test_native_webinar_wizard_buttons_escape_only_ordinary_stale_fsm() -> None:
+    ordinary = "ClientPlatformControlState:activity_description"
+    timezone = "cpm:event-wizard:timezone:moscow"
+    custom_timezone = "cpm:event-wizard:timezone:other"
+
+    assert not _callback_conflicts_with_state(ordinary, timezone)
+    assert _callback_should_clear_state(ordinary, timezone)
+    assert not _callback_conflicts_with_state(ordinary, custom_timezone)
+    assert _callback_should_clear_state(ordinary, custom_timezone)
+
+    assert _callback_conflicts_with_state("ManagedBotSetupState:username", timezone)
+    assert _callback_conflicts_with_state("AdSpendConsentState:confirming_consent", timezone)
+
+
 def test_owner_group_navigation_escapes_stale_ordinary_wizards() -> None:
     state_name = "ClientPlatformControlState:activity_description"
     for data in (
@@ -255,6 +269,38 @@ def test_owner_group_navigation_escapes_stale_ordinary_wizards() -> None:
         assert _is_repeatable_navigation(data)
         assert not _callback_conflicts_with_state(state_name, data)
         assert _callback_should_clear_state(state_name, data)
+
+
+@pytest.mark.asyncio
+async def test_native_webinar_timezone_callback_clears_stale_fsm_and_reaches_handler(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    answers: list[tuple[str | None, bool]] = []
+    handled_states: list[str | None] = []
+
+    async def answer_callback(
+        _callback: CallbackQuery,
+        text: str | None = None,
+        *,
+        show_alert: bool = False,
+        **_kwargs: Any,
+    ) -> None:
+        answers.append((text, show_alert))
+
+    async def handler(_event: Any, data: dict[str, Any]) -> str:
+        handled_states.append(await data["state"].get_state())
+        return "handled"
+
+    monkeypatch.setattr(CallbackQuery, "answer", answer_callback)
+    middleware = ClientPlatformInteractionSafetyMiddleware()
+    state = _state()
+    await state.set_state(control.ClientPlatformControlState.activity_description)
+    callback = _callback("cpm:event-wizard:timezone:moscow")
+    data = {"bot": type("Bot", (), {"id": 1})(), "state": state}
+
+    assert await middleware(handler, callback, data) == "handled"
+    assert handled_states == [None]
+    assert ("Сначала завершите текущий шаг или отправьте /cancel.", True) not in answers
 
 
 @pytest.mark.asyncio

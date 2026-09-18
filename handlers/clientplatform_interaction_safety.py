@@ -114,6 +114,7 @@ _STATE_ESCAPE_PREFIXES = (
     "cpj:share:",
     "cpj:add:",
     "cpj:edit:",
+    "cpm:event-wizard:",
     "cpp:stats:",
     "cpp:slot:",
     "cpb:o:",

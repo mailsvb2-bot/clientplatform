@@ -952,6 +952,7 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_followup_plan_uses_canonical_templates_and_navigation(self) -> None:
         target = SimpleNamespace(answer=AsyncMock())
+        actor = MagicMock(unsafe=True)
         snapshot = SimpleNamespace(items=(SimpleNamespace(id=EVENT_ID, title="Вебинар"),))
         previews = (
             SimpleNamespace(
@@ -960,6 +961,7 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 stage=1,
                 offset_label="+1 час",
                 text="{name}, про «{title}»: {offer}",
+                source="template",
             ),
             SimpleNamespace(
                 segment="no_show",
@@ -967,6 +969,7 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 stage=2,
                 offset_label="+24 часа",
                 text="Ещё раз {offer}",
+                source="template",
             ),
             SimpleNamespace(
                 segment="attended_unpaid",
@@ -974,6 +977,7 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 stage=1,
                 offset_label="+1 час",
                 text="{name}: {offer}",
+                source="owner",
             ),
         )
 
@@ -982,7 +986,8 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.object(events, "resolve_cockpit_events", return_value=snapshot),
-            patch.object(events, "event_followup_template_previews", return_value=previews),
+            patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(events, "get_event_followup_content_plan", return_value=previews),
             patch.object(events.control, "_uuid_token", side_effect=token),
             patch.object(events.control, "_keyboard", side_effect=lambda rows: rows),
         ):
@@ -993,12 +998,16 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 event_id=EVENT_ID,
             )
         text = target.answer.await_args.args[0]
-        self.assertEqual(text.count("• Не пришли:"), 1)
-        self.assertEqual(text.count("• Были:"), 1)
+        self.assertIn("Дожим 1/3", text)
+        self.assertIn("Группа: Не пришли", text)
+        self.assertIn("Источник: автотекст", text)
         self.assertIn("Имя", text)
         self.assertIn("[ссылка на предложение]", text)
         rows = target.answer.await_args.kwargs["reply_markup"]
-        self.assertEqual(rows[-1][0][1], f"cpev:content:{EVENT_TOKEN}:{TOKEN}")
+        callbacks = [callback for row in rows for _label, callback in row]
+        self.assertIn(f"cpev:fp:{EVENT_TOKEN}:1:{TOKEN}", callbacks)
+        self.assertIn(f"cpev:fe:{EVENT_TOKEN}:0:{TOKEN}", callbacks)
+        self.assertIn(f"cpev:content:{EVENT_TOKEN}:{TOKEN}", callbacks)
 
     async def test_content_plan_callbacks_cover_stale_and_success_paths(self) -> None:
         reply = SimpleNamespace(answer=AsyncMock())
@@ -1046,7 +1055,271 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
             user_id=101,
             business_id=BUSINESS_ID,
             event_id=EVENT_ID,
+            index=0,
         )
+
+    async def test_followup_text_edit_cancel_reset_and_success_paths(self) -> None:
+        actor = MagicMock(unsafe=True)
+        preview = SimpleNamespace(
+            segment="attended_unpaid",
+            segment_label="Были",
+            stage=2,
+            offset_label="+24 часа",
+            text="Шаблон {offer}",
+            source="owner",
+        )
+
+        def decode(value: str) -> str:
+            return EVENT_ID if value == EVENT_TOKEN else BUSINESS_ID
+
+        edit = _callback()
+        edit.data = f"cpev:fe:{EVENT_TOKEN}:0:{TOKEN}"
+        edit_state = AsyncMock()
+        reply = SimpleNamespace(answer=AsyncMock())
+        with (
+            patch.object(events.control, "_token_uuid", side_effect=decode),
+            patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(events, "get_event_followup_content_plan", return_value=(preview,)),
+            patch.object(events.control, "_callback_message", return_value=reply),
+        ):
+            await events.edit_followup_text(edit, edit_state)
+        edit_state.set_state.assert_awaited_once_with(
+            events.ClientPlatformEventState.waiting_followup_text
+        )
+        edit_state.update_data.assert_awaited_once_with(
+            event_business_id=BUSINESS_ID,
+            content_event_id=EVENT_ID,
+            followup_index=0,
+            followup_segment="attended_unpaid",
+            followup_stage=2,
+        )
+        self.assertIn("Пришлите новый текст дожима", reply.answer.await_args.args[0])
+
+        cancel = _message("Отмена")
+        cancel_state = AsyncMock()
+        cancel_state.get_data.return_value = {
+            "event_business_id": BUSINESS_ID,
+            "content_event_id": EVENT_ID,
+            "followup_index": 0,
+            "followup_segment": "attended_unpaid",
+            "followup_stage": 2,
+        }
+        with patch.object(events, "_send_followup_plan", new=AsyncMock()) as send:
+            await events.receive_followup_text(cancel, cancel_state)
+        cancel_state.clear.assert_awaited_once_with()
+        send.assert_awaited_once_with(
+            cancel,
+            user_id=101,
+            business_id=BUSINESS_ID,
+            event_id=EVENT_ID,
+            index=0,
+        )
+
+        saved = _message("Мой собственный дожим для {name}: {offer}")
+        saved_state = AsyncMock()
+        saved_state.get_data.return_value = {
+            "event_business_id": BUSINESS_ID,
+            "content_event_id": EVENT_ID,
+            "followup_index": 0,
+            "followup_segment": "attended_unpaid",
+            "followup_stage": 2,
+        }
+        with (
+            patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(events, "set_event_followup_text") as setter,
+            patch.object(events, "_send_followup_plan", new=AsyncMock()) as send,
+        ):
+            await events.receive_followup_text(saved, saved_state)
+        setter.assert_called_once_with(
+            actor=actor,
+            event_id=EVENT_ID,
+            segment="attended_unpaid",
+            stage=2,
+            text="Мой собственный дожим для {name}: {offer}",
+        )
+        saved_state.clear.assert_awaited_once_with()
+        send.assert_awaited_once_with(
+            saved,
+            user_id=101,
+            business_id=BUSINESS_ID,
+            event_id=EVENT_ID,
+            index=0,
+        )
+
+        reset = _callback()
+        reset.data = f"cpev:fr:{EVENT_TOKEN}:0:{TOKEN}"
+        with (
+            patch.object(events.control, "_token_uuid", side_effect=decode),
+            patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(events, "get_event_followup_content_plan", return_value=(preview,)),
+            patch.object(events, "reset_event_followup_text") as resetter,
+            patch.object(events, "_send_followup_plan", new=AsyncMock()) as send,
+            patch.object(events.control, "_callback_message", return_value=reply),
+        ):
+            await events.reset_followup_text(reset)
+        resetter.assert_called_once_with(
+            actor=actor,
+            event_id=EVENT_ID,
+            segment="attended_unpaid",
+            stage=2,
+        )
+        reset.answer.assert_awaited_once_with("Автотекст восстановлен")
+        send.assert_awaited_once_with(
+            reply,
+            user_id=101,
+            business_id=BUSINESS_ID,
+            event_id=EVENT_ID,
+            index=0,
+        )
+
+
+    async def test_followup_plan_empty_and_owner_navigation_edges(self) -> None:
+        target = SimpleNamespace(answer=AsyncMock())
+        actor = MagicMock(unsafe=True)
+        snapshot = SimpleNamespace(items=(SimpleNamespace(id=EVENT_ID, title="Вебинар"),))
+
+        with (
+            patch.object(events, "resolve_cockpit_events", return_value=snapshot),
+            patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(events, "get_event_followup_content_plan", return_value=()),
+        ):
+            await events._send_followup_plan(
+                target,
+                user_id=101,
+                business_id=BUSINESS_ID,
+                event_id=EVENT_ID,
+            )
+        target.answer.assert_awaited_once_with("Для этого вебинара нет сообщений дожима.")
+
+        target.answer.reset_mock()
+        previews = (
+            SimpleNamespace(
+                segment="no_show",
+                segment_label="Не пришли",
+                stage=1,
+                offset_label="+1 час",
+                text="Первый {offer}",
+                source="template",
+            ),
+            SimpleNamespace(
+                segment="attended_unpaid",
+                segment_label="Были",
+                stage=3,
+                offset_label="+48 часов",
+                text="{name}, последний {offer}",
+                source="owner",
+            ),
+        )
+
+        def token(value: str) -> str:
+            return EVENT_TOKEN if value == EVENT_ID else TOKEN
+
+        with (
+            patch.object(events, "resolve_cockpit_events", return_value=snapshot),
+            patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(events, "get_event_followup_content_plan", return_value=previews),
+            patch.object(events.control, "_uuid_token", side_effect=token),
+            patch.object(events.control, "_keyboard", side_effect=lambda rows: rows),
+        ):
+            await events._send_followup_plan(
+                target,
+                user_id=101,
+                business_id=BUSINESS_ID,
+                event_id=EVENT_ID,
+                index=99,
+            )
+        text = target.answer.await_args.args[0]
+        self.assertIn("Дожим 2/2", text)
+        self.assertIn("Источник: ваш текст", text)
+        callbacks = [
+            callback
+            for row in target.answer.await_args.kwargs["reply_markup"]
+            for _label, callback in row
+        ]
+        self.assertIn(f"cpev:fp:{EVENT_TOKEN}:0:{TOKEN}", callbacks)
+        self.assertIn(f"cpev:fr:{EVENT_TOKEN}:1:{TOKEN}", callbacks)
+        self.assertFalse(any(callback == f"cpev:fp:{EVENT_TOKEN}:2:{TOKEN}" for callback in callbacks))
+
+    async def test_followup_callbacks_cover_stale_range_and_error_paths(self) -> None:
+        actor = MagicMock(unsafe=True)
+        preview = SimpleNamespace(
+            segment="no_show",
+            segment_label="Не пришли",
+            stage=1,
+            offset_label="+1 час",
+            text="Автотекст {offer}",
+            source="template",
+        )
+
+        def decode(value: str) -> str:
+            return EVENT_ID if value == EVENT_TOKEN else BUSINESS_ID
+
+        bad_page = _callback()
+        bad_page.data = f"cpev:fp:{EVENT_TOKEN}:oops:{TOKEN}"
+        await events.open_followup_content_plan(bad_page)
+        bad_page.answer.assert_awaited_once_with("Кнопка устарела", show_alert=True)
+
+        bad_edit = _callback()
+        bad_edit.data = "cpev:fe:broken"
+        await events.edit_followup_text(bad_edit, AsyncMock())
+        bad_edit.answer.assert_awaited_once_with("Кнопка устарела", show_alert=True)
+
+        out_of_range = _callback()
+        out_of_range.data = f"cpev:fe:{EVENT_TOKEN}:9:{TOKEN}"
+        with (
+            patch.object(events.control, "_token_uuid", side_effect=decode),
+            patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(events, "get_event_followup_content_plan", return_value=(preview,)),
+        ):
+            await events.edit_followup_text(out_of_range, AsyncMock())
+        out_of_range.answer.assert_awaited_once_with("Кнопка устарела", show_alert=True)
+
+        state = AsyncMock()
+        state.get_data.return_value = {
+            "event_business_id": BUSINESS_ID,
+            "content_event_id": EVENT_ID,
+            "followup_index": 0,
+            "followup_segment": "no_show",
+            "followup_stage": 1,
+        }
+        too_long = _message("x" * 3501)
+        await events.receive_followup_text(too_long, state)
+        too_long.answer.assert_awaited_once_with("Текст должен быть от 1 до 3500 символов.")
+
+        rejected = _message("Мой текст")
+        with (
+            patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(events, "set_event_followup_text", side_effect=ValueError("ошибка текста")),
+        ):
+            await events.receive_followup_text(rejected, state)
+        rejected.answer.assert_awaited_once_with("ошибка текста")
+
+        bad_reset = _callback()
+        bad_reset.data = "cpev:fr:broken"
+        await events.reset_followup_text(bad_reset)
+        bad_reset.answer.assert_awaited_once_with("Кнопка устарела", show_alert=True)
+
+        reset_range = _callback()
+        reset_range.data = f"cpev:fr:{EVENT_TOKEN}:9:{TOKEN}"
+        with (
+            patch.object(events.control, "_token_uuid", side_effect=decode),
+            patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(events, "get_event_followup_content_plan", return_value=(preview,)),
+        ):
+            await events.reset_followup_text(reset_range)
+        reset_range.answer.assert_awaited_once_with("Кнопка устарела", show_alert=True)
+
+        reset_error = _callback()
+        reset_error.data = f"cpev:fr:{EVENT_TOKEN}:0:{TOKEN}"
+        with (
+            patch.object(events.control, "_token_uuid", side_effect=decode),
+            patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(events, "get_event_followup_content_plan", return_value=(preview,)),
+            patch.object(events, "reset_event_followup_text", side_effect=ValueError("ошибка сброса")),
+        ):
+            await events.reset_followup_text(reset_error)
+        reset_error.answer.assert_awaited_once_with("ошибка сброса", show_alert=True)
+
 
     async def test_warmup_setup_covers_quick_custom_and_zero_windows(self) -> None:
         actor = MagicMock(unsafe=True)

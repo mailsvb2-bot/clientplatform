@@ -33,6 +33,7 @@ from handlers import clientplatform_interaction_safety as safety
 from handlers.clientplatform_interaction_safety import (
     ClientPlatformInteractionSafetyMiddleware,
     _callback_conflicts_with_state,
+    _callback_should_clear_state,
     _command_like,
     install_interaction_safety,
 )
@@ -134,6 +135,51 @@ def test_cross_flow_callbacks_are_rejected_while_text_answer_is_pending() -> Non
         is True
     )
     assert _callback_conflicts_with_state(None, "cp:clients:business") is False
+
+
+def test_webinar_wizard_callbacks_escape_only_ordinary_stale_fsm_state() -> None:
+    callback = "cpm:event-wizard:timezone:moscow"
+    ordinary_state = "ClientPlatformControlState:activity_description"
+    sensitive_state = "ManagedBotSetupState:username"
+
+    assert _callback_conflicts_with_state(ordinary_state, callback) is False
+    assert _callback_should_clear_state(ordinary_state, callback) is True
+
+    assert _callback_conflicts_with_state(sensitive_state, callback) is True
+    assert _callback_should_clear_state(sensitive_state, callback) is False
+
+
+@pytest.mark.asyncio
+async def test_webinar_wizard_timezone_callback_clears_stale_fsm_and_runs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    answers: list[tuple[str | None, bool]] = []
+    handled: list[str] = []
+
+    async def answer_callback(
+        _callback: CallbackQuery,
+        text: str | None = None,
+        *,
+        show_alert: bool = False,
+        **_kwargs: Any,
+    ) -> None:
+        answers.append((text, show_alert))
+
+    async def handler(event: Any, _data: dict[str, Any]) -> str:
+        handled.append(str(event.data))
+        return "handled"
+
+    monkeypatch.setattr(CallbackQuery, "answer", answer_callback)
+    middleware = ClientPlatformInteractionSafetyMiddleware()
+    state = fsm_context()
+    await state.set_state(control.ClientPlatformControlState.activity_description)
+    data = {"bot": SimpleNamespace(id=1), "state": state}
+    callback = telegram_callback(data="cpm:event-wizard:timezone:moscow")
+
+    assert await middleware(handler, callback, data) == "handled"
+    assert handled == ["cpm:event-wizard:timezone:moscow"]
+    assert await state.get_state() is None
+    assert not any(text and "Сначала завершите" in text for text, _ in answers)
 
 
 def test_callback_actions_are_deduplicated_per_user_and_payload() -> None:

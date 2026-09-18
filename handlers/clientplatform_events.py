@@ -14,7 +14,11 @@ from clientplatform.application.activity import get_business_profile
 from clientplatform.application.cockpit_events import resolve_cockpit_events
 from clientplatform.application.event_announcements import draft_event_announcement
 from clientplatform.application.event_content_plans import get_event_content_plan
-from clientplatform.application.event_followups import event_followup_template_previews
+from clientplatform.application.event_followups import (
+    get_event_followup_content_plan,
+    reset_event_followup_text,
+    set_event_followup_text,
+)
 from clientplatform.application.event_sessions import get_event_warmup_window
 from clientplatform.application.event_warmups import (
     get_saved_event_warmup_plan,
@@ -60,6 +64,7 @@ class ClientPlatformEventState(StatesGroup):
     waiting_join_url = State()
     waiting_warmup_days = State()
     waiting_content_text = State()
+    waiting_followup_text = State()
 
 
 def _cancel_keyboard(business_id: str):
@@ -327,6 +332,7 @@ async def _send_followup_plan(
     user_id: int,
     business_id: str,
     event_id: str,
+    index: int = 0,
 ) -> None:
     snapshot = await asyncio.to_thread(
         resolve_cockpit_events,
@@ -335,41 +341,55 @@ async def _send_followup_plan(
         limit=30,
     )
     item = _event_item(snapshot, event_id)
-    previews = event_followup_template_previews()
+    actor = await control._actor(user_id, business_id)
+    previews = await asyncio.to_thread(
+        get_event_followup_content_plan,
+        actor=actor,
+        event_id=event_id,
+    )
+    if not previews:
+        await target.answer("Для этого вебинара нет сообщений дожима.")
+        return
+    current = max(0, min(int(index), len(previews) - 1))
+    preview = previews[current]
+    body = (
+        preview.text.replace("{name}", "Имя")
+        .replace("{title}", item.title)
+        .replace("{offer}", "[ссылка на предложение]")
+    )
+    source = "ваш текст" if preview.source == "owner" else "автотекст"
     lines = [
-        f"💬 Дожим после «{item.title}»",
+        f"💬 Дожим {current + 1}/{len(previews)} после «{item.title}»",
         "",
-        "Это тексты того же канонического движка, который ставит сообщения в отправку.",
+        f"Группа: {preview.segment_label}",
+        f"Когда: {preview.offset_label}",
+        f"Источник: {source}",
+        "",
+        body,
+        "",
+        "Можно полностью заменить этот текст своим. Поддерживаются {name}, {title}, {offer}.",
+        "После оплаты серия прекращается. Без действующего согласия сообщение не отправляется.",
     ]
-    current_segment = None
-    for preview in previews:
-        if preview.segment != current_segment:
-            current_segment = preview.segment
-            lines.extend(["", f"• {preview.segment_label}:"])
-        body = (
-            preview.text.replace("{name}", "Имя")
-            .replace("{title}", item.title)
-            .replace("{offer}", "[ссылка на предложение]")
-        )
-        lines.append(f"  {preview.offset_label}: {body}")
-    lines.extend(
+    event_token = control._uuid_token(event_id)
+    business_token = control._uuid_token(business_id)
+    rows: list[list[tuple[str, str]]] = []
+    navigation: list[tuple[str, str]] = []
+    if current > 0:
+        navigation.append(("⬅️ Предыдущее", f"cpev:fp:{event_token}:{current - 1}:{business_token}"))
+    if current + 1 < len(previews):
+        navigation.append(("Следующее ➡️", f"cpev:fp:{event_token}:{current + 1}:{business_token}"))
+    if navigation:
+        rows.append(navigation)
+    rows.append([("✏️ Изменить текст", f"cpev:fe:{event_token}:{current}:{business_token}")])
+    if preview.source != "template":
+        rows.append([("↩️ Вернуть автотекст", f"cpev:fr:{event_token}:{current}:{business_token}")])
+    rows.extend(
         [
-            "",
-            "После оплаты дальнейший коммерческий дожим прекращается. "
-            "Без действующего согласия сообщение не отправляется.",
+            [("⚙️ Настроить автосообщения", f"cpev:settings:{business_token}")],
+            [("🗓 К контент-плану", f"cpev:content:{event_token}:{business_token}")],
         ]
     )
-    token = control._uuid_token(business_id)
-    event_token = control._uuid_token(event_id)
-    await target.answer(
-        "\n".join(lines),
-        reply_markup=control._keyboard(
-            [
-                [("⚙️ Настроить автосообщения", f"cpev:settings:{token}")],
-                [("🗓 К контент-плану", f"cpev:content:{event_token}:{token}")],
-            ]
-        ),
-    )
+    await target.answer("\n".join(lines), reply_markup=control._keyboard(rows))
 
 
 @router.callback_query(F.data.startswith("cpev:home:"))
@@ -660,18 +680,152 @@ async def reset_warmup_text(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("cpev:fp:"))
 async def open_followup_content_plan(callback: CallbackQuery) -> None:
-    parts = str(callback.data or "").split(":", 3)
-    if len(parts) != 4:
+    parts = str(callback.data or "").split(":")
+    if len(parts) not in {4, 5}:
         await callback.answer("Кнопка устарела", show_alert=True)
         return
-    event_id = control._token_uuid(parts[2])
-    business_id = control._token_uuid(parts[3])
+    index = 0
+    business_token = parts[3]
+    if len(parts) == 5:
+        if not parts[3].isdigit():
+            await callback.answer("Кнопка устарела", show_alert=True)
+            return
+        index = int(parts[3])
+        business_token = parts[4]
+    try:
+        event_id = control._token_uuid(parts[2])
+        business_id = control._token_uuid(business_token)
+    except (ValueError, TypeError):
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
     await callback.answer()
     await _send_followup_plan(
         control._callback_message(callback),
         user_id=int(callback.from_user.id),
         business_id=business_id,
         event_id=event_id,
+        index=index,
+    )
+
+
+@router.callback_query(F.data.startswith("cpev:fe:"))
+async def edit_followup_text(callback: CallbackQuery, state: FSMContext) -> None:
+    parts = str(callback.data or "").split(":")
+    if len(parts) != 5 or not parts[3].isdigit():
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    event_id = control._token_uuid(parts[2])
+    index = int(parts[3])
+    business_id = control._token_uuid(parts[4])
+    actor = await control._actor(int(callback.from_user.id), business_id)
+    previews = await asyncio.to_thread(
+        get_event_followup_content_plan,
+        actor=actor,
+        event_id=event_id,
+    )
+    if not 0 <= index < len(previews):
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    preview = previews[index]
+    await state.clear()
+    await state.set_state(ClientPlatformEventState.waiting_followup_text)
+    await state.update_data(
+        event_business_id=business_id,
+        content_event_id=event_id,
+        followup_index=index,
+        followup_segment=preview.segment,
+        followup_stage=preview.stage,
+    )
+    await callback.answer()
+    await control._callback_message(callback).answer(
+        f"✏️ Пришлите новый текст дожима ({preview.segment_label}, {preview.offset_label}) "
+        "одним сообщением.\n\nМожно написать текст полностью самостоятельно. "
+        "Поддерживаются {name}, {title}, {offer}.\n\nДля выхода: Отмена."
+    )
+
+
+@router.message(ClientPlatformEventState.waiting_followup_text)
+async def receive_followup_text(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    business_id = str(data.get("event_business_id") or "")
+    event_id = str(data.get("content_event_id") or "")
+    index = int(data.get("followup_index") or 0)
+    segment = str(data.get("followup_segment") or "")
+    stage = int(data.get("followup_stage") or 0)
+    body = str(message.text or "").strip()
+    if body.casefold() in {"отмена", "cancel"}:
+        await state.clear()
+        await _send_followup_plan(
+            message,
+            user_id=int(message.from_user.id),
+            business_id=business_id,
+            event_id=event_id,
+            index=index,
+        )
+        return
+    if not 1 <= len(body) <= 3500:
+        await message.answer("Текст должен быть от 1 до 3500 символов.")
+        return
+    actor = await control._actor(int(message.from_user.id), business_id)
+    try:
+        await asyncio.to_thread(
+            set_event_followup_text,
+            actor=actor,
+            event_id=event_id,
+            segment=segment,
+            stage=stage,
+            text=body,
+        )
+    except ValueError as exc:
+        await message.answer(str(exc))
+        return
+    await state.clear()
+    await _send_followup_plan(
+        message,
+        user_id=int(message.from_user.id),
+        business_id=business_id,
+        event_id=event_id,
+        index=index,
+    )
+
+
+@router.callback_query(F.data.startswith("cpev:fr:"))
+async def reset_followup_text(callback: CallbackQuery) -> None:
+    parts = str(callback.data or "").split(":")
+    if len(parts) != 5 or not parts[3].isdigit():
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    event_id = control._token_uuid(parts[2])
+    index = int(parts[3])
+    business_id = control._token_uuid(parts[4])
+    actor = await control._actor(int(callback.from_user.id), business_id)
+    previews = await asyncio.to_thread(
+        get_event_followup_content_plan,
+        actor=actor,
+        event_id=event_id,
+    )
+    if not 0 <= index < len(previews):
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    preview = previews[index]
+    try:
+        await asyncio.to_thread(
+            reset_event_followup_text,
+            actor=actor,
+            event_id=event_id,
+            segment=preview.segment,
+            stage=preview.stage,
+        )
+    except ValueError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    await callback.answer("Автотекст восстановлен")
+    await _send_followup_plan(
+        control._callback_message(callback),
+        user_id=int(callback.from_user.id),
+        business_id=business_id,
+        event_id=event_id,
+        index=index,
     )
 
 
@@ -1148,6 +1302,7 @@ __all__ = [
     "receive_custom_warmup_days",
     "receive_event_details",
     "receive_warmup_text",
+    "receive_followup_text",
     "router",
     "start_event_wizard",
     "toggle_event_followup_channel",

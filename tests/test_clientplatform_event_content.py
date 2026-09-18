@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import sqlite3
 import unittest
+from contextlib import nullcontext
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from clientplatform.application import event_content_plans as plans
+from clientplatform.application import event_followups as followups
 from clientplatform.domain.event_content import (
     EventContentMode,
     EventContentStage,
@@ -206,6 +208,50 @@ class EventContentRepositoryTests(unittest.TestCase):
             ),
             1,
         )
+
+
+    def test_followup_messages_are_owner_editable_and_resettable(self) -> None:
+        actor = _actor()
+        with (
+            patch.object(followups, "get_db", side_effect=lambda: nullcontext(self.conn)),
+            patch.object(followups, "get_db_ro", side_effect=lambda: nullcontext(self.conn)),
+        ):
+            defaults = followups.get_event_followup_content_plan(
+                actor=actor,
+                event_id=EVENT_ID,
+            )
+            self.assertEqual(len(defaults), 10)
+            self.assertTrue(all(item.source == "template" for item in defaults))
+            self.assertEqual(defaults[0].slot_key, "no_show:1")
+
+            edited = followups.set_event_followup_text(
+                actor=actor,
+                event_id=EVENT_ID,
+                segment="no_show",
+                stage=1,
+                text="Свой дожим для {name}: {offer}",
+            )
+            self.assertEqual(edited.source, "owner")
+            self.assertEqual(edited.text, "Свой дожим для {name}: {offer}")
+            self.assertGreaterEqual(edited.revision, 1)
+
+            persisted = followups.get_event_followup_content_plan(
+                actor=actor,
+                event_id=EVENT_ID,
+            )
+            self.assertEqual(persisted[0].source, "owner")
+            self.assertEqual(persisted[0].text, "Свой дожим для {name}: {offer}")
+
+            reset = followups.reset_event_followup_text(
+                actor=actor,
+                event_id=EVENT_ID,
+                segment="no_show",
+                stage=1,
+            )
+            self.assertEqual(reset.source, "template")
+            self.assertIn("{offer}", reset.text)
+            self.assertGreater(reset.revision, edited.revision)
+
 
 
 class EventContentApplicationTests(unittest.TestCase):

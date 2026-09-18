@@ -163,6 +163,114 @@ class NativeOwnerInputSurfaceTests(unittest.TestCase):
         clear.assert_not_called()
 
 
+class NativeFollowupContentParityTests(unittest.TestCase):
+    def test_followup_content_message_exposes_owner_edit_and_reset(self) -> None:
+        route = _route(ConnectionPlatform.VK)
+        actor = _actor(route)
+        event_id = str(uuid4())
+        preview = SimpleNamespace(
+            segment="attended_unpaid",
+            segment_label="Были на вебинаре, но не купили",
+            stage=2,
+            offset_label="+24 часа",
+            text="{name}, мой текст: {offer}",
+            source="owner",
+        )
+        snapshot = SimpleNamespace(
+            items=(SimpleNamespace(id=event_id, title="Практика"),)
+        )
+        with (
+            patch.object(native_member_ui, "_business_name", return_value="Бизнес"),
+            patch.object(native_member_ui, "resolve_events_snapshot", return_value=snapshot),
+            patch.object(
+                native_member_ui,
+                "get_event_followup_content_plan",
+                return_value=(preview,),
+            ),
+        ):
+            message = native_member_ui._event_followup_content_message(
+                actor, event_id, 0
+            )
+
+        self.assertIn("Дожим 1/1", message.text)
+        self.assertIn("Источник: ваш текст", message.text)
+        self.assertIn("Имя, мой текст: [ссылка на предложение]", message.text)
+        commands = [
+            button.command for row in message.rows for button in row
+        ]
+        self.assertIn(f"cpm:event-followup-edit:{event_id}:0", commands)
+        self.assertIn(f"cpm:event-followup-reset:{event_id}:0", commands)
+
+    def test_followup_edit_and_reset_use_canonical_owner_input_and_store(self) -> None:
+        route = _route(ConnectionPlatform.MAX)
+        actor = _actor(route)
+        event_id = str(uuid4())
+        surface = f"route:{route.id}"
+        preview = SimpleNamespace(
+            segment="no_show",
+            segment_label="Не пришли",
+            stage=1,
+            offset_label="+1 час",
+            text="Автотекст {offer}",
+            source="template",
+        )
+        snapshot = SimpleNamespace(
+            items=(SimpleNamespace(id=event_id, title="Практика"),)
+        )
+
+        with (
+            patch.object(
+                native_member_ui,
+                "get_event_followup_content_plan",
+                return_value=(preview,),
+            ),
+            patch.object(native_member_ui, "begin_owner_input") as begin,
+        ):
+            edit = native_member_ui._event_followup_edit_message(
+                actor,
+                event_id=event_id,
+                index=0,
+                current_platform=route.platform,
+                input_surface=surface,
+            )
+        self.assertIn("Пришлите новый текст дожима", edit.text)
+        begin.assert_called_once_with(
+            actor=actor,
+            platform="max",
+            surface=surface,
+            action="event_followup_text",
+            context={
+                "event_id": event_id,
+                "index": "0",
+                "segment": "no_show",
+                "stage": "1",
+            },
+        )
+
+        with (
+            patch.object(
+                native_member_ui,
+                "get_event_followup_content_plan",
+                return_value=(preview,),
+            ),
+            patch.object(native_member_ui, "reset_event_followup_text") as reset,
+            patch.object(native_member_ui, "_business_name", return_value="Бизнес"),
+            patch.object(native_member_ui, "resolve_events_snapshot", return_value=snapshot),
+        ):
+            result = native_member_ui._event_followup_reset_result(
+                actor,
+                event_id=event_id,
+                index=0,
+            )
+        reset.assert_called_once_with(
+            actor=actor,
+            event_id=event_id,
+            segment="no_show",
+            stage=1,
+        )
+        self.assertIn("Дожим 1/1", result.text)
+
+
 class NativeEventAnnouncementParityTests(unittest.TestCase):
     def test_ai_announcement_keeps_confirmation_and_attributed_links_on_vk(self) -> None:
         route = _route(ConnectionPlatform.VK)
