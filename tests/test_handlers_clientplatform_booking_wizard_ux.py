@@ -304,6 +304,117 @@ def test_booking_date_picker_last_page_clamps_to_supported_range() -> None:
 
 
 @pytest.mark.asyncio
+async def test_date_page_navigation_rerenders_and_rejects_out_of_range_offset() -> None:
+    business_id = str(uuid4())
+    token = wizard.control._uuid_token(business_id)
+    message = FakeMessage()
+    message.edit_reply_markup = AsyncMock()
+    state = FakeState(
+        {
+            "business_id": business_id,
+            "offering_id": str(uuid4()),
+            "booking_picker_min_date": "2026-01-01",
+        }
+    )
+    callback = FakeCallback(f"cpj:wizdatepage:{token}:364", message)
+    with (
+        patch.object(wizard.control, "_actor", new=AsyncMock(return_value=object())),
+        patch.object(wizard.control, "_callback_message", return_value=message),
+    ):
+        await wizard.choose_booking_date_page(callback, state)
+
+    message.edit_reply_markup.assert_awaited_once()
+    markup = message.edit_reply_markup.await_args.kwargs["reply_markup"]
+    date_callbacks = [
+        str(button.callback_data)
+        for row in markup.inline_keyboard
+        for button in row
+        if str(button.callback_data or "").startswith("cpj:wizdate:")
+    ]
+    assert len(date_callbacks) == 2
+    assert callback.answers[-1] == (None, False)
+
+    stale = FakeCallback(
+        f"cpj:wizdatepage:{token}:{wizard._MAX_DATE_DAYS + 1}",
+        message,
+    )
+    with patch.object(
+        wizard.control,
+        "_actor",
+        new=AsyncMock(return_value=object()),
+    ):
+        await wizard.choose_booking_date_page(stale, state)
+    assert stale.answers[-1] == (
+        "Выбор даты устарел. Откройте услугу заново.",
+        True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_invalid_date_and_time_callbacks_fail_closed() -> None:
+    business_id = str(uuid4())
+    token = wizard.control._uuid_token(business_id)
+    state = FakeState(
+        {
+            "business_id": business_id,
+            "offering_id": str(uuid4()),
+            "booking_picker_min_date": "2026-09-20",
+            "booking_picker_date": "2026-09-22",
+        }
+    )
+
+    invalid_date = FakeCallback(f"cpj:wizdate:{token}:2026-09-19")
+    with patch.object(
+        wizard.control,
+        "_actor",
+        new=AsyncMock(return_value=object()),
+    ):
+        await wizard.choose_booking_date(invalid_date, state)
+    assert invalid_date.answers[-1] == ("Эта дата недоступна", True)
+
+    invalid_time = FakeCallback(f"cpj:wiztime:{token}:abcd")
+    with patch.object(
+        wizard.control,
+        "_actor",
+        new=AsyncMock(return_value=object()),
+    ):
+        await wizard.choose_booking_time(invalid_time, state)
+    assert invalid_time.answers[-1] == ("Выберите дату и время заново", True)
+
+
+@pytest.mark.asyncio
+async def test_manual_datetime_fallback_and_duration_proxy_answer() -> None:
+    business_id = str(uuid4())
+    token = wizard.control._uuid_token(business_id)
+    message = FakeMessage()
+    state = FakeState(
+        {
+            "business_id": business_id,
+            "offering_id": str(uuid4()),
+        }
+    )
+    callback = FakeCallback(f"cpj:wizmanual:{token}", message)
+    with (
+        patch.object(wizard.control, "_actor", new=AsyncMock(return_value=object())),
+        patch.object(wizard.control, "_callback_message", return_value=message),
+    ):
+        await wizard.choose_manual_booking_datetime(callback, state)
+
+    assert state.states[-1] == wizard.control.ClientPlatformControlState.booking_start
+    text, markup = message.answers[-1]
+    assert "Напишите дату и время" in text
+    assert "✖️ Отмена" in _labels(markup)
+
+    proxy = wizard._DurationMessageProxy(
+        message,
+        SimpleNamespace(id=101),
+        75,
+    )
+    await proxy.answer("Готово")
+    assert message.answers[-1][0] == "Готово"
+
+
+@pytest.mark.asyncio
 async def test_visible_cancel_clears_wizard_and_returns_owner_home() -> None:
     business_id = str(uuid4())
     token = wizard.control._uuid_token(business_id)
