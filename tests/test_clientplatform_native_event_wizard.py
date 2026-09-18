@@ -221,6 +221,37 @@ class NativeEventWizardTests(unittest.TestCase):
         self.assertLessEqual(sum(len(row) for row in message.rows), 10)
         self.assertTrue(any(command.startswith("cpm:event-wizard:date:") for command in self._commands(message)))
 
+
+    def test_date_picker_last_page_clamps_to_supported_range(self) -> None:
+        self.store.update(
+            {
+                "timezone": "Europe/Moscow",
+                "count": "3",
+                "position": "1",
+                "min_date": "2026-09-20",
+            }
+        )
+        with patch.object(wizard, "_context", side_effect=self._context):
+            message = wizard.handle_native_event_wizard_action(
+                self.actor,
+                args=("date-page", str(wizard._MAX_DATE_DAYS - 4)),
+                platform=self.platform,
+                surface=self.surface,
+            )
+        date_commands = [
+            command
+            for command in self._commands(message)
+            if command.startswith("cpm:event-wizard:date:")
+        ]
+        self.assertEqual(len(date_commands), 5)
+        self.assertFalse(
+            any(
+                command.startswith("cpm:event-wizard:date-page:")
+                and command.endswith(str(wizard._MAX_DATE_DAYS + 3))
+                for command in self._commands(message)
+            )
+        )
+
     def test_ucr_is_explicitly_unavailable_until_public_room_link_exists(self) -> None:
         self.store.update(
             {

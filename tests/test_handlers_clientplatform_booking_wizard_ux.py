@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -273,6 +274,33 @@ async def test_booking_date_picker_keeps_manual_fallback_visible() -> None:
     assert "20 сен" in labels
     assert "✍️ Ввести вручную" in labels
     assert "✖️ Отмена" in labels
+
+
+def test_booking_date_picker_last_page_clamps_to_supported_range() -> None:
+    business_id = str(uuid4())
+    minimum = date(2026, 1, 1)
+    markup = wizard._date_keyboard(
+        business_id,
+        minimum=minimum,
+        offset=wizard._MAX_DATE_DAYS - 1,
+    )
+    date_callbacks = [
+        str(button.callback_data)
+        for row in markup.inline_keyboard
+        for button in row
+        if str(button.callback_data or "").startswith("cpj:wizdate:")
+    ]
+
+    assert len(date_callbacks) == 2
+    rendered_dates = [
+        date.fromisoformat(callback.rsplit(":", 1)[-1])
+        for callback in date_callbacks
+    ]
+    assert max(rendered_dates) == minimum + timedelta(days=wizard._MAX_DATE_DAYS)
+    assert all(
+        rendered <= minimum + timedelta(days=wizard._MAX_DATE_DAYS)
+        for rendered in rendered_dates
+    )
 
 
 @pytest.mark.asyncio

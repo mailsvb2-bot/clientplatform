@@ -146,7 +146,11 @@ def _date_picker_message(context: dict[str, str], *, offset: int = 0) -> Custome
     start = minimum + timedelta(days=max(0, offset))
     if (start - minimum).days > _MAX_DATE_DAYS:
         raise ValueError("date page is outside the supported range")
-    values = tuple(start + timedelta(days=index) for index in range(_DATE_PAGE_SIZE))
+    values = tuple(
+        start + timedelta(days=index)
+        for index in range(_DATE_PAGE_SIZE)
+        if offset + index <= _MAX_DATE_DAYS
+    )
     rows: list[tuple[CustomerInteractionButton, ...]] = []
     for index in range(0, len(values), 2):
         rows.append(

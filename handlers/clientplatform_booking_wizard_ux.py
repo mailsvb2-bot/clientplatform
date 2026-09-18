@@ -50,7 +50,11 @@ def _date_keyboard(
     token = _business_token(business_id)
     start = minimum + timedelta(days=max(0, offset))
     rows: list[list[tuple[str, str]]] = []
-    values = [start + timedelta(days=index) for index in range(_DATE_PAGE_SIZE)]
+    values = [
+        start + timedelta(days=index)
+        for index in range(_DATE_PAGE_SIZE)
+        if offset + index <= _MAX_DATE_DAYS
+    ]
     for index in range(0, len(values), 2):
         rows.append(
             [
