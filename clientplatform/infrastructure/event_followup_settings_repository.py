@@ -19,6 +19,7 @@ _CHANNEL_COLUMNS = {
     "email": "channel_email",
     "max": "channel_max",
     "vk": "channel_vk",
+    "telegram": "channel_telegram",
 }
 
 
@@ -85,7 +86,7 @@ class EventFollowupSettingsRepository:
             """
             SELECT business_id,enabled,
                    segment_no_show,segment_join_signal,segment_attended,segment_offer_clicked,
-                   channel_email,channel_max,channel_vk,
+                   channel_email,channel_max,channel_vk,channel_telegram,
                    settings_epoch,updated_by_member_id,created_at,updated_at
             FROM clientplatform_event_followup_settings
             WHERE business_id=? LIMIT 1
@@ -107,10 +108,10 @@ class EventFollowupSettingsRepository:
             enabled=bool(_value(row, "enabled", 1)),
             enabled_segments=enabled_segments,
             enabled_channels=enabled_channels,
-            settings_epoch=int(_value(row, "settings_epoch", 9)),
-            updated_by_member_id=str(_value(row, "updated_by_member_id", 10)),
-            created_at=str(_value(row, "created_at", 11)),
-            updated_at=str(_value(row, "updated_at", 12)),
+            settings_epoch=int(_value(row, "settings_epoch", 10)),
+            updated_by_member_id=str(_value(row, "updated_by_member_id", 11)),
+            created_at=str(_value(row, "created_at", 12)),
+            updated_at=str(_value(row, "updated_at", 13)),
         )
 
     def set_enabled(

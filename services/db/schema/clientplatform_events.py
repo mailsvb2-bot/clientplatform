@@ -156,6 +156,7 @@ def ensure(c: sqlite3.Connection) -> None:
             channel_email INTEGER NOT NULL DEFAULT 1,
             channel_max INTEGER NOT NULL DEFAULT 1,
             channel_vk INTEGER NOT NULL DEFAULT 1,
+            channel_telegram INTEGER NOT NULL DEFAULT 1,
             settings_epoch INTEGER NOT NULL DEFAULT 1,
             updated_by_member_id TEXT NOT NULL,
             created_at TEXT NOT NULL,
@@ -171,6 +172,7 @@ def ensure(c: sqlite3.Connection) -> None:
             CHECK(channel_email IN (0,1)),
             CHECK(channel_max IN (0,1)),
             CHECK(channel_vk IN (0,1)),
+            CHECK(channel_telegram IN (0,1)),
             CHECK(settings_epoch >= 1)
         )
         """
@@ -191,6 +193,7 @@ def ensure(c: sqlite3.Connection) -> None:
         "channel_email",
         "channel_max",
         "channel_vk",
+        "channel_telegram",
     ):
         if column not in followup_columns:
             c.execute(

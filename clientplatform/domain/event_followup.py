@@ -6,7 +6,7 @@ EVENT_FOLLOWUP_SEGMENTS = (
     "attended_unpaid",
     "offer_clicked_unpaid",
 )
-EVENT_FOLLOWUP_CHANNELS = ("email", "max", "vk")
+EVENT_FOLLOWUP_CHANNELS = ("email", "max", "vk", "telegram")
 
 
 def classify_event_followup_segment(

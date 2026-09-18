@@ -13,7 +13,12 @@ EVENT_SEGMENT_LABELS = (
     ("attended_unpaid", "Были на вебинаре, но не купили"),
     ("offer_clicked_unpaid", "Открыли предложение, но не купили"),
 )
-EVENT_CHANNEL_LABELS = (("email", "Email"), ("max", "MAX"), ("vk", "VK"))
+EVENT_CHANNEL_LABELS = (
+    ("email", "Email"),
+    ("max", "MAX"),
+    ("vk", "VK"),
+    ("telegram", "Telegram"),
+)
 BACK_TO_GROWTH_LABEL = "⬅️ К продвижению"
 BACK_TO_EVENTS_LABEL = "🎥 К вебинарам"
 CREATE_EVENT_LABEL = "🎥 Создать вебинар"

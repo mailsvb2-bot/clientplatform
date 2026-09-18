@@ -241,7 +241,7 @@ def _business_timezone(conn, *, business_id: str) -> str:
 
 
 _EVENT_FOLLOWUP_ACTION = "events.commercial_followup"
-_EVENT_FOLLOWUP_CHANNELS = ("email", "max", "vk")
+_EVENT_FOLLOWUP_CHANNELS = ("email", "max", "vk", "telegram")
 _EVENT_FOLLOWUP_AUDIENCE = "prospect_opted_in"
 _EVENT_FOLLOWUP_TOPIC = "service_offer"
 _GROWTH_ACTION = "growth.read_only_analysis"
@@ -354,9 +354,9 @@ def set_owner_event_autosend_policy_in_conn(
         )
     else:
         if _EVENT_FOLLOWUP_ACTION in effective.spec.forbidden_actions:
-            raise ValueError("Текущая политика автоматизации запрещает автоматические сообщения после мероприятия")
+            raise ValueError("Текущая политика автоматизации запрещает автоматические сообщения вебинара")
         if _EVENT_FOLLOWUP_ACTION in effective.spec.approval_required_actions:
-            raise ValueError("Текущая политика требует ручного одобрения каждого сообщения после мероприятия")
+            raise ValueError("Текущая политика требует ручного одобрения каждого автоматического сообщения вебинара")
         if set(allowed_channels) & set(effective.spec.approval_required_channels):
             raise ValueError("Текущая политика требует ручного одобрения выбранных каналов автоматических сообщений")
         payload = effective.spec.payload()

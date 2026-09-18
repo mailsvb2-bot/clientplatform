@@ -36,7 +36,7 @@ from services.db import get_db
 _POST_FOLLOWUP_VERSION = "v4"
 _DEFAULT_EVENT_DURATION = timedelta(hours=2)
 _STAGE_GRACE = timedelta(hours=36)
-_DEFAULT_PRIORITY = ("max", "vk", "email")
+_DEFAULT_PRIORITY = ("max", "vk", "telegram", "email")
 _ALLOWED_PRIORITY = frozenset({"max", "vk", "email", "telegram"})
 _COMMERCIAL_PROVIDER_BOUNDARY_MARKER = "event_commercial_provider_call_started_non_idempotent"
 _SCAN_SCOPE = "commercial-event-followups:v1"
