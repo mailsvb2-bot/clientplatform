@@ -880,6 +880,12 @@ async def receive_event_time(message: Message, state: FSMContext) -> None:
         )
         event_rows.append(
             [(
+                "🗓 Контент-план",
+                f"cpev:content:{control._uuid_token(created_event_id)}:{token}",
+            )]
+        )
+        event_rows.append(
+            [(
                 "✨ Сделать анонс",
                 f"cpev:announce:{control._uuid_token(created_event_id)}:{token}",
             )]

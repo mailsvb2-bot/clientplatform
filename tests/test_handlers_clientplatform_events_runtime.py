@@ -323,10 +323,14 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
         rows = keyboard.call_args.args[0]
         self.assertEqual(
             rows[0],
-            [("🗓 Контент-план", f"cpev:content:{EVENT_TOKEN}:{TOKEN}")],
+            [("🔗 Добавить ссылку на эфир", f"cpev:join:{EVENT_TOKEN}:{TOKEN}")],
         )
         self.assertEqual(
             rows[1],
+            [("🗓 Контент-план", f"cpev:content:{EVENT_TOKEN}:{TOKEN}")],
+        )
+        self.assertEqual(
+            rows[2],
             [("✨ Сделать анонс", f"cpev:announce:{EVENT_TOKEN}:{TOKEN}")],
         )
 
@@ -353,6 +357,7 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
         state.get_data.return_value = {"event_business_id": BUSINESS_ID}
         actor = MagicMock(unsafe=True)
         created = SimpleNamespace(
+            event_id=EVENT_ID,
             provider_key="future_stage_2030",
             email_notifications_enabled=True,
             registration_url=lambda base: f"{base}/e/public-slug",
@@ -939,9 +944,9 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
             rows = target.answer.await_args.kwargs["reply_markup"]
             self.assertIn(expected_source, text)
             callbacks = [callback for row in rows for _label, callback in row]
-            self.assertTrue(any("warmedit" in callback for callback in callbacks))
+            self.assertTrue(any(callback.startswith("cpev:we:") for callback in callbacks))
             if position == 2:
-                self.assertTrue(any("warmreset" in callback for callback in callbacks))
+                self.assertTrue(any(callback.startswith("cpev:wr:") for callback in callbacks))
                 self.assertTrue(any(label == "⬅️" for row in rows for label, _ in row))
                 self.assertTrue(any(label == "➡️" for row in rows for label, _ in row))
 
