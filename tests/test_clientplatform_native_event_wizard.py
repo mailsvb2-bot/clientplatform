@@ -197,7 +197,7 @@ class NativeEventWizardTests(unittest.TestCase):
             )
             self.assertIn("https://clientplatform.example.test/e/demo", final.text)
             commands = self._commands(final)
-            self.assertTrue(any(command.startswith("cpm:event-wizard:warmup-preview:") for command in commands))
+            self.assertTrue(any(command.startswith("cpm:event-wizard:wp:") for command in commands))
             self.assertIn(f"cpm:event-announce:{EVENT_ID}", commands)
             clear.assert_called_once()
             self.assertEqual(content_modes.call_count, 3)
@@ -308,8 +308,8 @@ def test_native_warmup_preview_edit_reset_and_post_creation_setup() -> None:
             page=0,
         )
     commands = NativeEventWizardTests._commands(preview)
-    assert any(":warmup-edit:" in command for command in commands)
-    assert any(":warmup-reset:" in command for command in commands)
+    assert any(":we:" in command for command in commands)
+    assert any(":wr:" in command for command in commands)
     assert "Источник: Ваш текст" in preview.text
 
     with (
@@ -322,14 +322,14 @@ def test_native_warmup_preview_edit_reset_and_post_creation_setup() -> None:
     ):
         setup = wizard.handle_native_event_wizard_action(
             actor,
-            args=("warmup-setup", EVENT_ID),
+            args=("ws", EVENT_ID),
             platform=ConnectionPlatform.MAX,
             surface="official",
         )
-        assert any(":warmup-set:" in command for command in NativeEventWizardTests._commands(setup))
+        assert any(":wset:" in command for command in NativeEventWizardTests._commands(setup))
         custom = wizard.handle_native_event_wizard_action(
             actor,
-            args=("warmup-custom", EVENT_ID, "6"),
+            args=("wc", EVENT_ID, "6"),
             platform=ConnectionPlatform.MAX,
             surface="official",
         )
@@ -342,7 +342,7 @@ def test_native_warmup_preview_edit_reset_and_post_creation_setup() -> None:
     ):
         saved = wizard.handle_native_event_wizard_text(
             actor,
-            action="event-warmup-edit-text",
+            action="event-we-text",
             args=(EVENT_ID, "2", "1", "Полностью свой текст"),
             platform=ConnectionPlatform.VK,
             surface="official",
@@ -355,6 +355,23 @@ def test_native_warmup_preview_edit_reset_and_post_creation_setup() -> None:
         text="Полностью свой текст",
     )
     render.assert_called_once()
+
+
+
+def test_native_webinar_button_commands_fit_compact_transport_boundary() -> None:
+    event_id = "22222222-2222-4222-8222-222222222222"
+    commands = (
+        f"cpm:event-wizard:wp:{event_id}:14:10",
+        f"cpm:event-wizard:we:{event_id}:14:10",
+        f"cpm:event-wizard:wr:{event_id}:14:10",
+        f"cpm:event-wizard:ws:{event_id}",
+        f"cpm:event-wizard:wset:{event_id}:14",
+        f"cpm:event-wizard:wc:{event_id}:366",
+        f"cpm:event-content:{event_id}",
+        f"cpm:event-content-followups:{event_id}",
+    )
+    for command in commands:
+        assert len(command.encode("utf-8")) <= 64, command
 
 
 if __name__ == "__main__":

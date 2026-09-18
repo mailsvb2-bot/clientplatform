@@ -339,7 +339,7 @@ def handle_native_event_wizard_text(
     surface: str,
 ) -> CustomerInteractionMessage:
     actor.assert_can_manage_business()
-    if action == "event-warmup-edit-text":
+    if action == "event-we-text":
         if len(args) != 4:
             raise ValueError("invalid warmup edit text action")
         event_id, requested_days, raw_position, body = args
@@ -654,7 +654,7 @@ def _finish(
             (
                 _button(
                     "🔥 Тексты прогрева",
-                    f"cpm:event-wizard:warmup-preview:{event_id}:{requested_days}:0",
+                    f"cpm:event-wizard:wp:{event_id}:{requested_days}:0",
                 ),
             )
         )
@@ -697,14 +697,14 @@ def _warmup_preview(
         navigation.append(
             _button(
                 "⬅️",
-                f"cpm:event-wizard:warmup-preview:{event_id}:{requested_days}:{index - 1}",
+                f"cpm:event-wizard:wp:{event_id}:{requested_days}:{index - 1}",
             )
         )
     if index + 1 < len(plan.drafts):
         navigation.append(
             _button(
                 "➡️",
-                f"cpm:event-wizard:warmup-preview:{event_id}:{requested_days}:{index + 1}",
+                f"cpm:event-wizard:wp:{event_id}:{requested_days}:{index + 1}",
             )
         )
     if navigation:
@@ -713,7 +713,7 @@ def _warmup_preview(
         (
             _button(
                 "✏️ Изменить / свой текст",
-                f"cpm:event-wizard:warmup-edit:{event_id}:{plan.requested_days}:{draft.position}",
+                f"cpm:event-wizard:we:{event_id}:{plan.requested_days}:{draft.position}",
             ),
         )
     )
@@ -722,7 +722,7 @@ def _warmup_preview(
             (
                 _button(
                     "♻️ Вернуть автотекст",
-                    f"cpm:event-wizard:warmup-reset:{event_id}:{plan.requested_days}:{draft.position}",
+                    f"cpm:event-wizard:wr:{event_id}:{plan.requested_days}:{draft.position}",
                 ),
             )
         )
@@ -752,7 +752,7 @@ def handle_native_event_wizard_action(
     if not args:
         raise ValueError("webinar wizard action is missing")
 
-    if args[0] == "warmup-preview":
+    if args[0] == "wp":
         if len(args) != 4:
             raise ValueError("invalid warmup preview action")
         return _warmup_preview(
@@ -762,7 +762,7 @@ def handle_native_event_wizard_action(
             page=int(args[3]),
         )
 
-    if args[0] == "warmup-edit":
+    if args[0] == "we":
         if len(args) != 4:
             raise ValueError("invalid warmup edit action")
         event_id, requested_days, position = args[1], int(args[2]), int(args[3])
@@ -786,7 +786,7 @@ def handle_native_event_wizard_action(
             rows=(_back_row(),),
         )
 
-    if args[0] == "warmup-reset":
+    if args[0] == "wr":
         if len(args) != 4:
             raise ValueError("invalid warmup reset action")
         event_id, requested_days, position = args[1], int(args[2]), int(args[3])
@@ -802,7 +802,7 @@ def handle_native_event_wizard_action(
             page=position - 1,
         )
 
-    if args[0] == "warmup-setup":
+    if args[0] == "ws":
         if len(args) != 2:
             raise ValueError("invalid warmup setup action")
         event_id = args[1]
@@ -818,7 +818,7 @@ def handle_native_event_wizard_action(
                 tuple(
                     _button(
                         str(value),
-                        f"cpm:event-wizard:warmup-set:{event_id}:{value}",
+                        f"cpm:event-wizard:wset:{event_id}:{value}",
                     )
                     for value in quick[index : index + 3]
                 )
@@ -828,7 +828,7 @@ def handle_native_event_wizard_action(
                 (
                     _button(
                         "✍️ Другое число",
-                        f"cpm:event-wizard:warmup-custom:{event_id}:{maximum}",
+                        f"cpm:event-wizard:wc:{event_id}:{maximum}",
                     ),
                 )
             )
@@ -842,7 +842,7 @@ def handle_native_event_wizard_action(
             rows=tuple(rows),
         )
 
-    if args[0] == "warmup-set":
+    if args[0] == "wset":
         if len(args) != 3:
             raise ValueError("invalid warmup set action")
         event_id, raw_days = args[1], args[2]
@@ -863,7 +863,7 @@ def handle_native_event_wizard_action(
             page=0,
         )
 
-    if args[0] == "warmup-custom":
+    if args[0] == "wc":
         if len(args) != 3:
             raise ValueError("invalid warmup custom action")
         event_id, maximum = args[1], int(args[2])

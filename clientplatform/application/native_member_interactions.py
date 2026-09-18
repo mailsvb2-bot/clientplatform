@@ -1269,7 +1269,7 @@ _NATIVE_PARENT_COMMANDS: dict[str, str] = {
     "event-wizard-window-text": "cpm:events",
     "event-wizard-room-text": "cpm:events",
     "event-wizard-warmup-text": "cpm:events",
-    "event-warmup-edit-text": "cpm:events",
+    "event-we-text": "cpm:events",
     "event-warmup-days-text": "cpm:events",
     "event-create-text": "cpm:events",
     "event-announce": "cpm:events",
@@ -1456,7 +1456,7 @@ def _with_parent_navigation(
         "event-followups", "event-segment", "event-channel", "event-new", "event-wizard", "event-wizard-title-text",
         "event-wizard-count-text", "event-wizard-timezone-text",
         "event-wizard-window-text", "event-wizard-room-text",
-        "event-wizard-warmup-text", "event-warmup-edit-text",
+        "event-wizard-warmup-text", "event-we-text",
         "event-warmup-days-text", "event-create-text", "event-announce", "event-join", "event-join-text",
     } or (
         parsed.action in {"owner-input-invalid", "owner-input-cancelled"}
@@ -2234,7 +2234,7 @@ def _event_content_message(
             (
                 _button(
                     "🔥 Тексты прогрева",
-                    f"cpm:event-wizard:warmup-preview:{event_id}:{warmup.requested_days}:0",
+                    f"cpm:event-wizard:wp:{event_id}:{warmup.requested_days}:0",
                 ),
             )
         )
@@ -2242,7 +2242,7 @@ def _event_content_message(
             (
                 _button(
                     "🗓 Изменить дни прогрева",
-                    f"cpm:event-wizard:warmup-setup:{event_id}",
+                    f"cpm:event-wizard:ws:{event_id}",
                 ),
             )
         )
@@ -2255,7 +2255,7 @@ def _event_content_message(
             (
                 _button(
                     "🔥 Настроить прогрев",
-                    f"cpm:event-wizard:warmup-setup:{event_id}",
+                    f"cpm:event-wizard:ws:{event_id}",
                 ),
             )
         )
@@ -5477,7 +5477,7 @@ def _render(
             "event-wizard-window-text",
             "event-wizard-room-text",
             "event-wizard-warmup-text",
-            "event-warmup-edit-text",
+            "event-we-text",
             "event-warmup-days-text",
         }:
             return handle_native_event_wizard_text(
