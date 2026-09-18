@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import hashlib
+import re
 import sqlite3
 from typing import Any
 
@@ -22,6 +23,7 @@ from clientplatform.infrastructure.event_followup_settings_repository import (
 from clientplatform.infrastructure.unified_dispatch_outbox import ClaimedProviderDispatch
 
 _COMMERCIAL_POST_KEY_FRAGMENT = ":message:post:v4:stage:"
+_COMMERCIAL_POST_V5_KEY_FRAGMENT = ":message:post:v5:stage:"
 _COMMERCIAL_WARMUP_KEY_FRAGMENT = ":message:warmup:v2:slot:"
 _LEGACY_OFFER_KEY_SUFFIX = ":message:after:v2"
 _PROVIDER_BOUNDARY_MARKER = "event_commercial_provider_call_started_non_idempotent"
@@ -48,6 +50,7 @@ def is_commercial_event_dispatch(item: object) -> bool:
         and item.dispatch.source_kind == "event_message"
         and (
             _COMMERCIAL_POST_KEY_FRAGMENT in item.dispatch.idempotency_key
+            or _COMMERCIAL_POST_V5_KEY_FRAGMENT in item.dispatch.idempotency_key
             or _COMMERCIAL_WARMUP_KEY_FRAGMENT in item.dispatch.idempotency_key
         )
     )
@@ -316,6 +319,72 @@ def _warmup_claim_is_current(
     return row is not None
 
 
+def _followup_claim_is_current(
+    conn: Any,
+    item: ClaimedProviderDispatch,
+) -> bool:
+    if is_event_warmup_dispatch(item):
+        return True
+    key = str(item.dispatch.idempotency_key)
+    if (
+        _COMMERCIAL_POST_KEY_FRAGMENT not in key
+        and _COMMERCIAL_POST_V5_KEY_FRAGMENT not in key
+    ):
+        return True
+    stage_match = re.search(r":message:post:v(?:4|5):stage:(\d+)", key)
+    if stage_match is None:
+        return False
+    stage = int(stage_match.group(1))
+    row = conn.execute(
+        """
+        SELECT r.event_id,r.first_join_click_at,r.attendance_confirmed_at,r.offer_clicked_at
+        FROM provider_dispatch_outbox d
+        JOIN clientplatform_event_registrations r
+          ON r.id=d.source_id AND r.business_id=d.business_id
+        WHERE d.id=? AND d.business_id=? AND d.source_kind='event_message'
+          AND d.status='sending' AND d.lock_token=?
+        LIMIT 1
+        """,
+        (item.dispatch.id, item.dispatch.business_id, item.dispatch.lock_token),
+    ).fetchone()
+    if row is None:
+        return False
+    event_id = str(row["event_id"] if hasattr(row, "keys") else row[0])
+    first_join = row["first_join_click_at"] if hasattr(row, "keys") else row[1]
+    attended = row["attendance_confirmed_at"] if hasattr(row, "keys") else row[2]
+    offer_clicked = row["offer_clicked_at"] if hasattr(row, "keys") else row[3]
+    segment = classify_event_followup_segment(
+        first_join_click_at=first_join,
+        attendance_confirmed_at=attended,
+        offer_clicked_at=offer_clicked,
+    )
+    slot_key = f"{segment}:{stage}"
+    try:
+        content = conn.execute(
+            """
+            SELECT revision FROM clientplatform_event_content_messages
+            WHERE business_id=? AND event_id=? AND stage='post_event_followup'
+              AND slot_key=? LIMIT 1
+            """,
+            (item.dispatch.business_id, event_id, slot_key),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        content = None
+    if content is None:
+        expected = (
+            f"event:{event_id}:registration:{item.dispatch.source_id}:"
+            f"message:post:v4:stage:{stage}"
+        )
+    else:
+        revision = int(content["revision"] if hasattr(content, "keys") else content[0])
+        expected = (
+            f"event:{event_id}:registration:{item.dispatch.source_id}:"
+            f"message:post:v5:stage:{stage}:slot:{slot_key.replace(':', '-')}:"
+            f"revision:{revision}"
+        )
+    return key == expected
+
+
 def event_commercial_claim_can_cross_provider_boundary(
     conn: Any,
     item: ClaimedProviderDispatch,
@@ -353,6 +422,24 @@ def event_commercial_claim_can_cross_provider_boundary(
             UPDATE provider_dispatch_outbox
             SET status='cancelled',updated_at=?,locked_at=NULL,lock_token=NULL,
                 last_error='event_warmup_revision_superseded'
+            WHERE id=? AND business_id=? AND source_kind='event_message'
+              AND status='sending' AND lock_token=?
+            """,
+            (
+                timestamp,
+                item.dispatch.id,
+                item.dispatch.business_id,
+                item.dispatch.lock_token,
+            ),
+        )
+        return False
+
+    if not is_event_warmup_dispatch(item) and not _followup_claim_is_current(conn, item):
+        conn.execute(
+            """
+            UPDATE provider_dispatch_outbox
+            SET status='cancelled',updated_at=?,locked_at=NULL,lock_token=NULL,
+                last_error='event_followup_revision_superseded'
             WHERE id=? AND business_id=? AND source_kind='event_message'
               AND status='sending' AND lock_token=?
             """,

@@ -38,7 +38,7 @@ def _cancel_pending_followups(
         WHERE business_id=? AND source_kind='event_message'
           AND status IN ('pending','retry')
           AND (
-              idempotency_key LIKE 'event:%:message:post:v4:stage:%'
+              idempotency_key LIKE 'event:%:message:post:v4:stage:%'\n              OR idempotency_key LIKE 'event:%:message:post:v5:stage:%'
               OR idempotency_key LIKE 'event:%:message:warmup:v2:slot:%'
           )
         """,
@@ -62,7 +62,7 @@ def _cancel_pending_for_channel(
         WHERE business_id=? AND source_kind='event_message' AND platform=?
           AND status IN ('pending','retry')
           AND (
-              idempotency_key LIKE 'event:%:message:post:v4:stage:%'
+              idempotency_key LIKE 'event:%:message:post:v4:stage:%'\n              OR idempotency_key LIKE 'event:%:message:post:v5:stage:%'
               OR idempotency_key LIKE 'event:%:message:warmup:v2:slot:%'
           )
         """,
@@ -102,7 +102,7 @@ def _cancel_pending_for_segment(
             last_error='event_commercial_strategy_disabled'
         WHERE d.business_id=? AND d.source_kind='event_message'
           AND d.status IN ('pending','retry')
-          AND d.idempotency_key LIKE 'event:%:message:post:v4:stage:%'
+          AND (d.idempotency_key LIKE 'event:%:message:post:v4:stage:%'\n               OR d.idempotency_key LIKE 'event:%:message:post:v5:stage:%')
           AND EXISTS (
               SELECT 1 FROM clientplatform_event_registrations r
               WHERE r.id=d.source_id AND r.business_id=d.business_id

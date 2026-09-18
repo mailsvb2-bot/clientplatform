@@ -10,7 +10,8 @@ boundary.
 """
 
 import os
-from dataclasses import dataclass
+import sqlite3
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
@@ -19,11 +20,14 @@ from clientplatform.application.event_commercial_consent import (
     active_event_commercial_channels,
 )
 from clientplatform.domain.email_outbound import EmailPayload
+from clientplatform.domain.event_content import EventContentStage
 from clientplatform.domain.event_followup import (
     EVENT_FOLLOWUP_SEGMENTS,
     classify_event_followup_segment,
 )
 from clientplatform.domain.events import normalize_utc
+from clientplatform.domain.tenancy import TenantContext
+from clientplatform.infrastructure.event_content_repository import EventContentMessageRepository
 from clientplatform.infrastructure.event_dispatch_safety import (
     event_commercial_policy_authorized,
     quarantine_stale_event_commercial_boundaries,
@@ -33,7 +37,7 @@ from clientplatform.infrastructure.event_followup_settings_repository import (
     EventFollowupSettingsRepository,
     event_followups_platform_enabled,
 )
-from services.db import get_db
+from services.db import get_db, get_db_ro
 
 
 _POST_FOLLOWUP_VERSION = "v4"
@@ -91,6 +95,9 @@ class EventFollowupTemplatePreview:
     stage: int
     offset_label: str
     text: str
+    slot_key: str = ""
+    source: str = "template"
+    revision: int = 0
 
 
 def commercial_event_followups_enabled() -> bool:
@@ -150,6 +157,58 @@ _SEGMENT_LABELS = {
     "attended_unpaid": "Были на вебинаре, но не купили",
     "offer_clicked_unpaid": "Открыли предложение, но не купили",
 }
+
+
+def _followup_slot_key(segment: str, stage: int) -> str:
+    normalized_segment = str(segment or "").strip().lower()
+    if normalized_segment not in EVENT_FOLLOWUP_SEGMENTS:
+        raise ValueError("unsupported event follow-up segment")
+    allowed_stages = {candidate_stage for candidate_stage, _ in _stage_offsets(normalized_segment)}
+    if int(stage) not in allowed_stages:
+        raise ValueError("unsupported event follow-up stage")
+    return f"{normalized_segment}:{int(stage)}"
+
+
+def _followup_position(segment: str, stage: int) -> int:
+    position = 0
+    for candidate_segment in EVENT_FOLLOWUP_SEGMENTS:
+        for candidate_stage, _ in _stage_offsets(candidate_segment):
+            position += 1
+            if candidate_segment == segment and candidate_stage == stage:
+                return position
+    raise ValueError("unsupported event follow-up stage")
+
+
+def _stored_followup_content(
+    conn: Any,
+    *,
+    business_id: str,
+    event_id: str,
+    segment: str,
+    stage: int,
+) -> tuple[str, int, str, str]:
+    slot_key = _followup_slot_key(segment, stage)
+    try:
+        row = conn.execute(
+            """
+            SELECT text,revision,source
+            FROM clientplatform_event_content_messages
+            WHERE business_id=? AND event_id=? AND stage='post_event_followup'
+              AND slot_key=?
+            LIMIT 1
+            """,
+            (business_id, event_id, slot_key),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        row = None
+    if row is None:
+        return _template_body(segment, stage=stage), 0, slot_key, "template"
+    return (
+        str(_value(row, "text", 0)),
+        int(_value(row, "revision", 1)),
+        slot_key,
+        str(_value(row, "source", 2)),
+    )
 
 
 def _template_body(segment: str, *, stage: int) -> str:
@@ -232,15 +291,109 @@ def event_followup_template_previews() -> tuple[EventFollowupTemplatePreview, ..
                     stage=stage,
                     offset_label=offset_labels[stage],
                     text=_template_body(segment, stage=stage),
+                    slot_key=_followup_slot_key(segment, stage),
                 )
             )
     return tuple(previews)
 
 
-def _render(candidate: EventFollowupCandidate, *, stage: int) -> tuple[str, str]:
+def get_event_followup_content_plan(
+    *,
+    actor: TenantContext,
+    event_id: str,
+) -> tuple[EventFollowupTemplatePreview, ...]:
+    actor.assert_can_manage_business()
+    templates = event_followup_template_previews()
+    with get_db_ro() as conn:
+        stored = EventContentMessageRepository(conn).list_for_stage(
+            actor=actor,
+            event_id=event_id,
+            stage=EventContentStage.POST_EVENT,
+        )
+    by_key = {item.slot_key: item for item in stored}
+    return tuple(
+        preview
+        if (item := by_key.get(preview.slot_key)) is None
+        else replace(
+            preview,
+            text=item.text,
+            source=item.source,
+            revision=item.revision,
+        )
+        for preview in templates
+    )
+
+
+def set_event_followup_text(
+    *,
+    actor: TenantContext,
+    event_id: str,
+    segment: str,
+    stage: int,
+    text: str,
+) -> EventFollowupTemplatePreview:
+    actor.assert_can_manage_business()
+    slot_key = _followup_slot_key(segment, stage)
+    position = _followup_position(segment, stage)
+    with get_db() as conn:
+        stored = EventContentMessageRepository(conn).upsert(
+            actor=actor,
+            event_id=event_id,
+            stage=EventContentStage.POST_EVENT,
+            slot_key=slot_key,
+            position=position,
+            text=text,
+            source="owner",
+            scheduled_at=None,
+        )
+    preview = next(
+        item for item in event_followup_template_previews()
+        if item.segment == segment and item.stage == stage
+    )
+    return replace(preview, text=stored.text, source=stored.source, revision=stored.revision)
+
+
+def reset_event_followup_text(
+    *,
+    actor: TenantContext,
+    event_id: str,
+    segment: str,
+    stage: int,
+) -> EventFollowupTemplatePreview:
+    actor.assert_can_manage_business()
+    slot_key = _followup_slot_key(segment, stage)
+    position = _followup_position(segment, stage)
+    with get_db() as conn:
+        stored = EventContentMessageRepository(conn).upsert(
+            actor=actor,
+            event_id=event_id,
+            stage=EventContentStage.POST_EVENT,
+            slot_key=slot_key,
+            position=position,
+            text=_template_body(segment, stage=stage),
+            source="template",
+            scheduled_at=None,
+        )
+    preview = next(
+        item for item in event_followup_template_previews()
+        if item.segment == segment and item.stage == stage
+    )
+    return replace(preview, text=stored.text, source=stored.source, revision=stored.revision)
+
+
+def _render(
+    candidate: EventFollowupCandidate,
+    *,
+    stage: int,
+    template_text: str | None = None,
+) -> tuple[str, str]:
     offer = _offer_url(candidate.token)
     unsubscribe = _unsubscribe_url(candidate.token)
-    body = _template_body(candidate.segment, stage=stage)
+    body = (
+        _template_body(candidate.segment, stage=stage)
+        if template_text is None
+        else str(template_text)
+    )
     body = body.replace("{name}", candidate.name)
     body = body.replace("{title}", candidate.event_title)
     body = body.replace("{offer}", offer)
@@ -411,23 +564,65 @@ def _resolve_target(
     return None
 
 
-def _dispatch_key(candidate: EventFollowupCandidate, *, stage: int) -> str:
+def _dispatch_key(
+    candidate: EventFollowupCandidate,
+    *,
+    stage: int,
+    revision: int = 0,
+    slot_key: str | None = None,
+) -> str:
+    if int(revision) <= 0:
+        return (
+            f"event:{candidate.event_id}:registration:{candidate.registration_id}:"
+            f"message:post:{_POST_FOLLOWUP_VERSION}:stage:{stage}"
+        )
+    normalized_slot = str(slot_key or _followup_slot_key(candidate.segment, stage)).replace(":", "-")
     return (
         f"event:{candidate.event_id}:registration:{candidate.registration_id}:"
-        f"message:post:{_POST_FOLLOWUP_VERSION}:stage:{stage}"
+        f"message:post:v5:stage:{stage}:slot:{normalized_slot}:revision:{int(revision)}"
     )
 
 
 def _stage_dispatch_state(
     conn: Any, candidate: EventFollowupCandidate, *, stage: int
 ) -> tuple[str, str | None] | None:
+    legacy_key = _dispatch_key(candidate, stage=stage)
+    v5_prefix = (
+        f"event:{candidate.event_id}:registration:{candidate.registration_id}:"
+        f"message:post:v5:stage:{stage}:slot:%"
+    )
+    sent = conn.execute(
+        """
+        SELECT status,sent_at FROM provider_dispatch_outbox
+        WHERE business_id=? AND status='sent'
+          AND (idempotency_key=? OR idempotency_key LIKE ?)
+        ORDER BY sent_at DESC LIMIT 1
+        """,
+        (candidate.business_id, legacy_key, v5_prefix),
+    ).fetchone()
+    if sent is not None:
+        sent_at = _value(sent, "sent_at", 1)
+        return "sent", None if sent_at is None else str(sent_at)
+
+    _text, revision, slot_key, _source = _stored_followup_content(
+        conn,
+        business_id=candidate.business_id,
+        event_id=candidate.event_id,
+        segment=candidate.segment,
+        stage=stage,
+    )
+    current_key = _dispatch_key(
+        candidate,
+        stage=stage,
+        revision=revision,
+        slot_key=slot_key,
+    )
     row = conn.execute(
         """
         SELECT status,sent_at FROM provider_dispatch_outbox
-        WHERE business_id=? AND idempotency_key=?
-        LIMIT 1
+        WHERE business_id=? AND idempotency_key=? LIMIT 1
         """,
-        (candidate.business_id, _dispatch_key(candidate, stage=stage)),
+        (candidate.business_id, current_key),
     ).fetchone()
     if row is None:
         return None
@@ -436,8 +631,6 @@ def _stage_dispatch_state(
         str(_value(row, "status", 0)),
         None if sent_at is None else str(sent_at),
     )
-
-
 def _next_due_stage(
     conn: Any,
     candidate: EventFollowupCandidate,
@@ -475,15 +668,23 @@ def _next_due_stage(
 
 
 def _delivery_payload(
+    conn: Any,
     candidate: EventFollowupCandidate,
     target: EventFollowupTarget,
     *,
     stage: int,
-) -> tuple[str, str]:
-    subject, body = _render(candidate, stage=stage)
+) -> tuple[str, str, int, str]:
+    template_text, revision, slot_key, _source = _stored_followup_content(
+        conn,
+        business_id=candidate.business_id,
+        event_id=candidate.event_id,
+        segment=candidate.segment,
+        stage=stage,
+    )
+    subject, body = _render(candidate, stage=stage, template_text=template_text)
     if target.platform == "email":
-        return "mixed", EmailPayload(subject=subject, body=body).to_json()
-    return "text", body
+        return "mixed", EmailPayload(subject=subject, body=body).to_json(), revision, slot_key
+    return "text", body, revision, slot_key
 
 
 def _automation_followup_authorized(
@@ -494,7 +695,9 @@ def _automation_followup_authorized(
     stage: int,
     scheduled_at: datetime | str,
 ) -> bool:
-    payload_kind, payload_ref = _delivery_payload(candidate, target, stage=stage)
+    payload_kind, payload_ref, _revision, _slot_key = _delivery_payload(
+        conn, candidate, target, stage=stage
+    )
     del payload_kind
     return event_commercial_policy_authorized(
         conn,
@@ -514,8 +717,15 @@ def _materialize(
     stage: int,
     now_iso: str,
 ) -> bool:
-    payload_kind, payload_ref = _delivery_payload(candidate, target, stage=stage)
-    key = _dispatch_key(candidate, stage=stage)
+    payload_kind, payload_ref, revision, slot_key = _delivery_payload(
+        conn, candidate, target, stage=stage
+    )
+    key = _dispatch_key(
+        candidate,
+        stage=stage,
+        revision=revision,
+        slot_key=slot_key,
+    )
     cursor = conn.execute(
         """
         INSERT INTO provider_dispatch_outbox(
@@ -578,7 +788,7 @@ def _cancel_invalid_commercial_messages(conn: Any, *, now_iso: str) -> int:
             last_error='event_commercial_authority_revoked_or_paid'
         WHERE d.source_kind='event_message'
           AND d.status IN ('pending','retry')
-          AND d.idempotency_key LIKE 'event:%:message:post:v4:stage:%'
+          AND (d.idempotency_key LIKE 'event:%:message:post:v4:stage:%'\n               OR d.idempotency_key LIKE 'event:%:message:post:v5:stage:%')
           AND (
               EXISTS (
                   SELECT 1
@@ -622,7 +832,7 @@ def cancel_commercial_followups_for_registration_in_transaction(
         SET status='cancelled',updated_at=?,locked_at=NULL,lock_token=NULL,last_error=?
         WHERE business_id=? AND source_kind='event_message' AND source_id=?
           AND status IN ('pending','retry')
-          AND idempotency_key LIKE 'event:%:message:post:v4:stage:%'
+          AND (idempotency_key LIKE 'event:%:message:post:v4:stage:%'\n               OR idempotency_key LIKE 'event:%:message:post:v5:stage:%')
         """,
         (
             stamp,
@@ -930,6 +1140,9 @@ __all__ = [
     "classify_event_followup_segment",
     "commercial_event_followups_enabled",
     "event_followup_template_previews",
+    "get_event_followup_content_plan",
+    "set_event_followup_text",
+    "reset_event_followup_text",
     "materialize_due_event_followups",
     "materialize_due_event_followups_in_transaction",
 ]

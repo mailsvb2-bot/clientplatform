@@ -108,6 +108,20 @@ def resolve_owner_input(session: OwnerInputSession, value: object) -> OwnerInput
             (event_id, requested_days, position, raw_text),
         )
 
+    if session.action == "event_followup_text":
+        if not 1 <= len(raw_text) <= 3500:
+            raise ValueError("event followup text length is invalid")
+        event_id = str(session.context.get("event_id") or "").strip()
+        index = str(session.context.get("index") or "").strip()
+        segment = str(session.context.get("segment") or "").strip()
+        stage = str(session.context.get("stage") or "").strip()
+        if not event_id or not index.isdigit() or not segment or not stage.isdigit():
+            raise ValueError("event followup edit context is invalid")
+        return OwnerInputResolution(
+            "event-followup-edit-text",
+            (event_id, index, segment, stage, raw_text),
+        )
+
     if session.action == "event_warmup_days":
         event_id = str(session.context.get("event_id") or "").strip()
         maximum = str(session.context.get("maximum") or "").strip()

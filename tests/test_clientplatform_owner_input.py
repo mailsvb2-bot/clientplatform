@@ -211,6 +211,42 @@ class OwnerInputResolutionTests(unittest.TestCase):
                 "6",
             )
 
+    def test_followup_owner_input_preserves_custom_text(self) -> None:
+        resolved = resolve_owner_input(
+            self.session(
+                "event_followup_text",
+                event_id="event-1",
+                index="4",
+                segment="attended_unpaid",
+                stage="2",
+            ),
+            "Мой дожим\n\n{name}, детали здесь: {offer}",
+        )
+        self.assertEqual(
+            (resolved.action, resolved.args),
+            (
+                "event-followup-edit-text",
+                (
+                    "event-1",
+                    "4",
+                    "attended_unpaid",
+                    "2",
+                    "Мой дожим\n\n{name}, детали здесь: {offer}",
+                ),
+            ),
+        )
+        with self.assertRaises(ValueError):
+            resolve_owner_input(
+                self.session(
+                    "event_followup_text",
+                    event_id="event-1",
+                    index="4",
+                    segment="attended_unpaid",
+                    stage="",
+                ),
+                "Текст",
+            )
+
     def test_webinar_wizard_input_resolution_is_step_scoped(self) -> None:
         cases = (
             ("title", "Большой интенсив", "event-wizard-title-text", ("Большой интенсив",)),

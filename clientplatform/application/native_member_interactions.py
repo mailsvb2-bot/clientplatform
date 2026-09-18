@@ -45,7 +45,11 @@ from clientplatform.application.cockpit import cockpit_navigation
 from clientplatform.application.cockpit_events import resolve_events_snapshot
 from clientplatform.application.event_announcements import draft_event_announcement_template
 from clientplatform.application.event_content_plans import get_event_content_plan
-from clientplatform.application.event_followups import event_followup_template_previews
+from clientplatform.application.event_followups import (
+    get_event_followup_content_plan,
+    reset_event_followup_text,
+    set_event_followup_text,
+)
 from clientplatform.application.event_warmups import get_saved_event_warmup_plan
 from clientplatform.application.event_owner_flow import (
     OnlineEventCreateRequest,
@@ -769,6 +773,9 @@ def parse_native_member_interaction(value: object) -> ParsedMemberInteraction:
             "event-settings",
             "event-content",
             "event-content-followups",
+            "event-followup-edit",
+            "event-followup-reset",
+            "event-followup-edit-text",
             "event-followups",
             "event-segment",
             "event-channel",
@@ -909,6 +916,7 @@ _NATIVE_MEMBER_TEXT_ENTRY_ACTIONS = frozenset(
         "booking-open-text",
         "event-create-text",
         "event-join-text",
+        "event-followup-edit-text",
         "publication-new-text",
         "payment-new-text",
         "price-set-text",
@@ -1007,6 +1015,7 @@ def _owner_input_invalid_message(action: str) -> CustomerInteractionMessage:
         "booking_time": "Напишите дату и время: ДД.ММ.ГГГГ ЧЧ:ММ. При желании добавьте длительность в минутах.",
         "online_event": "Ответ не подходит текущему шагу вебинара. Используйте показанные кнопки или формат из подсказки.",
         "event_warmup_text": "Пришлите новый текст прогрева одним сообщением длиной до 3500 символов.",
+        "event_followup_text": "Пришлите новый текст дожима одним сообщением длиной до 3500 символов.",
         "event_warmup_days": "Пришлите допустимое число дней прогрева.",
         "price": "Напишите сумму и валюту, например: 5000 RUB.",
         "payment": "Напишите сумму и валюту, например: 3500 RUB | консультация.",
@@ -1015,7 +1024,7 @@ def _owner_input_invalid_message(action: str) -> CustomerInteractionMessage:
     }.get(action, "Проверьте ответ и попробуйте ещё раз.")
     exit_hint = (
         "Чтобы выйти без изменений, отправьте «Отмена» или нажмите «🎥 К вебинарам»."
-        if action in {"online_event", "event_warmup_text", "event_warmup_days"}
+        if action in {"online_event", "event_warmup_text", "event_followup_text", "event_warmup_days"}
         else "Чтобы выйти без изменений, отправьте «Отмена»."
     )
     return CustomerInteractionMessage(
@@ -1258,6 +1267,9 @@ _NATIVE_PARENT_COMMANDS: dict[str, str] = {
     "event-settings": "cpm:events",
     "event-content": "cpm:events",
     "event-content-followups": "cpm:events",
+    "event-followup-edit": "cpm:events",
+    "event-followup-reset": "cpm:events",
+    "event-followup-edit-text": "cpm:events",
     "event-followups": "cpm:events",
     "event-segment": "cpm:events",
     "event-channel": "cpm:events",
@@ -1325,7 +1337,7 @@ def _native_parent_command(parsed: ParsedMemberInteraction) -> str | None:
     if action == "menu":
         return None
     if action in {"owner-input-invalid", "owner-input-cancelled"} and args:
-        if args[0] in {"online_event", "event_warmup_text", "event_warmup_days"}:
+        if args[0] in {"online_event", "event_warmup_text", "event_followup_text", "event_warmup_days"}:
             return "cpm:events"
     if action == "customer":
         return "cpm:customers:0"
@@ -1453,6 +1465,7 @@ def _with_parent_navigation(
         back_label = BACK_TO_GROWTH_LABEL
     elif parsed.action in {
         "event-settings", "event-content", "event-content-followups",
+        "event-followup-edit", "event-followup-reset", "event-followup-edit-text",
         "event-followups", "event-segment", "event-channel", "event-new", "event-wizard", "event-wizard-title-text",
         "event-wizard-count-text", "event-wizard-timezone-text",
         "event-wizard-window-text", "event-wizard-room-text",
@@ -1461,7 +1474,7 @@ def _with_parent_navigation(
     } or (
         parsed.action in {"owner-input-invalid", "owner-input-cancelled"}
         and parsed.args
-        and parsed.args[0] in {"online_event", "event_warmup_text", "event_warmup_days"}
+        and parsed.args[0] in {"online_event", "event_warmup_text", "event_followup_text", "event_warmup_days"}
     ):
         back_label = BACK_TO_EVENTS_LABEL
     else:
@@ -2297,6 +2310,7 @@ def _event_content_message(
 def _event_followup_content_message(
     actor: TenantContext,
     event_id: str,
+    index: int = 0,
 ) -> CustomerInteractionMessage:
     snapshot = resolve_events_snapshot(
         actor=actor,
@@ -2309,32 +2323,130 @@ def _event_followup_content_message(
     )
     if item is None:
         raise ValueError("webinar was not found")
-    lines = [f"💬 Дожим после «{item.title}»"]
-    current_segment = None
-    for preview in event_followup_template_previews():
-        if preview.segment != current_segment:
-            current_segment = preview.segment
-            lines.extend(["", f"• {preview.segment_label}:"])
-        body = (
-            preview.text.replace("{name}", "Имя")
-            .replace("{title}", str(item.title))
-            .replace("{offer}", "[ссылка на предложение]")
+    previews = get_event_followup_content_plan(actor=actor, event_id=event_id)
+    if not previews:
+        return CustomerInteractionMessage(
+            text="Для этого вебинара нет сообщений дожима.",
+            rows=((_button("🗓 К контент-плану", f"cpm:event-content:{event_id}"),), _back_row()),
         )
-        lines.append(f"{preview.offset_label}: {body}")
-    lines.extend(
-        [
-            "",
-            "После оплаты серия прекращается. Без действующего согласия сообщение не отправляется.",
-        ]
+    current = max(0, min(int(index), len(previews) - 1))
+    preview = previews[current]
+    body = (
+        preview.text.replace("{name}", "Имя")
+        .replace("{title}", str(item.title))
+        .replace("{offer}", "[ссылка на предложение]")
     )
-    return CustomerInteractionMessage(
-        text="\n".join(lines),
-        rows=(
+    source = "ваш текст" if preview.source == "owner" else "автотекст"
+    rows: list[tuple[CustomerInteractionButton, ...]] = []
+    navigation: list[CustomerInteractionButton] = []
+    if current > 0:
+        navigation.append(
+            _button("⬅️ Предыдущее", f"cpm:event-content-followups:{event_id}:{current - 1}")
+        )
+    if current + 1 < len(previews):
+        navigation.append(
+            _button("Следующее ➡️", f"cpm:event-content-followups:{event_id}:{current + 1}")
+        )
+    if navigation:
+        rows.append(tuple(navigation))
+    rows.append(
+        (_button("✏️ Изменить текст", f"cpm:event-followup-edit:{event_id}:{current}"),)
+    )
+    if preview.source != "template":
+        rows.append(
+            (_button("↩️ Вернуть автотекст", f"cpm:event-followup-reset:{event_id}:{current}"),)
+        )
+    rows.extend(
+        [
             (_button("⚙️ Автосообщения", "cpm:event-settings"),),
             (_button("🗓 К контент-плану", f"cpm:event-content:{event_id}"),),
             _back_row(),
-        ),
+        ]
     )
+    return CustomerInteractionMessage(
+        text=(
+            f"💬 Дожим {current + 1}/{len(previews)} после «{item.title}»\n\n"
+            f"Группа: {preview.segment_label}\n"
+            f"Когда: {preview.offset_label}\n"
+            f"Источник: {source}\n\n"
+            f"{body}\n\n"
+            "Можно полностью заменить этот текст своим. Поддерживаются {name}, {title}, {offer}.\n"
+            "После оплаты серия прекращается. Без действующего согласия сообщение не отправляется."
+        ),
+        rows=tuple(rows),
+    )
+
+
+def _event_followup_edit_message(
+    actor: TenantContext,
+    *,
+    event_id: str,
+    index: int,
+    current_platform: ConnectionPlatform,
+    input_surface: str,
+) -> CustomerInteractionMessage:
+    previews = get_event_followup_content_plan(actor=actor, event_id=event_id)
+    if not 0 <= int(index) < len(previews):
+        raise ValueError("event followup index is invalid")
+    preview = previews[int(index)]
+    begin_owner_input(
+        actor=actor,
+        platform=current_platform.value,
+        surface=input_surface,
+        action="event_followup_text",
+        context={
+            "event_id": event_id,
+            "index": str(index),
+            "segment": preview.segment,
+            "stage": str(preview.stage),
+        },
+    )
+    return CustomerInteractionMessage(
+        text=(
+            f"✏️ Пришлите новый текст дожима ({preview.segment_label}, {preview.offset_label}) "
+            "одним сообщением.\n\nМожно написать текст полностью самостоятельно. "
+            "Поддерживаются {name}, {title}, {offer}.\n\nДля выхода: Отмена."
+        ),
+        rows=((_button("🗓 К дожиму", f"cpm:event-content-followups:{event_id}:{index}"),), _back_row()),
+    )
+
+
+def _event_followup_edit_result(
+    actor: TenantContext,
+    *,
+    event_id: str,
+    index: int,
+    segment: str,
+    stage: int,
+    text: str,
+) -> CustomerInteractionMessage:
+    set_event_followup_text(
+        actor=actor,
+        event_id=event_id,
+        segment=segment,
+        stage=stage,
+        text=text,
+    )
+    return _event_followup_content_message(actor, event_id, index)
+
+
+def _event_followup_reset_result(
+    actor: TenantContext,
+    *,
+    event_id: str,
+    index: int,
+) -> CustomerInteractionMessage:
+    previews = get_event_followup_content_plan(actor=actor, event_id=event_id)
+    if not 0 <= int(index) < len(previews):
+        raise ValueError("event followup index is invalid")
+    preview = previews[int(index)]
+    reset_event_followup_text(
+        actor=actor,
+        event_id=event_id,
+        segment=preview.segment,
+        stage=preview.stage,
+    )
+    return _event_followup_content_message(actor, event_id, index)
 
 
 def _event_settings_message(actor: TenantContext) -> CustomerInteractionMessage:
@@ -5442,9 +5554,44 @@ def _render(
                 return _stale_message()
             return _event_content_message(actor, parsed.args[0])
         if parsed.action == "event-content-followups":
-            if len(parsed.args) != 1:
+            if len(parsed.args) not in {1, 2}:
                 return _stale_message()
-            return _event_followup_content_message(actor, parsed.args[0])
+            if len(parsed.args) == 2 and not parsed.args[1].isdigit():
+                return _stale_message()
+            return _event_followup_content_message(
+                actor,
+                parsed.args[0],
+                int(parsed.args[1]) if len(parsed.args) == 2 else 0,
+            )
+        if parsed.action == "event-followup-edit":
+            if len(parsed.args) != 2 or not parsed.args[1].isdigit():
+                return _stale_message()
+            return _event_followup_edit_message(
+                actor,
+                event_id=parsed.args[0],
+                index=int(parsed.args[1]),
+                current_platform=current_platform,
+                input_surface=input_surface,
+            )
+        if parsed.action == "event-followup-reset":
+            if len(parsed.args) != 2 or not parsed.args[1].isdigit():
+                return _stale_message()
+            return _event_followup_reset_result(
+                actor,
+                event_id=parsed.args[0],
+                index=int(parsed.args[1]),
+            )
+        if parsed.action == "event-followup-edit-text":
+            if len(parsed.args) != 5 or not parsed.args[1].isdigit() or not parsed.args[3].isdigit():
+                return _stale_message()
+            return _event_followup_edit_result(
+                actor,
+                event_id=parsed.args[0],
+                index=int(parsed.args[1]),
+                segment=parsed.args[2],
+                stage=int(parsed.args[3]),
+                text=parsed.args[4],
+            )
         if parsed.action == "event-followups":
             return _event_followups_action(actor, parsed.args)
         if parsed.action == "event-segment":
