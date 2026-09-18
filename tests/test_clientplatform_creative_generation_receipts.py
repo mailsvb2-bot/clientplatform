@@ -9,7 +9,10 @@ from unittest.mock import patch
 from clientplatform.application import visual_creatives
 from clientplatform.application.visual_creatives import (
     create_business_image_from_frozen_payload,
+    create_business_visual_from_frozen_payload,
     freeze_business_image_payload,
+    freeze_business_visual_payload,
+    frozen_business_visual_binding,
 )
 from clientplatform.domain.creative_generation import CreativeGenerationReceiptStatus
 from clientplatform.infrastructure.creative_generation_receipt_repository import (
@@ -37,6 +40,52 @@ class FrozenBusinessImagePayloadTests(unittest.TestCase):
         self.assertEqual(value["wait_seconds"], 20)
         self.assertEqual(value["brief"]["kind"], "image")
         self.assertIn("Owner request: calm office", value["brief"]["prompt"])
+
+    def test_video_payload_preserves_event_binding_and_vertical_brief(self) -> None:
+        frozen = freeze_business_visual_payload(
+            request="webinar teaser",
+            kind="video",
+            brand_context="Tone: calm",
+            country_code="RU",
+            binding={
+                "type": "event_content",
+                "event_id": "33333333-3333-4333-8333-333333333333",
+                "stage": "warmup",
+                "slot_key": "before:3",
+                "kind": "video",
+            },
+        )
+        value = json.loads(frozen)
+        self.assertEqual(value["brief"]["kind"], "video")
+        self.assertEqual(value["brief"]["aspect_ratio"], "9:16")
+        self.assertEqual(value["brief"]["duration_seconds"], 8)
+        self.assertEqual(
+            frozen_business_visual_binding(frozen)["slot_key"],
+            "before:3",
+        )
+        expected = SimpleNamespace(id="provider-video-1")
+        with patch.object(visual_creatives, "submit_visual", return_value=expected) as submit:
+            result = create_business_visual_from_frozen_payload(
+                provider_payload_json=frozen,
+                scope_id="scope-1",
+                idempotency_key="stable-video-key",
+            )
+        self.assertIs(result, expected)
+        self.assertEqual(submit.call_args.args[0].kind, "video")
+
+    def test_event_binding_kind_must_match_frozen_visual_kind(self) -> None:
+        with self.assertRaises(ValueError):
+            freeze_business_visual_payload(
+                request="webinar teaser",
+                kind="video",
+                binding={
+                    "type": "event_content",
+                    "event_id": "33333333-3333-4333-8333-333333333333",
+                    "stage": "warmup",
+                    "slot_key": "before:3",
+                    "kind": "image",
+                },
+            )
 
     def test_submission_uses_only_the_frozen_brief(self) -> None:
         frozen = freeze_business_image_payload(
