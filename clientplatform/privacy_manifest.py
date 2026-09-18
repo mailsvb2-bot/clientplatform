@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 TenantDisposition = Literal["erase", "retain", "anonymize"]
-CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-09-17.v51-event-content-preferences"
+CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-09-19.v52-event-content-assets"
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +56,7 @@ _POLICIES = (
     _required("clientplatform_events", "retain", "business-owned online event configuration, provider routing and publication state"),
     _required("clientplatform_event_content_preferences", "retain", "business-owned event stage presentation mode and owner update evidence without participant identity"),
     _required("clientplatform_event_content_messages", "retain", "business-owned webinar content plan text, schedule, source and owner update evidence without participant identity"),
+    _required("clientplatform_event_content_assets", "erase", "owner-uploaded or generated webinar media references and generation lineage; media is tenant content and must be removed with the business"),
     _required("clientplatform_event_sessions", "retain", "business-owned multi-session event schedule and provider routing without participant identity"),
     _required("clientplatform_event_registrations", "erase", "public event registration PII, consent, CRM linkage and attendance signals"),
     _required("clientplatform_event_conversion_links", "anonymize", "verified event-to-payment attribution retained without public registration PII"),
