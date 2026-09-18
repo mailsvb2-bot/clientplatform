@@ -117,6 +117,16 @@ def main() -> int:
                 updated_by_member_id=actor.membership_id,
                 now=_NOW.isoformat(),
             )
+            # Telegram is now a first-class webinar autosend channel. Disable it
+            # before racing MAX/VK so this remains a true "last enabled channel"
+            # concurrency proof rather than accidentally testing two safe updates.
+            settings_repo.set_channel(
+                business_id=actor.business_id,
+                channel="telegram",
+                enabled=False,
+                updated_by_member_id=actor.membership_id,
+                now=_NOW.isoformat(),
+            )
 
         segment_gate = Barrier(2)
         segment_targets = ("attended_unpaid", "offer_clicked_unpaid")
