@@ -196,7 +196,11 @@ def ensure(c: sqlite3.Connection) -> None:
         "channel_telegram",
     ):
         if column not in followup_columns:
+            # Existing businesses must not silently gain a newly introduced
+            # external delivery channel. Legacy strategy remains unchanged until
+            # the owner explicitly enables Telegram.
+            default_value = 0 if column == "channel_telegram" else 1
             c.execute(
                 f"ALTER TABLE clientplatform_event_followup_settings "  # nosec B608
-                f"ADD COLUMN {column} INTEGER NOT NULL DEFAULT 1"
+                f"ADD COLUMN {column} INTEGER NOT NULL DEFAULT {default_value}"
             )

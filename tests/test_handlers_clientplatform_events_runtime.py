@@ -125,7 +125,7 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
         text = target.answer.await_args.args[0]
         rows = target.answer.await_args.kwargs["reply_markup"]
         callbacks = [callback for row in rows for _label, callback in row]
-        self.assertIn("⚙️ Автосообщения после вебинара", text)
+        self.assertIn("⚙️ Автосообщения вебинара", text)
         self.assertIn(f"cpev:followups:on:{TOKEN}", callbacks)
         self.assertEqual(rows[-1], [("🎥 К вебинарам", f"cpev:home:{TOKEN}")])
 

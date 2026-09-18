@@ -138,7 +138,7 @@ def test_owner_can_enable_and_disable_event_autosend(monkeypatch) -> None:
             scope for scope in policy.spec.action_scopes
             if scope.action == "events.commercial_followup"
         )
-        assert event_scope.allowed_channels == ("email", "max", "vk", "telegram")
+        assert event_scope.allowed_channels == ("email", "max", "telegram", "vk")
         assert event_scope.allowed_audiences == ("prospect_opted_in",)
         assert event_scope.allowed_content_topics == ("service_offer",)
         assert event_scope.schedule is not None
@@ -430,7 +430,7 @@ def test_event_strategy_flags_are_durable_and_require_nonempty_active_strategy(m
                 actor=owner, segment=segment, enabled=False,
                 now=datetime(2026, 9, 12, 12, 0, tzinfo=timezone.utc),
             )
-        for channel in ("max", "vk"):
+        for channel in ("max", "vk", "telegram"):
             settings_app.set_business_event_followup_channel_enabled(
                 actor=owner, channel=channel, enabled=False,
                 now=datetime(2026, 9, 12, 12, 1, tzinfo=timezone.utc),
@@ -568,6 +568,7 @@ def test_existing_followup_settings_schema_is_grown_in_place() -> None:
     assert {
         "segment_no_show", "segment_join_signal", "segment_attended",
         "segment_offer_clicked", "channel_email", "channel_max", "channel_vk",
+        "channel_telegram",
     }.issubset(columns)
     stored = EventFollowupSettingsRepository(conn).get(business_id=owner.business_id)
     assert stored is not None and stored.enabled is True and stored.settings_epoch == 4
