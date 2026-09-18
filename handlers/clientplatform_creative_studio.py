@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Discoverable owner image creation over the canonical visual gateway."""
+"""Discoverable owner image/video creation over the canonical visual gateway."""
 
 import asyncio
 import os
@@ -28,8 +28,9 @@ from clientplatform.application.creative_generation import (
 from clientplatform.application.creative_studio_publication import load_goal_visual_brand
 from clientplatform.application.visual_creatives import (
     VisualCreativeError,
-    create_business_image_from_frozen_payload,
+    create_business_visual_from_frozen_payload,
     freeze_business_image_payload,
+    frozen_business_visual_kind,
     materialize_ad_visual,
     normalize_business_image_request,
     poll_ad_visual,
@@ -53,6 +54,19 @@ class ClientPlatformCreativeStudioState(StatesGroup):
     waiting_prompt = State()
 
 
+def _receipt_kind(receipt: CreativeGenerationReceipt | None) -> str:
+    if receipt is None:
+        return "image"
+    try:
+        return frozen_business_visual_kind(receipt.provider_payload_json)
+    except ValueError:
+        return "image"
+
+
+def _receipt_noun(receipt: CreativeGenerationReceipt | None) -> str:
+    return "видео" if _receipt_kind(receipt) == "video" else "картинка"
+
+
 def _menu_rows(token: str, active: CreativeGenerationReceipt | None = None):
     rows: list[list[tuple[str, str]]] = []
     if active is not None:
@@ -60,7 +74,7 @@ def _menu_rows(token: str, active: CreativeGenerationReceipt | None = None):
             "⚠️ Проверить доставку"
             if active.delivery_claimed_at
             else (
-                "✅ Получить готовую картинку"
+                f"✅ Получить готовое {_receipt_noun(active)}"
                 if active.status == CreativeGenerationReceiptStatus.SUCCEEDED
                 else "🔄 Продолжить создание"
             )
@@ -137,26 +151,26 @@ async def send_creative_studio_menu(
     token = control._uuid_token(business_id)
     if active is None:
         body = (
-            "🎨 Картинки и креативы\n\n"
+            "🎨 Картинки и видео\n\n"
             "Опишите картинку обычными словами. ClientPlatform использует уже "
             "подключённый генератор и сохранённый фирменный стиль бизнеса."
         )
     elif active.status == CreativeGenerationReceiptStatus.PREPARED:
         body = (
-            "🎨 Картинки и креативы\n\n"
+            "🎨 Картинки и видео\n\n"
             "У Вас уже подготовлен запрос:\n"
             f"{active.request_text}\n\n"
             "Платный AI-вызов ещё не начинался. Можно продолжить или изменить описание."
         )
     elif active.delivery_claimed_at:
         body = (
-            "🎨 Картинки и креативы\n\n"
+            "🎨 Картинки и видео\n\n"
             "Отправка готовой картинки уже начиналась и могла завершиться. "
             "ClientPlatform не повторит её автоматически, чтобы не прислать дубль."
         )
     else:
         body = (
-            "🎨 Картинки и креативы\n\n"
+            "🎨 Картинки и видео\n\n"
             "У Вас уже есть незавершённая генерация. ClientPlatform продолжит именно "
             "её — новый платный job автоматически не создаётся."
         )
@@ -170,7 +184,7 @@ async def open_creative_studio(callback: CallbackQuery, state: FSMContext) -> No
         actor = await _actor_for_callback(callback, token)
     except (TypeError, ValueError, TenantPermissionDenied):
         await callback.answer(
-            "Создание картинок недоступно для Вашей роли", show_alert=True
+            "Создание визуалов недоступно для Вашей роли", show_alert=True
         )
         return
     await state.clear()
@@ -190,7 +204,7 @@ async def ask_creative_prompt(callback: CallbackQuery, state: FSMContext) -> Non
         active = await _active(actor)
     except (TypeError, ValueError, TenantPermissionDenied):
         await callback.answer(
-            "Создание картинок недоступно для Вашей роли", show_alert=True
+            "Создание визуалов недоступно для Вашей роли", show_alert=True
         )
         return
     if active is not None and active.status != CreativeGenerationReceiptStatus.PREPARED:
@@ -276,7 +290,7 @@ async def receive_creative_prompt(message: Message, state: FSMContext) -> None:
     )
 
 
-async def _finish_image(
+async def _finish_visual(
     callback: CallbackQuery,
     *,
     actor,
@@ -310,18 +324,21 @@ async def _finish_image(
                     )
                 except LookupError:
                     await target.answer(
-                        "Эта картинка уже была отправлена или завершена.",
+                        "Этот визуал уже был отправлен или завершён.",
                         reply_markup=_result_rows(token),
                     )
                     return True
                 await target.answer(
-                    "⚠️ Отправка этой картинки уже началась и могла завершиться. "
+                    "⚠️ Отправка этого визуала уже началась и могла завершиться. "
                     "Автоматически повторять её не буду, чтобы не прислать дубль.",
                     reply_markup=_delivery_recovery_rows(token, latest, ambiguous=True),
                 )
                 return True
             try:
-                await target.answer_photo(FSInputFile(path), caption="✅ Картинка готова")
+                if str(getattr(job, "kind", "") or "") == "video":
+                    await target.answer_video(FSInputFile(path), caption="✅ Видео готово")
+                else:
+                    await target.answer_photo(FSInputFile(path), caption="✅ Картинка готова")
             except TelegramAPIError:
                 await target.answer(
                     "⚠️ Telegram не дал однозначного подтверждения доставки. "
@@ -331,7 +348,7 @@ async def _finish_image(
                 return True
     except (OSError, VisualCreativeError):
         await target.answer(
-            "Генератор завершил картинку, но файл сейчас не удалось получить. "
+            "Генератор завершил визуал, но файл сейчас не удалось получить. "
             "Можно проверить файл ещё раз или завершить этот результат и создать новый.",
             reply_markup=_delivery_recovery_rows(token, receipt),
         )
@@ -342,7 +359,7 @@ async def _finish_image(
         receipt_id=receipt.id,
     )
     await target.answer(
-        "Можно сохранить её из чата, создать ещё одну или перейти к рекламе.",
+        "Можно сохранить результат из чата, создать ещё один или перейти к рекламе.",
         reply_markup=_result_rows(token),
     )
     return True
@@ -377,7 +394,7 @@ async def _submit_or_recover(actor, receipt: CreativeGenerationReceipt):
     if current.source_job_id:
         return await _poll_existing(actor, current)
     job = await asyncio.to_thread(
-        create_business_image_from_frozen_payload,
+        create_business_visual_from_frozen_payload,
         provider_payload_json=current.provider_payload_json,
         scope_id=actor.business_id,
         idempotency_key=current.idempotency_key,
@@ -432,7 +449,7 @@ async def _continue_generation(
     token = control._uuid_token(actor.business_id)
     if receipt.delivery_claimed_at:
         await control._callback_message(callback).answer(
-            "⚠️ Отправка этой картинки могла уже пройти. Автоматический повтор "
+            "⚠️ Отправка этого визуала могла уже пройти. Автоматический повтор "
             "заблокирован, чтобы не прислать дубль.",
             reply_markup=_delivery_recovery_rows(token, receipt, ambiguous=True),
         )
@@ -463,7 +480,7 @@ async def _continue_generation(
             reply_markup=_result_rows(token),
         )
         return
-    if await _finish_image(callback, actor=actor, receipt=current, job=job):
+    if await _finish_visual(callback, actor=actor, receipt=current, job=job):
         return
     if current.status == CreativeGenerationReceiptStatus.SUCCEEDED:
         await control._callback_message(callback).answer(
@@ -473,7 +490,7 @@ async def _continue_generation(
         )
         return
     await control._callback_message(callback).answer(
-        "⏳ Картинка ещё создаётся. Повторно платная генерация не запускается.",
+        "⏳ Визуал ещё создаётся. Повторно платная генерация не запускается.",
         reply_markup=_pending_rows(token, current),
     )
 
@@ -490,7 +507,7 @@ async def generate_creative_image(callback: CallbackQuery, state: FSMContext) ->
         actor = await _actor_for_callback(callback, token)
     except (TypeError, ValueError, TenantPermissionDenied):
         await callback.answer(
-            "Создание картинок недоступно для Вашей роли", show_alert=True
+            "Создание визуалов недоступно для Вашей роли", show_alert=True
         )
         return
     try:
@@ -501,7 +518,9 @@ async def generate_creative_image(callback: CallbackQuery, state: FSMContext) ->
             show_alert=True,
         )
         return
-    await callback.answer("Создаю картинку…")
+    await callback.answer(
+        "Создаю видео…" if _receipt_kind(receipt) == "video" else "Создаю картинку…"
+    )
     await _continue_generation(callback, actor=actor, receipt=receipt)
 
 
@@ -522,7 +541,7 @@ async def abandon_creative_image(callback: CallbackQuery, state: FSMContext) -> 
             receipt_id=receipt.id,
         )
     except TenantPermissionDenied:
-        await callback.answer("Создание картинок недоступно для Вашей роли", show_alert=True)
+        await callback.answer("Создание визуалов недоступно для Вашей роли", show_alert=True)
         return
     except (LookupError, TypeError, ValueError):
         await callback.answer("Этот результат уже недоступен", show_alert=True)
@@ -532,7 +551,7 @@ async def abandon_creative_image(callback: CallbackQuery, state: FSMContext) -> 
         return
     await callback.answer()
     await control._callback_message(callback).answer(
-        "Результат завершён. Теперь можно создать новую картинку.",
+        "Результат завершён. Теперь можно создать новый визуал.",
         reply_markup=_result_rows(token),
     )
 
@@ -554,7 +573,7 @@ async def redeliver_creative_image(callback: CallbackQuery, state: FSMContext) -
             receipt_id=receipt.id,
         )
     except TenantPermissionDenied:
-        await callback.answer("Создание картинок недоступно для Вашей роли", show_alert=True)
+        await callback.answer("Создание визуалов недоступно для Вашей роли", show_alert=True)
         return
     except (LookupError, TypeError, ValueError):
         await callback.answer("Этот результат уже недоступен", show_alert=True)
@@ -586,7 +605,7 @@ async def check_creative_image(callback: CallbackQuery, state: FSMContext) -> No
         actor = await _actor_for_callback(callback, token)
     except (TypeError, ValueError, TenantPermissionDenied):
         await callback.answer(
-            "Создание картинок недоступно для Вашей роли", show_alert=True
+            "Создание визуалов недоступно для Вашей роли", show_alert=True
         )
         return
     try:
