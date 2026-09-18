@@ -49,6 +49,11 @@ def test_warmup_plan_matches_requested_days_and_stops_before_event() -> None:
     assert plan.requested_days == 3
     assert len(plan.drafts) == 3
     assert [draft.days_before_event for draft in plan.drafts] == [3, 2, 1]
+    assert [draft.slot_key for draft in plan.drafts] == [
+        "before:3",
+        "before:2",
+        "before:1",
+    ]
     assert [draft.publish_date.isoformat() for draft in plan.drafts] == [
         "2026-09-19",
         "2026-09-20",
@@ -174,6 +179,40 @@ class TestPersistedWarmupPlan:
             assert reset.source == "template"
             assert reset.scheduled_at == original_schedule
             assert "Практический вебинар" in reset.text
+
+    def test_owner_text_stays_bound_to_days_before_event_when_plan_expands(self) -> None:
+        get_db_patch, get_db_ro_patch = self._db_patches()
+        with get_db_patch, get_db_ro_patch:
+            initial = warmups.save_event_warmup_plan(
+                actor=self.actor,
+                event_id=self.event_id,
+                requested_days=3,
+                now=datetime(2026, 9, 20, 12, tzinfo=timezone.utc),
+            )
+            assert initial.drafts[0].slot_key == "before:3"
+            warmups.set_event_warmup_text(
+                actor=self.actor,
+                event_id=self.event_id,
+                position=1,
+                text="Свой текст именно за три дня",
+            )
+            expanded = warmups.save_event_warmup_plan(
+                actor=self.actor,
+                event_id=self.event_id,
+                requested_days=5,
+                now=datetime(2026, 9, 20, 12, tzinfo=timezone.utc),
+            )
+
+        three_days = next(
+            draft for draft in expanded.drafts if draft.days_before_event == 3
+        )
+        assert three_days.position == 3
+        assert three_days.slot_key == "before:3"
+        assert three_days.text == "Свой текст именно за три дня"
+        assert three_days.source == "owner"
+        assert three_days.revision >= 2
+        assert expanded.drafts[0].days_before_event == 5
+        assert expanded.drafts[0].source == "template"
 
     def test_due_materializer_sends_only_current_day_and_never_catches_up_yesterday(self) -> None:
         get_db_patch, get_db_ro_patch = self._db_patches()

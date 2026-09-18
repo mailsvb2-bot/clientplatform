@@ -165,7 +165,7 @@ class EventContentRepositoryTests(unittest.TestCase):
             actor=_actor(),
             event_id=EVENT_ID,
             stage=EventContentStage.WARMUP,
-            slot_key="day:1",
+            slot_key="before:3",
             position=1,
             text="Автотекст",
             source="template",
@@ -173,11 +173,12 @@ class EventContentRepositoryTests(unittest.TestCase):
             now="2026-09-18T10:00:00+00:00",
         )
         self.assertEqual(created.source, "template")
+        self.assertEqual(created.revision, 1)
         updated = repo.upsert(
             actor=_actor(),
             event_id=EVENT_ID,
             stage=EventContentStage.WARMUP,
-            slot_key="day:1",
+            slot_key="before:3",
             position=1,
             text="Мой собственный прогрев",
             source="owner",
@@ -186,6 +187,7 @@ class EventContentRepositoryTests(unittest.TestCase):
         )
         self.assertEqual(updated.text, "Мой собственный прогрев")
         self.assertEqual(updated.source, "owner")
+        self.assertEqual(updated.revision, 2)
         self.assertEqual(updated.scheduled_at, "2026-09-20T09:00:00+00:00")
         self.assertEqual(
             repo.list_for_stage(
