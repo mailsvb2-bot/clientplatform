@@ -110,6 +110,33 @@ def test_progressive_disclosure_preserves_full_webinar_automation_power() -> Non
     }
 
 
+def test_event_hub_exposes_content_plan_for_each_visible_recent_webinar() -> None:
+    base = _snapshot()
+    items = tuple(
+        SimpleNamespace(
+            id=f"33333333-3333-4333-8333-33333333333{index}",
+            title=f"Вебинар {index}",
+            local_start=f"{14 + index}.09.2026 19:00",
+            registered=0,
+            join_clicked=0,
+            attendance_confirmed=0,
+            offer_clicked=0,
+            paid=0,
+            revenue=(),
+            join_ready=True,
+        )
+        for index in range(1, 4)
+    )
+    snapshot = SimpleNamespace(**{**vars(base), "items": items})
+    actions = event_hub_actions(snapshot)
+    content_actions = [action for action in actions if action.kind == "content"]
+    assert len(content_actions) == 3
+    assert [action.key for action in content_actions] == [item.id for item in items]
+    # create + 3 content plans + latest announce + settings remains compact
+    # enough for native back/home navigation.
+    assert len(actions) <= 8
+
+
 def test_shared_event_action_labels_fit_native_transport_limit_without_truncation() -> None:
     active = _snapshot()
     inactive = SimpleNamespace(**{**vars(active), "commercial_followup_segments": (), "commercial_followup_channels": ()})
