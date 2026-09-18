@@ -404,6 +404,9 @@ async def create_event_announcement(callback: CallbackQuery) -> None:
         )
         vk_url = draft.registration_url(public_base_url=public_base, source="vk")
         max_url = draft.registration_url(public_base_url=public_base, source="max")
+        advertising_url = draft.registration_url(
+            public_base_url=public_base, source="ads"
+        )
     except (TenantPermissionDenied, ValueError, RuntimeError):
         await callback.answer("Не удалось подготовить анонс", show_alert=True)
         return
@@ -418,7 +421,9 @@ async def create_event_announcement(callback: CallbackQuery) -> None:
         "✨ Анонс готов\n\n"
         f"{draft.text}\n\n"
         f"{source_note}\n\n"
-        "Каждая кнопка использует отдельную ссылку регистрации, поэтому ClientPlatform увидит, откуда пришёл человек.",
+        f"🔗 Ссылка для рекламы:\n{advertising_url}\n\n"
+        "Её можно вставить в рекламный кабинет, сайт или пост. ClientPlatform сохранит источник ads. "
+        "Кнопки ниже используют отдельные ссылки регистрации для Telegram, VK и MAX.",
         reply_markup=_announcement_share_markup(
             text=draft.text,
             title=draft.title,
