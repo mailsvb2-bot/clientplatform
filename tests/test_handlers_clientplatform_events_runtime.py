@@ -655,6 +655,8 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
         callback.answer.assert_awaited_once_with("Анонс готов")
         text = reply.answer.await_args.args[0]
         self.assertIn("требует Вашего подтверждения", text)
+        self.assertIn("🔗 Ссылка для рекламы:", text)
+        self.assertIn("source=ads", text)
         markup = reply.answer.await_args.kwargs["reply_markup"]
         urls = [row[0].url for row in markup.inline_keyboard[:3]]
         self.assertTrue(any("source%3Dtelegram" in (url or "") for url in urls))
