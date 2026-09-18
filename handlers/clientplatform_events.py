@@ -88,6 +88,8 @@ def _announcement_share_markup(
     vk_url: str,
     max_url: str,
     business_token: str,
+    visual_mode: EventContentMode = EventContentMode.TEXT,
+    visual_prepared: bool = False,
 ) -> InlineKeyboardMarkup:
     telegram_share = (
         "https://t.me/share/url?url="
@@ -106,11 +108,22 @@ def _announcement_share_markup(
     max_share = "https://max.ru/:share?text=" + quote(
         f"{text}\n\nРегистрация: {max_url}", safe=""
     )
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="✈️ Опубликовать в Telegram", url=telegram_share)],
-            [InlineKeyboardButton(text="🔵 Опубликовать во ВКонтакте", url=vk_share)],
-            [InlineKeyboardButton(text="🟣 Опубликовать в MAX", url=max_share)],
+    rows = [
+        [InlineKeyboardButton(text="✈️ Опубликовать в Telegram", url=telegram_share)],
+        [InlineKeyboardButton(text="🔵 Опубликовать во ВКонтакте", url=vk_share)],
+        [InlineKeyboardButton(text="🟣 Опубликовать в MAX", url=max_share)],
+    ]
+    if visual_prepared:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=_visual_action_label(visual_mode),
+                    callback_data=f"cpc:open:{business_token}",
+                )
+            ]
+        )
+    rows.extend(
+        [
             [
                 InlineKeyboardButton(
                     text="📣 Запустить рекламу",
@@ -125,6 +138,7 @@ def _announcement_share_markup(
             ],
         ]
     )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def _settings_rows(snapshot: object, *, token: str) -> list[list[tuple[str, str]]]:
@@ -1234,6 +1248,36 @@ async def create_event_announcement(callback: CallbackQuery) -> None:
     except (TenantPermissionDenied, ValueError, RuntimeError):
         await callback.answer("Не удалось подготовить анонс", show_alert=True)
         return
+    modes = await asyncio.to_thread(
+        get_event_content_plan,
+        actor=actor,
+        event_id=event_id,
+    )
+    visual_prepared = False
+    visual_note = ""
+    if modes.event_day is not EventContentMode.TEXT:
+        try:
+            prepared = await asyncio.to_thread(
+                prepare_event_stage_visual,
+                actor=actor,
+                event_id=event_id,
+                stage=EventContentStage.EVENT_DAY,
+                message_key="announcement",
+                event_title=draft.title,
+                message_text=draft.text,
+            )
+        except (TenantPermissionDenied, ValueError, RuntimeError):
+            visual_note = "\n\nВизуал сейчас не удалось подготовить; текст анонса сохранён."
+        else:
+            visual_prepared = prepared is not None
+            if visual_prepared:
+                visual_note = (
+                    "\n\n🎬 Видео подготовлено к генерации; платный AI-вызов начнётся "
+                    "только после Вашего отдельного подтверждения."
+                    if modes.event_day is EventContentMode.TEXT_WITH_VIDEO
+                    else "\n\n🎨 Картинка подготовлена к генерации; платный AI-вызов начнётся "
+                    "только после Вашего отдельного подтверждения."
+                )
     business_token = control._uuid_token(business_id)
     source_note = (
         "Текст подготовлен AI и требует Вашего подтверждения перед публикацией."
@@ -1244,7 +1288,7 @@ async def create_event_announcement(callback: CallbackQuery) -> None:
     await control._callback_message(callback).answer(
         "✨ Анонс готов\n\n"
         f"{draft.text}\n\n"
-        f"{source_note}\n\n"
+        f"{source_note}{visual_note}\n\n"
         f"🔗 Ссылка для рекламы:\n{advertising_url}\n\n"
         "Её можно вставить в рекламный кабинет, сайт или пост. ClientPlatform сохранит источник ads. "
         "Кнопки ниже используют отдельные ссылки регистрации для Telegram, VK и MAX.",
@@ -1255,6 +1299,8 @@ async def create_event_announcement(callback: CallbackQuery) -> None:
             vk_url=vk_url,
             max_url=max_url,
             business_token=business_token,
+            visual_mode=modes.event_day,
+            visual_prepared=visual_prepared,
         ),
     )
 
