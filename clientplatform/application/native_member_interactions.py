@@ -95,6 +95,12 @@ from clientplatform.application.owner_input import (
     get_owner_input_session,
     resolve_owner_input,
 )
+from clientplatform.application.native_event_wizard import (
+    abandon_native_event_wizard,
+    begin_native_event_wizard,
+    handle_native_event_wizard_action,
+    handle_native_event_wizard_text,
+)
 from clientplatform.application.programs import (
     add_program_lesson,
     create_program,
@@ -343,7 +349,18 @@ TELEGRAM_NATIVE_ACTION_EQUIVALENTS: dict[str, tuple[str, ...]] = {
     "prices": ("prices",),
     "price-set": ("price-set", "price-set-text"),
     "promotion": ("acquire",),
-    "online-event": ("events", "event-new", "event-create-text"),
+    "online-event": (
+        "events",
+        "event-new",
+        "event-wizard",
+        "event-wizard-title-text",
+        "event-wizard-count-text",
+        "event-wizard-timezone-text",
+        "event-wizard-window-text",
+        "event-wizard-room-text",
+        "event-wizard-warmup-text",
+        "event-create-text",
+    ),
     "experiments": ("experiments",),
     "invites": ("invites", "invite-new"),
     "funnel2": ("funnel2",),
@@ -756,6 +773,7 @@ def parse_native_member_interaction(value: object) -> ParsedMemberInteraction:
             "event-segment",
             "event-channel",
             "event-new",
+            "event-wizard",
             "event-create-text",
             "event-announce",
             "event-join",
@@ -936,15 +954,35 @@ def _pending_owner_input(
         user_id=actor.user_id, platform=platform.value, surface=surface
     )
     if compact.casefold() in {"отмена", "cancel"} and session is not None:
-        clear_owner_input(
-            user_id=actor.user_id, platform=platform.value, surface=surface
-        )
-        return ParsedMemberInteraction("owner-input-cancelled", (session.action,)), None
-    if compact.startswith(("cpm:", "cpw:", "/")):
-        if session is not None:
+        if session.action == "online_event":
+            abandon_native_event_wizard(
+                actor,
+                platform=platform,
+                surface=surface,
+            )
+        else:
             clear_owner_input(
                 user_id=actor.user_id, platform=platform.value, surface=surface
             )
+        return ParsedMemberInteraction("owner-input-cancelled", (session.action,)), None
+    if compact.startswith(("cpm:", "cpw:", "/")):
+        if (
+            session is not None
+            and session.action == "online_event"
+            and compact.startswith("cpm:event-wizard:")
+        ):
+            return parse_native_member_interaction(raw), None
+        if session is not None:
+            if session.action == "online_event":
+                abandon_native_event_wizard(
+                    actor,
+                    platform=platform,
+                    surface=surface,
+                )
+            else:
+                clear_owner_input(
+                    user_id=actor.user_id, platform=platform.value, surface=surface
+                )
         return parse_native_member_interaction(raw), None
     if session is None:
         return parse_native_member_interaction(raw), None
@@ -967,7 +1005,7 @@ def _owner_input_invalid_message(action: str) -> CustomerInteractionMessage:
         "program_lesson": "Напишите: Название | Материал.",
         "publication_draft": "Напишите: Заголовок | Текст публикации.",
         "booking_time": "Напишите дату и время: ДД.ММ.ГГГГ ЧЧ:ММ. При желании добавьте длительность в минутах.",
-        "online_event": EVENT_CREATION_INPUT_GUIDANCE,
+        "online_event": "Ответ не подходит текущему шагу вебинара. Используйте показанные кнопки или формат из подсказки.",
         "price": "Напишите сумму и валюту, например: 5000 RUB.",
         "payment": "Напишите сумму и валюту, например: 3500 RUB | консультация.",
         "member_user": "Напишите номер аккаунта ClientPlatform сотрудника — только цифры. Сотрудник увидит свой номер в разделе «Сотрудники и доступы».",
@@ -1220,6 +1258,13 @@ _NATIVE_PARENT_COMMANDS: dict[str, str] = {
     "event-segment": "cpm:events",
     "event-channel": "cpm:events",
     "event-new": "cpm:events",
+    "event-wizard": "cpm:events",
+    "event-wizard-title-text": "cpm:events",
+    "event-wizard-count-text": "cpm:events",
+    "event-wizard-timezone-text": "cpm:events",
+    "event-wizard-window-text": "cpm:events",
+    "event-wizard-room-text": "cpm:events",
+    "event-wizard-warmup-text": "cpm:events",
     "event-create-text": "cpm:events",
     "event-announce": "cpm:events",
     "event-join": "cpm:events",
@@ -1400,7 +1445,14 @@ def _with_parent_navigation(
     total = sum(len(row) for row in rows)
     if parsed.action == "events":
         back_label = BACK_TO_GROWTH_LABEL
-    elif parsed.action in {"event-settings", "event-followups", "event-segment", "event-channel", "event-new", "event-create-text", "event-announce", "event-join", "event-join-text"} or (
+    elif parsed.action in {
+        "event-settings", "event-followups", "event-segment", "event-channel",
+        "event-new", "event-wizard", "event-wizard-title-text",
+        "event-wizard-count-text", "event-wizard-timezone-text",
+        "event-wizard-window-text", "event-wizard-room-text",
+        "event-wizard-warmup-text", "event-create-text", "event-announce",
+        "event-join", "event-join-text",
+    } or (
         parsed.action in {"owner-input-invalid", "owner-input-cancelled"}
         and parsed.args
         and parsed.args[0] == "online_event"
@@ -5257,10 +5309,32 @@ def _render(
                 actor, parsed.args[0], current_platform=current_platform
             )
         if parsed.action == "event-new":
-            return _event_new_message(
+            return begin_native_event_wizard(
                 actor,
-                current_platform=current_platform,
-                input_surface=input_surface,
+                platform=current_platform,
+                surface=input_surface,
+            )
+        if parsed.action == "event-wizard":
+            return handle_native_event_wizard_action(
+                actor,
+                args=parsed.args,
+                platform=current_platform,
+                surface=input_surface,
+            )
+        if parsed.action in {
+            "event-wizard-title-text",
+            "event-wizard-count-text",
+            "event-wizard-timezone-text",
+            "event-wizard-window-text",
+            "event-wizard-room-text",
+            "event-wizard-warmup-text",
+        }:
+            return handle_native_event_wizard_text(
+                actor,
+                action=parsed.action,
+                args=parsed.args,
+                platform=current_platform,
+                surface=input_surface,
             )
         if parsed.action == "event-create-text":
             if len(parsed.args) != 4:
@@ -5740,6 +5814,12 @@ def render_native_member_interaction(
         )
     else:
         parsed, pending = parse_native_member_interaction(raw_text), None
+    if pending is not None and parsed.action != "owner-input-invalid":
+        clear_owner_input(
+            user_id=current.user_id,
+            platform=current_platform.value,
+            surface="official",
+        )
     interaction = _render(
         current,
         parsed,
@@ -5750,12 +5830,6 @@ def render_native_member_interaction(
         current_platform=current_platform,
     )
     interaction = _with_parent_navigation(interaction, parsed)
-    if pending is not None and parsed.action != "owner-input-invalid":
-        clear_owner_input(
-            user_id=current.user_id,
-            platform=current_platform.value,
-            surface="official",
-        )
     return interaction
 
 
@@ -5786,6 +5860,12 @@ def process_native_member_interaction(
         f"route:{route.id}:event:{provider_event_id}:"
         + f"member:{actor.user_id}:action:{action_key}"
     )
+    if pending is not None and parsed.action != "owner-input-invalid":
+        clear_owner_input(
+            user_id=actor.user_id,
+            platform=route.platform.value,
+            surface=input_surface,
+        )
     interaction = _render(
         actor,
         parsed,
@@ -5796,12 +5876,6 @@ def process_native_member_interaction(
         current_platform=route.platform,
     )
     interaction = _with_parent_navigation(interaction, parsed)
-    if pending is not None and parsed.action != "owner-input-invalid":
-        clear_owner_input(
-            user_id=actor.user_id,
-            platform=route.platform.value,
-            surface=input_surface,
-        )
     with get_db() as conn:
         return DispatchOutboxRepository(conn).materialize_member_interaction(
             business_id=route.business_id,
