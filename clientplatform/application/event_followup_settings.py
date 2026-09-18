@@ -41,6 +41,8 @@ def _cancel_pending_followups(
               idempotency_key LIKE 'event:%:message:post:v4:stage:%'
               OR idempotency_key LIKE 'event:%:message:post:v5:stage:%'
               OR idempotency_key LIKE 'event:%:message:warmup:v2:slot:%'
+               OR idempotency_key LIKE 'event:%:message:warmup-media:v1:slot:%'
+               OR idempotency_key LIKE 'event:%:message:post-media:v1:stage:%'
           )
         """,
         (timestamp, business_id),
@@ -66,6 +68,8 @@ def _cancel_pending_for_channel(
               idempotency_key LIKE 'event:%:message:post:v4:stage:%'
               OR idempotency_key LIKE 'event:%:message:post:v5:stage:%'
               OR idempotency_key LIKE 'event:%:message:warmup:v2:slot:%'
+               OR idempotency_key LIKE 'event:%:message:warmup-media:v1:slot:%'
+               OR idempotency_key LIKE 'event:%:message:post-media:v1:stage:%'
           )
         """,
         (timestamp, business_id, channel),
@@ -105,7 +109,8 @@ def _cancel_pending_for_segment(
         WHERE d.business_id=? AND d.source_kind='event_message'
           AND d.status IN ('pending','retry')
           AND (d.idempotency_key LIKE 'event:%:message:post:v4:stage:%'
-               OR d.idempotency_key LIKE 'event:%:message:post:v5:stage:%')
+               OR d.idempotency_key LIKE 'event:%:message:post:v5:stage:%'
+                OR d.idempotency_key LIKE 'event:%:message:post-media:v1:stage:%')
           AND EXISTS (
               SELECT 1 FROM clientplatform_event_registrations r
               WHERE r.id=d.source_id AND r.business_id=d.business_id
