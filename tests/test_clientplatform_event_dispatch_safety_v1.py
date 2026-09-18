@@ -276,6 +276,54 @@ def test_current_followup_revision_can_cross_when_other_authority_is_valid() -> 
         )
 
 
+def test_revisioned_followup_non_replay_boundary_is_quarantined() -> None:
+    conn = _db()
+    conn.execute(
+        """
+        CREATE TABLE clientplatform_event_content_messages(
+            business_id TEXT,event_id TEXT,stage TEXT,slot_key TEXT,revision INTEGER
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO clientplatform_event_content_messages
+        VALUES('b','e','post_event_followup','no_show:1',2)
+        """
+    )
+    key = "event:e:registration:r:message:post:v5:stage:1:slot:no_show-1:revision:2"
+    conn.execute(
+        "UPDATE provider_dispatch_outbox SET idempotency_key=? WHERE id='d'",
+        (key,),
+    )
+    base = _item()
+    item = ClaimedProviderDispatch(
+        dispatch=replace(base.dispatch, idempotency_key=key),
+        external_subject=base.external_subject,
+        credential_reference=base.credential_reference,
+    )
+    with patch(
+        "clientplatform.infrastructure.event_dispatch_safety.event_commercial_policy_authorized",
+        return_value=True,
+    ):
+        assert mark_event_commercial_non_replay_boundary(
+            conn, item, now="2026-09-12T10:00:01+00:00"
+        )
+    quarantined = quarantine_stale_event_commercial_boundaries(
+        conn,
+        lock_ttl_seconds=60,
+        now=datetime(2026, 9, 12, 10, 2, tzinfo=timezone.utc),
+    )
+    assert quarantined == 1
+    row = conn.execute(
+        "SELECT status,last_error FROM provider_dispatch_outbox WHERE id='d'"
+    ).fetchone()
+    assert tuple(row) == (
+        "dead",
+        "event_commercial_delivery_outcome_ambiguous_manual_reconciliation_required",
+    )
+
+
 def test_revoked_commercial_consent_blocks_provider_boundary() -> None:
     conn = _db(); item = _item()
     conn.execute("UPDATE clientplatform_event_commercial_channel_state SET status='revoked'")
