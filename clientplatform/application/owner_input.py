@@ -108,6 +108,21 @@ def resolve_owner_input(session: OwnerInputSession, value: object) -> OwnerInput
             (event_id, requested_days, position, raw_text),
         )
 
+    if session.action == "event_warmup_days":
+        event_id = str(session.context.get("event_id") or "").strip()
+        maximum = str(session.context.get("maximum") or "").strip()
+        if (
+            not event_id
+            or not maximum.isdigit()
+            or not compact.isdigit()
+            or not 0 <= int(compact) <= int(maximum)
+        ):
+            raise ValueError("event warmup days are invalid")
+        return OwnerInputResolution(
+            "event-warmup-days-text",
+            (event_id, compact),
+        )
+
     if session.action == "online_event":
         step = str(session.context.get("step") or "").strip().casefold()
         if step == "title":
