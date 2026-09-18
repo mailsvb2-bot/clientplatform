@@ -8,6 +8,7 @@ from clientplatform.application.control_callbacks import uuid_token
 from clientplatform.domain.customer_interactions import CustomerInteractionMessage
 from clientplatform.runtime.messenger_switch_links import StaffMessengerSwitchLinkService
 from clientplatform.runtime.native_messenger_setup_links import NativeMessengerSetupLinkService
+from clientplatform.presentation.event_schedule_picker import webinar_venue
 from clientplatform.runtime.secrets import EnvironmentCredentialProvider
 from runtime.messenger_senders import MaxBotSender, MessengerTransportError, VkBotSender
 from services.messenger.outbound import SenderRegistry
@@ -40,6 +41,9 @@ def _clientplatform_runtime_button_links(
                     command=command,
                     business_id=business_id,
                 )
+            elif command.startswith("cpm:event-venue-open:"):
+                venue_key = command.split(":", 3)[3]
+                url = webinar_venue(venue_key).open_url
             else:
                 continue
             if url is None or not str(url).startswith("https://"):
@@ -52,7 +56,7 @@ def _scoped_clientplatform_command(command: str, *, business_id: str) -> str:
     raw = str(command or "").strip()
     if not business_id or not raw.startswith("cpm:"):
         return raw
-    if raw.startswith(("cpm:setup:", "cpm:switch:")):
+    if raw.startswith(("cpm:setup:", "cpm:switch:", "cpm:event-venue-open:")):
         return raw
     scoped = f"cpw:act:{uuid_token(business_id)}:{raw}"
     if len(scoped) > 180:
@@ -183,7 +187,7 @@ async def _send_clientplatform_interaction(
             button.command
             for row in interaction.rows
             for button in row
-            if button.command.startswith(("cpm:setup:", "cpm:switch:"))
+            if button.command.startswith(("cpm:setup:", "cpm:switch:", "cpm:event-venue-open:"))
         }
         if link_commands and not business_id:
             raise ValueError("ClientPlatform linked interaction is missing business scope")
