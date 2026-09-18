@@ -1,9 +1,17 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sqlite3
+
+try:
+    from psycopg import Error as PostgresError
+except ImportError:  # pragma: no cover - dependency-light boundary
+    class PostgresError(Exception):
+        pass
 
 from clientplatform.application.program_media import (
     ProgramMediaCleanupQueueError,
+    ProgramMediaStoreError,
     queue_program_media_cleanup,
     store_program_media,
 )
@@ -12,6 +20,10 @@ from clientplatform.domain.programs import ContentKind
 from clientplatform.domain.tenancy import TenantContext
 from clientplatform.infrastructure.event_content_repository import EventContentAssetRepository
 from services.db import get_db, get_db_ro
+
+
+class EventContentAssetError(RuntimeError):
+    """Sanitized failure to persist or materialize an event visual asset."""
 
 
 def get_event_content_asset(
@@ -58,24 +70,27 @@ def set_event_content_asset_reference(
     selected_kind = kind if isinstance(kind, ContentKind) else ContentKind(str(kind))
     if selected_kind not in {ContentKind.IMAGE, ContentKind.VIDEO}:
         raise ValueError("event content asset must be image or video")
-    with get_db_ro() as conn:
-        previous = EventContentAssetRepository(conn).get(
-            actor=actor,
-            event_id=event_id,
-            stage=stage,
-            slot_key=slot_key,
-        )
-    with get_db() as conn:
-        stored = EventContentAssetRepository(conn).upsert(
-            actor=actor,
-            event_id=event_id,
-            stage=stage,
-            slot_key=slot_key,
-            kind=selected_kind.value,
-            media_reference=media_reference,
-            source=source,
-            source_ref=source_ref,
-        )
+    try:
+        with get_db_ro() as conn:
+            previous = EventContentAssetRepository(conn).get(
+                actor=actor,
+                event_id=event_id,
+                stage=stage,
+                slot_key=slot_key,
+            )
+        with get_db() as conn:
+            stored = EventContentAssetRepository(conn).upsert(
+                actor=actor,
+                event_id=event_id,
+                stage=stage,
+                slot_key=slot_key,
+                kind=selected_kind.value,
+                media_reference=media_reference,
+                source=source,
+                source_ref=source_ref,
+            )
+    except (sqlite3.Error, PostgresError, OSError) as exc:
+        raise EventContentAssetError("event_content_asset_persist_failed") from exc
     if previous is not None and previous.media_reference != stored.media_reference:
         _queue_replaced(
             previous.media_reference,
@@ -114,13 +129,16 @@ def store_generated_event_content_asset(
         and current.kind == selected_kind.value
     ):
         return current
-    stored_media = store_program_media(
-        path,
-        business_id=actor.business_id,
-        content_kind=selected_kind,
-        content_type=content_type,
-        extension=extension,
-    )
+    try:
+        stored_media = store_program_media(
+            path,
+            business_id=actor.business_id,
+            content_kind=selected_kind,
+            content_type=content_type,
+            extension=extension,
+        )
+    except ProgramMediaStoreError as exc:
+        raise EventContentAssetError("event_content_asset_store_failed") from exc
     try:
         return set_event_content_asset_reference(
             actor=actor,
@@ -142,6 +160,7 @@ def store_generated_event_content_asset(
 
 
 __all__ = [
+    "EventContentAssetError",
     "get_event_content_asset",
     "set_event_content_asset_reference",
     "store_generated_event_content_asset",
