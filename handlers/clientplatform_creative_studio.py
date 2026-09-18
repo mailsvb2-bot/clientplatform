@@ -26,7 +26,10 @@ from clientplatform.application.creative_generation import (
     remember_creative_generation_job,
 )
 from clientplatform.application.creative_studio_publication import load_goal_visual_brand
-from clientplatform.application.event_content_assets import store_generated_event_content_asset
+from clientplatform.application.event_content_assets import (
+    EventContentAssetError,
+    store_generated_event_content_asset,
+)
 from clientplatform.application.visual_creatives import (
     VisualCreativeError,
     create_business_visual_from_frozen_payload,
@@ -368,7 +371,7 @@ async def _finish_visual(
                     reply_markup=_delivery_recovery_rows(token, receipt, ambiguous=True),
                 )
                 return True
-    except (OSError, VisualCreativeError):
+    except (OSError, VisualCreativeError, EventContentAssetError, ValueError):
         await target.answer(
             "Генератор завершил визуал, но файл сейчас не удалось получить. "
             "Можно проверить файл ещё раз или завершить этот результат и создать новый.",
