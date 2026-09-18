@@ -156,6 +156,7 @@ def ensure(c: sqlite3.Connection) -> None:
             channel_email INTEGER NOT NULL DEFAULT 1,
             channel_max INTEGER NOT NULL DEFAULT 1,
             channel_vk INTEGER NOT NULL DEFAULT 1,
+            channel_telegram INTEGER NOT NULL DEFAULT 1,
             settings_epoch INTEGER NOT NULL DEFAULT 1,
             updated_by_member_id TEXT NOT NULL,
             created_at TEXT NOT NULL,
@@ -171,6 +172,7 @@ def ensure(c: sqlite3.Connection) -> None:
             CHECK(channel_email IN (0,1)),
             CHECK(channel_max IN (0,1)),
             CHECK(channel_vk IN (0,1)),
+            CHECK(channel_telegram IN (0,1)),
             CHECK(settings_epoch >= 1)
         )
         """
@@ -191,9 +193,14 @@ def ensure(c: sqlite3.Connection) -> None:
         "channel_email",
         "channel_max",
         "channel_vk",
+        "channel_telegram",
     ):
         if column not in followup_columns:
+            # Existing businesses must not silently gain a newly introduced
+            # external delivery channel. Legacy strategy remains unchanged until
+            # the owner explicitly enables Telegram.
+            default_value = 0 if column == "channel_telegram" else 1
             c.execute(
                 f"ALTER TABLE clientplatform_event_followup_settings "  # nosec B608
-                f"ADD COLUMN {column} INTEGER NOT NULL DEFAULT 1"
+                f"ADD COLUMN {column} INTEGER NOT NULL DEFAULT {default_value}"
             )

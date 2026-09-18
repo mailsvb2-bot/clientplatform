@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from clientplatform.domain.event_content import EventContentMode
 from clientplatform.domain.tenancy import TenantPermissionDenied
 from handlers import clientplatform_events as events
 
@@ -125,7 +126,7 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
         text = target.answer.await_args.args[0]
         rows = target.answer.await_args.kwargs["reply_markup"]
         callbacks = [callback for row in rows for _label, callback in row]
-        self.assertIn("⚙️ Автосообщения после вебинара", text)
+        self.assertIn("⚙️ Автосообщения вебинара", text)
         self.assertIn(f"cpev:followups:on:{TOKEN}", callbacks)
         self.assertEqual(rows[-1], [("🎥 К вебинарам", f"cpev:home:{TOKEN}")])
 
@@ -326,6 +327,10 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             rows[1],
+            [("🗓 Контент-план", f"cpev:content:{EVENT_TOKEN}:{TOKEN}")],
+        )
+        self.assertEqual(
+            rows[2],
             [("✨ Сделать анонс", f"cpev:announce:{EVENT_TOKEN}:{TOKEN}")],
         )
 
@@ -352,6 +357,7 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
         state.get_data.return_value = {"event_business_id": BUSINESS_ID}
         actor = MagicMock(unsafe=True)
         created = SimpleNamespace(
+            event_id=EVENT_ID,
             provider_key="future_stage_2030",
             email_notifications_enabled=True,
             registration_url=lambda base: f"{base}/e/public-slug",
@@ -381,8 +387,11 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("https://clientplatform.example.test/e/public-slug", answer)
         self.assertIn("E-mail напоминания включены", answer)
         post_create_rows = keyboard.call_args.args[0]
-        self.assertEqual(post_create_rows[0], [("🎥 К вебинарам", f"cpev:home:{TOKEN}")])
-        self.assertIn(("🎥 Создать ещё", f"cpev:new:{TOKEN}"), post_create_rows[1])
+        callbacks = [callback for row in post_create_rows for _label, callback in row]
+        self.assertIn(f"cpev:content:{TOKEN}:{TOKEN}", callbacks)
+        self.assertIn(f"cpev:announce:{TOKEN}:{TOKEN}", callbacks)
+        self.assertIn(f"cpev:home:{TOKEN}", callbacks)
+        self.assertIn(f"cpev:new:{TOKEN}", callbacks)
 
     async def test_receive_details_supports_external_provider_without_offer_or_email(self) -> None:
         message = _message("Эфир | 15.09.2026 19:00 | https://stream.example/room | -")
@@ -623,7 +632,12 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
         rows = message.answer.await_args.kwargs["reply_markup"]
         callbacks = [callback for row in rows for _label, callback in row]
         self.assertIn(f"cpev:join:{EVENT_TOKEN}:{TOKEN}", callbacks)
+        self.assertIn(f"cpev:content:{EVENT_TOKEN}:{TOKEN}", callbacks)
         self.assertIn(f"cpev:announce:{EVENT_TOKEN}:{TOKEN}", callbacks)
+        self.assertEqual(
+            callbacks.count(f"cpev:content:{EVENT_TOKEN}:{TOKEN}"),
+            1,
+        )
         self.assertIn("ссылку на эфир можно добавить позже", message.answer.await_args.args[0].casefold())
 
     async def test_announcement_callback_covers_success_stale_and_safe_failure(self) -> None:
@@ -767,6 +781,564 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
             success.answer.await_args.kwargs["reply_markup"],
             [[("🎥 К вебинарам", f"cpev:home:{TOKEN}")]],
         )
+
+
+    def test_webinar_callback_payloads_fit_telegram_limit(self) -> None:
+        samples = (
+            f"cpev:content:{EVENT_TOKEN}:{TOKEN}",
+            f"cpev:fp:{EVENT_TOKEN}:{TOKEN}",
+            f"cpev:ws:{EVENT_TOKEN}:{TOKEN}",
+            f"cpev:wd:{EVENT_TOKEN}:14:{TOKEN}",
+            f"cpev:wo:{EVENT_TOKEN}:{TOKEN}",
+            f"cpev:wt:{EVENT_TOKEN}:14:{TOKEN}",
+            f"cpev:we:{EVENT_TOKEN}:14:{TOKEN}",
+            f"cpev:wr:{EVENT_TOKEN}:14:{TOKEN}",
+            f"cpev:announce:{EVENT_TOKEN}:{TOKEN}",
+        )
+        for payload in samples:
+            self.assertLessEqual(len(payload.encode("utf-8")), 64, payload)
+
+    def test_content_plan_helpers_cover_warmup_and_empty_states(self) -> None:
+        item = SimpleNamespace(id=EVENT_ID, title="Вебинар")
+        snapshot = SimpleNamespace(items=(SimpleNamespace(id="other"), item))
+        self.assertIs(events._event_item(snapshot, EVENT_ID), item)
+        with self.assertRaisesRegex(ValueError, "вебинар не найден"):
+            events._event_item(snapshot, "missing")
+
+        def token(value: str) -> str:
+            return EVENT_TOKEN if value == EVENT_ID else TOKEN
+
+        with patch.object(events.control, "_uuid_token", side_effect=token):
+            warm = events._content_plan_rows(
+                event_id=EVENT_ID,
+                business_id=BUSINESS_ID,
+                has_warmup=True,
+            )
+            empty = events._content_plan_rows(
+                event_id=EVENT_ID,
+                business_id=BUSINESS_ID,
+                has_warmup=False,
+            )
+        self.assertIn("cpev:wt:", warm[0][0][1])
+        self.assertIn("Изменить дни", warm[1][0][0])
+        self.assertIn("Настроить прогрев", empty[0][0][0])
+        self.assertEqual(warm[-1][0][1], f"cpev:home:{TOKEN}")
+
+    async def test_send_content_plan_renders_all_autosend_states(self) -> None:
+        actor = MagicMock(unsafe=True)
+        item = SimpleNamespace(id=EVENT_ID, title="Вебинар")
+        modes = SimpleNamespace(
+            warmup=EventContentMode.TEXT,
+            event_day=EventContentMode.TEXT_WITH_IMAGE,
+            post_event=EventContentMode.TEXT_IN_IMAGE,
+        )
+        scheduled = datetime(2026, 9, 20, 9, 0, tzinfo=timezone.utc)
+        draft1 = SimpleNamespace(
+            publish_date=scheduled.date(),
+            scheduled_at=scheduled,
+            position=1,
+            text="Первый",
+            source="template",
+        )
+        draft2 = SimpleNamespace(
+            publish_date=datetime(2026, 9, 21, tzinfo=timezone.utc).date(),
+            scheduled_at=scheduled,
+            position=2,
+            text="Второй",
+            source="owner",
+        )
+
+        def token(value: str) -> str:
+            return EVENT_TOKEN if value == EVENT_ID else TOKEN
+
+        cases = (
+            (True, True, (draft1, draft2), "🟢 включены", "2 дн."),
+            (True, False, (draft1,), "🟡 включены", "1 дн."),
+            (False, False, (), "⚪️ выключены", "не настроен"),
+        )
+        for enabled, effective, drafts, status, warmup_text in cases:
+            target = SimpleNamespace(answer=AsyncMock())
+            snapshot = SimpleNamespace(
+                items=(item,),
+                commercial_followups_enabled=enabled,
+                commercial_followups_effective=effective,
+            )
+            plan = SimpleNamespace(
+                drafts=drafts,
+                requested_days=len(drafts),
+                timezone_name="Europe/Moscow",
+            )
+            with (
+                patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
+                patch.object(events, "resolve_cockpit_events", return_value=snapshot),
+                patch.object(events, "get_saved_event_warmup_plan", return_value=plan),
+                patch.object(events, "get_event_content_plan", return_value=modes),
+                patch.object(events.control, "_uuid_token", side_effect=token),
+                patch.object(events.control, "_keyboard", side_effect=lambda rows: rows),
+            ):
+                await events._send_event_content_plan(
+                    target,
+                    user_id=101,
+                    business_id=BUSINESS_ID,
+                    event_id=EVENT_ID,
+                )
+            text = target.answer.await_args.args[0]
+            self.assertIn(status, text)
+            self.assertIn(warmup_text, text)
+            self.assertIn("24 часа, 3 часа и 15 минут", text)
+        self.assertGreaterEqual(actor.assert_can_manage_business.call_count, 3)
+
+    async def test_warmup_preview_covers_navigation_owner_and_empty_plan(self) -> None:
+        actor = MagicMock(unsafe=True)
+        target = SimpleNamespace(answer=AsyncMock())
+        empty = SimpleNamespace(drafts=(), requested_days=0, timezone_name="Europe/Moscow")
+        with (
+            patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(events, "get_saved_event_warmup_plan", return_value=empty),
+            patch.object(events, "_send_event_content_plan", new=AsyncMock()) as fallback,
+        ):
+            await events._send_warmup_preview(
+                target,
+                user_id=101,
+                business_id=BUSINESS_ID,
+                event_id=EVENT_ID,
+                position=1,
+            )
+        fallback.assert_awaited_once()
+
+        drafts = tuple(
+            SimpleNamespace(
+                position=index,
+                publish_date=datetime(2026, 9, 19 + index, tzinfo=timezone.utc).date(),
+                scheduled_at=datetime(2026, 9, 19 + index, 9, tzinfo=timezone.utc),
+                text=f"Текст {index}",
+                source="owner" if index == 2 else "template",
+            )
+            for index in (1, 2, 3)
+        )
+        plan = SimpleNamespace(
+            drafts=drafts,
+            requested_days=3,
+            timezone_name="Europe/Moscow",
+        )
+
+        def token(value: str) -> str:
+            return EVENT_TOKEN if value == EVENT_ID else TOKEN
+
+        for position, expected_source in ((1, "Автотекст"), (2, "Ваш текст"), (99, "Автотекст")):
+            target = SimpleNamespace(answer=AsyncMock())
+            with (
+                patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
+                patch.object(events, "get_saved_event_warmup_plan", return_value=plan),
+                patch.object(events.control, "_uuid_token", side_effect=token),
+                patch.object(events.control, "_keyboard", side_effect=lambda rows: rows),
+            ):
+                await events._send_warmup_preview(
+                    target,
+                    user_id=101,
+                    business_id=BUSINESS_ID,
+                    event_id=EVENT_ID,
+                    position=position,
+                )
+            text = target.answer.await_args.args[0]
+            rows = target.answer.await_args.kwargs["reply_markup"]
+            self.assertIn(expected_source, text)
+            callbacks = [callback for row in rows for _label, callback in row]
+            self.assertTrue(any(callback.startswith("cpev:we:") for callback in callbacks))
+            if position == 2:
+                self.assertTrue(any(callback.startswith("cpev:wr:") for callback in callbacks))
+                self.assertTrue(any(label == "⬅️" for row in rows for label, _ in row))
+                self.assertTrue(any(label == "➡️" for row in rows for label, _ in row))
+
+    async def test_followup_plan_uses_canonical_templates_and_navigation(self) -> None:
+        target = SimpleNamespace(answer=AsyncMock())
+        snapshot = SimpleNamespace(items=(SimpleNamespace(id=EVENT_ID, title="Вебинар"),))
+        previews = (
+            SimpleNamespace(
+                segment="no_show",
+                segment_label="Не пришли",
+                stage=1,
+                offset_label="+1 час",
+                text="{name}, про «{title}»: {offer}",
+            ),
+            SimpleNamespace(
+                segment="no_show",
+                segment_label="Не пришли",
+                stage=2,
+                offset_label="+24 часа",
+                text="Ещё раз {offer}",
+            ),
+            SimpleNamespace(
+                segment="attended_unpaid",
+                segment_label="Были",
+                stage=1,
+                offset_label="+1 час",
+                text="{name}: {offer}",
+            ),
+        )
+
+        def token(value: str) -> str:
+            return EVENT_TOKEN if value == EVENT_ID else TOKEN
+
+        with (
+            patch.object(events, "resolve_cockpit_events", return_value=snapshot),
+            patch.object(events, "event_followup_template_previews", return_value=previews),
+            patch.object(events.control, "_uuid_token", side_effect=token),
+            patch.object(events.control, "_keyboard", side_effect=lambda rows: rows),
+        ):
+            await events._send_followup_plan(
+                target,
+                user_id=101,
+                business_id=BUSINESS_ID,
+                event_id=EVENT_ID,
+            )
+        text = target.answer.await_args.args[0]
+        self.assertEqual(text.count("• Не пришли:"), 1)
+        self.assertEqual(text.count("• Были:"), 1)
+        self.assertIn("Имя", text)
+        self.assertIn("[ссылка на предложение]", text)
+        rows = target.answer.await_args.kwargs["reply_markup"]
+        self.assertEqual(rows[-1][0][1], f"cpev:content:{EVENT_TOKEN}:{TOKEN}")
+
+    async def test_content_plan_callbacks_cover_stale_and_success_paths(self) -> None:
+        reply = SimpleNamespace(answer=AsyncMock())
+
+        def decode(value: str) -> str:
+            return EVENT_ID if value == EVENT_TOKEN else BUSINESS_ID
+
+        stale = _callback()
+        stale.data = "cpev:content:broken"
+        await events.open_event_content_plan(stale)
+        stale.answer.assert_awaited_once_with("Кнопка устарела", show_alert=True)
+
+        callback = _callback()
+        callback.data = f"cpev:content:{EVENT_TOKEN}:{TOKEN}"
+        with (
+            patch.object(events.control, "_token_uuid", side_effect=decode),
+            patch.object(events.control, "_callback_message", return_value=reply),
+            patch.object(events, "_send_event_content_plan", new=AsyncMock()) as send,
+        ):
+            await events.open_event_content_plan(callback)
+        callback.answer.assert_awaited_once_with()
+        send.assert_awaited_once_with(
+            reply,
+            user_id=101,
+            business_id=BUSINESS_ID,
+            event_id=EVENT_ID,
+        )
+
+        stale_follow = _callback()
+        stale_follow.data = "cpev:fp:broken"
+        await events.open_followup_content_plan(stale_follow)
+        stale_follow.answer.assert_awaited_once_with("Кнопка устарела", show_alert=True)
+
+        follow = _callback()
+        follow.data = f"cpev:fp:{EVENT_TOKEN}:{TOKEN}"
+        with (
+            patch.object(events.control, "_token_uuid", side_effect=decode),
+            patch.object(events.control, "_callback_message", return_value=reply),
+            patch.object(events, "_send_followup_plan", new=AsyncMock()) as send_follow,
+        ):
+            await events.open_followup_content_plan(follow)
+        follow.answer.assert_awaited_once_with()
+        send_follow.assert_awaited_once_with(
+            reply,
+            user_id=101,
+            business_id=BUSINESS_ID,
+            event_id=EVENT_ID,
+        )
+
+    async def test_warmup_setup_covers_quick_custom_and_zero_windows(self) -> None:
+        actor = MagicMock(unsafe=True)
+
+        def decode(value: str) -> str:
+            return EVENT_ID if value == EVENT_TOKEN else BUSINESS_ID
+
+        def token(value: str) -> str:
+            return EVENT_TOKEN if value == EVENT_ID else TOKEN
+
+        for maximum in (6, 0):
+            callback = _callback()
+            callback.data = f"cpev:ws:{EVENT_TOKEN}:{TOKEN}"
+            state = AsyncMock()
+            reply = SimpleNamespace(answer=AsyncMock())
+            with (
+                patch.object(events.control, "_token_uuid", side_effect=decode),
+                patch.object(events.control, "_uuid_token", side_effect=token),
+                patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
+                patch.object(
+                    events,
+                    "get_event_warmup_window",
+                    return_value=SimpleNamespace(max_warmup_days=maximum),
+                ),
+                patch.object(events.control, "_callback_message", return_value=reply),
+                patch.object(events.control, "_keyboard", side_effect=lambda rows: rows),
+            ):
+                await events.open_warmup_setup(callback, state)
+            rows = reply.answer.await_args.kwargs["reply_markup"]
+            labels = [label for row in rows for label, _ in row]
+            self.assertIn("0", labels)
+            if maximum:
+                self.assertIn("6", labels)
+                self.assertIn("✍️ Другое число", labels)
+            else:
+                self.assertNotIn("✍️ Другое число", labels)
+            state.clear.assert_awaited_once_with()
+            callback.answer.assert_awaited_once_with()
+
+        stale = _callback()
+        stale.data = "cpev:ws:broken"
+        await events.open_warmup_setup(stale, AsyncMock())
+        stale.answer.assert_awaited_once_with("Кнопка устарела", show_alert=True)
+
+    async def test_set_warmup_days_covers_stale_validation_and_success(self) -> None:
+        actor = MagicMock(unsafe=True)
+        reply = SimpleNamespace(answer=AsyncMock())
+
+        def decode(value: str) -> str:
+            return EVENT_ID if value == EVENT_TOKEN else BUSINESS_ID
+
+        stale = _callback()
+        stale.data = f"cpev:wd:{EVENT_TOKEN}:x:{TOKEN}"
+        await events.set_warmup_days(stale, AsyncMock())
+        stale.answer.assert_awaited_once_with("Кнопка устарела", show_alert=True)
+
+        invalid = _callback()
+        invalid.data = f"cpev:wd:{EVENT_TOKEN}:9:{TOKEN}"
+        with (
+            patch.object(events.control, "_token_uuid", side_effect=decode),
+            patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(events, "save_event_warmup_plan", side_effect=ValueError("слишком много")),
+        ):
+            await events.set_warmup_days(invalid, AsyncMock())
+        invalid.answer.assert_awaited_once_with("слишком много", show_alert=True)
+
+        callback = _callback()
+        callback.data = f"cpev:wd:{EVENT_TOKEN}:3:{TOKEN}"
+        state = AsyncMock()
+        with (
+            patch.object(events.control, "_token_uuid", side_effect=decode),
+            patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(events, "save_event_warmup_plan") as save,
+            patch.object(events.control, "_callback_message", return_value=reply),
+            patch.object(events, "_send_event_content_plan", new=AsyncMock()) as refresh,
+        ):
+            await events.set_warmup_days(callback, state)
+        save.assert_called_once_with(actor=actor, event_id=EVENT_ID, requested_days=3)
+        state.clear.assert_awaited_once_with()
+        callback.answer.assert_awaited_once_with("Прогрев сохранён")
+        refresh.assert_awaited_once()
+
+    async def test_custom_warmup_days_input_covers_cancel_invalid_and_success(self) -> None:
+        actor = MagicMock(unsafe=True)
+        reply = SimpleNamespace(answer=AsyncMock())
+
+        def decode(value: str) -> str:
+            return EVENT_ID if value == EVENT_TOKEN else BUSINESS_ID
+
+        stale = _callback()
+        stale.data = "cpev:wo:broken"
+        await events.request_custom_warmup_days(stale, AsyncMock())
+        stale.answer.assert_awaited_once_with("Кнопка устарела", show_alert=True)
+
+        callback = _callback()
+        callback.data = f"cpev:wo:{EVENT_TOKEN}:{TOKEN}"
+        state = AsyncMock()
+        with (
+            patch.object(events.control, "_token_uuid", side_effect=decode),
+            patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(
+                events,
+                "get_event_warmup_window",
+                return_value=SimpleNamespace(max_warmup_days=8),
+            ),
+            patch.object(events.control, "_callback_message", return_value=reply),
+        ):
+            await events.request_custom_warmup_days(callback, state)
+        state.set_state.assert_awaited_once_with(events.ClientPlatformEventState.waiting_warmup_days)
+        state.update_data.assert_awaited_once_with(
+            event_business_id=BUSINESS_ID,
+            content_event_id=EVENT_ID,
+            max_warmup_days=8,
+        )
+
+        cancel = _message("Отмена")
+        cancel_state = AsyncMock()
+        cancel_state.get_data.return_value = {
+            "event_business_id": BUSINESS_ID,
+            "content_event_id": EVENT_ID,
+            "max_warmup_days": 8,
+        }
+        with patch.object(events, "_send_event_content_plan", new=AsyncMock()) as send:
+            await events.receive_custom_warmup_days(cancel, cancel_state)
+        cancel_state.clear.assert_awaited_once_with()
+        send.assert_awaited_once()
+
+        invalid = _message("девять")
+        invalid_state = AsyncMock()
+        invalid_state.get_data.return_value = {
+            "event_business_id": BUSINESS_ID,
+            "content_event_id": EVENT_ID,
+            "max_warmup_days": 8,
+        }
+        await events.receive_custom_warmup_days(invalid, invalid_state)
+        self.assertIn("Нужно число", invalid.answer.await_args.args[0])
+        invalid_state.clear.assert_not_awaited()
+
+        success = _message("6")
+        success_state = AsyncMock()
+        success_state.get_data.return_value = {
+            "event_business_id": BUSINESS_ID,
+            "content_event_id": EVENT_ID,
+            "max_warmup_days": 8,
+        }
+        with (
+            patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(events, "save_event_warmup_plan") as save,
+            patch.object(events, "_send_event_content_plan", new=AsyncMock()) as send,
+        ):
+            await events.receive_custom_warmup_days(success, success_state)
+        save.assert_called_once_with(actor=actor, event_id=EVENT_ID, requested_days=6)
+        success_state.clear.assert_awaited_once_with()
+        send.assert_awaited_once()
+
+    async def test_warmup_text_callbacks_cover_edit_cancel_validation_reset_and_success(self) -> None:
+        actor = MagicMock(unsafe=True)
+        reply = SimpleNamespace(answer=AsyncMock())
+
+        def decode(value: str) -> str:
+            return EVENT_ID if value == EVENT_TOKEN else BUSINESS_ID
+
+        stale_open = _callback()
+        stale_open.data = f"cpev:wt:{EVENT_TOKEN}:x:{TOKEN}"
+        await events.open_warmup_text(stale_open)
+        stale_open.answer.assert_awaited_once_with("Кнопка устарела", show_alert=True)
+
+        opened = _callback()
+        opened.data = f"cpev:wt:{EVENT_TOKEN}:2:{TOKEN}"
+        with (
+            patch.object(events.control, "_token_uuid", side_effect=decode),
+            patch.object(events.control, "_callback_message", return_value=reply),
+            patch.object(events, "_send_warmup_preview", new=AsyncMock()) as preview,
+        ):
+            await events.open_warmup_text(opened)
+        preview.assert_awaited_once_with(
+            reply,
+            user_id=101,
+            business_id=BUSINESS_ID,
+            event_id=EVENT_ID,
+            position=2,
+        )
+
+        stale_edit = _callback()
+        stale_edit.data = f"cpev:we:{EVENT_TOKEN}:x:{TOKEN}"
+        await events.edit_warmup_text(stale_edit, AsyncMock())
+        stale_edit.answer.assert_awaited_once_with("Кнопка устарела", show_alert=True)
+
+        edit = _callback()
+        edit.data = f"cpev:we:{EVENT_TOKEN}:2:{TOKEN}"
+        edit_state = AsyncMock()
+        with (
+            patch.object(events.control, "_token_uuid", side_effect=decode),
+            patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(events.control, "_callback_message", return_value=reply),
+        ):
+            await events.edit_warmup_text(edit, edit_state)
+        actor.assert_can_manage_business.assert_called()
+        edit_state.set_state.assert_awaited_once_with(events.ClientPlatformEventState.waiting_content_text)
+        edit_state.update_data.assert_awaited_once_with(
+            event_business_id=BUSINESS_ID,
+            content_event_id=EVENT_ID,
+            content_position=2,
+        )
+
+        cancel = _message("Отмена")
+        cancel_state = AsyncMock()
+        cancel_state.get_data.return_value = {
+            "event_business_id": BUSINESS_ID,
+            "content_event_id": EVENT_ID,
+            "content_position": 2,
+        }
+        with patch.object(events, "_send_warmup_preview", new=AsyncMock()) as preview:
+            await events.receive_warmup_text(cancel, cancel_state)
+        cancel_state.clear.assert_awaited_once_with()
+        preview.assert_awaited_once()
+
+        invalid = _message("")
+        invalid_state = AsyncMock()
+        invalid_state.get_data.return_value = {
+            "event_business_id": BUSINESS_ID,
+            "content_event_id": EVENT_ID,
+            "content_position": 2,
+        }
+        await events.receive_warmup_text(invalid, invalid_state)
+        self.assertIn("от 1 до 3500", invalid.answer.await_args.args[0])
+
+        rejected = _message("Мой текст")
+        rejected_state = AsyncMock()
+        rejected_state.get_data.return_value = {
+            "event_business_id": BUSINESS_ID,
+            "content_event_id": EVENT_ID,
+            "content_position": 2,
+        }
+        with (
+            patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(events, "set_event_warmup_text", side_effect=ValueError("нет плана")),
+        ):
+            await events.receive_warmup_text(rejected, rejected_state)
+        self.assertEqual(rejected.answer.await_args.args[0], "нет плана")
+        rejected_state.clear.assert_not_awaited()
+
+        saved = _message("Полностью свой текст {name}")
+        saved_state = AsyncMock()
+        saved_state.get_data.return_value = {
+            "event_business_id": BUSINESS_ID,
+            "content_event_id": EVENT_ID,
+            "content_position": 2,
+        }
+        with (
+            patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(events, "set_event_warmup_text") as setter,
+            patch.object(events, "_send_warmup_preview", new=AsyncMock()) as preview,
+        ):
+            await events.receive_warmup_text(saved, saved_state)
+        setter.assert_called_once_with(
+            actor=actor,
+            event_id=EVENT_ID,
+            position=2,
+            text="Полностью свой текст {name}",
+        )
+        saved_state.clear.assert_awaited_once_with()
+        preview.assert_awaited_once()
+
+        stale_reset = _callback()
+        stale_reset.data = f"cpev:wr:{EVENT_TOKEN}:x:{TOKEN}"
+        await events.reset_warmup_text(stale_reset)
+        stale_reset.answer.assert_awaited_once_with("Кнопка устарела", show_alert=True)
+
+        reset_error = _callback()
+        reset_error.data = f"cpev:wr:{EVENT_TOKEN}:2:{TOKEN}"
+        with (
+            patch.object(events.control, "_token_uuid", side_effect=decode),
+            patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(events, "reset_event_warmup_text", side_effect=ValueError("нет текста")),
+        ):
+            await events.reset_warmup_text(reset_error)
+        reset_error.answer.assert_awaited_once_with("нет текста", show_alert=True)
+
+        reset = _callback()
+        reset.data = f"cpev:wr:{EVENT_TOKEN}:2:{TOKEN}"
+        with (
+            patch.object(events.control, "_token_uuid", side_effect=decode),
+            patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(events, "reset_event_warmup_text") as resetter,
+            patch.object(events.control, "_callback_message", return_value=reply),
+            patch.object(events, "_send_warmup_preview", new=AsyncMock()) as preview,
+        ):
+            await events.reset_warmup_text(reset)
+        resetter.assert_called_once_with(actor=actor, event_id=EVENT_ID, position=2)
+        reset.answer.assert_awaited_once_with("Автотекст восстановлен")
+        preview.assert_awaited_once()
 
 
 if __name__ == "__main__":

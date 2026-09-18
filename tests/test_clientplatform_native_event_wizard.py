@@ -82,7 +82,7 @@ class NativeEventWizardTests(unittest.TestCase):
             ) as append,
             patch.object(wizard, "publish_multisession_online_event_draft", return_value=published) as publish,
             patch.object(wizard, "get_event_warmup_window", return_value=window),
-            patch.object(wizard, "get_event_warmup_plan", return_value=warmup),
+            patch.object(wizard, "save_event_warmup_plan", return_value=warmup),
             patch.object(wizard, "list_event_sessions", return_value=()),
             patch.object(wizard, "set_event_content_mode", content_modes),
             patch.object(wizard, "clear_owner_input") as clear,
@@ -197,7 +197,7 @@ class NativeEventWizardTests(unittest.TestCase):
             )
             self.assertIn("https://clientplatform.example.test/e/demo", final.text)
             commands = self._commands(final)
-            self.assertTrue(any(command.startswith("cpm:event-wizard:warmup-preview:") for command in commands))
+            self.assertTrue(any(command.startswith("cpm:event-wizard:wp:") for command in commands))
             self.assertIn(f"cpm:event-announce:{EVENT_ID}", commands)
             clear.assert_called_once()
             self.assertEqual(content_modes.call_count, 3)
@@ -274,6 +274,104 @@ class NativeEventWizardTests(unittest.TestCase):
             )
         self.assertIn("не выдаёт", message.text)
         self.assertEqual(self.store["step"], "venue")
+
+
+def test_native_warmup_preview_edit_reset_and_post_creation_setup() -> None:
+    actor = TenantContext(
+        business_id=BUSINESS_ID,
+        user_id=101,
+        membership_id="33333333-3333-4333-8333-333333333333",
+        role=PlatformRole.OWNER,
+    )
+    plan = SimpleNamespace(
+        requested_days=2,
+        drafts=(
+            SimpleNamespace(
+                position=1,
+                publish_date=date(2026, 9, 20),
+                text="Мой прогрев",
+                source="owner",
+            ),
+            SimpleNamespace(
+                position=2,
+                publish_date=date(2026, 9, 21),
+                text="Автотекст",
+                source="template",
+            ),
+        ),
+    )
+    with patch.object(wizard, "get_saved_event_warmup_plan", return_value=plan):
+        preview = wizard._warmup_preview(
+            actor,
+            event_id=EVENT_ID,
+            requested_days=2,
+            page=0,
+        )
+    commands = NativeEventWizardTests._commands(preview)
+    assert any(":we:" in command for command in commands)
+    assert any(":wr:" in command for command in commands)
+    assert "Источник: Ваш текст" in preview.text
+
+    with (
+        patch.object(
+            wizard,
+            "get_event_warmup_window",
+            return_value=SimpleNamespace(max_warmup_days=6),
+        ),
+        patch.object(wizard, "begin_owner_input") as begin,
+    ):
+        setup = wizard.handle_native_event_wizard_action(
+            actor,
+            args=("ws", EVENT_ID),
+            platform=ConnectionPlatform.MAX,
+            surface="official",
+        )
+        assert any(":wset:" in command for command in NativeEventWizardTests._commands(setup))
+        custom = wizard.handle_native_event_wizard_action(
+            actor,
+            args=("wc", EVENT_ID, "6"),
+            platform=ConnectionPlatform.MAX,
+            surface="official",
+        )
+        assert "число дней" in custom.text
+        assert begin.call_args.kwargs["action"] == "event_warmup_days"
+
+    with (
+        patch.object(wizard, "set_event_warmup_text") as save_text,
+        patch.object(wizard, "_warmup_preview", return_value=SimpleNamespace(text="saved", rows=())) as render,
+    ):
+        saved = wizard.handle_native_event_wizard_text(
+            actor,
+            action="event-we-text",
+            args=(EVENT_ID, "2", "1", "Полностью свой текст"),
+            platform=ConnectionPlatform.VK,
+            surface="official",
+        )
+    assert saved.text == "saved"
+    save_text.assert_called_once_with(
+        actor=actor,
+        event_id=EVENT_ID,
+        position=1,
+        text="Полностью свой текст",
+    )
+    render.assert_called_once()
+
+
+
+def test_native_webinar_button_commands_fit_compact_transport_boundary() -> None:
+    event_id = "22222222-2222-4222-8222-222222222222"
+    commands = (
+        f"cpm:event-wizard:wp:{event_id}:14:10",
+        f"cpm:event-wizard:we:{event_id}:14:10",
+        f"cpm:event-wizard:wr:{event_id}:14:10",
+        f"cpm:event-wizard:ws:{event_id}",
+        f"cpm:event-wizard:wset:{event_id}:14",
+        f"cpm:event-wizard:wc:{event_id}:366",
+        f"cpm:event-content:{event_id}",
+        f"cpm:event-content-followups:{event_id}",
+    )
+    for command in commands:
+        assert len(command.encode("utf-8")) <= 64, command
 
 
 if __name__ == "__main__":

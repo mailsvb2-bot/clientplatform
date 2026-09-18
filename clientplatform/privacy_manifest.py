@@ -55,6 +55,7 @@ _POLICIES = (
     _required("booking_slots", "anonymize", "business availability and customer appointment fulfilment"),
     _required("clientplatform_events", "retain", "business-owned online event configuration, provider routing and publication state"),
     _required("clientplatform_event_content_preferences", "retain", "business-owned event stage presentation mode and owner update evidence without participant identity"),
+    _required("clientplatform_event_content_messages", "retain", "business-owned webinar content plan text, schedule, source and owner update evidence without participant identity"),
     _required("clientplatform_event_sessions", "retain", "business-owned multi-session event schedule and provider routing without participant identity"),
     _required("clientplatform_event_registrations", "erase", "public event registration PII, consent, CRM linkage and attendance signals"),
     _required("clientplatform_event_conversion_links", "anonymize", "verified event-to-payment attribution retained without public registration PII"),

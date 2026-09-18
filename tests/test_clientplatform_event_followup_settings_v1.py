@@ -138,7 +138,7 @@ def test_owner_can_enable_and_disable_event_autosend(monkeypatch) -> None:
             scope for scope in policy.spec.action_scopes
             if scope.action == "events.commercial_followup"
         )
-        assert event_scope.allowed_channels == ("email", "max", "vk")
+        assert event_scope.allowed_channels == ("email", "max", "telegram", "vk")
         assert event_scope.allowed_audiences == ("prospect_opted_in",)
         assert event_scope.allowed_content_topics == ("service_offer",)
         assert event_scope.schedule is not None
@@ -167,6 +167,46 @@ def test_owner_can_enable_and_disable_event_autosend(monkeypatch) -> None:
         "event_commercial_followups_enabled",
         "event_commercial_followups_disabled",
     ]
+    conn.close()
+
+
+def test_disabling_event_autosend_cancels_pending_warmup_too(monkeypatch) -> None:
+    conn, owner = _owner_db()
+    monkeypatch.delenv("CLIENTPLATFORM_EVENT_COMMERCIAL_FOLLOWUPS_ENABLED", raising=False)
+    _seed_pending_email_followup(
+        conn,
+        owner,
+        registration_id="warmup-registration",
+        dispatch_id="warmup-dispatch",
+        no_show=True,
+    )
+    conn.execute(
+        """
+        UPDATE provider_dispatch_outbox
+        SET idempotency_key=REPLACE(
+            idempotency_key,
+            ':message:post:v4:stage:1',
+            ':message:warmup:v2:slot:before-1:revision:1'
+        )
+        WHERE id='warmup-dispatch'
+        """
+    )
+    conn.commit()
+    with patch.object(settings_app, "get_db", side_effect=lambda: _shared(conn)):
+        settings_app.set_business_event_followups_enabled(
+            actor=owner,
+            enabled=True,
+            now=datetime(2026, 9, 12, 12, 0, tzinfo=timezone.utc),
+        )
+        settings_app.set_business_event_followups_enabled(
+            actor=owner,
+            enabled=False,
+            now=datetime(2026, 9, 12, 12, 1, tzinfo=timezone.utc),
+        )
+    row = conn.execute(
+        "SELECT status,last_error FROM provider_dispatch_outbox WHERE id='warmup-dispatch'"
+    ).fetchone()
+    assert tuple(row) == ("cancelled", "event_commercial_business_disabled")
     conn.close()
 
 
@@ -390,7 +430,7 @@ def test_event_strategy_flags_are_durable_and_require_nonempty_active_strategy(m
                 actor=owner, segment=segment, enabled=False,
                 now=datetime(2026, 9, 12, 12, 0, tzinfo=timezone.utc),
             )
-        for channel in ("max", "vk"):
+        for channel in ("max", "vk", "telegram"):
             settings_app.set_business_event_followup_channel_enabled(
                 actor=owner, channel=channel, enabled=False,
                 now=datetime(2026, 9, 12, 12, 1, tzinfo=timezone.utc),
@@ -528,6 +568,7 @@ def test_existing_followup_settings_schema_is_grown_in_place() -> None:
     assert {
         "segment_no_show", "segment_join_signal", "segment_attended",
         "segment_offer_clicked", "channel_email", "channel_max", "channel_vk",
+        "channel_telegram",
     }.issubset(columns)
     stored = EventFollowupSettingsRepository(conn).get(business_id=owner.business_id)
     assert stored is not None and stored.enabled is True and stored.settings_epoch == 4

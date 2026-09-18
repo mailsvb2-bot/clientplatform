@@ -117,7 +117,13 @@ def test_business_switch_off_wins_before_non_replay_marker() -> None:
 
 def test_commercial_event_boundary_becomes_non_replayable() -> None:
     conn = _db(); item = _item()
-    assert mark_event_commercial_non_replay_boundary(conn, item, now='2026-09-12T10:00:01+00:00')
+    with patch(
+        "clientplatform.infrastructure.event_dispatch_safety.event_commercial_policy_authorized",
+        return_value=True,
+    ):
+        assert mark_event_commercial_non_replay_boundary(
+            conn, item, now='2026-09-12T10:00:01+00:00'
+        )
     marker = conn.execute("SELECT last_error FROM provider_dispatch_outbox WHERE id='d'").fetchone()[0]
     assert marker == 'event_commercial_provider_call_started_non_idempotent'
     quarantined = quarantine_stale_event_commercial_boundaries(
@@ -128,6 +134,76 @@ def test_commercial_event_boundary_becomes_non_replayable() -> None:
     assert quarantined == 1
     row = conn.execute("SELECT status,last_error FROM provider_dispatch_outbox WHERE id='d'").fetchone()
     assert tuple(row) == ('dead','event_commercial_delivery_outcome_ambiguous_manual_reconciliation_required')
+
+
+def test_superseded_warmup_revision_is_cancelled_before_provider_write() -> None:
+    conn = _db()
+    conn.execute(
+        """
+        CREATE TABLE clientplatform_event_content_messages(
+            business_id TEXT,event_id TEXT,stage TEXT,slot_key TEXT,revision INTEGER
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO clientplatform_event_content_messages
+        VALUES('b','e','warmup','before:1',2)
+        """
+    )
+    key = "event:e:registration:r:message:warmup:v2:slot:before-1:revision:1"
+    conn.execute(
+        "UPDATE provider_dispatch_outbox SET idempotency_key=? WHERE id='d'",
+        (key,),
+    )
+    base = _item()
+    item = ClaimedProviderDispatch(
+        dispatch=replace(base.dispatch, idempotency_key=key),
+        external_subject=base.external_subject,
+        credential_reference=base.credential_reference,
+    )
+    assert not event_commercial_claim_can_cross_provider_boundary(
+        conn, item, now="2026-09-12T10:01:00+00:00"
+    )
+    row = conn.execute(
+        "SELECT status,last_error FROM provider_dispatch_outbox WHERE id='d'"
+    ).fetchone()
+    assert tuple(row) == ("cancelled", "event_warmup_revision_superseded")
+
+
+def test_current_warmup_revision_can_cross_when_other_authority_is_valid() -> None:
+    conn = _db()
+    conn.execute(
+        """
+        CREATE TABLE clientplatform_event_content_messages(
+            business_id TEXT,event_id TEXT,stage TEXT,slot_key TEXT,revision INTEGER
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO clientplatform_event_content_messages
+        VALUES('b','e','warmup','before:1',1)
+        """
+    )
+    key = "event:e:registration:r:message:warmup:v2:slot:before-1:revision:1"
+    conn.execute(
+        "UPDATE provider_dispatch_outbox SET idempotency_key=? WHERE id='d'",
+        (key,),
+    )
+    base = _item()
+    item = ClaimedProviderDispatch(
+        dispatch=replace(base.dispatch, idempotency_key=key),
+        external_subject=base.external_subject,
+        credential_reference=base.credential_reference,
+    )
+    with patch(
+        "clientplatform.infrastructure.event_dispatch_safety.event_commercial_policy_authorized",
+        return_value=True,
+    ):
+        assert event_commercial_claim_can_cross_provider_boundary(
+            conn, item, now="2026-09-12T10:01:00+00:00"
+        )
 
 
 def test_revoked_commercial_consent_blocks_provider_boundary() -> None:

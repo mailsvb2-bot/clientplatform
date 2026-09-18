@@ -51,7 +51,7 @@ class CockpitEventsBridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("пришли 24", text)
         self.assertIn("оплаты 5", text)
         self.assertIn("25 000 RUB", text)
-        self.assertIn("Автосообщения после вебинара: ⚪️ выключены", text)
+        self.assertIn("Автосообщения вебинара: ⚪️ выключены", text)
         self.assertNotIn("После включения — кому писать:", text)
         self.assertNotIn("После включения — каналы:", text)
         flattened = [button for row in captured_rows for button in row]
@@ -86,7 +86,7 @@ class CockpitEventsBridgeTests(unittest.IsolatedAsyncioTestCase):
                 target, user_id=101, business_id=_BUSINESS, section="events"
             )
         text = target.answer.await_args.args[0]
-        self.assertIn("Автосообщения после вебинара: 🟡 включены, временно приостановлены", text)
+        self.assertIn("Автосообщения вебинара: 🟡 включены, временно приостановлены", text)
         flattened = [button for row in captured_rows for button in row]
         self.assertIn(("⚙️ Автосообщения", f"cpev:settings:{cockpit_dispatch.one_click.control._uuid_token(_BUSINESS)}"), flattened)
         self.assertFalse(any(callback.startswith("cpev:followups:") for _label, callback in flattened))
@@ -114,7 +114,7 @@ class CockpitEventsBridgeTests(unittest.IsolatedAsyncioTestCase):
                 target, user_id=101, business_id=_BUSINESS, section="events"
             )
         text = target.answer.await_args.args[0]
-        self.assertIn("Автосообщения после вебинара: 🟢 включены", text)
+        self.assertIn("Автосообщения вебинара: 🟢 включены", text)
         self.assertNotIn("Кому писать:", text)
         flattened = [button for row in captured_rows for button in row]
         self.assertIn(("⚙️ Автосообщения", f"cpev:settings:{cockpit_dispatch.one_click.control._uuid_token(_BUSINESS)}"), flattened)
@@ -142,7 +142,7 @@ class CockpitEventsBridgeTests(unittest.IsolatedAsyncioTestCase):
                 target, user_id=101, business_id=_BUSINESS, section="events"
             )
         text = target.answer.await_args.args[0]
-        self.assertIn("Автосообщения после вебинара: ⚪️ выключены", text)
+        self.assertIn("Автосообщения вебинара: ⚪️ выключены", text)
         self.assertNotIn("Ограничение тестового бизнеса", text)
 
     async def test_events_section_hides_creation_for_read_only_snapshot(self) -> None:

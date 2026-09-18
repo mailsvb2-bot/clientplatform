@@ -13,7 +13,12 @@ EVENT_SEGMENT_LABELS = (
     ("attended_unpaid", "Были на вебинаре, но не купили"),
     ("offer_clicked_unpaid", "Открыли предложение, но не купили"),
 )
-EVENT_CHANNEL_LABELS = (("email", "Email"), ("max", "MAX"), ("vk", "VK"))
+EVENT_CHANNEL_LABELS = (
+    ("email", "Email"),
+    ("max", "MAX"),
+    ("vk", "VK"),
+    ("telegram", "Telegram"),
+)
 BACK_TO_GROWTH_LABEL = "⬅️ К продвижению"
 BACK_TO_EVENTS_LABEL = "🎥 К вебинарам"
 CREATE_EVENT_LABEL = "🎥 Создать вебинар"
@@ -50,7 +55,7 @@ def event_hub_text(snapshot: object) -> str:
     lines = [
         "🎥 Вебинары",
         "",
-        "Здесь можно создать вебинар, посмотреть результат и настроить сообщения после эфира.",
+        "Здесь можно создать вебинар, посмотреть результат и настроить весь контент-план.",
     ]
     items = tuple(getattr(snapshot, "items", ()))
     if items:
@@ -73,7 +78,7 @@ def event_hub_text(snapshot: object) -> str:
     lines.extend(
         [
             "",
-            f"Автосообщения после вебинара: {_followup_status(snapshot)}",
+            f"Автосообщения вебинара: {_followup_status(snapshot)}",
             "Выберите действие ниже.",
         ]
     )
@@ -97,6 +102,16 @@ def event_hub_actions(snapshot: object) -> tuple[EventHubAction, ...]:
                 )
             )
             break
+    for item in items[:3]:
+        if not getattr(item, "id", None):
+            continue
+        actions.append(
+            EventHubAction(
+                "content",
+                f"🗓 Контент-план · {str(item.title)[:17]}",
+                key=str(item.id),
+            )
+        )
     if items and getattr(items[0], "id", None):
         actions.append(
             EventHubAction(
@@ -113,12 +128,13 @@ def event_settings_text(snapshot: object) -> str:
     enabled = bool(getattr(snapshot, "commercial_followups_enabled", False))
     available = bool(getattr(snapshot, "commercial_followups_platform_available", True))
     lines = [
-        "⚙️ Автосообщения после вебинара",
+        "⚙️ Автосообщения вебинара",
         "",
-        "ClientPlatform может автоматически написать участникам после эфира.",
+        "ClientPlatform может автоматически отправлять согласованные прогревы до эфира "
+        "и дожимы после него.",
         f"Статус: {_followup_status(snapshot)}",
         "",
-        "Кому писать:" if enabled else "После включения — кому писать:",
+        "Кому отправлять дожим:" if enabled else "После включения — кому отправлять дожим:",
     ]
     segments = _segments(snapshot)
     lines.extend(f"{'✅' if key in segments else '▫️'} {label}" for key, label in EVENT_SEGMENT_LABELS)

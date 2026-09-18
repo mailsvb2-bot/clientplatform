@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import sqlite3
 import os
 from typing import Any
 
@@ -19,6 +20,7 @@ _CHANNEL_COLUMNS = {
     "email": "channel_email",
     "max": "channel_max",
     "vk": "channel_vk",
+    "telegram": "channel_telegram",
 }
 
 
@@ -81,36 +83,66 @@ class EventFollowupSettingsRepository:
         business = str(business_id or "").strip()
         if not business:
             raise ValueError("business_id is required")
-        row = self._conn.execute(
-            """
-            SELECT business_id,enabled,
-                   segment_no_show,segment_join_signal,segment_attended,segment_offer_clicked,
-                   channel_email,channel_max,channel_vk,
-                   settings_epoch,updated_by_member_id,created_at,updated_at
-            FROM clientplatform_event_followup_settings
-            WHERE business_id=? LIMIT 1
-            """,
-            (business,),
-        ).fetchone()
+        legacy_without_telegram = False
+        try:
+            row = self._conn.execute(
+                """
+                SELECT business_id,enabled,
+                       segment_no_show,segment_join_signal,segment_attended,segment_offer_clicked,
+                       channel_email,channel_max,channel_vk,channel_telegram,
+                       settings_epoch,updated_by_member_id,created_at,updated_at
+                FROM clientplatform_event_followup_settings
+                WHERE business_id=? LIMIT 1
+                """,
+                (business,),
+            ).fetchone()
+        except sqlite3.OperationalError as exc:
+            if "channel_telegram" not in str(exc):
+                raise
+            # Compatibility for pre-migration SQLite databases and focused test
+            # fixtures. Missing Telegram means disabled, never implicitly enabled.
+            legacy_without_telegram = True
+            row = self._conn.execute(
+                """
+                SELECT business_id,enabled,
+                       segment_no_show,segment_join_signal,segment_attended,segment_offer_clicked,
+                       channel_email,channel_max,channel_vk,
+                       settings_epoch,updated_by_member_id,created_at,updated_at
+                FROM clientplatform_event_followup_settings
+                WHERE business_id=? LIMIT 1
+                """,
+                (business,),
+            ).fetchone()
         if row is None:
             return None
         enabled_segments = tuple(
             key for index, key in enumerate(EVENT_FOLLOWUP_SEGMENTS, start=2)
             if bool(_value(row, _SEGMENT_COLUMNS[key], index))
         )
-        enabled_channels = tuple(
-            key for index, key in enumerate(EVENT_FOLLOWUP_CHANNELS, start=6)
-            if bool(_value(row, _CHANNEL_COLUMNS[key], index))
-        )
+        if legacy_without_telegram:
+            enabled_channels = tuple(
+                key
+                for index, key in enumerate(("email", "max", "vk"), start=6)
+                if bool(_value(row, _CHANNEL_COLUMNS[key], index))
+            )
+            settings_epoch_index = 9
+        else:
+            enabled_channels = tuple(
+                key for index, key in enumerate(EVENT_FOLLOWUP_CHANNELS, start=6)
+                if bool(_value(row, _CHANNEL_COLUMNS[key], index))
+            )
+            settings_epoch_index = 10
         return EventFollowupSettings(
             business_id=str(_value(row, "business_id", 0)),
             enabled=bool(_value(row, "enabled", 1)),
             enabled_segments=enabled_segments,
             enabled_channels=enabled_channels,
-            settings_epoch=int(_value(row, "settings_epoch", 9)),
-            updated_by_member_id=str(_value(row, "updated_by_member_id", 10)),
-            created_at=str(_value(row, "created_at", 11)),
-            updated_at=str(_value(row, "updated_at", 12)),
+            settings_epoch=int(_value(row, "settings_epoch", settings_epoch_index)),
+            updated_by_member_id=str(
+                _value(row, "updated_by_member_id", settings_epoch_index + 1)
+            ),
+            created_at=str(_value(row, "created_at", settings_epoch_index + 2)),
+            updated_at=str(_value(row, "updated_at", settings_epoch_index + 3)),
         )
 
     def set_enabled(

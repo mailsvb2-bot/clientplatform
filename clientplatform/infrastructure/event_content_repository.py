@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from clientplatform.domain.event_content import (
+    EventContentMessage,
     EventContentMode,
     EventContentPreference,
     EventContentStage,
@@ -34,6 +35,42 @@ def _from_row(row: Any) -> EventContentPreference:
 _COLUMNS = (
     "business_id,event_id,stage,mode,updated_by_member_id,created_at,updated_at"
 )
+
+
+_MESSAGE_COLUMNS = (
+    "business_id,event_id,stage,slot_key,position,revision,scheduled_at,text,source,"
+    "updated_by_member_id,created_at,updated_at"
+)
+
+
+def _message_from_row(row: Any) -> EventContentMessage:
+    return EventContentMessage(
+        business_id=str(_value(row, "business_id", 0)),
+        event_id=str(_value(row, "event_id", 1)),
+        stage=EventContentStage(str(_value(row, "stage", 2))),
+        slot_key=str(_value(row, "slot_key", 3)),
+        position=int(_value(row, "position", 4)),
+        revision=int(_value(row, "revision", 5)),
+        scheduled_at=(
+            None
+            if _value(row, "scheduled_at", 6) is None
+            else str(_value(row, "scheduled_at", 6))
+        ),
+        text=str(_value(row, "text", 7)),
+        source=str(_value(row, "source", 8)),
+        updated_by_member_id=str(_value(row, "updated_by_member_id", 9)),
+        created_at=str(_value(row, "created_at", 10)),
+        updated_at=str(_value(row, "updated_at", 11)),
+    )
+
+
+def _slot_key(value: object) -> str:
+    key = str(value or "").strip()
+    if not key or len(key) > 80:
+        raise ValueError("event content slot key is invalid")
+    if any(ord(char) < 32 or ord(char) == 127 for char in key):
+        raise ValueError("event content slot key is invalid")
+    return key
 
 
 class EventContentPreferenceRepository:
@@ -122,4 +159,147 @@ class EventContentPreferenceRepository:
         return tuple(_from_row(row) for row in rows)
 
 
-__all__ = ["EventContentPreferenceRepository"]
+
+
+class EventContentMessageRepository:
+    def __init__(self, conn: Any):
+        self._conn = conn
+
+    def _event_exists(self, *, actor: TenantContext, event_id: str) -> str:
+        actor.assert_can_manage_business()
+        normalized = normalize_uuid(event_id, field_name="event_id")
+        row = self._conn.execute(
+            "SELECT id FROM clientplatform_events WHERE id=? AND business_id=? LIMIT 1",
+            (normalized, actor.business_id),
+        ).fetchone()
+        if row is None:
+            raise ValueError("event was not found in the active business")
+        return normalized
+
+    def upsert(
+        self,
+        *,
+        actor: TenantContext,
+        event_id: str,
+        stage: EventContentStage,
+        slot_key: str,
+        position: int,
+        text: str,
+        source: str,
+        scheduled_at: str | None,
+        now: str | None = None,
+    ) -> EventContentMessage:
+        normalized = self._event_exists(actor=actor, event_id=event_id)
+        key = _slot_key(slot_key)
+        if isinstance(position, bool) or not isinstance(position, int) or position < 1:
+            raise ValueError("event content position is invalid")
+        body = str(text or "").strip()
+        if not 1 <= len(body) <= 4000:
+            raise ValueError("event content text length is invalid")
+        source_value = str(source or "").strip().lower()
+        if source_value not in {"template", "ai", "owner"}:
+            raise ValueError("event content source is invalid")
+        timestamp = str(now or _utc_now())
+        schedule = None if scheduled_at is None else str(scheduled_at)
+        self._conn.execute(
+            """
+            INSERT INTO clientplatform_event_content_messages(
+                business_id,event_id,stage,slot_key,position,revision,scheduled_at,text,source,
+                updated_by_member_id,created_at,updated_at
+            ) VALUES(?,?,?,?,?,1,?,?,?,?,?,?)
+            ON CONFLICT(business_id,event_id,stage,slot_key) DO UPDATE SET
+                position=excluded.position,
+                revision=clientplatform_event_content_messages.revision + 1,
+                scheduled_at=excluded.scheduled_at,
+                text=excluded.text,
+                source=excluded.source,
+                updated_by_member_id=excluded.updated_by_member_id,
+                updated_at=excluded.updated_at
+            """,
+            (
+                actor.business_id,
+                normalized,
+                stage.value,
+                key,
+                position,
+                schedule,
+                body,
+                source_value,
+                actor.membership_id,
+                timestamp,
+                timestamp,
+            ),
+        )
+        stored = self.get(
+            actor=actor,
+            event_id=normalized,
+            stage=stage,
+            slot_key=key,
+        )
+        if stored is None:
+            raise RuntimeError("event content message was not persisted")
+        return stored
+
+    def get(
+        self,
+        *,
+        actor: TenantContext,
+        event_id: str,
+        stage: EventContentStage,
+        slot_key: str,
+    ) -> EventContentMessage | None:
+        normalized = self._event_exists(actor=actor, event_id=event_id)
+        key = _slot_key(slot_key)
+        row = self._conn.execute(
+            f"SELECT {_MESSAGE_COLUMNS} FROM clientplatform_event_content_messages "  # nosec B608 - static columns
+            "WHERE business_id=? AND event_id=? AND stage=? AND slot_key=? LIMIT 1",
+            (actor.business_id, normalized, stage.value, key),
+        ).fetchone()
+        return None if row is None else _message_from_row(row)
+
+    def list_for_stage(
+        self,
+        *,
+        actor: TenantContext,
+        event_id: str,
+        stage: EventContentStage,
+    ) -> tuple[EventContentMessage, ...]:
+        normalized = self._event_exists(actor=actor, event_id=event_id)
+        rows = self._conn.execute(
+            f"SELECT {_MESSAGE_COLUMNS} FROM clientplatform_event_content_messages "  # nosec B608 - static columns
+            "WHERE business_id=? AND event_id=? AND stage=? "
+            "ORDER BY position,slot_key",
+            (actor.business_id, normalized, stage.value),
+        ).fetchall()
+        return tuple(_message_from_row(row) for row in rows)
+
+    def delete_missing_slots(
+        self,
+        *,
+        actor: TenantContext,
+        event_id: str,
+        stage: EventContentStage,
+        keep_slot_keys: tuple[str, ...],
+    ) -> int:
+        normalized = self._event_exists(actor=actor, event_id=event_id)
+        keys = tuple(_slot_key(value) for value in keep_slot_keys)
+        if not keys:
+            cursor = self._conn.execute(
+                """
+                DELETE FROM clientplatform_event_content_messages
+                WHERE business_id=? AND event_id=? AND stage=?
+                """,
+                (actor.business_id, normalized, stage.value),
+            )
+        else:
+            placeholders = ",".join("?" for _ in keys)
+            cursor = self._conn.execute(
+                f"DELETE FROM clientplatform_event_content_messages "  # nosec B608
+                f"WHERE business_id=? AND event_id=? AND stage=? "
+                f"AND slot_key NOT IN ({placeholders})",
+                (actor.business_id, normalized, stage.value, *keys),
+            )
+        return max(0, int(getattr(cursor, "rowcount", 0) or 0))
+
+
+__all__ = ["EventContentMessageRepository", "EventContentPreferenceRepository"]

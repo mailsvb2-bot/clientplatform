@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from clientplatform.application.activity import run_offering_process_retention_batch
 from clientplatform.application.dispatch_worker import DispatchBatchResult, run_dispatch_batch
 from clientplatform.application.event_followups import materialize_due_event_followups
+from clientplatform.application.event_warmups import materialize_due_event_warmups
 from clientplatform.application.program_media import run_program_media_cleanup_batch
 from clientplatform.application.sales_followups import run_sales_followup_maintenance_batch
 from clientplatform.runtime.control_bot import control_bot_enabled
@@ -244,6 +245,13 @@ async def run_configured_dispatch_tick(
         )
     except Exception:  # validator: allow-wide-except - reminder maintenance must not block delivery
         log.exception("Sales follow-up maintenance tick failed")
+    try:
+        await asyncio.to_thread(
+            materialize_due_event_warmups,
+            limit=max(20, selected.config.batch_size * 5),
+        )
+    except Exception:  # validator: allow-wide-except - event warmups must not block delivery
+        log.exception("Event warmup maintenance tick failed")
     try:
         await asyncio.to_thread(
             materialize_due_event_followups,

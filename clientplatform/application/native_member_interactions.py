@@ -44,6 +44,9 @@ from clientplatform.application.bookings import create_booking_slot, list_bookin
 from clientplatform.application.cockpit import cockpit_navigation
 from clientplatform.application.cockpit_events import resolve_events_snapshot
 from clientplatform.application.event_announcements import draft_event_announcement_template
+from clientplatform.application.event_content_plans import get_event_content_plan
+from clientplatform.application.event_followups import event_followup_template_previews
+from clientplatform.application.event_warmups import get_saved_event_warmup_plan
 from clientplatform.application.event_owner_flow import (
     OnlineEventCreateRequest,
     create_and_publish_online_event,
@@ -148,6 +151,7 @@ from clientplatform.domain.automation_policy import AutomationPolicyError
 from clientplatform.domain.ad_spend import AdSpendAuthorizationStatus, AdSpendError
 from clientplatform.domain.bookings import BookingError, BookingSlotStatus, parse_local_booking_start
 from clientplatform.domain.connections import ConnectionPlatform
+from clientplatform.domain.event_content import event_content_mode_label
 from clientplatform.domain.customer_interactions import (
     CustomerInteractionButton,
     CustomerInteractionMessage,
@@ -763,6 +767,8 @@ def parse_native_member_interaction(value: object) -> ParsedMemberInteraction:
             "growth-lifecycle",
             "events",
             "event-settings",
+            "event-content",
+            "event-content-followups",
             "event-followups",
             "event-segment",
             "event-channel",
@@ -1000,6 +1006,8 @@ def _owner_input_invalid_message(action: str) -> CustomerInteractionMessage:
         "publication_draft": "Напишите: Заголовок | Текст публикации.",
         "booking_time": "Напишите дату и время: ДД.ММ.ГГГГ ЧЧ:ММ. При желании добавьте длительность в минутах.",
         "online_event": "Ответ не подходит текущему шагу вебинара. Используйте показанные кнопки или формат из подсказки.",
+        "event_warmup_text": "Пришлите новый текст прогрева одним сообщением длиной до 3500 символов.",
+        "event_warmup_days": "Пришлите допустимое число дней прогрева.",
         "price": "Напишите сумму и валюту, например: 5000 RUB.",
         "payment": "Напишите сумму и валюту, например: 3500 RUB | консультация.",
         "member_user": "Напишите номер аккаунта ClientPlatform сотрудника — только цифры. Сотрудник увидит свой номер в разделе «Сотрудники и доступы».",
@@ -1007,7 +1015,7 @@ def _owner_input_invalid_message(action: str) -> CustomerInteractionMessage:
     }.get(action, "Проверьте ответ и попробуйте ещё раз.")
     exit_hint = (
         "Чтобы выйти без изменений, отправьте «Отмена» или нажмите «🎥 К вебинарам»."
-        if action == "online_event"
+        if action in {"online_event", "event_warmup_text", "event_warmup_days"}
         else "Чтобы выйти без изменений, отправьте «Отмена»."
     )
     return CustomerInteractionMessage(
@@ -1248,6 +1256,8 @@ _NATIVE_PARENT_COMMANDS: dict[str, str] = {
     "growth-lifecycle": "cpm:growth-more",
     "events": "cpm:growth",
     "event-settings": "cpm:events",
+    "event-content": "cpm:events",
+    "event-content-followups": "cpm:events",
     "event-followups": "cpm:events",
     "event-segment": "cpm:events",
     "event-channel": "cpm:events",
@@ -1259,6 +1269,8 @@ _NATIVE_PARENT_COMMANDS: dict[str, str] = {
     "event-wizard-window-text": "cpm:events",
     "event-wizard-room-text": "cpm:events",
     "event-wizard-warmup-text": "cpm:events",
+    "event-we-text": "cpm:events",
+    "event-warmup-days-text": "cpm:events",
     "event-create-text": "cpm:events",
     "event-announce": "cpm:events",
     "event-join": "cpm:events",
@@ -1313,7 +1325,7 @@ def _native_parent_command(parsed: ParsedMemberInteraction) -> str | None:
     if action == "menu":
         return None
     if action in {"owner-input-invalid", "owner-input-cancelled"} and args:
-        if args[0] == "online_event":
+        if args[0] in {"online_event", "event_warmup_text", "event_warmup_days"}:
             return "cpm:events"
     if action == "customer":
         return "cpm:customers:0"
@@ -1440,16 +1452,16 @@ def _with_parent_navigation(
     if parsed.action == "events":
         back_label = BACK_TO_GROWTH_LABEL
     elif parsed.action in {
-        "event-settings", "event-followups", "event-segment", "event-channel",
-        "event-new", "event-wizard", "event-wizard-title-text",
+        "event-settings", "event-content", "event-content-followups",
+        "event-followups", "event-segment", "event-channel", "event-new", "event-wizard", "event-wizard-title-text",
         "event-wizard-count-text", "event-wizard-timezone-text",
         "event-wizard-window-text", "event-wizard-room-text",
-        "event-wizard-warmup-text", "event-create-text", "event-announce",
-        "event-join", "event-join-text",
+        "event-wizard-warmup-text", "event-we-text",
+        "event-warmup-days-text", "event-create-text", "event-announce", "event-join", "event-join-text",
     } or (
         parsed.action in {"owner-input-invalid", "owner-input-cancelled"}
         and parsed.args
-        and parsed.args[0] == "online_event"
+        and parsed.args[0] in {"online_event", "event_warmup_text", "event_warmup_days"}
     ):
         back_label = BACK_TO_EVENTS_LABEL
     else:
@@ -2144,6 +2156,8 @@ def _event_action_command(action: EventHubAction) -> str:
         return "cpm:event-new"
     if action.kind == "join" and action.key is not None:
         return f"cpm:event-join:{action.key}"
+    if action.kind == "content" and action.key is not None:
+        return f"cpm:event-content:{action.key}"
     if action.kind == "announce" and action.key is not None:
         return f"cpm:event-announce:{action.key}"
     if action.kind == "settings":
@@ -2194,6 +2208,133 @@ def _events_message(actor: TenantContext) -> CustomerInteractionMessage:
             extra={"business_id": actor.business_id, "member_user_id": actor.user_id},
         )
         return _event_projection_fallback(actor)
+
+
+def _event_content_message(
+    actor: TenantContext,
+    event_id: str,
+) -> CustomerInteractionMessage:
+    actor.assert_can_manage_business()
+    snapshot = resolve_events_snapshot(
+        actor=actor,
+        business_name=_business_name(actor),
+        limit=30,
+    )
+    item = next(
+        (row for row in tuple(getattr(snapshot, "items", ())) if str(getattr(row, "id", "")) == event_id),
+        None,
+    )
+    if item is None:
+        raise ValueError("webinar was not found")
+    warmup = get_saved_event_warmup_plan(actor=actor, event_id=event_id)
+    modes = get_event_content_plan(actor=actor, event_id=event_id)
+    rows: list[tuple[CustomerInteractionButton, ...]] = []
+    if warmup.drafts:
+        rows.append(
+            (
+                _button(
+                    "🔥 Тексты прогрева",
+                    f"cpm:event-wizard:wp:{event_id}:{warmup.requested_days}:0",
+                ),
+            )
+        )
+        rows.append(
+            (
+                _button(
+                    "🗓 Изменить дни прогрева",
+                    f"cpm:event-wizard:ws:{event_id}",
+                ),
+            )
+        )
+        warmup_text = (
+            f"{warmup.requested_days} дн. · по 1 сообщению в день · "
+            f"12:00 ({warmup.timezone_name})"
+        )
+    else:
+        rows.append(
+            (
+                _button(
+                    "🔥 Настроить прогрев",
+                    f"cpm:event-wizard:ws:{event_id}",
+                ),
+            )
+        )
+        warmup_text = "не настроен"
+    rows.extend(
+        [
+            (_button("✨ Анонс", f"cpm:event-announce:{event_id}"),),
+            (_button("💬 Тексты дожима", f"cpm:event-content-followups:{event_id}"),),
+            (_button("⚙️ Автосообщения", "cpm:event-settings"),),
+            _back_row(),
+        ]
+    )
+    enabled = bool(getattr(snapshot, "commercial_followups_enabled", False))
+    effective = bool(getattr(snapshot, "commercial_followups_effective", False))
+    autosend = (
+        "🟢 включены"
+        if enabled and effective
+        else "🟡 включены, но ограничены политикой/платформой"
+        if enabled
+        else "⚪️ выключены"
+    )
+    return CustomerInteractionMessage(
+        text=(
+            f"🗓 Контент-план\n\n{item.title}\n\n"
+            f"🔥 Прогрев: {warmup_text}\n"
+            f"Формат: {event_content_mode_label(modes.warmup)}\n\n"
+            "✨ Анонс: показывается владельцу до публикации.\n"
+            f"Формат: {event_content_mode_label(modes.event_day)}\n\n"
+            "🔔 Напоминания: подтверждение регистрации, затем 24 ч, 3 ч и 15 мин "
+            "до каждого эфира.\n\n"
+            "💬 Дожим: 2 или 3 сообщения в зависимости от поведения участника.\n"
+            f"Формат: {event_content_mode_label(modes.post_event)}\n\n"
+            f"Автоматическая отправка: {autosend}."
+        ),
+        rows=tuple(rows),
+    )
+
+
+def _event_followup_content_message(
+    actor: TenantContext,
+    event_id: str,
+) -> CustomerInteractionMessage:
+    snapshot = resolve_events_snapshot(
+        actor=actor,
+        business_name=_business_name(actor),
+        limit=30,
+    )
+    item = next(
+        (row for row in tuple(getattr(snapshot, "items", ())) if str(getattr(row, "id", "")) == event_id),
+        None,
+    )
+    if item is None:
+        raise ValueError("webinar was not found")
+    lines = [f"💬 Дожим после «{item.title}»"]
+    current_segment = None
+    for preview in event_followup_template_previews():
+        if preview.segment != current_segment:
+            current_segment = preview.segment
+            lines.extend(["", f"• {preview.segment_label}:"])
+        body = (
+            preview.text.replace("{name}", "Имя")
+            .replace("{title}", str(item.title))
+            .replace("{offer}", "[ссылка на предложение]")
+        )
+        lines.append(f"{preview.offset_label}: {body}")
+    lines.extend(
+        [
+            "",
+            "После оплаты серия прекращается. Без действующего согласия сообщение не отправляется.",
+        ]
+    )
+    return CustomerInteractionMessage(
+        text="\n".join(lines),
+        rows=(
+            (_button("⚙️ Автосообщения", "cpm:event-settings"),),
+            (_button("🗓 К контент-плану", f"cpm:event-content:{event_id}"),),
+            _back_row(),
+        ),
+    )
 
 
 def _event_settings_message(actor: TenantContext) -> CustomerInteractionMessage:
@@ -5296,6 +5437,14 @@ def _render(
             return _events_message(actor)
         if parsed.action == "event-settings":
             return _event_settings_message(actor)
+        if parsed.action == "event-content":
+            if len(parsed.args) != 1:
+                return _stale_message()
+            return _event_content_message(actor, parsed.args[0])
+        if parsed.action == "event-content-followups":
+            if len(parsed.args) != 1:
+                return _stale_message()
+            return _event_followup_content_message(actor, parsed.args[0])
         if parsed.action == "event-followups":
             return _event_followups_action(actor, parsed.args)
         if parsed.action == "event-segment":
@@ -5328,6 +5477,8 @@ def _render(
             "event-wizard-window-text",
             "event-wizard-room-text",
             "event-wizard-warmup-text",
+            "event-we-text",
+            "event-warmup-days-text",
         }:
             return handle_native_event_wizard_text(
                 actor,

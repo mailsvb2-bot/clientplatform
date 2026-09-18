@@ -47,6 +47,22 @@ class EventContentPreference:
         return _STAGE_LABELS[self.stage]
 
 
+@dataclass(frozen=True, slots=True)
+class EventContentMessage:
+    business_id: str
+    event_id: str
+    stage: EventContentStage
+    slot_key: str
+    position: int
+    revision: int
+    scheduled_at: str | None
+    text: str
+    source: str
+    updated_by_member_id: str
+    created_at: str
+    updated_at: str
+
+
 def event_content_mode_label(mode: EventContentMode | str) -> str:
     normalized = mode if isinstance(mode, EventContentMode) else EventContentMode(str(mode))
     return _MODE_LABELS[normalized]
@@ -110,6 +126,7 @@ def event_visual_request(
 
 
 __all__ = [
+    "EventContentMessage",
     "EventContentMode",
     "EventContentPreference",
     "EventContentStage",

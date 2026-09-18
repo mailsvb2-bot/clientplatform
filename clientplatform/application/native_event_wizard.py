@@ -15,7 +15,12 @@ from clientplatform.application.event_sessions import (
     get_event_warmup_window,
     list_event_sessions,
 )
-from clientplatform.application.event_warmups import get_event_warmup_plan
+from clientplatform.application.event_warmups import (
+    get_saved_event_warmup_plan,
+    reset_event_warmup_text,
+    save_event_warmup_plan,
+    set_event_warmup_text,
+)
 from clientplatform.application.event_wizard import (
     normalize_event_timezone,
     normalize_session_join_url,
@@ -334,6 +339,50 @@ def handle_native_event_wizard_text(
     surface: str,
 ) -> CustomerInteractionMessage:
     actor.assert_can_manage_business()
+    if action == "event-we-text":
+        if len(args) != 4:
+            raise ValueError("invalid warmup edit text action")
+        event_id, requested_days, raw_position, body = args
+        position = int(raw_position)
+        set_event_warmup_text(
+            actor=actor,
+            event_id=event_id,
+            position=position,
+            text=body,
+        )
+        return _warmup_preview(
+            actor,
+            event_id=event_id,
+            requested_days=int(requested_days),
+            page=position - 1,
+        )
+
+    if action == "event-warmup-days-text":
+        if len(args) != 2:
+            raise ValueError("invalid warmup days text action")
+        event_id, raw_days = args
+        plan = save_event_warmup_plan(
+            actor=actor,
+            event_id=event_id,
+            requested_days=int(raw_days),
+        )
+        clear_owner_input(
+            user_id=actor.user_id,
+            platform=platform.value,
+            surface=surface,
+        )
+        if not plan.drafts:
+            return CustomerInteractionMessage(
+                text="🔥 Прогрев отключён для этого вебинара.",
+                rows=(_back_row(),),
+            )
+        return _warmup_preview(
+            actor,
+            event_id=event_id,
+            requested_days=plan.requested_days,
+            page=0,
+        )
+
     context = _context(actor, platform=platform, surface=surface)
 
     if action == "event-wizard-title-text":
@@ -560,7 +609,7 @@ def _accept_warmup_days(
 ) -> CustomerInteractionMessage:
     try:
         requested = int(str(raw_days).strip())
-        plan = get_event_warmup_plan(
+        plan = save_event_warmup_plan(
             actor=actor,
             event_id=context["event_id"],
             requested_days=requested,
@@ -605,7 +654,7 @@ def _finish(
             (
                 _button(
                     "🔥 Тексты прогрева",
-                    f"cpm:event-wizard:warmup-preview:{event_id}:{requested_days}:0",
+                    f"cpm:event-wizard:wp:{event_id}:{requested_days}:0",
                 ),
             )
         )
@@ -631,10 +680,9 @@ def _warmup_preview(
     requested_days: int,
     page: int,
 ) -> CustomerInteractionMessage:
-    plan = get_event_warmup_plan(
+    plan = get_saved_event_warmup_plan(
         actor=actor,
         event_id=event_id,
-        requested_days=requested_days,
     )
     if not plan.drafts:
         return CustomerInteractionMessage(
@@ -649,24 +697,45 @@ def _warmup_preview(
         navigation.append(
             _button(
                 "⬅️",
-                f"cpm:event-wizard:warmup-preview:{event_id}:{requested_days}:{index - 1}",
+                f"cpm:event-wizard:wp:{event_id}:{requested_days}:{index - 1}",
             )
         )
     if index + 1 < len(plan.drafts):
         navigation.append(
             _button(
                 "➡️",
-                f"cpm:event-wizard:warmup-preview:{event_id}:{requested_days}:{index + 1}",
+                f"cpm:event-wizard:wp:{event_id}:{requested_days}:{index + 1}",
             )
         )
     if navigation:
         rows.append(tuple(navigation))
+    rows.append(
+        (
+            _button(
+                "✏️ Изменить / свой текст",
+                f"cpm:event-wizard:we:{event_id}:{plan.requested_days}:{draft.position}",
+            ),
+        )
+    )
+    if draft.source == "owner":
+        rows.append(
+            (
+                _button(
+                    "♻️ Вернуть автотекст",
+                    f"cpm:event-wizard:wr:{event_id}:{plan.requested_days}:{draft.position}",
+                ),
+            )
+        )
     rows.append((_button("✨ Сделать анонс", f"cpm:event-announce:{event_id}"),))
     rows.append(_back_row())
+    source_label = "Ваш текст" if draft.source == "owner" else "Автотекст"
     return CustomerInteractionMessage(
         text=(
             f"🔥 Прогрев {draft.position}/{plan.requested_days} — "
-            f"{draft.publish_date.strftime('%d.%m.%Y')}\n\n{draft.text}"
+            f"{draft.publish_date.strftime('%d.%m.%Y')}\n"
+            f"Источник: {source_label}\n\n{draft.text}\n\n"
+            "Можно использовать {name}, {title}, {join_url}. "
+            "Если {join_url} не указан, персональная ссылка добавится автоматически."
         ),
         rows=tuple(rows),
     )
@@ -683,7 +752,7 @@ def handle_native_event_wizard_action(
     if not args:
         raise ValueError("webinar wizard action is missing")
 
-    if args[0] == "warmup-preview":
+    if args[0] == "wp":
         if len(args) != 4:
             raise ValueError("invalid warmup preview action")
         return _warmup_preview(
@@ -691,6 +760,123 @@ def handle_native_event_wizard_action(
             event_id=args[1],
             requested_days=int(args[2]),
             page=int(args[3]),
+        )
+
+    if args[0] == "we":
+        if len(args) != 4:
+            raise ValueError("invalid warmup edit action")
+        event_id, requested_days, position = args[1], int(args[2]), int(args[3])
+        begin_owner_input(
+            actor=actor,
+            platform=platform.value,
+            surface=surface,
+            action="event_warmup_text",
+            context={
+                "event_id": event_id,
+                "requested_days": requested_days,
+                "position": position,
+            },
+        )
+        return CustomerInteractionMessage(
+            text=(
+                f"✏️ Пришлите новый текст прогрева {position} одним сообщением.\n\n"
+                "Можно написать его полностью самостоятельно. Поддерживаются "
+                "{name}, {title}, {join_url}. Для выхода отправьте «Отмена»."
+            ),
+            rows=(_back_row(),),
+        )
+
+    if args[0] == "wr":
+        if len(args) != 4:
+            raise ValueError("invalid warmup reset action")
+        event_id, requested_days, position = args[1], int(args[2]), int(args[3])
+        reset_event_warmup_text(
+            actor=actor,
+            event_id=event_id,
+            position=position,
+        )
+        return _warmup_preview(
+            actor,
+            event_id=event_id,
+            requested_days=requested_days,
+            page=position - 1,
+        )
+
+    if args[0] == "ws":
+        if len(args) != 2:
+            raise ValueError("invalid warmup setup action")
+        event_id = args[1]
+        window = get_event_warmup_window(actor=actor, event_id=event_id)
+        maximum = int(window.max_warmup_days)
+        quick = [value for value in (0, 1, 2, 3, 5, 7, 10, 14) if value <= maximum]
+        if maximum not in quick:
+            quick.append(maximum)
+        quick = sorted(set(quick))
+        rows: list[tuple[CustomerInteractionButton, ...]] = []
+        for index in range(0, len(quick), 3):
+            rows.append(
+                tuple(
+                    _button(
+                        str(value),
+                        f"cpm:event-wizard:wset:{event_id}:{value}",
+                    )
+                    for value in quick[index : index + 3]
+                )
+            )
+        if maximum > 0:
+            rows.append(
+                (
+                    _button(
+                        "✍️ Другое число",
+                        f"cpm:event-wizard:wc:{event_id}:{maximum}",
+                    ),
+                )
+            )
+        rows.append(_back_row())
+        return CustomerInteractionMessage(
+            text=(
+                f"🔥 Сколько дней прогрева сделать? Можно до {maximum} дн.\n\n"
+                "Будет одно сообщение в день в 12:00 по часовому поясу вебинара. "
+                "0 — отключить прогрев."
+            ),
+            rows=tuple(rows),
+        )
+
+    if args[0] == "wset":
+        if len(args) != 3:
+            raise ValueError("invalid warmup set action")
+        event_id, raw_days = args[1], args[2]
+        plan = save_event_warmup_plan(
+            actor=actor,
+            event_id=event_id,
+            requested_days=int(raw_days),
+        )
+        if not plan.drafts:
+            return CustomerInteractionMessage(
+                text="🔥 Прогрев отключён для этого вебинара.",
+                rows=(_back_row(),),
+            )
+        return _warmup_preview(
+            actor,
+            event_id=event_id,
+            requested_days=plan.requested_days,
+            page=0,
+        )
+
+    if args[0] == "wc":
+        if len(args) != 3:
+            raise ValueError("invalid warmup custom action")
+        event_id, maximum = args[1], int(args[2])
+        begin_owner_input(
+            actor=actor,
+            platform=platform.value,
+            surface=surface,
+            action="event_warmup_days",
+            context={"event_id": event_id, "maximum": maximum},
+        )
+        return CustomerInteractionMessage(
+            text=f"Отправьте число дней от 0 до {maximum}. 0 отключит прогрев.",
+            rows=(_back_row(),),
         )
 
     context = _context(actor, platform=platform, surface=surface)
