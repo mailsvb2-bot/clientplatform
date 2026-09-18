@@ -198,14 +198,81 @@ async def test_back_returns_to_date_entry_without_losing_booking_context() -> No
     with (
         patch.object(wizard.control, "_actor", new=AsyncMock(return_value=object())),
         patch.object(wizard.control, "_callback_message", return_value=message),
+        patch.object(
+            wizard,
+            "get_business_profile",
+            return_value=SimpleNamespace(timezone="Europe/Moscow"),
+        ),
     ):
         await wizard.return_to_booking_start(callback, state)
 
     assert state.states[-1] == wizard.control.ClientPlatformControlState.booking_start
     assert state.data["offering_id"] == offering_id
+    assert state.data["booking_picker_timezone"] == "Europe/Moscow"
     text, markup = message.answers[-1]
-    assert "Напишите дату и время заново" in text
+    assert "Выберите новые дату и время" in text
+    assert "Выберите дату свободного времени" in text
+    assert "✍️ Ввести вручную" in _labels(markup)
     assert "✖️ Отмена" in _labels(markup)
+
+
+@pytest.mark.asyncio
+async def test_date_then_time_buttons_build_booking_start_without_manual_typing() -> None:
+    business_id = str(uuid4())
+    offering_id = str(uuid4())
+    token = wizard.control._uuid_token(business_id)
+    message = FakeMessage()
+    state = FakeState(
+        {
+            "business_id": business_id,
+            "offering_id": offering_id,
+            "booking_picker_min_date": "2026-09-20",
+            "booking_picker_timezone": "Europe/Moscow",
+        }
+    )
+    date_callback = FakeCallback(f"cpj:wizdate:{token}:2026-09-22", message)
+    with (
+        patch.object(wizard.control, "_actor", new=AsyncMock(return_value=object())),
+        patch.object(wizard.control, "_callback_message", return_value=message),
+    ):
+        await wizard.choose_booking_date(date_callback, state)
+    assert state.data["booking_picker_date"] == "2026-09-22"
+    assert "19:00" in _labels(message.answers[-1][1])
+
+    time_callback = FakeCallback(f"cpj:wiztime:{token}:1900", message)
+    with (
+        patch.object(wizard.control, "_actor", new=AsyncMock(return_value=object())),
+        patch.object(wizard.control, "_callback_message", return_value=message),
+    ):
+        await wizard.choose_booking_time(time_callback, state)
+
+    assert state.data["booking_start"] == "22.09.2026 19:00"
+    assert state.states[-1] == wizard.control.ClientPlatformControlState.booking_duration
+    text, markup = message.answers[-1]
+    assert "Дата и время приняты" in text
+    assert "60 мин" in _labels(markup)
+
+
+@pytest.mark.asyncio
+async def test_booking_date_picker_keeps_manual_fallback_visible() -> None:
+    business_id = str(uuid4())
+    message = FakeMessage()
+    state = FakeState({"business_id": business_id, "offering_id": str(uuid4())})
+
+    with patch.object(wizard, "local_today", return_value=__import__("datetime").date(2026, 9, 20)):
+        await wizard.send_booking_date_picker(
+            message,
+            state,
+            business_id=business_id,
+            timezone_name="Europe/Moscow",
+        )
+
+    text, markup = message.answers[-1]
+    labels = _labels(markup)
+    assert "Выберите дату свободного времени" in text
+    assert "20 сен" in labels
+    assert "✍️ Ввести вручную" in labels
+    assert "✖️ Отмена" in labels
 
 
 @pytest.mark.asyncio
