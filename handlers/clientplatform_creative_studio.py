@@ -371,7 +371,14 @@ async def _finish_visual(
                     reply_markup=_delivery_recovery_rows(token, receipt, ambiguous=True),
                 )
                 return True
-    except (OSError, VisualCreativeError, EventContentAssetError, ValueError):
+    except (VisualCreativeError, EventContentAssetError, ValueError):
+        await target.answer(
+            "Генератор завершил визуал, но файл сейчас не удалось получить. "
+            "Можно проверить файл ещё раз или завершить этот результат и создать новый.",
+            reply_markup=_delivery_recovery_rows(token, receipt),
+        )
+        return True
+    except OSError:
         await target.answer(
             "Генератор завершил визуал, но файл сейчас не удалось получить. "
             "Можно проверить файл ещё раз или завершить этот результат и создать новый.",
