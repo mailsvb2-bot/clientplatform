@@ -30,6 +30,7 @@ from clientplatform.infrastructure.event_dispatch_safety import (
     event_commercial_policy_authorized,
 )
 from clientplatform.infrastructure.event_followup_settings_repository import (
+    EventFollowupSettings,
     EventFollowupSettingsRepository,
     event_followups_platform_enabled,
 )
@@ -323,17 +324,50 @@ def get_saved_event_warmup_plan(
     event_id: str,
     now: datetime | None = None,
 ) -> EventWarmupPlan:
+    """Read the persisted schedule without revalidating it against today's remaining days."""
+
+    current = normalize_utc(now or datetime.now(timezone.utc), field_name="now")
     with get_db_ro() as conn:
+        event = EventRepository(conn).get(actor=actor, event_id=event_id)
+        actor.assert_can_manage_business()
+        sessions = EventSessionRepository(conn).list_for_event(
+            actor=actor,
+            event_id=event.id,
+        )
         messages = EventContentMessageRepository(conn).list_for_stage(
             actor=actor,
-            event_id=event_id,
+            event_id=event.id,
             stage=EventContentStage.WARMUP,
         )
-    return get_event_warmup_plan(
-        actor=actor,
-        event_id=event_id,
-        requested_days=len(messages),
-        now=now,
+    window = warmup_window_for_sessions(
+        sessions,
+        timezone_name=event.timezone_name,
+        now=current,
+    )
+    zone = ZoneInfo(event.timezone_name)
+    first_local_date = sessions[0].starts_at.astimezone(zone).date()
+    drafts: list[EventWarmupDraft] = []
+    for item in messages:
+        if item.scheduled_at is None:
+            continue
+        scheduled = normalize_utc(item.scheduled_at, field_name="scheduled_at")
+        publish_date = scheduled.astimezone(zone).date()
+        drafts.append(
+            EventWarmupDraft(
+                position=item.position,
+                publish_date=publish_date,
+                scheduled_at=scheduled,
+                days_before_event=max((first_local_date - publish_date).days, 0),
+                text=item.text,
+                source=item.source,
+            )
+        )
+    return EventWarmupPlan(
+        event_id=event.id,
+        timezone_name=event.timezone_name,
+        days_until_event=window.days_until_event,
+        requested_days=len(drafts),
+        drafts=tuple(drafts),
     )
 
 
@@ -366,19 +400,14 @@ def set_event_warmup_text(
             source="owner",
             scheduled_at=current.scheduled_at,
         )
-        count = len(
-            repository.list_for_stage(
-                actor=actor,
-                event_id=event_id,
-                stage=EventContentStage.WARMUP,
-            )
-        )
-    plan = get_event_warmup_plan(
+    plan = get_saved_event_warmup_plan(
         actor=actor,
         event_id=event_id,
-        requested_days=count,
     )
-    return plan.drafts[position - 1]
+    for draft in plan.drafts:
+        if draft.position == position:
+            return draft
+    raise ValueError("прогрев для этой позиции не найден")
 
 
 def reset_event_warmup_text(
@@ -389,32 +418,50 @@ def reset_event_warmup_text(
 ) -> EventWarmupDraft:
     actor.assert_can_manage_business()
     with get_db_ro() as conn:
+        event = EventRepository(conn).get(actor=actor, event_id=event_id)
+        sessions = EventSessionRepository(conn).list_for_event(
+            actor=actor,
+            event_id=event.id,
+        )
         messages = EventContentMessageRepository(conn).list_for_stage(
             actor=actor,
-            event_id=event_id,
+            event_id=event.id,
             stage=EventContentStage.WARMUP,
         )
-    if not messages or not 1 <= position <= len(messages):
+    current = next((item for item in messages if item.position == position), None)
+    if current is None or current.scheduled_at is None:
         raise ValueError("прогрев для этой позиции не найден")
-    base = _base_plan(
-        actor=actor,
-        event_id=event_id,
-        requested_days=len(messages),
-        now=None,
+    scheduled = normalize_utc(current.scheduled_at, field_name="scheduled_at")
+    zone = ZoneInfo(event.timezone_name)
+    publish_date = scheduled.astimezone(zone).date()
+    first_local_date = sessions[0].starts_at.astimezone(zone).date()
+    days_before_event = max((first_local_date - publish_date).days, 0)
+    body = _safe_warmup_text(
+        title=event.title,
+        description=event.description,
+        days_before_event=days_before_event,
+        position=position,
+        total=len(messages),
     )
-    draft = base.drafts[position - 1]
     with get_db() as conn:
         EventContentMessageRepository(conn).upsert(
             actor=actor,
-            event_id=event_id,
+            event_id=event.id,
             stage=EventContentStage.WARMUP,
             slot_key=_slot_key(position),
             position=position,
-            text=draft.text,
+            text=body,
             source="template",
-            scheduled_at=draft.scheduled_at.isoformat(),
+            scheduled_at=scheduled.isoformat(),
         )
-    return draft
+    return EventWarmupDraft(
+        position=position,
+        publish_date=publish_date,
+        scheduled_at=scheduled,
+        days_before_event=days_before_event,
+        text=body,
+        source="template",
+    )
 
 
 def _public_base_url() -> str:
@@ -615,7 +662,7 @@ def materialize_due_event_warmups_in_transaction(
     scanned = queued = expired = no_consent = no_route = policy_blocked = settings_disabled = 0
     event_repository = EventRepository(conn)
     settings_repository = EventFollowupSettingsRepository(conn)
-    settings_cache: dict[str, object] = {}
+    settings_cache: dict[str, EventFollowupSettings | None] = {}
     event_cache: dict[str, Event] = {}
 
     for row in rows:

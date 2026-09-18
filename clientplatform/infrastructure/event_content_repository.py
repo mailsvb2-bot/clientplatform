@@ -249,7 +249,7 @@ class EventContentMessageRepository:
         normalized = self._event_exists(actor=actor, event_id=event_id)
         key = _slot_key(slot_key)
         row = self._conn.execute(
-            f"SELECT {_MESSAGE_COLUMNS} FROM clientplatform_event_content_messages "
+            f"SELECT {_MESSAGE_COLUMNS} FROM clientplatform_event_content_messages "  # nosec B608 - static columns
             "WHERE business_id=? AND event_id=? AND stage=? AND slot_key=? LIMIT 1",
             (actor.business_id, normalized, stage.value, key),
         ).fetchone()
@@ -264,7 +264,7 @@ class EventContentMessageRepository:
     ) -> tuple[EventContentMessage, ...]:
         normalized = self._event_exists(actor=actor, event_id=event_id)
         rows = self._conn.execute(
-            f"SELECT {_MESSAGE_COLUMNS} FROM clientplatform_event_content_messages "
+            f"SELECT {_MESSAGE_COLUMNS} FROM clientplatform_event_content_messages "  # nosec B608 - static columns
             "WHERE business_id=? AND event_id=? AND stage=? "
             "ORDER BY position,slot_key",
             (actor.business_id, normalized, stage.value),
