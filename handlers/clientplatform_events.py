@@ -99,7 +99,7 @@ def _announcement_share_markup(
     vk_url: str,
     max_url: str,
     business_token: str,
-    event_token: str,
+    event_token: str = "",
     visual_mode: EventContentMode = EventContentMode.TEXT,
     visual_prepared: bool = False,
 ) -> InlineKeyboardMarkup:
@@ -134,7 +134,7 @@ def _announcement_share_markup(
                 )
             ]
         )
-    if visual_mode is EventContentMode.TEXT_WITH_VIDEO:
+    if visual_mode is EventContentMode.TEXT_WITH_VIDEO and event_token:
         rows.append(
             [
                 InlineKeyboardButton(
