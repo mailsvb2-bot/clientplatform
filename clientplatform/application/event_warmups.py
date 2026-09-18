@@ -556,6 +556,108 @@ def _dispatch_key(
     )
 
 
+def _active_visual_asset(
+    conn: Any,
+    *,
+    business_id: str,
+    event_id: str,
+    slot_key: str,
+) -> tuple[str, str, int] | None:
+    row = conn.execute(
+        """
+        SELECT a.kind,a.media_reference,a.revision,p.mode
+        FROM clientplatform_event_content_assets a
+        JOIN clientplatform_event_content_preferences p
+          ON p.business_id=a.business_id AND p.event_id=a.event_id AND p.stage=a.stage
+        WHERE a.business_id=? AND a.event_id=? AND a.stage='warmup' AND a.slot_key=?
+        LIMIT 1
+        """,
+        (business_id, event_id, slot_key),
+    ).fetchone()
+    if row is None:
+        return None
+    kind = str(row["kind"] if hasattr(row, "keys") else row[0])
+    reference = str(row["media_reference"] if hasattr(row, "keys") else row[1])
+    revision = int(row["revision"] if hasattr(row, "keys") else row[2])
+    mode = str(row["mode"] if hasattr(row, "keys") else row[3])
+    valid = (
+        (mode == "text_with_video" and kind == "video")
+        or (mode in {"text_with_image", "text_in_image"} and kind == "image")
+    )
+    return (kind, reference, revision) if valid else None
+
+
+def _media_dispatch_key(
+    *,
+    event_id: str,
+    registration_id: str,
+    slot_key: str,
+    message_revision: int,
+    asset_revision: int,
+) -> str:
+    normalized_slot = str(slot_key).replace(":", "-")
+    return (
+        f"event:{event_id}:registration:{registration_id}:"
+        f"message:warmup-media:v1:slot:{normalized_slot}:"
+        f"message-revision:{int(message_revision)}:asset-revision:{int(asset_revision)}"
+    )
+
+
+def _materialize_media(
+    conn: Any,
+    *,
+    event: Event,
+    registration: EventRegistration,
+    target: EventDeliveryTarget,
+    slot_key: str,
+    message_revision: int,
+    asset_kind: str,
+    asset_reference: str,
+    asset_revision: int,
+    now_iso: str,
+) -> bool:
+    key = _media_dispatch_key(
+        event_id=event.id,
+        registration_id=registration.id,
+        slot_key=slot_key,
+        message_revision=message_revision,
+        asset_revision=asset_revision,
+    )
+    cursor = conn.execute(
+        """
+        INSERT INTO provider_dispatch_outbox(
+            id,business_id,platform,source_kind,source_id,
+            logical_delivery_id,partner_campaign_id,partner_candidate_id,
+            sales_followup_id,connection_id,recipient_kind,customer_identity_id,
+            external_subject,payload_kind,payload_ref,idempotency_key,status,
+            attempts,available_at,locked_at,lock_token,provider_message_id,
+            last_error,created_at,updated_at,sent_at,dead_at
+        ) VALUES(
+            ?,?,?,'event_message',?,NULL,NULL,NULL,NULL,?,?,?,?,?,?,?,'pending',0,?,
+            NULL,NULL,NULL,NULL,?,?,NULL,NULL
+        )
+        ON CONFLICT(business_id,idempotency_key) DO NOTHING
+        """,
+        (
+            str(uuid4()),
+            event.business_id,
+            target.platform,
+            registration.id,
+            target.connection_id,
+            target.recipient_kind,
+            target.customer_identity_id,
+            target.external_subject,
+            asset_kind,
+            asset_reference,
+            key,
+            now_iso,
+            now_iso,
+            now_iso,
+        ),
+    )
+    return int(getattr(cursor, "rowcount", 0) or 0) == 1
+
+
 def _materialize(
     conn: Any,
     *,
@@ -566,6 +668,7 @@ def _materialize(
     revision: int,
     text: str,
     now_iso: str,
+    available_at: str | None = None,
 ) -> bool:
     subject, body = _render_for_registration(
         text=text,
@@ -611,7 +714,7 @@ def _materialize(
             payload_kind,
             payload_ref,
             key,
-            now_iso,
+            available_at or now_iso,
             now_iso,
             now_iso,
         ),
@@ -788,6 +891,38 @@ def materialize_due_event_warmups_in_transaction(
             policy_blocked += 1
             continue
 
+        media_queued = False
+        if target.platform != "email":
+            asset = _active_visual_asset(
+                conn,
+                business_id=business_id,
+                event_id=event_id,
+                slot_key=slot_key,
+            )
+            if asset is not None:
+                asset_kind, asset_reference, asset_revision = asset
+                if event_commercial_policy_authorized(
+                    conn,
+                    business_id=business_id,
+                    registration_id=registration.id,
+                    platform=target.platform,
+                    payload_ref=asset_reference,
+                    scheduled_at=current,
+                    now=current,
+                ):
+                    media_queued = _materialize_media(
+                        conn,
+                        event=event,
+                        registration=registration,
+                        target=target,
+                        slot_key=slot_key,
+                        message_revision=revision,
+                        asset_kind=asset_kind,
+                        asset_reference=asset_reference,
+                        asset_revision=asset_revision,
+                        now_iso=now_iso,
+                    )
+
         if _materialize(
             conn,
             event=event,
@@ -797,6 +932,11 @@ def materialize_due_event_warmups_in_transaction(
             revision=revision,
             text=text,
             now_iso=now_iso,
+            available_at=(
+                (current + timedelta(seconds=2)).replace(microsecond=0).isoformat()
+                if media_queued
+                else now_iso
+            ),
         ):
             queued += 1
 
