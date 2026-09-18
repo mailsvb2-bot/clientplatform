@@ -54,8 +54,11 @@ class EventContentDomainTests(unittest.TestCase):
             event_content_stage_label(EventContentStage.POST_EVENT),
             "дожим после мероприятия",
         )
+        self.assertIs(parse_event_content_mode("4"), EventContentMode.TEXT_WITH_VIDEO)
+        self.assertIs(parse_event_content_mode("видео"), EventContentMode.TEXT_WITH_VIDEO)
+        self.assertEqual(event_content_mode_label(EventContentMode.TEXT_WITH_VIDEO), "Текст + видео")
         with self.assertRaises(ValueError):
-            parse_event_content_mode("видео")
+            parse_event_content_mode("карусель")
 
     def test_visual_request_separates_attachment_and_text_in_image_semantics(self) -> None:
         separate = event_visual_request(
@@ -74,6 +77,13 @@ class EventContentDomainTests(unittest.TestCase):
         )
         self.assertIn("хорошо читаемый основной текст", embedded)
         self.assertIn("25.09.2026", embedded)
+        video = event_visual_request(
+            stage=EventContentStage.WARMUP,
+            mode=EventContentMode.TEXT_WITH_VIDEO,
+            event_title="Практика",
+            message_text="Скоро встречаемся",
+        )
+        self.assertIn("Короткое вертикальное видео", video)
         with self.assertRaises(ValueError):
             event_visual_request(
                 stage=EventContentStage.WARMUP,
@@ -278,7 +288,7 @@ class EventContentApplicationTests(unittest.TestCase):
         with (
             patch.object(plans, "get_event_content_plan", return_value=text_plan),
             patch.object(plans, "_load_goal_visual_brand") as load_brand,
-            patch.object(plans, "_freeze_business_image_payload") as freeze,
+            patch.object(plans, "_freeze_business_visual_payload") as freeze,
             patch.object(plans, "prepare_creative_generation") as prepare,
         ):
             result = plans.prepare_event_stage_visual(
@@ -307,7 +317,7 @@ class EventContentApplicationTests(unittest.TestCase):
             patch.object(plans, "get_event_content_plan", return_value=visual_plan),
             patch.object(plans, "event_visual_request", return_value="REQUEST"),
             patch.object(plans, "_load_goal_visual_brand", return_value=brand),
-            patch.object(plans, "_freeze_business_image_payload", return_value="FROZEN") as freeze,
+            patch.object(plans, "_freeze_business_visual_payload", return_value="FROZEN") as freeze,
             patch.object(plans, "prepare_creative_generation", return_value=receipt) as prepare,
         ):
             result = plans.prepare_event_stage_visual(
@@ -324,6 +334,7 @@ class EventContentApplicationTests(unittest.TestCase):
         self.assertTrue(result.prepared_for_requested_visual)
         freeze.assert_called_once_with(
             request="REQUEST",
+            kind="image",
             brand_context="brand",
             country_code="RU",
         )
