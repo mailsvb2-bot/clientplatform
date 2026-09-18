@@ -12,6 +12,7 @@ from clientplatform.application.events import (
     create_event_in_transaction,
     publish_event_in_transaction,
 )
+from clientplatform.domain.event_sessions import EventSession
 from clientplatform.domain.events import normalize_provider_key, validate_external_https_url
 from clientplatform.domain.tenancy import TenantContext
 from clientplatform.infrastructure.event_repository import EventRepository, EventStateConflict
@@ -242,7 +243,7 @@ def append_multisession_online_event_draft_session_in_transaction(
     actor: TenantContext,
     event_id: str,
     session: OnlineEventSessionCreateRequest,
-) -> tuple:
+) -> tuple[EventSession, ...]:
     event = EventRepository(conn).get(actor=actor, event_id=event_id)
     if event.status != "draft":
         raise EventStateConflict("only draft events can accept wizard sessions")
@@ -349,7 +350,7 @@ def append_multisession_online_event_draft_session(
     actor: TenantContext,
     event_id: str,
     session: OnlineEventSessionCreateRequest,
-):
+) -> tuple[EventSession, ...]:
     with atomic_db() as conn:
         return append_multisession_online_event_draft_session_in_transaction(
             conn,
