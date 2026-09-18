@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
@@ -66,6 +67,8 @@ from config.settings import settings
 
 from . import clientplatform_control as control
 from .clientplatform_program_media import ProgramMediaIngestError, materialize_program_content
+
+log = logging.getLogger(__name__)
 
 router = Router(name="clientplatform_events")
 router.message.filter(control.ClientPlatformControlEnabled())
@@ -743,7 +746,7 @@ async def receive_event_video_upload(message: Message, state: FSMContext) -> Non
                     reason="failed_event_owner_video_binding",
                 )
             except RuntimeError:
-                pass
+                log.warning("Failed to queue rejected event video cleanup")
             raise EventContentAssetError("event_owner_video_binding_failed") from exc
     except (
         TenantPermissionDenied,
