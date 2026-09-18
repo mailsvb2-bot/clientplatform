@@ -50,6 +50,22 @@ class EventContentPreference:
 
 
 @dataclass(frozen=True, slots=True)
+class EventContentAsset:
+    business_id: str
+    event_id: str
+    stage: EventContentStage
+    slot_key: str
+    kind: str
+    media_reference: str
+    source: str
+    source_ref: str
+    revision: int
+    updated_by_member_id: str
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True, slots=True)
 class EventContentMessage:
     business_id: str
     event_id: str
@@ -141,6 +157,7 @@ def event_visual_request(
 
 
 __all__ = [
+    "EventContentAsset",
     "EventContentMessage",
     "EventContentMode",
     "EventContentPreference",
