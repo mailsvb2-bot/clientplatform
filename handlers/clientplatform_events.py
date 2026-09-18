@@ -18,6 +18,7 @@ from clientplatform.application.event_content_plans import (
     prepare_event_stage_visual,
 )
 from clientplatform.application.event_content_assets import (
+    EventContentAssetError,
     get_event_content_asset,
     set_event_content_asset_reference,
 )
@@ -64,6 +65,7 @@ from clientplatform.presentation.event_ui import (
 from config.settings import settings
 
 from . import clientplatform_control as control
+from .clientplatform_program_media import ProgramMediaIngestError, materialize_program_content
 
 router = Router(name="clientplatform_events")
 router.message.filter(control.ClientPlatformControlEnabled())
@@ -685,10 +687,6 @@ async def receive_event_video_upload(message: Message, state: FSMContext) -> Non
             await state.clear()
             await message.answer("Формат этапа уже изменён. Видео не сохранено.")
             return
-        from .clientplatform_program_media import (
-            ProgramMediaIngestError,
-            materialize_program_content,
-        )
         kind, reference = await materialize_program_content(
             message,
             business_id=business_id,
@@ -707,7 +705,7 @@ async def receive_event_video_upload(message: Message, state: FSMContext) -> Non
                 source="owner",
                 source_ref="owner-upload",
             )
-        except Exception:  # validator: allow-wide-except - newly stored object must be cleanup-safe
+        except (EventContentAssetError, ValueError, RuntimeError) as exc:
             try:
                 await asyncio.to_thread(
                     queue_program_media_cleanup,
@@ -717,8 +715,14 @@ async def receive_event_video_upload(message: Message, state: FSMContext) -> Non
                 )
             except RuntimeError:
                 pass
-            raise
-    except (TenantPermissionDenied, ValueError, RuntimeError, ProgramMediaIngestError):
+            raise EventContentAssetError("event_owner_video_binding_failed") from exc
+    except (
+        TenantPermissionDenied,
+        ValueError,
+        RuntimeError,
+        ProgramMediaIngestError,
+        EventContentAssetError,
+    ):
         await message.answer(
             "Не удалось безопасно сохранить видео. Проверьте размер/формат и попробуйте ещё раз."
         )
