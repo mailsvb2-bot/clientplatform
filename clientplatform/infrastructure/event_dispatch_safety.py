@@ -590,6 +590,7 @@ def quarantine_stale_event_commercial_boundaries(
             WHERE source_kind='event_message'
               AND (
                   idempotency_key LIKE 'event:%:message:post:v4:stage:%'
+                  OR idempotency_key LIKE 'event:%:message:post:v5:stage:%'
                   OR idempotency_key LIKE 'event:%:message:warmup:v2:slot:%'
               )
               AND status='sending' AND locked_at IS NOT NULL AND locked_at<=?
@@ -608,6 +609,7 @@ def quarantine_stale_event_commercial_boundaries(
             WHERE source_kind='event_message'
               AND (
                   idempotency_key LIKE 'event:%:message:post:v4:stage:%'
+                  OR idempotency_key LIKE 'event:%:message:post:v5:stage:%'
                   OR idempotency_key LIKE 'event:%:message:warmup:v2:slot:%'
               )
               AND status='sending' AND locked_at IS NOT NULL AND locked_at<=?
