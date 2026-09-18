@@ -13,7 +13,10 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from clientplatform.application.activity import get_business_profile
 from clientplatform.application.cockpit_events import resolve_cockpit_events
 from clientplatform.application.event_announcements import draft_event_announcement
-from clientplatform.application.event_content_plans import get_event_content_plan
+from clientplatform.application.event_content_plans import (
+    get_event_content_plan,
+    prepare_event_stage_visual,
+)
 from clientplatform.application.event_followups import (
     get_event_followup_content_plan,
     reset_event_followup_text,
@@ -38,7 +41,11 @@ from clientplatform.application.event_followup_settings import (
     set_business_event_followups_enabled,
 )
 from clientplatform.domain.bookings import parse_local_booking_start
-from clientplatform.domain.event_content import event_content_mode_label
+from clientplatform.domain.event_content import (
+    EventContentMode,
+    EventContentStage,
+    event_content_mode_label,
+)
 from clientplatform.domain.tenancy import TenantPermissionDenied
 from clientplatform.presentation.event_ui import (
     BACK_TO_EVENTS_LABEL,
@@ -173,6 +180,14 @@ def _event_item(snapshot: object, event_id: str):
     raise ValueError("вебинар не найден")
 
 
+def _visual_action_label(mode: EventContentMode) -> str:
+    return (
+        "🎬 Подготовить видео"
+        if mode is EventContentMode.TEXT_WITH_VIDEO
+        else "🎨 Подготовить картинку"
+    )
+
+
 def _content_plan_rows(
     *,
     event_id: str,
@@ -285,6 +300,11 @@ async def _send_warmup_preview(
         actor=actor,
         event_id=event_id,
     )
+    modes = await asyncio.to_thread(
+        get_event_content_plan,
+        actor=actor,
+        event_id=event_id,
+    )
     if not plan.drafts:
         await _send_event_content_plan(
             target,
@@ -311,6 +331,13 @@ async def _send_warmup_preview(
     if draft.source == "owner":
         rows.append(
             [("♻️ Вернуть автотекст", f"cpev:wr:{event_token}:{draft.position}:{business_token}")]
+        )
+    if modes.warmup is not EventContentMode.TEXT:
+        rows.append(
+            [(
+                _visual_action_label(modes.warmup),
+                f"cpev:vis:w:{event_token}:{draft.position}:{business_token}",
+            )]
         )
     rows.append([("🗓 К контент-плану", f"cpev:content:{event_token}:{business_token}")])
     local_at = draft.scheduled_at.astimezone(ZoneInfo(plan.timezone_name))
@@ -344,6 +371,11 @@ async def _send_followup_plan(
     actor = await control._actor(user_id, business_id)
     previews = await asyncio.to_thread(
         get_event_followup_content_plan,
+        actor=actor,
+        event_id=event_id,
+    )
+    modes = await asyncio.to_thread(
+        get_event_content_plan,
         actor=actor,
         event_id=event_id,
     )
@@ -383,6 +415,13 @@ async def _send_followup_plan(
     rows.append([("✏️ Изменить текст", f"cpev:fe:{event_token}:{current}:{business_token}")])
     if preview.source != "template":
         rows.append([("↩️ Вернуть автотекст", f"cpev:fr:{event_token}:{current}:{business_token}")])
+    if modes.post_event is not EventContentMode.TEXT:
+        rows.append(
+            [(
+                _visual_action_label(modes.post_event),
+                f"cpev:vis:f:{event_token}:{current}:{business_token}",
+            )]
+        )
     rows.extend(
         [
             [("⚙️ Настроить автосообщения", f"cpev:settings:{business_token}")],
@@ -390,6 +429,113 @@ async def _send_followup_plan(
         ]
     )
     await target.answer("\n".join(lines), reply_markup=control._keyboard(rows))
+
+
+async def _prepare_event_visual_for_owner(
+    callback: CallbackQuery,
+    *,
+    actor,
+    event_id: str,
+    stage: EventContentStage,
+    message_key: str,
+    event_title: str,
+    message_text: str,
+) -> None:
+    try:
+        prepared = await asyncio.to_thread(
+            prepare_event_stage_visual,
+            actor=actor,
+            event_id=event_id,
+            stage=stage,
+            message_key=message_key,
+            event_title=event_title,
+            message_text=message_text,
+        )
+    except (TenantPermissionDenied, ValueError, RuntimeError):
+        await callback.answer("Не удалось безопасно подготовить визуал", show_alert=True)
+        return
+    if prepared is None:
+        await callback.answer("Для этого этапа выбран только текст", show_alert=True)
+        return
+    await callback.answer(
+        "Видео подготовлено к генерации"
+        if prepared.mode is EventContentMode.TEXT_WITH_VIDEO
+        else "Картинка подготовлена к генерации"
+    )
+    from .clientplatform_creative_studio import send_creative_studio_menu
+
+    await send_creative_studio_menu(
+        control._callback_message(callback),
+        user_id=int(callback.from_user.id),
+        business_id=actor.business_id,
+    )
+
+
+@router.callback_query(F.data.startswith("cpev:vis:"))
+async def prepare_event_visual(callback: CallbackQuery) -> None:
+    parts = str(callback.data or "").split(":")
+    if len(parts) not in {6, 7}:
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    target = parts[2]
+    if target not in {"w", "f"}:
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    event_id = control._token_uuid(parts[3])
+    try:
+        position = int(parts[4])
+    except ValueError:
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    business_id = control._token_uuid(parts[5])
+    actor = await control._actor(int(callback.from_user.id), business_id)
+    actor.assert_can_manage_business()
+    snapshot = await asyncio.to_thread(
+        resolve_cockpit_events,
+        telegram_user_id=int(callback.from_user.id),
+        requested_business_id=business_id,
+        limit=30,
+    )
+    item = _event_item(snapshot, event_id)
+    if target == "w":
+        plan = await asyncio.to_thread(
+            get_saved_event_warmup_plan,
+            actor=actor,
+            event_id=event_id,
+        )
+        draft = next((row for row in plan.drafts if row.position == position), None)
+        if draft is None:
+            await callback.answer("Сообщение прогрева уже изменилось", show_alert=True)
+            return
+        await _prepare_event_visual_for_owner(
+            callback,
+            actor=actor,
+            event_id=event_id,
+            stage=EventContentStage.WARMUP,
+            message_key=draft.slot_key,
+            event_title=item.title,
+            message_text=draft.text,
+        )
+        return
+
+    previews = await asyncio.to_thread(
+        get_event_followup_content_plan,
+        actor=actor,
+        event_id=event_id,
+    )
+    if not 0 <= position < len(previews):
+        await callback.answer("Сообщение дожима уже изменилось", show_alert=True)
+        return
+    preview = previews[position]
+    await _prepare_event_visual_for_owner(
+        callback,
+        actor=actor,
+        event_id=event_id,
+        stage=EventContentStage.POST_EVENT,
+        message_key=preview.slot_key,
+        event_title=item.title,
+        message_text=preview.text,
+    )
 
 
 @router.callback_query(F.data.startswith("cpev:home:"))
