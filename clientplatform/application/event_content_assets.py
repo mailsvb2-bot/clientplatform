@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from pathlib import Path
 import sqlite3
+from pathlib import Path
 
 try:
     from psycopg import Error as PostgresError
@@ -150,7 +150,7 @@ def store_generated_event_content_asset(
             source="generated",
             source_ref=str(source_ref),
         )
-    except Exception:
+    except (EventContentAssetError, ValueError, RuntimeError):
         _queue_replaced(
             stored_media.reference,
             business_id=actor.business_id,
