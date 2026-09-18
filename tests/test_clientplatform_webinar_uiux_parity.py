@@ -148,6 +148,12 @@ def test_event_settings_and_mutations_return_to_webinar_hub() -> None:
     for parsed in (
         native_ui.ParsedMemberInteraction("event-settings"),
         native_ui.ParsedMemberInteraction("event-channel", ("vk", "on")),
+        native_ui.ParsedMemberInteraction(
+            "owner-input-cancelled", ("event_warmup_text",)
+        ),
+        native_ui.ParsedMemberInteraction(
+            "owner-input-cancelled", ("event_warmup_days",)
+        ),
     ):
         rendered = native_ui._with_parent_navigation(hub, parsed)
         commands = _commands(rendered)
