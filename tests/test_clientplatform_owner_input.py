@@ -49,6 +49,23 @@ class OwnerInputRepositoryTests(unittest.TestCase):
         )
         self.assertIsNone(self.repo.get(user_id=101, platform="max"))
 
+        event_input = self.repo.set(
+            user_id=101,
+            platform="max",
+            business_id=self.first.business.id,
+            action="online_event",
+            context={"step": "legacy-compatible"},
+        )
+        self.assertEqual(event_input.action, "online_event")
+        join_input = self.repo.set(
+            user_id=101,
+            platform="max",
+            business_id=self.first.business.id,
+            action="event_join_url",
+            context={"event_id": "event-1"},
+        )
+        self.assertEqual(join_input.action, "event_join_url")
+
         with self.assertRaises(TenantAccessDenied):
             self.repo.set(
                 user_id=101,
@@ -144,11 +161,40 @@ class OwnerInputResolutionTests(unittest.TestCase):
                 "member-add-text",
                 ("123456", "manager"),
             ),
+            (
+                self.session("online_event"),
+                "Вебинар | 25.09.2026 19:00 | - | -",
+                "event-create-text",
+                ("Вебинар", "25.09.2026 19:00", "", ""),
+            ),
+            (
+                self.session("event_join_url", event_id="event-1"),
+                "https://example.test/live",
+                "event-join-text",
+                ("event-1", "https://example.test/live"),
+            ),
         )
         for session, raw, action, args in cases:
             with self.subTest(action=action):
                 resolved = resolve_owner_input(session, raw)
                 self.assertEqual((resolved.action, resolved.args), (action, args))
+
+    def test_webinar_wizard_input_resolution_is_step_scoped(self) -> None:
+        cases = (
+            ("title", "Большой интенсив", "event-wizard-title-text", ("Большой интенсив",)),
+            ("count", "3", "event-wizard-count-text", ("3",)),
+            ("timezone", "Europe/Amsterdam", "event-wizard-timezone-text", ("Europe/Amsterdam",)),
+            ("manual_window", "25.09.2026 19:00-21:00", "event-wizard-window-text", ("25.09.2026 19:00-21:00",)),
+            ("room", "https://example.test/day-1", "event-wizard-room-text", ("https://example.test/day-1",)),
+            ("warmup_days", "5", "event-wizard-warmup-text", ("5",)),
+        )
+        for step, raw, action, args in cases:
+            with self.subTest(step=step):
+                resolved = resolve_owner_input(self.session("online_event", step=step), raw)
+                self.assertEqual((resolved.action, resolved.args), (action, args))
+
+        with self.assertRaises(ValueError):
+            resolve_owner_input(self.session("online_event", step="count"), "32")
 
     def test_free_text_fields_preserve_multiline_formatting(self) -> None:
         activity = resolve_owner_input(

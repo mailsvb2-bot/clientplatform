@@ -46,6 +46,10 @@ def _business_token(business_id: str) -> str:
     return control._uuid_token(business_id)
 
 
+def _booking_wizard_module():
+    return importlib.import_module(".clientplatform_booking_wizard_ux", __package__)
+
+
 def _slot_status(slot: BookingSlotView) -> tuple[str, str]:
     labels = {
         BookingSlotStatus.OPEN: ("🟢", "свободно"),
@@ -479,13 +483,16 @@ async def add_another_slot(callback: CallbackQuery, state: FSMContext) -> None:
     if not any(item.id == offering_id for item in offerings):
         await callback.answer("Услуга больше недоступна", show_alert=True)
         return
+    profile = await asyncio.to_thread(control.get_business_profile, actor=actor)
     await state.clear()
-    await state.set_state(control.ClientPlatformControlState.booking_start)
     await state.update_data(business_id=business_id, offering_id=offering_id)
     await callback.answer()
-    await control._callback_message(callback).answer(
-        "Напишите новое свободное время в формате ДД.ММ.ГГГГ ЧЧ:ММ.\n"
-        "Например: 15.08.2026 18:30"
+    await _booking_wizard_module().send_booking_date_picker(
+        control._callback_message(callback),
+        state,
+        business_id=business_id,
+        timezone_name=profile.timezone,
+        heading="Добавляем свободное время.",
     )
 
 
@@ -496,17 +503,21 @@ async def edit_owner_slot(callback: CallbackQuery, state: FSMContext) -> None:
     if slot.slot.status != BookingSlotStatus.OPEN:
         await callback.answer("Изменять можно только свободное время", show_alert=True)
         return
+    actor = await control._actor(int(callback.from_user.id), slot.slot.business_id)
+    profile = await asyncio.to_thread(control.get_business_profile, actor=actor)
     await state.clear()
-    await state.set_state(control.ClientPlatformControlState.booking_start)
     await state.update_data(
         business_id=slot.slot.business_id,
         offering_id=slot.slot.offering_id,
         replacing_slot_id=slot.slot.id,
     )
     await callback.answer()
-    await control._callback_message(callback).answer(
-        f"Сейчас: {slot.local_start}, {slot.slot.duration_minutes} минут.\n\n"
-        "Напишите новые дату и время в формате ДД.ММ.ГГГГ ЧЧ:ММ."
+    await _booking_wizard_module().send_booking_date_picker(
+        control._callback_message(callback),
+        state,
+        business_id=slot.slot.business_id,
+        timezone_name=profile.timezone,
+        heading=f"Сейчас: {slot.local_start}, {slot.slot.duration_minutes} минут. Выберите новые дату и время.",
     )
 
 

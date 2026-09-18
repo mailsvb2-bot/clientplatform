@@ -15,6 +15,8 @@ _ALLOWED_ACTIONS = frozenset(
         "activity_description",
         "booking_time",
         "member_user",
+        "online_event",
+        "event_join_url",
         "offering",
         "payment",
         "price",
