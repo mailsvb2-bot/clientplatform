@@ -893,7 +893,8 @@ def _cancel_invalid_commercial_messages(conn: Any, *, now_iso: str) -> int:
         WHERE d.source_kind='event_message'
           AND d.status IN ('pending','retry')
           AND (d.idempotency_key LIKE 'event:%:message:post:v4:stage:%'
-               OR d.idempotency_key LIKE 'event:%:message:post:v5:stage:%')
+               OR d.idempotency_key LIKE 'event:%:message:post:v5:stage:%'
+                OR d.idempotency_key LIKE 'event:%:message:post-media:v1:stage:%')
           AND (
               EXISTS (
                   SELECT 1
@@ -938,7 +939,8 @@ def cancel_commercial_followups_for_registration_in_transaction(
         WHERE business_id=? AND source_kind='event_message' AND source_id=?
           AND status IN ('pending','retry')
           AND (idempotency_key LIKE 'event:%:message:post:v4:stage:%'
-               OR idempotency_key LIKE 'event:%:message:post:v5:stage:%')
+               OR idempotency_key LIKE 'event:%:message:post:v5:stage:%'
+               OR idempotency_key LIKE 'event:%:message:post-media:v1:stage:%')
         """,
         (
             stamp,
