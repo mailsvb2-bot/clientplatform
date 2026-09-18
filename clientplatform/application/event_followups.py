@@ -215,9 +215,7 @@ def _template_body(segment: str, *, stage: int) -> str:
     if segment == "offer_clicked_unpaid":
         if stage == 1:
             return (
-                "{name}, вы открывали предложение после «{title}».
-
-"
+                "{name}, вы открывали предложение после «{title}».\n\n"
                 "Если хотите вернуться к нему: {offer}"
             )
         if stage == 2:
@@ -233,9 +231,7 @@ def _template_body(segment: str, *, stage: int) -> str:
     if segment == "attended_unpaid":
         if stage == 1:
             return (
-                "{name}, спасибо, что были на «{title}».
-
-"
+                "{name}, спасибо, что были на «{title}».\n\n"
                 "Продолжить и посмотреть предложение: {offer}"
             )
         if stage == 2:
@@ -401,9 +397,7 @@ def _render(
     body = body.replace("{name}", candidate.name)
     body = body.replace("{title}", candidate.event_title)
     body = body.replace("{offer}", offer)
-    footer = f"
-
-Отказаться от рекламных сообщений: {unsubscribe}"
+    footer = f"\n\nОтказаться от рекламных сообщений: {unsubscribe}"
     return (_subject(candidate.segment, title=candidate.event_title), body + footer)
 
 
