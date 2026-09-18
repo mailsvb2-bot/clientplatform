@@ -684,7 +684,6 @@ async def open_followup_content_plan(callback: CallbackQuery) -> None:
     if len(parts) not in {4, 5}:
         await callback.answer("Кнопка устарела", show_alert=True)
         return
-    event_id = control._token_uuid(parts[2])
     index = 0
     business_token = parts[3]
     if len(parts) == 5:
@@ -693,7 +692,12 @@ async def open_followup_content_plan(callback: CallbackQuery) -> None:
             return
         index = int(parts[3])
         business_token = parts[4]
-    business_id = control._token_uuid(business_token)
+    try:
+        event_id = control._token_uuid(parts[2])
+        business_id = control._token_uuid(business_token)
+    except (ValueError, TypeError):
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
     await callback.answer()
     await _send_followup_plan(
         control._callback_message(callback),
