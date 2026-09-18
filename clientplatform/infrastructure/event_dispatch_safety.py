@@ -93,17 +93,22 @@ def _value(row: Any, key: str, position: int) -> Any:
 
 
 def _owner_actor(conn: Any, *, business_id: str) -> TenantContext | None:
-    row = conn.execute(
-        """
-        SELECT bm.id,bm.user_id
-        FROM business_members bm
-        JOIN businesses b ON b.id=bm.business_id AND b.status='active'
-        WHERE bm.business_id=? AND bm.role='owner' AND bm.status='active'
-        ORDER BY bm.created_at,bm.id
-        LIMIT 1
-        """,
-        (business_id,),
-    ).fetchone()
+    try:
+        row = conn.execute(
+            """
+            SELECT bm.id,bm.user_id
+            FROM business_members bm
+            JOIN businesses b ON b.id=bm.business_id AND b.status='active'
+            WHERE bm.business_id=? AND bm.role='owner' AND bm.status='active'
+            ORDER BY bm.created_at,bm.id
+            LIMIT 1
+            """,
+            (business_id,),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        # Fail closed for pre-policy/partial databases instead of letting a
+        # provider-boundary safety hook crash the shared dispatcher.
+        return None
     if row is None:
         return None
     try:

@@ -117,7 +117,13 @@ def test_business_switch_off_wins_before_non_replay_marker() -> None:
 
 def test_commercial_event_boundary_becomes_non_replayable() -> None:
     conn = _db(); item = _item()
-    assert mark_event_commercial_non_replay_boundary(conn, item, now='2026-09-12T10:00:01+00:00')
+    with patch(
+        "clientplatform.infrastructure.event_dispatch_safety.event_commercial_policy_authorized",
+        return_value=True,
+    ):
+        assert mark_event_commercial_non_replay_boundary(
+            conn, item, now='2026-09-12T10:00:01+00:00'
+        )
     marker = conn.execute("SELECT last_error FROM provider_dispatch_outbox WHERE id='d'").fetchone()[0]
     assert marker == 'event_commercial_provider_call_started_non_idempotent'
     quarantined = quarantine_stale_event_commercial_boundaries(

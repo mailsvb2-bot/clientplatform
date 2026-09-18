@@ -239,4 +239,6 @@ class TestPersistedWarmupPlan:
                 now=next_day,
             )
             assert second.queued == 1
-            assert second.expired == 1
+            # Yesterday is outside the scan window by the time today's noon
+            # warmup is due, so stale work cannot crowd out the current day.
+            assert second.expired == 0
