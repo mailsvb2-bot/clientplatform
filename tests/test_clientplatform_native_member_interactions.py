@@ -119,6 +119,49 @@ class NativeOwnerInputSurfaceTests(unittest.TestCase):
             user_id=actor.user_id, platform="max", surface=surface
         )
 
+    def test_webinar_wizard_callback_preserves_durable_pending_session(self) -> None:
+        route = _route(ConnectionPlatform.VK)
+        actor = _actor(route)
+        surface = f"route:{route.id}"
+        session = SimpleNamespace(business_id=actor.business_id, action="online_event")
+        with (
+            patch.object(native_member_ui, "get_owner_input_session", return_value=session),
+            patch.object(native_member_ui, "clear_owner_input") as clear,
+            patch.object(native_member_ui, "abandon_native_event_wizard") as abandon,
+        ):
+            parsed, pending = native_member_ui._pending_owner_input(
+                actor,
+                platform=route.platform,
+                surface=surface,
+                raw_text="cpm:event-wizard:count:3",
+            )
+        self.assertEqual(parsed.action, "event-wizard")
+        self.assertEqual(parsed.args, ("count", "3"))
+        self.assertIsNone(pending)
+        clear.assert_not_called()
+        abandon.assert_not_called()
+
+    def test_webinar_text_cancel_abandons_draft_through_canonical_helper(self) -> None:
+        route = _route(ConnectionPlatform.MAX)
+        actor = _actor(route)
+        surface = f"route:{route.id}"
+        session = SimpleNamespace(business_id=actor.business_id, action="online_event")
+        with (
+            patch.object(native_member_ui, "get_owner_input_session", return_value=session),
+            patch.object(native_member_ui, "clear_owner_input") as clear,
+            patch.object(native_member_ui, "abandon_native_event_wizard", return_value=True) as abandon,
+        ):
+            parsed, pending = native_member_ui._pending_owner_input(
+                actor,
+                platform=route.platform,
+                surface=surface,
+                raw_text="Отмена",
+            )
+        self.assertEqual(parsed.action, "owner-input-cancelled")
+        self.assertIsNone(pending)
+        abandon.assert_called_once_with(actor, platform=route.platform, surface=surface)
+        clear.assert_not_called()
+
 
 class NativeMemberResolutionTests(unittest.TestCase):
     def test_existing_account_member_is_resolved_before_customer_path(self) -> None:
