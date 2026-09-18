@@ -179,6 +179,23 @@ class OwnerInputResolutionTests(unittest.TestCase):
                 resolved = resolve_owner_input(session, raw)
                 self.assertEqual((resolved.action, resolved.args), (action, args))
 
+    def test_webinar_wizard_input_resolution_is_step_scoped(self) -> None:
+        cases = (
+            ("title", "Большой интенсив", "event-wizard-title-text", ("Большой интенсив",)),
+            ("count", "3", "event-wizard-count-text", ("3",)),
+            ("timezone", "Europe/Amsterdam", "event-wizard-timezone-text", ("Europe/Amsterdam",)),
+            ("manual_window", "25.09.2026 19:00-21:00", "event-wizard-window-text", ("25.09.2026 19:00-21:00",)),
+            ("room", "https://example.test/day-1", "event-wizard-room-text", ("https://example.test/day-1",)),
+            ("warmup_days", "5", "event-wizard-warmup-text", ("5",)),
+        )
+        for step, raw, action, args in cases:
+            with self.subTest(step=step):
+                resolved = resolve_owner_input(self.session("online_event", step=step), raw)
+                self.assertEqual((resolved.action, resolved.args), (action, args))
+
+        with self.assertRaises(ValueError):
+            resolve_owner_input(self.session("online_event", step="count"), "32")
+
     def test_free_text_fields_preserve_multiline_formatting(self) -> None:
         activity = resolve_owner_input(
             self.session("activity_description"),
