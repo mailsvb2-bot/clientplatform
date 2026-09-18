@@ -51,6 +51,8 @@ async def send_cockpit_section(
                 callback = f"cpev:new:{token}"
             elif action.kind == "join" and action.key is not None:
                 callback = f"cpev:join:{one_click.control._uuid_token(action.key)}:{token}"
+            elif action.kind == "content" and action.key is not None:
+                callback = f"cpev:content:{one_click.control._uuid_token(action.key)}:{token}"
             elif action.kind == "announce" and action.key is not None:
                 callback = f"cpev:announce:{one_click.control._uuid_token(action.key)}:{token}"
             elif action.kind == "settings":
