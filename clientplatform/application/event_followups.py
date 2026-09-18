@@ -716,18 +716,21 @@ def _active_followup_visual_asset(
     stage: int,
     slot_key: str,
 ) -> tuple[str, str, int] | None:
-    row = conn.execute(
-        """
-        SELECT a.kind,a.media_reference,a.revision,p.mode
-        FROM clientplatform_event_content_assets a
-        JOIN clientplatform_event_content_preferences p
-          ON p.business_id=a.business_id AND p.event_id=a.event_id AND p.stage=a.stage
-        WHERE a.business_id=? AND a.event_id=?
-          AND a.stage='post_event_followup' AND a.slot_key=?
-        LIMIT 1
-        """,
-        (candidate.business_id, candidate.event_id, slot_key),
-    ).fetchone()
+    try:
+        row = conn.execute(
+            """
+            SELECT a.kind,a.media_reference,a.revision,p.mode
+            FROM clientplatform_event_content_assets a
+            JOIN clientplatform_event_content_preferences p
+              ON p.business_id=a.business_id AND p.event_id=a.event_id AND p.stage=a.stage
+            WHERE a.business_id=? AND a.event_id=?
+              AND a.stage='post_event_followup' AND a.slot_key=?
+            LIMIT 1
+            """,
+            (candidate.business_id, candidate.event_id, slot_key),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return None
     if row is None:
         return None
     kind = str(_value(row, "kind", 0))
