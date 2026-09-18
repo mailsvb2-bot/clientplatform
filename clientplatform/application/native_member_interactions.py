@@ -2249,6 +2249,10 @@ def _event_announcement_message(
             public_base_url=public_base,
             source=current_platform.value,
         )
+        advertising_url = draft.registration_url(
+            public_base_url=public_base,
+            source="ads",
+        )
     except (TenantPermissionDenied, ValueError, RuntimeError):
         return CustomerInteractionMessage(
             text="Не удалось подготовить анонс. Вернитесь к вебинарам и попробуйте ещё раз.",
@@ -2259,7 +2263,9 @@ def _event_announcement_message(
             "✨ Анонс готов\n\n"
             f"{draft.text}\n\n"
             f"Регистрация: {registration_url}\n\n"
-            "Ссылка помечена текущим каналом, поэтому ClientPlatform сохранит источник регистрации."
+            f"🔗 Ссылка для рекламы:\n{advertising_url}\n\n"
+            "Ссылку для рекламы можно вставить в рекламный кабинет, сайт или пост. "
+            "ClientPlatform отдельно сохранит источник ads; обычная регистрационная ссылка помечена текущим каналом."
         ),
         rows=((_button(BACK_TO_EVENTS_LABEL, "cpm:events"),), _back_row()),
     )
