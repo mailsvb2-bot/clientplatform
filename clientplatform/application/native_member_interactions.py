@@ -5808,12 +5808,6 @@ def render_native_member_interaction(
         )
     else:
         parsed, pending = parse_native_member_interaction(raw_text), None
-    if pending is not None and parsed.action != "owner-input-invalid":
-        clear_owner_input(
-            user_id=current.user_id,
-            platform=current_platform.value,
-            surface="official",
-        )
     interaction = _render(
         current,
         parsed,
@@ -5824,6 +5818,16 @@ def render_native_member_interaction(
         current_platform=current_platform,
     )
     interaction = _with_parent_navigation(interaction, parsed)
+    if (
+        pending is not None
+        and pending.action != "online_event"
+        and parsed.action != "owner-input-invalid"
+    ):
+        clear_owner_input(
+            user_id=current.user_id,
+            platform=current_platform.value,
+            surface="official",
+        )
     return interaction
 
 
@@ -5854,12 +5858,6 @@ def process_native_member_interaction(
         f"route:{route.id}:event:{provider_event_id}:"
         + f"member:{actor.user_id}:action:{action_key}"
     )
-    if pending is not None and parsed.action != "owner-input-invalid":
-        clear_owner_input(
-            user_id=actor.user_id,
-            platform=route.platform.value,
-            surface=input_surface,
-        )
     interaction = _render(
         actor,
         parsed,
@@ -5870,6 +5868,16 @@ def process_native_member_interaction(
         current_platform=route.platform,
     )
     interaction = _with_parent_navigation(interaction, parsed)
+    if (
+        pending is not None
+        and pending.action != "online_event"
+        and parsed.action != "owner-input-invalid"
+    ):
+        clear_owner_input(
+            user_id=actor.user_id,
+            platform=route.platform.value,
+            surface=input_surface,
+        )
     with get_db() as conn:
         return DispatchOutboxRepository(conn).materialize_member_interaction(
             business_id=route.business_id,
