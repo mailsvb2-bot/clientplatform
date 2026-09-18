@@ -163,6 +163,35 @@ class NativeOwnerInputSurfaceTests(unittest.TestCase):
         clear.assert_not_called()
 
 
+class NativeEventAnnouncementParityTests(unittest.TestCase):
+    def test_ai_announcement_keeps_confirmation_and_attributed_links_on_vk(self) -> None:
+        route = _route(ConnectionPlatform.VK)
+        actor = _actor(route)
+        draft = SimpleNamespace(
+            text="Приходите на вебинар",
+            generated_by="ai:test",
+            registration_url=lambda *, public_base_url, source: (
+                f"https://clientplatform.example.test/e/demo?source={source}"
+            ),
+        )
+        with patch.object(
+            native_member_ui,
+            "draft_event_announcement_template",
+            return_value=draft,
+        ):
+            message = native_member_ui._event_announcement_message(
+                actor,
+                "event-1",
+                current_platform=ConnectionPlatform.VK,
+            )
+
+        self.assertIn("требует Вашего подтверждения", message.text)
+        self.assertIn("source=vk", message.text)
+        self.assertIn("source=ads", message.text)
+
+
+
+
 class NativeMemberResolutionTests(unittest.TestCase):
     def test_existing_account_member_is_resolved_before_customer_path(self) -> None:
         route = _route()
