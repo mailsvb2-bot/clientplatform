@@ -14,6 +14,8 @@ from clientplatform.application.events import (
 )
 from clientplatform.domain.events import normalize_provider_key, validate_external_https_url
 from clientplatform.domain.tenancy import TenantContext
+from clientplatform.infrastructure.event_repository import EventRepository, EventStateConflict
+from clientplatform.infrastructure.event_session_repository import EventSessionRepository
 from clientplatform.infrastructure.tenancy_repository import TenancyRepository
 from services.db import atomic_db
 
@@ -53,6 +55,15 @@ class MultiSessionOnlineEventCreateRequest:
     kind: str = "webinar"
     enable_email_notifications: bool = True
     notification_connection_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class OnlineEventDraft:
+    event_id: str
+    public_slug: str
+    provider_key: str
+    email_notifications_enabled: bool
+    join_ready: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,12 +172,12 @@ def create_and_publish_online_event_in_transaction(
     )
 
 
-def create_and_publish_multisession_online_event_in_transaction(
+def create_multisession_online_event_draft_in_transaction(
     conn: Any,
     *,
     actor: TenantContext,
     request: MultiSessionOnlineEventCreateRequest,
-) -> OnlineEventCreated:
+) -> OnlineEventDraft:
     sessions = tuple(request.sessions)
     if not sessions:
         raise ValueError("event must have at least one session")
@@ -216,17 +227,87 @@ def create_and_publish_multisession_online_event_in_transaction(
             for session in sessions
         ),
     )
-    event = publish_event_in_transaction(
-        conn,
-        actor=actor,
-        event_id=event.id,
-    )
-    return OnlineEventCreated(
+    return OnlineEventDraft(
         event_id=event.id,
         public_slug=event.public_slug,
         provider_key=event.provider_key,
         email_notifications_enabled=event.notification_connection_id is not None,
         join_ready=all(session.join_is_ready for session in configured),
+    )
+
+
+def append_multisession_online_event_draft_session_in_transaction(
+    conn: Any,
+    *,
+    actor: TenantContext,
+    event_id: str,
+    session: OnlineEventSessionCreateRequest,
+) -> tuple:
+    event = EventRepository(conn).get(actor=actor, event_id=event_id)
+    if event.status != "draft":
+        raise EventStateConflict("only draft events can accept wizard sessions")
+    existing = EventSessionRepository(conn).list_for_event(actor=actor, event_id=event.id)
+    specs = tuple(
+        EventSessionSpec(
+            starts_at=item.starts_at,
+            ends_at=item.ends_at,
+            join_url=item.join_url,
+            provider_key=item.provider_key,
+            provider_label=item.provider_label,
+        )
+        for item in existing
+    ) + (
+        EventSessionSpec(
+            starts_at=session.starts_at,
+            ends_at=session.ends_at,
+            join_url=session.join_url,
+            provider_key=session.provider_key,
+            provider_label=session.provider_label,
+        ),
+    )
+    return configure_event_sessions_in_transaction(
+        conn,
+        actor=actor,
+        event_id=event.id,
+        sessions=specs,
+    )
+
+
+def publish_multisession_online_event_draft_in_transaction(
+    conn: Any,
+    *,
+    actor: TenantContext,
+    event_id: str,
+) -> OnlineEventCreated:
+    event = EventRepository(conn).get(actor=actor, event_id=event_id)
+    if event.status != "draft":
+        raise EventStateConflict("event draft is no longer publishable")
+    sessions = EventSessionRepository(conn).list_for_event(actor=actor, event_id=event.id)
+    event = publish_event_in_transaction(conn, actor=actor, event_id=event.id)
+    return OnlineEventCreated(
+        event_id=event.id,
+        public_slug=event.public_slug,
+        provider_key=event.provider_key,
+        email_notifications_enabled=event.notification_connection_id is not None,
+        join_ready=all(session.join_is_ready for session in sessions),
+    )
+
+
+def create_and_publish_multisession_online_event_in_transaction(
+    conn: Any,
+    *,
+    actor: TenantContext,
+    request: MultiSessionOnlineEventCreateRequest,
+) -> OnlineEventCreated:
+    draft = create_multisession_online_event_draft_in_transaction(
+        conn,
+        actor=actor,
+        request=request,
+    )
+    return publish_multisession_online_event_draft_in_transaction(
+        conn,
+        actor=actor,
+        event_id=draft.event_id,
     )
 
 
@@ -252,13 +333,59 @@ def create_and_publish_multisession_online_event(
         )
 
 
+def create_multisession_online_event_draft(
+    *,
+    actor: TenantContext,
+    request: MultiSessionOnlineEventCreateRequest,
+) -> OnlineEventDraft:
+    with atomic_db() as conn:
+        return create_multisession_online_event_draft_in_transaction(
+            conn, actor=actor, request=request
+        )
+
+
+def append_multisession_online_event_draft_session(
+    *,
+    actor: TenantContext,
+    event_id: str,
+    session: OnlineEventSessionCreateRequest,
+):
+    with atomic_db() as conn:
+        return append_multisession_online_event_draft_session_in_transaction(
+            conn,
+            actor=actor,
+            event_id=event_id,
+            session=session,
+        )
+
+
+def publish_multisession_online_event_draft(
+    *,
+    actor: TenantContext,
+    event_id: str,
+) -> OnlineEventCreated:
+    with atomic_db() as conn:
+        return publish_multisession_online_event_draft_in_transaction(
+            conn,
+            actor=actor,
+            event_id=event_id,
+        )
+
+
 __all__ = [
     "MultiSessionOnlineEventCreateRequest",
+    "OnlineEventDraft",
     "OnlineEventCreateRequest",
     "OnlineEventCreated",
     "OnlineEventSessionCreateRequest",
+    "append_multisession_online_event_draft_session",
+    "append_multisession_online_event_draft_session_in_transaction",
     "create_and_publish_multisession_online_event",
+    "create_multisession_online_event_draft",
+    "create_multisession_online_event_draft_in_transaction",
     "create_and_publish_multisession_online_event_in_transaction",
     "create_and_publish_online_event",
     "create_and_publish_online_event_in_transaction",
+    "publish_multisession_online_event_draft",
+    "publish_multisession_online_event_draft_in_transaction",
 ]
