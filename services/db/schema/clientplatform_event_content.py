@@ -71,6 +71,43 @@ def ensure(c: sqlite3.Connection) -> None:
         """
     )
 
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS clientplatform_event_content_assets(
+            business_id TEXT NOT NULL,
+            event_id TEXT NOT NULL,
+            stage TEXT NOT NULL,
+            slot_key TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            media_reference TEXT NOT NULL,
+            source TEXT NOT NULL,
+            source_ref TEXT NOT NULL DEFAULT '',
+            revision INTEGER NOT NULL DEFAULT 1,
+            updated_by_member_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(business_id, event_id, stage, slot_key),
+            FOREIGN KEY(event_id, business_id)
+                REFERENCES clientplatform_events(id, business_id) ON DELETE CASCADE,
+            FOREIGN KEY(updated_by_member_id, business_id)
+                REFERENCES business_members(id, business_id),
+            CHECK(stage IN ('warmup','event_day_announcement','post_event_followup')),
+            CHECK(kind IN ('image','video')),
+            CHECK(source IN ('owner','generated')),
+            CHECK(revision >= 1),
+            CHECK(length(slot_key) BETWEEN 1 AND 80),
+            CHECK(length(media_reference) BETWEEN 1 AND 2048),
+            CHECK(length(source_ref) <= 200)
+        )
+        """
+    )
+    c.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_clientplatform_event_content_assets_event
+        ON clientplatform_event_content_assets(business_id, event_id, stage, slot_key)
+        """
+    )
+
     message_columns = {
         str(row[1])
         for row in c.execute(
