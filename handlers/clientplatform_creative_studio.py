@@ -32,6 +32,7 @@ from clientplatform.application.event_content_assets import (
 )
 from clientplatform.application.visual_creatives import (
     VisualCreativeError,
+    create_business_image_from_frozen_payload,
     create_business_visual_from_frozen_payload,
     freeze_business_image_payload,
     frozen_business_visual_binding,
@@ -81,7 +82,11 @@ def _menu_rows(token: str, active: CreativeGenerationReceipt | None = None):
             "⚠️ Проверить доставку"
             if active.delivery_claimed_at
             else (
-                f"✅ Получить готовое {_receipt_noun(active)}"
+                (
+                    "✅ Получить готовое видео"
+                    if _receipt_kind(active) == "video"
+                    else "✅ Получить готовую картинку"
+                )
                 if active.status == CreativeGenerationReceiptStatus.SUCCEEDED
                 else "🔄 Продолжить создание"
             )
@@ -397,6 +402,23 @@ async def _finish_visual(
     return True
 
 
+async def _finish_image(
+    callback: CallbackQuery,
+    *,
+    actor,
+    receipt: CreativeGenerationReceipt,
+    job,
+) -> bool:
+    """Backward-compatible image completion boundary over the generic visual path."""
+
+    return await _finish_visual(
+        callback,
+        actor=actor,
+        receipt=receipt,
+        job=job,
+    )
+
+
 async def _remember_job(actor, receipt: CreativeGenerationReceipt, job):
     return await asyncio.to_thread(
         remember_creative_generation_job,
@@ -425,8 +447,13 @@ async def _submit_or_recover(actor, receipt: CreativeGenerationReceipt):
     )
     if current.source_job_id:
         return await _poll_existing(actor, current)
+    generator = (
+        create_business_visual_from_frozen_payload
+        if _receipt_kind(current) == "video"
+        else create_business_image_from_frozen_payload
+    )
     job = await asyncio.to_thread(
-        create_business_visual_from_frozen_payload,
+        generator,
         provider_payload_json=current.provider_payload_json,
         scope_id=actor.business_id,
         idempotency_key=current.idempotency_key,
@@ -512,7 +539,8 @@ async def _continue_generation(
             reply_markup=_result_rows(token),
         )
         return
-    if await _finish_visual(callback, actor=actor, receipt=current, job=job):
+    finish = _finish_visual if _receipt_kind(current) == "video" else _finish_image
+    if await finish(callback, actor=actor, receipt=current, job=job):
         return
     if current.status == CreativeGenerationReceiptStatus.SUCCEEDED:
         await control._callback_message(callback).answer(
@@ -582,8 +610,13 @@ async def abandon_creative_image(callback: CallbackQuery, state: FSMContext) -> 
         await callback.answer("Состояние результата уже изменилось", show_alert=True)
         return
     await callback.answer()
+    result_text = (
+        "Результат завершён. Теперь можно создать новое видео."
+        if _receipt_kind(receipt) == "video"
+        else "Результат завершён. Теперь можно создать новую картинку."
+    )
     await control._callback_message(callback).answer(
-        "Результат завершён. Теперь можно создать новый визуал.",
+        result_text,
         reply_markup=_result_rows(token),
     )
 
