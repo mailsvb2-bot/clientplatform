@@ -26,10 +26,12 @@ from clientplatform.application.creative_generation import (
     remember_creative_generation_job,
 )
 from clientplatform.application.creative_studio_publication import load_goal_visual_brand
+from clientplatform.application.event_content_assets import store_generated_event_content_asset
 from clientplatform.application.visual_creatives import (
     VisualCreativeError,
     create_business_visual_from_frozen_payload,
     freeze_business_image_payload,
+    frozen_business_visual_binding,
     frozen_business_visual_kind,
     materialize_ad_visual,
     normalize_business_image_request,
@@ -39,6 +41,8 @@ from clientplatform.domain.creative_generation import (
     CreativeGenerationReceipt,
     CreativeGenerationReceiptStatus,
 )
+from clientplatform.domain.event_content import EventContentStage
+from clientplatform.domain.programs import ContentKind
 from clientplatform.domain.tenancy import TenantPermissionDenied
 from clientplatform.presentation import owner_navigation as nav
 
@@ -310,6 +314,24 @@ async def _finish_visual(
                 job,
                 output_dir=directory,
             )
+            binding = frozen_business_visual_binding(receipt.provider_payload_json)
+            if binding is not None and binding.get("type") == "event_content":
+                await asyncio.to_thread(
+                    store_generated_event_content_asset,
+                    actor=actor,
+                    event_id=binding["event_id"],
+                    stage=EventContentStage(binding["stage"]),
+                    slot_key=binding["slot_key"],
+                    kind=ContentKind(binding["kind"]),
+                    path=path,
+                    content_type=str(getattr(job, "mime_type", "") or (
+                        "video/mp4" if binding["kind"] == "video" else "image/jpeg"
+                    )),
+                    extension=path.suffix.lower().lstrip(".") or (
+                        "mp4" if binding["kind"] == "video" else "jpg"
+                    ),
+                    source_ref=receipt.id,
+                )
             claimed = await asyncio.to_thread(
                 claim_creative_generation_delivery,
                 actor=actor,
