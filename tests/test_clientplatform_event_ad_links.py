@@ -22,6 +22,7 @@ class EventAdvertisingLinkParityTests(unittest.TestCase):
         )
         draft = SimpleNamespace(
             text="Анонс вебинара",
+            generated_by="ai:test",
             registration_url=lambda *, public_base_url, source: (
                 f"{public_base_url}/e/demo?source={source}"
             ),
@@ -46,6 +47,7 @@ class EventAdvertisingLinkParityTests(unittest.TestCase):
                         f"Регистрация: https://clientplatform.example.test/e/demo?source={platform.value}",
                         message.text,
                     )
+                    self.assertIn("требует Вашего подтверждения", message.text)
                     self.assertIn("🔗 Ссылка для рекламы:", message.text)
                     self.assertIn(
                         "https://clientplatform.example.test/e/demo?source=ads",
