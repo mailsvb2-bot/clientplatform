@@ -96,6 +96,7 @@ def _announcement_share_markup(
     vk_url: str,
     max_url: str,
     business_token: str,
+    event_token: str,
     visual_mode: EventContentMode = EventContentMode.TEXT,
     visual_prepared: bool = False,
 ) -> InlineKeyboardMarkup:
@@ -127,6 +128,15 @@ def _announcement_share_markup(
                 InlineKeyboardButton(
                     text=_visual_action_label(visual_mode),
                     callback_data=f"cpc:open:{business_token}",
+                )
+            ]
+        )
+    if visual_mode is EventContentMode.TEXT_WITH_VIDEO:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="📎 Использовать своё видео",
+                    callback_data=f"cpev:vu:a:{event_token}:0:{business_token}",
                 )
             ]
         )
@@ -1484,6 +1494,7 @@ async def create_event_announcement(callback: CallbackQuery) -> None:
             vk_url=vk_url,
             max_url=max_url,
             business_token=business_token,
+            event_token=control._uuid_token(event_id),
             visual_mode=modes.event_day,
             visual_prepared=visual_prepared,
         ),
