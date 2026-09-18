@@ -54,6 +54,7 @@ class EventContentMessage:
     stage: EventContentStage
     slot_key: str
     position: int
+    revision: int
     scheduled_at: str | None
     text: str
     source: str

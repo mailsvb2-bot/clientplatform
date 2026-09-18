@@ -41,6 +41,7 @@ def ensure(c: sqlite3.Connection) -> None:
             stage TEXT NOT NULL,
             slot_key TEXT NOT NULL,
             position INTEGER NOT NULL,
+            revision INTEGER NOT NULL DEFAULT 1,
             scheduled_at TEXT,
             text TEXT NOT NULL,
             source TEXT NOT NULL,
@@ -55,6 +56,7 @@ def ensure(c: sqlite3.Connection) -> None:
             CHECK(stage IN ('warmup','event_day_announcement','post_event_followup')),
             CHECK(source IN ('template','ai','owner')),
             CHECK(position >= 1),
+            CHECK(revision >= 1),
             CHECK(length(slot_key) BETWEEN 1 AND 80),
             CHECK(length(text) BETWEEN 1 AND 4000)
         )
@@ -68,3 +70,17 @@ def ensure(c: sqlite3.Connection) -> None:
         )
         """
     )
+
+    message_columns = {
+        str(row[1])
+        for row in c.execute(
+            "PRAGMA table_info(clientplatform_event_content_messages)"
+        ).fetchall()
+    }
+    if "revision" not in message_columns:
+        c.execute(
+            """
+            ALTER TABLE clientplatform_event_content_messages
+            ADD COLUMN revision INTEGER NOT NULL DEFAULT 1
+            """
+        )

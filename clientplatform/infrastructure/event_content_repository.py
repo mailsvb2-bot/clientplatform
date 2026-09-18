@@ -38,7 +38,7 @@ _COLUMNS = (
 
 
 _MESSAGE_COLUMNS = (
-    "business_id,event_id,stage,slot_key,position,scheduled_at,text,source,"
+    "business_id,event_id,stage,slot_key,position,revision,scheduled_at,text,source,"
     "updated_by_member_id,created_at,updated_at"
 )
 
@@ -50,16 +50,17 @@ def _message_from_row(row: Any) -> EventContentMessage:
         stage=EventContentStage(str(_value(row, "stage", 2))),
         slot_key=str(_value(row, "slot_key", 3)),
         position=int(_value(row, "position", 4)),
+        revision=int(_value(row, "revision", 5)),
         scheduled_at=(
             None
-            if _value(row, "scheduled_at", 5) is None
-            else str(_value(row, "scheduled_at", 5))
+            if _value(row, "scheduled_at", 6) is None
+            else str(_value(row, "scheduled_at", 6))
         ),
-        text=str(_value(row, "text", 6)),
-        source=str(_value(row, "source", 7)),
-        updated_by_member_id=str(_value(row, "updated_by_member_id", 8)),
-        created_at=str(_value(row, "created_at", 9)),
-        updated_at=str(_value(row, "updated_at", 10)),
+        text=str(_value(row, "text", 7)),
+        source=str(_value(row, "source", 8)),
+        updated_by_member_id=str(_value(row, "updated_by_member_id", 9)),
+        created_at=str(_value(row, "created_at", 10)),
+        updated_at=str(_value(row, "updated_at", 11)),
     )
 
 
@@ -203,11 +204,12 @@ class EventContentMessageRepository:
         self._conn.execute(
             """
             INSERT INTO clientplatform_event_content_messages(
-                business_id,event_id,stage,slot_key,position,scheduled_at,text,source,
+                business_id,event_id,stage,slot_key,position,revision,scheduled_at,text,source,
                 updated_by_member_id,created_at,updated_at
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+            ) VALUES(?,?,?,?,?,1,?,?,?,?,?,?)
             ON CONFLICT(business_id,event_id,stage,slot_key) DO UPDATE SET
                 position=excluded.position,
+                revision=clientplatform_event_content_messages.revision + 1,
                 scheduled_at=excluded.scheduled_at,
                 text=excluded.text,
                 source=excluded.source,
