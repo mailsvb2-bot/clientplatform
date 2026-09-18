@@ -15,7 +15,10 @@ from clientplatform.application.event_sessions import (
     get_event_warmup_window,
     list_event_sessions,
 )
-from clientplatform.application.event_warmups import get_event_warmup_plan
+from clientplatform.application.event_warmups import (
+    get_event_warmup_plan,
+    save_event_warmup_plan,
+)
 from clientplatform.application.event_wizard import (
     normalize_event_timezone,
     normalize_session_join_url,
@@ -560,7 +563,7 @@ def _accept_warmup_days(
 ) -> CustomerInteractionMessage:
     try:
         requested = int(str(raw_days).strip())
-        plan = get_event_warmup_plan(
+        plan = save_event_warmup_plan(
             actor=actor,
             event_id=context["event_id"],
             requested_days=requested,
