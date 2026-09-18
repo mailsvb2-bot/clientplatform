@@ -267,7 +267,7 @@ def _event_actions(
         rows.append([("🔗 Добавить ссылку на эфир", f"cpev:join:{event_token}:{business_token}")])
     rows.append([("✨ Сделать анонс", f"cpev:announce:{event_token}:{business_token}")])
     if visual_requested:
-        rows.append([("🎨 Картинки и видео", f"cpc:open:{business_token}")])
+        rows.append([("🎨 Картинки и креативы", f"cpc:open:{business_token}")])
     rows.append([(BACK_TO_EVENTS_LABEL, f"cpev:home:{business_token}")])
     rows.append([("🎥 Создать ещё", f"cpev:new:{business_token}")])
     return rows
