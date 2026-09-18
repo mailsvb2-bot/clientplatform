@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 from clientplatform.application import native_event_wizard as wizard
 from clientplatform.domain.connections import ConnectionPlatform
 from clientplatform.domain.event_content import EventContentMode, EventContentStage
+from clientplatform.domain.tenancy import PlatformRole, TenantContext
 
 
 BUSINESS_ID = "11111111-1111-4111-8111-111111111111"
@@ -16,9 +17,12 @@ EVENT_ID = "22222222-2222-4222-8222-222222222222"
 
 class NativeEventWizardTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.actor = MagicMock()
-        self.actor.user_id = 101
-        self.actor.business_id = BUSINESS_ID
+        self.actor = TenantContext(
+            business_id=BUSINESS_ID,
+            user_id=101,
+            membership_id="33333333-3333-4333-8333-333333333333",
+            role=PlatformRole.OWNER,
+        )
         self.platform = ConnectionPlatform.VK
         self.surface = "official"
         self.store: dict[str, str] = {}
