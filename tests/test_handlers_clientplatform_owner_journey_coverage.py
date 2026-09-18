@@ -278,7 +278,19 @@ async def test_add_edit_and_cancel_slot_actions(monkeypatch: pytest.MonkeyPatch)
     capability = SimpleNamespace(id=str(uuid4()), connector_key="services")
     programs = SimpleNamespace(id=str(uuid4()), connector_key="programs")
     offering = SimpleNamespace(id=offering_id)
-    monkeypatch.setattr(control, "_actor", AsyncMock(return_value=object()))
+    actor = object()
+    monkeypatch.setattr(control, "_actor", AsyncMock(return_value=actor))
+    monkeypatch.setattr(
+        control,
+        "get_business_profile",
+        lambda **_kwargs: SimpleNamespace(timezone="Europe/Amsterdam"),
+    )
+    picker = AsyncMock()
+    monkeypatch.setattr(
+        owner,
+        "_booking_wizard_module",
+        lambda: SimpleNamespace(send_booking_date_picker=picker),
+    )
     monkeypatch.setattr(
         control,
         "list_business_capabilities",
@@ -294,9 +306,14 @@ async def test_add_edit_and_cancel_slot_actions(monkeypatch: pytest.MonkeyPatch)
     add = FakeCallback(f"cpj:add:{business_token}:{offering_token}")
     await owner.add_another_slot(add, add_state)
     assert add_state.clear_count == 1
-    assert add_state.states[-1] == control.ClientPlatformControlState.booking_start
     assert add_state.data == {"business_id": business_id, "offering_id": offering_id}
-    assert "Напишите новое свободное время" in add.message.answers[-1][0]
+    picker.assert_awaited_once_with(
+        add.message,
+        add_state,
+        business_id=business_id,
+        timezone_name="Europe/Amsterdam",
+        heading="Добавляем свободное время.",
+    )
 
     monkeypatch.setattr(control, "list_business_offerings", lambda **_kwargs: [])
     missing = FakeCallback(f"cpj:add:{business_token}:{offering_token}")
@@ -308,7 +325,12 @@ async def test_add_edit_and_cancel_slot_actions(monkeypatch: pytest.MonkeyPatch)
     edit = FakeCallback(f"cpj:edit:{business_token}:{slot_token}")
     await owner.edit_owner_slot(edit, edit_state)
     assert edit_state.data["replacing_slot_id"] == slot.slot.id
-    assert "Напишите новые дату и время" in edit.message.answers[-1][0]
+    assert picker.await_count == 2
+    edit_call = picker.await_args_list[-1]
+    assert edit_call.args == (edit.message, edit_state)
+    assert edit_call.kwargs["business_id"] == business_id
+    assert edit_call.kwargs["timezone_name"] == "Europe/Amsterdam"
+    assert "Выберите новые дату и время" in edit_call.kwargs["heading"]
 
     confirm = FakeCallback(f"cpj:cancel:{business_token}:{slot_token}")
     await owner.confirm_cancel_owner_slot(confirm)
