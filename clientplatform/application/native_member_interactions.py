@@ -1000,6 +1000,7 @@ def _owner_input_invalid_message(action: str) -> CustomerInteractionMessage:
         "publication_draft": "Напишите: Заголовок | Текст публикации.",
         "booking_time": "Напишите дату и время: ДД.ММ.ГГГГ ЧЧ:ММ. При желании добавьте длительность в минутах.",
         "online_event": "Ответ не подходит текущему шагу вебинара. Используйте показанные кнопки или формат из подсказки.",
+        "event_warmup_text": "Пришлите новый текст прогрева одним сообщением длиной до 3500 символов.",
         "price": "Напишите сумму и валюту, например: 5000 RUB.",
         "payment": "Напишите сумму и валюту, например: 3500 RUB | консультация.",
         "member_user": "Напишите номер аккаунта ClientPlatform сотрудника — только цифры. Сотрудник увидит свой номер в разделе «Сотрудники и доступы».",
@@ -1007,7 +1008,7 @@ def _owner_input_invalid_message(action: str) -> CustomerInteractionMessage:
     }.get(action, "Проверьте ответ и попробуйте ещё раз.")
     exit_hint = (
         "Чтобы выйти без изменений, отправьте «Отмена» или нажмите «🎥 К вебинарам»."
-        if action == "online_event"
+        if action in {"online_event", "event_warmup_text"}
         else "Чтобы выйти без изменений, отправьте «Отмена»."
     )
     return CustomerInteractionMessage(
@@ -1259,6 +1260,7 @@ _NATIVE_PARENT_COMMANDS: dict[str, str] = {
     "event-wizard-window-text": "cpm:events",
     "event-wizard-room-text": "cpm:events",
     "event-wizard-warmup-text": "cpm:events",
+    "event-warmup-edit-text": "cpm:events",
     "event-create-text": "cpm:events",
     "event-announce": "cpm:events",
     "event-join": "cpm:events",
@@ -1444,12 +1446,12 @@ def _with_parent_navigation(
         "event-new", "event-wizard", "event-wizard-title-text",
         "event-wizard-count-text", "event-wizard-timezone-text",
         "event-wizard-window-text", "event-wizard-room-text",
-        "event-wizard-warmup-text", "event-create-text", "event-announce",
-        "event-join", "event-join-text",
+        "event-wizard-warmup-text", "event-warmup-edit-text",
+        "event-create-text", "event-announce", "event-join", "event-join-text",
     } or (
         parsed.action in {"owner-input-invalid", "owner-input-cancelled"}
         and parsed.args
-        and parsed.args[0] == "online_event"
+        and parsed.args[0] in {"online_event", "event_warmup_text"}
     ):
         back_label = BACK_TO_EVENTS_LABEL
     else:
@@ -5328,6 +5330,7 @@ def _render(
             "event-wizard-window-text",
             "event-wizard-room-text",
             "event-wizard-warmup-text",
+            "event-warmup-edit-text",
         }:
             return handle_native_event_wizard_text(
                 actor,

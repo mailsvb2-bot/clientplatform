@@ -16,8 +16,10 @@ from clientplatform.application.event_sessions import (
     list_event_sessions,
 )
 from clientplatform.application.event_warmups import (
-    get_event_warmup_plan,
+    get_saved_event_warmup_plan,
+    reset_event_warmup_text,
     save_event_warmup_plan,
+    set_event_warmup_text,
 )
 from clientplatform.application.event_wizard import (
     normalize_event_timezone,
@@ -337,6 +339,24 @@ def handle_native_event_wizard_text(
     surface: str,
 ) -> CustomerInteractionMessage:
     actor.assert_can_manage_business()
+    if action == "event-warmup-edit-text":
+        if len(args) != 4:
+            raise ValueError("invalid warmup edit text action")
+        event_id, requested_days, raw_position, body = args
+        position = int(raw_position)
+        set_event_warmup_text(
+            actor=actor,
+            event_id=event_id,
+            position=position,
+            text=body,
+        )
+        return _warmup_preview(
+            actor,
+            event_id=event_id,
+            requested_days=int(requested_days),
+            page=position - 1,
+        )
+
     context = _context(actor, platform=platform, surface=surface)
 
     if action == "event-wizard-title-text":
@@ -634,10 +654,9 @@ def _warmup_preview(
     requested_days: int,
     page: int,
 ) -> CustomerInteractionMessage:
-    plan = get_event_warmup_plan(
+    plan = get_saved_event_warmup_plan(
         actor=actor,
         event_id=event_id,
-        requested_days=requested_days,
     )
     if not plan.drafts:
         return CustomerInteractionMessage(
@@ -664,12 +683,33 @@ def _warmup_preview(
         )
     if navigation:
         rows.append(tuple(navigation))
+    rows.append(
+        (
+            _button(
+                "✏️ Изменить / свой текст",
+                f"cpm:event-wizard:warmup-edit:{event_id}:{plan.requested_days}:{draft.position}",
+            ),
+        )
+    )
+    if draft.source == "owner":
+        rows.append(
+            (
+                _button(
+                    "♻️ Вернуть автотекст",
+                    f"cpm:event-wizard:warmup-reset:{event_id}:{plan.requested_days}:{draft.position}",
+                ),
+            )
+        )
     rows.append((_button("✨ Сделать анонс", f"cpm:event-announce:{event_id}"),))
     rows.append(_back_row())
+    source_label = "Ваш текст" if draft.source == "owner" else "Автотекст"
     return CustomerInteractionMessage(
         text=(
             f"🔥 Прогрев {draft.position}/{plan.requested_days} — "
-            f"{draft.publish_date.strftime('%d.%m.%Y')}\n\n{draft.text}"
+            f"{draft.publish_date.strftime('%d.%m.%Y')}\n"
+            f"Источник: {source_label}\n\n{draft.text}\n\n"
+            "Можно использовать {name}, {title}, {join_url}. "
+            "Если {join_url} не указан, персональная ссылка добавится автоматически."
         ),
         rows=tuple(rows),
     )
@@ -694,6 +734,46 @@ def handle_native_event_wizard_action(
             event_id=args[1],
             requested_days=int(args[2]),
             page=int(args[3]),
+        )
+
+    if args[0] == "warmup-edit":
+        if len(args) != 4:
+            raise ValueError("invalid warmup edit action")
+        event_id, requested_days, position = args[1], int(args[2]), int(args[3])
+        begin_owner_input(
+            actor=actor,
+            platform=platform.value,
+            surface=surface,
+            action="event_warmup_text",
+            context={
+                "event_id": event_id,
+                "requested_days": requested_days,
+                "position": position,
+            },
+        )
+        return CustomerInteractionMessage(
+            text=(
+                f"✏️ Пришлите новый текст прогрева {position} одним сообщением.\n\n"
+                "Можно написать его полностью самостоятельно. Поддерживаются "
+                "{name}, {title}, {join_url}. Для выхода отправьте «Отмена»."
+            ),
+            rows=(_back_row(),),
+        )
+
+    if args[0] == "warmup-reset":
+        if len(args) != 4:
+            raise ValueError("invalid warmup reset action")
+        event_id, requested_days, position = args[1], int(args[2]), int(args[3])
+        reset_event_warmup_text(
+            actor=actor,
+            event_id=event_id,
+            position=position,
+        )
+        return _warmup_preview(
+            actor,
+            event_id=event_id,
+            requested_days=requested_days,
+            page=position - 1,
         )
 
     context = _context(actor, platform=platform, surface=surface)
