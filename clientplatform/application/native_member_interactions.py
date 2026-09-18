@@ -2304,10 +2304,16 @@ def _event_announcement_message(
             text="Не удалось подготовить анонс. Вернитесь к вебинарам и попробуйте ещё раз.",
             rows=((_button(BACK_TO_EVENTS_LABEL, "cpm:events"),), _back_row()),
         )
+    source_note = (
+        "Текст подготовлен AI и требует Вашего подтверждения перед публикацией."
+        if draft.generated_by.startswith("ai:")
+        else "Подготовлен безопасный текст. Перед публикацией его можно отредактировать в выбранном мессенджере."
+    )
     return CustomerInteractionMessage(
         text=(
             "✨ Анонс готов\n\n"
             f"{draft.text}\n\n"
+            f"{source_note}\n\n"
             f"Регистрация: {registration_url}\n\n"
             f"🔗 Ссылка для рекламы:\n{advertising_url}\n\n"
             "Ссылку для рекламы можно вставить в рекламный кабинет, сайт или пост. "
