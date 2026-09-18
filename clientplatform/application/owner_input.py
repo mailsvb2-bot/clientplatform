@@ -96,6 +96,34 @@ def resolve_owner_input(session: OwnerInputSession, value: object) -> OwnerInput
         )
 
     if session.action == "online_event":
+        step = str(session.context.get("step") or "").strip().casefold()
+        if step == "title":
+            if not compact or len(compact) > 180:
+                raise ValueError("event title is invalid")
+            return OwnerInputResolution("event-wizard-title-text", (compact,))
+        if step == "count":
+            if not compact.isdigit() or not 1 <= int(compact) <= 31:
+                raise ValueError("event session count is invalid")
+            return OwnerInputResolution("event-wizard-count-text", (compact,))
+        if step == "timezone":
+            if not compact or len(compact) > 80:
+                raise ValueError("event timezone is invalid")
+            return OwnerInputResolution("event-wizard-timezone-text", (compact,))
+        if step == "manual_window":
+            if not compact or len(compact) > 80:
+                raise ValueError("event session window is invalid")
+            return OwnerInputResolution("event-wizard-window-text", (compact,))
+        if step == "room":
+            if not raw_text or len(raw_text) > 2048:
+                raise ValueError("event room URL is invalid")
+            return OwnerInputResolution("event-wizard-room-text", (raw_text,))
+        if step == "warmup_days":
+            if not compact.isdigit() or int(compact) > 366:
+                raise ValueError("event warmup days are invalid")
+            return OwnerInputResolution("event-wizard-warmup-text", (compact,))
+
+        # Legacy durable sessions created before the multi-step wizard remain
+        # resolvable so an in-flight owner interaction is never stranded.
         parts = [part.strip() for part in raw_text.split("|")]
         if len(parts) not in {2, 3, 4} or not all(parts[:2]):
             raise ValueError("event title and time are required")
