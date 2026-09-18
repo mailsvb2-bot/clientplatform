@@ -41,7 +41,7 @@ from services.db import get_db, get_db_ro
 
 _DEFAULT_PRIORITY = ("max", "vk", "telegram", "email")
 _ALLOWED_PRIORITY = frozenset({"max", "vk", "telegram", "email"})
-_WARMUP_GRACE = timedelta(hours=36)
+_WARMUP_GRACE = timedelta(hours=18)
 
 
 @dataclass(frozen=True, slots=True)
@@ -647,6 +647,14 @@ def materialize_due_event_warmups_in_transaction(
                 AND cs.event_id=r.event_id
                 AND cs.registration_id=r.id
                 AND cs.status='active'
+          )
+          AND NOT EXISTS (
+              SELECT 1 FROM provider_dispatch_outbox d
+              WHERE d.business_id=r.business_id
+                AND d.idempotency_key=(
+                    'event:' || e.id || ':registration:' || r.id ||
+                    ':message:warmup:v1:position:' || CAST(m.position AS TEXT)
+                )
           )
         ORDER BY m.scheduled_at,m.event_id,m.position,r.id
         LIMIT ?
