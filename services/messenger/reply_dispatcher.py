@@ -42,7 +42,7 @@ def _clientplatform_runtime_button_links(
                     business_id=business_id,
                 )
             elif command.startswith("cpm:event-venue-open:"):
-                venue_key = command.split(":", 3)[3]
+                venue_key = command.split(":", 2)[2]
                 url = webinar_venue(venue_key).open_url
             else:
                 continue
