@@ -19,7 +19,10 @@ from clientplatform.application.event_commercial_consent import (
     active_event_commercial_channels,
 )
 from clientplatform.domain.email_outbound import EmailPayload
-from clientplatform.domain.event_followup import classify_event_followup_segment
+from clientplatform.domain.event_followup import (
+    EVENT_FOLLOWUP_SEGMENTS,
+    classify_event_followup_segment,
+)
 from clientplatform.domain.events import normalize_utc
 from clientplatform.infrastructure.event_dispatch_safety import (
     event_commercial_policy_authorized,
@@ -81,6 +84,15 @@ class EventFollowupBatchResult:
     strategy_blocked: int = 0
 
 
+@dataclass(frozen=True, slots=True)
+class EventFollowupTemplatePreview:
+    segment: str
+    segment_label: str
+    stage: int
+    offset_label: str
+    text: str
+
+
 def commercial_event_followups_enabled() -> bool:
     """Compatibility projection of the platform-wide emergency gate.
 
@@ -132,68 +144,108 @@ def _unsubscribe_url(token: str) -> str:
     return f"{_public_base_url()}/e/marketing/unsubscribe/{token}"
 
 
+_SEGMENT_LABELS = {
+    "no_show": "Зарегистрировались, но не пришли",
+    "join_signal_unpaid": "Переходили в эфир, участие не подтверждено",
+    "attended_unpaid": "Были на вебинаре, но не купили",
+    "offer_clicked_unpaid": "Открыли предложение, но не купили",
+}
+
+
+def _template_body(segment: str, *, stage: int) -> str:
+    if segment == "offer_clicked_unpaid":
+        if stage == 1:
+            return (
+                "{name}, вы открывали предложение после «{title}».\n\n"
+                "Если хотите вернуться к нему: {offer}"
+            )
+        if stage == 2:
+            return (
+                "{name}, если после «{title}» остался вопрос по формату или оплате, "
+                "предложение по-прежнему доступно здесь: {offer}"
+            )
+        return (
+            "{name}, завершаю серию сообщений по «{title}». "
+            "Если тема остаётся актуальной, вернуться к предложению можно здесь: {offer}"
+        )
+
+    if segment == "attended_unpaid":
+        if stage == 1:
+            return (
+                "{name}, спасибо, что были на «{title}».\n\n"
+                "Продолжить и посмотреть предложение: {offer}"
+            )
+        if stage == 2:
+            return (
+                "{name}, напомню о продолжении темы «{title}» без искусственной срочности. "
+                "Подробности здесь: {offer}"
+            )
+        return (
+            "{name}, это последнее сообщение в серии после «{title}». "
+            "Если захотите продолжить позже: {offer}"
+        )
+
+    if segment == "join_signal_unpaid":
+        if stage == 1:
+            return (
+                "{name}, вы переходили к эфиру «{title}». "
+                "Если тема для вас актуальна, предложение здесь: {offer}"
+            )
+        return "{name}, оставлю ещё одну ссылку по теме «{title}»: {offer}"
+
+    if segment == "no_show":
+        if stage == 1:
+            return (
+                "{name}, вы регистрировались на «{title}», но мы не видим подтверждённого участия. "
+                "Если тема остаётся актуальной, посмотреть предложение можно здесь: {offer}"
+            )
+        return "{name}, это последнее напоминание по регистрации на «{title}»: {offer}"
+
+    raise ValueError("unsupported event follow-up segment")
+
+
+def _subject(segment: str, *, title: str) -> str:
+    if segment == "offer_clicked_unpaid":
+        return f"После «{title}»"
+    if segment == "attended_unpaid":
+        return f"Продолжение после «{title}»"
+    if segment == "join_signal_unpaid":
+        return f"После мероприятия «{title}»"
+    if segment == "no_show":
+        return f"Вы регистрировались: {title}"
+    raise ValueError("unsupported event follow-up segment")
+
+
+def event_followup_template_previews() -> tuple[EventFollowupTemplatePreview, ...]:
+    previews: list[EventFollowupTemplatePreview] = []
+    offset_labels = {
+        1: "+1 час",
+        2: "+24 часа",
+        3: "+48 часов",
+    }
+    for segment in EVENT_FOLLOWUP_SEGMENTS:
+        for stage, _offset in _stage_offsets(segment):
+            previews.append(
+                EventFollowupTemplatePreview(
+                    segment=segment,
+                    segment_label=_SEGMENT_LABELS[segment],
+                    stage=stage,
+                    offset_label=offset_labels[stage],
+                    text=_template_body(segment, stage=stage),
+                )
+            )
+    return tuple(previews)
+
+
 def _render(candidate: EventFollowupCandidate, *, stage: int) -> tuple[str, str]:
     offer = _offer_url(candidate.token)
     unsubscribe = _unsubscribe_url(candidate.token)
-    name = candidate.name
-    title = candidate.event_title
+    body = _template_body(candidate.segment, stage=stage)
+    body = body.replace("{name}", candidate.name)
+    body = body.replace("{title}", candidate.event_title)
+    body = body.replace("{offer}", offer)
     footer = f"\n\nОтказаться от рекламных сообщений: {unsubscribe}"
-
-    if candidate.segment == "offer_clicked_unpaid":
-        if stage == 1:
-            body = (
-                f"{name}, вы открывали предложение после «{title}».\n\n"
-                f"Если хотите вернуться к нему: {offer}"
-            )
-        elif stage == 2:
-            body = (
-                f"{name}, если после «{title}» остался вопрос по формату или оплате, "
-                f"предложение по-прежнему доступно здесь: {offer}"
-            )
-        else:
-            body = (
-                f"{name}, завершаю серию сообщений по «{title}». "
-                f"Если тема остаётся актуальной, вернуться к предложению можно здесь: {offer}"
-            )
-        return (f"После «{title}»", body + footer)
-
-    if candidate.segment == "attended_unpaid":
-        if stage == 1:
-            body = (
-                f"{name}, спасибо, что были на «{title}».\n\n"
-                f"Продолжить и посмотреть предложение: {offer}"
-            )
-        elif stage == 2:
-            body = (
-                f"{name}, напомню о продолжении темы «{title}» без искусственной срочности. "
-                f"Подробности здесь: {offer}"
-            )
-        else:
-            body = (
-                f"{name}, это последнее сообщение в серии после «{title}». "
-                f"Если захотите продолжить позже: {offer}"
-            )
-        return (f"Продолжение после «{title}»", body + footer)
-
-    if candidate.segment == "join_signal_unpaid":
-        body = (
-            f"{name}, вы переходили к эфиру «{title}». "
-            f"Если тема для вас актуальна, предложение здесь: {offer}"
-            if stage == 1
-            else f"{name}, оставлю ещё одну ссылку по теме «{title}»: {offer}"
-        )
-        return (f"После мероприятия «{title}»", body + footer)
-
-    if candidate.segment == "no_show":
-        body = (
-            f"{name}, вы регистрировались на «{title}», но мы не видим подтверждённого участия. "
-            f"Если тема остаётся актуальной, посмотреть предложение можно здесь: {offer}"
-            if stage == 1
-            else f"{name}, это последнее напоминание по регистрации на «{title}»: {offer}"
-        )
-        return (f"Вы регистрировались: {title}", body + footer)
-
-    raise ValueError("unsupported event follow-up segment")
+    return (_subject(candidate.segment, title=candidate.event_title), body + footer)
 
 
 def _candidate_from_row(row: Any) -> EventFollowupCandidate:
@@ -873,9 +925,11 @@ __all__ = [
     "EventFollowupBatchResult",
     "EventFollowupCandidate",
     "EventFollowupTarget",
+    "EventFollowupTemplatePreview",
     "cancel_commercial_followups_for_registration_in_transaction",
     "classify_event_followup_segment",
     "commercial_event_followups_enabled",
+    "event_followup_template_previews",
     "materialize_due_event_followups",
     "materialize_due_event_followups_in_transaction",
 ]
