@@ -47,16 +47,18 @@ def _load_goal_visual_brand(*, actor: TenantContext):
     return load_goal_visual_brand(actor=actor)
 
 
-def _freeze_business_image_payload(
+def _freeze_business_visual_payload(
     *,
     request: str,
+    kind: str,
     brand_context: str,
     country_code: str,
 ) -> str:
-    from clientplatform.application.visual_creatives import freeze_business_image_payload
+    from clientplatform.application.visual_creatives import freeze_business_visual_payload
 
-    return freeze_business_image_payload(
+    return freeze_business_visual_payload(
         request=request,
+        kind=kind,
         brand_context=brand_context,
         country_code=country_code,
     )
@@ -148,8 +150,9 @@ def prepare_event_stage_visual(
     )
     brand = _load_goal_visual_brand(actor=actor)
     brand_context = brand.prompt_context()
-    provider_payload_json = _freeze_business_image_payload(
+    provider_payload_json = _freeze_business_visual_payload(
         request=request_text,
+        kind="video" if mode is EventContentMode.TEXT_WITH_VIDEO else "image",
         brand_context=brand_context,
         country_code=country_code,
     )
