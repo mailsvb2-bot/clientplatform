@@ -98,12 +98,24 @@ def _menu_rows(token: str, active: CreativeGenerationReceipt | None = None):
         } else "check"
         rows.append([(label, _receipt_callback(action, token, active))])
         if active.status == CreativeGenerationReceiptStatus.PREPARED:
+            active_kind = _receipt_kind(active)
             edit_callback = (
                 f"cpc:video:{token}"
-                if _receipt_kind(active) == "video"
+                if active_kind == "video"
                 else f"cpc:new:{token}"
             )
+            alternate_label = (
+                "✨ Вместо этого картинка"
+                if active_kind == "video"
+                else "🎬 Вместо этого видео"
+            )
+            alternate_callback = (
+                f"cpc:new:{token}"
+                if active_kind == "video"
+                else f"cpc:video:{token}"
+            )
             rows.append([("✏️ Изменить описание", edit_callback)])
+            rows.append([(alternate_label, alternate_callback)])
     else:
         rows.append([("✨ Создать картинку", f"cpc:new:{token}")])
         rows.append([("🎬 Создать видео", f"cpc:video:{token}")])
