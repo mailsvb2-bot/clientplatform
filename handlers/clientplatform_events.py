@@ -233,10 +233,10 @@ def _content_plan_rows(
     business_token = control._uuid_token(business_id)
     rows: list[list[tuple[str, str]]] = []
     if has_warmup:
-        rows.append([("🔥 Тексты прогрева", f"cpev:wt:{event_token}:1:{business_token}")])
-        rows.append([("🗓 Изменить дни прогрева", f"cpev:ws:{event_token}:{business_token}")])
+        rows.append([("📨 Сообщения до вебинара", f"cpev:wt:{event_token}:1:{business_token}")])
+        rows.append([("🗓 Изменить дни сообщений", f"cpev:ws:{event_token}:{business_token}")])
     else:
-        rows.append([("🔥 Настроить прогрев", f"cpev:ws:{event_token}:{business_token}")])
+        rows.append([("📨 Настроить сообщения до вебинара", f"cpev:ws:{event_token}:{business_token}")])
     rows.extend(
         [
             [("✨ Анонс", f"cpev:announce:{event_token}:{business_token}")],
@@ -295,7 +295,7 @@ async def _send_event_content_plan(
 
     text = (
         f"🗓 Контент-план\n\n{item.title}\n\n"
-        f"🔥 Прогрев: {warmup_line}\n"
+        f"📨 До вебинара: {warmup_line}\n"
         f"   Формат: {event_content_mode_label(modes.warmup)}\n\n"
         "✨ Анонс: создаётся по кнопке и показывается Вам до публикации.\n"
         f"   Формат: {event_content_mode_label(modes.event_day)}\n\n"
@@ -305,7 +305,7 @@ async def _send_event_content_plan(
         "3 сообщения для участников/открывших предложение.\n"
         f"   Формат: {event_content_mode_label(modes.post_event)}\n\n"
         f"Автоматическая отправка: {autosend}.\n"
-        "Прогрев отправляется только участникам с действующим согласием "
+        "Сообщения до вебинара отправляются только участникам с действующим согласием "
         "на коммерческие сообщения и только по разрешённому каналу."
     )
     await target.answer(
@@ -396,7 +396,7 @@ async def _send_warmup_preview(
         asset_source = "Ваше видео" if asset.source == "owner" else "AI-визуал"
         asset_line = f"\nВизуал: ✅ {asset_source}"
     await target.answer(
-        f"🔥 Прогрев {draft.position}/{plan.requested_days}\n"
+        f"📨 Сообщение {draft.position}/{plan.requested_days}\n"
         f"Отправка: {local_at.strftime('%d.%m.%Y %H:%M')} ({plan.timezone_name})\n"
         f"Источник: {source_label}{asset_line}\n\n"
         f"{draft.text}\n\n"
@@ -573,7 +573,7 @@ async def prepare_event_visual(callback: CallbackQuery) -> None:
         )
         draft = next((row for row in plan.drafts if row.position == position), None)
         if draft is None:
-            await callback.answer("Сообщение прогрева уже изменилось", show_alert=True)
+            await callback.answer("Это сообщение уже изменилось", show_alert=True)
             return
         await _prepare_event_visual_for_owner(
             callback,
@@ -836,10 +836,10 @@ async def open_warmup_setup(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     await callback.answer()
     await control._callback_message(callback).answer(
-        f"🔥 Сколько дней прогрева сделать?\n\n"
+        f"📨 Сколько дней отправлять сообщения до вебинара?\n\n"
         f"До первого эфира можно поставить до {maximum} дн. "
         "Будет ровно одно сообщение в день в 12:00 по часовому поясу вебинара. "
-        "0 — отключить прогрев.",
+        "0 — не отправлять сообщения до вебинара.",
         reply_markup=control._keyboard(rows),
     )
 
@@ -865,7 +865,7 @@ async def set_warmup_days(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.answer(str(exc), show_alert=True)
         return
     await state.clear()
-    await callback.answer("Прогрев сохранён")
+    await callback.answer("Сообщения до вебинара сохранены")
     await _send_event_content_plan(
         control._callback_message(callback),
         user_id=int(callback.from_user.id),
@@ -898,7 +898,7 @@ async def request_custom_warmup_days(callback: CallbackQuery, state: FSMContext)
     await callback.answer()
     await control._callback_message(callback).answer(
         f"Отправьте число дней от 0 до {int(window.max_warmup_days)}. "
-        "0 отключит прогрев."
+        "0 отключит сообщения до вебинара."
     )
 
 
@@ -976,7 +976,7 @@ async def edit_warmup_text(callback: CallbackQuery, state: FSMContext) -> None:
     )
     await callback.answer()
     await control._callback_message(callback).answer(
-        f"✏️ Пришлите новый текст прогрева {position} одним сообщением.\n\n"
+        f"✏️ Пришлите новый текст сообщения {position} одним сообщением.\n\n"
         "Можно написать текст полностью самостоятельно. Поддерживаются "
         "{name}, {title}, {join_url}. Персональная ссылка добавится автоматически, "
         "если {join_url} не вставлен.\n\nДля выхода: Отмена."
