@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Any
 
-from clientplatform.domain.connections import DispatchLeaseLost
+from clientplatform.domain.connections import ConnectionPlatform, DispatchLeaseLost
 from clientplatform.domain.email_outbound import EmailPayload, normalize_email_address
 from clientplatform.domain.customer_interactions import CustomerInteractionMessage
 from clientplatform.domain.partners import (
