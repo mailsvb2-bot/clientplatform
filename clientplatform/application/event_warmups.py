@@ -80,6 +80,23 @@ def _clean(value: object, *, limit: int) -> str:
     return " ".join(str(value or "").split()).strip()[:limit]
 
 
+def _program_topics(description: str) -> tuple[str, ...]:
+    """Read canonical day topics from the event description without a second store."""
+
+    lines = [line.strip() for line in str(description or "").splitlines() if line.strip()]
+    if not lines or lines[0].casefold() != "программа по дням:":
+        return ()
+    topics: list[str] = []
+    for line in lines[1:]:
+        _prefix, separator, topic = line.partition(":")
+        if not separator:
+            continue
+        clean = _clean(topic, limit=180)
+        if clean:
+            topics.append(clean)
+    return tuple(topics)
+
+
 def _safe_warmup_text(
     *,
     title: str,
@@ -90,6 +107,7 @@ def _safe_warmup_text(
 ) -> str:
     clean_title = _clean(title, limit=240)
     clean_description = _clean(description, limit=700)
+    topics = _program_topics(description)
     if days_before_event == 1:
         opener = "Уже завтра"
     elif days_before_event == 2:
@@ -97,15 +115,45 @@ def _safe_warmup_text(
     else:
         opener = f"До вебинара осталось {days_before_event} дн."
 
+    focus = ""
+    if topics:
+        # Spread a long pre-event series across the actual day themes.  A
+        # two-month campaign therefore changes focus instead of repeating one
+        # generic paragraph for 60 days.
+        topic_index = min(
+            len(topics) - 1,
+            ((max(position, 1) - 1) * len(topics)) // max(total, 1),
+        )
+        focus = topics[topic_index]
+
     if position == 1 and total > 1:
-        angle = "Начинаем прогрев к теме и фиксируем главное, с чем будем работать на эфире."
+        angle = (
+            f"Начинаем с темы «{focus}»: посмотрите, где она уже проявляется в Вашей ситуации."
+            if focus
+            else "Начинаем знакомство с темой и отмечаем главное, с чем будем работать на эфире."
+        )
     elif position == total:
-        angle = "Завтра перед стартом придёт отдельное организационное напоминание."
+        angle = (
+            f"Перед эфиром вернитесь к теме «{focus}» и запишите один вопрос, который хотите разобрать."
+            if focus
+            else "Перед стартом выберите один главный вопрос, который хотите разобрать на эфире."
+        )
+    elif focus:
+        phase = (position - 1) % 3
+        angle = (
+            f"Сегодня в центре внимания тема «{focus}». Отметьте один пример из своей практики или жизни."
+            if phase == 0
+            else (
+                f"Продолжаем тему «{focus}». Подумайте, что в ней сейчас вызывает больше всего вопросов."
+                if phase == 1
+                else f"Тема дня — «{focus}». Сформулируйте один результат, который хотите получить на вебинаре."
+            )
+        )
     else:
         angle = "Возвращаемся к теме и постепенно готовимся применить материал на вебинаре."
 
     parts = [f"🔥 {opener}: «{clean_title}».", "", angle]
-    if clean_description:
+    if clean_description and not topics:
         parts.extend(["", clean_description])
     parts.extend(
         [
@@ -394,7 +442,7 @@ def set_event_warmup_text(
         )
         current = next((item for item in messages if item.position == position), None)
         if current is None:
-            raise ValueError("сначала выберите длительность прогрева")
+            raise ValueError("сначала выберите длительность серии сообщений")
         repository.upsert(
             actor=actor,
             event_id=event_id,
@@ -412,7 +460,7 @@ def set_event_warmup_text(
     for draft in plan.drafts:
         if draft.position == position:
             return draft
-    raise ValueError("прогрев для этой позиции не найден")
+    raise ValueError("сообщение для этой позиции не найдено")
 
 
 def reset_event_warmup_text(
@@ -435,7 +483,7 @@ def reset_event_warmup_text(
         )
     current = next((item for item in messages if item.position == position), None)
     if current is None or current.scheduled_at is None:
-        raise ValueError("прогрев для этой позиции не найден")
+        raise ValueError("сообщение для этой позиции не найдено")
     scheduled = normalize_utc(current.scheduled_at, field_name="scheduled_at")
     zone = ZoneInfo(event.timezone_name)
     publish_date = scheduled.astimezone(zone).date()
