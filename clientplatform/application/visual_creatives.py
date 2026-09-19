@@ -7,6 +7,7 @@ from services.visual_creative_gateway import (
     VisualCreativeBrief,
     VisualCreativeGatewayError,
     VisualCreativeJob,
+    configured_visual_providers,
     download_visual,
     poll_visual,
     submit_visual,
@@ -48,6 +49,24 @@ def _brief_dict(brief: VisualCreativeBrief) -> dict[str, object]:
         "brand_context": brief.brand_context,
         "seed": brief.seed,
     }
+
+
+def visual_generation_ready(
+    *,
+    kind: str,
+    country_code: str = "",
+) -> bool:
+    """Return deployment readiness without exposing provider credentials."""
+
+    try:
+        return bool(
+            configured_visual_providers(
+                kind,
+                country_code=country_code,
+            )
+        )
+    except VisualCreativeGatewayError as exc:
+        raise VisualCreativeError("visual_creative_provider_preflight_failed") from exc
 
 
 def freeze_business_visual_payload(
@@ -433,6 +452,7 @@ def poll_ad_visual(*, job_id: str, scope_id: str) -> VisualCreativeJob:
 
 __all__ = [
     "VisualCreativeError",
+    "visual_generation_ready",
     "build_business_visual_brief",
     "build_business_image_brief",
     "create_business_visual_from_frozen_payload",
