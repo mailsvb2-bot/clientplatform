@@ -70,10 +70,15 @@ def slot(*, slot_id="slot-1", start="2026-08-20T09:00:00+00:00"):
             id=slot_id,
             status=BookingSlotStatus.OPEN,
             starts_at=start,
+            offering_id="offering-1",
         ),
         offering_title="Консультация",
         local_start="20.08.2026 12:00",
     )
+
+
+def offering(*, offering_id="offering-1", title="Консультация"):
+    return SimpleNamespace(id=offering_id, title=title)
 
 
 def connection(*, connection_id="connection-1", login="owner"):
@@ -230,20 +235,30 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("🏠 Открыть кабинет", labels)
         self.assertEqual(labels[0], "💰 Деньги и результат")
 
-    async def test_no_open_slot_reduces_flow_to_one_required_next_action(self) -> None:
+    async def test_start_explicitly_asks_which_service_to_advertise(self) -> None:
         out = outbound_message()
         cb = callback("cpo:start:business-1", out)
         patches = self.common_patches(out)
         with (
             patches[0], patches[1], patches[2], patches[3], patches[4],
-            patch.object(one_click.control, "list_booking_slots", return_value=[]),
+            patch.object(
+                one_click,
+                "_advertisable_offerings",
+                new=AsyncMock(return_value=[offering()]),
+            ),
         ):
-            await one_click.get_clients_one_click(cb, FakeState())
-        self.assertIn("Сначала нужно одно свободное время", out.answer.await_args.args[0])
-        self.assertEqual(
-            out.answer.await_args.kwargs["reply_markup"].inline_keyboard[0][0].text,
-            "➕ Открыть время",
-        )
+            await one_click._start_slot_ad(
+                cb,
+                FakeState(),
+                actor=tenant_actor(),
+                business_id="business-1",
+                token="business-1",
+                slot=slot(),
+            )
+        self.assertIn("Что именно Вы хотите рекламировать", out.answer.await_args.args[0])
+        button = out.answer.await_args.kwargs["reply_markup"].inline_keyboard[0][0]
+        self.assertEqual(button.text, "🧰 Консультация")
+        self.assertTrue(str(button.callback_data).startswith("cpo:offer:"))
 
     async def test_existing_provider_campaign_is_not_a_selection_step(self) -> None:
         out = outbound_message()
@@ -258,7 +273,14 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
             patch.object(one_click.control, "list_booking_slots", return_value=[slot()]),
             patch.object(one_click, "list_ad_publications", return_value=[]),
         ):
-            await one_click.get_clients_one_click(cb, state)
+            await one_click._start_slot_ad(
+                cb,
+                state,
+                actor=tenant_actor(),
+                business_id="business-1",
+                token="business-1",
+                slot=slot(),
+            )
         self.assertEqual(state.state, one_click.OneClickOwnerState.waiting_region)
         self.assertNotIn("external_campaign_id", state.data)
         self.assertFalse(hasattr(one_click.OneClickOwnerState, "selecting_campaign"))
@@ -280,7 +302,14 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
             patch.object(one_click, "list_ad_publications", return_value=[]),
             patch.object(one_click, "create_slot_promotion", return_value=promotion()),
         ):
-            await one_click.get_clients_one_click(cb, FakeState())
+            await one_click._start_slot_ad(
+                cb,
+                FakeState(),
+                actor=tenant_actor(),
+                business_id="business-1",
+                token="business-1",
+                slot=slot(),
+            )
         text = out.answer.await_args.args[0]
         self.assertIn("Уже можно привлекать клиентов", text)
         self.assertIn("нет доступа к личному рекламному кабинету", text)
@@ -308,7 +337,14 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
                 return_value=managed_draft(),
             ) as create_draft,
         ):
-            await one_click.get_clients_one_click(cb, state)
+            await one_click._start_slot_ad(
+                cb,
+                state,
+                actor=tenant_actor(),
+                business_id="business-1",
+                token="business-1",
+                slot=slot(),
+            )
         create_draft.assert_called_once()
         self.assertNotIn("external_campaign_id", create_draft.call_args.kwargs)
         self.assertEqual(state.state, goal.GoalFirstAutopilotState.ready)
@@ -331,7 +367,14 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
             patch.object(one_click.control, "list_booking_slots", return_value=[slot()]),
             patch.object(one_click, "list_ad_publications", return_value=[]),
         ):
-            await one_click.get_clients_one_click(cb, state)
+            await one_click._start_slot_ad(
+                cb,
+                state,
+                actor=tenant_actor(),
+                business_id="business-1",
+                token="business-1",
+                slot=slot(),
+            )
         self.assertEqual(state.state, one_click.OneClickOwnerState.waiting_region)
         text = out.answer.await_args.args[0]
         self.assertIn("Осталось только указать регион", text)
@@ -363,7 +406,14 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
             patch.object(one_click.control, "list_booking_slots", return_value=[slot()]),
             patch.object(one_click, "list_ad_publications", return_value=[]),
         ):
-            await one_click.get_clients_one_click(cb, state)
+            await one_click._start_slot_ad(
+                cb,
+                state,
+                actor=tenant_actor(),
+                business_id="business-1",
+                token="business-1",
+                slot=slot(),
+            )
         self.assertEqual(state.state, one_click.OneClickOwnerState.selecting_connection)
         labels = [
             button.text
