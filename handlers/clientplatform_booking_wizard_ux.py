@@ -243,6 +243,42 @@ class _DurationMessageProxy:
         return await self._message.answer(text, **kwargs)
 
 
+@router.callback_query(F.data.startswith("cpj:wiznoop:"))
+async def ignore_booking_calendar_noop(callback: CallbackQuery) -> None:
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("cpj:wizmonth:"))
+async def choose_booking_month(callback: CallbackQuery, state: FSMContext) -> None:
+    _, _, business_token, raw_month = str(callback.data).split(":", 3)
+    resolved = await _state_business(callback, state, business_token)
+    if resolved is None:
+        return
+    business_id, data = resolved
+    try:
+        minimum = date.fromisoformat(str(data["booking_picker_min_date"]))
+        year, month = parse_month_key(raw_month)
+        calendar_days(
+            year=year,
+            month=month,
+            minimum=minimum,
+            max_months=MAX_CALENDAR_MONTHS,
+        )
+    except (KeyError, ValueError):
+        await callback.answer("Этот месяц недоступен", show_alert=True)
+        return
+    await state.update_data(booking_picker_month=month_key(year, month))
+    await callback.answer()
+    await control._callback_message(callback).edit_reply_markup(
+        reply_markup=_date_keyboard(
+            business_id,
+            minimum=minimum,
+            year=year,
+            month=month,
+        )
+    )
+
+
 @router.callback_query(F.data.startswith("cpj:wizdatepage:"))
 async def choose_booking_date_page(callback: CallbackQuery, state: FSMContext) -> None:
     _, _, business_token, raw_offset = str(callback.data).split(":", 3)
@@ -259,8 +295,15 @@ async def choose_booking_date_page(callback: CallbackQuery, state: FSMContext) -
         await callback.answer("Выбор даты устарел. Откройте услугу заново.", show_alert=True)
         return
     await callback.answer()
+    target = minimum + timedelta(days=offset)
+    await state.update_data(booking_picker_month=month_key(target.year, target.month))
     await control._callback_message(callback).edit_reply_markup(
-        reply_markup=_date_keyboard(business_id, minimum=minimum, offset=offset)
+        reply_markup=_date_keyboard(
+            business_id,
+            minimum=minimum,
+            year=target.year,
+            month=target.month,
+        )
     )
 
 
@@ -274,7 +317,13 @@ async def choose_booking_date(callback: CallbackQuery, state: FSMContext) -> Non
     try:
         selected = date.fromisoformat(raw_date)
         minimum = date.fromisoformat(str(data["booking_picker_min_date"]))
-        if selected < minimum or (selected - minimum).days > _MAX_DATE_DAYS:
+        calendar_days(
+            year=selected.year,
+            month=selected.month,
+            minimum=minimum,
+            max_months=MAX_CALENDAR_MONTHS,
+        )
+        if selected < minimum:
             raise ValueError("date outside range")
     except (KeyError, ValueError):
         await callback.answer("Эта дата недоступна", show_alert=True)
@@ -297,7 +346,9 @@ async def choose_booking_time(callback: CallbackQuery, state: FSMContext) -> Non
     try:
         if len(raw_time) != 4 or not raw_time.isdigit():
             raise ValueError("invalid time")
-        value = parse_quick_time(f"{raw_time[:2]}:{raw_time[2:]}")
+        value = f"{raw_time[:2]}:{raw_time[2:]}"
+        if value not in _BOOKING_START_TIMES:
+            raise ValueError("unsupported booking start time")
         selected = date.fromisoformat(str(data["booking_picker_date"]))
     except (KeyError, ValueError):
         await callback.answer("Выберите дату и время заново", show_alert=True)
@@ -438,10 +489,12 @@ __all__ = [
     "cancel_booking_wizard",
     "choose_booking_date",
     "choose_booking_date_page",
+    "choose_booking_month",
     "choose_booking_time",
     "choose_custom_duration",
     "choose_manual_booking_datetime",
     "choose_quick_duration",
+    "ignore_booking_calendar_noop",
     "receive_booking_start_with_quick_duration",
     "return_to_booking_start",
     "router",
