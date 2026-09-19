@@ -63,18 +63,16 @@ def test_commercial_consent_copy_is_separate_versioned_and_hashable() -> None:
 
 
 def test_public_channel_normalization_is_fail_closed() -> None:
-    assert normalize_marketing_channels(
-        ["email", "telegram", "max", "email"], public_form=True
-    ) == (
+    assert normalize_marketing_channels(["email", "email"], public_form=True) == (
         "email",
-        "telegram",
-        "max",
     )
     with unittest.TestCase().assertRaises(ValueError):
         normalize_marketing_channels([], public_form=True)
     with unittest.TestCase().assertRaises(ValueError):
         normalize_marketing_channels(["sms"], public_form=True)
-    assert normalize_marketing_channels(["telegram"], public_form=True) == ("telegram",)
+    for messenger in ("telegram", "vk", "max"):
+        with unittest.TestCase().assertRaises(ValueError):
+            normalize_marketing_channels([messenger], public_form=True)
 
 
 
