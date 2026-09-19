@@ -6,6 +6,8 @@ from html import escape
 from urllib.parse import quote
 from aiohttp import web
 
+from config.settings import settings
+
 from clientplatform.application.event_commercial_consent import (
     grant_event_commercial_consent_in_transaction,
     normalize_marketing_channels,
@@ -129,6 +131,75 @@ def _registration_channel_entry_url(
         ).fetchall()
         if len(shared) != 1:
             return None
+
+    elif platform == "vk":
+        rows = conn.execute(
+            """
+            SELECT external_account_id
+            FROM connections
+            WHERE business_id=? AND platform='vk'
+              AND connection_type='vk_community' AND status='active'
+            ORDER BY created_at,id
+            LIMIT 2
+            """,
+            (business_id,),
+        ).fetchall()
+        if len(rows) != 1:
+            return None
+        group_id = str(
+            rows[0]["external_account_id"] if hasattr(rows[0], "keys") else rows[0][0]
+        ).strip().lstrip("-")
+        if not group_id.isdigit() or int(group_id) <= 0:
+            return None
+        return f"https://vk.com/im?sel=-{group_id}&start={quote(payload, safe='')}"
+
+    elif platform == "max":
+        managed = conn.execute(
+            """
+            SELECT mb.username
+            FROM connections c
+            JOIN managed_bots mb
+              ON mb.connection_id=c.id AND mb.business_id=c.business_id
+             AND mb.platform='max' AND mb.status='active'
+            WHERE c.business_id=? AND c.platform='max'
+              AND c.connection_type='max_personal_bot' AND c.status='active'
+              AND mb.username IS NOT NULL AND TRIM(mb.username)!=''
+            ORDER BY c.created_at,c.id
+            LIMIT 2
+            """,
+            (business_id,),
+        ).fetchall()
+        if len(managed) == 1:
+            bot_name = str(
+                managed[0]["username"] if hasattr(managed[0], "keys") else managed[0][0]
+            ).strip().lstrip("@")
+            base = str(getattr(settings, "MAX_BOT_LINK_BASE", "") or "").strip()
+            if bot_name and base:
+                rendered = base.replace("{bot}", quote(bot_name, safe=""))
+                encoded = quote(payload, safe="")
+                if "{payload}" in rendered:
+                    rendered = rendered.replace("{payload}", encoded)
+                    if "{" not in rendered and "}" not in rendered:
+                        return rendered
+                elif "{" not in rendered and "}" not in rendered:
+                    separator = "&" if "?" in rendered else "?"
+                    return f"{rendered}{separator}start={encoded}"
+        shared = conn.execute(
+            """
+            SELECT id
+            FROM connections
+            WHERE business_id=? AND platform='max'
+              AND connection_type='max_shared_bot' AND status='active'
+            ORDER BY created_at,id
+            LIMIT 2
+            """,
+            (business_id,),
+        ).fetchall()
+        if len(shared) != 1:
+            return None
+    else:
+        return None
+
     target = next(
         (
             item
