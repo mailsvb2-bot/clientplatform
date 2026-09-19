@@ -112,6 +112,10 @@ _STATE_ESCAPE_PREFIXES = (
     "cpj:slot:",
     "cpj:preview:",
     "cpj:share:",
+    "cpj:wizdatepage:",
+    "cpj:wizmonth:",
+    "cpj:wizdate:",
+    "cpj:wiznoop:",
     "cpj:add:",
     "cpj:edit:",
     "cpm:event-wizard:",
@@ -306,7 +310,17 @@ def _state_local_callback_allowed(current_state: str, callback_data: str) -> boo
     if current_state.startswith("AdConnectionState:confirming_publication"):
         return callback_data == "cpa:confirm"
     if current_state.startswith("ClientPlatformControlState:booking_start"):
-        return callback_data.startswith("cpj:wizcancel:")
+        return callback_data.startswith(
+            (
+                "cpj:wizdatepage:",
+                "cpj:wizmonth:",
+                "cpj:wizdate:",
+                "cpj:wiztime:",
+                "cpj:wiznoop:",
+                "cpj:wizmanual:",
+                "cpj:wizcancel:",
+            )
+        )
     if current_state.startswith("ClientPlatformControlState:booking_duration"):
         return callback_data.startswith(
             (
