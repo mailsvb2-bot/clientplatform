@@ -18,7 +18,7 @@ from clientplatform.domain.events import normalize_utc
 
 CURRENT_EVENT_MARKETING_CONSENT_VERSION = "2026-09-event-commercial-v1"
 _ALLOWED_CHANNELS = frozenset({"email", "vk", "max", "telegram"})
-_PUBLIC_CHANNELS = frozenset({"email", "telegram", "vk", "max"})
+_PUBLIC_CHANNELS = frozenset({"email"})
 _COMMERCIAL_KEY_FRAGMENT = ":message:post:v4:stage:"
 _COMMERCIAL_PROVIDER_BOUNDARY_MARKER = "event_commercial_provider_call_started_non_idempotent"
 
