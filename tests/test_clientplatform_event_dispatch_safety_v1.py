@@ -71,7 +71,7 @@ def _db() -> sqlite3.Connection:
     conn.execute("INSERT INTO connections VALUES('c','b','email','active','email_smtp')")
     conn.execute("INSERT INTO clientplatform_event_commercial_channel_state VALUES('b','e','r','email','active')")
     conn.execute(
-        "INSERT INTO provider_dispatch_outbox VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO provider_dispatch_outbox VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         ('d','b','email','event_message','r','c','external_subject',None,'a@example.test',
          'event:e:registration:r:message:post:v4:stage:1','sending','lock',
          '2026-09-12T10:00:00+00:00',None,'2026-09-12T10:00:00+00:00',None),
