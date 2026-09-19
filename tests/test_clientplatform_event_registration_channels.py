@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 from uuid import uuid4
 
-import pytest
+import unittest
 
 from clientplatform.application.event_commercial_consent import (
     active_event_commercial_channels,
@@ -202,9 +202,9 @@ def test_second_messenger_account_cannot_hijack_verified_registration() -> None:
         registration=result.registration,
     )
     second = next(item for item in second_links if item.platform == "telegram")
-    with pytest.raises(
+    with unittest.TestCase().assertRaisesRegex(
         EventRegistrationChannelLinkRejected,
-        match="already verified to another messenger account",
+        "already verified to another messenger account",
     ):
         consume_event_registration_channel_link_in_transaction(
             conn,
@@ -240,9 +240,9 @@ def test_event_channel_token_is_business_bound_single_use_and_parseable() -> Non
     assert extract_event_registration_channel_link_token(f"ecv_{vk.token}") == vk.token
     assert extract_event_registration_channel_link_token("cplink_other") is None
 
-    with pytest.raises(
+    with unittest.TestCase().assertRaisesRegex(
         EventRegistrationChannelLinkRejected,
-        match="another business",
+        "another business",
     ):
         consume_event_registration_channel_link_in_transaction(
             conn,
@@ -259,9 +259,9 @@ def test_event_channel_token_is_business_bound_single_use_and_parseable() -> Non
         external_subject="123456",
         expected_business_id=actor.business_id,
     )
-    with pytest.raises(
+    with unittest.TestCase().assertRaisesRegex(
         EventRegistrationChannelLinkRejected,
-        match="already consumed",
+        "already consumed",
     ):
         consume_event_registration_channel_link_in_transaction(
             conn,
