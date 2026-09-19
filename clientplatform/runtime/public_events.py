@@ -15,8 +15,8 @@ from clientplatform.application.event_public_surface import (
     SECURITY_HEADERS,
     render_event_landing_body,
 )
-from clientplatform.application.event_reminder_channels import (
-    issue_event_reminder_channel_links_in_transaction,
+from clientplatform.application.event_registration_channels import (
+    issue_event_registration_channel_links_in_transaction,
 )
 from clientplatform.application.event_sessions import select_event_session_for_join
 from clientplatform.application.events import (
@@ -127,7 +127,7 @@ async def public_event_register(request: web.Request) -> web.Response:
                 "<h1>Выберите хотя бы один канал для рекламных сообщений</h1>",
                 status=400,
             )
-    reminder_channel_links = ()
+    registration_channel_links = ()
     try:
         with get_db() as conn:
             result = register_public_attendee_in_transaction(
@@ -141,7 +141,8 @@ async def public_event_register(request: web.Request) -> web.Response:
                 consent=one("consent").lower() in {"yes", "1", "true", "on"},
             )
             marketing_recorded = False
-            if marketing_requested and result.created:
+            email_marketing_requested = "email" in marketing_channels
+            if marketing_requested and result.created and email_marketing_requested:
                 try:
                     with ambient_savepoint(conn):
                         grant_event_commercial_consent_in_transaction(
@@ -149,54 +150,78 @@ async def public_event_register(request: web.Request) -> web.Response:
                             business_id=result.registration.business_id,
                             event_id=result.registration.event_id,
                             registration_id=result.registration.id,
-                            channels=marketing_channels,
+                            channels=("email",),
                             expected_text_sha256=one("marketing_consent_hash"),
                         )
                     marketing_recorded = True
                 except Exception:  # validator: allow-wide-except
                     LOGGER.exception(
-                        "event commercial consent persistence failed; follow-up stays disabled",
+                        "event e-mail commercial consent persistence failed; follow-up stays disabled",
                         extra={
                             "business_id": result.registration.business_id,
                             "event_id": result.registration.event_id,
                         },
                     )
-            if getattr(result, "customer_id", None) is not None:
-                try:
-                    with ambient_savepoint(conn):
-                        reminder_channel_links = issue_event_reminder_channel_links_in_transaction(
+            try:
+                with ambient_savepoint(conn):
+                    registration_channel_links = (
+                        issue_event_registration_channel_links_in_transaction(
                             conn,
                             registration=result.registration,
-                            skip_platforms=tuple(getattr(result.notifications, "channels", ()) or ()),
+                            marketing_platforms=(
+                                tuple(
+                                    channel
+                                    for channel in marketing_channels
+                                    if channel in {"telegram", "vk", "max"}
+                                )
+                                if result.created
+                                else ()
+                            ),
+                            expected_marketing_text_sha256=(
+                                one("marketing_consent_hash")
+                                if marketing_requested and result.created
+                                else None
+                            ),
                         )
-                except Exception:  # validator: allow-wide-except - registration remains durable
-                    LOGGER.exception(
-                        "event reminder channel-link issuance failed",
-                        extra={
-                            "business_id": result.registration.business_id,
-                            "event_id": result.registration.event_id,
-                        },
                     )
+            except Exception:  # validator: allow-wide-except - registration remains durable
+                LOGGER.exception(
+                    "event registration-scoped messenger link issuance failed",
+                    extra={
+                        "business_id": result.registration.business_id,
+                        "event_id": result.registration.event_id,
+                    },
+                )
     except EventUnavailable:
         return _page("Регистрация закрыта", "<h1>Регистрация уже закрыта</h1>", status=410)
     except (ValueError, EventNotFound):
         return _page("Ошибка", "<h1>Проверьте введённые данные</h1>", status=400)
 
     state = "уже была подтверждена" if not result.created else "подтверждена"
-    marketing_note = (
-        "<p>Согласие на сообщения о предложениях сохранено. В каждом таком сообщении будет ссылка для отказа.</p>"
-        if marketing_requested and marketing_recorded
-        else (
-            (
-                "<p>Повторная регистрация не изменяет рекламное согласие. "
-                "Для управления им используйте персональную ссылку из сообщения.</p>"
-                if marketing_requested and not result.created
-                else "<p>Согласие на рекламные сообщения не было сохранено; такие сообщения отправляться не будут.</p>"
-            )
-            if marketing_requested
-            else ""
-        )
+    requested_messenger_marketing = tuple(
+        channel for channel in marketing_channels if channel in {"telegram", "vk", "max"}
     )
+    if marketing_requested and not result.created:
+        marketing_note = (
+            "<p>Повторная регистрация не изменяет рекламное согласие. "
+            "Для управления им используйте персональную ссылку из сообщения.</p>"
+        )
+    elif marketing_requested:
+        parts = []
+        if marketing_recorded:
+            parts.append("E-mail подтверждён")
+        if requested_messenger_marketing:
+            parts.append(
+                "выбранные мессенджеры включатся для предложений только после "
+                "подтверждения одноразовой кнопкой ниже"
+            )
+        marketing_note = (
+            "<p>" + escape("; ".join(parts)) + ". В каждом рекламном сообщении будет ссылка для отказа.</p>"
+            if parts
+            else "<p>Согласие на рекламные сообщения не было сохранено.</p>"
+        )
+    else:
+        marketing_note = ""
     channel_labels = {
         "email": "E-mail",
         "telegram": "Telegram",
@@ -215,25 +240,36 @@ async def public_event_register(request: web.Request) -> web.Response:
         else "<p>Регистрация сохранена. Организатор сообщит детали входа отдельно.</p>"
     )
     entry_by_platform: dict[str, str] = {}
-    for issued in reminder_channel_links:
-        payload = f"cplink_{issued.token}"
+    marketing_by_platform: dict[str, bool] = {}
+    for issued in registration_channel_links:
+        payload = f"ecv_{issued.token}"
         target = next(
             (item for item in build_entry_targets(payload) if item.get("platform") == issued.platform),
             None,
         )
         if target is not None and str(target.get("url") or "").strip():
             entry_by_platform[issued.platform] = str(target["url"])
+            marketing_by_platform[issued.platform] = bool(issued.marketing_requested)
     labels = {"telegram": "Telegram", "vk": "ВКонтакте", "max": "MAX"}
     reminder_opt_in = ""
     if entry_by_platform:
         links = "".join(
-            f"<a class='channel-link' href='{escape(url, quote=True)}'>Получать напоминания в {escape(labels[platform])}</a>"
+            (
+                f"<a class='channel-link' href='{escape(url, quote=True)}'>"
+                + (
+                    f"Подтвердить {escape(labels[platform])}: напоминания + предложения"
+                    if marketing_by_platform.get(platform)
+                    else f"Получать напоминания в {escape(labels[platform])}"
+                )
+                + "</a>"
+            )
             for platform, url in entry_by_platform.items()
         )
         reminder_opt_in = (
-            "<h2>Организационные напоминания в мессенджере</h2>"
-            "<p>При желании привяжите Telegram, ВКонтакте или MAX. "
-            "Ник или ID вводить не нужно: откроется выбранный мессенджер. "
+            "<h2>Подтвердить мессенджер</h2>"
+            "<p>Ник или ID вводить не нужно: откроется выбранный мессенджер. "
+            "Подтверждение относится только к этой регистрации и не объединяет "
+            "аккаунт с чужой CRM-карточкой по введённому e-mail. "
             "Ссылка одноразовая и действует ограниченное время.</p>"
             + links
         )
