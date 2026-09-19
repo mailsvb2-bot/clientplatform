@@ -624,9 +624,32 @@ def event_commercial_claim_can_cross_provider_boundary(
                   AND r.email=d.external_subject)
               OR
               (d.platform IN ('vk','max','telegram')
-                  AND r.customer_id IS NOT NULL
-                  AND ci.customer_id=r.customer_id
-                  AND ci.external_subject=d.external_subject)
+                  AND (
+                      (
+                          d.recipient_kind='external_subject'
+                          AND d.customer_identity_id IS NULL
+                          AND EXISTS (
+                              SELECT 1
+                              FROM clientplatform_event_registration_channels rc
+                              WHERE rc.business_id=r.business_id
+                                AND rc.event_id=r.event_id
+                                AND rc.registration_id=r.id
+                                AND rc.platform=d.platform
+                                AND rc.external_subject=d.external_subject
+                                AND (
+                                    rc.connection_id IS NULL
+                                    OR rc.connection_id=d.connection_id
+                                )
+                          )
+                      )
+                      OR
+                      (
+                          d.recipient_kind='customer_identity'
+                          AND r.customer_id IS NOT NULL
+                          AND ci.customer_id=r.customer_id
+                          AND ci.external_subject=d.external_subject
+                      )
+                  ))
           )
         LIMIT 1
         """,
