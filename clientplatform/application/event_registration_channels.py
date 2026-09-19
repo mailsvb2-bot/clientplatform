@@ -187,7 +187,22 @@ def _validated_connection_id(
     connection_id: str | None,
 ) -> str | None:
     if connection_id is None:
-        return None
+        if platform != "telegram":
+            return None
+        rows = conn.execute(
+            """
+            SELECT id
+            FROM connections
+            WHERE business_id=? AND platform='telegram'
+              AND connection_type='telegram_shared_bot' AND status='active'
+            ORDER BY created_at,id
+            LIMIT 2
+            """,
+            (business_id,),
+        ).fetchall()
+        if len(rows) != 1:
+            return None
+        return str(rows[0]["id"] if hasattr(rows[0], "keys") else rows[0][0])
     normalized = str(connection_id or "").strip()
     if not normalized:
         return None
