@@ -66,6 +66,8 @@ router.callback_query.filter(control.ClientPlatformControlEnabled())
 class ClientPlatformEventLifecycleState(StatesGroup):
     waiting_title = State()
     waiting_days = State()
+    waiting_topics_choice = State()
+    waiting_topics = State()
     waiting_timezone = State()
     waiting_session_time = State()
     waiting_session_url = State()
@@ -102,6 +104,19 @@ def _timezone_keyboard(business_id: str):
     return control._keyboard(
         [
             [("🕒 Москва", "cpev:tz:moscow"), ("🌍 Другое время", "cpev:tz:other")],
+            [(BACK_TO_EVENTS_LABEL, f"cpev:cancel:{token}")],
+        ]
+    )
+
+
+def _topics_keyboard(business_id: str):
+    token = control._uuid_token(business_id)
+    return control._keyboard(
+        [
+            [
+                ("Да, у дней есть темы", "cpev:topics:yes"),
+                ("Нет, тема общая", "cpev:topics:no"),
+            ],
             [(BACK_TO_EVENTS_LABEL, f"cpev:cancel:{token}")],
         ]
     )
@@ -442,10 +457,10 @@ async def _begin_warmup_choice(
     await state.set_state(ClientPlatformEventLifecycleState.waiting_warmup_days)
     await message.answer(
         f"✅ Вебинар создан. До первого дня — {window.days_until_event} календ. дн.\n\n"
-        f"Сколько дней прогревать аудиторию? Введите число от 0 до {window.max_warmup_days}.\n"
-        f"Можно прогревать весь доступный период — хоть все {window.max_warmup_days} дней до вебинара, "
+        f"Сколько дней готовить аудиторию сообщениями? Введите число от 0 до {window.max_warmup_days}.\n"
+        f"Можно использовать весь доступный период — хоть все {window.max_warmup_days} дней до вебинара, "
         "по одному сообщению в день.\n"
-        "0 — пропустить прогрев. ClientPlatform подготовит тексты как черновики владельца и ничего не разошлёт без разрешённого канала.",
+        "0 — не отправлять сообщения до вебинара. ClientPlatform подготовит тексты как черновики владельца и ничего не разошлёт без разрешённого канала.",
         reply_markup=_cancel_keyboard(business_id),
     )
 
@@ -520,7 +535,7 @@ async def _finish_content_setup(message: Message, state: FSMContext) -> None:
     )
     await message.answer(
         f"✅ {title}\n{schedule}\n\nРегистрация: {registration_url}\n\n"
-        f"Прогрев: {requested_days} дн. — {event_content_mode_label(warmup_mode)}\n"
+        f"Сообщения до вебинара: {requested_days} дн. — {event_content_mode_label(warmup_mode)}\n"
         f"В день мероприятия — {event_content_mode_label(event_day_mode)}\n"
         f"После мероприятия — {event_content_mode_label(post_event_mode)}."
         f"{visual_note}",
@@ -535,7 +550,7 @@ async def _finish_content_setup(message: Message, state: FSMContext) -> None:
     )
     for draft in drafts:
         await message.answer(
-            f"🔥 Прогрев {int(draft['position'])}/{requested_days} — {draft['publish_date']}\n\n{draft['text']}"
+            f"📨 Сообщение {int(draft['position'])}/{requested_days} — {draft['publish_date']}\n\n{draft['text']}"
         )
 
 
@@ -601,13 +616,90 @@ async def receive_days(message: Message, state: FSMContext) -> None:
             reply_markup=_cancel_keyboard(business_id),
         )
         return
-    await state.update_data(event_days=days, event_sessions=[], event_session_index=1)
+    await state.update_data(
+        event_days=days,
+        event_sessions=[],
+        event_session_index=1,
+        event_topics=[],
+    )
+    await state.set_state(ClientPlatformEventLifecycleState.waiting_topics_choice)
+    await message.answer(
+        "У каждого дня вебинара есть своё название темы?\n\n"
+        "Если да — ClientPlatform попросит названия и будет использовать их "
+        "в сообщениях до вебинара.",
+        reply_markup=_topics_keyboard(business_id),
+    )
+
+
+async def _prompt_event_timezone(message: Message, state: FSMContext, business_id: str) -> None:
     await state.set_state(ClientPlatformEventLifecycleState.waiting_timezone)
     await message.answer(
         "По какому времени идут эфиры?\n\n"
         "Нажмите «Москва» или «Другое время». При необходимости часовой пояс можно ввести вручную.",
         reply_markup=_timezone_keyboard(business_id),
     )
+
+
+@router.callback_query(
+    ClientPlatformEventLifecycleState.waiting_topics_choice,
+    F.data == "cpev:topics:no",
+)
+async def choose_common_event_topic(callback: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    business_id = str(data.get("event_business_id") or "")
+    if not business_id:
+        await callback.answer("Мастер устарел. Откройте вебинары заново.", show_alert=True)
+        return
+    await state.update_data(event_topics=[])
+    await callback.answer()
+    await _prompt_event_timezone(control._callback_message(callback), state, business_id)
+
+
+@router.callback_query(
+    ClientPlatformEventLifecycleState.waiting_topics_choice,
+    F.data == "cpev:topics:yes",
+)
+async def choose_named_event_topics(callback: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    business_id = str(data.get("event_business_id") or "")
+    days = int(data.get("event_days") or 0)
+    if not business_id or days < 1:
+        await callback.answer("Мастер устарел. Откройте вебинары заново.", show_alert=True)
+        return
+    await state.set_state(ClientPlatformEventLifecycleState.waiting_topics)
+    await callback.answer()
+    await control._callback_message(callback).answer(
+        f"Пришлите {days} названий тем — каждое с новой строки.\n\n"
+        "Например:\nКак найти свою главную проблему\nЧто мешает изменениям\nПлан действий",
+        reply_markup=_cancel_keyboard(business_id),
+    )
+
+
+@router.message(ClientPlatformEventLifecycleState.waiting_topics)
+async def receive_event_topics(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    business_id = str(data.get("event_business_id") or "")
+    days = int(data.get("event_days") or 0)
+    if not business_id or days < 1:
+        await state.clear()
+        await message.answer("Не удалось продолжить. Откройте вебинары заново.")
+        return
+    if _is_cancel(message):
+        await _cancel(message, state, business_id)
+        return
+    topics = [
+        " ".join(line.split()).strip()
+        for line in str(message.text or "").splitlines()
+        if line.strip()
+    ]
+    if len(topics) != days or any(len(topic) > 180 for topic in topics):
+        await message.answer(
+            f"Нужно ровно {days} названий, каждое с новой строки и до 180 символов.",
+            reply_markup=_cancel_keyboard(business_id),
+        )
+        return
+    await state.update_data(event_topics=topics)
+    await _prompt_event_timezone(message, state, business_id)
 
 
 async def _accept_timezone(message: Message, state: FSMContext, timezone_value: str) -> None:
@@ -948,6 +1040,17 @@ async def _create_configured_event(message: Message, state: FSMContext) -> None:
         )
         return
 
+    topics = tuple(
+        str(item).strip()
+        for item in (data.get("event_topics") or [])
+        if str(item).strip()
+    )
+    description = (
+        "Программа по дням:\n"
+        + "\n".join(f"День {index}: {topic}" for index, topic in enumerate(topics, start=1))
+        if topics
+        else ""
+    )
     actor = await control._actor(int(message.from_user.id), business_id)
     try:
         if len(sessions) == 1:
@@ -961,6 +1064,7 @@ async def _create_configured_event(message: Message, state: FSMContext) -> None:
                     ends_at=session.ends_at,
                     timezone_name=timezone_name,
                     join_url=session.join_url,
+                    description=description,
                 ),
             )
         else:
@@ -970,6 +1074,7 @@ async def _create_configured_event(message: Message, state: FSMContext) -> None:
                 request=MultiSessionOnlineEventCreateRequest(
                     title=title,
                     timezone_name=timezone_name,
+                    description=description,
                     sessions=tuple(
                         OnlineEventSessionCreateRequest(
                             starts_at=session.starts_at,
@@ -988,7 +1093,14 @@ async def _create_configured_event(message: Message, state: FSMContext) -> None:
             business_id=business_id,
             event_id=created.event_id,
             title=title,
-            local_times=tuple(session.local_label for session in sessions),
+            local_times=tuple(
+                (
+                    f"{session.local_label} — {topics[index]}"
+                    if index < len(topics)
+                    else session.local_label
+                )
+                for index, session in enumerate(sessions)
+            ),
             registration_url=registration_url,
             provider_key=created.provider_key,
             join_ready=created.join_ready,
@@ -1081,12 +1193,12 @@ async def receive_warmup_days(message: Message, state: FSMContext) -> None:
     event_id = str(data.get("created_event_id") or "")
     if not business_id or not event_id:
         await state.clear()
-        await message.answer("Вебинар создан, но не удалось продолжить прогрев. Откройте вебинары заново.")
+        await message.answer("Вебинар создан, но не удалось продолжить настройку сообщений. Откройте вебинары заново.")
         return
     if _is_cancel(message):
         await state.clear()
         await message.answer(
-            "Вебинар уже создан. Настройка прогрева остановлена.",
+            "Вебинар уже создан. Настройка сообщений до вебинара остановлена.",
             reply_markup=control._keyboard(
                 _event_actions(
                     event_id=event_id,
@@ -1117,7 +1229,7 @@ async def receive_warmup_days(message: Message, state: FSMContext) -> None:
         )
     except (ValueError, RuntimeError):
         await message.answer(
-            "Не удалось подготовить прогрев. Попробуйте другое число дней.",
+            "Не удалось подготовить сообщения. Попробуйте другое число дней.",
             reply_markup=_cancel_keyboard(business_id),
         )
         return
@@ -1146,7 +1258,7 @@ async def receive_warmup_days(message: Message, state: FSMContext) -> None:
         return
     await state.set_state(ClientPlatformEventLifecycleState.waiting_warmup_mode)
     await message.answer(
-        _mode_prompt("прогрев"),
+        _mode_prompt("сообщения до вебинара"),
         reply_markup=_cancel_keyboard(business_id),
     )
 
@@ -1166,7 +1278,7 @@ async def receive_warmup_mode(message: Message, state: FSMContext) -> None:
         mode = parse_event_content_mode(_normalized_text(message))
         await _store_mode(message=message, data=data, stage=EventContentStage.WARMUP, mode=mode)
     except (KeyError, ValueError, RuntimeError):
-        await message.answer(_mode_prompt("прогрев"), reply_markup=_cancel_keyboard(business_id))
+        await message.answer(_mode_prompt("сообщения до вебинара"), reply_markup=_cancel_keyboard(business_id))
         return
     await state.update_data(warmup_mode=mode.value)
     await _ask_event_day_mode(message, state, business_id)
