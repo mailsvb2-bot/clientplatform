@@ -205,6 +205,7 @@ def install_button_surface_contract(safety: ModuleType) -> None:
         "cpg:ok:",
         "cpg:no:",
         "cpg:b:",
+        "cpev:new:",
     )
 
     original_state_local = cast(
@@ -249,6 +250,36 @@ def install_button_surface_contract(safety: ModuleType) -> None:
         )):
             if callback_data.startswith("cpev:cancel:"):
                 return True
+        if current_state == "ClientPlatformEventLifecycleState:waiting_title":
+            return callback_data.startswith(("cpev:new:", "cpev:cancel:"))
+        if current_state.startswith((
+            "ClientPlatformEventLifecycleState:waiting_description",
+            "ClientPlatformEventLifecycleState:waiting_days",
+            "ClientPlatformEventLifecycleState:waiting_session_url",
+            "ClientPlatformEventLifecycleState:waiting_offer",
+            "ClientPlatformEventLifecycleState:waiting_warmup_days",
+            "ClientPlatformEventLifecycleState:waiting_warmup_mode",
+            "ClientPlatformEventLifecycleState:waiting_event_day_mode",
+            "ClientPlatformEventLifecycleState:waiting_post_event_mode",
+        )):
+            return callback_data.startswith("cpev:cancel:")
+        if current_state == "ClientPlatformEventLifecycleState:waiting_timezone":
+            return callback_data.startswith(("cpev:tz:", "cpev:cancel:"))
+        if current_state == "ClientPlatformEventLifecycleState:waiting_session_time":
+            return callback_data.startswith(
+                (
+                    "cpev:venue:",
+                    "cpev:noop",
+                    "cpev:month:",
+                    "cpev:date:",
+                    "cpev:start:",
+                    "cpev:duration:",
+                    "cpev:manual-time",
+                    "cpev:cancel:",
+                )
+            )
+        if current_state == "ClientPlatformEventLifecycleState:waiting_confirmation":
+            return callback_data.startswith(("cpev:confirm:", "cpev:cancel:"))
         if current_state.startswith("AdConnectionState:confirming_publication"):
             if callback_data.startswith("cpa:creative:"):
                 return True
