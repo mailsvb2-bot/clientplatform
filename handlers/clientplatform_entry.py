@@ -340,14 +340,24 @@ async def clientplatform_entry_start(
     status_message = await message.answer("Открываю…")
     try:
         with db_operation_deadline(_START_STORAGE_DEADLINE_SECONDS):
-            await asyncio.wait_for(
+            dispatch_coro = (
                 _dispatch_clientplatform_start(
                     message,
                     state,
                     user_id=user_id,
                     managed_bot_business_id=managed_bot_business_id,
+                )
+                if managed_bot_connection_id is None
+                else _dispatch_clientplatform_start(
+                    message,
+                    state,
+                    user_id=user_id,
+                    managed_bot_business_id=managed_bot_business_id,
                     managed_bot_connection_id=managed_bot_connection_id,
-                ),
+                )
+            )
+            await asyncio.wait_for(
+                dispatch_coro,
                 timeout=_START_TIMEOUT_SECONDS,
             )
     except TimeoutError:
