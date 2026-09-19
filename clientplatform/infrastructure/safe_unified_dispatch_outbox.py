@@ -1287,34 +1287,89 @@ class DispatchOutboxRepository(_UnifiedDispatchOutboxRepository):
         *,
         now: str | None = None,
     ) -> bool:
-        """Cancel a leased event message if the event/registration was revoked."""
+        """Cancel a leased event message if the exact send authority was revoked."""
 
         if item.dispatch.source_kind != "event_message":
             return True
-        row = self._conn.execute(
-            """
-            SELECT 1
-            FROM provider_dispatch_outbox d
-            JOIN clientplatform_event_registrations r
-              ON r.id=d.source_id AND r.business_id=d.business_id
-             AND r.status='registered' AND r.email=d.external_subject
-            JOIN clientplatform_events e
-              ON e.id=r.event_id AND e.business_id=r.business_id
-             AND e.status IN ('published','completed')
-            JOIN connections c
-              ON c.id=d.connection_id AND c.business_id=d.business_id
-             AND c.platform='email' AND c.connection_type='email_smtp'
-             AND c.status='active'
-            WHERE d.id=? AND d.business_id=? AND d.source_kind='event_message'
-              AND d.platform='email' AND d.status='sending' AND d.lock_token=?
-            LIMIT 1
-            """,
-            (
-                item.dispatch.id,
-                item.dispatch.business_id,
-                item.dispatch.lock_token,
-            ),
-        ).fetchone()
+
+        if item.dispatch.platform == ConnectionPlatform.EMAIL:
+            row = self._conn.execute(
+                """
+                SELECT 1
+                FROM provider_dispatch_outbox d
+                JOIN clientplatform_event_registrations r
+                  ON r.id=d.source_id AND r.business_id=d.business_id
+                 AND r.status='registered' AND r.email=d.external_subject
+                JOIN clientplatform_events e
+                  ON e.id=r.event_id AND e.business_id=r.business_id
+                 AND e.status IN ('published','completed')
+                JOIN connections c
+                  ON c.id=d.connection_id AND c.business_id=d.business_id
+                 AND c.platform='email' AND c.connection_type='email_smtp'
+                 AND c.status='active'
+                WHERE d.id=? AND d.business_id=? AND d.source_kind='event_message'
+                  AND d.platform='email' AND d.status='sending' AND d.lock_token=?
+                LIMIT 1
+                """,
+                (
+                    item.dispatch.id,
+                    item.dispatch.business_id,
+                    item.dispatch.lock_token,
+                ),
+            ).fetchone()
+        elif item.dispatch.platform in {
+            ConnectionPlatform.TELEGRAM,
+            ConnectionPlatform.VK,
+            ConnectionPlatform.MAX,
+        }:
+            allowed_types = {
+                ConnectionPlatform.TELEGRAM: (
+                    "telegram_shared_bot",
+                    "telegram_managed_bot",
+                    "telegram_business",
+                ),
+                ConnectionPlatform.VK: ("vk_community",),
+                ConnectionPlatform.MAX: ("max_shared_bot", "max_personal_bot"),
+            }[item.dispatch.platform]
+            placeholders = ",".join("?" for _ in allowed_types)
+            row = self._conn.execute(
+                f"""
+                SELECT 1
+                FROM provider_dispatch_outbox d
+                JOIN clientplatform_event_registrations r
+                  ON r.id=d.source_id AND r.business_id=d.business_id
+                 AND r.status='registered'
+                JOIN clientplatform_events e
+                  ON e.id=r.event_id AND e.business_id=r.business_id
+                 AND e.status IN ('published','completed')
+                JOIN connections c
+                  ON c.id=d.connection_id AND c.business_id=d.business_id
+                 AND c.platform=d.platform AND c.connection_type IN ({placeholders})
+                 AND c.status='active'
+                JOIN clientplatform_event_registration_channels rc
+                  ON rc.business_id=r.business_id
+                 AND rc.event_id=r.event_id
+                 AND rc.registration_id=r.id
+                 AND rc.platform=d.platform
+                 AND rc.external_subject=d.external_subject
+                 AND (rc.connection_id IS NULL OR rc.connection_id=d.connection_id)
+                WHERE d.id=? AND d.business_id=? AND d.source_kind='event_message'
+                  AND d.platform=? AND d.recipient_kind='external_subject'
+                  AND d.customer_identity_id IS NULL
+                  AND d.status='sending' AND d.lock_token=?
+                LIMIT 1
+                """,  # nosec B608 - placeholder count derives only from static enum
+                (
+                    *allowed_types,
+                    item.dispatch.id,
+                    item.dispatch.business_id,
+                    item.dispatch.platform.value,
+                    item.dispatch.lock_token,
+                ),
+            ).fetchone()
+        else:
+            row = None
+
         if row is not None:
             return True
         timestamp = str(now or _utc_now().isoformat())
