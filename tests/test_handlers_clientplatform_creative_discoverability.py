@@ -197,10 +197,11 @@ class CreativeDiscoverabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("картин", restricted["content"].summary.casefold())
 
     def test_creative_menu_covers_new_prepared_running_and_succeeded_states(self) -> None:
-        self.assertIn(
-            "✨ Создать картинку",
-            [b.text for r in creative._menu_rows(_TOKEN).inline_keyboard for b in r],
-        )
+        menu_labels = [
+            b.text for r in creative._menu_rows(_TOKEN).inline_keyboard for b in r
+        ]
+        self.assertIn("✨ Создать картинку", menu_labels)
+        self.assertIn("🎬 Создать видео", menu_labels)
         prepared = creative._menu_rows(
             _TOKEN, receipt(status=CreativeGenerationReceiptStatus.PREPARED)
         )
@@ -238,7 +239,7 @@ class CreativeDiscoverabilityTests(unittest.IsolatedAsyncioTestCase):
     async def test_menu_copy_reflects_absent_prepared_and_running_generation(self) -> None:
         target = outbound()
         cases = [
-            (None, "Опишите картинку"),
+            (None, "картинку или короткое видео"),
             (
                 receipt(status=CreativeGenerationReceiptStatus.PREPARED),
                 "Платный AI-вызов ещё не начинался",
@@ -315,6 +316,22 @@ class CreativeDiscoverabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state.data["creative_business_id"], _BUSINESS)
         self.assertIn("Какую картинку создать", target.answer.await_args.args[0])
 
+        video = callback(f"cpc:video:{_TOKEN}", target)
+        video_state = FakeState()
+        target.answer.reset_mock()
+        with (
+            patch.object(creative, "_actor_for_callback", new=AsyncMock(return_value=actor())),
+            patch.object(creative, "_active", new=AsyncMock(return_value=None)),
+            patch.object(creative.control, "_callback_message", return_value=target),
+        ):
+            await creative.ask_creative_video_prompt(video, video_state)
+        self.assertEqual(
+            video_state.state,
+            creative.ClientPlatformCreativeStudioState.waiting_prompt,
+        )
+        self.assertEqual(video_state.data["creative_kind"], "video")
+        self.assertIn("Какое видео создать", target.answer.await_args.args[0])
+
     async def test_receive_prompt_rejects_stale_invalid_and_prepare_failure(self) -> None:
         target = outbound()
         stale = FakeState()
@@ -378,6 +395,42 @@ class CreativeDiscoverabilityTests(unittest.IsolatedAsyncioTestCase):
             for b in row
         ]
         self.assertIn("✅ Создать 1 картинку", labels_)
+
+        target.answer.reset_mock()
+        target.text = " calm vertical video "
+        video_state = FakeState(
+            {
+                "creative_business_id": _BUSINESS,
+                "creative_business_token": _TOKEN,
+                "creative_kind": "video",
+            }
+        )
+        video_prepared = receipt(status=CreativeGenerationReceiptStatus.PREPARED)
+        with (
+            patch.object(creative.asyncio, "to_thread", new=direct),
+            patch.object(creative.control, "_actor", new=AsyncMock(return_value=actor())),
+            patch.object(creative.control, "_user_id", return_value=101),
+            patch.object(creative, "load_goal_visual_brand", return_value=brand),
+            patch.object(
+                creative,
+                "freeze_business_video_payload",
+                return_value='{"version":1,"brief":{"kind":"video"}}',
+            ) as freeze_video,
+            patch.object(
+                creative,
+                "prepare_creative_generation",
+                return_value=video_prepared,
+            ),
+            patch.object(creative, "_receipt_kind", return_value="video"),
+        ):
+            await creative.receive_creative_prompt(target, video_state)
+        freeze_video.assert_called_once()
+        video_labels = [
+            b.text
+            for row in target.answer.await_args.kwargs["reply_markup"].inline_keyboard
+            for b in row
+        ]
+        self.assertIn("✅ Создать 1 видео", video_labels)
 
         target.answer.reset_mock()
         state = FakeState(
