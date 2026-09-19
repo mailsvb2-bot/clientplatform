@@ -19,6 +19,7 @@ from clientplatform.application.messenger_channels import (
     resolve_messenger_ingress_route,
 )
 from clientplatform.application.event_registration_channels import (
+    EventRegistrationChannelLinkRejected,
     consume_event_registration_channel_link,
     extract_event_registration_channel_link_token,
 )
@@ -551,7 +552,7 @@ async def _process_business_event(
             permanent=True,
         )
         return web.Response(text="ok")
-    except CustomerChannelLinkRejected:
+    except (CustomerChannelLinkRejected, EventRegistrationChannelLinkRejected):
         await asyncio.to_thread(
             fail_claimed_inbound_event,
             platform.value,
