@@ -50,6 +50,87 @@ def resolve_event_email_target(
     )
 
 
+def resolve_event_registration_messenger_target(
+    conn: Any,
+    *,
+    business_id: str,
+    event_id: str,
+    registration_id: str,
+    platform: str,
+) -> EventDeliveryTarget | None:
+    if platform not in {"telegram", "vk", "max"}:
+        raise ValueError("unsupported event messenger platform")
+    row = conn.execute(
+        """
+        SELECT external_subject,connection_id
+        FROM clientplatform_event_registration_channels
+        WHERE business_id=? AND event_id=? AND registration_id=? AND platform=?
+        LIMIT 1
+        """,
+        (business_id, event_id, registration_id, platform),
+    ).fetchone()
+    if row is None:
+        return None
+    external_subject = str(
+        row["external_subject"] if hasattr(row, "keys") else row[0]
+    ).strip()
+    if not external_subject:
+        return None
+    stored_connection_id = (
+        row["connection_id"] if hasattr(row, "keys") else row[1]
+    )
+    allowed_types = _CUSTOMER_CONNECTION_TYPES[platform]
+    connection_id: str | None = None
+    if stored_connection_id is not None:
+        connection = conn.execute(
+            """
+            SELECT id,connection_type
+            FROM connections
+            WHERE id=? AND business_id=? AND platform=? AND status='active'
+            LIMIT 1
+            """,
+            (str(stored_connection_id), business_id, platform),
+        ).fetchone()
+        if connection is not None:
+            connection_type = str(
+                connection["connection_type"]
+                if hasattr(connection, "keys")
+                else connection[1]
+            )
+            if connection_type in allowed_types:
+                connection_id = str(
+                    connection["id"] if hasattr(connection, "keys") else connection[0]
+                )
+    if connection_id is None:
+        connections = conn.execute(
+            """
+            SELECT id,connection_type
+            FROM connections
+            WHERE business_id=? AND platform=? AND status='active'
+            ORDER BY created_at,id
+            """,
+            (business_id, platform),
+        ).fetchall()
+        eligible = [
+            item
+            for item in connections
+            if str(item["connection_type"] if hasattr(item, "keys") else item[1])
+            in allowed_types
+        ]
+        if len(eligible) != 1:
+            return None
+        connection_id = str(
+            eligible[0]["id"] if hasattr(eligible[0], "keys") else eligible[0][0]
+        )
+    return EventDeliveryTarget(
+        platform=platform,
+        connection_id=connection_id,
+        recipient_kind="external_subject",
+        customer_identity_id=None,
+        external_subject=external_subject,
+    )
+
+
 def resolve_event_messenger_target(
     conn: Any,
     *,
@@ -57,6 +138,15 @@ def resolve_event_messenger_target(
     registration: EventRegistration,
     platform: str,
 ) -> EventDeliveryTarget | None:
+    scoped = resolve_event_registration_messenger_target(
+        conn,
+        business_id=event.business_id,
+        event_id=event.id,
+        registration_id=registration.id,
+        platform=platform,
+    )
+    if scoped is not None:
+        return scoped
     if platform not in {"telegram", "vk", "max"}:
         raise ValueError("unsupported event messenger platform")
     if not registration.customer_id:
@@ -168,5 +258,6 @@ __all__ = [
     "EventDeliveryTarget",
     "resolve_event_email_target",
     "resolve_event_messenger_target",
+    "resolve_event_registration_messenger_target",
     "resolve_event_organizational_targets",
 ]
