@@ -154,7 +154,7 @@ def _calendar_keyboard(
         previous_year, previous_month = shift_month(year, month, -1)
         navigation.append(
             InlineKeyboardButton(
-                text="‹",
+                text=f"⬅️ {_RU_MONTHS[previous_month]}",
                 callback_data=f"cpev:month:{month_key(previous_year, previous_month)}",
             )
         )
@@ -162,7 +162,7 @@ def _calendar_keyboard(
         next_year, next_month = shift_month(year, month, 1)
         navigation.append(
             InlineKeyboardButton(
-                text="›",
+                text=f"{_RU_MONTHS[next_month]} ➡️",
                 callback_data=f"cpev:month:{month_key(next_year, next_month)}",
             )
         )
@@ -443,6 +443,8 @@ async def _begin_warmup_choice(
     await message.answer(
         f"✅ Вебинар создан. До первого дня — {window.days_until_event} календ. дн.\n\n"
         f"Сколько дней прогревать аудиторию? Введите число от 0 до {window.max_warmup_days}.\n"
+        f"Можно прогревать весь доступный период — хоть все {window.max_warmup_days} дней до вебинара, "
+        "по одному сообщению в день.\n"
         "0 — пропустить прогрев. ClientPlatform подготовит тексты как черновики владельца и ничего не разошлёт без разрешённого канала.",
         reply_markup=_cancel_keyboard(business_id),
     )
@@ -759,7 +761,11 @@ async def choose_calendar_date(callback: CallbackQuery, state: FSMContext) -> No
     except (IndexError, ValueError):
         await callback.answer("Эта дата недоступна", show_alert=True)
         return
-    await state.update_data(event_picker_date=selected.isoformat(), event_picker_start="")
+    selected_iso = selected.isoformat()
+    if str(data.get("event_picker_date") or "") == selected_iso:
+        await callback.answer()
+        return
+    await state.update_data(event_picker_date=selected_iso, event_picker_start="")
     await callback.answer()
     await control._callback_message(callback).answer(
         f"Дата: {selected.strftime('%d.%m.%Y')}. Во сколько начинаем?",
