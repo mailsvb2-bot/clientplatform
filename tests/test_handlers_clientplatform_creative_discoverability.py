@@ -109,7 +109,7 @@ class CreativeDiscoverabilityTests(unittest.IsolatedAsyncioTestCase):
     def test_content_surface_exposes_same_creative_entry(self) -> None:
         rows, help_lines = one_click._content_tools_rows(_TOKEN, actor())
         self.assertIn("🎨 Создать картинку", labels(rows))
-        self.assertTrue(any("изображение" in line for line in help_lines))
+        self.assertTrue(any("картинку" in line and "видео" in line for line in help_lines))
 
     def test_roles_without_promotion_management_do_not_get_paid_creative_entry(self) -> None:
         rows = one_click._more_rows(_TOKEN, actor(PlatformRole.ANALYST))
@@ -405,7 +405,7 @@ class CreativeDiscoverabilityTests(unittest.IsolatedAsyncioTestCase):
                 "creative_kind": "video",
             }
         )
-        video_prepared = receipt(status=CreativeGenerationReceiptStatus.PREPARED)
+        video_prepared = receipt(\n            status=CreativeGenerationReceiptStatus.PREPARED,\n            request_text="calm vertical video",\n        )
         with (
             patch.object(creative.asyncio, "to_thread", new=direct),
             patch.object(creative.control, "_actor", new=AsyncMock(return_value=actor())),
@@ -810,7 +810,7 @@ class CreativeDiscoverabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("🎨 Создать картинку", analyst_labels)
         content_rows, help_lines = fake._content_tools_rows(_TOKEN, actor())
         self.assertEqual(labels(content_rows)[0], "🎨 Создать картинку")
-        self.assertTrue(any("создать изображение" in line for line in help_lines))
+        self.assertTrue(any("создать картинку" in line and "видео" in line for line in help_lines))
         creative.install_creative_studio_visibility(fake)
 
         safety = SimpleNamespace(
