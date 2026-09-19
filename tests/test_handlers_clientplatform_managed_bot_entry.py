@@ -41,6 +41,40 @@ async def _direct_to_thread(
 
 
 class ClientPlatformManagedBotEntryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_event_verification_uses_exact_managed_bot_connection(self) -> None:
+        business_id = str(uuid4())
+        connection_id = str(uuid4())
+        message = _Message(text="/start ecv_verified-token")
+        state = _State()
+        consume = Mock(
+            return_value=SimpleNamespace(marketing_consent_recorded=True)
+        )
+        with (
+            patch.object(entry.asyncio, "to_thread", _direct_to_thread),
+            patch.object(
+                entry,
+                "consume_event_registration_channel_link",
+                consume,
+            ),
+        ):
+            await entry.clientplatform_entry_start(
+                message,
+                state,
+                managed_bot_business_id=business_id,
+                managed_bot_connection_id=connection_id,
+            )
+        consume.assert_called_once_with(
+            token="verified-token",
+            platform="telegram",
+            external_subject="501",
+            expected_business_id=business_id,
+            connection_id=connection_id,
+        )
+        self.assertEqual(state.clear_count, 1)
+        self.assertTrue(message.answers)
+        self.assertIn("Telegram подтверждён", message.answers[-1])
+        self.assertIn("предложениями", message.answers[-1])
+
     async def test_managed_bot_context_precedes_invite_payload(self) -> None:
         business_id = str(uuid4())
         customer_link = SimpleNamespace(
