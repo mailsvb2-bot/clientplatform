@@ -188,6 +188,12 @@ def install_button_surface_contract(safety: ModuleType) -> None:
         "cpo:ads:",
         "cpev:home:",
         "cpev:settings:",
+        # Calendar browsing/selection is idempotent UI state. Telegram Web may
+        # retransmit the same callback while a keyboard redraw is in flight;
+        # never turn that into the misleading "Действие уже выполняется".
+        "cpev:month:",
+        "cpev:date:",
+        "cpev:noop",
     )
     _extend_tuple(
         safety,
