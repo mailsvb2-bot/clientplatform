@@ -37,14 +37,15 @@ def render_event_landing_body(
         consent_text = build_event_commercial_consent_text(advertiser_label)
         consent_hash = commercial_consent_text_sha256(advertiser_label)
         marketing_block = (
-            "<fieldset><legend>Необязательное согласие на сообщения о предложениях</legend>"
+            "<fieldset><legend>Полезные материалы и предложения (необязательно)</legend>"
             f"<input type=hidden name=marketing_consent_hash value='{escape(consent_hash, quote=True)}'>"
             f"<label><input style='width:auto' type=checkbox name=marketing_consent value=yes> "
             f"{escape(consent_text)}</label>"
-            "<p>Каналы:</p>"
+            "<p>Где можно присылать такие сообщения:</p>"
             "<label><input style='width:auto' type=checkbox name=marketing_channel value=email checked> E-mail</label> "
-            "<label><input style='width:auto' type=checkbox name=marketing_channel value=max> MAX</label> "
-            "<label><input style='width:auto' type=checkbox name=marketing_channel value=vk> VK</label>"
+            "<label><input style='width:auto' type=checkbox name=marketing_channel value=telegram> Telegram</label> "
+            "<label><input style='width:auto' type=checkbox name=marketing_channel value=vk> ВКонтакте</label> "
+            "<label><input style='width:auto' type=checkbox name=marketing_channel value=max> MAX</label>"
             "</fieldset>"
         )
     return (
@@ -52,13 +53,14 @@ def render_event_landing_body(
         f"<p>{escape(event.description)}</p>"
         f"<p><b>{escape(event.local_start_label())}</b></p>"
         f"<form method=post action='{escape(action, quote=True)}'>"
+        "<fieldset><legend>Регистрация на мероприятие</legend>"
         "<label>Имя</label><input name=name maxlength=120 required autocomplete=name>"
         "<label>E-mail</label><input name=email maxlength=320 type=email required autocomplete=email>"
-        "<label>Телефон</label><input name=phone maxlength=40 autocomplete=tel>"
+        "<label>Телефон (необязательно)</label><input name=phone maxlength=40 autocomplete=tel>"
         "<div class=hp aria-hidden=true><input name=company tabindex=-1 autocomplete=off></div>"
         "<label><input style='width:auto' type=checkbox name=consent value=yes required> "
         "Согласен на обработку данных для регистрации и получения организационных сообщений "
-        "об этом мероприятии.</label>"
+        "об этом мероприятии.</label></fieldset>"
         f"<input type=hidden name=source value='{escape(source_value, quote=True)}'>"
         f"<input type=hidden name=campaign_ref value='{escape(campaign_value, quote=True)}'>"
         + marketing_block
