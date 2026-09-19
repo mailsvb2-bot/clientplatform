@@ -364,12 +364,33 @@ class CreativeDiscoverabilityTests(unittest.IsolatedAsyncioTestCase):
             patch.object(creative.asyncio, "to_thread", new=direct),
             patch.object(creative.control, "_actor", new=AsyncMock(return_value=actor())),
             patch.object(creative.control, "_user_id", return_value=101),
+            patch.object(creative, "visual_generation_ready", return_value=True),
             patch.object(creative, "load_goal_visual_brand", return_value=brand),
             patch.object(creative, "prepare_creative_generation", side_effect=OSError("db")),
         ):
             target.text = "calm office"
             await creative.receive_creative_prompt(target, state)
         self.assertIn("безопасно подготовить", target.answer.await_args.args[0])
+
+    async def test_receive_prompt_stops_before_paid_consent_when_provider_is_unavailable(self) -> None:
+        target = outbound()
+        target.text = "calm office"
+        state = FakeState(
+            {"creative_business_id": _BUSINESS, "creative_business_token": _TOKEN}
+        )
+        with (
+            patch.object(creative.asyncio, "to_thread", new=direct),
+            patch.object(creative.control, "_actor", new=AsyncMock(return_value=actor())),
+            patch.object(creative.control, "_user_id", return_value=101),
+            patch.object(creative, "visual_generation_ready", return_value=False),
+            patch.object(creative, "prepare_creative_generation") as prepare,
+        ):
+            await creative.receive_creative_prompt(target, state)
+
+        prepare.assert_not_called()
+        self.assertIn("не подключён рабочий генератор", target.answer.await_args.args[0])
+        self.assertIn("Платный запрос не запускался", target.answer.await_args.args[0])
+
 
     async def test_receive_prompt_confirms_paid_call_and_preserves_existing_request(self) -> None:
         target = outbound()
@@ -383,6 +404,7 @@ class CreativeDiscoverabilityTests(unittest.IsolatedAsyncioTestCase):
             patch.object(creative.asyncio, "to_thread", new=direct),
             patch.object(creative.control, "_actor", new=AsyncMock(return_value=actor())),
             patch.object(creative.control, "_user_id", return_value=101),
+            patch.object(creative, "visual_generation_ready", return_value=True),
             patch.object(creative, "load_goal_visual_brand", return_value=brand),
             patch.object(creative, "prepare_creative_generation", return_value=prepared),
         ):
@@ -413,6 +435,7 @@ class CreativeDiscoverabilityTests(unittest.IsolatedAsyncioTestCase):
             patch.object(creative.asyncio, "to_thread", new=direct),
             patch.object(creative.control, "_actor", new=AsyncMock(return_value=actor())),
             patch.object(creative.control, "_user_id", return_value=101),
+            patch.object(creative, "visual_generation_ready", return_value=True),
             patch.object(creative, "load_goal_visual_brand", return_value=brand),
             patch.object(
                 creative,
@@ -448,6 +471,7 @@ class CreativeDiscoverabilityTests(unittest.IsolatedAsyncioTestCase):
             patch.object(creative.asyncio, "to_thread", new=direct),
             patch.object(creative.control, "_actor", new=AsyncMock(return_value=actor())),
             patch.object(creative.control, "_user_id", return_value=101),
+            patch.object(creative, "visual_generation_ready", return_value=True),
             patch.object(creative, "load_goal_visual_brand", return_value=brand),
             patch.object(creative, "prepare_creative_generation", return_value=existing),
         ):
