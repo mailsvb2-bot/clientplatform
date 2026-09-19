@@ -22,7 +22,11 @@ from clientplatform.application.events import (
     publish_event_in_transaction,
     register_public_attendee_in_transaction,
 )
+from clientplatform.infrastructure.safe_unified_dispatch_outbox import (
+    DispatchOutboxRepository as SafeDispatchOutboxRepository,
+)
 from clientplatform.infrastructure.tenancy_repository import TenancyRepository
+from clientplatform.privacy_manifest import validate_clientplatform_privacy_manifest
 from services.db.schema import create_or_update_tables
 
 
@@ -178,6 +182,69 @@ def test_event_channel_verification_is_registration_scoped_and_does_not_capture_
         )
         for row in queued
     } == {("external_subject", None, "100200300", telegram_connection)}
+    conn.close()
+
+
+
+def test_verified_event_messenger_reminder_crosses_provider_boundary_and_revokes_exactly() -> None:
+    conn = _conn()
+    actor, event, result = _published_registration(conn, user_id=993)
+    telegram_connection = _telegram_connection(conn, actor)
+    links = issue_event_registration_channel_links_in_transaction(
+        conn,
+        registration=result.registration,
+    )
+    telegram = next(item for item in links if item.platform == "telegram")
+    with patch(
+        "clientplatform.application.event_notifications._public_base_url",
+        return_value="https://clientplatform.example.test",
+    ):
+        consume_event_registration_channel_link_in_transaction(
+            conn,
+            token=telegram.token,
+            platform="telegram",
+            external_subject="700700700",
+            expected_business_id=actor.business_id,
+            connection_id=telegram_connection,
+        )
+
+    report = validate_clientplatform_privacy_manifest(conn, strict=True)
+    assert report.ok
+
+    outbox = SafeDispatchOutboxRepository(conn)
+    claimed = outbox.claim_due(
+        limit=10,
+        now=datetime.now(timezone.utc).replace(microsecond=0) + timedelta(seconds=5),
+    )
+    item = next(
+        entry
+        for entry in claimed
+        if getattr(entry, "dispatch", None) is not None
+        and entry.dispatch.source_kind == "event_message"
+        and entry.dispatch.platform.value == "telegram"
+        and entry.dispatch.source_id == result.registration.id
+    )
+    assert outbox.event_message_claim_can_cross_provider_boundary(item) is True
+
+    conn.execute(
+        """
+        UPDATE clientplatform_event_registration_channels
+        SET external_subject='revoked-subject',updated_at=?
+        WHERE business_id=? AND event_id=? AND registration_id=? AND platform='telegram'
+        """,
+        (
+            datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+            actor.business_id,
+            event.id,
+            result.registration.id,
+        ),
+    )
+    assert outbox.event_message_claim_can_cross_provider_boundary(item) is False
+    row = conn.execute(
+        "SELECT status,last_error FROM provider_dispatch_outbox WHERE id=?",
+        (item.dispatch.id,),
+    ).fetchone()
+    assert tuple(row) == ("cancelled", "event_message_revoked")
     conn.close()
 
 
