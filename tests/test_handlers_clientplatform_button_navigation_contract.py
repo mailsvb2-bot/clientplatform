@@ -242,6 +242,110 @@ def test_admin_token_first_menu_is_recognized_as_repeatable_navigation() -> None
     )
 
 
+def test_telegram_webinar_lifecycle_accepts_current_step_callbacks() -> None:
+    allowed = {
+        "ClientPlatformEventLifecycleState:waiting_title": (
+            "cpev:new:business",
+            "cpev:cancel:business",
+        ),
+        "ClientPlatformEventLifecycleState:waiting_description": (
+            "cpev:cancel:business",
+        ),
+        "ClientPlatformEventLifecycleState:waiting_days": (
+            "cpev:cancel:business",
+        ),
+        "ClientPlatformEventLifecycleState:waiting_timezone": (
+            "cpev:tz:moscow",
+            "cpev:tz:other",
+            "cpev:cancel:business",
+        ),
+        "ClientPlatformEventLifecycleState:waiting_session_time": (
+            "cpev:venue:telemost",
+            "cpev:noop",
+            "cpev:month:202610",
+            "cpev:date:2026-10-01",
+            "cpev:start:1900",
+            "cpev:duration:120",
+            "cpev:manual-time",
+            "cpev:cancel:business",
+        ),
+        "ClientPlatformEventLifecycleState:waiting_session_url": (
+            "cpev:cancel:business",
+        ),
+        "ClientPlatformEventLifecycleState:waiting_offer": (
+            "cpev:cancel:business",
+        ),
+        "ClientPlatformEventLifecycleState:waiting_confirmation": (
+            "cpev:confirm:create",
+            "cpev:confirm:edit",
+            "cpev:cancel:business",
+        ),
+        "ClientPlatformEventLifecycleState:waiting_warmup_days": (
+            "cpev:cancel:business",
+        ),
+        "ClientPlatformEventLifecycleState:waiting_warmup_mode": (
+            "cpev:cancel:business",
+        ),
+        "ClientPlatformEventLifecycleState:waiting_event_day_mode": (
+            "cpev:cancel:business",
+        ),
+        "ClientPlatformEventLifecycleState:waiting_post_event_mode": (
+            "cpev:cancel:business",
+        ),
+    }
+    for state_name, callbacks in allowed.items():
+        for callback in callbacks:
+            assert not _callback_conflicts_with_state(state_name, callback), (
+                state_name,
+                callback,
+            )
+            assert not _callback_should_clear_state(state_name, callback), (
+                state_name,
+                callback,
+            )
+
+    assert _callback_conflicts_with_state(
+        "ClientPlatformEventLifecycleState:waiting_timezone",
+        "cpev:confirm:create",
+    )
+    assert _callback_conflicts_with_state(
+        "ClientPlatformEventLifecycleState:waiting_confirmation",
+        "cpev:venue:telemost",
+    )
+
+
+@pytest.mark.asyncio
+async def test_telegram_webinar_timezone_button_is_not_blocked_by_safety(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    answers: list[tuple[str | None, bool]] = []
+    handled: list[str] = []
+
+    async def answer_callback(
+        _callback: CallbackQuery,
+        text: str | None = None,
+        *,
+        show_alert: bool = False,
+        **_kwargs: Any,
+    ) -> None:
+        answers.append((text, show_alert))
+
+    async def handler(event: Any, _data: dict[str, Any]) -> str:
+        handled.append(str(event.data))
+        return "handled"
+
+    monkeypatch.setattr(CallbackQuery, "answer", answer_callback)
+    middleware = ClientPlatformInteractionSafetyMiddleware()
+    state = _state()
+    await state.set_state("ClientPlatformEventLifecycleState:waiting_timezone")
+    callback = _callback("cpev:tz:moscow")
+    data = {"bot": type("Bot", (), {"id": 1})(), "state": state}
+
+    assert await middleware(handler, callback, data) == "handled"
+    assert handled == ["cpev:tz:moscow"]
+    assert ("Сначала завершите текущий шаг или отправьте /cancel.", True) not in answers
+
+
 def test_native_webinar_wizard_buttons_escape_only_ordinary_stale_fsm() -> None:
     ordinary = "ClientPlatformControlState:activity_description"
     timezone = "cpm:event-wizard:timezone:moscow"
