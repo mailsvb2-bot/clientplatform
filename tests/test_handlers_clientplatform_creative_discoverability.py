@@ -405,7 +405,10 @@ class CreativeDiscoverabilityTests(unittest.IsolatedAsyncioTestCase):
                 "creative_kind": "video",
             }
         )
-        video_prepared = receipt(\n            status=CreativeGenerationReceiptStatus.PREPARED,\n            request_text="calm vertical video",\n        )
+        video_prepared = receipt(
+            status=CreativeGenerationReceiptStatus.PREPARED,
+            request_text="calm vertical video",
+        )
         with (
             patch.object(creative.asyncio, "to_thread", new=direct),
             patch.object(creative.control, "_actor", new=AsyncMock(return_value=actor())),
