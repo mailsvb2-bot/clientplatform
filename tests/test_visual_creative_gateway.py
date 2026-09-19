@@ -95,6 +95,55 @@ def test_snapshot_never_exposes_gateway_credentials(monkeypatch):
     assert "super-secret" not in rendered
 
 
+def test_configured_visual_providers_uses_gateway_capability_snapshot(monkeypatch):
+    seen = {}
+    def fake_json(method, path, **_kwargs):
+        seen["method"] = method
+        seen["path"] = path
+        return {
+            "enabled": True,
+            "configured_image": ["yandexart", "gigachat"],
+            "configured_video": ["yandexart_motion"],
+        }
+
+    monkeypatch.setattr(gateway, "_json", fake_json)
+    assert gateway.configured_visual_providers("image", country_code="RU") == (
+        "yandexart",
+        "gigachat",
+    )
+    assert seen["method"] == "GET"
+    assert "country_code=RU" in seen["path"]
+
+
+def test_configured_visual_providers_fails_closed_when_generation_disabled(monkeypatch):
+    monkeypatch.setattr(
+        gateway,
+        "_json",
+        lambda *_args, **_kwargs: {
+            "enabled": False,
+            "configured_image": ["yandexart"],
+            "configured_video": ["yandexart_motion"],
+        },
+    )
+    assert gateway.configured_visual_providers("image", country_code="RU") == ()
+
+
+def test_configured_visual_providers_rejects_malformed_snapshot(monkeypatch):
+    monkeypatch.setattr(
+        gateway,
+        "_json",
+        lambda *_args, **_kwargs: {
+            "enabled": True,
+            "configured_image": ["../../secret"],
+        },
+    )
+    with pytest.raises(
+        gateway.VisualCreativeGatewayError,
+        match="invalid_provider_snapshot",
+    ):
+        gateway.configured_visual_providers("image", country_code="RU")
+
+
 def test_wait_polls_with_original_scope_until_done(monkeypatch):
     sequence = [
         gateway.VisualCreativeJob(
