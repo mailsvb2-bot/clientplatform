@@ -41,6 +41,7 @@ from clientplatform.application.visual_creatives import (
     materialize_ad_visual,
     normalize_business_image_request,
     poll_ad_visual,
+    visual_generation_ready,
 )
 from clientplatform.domain.creative_generation import (
     CreativeGenerationReceipt,
@@ -307,9 +308,22 @@ async def receive_creative_prompt(message: Message, state: FSMContext) -> None:
         )
         return
     try:
+        country_code = os.getenv("VISUAL_DEPLOYMENT_COUNTRY", "")
+        ready = await asyncio.to_thread(
+            visual_generation_ready,
+            kind=kind,
+            country_code=country_code,
+        )
+        if not ready:
+            noun = "видео" if kind == "video" else "картинок"
+            await message.answer(
+                f"Сейчас для создания {noun} не подключён рабочий генератор. "
+                "Платный запрос не запускался. Проверьте подключение AI-провайдера "
+                "в инфраструктуре ClientPlatform."
+            )
+            return
         brand = await asyncio.to_thread(load_goal_visual_brand, actor=actor)
         brand_context = brand.prompt_context()
-        country_code = os.getenv("VISUAL_DEPLOYMENT_COUNTRY", "")
         freezer = (
             freeze_business_video_payload
             if kind == "video"
@@ -328,6 +342,12 @@ async def receive_creative_prompt(message: Message, state: FSMContext) -> None:
             country_code=country_code,
             provider_payload_json=provider_payload_json,
         )
+    except VisualCreativeError:
+        await message.answer(
+            "Не удалось проверить доступность генератора. Платный запрос не запускался. "
+            "Попробуйте ещё раз после восстановления шлюза генерации."
+        )
+        return
     except (OSError, ValueError):
         await message.answer("Не удалось безопасно подготовить генерацию. Попробуйте позже.")
         return
@@ -558,6 +578,39 @@ def _delivery_recovery_rows(
     return control._keyboard(rows)
 
 
+def _visual_failure_text(job) -> str:
+    code = str(getattr(job, "error_code", "") or "").strip().lower()
+    if code in {"no_visual_provider_available", "visual_creative_disabled"}:
+        return (
+            "Для этого типа визуала сейчас нет подключённого рабочего генератора. "
+            "Новый платный запрос не запускался."
+        )
+    if code in {
+        "visual_provider_submit_http_401",
+        "visual_provider_submit_http_403",
+    }:
+        return (
+            "Провайдер генерации отклонил авторизацию. Нужно восстановить его ключ "
+            "или доступ; повторять платный запрос вслепую ClientPlatform не будет."
+        )
+    if code in {"visual_gateway_quota_rejected"}:
+        return (
+            "Шлюз генерации остановил запрос по лимиту. Платная генерация повторно "
+            "автоматически не запускается."
+        )
+    if "timeout" in code or code.endswith("_transport"):
+        return (
+            "Генератор не подтвердил результат из-за сетевой ошибки. ClientPlatform "
+            "не запускает второй платный запрос автоматически, чтобы не получить дубль."
+        )
+    if code:
+        return (
+            "Генератор вернул безопасный код ошибки. Новый запрос можно создать после "
+            "устранения причины; повторного платного запуска автоматически нет."
+        )
+    return "Генерация завершилась ошибкой. Можно создать новый запрос."
+
+
 async def _continue_generation(
     callback: CallbackQuery,
     *,
@@ -594,7 +647,7 @@ async def _continue_generation(
         return
     if current.status == CreativeGenerationReceiptStatus.FAILED:
         await control._callback_message(callback).answer(
-            "Генерация завершилась ошибкой. Можно создать новый запрос.",
+            _visual_failure_text(job),
             reply_markup=_result_rows(token),
         )
         return
