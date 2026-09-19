@@ -103,6 +103,40 @@ class EventSchedulePickerHandlerTests(unittest.IsolatedAsyncioTestCase):
                 )
             )
 
+    def test_calendar_has_obvious_month_navigation_two_months_ahead(self) -> None:
+        with patch.object(lifecycle.control, "_uuid_token", return_value="business-token"):
+            october = lifecycle._calendar_keyboard(
+                business_id=BUSINESS_ID,
+                timezone_name="Europe/Moscow",
+                year=2026,
+                month=10,
+                minimum_date=date(2026, 9, 17),
+            )
+        buttons = [
+            (button.text, button.callback_data)
+            for row in october.inline_keyboard
+            for button in row
+            if button.callback_data
+        ]
+        self.assertIn(("⬅️ Сентябрь", "cpev:month:202609"), buttons)
+        self.assertIn(("Ноябрь ➡️", "cpev:month:202611"), buttons)
+
+        with patch.object(lifecycle.control, "_uuid_token", return_value="business-token"):
+            november = lifecycle._calendar_keyboard(
+                business_id=BUSINESS_ID,
+                timezone_name="Europe/Moscow",
+                year=2026,
+                month=11,
+                minimum_date=date(2026, 9, 17),
+            )
+        november_callbacks = {
+            button.callback_data
+            for row in november.inline_keyboard
+            for button in row
+            if button.callback_data
+        }
+        self.assertIn("cpev:date:2026-11-20", november_callbacks)
+
     def test_room_keyboard_opens_selected_external_service_but_not_other(self) -> None:
         with patch.object(lifecycle.control, "_uuid_token", return_value="business-token"):
             telemost = lifecycle._session_url_keyboard(
