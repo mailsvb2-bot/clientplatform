@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from html import escape
+from urllib.parse import quote
 from aiohttp import web
 
 from clientplatform.application.event_commercial_consent import (
@@ -83,6 +84,63 @@ def _public_advertiser_label(public_slug: str) -> str | None:
         return public_event_advertiser_label_in_transaction(
             conn, public_slug=public_slug
         )
+
+
+def _registration_channel_entry_url(
+    conn,
+    *,
+    business_id: str,
+    platform: str,
+    payload: str,
+) -> str | None:
+    if platform == "telegram":
+        managed = conn.execute(
+            """
+            SELECT c.id,mb.username
+            FROM connections c
+            JOIN managed_bots mb
+              ON mb.connection_id=c.id AND mb.business_id=c.business_id
+             AND mb.platform='telegram' AND mb.status='active'
+            WHERE c.business_id=? AND c.platform='telegram'
+              AND c.connection_type='telegram_managed_bot'
+              AND c.status='active'
+              AND mb.username IS NOT NULL AND TRIM(mb.username)!=''
+            ORDER BY c.created_at,c.id
+            LIMIT 2
+            """,
+            (business_id,),
+        ).fetchall()
+        if len(managed) == 1:
+            username = str(
+                managed[0]["username"] if hasattr(managed[0], "keys") else managed[0][1]
+            ).strip().lstrip("@")
+            if username:
+                return f"https://t.me/{quote(username, safe='')}?start={quote(payload, safe='')}"
+        shared = conn.execute(
+            """
+            SELECT id
+            FROM connections
+            WHERE business_id=? AND platform='telegram'
+              AND connection_type='telegram_shared_bot' AND status='active'
+            ORDER BY created_at,id
+            LIMIT 2
+            """,
+            (business_id,),
+        ).fetchall()
+        if len(shared) != 1:
+            return None
+    target = next(
+        (
+            item
+            for item in build_entry_targets(payload)
+            if item.get("platform") == platform
+        ),
+        None,
+    )
+    if target is None:
+        return None
+    url = str(target.get("url") or "").strip()
+    return url or None
 
 
 async def public_event_landing(request: web.Request) -> web.Response:
@@ -241,15 +299,21 @@ async def public_event_register(request: web.Request) -> web.Response:
     )
     entry_by_platform: dict[str, str] = {}
     marketing_by_platform: dict[str, bool] = {}
-    for issued in registration_channel_links:
-        payload = f"ecv_{issued.token}"
-        target = next(
-            (item for item in build_entry_targets(payload) if item.get("platform") == issued.platform),
-            None,
-        )
-        if target is not None and str(target.get("url") or "").strip():
-            entry_by_platform[issued.platform] = str(target["url"])
-            marketing_by_platform[issued.platform] = bool(issued.marketing_requested)
+    if registration_channel_links:
+        with get_db_ro() as conn:
+            for issued in registration_channel_links:
+                payload = f"ecv_{issued.token}"
+                url = _registration_channel_entry_url(
+                    conn,
+                    business_id=result.registration.business_id,
+                    platform=issued.platform,
+                    payload=payload,
+                )
+                if url:
+                    entry_by_platform[issued.platform] = url
+                    marketing_by_platform[issued.platform] = bool(
+                        issued.marketing_requested
+                    )
     labels = {"telegram": "Telegram", "vk": "ВКонтакте", "max": "MAX"}
     reminder_opt_in = ""
     if entry_by_platform:
