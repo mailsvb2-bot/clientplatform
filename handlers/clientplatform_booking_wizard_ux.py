@@ -12,7 +12,15 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, User
 
 from clientplatform.application.activity import get_business_profile
-from clientplatform.presentation.event_schedule_picker import QUICK_START_TIMES, local_today, parse_quick_time
+from clientplatform.presentation.event_schedule_picker import (
+    MAX_CALENDAR_MONTHS,
+    calendar_days,
+    local_today,
+    month_distance,
+    month_key,
+    parse_month_key,
+    shift_month,
+)
 
 control = importlib.import_module(".clientplatform_control", __package__)
 
@@ -27,10 +35,32 @@ router = Router(name="clientplatform_booking_wizard_ux")
 router.message.filter(control.ClientPlatformControlEnabled())
 router.callback_query.filter(control.ClientPlatformControlEnabled())
 
-_QUICK_DURATIONS = (30, 45, 60, 90)
+_QUICK_DURATIONS = (15, 30, 45, 60, 75, 90, 120, 180)
+_BOOKING_START_TIMES = tuple(
+    f"{hour:02d}:{minute:02d}"
+    for hour in range(8, 22)
+    for minute in (0, 30)
+) + ("22:00",)
+# Kept for callback compatibility with keyboards rendered by earlier releases.
 _DATE_PAGE_SIZE = 7
 _MAX_DATE_DAYS = 365
 _MONTHS_RU = ("", "янв", "фев", "мар", "апр", "май", "июн", "июл", "авг", "сен", "окт", "ноя", "дек")
+_MONTHS_RU_FULL = (
+    "",
+    "Январь",
+    "Февраль",
+    "Март",
+    "Апрель",
+    "Май",
+    "Июнь",
+    "Июль",
+    "Август",
+    "Сентябрь",
+    "Октябрь",
+    "Ноябрь",
+    "Декабрь",
+)
+_WEEKDAYS_RU = ("Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс")
 
 
 def _business_token(business_id: str) -> str:
@@ -45,31 +75,62 @@ def _date_keyboard(
     business_id: str,
     *,
     minimum: date,
+    year: int | None = None,
+    month: int | None = None,
     offset: int = 0,
 ):
+    """Render a real month calendar while keeping legacy offset callbacks usable."""
+
     token = _business_token(business_id)
-    start = minimum + timedelta(days=max(0, offset))
-    rows: list[list[tuple[str, str]]] = []
-    values = [
-        start + timedelta(days=index)
-        for index in range(_DATE_PAGE_SIZE)
-        if offset + index <= _MAX_DATE_DAYS
+    if year is None or month is None:
+        target = minimum + timedelta(days=max(0, offset))
+        year, month = target.year, target.month
+    # Shared validation keeps booking and webinar calendars on one month-window contract.
+    weeks = calendar_days(
+        year=year,
+        month=month,
+        minimum=minimum,
+        max_months=MAX_CALENDAR_MONTHS,
+    )
+    rows: list[list[tuple[str, str]]] = [
+        [(f"{_MONTHS_RU_FULL[month]} {year}", f"cpj:wiznoop:{token}")],
+        [(label, f"cpj:wiznoop:{token}") for label in _WEEKDAYS_RU],
     ]
-    for index in range(0, len(values), 2):
+    for week in weeks:
         rows.append(
             [
-                (_date_label(item), f"cpj:wizdate:{token}:{item.isoformat()}")
-                for item in values[index : index + 2]
+                (
+                    str(cell.day) if cell.day else "·",
+                    (
+                        f"cpj:wizdate:{token}:{cell.value}"
+                        if cell.enabled and cell.value
+                        else f"cpj:wiznoop:{token}"
+                    ),
+                )
+                for cell in week
             ]
         )
+
+    distance = month_distance(minimum, year=year, month=month)
     navigation: list[tuple[str, str]] = []
-    if offset > 0:
-        navigation.append(("⬅️ Раньше", f"cpj:wizdatepage:{token}:{max(0, offset - _DATE_PAGE_SIZE)}"))
-    if offset + _DATE_PAGE_SIZE <= _MAX_DATE_DAYS:
-        navigation.append(("Позже ➡️", f"cpj:wizdatepage:{token}:{offset + _DATE_PAGE_SIZE}"))
+    if distance > 0:
+        previous_year, previous_month = shift_month(year, month, -1)
+        navigation.append(
+            (
+                f"⬅️ {_MONTHS_RU_FULL[previous_month]}",
+                f"cpj:wizmonth:{token}:{month_key(previous_year, previous_month)}",
+            )
+        )
+    if distance < MAX_CALENDAR_MONTHS:
+        next_year, next_month = shift_month(year, month, 1)
+        navigation.append(
+            (
+                f"{_MONTHS_RU_FULL[next_month]} ➡️",
+                f"cpj:wizmonth:{token}:{month_key(next_year, next_month)}",
+            )
+        )
     if navigation:
         rows.append(navigation)
-    rows.append([("✍️ Ввести вручную", f"cpj:wizmanual:{token}")])
     rows.append([("✖️ Отмена", f"cpj:wizcancel:{token}")])
     return control._keyboard(rows)
 
@@ -79,11 +140,10 @@ def _time_keyboard(business_id: str):
     rows = [
         [
             (value, f"cpj:wiztime:{token}:{value.replace(':', '')}")
-            for value in QUICK_START_TIMES[index : index + 3]
+            for value in _BOOKING_START_TIMES[index : index + 3]
         ]
-        for index in range(0, len(QUICK_START_TIMES), 3)
+        for index in range(0, len(_BOOKING_START_TIMES), 3)
     ]
-    rows.append([("✍️ Ввести вручную", f"cpj:wizmanual:{token}")])
     rows.append([("✖️ Отмена", f"cpj:wizcancel:{token}")])
     return control._keyboard(rows)
 
@@ -101,6 +161,7 @@ async def send_booking_date_picker(
     await state.update_data(
         booking_picker_timezone=timezone_name,
         booking_picker_min_date=minimum.isoformat(),
+        booking_picker_month=month_key(minimum.year, minimum.month),
         booking_picker_date="",
     )
     prefix = f"{heading.rstrip()}\n\n" if heading.strip() else ""
@@ -113,21 +174,30 @@ async def send_booking_date_picker(
 
 def _duration_keyboard(business_id: str):
     token = _business_token(business_id)
-    return control._keyboard(
+    labels = {
+        15: "15 мин",
+        30: "30 мин",
+        45: "45 мин",
+        60: "1 час",
+        75: "1 ч 15 мин",
+        90: "1,5 часа",
+        120: "2 часа",
+        180: "3 часа",
+    }
+    rows = [
         [
-            [
-                ("30 мин", f"cpj:wizdur:{token}:30"),
-                ("45 мин", f"cpj:wizdur:{token}:45"),
-            ],
-            [
-                ("60 мин", f"cpj:wizdur:{token}:60"),
-                ("90 мин", f"cpj:wizdur:{token}:90"),
-            ],
-            [("Другая длительность", f"cpj:wizcustom:{token}")],
+            (labels[value], f"cpj:wizdur:{token}:{value}")
+            for value in _QUICK_DURATIONS[index : index + 3]
+        ]
+        for index in range(0, len(_QUICK_DURATIONS), 3)
+    ]
+    rows.extend(
+        [
             [("⬅️ Изменить дату и время", f"cpj:wizback:{token}")],
             [("✖️ Отмена", f"cpj:wizcancel:{token}")],
         ]
     )
+    return control._keyboard(rows)
 
 
 def _cancel_keyboard(business_id: str):
