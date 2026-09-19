@@ -17,6 +17,8 @@ from clientplatform.domain.events import EventRegistration, normalize_utc
 from clientplatform.infrastructure.event_repository import EventRepository
 
 
+LOGGER = logging.getLogger(__name__)
+
 _EVENT_MESSENGER_PLATFORMS = (
     CustomerPlatform.TELEGRAM,
     CustomerPlatform.VK,
@@ -372,17 +374,30 @@ def consume_event_registration_channel_link_in_transaction(
     notifications_queued = 0
     registration_token = str(value("registration_token", 9))
     public_slug = str(value("public_slug", 10))
-    repository = EventRepository(conn)
-    registration = repository.get_registration_by_token(token=registration_token)
-    event = repository.get_public_owner_event(public_slug=public_slug)
-    from clientplatform.application.event_notifications import enqueue_event_notifications
+    try:
+        repository = EventRepository(conn)
+        registration = repository.get_registration_by_token(token=registration_token)
+        event = repository.get_public_owner_event(public_slug=public_slug)
+        from clientplatform.application.event_notifications import enqueue_event_notifications
+        from services.db.core import ambient_savepoint
 
-    notifications_queued = enqueue_event_notifications(
-        conn,
-        event=event,
-        registration=registration,
-        now=current,
-    ).queued
+        with ambient_savepoint(conn):
+            notifications_queued = enqueue_event_notifications(
+                conn,
+                event=event,
+                registration=registration,
+                now=current,
+            ).queued
+    except Exception:  # validator: allow-wide-except - verification and consent stay durable
+        LOGGER.exception(
+            "event messenger verification notification reconciliation failed",
+            extra={
+                "business_id": business_id,
+                "event_id": event_id,
+                "registration_id": registration_id,
+                "platform": normalized_platform.value,
+            },
+        )
     return ConsumedEventRegistrationChannelLink(
         business_id=business_id,
         event_id=event_id,
