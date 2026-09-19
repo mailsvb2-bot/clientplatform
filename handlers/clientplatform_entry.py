@@ -137,6 +137,7 @@ async def _dispatch_clientplatform_start(
     *,
     user_id: int,
     managed_bot_business_id: str | None,
+    managed_bot_connection_id: str | None = None,
 ) -> None:
     payload = control._start_payload(message)
     event_channel_token = extract_event_registration_channel_link_token(payload)
@@ -148,6 +149,7 @@ async def _dispatch_clientplatform_start(
                 platform="telegram",
                 external_subject=str(user_id),
                 expected_business_id=managed_bot_business_id,
+                connection_id=managed_bot_connection_id,
             )
         except EventRegistrationChannelLinkRejected:
             await state.clear()
@@ -330,6 +332,7 @@ async def clientplatform_entry_start(
     message: Message,
     state: FSMContext,
     managed_bot_business_id: str | None = None,
+    managed_bot_connection_id: str | None = None,
 ) -> None:
     """Acknowledge `/start` before storage work and fail visibly on stalls."""
 
@@ -343,6 +346,7 @@ async def clientplatform_entry_start(
                     state,
                     user_id=user_id,
                     managed_bot_business_id=managed_bot_business_id,
+                    managed_bot_connection_id=managed_bot_connection_id,
                 ),
                 timeout=_START_TIMEOUT_SECONDS,
             )
