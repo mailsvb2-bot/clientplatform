@@ -335,11 +335,6 @@ async def _send_warmup_preview(
         actor=actor,
         event_id=event_id,
     )
-    modes = await asyncio.to_thread(
-        get_event_content_plan,
-        actor=actor,
-        event_id=event_id,
-    )
     if not plan.drafts:
         await _send_event_content_plan(
             target,
@@ -348,6 +343,11 @@ async def _send_warmup_preview(
             event_id=event_id,
         )
         return
+    modes = await asyncio.to_thread(
+        get_event_content_plan,
+        actor=actor,
+        event_id=event_id,
+    )
     index = max(0, min(position - 1, len(plan.drafts) - 1))
     draft = plan.drafts[index]
     asset = await asyncio.to_thread(

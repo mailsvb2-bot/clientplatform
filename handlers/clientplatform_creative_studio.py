@@ -354,7 +354,7 @@ async def _finish_visual(
                     )
                 except LookupError:
                     await target.answer(
-                        "Этот визуал уже был отправлен или завершён.",
+                        "Эта генерация уже была отправлена или завершена.",
                         reply_markup=_result_rows(token),
                     )
                     return True
