@@ -18,7 +18,7 @@ from clientplatform.application.event_owner_flow import (
     create_and_publish_online_event,
 )
 from clientplatform.application.event_sessions import get_event_warmup_window
-from clientplatform.application.event_warmups import get_event_warmup_plan
+from clientplatform.application.event_warmups import save_event_warmup_plan
 from clientplatform.application.event_wizard import (
     MAX_EVENT_SESSIONS,
     EventWizardSession,
@@ -1222,7 +1222,7 @@ async def receive_warmup_days(message: Message, state: FSMContext) -> None:
     actor = await control._actor(int(message.from_user.id), business_id)
     try:
         plan = await asyncio.to_thread(
-            get_event_warmup_plan,
+            save_event_warmup_plan,
             actor=actor,
             event_id=event_id,
             requested_days=requested_days,
