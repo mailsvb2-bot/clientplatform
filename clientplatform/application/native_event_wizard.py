@@ -282,7 +282,7 @@ def _warmup_message(maximum: int) -> CustomerInteractionMessage:
     rows.append(_back_row())
     return CustomerInteractionMessage(
         text=(
-            f"До первого дня можно сделать прогрев до {maximum} дн.\n\n"
+            f"До первого дня можно отправлять сообщения до {maximum} дн.\n\n"
             "Нажмите готовое число или отправьте нужное число сообщением. 0 — без подготовительных сообщений."
         ),
         rows=tuple(rows),
@@ -291,7 +291,7 @@ def _warmup_message(maximum: int) -> CustomerInteractionMessage:
 
 def _mode_message(stage: EventContentStage) -> CustomerInteractionMessage:
     labels = {
-        EventContentStage.WARMUP: "прогрев",
+        EventContentStage.WARMUP: "сообщения до вебинара",
         EventContentStage.EVENT_DAY: "анонс в день мероприятия",
         EventContentStage.POST_EVENT: "дожим после мероприятия",
     }
@@ -688,7 +688,7 @@ def _warmup_preview(
     )
     if not plan.drafts:
         return CustomerInteractionMessage(
-            text="Для этого вебинара прогрев не выбран.",
+            text="Для этого вебинара сообщения до эфира не выбраны.",
             rows=(_back_row(),),
         )
     index = min(max(0, page), len(plan.drafts) - 1)
@@ -839,7 +839,7 @@ def handle_native_event_wizard_action(
             text=(
                 f"🔥 Сколько дней отправлять сообщения до вебинара? Можно до {maximum} дн.\n\n"
                 "Будет одно сообщение в день в 12:00 по часовому поясу вебинара. "
-                "0 — отключить прогрев."
+                "0 — не отправлять сообщения до вебинара."
             ),
             rows=tuple(rows),
         )
@@ -877,7 +877,7 @@ def handle_native_event_wizard_action(
             context={"event_id": event_id, "maximum": maximum},
         )
         return CustomerInteractionMessage(
-            text=f"Отправьте число дней от 0 до {maximum}. 0 отключит прогрев.",
+            text=f"Отправьте число дней от 0 до {maximum}. 0 отключит сообщения до вебинара.",
             rows=(_back_row(),),
         )
 
