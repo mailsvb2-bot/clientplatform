@@ -258,9 +258,12 @@ def install_button_surface_contract(safety: ModuleType) -> None:
                 return True
         if current_state == "ClientPlatformEventLifecycleState:waiting_title":
             return callback_data.startswith(("cpev:new:", "cpev:cancel:"))
+        if current_state == "ClientPlatformEventLifecycleState:waiting_topics_choice":
+            return callback_data.startswith(("cpev:topics:", "cpev:cancel:"))
         if current_state.startswith((
             "ClientPlatformEventLifecycleState:waiting_description",
             "ClientPlatformEventLifecycleState:waiting_days",
+            "ClientPlatformEventLifecycleState:waiting_topics",
             "ClientPlatformEventLifecycleState:waiting_session_url",
             "ClientPlatformEventLifecycleState:waiting_offer",
             "ClientPlatformEventLifecycleState:waiting_warmup_days",
