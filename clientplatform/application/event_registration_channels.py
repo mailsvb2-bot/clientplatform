@@ -99,7 +99,8 @@ def issue_event_registration_channel_links_in_transaction(
     requested_marketing = _marketing_platforms(marketing_platforms)
     row = conn.execute(
         """
-        SELECT r.id,r.business_id,r.event_id,r.status AS registration_status,\n               e.public_slug,e.status AS event_status
+        SELECT r.id,r.business_id,r.event_id,r.status AS registration_status,
+               e.public_slug,e.status AS event_status
         FROM clientplatform_event_registrations r
         JOIN clientplatform_events e
           ON e.id=r.event_id AND e.business_id=r.business_id
@@ -111,7 +112,10 @@ def issue_event_registration_channel_links_in_transaction(
     if row is None:
         raise EventRegistrationChannelLinkRejected("event registration was not found")
     value = lambda key, index: row[key] if hasattr(row, "keys") else row[index]
-    if (\n        str(value("registration_status", 3)) != "registered"\n        or str(value("event_status", 5)) != "published"\n    ):
+    if (
+        str(value("registration_status", 3)) != "registered"
+        or str(value("event_status", 5)) != "published"
+    ):
         raise EventRegistrationChannelLinkRejected(
             "event registration is not available for messenger verification"
         )
