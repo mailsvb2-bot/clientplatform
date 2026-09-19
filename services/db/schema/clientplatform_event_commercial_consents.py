@@ -158,9 +158,6 @@ def ensure(c: sqlite3.Connection) -> None:
             FOREIGN KEY(registration_id,business_id,event_id)
                 REFERENCES clientplatform_event_registrations(id,business_id,event_id)
                 ON DELETE CASCADE,
-            FOREIGN KEY(connection_id,business_id,platform)
-                REFERENCES connections(id,business_id,platform)
-                ON DELETE SET NULL,
             CHECK(platform IN ('telegram','vk','max')),
             CHECK(length(external_subject) BETWEEN 1 AND 512)
         )
