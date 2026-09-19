@@ -366,7 +366,14 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
                     patch.object(one_click, "start_yandex_direct_oauth", return_value=oauth, side_effect=side_effect),
                     patch.object(one_click, "_fallback", new=fallback),
                 ):
-                    await one_click.get_clients_one_click(callback("cpo:start:business-1", target), State())
+                    await one_click._start_slot_ad(
+                        callback("cpo:start:business-1", target),
+                        State(),
+                        actor=tenant_actor(),
+                        business_id="business-1",
+                        token="business-1",
+                        slot=slot(),
+                    )
                 if fail:
                     fallback.assert_awaited_once()
                 else:
@@ -383,7 +390,14 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
             patch.object(one_click.control, "list_booking_slots", return_value=[slot()]),
             patch.object(one_click, "_fallback", new=fallback),
         ):
-            await one_click.get_clients_one_click(callback("cpo:start:business-1", target), State())
+            await one_click._start_slot_ad(
+                        callback("cpo:start:business-1", target),
+                        State(),
+                        actor=tenant_actor(),
+                        business_id="business-1",
+                        token="business-1",
+                        slot=slot(),
+                    )
         fallback.assert_awaited_once()
 
         fallback.reset_mock()
@@ -396,7 +410,14 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
             patch.object(one_click, "list_ad_publications", return_value=[]),
             patch.object(one_click, "_fallback", new=fallback),
         ):
-            await one_click.get_clients_one_click(callback("cpo:start:business-1", target), State())
+            await one_click._start_slot_ad(
+                        callback("cpo:start:business-1", target),
+                        State(),
+                        actor=tenant_actor(),
+                        business_id="business-1",
+                        token="business-1",
+                        slot=slot(),
+                    )
         fallback.assert_awaited_once()
 
     async def test_connection_callback_selection_valid_and_stale(self):
