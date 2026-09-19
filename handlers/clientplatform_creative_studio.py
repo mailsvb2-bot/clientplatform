@@ -779,7 +779,7 @@ def install_creative_studio_visibility(one_click: ModuleType) -> None:
                 else:
                     rows[publication_index].insert(0, creative_button)
             help_line = (
-                f"• создать изображение для поста или рекламы → «{nav.CREATIVES.label}»"
+                f"• создать картинку или видео для поста/рекламы → «{nav.CREATIVES.label}»"
             )
             if help_line not in help_lines:
                 help_lines.insert(0, help_line)
@@ -799,12 +799,19 @@ def install_creative_studio_safety(safety: ModuleType) -> None:
     if bool(getattr(safety, "_creative_studio_safety_installed", False)):
         return
     _extend_tuple(safety, "_CLIENTPLATFORM_CALLBACK_PREFIXES", "cpc:")
-    _extend_tuple(safety, "_STATE_ESCAPE_PREFIXES", "cpc:open:", "cpc:new:")
+    _extend_tuple(
+        safety,
+        "_STATE_ESCAPE_PREFIXES",
+        "cpc:open:",
+        "cpc:new:",
+        "cpc:video:",
+    )
     _extend_tuple(
         safety,
         "_REPEATABLE_NAVIGATION_PREFIXES",
         "cpc:open:",
         "cpc:new:",
+        "cpc:video:",
         "cpc:check:",
     )
     _extend_tuple(
@@ -822,7 +829,9 @@ def install_creative_studio_safety(safety: ModuleType) -> None:
 
     def callback_can_escape_state(current_state: str, callback_data: str) -> bool:
         if current_state.startswith("ClientPlatformCreativeStudioState:"):
-            if callback_data.startswith(("cpc:open:", "cpc:new:", "cpj:home:")):
+            if callback_data.startswith(
+                ("cpc:open:", "cpc:new:", "cpc:video:", "cpj:home:")
+            ):
                 return True
         return original_escape(current_state, callback_data)
 
