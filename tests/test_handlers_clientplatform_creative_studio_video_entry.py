@@ -40,3 +40,35 @@ def test_result_menu_keeps_video_creation_visible() -> None:
     rows = _labels_and_callbacks(studio._result_rows("business-token"))
     assert ("✨ Создать ещё картинку", "cpc:new:business-token") in rows
     assert ("🎬 Создать видео", "cpc:video:business-token") in rows
+
+def test_prepared_image_can_switch_to_video(monkeypatch) -> None:
+    active = SimpleNamespace(
+        status=CreativeGenerationReceiptStatus.PREPARED,
+        delivery_claimed_at=None,
+    )
+    monkeypatch.setattr(studio, "_receipt_kind", lambda _receipt: "image")
+    monkeypatch.setattr(
+        studio,
+        "_receipt_callback",
+        lambda action, token, receipt: f"receipt:{action}:{token}",
+    )
+
+    rows = _labels_and_callbacks(studio._menu_rows("business-token", active))
+    assert ("🎬 Вместо этого видео", "cpc:video:business-token") in rows
+
+
+def test_prepared_video_can_switch_to_image(monkeypatch) -> None:
+    active = SimpleNamespace(
+        status=CreativeGenerationReceiptStatus.PREPARED,
+        delivery_claimed_at=None,
+    )
+    monkeypatch.setattr(studio, "_receipt_kind", lambda _receipt: "video")
+    monkeypatch.setattr(
+        studio,
+        "_receipt_callback",
+        lambda action, token, receipt: f"receipt:{action}:{token}",
+    )
+
+    rows = _labels_and_callbacks(studio._menu_rows("business-token", active))
+    assert ("✨ Вместо этого картинка", "cpc:new:business-token") in rows
+
