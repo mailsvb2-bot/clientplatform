@@ -291,36 +291,33 @@ async def public_event_register(request: web.Request) -> web.Response:
                             "event_id": result.registration.event_id,
                         },
                     )
-            try:
-                with ambient_savepoint(conn):
-                    registration_channel_links = (
-                        issue_event_registration_channel_links_in_transaction(
-                            conn,
-                            registration=result.registration,
-                            marketing_platforms=(
-                                tuple(
+            if result.created:
+                try:
+                    with ambient_savepoint(conn):
+                        registration_channel_links = (
+                            issue_event_registration_channel_links_in_transaction(
+                                conn,
+                                registration=result.registration,
+                                marketing_platforms=tuple(
                                     channel
                                     for channel in marketing_channels
                                     if channel in {"telegram", "vk", "max"}
-                                )
-                                if result.created
-                                else ()
-                            ),
-                            expected_marketing_text_sha256=(
-                                one("marketing_consent_hash")
-                                if marketing_requested and result.created
-                                else None
-                            ),
+                                ),
+                                expected_marketing_text_sha256=(
+                                    one("marketing_consent_hash")
+                                    if marketing_requested
+                                    else None
+                                ),
+                            )
                         )
+                except Exception:  # validator: allow-wide-except - registration remains durable
+                    LOGGER.exception(
+                        "event registration-scoped messenger link issuance failed",
+                        extra={
+                            "business_id": result.registration.business_id,
+                            "event_id": result.registration.event_id,
+                        },
                     )
-            except Exception:  # validator: allow-wide-except - registration remains durable
-                LOGGER.exception(
-                    "event registration-scoped messenger link issuance failed",
-                    extra={
-                        "business_id": result.registration.business_id,
-                        "event_id": result.registration.event_id,
-                    },
-                )
     except EventUnavailable:
         return _page("Регистрация закрыта", "<h1>Регистрация уже закрыта</h1>", status=410)
     except (ValueError, EventNotFound):

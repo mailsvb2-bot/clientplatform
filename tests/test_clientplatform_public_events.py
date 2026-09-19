@@ -116,6 +116,21 @@ class _Request:
         )
 
 
+class _MessengerRequest:
+    content_length = 256
+    match_info = {"slug": "existing-event"}
+
+    async def post(self):
+        return _Form(
+            name="Victim",
+            email="victim@example.test",
+            consent="yes",
+            marketing_consent="yes",
+            marketing_channel=["telegram"],
+            marketing_consent_hash="a" * 64,
+        )
+
+
 @unittest.skipUnless(_AIOHTTP_AVAILABLE, "aiohttp runtime dependency is not installed")
 class PublicEventBusinessMessengerLinkTests(unittest.TestCase):
     def test_entry_links_use_exact_connected_business_accounts(self) -> None:
@@ -224,6 +239,43 @@ class PublicEventCommercialConsentRuntimeTests(unittest.IsolatedAsyncioTestCase)
             response = await public_events_runtime.public_event_register(_Request())
         self.assertEqual(response.status, 200)
         self.assertFalse(grant.called)
+        self.assertIn(
+            "Повторная регистрация не изменяет рекламное согласие",
+            response.text,
+        )
+
+
+    async def test_duplicate_registration_cannot_receive_fresh_messenger_capabilities(self) -> None:
+        registration = SimpleNamespace(
+            business_id="11111111-1111-4111-8111-111111111111",
+            event_id="22222222-2222-4222-8222-222222222222",
+            id="33333333-3333-4333-8333-333333333333",
+        )
+        result = SimpleNamespace(
+            created=False,
+            registration=registration,
+            notifications=SimpleNamespace(enabled=False),
+        )
+        issue = Mock()
+        with (
+            patch.object(public_events_runtime, "get_db", return_value=nullcontext(object())),
+            patch.object(
+                public_events_runtime,
+                "register_public_attendee_in_transaction",
+                return_value=result,
+            ),
+            patch.object(
+                public_events_runtime,
+                "issue_event_registration_channel_links_in_transaction",
+                issue,
+            ),
+        ):
+            response = await public_events_runtime.public_event_register(
+                _MessengerRequest()
+            )
+        self.assertEqual(response.status, 200)
+        self.assertFalse(issue.called)
+        self.assertNotIn("Подтвердить мессенджер", response.text)
         self.assertIn(
             "Повторная регистрация не изменяет рекламное согласие",
             response.text,
