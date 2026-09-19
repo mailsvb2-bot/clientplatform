@@ -177,11 +177,16 @@ def frozen_business_visual_kind(value: str) -> str:
 
 
 def frozen_business_visual_binding(value: str) -> dict[str, str] | None:
-    _load_frozen_business_visual_payload(value)
     raw = json.loads(str(value or ""))
+    if not isinstance(raw, dict):
+        raise ValueError("frozen business visual payload is invalid")
     binding = raw.get("binding")
     if binding is None:
+        # Legacy image receipts predate event-content bindings and may carry an
+        # older frozen payload shape. Delivery/recovery of those receipts must
+        # not be blocked merely because there is no event binding to persist.
         return None
+    _load_frozen_business_visual_payload(value)
     if not isinstance(binding, dict):
         raise ValueError("frozen business visual binding is invalid")
     normalized = {str(key): str(item) for key, item in binding.items()}
