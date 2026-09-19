@@ -73,8 +73,8 @@ async def test_booking_start_offers_common_durations_and_escape_routes() -> None
     text, markup = message.answers[-1]
     assert "одного нажатия" in text
     labels = _labels(markup)
-    assert labels[:4] == ["30 мин", "45 мин", "60 мин", "90 мин"]
-    assert "Другая длительность" in labels
+    assert labels[:4] == ["15 мин", "30 мин", "45 мин", "1 час"]
+    assert "Другая длительность" not in labels
     assert "⬅️ Изменить дату и время" in labels
     assert "✖️ Отмена" in labels
 
@@ -145,7 +145,7 @@ async def test_quick_duration_reuses_canonical_booking_completion() -> None:
 async def test_quick_duration_rejects_unknown_preset() -> None:
     business_id = str(uuid4())
     token = wizard.control._uuid_token(business_id)
-    callback = FakeCallback(f"cpj:wizdur:{token}:75")
+    callback = FakeCallback(f"cpj:wizdur:{token}:20")
     state = FakeState({"business_id": business_id})
     actor = AsyncMock()
 
@@ -213,8 +213,10 @@ async def test_back_returns_to_date_entry_without_losing_booking_context() -> No
     text, markup = message.answers[-1]
     assert "Выберите новые дату и время" in text
     assert "Выберите дату свободного времени" in text
-    assert "✍️ Ввести вручную" in _labels(markup)
-    assert "✖️ Отмена" in _labels(markup)
+    labels = _labels(markup)
+    assert "Пн" in labels and "Вс" in labels
+    assert "✍️ Ввести вручную" not in labels
+    assert "✖️ Отмена" in labels
 
 
 @pytest.mark.asyncio
@@ -251,11 +253,11 @@ async def test_date_then_time_buttons_build_booking_start_without_manual_typing(
     assert state.states[-1] == wizard.control.ClientPlatformControlState.booking_duration
     text, markup = message.answers[-1]
     assert "Дата и время приняты" in text
-    assert "60 мин" in _labels(markup)
+    assert "1 час" in _labels(markup)
 
 
 @pytest.mark.asyncio
-async def test_booking_date_picker_keeps_manual_fallback_visible() -> None:
+async def test_booking_date_picker_is_month_calendar_without_manual_entry() -> None:
     business_id = str(uuid4())
     message = FakeMessage()
     state = FakeState({"business_id": business_id, "offering_id": str(uuid4())})
@@ -271,36 +273,35 @@ async def test_booking_date_picker_keeps_manual_fallback_visible() -> None:
     text, markup = message.answers[-1]
     labels = _labels(markup)
     assert "Выберите дату свободного времени" in text
-    assert "20 сен" in labels
-    assert "✍️ Ввести вручную" in labels
+    assert "Сентябрь 2026" in labels
+    assert "Пн" in labels and "Вс" in labels
+    assert "20" in labels
+    assert "✍️ Ввести вручную" not in labels
+    assert "Октябрь ➡️" in labels
     assert "✖️ Отмена" in labels
 
 
-def test_booking_date_picker_last_page_clamps_to_supported_range() -> None:
+def test_booking_date_picker_can_jump_many_months_ahead() -> None:
     business_id = str(uuid4())
     minimum = date(2026, 1, 1)
     markup = wizard._date_keyboard(
         business_id,
         minimum=minimum,
-        offset=wizard._MAX_DATE_DAYS - 1,
+        year=2026,
+        month=11,
     )
-    date_callbacks = [
+    labels = _labels(markup)
+    callbacks = [
         str(button.callback_data)
         for row in markup.inline_keyboard
         for button in row
         if str(button.callback_data or "").startswith("cpj:wizdate:")
     ]
 
-    assert len(date_callbacks) == 2
-    rendered_dates = [
-        date.fromisoformat(callback.rsplit(":", 1)[-1])
-        for callback in date_callbacks
-    ]
-    assert max(rendered_dates) == minimum + timedelta(days=wizard._MAX_DATE_DAYS)
-    assert all(
-        rendered <= minimum + timedelta(days=wizard._MAX_DATE_DAYS)
-        for rendered in rendered_dates
-    )
+    assert "Ноябрь 2026" in labels
+    assert "Октябрь" in " ".join(labels)
+    assert "Декабрь ➡️" in labels
+    assert any(callback.endswith(":2026-11-20") for callback in callbacks)
 
 
 @pytest.mark.asyncio
@@ -331,7 +332,8 @@ async def test_date_page_navigation_rerenders_and_rejects_out_of_range_offset() 
         for button in row
         if str(button.callback_data or "").startswith("cpj:wizdate:")
     ]
-    assert len(date_callbacks) == 2
+    assert any(value.endswith(":2026-12-31") for value in date_callbacks)
+    assert state.data["booking_picker_month"] == "202612"
     assert callback.answers[-1] == (None, False)
 
     stale = FakeCallback(
