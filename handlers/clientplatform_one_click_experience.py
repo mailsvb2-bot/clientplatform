@@ -3,6 +3,7 @@ from __future__ import annotations
 """One primary owner action with safe automatic orchestration."""
 
 import asyncio
+import importlib
 from types import ModuleType
 from urllib.parse import urlencode
 
@@ -381,27 +382,40 @@ async def _choose_connection(
     )
 
 
-@router.callback_query(F.data.startswith("cpo:start:"))
-async def get_clients_one_click(callback: CallbackQuery, state: FSMContext) -> None:
-    token = str(callback.data).split(":", 2)[2]
-    business_id = control._token_uuid(token)
-    actor = await control._actor(int(callback.from_user.id), business_id)
-    await callback.answer("Готовлю всё сам…")
-    await state.clear()
-    slots = await asyncio.to_thread(control.list_booking_slots, actor=actor)
-    open_slots = [item for item in slots if item.slot.status == BookingSlotStatus.OPEN]
-    if not open_slots:
-        await control._callback_message(callback).answer(
-            "Сначала нужно одно свободное время. Нажмите кнопку — остальное поведу сам.",
-            reply_markup=control._keyboard(
-                [
-                    [("➕ Открыть время", f"cps:firstbook:{token}")],
-                    [(nav.BACK.label, f"cpj:home:{token}")],
-                ]
-            ),
-        )
-        return
-    slot = min(open_slots, key=lambda item: item.slot.starts_at)
+async def _advertisable_offerings(actor) -> list:
+    capabilities = await asyncio.to_thread(control.list_business_capabilities, actor=actor)
+    groups = await asyncio.gather(
+        *[
+            asyncio.to_thread(
+                control.list_business_offerings,
+                actor=actor,
+                capability_id=capability.id,
+            )
+            for capability in capabilities
+            if capability.connector_key != "programs"
+            and capability.status == control.CapabilityStatus.ACTIVE
+        ]
+    )
+    seen: set[str] = set()
+    result = []
+    for group in groups:
+        for offering in group:
+            if offering.id in seen:
+                continue
+            seen.add(offering.id)
+            result.append(offering)
+    return result
+
+
+async def _start_slot_ad(
+    callback: CallbackQuery,
+    state: FSMContext,
+    *,
+    actor,
+    business_id: str,
+    token: str,
+    slot,
+) -> None:
     data = {
         "business_id": business_id,
         "business_token": token,
@@ -512,6 +526,154 @@ async def get_clients_one_click(callback: CallbackQuery, state: FSMContext) -> N
             ]
             + [[("🏠 Отмена", f"cpj:home:{token}")]],
         ),
+    )
+
+
+@router.callback_query(F.data.startswith("cpo:start:"))
+async def get_clients_one_click(callback: CallbackQuery, state: FSMContext) -> None:
+    token = str(callback.data).split(":", 2)[2]
+    business_id = control._token_uuid(token)
+    actor = await control._actor(int(callback.from_user.id), business_id)
+    actor.assert_can_manage_promotions()
+    await state.clear()
+    offerings = await _advertisable_offerings(actor)
+    await callback.answer()
+    if not offerings:
+        await control._callback_message(callback).answer(
+            "Сначала добавьте услугу или предложение, которое хотите рекламировать.",
+            reply_markup=control._keyboard(
+                [
+                    [("🧰 Мои услуги", f"cpj:services:{token}")],
+                    [(nav.BACK.label, f"cpj:home:{token}")],
+                ]
+            ),
+        )
+        return
+    await control._callback_message(callback).answer(
+        "Что именно Вы хотите рекламировать?\n\n"
+        "Выберите одну из своих услуг — ClientPlatform больше не будет решать это за Вас.",
+        reply_markup=control._keyboard(
+            [
+                [
+                    (
+                        f"🧰 {offering.title[:48]}",
+                        f"cpo:offer:{token}:{control._uuid_token(offering.id)}",
+                    )
+                ]
+                for offering in offerings
+            ]
+            + [[(nav.BACK.label, f"cpj:home:{token}")]],
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("cpo:offer:"))
+async def choose_one_click_offering(callback: CallbackQuery, state: FSMContext) -> None:
+    _, _, business_token, offering_token = str(callback.data).split(":", 3)
+    business_id = control._token_uuid(business_token)
+    offering_id = control._token_uuid(offering_token)
+    actor = await control._actor(int(callback.from_user.id), business_id)
+    actor.assert_can_manage_promotions()
+    offerings, slots = await asyncio.gather(
+        _advertisable_offerings(actor),
+        asyncio.to_thread(control.list_booking_slots, actor=actor),
+    )
+    offering = next((item for item in offerings if item.id == offering_id), None)
+    if offering is None:
+        await callback.answer("Эта услуга больше недоступна", show_alert=True)
+        return
+    open_slots = [
+        item
+        for item in slots
+        if item.slot.status == BookingSlotStatus.OPEN
+        and item.slot.offering_id == offering_id
+    ]
+    await callback.answer()
+    if not open_slots:
+        await state.clear()
+        await state.update_data(business_id=business_id, offering_id=offering_id)
+        profile = await asyncio.to_thread(control.get_business_profile, actor=actor)
+        booking = importlib.import_module(".clientplatform_booking_wizard_ux", __package__)
+        await booking.send_booking_date_picker(
+            control._callback_message(callback),
+            state,
+            business_id=business_id,
+            timezone_name=profile.timezone,
+            heading=f"Рекламируем «{offering.title}». Выберите дату.",
+        )
+        return
+
+    rows = [
+        [
+            (
+                f"📅 {slot.local_start} · {slot.slot.duration_minutes} мин",
+                f"cpo:slot:{business_token}:{control._uuid_token(slot.slot.id)}",
+            )
+        ]
+        for slot in sorted(open_slots, key=lambda item: item.slot.starts_at)
+    ]
+    rows.extend(
+        [
+            [
+                (
+                    "➕ Выбрать другую дату и время",
+                    f"cpo:newtime:{business_token}:{offering_token}",
+                )
+            ],
+            [("⬅️ Другая услуга", f"cpo:start:{business_token}")],
+        ]
+    )
+    await control._callback_message(callback).answer(
+        f"Рекламируем «{offering.title}».\n\n"
+        "Какую дату и время продвигать?",
+        reply_markup=control._keyboard(rows),
+    )
+
+
+@router.callback_query(F.data.startswith("cpo:newtime:"))
+async def choose_new_ad_time(callback: CallbackQuery, state: FSMContext) -> None:
+    _, _, business_token, offering_token = str(callback.data).split(":", 3)
+    business_id = control._token_uuid(business_token)
+    offering_id = control._token_uuid(offering_token)
+    actor = await control._actor(int(callback.from_user.id), business_id)
+    offerings = await _advertisable_offerings(actor)
+    offering = next((item for item in offerings if item.id == offering_id), None)
+    if offering is None:
+        await callback.answer("Эта услуга больше недоступна", show_alert=True)
+        return
+    profile = await asyncio.to_thread(control.get_business_profile, actor=actor)
+    await state.clear()
+    await state.update_data(business_id=business_id, offering_id=offering_id)
+    await callback.answer()
+    booking = importlib.import_module(".clientplatform_booking_wizard_ux", __package__)
+    await booking.send_booking_date_picker(
+        control._callback_message(callback),
+        state,
+        business_id=business_id,
+        timezone_name=profile.timezone,
+        heading=f"Рекламируем «{offering.title}». Выберите новую дату.",
+    )
+
+
+@router.callback_query(F.data.startswith("cpo:slot:"))
+async def choose_exact_ad_slot(callback: CallbackQuery, state: FSMContext) -> None:
+    _, _, business_token, slot_token = str(callback.data).split(":", 3)
+    business_id = control._token_uuid(business_token)
+    slot_id = control._token_uuid(slot_token)
+    actor = await control._actor(int(callback.from_user.id), business_id)
+    actor.assert_can_manage_promotions()
+    slot = await _reload_slot(actor, slot_id)
+    if slot is None:
+        await callback.answer("Это время уже недоступно. Выберите другое.", show_alert=True)
+        return
+    await callback.answer("Готовлю рекламу выбранной услуги…")
+    await _start_slot_ad(
+        callback,
+        state,
+        actor=actor,
+        business_id=business_id,
+        token=business_token,
+        slot=slot,
     )
 
 
