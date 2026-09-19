@@ -64,9 +64,11 @@ def test_landing_separates_registration_and_optional_marketing_channels() -> Non
     assert "Телефон (необязательно)" in body
     assert "Полезные материалы и предложения (необязательно)" in body
     assert "value=email checked" in body
-    assert "value=telegram" in body
-    assert "value=vk" in body
-    assert "value=max" in body
+    assert "value=telegram" not in body
+    assert "value=vk" not in body
+    assert "value=max" not in body
+    assert "коммерческое согласие подтверждается только для E-mail" in body
+    assert "отдельного подтверждения владения каналом" in body
     assert "от «Бренд»" in body
 
 
