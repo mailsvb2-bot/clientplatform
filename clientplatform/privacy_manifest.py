@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 TenantDisposition = Literal["erase", "retain", "anonymize"]
-CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-09-19.v52-event-content-assets"
+CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-09-19.v53-event-registration-channels"
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,6 +62,8 @@ _POLICIES = (
     _required("clientplatform_event_conversion_links", "anonymize", "verified event-to-payment attribution retained without public registration PII"),
     _required("clientplatform_event_commercial_consent_events", "erase", "registration-linked commercial consent evidence is erased with the public registration and contains no independent send authority"),
     _required("clientplatform_event_commercial_channel_state", "erase", "registration-linked current commercial messaging authority and revocation state"),
+    _required("clientplatform_event_channel_link_tokens", "erase", "short-lived registration-scoped messenger verification capability digest, consent intent and consumed subject"),
+    _required("clientplatform_event_registration_channels", "erase", "verified registration-scoped messenger recipient and provider connection binding"),
     _required("clientplatform_event_owner_requests", "retain", "business-owned replay protection for owner event creation without customer identity or message payloads"),
     _required("clientplatform_event_followup_scan_state", "retain", "technical bounded scheduler cursor containing only internal event and registration identifiers"),
     _required("clientplatform_event_followup_settings", "retain", "business-owned switch, participant-group and channel strategy, actor and revision epoch for commercial event automation"),

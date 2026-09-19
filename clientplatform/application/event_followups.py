@@ -19,6 +19,9 @@ from uuid import uuid4
 from clientplatform.application.event_commercial_consent import (
     active_event_commercial_channels,
 )
+from clientplatform.application.event_delivery_targets import (
+    resolve_event_registration_messenger_target,
+)
 from clientplatform.domain.email_outbound import EmailPayload
 from clientplatform.domain.event_content import EventContentStage
 from clientplatform.domain.event_followup import (
@@ -466,6 +469,21 @@ def _resolve_messenger_target(
     *,
     platform: str,
 ) -> EventFollowupTarget | None:
+    scoped = resolve_event_registration_messenger_target(
+        conn,
+        business_id=candidate.business_id,
+        event_id=candidate.event_id,
+        registration_id=candidate.registration_id,
+        platform=platform,
+    )
+    if scoped is not None:
+        return EventFollowupTarget(
+            platform=scoped.platform,
+            connection_id=scoped.connection_id,
+            recipient_kind=scoped.recipient_kind,
+            customer_identity_id=scoped.customer_identity_id,
+            external_subject=scoped.external_subject,
+        )
     if not candidate.customer_id:
         return None
     # First prefer a previously successful route for this customer's active

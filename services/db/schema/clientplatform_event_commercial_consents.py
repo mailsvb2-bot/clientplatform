@@ -93,3 +93,81 @@ def ensure(c: sqlite3.Connection) -> None:
         )
         """
     )
+
+
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS clientplatform_event_channel_link_tokens(
+            id TEXT PRIMARY KEY,
+            business_id TEXT NOT NULL,
+            event_id TEXT NOT NULL,
+            registration_id TEXT NOT NULL,
+            token_digest TEXT NOT NULL UNIQUE,
+            target_platform TEXT NOT NULL,
+            marketing_requested INTEGER NOT NULL DEFAULT 0,
+            consent_text_sha256 TEXT,
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            consumed_at TEXT,
+            consumed_external_subject TEXT,
+            UNIQUE(id,business_id),
+            FOREIGN KEY(registration_id,business_id,event_id)
+                REFERENCES clientplatform_event_registrations(id,business_id,event_id)
+                ON DELETE CASCADE,
+            CHECK(length(token_digest)=64),
+            CHECK(target_platform IN ('telegram','vk','max')),
+            CHECK(marketing_requested IN (0,1)),
+            CHECK(
+                (marketing_requested=0 AND consent_text_sha256 IS NULL)
+                OR
+                (marketing_requested=1
+                    AND consent_text_sha256 IS NOT NULL
+                    AND length(consent_text_sha256)=64)
+            ),
+            CHECK(
+                (consumed_at IS NULL AND consumed_external_subject IS NULL)
+                OR
+                (consumed_at IS NOT NULL
+                    AND consumed_external_subject IS NOT NULL
+                    AND length(consumed_external_subject) BETWEEN 1 AND 512)
+            )
+        )
+        """
+    )
+    c.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_event_channel_link_registration
+        ON clientplatform_event_channel_link_tokens(
+            business_id,event_id,registration_id,target_platform,expires_at
+        )
+        """
+    )
+
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS clientplatform_event_registration_channels(
+            business_id TEXT NOT NULL,
+            event_id TEXT NOT NULL,
+            registration_id TEXT NOT NULL,
+            platform TEXT NOT NULL,
+            external_subject TEXT NOT NULL,
+            connection_id TEXT,
+            verified_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(business_id,event_id,registration_id,platform),
+            FOREIGN KEY(registration_id,business_id,event_id)
+                REFERENCES clientplatform_event_registrations(id,business_id,event_id)
+                ON DELETE CASCADE,
+            CHECK(platform IN ('telegram','vk','max')),
+            CHECK(length(external_subject) BETWEEN 1 AND 512)
+        )
+        """
+    )
+    c.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_event_registration_channels_recipient
+        ON clientplatform_event_registration_channels(
+            business_id,platform,external_subject,event_id,registration_id
+        )
+        """
+    )

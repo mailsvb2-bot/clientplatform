@@ -18,6 +18,11 @@ from clientplatform.application.messenger_channels import (
     ensure_channel_customer,
     resolve_messenger_ingress_route,
 )
+from clientplatform.application.event_registration_channels import (
+    EventRegistrationChannelLinkRejected,
+    consume_event_registration_channel_link,
+    extract_event_registration_channel_link_token,
+)
 from clientplatform.application.customer_activity import record_customer_contact
 from clientplatform.application.native_customer_interactions import (
     is_native_customer_interaction_input,
@@ -401,6 +406,7 @@ async def _process_business_event(
             )
 
         invite_token = extract_customer_invite_token(raw_text)
+        event_channel_token = extract_event_registration_channel_link_token(raw_text)
         link_token = extract_customer_link_token(raw_text)
         invite_claim = None
         if invite_token is not None:
@@ -423,6 +429,21 @@ async def _process_business_event(
                 raise CustomerChannelLinkRejected(
                     "customer invite resolved to a different customer identity"
                 )
+        elif event_channel_token is not None:
+            await asyncio.to_thread(
+                consume_event_registration_channel_link,
+                token=event_channel_token,
+                platform=platform.value,
+                external_subject=external_subject,
+                expected_business_id=route.business_id,
+                connection_id=route.connection_id,
+            )
+            identity = await asyncio.to_thread(
+                ensure_channel_customer,
+                route=route,
+                external_subject=external_subject,
+                display_name=display_name,
+            )
         elif link_token is not None:
             identity = await asyncio.to_thread(
                 consume_customer_channel_link,
@@ -462,6 +483,7 @@ async def _process_business_event(
         if (
             message_text is not None
             and invite_token is None
+            and event_channel_token is None
             and link_token is None
             and not promotion_start_only
             and not interaction_input
@@ -482,12 +504,13 @@ async def _process_business_event(
             )
         if (
             interaction_input
+            or event_channel_token is not None
             or link_token is not None
             or invite_token is not None
             or promotion_token is not None
         ):
             native_text = raw_text
-            if invite_token is not None:
+            if invite_token is not None or event_channel_token is not None:
                 native_text = "cpi:menu"
             elif promotion_token is not None:
                 native_text = "cpi:slots:0"
@@ -498,7 +521,8 @@ async def _process_business_event(
                 raw_text=native_text,
                 provider_event_id=provider_event_id,
                 linked=(
-                    link_token is not None
+                    event_channel_token is not None
+                    or link_token is not None
                     or invite_token is not None
                     or promotion_token is not None
                 ),
@@ -528,7 +552,7 @@ async def _process_business_event(
             permanent=True,
         )
         return web.Response(text="ok")
-    except CustomerChannelLinkRejected:
+    except (CustomerChannelLinkRejected, EventRegistrationChannelLinkRejected):
         await asyncio.to_thread(
             fail_claimed_inbound_event,
             platform.value,

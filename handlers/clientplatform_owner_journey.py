@@ -785,6 +785,7 @@ async def _dispatch_public_start(
     *,
     user_id: int,
     managed_bot_business_id: str | None,
+    managed_bot_connection_id: str | None = None,
 ) -> None:
     payload = control._start_payload(message)
     business_token = ""
@@ -802,6 +803,7 @@ async def _dispatch_public_start(
             state,
             user_id=user_id,
             managed_bot_business_id=managed_bot_business_id,
+            managed_bot_connection_id=managed_bot_connection_id,
         )
         return
     business_id = control._token_uuid(business_token)
@@ -846,6 +848,7 @@ def install_owner_journey(
         *,
         user_id: int,
         managed_bot_business_id: str | None,
+        managed_bot_connection_id: str | None = None,
     ) -> None:
         await _dispatch_public_start(
             original_dispatch,
@@ -853,6 +856,7 @@ def install_owner_journey(
             state,
             user_id=user_id,
             managed_bot_business_id=managed_bot_business_id,
+            managed_bot_connection_id=managed_bot_connection_id,
         )
 
     entry_module._dispatch_clientplatform_start = dispatch

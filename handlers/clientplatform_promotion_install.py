@@ -138,6 +138,7 @@ def install_promotion_engine(
         *,
         user_id: int,
         managed_bot_business_id: str | None,
+        managed_bot_connection_id: str | None = None,
     ) -> None:
         partner_handled = await partner_referral.dispatch_partner_referral_start(
             message,
@@ -161,6 +162,7 @@ def install_promotion_engine(
             state,
             user_id=user_id,
             managed_bot_business_id=managed_bot_business_id,
+            managed_bot_connection_id=managed_bot_connection_id,
         )
 
     owner_module._dispatch_public_start = dispatch

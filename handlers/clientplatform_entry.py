@@ -14,6 +14,11 @@ from aiogram.types import BotCommand, CallbackQuery, Message
 
 from clientplatform.application.activity import claim_customer_invite
 from clientplatform.application.cockpit import resolve_cockpit_context
+from clientplatform.application.event_registration_channels import (
+    EventRegistrationChannelLinkRejected,
+    consume_event_registration_channel_link,
+    extract_event_registration_channel_link_token,
+)
 from clientplatform.application.cockpit_action_routing import (
     parse_cockpit_action_start_payload,
 )
@@ -132,7 +137,40 @@ async def _dispatch_clientplatform_start(
     *,
     user_id: int,
     managed_bot_business_id: str | None,
+    managed_bot_connection_id: str | None = None,
 ) -> None:
+    payload = control._start_payload(message)
+    event_channel_token = extract_event_registration_channel_link_token(payload)
+    if event_channel_token is not None:
+        try:
+            verified = await asyncio.to_thread(
+                consume_event_registration_channel_link,
+                token=event_channel_token,
+                platform="telegram",
+                external_subject=str(user_id),
+                expected_business_id=managed_bot_business_id,
+                connection_id=managed_bot_connection_id,
+            )
+        except EventRegistrationChannelLinkRejected:
+            await state.clear()
+            await message.answer(
+                "Эта ссылка подтверждения Telegram недействительна, уже использована "
+                "или истекла. Вернитесь на страницу регистрации и получите новую."
+            )
+            return
+        await state.clear()
+        marketing = (
+            " Также подтверждено согласие на сообщения с предложениями в Telegram."
+            if verified.marketing_consent_recorded
+            else ""
+        )
+        await message.answer(
+            "Telegram подтверждён для этой регистрации. "
+            "Организационные напоминания можно отправлять сюда."
+            + marketing
+        )
+        return
+
     if managed_bot_business_id is not None:
         links = await asyncio.to_thread(
             list_customer_businesses,
@@ -151,7 +189,6 @@ async def _dispatch_clientplatform_start(
         await control._send_client_portal(message, links=managed_links)
         return
 
-    payload = control._start_payload(message)
     try:
         cockpit_route = parse_cockpit_action_start_payload(payload)
     except ValueError:
@@ -295,6 +332,7 @@ async def clientplatform_entry_start(
     message: Message,
     state: FSMContext,
     managed_bot_business_id: str | None = None,
+    managed_bot_connection_id: str | None = None,
 ) -> None:
     """Acknowledge `/start` before storage work and fail visibly on stalls."""
 
@@ -302,13 +340,24 @@ async def clientplatform_entry_start(
     status_message = await message.answer("Открываю…")
     try:
         with db_operation_deadline(_START_STORAGE_DEADLINE_SECONDS):
-            await asyncio.wait_for(
+            dispatch_coro = (
                 _dispatch_clientplatform_start(
                     message,
                     state,
                     user_id=user_id,
                     managed_bot_business_id=managed_bot_business_id,
-                ),
+                )
+                if managed_bot_connection_id is None
+                else _dispatch_clientplatform_start(
+                    message,
+                    state,
+                    user_id=user_id,
+                    managed_bot_business_id=managed_bot_business_id,
+                    managed_bot_connection_id=managed_bot_connection_id,
+                )
+            )
+            await asyncio.wait_for(
+                dispatch_coro,
                 timeout=_START_TIMEOUT_SECONDS,
             )
     except TimeoutError:

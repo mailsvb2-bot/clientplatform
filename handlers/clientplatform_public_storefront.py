@@ -24,6 +24,7 @@ async def dispatch_public_start(
     *,
     user_id: int,
     managed_bot_business_id: str | None,
+    managed_bot_connection_id: str | None = None,
 ) -> None:
     owner = __import__(
         "handlers.clientplatform_owner_journey",
@@ -51,6 +52,7 @@ async def dispatch_public_start(
             state,
             user_id=user_id,
             managed_bot_business_id=managed_bot_business_id,
+            managed_bot_connection_id=managed_bot_connection_id,
         )
         return
 

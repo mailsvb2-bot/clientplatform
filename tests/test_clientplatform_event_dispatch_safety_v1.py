@@ -28,7 +28,7 @@ def _db() -> sqlite3.Connection:
         """
         CREATE TABLE provider_dispatch_outbox(
           id TEXT,business_id TEXT,platform TEXT,source_kind TEXT,source_id TEXT,
-          connection_id TEXT,customer_identity_id TEXT,external_subject TEXT,
+          connection_id TEXT,recipient_kind TEXT,customer_identity_id TEXT,external_subject TEXT,
           idempotency_key TEXT,status TEXT,lock_token TEXT,locked_at TEXT,
           last_error TEXT,updated_at TEXT,dead_at TEXT
         );
@@ -48,11 +48,16 @@ def _db() -> sqlite3.Connection:
         CREATE TABLE clientplatform_event_commercial_channel_state(
           business_id TEXT,event_id TEXT,registration_id TEXT,platform TEXT,status TEXT
         );
+        CREATE TABLE clientplatform_event_registration_channels(
+          business_id TEXT,event_id TEXT,registration_id TEXT,platform TEXT,
+          external_subject TEXT,connection_id TEXT,verified_at TEXT,updated_at TEXT
+        );
         CREATE TABLE clientplatform_event_followup_settings(
           business_id TEXT PRIMARY KEY,enabled INTEGER NOT NULL,
           segment_no_show INTEGER NOT NULL DEFAULT 1,segment_join_signal INTEGER NOT NULL DEFAULT 1,
           segment_attended INTEGER NOT NULL DEFAULT 1,segment_offer_clicked INTEGER NOT NULL DEFAULT 1,
           channel_email INTEGER NOT NULL DEFAULT 1,channel_max INTEGER NOT NULL DEFAULT 1,channel_vk INTEGER NOT NULL DEFAULT 1,
+          channel_telegram INTEGER NOT NULL DEFAULT 1,
           settings_epoch INTEGER NOT NULL,updated_by_member_id TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL
         );
         """
@@ -66,8 +71,8 @@ def _db() -> sqlite3.Connection:
     conn.execute("INSERT INTO connections VALUES('c','b','email','active','email_smtp')")
     conn.execute("INSERT INTO clientplatform_event_commercial_channel_state VALUES('b','e','r','email','active')")
     conn.execute(
-        "INSERT INTO provider_dispatch_outbox VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        ('d','b','email','event_message','r','c',None,'a@example.test',
+        "INSERT INTO provider_dispatch_outbox VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        ('d','b','email','event_message','r','c','external_subject',None,'a@example.test',
          'event:e:registration:r:message:post:v4:stage:1','sending','lock',
          '2026-09-12T10:00:00+00:00',None,'2026-09-12T10:00:00+00:00',None),
     )
@@ -101,6 +106,67 @@ def test_commercial_event_authority_rechecks_consent_and_paid_state() -> None:
     assert not event_commercial_claim_can_cross_provider_boundary(conn, item, now='2026-09-12T10:01:00+00:00')
     row = conn.execute("SELECT status,last_error FROM provider_dispatch_outbox WHERE id='d'").fetchone()
     assert tuple(row) == ('cancelled','event_message_authority_revoked_or_paid')
+
+
+
+def test_registration_scoped_messenger_recipient_is_rechecked_at_provider_boundary() -> None:
+    conn = _db()
+    conn.execute(
+        "INSERT INTO connections VALUES('ct','b','telegram','active','telegram_shared_bot')"
+    )
+    conn.execute(
+        "INSERT INTO clientplatform_event_commercial_channel_state VALUES('b','e','r','telegram','active')"
+    )
+    conn.execute(
+        """
+        INSERT INTO clientplatform_event_registration_channels
+        VALUES(
+            'b','e','r','telegram','100200300','ct',
+            '2026-09-12T09:00:00+00:00','2026-09-12T09:00:00+00:00'
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO provider_dispatch_outbox
+        VALUES(
+            'dt','b','telegram','event_message','r','ct','external_subject',NULL,
+            '100200300','event:e:registration:r:message:post:v4:stage:1',
+            'sending','lock-t','2026-09-12T10:00:00+00:00',NULL,
+            '2026-09-12T10:00:00+00:00',NULL
+        )
+        """
+    )
+    item = ClaimedProviderDispatch(
+        dispatch=ProviderDispatch(
+            id='dt',business_id='b',platform=ConnectionPlatform.TELEGRAM,
+            source_kind='event_message',source_id='r',connection_id='ct',
+            external_subject='100200300',payload_kind=ContentKind.TEXT,
+            payload_ref='hello',
+            idempotency_key='event:e:registration:r:message:post:v4:stage:1',
+            status=DispatchStatus.SENDING,attempts=0,
+            available_at='2026-09-12T10:00:00+00:00',
+            created_at='2026-09-12T10:00:00+00:00',
+            updated_at='2026-09-12T10:00:00+00:00',
+            locked_at='2026-09-12T10:00:00+00:00',lock_token='lock-t',
+        ),
+        external_subject='100200300',
+        credential_reference='telegram-token',
+    )
+    with patch(
+        "clientplatform.infrastructure.event_dispatch_safety.event_commercial_policy_authorized",
+        return_value=True,
+    ):
+        assert event_commercial_claim_can_cross_provider_boundary(
+            conn, item, now='2026-09-12T10:01:00+00:00'
+        )
+
+    conn.execute(
+        "UPDATE clientplatform_event_registration_channels SET external_subject='different'"
+    )
+    assert not event_commercial_claim_can_cross_provider_boundary(
+        conn, item, now='2026-09-12T10:02:00+00:00'
+    )
 
 
 def test_business_switch_off_wins_before_non_replay_marker() -> None:
