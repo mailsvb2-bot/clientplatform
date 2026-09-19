@@ -46,6 +46,32 @@ def test_landing_is_provider_neutral_and_cannot_leak_join_url() -> None:
     assert SECURITY_HEADERS["X-Frame-Options"] == "DENY"
 
 
+def test_landing_separates_registration_and_optional_marketing_channels() -> None:
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    event = PublicEvent(
+        public_slug=new_public_slug(),
+        kind="webinar",
+        title="Практический вебинар",
+        description="Описание",
+        starts_at=now + timedelta(days=2),
+        ends_at=None,
+        timezone_name="Europe/Moscow",
+        provider_key="external",
+        provider_label=None,
+    )
+    body = render_event_landing_body(event, advertiser_label="Бренд")
+    assert "Регистрация на мероприятие" in body
+    assert "Телефон (необязательно)" in body
+    assert "Полезные материалы и предложения (необязательно)" in body
+    assert "value=email checked" in body
+    assert "value=telegram" not in body
+    assert "value=vk" not in body
+    assert "value=max" not in body
+    assert "коммерческое согласие подтверждается только для E-mail" in body
+    assert "отдельного подтверждения владения каналом" in body
+    assert "от «Бренд»" in body
+
+
 def test_tracking_fields_are_bounded_before_rendering() -> None:
     now = datetime.now(timezone.utc).replace(microsecond=0)
     event = PublicEvent(
