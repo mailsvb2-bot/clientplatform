@@ -67,6 +67,25 @@ def test_warmup_plan_matches_requested_days_and_stops_before_event() -> None:
     assert "Уже завтра" in plan.drafts[-1].text
 
 
+def test_warmup_plan_supports_two_month_campaign() -> None:
+    future_session = datetime(2026, 11, 20, 16, 0, tzinfo=timezone.utc)
+    plan = build_event_warmup_plan(
+        event_id="event-2",
+        title="Дальний вебинар",
+        description="Два месяца прогрева.",
+        timezone_name="Europe/Moscow",
+        first_session_starts_at=future_session,
+        requested_days=60,
+        now=NOW,
+    )
+
+    assert plan.days_until_event >= 60
+    assert plan.requested_days == 60
+    assert len(plan.drafts) == 60
+    assert plan.drafts[0].days_before_event == 60
+    assert plan.drafts[-1].days_before_event == 1
+
+
 def test_warmup_plan_rejects_more_days_than_time_remaining() -> None:
     with unittest.TestCase().assertRaisesRegex(ValueError, "exceed"):
         build_event_warmup_plan(
