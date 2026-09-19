@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 import importlib.util
+import sqlite3
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
@@ -113,6 +114,84 @@ class _Request:
             marketing_channel=["email"],
             marketing_consent_hash="a" * 64,
         )
+
+
+@unittest.skipUnless(_AIOHTTP_AVAILABLE, "aiohttp runtime dependency is not installed")
+class PublicEventBusinessMessengerLinkTests(unittest.TestCase):
+    def test_entry_links_use_exact_connected_business_accounts(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            CREATE TABLE connections(
+                id TEXT PRIMARY KEY,business_id TEXT,platform TEXT,
+                connection_type TEXT,external_account_id TEXT,status TEXT,
+                created_at TEXT
+            );
+            CREATE TABLE managed_bots(
+                connection_id TEXT,business_id TEXT,platform TEXT,
+                username TEXT,status TEXT
+            );
+            """
+        )
+        business_id = "business-a"
+        conn.executemany(
+            """
+            INSERT INTO connections(
+                id,business_id,platform,connection_type,
+                external_account_id,status,created_at
+            ) VALUES(?,?,?,?,?,'active','2026-09-19T00:00:00+00:00')
+            """,
+            (
+                ("tg", business_id, "telegram", "telegram_managed_bot", "tg-bot"),
+                ("vk", business_id, "vk", "vk_community", "123456"),
+                ("max", business_id, "max", "max_personal_bot", "998877"),
+            ),
+        )
+        conn.executemany(
+            "INSERT INTO managed_bots VALUES(?,?,?,?, 'active')",
+            (
+                ("tg", business_id, "telegram", "BusinessTelegramBot"),
+                ("max", business_id, "max", "BusinessMaxBot"),
+            ),
+        )
+        payload = "ecv_token-value"
+        with patch.object(
+            public_events_runtime.settings,
+            "MAX_BOT_LINK_BASE",
+            "https://max.ru/{bot}?start={payload}",
+        ):
+            telegram = public_events_runtime._registration_channel_entry_url(
+                conn,
+                business_id=business_id,
+                platform="telegram",
+                payload=payload,
+            )
+            vk = public_events_runtime._registration_channel_entry_url(
+                conn,
+                business_id=business_id,
+                platform="vk",
+                payload=payload,
+            )
+            max_url = public_events_runtime._registration_channel_entry_url(
+                conn,
+                business_id=business_id,
+                platform="max",
+                payload=payload,
+            )
+        self.assertEqual(
+            telegram,
+            "https://t.me/BusinessTelegramBot?start=ecv_token-value",
+        )
+        self.assertEqual(
+            vk,
+            "https://vk.com/im?sel=-123456&start=ecv_token-value",
+        )
+        self.assertEqual(
+            max_url,
+            "https://max.ru/BusinessMaxBot?start=ecv_token-value",
+        )
+        conn.close()
 
 
 @unittest.skipUnless(_AIOHTTP_AVAILABLE, "aiohttp runtime dependency is not installed")
