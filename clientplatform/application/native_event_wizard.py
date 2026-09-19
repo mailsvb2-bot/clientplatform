@@ -283,7 +283,7 @@ def _warmup_message(maximum: int) -> CustomerInteractionMessage:
     return CustomerInteractionMessage(
         text=(
             f"До первого дня можно сделать прогрев до {maximum} дн.\n\n"
-            "Нажмите готовое число или отправьте нужное число сообщением. 0 — без прогрева."
+            "Нажмите готовое число или отправьте нужное число сообщением. 0 — без подготовительных сообщений."
         ),
         rows=tuple(rows),
     )
@@ -375,7 +375,7 @@ def handle_native_event_wizard_text(
         )
         if not plan.drafts:
             return CustomerInteractionMessage(
-                text="🔥 Прогрев отключён для этого вебинара.",
+                text="📨 Сообщение отключён для этого вебинара.",
                 rows=(_back_row(),),
             )
         return _warmup_preview(
@@ -655,7 +655,7 @@ def _finish(
         rows.append(
             (
                 _button(
-                    "🔥 Тексты прогрева",
+                    "🔥 Тексты подготовительных сообщений",
                     f"cpm:event-wizard:wp:{event_id}:{requested_days}:0",
                 ),
             )
@@ -666,7 +666,7 @@ def _finish(
         text=(
             f"✅ {context['title']}\n\n"
             f"Регистрация: {context['registration_url']}\n\n"
-            f"Прогрев: {requested_days} дн. — {event_content_mode_label(warmup)}\n"
+            f"Сообщения до вебинара: {requested_days} дн. — {event_content_mode_label(warmup)}\n"
             f"В день мероприятия — {event_content_mode_label(event_day)}\n"
             f"После мероприятия — {event_content_mode_label(post_event)}.\n\n"
             "Вебинар опубликован. Комнаты участников остаются скрыты за персональными ссылками."
@@ -733,7 +733,7 @@ def _warmup_preview(
     source_label = "Ваш текст" if draft.source == "owner" else "Автотекст"
     return CustomerInteractionMessage(
         text=(
-            f"🔥 Прогрев {draft.position}/{plan.requested_days} — "
+            f"📨 Сообщение {draft.position}/{plan.requested_days} — "
             f"{draft.publish_date.strftime('%d.%m.%Y')}\n"
             f"Источник: {source_label}\n\n{draft.text}\n\n"
             "Можно использовать {name}, {title}, {join_url}. "
@@ -781,7 +781,7 @@ def handle_native_event_wizard_action(
         )
         return CustomerInteractionMessage(
             text=(
-                f"✏️ Пришлите новый текст прогрева {position} одним сообщением.\n\n"
+                f"✏️ Пришлите новый текст сообщения {position} одним сообщением.\n\n"
                 "Можно написать его полностью самостоятельно. Поддерживаются "
                 "{name}, {title}, {join_url}. Для выхода отправьте «Отмена»."
             ),
@@ -837,7 +837,7 @@ def handle_native_event_wizard_action(
         rows.append(_back_row())
         return CustomerInteractionMessage(
             text=(
-                f"🔥 Сколько дней прогрева сделать? Можно до {maximum} дн.\n\n"
+                f"🔥 Сколько дней отправлять сообщения до вебинара? Можно до {maximum} дн.\n\n"
                 "Будет одно сообщение в день в 12:00 по часовому поясу вебинара. "
                 "0 — отключить прогрев."
             ),
@@ -855,7 +855,7 @@ def handle_native_event_wizard_action(
         )
         if not plan.drafts:
             return CustomerInteractionMessage(
-                text="🔥 Прогрев отключён для этого вебинара.",
+                text="📨 Сообщение отключён для этого вебинара.",
                 rows=(_back_row(),),
             )
         return _warmup_preview(
