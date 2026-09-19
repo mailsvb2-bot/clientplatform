@@ -13,6 +13,7 @@ on:
 permissions:
   contents: write
   statuses: write
+  pull-requests: read
 
 jobs:
   cleanup:
@@ -35,9 +36,77 @@ jobs:
                 { owner, repo, per_page: 100 },
               );
 
+              const preserved = [];
+
               for (const branch of branches) {
                 if (branch.name === 'main') continue;
-                core.info(`Deleting non-main branch: ${branch.name}`);
+
+                const head = `${owner}:${branch.name}`;
+                const openPulls = await github.paginate(
+                  github.rest.pulls.list,
+                  { owner, repo, state: 'open', head, per_page: 100 },
+                );
+                if (openPulls.length > 0) {
+                  preserved.push(`${branch.name}:open-pr`);
+                  core.warning(
+                    `Preserving non-main branch with open PR: ${branch.name}`,
+                  );
+                  continue;
+                }
+
+                const closedPulls = await github.paginate(
+                  github.rest.pulls.list,
+                  {
+                    owner,
+                    repo,
+                    state: 'closed',
+                    head,
+                    base: 'main',
+                    per_page: 100,
+                  },
+                );
+                const exactMergedPull = closedPulls.find(
+                  (pull) =>
+                    Boolean(pull.merged_at) &&
+                    pull.head &&
+                    pull.head.sha === branch.commit.sha,
+                );
+                if (!exactMergedPull) {
+                  preserved.push(`${branch.name}:not-proven-merged`);
+                  core.warning(
+                    `Preserving non-main branch without an exact merged PR: ${branch.name}`,
+                  );
+                  continue;
+                }
+
+                const currentRef = await github.rest.git.getRef({
+                  owner,
+                  repo,
+                  ref: `heads/${branch.name}`,
+                });
+                if (currentRef.data.object.sha !== branch.commit.sha) {
+                  preserved.push(`${branch.name}:head-moved`);
+                  core.warning(
+                    `Preserving non-main branch whose head moved during cleanup: ${branch.name}`,
+                  );
+                  continue;
+                }
+
+                const openPullsBeforeDelete = await github.paginate(
+                  github.rest.pulls.list,
+                  { owner, repo, state: 'open', head, per_page: 100 },
+                );
+                if (openPullsBeforeDelete.length > 0) {
+                  preserved.push(`${branch.name}:open-pr-race`);
+                  core.warning(
+                    `Preserving non-main branch because an open PR appeared during cleanup: ${branch.name}`,
+                  );
+                  continue;
+                }
+
+                core.info(
+                  `Deleting proven-merged non-main branch: ${branch.name} via PR #${exactMergedPull.number}`,
+                );
                 await github.rest.git.deleteRef({
                   owner,
                   repo,
@@ -64,6 +133,11 @@ jobs:
               core.info(`GITHUB_BRANCH_COUNT=${names.length}`);
               core.info(`GITHUB_BRANCHES=${names.join(',')}`);
 
+              if (preserved.length > 0) {
+                throw new Error(
+                  `Refusing to delete non-main branches without exact merged proof: ${preserved.join(',')}`,
+                );
+              }
               if (names.length !== 1 || names[0] !== 'main') {
                 throw new Error(
                   `Expected exactly one GitHub branch named main; got ${names.length}: ${names.join(',')}`,

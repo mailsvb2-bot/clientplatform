@@ -9,6 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 TOPOLOGY = ROOT / ".github" / "workflows" / "production-server-topology-probe.yml"
 RECOVERY = ROOT / ".github" / "workflows" / "production-deploy-recovery.yml"
+BRANCH_CLEANUP = ROOT / ".github" / "workflows" / "single-main-topology.yml"
 REPAIR = ROOT / "scripts" / "repair_production_deploy_channel.sh"
 OPERATIONS = ROOT / "deploy" / "clientplatform" / "GITHUB_OPERATIONS.md"
 
@@ -75,6 +76,26 @@ class ProductionWorkflowIsolationTests(unittest.TestCase):
                 self.assertIn(required, text)
         self.assertNotIn("git fetch --prune origin main", text)
         self.assertNotIn("git fetch origin", text)
+
+
+    def test_branch_cleanup_deletes_only_exact_merged_pr_heads(self) -> None:
+        text = self._text(BRANCH_CLEANUP)
+        for required in (
+            "pull-requests: read",
+            "state: 'open'",
+            "state: 'closed'",
+            "base: 'main'",
+            "pull.head.sha === branch.commit.sha",
+            "github.rest.git.getRef",
+            "currentRef.data.object.sha !== branch.commit.sha",
+            "openPullsBeforeDelete",
+            "Deleting proven-merged non-main branch",
+            "Refusing to delete non-main branches without exact merged proof",
+            "ops/single-main-topology",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, text)
+        self.assertNotIn("Deleting non-main branch:", text)
 
     def test_repair_bootstrap_only_configures_dedicated_clientplatform_ssh(self) -> None:
         text = self._text(REPAIR)
