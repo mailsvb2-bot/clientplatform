@@ -41,11 +41,11 @@ def render_event_landing_body(
             f"<input type=hidden name=marketing_consent_hash value='{escape(consent_hash, quote=True)}'>"
             f"<label><input style='width:auto' type=checkbox name=marketing_consent value=yes> "
             f"{escape(consent_text)}</label>"
-            "<p>Где можно присылать такие сообщения:</p>"
-            "<label><input style='width:auto' type=checkbox name=marketing_channel value=email checked> E-mail</label> "
-            "<label><input style='width:auto' type=checkbox name=marketing_channel value=telegram> Telegram</label> "
-            "<label><input style='width:auto' type=checkbox name=marketing_channel value=vk> ВКонтакте</label> "
-            "<label><input style='width:auto' type=checkbox name=marketing_channel value=max> MAX</label>"
+            "<p>Для публичной регистрации коммерческое согласие подтверждается только для E-mail. "
+            "Telegram, ВКонтакте и MAX можно безопасно привязать после регистрации для "
+            "организационных напоминаний; коммерческие сообщения в мессенджере требуют "
+            "отдельного подтверждения владения каналом.</p>"
+            "<label><input style='width:auto' type=checkbox name=marketing_channel value=email checked> E-mail</label>"
             "</fieldset>"
         )
     return (
