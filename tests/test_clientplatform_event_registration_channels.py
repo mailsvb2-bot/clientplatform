@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
@@ -284,11 +285,12 @@ def test_second_messenger_account_cannot_hijack_verified_registration() -> None:
         """
         SELECT consumed_at
         FROM clientplatform_event_channel_link_tokens
-        WHERE target_platform='telegram'
-        ORDER BY created_at DESC,id DESC
+        WHERE token_digest=? AND target_platform='telegram'
         LIMIT 1
-        """
+        """,
+        (hashlib.sha256(second.token.encode("utf-8")).hexdigest(),),
     ).fetchone()
+    assert digest_row is not None
     assert digest_row["consumed_at"] is None
     conn.close()
 
