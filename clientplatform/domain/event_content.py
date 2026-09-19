@@ -14,12 +14,14 @@ class EventContentMode(StrEnum):
     TEXT = "text"
     TEXT_WITH_IMAGE = "text_with_image"
     TEXT_IN_IMAGE = "text_in_image"
+    TEXT_WITH_VIDEO = "text_with_video"
 
 
 _MODE_LABELS = {
     EventContentMode.TEXT: "Только текст",
     EventContentMode.TEXT_WITH_IMAGE: "Текст + картинка",
     EventContentMode.TEXT_IN_IMAGE: "Текст в тематической картинке",
+    EventContentMode.TEXT_WITH_VIDEO: "Текст + видео",
 }
 _STAGE_LABELS = {
     EventContentStage.WARMUP: "прогрев",
@@ -45,6 +47,22 @@ class EventContentPreference:
     @property
     def stage_label(self) -> str:
         return _STAGE_LABELS[self.stage]
+
+
+@dataclass(frozen=True, slots=True)
+class EventContentAsset:
+    business_id: str
+    event_id: str
+    stage: EventContentStage
+    slot_key: str
+    kind: str
+    media_reference: str
+    source: str
+    source_ref: str
+    revision: int
+    updated_by_member_id: str
+    created_at: str
+    updated_at: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,6 +104,11 @@ def parse_event_content_mode(value: object) -> EventContentMode:
         "3": EventContentMode.TEXT_IN_IMAGE,
         "текст в тематической картинке": EventContentMode.TEXT_IN_IMAGE,
         "текст в картинке": EventContentMode.TEXT_IN_IMAGE,
+        "4": EventContentMode.TEXT_WITH_VIDEO,
+        "видео": EventContentMode.TEXT_WITH_VIDEO,
+        "текст + видео": EventContentMode.TEXT_WITH_VIDEO,
+        "текст+видео": EventContentMode.TEXT_WITH_VIDEO,
+        "текст и видео": EventContentMode.TEXT_WITH_VIDEO,
     }
     try:
         return aliases[raw]
@@ -117,6 +140,14 @@ def event_visual_request(
             "Сделай выразительный тематический визуал без читаемого рекламного текста, "
             "букв, дат, URL и интерфейсных элементов; основной текст будет отправлен отдельно."
         )
+    if mode is EventContentMode.TEXT_WITH_VIDEO:
+        return (
+            f"Короткое вертикальное видео для этапа «{stage_label}» вебинара «{title}». "
+            f"Смысл сообщения: {body}.{context} "
+            "Сделай спокойный динамичный ролик с естественным движением и чистым финальным кадром. "
+            "Не добавляй читаемый рекламный текст, буквы, даты, URL, интерфейсные элементы, "
+            "ложные обещания или факты; основной текст будет отправлен отдельно."
+        )
     return (
         f"Тематическая карточка для этапа «{stage_label}» вебинара «{title}».{context} "
         "Размести внутри изображения короткий, хорошо читаемый основной текст на русском: "
@@ -126,6 +157,7 @@ def event_visual_request(
 
 
 __all__ = [
+    "EventContentAsset",
     "EventContentMessage",
     "EventContentMode",
     "EventContentPreference",

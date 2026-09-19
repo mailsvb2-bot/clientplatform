@@ -121,6 +121,7 @@ class EventLifecycleExtendedHandlerTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             lifecycle._configured_sessions({"event_sessions": "bad"})
         self.assertIn("3) Текст в тематической картинке", lifecycle._mode_prompt("анонс"))
+        self.assertIn("4) Текст + видео", lifecycle._mode_prompt("анонс"))
 
         with patch.object(lifecycle.settings, "MESSENGER_PUBLIC_BASE_URL", "https://cp.example/"):
             self.assertEqual(lifecycle._public_base_url(), "https://cp.example")

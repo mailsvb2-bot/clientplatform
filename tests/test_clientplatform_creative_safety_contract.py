@@ -15,7 +15,7 @@ class CreativeSafetySourceContractTests(unittest.TestCase):
         self.assertIn('"cpc:generate:"', source)
         self.assertIn('"cpc:abandon:"', source)
         self.assertIn('"cpc:redeliver:"', source)
-        self.assertIn("create_business_image_from_frozen_payload", source)
+        self.assertIn("create_business_visual_from_frozen_payload", source)
         self.assertIn("load_goal_visual_brand", source)
         self.assertIn('_receipt_callback("generate"', source)
 

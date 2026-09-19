@@ -50,6 +50,47 @@ def _brief_dict(brief: VisualCreativeBrief) -> dict[str, object]:
     }
 
 
+def freeze_business_visual_payload(
+    *,
+    request: str,
+    kind: str,
+    brand_context: str = "",
+    country_code: str = "",
+    preferred_provider: str = "",
+    binding: dict[str, str] | None = None,
+) -> str:
+    """Freeze the exact versioned image/video brief before owner paid consent."""
+
+    brief = build_business_visual_brief(
+        request=request,
+        kind=kind,
+        brand_context=brand_context,
+        country_code=country_code,
+        preferred_provider=preferred_provider,
+    )
+    value: dict[str, object] = {
+        "version": _BUSINESS_IMAGE_BRIEF_VERSION,
+        "brief": _brief_dict(brief),
+        "wait_seconds": _BUSINESS_IMAGE_WAIT_SECONDS,
+    }
+    if binding is not None:
+        normalized_binding = {str(key): str(item) for key, item in binding.items()}
+        required = {"type", "event_id", "stage", "slot_key", "kind"}
+        if set(normalized_binding) != required:
+            raise ValueError("frozen business visual binding is invalid")
+        if normalized_binding["type"] != "event_content":
+            raise ValueError("frozen business visual binding is invalid")
+        if normalized_binding["kind"] != brief.kind:
+            raise ValueError("frozen business visual binding kind mismatch")
+        if any(
+            not value or len(value) > 200 or any(ord(char) < 32 for char in value)
+            for value in normalized_binding.values()
+        ):
+            raise ValueError("frozen business visual binding is invalid")
+        value["binding"] = normalized_binding
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
 def freeze_business_image_payload(
     *,
     request: str,
@@ -57,28 +98,40 @@ def freeze_business_image_payload(
     country_code: str = "",
     preferred_provider: str = "",
 ) -> str:
-    """Freeze the exact versioned provider brief before owner paid consent."""
-
-    brief = build_business_image_brief(
+    return freeze_business_visual_payload(
         request=request,
+        kind="image",
         brand_context=brand_context,
         country_code=country_code,
         preferred_provider=preferred_provider,
     )
-    value = {
-        "version": _BUSINESS_IMAGE_BRIEF_VERSION,
-        "brief": _brief_dict(brief),
-        "wait_seconds": _BUSINESS_IMAGE_WAIT_SECONDS,
-    }
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
-def _load_frozen_business_image_payload(value: str) -> tuple[VisualCreativeBrief, int]:
+def freeze_business_video_payload(
+    *,
+    request: str,
+    brand_context: str = "",
+    country_code: str = "",
+    preferred_provider: str = "",
+) -> str:
+    return freeze_business_visual_payload(
+        request=request,
+        kind="video",
+        brand_context=brand_context,
+        country_code=country_code,
+        preferred_provider=preferred_provider,
+    )
+
+
+def _load_frozen_business_visual_payload(value: str) -> tuple[VisualCreativeBrief, int]:
     try:
         raw = json.loads(str(value or ""))
     except json.JSONDecodeError as exc:
         raise ValueError("frozen business image payload is invalid") from exc
-    if not isinstance(raw, dict) or set(raw) != {"version", "brief", "wait_seconds"}:
+    if not isinstance(raw, dict) or set(raw) not in (
+        {"version", "brief", "wait_seconds"},
+        {"version", "brief", "wait_seconds", "binding"},
+    ):
         raise ValueError("frozen business image payload is invalid")
     if raw.get("version") != _BUSINESS_IMAGE_BRIEF_VERSION:
         raise ValueError("unsupported frozen business image payload version")
@@ -106,9 +159,43 @@ def _load_frozen_business_image_payload(value: str) -> tuple[VisualCreativeBrief
         brand_context=str(raw_brief.get("brand_context") or ""),
         seed=seed,
     )
-    if brief.kind != "image" or not brief.prompt.strip():
+    if brief.kind not in {"image", "video"} or not brief.prompt.strip():
+        raise ValueError("frozen business visual brief is invalid")
+    return brief, wait_seconds
+
+
+def _load_frozen_business_image_payload(value: str) -> tuple[VisualCreativeBrief, int]:
+    brief, wait_seconds = _load_frozen_business_visual_payload(value)
+    if brief.kind != "image":
         raise ValueError("frozen business image brief is invalid")
     return brief, wait_seconds
+
+
+def frozen_business_visual_kind(value: str) -> str:
+    brief, _ = _load_frozen_business_visual_payload(value)
+    return brief.kind
+
+
+def frozen_business_visual_binding(value: str) -> dict[str, str] | None:
+    raw = json.loads(str(value or ""))
+    if not isinstance(raw, dict):
+        raise ValueError("frozen business visual payload is invalid")
+    binding = raw.get("binding")
+    if binding is None:
+        # Legacy image receipts predate event-content bindings and may carry an
+        # older frozen payload shape. Delivery/recovery of those receipts must
+        # not be blocked merely because there is no event binding to persist.
+        return None
+    _load_frozen_business_visual_payload(value)
+    if not isinstance(binding, dict):
+        raise ValueError("frozen business visual binding is invalid")
+    normalized = {str(key): str(item) for key, item in binding.items()}
+    required = {"type", "event_id", "stage", "slot_key", "kind"}
+    if set(normalized) != required or normalized["type"] != "event_content":
+        raise ValueError("frozen business visual binding is invalid")
+    if normalized["kind"] != frozen_business_visual_kind(value):
+        raise ValueError("frozen business visual binding kind mismatch")
+    return normalized
 
 
 def normalize_business_image_request(value: str) -> str:
@@ -122,17 +209,27 @@ def normalize_business_image_request(value: str) -> str:
     return request
 
 
-def build_business_image_brief(
+def build_business_visual_brief(
     *,
     request: str,
+    kind: str,
     brand_context: str = "",
     country_code: str = "",
     preferred_provider: str = "",
 ) -> VisualCreativeBrief:
     owner_request = normalize_business_image_request(request)
+    visual_kind = str(kind or "").strip().lower()
+    if visual_kind not in {"image", "video"}:
+        raise ValueError("business visual kind must be image or video")
+    medium = (
+        "Create one polished short vertical video for an independent professional or small business. "
+        "Use natural motion, a clear subject and a calm final frame. "
+        if visual_kind == "video"
+        else "Create one polished visual for an independent professional or small business. "
+    )
     prompt = (
-        "Create one polished visual for an independent professional or small business. "
-        f"Owner request: {owner_request}. "
+        medium
+        + f"Owner request: {owner_request}. "
         "Use credible natural details, human proportions and realistic lighting. "
         "No fake awards, fake reviews, invented statistics, before/after claims, "
         "medical guarantees, money guarantees or manipulative urgency. "
@@ -140,22 +237,39 @@ def build_business_image_brief(
         "explicitly asked for text as part of the visual concept."
     )
     return VisualCreativeBrief(
-        kind="image",
+        kind=visual_kind,
         prompt=prompt,
         country_code=str(country_code or ""),
         preferred_provider=str(preferred_provider or ""),
-        aspect_ratio="4:5",
+        aspect_ratio="9:16" if visual_kind == "video" else "4:5",
+        duration_seconds=8,
         brand_context=str(brand_context or "").strip()[:2500],
     )
 
 
-def create_business_image_from_frozen_payload(
+def build_business_image_brief(
+    *,
+    request: str,
+    brand_context: str = "",
+    country_code: str = "",
+    preferred_provider: str = "",
+) -> VisualCreativeBrief:
+    return build_business_visual_brief(
+        request=request,
+        kind="image",
+        brand_context=brand_context,
+        country_code=country_code,
+        preferred_provider=preferred_provider,
+    )
+
+
+def create_business_visual_from_frozen_payload(
     *,
     provider_payload_json: str,
     scope_id: str,
     idempotency_key: str,
 ) -> VisualCreativeJob:
-    brief, wait_seconds = _load_frozen_business_image_payload(provider_payload_json)
+    brief, wait_seconds = _load_frozen_business_visual_payload(provider_payload_json)
     try:
         return submit_visual(
             brief,
@@ -165,6 +279,37 @@ def create_business_image_from_frozen_payload(
         )
     except VisualCreativeGatewayError as exc:
         raise VisualCreativeError("visual_creative_generation_failed") from exc
+
+
+def create_business_image_from_frozen_payload(
+    *,
+    provider_payload_json: str,
+    scope_id: str,
+    idempotency_key: str,
+) -> VisualCreativeJob:
+    brief, _ = _load_frozen_business_image_payload(provider_payload_json)
+    del brief
+    return create_business_visual_from_frozen_payload(
+        provider_payload_json=provider_payload_json,
+        scope_id=scope_id,
+        idempotency_key=idempotency_key,
+    )
+
+
+def create_business_video_from_frozen_payload(
+    *,
+    provider_payload_json: str,
+    scope_id: str,
+    idempotency_key: str,
+) -> VisualCreativeJob:
+    brief, _ = _load_frozen_business_visual_payload(provider_payload_json)
+    if brief.kind != "video":
+        raise ValueError("frozen business video brief is invalid")
+    return create_business_visual_from_frozen_payload(
+        provider_payload_json=provider_payload_json,
+        scope_id=scope_id,
+        idempotency_key=idempotency_key,
+    )
 
 
 def create_business_image(
@@ -288,10 +433,17 @@ def poll_ad_visual(*, job_id: str, scope_id: str) -> VisualCreativeJob:
 
 __all__ = [
     "VisualCreativeError",
+    "build_business_visual_brief",
     "build_business_image_brief",
+    "create_business_visual_from_frozen_payload",
     "create_business_image",
     "create_business_image_from_frozen_payload",
+    "create_business_video_from_frozen_payload",
+    "freeze_business_visual_payload",
     "freeze_business_image_payload",
+    "freeze_business_video_payload",
+    "frozen_business_visual_kind",
+    "frozen_business_visual_binding",
     "normalize_business_image_request",
     "build_ad_visual_brief",
     "create_ad_visual",

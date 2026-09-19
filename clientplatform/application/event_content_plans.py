@@ -47,18 +47,22 @@ def _load_goal_visual_brand(*, actor: TenantContext):
     return load_goal_visual_brand(actor=actor)
 
 
-def _freeze_business_image_payload(
+def _freeze_business_visual_payload(
     *,
     request: str,
+    kind: str,
     brand_context: str,
     country_code: str,
+    binding: dict[str, str] | None = None,
 ) -> str:
-    from clientplatform.application.visual_creatives import freeze_business_image_payload
+    from clientplatform.application.visual_creatives import freeze_business_visual_payload
 
-    return freeze_business_image_payload(
+    return freeze_business_visual_payload(
         request=request,
+        kind=kind,
         brand_context=brand_context,
         country_code=country_code,
+        binding=binding,
     )
 
 
@@ -148,10 +152,19 @@ def prepare_event_stage_visual(
     )
     brand = _load_goal_visual_brand(actor=actor)
     brand_context = brand.prompt_context()
-    provider_payload_json = _freeze_business_image_payload(
+    visual_kind = "video" if mode is EventContentMode.TEXT_WITH_VIDEO else "image"
+    provider_payload_json = _freeze_business_visual_payload(
         request=request_text,
+        kind=visual_kind,
         brand_context=brand_context,
         country_code=country_code,
+        binding={
+            "type": "event_content",
+            "event_id": normalize_uuid(event_id, field_name="event_id"),
+            "stage": stage.value,
+            "slot_key": _normalize_message_key(message_key),
+            "kind": visual_kind,
+        },
     )
     receipt = prepare_creative_generation(
         actor=actor,

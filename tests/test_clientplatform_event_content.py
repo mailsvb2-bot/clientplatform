@@ -18,6 +18,7 @@ from clientplatform.domain.event_content import (
 )
 from clientplatform.domain.tenancy import PlatformRole, TenantContext
 from clientplatform.infrastructure.event_content_repository import (
+    EventContentAssetRepository,
     EventContentMessageRepository,
     EventContentPreferenceRepository,
 )
@@ -54,8 +55,11 @@ class EventContentDomainTests(unittest.TestCase):
             event_content_stage_label(EventContentStage.POST_EVENT),
             "дожим после мероприятия",
         )
+        self.assertIs(parse_event_content_mode("4"), EventContentMode.TEXT_WITH_VIDEO)
+        self.assertIs(parse_event_content_mode("видео"), EventContentMode.TEXT_WITH_VIDEO)
+        self.assertEqual(event_content_mode_label(EventContentMode.TEXT_WITH_VIDEO), "Текст + видео")
         with self.assertRaises(ValueError):
-            parse_event_content_mode("видео")
+            parse_event_content_mode("карусель")
 
     def test_visual_request_separates_attachment_and_text_in_image_semantics(self) -> None:
         separate = event_visual_request(
@@ -74,6 +78,13 @@ class EventContentDomainTests(unittest.TestCase):
         )
         self.assertIn("хорошо читаемый основной текст", embedded)
         self.assertIn("25.09.2026", embedded)
+        video = event_visual_request(
+            stage=EventContentStage.WARMUP,
+            mode=EventContentMode.TEXT_WITH_VIDEO,
+            event_title="Практика",
+            message_text="Скоро встречаемся",
+        )
+        self.assertIn("Короткое вертикальное видео", video)
         with self.assertRaises(ValueError):
             event_visual_request(
                 stage=EventContentStage.WARMUP,
@@ -159,6 +170,43 @@ class EventContentRepositoryTests(unittest.TestCase):
                 event_id=EVENT_ID,
                 stage=EventContentStage.WARMUP,
                 mode=EventContentMode.TEXT,
+            )
+
+    def test_video_asset_is_revisioned_and_tenant_scoped(self) -> None:
+        repo = EventContentAssetRepository(self.conn)
+        created = repo.upsert(
+            actor=_actor(),
+            event_id=EVENT_ID,
+            stage=EventContentStage.WARMUP,
+            slot_key="before:3",
+            kind="video",
+            media_reference="s3://clientplatform-test/program-media/one/video.mp4",
+            source="owner",
+            source_ref="owner-upload",
+            now="2026-09-18T10:00:00+00:00",
+        )
+        self.assertEqual(created.kind, "video")
+        self.assertEqual(created.source, "owner")
+        self.assertEqual(created.revision, 1)
+        updated = repo.upsert(
+            actor=_actor(),
+            event_id=EVENT_ID,
+            stage=EventContentStage.WARMUP,
+            slot_key="before:3",
+            kind="video",
+            media_reference="s3://clientplatform-test/program-media/two/video.mp4",
+            source="generated",
+            source_ref="receipt-1",
+            now="2026-09-18T10:05:00+00:00",
+        )
+        self.assertEqual(updated.revision, 2)
+        self.assertEqual(updated.source_ref, "receipt-1")
+        with self.assertRaises(ValueError):
+            repo.get(
+                actor=_actor(business_id=OTHER_BUSINESS_ID),
+                event_id=EVENT_ID,
+                stage=EventContentStage.WARMUP,
+                slot_key="before:3",
             )
 
     def test_editable_message_slots_preserve_owner_source_and_schedule(self) -> None:
@@ -278,7 +326,7 @@ class EventContentApplicationTests(unittest.TestCase):
         with (
             patch.object(plans, "get_event_content_plan", return_value=text_plan),
             patch.object(plans, "_load_goal_visual_brand") as load_brand,
-            patch.object(plans, "_freeze_business_image_payload") as freeze,
+            patch.object(plans, "_freeze_business_visual_payload") as freeze,
             patch.object(plans, "prepare_creative_generation") as prepare,
         ):
             result = plans.prepare_event_stage_visual(
@@ -307,7 +355,7 @@ class EventContentApplicationTests(unittest.TestCase):
             patch.object(plans, "get_event_content_plan", return_value=visual_plan),
             patch.object(plans, "event_visual_request", return_value="REQUEST"),
             patch.object(plans, "_load_goal_visual_brand", return_value=brand),
-            patch.object(plans, "_freeze_business_image_payload", return_value="FROZEN") as freeze,
+            patch.object(plans, "_freeze_business_visual_payload", return_value="FROZEN") as freeze,
             patch.object(plans, "prepare_creative_generation", return_value=receipt) as prepare,
         ):
             result = plans.prepare_event_stage_visual(
@@ -324,8 +372,59 @@ class EventContentApplicationTests(unittest.TestCase):
         self.assertTrue(result.prepared_for_requested_visual)
         freeze.assert_called_once_with(
             request="REQUEST",
+            kind="image",
             brand_context="brand",
             country_code="RU",
+            binding={
+                "type": "event_content",
+                "event_id": EVENT_ID,
+                "stage": EventContentStage.WARMUP.value,
+                "slot_key": "warmup-01",
+                "kind": "image",
+            },
+        )
+        prepare.assert_called_once()
+
+    def test_video_mode_freezes_video_receipt_without_paid_submission(self) -> None:
+        plan = plans.EventContentPlan(
+            event_id=EVENT_ID,
+            warmup=EventContentMode.TEXT_WITH_VIDEO,
+            event_day=EventContentMode.TEXT,
+            post_event=EventContentMode.TEXT,
+        )
+        brand = SimpleNamespace(prompt_context=lambda: "brand")
+        receipt = SimpleNamespace(id="receipt-video", request_text="VIDEO")
+        with (
+            patch.object(plans, "get_event_content_plan", return_value=plan),
+            patch.object(plans, "event_visual_request", return_value="VIDEO"),
+            patch.object(plans, "_load_goal_visual_brand", return_value=brand),
+            patch.object(plans, "_freeze_business_visual_payload", return_value="FROZEN") as freeze,
+            patch.object(plans, "prepare_creative_generation", return_value=receipt) as prepare,
+        ):
+            result = plans.prepare_event_stage_visual(
+                actor=_actor(),
+                event_id=EVENT_ID,
+                stage=EventContentStage.WARMUP,
+                message_key="before:3",
+                event_title="Практика",
+                message_text="Скоро встречаемся",
+                country_code="RU",
+            )
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertIs(result.mode, EventContentMode.TEXT_WITH_VIDEO)
+        freeze.assert_called_once_with(
+            request="VIDEO",
+            kind="video",
+            brand_context="brand",
+            country_code="RU",
+            binding={
+                "type": "event_content",
+                "event_id": EVENT_ID,
+                "stage": EventContentStage.WARMUP.value,
+                "slot_key": "before:3",
+                "kind": "video",
+            },
         )
         prepare.assert_called_once()
 

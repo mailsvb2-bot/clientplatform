@@ -660,6 +660,11 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
             patch.object(events.control, "_uuid_token", return_value=TOKEN),
             patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
             patch.object(events, "draft_event_announcement", new=AsyncMock(return_value=draft)),
+            patch.object(
+                events,
+                "get_event_content_plan",
+                return_value=SimpleNamespace(event_day=EventContentMode.TEXT),
+            ),
             patch.object(events, "_public_base_url", return_value="https://clientplatform.example.test"),
             patch.object(events.control, "_callback_message", return_value=reply),
         ):
@@ -913,6 +918,7 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 scheduled_at=datetime(2026, 9, 19 + index, 9, tzinfo=timezone.utc),
                 text=f"Текст {index}",
                 source="owner" if index == 2 else "template",
+                slot_key=f"before:{4 - index}",
             )
             for index in (1, 2, 3)
         )
@@ -930,6 +936,12 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
             with (
                 patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
                 patch.object(events, "get_saved_event_warmup_plan", return_value=plan),
+                patch.object(
+                    events,
+                    "get_event_content_plan",
+                    return_value=SimpleNamespace(warmup=EventContentMode.TEXT),
+                ),
+                patch.object(events, "get_event_content_asset", return_value=None),
                 patch.object(events.control, "_uuid_token", side_effect=token),
                 patch.object(events.control, "_keyboard", side_effect=lambda rows: rows),
             ):
@@ -962,6 +974,7 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 offset_label="+1 час",
                 text="{name}, про «{title}»: {offer}",
                 source="template",
+                slot_key="no_show:1",
             ),
             SimpleNamespace(
                 segment="no_show",
@@ -970,6 +983,7 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 offset_label="+24 часа",
                 text="Ещё раз {offer}",
                 source="template",
+                slot_key="no_show:2",
             ),
             SimpleNamespace(
                 segment="attended_unpaid",
@@ -978,6 +992,7 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 offset_label="+1 час",
                 text="{name}: {offer}",
                 source="owner",
+                slot_key="attended_unpaid:1",
             ),
         )
 
@@ -988,6 +1003,12 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
             patch.object(events, "resolve_cockpit_events", return_value=snapshot),
             patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
             patch.object(events, "get_event_followup_content_plan", return_value=previews),
+            patch.object(
+                events,
+                "get_event_content_plan",
+                return_value=SimpleNamespace(post_event=EventContentMode.TEXT),
+            ),
+            patch.object(events, "get_event_content_asset", return_value=None),
             patch.object(events.control, "_uuid_token", side_effect=token),
             patch.object(events.control, "_keyboard", side_effect=lambda rows: rows),
         ):
@@ -1182,6 +1203,11 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
             patch.object(events, "resolve_cockpit_events", return_value=snapshot),
             patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
             patch.object(events, "get_event_followup_content_plan", return_value=()),
+            patch.object(
+                events,
+                "get_event_content_plan",
+                return_value=SimpleNamespace(post_event=EventContentMode.TEXT),
+            ),
         ):
             await events._send_followup_plan(
                 target,
@@ -1200,6 +1226,7 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 offset_label="+1 час",
                 text="Первый {offer}",
                 source="template",
+                slot_key="no_show:1",
             ),
             SimpleNamespace(
                 segment="attended_unpaid",
@@ -1208,6 +1235,7 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 offset_label="+48 часов",
                 text="{name}, последний {offer}",
                 source="owner",
+                slot_key="attended_unpaid:3",
             ),
         )
 
@@ -1218,6 +1246,12 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
             patch.object(events, "resolve_cockpit_events", return_value=snapshot),
             patch.object(events.control, "_actor", new=AsyncMock(return_value=actor)),
             patch.object(events, "get_event_followup_content_plan", return_value=previews),
+            patch.object(
+                events,
+                "get_event_content_plan",
+                return_value=SimpleNamespace(post_event=EventContentMode.TEXT),
+            ),
+            patch.object(events, "get_event_content_asset", return_value=None),
             patch.object(events.control, "_uuid_token", side_effect=token),
             patch.object(events.control, "_keyboard", side_effect=lambda rows: rows),
         ):

@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from clientplatform.domain.event_content import (
+    EventContentAsset,
     EventContentMessage,
     EventContentMode,
     EventContentPreference,
@@ -302,4 +303,131 @@ class EventContentMessageRepository:
         return max(0, int(getattr(cursor, "rowcount", 0) or 0))
 
 
-__all__ = ["EventContentMessageRepository", "EventContentPreferenceRepository"]
+
+_ASSET_COLUMNS = (
+    "business_id,event_id,stage,slot_key,kind,media_reference,source,source_ref,revision,"
+    "updated_by_member_id,created_at,updated_at"
+)
+
+
+def _asset_from_row(row: Any) -> EventContentAsset:
+    return EventContentAsset(
+        business_id=str(_value(row, "business_id", 0)),
+        event_id=str(_value(row, "event_id", 1)),
+        stage=EventContentStage(str(_value(row, "stage", 2))),
+        slot_key=str(_value(row, "slot_key", 3)),
+        kind=str(_value(row, "kind", 4)),
+        media_reference=str(_value(row, "media_reference", 5)),
+        source=str(_value(row, "source", 6)),
+        source_ref=str(_value(row, "source_ref", 7)),
+        revision=int(_value(row, "revision", 8)),
+        updated_by_member_id=str(_value(row, "updated_by_member_id", 9)),
+        created_at=str(_value(row, "created_at", 10)),
+        updated_at=str(_value(row, "updated_at", 11)),
+    )
+
+
+class EventContentAssetRepository:
+    def __init__(self, conn: Any):
+        self._conn = conn
+
+    def _event_exists(self, *, actor: TenantContext, event_id: str) -> str:
+        actor.assert_can_manage_business()
+        normalized = normalize_uuid(event_id, field_name="event_id")
+        row = self._conn.execute(
+            "SELECT id FROM clientplatform_events WHERE id=? AND business_id=? LIMIT 1",
+            (normalized, actor.business_id),
+        ).fetchone()
+        if row is None:
+            raise ValueError("event was not found in the active business")
+        return normalized
+
+    def get(
+        self,
+        *,
+        actor: TenantContext,
+        event_id: str,
+        stage: EventContentStage,
+        slot_key: str,
+    ) -> EventContentAsset | None:
+        normalized = self._event_exists(actor=actor, event_id=event_id)
+        key = _slot_key(slot_key)
+        row = self._conn.execute(
+            f"SELECT {_ASSET_COLUMNS} FROM clientplatform_event_content_assets "
+            "WHERE business_id=? AND event_id=? AND stage=? AND slot_key=? LIMIT 1",
+            (actor.business_id, normalized, stage.value, key),
+        ).fetchone()
+        return None if row is None else _asset_from_row(row)
+
+    def upsert(
+        self,
+        *,
+        actor: TenantContext,
+        event_id: str,
+        stage: EventContentStage,
+        slot_key: str,
+        kind: str,
+        media_reference: str,
+        source: str,
+        source_ref: str = "",
+        now: str | None = None,
+    ) -> EventContentAsset:
+        normalized = self._event_exists(actor=actor, event_id=event_id)
+        key = _slot_key(slot_key)
+        normalized_kind = str(kind or "").strip().lower()
+        if normalized_kind not in {"image", "video"}:
+            raise ValueError("event content asset kind is invalid")
+        reference = str(media_reference or "").strip()
+        if not 1 <= len(reference) <= 2048 or any(ord(char) < 32 for char in reference):
+            raise ValueError("event content asset reference is invalid")
+        normalized_source = str(source or "").strip().lower()
+        if normalized_source not in {"owner", "generated"}:
+            raise ValueError("event content asset source is invalid")
+        normalized_source_ref = str(source_ref or "").strip()
+        if len(normalized_source_ref) > 200:
+            raise ValueError("event content asset source reference is invalid")
+        timestamp = str(now or _utc_now())
+        self._conn.execute(
+            """
+            INSERT INTO clientplatform_event_content_assets(
+                business_id,event_id,stage,slot_key,kind,media_reference,source,source_ref,
+                revision,updated_by_member_id,created_at,updated_at
+            ) VALUES(?,?,?,?,?,?,?,?,1,?,?,?)
+            ON CONFLICT(business_id,event_id,stage,slot_key) DO UPDATE SET
+                kind=excluded.kind,
+                media_reference=excluded.media_reference,
+                source=excluded.source,
+                source_ref=excluded.source_ref,
+                revision=clientplatform_event_content_assets.revision + 1,
+                updated_by_member_id=excluded.updated_by_member_id,
+                updated_at=excluded.updated_at
+            """,
+            (
+                actor.business_id,
+                normalized,
+                stage.value,
+                key,
+                normalized_kind,
+                reference,
+                normalized_source,
+                normalized_source_ref,
+                actor.membership_id,
+                timestamp,
+                timestamp,
+            ),
+        )
+        stored = self.get(
+            actor=actor,
+            event_id=normalized,
+            stage=stage,
+            slot_key=key,
+        )
+        if stored is None:
+            raise RuntimeError("event content asset was not persisted")
+        return stored
+
+__all__ = [
+    "EventContentAssetRepository",
+    "EventContentMessageRepository",
+    "EventContentPreferenceRepository",
+]

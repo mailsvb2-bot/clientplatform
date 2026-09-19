@@ -709,6 +709,112 @@ def _automation_followup_authorized(
         now=scheduled_at,
     )
 
+def _active_followup_visual_asset(
+    conn: Any,
+    *,
+    candidate: EventFollowupCandidate,
+    stage: int,
+    slot_key: str,
+) -> tuple[str, str, int] | None:
+    try:
+        row = conn.execute(
+            """
+            SELECT a.kind,a.media_reference,a.revision,p.mode
+            FROM clientplatform_event_content_assets a
+            JOIN clientplatform_event_content_preferences p
+              ON p.business_id=a.business_id AND p.event_id=a.event_id AND p.stage=a.stage
+            WHERE a.business_id=? AND a.event_id=?
+              AND a.stage='post_event_followup' AND a.slot_key=?
+            LIMIT 1
+            """,
+            (candidate.business_id, candidate.event_id, slot_key),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return None
+    if row is None:
+        return None
+    kind = str(_value(row, "kind", 0))
+    reference = str(_value(row, "media_reference", 1))
+    revision = int(_value(row, "revision", 2))
+    mode = str(_value(row, "mode", 3))
+    valid = (
+        (mode == "text_with_video" and kind == "video")
+        or (mode in {"text_with_image", "text_in_image"} and kind == "image")
+    )
+    return (kind, reference, revision) if valid else None
+
+
+def _media_dispatch_key(
+    candidate: EventFollowupCandidate,
+    *,
+    stage: int,
+    slot_key: str,
+    message_revision: int,
+    asset_revision: int,
+) -> str:
+    normalized_slot = str(slot_key).replace(":", "-")
+    return (
+        f"event:{candidate.event_id}:registration:{candidate.registration_id}:"
+        f"message:post-media:v1:stage:{stage}:slot:{normalized_slot}:"
+        f"message-revision:{int(message_revision)}:asset-revision:{int(asset_revision)}"
+    )
+
+
+def _materialize_media(
+    conn: Any,
+    *,
+    candidate: EventFollowupCandidate,
+    target: EventFollowupTarget,
+    stage: int,
+    slot_key: str,
+    message_revision: int,
+    asset_kind: str,
+    asset_reference: str,
+    asset_revision: int,
+    now_iso: str,
+) -> bool:
+    key = _media_dispatch_key(
+        candidate,
+        stage=stage,
+        slot_key=slot_key,
+        message_revision=message_revision,
+        asset_revision=asset_revision,
+    )
+    cursor = conn.execute(
+        """
+        INSERT INTO provider_dispatch_outbox(
+            id,business_id,platform,source_kind,source_id,
+            logical_delivery_id,partner_campaign_id,partner_candidate_id,
+            sales_followup_id,connection_id,recipient_kind,customer_identity_id,
+            external_subject,payload_kind,payload_ref,idempotency_key,status,
+            attempts,available_at,locked_at,lock_token,provider_message_id,
+            last_error,created_at,updated_at,sent_at,dead_at
+        ) VALUES(
+            ?,?,?,'event_message',?,NULL,NULL,NULL,NULL,?,?,?,?,?,?,?,'pending',0,?,
+            NULL,NULL,NULL,NULL,?,?,NULL,NULL
+        )
+        ON CONFLICT(business_id,idempotency_key) DO NOTHING
+        """,
+        (
+            str(uuid4()),
+            candidate.business_id,
+            target.platform,
+            candidate.registration_id,
+            target.connection_id,
+            target.recipient_kind,
+            target.customer_identity_id,
+            target.external_subject,
+            asset_kind,
+            asset_reference,
+            key,
+            now_iso,
+            now_iso,
+            now_iso,
+        ),
+    )
+    return int(getattr(cursor, "rowcount", 0) or 0) == 1
+
+
 def _materialize(
     conn: Any,
     *,
@@ -716,6 +822,7 @@ def _materialize(
     target: EventFollowupTarget,
     stage: int,
     now_iso: str,
+    available_at: str | None = None,
 ) -> bool:
     payload_kind, payload_ref, revision, slot_key = _delivery_payload(
         conn, candidate, target, stage=stage
@@ -753,7 +860,7 @@ def _materialize(
             payload_kind,
             payload_ref,
             key,
-            now_iso,
+            available_at or now_iso,
             now_iso,
             now_iso,
         ),
@@ -789,7 +896,8 @@ def _cancel_invalid_commercial_messages(conn: Any, *, now_iso: str) -> int:
         WHERE d.source_kind='event_message'
           AND d.status IN ('pending','retry')
           AND (d.idempotency_key LIKE 'event:%:message:post:v4:stage:%'
-               OR d.idempotency_key LIKE 'event:%:message:post:v5:stage:%')
+               OR d.idempotency_key LIKE 'event:%:message:post:v5:stage:%'
+                OR d.idempotency_key LIKE 'event:%:message:post-media:v1:stage:%')
           AND (
               EXISTS (
                   SELECT 1
@@ -834,7 +942,8 @@ def cancel_commercial_followups_for_registration_in_transaction(
         WHERE business_id=? AND source_kind='event_message' AND source_id=?
           AND status IN ('pending','retry')
           AND (idempotency_key LIKE 'event:%:message:post:v4:stage:%'
-               OR idempotency_key LIKE 'event:%:message:post:v5:stage:%')
+               OR idempotency_key LIKE 'event:%:message:post:v5:stage:%'
+               OR idempotency_key LIKE 'event:%:message:post-media:v1:stage:%')
         """,
         (
             stamp,
@@ -1081,12 +1190,55 @@ def materialize_due_event_followups_in_transaction(
             policy_blocked += 1
             continue
 
+        _payload_kind, _payload_ref, message_revision, slot_key = _delivery_payload(
+            conn,
+            candidate,
+            target,
+            stage=stage,
+        )
+        media_queued = False
+        if target.platform != "email":
+            asset = _active_followup_visual_asset(
+                conn,
+                candidate=candidate,
+                stage=stage,
+                slot_key=slot_key,
+            )
+            if asset is not None:
+                asset_kind, asset_reference, asset_revision = asset
+                if event_commercial_policy_authorized(
+                    conn,
+                    business_id=candidate.business_id,
+                    registration_id=candidate.registration_id,
+                    platform=target.platform,
+                    payload_ref=asset_reference,
+                    scheduled_at=now_iso,
+                    now=now_iso,
+                ):
+                    media_queued = _materialize_media(
+                        conn,
+                        candidate=candidate,
+                        target=target,
+                        stage=stage,
+                        slot_key=slot_key,
+                        message_revision=message_revision,
+                        asset_kind=asset_kind,
+                        asset_reference=asset_reference,
+                        asset_revision=asset_revision,
+                        now_iso=now_iso,
+                    )
+
         if _materialize(
             conn,
             candidate=candidate,
             target=target,
             stage=stage,
             now_iso=now_iso,
+            available_at=(
+                (current + timedelta(seconds=2)).replace(microsecond=0).isoformat()
+                if media_queued
+                else now_iso
+            ),
         ):
             queued += 1
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
@@ -13,7 +14,16 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from clientplatform.application.activity import get_business_profile
 from clientplatform.application.cockpit_events import resolve_cockpit_events
 from clientplatform.application.event_announcements import draft_event_announcement
-from clientplatform.application.event_content_plans import get_event_content_plan
+from clientplatform.application.event_content_plans import (
+    get_event_content_plan,
+    prepare_event_stage_visual,
+)
+from clientplatform.application.event_content_assets import (
+    EventContentAssetError,
+    get_event_content_asset,
+    set_event_content_asset_reference,
+)
+from clientplatform.application.program_media import queue_program_media_cleanup
 from clientplatform.application.event_followups import (
     get_event_followup_content_plan,
     reset_event_followup_text,
@@ -38,7 +48,11 @@ from clientplatform.application.event_followup_settings import (
     set_business_event_followups_enabled,
 )
 from clientplatform.domain.bookings import parse_local_booking_start
-from clientplatform.domain.event_content import event_content_mode_label
+from clientplatform.domain.event_content import (
+    EventContentMode,
+    EventContentStage,
+    event_content_mode_label,
+)
 from clientplatform.domain.tenancy import TenantPermissionDenied
 from clientplatform.presentation.event_ui import (
     BACK_TO_EVENTS_LABEL,
@@ -52,6 +66,9 @@ from clientplatform.presentation.event_ui import (
 from config.settings import settings
 
 from . import clientplatform_control as control
+from .clientplatform_program_media import ProgramMediaIngestError, materialize_program_content
+
+log = logging.getLogger(__name__)
 
 router = Router(name="clientplatform_events")
 router.message.filter(control.ClientPlatformControlEnabled())
@@ -65,6 +82,7 @@ class ClientPlatformEventState(StatesGroup):
     waiting_warmup_days = State()
     waiting_content_text = State()
     waiting_followup_text = State()
+    waiting_visual_upload = State()
 
 
 def _cancel_keyboard(business_id: str):
@@ -81,6 +99,9 @@ def _announcement_share_markup(
     vk_url: str,
     max_url: str,
     business_token: str,
+    event_token: str = "",
+    visual_mode: EventContentMode = EventContentMode.TEXT,
+    visual_prepared: bool = False,
 ) -> InlineKeyboardMarkup:
     telegram_share = (
         "https://t.me/share/url?url="
@@ -99,11 +120,31 @@ def _announcement_share_markup(
     max_share = "https://max.ru/:share?text=" + quote(
         f"{text}\n\nРегистрация: {max_url}", safe=""
     )
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="✈️ Опубликовать в Telegram", url=telegram_share)],
-            [InlineKeyboardButton(text="🔵 Опубликовать во ВКонтакте", url=vk_share)],
-            [InlineKeyboardButton(text="🟣 Опубликовать в MAX", url=max_share)],
+    rows = [
+        [InlineKeyboardButton(text="✈️ Опубликовать в Telegram", url=telegram_share)],
+        [InlineKeyboardButton(text="🔵 Опубликовать во ВКонтакте", url=vk_share)],
+        [InlineKeyboardButton(text="🟣 Опубликовать в MAX", url=max_share)],
+    ]
+    if visual_prepared:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=_visual_action_label(visual_mode),
+                    callback_data=f"cpc:open:{business_token}",
+                )
+            ]
+        )
+    if visual_mode is EventContentMode.TEXT_WITH_VIDEO and event_token:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="📎 Использовать своё видео",
+                    callback_data=f"cpev:vu:a:{event_token}:0:{business_token}",
+                )
+            ]
+        )
+    rows.extend(
+        [
             [
                 InlineKeyboardButton(
                     text="📣 Запустить рекламу",
@@ -118,6 +159,7 @@ def _announcement_share_markup(
             ],
         ]
     )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def _settings_rows(snapshot: object, *, token: str) -> list[list[tuple[str, str]]]:
@@ -171,6 +213,14 @@ def _event_item(snapshot: object, event_id: str):
         if str(getattr(item, "id", "")) == event_id:
             return item
     raise ValueError("вебинар не найден")
+
+
+def _visual_action_label(mode: EventContentMode) -> str:
+    return (
+        "🎬 Подготовить видео"
+        if mode is EventContentMode.TEXT_WITH_VIDEO
+        else "🎨 Подготовить картинку"
+    )
 
 
 def _content_plan_rows(
@@ -293,8 +343,20 @@ async def _send_warmup_preview(
             event_id=event_id,
         )
         return
+    modes = await asyncio.to_thread(
+        get_event_content_plan,
+        actor=actor,
+        event_id=event_id,
+    )
     index = max(0, min(position - 1, len(plan.drafts) - 1))
     draft = plan.drafts[index]
+    asset = await asyncio.to_thread(
+        get_event_content_asset,
+        actor=actor,
+        event_id=event_id,
+        stage=EventContentStage.WARMUP,
+        slot_key=draft.slot_key,
+    )
     event_token = control._uuid_token(event_id)
     business_token = control._uuid_token(business_id)
     rows: list[list[tuple[str, str]]] = []
@@ -312,13 +374,31 @@ async def _send_warmup_preview(
         rows.append(
             [("♻️ Вернуть автотекст", f"cpev:wr:{event_token}:{draft.position}:{business_token}")]
         )
+    if modes.warmup is not EventContentMode.TEXT:
+        rows.append(
+            [(
+                _visual_action_label(modes.warmup),
+                f"cpev:vis:w:{event_token}:{draft.position}:{business_token}",
+            )]
+        )
+    if modes.warmup is EventContentMode.TEXT_WITH_VIDEO:
+        rows.append(
+            [(
+                "📎 Использовать своё видео",
+                f"cpev:vu:w:{event_token}:{draft.position}:{business_token}",
+            )]
+        )
     rows.append([("🗓 К контент-плану", f"cpev:content:{event_token}:{business_token}")])
     local_at = draft.scheduled_at.astimezone(ZoneInfo(plan.timezone_name))
     source_label = "Ваш текст" if draft.source == "owner" else "Автотекст"
+    asset_line = ""
+    if asset is not None:
+        asset_source = "Ваше видео" if asset.source == "owner" else "AI-визуал"
+        asset_line = f"\nВизуал: ✅ {asset_source}"
     await target.answer(
         f"🔥 Прогрев {draft.position}/{plan.requested_days}\n"
         f"Отправка: {local_at.strftime('%d.%m.%Y %H:%M')} ({plan.timezone_name})\n"
-        f"Источник: {source_label}\n\n"
+        f"Источник: {source_label}{asset_line}\n\n"
         f"{draft.text}\n\n"
         "Можно использовать {name}, {title}, {join_url}. "
         "Если {join_url} не указан, персональная ссылка на эфир добавится автоматически.",
@@ -347,11 +427,23 @@ async def _send_followup_plan(
         actor=actor,
         event_id=event_id,
     )
+    modes = await asyncio.to_thread(
+        get_event_content_plan,
+        actor=actor,
+        event_id=event_id,
+    )
     if not previews:
         await target.answer("Для этого вебинара нет сообщений дожима.")
         return
     current = max(0, min(int(index), len(previews) - 1))
     preview = previews[current]
+    asset = await asyncio.to_thread(
+        get_event_content_asset,
+        actor=actor,
+        event_id=event_id,
+        stage=EventContentStage.POST_EVENT,
+        slot_key=preview.slot_key,
+    )
     body = (
         preview.text.replace("{name}", "Имя")
         .replace("{title}", item.title)
@@ -364,6 +456,7 @@ async def _send_followup_plan(
         f"Группа: {preview.segment_label}",
         f"Когда: {preview.offset_label}",
         f"Источник: {source}",
+        *((f"Визуал: ✅ {'Ваше видео' if asset.source == 'owner' else 'AI-визуал'}",) if asset is not None else ()),
         "",
         body,
         "",
@@ -383,6 +476,20 @@ async def _send_followup_plan(
     rows.append([("✏️ Изменить текст", f"cpev:fe:{event_token}:{current}:{business_token}")])
     if preview.source != "template":
         rows.append([("↩️ Вернуть автотекст", f"cpev:fr:{event_token}:{current}:{business_token}")])
+    if modes.post_event is not EventContentMode.TEXT:
+        rows.append(
+            [(
+                _visual_action_label(modes.post_event),
+                f"cpev:vis:f:{event_token}:{current}:{business_token}",
+            )]
+        )
+    if modes.post_event is EventContentMode.TEXT_WITH_VIDEO:
+        rows.append(
+            [(
+                "📎 Использовать своё видео",
+                f"cpev:vu:f:{event_token}:{current}:{business_token}",
+            )]
+        )
     rows.extend(
         [
             [("⚙️ Настроить автосообщения", f"cpev:settings:{business_token}")],
@@ -390,6 +497,276 @@ async def _send_followup_plan(
         ]
     )
     await target.answer("\n".join(lines), reply_markup=control._keyboard(rows))
+
+
+async def _prepare_event_visual_for_owner(
+    callback: CallbackQuery,
+    *,
+    actor,
+    event_id: str,
+    stage: EventContentStage,
+    message_key: str,
+    event_title: str,
+    message_text: str,
+) -> None:
+    try:
+        prepared = await asyncio.to_thread(
+            prepare_event_stage_visual,
+            actor=actor,
+            event_id=event_id,
+            stage=stage,
+            message_key=message_key,
+            event_title=event_title,
+            message_text=message_text,
+        )
+    except (TenantPermissionDenied, ValueError, RuntimeError):
+        await callback.answer("Не удалось безопасно подготовить визуал", show_alert=True)
+        return
+    if prepared is None:
+        await callback.answer("Для этого этапа выбран только текст", show_alert=True)
+        return
+    await callback.answer(
+        "Видео подготовлено к генерации"
+        if prepared.mode is EventContentMode.TEXT_WITH_VIDEO
+        else "Картинка подготовлена к генерации"
+    )
+    from .clientplatform_creative_studio import send_creative_studio_menu
+
+    await send_creative_studio_menu(
+        control._callback_message(callback),
+        user_id=int(callback.from_user.id),
+        business_id=actor.business_id,
+    )
+
+
+@router.callback_query(F.data.startswith("cpev:vis:"))
+async def prepare_event_visual(callback: CallbackQuery) -> None:
+    parts = str(callback.data or "").split(":")
+    if len(parts) != 6:
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    target = parts[2]
+    if target not in {"w", "f"}:
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    event_id = control._token_uuid(parts[3])
+    try:
+        position = int(parts[4])
+    except ValueError:
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    business_id = control._token_uuid(parts[5])
+    actor = await control._actor(int(callback.from_user.id), business_id)
+    actor.assert_can_manage_business()
+    snapshot = await asyncio.to_thread(
+        resolve_cockpit_events,
+        telegram_user_id=int(callback.from_user.id),
+        requested_business_id=business_id,
+        limit=30,
+    )
+    item = _event_item(snapshot, event_id)
+    if target == "w":
+        plan = await asyncio.to_thread(
+            get_saved_event_warmup_plan,
+            actor=actor,
+            event_id=event_id,
+        )
+        draft = next((row for row in plan.drafts if row.position == position), None)
+        if draft is None:
+            await callback.answer("Сообщение прогрева уже изменилось", show_alert=True)
+            return
+        await _prepare_event_visual_for_owner(
+            callback,
+            actor=actor,
+            event_id=event_id,
+            stage=EventContentStage.WARMUP,
+            message_key=draft.slot_key,
+            event_title=item.title,
+            message_text=draft.text,
+        )
+        return
+
+    previews = await asyncio.to_thread(
+        get_event_followup_content_plan,
+        actor=actor,
+        event_id=event_id,
+    )
+    if not 0 <= position < len(previews):
+        await callback.answer("Сообщение дожима уже изменилось", show_alert=True)
+        return
+    preview = previews[position]
+    await _prepare_event_visual_for_owner(
+        callback,
+        actor=actor,
+        event_id=event_id,
+        stage=EventContentStage.POST_EVENT,
+        message_key=preview.slot_key,
+        event_title=item.title,
+        message_text=preview.text,
+    )
+
+
+def _mode_for_stage(plan, stage: EventContentStage) -> EventContentMode:
+    return {
+        EventContentStage.WARMUP: plan.warmup,
+        EventContentStage.EVENT_DAY: plan.event_day,
+        EventContentStage.POST_EVENT: plan.post_event,
+    }[stage]
+
+
+@router.callback_query(F.data.startswith("cpev:vu:"))
+async def begin_event_video_upload(callback: CallbackQuery, state: FSMContext) -> None:
+    parts = str(callback.data or "").split(":")
+    if len(parts) != 6 or parts[2] not in {"w", "f", "a"}:
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    target = parts[2]
+    try:
+        event_id = control._token_uuid(parts[3])
+        position = int(parts[4])
+        business_id = control._token_uuid(parts[5])
+    except (TypeError, ValueError):
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    actor = await control._actor(int(callback.from_user.id), business_id)
+    try:
+        actor.assert_can_manage_business()
+        modes = await asyncio.to_thread(
+            get_event_content_plan,
+            actor=actor,
+            event_id=event_id,
+        )
+        if target == "w":
+            stage = EventContentStage.WARMUP
+            plan = await asyncio.to_thread(
+                get_saved_event_warmup_plan,
+                actor=actor,
+                event_id=event_id,
+            )
+            draft = next((row for row in plan.drafts if row.position == position), None)
+            if draft is None:
+                raise ValueError("warmup slot changed")
+            slot_key = draft.slot_key
+        elif target == "f":
+            stage = EventContentStage.POST_EVENT
+            previews = await asyncio.to_thread(
+                get_event_followup_content_plan,
+                actor=actor,
+                event_id=event_id,
+            )
+            if not 0 <= position < len(previews):
+                raise ValueError("followup slot changed")
+            slot_key = previews[position].slot_key
+        else:
+            stage = EventContentStage.EVENT_DAY
+            slot_key = "announcement"
+        if _mode_for_stage(modes, stage) is not EventContentMode.TEXT_WITH_VIDEO:
+            await callback.answer("Для этого этапа больше не выбран формат видео", show_alert=True)
+            return
+    except (TenantPermissionDenied, ValueError, RuntimeError):
+        await callback.answer("Не удалось открыть загрузку видео", show_alert=True)
+        return
+
+    await state.clear()
+    await state.set_state(ClientPlatformEventState.waiting_visual_upload)
+    await state.update_data(
+        event_business_id=business_id,
+        event_id=event_id,
+        event_visual_stage=stage.value,
+        event_visual_slot_key=slot_key,
+    )
+    await callback.answer()
+    await control._callback_message(callback).answer(
+        "📎 Пришлите видео одним сообщением.\n\n"
+        "ClientPlatform перенесёт файл в защищённое хранилище бизнеса и привяжет "
+        "его именно к этому сообщению вебинара. Для выхода: Отмена.",
+        reply_markup=_cancel_keyboard(business_id),
+    )
+
+
+@router.message(ClientPlatformEventState.waiting_visual_upload)
+async def receive_event_video_upload(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    business_id = str(data.get("event_business_id") or "")
+    event_id = str(data.get("event_id") or "")
+    stage_raw = str(data.get("event_visual_stage") or "")
+    slot_key = str(data.get("event_visual_slot_key") or "")
+    if not business_id or not event_id or not stage_raw or not slot_key:
+        await state.clear()
+        await message.answer("Сессия загрузки устарела. Откройте контент-план заново.")
+        return
+    if " ".join(str(message.text or "").split()).casefold() in {"отмена", "cancel"}:
+        await state.clear()
+        await _send_event_content_plan(
+            message,
+            user_id=int(message.from_user.id),
+            business_id=business_id,
+            event_id=event_id,
+        )
+        return
+    if message.video is None:
+        await message.answer("Пришлите именно видеофайл одним сообщением или отправьте «Отмена».")
+        return
+    actor = await control._actor(int(message.from_user.id), business_id)
+    try:
+        stage = EventContentStage(stage_raw)
+        modes = await asyncio.to_thread(
+            get_event_content_plan,
+            actor=actor,
+            event_id=event_id,
+        )
+        if _mode_for_stage(modes, stage) is not EventContentMode.TEXT_WITH_VIDEO:
+            await state.clear()
+            await message.answer("Формат этапа уже изменён. Видео не сохранено.")
+            return
+        kind, reference = await materialize_program_content(
+            message,
+            business_id=business_id,
+        )
+        if kind.value != "video":
+            raise ProgramMediaIngestError("event_visual_video_required")
+        try:
+            await asyncio.to_thread(
+                set_event_content_asset_reference,
+                actor=actor,
+                event_id=event_id,
+                stage=stage,
+                slot_key=slot_key,
+                kind=kind,
+                media_reference=reference,
+                source="owner",
+                source_ref="owner-upload",
+            )
+        except (EventContentAssetError, ValueError, RuntimeError) as exc:
+            try:
+                await asyncio.to_thread(
+                    queue_program_media_cleanup,
+                    business_id=business_id,
+                    media_reference=reference,
+                    reason="failed_event_owner_video_binding",
+                )
+            except RuntimeError:
+                log.warning("Failed to queue rejected event video cleanup")
+            raise EventContentAssetError("event_owner_video_binding_failed") from exc
+    except (
+        TenantPermissionDenied,
+        ValueError,
+        RuntimeError,
+        ProgramMediaIngestError,
+        EventContentAssetError,
+    ):
+        await message.answer(
+            "Не удалось безопасно сохранить видео. Проверьте размер/формат и попробуйте ещё раз."
+        )
+        return
+    await state.clear()
+    await message.answer("✅ Своё видео сохранено и привязано к этому сообщению.")
+    await _send_event_content_plan(
+        message,
+        user_id=int(message.from_user.id),
+        business_id=business_id,
+        event_id=event_id,
+    )
 
 
 @router.callback_query(F.data.startswith("cpev:home:"))
@@ -1088,6 +1465,36 @@ async def create_event_announcement(callback: CallbackQuery) -> None:
     except (TenantPermissionDenied, ValueError, RuntimeError):
         await callback.answer("Не удалось подготовить анонс", show_alert=True)
         return
+    modes = await asyncio.to_thread(
+        get_event_content_plan,
+        actor=actor,
+        event_id=event_id,
+    )
+    visual_prepared = False
+    visual_note = ""
+    if modes.event_day is not EventContentMode.TEXT:
+        try:
+            prepared = await asyncio.to_thread(
+                prepare_event_stage_visual,
+                actor=actor,
+                event_id=event_id,
+                stage=EventContentStage.EVENT_DAY,
+                message_key="announcement",
+                event_title=draft.title,
+                message_text=draft.text,
+            )
+        except (TenantPermissionDenied, ValueError, RuntimeError):
+            visual_note = "\n\nВизуал сейчас не удалось подготовить; текст анонса сохранён."
+        else:
+            visual_prepared = prepared is not None
+            if visual_prepared:
+                visual_note = (
+                    "\n\n🎬 Видео подготовлено к генерации; платный AI-вызов начнётся "
+                    "только после Вашего отдельного подтверждения."
+                    if modes.event_day is EventContentMode.TEXT_WITH_VIDEO
+                    else "\n\n🎨 Картинка подготовлена к генерации; платный AI-вызов начнётся "
+                    "только после Вашего отдельного подтверждения."
+                )
     business_token = control._uuid_token(business_id)
     source_note = (
         "Текст подготовлен AI и требует Вашего подтверждения перед публикацией."
@@ -1098,7 +1505,7 @@ async def create_event_announcement(callback: CallbackQuery) -> None:
     await control._callback_message(callback).answer(
         "✨ Анонс готов\n\n"
         f"{draft.text}\n\n"
-        f"{source_note}\n\n"
+        f"{source_note}{visual_note}\n\n"
         f"🔗 Ссылка для рекламы:\n{advertising_url}\n\n"
         "Её можно вставить в рекламный кабинет, сайт или пост. ClientPlatform сохранит источник ads. "
         "Кнопки ниже используют отдельные ссылки регистрации для Telegram, VK и MAX.",
@@ -1109,6 +1516,9 @@ async def create_event_announcement(callback: CallbackQuery) -> None:
             vk_url=vk_url,
             max_url=max_url,
             business_token=business_token,
+            event_token=control._uuid_token(event_id),
+            visual_mode=modes.event_day,
+            visual_prepared=visual_prepared,
         ),
     )
 

@@ -300,12 +300,14 @@ def _mode_message(stage: EventContentStage) -> CustomerInteractionMessage:
             f"Как оформить {labels[stage]}?\n\n"
             "1) Только текст\n"
             "2) Текст + картинка\n"
-            "3) Текст в тематической картинке"
+            "3) Текст в тематической картинке\n"
+            "4) Текст + видео"
         ),
         rows=(
             (_button("1 · Только текст", f"cpm:event-wizard:mode:{stage.value}:text"),),
             (_button("2 · Текст + картинка", f"cpm:event-wizard:mode:{stage.value}:text_with_image"),),
             (_button("3 · Текст в картинке", f"cpm:event-wizard:mode:{stage.value}:text_in_image"),),
+            (_button("4 · Текст + видео", f"cpm:event-wizard:mode:{stage.value}:text_with_video"),),
             _back_row(),
         ),
     )

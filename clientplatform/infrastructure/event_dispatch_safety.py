@@ -25,6 +25,8 @@ from clientplatform.infrastructure.unified_dispatch_outbox import ClaimedProvide
 _COMMERCIAL_POST_KEY_FRAGMENT = ":message:post:v4:stage:"
 _COMMERCIAL_POST_V5_KEY_FRAGMENT = ":message:post:v5:stage:"
 _COMMERCIAL_WARMUP_KEY_FRAGMENT = ":message:warmup:v2:slot:"
+_COMMERCIAL_WARMUP_MEDIA_KEY_FRAGMENT = ":message:warmup-media:v1:slot:"
+_COMMERCIAL_POST_MEDIA_KEY_FRAGMENT = ":message:post-media:v1:stage:"
 _LEGACY_OFFER_KEY_SUFFIX = ":message:after:v2"
 _PROVIDER_BOUNDARY_MARKER = "event_commercial_provider_call_started_non_idempotent"
 _AMBIGUOUS_ERROR = (
@@ -40,7 +42,10 @@ def is_event_warmup_dispatch(item: object) -> bool:
     return bool(
         isinstance(item, ClaimedProviderDispatch)
         and item.dispatch.source_kind == "event_message"
-        and _COMMERCIAL_WARMUP_KEY_FRAGMENT in item.dispatch.idempotency_key
+        and (
+            _COMMERCIAL_WARMUP_KEY_FRAGMENT in item.dispatch.idempotency_key
+            or _COMMERCIAL_WARMUP_MEDIA_KEY_FRAGMENT in item.dispatch.idempotency_key
+        )
     )
 
 
@@ -52,6 +57,8 @@ def is_commercial_event_dispatch(item: object) -> bool:
             _COMMERCIAL_POST_KEY_FRAGMENT in item.dispatch.idempotency_key
             or _COMMERCIAL_POST_V5_KEY_FRAGMENT in item.dispatch.idempotency_key
             or _COMMERCIAL_WARMUP_KEY_FRAGMENT in item.dispatch.idempotency_key
+            or _COMMERCIAL_WARMUP_MEDIA_KEY_FRAGMENT in item.dispatch.idempotency_key
+            or _COMMERCIAL_POST_MEDIA_KEY_FRAGMENT in item.dispatch.idempotency_key
         )
     )
 
@@ -282,12 +289,59 @@ def mark_event_commercial_non_replay_boundary(
     raise DispatchLeaseLost("commercial event lease was lost before provider boundary")
 
 
+def _warmup_media_claim_is_current(
+    conn: Any,
+    item: ClaimedProviderDispatch,
+) -> bool:
+    try:
+        row = conn.execute(
+            """
+            SELECT 1
+            FROM provider_dispatch_outbox d
+            JOIN clientplatform_event_registrations r
+              ON r.id=d.source_id AND r.business_id=d.business_id
+            JOIN clientplatform_event_content_messages m
+              ON m.business_id=r.business_id
+             AND m.event_id=r.event_id AND m.stage='warmup'
+            JOIN clientplatform_event_content_assets a
+              ON a.business_id=m.business_id AND a.event_id=m.event_id
+             AND a.stage=m.stage AND a.slot_key=m.slot_key
+            JOIN clientplatform_event_content_preferences p
+              ON p.business_id=a.business_id AND p.event_id=a.event_id AND p.stage=a.stage
+            WHERE d.id=? AND d.business_id=? AND d.source_kind='event_message'
+              AND d.status='sending' AND d.lock_token=?
+              AND d.payload_kind=a.kind AND d.payload_ref=a.media_reference
+              AND (
+                   (p.mode='text_with_video' AND a.kind='video')
+                OR (p.mode IN ('text_with_image','text_in_image') AND a.kind='image')
+              )
+              AND d.idempotency_key=(
+                  'event:' || m.event_id || ':registration:' || r.id ||
+                  ':message:warmup-media:v1:slot:' || REPLACE(m.slot_key, ':', '-') ||
+                  ':message-revision:' || CAST(m.revision AS TEXT) ||
+                  ':asset-revision:' || CAST(a.revision AS TEXT)
+              )
+            LIMIT 1
+            """,
+            (
+                item.dispatch.id,
+                item.dispatch.business_id,
+                item.dispatch.lock_token,
+            ),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return False
+    return row is not None
+
+
 def _warmup_claim_is_current(
     conn: Any,
     item: ClaimedProviderDispatch,
 ) -> bool:
     if not is_event_warmup_dispatch(item):
         return True
+    if _COMMERCIAL_WARMUP_MEDIA_KEY_FRAGMENT in item.dispatch.idempotency_key:
+        return _warmup_media_claim_is_current(conn, item)
     try:
         row = conn.execute(
             """
@@ -319,6 +373,80 @@ def _warmup_claim_is_current(
     return row is not None
 
 
+def _followup_media_claim_is_current(
+    conn: Any,
+    item: ClaimedProviderDispatch,
+) -> bool:
+    key = str(item.dispatch.idempotency_key)
+    stage_match = re.search(r":message:post-media:v1:stage:(\d+)", key)
+    if stage_match is None:
+        return False
+    stage = int(stage_match.group(1))
+    row = conn.execute(
+        """
+        SELECT r.event_id,r.first_join_click_at,r.attendance_confirmed_at,r.offer_clicked_at
+        FROM provider_dispatch_outbox d
+        JOIN clientplatform_event_registrations r
+          ON r.id=d.source_id AND r.business_id=d.business_id
+        WHERE d.id=? AND d.business_id=? AND d.source_kind='event_message'
+          AND d.status='sending' AND d.lock_token=?
+        LIMIT 1
+        """,
+        (item.dispatch.id, item.dispatch.business_id, item.dispatch.lock_token),
+    ).fetchone()
+    if row is None:
+        return False
+    event_id = str(_value(row, "event_id", 0))
+    segment = classify_event_followup_segment(
+        first_join_click_at=_value(row, "first_join_click_at", 1),
+        attendance_confirmed_at=_value(row, "attendance_confirmed_at", 2),
+        offer_clicked_at=_value(row, "offer_clicked_at", 3),
+    )
+    slot_key = f"{segment}:{stage}"
+    content = conn.execute(
+        """
+        SELECT revision FROM clientplatform_event_content_messages
+        WHERE business_id=? AND event_id=? AND stage='post_event_followup'
+          AND slot_key=? LIMIT 1
+        """,
+        (item.dispatch.business_id, event_id, slot_key),
+    ).fetchone()
+    message_revision = 0 if content is None else int(_value(content, "revision", 0))
+    asset = conn.execute(
+        """
+        SELECT a.kind,a.media_reference,a.revision,p.mode
+        FROM clientplatform_event_content_assets a
+        JOIN clientplatform_event_content_preferences p
+          ON p.business_id=a.business_id AND p.event_id=a.event_id AND p.stage=a.stage
+        WHERE a.business_id=? AND a.event_id=?
+          AND a.stage='post_event_followup' AND a.slot_key=?
+        LIMIT 1
+        """,
+        (item.dispatch.business_id, event_id, slot_key),
+    ).fetchone()
+    if asset is None:
+        return False
+    kind = str(_value(asset, "kind", 0))
+    reference = str(_value(asset, "media_reference", 1))
+    asset_revision = int(_value(asset, "revision", 2))
+    mode = str(_value(asset, "mode", 3))
+    if not (
+        (mode == "text_with_video" and kind == "video")
+        or (mode in {"text_with_image", "text_in_image"} and kind == "image")
+    ):
+        return False
+    expected = (
+        f"event:{event_id}:registration:{item.dispatch.source_id}:"
+        f"message:post-media:v1:stage:{stage}:slot:{slot_key.replace(':', '-')}:"
+        f"message-revision:{message_revision}:asset-revision:{asset_revision}"
+    )
+    return (
+        key == expected
+        and item.dispatch.payload_kind.value == kind
+        and item.dispatch.payload_ref == reference
+    )
+
+
 def _followup_claim_is_current(
     conn: Any,
     item: ClaimedProviderDispatch,
@@ -326,6 +454,8 @@ def _followup_claim_is_current(
     if is_event_warmup_dispatch(item):
         return True
     key = str(item.dispatch.idempotency_key)
+    if _COMMERCIAL_POST_MEDIA_KEY_FRAGMENT in key:
+        return _followup_media_claim_is_current(conn, item)
     if (
         _COMMERCIAL_POST_KEY_FRAGMENT not in key
         and _COMMERCIAL_POST_V5_KEY_FRAGMENT not in key
