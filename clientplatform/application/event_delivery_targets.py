@@ -60,15 +60,18 @@ def resolve_event_registration_messenger_target(
 ) -> EventDeliveryTarget | None:
     if platform not in {"telegram", "vk", "max"}:
         raise ValueError("unsupported event messenger platform")
-    row = conn.execute(
-        """
-        SELECT external_subject,connection_id
-        FROM clientplatform_event_registration_channels
-        WHERE business_id=? AND event_id=? AND registration_id=? AND platform=?
-        LIMIT 1
-        """,
-        (business_id, event_id, registration_id, platform),
-    ).fetchone()
+    try:
+        row = conn.execute(
+            """
+            SELECT external_subject,connection_id
+            FROM clientplatform_event_registration_channels
+            WHERE business_id=? AND event_id=? AND registration_id=? AND platform=?
+            LIMIT 1
+            """,
+            (business_id, event_id, registration_id, platform),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return None
     if row is None:
         return None
     external_subject = str(
