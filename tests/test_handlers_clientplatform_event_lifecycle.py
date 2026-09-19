@@ -50,16 +50,61 @@ class EventLifecycleHandlerTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("Как называется", reply.answer.await_args.args[0])
 
-    async def test_arbitrary_session_count_advances_to_explicit_timezone(self) -> None:
+    async def test_arbitrary_session_count_asks_about_day_topics_before_timezone(self) -> None:
         message = _message("5 дней")
         state = AsyncMock()
         state.get_data.return_value = {"event_business_id": BUSINESS_ID}
-        with patch.object(lifecycle, "_cancel_keyboard", return_value="cancel"):
+        with (
+            patch.object(lifecycle, "_cancel_keyboard", return_value="cancel"),
+            patch.object(lifecycle, "_topics_keyboard", return_value="topics"),
+        ):
             await lifecycle.receive_days(message, state)
         state.update_data.assert_awaited_once_with(
             event_days=5,
             event_sessions=[],
             event_session_index=1,
+            event_topics=[],
+        )
+        state.set_state.assert_awaited_once_with(
+            lifecycle.ClientPlatformEventLifecycleState.waiting_topics_choice
+        )
+        self.assertIn("своё название темы", message.answer.await_args.args[0])
+
+    async def test_common_topic_choice_advances_to_timezone(self) -> None:
+        message = _message("")
+        callback = SimpleNamespace(
+            data="cpev:topics:no",
+            from_user=SimpleNamespace(id=101),
+            answer=AsyncMock(),
+            message=message,
+        )
+        state = AsyncMock()
+        state.get_data.return_value = {
+            "event_business_id": BUSINESS_ID,
+            "event_days": 3,
+        }
+        with (
+            patch.object(lifecycle.control, "_callback_message", return_value=message),
+            patch.object(lifecycle, "_timezone_keyboard", return_value="timezone"),
+        ):
+            await lifecycle.choose_common_event_topic(callback, state)
+        state.update_data.assert_awaited_once_with(event_topics=[])
+        state.set_state.assert_awaited_once_with(
+            lifecycle.ClientPlatformEventLifecycleState.waiting_timezone
+        )
+        self.assertIn("По какому времени", message.answer.await_args.args[0])
+
+    async def test_named_topics_require_one_title_per_day(self) -> None:
+        message = _message("Первая тема\nВторая тема\nТретья тема")
+        state = AsyncMock()
+        state.get_data.return_value = {
+            "event_business_id": BUSINESS_ID,
+            "event_days": 3,
+        }
+        with patch.object(lifecycle, "_timezone_keyboard", return_value="timezone"):
+            await lifecycle.receive_event_topics(message, state)
+        state.update_data.assert_awaited_once_with(
+            event_topics=["Первая тема", "Вторая тема", "Третья тема"]
         )
         state.set_state.assert_awaited_once_with(
             lifecycle.ClientPlatformEventLifecycleState.waiting_timezone
@@ -128,6 +173,47 @@ class EventLifecycleHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(request.sessions[2].join_url, "https://room-3.example.test/live")
         self.assertEqual(request.sessions[0].ends_at.hour, 18)
         warmup.assert_awaited_once()
+
+    async def test_day_topics_are_persisted_in_canonical_event_description(self) -> None:
+        message = _message("")
+        state = AsyncMock()
+        state.get_data.return_value = {
+            "event_business_id": BUSINESS_ID,
+            "event_title": "Большой вебинар",
+            "event_timezone": "Europe/Moscow",
+            "event_days": 1,
+            "event_topics": ["Практика первого дня"],
+            "event_sessions": [
+                {
+                    "position": 1,
+                    "starts_at": "2026-10-20T16:00:00+00:00",
+                    "ends_at": "2026-10-20T18:00:00+00:00",
+                    "local_label": "20.10.2026 19:00–21:00",
+                    "join_url": "https://room.example.test/live",
+                }
+            ],
+        }
+        actor = object()
+        created = SimpleNamespace(
+            event_id="event-1",
+            provider_key="external",
+            join_ready=True,
+            registration_url=lambda base: f"{base}/e/event-1",
+        )
+        with (
+            patch.object(lifecycle.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(lifecycle, "create_and_publish_online_event", return_value=created) as create,
+            patch.object(lifecycle, "_public_base_url", return_value="https://clientplatform.example.test"),
+            patch.object(lifecycle, "_begin_warmup_choice", new=AsyncMock()),
+        ):
+            await lifecycle._create_configured_event(message, state)
+
+        request = create.call_args.kwargs["request"]
+        self.assertEqual(
+            request.description,
+            "Программа по дням:\nДень 1: Практика первого дня",
+        )
+
 
     def test_lifecycle_router_is_composed_before_legacy_events_router(self) -> None:
         source = open("handlers/__init__.py", encoding="utf-8").read()
