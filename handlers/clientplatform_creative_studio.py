@@ -51,6 +51,10 @@ from clientplatform.domain.event_content import EventContentStage
 from clientplatform.domain.programs import ContentKind
 from clientplatform.domain.tenancy import TenantPermissionDenied
 from clientplatform.presentation import owner_navigation as nav
+from clientplatform.presentation.visual_generation import (
+    visual_failure_message,
+    visual_provider_unavailable_message,
+)
 
 from . import clientplatform_control as control
 
@@ -315,12 +319,7 @@ async def receive_creative_prompt(message: Message, state: FSMContext) -> None:
             country_code=country_code,
         )
         if not ready:
-            noun = "видео" if kind == "video" else "картинок"
-            await message.answer(
-                f"Сейчас для создания {noun} не подключён рабочий генератор. "
-                "Платный запрос не запускался. Проверьте подключение AI-провайдера "
-                "в инфраструктуре ClientPlatform."
-            )
+            await message.answer(visual_provider_unavailable_message(kind))
             return
         brand = await asyncio.to_thread(load_goal_visual_brand, actor=actor)
         brand_context = brand.prompt_context()
@@ -578,39 +577,6 @@ def _delivery_recovery_rows(
     return control._keyboard(rows)
 
 
-def _visual_failure_text(job) -> str:
-    code = str(getattr(job, "error_code", "") or "").strip().lower()
-    if code in {"no_visual_provider_available", "visual_creative_disabled"}:
-        return (
-            "Для этого типа визуала сейчас нет подключённого рабочего генератора. "
-            "Новый платный запрос не запускался."
-        )
-    if code in {
-        "visual_provider_submit_http_401",
-        "visual_provider_submit_http_403",
-    }:
-        return (
-            "Провайдер генерации отклонил авторизацию. Нужно восстановить его ключ "
-            "или доступ; повторять платный запрос вслепую ClientPlatform не будет."
-        )
-    if code in {"visual_gateway_quota_rejected"}:
-        return (
-            "Шлюз генерации остановил запрос по лимиту. Платная генерация повторно "
-            "автоматически не запускается."
-        )
-    if "timeout" in code or code.endswith("_transport"):
-        return (
-            "Генератор не подтвердил результат из-за сетевой ошибки. ClientPlatform "
-            "не запускает второй платный запрос автоматически, чтобы не получить дубль."
-        )
-    if code:
-        return (
-            "Генератор вернул безопасный код ошибки. Новый запрос можно создать после "
-            "устранения причины; повторного платного запуска автоматически нет."
-        )
-    return "Генерация завершилась ошибкой. Можно создать новый запрос."
-
-
 async def _continue_generation(
     callback: CallbackQuery,
     *,
@@ -647,7 +613,7 @@ async def _continue_generation(
         return
     if current.status == CreativeGenerationReceiptStatus.FAILED:
         await control._callback_message(callback).answer(
-            _visual_failure_text(job),
+            visual_failure_message(job),
             reply_markup=_result_rows(token),
         )
         return
