@@ -30,6 +30,10 @@ class CustomerTimelineEntry:
     detail: str | None = None
     amount_minor: int | None = None
     currency: str | None = None
+    evidence_source: str | None = None
+    evidence_quality: str | None = None
+    observed_at: datetime | None = None
+    limitations: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         for field_name in ("kind", "source_type", "source_id", "title"):
@@ -51,6 +55,19 @@ class CustomerTimelineEntry:
             object.__setattr__(self, "currency", currency)
         elif self.currency is not None:
             raise ValueError("currency without amount_minor is not allowed")
+        for field_name in ("evidence_source", "evidence_quality"):
+            value = getattr(self, field_name)
+            if value is not None:
+                normalized = " ".join(str(value).split()).strip()
+                object.__setattr__(self, field_name, normalized or None)
+        if self.observed_at is not None and self.observed_at.tzinfo is None:
+            raise ValueError("observed_at must be timezone-aware")
+        limitations = tuple(
+            text
+            for item in tuple(self.limitations or ())
+            if (text := _bounded_text(item, limit=200))
+        )
+        object.__setattr__(self, "limitations", limitations[:8])
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,6 +110,13 @@ _SOURCE_LABELS = {
     "partner": "Партнёр",
     "manual_import": "Добавлен вручную",
     "unknown": "Источник не определён",
+}
+
+_EXTERNAL_OBSERVATION_SCHEMA = "2026-09-20.v1"
+_EXTERNAL_OBSERVATION_QUALITY_LABELS = {
+    "source_asserted": "сообщено источником",
+    "source_verified": "проверено источником",
+    "derived": "вывод источника",
 }
 
 _VISIBLE_SALES_EVENTS = frozenset(
@@ -140,6 +164,59 @@ def _bounded_text(value: object, *, limit: int = 240) -> str | None:
     if not text:
         return None
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def _external_observation_entry(row: Any) -> CustomerTimelineEntry | None:
+    metadata = _payload(_value(row, "metadata_json", 4))
+    if metadata.get("external_observation_schema") != _EXTERNAL_OBSERVATION_SCHEMA:
+        return None
+    kind = str(metadata.get("external_observation_kind") or "").strip()
+    label = _bounded_text(metadata.get("external_observation_label"), limit=160)
+    provenance_ref = _bounded_text(
+        metadata.get("external_observation_provenance_ref"),
+        limit=300,
+    )
+    quality = str(metadata.get("external_observation_quality") or "").strip()
+    quality_label = _EXTERNAL_OBSERVATION_QUALITY_LABELS.get(quality)
+    if not kind or label is None or provenance_ref is None or quality_label is None:
+        return None
+    observed_at = _parse_timestamp(
+        metadata.get("external_observation_observed_at"),
+        field="external observation observed_at",
+    )
+    raw_limitations = metadata.get("external_observation_limitations") or []
+    if not isinstance(raw_limitations, list):
+        return None
+    limitations = tuple(
+        text
+        for item in raw_limitations[:8]
+        if isinstance(item, str) and (text := _bounded_text(item, limit=200))
+    )
+    connector_name = _bounded_text(_value(row, "connector_name", 5), limit=160)
+    if connector_name is None:
+        return None
+    detail_parts = [
+        f"Источник: {connector_name}",
+        quality_label,
+        f"наблюдалось {observed_at.strftime('%d.%m.%Y %H:%M UTC')}",
+    ]
+    if limitations:
+        detail_parts.append("ограничения: " + "; ".join(limitations[:2]))
+    return CustomerTimelineEntry(
+        kind=f"external_observation:{kind}",
+        occurred_at=_parse_timestamp(
+            _value(row, "occurred_at", 2),
+            field="external observation occurred_at",
+        ),
+        source_type="external_product_receipt",
+        source_id=str(_value(row, "id", 0)),
+        title=label,
+        detail=" · ".join(detail_parts),
+        evidence_source=connector_name,
+        evidence_quality=quality_label,
+        observed_at=observed_at,
+        limitations=limitations,
+    )
 
 
 def _sales_event_entry(row: Any) -> CustomerTimelineEntry | None:
@@ -309,6 +386,24 @@ def get_customer_timeline(
                         detail=_SOURCE_LABELS.get(trace.touch.source.value, trace.touch.source.value),
                     )
                 )
+
+        observation_rows = conn.execute(
+            """
+            SELECT r.id,r.external_event_id,r.occurred_at,r.received_at,
+                   r.metadata_json,c.display_name AS connector_name
+            FROM external_product_event_receipts r
+            JOIN external_product_connectors c
+              ON c.id=r.connector_id AND c.business_id=r.business_id
+            WHERE r.business_id=? AND r.customer_id=?
+              AND r.event_type='evidence' AND r.status='accepted'
+            ORDER BY r.occurred_at,r.external_event_id
+            """,
+            (current.business_id, customer.id),
+        ).fetchall()
+        for row in observation_rows:
+            entry = _external_observation_entry(row)
+            if entry is not None:
+                entries.append(entry)
 
         lead_rows = conn.execute(
             """
