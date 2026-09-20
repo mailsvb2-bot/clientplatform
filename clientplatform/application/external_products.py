@@ -9,6 +9,9 @@ from typing import Any
 
 from clientplatform.domain.attribution import AcquisitionSource
 from clientplatform.domain.external_products import (
+    ExternalObservationFeedback,
+    ExternalObservationFeedbackRecord,
+    ExternalObservationValueSnapshot,
     ExternalProductAcquisition,
     ExternalProductConnector,
     ExternalProductEvent,
@@ -30,7 +33,7 @@ from clientplatform.runtime.secrets import (
     EnvironmentCredentialProvider,
     SecretReferenceError,
 )
-from services.db import get_db
+from services.db import get_db, get_db_ro
 
 
 _SIGNATURE_RE = re.compile(r"sha256=([0-9a-fA-F]{64})")
@@ -116,6 +119,36 @@ def bind_external_product_customer(
             connector_id=connector_id,
             customer_id=customer_id,
             customer_ref=customer_ref,
+        )
+
+
+def record_external_observation_feedback(
+    *,
+    actor: TenantContext,
+    customer_id: str,
+    receipt_id: str,
+    feedback: ExternalObservationFeedback | str,
+) -> ExternalObservationFeedbackRecord:
+    with get_db() as conn:
+        return ExternalProductRepository(conn).record_observation_feedback(
+            actor=actor,
+            customer_id=customer_id,
+            receipt_id=receipt_id,
+            feedback=feedback,
+        )
+
+
+def get_external_observation_value_snapshot(
+    *,
+    actor: TenantContext,
+    connector_id: str | None = None,
+    now: datetime | None = None,
+) -> ExternalObservationValueSnapshot:
+    with get_db_ro() as conn:
+        return ExternalProductRepository(conn).observation_value_snapshot(
+            actor=actor,
+            connector_id=connector_id,
+            now=now,
         )
 
 
@@ -403,12 +436,14 @@ def _parse_acquisition(value: Any) -> ExternalProductAcquisition | None:
 
 __all__ = [
     "authenticate_external_product_webhook",
+    "get_external_observation_value_snapshot",
     "bind_external_product_customer",
     "disable_external_product_connector",
     "ingest_authenticated_external_product_event",
     "ingest_external_product_webhook",
     "parse_external_product_event",
     "provision_external_product_connector",
+    "record_external_observation_feedback",
     "verify_and_activate_external_product_connector",
     "verify_external_product_signature",
 ]
