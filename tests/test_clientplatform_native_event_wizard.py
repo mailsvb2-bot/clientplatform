@@ -109,12 +109,28 @@ class NativeEventWizardTests(unittest.TestCase):
                 surface=self.surface,
             )
             self.assertIn("Сколько дней", count.text)
-            wizard.handle_native_event_wizard_action(
+            topic_choice = wizard.handle_native_event_wizard_action(
                 self.actor,
                 args=("count", "3"),
                 platform=self.platform,
                 surface=self.surface,
             )
+            self.assertIn("своё название темы", topic_choice.text)
+            topic_prompt = wizard.handle_native_event_wizard_action(
+                self.actor,
+                args=("topics", "yes"),
+                platform=self.platform,
+                surface=self.surface,
+            )
+            self.assertIn("3 названий тем", topic_prompt.text)
+            timezone = wizard.handle_native_event_wizard_text(
+                self.actor,
+                action="event-wizard-topics-text",
+                args=("Диагностика\nПрактика\nПлан действий",),
+                platform=self.platform,
+                surface=self.surface,
+            )
+            self.assertIn("По какому времени", timezone.text)
             wizard.handle_native_event_wizard_action(
                 self.actor,
                 args=("timezone", "moscow"),
@@ -166,6 +182,14 @@ class NativeEventWizardTests(unittest.TestCase):
             self.assertEqual(self.store["step"], "warmup_days")
             self.assertEqual(self.store["published"], "1")
             create.assert_called_once()
+            request = create.call_args.kwargs["request"]
+            self.assertEqual(
+                request.description,
+                "Программа по дням:\n"
+                "День 1: Диагностика\n"
+                "День 2: Практика\n"
+                "День 3: План действий",
+            )
             self.assertEqual(append.call_count, 2)
             publish.assert_called_once_with(actor=self.actor, event_id=EVENT_ID)
 
@@ -176,7 +200,7 @@ class NativeEventWizardTests(unittest.TestCase):
                 platform=self.platform,
                 surface=self.surface,
             )
-            self.assertIn("Как оформить прогрев", mode.text)
+            self.assertIn("Как оформить сообщения до вебинара", mode.text)
             wizard.handle_native_event_wizard_action(
                 self.actor,
                 args=("mode", EventContentStage.WARMUP.value, EventContentMode.TEXT_WITH_IMAGE.value),
