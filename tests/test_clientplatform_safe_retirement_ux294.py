@@ -207,12 +207,13 @@ class ClientPlatformSafeRetirementUX294Tests(unittest.TestCase):
 
     def test_archived_offering_closes_open_booking_surface_and_stale_claim(self) -> None:
         customer = create_customer(actor=self.owner_a, display_name="Клиент")
+        future_start = (
+            datetime.now(ZoneInfo("Europe/Moscow")) + timedelta(days=2)
+        ).replace(hour=12, minute=0, second=0, microsecond=0)
         slot = create_booking_slot(
             actor=self.owner_a,
             offering_id=self.offering.id,
-            local_start=(
-                datetime.now(ZoneInfo("Europe/Moscow")) + timedelta(days=2)
-            ).replace(hour=12, minute=0, second=0, microsecond=0).strftime("%d.%m.%Y %H:%M"),
+            local_start=future_start.strftime("%d.%m.%Y %H:%M"),
             duration_minutes=60,
         )
         self.assertIn(slot.slot.id, {item.slot.id for item in list_booking_slots(actor=self.owner_a)})
