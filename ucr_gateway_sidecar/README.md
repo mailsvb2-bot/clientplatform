@@ -4,7 +4,7 @@ This component is the executable transport adapter for the optional ClientPlatfo
 
 It is **not** a second communication runtime, CRM, identity model or authorization owner. It accepts the bounded ClientPlatform HTTP envelope documented in `docs/UCR_GATEWAY.md`, validates it, then forwards the exact request JSON through the public pinned UCR protobuf/gRPC services.
 
-Pinned UCR revision: `8097b41e69634c944c225f7071e80b991d4ddc02`.
+Pinned UCR revision: `22d598e057769d59fe0aa47e169cf2eb904abb18`.
 
 ## Build contract
 
@@ -20,11 +20,11 @@ Runtime dependencies are isolated under this component. The ordinary ClientPlatf
 Both endpoints require:
 
 - `Authorization: Bearer <CLIENTPLATFORM_SECRET_UCR_GATEWAY_TOKEN>`
-- `X-ClientPlatform-UCR-Revision: 8097b41e69634c944c225f7071e80b991d4ddc02`
+- `X-ClientPlatform-UCR-Revision: 22d598e057769d59fe0aa47e169cf2eb904abb18`
 
 Mutating methods additionally require the validated `Idempotency-Key` already required by the ClientPlatform caller boundary. The sidecar does not invent semantic state from that key: canonical UCR IDs and UCR's durable owners remain authoritative for duplicate/conflict behavior.
 
-Only the public `ucr.v1.IntegrationService` and `ucr.v1.CallService` method whitelist from `docs/UCR_GATEWAY.md` is callable. Unknown services and methods are rejected before gRPC I/O.
+Only the reviewed public method whitelist from `ucr.v1.IntegrationService`, `ucr.v1.CallService` and the read-only `ucr.v1.UniversalConferenceService` attendance/capability surface in `docs/UCR_GATEWAY.md` is callable. Unknown services and methods are rejected before gRPC I/O.
 
 ## UCR Service Principal
 

@@ -17,9 +17,10 @@ from clientplatform.runtime.secrets import (
 )
 
 
-UCR_PINNED_REVISION = "8097b41e69634c944c225f7071e80b991d4ddc02"
+UCR_PINNED_REVISION = "22d598e057769d59fe0aa47e169cf2eb904abb18"
 UCR_INTEGRATION_SERVICE = "ucr.v1.IntegrationService"
 UCR_CALL_SERVICE = "ucr.v1.CallService"
+UCR_UNIVERSAL_CONFERENCE_SERVICE = "ucr.v1.UniversalConferenceService"
 _DEFAULT_TOKEN_REFERENCE = "secret://env/CLIENTPLATFORM_SECRET_UCR_GATEWAY_TOKEN"
 _DEFAULT_TIMEOUT_SECONDS = 5.0
 _DEFAULT_MAX_RESPONSE_BYTES = 128 * 1024
@@ -49,6 +50,11 @@ class UcrCallMethod(str, Enum):
     START_CALL = "StartCall"
     GET_CALL = "GetCall"
     SIGNAL_CALL = "SignalCall"
+
+
+class UcrUniversalConferenceMethod(str, Enum):
+    GET_PARTICIPANT_ATTENDANCE = "GetParticipantAttendance"
+    GET_CAPABILITIES = "GetCapabilities"
 
 
 _INTEGRATION_MUTATIONS = frozenset(
@@ -229,6 +235,21 @@ class UcrGatewayClient:
             request=request,
             mutating=normalized_method in _CALL_MUTATIONS,
             idempotency_key=idempotency_key,
+        )
+
+    async def invoke_universal_conference(
+        self,
+        *,
+        method: UcrUniversalConferenceMethod,
+        request: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        normalized_method = _require_enum(method, UcrUniversalConferenceMethod)
+        return await self._invoke_rpc(
+            service=UCR_UNIVERSAL_CONFERENCE_SERVICE,
+            method=normalized_method.value,
+            request=request,
+            mutating=False,
+            idempotency_key=None,
         )
 
     async def _invoke_rpc(
@@ -469,6 +490,7 @@ __all__ = [
     "UCR_CALL_SERVICE",
     "UCR_INTEGRATION_SERVICE",
     "UCR_PINNED_REVISION",
+    "UCR_UNIVERSAL_CONFERENCE_SERVICE",
     "UcrCallMethod",
     "UcrGatewayClient",
     "UcrGatewayConfig",
@@ -478,5 +500,6 @@ __all__ = [
     "UcrGatewayRejected",
     "UcrGatewayUnavailable",
     "UcrIntegrationMethod",
+    "UcrUniversalConferenceMethod",
     "ucr_gateway_config",
 ]

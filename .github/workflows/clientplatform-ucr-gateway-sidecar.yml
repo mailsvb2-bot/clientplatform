@@ -32,4 +32,4 @@ jobs:
       - name: Verify generated pinned UCR bindings
         run: |
           docker run --rm --entrypoint python clientplatform-ucr-gateway-sidecar -c \
-            "from ucr.v1 import call_pb2, call_pb2_grpc, integration_pb2, integration_pb2_grpc; from ucr_gateway_sidecar.server import UCR_PINNED_REVISION; assert UCR_PINNED_REVISION == '8097b41e69634c944c225f7071e80b991d4ddc02'"
+            "from ucr.v1 import call_pb2, call_pb2_grpc, integration_pb2, integration_pb2_grpc, universal_conference_pb2, universal_conference_pb2_grpc; from ucr_gateway_sidecar.server import UCR_PINNED_REVISION; assert UCR_PINNED_REVISION == '22d598e057769d59fe0aa47e169cf2eb904abb18'; assert hasattr(universal_conference_pb2, 'UniversalGetParticipantAttendanceRequest'); assert hasattr(universal_conference_pb2_grpc, 'UniversalConferenceServiceStub')"
