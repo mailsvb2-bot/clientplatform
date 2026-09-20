@@ -15,6 +15,7 @@ if _AIOHTTP_AVAILABLE:
         build_cockpit_action_start_payload,
     )
     from clientplatform.domain.customers import CustomerNotFound
+    from clientplatform.domain.external_products import ExternalProductNotFound
     from clientplatform.domain.tenancy import TenantAccessDenied, TenantPermissionDenied
     from clientplatform.runtime import cockpit_http
     from clientplatform.runtime.telegram_webapp_auth import TelegramWebAppPrincipal
@@ -220,6 +221,119 @@ class CockpitCustomersHttpM7003Tests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(status, 404)
         self.assertEqual(payload, {"ok": False, "error": "customer_not_found"})
+
+    async def test_observation_feedback_reauthenticates_and_saves_current_head(self) -> None:
+        principal = TelegramWebAppPrincipal(user_id=101, auth_date=1, query_id=None)
+        calls: list[dict[str, object]] = []
+
+        def record(**kwargs: object):
+            calls.append(dict(kwargs))
+            return "useful"
+
+        with (
+            patch.object(cockpit_http.settings, "BOT_TOKEN", _TOKEN),
+            patch.object(
+                cockpit_http,
+                "verify_telegram_webapp_init_data",
+                return_value=principal,
+            ),
+            patch.object(
+                cockpit_http,
+                "record_cockpit_observation_feedback",
+                side_effect=record,
+            ),
+        ):
+            status, payload, headers = await self._post(
+                "/clientplatform/cockpit/customers/observation-feedback",
+                {
+                    "init_data": "verified",
+                    "business_id": _BUSINESS,
+                    "customer_id": _CUSTOMER,
+                    "receipt_id": "66666666-6666-4666-8666-666666666666",
+                    "feedback": "useful",
+                },
+            )
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["feedback"], "useful")
+        self.assertEqual(headers["Cache-Control"], "no-store, max-age=0")
+        self.assertEqual(calls[0]["telegram_user_id"], 101)
+        self.assertEqual(calls[0]["requested_business_id"], _BUSINESS)
+        self.assertEqual(calls[0]["customer_id"], _CUSTOMER)
+        self.assertEqual(calls[0]["feedback"], "useful")
+
+    async def test_observation_feedback_fails_closed_for_stale_or_forbidden_feedback(self) -> None:
+        principal = TelegramWebAppPrincipal(user_id=101, auth_date=1, query_id=None)
+        cases = (
+            (
+                ExternalProductNotFound("head changed"),
+                "useful",
+                409,
+                "observation_changed",
+            ),
+            (
+                TenantPermissionDenied("role denied"),
+                "incorrect",
+                403,
+                "observation_feedback_denied",
+            ),
+        )
+        for error, feedback, expected_status, expected_code in cases:
+            with self.subTest(expected_code=expected_code):
+                with (
+                    patch.object(cockpit_http.settings, "BOT_TOKEN", _TOKEN),
+                    patch.object(
+                        cockpit_http,
+                        "verify_telegram_webapp_init_data",
+                        return_value=principal,
+                    ),
+                    patch.object(
+                        cockpit_http,
+                        "record_cockpit_observation_feedback",
+                        side_effect=error,
+                    ),
+                ):
+                    status, payload, _headers = await self._post(
+                        "/clientplatform/cockpit/customers/observation-feedback",
+                        {
+                            "init_data": "verified",
+                            "business_id": _BUSINESS,
+                            "customer_id": _CUSTOMER,
+                            "receipt_id": "66666666-6666-4666-8666-666666666666",
+                            "feedback": feedback,
+                        },
+                    )
+                self.assertEqual(status, expected_status)
+                self.assertEqual(payload["error"], expected_code)
+
+    async def test_observation_feedback_rejects_unknown_value_before_mutation(self) -> None:
+        principal = TelegramWebAppPrincipal(user_id=101, auth_date=1, query_id=None)
+        recorder = AsyncMock()
+        with (
+            patch.object(cockpit_http.settings, "BOT_TOKEN", _TOKEN),
+            patch.object(
+                cockpit_http,
+                "verify_telegram_webapp_init_data",
+                return_value=principal,
+            ),
+            patch.object(
+                cockpit_http,
+                "record_cockpit_observation_feedback",
+                recorder,
+            ),
+        ):
+            status, payload, _headers = await self._post(
+                "/clientplatform/cockpit/customers/observation-feedback",
+                {
+                    "init_data": "verified",
+                    "business_id": _BUSINESS,
+                    "customer_id": _CUSTOMER,
+                    "receipt_id": "66666666-6666-4666-8666-666666666666",
+                    "feedback": "rebind_now",
+                },
+            )
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["error"], "invalid_observation_feedback")
+        recorder.assert_not_awaited()
 
     async def test_action_open_revalidates_and_delivers_through_canonical_bot_ui(self) -> None:
         principal = TelegramWebAppPrincipal(user_id=101, auth_date=1, query_id=None)
