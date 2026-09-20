@@ -826,7 +826,7 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertIn("cpev:wt:", warm[0][0][1])
         self.assertIn("Изменить дни", warm[1][0][0])
-        self.assertIn("Настроить прогрев", empty[0][0][0])
+        self.assertIn("Настроить сообщения до вебинара", empty[0][0][0])
         self.assertEqual(warm[-1][0][1], f"cpev:home:{TOKEN}")
 
     async def test_send_content_plan_renders_all_autosend_states(self) -> None:
@@ -1433,7 +1433,7 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
             await events.set_warmup_days(callback, state)
         save.assert_called_once_with(actor=actor, event_id=EVENT_ID, requested_days=3)
         state.clear.assert_awaited_once_with()
-        callback.answer.assert_awaited_once_with("Прогрев сохранён")
+        callback.answer.assert_awaited_once_with("Сообщения до вебинара сохранены")
         refresh.assert_awaited_once()
 
     async def test_custom_warmup_days_input_covers_cancel_invalid_and_success(self) -> None:
