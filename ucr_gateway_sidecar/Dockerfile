@@ -1,6 +1,6 @@
 FROM python:3.12-slim AS proto-builder
 
-ENV UCR_REVISION=8097b41e69634c944c225f7071e80b991d4ddc02
+ENV UCR_REVISION=22d598e057769d59fe0aa47e169cf2eb904abb18
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates git \
