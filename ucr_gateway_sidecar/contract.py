@@ -5,9 +5,10 @@ import math
 import re
 from typing import Any, Mapping
 
-UCR_PINNED_REVISION = "8097b41e69634c944c225f7071e80b991d4ddc02"
+UCR_PINNED_REVISION = "22d598e057769d59fe0aa47e169cf2eb904abb18"
 UCR_INTEGRATION_SERVICE = "ucr.v1.IntegrationService"
 UCR_CALL_SERVICE = "ucr.v1.CallService"
+UCR_UNIVERSAL_CONFERENCE_SERVICE = "ucr.v1.UniversalConferenceService"
 SERVICE_CREDENTIAL_ID_METADATA_KEY = "ucr-service-credential-id-bin"
 SERVICE_CREDENTIAL_SECRET_METADATA_KEY = "ucr-service-credential-secret-bin"
 
@@ -32,6 +33,10 @@ CALL_REQUEST_TYPES = {
     "StartCall": "CallStartRequest",
     "GetCall": "CallGetRequest",
     "SignalCall": "CallSignalRequest",
+}
+UNIVERSAL_CONFERENCE_REQUEST_TYPES = {
+    "GetParticipantAttendance": "UniversalGetParticipantAttendanceRequest",
+    "GetCapabilities": "UniversalGetCapabilitiesRequest",
 }
 MUTATING_METHODS = frozenset(
     {
@@ -104,6 +109,8 @@ def validate_envelope(
         allowed = INTEGRATION_REQUEST_TYPES
     elif service == UCR_CALL_SERVICE:
         allowed = CALL_REQUEST_TYPES
+    elif service == UCR_UNIVERSAL_CONFERENCE_SERVICE:
+        allowed = UNIVERSAL_CONFERENCE_REQUEST_TYPES
     else:
         raise ValueError("ucr_rpc_service_not_allowed")
     if method not in allowed:
