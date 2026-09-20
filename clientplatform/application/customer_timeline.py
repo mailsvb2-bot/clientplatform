@@ -201,13 +201,10 @@ def _external_observation_entry(row: Any) -> CustomerTimelineEntry | None:
         f"наблюдалось {observed_at.strftime('%d.%m.%Y %H:%M UTC')}",
     ]
     if limitations:
-        detail_parts.append("ограничения: " + "; ".join(limitations[:2]))
+        detail_parts.append("ограничения: " + "; ".join(limitations))
     return CustomerTimelineEntry(
         kind=f"external_observation:{kind}",
-        occurred_at=_parse_timestamp(
-            _value(row, "occurred_at", 2),
-            field="external observation occurred_at",
-        ),
+        occurred_at=observed_at,
         source_type="external_product_receipt",
         source_id=str(_value(row, "id", 0)),
         title=label,
