@@ -373,6 +373,7 @@ def test_native_webinar_wizard_buttons_escape_only_ordinary_stale_fsm() -> None:
 def test_owner_group_navigation_escapes_stale_ordinary_wizards() -> None:
     state_name = "ClientPlatformControlState:activity_description"
     for data in (
+        "cpo:start:business",
         "cpo:more:business",
         "cpo:clients:business",
         "cpo:content:business",
@@ -383,6 +384,35 @@ def test_owner_group_navigation_escapes_stale_ordinary_wizards() -> None:
         assert _is_repeatable_navigation(data)
         assert not _callback_conflicts_with_state(state_name, data)
         assert _callback_should_clear_state(state_name, data)
+
+
+def test_service_ad_selection_callbacks_are_guarded_and_step_local() -> None:
+    assert _is_repeatable_navigation("cpo:start:business")
+    for data in (
+        "cpo:offer:business:offering",
+        "cpo:newtime:business:offering",
+        "cpo:slot:business:slot",
+        "cpo:connection:0",
+        "cpo:region:47",
+    ):
+        assert not _is_repeatable_navigation(data), data
+
+    assert not _callback_conflicts_with_state(
+        "OneClickOwnerState:selecting_connection",
+        "cpo:connection:0",
+    )
+    assert _callback_conflicts_with_state(
+        "OneClickOwnerState:selecting_connection",
+        "cpo:region:47",
+    )
+    assert not _callback_conflicts_with_state(
+        "OneClickOwnerState:waiting_region",
+        "cpo:region:47",
+    )
+    assert _callback_conflicts_with_state(
+        "OneClickOwnerState:waiting_region",
+        "cpo:slot:business:slot",
+    )
 
 
 @pytest.mark.asyncio
