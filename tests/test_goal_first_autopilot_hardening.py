@@ -133,7 +133,9 @@ class GoalFirstAutopilotHardeningTests(unittest.IsolatedAsyncioTestCase):
             (goal.ask_custom_video, "cpo:custom-video:business-token"),
             (goal.clear_custom_media, "cpo:custom-clear:business-token"),
             (goal.ask_generated_image_confirmation, "cpo:genask:business-token"),
+            (goal.ask_generated_video_confirmation, "cpo:genvideoask:business-token"),
             (goal.generate_custom_image, "cpo:gen:business-token"),
+            (goal.generate_custom_video, "cpo:genvideo:business-token"),
             (goal.check_generated_image, "cpo:gencheck:business-token"),
             (goal.finish_customization, "cpo:custom-done:business-token"),
         )
@@ -347,11 +349,12 @@ class GoalFirstAutopilotHardeningTests(unittest.IsolatedAsyncioTestCase):
             state = FakeState(broken)
             await goal.generate_custom_image(cb, state)
         self.assertEqual(state.state, goal.GoalFirstAutopilotState.customizing)
-        self.assertIn("Не удалось создать картинку", out.answer.await_args.args[0])
+        self.assertIn("Не удалось проверить или запустить генератор", out.answer.await_args.args[0])
 
         out2 = target()
         cb2 = callback("cpo:gen:business-token", out2)
         with (
+            patch.object(goal, "visual_generation_ready", return_value=True),
             patch.object(
                 goal,
                 "create_ad_visual",
