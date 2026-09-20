@@ -351,6 +351,119 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any(value.startswith("cpo:newtime:") for value in callbacks))
         self.assertFalse(any("slot-other" in value for value in callbacks))
 
+    async def test_start_without_offerings_routes_to_service_setup(self) -> None:
+        out = outbound_message()
+        cb = callback("cpo:start:business-1", out)
+        patches = self.common_patches(out)
+        with (
+            patches[0], patches[1], patches[2], patches[3], patches[4],
+            patch.object(
+                one_click,
+                "_advertisable_offerings",
+                new=AsyncMock(return_value=[]),
+            ),
+        ):
+            await one_click.get_clients_one_click(cb, FakeState())
+
+        self.assertIn("Сначала добавьте услугу", out.answer.await_args.args[0])
+        labels = [
+            button.text
+            for row in out.answer.await_args.kwargs["reply_markup"].inline_keyboard
+            for button in row
+        ]
+        self.assertIn("🧰 Мои услуги", labels)
+
+    async def test_stale_selected_service_fails_closed(self) -> None:
+        out = outbound_message()
+        cb = callback("cpo:offer:business-1:offering-1", out)
+        patches = self.common_patches(out)
+        with (
+            patches[0], patches[1], patches[2], patches[3], patches[4],
+            patch.object(
+                one_click,
+                "_advertisable_offerings",
+                new=AsyncMock(return_value=[]),
+            ),
+            patch.object(one_click.control, "list_booking_slots", return_value=[]),
+        ):
+            await one_click.choose_one_click_offering(cb, FakeState())
+
+        cb.answer.assert_awaited_once_with("Эта услуга больше недоступна", show_alert=True)
+        out.answer.assert_not_awaited()
+
+    async def test_choose_new_ad_time_opens_calendar_for_selected_service(self) -> None:
+        out = outbound_message()
+        state = FakeState()
+        cb = callback("cpo:newtime:business-1:offering-1", out)
+        send_picker = AsyncMock()
+        patches = self.common_patches(out)
+        with (
+            patches[0], patches[1], patches[2], patches[3], patches[4],
+            patch.object(
+                one_click,
+                "_advertisable_offerings",
+                new=AsyncMock(return_value=[offering()]),
+            ),
+            patch.object(
+                one_click.control,
+                "get_business_profile",
+                return_value=SimpleNamespace(timezone="Europe/Moscow"),
+            ),
+            patch.object(
+                one_click.importlib,
+                "import_module",
+                return_value=SimpleNamespace(send_booking_date_picker=send_picker),
+            ),
+        ):
+            await one_click.choose_new_ad_time(cb, state)
+
+        self.assertEqual(state.data["business_id"], "business-1")
+        self.assertEqual(state.data["offering_id"], "offering-1")
+        send_picker.assert_awaited_once()
+        self.assertIn("новую дату", send_picker.await_args.kwargs["heading"])
+
+    async def test_stale_ad_slot_fails_closed(self) -> None:
+        out = outbound_message()
+        cb = callback("cpo:slot:business-1:slot-gone", out)
+        patches = self.common_patches(out)
+        with (
+            patches[0], patches[1], patches[2], patches[3], patches[4],
+            patch.object(
+                one_click,
+                "_reload_slot",
+                new=AsyncMock(return_value=None),
+            ),
+        ):
+            await one_click.choose_exact_ad_slot(cb, FakeState())
+
+        cb.answer.assert_awaited_once_with(
+            "Это время уже недоступно. Выберите другое.",
+            show_alert=True,
+        )
+
+    async def test_exact_ad_slot_enters_canonical_ad_flow(self) -> None:
+        out = outbound_message()
+        state = FakeState()
+        cb = callback("cpo:slot:business-1:slot-1", out)
+        selected = slot()
+        start_ad = AsyncMock()
+        patches = self.common_patches(out)
+        with (
+            patches[0], patches[1], patches[2], patches[3], patches[4],
+            patch.object(
+                one_click,
+                "_reload_slot",
+                new=AsyncMock(return_value=selected),
+            ),
+            patch.object(one_click, "_start_slot_ad", new=start_ad),
+        ):
+            await one_click.choose_exact_ad_slot(cb, state)
+
+        self.assertIn("Готовлю рекламу", cb.answer.await_args.args[0])
+        start_ad.assert_awaited_once()
+        self.assertIs(start_ad.await_args.kwargs["slot"], selected)
+
+
     async def test_existing_provider_campaign_is_not_a_selection_step(self) -> None:
         out = outbound_message()
         cb = callback("cpo:start:business-1", out)
