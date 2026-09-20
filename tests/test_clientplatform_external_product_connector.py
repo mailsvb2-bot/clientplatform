@@ -28,6 +28,7 @@ from clientplatform.domain.external_products import (
     ExternalProductInvariantViolation,
     ExternalProductNotFound,
     ExternalProductObservation,
+    ExternalProductReceipt,
     ExternalProductSignatureError,
     external_customer_fingerprint,
 )
@@ -130,6 +131,26 @@ class _HideFirstIdentityLookup:
                     return None
 
             return _EmptyCursor()
+        return self._conn.execute(sql, params)
+
+
+class _InterleaveOnObservationLock:
+    """Inject one deterministic state change immediately before the lock update."""
+
+    def __init__(self, conn: sqlite3.Connection, callback) -> None:
+        self._conn = conn
+        self._callback = callback
+        self._triggered = False
+
+    def execute(self, sql: str, params: tuple[object, ...] = ()):
+        normalized = " ".join(sql.split())
+        if (
+            not self._triggered
+            and normalized.startswith("UPDATE external_product_connectors SET updated_at=updated_at")
+            and "status='active'" in normalized
+        ):
+            self._triggered = True
+            self._callback()
         return self._conn.execute(sql, params)
 
 
@@ -399,6 +420,104 @@ class ClientPlatformExternalProductConnectorTests(unittest.TestCase):
             (self.fx.actor.business_id,),
         ).fetchone()[0]
         self.assertEqual(outcome_count, 0)
+
+    def test_observation_lock_rechecks_off_switch_before_accepting(self) -> None:
+        event = ExternalProductEvent(
+            external_event_id="off-switch-race",
+            event_type=ExternalProductEventType.EVIDENCE,
+            occurred_at=self.now,
+            customer_ref="off-switch-subject",
+            observation=ExternalProductObservation(
+                observation_key="webinar:off-switch:attendance",
+                kind="webinar.attended",
+                label="Участие подтверждено",
+                observed_at=self.now,
+                provenance_ref="off-switch-proof",
+            ),
+        )
+
+        def disable_before_lock() -> None:
+            self.fx.conn.execute(
+                """
+                UPDATE external_product_connectors
+                SET status='disabled',disabled_at=?,updated_at=?
+                WHERE id=? AND business_id=?
+                """,
+                (
+                    self.now.isoformat(),
+                    self.now.isoformat(),
+                    self.fx.connector.id,
+                    self.fx.actor.business_id,
+                ),
+            )
+
+        racing = ExternalProductRepository(
+            _InterleaveOnObservationLock(self.fx.conn, disable_before_lock)
+        )
+        with self.assertRaises(ExternalProductNotFound):
+            racing.ingest_event(
+                connector=self.fx.connector,
+                event=event,
+                payload_fingerprint="66" * 32,
+                received_at=self.now,
+            )
+        count = self.fx.conn.execute(
+            """
+            SELECT COUNT(*) FROM external_product_event_receipts
+            WHERE business_id=? AND external_event_id='off-switch-race'
+            """,
+            (self.fx.actor.business_id,),
+        ).fetchone()[0]
+        self.assertEqual(count, 0)
+
+    def test_observation_lock_rechecks_idempotency_after_concurrent_retry(self) -> None:
+        event = ExternalProductEvent(
+            external_event_id="concurrent-retry-r1",
+            event_type=ExternalProductEventType.EVIDENCE,
+            occurred_at=self.now,
+            customer_ref="concurrent-retry-subject",
+            observation=ExternalProductObservation(
+                observation_key="webinar:retry:attendance",
+                kind="webinar.attended",
+                label="Участие подтверждено",
+                observed_at=self.now,
+                provenance_ref="retry-proof",
+            ),
+        )
+        inserted: list[ExternalProductReceipt] = []
+
+        def insert_same_event_before_outer_lock() -> None:
+            inserted.append(
+                ExternalProductRepository(self.fx.conn).ingest_event(
+                    connector=self.fx.connector,
+                    event=event,
+                    payload_fingerprint="77" * 32,
+                    received_at=self.now,
+                )
+            )
+
+        racing = ExternalProductRepository(
+            _InterleaveOnObservationLock(
+                self.fx.conn,
+                insert_same_event_before_outer_lock,
+            )
+        )
+        result = racing.ingest_event(
+            connector=self.fx.connector,
+            event=event,
+            payload_fingerprint="77" * 32,
+            received_at=self.now + timedelta(seconds=1),
+        )
+        self.assertEqual(len(inserted), 1)
+        self.assertEqual(result.id, inserted[0].id)
+        count = self.fx.conn.execute(
+            """
+            SELECT COUNT(*) FROM external_product_event_receipts
+            WHERE business_id=? AND external_event_id='concurrent-retry-r1'
+            """,
+            (self.fx.actor.business_id,),
+        ).fetchone()[0]
+        self.assertEqual(count, 1)
 
     def test_observation_revision_retraction_restore_and_off_switch(self) -> None:
         customer = CustomerRepository(self.fx.conn).create_customer(
