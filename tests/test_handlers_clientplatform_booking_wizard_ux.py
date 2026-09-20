@@ -118,6 +118,30 @@ async def test_typed_replacement_date_keeps_replacement_context_and_calendar() -
 
 
 @pytest.mark.asyncio
+async def test_typed_booking_start_loads_timezone_when_picker_context_is_missing() -> None:
+    business_id = str(uuid4())
+    message = FakeMessage("10.08.2026 15:00")
+    state = FakeState(
+        {
+            "business_id": business_id,
+            "offering_id": str(uuid4()),
+        }
+    )
+    actor = object()
+    profile = SimpleNamespace(timezone="Europe/Moscow")
+
+    with (
+        patch.object(wizard.control, "_actor", new=AsyncMock(return_value=actor)),
+        patch.object(wizard, "get_business_profile", return_value=profile),
+        patch.object(wizard, "local_today", return_value=date(2026, 8, 1)),
+    ):
+        await wizard.receive_booking_start_with_quick_duration(message, state)
+
+    assert state.data["booking_picker_timezone"] == "Europe/Moscow"
+    assert "Дата и время выбираются кнопками" in message.answers[-1][0]
+
+
+@pytest.mark.asyncio
 async def test_typed_booking_start_without_business_fails_closed() -> None:
     message = FakeMessage("10.08.2026 15:00")
     state = FakeState({})
