@@ -9,7 +9,10 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 from clientplatform.domain.connections import normalize_credential_reference
 from clientplatform.domain.customers import CustomerIdentityConflict, CustomerPlatform
 from clientplatform.domain.external_products import (
+    ExternalObservationFeedback,
+    ExternalObservationFeedbackRecord,
     ExternalObservationState,
+    ExternalObservationValueSnapshot,
     ExternalProductConnector,
     ExternalProductConnectorStatus,
     ExternalProductEvent,
@@ -434,6 +437,196 @@ class ExternalProductRepository:
                 "external customer reference is already bound to another customer"
             ) from exc
         return identity.customer_id
+
+    def record_observation_feedback(
+        self,
+        *,
+        actor: TenantContext,
+        customer_id: str,
+        receipt_id: str,
+        feedback: ExternalObservationFeedback | str,
+        now: datetime | None = None,
+    ) -> ExternalObservationFeedbackRecord:
+        """Record current-head owner feedback without mutating evidence or identity."""
+
+        current = self._tenancy.resolve_context(
+            user_id=actor.user_id,
+            business_id=actor.business_id,
+        )
+        current.assert_can_manage_customer_records()
+        normalized_customer_id = normalize_uuid(customer_id, field_name="customer_id")
+        normalized_receipt_id = normalize_uuid(receipt_id, field_name="receipt_id")
+        normalized_feedback = (
+            feedback
+            if isinstance(feedback, ExternalObservationFeedback)
+            else ExternalObservationFeedback(str(feedback).strip().lower())
+        )
+        row = self._conn.execute(
+            """
+            SELECT r.id,r.customer_id,r.connector_id,r.observation_key,r.observation_revision
+            FROM external_product_event_receipts r
+            WHERE r.id=? AND r.business_id=? AND r.customer_id=?
+              AND r.event_type='evidence' AND r.status='accepted'
+              AND r.observation_key IS NOT NULL
+              AND NOT EXISTS (
+                SELECT 1
+                FROM external_product_event_receipts newer
+                WHERE newer.business_id=r.business_id
+                  AND newer.connector_id=r.connector_id
+                  AND newer.customer_id=r.customer_id
+                  AND newer.observation_key=r.observation_key
+                  AND newer.status='accepted'
+                  AND newer.observation_revision > r.observation_revision
+              )
+            LIMIT 1
+            """,
+            (
+                normalized_receipt_id,
+                current.business_id,
+                normalized_customer_id,
+            ),
+        ).fetchone()
+        if row is None:
+            raise ExternalProductNotFound(
+                "current external observation was not found for this customer"
+            )
+        timestamp = _iso(now or _utc_now())
+        feedback_id = str(uuid4())
+        self._conn.execute(
+            """
+            INSERT INTO external_product_observation_feedback(
+                id,business_id,receipt_id,customer_id,feedback,
+                actor_member_id,created_at,updated_at
+            ) VALUES(?,?,?,?,?,?,?,?)
+            ON CONFLICT(business_id,receipt_id) DO UPDATE SET
+                feedback=excluded.feedback,
+                actor_member_id=excluded.actor_member_id,
+                updated_at=excluded.updated_at
+            """,
+            (
+                feedback_id,
+                current.business_id,
+                normalized_receipt_id,
+                normalized_customer_id,
+                normalized_feedback.value,
+                current.membership_id,
+                timestamp,
+                timestamp,
+            ),
+        )
+        saved = self._conn.execute(
+            """
+            SELECT id,business_id,receipt_id,customer_id,feedback,
+                   actor_member_id,created_at,updated_at
+            FROM external_product_observation_feedback
+            WHERE business_id=? AND receipt_id=?
+            LIMIT 1
+            """,
+            (current.business_id, normalized_receipt_id),
+        ).fetchone()
+        if saved is None:
+            raise RuntimeError("external observation feedback was not persisted")
+        return ExternalObservationFeedbackRecord(
+            id=str(_value(saved, "id", 0)),
+            business_id=str(_value(saved, "business_id", 1)),
+            receipt_id=str(_value(saved, "receipt_id", 2)),
+            customer_id=str(_value(saved, "customer_id", 3)),
+            feedback=ExternalObservationFeedback(str(_value(saved, "feedback", 4))),
+            actor_member_id=str(_value(saved, "actor_member_id", 5)),
+            created_at=str(_value(saved, "created_at", 6)),
+            updated_at=str(_value(saved, "updated_at", 7)),
+        )
+
+    def observation_value_snapshot(
+        self,
+        *,
+        actor: TenantContext,
+        connector_id: str | None = None,
+        now: datetime | None = None,
+    ) -> ExternalObservationValueSnapshot:
+        """Measure useful-signal feedback without changing any business policy."""
+
+        current = self._tenancy.resolve_context(
+            user_id=actor.user_id,
+            business_id=actor.business_id,
+        )
+        current.assert_can_view_customer_records()
+        normalized_connector = (
+            None
+            if connector_id is None
+            else normalize_uuid(connector_id, field_name="connector_id")
+        )
+        timestamp = _iso(now or _utc_now())
+        connector_clause = "" if normalized_connector is None else " AND r.connector_id=?"
+        params: list[Any] = [current.business_id]
+        if normalized_connector is not None:
+            params.append(normalized_connector)
+        params.append(timestamp)
+        row = self._conn.execute(
+            f"""
+            WITH heads AS (
+                SELECT r.id,r.observation_state,r.observation_fresh_until
+                FROM external_product_event_receipts r
+                WHERE r.business_id=?
+                  AND r.status='accepted'
+                  AND r.observation_key IS NOT NULL
+                  {connector_clause}
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM external_product_event_receipts newer
+                    WHERE newer.business_id=r.business_id
+                      AND newer.connector_id=r.connector_id
+                      AND newer.customer_id=r.customer_id
+                      AND newer.observation_key=r.observation_key
+                      AND newer.status='accepted'
+                      AND newer.observation_revision > r.observation_revision
+                  )
+            )
+            SELECT
+                COUNT(*) AS current_observations,
+                SUM(CASE WHEN h.observation_state='active' THEN 1 ELSE 0 END) AS active_observations,
+                SUM(CASE WHEN h.observation_state='retracted' THEN 1 ELSE 0 END) AS retracted_observations,
+                SUM(CASE WHEN h.observation_state='active'
+                           AND h.observation_fresh_until IS NOT NULL
+                           AND h.observation_fresh_until < ?
+                         THEN 1 ELSE 0 END) AS stale_active_observations,
+                SUM(CASE WHEN h.observation_state='active'
+                           AND h.observation_fresh_until IS NULL
+                         THEN 1 ELSE 0 END) AS unknown_freshness_observations,
+                SUM(CASE WHEN f.feedback IS NOT NULL THEN 1 ELSE 0 END) AS feedback_total,
+                SUM(CASE WHEN f.feedback='useful' THEN 1 ELSE 0 END) AS useful_feedback,
+                SUM(CASE WHEN f.feedback='incorrect' THEN 1 ELSE 0 END) AS incorrect_feedback,
+                SUM(CASE WHEN f.feedback='wrong_customer' THEN 1 ELSE 0 END) AS wrong_customer_feedback
+            FROM heads h
+            LEFT JOIN external_product_observation_feedback f
+              ON f.business_id=? AND f.receipt_id=h.id
+            """,
+            tuple(params + [current.business_id]),
+        ).fetchone()
+        values = [0 if _value(row, name, pos) is None else int(_value(row, name, pos)) for pos, name in enumerate((
+            "current_observations",
+            "active_observations",
+            "retracted_observations",
+            "stale_active_observations",
+            "unknown_freshness_observations",
+            "feedback_total",
+            "useful_feedback",
+            "incorrect_feedback",
+            "wrong_customer_feedback",
+        ))]
+        return ExternalObservationValueSnapshot(
+            business_id=current.business_id,
+            connector_id=normalized_connector,
+            current_observations=values[0],
+            active_observations=values[1],
+            retracted_observations=values[2],
+            stale_active_observations=values[3],
+            unknown_freshness_observations=values[4],
+            feedback_total=values[5],
+            useful_feedback=values[6],
+            incorrect_feedback=values[7],
+            wrong_customer_feedback=values[8],
+        )
 
     def _validate_observation_transition(
         self,
