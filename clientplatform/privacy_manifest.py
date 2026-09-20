@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 TenantDisposition = Literal["erase", "retain", "anonymize"]
-CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-09-19.v53-event-registration-channels"
+CLIENTPLATFORM_PRIVACY_MANIFEST_VERSION = "2026-09-20.v54-external-observation-feedback"
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,6 +84,7 @@ _POLICIES = (
     _required("partner_outreach_approvals", "anonymize", "owner approval evidence for exact public-business-contact outreach while recipient/payload fingerprints remain non-reversible"),
     _required("external_product_connectors", "retain", "business-owned external product integration and secret reference without raw secret material"),
     _required("external_product_event_receipts", "erase", "customer-linked verified external product event evidence and bounded metadata"),
+    _required("external_product_observation_feedback", "erase", "customer-linked owner feedback on external observations used only for value proof and mismatch review"),
     _required("ad_connections", "erase", "personal advertising account identity and encrypted OAuth material"),
     _required("ad_oauth_sessions", "erase", "short-lived one-time OAuth state and encrypted PKCE verifier"),
     _required("ad_managed_campaigns", "retain", "business-owned provider campaign binding and provisioning lifecycle without customer identity or credential material"),
