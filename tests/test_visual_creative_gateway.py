@@ -144,6 +144,38 @@ def test_configured_visual_providers_rejects_malformed_snapshot(monkeypatch):
         gateway.configured_visual_providers("image", country_code="RU")
 
 
+def test_configured_visual_providers_validates_kind_shape_and_deduplicates(monkeypatch):
+    with pytest.raises(ValueError, match="visual kind"):
+        gateway.configured_visual_providers("audio")
+
+    monkeypatch.setattr(
+        gateway,
+        "_json",
+        lambda *_args, **_kwargs: {
+            "enabled": True,
+            "configured_image": "yandexart",
+        },
+    )
+    with pytest.raises(
+        gateway.VisualCreativeGatewayError,
+        match="invalid_provider_snapshot",
+    ):
+        gateway.configured_visual_providers("image")
+
+    monkeypatch.setattr(
+        gateway,
+        "_json",
+        lambda *_args, **_kwargs: {
+            "enabled": True,
+            "configured_image": ["yandexart", "yandexart", "gigachat"],
+        },
+    )
+    assert gateway.configured_visual_providers("image") == (
+        "yandexart",
+        "gigachat",
+    )
+
+
 def test_wait_polls_with_original_scope_until_done(monkeypatch):
     sequence = [
         gateway.VisualCreativeJob(
