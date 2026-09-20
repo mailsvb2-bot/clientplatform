@@ -317,6 +317,13 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state.data["external_campaign_id"], "managed-7001")
         self.assertEqual(state.data["external_campaign_name"], "ClientPlatform managed")
         self.assertIn("Реклама подготовлена", out.answer.await_args.args[0])
+        labels = [
+            button.text
+            for row in out.answer.await_args.kwargs["reply_markup"].inline_keyboard
+            for button in row
+        ]
+        self.assertIn("🖼 Создать картинку", labels)
+        self.assertIn("🎬 Создать видео", labels)
 
     async def test_first_direct_run_asks_only_for_missing_region(self) -> None:
         out = outbound_message()
