@@ -419,6 +419,22 @@ async def receive_booking_start_with_quick_duration(
     )
 
 
+@router.message(control.ClientPlatformControlState.booking_duration)
+async def reject_typed_booking_duration(message: Message, state: FSMContext) -> None:
+    """Enforce the owner-visible duration contract as button-only."""
+
+    data = await state.get_data()
+    business_id = str(data.get("business_id") or "")
+    if not business_id:
+        await state.clear()
+        await message.answer("Не удалось продолжить настройку. Откройте кабинет через /start.")
+        return
+    await message.answer(
+        "Длительность выбирается кнопкой.",
+        reply_markup=_duration_keyboard(business_id),
+    )
+
+
 @router.callback_query(
     StateFilter(control.ClientPlatformControlState.booking_duration),
     F.data.startswith("cpj:wizdur:"),
