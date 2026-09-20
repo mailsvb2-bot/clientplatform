@@ -395,6 +395,26 @@ class ClientPlatformCustomerTimelineM4002Tests(unittest.TestCase):
                 payload_fingerprint="c3" * 32,
                 received_at=observed + timedelta(minutes=2),
             )
+            repository.ingest_event(
+                connector=connector,
+                event=ExternalProductEvent(
+                    external_event_id="timeline-stale-r1",
+                    event_type=ExternalProductEventType.EVIDENCE,
+                    occurred_at=observed + timedelta(minutes=3),
+                    customer_ref="revision-attendee",
+                    observation=ExternalProductObservation(
+                        observation_key="webinar:recording:viewed",
+                        kind="webinar.recording_viewed",
+                        label="Запись вебинара открыта",
+                        observed_at=observed + timedelta(minutes=3),
+                        provenance_ref="timeline-proof-4",
+                        fresh_until=observed + timedelta(minutes=8),
+                        quality=ExternalObservationQuality.SOURCE_ASSERTED,
+                    ),
+                ),
+                payload_fingerprint="c4" * 32,
+                received_at=observed + timedelta(minutes=3),
+            )
 
         timeline = get_customer_timeline(
             actor=actor,
@@ -406,7 +426,7 @@ class ClientPlatformCustomerTimelineM4002Tests(unittest.TestCase):
             for entry in timeline.entries
             if entry.source_type == "external_product_receipt"
         ]
-        self.assertEqual(len(external), 2)
+        self.assertEqual(len(external), 3)
         retracted = next(entry for entry in external if entry.evidence_revision == 2)
         self.assertEqual(retracted.title, "Внешнее наблюдение отозвано")
         self.assertEqual(retracted.evidence_state, "retracted")
@@ -421,6 +441,14 @@ class ClientPlatformCustomerTimelineM4002Tests(unittest.TestCase):
         self.assertEqual(unknown.evidence_revision, 1)
         self.assertEqual(unknown.evidence_freshness, "свежесть неизвестна")
         self.assertIsNone(unknown.fresh_until)
+
+        stale = next(
+            entry
+            for entry in external
+            if entry.kind == "external_observation:webinar.recording_viewed"
+        )
+        self.assertIn("возможно устарело после", stale.evidence_freshness or "")
+        self.assertIsNotNone(stale.fresh_until)
 
     def test_refund_is_a_distinct_money_fact_and_replay_does_not_duplicate_projection(self) -> None:
         actor, customer = _business(880002, "timeline-refund")
