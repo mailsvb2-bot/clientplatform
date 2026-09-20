@@ -9,6 +9,7 @@ from clientplatform.runtime.ucr_gateway import (
     UCR_CALL_SERVICE,
     UCR_INTEGRATION_SERVICE,
     UCR_PINNED_REVISION,
+    UCR_UNIVERSAL_CONFERENCE_SERVICE,
     UcrCallMethod,
     UcrGatewayClient,
     UcrGatewayConfig,
@@ -17,6 +18,7 @@ from clientplatform.runtime.ucr_gateway import (
     UcrGatewayRejected,
     UcrGatewayUnavailable,
     UcrIntegrationMethod,
+    UcrUniversalConferenceMethod,
     ucr_gateway_config,
 )
 
@@ -157,6 +159,10 @@ class ClientPlatformUcrGatewayConfigTests(unittest.TestCase):
             {method.value for method in UcrCallMethod},
             {"StartCall", "GetCall", "SignalCall"},
         )
+        self.assertEqual(
+            {method.value for method in UcrUniversalConferenceMethod},
+            {"GetParticipantAttendance", "GetCapabilities"},
+        )
 
 
 class ClientPlatformUcrGatewayClientTests(unittest.IsolatedAsyncioTestCase):
@@ -250,6 +256,79 @@ class ClientPlatformUcrGatewayClientTests(unittest.IsolatedAsyncioTestCase):
             },
         )
 
+        self.assertNotIn("Idempotency-Key", transport.calls[0]["headers"])
+
+    async def test_universal_conference_attendance_read_is_exact_and_non_mutating(self) -> None:
+        request = {
+            "scope": {"tenant_id": {"value": "tenant-a"}},
+            "conference_id": {"value": "conference-a"},
+            "integration_id": {"value": "integration-a"},
+            "external_user_id": "YWxpY2U=",
+        }
+        transport = _Transport(
+            body=_rpc_body(
+                service=UCR_UNIVERSAL_CONFERENCE_SERVICE,
+                method="GetParticipantAttendance",
+                result={
+                    "attendance": {
+                        "externalUserId": "YWxpY2U=",
+                        "totalConnectedSeconds": "2520",
+                        "joinCount": 1,
+                        "connected": False,
+                    }
+                },
+            )
+        )
+        client = UcrGatewayClient(
+            config=_config(),
+            credential_provider=_CredentialProvider(),
+            transport=transport,
+        )
+
+        response = await client.invoke_universal_conference(
+            method=UcrUniversalConferenceMethod.GET_PARTICIPANT_ATTENDANCE,
+            request=request,
+        )
+
+        self.assertTrue(response["ok"])
+        call = transport.calls[0]
+        self.assertEqual(
+            call["payload"],
+            {
+                "version": 1,
+                "service": UCR_UNIVERSAL_CONFERENCE_SERVICE,
+                "method": "GetParticipantAttendance",
+                "request": request,
+            },
+        )
+        self.assertNotIn("Idempotency-Key", call["headers"])
+
+    async def test_universal_conference_capabilities_read_is_exact(self) -> None:
+        request = {
+            "scope": {"tenant_id": {"value": "tenant-a"}},
+            "integration_id": {"value": "integration-a"},
+        }
+        transport = _Transport(
+            body=_rpc_body(
+                service=UCR_UNIVERSAL_CONFERENCE_SERVICE,
+                method="GetCapabilities",
+                result={"capabilities": {"maxParticipants": 1024}},
+            )
+        )
+        client = UcrGatewayClient(
+            config=_config(),
+            credential_provider=_CredentialProvider(),
+            transport=transport,
+        )
+
+        await client.invoke_universal_conference(
+            method=UcrUniversalConferenceMethod.GET_CAPABILITIES,
+            request=request,
+        )
+        self.assertEqual(
+            transport.calls[0]["payload"]["method"],
+            "GetCapabilities",
+        )
         self.assertNotIn("Idempotency-Key", transport.calls[0]["headers"])
 
     async def test_call_request_is_forwarded_without_inventing_call_state(self) -> None:
