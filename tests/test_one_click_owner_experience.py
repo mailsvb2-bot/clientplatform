@@ -443,10 +443,16 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state.data["job_id"], "job-2")
         self.assertEqual(state.data["external_campaign_id"], "managed-7001")
         self.assertEqual(state.data["external_campaign_name"], "ClientPlatform managed")
-        self.assertIn("Реклама подготовлена", out.answer.await_args.args[0])
+        prepared_calls = [
+            call
+            for call in out.answer.await_args_list
+            if call.args and "Реклама подготовлена" in str(call.args[0])
+        ]
+        self.assertTrue(prepared_calls)
+        prepared = prepared_calls[-1]
         labels = [
             button.text
-            for row in out.answer.await_args.kwargs["reply_markup"].inline_keyboard
+            for row in prepared.kwargs["reply_markup"].inline_keyboard
             for button in row
         ]
         self.assertIn("🖼 Создать картинку", labels)
