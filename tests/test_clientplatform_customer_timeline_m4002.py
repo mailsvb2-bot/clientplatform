@@ -25,6 +25,7 @@ from clientplatform.application.tenancy import (
 from clientplatform.domain.customers import CustomerNotFound
 from clientplatform.domain.external_products import (
     ExternalObservationQuality,
+    ExternalObservationState,
     ExternalProductEvent,
     ExternalProductEventType,
     ExternalProductObservation,
@@ -201,7 +202,11 @@ class ClientPlatformCustomerTimelineM4002Tests(unittest.TestCase):
             currency="RUB",
         )
 
-        timeline = get_customer_timeline(actor=actor, customer_id=customer.id)
+        timeline = get_customer_timeline(
+            actor=actor,
+            customer_id=customer.id,
+            now=observed_at + timedelta(minutes=30),
+        )
         kinds = [entry.kind for entry in timeline.entries]
         assert kinds[-5:] == [
             "acquisition:first_touch",
@@ -252,10 +257,12 @@ class ClientPlatformCustomerTimelineM4002Tests(unittest.TestCase):
                     occurred_at=_BASE + timedelta(minutes=3),
                     customer_ref="external-attendee-10",
                     observation=ExternalProductObservation(
+                        observation_key="webinar:session-10:attendance",
                         kind="webinar.attended",
                         label="Участие в вебинаре подтверждено",
                         observed_at=observed_at,
                         provenance_ref="attendance-proof-10",
+                        fresh_until=observed_at + timedelta(hours=2),
                         quality=ExternalObservationQuality.SOURCE_VERIFIED,
                         limitations=(
                             "Нет данных о внимании во время просмотра.",
@@ -281,6 +288,9 @@ class ClientPlatformCustomerTimelineM4002Tests(unittest.TestCase):
         self.assertEqual(observation.evidence_quality, "проверено источником")
         self.assertEqual(observation.observed_at, observed_at)
         self.assertEqual(observation.occurred_at, observed_at)
+        self.assertEqual(observation.evidence_revision, 1)
+        self.assertEqual(observation.evidence_state, "active")
+        self.assertIn("актуально до", observation.evidence_freshness or "")
         self.assertEqual(
             observation.limitations,
             (
@@ -295,6 +305,122 @@ class ClientPlatformCustomerTimelineM4002Tests(unittest.TestCase):
         self.assertIn("Нет поминутного подтверждения активности.", observation.detail or "")
         self.assertIn("Источник не измеряет понимание материала.", observation.detail or "")
         self.assertNotIn("external-attendee-10", repr(timeline))
+
+    def test_timeline_keeps_only_head_revision_and_marks_retraction_or_unknown_freshness(self) -> None:
+        actor, customer = _business(880011, "timeline-revision")
+        observed = _BASE + timedelta(minutes=2)
+        with get_db() as conn:
+            repository = ExternalProductRepository(conn)
+            pending = repository.create_connector(
+                actor=actor,
+                product_key="revision_source",
+                display_name="Источник наблюдений",
+                webhook_secret_reference=(
+                    "secret://env/CLIENTPLATFORM_SECRET_REVISION_SOURCE"
+                ),
+                now=_BASE,
+            )
+            connector = repository.activate_connector(
+                actor=actor,
+                connector_id=pending.id,
+                now=_BASE,
+            )
+            repository.bind_customer_ref(
+                actor=actor,
+                connector_id=connector.id,
+                customer_id=customer.id,
+                customer_ref="revision-attendee",
+                now=_BASE + timedelta(minutes=1),
+            )
+            repository.ingest_event(
+                connector=connector,
+                event=ExternalProductEvent(
+                    external_event_id="timeline-r1",
+                    event_type=ExternalProductEventType.EVIDENCE,
+                    occurred_at=observed,
+                    customer_ref="revision-attendee",
+                    observation=ExternalProductObservation(
+                        observation_key="webinar:revision:attendance",
+                        kind="webinar.attended",
+                        label="Участие подтверждено",
+                        observed_at=observed,
+                        provenance_ref="timeline-proof-1",
+                        revision=1,
+                        fresh_until=observed + timedelta(minutes=10),
+                        quality=ExternalObservationQuality.SOURCE_VERIFIED,
+                    ),
+                ),
+                payload_fingerprint="c1" * 32,
+                received_at=observed,
+            )
+            repository.ingest_event(
+                connector=connector,
+                event=ExternalProductEvent(
+                    external_event_id="timeline-r2",
+                    event_type=ExternalProductEventType.EVIDENCE,
+                    occurred_at=observed + timedelta(minutes=1),
+                    customer_ref="revision-attendee",
+                    observation=ExternalProductObservation(
+                        observation_key="webinar:revision:attendance",
+                        kind="webinar.attended",
+                        label="Участие отозвано",
+                        observed_at=observed + timedelta(minutes=1),
+                        provenance_ref="timeline-proof-2",
+                        revision=2,
+                        state=ExternalObservationState.RETRACTED,
+                        supersedes_external_event_id="timeline-r1",
+                        quality=ExternalObservationQuality.SOURCE_VERIFIED,
+                        limitations=("Источник исправил данные.",),
+                    ),
+                ),
+                payload_fingerprint="c2" * 32,
+                received_at=observed + timedelta(minutes=1),
+            )
+            repository.ingest_event(
+                connector=connector,
+                event=ExternalProductEvent(
+                    external_event_id="timeline-other-r1",
+                    event_type=ExternalProductEventType.EVIDENCE,
+                    occurred_at=observed + timedelta(minutes=2),
+                    customer_ref="revision-attendee",
+                    observation=ExternalProductObservation(
+                        observation_key="lms:lesson:completed",
+                        kind="lms.lesson_completed",
+                        label="Урок завершён",
+                        observed_at=observed + timedelta(minutes=2),
+                        provenance_ref="timeline-proof-3",
+                        quality=ExternalObservationQuality.SOURCE_ASSERTED,
+                    ),
+                ),
+                payload_fingerprint="c3" * 32,
+                received_at=observed + timedelta(minutes=2),
+            )
+
+        timeline = get_customer_timeline(
+            actor=actor,
+            customer_id=customer.id,
+            now=observed + timedelta(hours=1),
+        )
+        external = [
+            entry
+            for entry in timeline.entries
+            if entry.source_type == "external_product_receipt"
+        ]
+        self.assertEqual(len(external), 2)
+        retracted = next(entry for entry in external if entry.evidence_revision == 2)
+        self.assertEqual(retracted.title, "Внешнее наблюдение отозвано")
+        self.assertEqual(retracted.evidence_state, "retracted")
+        self.assertEqual(retracted.evidence_freshness, "отозвано источником")
+        self.assertNotIn("timeline-r1", [entry.source_id for entry in external])
+
+        unknown = next(
+            entry
+            for entry in external
+            if entry.kind == "external_observation:lms.lesson_completed"
+        )
+        self.assertEqual(unknown.evidence_revision, 1)
+        self.assertEqual(unknown.evidence_freshness, "свежесть неизвестна")
+        self.assertIsNone(unknown.fresh_until)
 
     def test_refund_is_a_distinct_money_fact_and_replay_does_not_duplicate_projection(self) -> None:
         actor, customer = _business(880002, "timeline-refund")
