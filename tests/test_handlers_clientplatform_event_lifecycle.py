@@ -94,6 +94,53 @@ class EventLifecycleHandlerTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("По какому времени", message.answer.await_args.args[0])
 
+    async def test_named_topics_choice_rejects_stale_wizard(self) -> None:
+        message = _message("")
+        callback = SimpleNamespace(
+            data="cpev:topics:yes",
+            from_user=SimpleNamespace(id=101),
+            answer=AsyncMock(),
+            message=message,
+        )
+        state = AsyncMock()
+        state.get_data.return_value = {
+            "event_business_id": "",
+            "event_days": 0,
+        }
+
+        await lifecycle.choose_named_event_topics(callback, state)
+
+        callback.answer.assert_awaited_once()
+        self.assertTrue(callback.answer.await_args.kwargs["show_alert"])
+
+    async def test_topic_entry_rejects_wrong_number_of_lines(self) -> None:
+        message = _message("Первая тема\nВторая тема")
+        state = AsyncMock()
+        state.get_data.return_value = {
+            "event_business_id": BUSINESS_ID,
+            "event_days": 3,
+        }
+        with patch.object(lifecycle, "_cancel_keyboard", return_value="cancel"):
+            await lifecycle.receive_event_topics(message, state)
+
+        state.update_data.assert_not_awaited()
+        self.assertIn("Нужно ровно 3 названий", message.answer.await_args.args[0])
+
+    async def test_topic_entry_can_be_cancelled(self) -> None:
+        message = _message("отмена")
+        state = AsyncMock()
+        state.get_data.return_value = {
+            "event_business_id": BUSINESS_ID,
+            "event_days": 2,
+        }
+        with (
+            patch.object(lifecycle, "_is_cancel", return_value=True),
+            patch.object(lifecycle, "_cancel", new=AsyncMock()) as cancel,
+        ):
+            await lifecycle.receive_event_topics(message, state)
+
+        cancel.assert_awaited_once_with(message, state, BUSINESS_ID)
+
     async def test_named_topics_require_one_title_per_day(self) -> None:
         message = _message("Первая тема\nВторая тема\nТретья тема")
         state = AsyncMock()
