@@ -370,18 +370,25 @@ async def choose_booking_time(callback: CallbackQuery, state: FSMContext) -> Non
 
 @router.callback_query(F.data.startswith("cpj:wizmanual:"))
 async def choose_manual_booking_datetime(callback: CallbackQuery, state: FSMContext) -> None:
+    """Upgrade legacy keyboards to the current button-only calendar flow."""
+
     business_token = str(callback.data).split(":", 2)[2]
     resolved = await _state_business(callback, state, business_token)
     if resolved is None:
         return
-    business_id, _data = resolved
-    await state.set_state(control.ClientPlatformControlState.booking_start)
-    await callback.answer()
-    await control._callback_message(callback).answer(
-        "Напишите дату и время. Можно коротко: 15.08 18:30. Если нужен другой год: 15.08.27 18:30.",
-        reply_markup=control._keyboard(
-            [[("✖️ Отмена", f"cpj:wizcancel:{_business_token(business_id)}")]]
-        ),
+    business_id, data = resolved
+    timezone_name = str(data.get("booking_picker_timezone") or "").strip()
+    if not timezone_name:
+        actor = await control._actor(int(callback.from_user.id), business_id)
+        profile = await asyncio.to_thread(get_business_profile, actor=actor)
+        timezone_name = profile.timezone
+    await callback.answer("Дата и время теперь выбираются кнопками")
+    await send_booking_date_picker(
+        control._callback_message(callback),
+        state,
+        business_id=business_id,
+        timezone_name=timezone_name,
+        heading="Выберите дату и время кнопками.",
     )
 
 
@@ -400,8 +407,7 @@ async def receive_booking_start_with_quick_duration(
     await state.set_state(control.ClientPlatformControlState.booking_duration)
     prefix = "Новое время принято." if data.get("replacing_slot_id") else "Дата и время приняты."
     await message.answer(
-        f"{prefix} Выберите длительность — обычно достаточно одного нажатия.\n\n"
-        "Если нужного варианта нет, выберите «Другая длительность».",
+        f"{prefix} Выберите длительность кнопкой.",
         reply_markup=_duration_keyboard(business_id),
     )
 
@@ -440,10 +446,10 @@ async def choose_custom_duration(callback: CallbackQuery, state: FSMContext) -> 
     business_id, _data = resolved
     message = control._callback_message(callback)
     await _remove_keyboard(message)
-    await callback.answer()
+    await callback.answer("Длительность теперь выбирается кнопками")
     await message.answer(
-        "Напишите длительность встречи или услуги в минутах. Например: 75.",
-        reply_markup=_cancel_keyboard(business_id),
+        "Выберите длительность встречи или услуги.",
+        reply_markup=_duration_keyboard(business_id),
     )
 
 
