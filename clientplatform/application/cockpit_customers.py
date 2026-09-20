@@ -135,7 +135,11 @@ def _display_name(record: CustomerRecord) -> str:
     if record.customer.display_name:
         return record.customer.display_name
     for identity in record.identities:
-        if identity.status == CustomerIdentityStatus.ACTIVE and identity.display_name:
+        if (
+            identity.status == CustomerIdentityStatus.ACTIVE
+            and identity.platform != CustomerPlatform.INTERNAL
+            and identity.display_name
+        ):
             return identity.display_name
     return "Клиент"
 
