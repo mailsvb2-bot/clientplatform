@@ -201,7 +201,7 @@ class WebinarVideoHandlerTests(unittest.IsolatedAsyncioTestCase):
         ):
             await events.prepare_event_visual(missing)
         missing.answer.assert_awaited_once_with(
-            "Сообщение прогрева уже изменилось", show_alert=True
+            "Это сообщение уже изменилось", show_alert=True
         )
 
         preview = SimpleNamespace(slot_key="attended_unpaid:1", text="Дожим")
