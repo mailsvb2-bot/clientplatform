@@ -253,6 +253,103 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(button.text, "🧰 Консультация")
         self.assertTrue(str(button.callback_data).startswith("cpo:offer:"))
 
+    async def test_advertisable_offerings_excludes_programs_and_deduplicates(self) -> None:
+        actor = tenant_actor()
+        active = one_click.control.CapabilityStatus.ACTIVE
+        capabilities = [
+            SimpleNamespace(id="cap-service", connector_key="booking", status=active),
+            SimpleNamespace(id="cap-program", connector_key="programs", status=active),
+            SimpleNamespace(id="cap-second", connector_key="consulting", status=active),
+        ]
+        shared = offering()
+        with (
+            patch.object(one_click.asyncio, "to_thread", new=immediate_to_thread),
+            patch.object(
+                one_click.control,
+                "list_business_capabilities",
+                return_value=capabilities,
+            ),
+            patch.object(
+                one_click.control,
+                "list_business_offerings",
+                side_effect=([shared], [shared]),
+            ) as list_offerings,
+        ):
+            result = await one_click._advertisable_offerings(actor)
+
+        self.assertEqual(result, [shared])
+        self.assertEqual(list_offerings.call_count, 2)
+        called_capabilities = {
+            call.kwargs["capability_id"]
+            for call in list_offerings.call_args_list
+        }
+        self.assertEqual(called_capabilities, {"cap-service", "cap-second"})
+
+    async def test_selected_service_without_open_time_opens_calendar_for_that_service(self) -> None:
+        out = outbound_message()
+        state = FakeState()
+        cb = callback("cpo:offer:business-1:offering-1", out)
+        send_picker = AsyncMock()
+        patches = self.common_patches(out)
+        with (
+            patches[0], patches[1], patches[2], patches[3], patches[4],
+            patch.object(
+                one_click,
+                "_advertisable_offerings",
+                new=AsyncMock(return_value=[offering()]),
+            ),
+            patch.object(one_click.control, "list_booking_slots", return_value=[]),
+            patch.object(
+                one_click.control,
+                "get_business_profile",
+                return_value=SimpleNamespace(timezone="Europe/Moscow"),
+            ),
+            patch.object(
+                one_click.importlib,
+                "import_module",
+                return_value=SimpleNamespace(send_booking_date_picker=send_picker),
+            ),
+        ):
+            await one_click.choose_one_click_offering(cb, state)
+
+        self.assertEqual(state.data["offering_id"], "offering-1")
+        send_picker.assert_awaited_once()
+        self.assertIn("Рекламируем «Консультация»", send_picker.await_args.kwargs["heading"])
+
+    async def test_selected_service_lists_only_its_open_times_and_allows_new_time(self) -> None:
+        out = outbound_message()
+        state = FakeState()
+        cb = callback("cpo:offer:business-1:offering-1", out)
+        chosen = slot(slot_id="slot-chosen")
+        other = slot(slot_id="slot-other")
+        other.slot.offering_id = "offering-2"
+        patches = self.common_patches(out)
+        with (
+            patches[0], patches[1], patches[2], patches[3], patches[4],
+            patch.object(
+                one_click,
+                "_advertisable_offerings",
+                new=AsyncMock(return_value=[offering()]),
+            ),
+            patch.object(
+                one_click.control,
+                "list_booking_slots",
+                return_value=[other, chosen],
+            ),
+        ):
+            await one_click.choose_one_click_offering(cb, state)
+
+        text = out.answer.await_args.args[0]
+        self.assertIn("Какую дату и время продвигать", text)
+        callbacks = [
+            str(button.callback_data)
+            for row in out.answer.await_args.kwargs["reply_markup"].inline_keyboard
+            for button in row
+        ]
+        self.assertTrue(any(value.startswith("cpo:slot:") for value in callbacks))
+        self.assertTrue(any(value.startswith("cpo:newtime:") for value in callbacks))
+        self.assertFalse(any("slot-other" in value for value in callbacks))
+
     async def test_existing_provider_campaign_is_not_a_selection_step(self) -> None:
         out = outbound_message()
         cb = callback("cpo:start:business-1", out)
