@@ -461,11 +461,47 @@ class ExternalProductRepository:
             if isinstance(feedback, ExternalObservationFeedback)
             else ExternalObservationFeedback(str(feedback).strip().lower())
         )
-        row = self._conn.execute(
+        candidate = self._conn.execute(
             """
-            SELECT r.id,r.customer_id,r.connector_id,r.observation_key,r.observation_revision
+            SELECT r.connector_id
             FROM external_product_event_receipts r
             WHERE r.id=? AND r.business_id=? AND r.customer_id=?
+              AND r.event_type='evidence' AND r.status='accepted'
+              AND r.observation_key IS NOT NULL
+            LIMIT 1
+            """,
+            (
+                normalized_receipt_id,
+                current.business_id,
+                normalized_customer_id,
+            ),
+        ).fetchone()
+        if candidate is None:
+            raise ExternalProductNotFound(
+                "external observation was not found for this customer"
+            )
+        connector_id = str(_value(candidate, "connector_id", 0))
+
+        # Serialize with structured-observation ingestion on the same connector row.
+        # After this lock is acquired no newer revision can commit until feedback
+        # either persists against the still-current head or fails closed.
+        cursor = self._conn.execute(
+            """
+            UPDATE external_product_connectors
+            SET updated_at=updated_at
+            WHERE id=? AND business_id=?
+            """,
+            (connector_id, current.business_id),
+        )
+        if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+            raise ExternalProductNotFound("external product connector was not found")
+
+        head = self._conn.execute(
+            """
+            SELECT r.id
+            FROM external_product_event_receipts r
+            WHERE r.id=? AND r.business_id=? AND r.customer_id=?
+              AND r.connector_id=?
               AND r.event_type='evidence' AND r.status='accepted'
               AND r.observation_key IS NOT NULL
               AND NOT EXISTS (
@@ -484,12 +520,14 @@ class ExternalProductRepository:
                 normalized_receipt_id,
                 current.business_id,
                 normalized_customer_id,
+                connector_id,
             ),
         ).fetchone()
-        if row is None:
+        if head is None:
             raise ExternalProductNotFound(
                 "current external observation was not found for this customer"
             )
+
         timestamp = _iso(now or _utc_now())
         feedback_id = str(uuid4())
         self._conn.execute(
