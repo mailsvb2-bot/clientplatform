@@ -338,7 +338,10 @@ async def _prepare_draft(
         "Ничего ещё не запущено: показов, модерации и расходов нет.",
         reply_markup=control._keyboard(
             [
-                [("🖼 Создать красивую картинку", "cpa:creative:image")],
+                [
+                    ("🖼 Создать картинку", "cpa:creative:image"),
+                    ("🎬 Создать видео", "cpa:creative:video"),
+                ],
                 [(ad._CONFIRM_DRAFT_LABEL, "cpa:confirm")],
                 [("✏️ Изменить вручную", f"cpa:promote:{data['business_token']}")],
                 [("🏠 В кабинет", f"cpj:home:{data['business_token']}")],
