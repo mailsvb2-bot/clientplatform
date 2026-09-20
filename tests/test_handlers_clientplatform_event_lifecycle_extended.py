@@ -317,6 +317,27 @@ class EventLifecycleExtendedHandlerTests(unittest.IsolatedAsyncioTestCase):
         await lifecycle.choose_webinar_venue(stale_callback, stale)
         self.assertIn("устарел", stale_callback.answer.await_args.args[0])
 
+    async def test_same_event_calendar_month_is_a_noop(self) -> None:
+        state = AsyncMock()
+        state.get_data.return_value = {
+            "event_business_id": BUSINESS_ID,
+            "event_timezone": "Europe/Moscow",
+            "event_picker_min_date": "2026-09-18",
+            "event_picker_month": "202610",
+        }
+        reply = _reply()
+        callback = _callback("cpev:month:202610")
+        with (
+            patch.object(lifecycle.control, "_callback_message", return_value=reply),
+            patch.object(lifecycle, "local_today", return_value=date(2026, 9, 18)),
+        ):
+            await lifecycle.choose_calendar_month(callback, state)
+
+        callback.answer.assert_awaited_once_with()
+        reply.edit_reply_markup.assert_not_awaited()
+        state.update_data.assert_not_awaited()
+
+
     async def test_calendar_callbacks_quick_time_and_duration(self) -> None:
         state = AsyncMock()
         state.get_data.return_value = {
