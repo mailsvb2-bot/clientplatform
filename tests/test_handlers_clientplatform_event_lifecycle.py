@@ -348,6 +348,95 @@ class EventLifecycleHandlerTests(unittest.IsolatedAsyncioTestCase):
             timezone_name="Europe/Moscow",
         )
 
+    async def test_schedule_edit_advances_to_next_day_without_reasking_room(self) -> None:
+        message = _message("")
+        state = AsyncMock()
+        state.get_data.return_value = {
+            "event_business_id": BUSINESS_ID,
+            "edit_event_id": EVENT_ID,
+            "event_timezone": "Europe/Moscow",
+            "event_days": 2,
+            "event_session_index": 1,
+            "event_sessions": [],
+            "edit_existing_sessions": [
+                {
+                    "position": 1,
+                    "join_url": "https://zoom.us/j/123",
+                    "provider_key": "zoom",
+                    "provider_label": "Zoom",
+                },
+                {
+                    "position": 2,
+                    "join_url": "https://webinar.ru/day2",
+                    "provider_key": "webinar_ru",
+                    "provider_label": "Webinar.ru",
+                },
+            ],
+        }
+        session = lifecycle.EventWizardSession(
+            position=1,
+            starts_at=datetime(2026, 10, 20, 16, 0, tzinfo=timezone.utc),
+            ends_at=datetime(2026, 10, 20, 18, 0, tzinfo=timezone.utc),
+            local_label="20.10.2026 19:00–21:00",
+            join_url=None,
+        )
+        with patch.object(
+            lifecycle,
+            "_prompt_session_date",
+            new=AsyncMock(),
+        ) as prompt:
+            await lifecycle._store_edited_session_and_continue(message, state, session)
+
+        first_update = state.update_data.await_args_list[0].kwargs["event_sessions"][0]
+        self.assertEqual(first_update["join_url"], "https://zoom.us/j/123")
+        self.assertEqual(
+            state.update_data.await_args_list[1].kwargs["event_session_index"],
+            2,
+        )
+        prompt.assert_awaited_once_with(
+            message,
+            state,
+            business_id=BUSINESS_ID,
+            position=2,
+            total=2,
+            timezone_name="Europe/Moscow",
+        )
+
+    async def test_schedule_edit_last_day_finishes_without_room_prompt(self) -> None:
+        message = _message("")
+        state = AsyncMock()
+        state.get_data.return_value = {
+            "event_business_id": BUSINESS_ID,
+            "edit_event_id": EVENT_ID,
+            "event_timezone": "Europe/Moscow",
+            "event_days": 1,
+            "event_session_index": 1,
+            "event_sessions": [],
+            "edit_existing_sessions": [
+                {
+                    "position": 1,
+                    "join_url": "https://zoom.us/j/123",
+                    "provider_key": "zoom",
+                    "provider_label": "Zoom",
+                }
+            ],
+        }
+        session = lifecycle.EventWizardSession(
+            position=1,
+            starts_at=datetime(2026, 10, 20, 16, 0, tzinfo=timezone.utc),
+            ends_at=datetime(2026, 10, 20, 18, 0, tzinfo=timezone.utc),
+            local_label="20.10.2026 19:00–21:00",
+            join_url=None,
+        )
+        with patch.object(
+            lifecycle,
+            "_finish_schedule_edit",
+            new=AsyncMock(),
+        ) as finish:
+            await lifecycle._store_edited_session_and_continue(message, state, session)
+
+        finish.assert_awaited_once_with(message, state)
+
     async def test_finish_schedule_edit_preserves_join_targets(self) -> None:
         message = _message("")
         state = AsyncMock()
