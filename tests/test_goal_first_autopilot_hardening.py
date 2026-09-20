@@ -133,7 +133,9 @@ class GoalFirstAutopilotHardeningTests(unittest.IsolatedAsyncioTestCase):
             (goal.ask_custom_video, "cpo:custom-video:business-token"),
             (goal.clear_custom_media, "cpo:custom-clear:business-token"),
             (goal.ask_generated_image_confirmation, "cpo:genask:business-token"),
+            (goal.ask_generated_video_confirmation, "cpo:genvideoask:business-token"),
             (goal.generate_custom_image, "cpo:gen:business-token"),
+            (goal.generate_custom_video, "cpo:genvideo:business-token"),
             (goal.check_generated_image, "cpo:gencheck:business-token"),
             (goal.finish_customization, "cpo:custom-done:business-token"),
         )
