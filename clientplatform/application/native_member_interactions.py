@@ -1014,9 +1014,9 @@ def _owner_input_invalid_message(action: str) -> CustomerInteractionMessage:
         "publication_draft": "Напишите: Заголовок | Текст публикации.",
         "booking_time": "Напишите дату и время: ДД.ММ.ГГГГ ЧЧ:ММ. При желании добавьте длительность в минутах.",
         "online_event": "Ответ не подходит текущему шагу вебинара. Используйте показанные кнопки или формат из подсказки.",
-        "event_warmup_text": "Пришлите новый текст прогрева одним сообщением длиной до 3500 символов.",
+        "event_warmup_text": "Пришлите новый текст сообщения до вебинара одним сообщением длиной до 3500 символов.",
         "event_followup_text": "Пришлите новый текст дожима одним сообщением длиной до 3500 символов.",
-        "event_warmup_days": "Пришлите допустимое число дней прогрева.",
+        "event_warmup_days": "Пришлите допустимое число дней сообщений до вебинара.",
         "price": "Напишите сумму и валюту, например: 5000 RUB.",
         "payment": "Напишите сумму и валюту, например: 3500 RUB | консультация.",
         "member_user": "Напишите номер аккаунта ClientPlatform сотрудника — только цифры. Сотрудник увидит свой номер в разделе «Сотрудники и доступы».",
@@ -1277,6 +1277,7 @@ _NATIVE_PARENT_COMMANDS: dict[str, str] = {
     "event-wizard": "cpm:events",
     "event-wizard-title-text": "cpm:events",
     "event-wizard-count-text": "cpm:events",
+    "event-wizard-topics-text": "cpm:events",
     "event-wizard-timezone-text": "cpm:events",
     "event-wizard-window-text": "cpm:events",
     "event-wizard-room-text": "cpm:events",
@@ -1467,8 +1468,8 @@ def _with_parent_navigation(
         "event-settings", "event-content", "event-content-followups",
         "event-followup-edit", "event-followup-reset", "event-followup-edit-text",
         "event-followups", "event-segment", "event-channel", "event-new", "event-wizard", "event-wizard-title-text",
-        "event-wizard-count-text", "event-wizard-timezone-text",
-        "event-wizard-window-text", "event-wizard-room-text",
+        "event-wizard-count-text", "event-wizard-topics-text",
+        "event-wizard-timezone-text", "event-wizard-window-text", "event-wizard-room-text",
         "event-wizard-warmup-text", "event-we-text",
         "event-warmup-days-text", "event-create-text", "event-announce", "event-join", "event-join-text",
     } or (
@@ -2246,7 +2247,7 @@ def _event_content_message(
         rows.append(
             (
                 _button(
-                    "🔥 Тексты прогрева",
+                    "📨 Сообщения до вебинара",
                     f"cpm:event-wizard:wp:{event_id}:{warmup.requested_days}:0",
                 ),
             )
@@ -2254,7 +2255,7 @@ def _event_content_message(
         rows.append(
             (
                 _button(
-                    "🗓 Изменить дни прогрева",
+                    "🗓 Изменить дни сообщений",
                     f"cpm:event-wizard:ws:{event_id}",
                 ),
             )
@@ -2267,7 +2268,7 @@ def _event_content_message(
         rows.append(
             (
                 _button(
-                    "🔥 Настроить прогрев",
+                    "📨 Настроить сообщения до вебинара",
                     f"cpm:event-wizard:ws:{event_id}",
                 ),
             )
@@ -2293,7 +2294,7 @@ def _event_content_message(
     return CustomerInteractionMessage(
         text=(
             f"🗓 Контент-план\n\n{item.title}\n\n"
-            f"🔥 Прогрев: {warmup_text}\n"
+            f"📨 До вебинара: {warmup_text}\n"
             f"Формат: {event_content_mode_label(modes.warmup)}\n\n"
             "✨ Анонс: показывается владельцу до публикации.\n"
             f"Формат: {event_content_mode_label(modes.event_day)}\n\n"
@@ -5620,6 +5621,7 @@ def _render(
         if parsed.action in {
             "event-wizard-title-text",
             "event-wizard-count-text",
+            "event-wizard-topics-text",
             "event-wizard-timezone-text",
             "event-wizard-window-text",
             "event-wizard-room-text",

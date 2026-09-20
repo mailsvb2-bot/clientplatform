@@ -18,6 +18,7 @@ from urllib.parse import quote
 from aiogram import F
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
+    BufferedInputFile,
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -25,6 +26,11 @@ from aiogram.types import (
 )
 
 from clientplatform.application.pagination import paginate
+from clientplatform.domain.booking_calendar import (
+    booking_calendar_filename,
+    booking_calendar_ics,
+    google_calendar_url,
+)
 from clientplatform.application.owner_booking_journey import (
     cancel_owner_booking_slot,
     connect_public_storefront_customer,
@@ -175,23 +181,63 @@ async def _send_publish_receipt(
         f"📅 {slot.local_start}\n"
         f"⏱ {slot.slot.duration_minutes} минут\n"
         "🟢 Доступно для записи\n\n"
-        "Теперь проверьте карточку глазами клиента или сразу отправьте ссылку людям.",
-        reply_markup=control._keyboard(
-            [
-                [("👀 Посмотреть глазами клиента", f"cpj:preview:{business_token}:{slot_token}")],
-                [("📅 Открыть мой календарь", f"cpj:calendar:{business_token}:30")],
+        "Теперь можно добавить это время в личный календарь, проверить карточку "
+        "глазами клиента или перейти к рекламе.",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
                 [
-                    ("📨 Отправить клиенту", f"cpj:share:{business_token}:{slot_token}"),
-                    ("📢 Рекламировать", f"cpj:share:{business_token}:{slot_token}"),
+                    InlineKeyboardButton(
+                        text="📅 Добавить в Google Календарь",
+                        url=google_calendar_url(slot),
+                    )
+                ],
+                [InlineKeyboardButton(
+                    text="👀 Посмотреть глазами клиента",
+                    callback_data=f"cpj:preview:{business_token}:{slot_token}",
+                )],
+                [
+                    InlineKeyboardButton(
+                        text="📨 Отправить клиенту",
+                        callback_data=f"cpj:share:{business_token}:{slot_token}",
+                    ),
+                    InlineKeyboardButton(
+                        text="🚀 Перейти к рекламе",
+                        callback_data=f"cpo:slot:{business_token}:{slot_token}",
+                    ),
                 ],
                 [
-                    ("✏️ Изменить", f"cpj:edit:{business_token}:{slot_token}"),
-                    ("➕ Ещё время", f"cpj:add:{business_token}:{offering_token}"),
+                    InlineKeyboardButton(
+                        text="✏️ Изменить",
+                        callback_data=f"cpj:edit:{business_token}:{slot_token}",
+                    ),
+                    InlineKeyboardButton(
+                        text="➕ Ещё время",
+                        callback_data=f"cpj:add:{business_token}:{offering_token}",
+                    ),
                 ],
-                [("🏠 В кабинет", f"cpj:home:{business_token}")],
+                [InlineKeyboardButton(
+                    text="📅 Открыть мой календарь",
+                    callback_data=f"cpj:calendar:{business_token}:30",
+                )],
+                [InlineKeyboardButton(
+                    text="🏠 В кабинет",
+                    callback_data=f"cpj:home:{business_token}",
+                )],
             ]
         ),
     )
+    document_sender = getattr(message, "answer_document", None)
+    if callable(document_sender):
+        await document_sender(
+            BufferedInputFile(
+                booking_calendar_ics(slot),
+                filename=booking_calendar_filename(slot),
+            ),
+            caption=(
+                "📅 Универсальный файл календаря: откройте его на телефоне или компьютере — "
+                "система предложит добавить выбранные дату и время."
+            ),
+        )
 
 
 @simple.router.message(control.ClientPlatformControlState.booking_start)
@@ -208,7 +254,20 @@ async def receive_owner_booking_duration(message: Message, state: FSMContext) ->
     data = await state.get_data()
     business_id = str(data["business_id"])
     actor = await control._actor(control._user_id(message), business_id)
-    duration = int(str(message.text or "").strip())
+    try:
+        duration = int(str(message.text or "").strip())
+    except ValueError:
+        await message.answer(
+            "Выберите длительность кнопкой.",
+            reply_markup=_booking_wizard_module()._duration_keyboard(business_id),
+        )
+        return
+    if duration < 15 or duration > 1440:
+        await message.answer(
+            "Выберите подходящую длительность кнопкой.",
+            reply_markup=_booking_wizard_module()._duration_keyboard(business_id),
+        )
+        return
     replacing_slot_id = str(data.get("replacing_slot_id") or "").strip()
     if replacing_slot_id:
         slot = await asyncio.to_thread(

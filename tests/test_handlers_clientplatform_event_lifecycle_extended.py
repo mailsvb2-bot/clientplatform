@@ -85,7 +85,7 @@ class EventLifecycleExtendedHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("🕒 Москва", _labels(timezone_markup))
         self.assertIn("Яндекс Телемост", _labels(venue_markup))
         self.assertIn("✍️ Ввести вручную", _labels(calendar_markup))
-        self.assertIn("‹", _labels(future_calendar))
+        self.assertIn("⬅️ Февраль", _labels(future_calendar))
         self.assertIn("19:00", _labels(start_markup))
         self.assertIn("2 часа", _labels(duration_markup))
         self.assertIn("↗️ Открыть Яндекс Телемост", _labels(telemost_markup))
@@ -317,6 +317,27 @@ class EventLifecycleExtendedHandlerTests(unittest.IsolatedAsyncioTestCase):
         await lifecycle.choose_webinar_venue(stale_callback, stale)
         self.assertIn("устарел", stale_callback.answer.await_args.args[0])
 
+    async def test_same_event_calendar_month_is_a_noop(self) -> None:
+        state = AsyncMock()
+        state.get_data.return_value = {
+            "event_business_id": BUSINESS_ID,
+            "event_timezone": "Europe/Moscow",
+            "event_picker_min_date": "2026-09-18",
+            "event_picker_month": "202610",
+        }
+        reply = _reply()
+        callback = _callback("cpev:month:202610")
+        with (
+            patch.object(lifecycle.control, "_callback_message", return_value=reply),
+            patch.object(lifecycle, "local_today", return_value=date(2026, 9, 18)),
+        ):
+            await lifecycle.choose_calendar_month(callback, state)
+
+        callback.answer.assert_awaited_once_with()
+        reply.edit_reply_markup.assert_not_awaited()
+        state.update_data.assert_not_awaited()
+
+
     async def test_calendar_callbacks_quick_time_and_duration(self) -> None:
         state = AsyncMock()
         state.get_data.return_value = {
@@ -327,7 +348,7 @@ class EventLifecycleExtendedHandlerTests(unittest.IsolatedAsyncioTestCase):
             "event_platform": "telemost",
             "event_sessions": [],
             "event_picker_min_date": "2026-09-18",
-            "event_picker_date": "2026-09-25",
+            "event_picker_date": "",
             "event_picker_start": "19:00",
         }
         reply = _reply()
@@ -346,6 +367,7 @@ class EventLifecycleExtendedHandlerTests(unittest.IsolatedAsyncioTestCase):
             date_cb = _callback("cpev:date:2026-09-25")
             await lifecycle.choose_calendar_date(date_cb, state)
             self.assertIn("Во сколько", reply.answer.await_args.args[0])
+            state.get_data.return_value["event_picker_date"] = "2026-09-25"
 
             bad_date = _callback("cpev:date:2020-01-01")
             await lifecycle.choose_calendar_date(bad_date, state)
@@ -545,7 +567,7 @@ class EventLifecycleExtendedHandlerTests(unittest.IsolatedAsyncioTestCase):
         zero_plan = SimpleNamespace(requested_days=0, drafts=())
         with (
             patch.object(lifecycle.control, "_actor", new=AsyncMock(return_value=actor)),
-            patch.object(lifecycle, "get_event_warmup_plan", return_value=zero_plan),
+            patch.object(lifecycle, "save_event_warmup_plan", return_value=zero_plan),
             patch.object(lifecycle, "set_event_content_mode", return_value=None) as set_mode,
             patch.object(lifecycle, "_ask_event_day_mode", new=AsyncMock()) as ask_day,
         ):
@@ -563,7 +585,7 @@ class EventLifecycleExtendedHandlerTests(unittest.IsolatedAsyncioTestCase):
         plan = SimpleNamespace(requested_days=1, drafts=(draft,))
         with (
             patch.object(lifecycle.control, "_actor", new=AsyncMock(return_value=actor)),
-            patch.object(lifecycle, "get_event_warmup_plan", return_value=plan),
+            patch.object(lifecycle, "save_event_warmup_plan", return_value=plan),
             patch.object(lifecycle, "_cancel_keyboard", return_value="cancel"),
         ):
             await lifecycle.receive_warmup_days(_message("1"), warm)
@@ -576,7 +598,7 @@ class EventLifecycleExtendedHandlerTests(unittest.IsolatedAsyncioTestCase):
         failed_message = _message("1")
         with (
             patch.object(lifecycle.control, "_actor", new=AsyncMock(return_value=actor)),
-            patch.object(lifecycle, "get_event_warmup_plan", side_effect=ValueError("bad")),
+            patch.object(lifecycle, "save_event_warmup_plan", side_effect=ValueError("bad")),
             patch.object(lifecycle, "_cancel_keyboard", return_value="cancel"),
         ):
             await lifecycle.receive_warmup_days(failed_message, failure)

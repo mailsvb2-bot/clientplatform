@@ -242,6 +242,16 @@ def test_admin_token_first_menu_is_recognized_as_repeatable_navigation() -> None
     )
 
 
+def test_webinar_calendar_callbacks_are_repeatable_and_never_hit_duplicate_toast() -> None:
+    for data in (
+        "cpev:noop",
+        "cpev:month:202610",
+        "cpev:month:202611",
+        "cpev:date:2026-11-20",
+    ):
+        assert _is_repeatable_navigation(data), data
+
+
 def test_telegram_webinar_lifecycle_accepts_current_step_callbacks() -> None:
     allowed = {
         "ClientPlatformEventLifecycleState:waiting_title": (
@@ -373,6 +383,39 @@ def test_owner_group_navigation_escapes_stale_ordinary_wizards() -> None:
         assert _is_repeatable_navigation(data)
         assert not _callback_conflicts_with_state(state_name, data)
         assert _callback_should_clear_state(state_name, data)
+
+
+def test_service_ad_selection_callbacks_are_guarded_and_step_local() -> None:
+    start = "cpo:start:business"
+    ordinary = "ClientPlatformControlState:activity_description"
+    assert not _is_repeatable_navigation(start)
+    assert not _callback_conflicts_with_state(ordinary, start)
+    assert _callback_should_clear_state(ordinary, start)
+    for data in (
+        "cpo:offer:business:offering",
+        "cpo:newtime:business:offering",
+        "cpo:slot:business:slot",
+        "cpo:connection:0",
+        "cpo:region:47",
+    ):
+        assert not _is_repeatable_navigation(data), data
+
+    assert not _callback_conflicts_with_state(
+        "OneClickOwnerState:selecting_connection",
+        "cpo:connection:0",
+    )
+    assert _callback_conflicts_with_state(
+        "OneClickOwnerState:selecting_connection",
+        "cpo:region:47",
+    )
+    assert not _callback_conflicts_with_state(
+        "OneClickOwnerState:waiting_region",
+        "cpo:region:47",
+    )
+    assert _callback_conflicts_with_state(
+        "OneClickOwnerState:waiting_region",
+        "cpo:slot:business:slot",
+    )
 
 
 @pytest.mark.asyncio

@@ -261,6 +261,23 @@ class OwnerInputResolutionTests(unittest.TestCase):
                 resolved = resolve_owner_input(self.session("online_event", step=step), raw)
                 self.assertEqual((resolved.action, resolved.args), (action, args))
 
+        topics = resolve_owner_input(
+            self.session("online_event", step="topics", count="3"),
+            "Диагностика\nПрактика\nПлан действий",
+        )
+        self.assertEqual(
+            (topics.action, topics.args),
+            (
+                "event-wizard-topics-text",
+                ("Диагностика\nПрактика\nПлан действий",),
+            ),
+        )
+        with self.assertRaises(ValueError):
+            resolve_owner_input(
+                self.session("online_event", step="topics", count="3"),
+                "Только одна тема",
+            )
+
         with self.assertRaises(ValueError):
             resolve_owner_input(self.session("online_event", step="count"), "32")
 

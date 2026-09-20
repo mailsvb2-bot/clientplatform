@@ -61,22 +61,27 @@ def _labels(markup) -> list[str]:
 
 
 @pytest.mark.asyncio
-async def test_booking_start_offers_common_durations_and_escape_routes() -> None:
+async def test_typed_booking_start_is_rejected_back_to_calendar() -> None:
     business_id = str(uuid4())
     message = FakeMessage("10.08.2026 15:00")
-    state = FakeState({"business_id": business_id, "offering_id": str(uuid4())})
+    state = FakeState(
+        {
+            "business_id": business_id,
+            "offering_id": str(uuid4()),
+            "booking_picker_timezone": "Europe/Moscow",
+        }
+    )
 
-    await wizard.receive_booking_start_with_quick_duration(message, state)
+    with patch.object(wizard, "local_today", return_value=date(2026, 8, 1)):
+        await wizard.receive_booking_start_with_quick_duration(message, state)
 
-    assert state.data["booking_start"] == "10.08.2026 15:00"
-    assert state.states[-1] == wizard.control.ClientPlatformControlState.booking_duration
+    assert "booking_start" not in state.data
+    assert state.states[-1] == wizard.control.ClientPlatformControlState.booking_start
     text, markup = message.answers[-1]
-    assert "одного нажатия" in text
+    assert "Дата и время выбираются кнопками" in text
     labels = _labels(markup)
-    assert labels[:4] == ["30 мин", "45 мин", "60 мин", "90 мин"]
-    assert "Другая длительность" in labels
-    assert "⬅️ Изменить дату и время" in labels
-    assert "✖️ Отмена" in labels
+    assert "Август 2026" in labels
+    assert "Пн" in labels and "Вс" in labels
 
 
 @pytest.mark.asyncio
@@ -91,20 +96,94 @@ async def test_booking_start_without_business_fails_closed() -> None:
 
 
 @pytest.mark.asyncio
-async def test_replacement_booking_start_uses_replacement_copy() -> None:
+async def test_typed_replacement_date_keeps_replacement_context_and_calendar() -> None:
     business_id = str(uuid4())
+    replacing_slot_id = str(uuid4())
     message = FakeMessage("10.08.2026 16:00")
     state = FakeState(
         {
             "business_id": business_id,
             "offering_id": str(uuid4()),
-            "replacing_slot_id": str(uuid4()),
+            "replacing_slot_id": replacing_slot_id,
+            "booking_picker_timezone": "Europe/Moscow",
         }
     )
 
+    with patch.object(wizard, "local_today", return_value=date(2026, 8, 1)):
+        await wizard.receive_booking_start_with_quick_duration(message, state)
+
+    assert state.data["replacing_slot_id"] == replacing_slot_id
+    assert "booking_start" not in state.data
+    assert "Дата и время выбираются кнопками" in message.answers[-1][0]
+
+
+@pytest.mark.asyncio
+async def test_typed_booking_start_loads_timezone_when_picker_context_is_missing() -> None:
+    business_id = str(uuid4())
+    message = FakeMessage("10.08.2026 15:00")
+    state = FakeState(
+        {
+            "business_id": business_id,
+            "offering_id": str(uuid4()),
+        }
+    )
+    actor = object()
+    profile = SimpleNamespace(timezone="Europe/Moscow")
+
+    with (
+        patch.object(wizard.control, "_actor", new=AsyncMock(return_value=actor)),
+        patch.object(wizard, "get_business_profile", return_value=profile),
+        patch.object(wizard, "local_today", return_value=date(2026, 8, 1)),
+    ):
+        await wizard.receive_booking_start_with_quick_duration(message, state)
+
+    assert state.data["booking_picker_timezone"] == "Europe/Moscow"
+    assert "Дата и время выбираются кнопками" in message.answers[-1][0]
+
+
+@pytest.mark.asyncio
+async def test_typed_booking_start_without_business_fails_closed() -> None:
+    message = FakeMessage("10.08.2026 15:00")
+    state = FakeState({})
+
     await wizard.receive_booking_start_with_quick_duration(message, state)
 
-    assert message.answers[-1][0].startswith("Новое время принято.")
+    assert state.cleared == 1
+    assert "Не удалось продолжить настройку" in message.answers[-1][0]
+
+
+@pytest.mark.asyncio
+async def test_typed_duration_without_business_fails_closed() -> None:
+    message = FakeMessage("75")
+    state = FakeState({})
+
+    await wizard.reject_typed_booking_duration(message, state)
+
+    assert state.cleared == 1
+    assert "Не удалось продолжить настройку" in message.answers[-1][0]
+
+
+@pytest.mark.asyncio
+async def test_typed_duration_is_rejected_back_to_button_choices() -> None:
+    business_id = str(uuid4())
+    message = FakeMessage("75")
+    state = FakeState(
+        {
+            "business_id": business_id,
+            "offering_id": str(uuid4()),
+            "booking_start": "10.08.2026 15:00",
+        }
+    )
+
+    await wizard.reject_typed_booking_duration(message, state)
+
+    assert state.data["booking_start"] == "10.08.2026 15:00"
+    text, markup = message.answers[-1]
+    assert "выбирается кнопкой" in text
+    labels = _labels(markup)
+    assert "1 ч 15 мин" in labels
+    assert "2 часа" in labels
+    assert "✖️ Отмена" in labels
 
 
 @pytest.mark.asyncio
@@ -145,7 +224,7 @@ async def test_quick_duration_reuses_canonical_booking_completion() -> None:
 async def test_quick_duration_rejects_unknown_preset() -> None:
     business_id = str(uuid4())
     token = wizard.control._uuid_token(business_id)
-    callback = FakeCallback(f"cpj:wizdur:{token}:75")
+    callback = FakeCallback(f"cpj:wizdur:{token}:20")
     state = FakeState({"business_id": business_id})
     actor = AsyncMock()
 
@@ -157,7 +236,7 @@ async def test_quick_duration_rejects_unknown_preset() -> None:
 
 
 @pytest.mark.asyncio
-async def test_custom_duration_keeps_manual_fallback_and_visible_exit() -> None:
+async def test_legacy_custom_duration_redirects_to_button_choices() -> None:
     business_id = str(uuid4())
     token = wizard.control._uuid_token(business_id)
     message = FakeMessage()
@@ -176,9 +255,12 @@ async def test_custom_duration_keeps_manual_fallback_and_visible_exit() -> None:
         await wizard.choose_custom_duration(callback, state)
 
     text, markup = message.answers[-1]
-    assert "Напишите длительность" in text
-    assert "⬅️ Изменить дату и время" in _labels(markup)
-    assert "✖️ Отмена" in _labels(markup)
+    assert "Выберите длительность" in text
+    labels = _labels(markup)
+    assert "1 час" in labels
+    assert "2 часа" in labels
+    assert "⬅️ Изменить дату и время" in labels
+    assert "✖️ Отмена" in labels
     assert state.cleared == 0
 
 
@@ -213,8 +295,10 @@ async def test_back_returns_to_date_entry_without_losing_booking_context() -> No
     text, markup = message.answers[-1]
     assert "Выберите новые дату и время" in text
     assert "Выберите дату свободного времени" in text
-    assert "✍️ Ввести вручную" in _labels(markup)
-    assert "✖️ Отмена" in _labels(markup)
+    labels = _labels(markup)
+    assert "Пн" in labels and "Вс" in labels
+    assert "✍️ Ввести вручную" not in labels
+    assert "✖️ Отмена" in labels
 
 
 @pytest.mark.asyncio
@@ -251,11 +335,11 @@ async def test_date_then_time_buttons_build_booking_start_without_manual_typing(
     assert state.states[-1] == wizard.control.ClientPlatformControlState.booking_duration
     text, markup = message.answers[-1]
     assert "Дата и время приняты" in text
-    assert "60 мин" in _labels(markup)
+    assert "1 час" in _labels(markup)
 
 
 @pytest.mark.asyncio
-async def test_booking_date_picker_keeps_manual_fallback_visible() -> None:
+async def test_booking_date_picker_is_month_calendar_without_manual_entry() -> None:
     business_id = str(uuid4())
     message = FakeMessage()
     state = FakeState({"business_id": business_id, "offering_id": str(uuid4())})
@@ -271,36 +355,61 @@ async def test_booking_date_picker_keeps_manual_fallback_visible() -> None:
     text, markup = message.answers[-1]
     labels = _labels(markup)
     assert "Выберите дату свободного времени" in text
-    assert "20 сен" in labels
-    assert "✍️ Ввести вручную" in labels
+    assert "Сентябрь 2026" in labels
+    assert "Пн" in labels and "Вс" in labels
+    assert "20" in labels
+    assert "✍️ Ввести вручную" not in labels
+    assert "Октябрь ➡️" in labels
     assert "✖️ Отмена" in labels
 
 
-def test_booking_date_picker_last_page_clamps_to_supported_range() -> None:
+def test_booking_date_picker_can_jump_many_months_ahead() -> None:
     business_id = str(uuid4())
     minimum = date(2026, 1, 1)
     markup = wizard._date_keyboard(
         business_id,
         minimum=minimum,
-        offset=wizard._MAX_DATE_DAYS - 1,
+        year=2026,
+        month=11,
     )
-    date_callbacks = [
+    labels = _labels(markup)
+    callbacks = [
         str(button.callback_data)
         for row in markup.inline_keyboard
         for button in row
         if str(button.callback_data or "").startswith("cpj:wizdate:")
     ]
 
-    assert len(date_callbacks) == 2
-    rendered_dates = [
-        date.fromisoformat(callback.rsplit(":", 1)[-1])
-        for callback in date_callbacks
-    ]
-    assert max(rendered_dates) == minimum + timedelta(days=wizard._MAX_DATE_DAYS)
-    assert all(
-        rendered <= minimum + timedelta(days=wizard._MAX_DATE_DAYS)
-        for rendered in rendered_dates
+    assert "Ноябрь 2026" in labels
+    assert "Октябрь" in " ".join(labels)
+    assert "Декабрь ➡️" in labels
+    assert any(callback.endswith(":2026-11-20") for callback in callbacks)
+
+
+@pytest.mark.asyncio
+async def test_same_booking_calendar_month_is_a_noop() -> None:
+    business_id = str(uuid4())
+    token = wizard.control._uuid_token(business_id)
+    message = FakeMessage()
+    message.edit_reply_markup = AsyncMock()
+    state = FakeState(
+        {
+            "business_id": business_id,
+            "offering_id": str(uuid4()),
+            "booking_picker_min_date": "2026-09-20",
+            "booking_picker_month": "202610",
+        }
     )
+    callback = FakeCallback(f"cpj:wizmonth:{token}:202610", message)
+    with (
+        patch.object(wizard.control, "_actor", new=AsyncMock(return_value=object())),
+        patch.object(wizard.control, "_callback_message", return_value=message),
+    ):
+        await wizard.choose_booking_month(callback, state)
+
+    assert callback.answers[-1] == (None, False)
+    message.edit_reply_markup.assert_not_awaited()
+    assert state.data["booking_picker_month"] == "202610"
 
 
 @pytest.mark.asyncio
@@ -331,7 +440,8 @@ async def test_date_page_navigation_rerenders_and_rejects_out_of_range_offset() 
         for button in row
         if str(button.callback_data or "").startswith("cpj:wizdate:")
     ]
-    assert len(date_callbacks) == 2
+    assert any(value.endswith(":2026-12-31") for value in date_callbacks)
+    assert state.data["booking_picker_month"] == "202612"
     assert callback.answers[-1] == (None, False)
 
     stale = FakeCallback(
@@ -383,7 +493,7 @@ async def test_invalid_date_and_time_callbacks_fail_closed() -> None:
 
 
 @pytest.mark.asyncio
-async def test_manual_datetime_fallback_and_duration_proxy_answer() -> None:
+async def test_legacy_manual_datetime_redirects_to_calendar_and_duration_proxy_answer() -> None:
     business_id = str(uuid4())
     token = wizard.control._uuid_token(business_id)
     message = FakeMessage()
@@ -391,6 +501,7 @@ async def test_manual_datetime_fallback_and_duration_proxy_answer() -> None:
         {
             "business_id": business_id,
             "offering_id": str(uuid4()),
+            "booking_picker_timezone": "Europe/Moscow",
         }
     )
     callback = FakeCallback(f"cpj:wizmanual:{token}", message)
@@ -402,8 +513,10 @@ async def test_manual_datetime_fallback_and_duration_proxy_answer() -> None:
 
     assert state.states[-1] == wizard.control.ClientPlatformControlState.booking_start
     text, markup = message.answers[-1]
-    assert "Напишите дату и время" in text
-    assert "✖️ Отмена" in _labels(markup)
+    assert "Выберите дату и время кнопками" in text
+    labels = _labels(markup)
+    assert "Пн" in labels and "Вс" in labels
+    assert "✖️ Отмена" in labels
 
     proxy = wizard._DurationMessageProxy(
         message,
