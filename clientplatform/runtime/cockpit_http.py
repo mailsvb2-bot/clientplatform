@@ -67,6 +67,7 @@ from clientplatform.application.cockpit_automation import (
 )
 from clientplatform.application.cockpit_customers import (
     CockpitCustomerActionUnavailable,
+    record_cockpit_observation_feedback,
     resolve_cockpit_customer_action_route,
     resolve_cockpit_customer_detail,
     resolve_cockpit_customer_page,
@@ -75,6 +76,7 @@ from clientplatform.domain.automation_policy import AutomationPolicyError
 from clientplatform.domain.activity import ActivityInvariantViolation
 from clientplatform.domain.bookings import BookingInvariantViolation, BookingNotFound
 from clientplatform.domain.customers import CustomerNotFound
+from clientplatform.domain.external_products import ExternalProductNotFound
 from clientplatform.domain.sales import SalesInvariantViolation, SalesLeadNotFound
 from clientplatform.domain.tenancy import TenantAccessDenied, TenantPermissionDenied
 from clientplatform.runtime.telegram_webapp_auth import (
@@ -1839,6 +1841,45 @@ async def cockpit_section_route(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "route_url": route_url}, headers=_base_headers())
 
 
+async def cockpit_customer_observation_feedback(request: web.Request) -> web.Response:
+    scope = await _verified_payload_scope(request)
+    if isinstance(scope, web.Response):
+        return scope
+    user_id, requested_business, payload = scope
+    customer_id = payload.get("customer_id")
+    receipt_id = payload.get("receipt_id")
+    feedback = payload.get("feedback")
+    if not isinstance(customer_id, str) or not customer_id.strip():
+        return _error(400, "customer_id_required")
+    if not isinstance(receipt_id, str) or not receipt_id.strip():
+        return _error(400, "observation_receipt_required")
+    if feedback not in {"useful", "incorrect", "wrong_customer"}:
+        return _error(400, "invalid_observation_feedback")
+    try:
+        saved = await asyncio.to_thread(
+            record_cockpit_observation_feedback,
+            telegram_user_id=user_id,
+            requested_business_id=requested_business,
+            customer_id=customer_id,
+            receipt_id=receipt_id,
+            feedback=feedback,
+        )
+    except TenantAccessDenied:
+        return _error(403, "business_access_denied")
+    except TenantPermissionDenied:
+        return _error(403, "observation_feedback_denied")
+    except CustomerNotFound:
+        return _error(404, "customer_not_found")
+    except ExternalProductNotFound:
+        return _error(409, "observation_changed")
+    except ValueError:
+        return _error(400, "invalid_observation_feedback")
+    return web.json_response(
+        {"ok": True, "feedback": saved},
+        headers=_base_headers(),
+    )
+
+
 async def cockpit_customer_action_open(request: web.Request) -> web.Response:
     scope = await _verified_payload_scope(request)
     if isinstance(scope, web.Response):
@@ -2007,6 +2048,10 @@ def register_cockpit_routes(
         f"{_COCKPIT_PREFIX}/customers/detail", cockpit_customer_detail
     )
     app.router.add_post(
+        f"{_COCKPIT_PREFIX}/customers/observation-feedback",
+        cockpit_customer_observation_feedback,
+    )
+    app.router.add_post(
         f"{_COCKPIT_PREFIX}/customers/action-open", cockpit_customer_action_open
     )
     app.router.add_post(
@@ -2045,6 +2090,7 @@ __all__ = [
     "cockpit_settings_script",
     "cockpit_settings_update",
     "cockpit_customer_action_open",
+    "cockpit_customer_observation_feedback",
     "cockpit_customer_action_route",
     "cockpit_customer_detail",
     "cockpit_customers",
