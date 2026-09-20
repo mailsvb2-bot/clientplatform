@@ -21,11 +21,14 @@ from clientplatform.domain.attribution import AcquisitionSource
 from clientplatform.domain.customers import CustomerNotFound
 from clientplatform.domain.external_products import (
     ExternalObservationQuality,
+    ExternalObservationState,
     ExternalProductAcquisition,
     ExternalProductEvent,
     ExternalProductEventType,
     ExternalProductInvariantViolation,
+    ExternalProductNotFound,
     ExternalProductObservation,
+    ExternalProductReceipt,
     ExternalProductSignatureError,
     external_customer_fingerprint,
 )
@@ -128,6 +131,26 @@ class _HideFirstIdentityLookup:
                     return None
 
             return _EmptyCursor()
+        return self._conn.execute(sql, params)
+
+
+class _InterleaveOnObservationLock:
+    """Inject one deterministic state change immediately before the lock update."""
+
+    def __init__(self, conn: sqlite3.Connection, callback) -> None:
+        self._conn = conn
+        self._callback = callback
+        self._triggered = False
+
+    def execute(self, sql: str, params: tuple[object, ...] = ()):
+        normalized = " ".join(sql.split())
+        if (
+            not self._triggered
+            and normalized.startswith("UPDATE external_product_connectors SET updated_at=updated_at")
+            and "status='active'" in normalized
+        ):
+            self._triggered = True
+            self._callback()
         return self._conn.execute(sql, params)
 
 
@@ -277,6 +300,7 @@ class ClientPlatformExternalProductConnectorTests(unittest.TestCase):
             "occurred_at": self.now.isoformat(),
             "customer_ref": "external-attendee-42",
             "observation": {
+                "observation_key": "webinar:42:attendance",
                 "kind": "webinar.attended",
                 "label": "Участие в вебинаре подтверждено",
                 "observed_at": (self.now + timedelta(seconds=2)).isoformat(),
@@ -290,6 +314,7 @@ class ClientPlatformExternalProductConnectorTests(unittest.TestCase):
         )
         self.assertIsNotNone(event.observation)
         assert event.observation is not None
+        self.assertEqual(event.observation.observation_key, "webinar:42:attendance")
         self.assertEqual(event.observation.kind, "webinar.attended")
         self.assertEqual(
             event.observation.quality,
@@ -309,6 +334,7 @@ class ClientPlatformExternalProductConnectorTests(unittest.TestCase):
                 occurred_at=self.now,
                 customer_ref="customer-42",
                 observation=ExternalProductObservation(
+                    observation_key="webinar:lead:attendance",
                     kind="webinar.attended",
                     label="Участие подтверждено",
                     observed_at=self.now,
@@ -341,6 +367,7 @@ class ClientPlatformExternalProductConnectorTests(unittest.TestCase):
             occurred_at=self.now,
             customer_ref="lms-user-42@example.invalid",
             observation=ExternalProductObservation(
+                observation_key="webinar:42:attendance",
                 kind="webinar.attended",
                 label="Участие в вебинаре подтверждено",
                 observed_at=self.now + timedelta(seconds=2),
@@ -393,6 +420,315 @@ class ClientPlatformExternalProductConnectorTests(unittest.TestCase):
             (self.fx.actor.business_id,),
         ).fetchone()[0]
         self.assertEqual(outcome_count, 0)
+
+    def test_observation_lock_rechecks_off_switch_before_accepting(self) -> None:
+        event = ExternalProductEvent(
+            external_event_id="off-switch-race",
+            event_type=ExternalProductEventType.EVIDENCE,
+            occurred_at=self.now,
+            customer_ref="off-switch-subject",
+            observation=ExternalProductObservation(
+                observation_key="webinar:off-switch:attendance",
+                kind="webinar.attended",
+                label="Участие подтверждено",
+                observed_at=self.now,
+                provenance_ref="off-switch-proof",
+            ),
+        )
+
+        def disable_before_lock() -> None:
+            self.fx.conn.execute(
+                """
+                UPDATE external_product_connectors
+                SET status='disabled',disabled_at=?,updated_at=?
+                WHERE id=? AND business_id=?
+                """,
+                (
+                    self.now.isoformat(),
+                    self.now.isoformat(),
+                    self.fx.connector.id,
+                    self.fx.actor.business_id,
+                ),
+            )
+
+        racing = ExternalProductRepository(
+            _InterleaveOnObservationLock(self.fx.conn, disable_before_lock)
+        )
+        with self.assertRaises(ExternalProductNotFound):
+            racing.ingest_event(
+                connector=self.fx.connector,
+                event=event,
+                payload_fingerprint="66" * 32,
+                received_at=self.now,
+            )
+        count = self.fx.conn.execute(
+            """
+            SELECT COUNT(*) FROM external_product_event_receipts
+            WHERE business_id=? AND external_event_id='off-switch-race'
+            """,
+            (self.fx.actor.business_id,),
+        ).fetchone()[0]
+        self.assertEqual(count, 0)
+
+    def test_observation_lock_rechecks_idempotency_after_concurrent_retry(self) -> None:
+        event = ExternalProductEvent(
+            external_event_id="concurrent-retry-r1",
+            event_type=ExternalProductEventType.EVIDENCE,
+            occurred_at=self.now,
+            customer_ref="concurrent-retry-subject",
+            observation=ExternalProductObservation(
+                observation_key="webinar:retry:attendance",
+                kind="webinar.attended",
+                label="Участие подтверждено",
+                observed_at=self.now,
+                provenance_ref="retry-proof",
+            ),
+        )
+        inserted: list[ExternalProductReceipt] = []
+
+        def insert_same_event_before_outer_lock() -> None:
+            inserted.append(
+                ExternalProductRepository(self.fx.conn).ingest_event(
+                    connector=self.fx.connector,
+                    event=event,
+                    payload_fingerprint="77" * 32,
+                    received_at=self.now,
+                )
+            )
+
+        racing = ExternalProductRepository(
+            _InterleaveOnObservationLock(
+                self.fx.conn,
+                insert_same_event_before_outer_lock,
+            )
+        )
+        result = racing.ingest_event(
+            connector=self.fx.connector,
+            event=event,
+            payload_fingerprint="77" * 32,
+            received_at=self.now + timedelta(seconds=1),
+        )
+        self.assertEqual(len(inserted), 1)
+        self.assertEqual(result.id, inserted[0].id)
+        count = self.fx.conn.execute(
+            """
+            SELECT COUNT(*) FROM external_product_event_receipts
+            WHERE business_id=? AND external_event_id='concurrent-retry-r1'
+            """,
+            (self.fx.actor.business_id,),
+        ).fetchone()[0]
+        self.assertEqual(count, 1)
+
+    def test_observation_revision_retraction_restore_and_off_switch(self) -> None:
+        customer = CustomerRepository(self.fx.conn).create_customer(
+            actor=self.fx.actor,
+            display_name="Мария",
+            now=self.now.isoformat(),
+        )
+        self.fx.repo.bind_customer_ref(
+            actor=self.fx.actor,
+            connector_id=self.fx.connector.id,
+            customer_id=customer.id,
+            customer_ref="revision-subject",
+            now=self.now,
+        )
+
+        first = self.fx.repo.ingest_event(
+            connector=self.fx.connector,
+            event=ExternalProductEvent(
+                external_event_id="obs-r1",
+                event_type=ExternalProductEventType.EVIDENCE,
+                occurred_at=self.now,
+                customer_ref="revision-subject",
+                observation=ExternalProductObservation(
+                    observation_key="webinar:session-9:attendance",
+                    kind="webinar.attended",
+                    label="Участие подтверждено",
+                    observed_at=self.now,
+                    provenance_ref="proof-r1",
+                    revision=1,
+                    fresh_until=self.now + timedelta(hours=2),
+                    quality=ExternalObservationQuality.SOURCE_VERIFIED,
+                ),
+            ),
+            payload_fingerprint="11" * 32,
+            received_at=self.now,
+        )
+        self.assertEqual(first.observation_revision, 1)
+        self.assertEqual(first.observation_state, ExternalObservationState.ACTIVE)
+
+        with self.assertRaisesRegex(
+            ExternalProductInvariantViolation,
+            "next exact revision|current head",
+        ):
+            self.fx.repo.ingest_event(
+                connector=self.fx.connector,
+                event=ExternalProductEvent(
+                    external_event_id="obs-r3-gap",
+                    event_type=ExternalProductEventType.EVIDENCE,
+                    occurred_at=self.now + timedelta(minutes=1),
+                    customer_ref="revision-subject",
+                    observation=ExternalProductObservation(
+                        observation_key="webinar:session-9:attendance",
+                        kind="webinar.attended",
+                        label="Некорректный скачок",
+                        observed_at=self.now + timedelta(minutes=1),
+                        provenance_ref="proof-gap",
+                        revision=3,
+                        supersedes_external_event_id="obs-r1",
+                    ),
+                ),
+                payload_fingerprint="22" * 32,
+                received_at=self.now + timedelta(minutes=1),
+            )
+
+        retracted = self.fx.repo.ingest_event(
+            connector=self.fx.connector,
+            event=ExternalProductEvent(
+                external_event_id="obs-r2",
+                event_type=ExternalProductEventType.EVIDENCE,
+                occurred_at=self.now + timedelta(minutes=2),
+                customer_ref="revision-subject",
+                observation=ExternalProductObservation(
+                    observation_key="webinar:session-9:attendance",
+                    kind="webinar.attended",
+                    label="Участие отозвано источником",
+                    observed_at=self.now + timedelta(minutes=2),
+                    provenance_ref="proof-r2",
+                    revision=2,
+                    state=ExternalObservationState.RETRACTED,
+                    supersedes_external_event_id="obs-r1",
+                    quality=ExternalObservationQuality.SOURCE_VERIFIED,
+                    limitations=("Источник исправил исходный факт.",),
+                ),
+            ),
+            payload_fingerprint="33" * 32,
+            received_at=self.now + timedelta(minutes=2),
+        )
+        self.assertEqual(retracted.observation_revision, 2)
+        self.assertEqual(retracted.observation_state, ExternalObservationState.RETRACTED)
+
+        restored = self.fx.repo.ingest_event(
+            connector=self.fx.connector,
+            event=ExternalProductEvent(
+                external_event_id="obs-r3",
+                event_type=ExternalProductEventType.EVIDENCE,
+                occurred_at=self.now + timedelta(minutes=3),
+                customer_ref="revision-subject",
+                observation=ExternalProductObservation(
+                    observation_key="webinar:session-9:attendance",
+                    kind="webinar.attended",
+                    label="Участие подтверждено повторной проверкой",
+                    observed_at=self.now + timedelta(minutes=3),
+                    provenance_ref="proof-r3",
+                    revision=3,
+                    state=ExternalObservationState.ACTIVE,
+                    supersedes_external_event_id="obs-r2",
+                    fresh_until=self.now + timedelta(hours=4),
+                    quality=ExternalObservationQuality.SOURCE_VERIFIED,
+                ),
+            ),
+            payload_fingerprint="44" * 32,
+            received_at=self.now + timedelta(minutes=3),
+        )
+        self.assertEqual(restored.observation_revision, 3)
+        self.assertEqual(
+            restored.observation_supersedes_external_event_id,
+            "obs-r2",
+        )
+
+        disabled = self.fx.repo.disable_connector(
+            actor=self.fx.actor,
+            connector_id=self.fx.connector.id,
+            now=self.now + timedelta(minutes=4),
+        )
+        self.assertEqual(disabled.status.value, "disabled")
+        with self.assertRaises(ExternalProductNotFound):
+            self.fx.repo.ingest_event(
+                connector=self.fx.connector,
+                event=ExternalProductEvent(
+                    external_event_id="obs-r4",
+                    event_type=ExternalProductEventType.EVIDENCE,
+                    occurred_at=self.now + timedelta(minutes=4),
+                    customer_ref="revision-subject",
+                    observation=ExternalProductObservation(
+                        observation_key="webinar:session-9:attendance",
+                        kind="webinar.attended",
+                        label="Не должно попасть после off-switch",
+                        observed_at=self.now + timedelta(minutes=4),
+                        provenance_ref="proof-r4",
+                        revision=4,
+                        supersedes_external_event_id="obs-r3",
+                    ),
+                ),
+                payload_fingerprint="55" * 32,
+                received_at=self.now + timedelta(minutes=4),
+            )
+
+    def test_observation_revision_rejects_stale_branch(self) -> None:
+        first = self.fx.repo.ingest_event(
+            connector=self.fx.connector,
+            event=ExternalProductEvent(
+                external_event_id="branch-r1",
+                event_type=ExternalProductEventType.EVIDENCE,
+                occurred_at=self.now,
+                customer_ref="branch-subject",
+                observation=ExternalProductObservation(
+                    observation_key="lms:lesson-1:complete",
+                    kind="lms.lesson_completed",
+                    label="Урок завершён",
+                    observed_at=self.now,
+                    provenance_ref="branch-proof-1",
+                ),
+            ),
+            payload_fingerprint="b1" * 32,
+            received_at=self.now,
+        )
+        self.assertEqual(first.observation_revision, 1)
+        self.fx.repo.ingest_event(
+            connector=self.fx.connector,
+            event=ExternalProductEvent(
+                external_event_id="branch-r2",
+                event_type=ExternalProductEventType.EVIDENCE,
+                occurred_at=self.now + timedelta(minutes=1),
+                customer_ref="branch-subject",
+                observation=ExternalProductObservation(
+                    observation_key="lms:lesson-1:complete",
+                    kind="lms.lesson_completed",
+                    label="Урок завершён повторно",
+                    observed_at=self.now + timedelta(minutes=1),
+                    provenance_ref="branch-proof-2",
+                    revision=2,
+                    supersedes_external_event_id="branch-r1",
+                ),
+            ),
+            payload_fingerprint="b2" * 32,
+            received_at=self.now + timedelta(minutes=1),
+        )
+        with self.assertRaisesRegex(
+            ExternalProductInvariantViolation,
+            "stale or different head",
+        ):
+            self.fx.repo.ingest_event(
+                connector=self.fx.connector,
+                event=ExternalProductEvent(
+                    external_event_id="branch-r3-stale",
+                    event_type=ExternalProductEventType.EVIDENCE,
+                    occurred_at=self.now + timedelta(minutes=2),
+                    customer_ref="branch-subject",
+                    observation=ExternalProductObservation(
+                        observation_key="lms:lesson-1:complete",
+                        kind="lms.lesson_completed",
+                        label="Старая ветка",
+                        observed_at=self.now + timedelta(minutes=2),
+                        provenance_ref="branch-proof-stale",
+                        revision=3,
+                        supersedes_external_event_id="branch-r1",
+                    ),
+                ),
+                payload_fingerprint="b3" * 32,
+                received_at=self.now + timedelta(minutes=2),
+            )
 
     def test_auto_create_race_reuses_explicit_binding_and_removes_losing_candidate(self) -> None:
         intended = CustomerRepository(self.fx.conn).create_customer(

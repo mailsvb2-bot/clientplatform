@@ -91,7 +91,19 @@ class CockpitCustomersM7003Tests(unittest.TestCase):
             created_at="2026-09-01T10:00:00+00:00",
             updated_at="2026-09-01T10:00:00+00:00",
         )
-        record = CustomerRecord(customer=_customer(), identities=(phone, email))
+        internal = CustomerIdentity(
+            id="77777777-7777-4777-8777-777777777777",
+            business_id=_BUSINESS,
+            customer_id=_CUSTOMER,
+            platform=CustomerPlatform.INTERNAL,
+            external_subject="extp:connector:fingerprint",
+            username=None,
+            display_name=None,
+            status=CustomerIdentityStatus.ACTIVE,
+            created_at="2026-09-01T10:00:00+00:00",
+            updated_at="2026-09-01T10:00:00+00:00",
+        )
+        record = CustomerRecord(customer=_customer(), identities=(phone, email, internal))
         timeline = CustomerTimeline(
             business_id=_BUSINESS,
             customer_id=_CUSTOMER,
@@ -136,6 +148,8 @@ class CockpitCustomersM7003Tests(unittest.TestCase):
         self.assertEqual(payload["timeline"][1]["money"], "500,00 RUB")
         self.assertEqual(payload["contacts"][0]["display"], "•••• 4567")
         self.assertEqual(payload["contacts"][1]["display"], "•••@example.com")
+        self.assertEqual(len(payload["contacts"]), 2)
+        self.assertNotIn("internal", repr(payload["contacts"]))
         self.assertEqual(payload["next_action"]["section"], "sales")
         rendered = repr(payload)
         self.assertNotIn("79991234567", rendered)
@@ -160,6 +174,10 @@ class CockpitCustomersM7003Tests(unittest.TestCase):
                     evidence_source="Вебинарная платформа",
                     evidence_quality="проверено источником",
                     observed_at=datetime(2026, 9, 6, 12, 1, tzinfo=timezone.utc),
+                    evidence_revision=2,
+                    evidence_state="active",
+                    evidence_freshness="актуально до 06.09.2026 14:00 UTC",
+                    fresh_until=datetime(2026, 9, 6, 14, 0, tzinfo=timezone.utc),
                     limitations=("Нет данных о внимании во время просмотра.",),
                 ),
             ),
@@ -180,6 +198,10 @@ class CockpitCustomersM7003Tests(unittest.TestCase):
             ("Нет данных о внимании во время просмотра.",),
         )
         self.assertEqual(item["observed_at"], "2026-09-06T12:01:00+00:00")
+        self.assertEqual(item["evidence_revision"], 2)
+        self.assertEqual(item["evidence_state"], "active")
+        self.assertIn("актуально до", item["evidence_freshness"])
+        self.assertEqual(item["fresh_until"], "2026-09-06T14:00:00+00:00")
         self.assertNotIn("customer_ref", repr(detail.as_dict()))
 
     def test_optional_timeline_or_action_failure_does_not_invent_data(self) -> None:

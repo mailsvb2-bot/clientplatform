@@ -33,6 +33,10 @@ class CustomerTimelineEntry:
     evidence_source: str | None = None
     evidence_quality: str | None = None
     observed_at: datetime | None = None
+    evidence_revision: int | None = None
+    evidence_state: str | None = None
+    evidence_freshness: str | None = None
+    fresh_until: datetime | None = None
     limitations: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
@@ -62,6 +66,14 @@ class CustomerTimelineEntry:
                 object.__setattr__(self, field_name, normalized or None)
         if self.observed_at is not None and self.observed_at.tzinfo is None:
             raise ValueError("observed_at must be timezone-aware")
+        if self.fresh_until is not None and self.fresh_until.tzinfo is None:
+            raise ValueError("fresh_until must be timezone-aware")
+        if self.evidence_revision is not None and (
+            isinstance(self.evidence_revision, bool)
+            or not isinstance(self.evidence_revision, int)
+            or self.evidence_revision < 1
+        ):
+            raise ValueError("evidence_revision must be a positive integer")
         limitations = tuple(
             text
             for item in tuple(self.limitations or ())
@@ -112,7 +124,8 @@ _SOURCE_LABELS = {
     "unknown": "Источник не определён",
 }
 
-_EXTERNAL_OBSERVATION_SCHEMA = "2026-09-20.v1"
+_EXTERNAL_OBSERVATION_SCHEMA_V1 = "2026-09-20.v1"
+_EXTERNAL_OBSERVATION_SCHEMA_V2 = "2026-09-20.v2"
 _EXTERNAL_OBSERVATION_QUALITY_LABELS = {
     "source_asserted": "сообщено источником",
     "source_verified": "проверено источником",
@@ -166,9 +179,14 @@ def _bounded_text(value: object, *, limit: int = 240) -> str | None:
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
-def _external_observation_entry(row: Any) -> CustomerTimelineEntry | None:
+def _external_observation_entry(
+    row: Any,
+    *,
+    now: datetime,
+) -> CustomerTimelineEntry | None:
     metadata = _payload(_value(row, "metadata_json", 4))
-    if metadata.get("external_observation_schema") != _EXTERNAL_OBSERVATION_SCHEMA:
+    schema = metadata.get("external_observation_schema")
+    if schema not in {_EXTERNAL_OBSERVATION_SCHEMA_V1, _EXTERNAL_OBSERVATION_SCHEMA_V2}:
         return None
     kind = str(metadata.get("external_observation_kind") or "").strip()
     label = _bounded_text(metadata.get("external_observation_label"), limit=160)
@@ -195,11 +213,32 @@ def _external_observation_entry(row: Any) -> CustomerTimelineEntry | None:
     connector_name = _bounded_text(_value(row, "connector_name", 5), limit=160)
     if connector_name is None:
         return None
+    revision_value = _value(row, "observation_revision", 6)
+    revision = None if revision_value is None else int(revision_value)
+    state_value = _value(row, "observation_state", 7)
+    state = None if state_value is None else str(state_value)
+    fresh_value = _value(row, "observation_fresh_until", 8)
+    fresh_until = (
+        None
+        if fresh_value is None
+        else _parse_timestamp(fresh_value, field="external observation fresh_until")
+    )
+    if state == "retracted":
+        freshness = "отозвано источником"
+    elif fresh_until is None:
+        freshness = "свежесть неизвестна"
+    elif fresh_until < now:
+        freshness = f"возможно устарело после {fresh_until.strftime('%d.%m.%Y %H:%M UTC')}"
+    else:
+        freshness = f"актуально до {fresh_until.strftime('%d.%m.%Y %H:%M UTC')}"
     detail_parts = [
         f"Источник: {connector_name}",
         quality_label,
         f"наблюдалось {observed_at.strftime('%d.%m.%Y %H:%M UTC')}",
+        freshness,
     ]
+    if revision is not None:
+        detail_parts.append(f"ревизия {revision}")
     if limitations:
         detail_parts.append("ограничения: " + "; ".join(limitations))
     return CustomerTimelineEntry(
@@ -207,11 +246,15 @@ def _external_observation_entry(row: Any) -> CustomerTimelineEntry | None:
         occurred_at=observed_at,
         source_type="external_product_receipt",
         source_id=str(_value(row, "id", 0)),
-        title=label,
+        title=("Внешнее наблюдение отозвано" if state == "retracted" else label),
         detail=" · ".join(detail_parts),
         evidence_source=connector_name,
         evidence_quality=quality_label,
         observed_at=observed_at,
+        evidence_revision=revision,
+        evidence_state=state,
+        evidence_freshness=freshness,
+        fresh_until=fresh_until,
         limitations=limitations,
     )
 
@@ -337,6 +380,7 @@ def get_customer_timeline(
     actor: TenantContext,
     customer_id: str,
     limit: int = 100,
+    now: datetime | None = None,
 ) -> CustomerTimeline:
     """Project one customer chronology from existing canonical tenant facts.
 
@@ -347,6 +391,10 @@ def get_customer_timeline(
 
     if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1 or limit > 200:
         raise ValueError("limit must be an integer between 1 and 200")
+    current_time = now or datetime.now(timezone.utc)
+    if current_time.tzinfo is None:
+        raise ValueError("timeline now must be timezone-aware")
+    current_time = current_time.astimezone(timezone.utc)
 
     with get_db_ro() as conn:
         current = TenancyRepository(conn).resolve_context(
@@ -387,18 +435,32 @@ def get_customer_timeline(
         observation_rows = conn.execute(
             """
             SELECT r.id,r.external_event_id,r.occurred_at,r.received_at,
-                   r.metadata_json,c.display_name AS connector_name
+                   r.metadata_json,c.display_name AS connector_name,
+                   r.observation_revision,r.observation_state,r.observation_fresh_until
             FROM external_product_event_receipts r
             JOIN external_product_connectors c
               ON c.id=r.connector_id AND c.business_id=r.business_id
             WHERE r.business_id=? AND r.customer_id=?
               AND r.event_type='evidence' AND r.status='accepted'
+              AND (
+                r.observation_key IS NULL
+                OR NOT EXISTS (
+                    SELECT 1
+                    FROM external_product_event_receipts newer
+                    WHERE newer.business_id=r.business_id
+                      AND newer.connector_id=r.connector_id
+                      AND newer.customer_id=r.customer_id
+                      AND newer.observation_key=r.observation_key
+                      AND newer.status='accepted'
+                      AND newer.observation_revision > r.observation_revision
+                )
+              )
             ORDER BY r.occurred_at,r.external_event_id
             """,
             (current.business_id, customer.id),
         ).fetchall()
         for row in observation_rows:
-            entry = _external_observation_entry(row)
+            entry = _external_observation_entry(row, now=current_time)
             if entry is not None:
                 entries.append(entry)
 

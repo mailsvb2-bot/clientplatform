@@ -160,6 +160,7 @@ from clientplatform.domain.customer_interactions import (
     CustomerInteractionButton,
     CustomerInteractionMessage,
 )
+from clientplatform.domain.customers import CustomerPlatform
 from clientplatform.domain.messenger_channels import MessengerIngressRoute
 from clientplatform.domain.money import settlement_currency_minor_unit_exponent
 from clientplatform.domain.owner_input import OwnerInputSession
@@ -3165,6 +3166,7 @@ def _customer_message(actor: TenantContext, customer_id: str) -> CustomerInterac
             else f"• {_CUSTOMER_PLATFORM_LABELS.get(item.platform.value, item.platform.value)}: {item.display_name or item.external_subject}"
         )
         for item in record.identities
+        if item.platform != CustomerPlatform.INTERNAL
     ]
     return CustomerInteractionMessage(
         text=(

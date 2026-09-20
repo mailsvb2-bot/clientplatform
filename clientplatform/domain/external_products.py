@@ -17,7 +17,8 @@ from clientplatform.domain.tenancy import normalize_uuid
 _PRODUCT_KEY_RE = re.compile(r"[a-z][a-z0-9_-]{1,63}")
 _EVENT_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:@/+-]{0,159}")
 _OBSERVATION_KIND_RE = re.compile(r"[a-z][a-z0-9._-]{1,63}")
-_EXTERNAL_OBSERVATION_SCHEMA = "2026-09-20.v1"
+_OBSERVATION_KEY_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:@/+-]{0,159}")
+_EXTERNAL_OBSERVATION_SCHEMA = "2026-09-20.v2"
 _RESERVED_METADATA_KEYS = frozenset(
     {
         "external_product_connector_id",
@@ -33,6 +34,11 @@ _RESERVED_METADATA_KEYS = frozenset(
         "external_observation_provenance_ref",
         "external_observation_quality",
         "external_observation_limitations",
+        "external_observation_key",
+        "external_observation_revision",
+        "external_observation_state",
+        "external_observation_supersedes_external_event_id",
+        "external_observation_fresh_until",
     }
 )
 
@@ -69,6 +75,11 @@ class ExternalProductEventType(StrEnum):
     REFUND_RECORDED = "refund_recorded"
 
 
+class ExternalObservationState(StrEnum):
+    ACTIVE = "active"
+    RETRACTED = "retracted"
+
+
 class ExternalObservationQuality(StrEnum):
     """Meaning of an observation without pretending it is a probability."""
 
@@ -85,14 +96,22 @@ class ExternalProductObservation:
     instruction to mutate CustomerIdentity or perform customer communication.
     """
 
+    observation_key: str
     kind: str
     label: str
     observed_at: datetime
     provenance_ref: str
+    revision: int = 1
+    state: ExternalObservationState = ExternalObservationState.ACTIVE
+    supersedes_external_event_id: str | None = None
+    fresh_until: datetime | None = None
     quality: ExternalObservationQuality = ExternalObservationQuality.SOURCE_ASSERTED
     limitations: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        observation_key = str(self.observation_key or "").strip()
+        if not _OBSERVATION_KEY_RE.fullmatch(observation_key):
+            raise ValueError("external observation key has an unsupported format")
         kind = str(self.kind or "").strip().lower()
         if not _OBSERVATION_KIND_RE.fullmatch(kind):
             raise ValueError("external observation kind must be a stable lowercase identifier")
@@ -105,6 +124,31 @@ class ExternalProductObservation:
         observed_at = self.observed_at
         if observed_at.tzinfo is None:
             raise ValueError("external observation observed_at must be timezone-aware")
+        revision = self.revision
+        if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
+            raise ValueError("external observation revision must be a positive integer")
+        state = self.state
+        if not isinstance(state, ExternalObservationState):
+            state = ExternalObservationState(str(state).strip().lower())
+        supersedes = (
+            None
+            if self.supersedes_external_event_id is None
+            else normalize_external_event_id(self.supersedes_external_event_id)
+        )
+        if revision == 1 and supersedes is not None:
+            raise ValueError("first external observation revision cannot supersede an event")
+        if revision > 1 and supersedes is None:
+            raise ValueError("external observation revision requires supersedes_external_event_id")
+        if revision == 1 and state == ExternalObservationState.RETRACTED:
+            raise ValueError("first external observation revision cannot be retracted")
+        fresh_until = self.fresh_until
+        if fresh_until is not None:
+            if fresh_until.tzinfo is None:
+                raise ValueError("external observation fresh_until must be timezone-aware")
+            if fresh_until < observed_at:
+                raise ValueError("external observation fresh_until cannot predate observed_at")
+        if state == ExternalObservationState.RETRACTED and fresh_until is not None:
+            raise ValueError("retracted external observation cannot have fresh_until")
         quality = self.quality
         if not isinstance(quality, ExternalObservationQuality):
             quality = ExternalObservationQuality(str(quality).strip().lower())
@@ -119,16 +163,28 @@ class ExternalProductObservation:
             )
             for item in raw_limitations
         )
+        object.__setattr__(self, "observation_key", observation_key)
         object.__setattr__(self, "kind", kind)
         object.__setattr__(self, "label", label)
         object.__setattr__(self, "provenance_ref", provenance_ref)
         object.__setattr__(self, "observed_at", observed_at)
+        object.__setattr__(self, "revision", revision)
+        object.__setattr__(self, "state", state)
+        object.__setattr__(self, "supersedes_external_event_id", supersedes)
+        object.__setattr__(self, "fresh_until", fresh_until)
         object.__setattr__(self, "quality", quality)
         object.__setattr__(self, "limitations", limitations)
 
     def canonical_metadata(self) -> dict[str, Any]:
         return {
             "external_observation_schema": _EXTERNAL_OBSERVATION_SCHEMA,
+            "external_observation_key": self.observation_key,
+            "external_observation_revision": self.revision,
+            "external_observation_state": self.state.value,
+            "external_observation_supersedes_external_event_id": self.supersedes_external_event_id,
+            "external_observation_fresh_until": (
+                None if self.fresh_until is None else self.fresh_until.isoformat()
+            ),
             "external_observation_kind": self.kind,
             "external_observation_label": self.label,
             "external_observation_observed_at": self.observed_at.isoformat(),
@@ -225,6 +281,8 @@ class ExternalProductEvent:
             raise TypeError("external product observation must be ExternalProductObservation")
         if observation is not None and event_type != ExternalProductEventType.EVIDENCE:
             raise ValueError("external observation is only allowed for evidence events")
+        if observation is not None and customer_ref is None:
+            raise ValueError("structured external observation requires customer_ref")
         if event_type != ExternalProductEventType.EVIDENCE and customer_ref is None:
             raise ValueError(f"{event_type.value} requires customer_ref")
         if event_type in {
@@ -264,6 +322,11 @@ class ExternalProductReceipt:
     outcome_event_id: str | None
     occurred_at: str
     received_at: str
+    observation_key: str | None = None
+    observation_revision: int | None = None
+    observation_state: ExternalObservationState | None = None
+    observation_supersedes_external_event_id: str | None = None
+    observation_fresh_until: str | None = None
 
 
 def _normalize_bounded_text(value: object, *, field_name: str, limit: int) -> str:
@@ -382,6 +445,7 @@ def normalize_external_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:
 
 __all__ = [
     "ExternalObservationQuality",
+    "ExternalObservationState",
     "ExternalProductAcquisition",
     "ExternalProductConnector",
     "ExternalProductConnectorStatus",
