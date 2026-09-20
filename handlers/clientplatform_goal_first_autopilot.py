@@ -45,6 +45,7 @@ from clientplatform.application.visual_creatives import (
     create_ad_visual,
     materialize_ad_visual,
     poll_ad_visual,
+    visual_generation_ready,
 )
 from clientplatform.domain.ad_connections import AdConnectionError
 from clientplatform.domain.ad_publication_assets import (
@@ -55,6 +56,10 @@ from clientplatform.domain.ad_spend import AdSpendError
 from clientplatform.domain.promotions import PromotionChannel, PromotionError
 from clientplatform.domain.tenancy import TenantPermissionDenied
 from clientplatform.integrations.yandex_direct import YandexDirectError
+from clientplatform.presentation.visual_generation import (
+    visual_failure_message,
+    visual_provider_unavailable_message,
+)
 
 from . import clientplatform_control as control
 from . import clientplatform_one_click_experience as one_click
@@ -62,6 +67,7 @@ from . import clientplatform_one_click_experience as one_click
 
 router = Router(name="clientplatform_goal_first_autopilot")
 _MAX_TELEGRAM_MEDIA_BYTES = 20_000_000
+_GENERATED_VIDEO_DURATION_SECONDS = 8
 
 
 class GoalFirstAutopilotState(StatesGroup):
@@ -119,9 +125,9 @@ async def send_goal_dashboard(
         f"{profile.activity_description}\n\n"
         f"{readiness}\n"
         f"Клиентов: {len(customers)} · материалов и программ: {len(programs)}\n\n"
-        "Главное действие — «🚀 Получить клиентов». ClientPlatform сама выберет "
-        "ближайшее свободное время, подходящий рекламный путь и сохранённые "
-        "настройки. Технические кабинеты и кампании знать не нужно.\n\n"
+        "Главное действие — «🚀 Получить клиентов». ClientPlatform проведёт "
+        "через выбор услуги и нужного времени, затем использует подходящий рекламный "
+        "путь и сохранённые настройки. Технические кабинеты и кампании знать не нужно.\n\n"
         "Если захотите, перед запуском можно заменить текст и добавить свою "
         "картинку или видео. Действия с возможными расходами подтверждаются отдельно.",
         reply_markup=_goal_keyboard(business_id),
@@ -136,7 +142,10 @@ def _custom_keyboard(business_token: str):
                 ("🖼 Своя картинка", f"cpo:custom-image:{business_token}"),
                 ("🎬 Своё видео", f"cpo:custom-video:{business_token}"),
             ],
-            [("✨ Сделать картинку автоматически", f"cpo:genask:{business_token}")],
+            [
+                ("✨ AI-картинка", f"cpo:genask:{business_token}"),
+                ("🎬 AI-видео", f"cpo:genvideoask:{business_token}"),
+            ],
             [("🧹 Без картинки и видео", f"cpo:custom-clear:{business_token}")],
             [("✅ Готово", f"cpo:custom-done:{business_token}")],
             [("🧰 Другие настройки", f"cpo:ads:{business_token}")],
@@ -157,6 +166,10 @@ def _launch_label(data: dict) -> str:
 def _result_keyboard(business_token: str, data: dict):
     return control._keyboard(
         [
+            [
+                ("🖼 Создать картинку", f"cpo:genask:{business_token}"),
+                ("🎬 Создать видео", f"cpo:genvideoask:{business_token}"),
+            ],
             [(_launch_label(data), f"cpo:launch:{business_token}")],
             [("🎨 Настроить под себя", f"cpo:custom:{business_token}")],
             [("🏠 Не запускать", f"cpj:home:{business_token}")],
@@ -275,8 +288,9 @@ async def _prepare_goal_result(
         "ClientPlatform сама выбрала ближайшее свободное время и подходящие "
         "сохранённые настройки.\n\n"
         f"{draft.job.title}\n\n{draft.job.text}\n\n"
-        "Если всё устраивает — больше технических шагов нет. Если хотите свой "
-        "текст, картинку или видео, откройте «Настроить под себя».\n\n"
+        "Если всё устраивает — больше технических шагов нет. Картинку или видео "
+        "можно создать сразу кнопками ниже; свой текст и свои файлы доступны через "
+        "«Настроить под себя».\n\n"
         f"{launch_hint}",
         reply_markup=_result_keyboard(str(data["business_token"]), next_data),
     )
@@ -627,6 +641,30 @@ async def ask_generated_image_confirmation(callback: CallbackQuery, state: FSMCo
     )
 
 
+@router.callback_query(F.data.startswith("cpo:genvideoask:"))
+async def ask_generated_video_confirmation(callback: CallbackQuery, state: FSMContext) -> None:
+    business_token = str(callback.data).split(":", 2)[2]
+    data = await state.get_data()
+    if not _state_matches(data, business_token):
+        await callback.answer("Этот черновик уже устарел", show_alert=True)
+        return
+    await state.update_data(creative_generation_kind="video")
+    await state.set_state(GoalFirstAutopilotState.confirming_generation)
+    await callback.answer()
+    await control._callback_message(callback).answer(
+        "🎬 Создать короткое видео автоматически?\n\n"
+        "Это отдельная генерация через подключённый AI-провайдер и она может "
+        "расходовать платную квоту. ClientPlatform запустит ровно один "
+        "идемпотентный запрос только после явного подтверждения.",
+        reply_markup=control._keyboard(
+            [
+                [("✅ Создать 1 видео", f"cpo:genvideo:{business_token}")],
+                [("⬅️ Не создавать", f"cpo:custom:{business_token}")],
+            ]
+        ),
+    )
+
+
 @router.callback_query(F.data.startswith("cpo:genstudio:"))
 async def open_generated_image_studio(callback: CallbackQuery, state: FSMContext) -> None:
     business_token = str(callback.data).split(":", 2)[2]
@@ -671,19 +709,22 @@ async def open_generated_image_studio(callback: CallbackQuery, state: FSMContext
         ),
     )
 
-async def _finish_generated_image(
+async def _finish_generated_visual(
     event: CallbackQuery,
     state: FSMContext,
     *,
     data: dict,
+    kind: str,
     result: GoalStudioPublicationResult | None = None,
     job: object | None = None,
 ) -> bool:
+    visual_kind = "video" if str(kind or "").strip().lower() == "video" else "image"
     if result is not None:
         if not result.attached or result.asset is None:
             return False
         await state.update_data(
             creative_job_id="",
+            creative_generation_kind="image",
             creative_experiment_id=result.binding.experiment_id,
             creative_variant_id=result.binding.variant_id,
         )
@@ -707,34 +748,71 @@ async def _finish_generated_image(
     try:
         path = await asyncio.to_thread(materialize_ad_visual, job)
         actor = await control._actor(int(event.from_user.id), str(data["business_id"]))
-        await asyncio.to_thread(
-            attach_image_file,
-            actor=actor,
-            publication_job_id=str(data["job_id"]),
-            path=path,
-            source=AdPublicationAssetSource.GENERATED,
-        )
-    except KeyError:
+        if visual_kind == "video":
+            payload = await asyncio.to_thread(path.read_bytes)
+            await asyncio.to_thread(
+                attach_video_bytes,
+                actor=actor,
+                publication_job_id=str(data["job_id"]),
+                payload=payload,
+                content_type=str(getattr(job, "mime_type", "") or "video/mp4"),
+                original_name=path.name or "generated.mp4",
+                duration_seconds=_GENERATED_VIDEO_DURATION_SECONDS,
+                source=AdPublicationAssetSource.GENERATED,
+            )
+        else:
+            await asyncio.to_thread(
+                attach_image_file,
+                actor=actor,
+                publication_job_id=str(data["job_id"]),
+                path=path,
+                source=AdPublicationAssetSource.GENERATED,
+            )
+    except (KeyError, OSError, ValueError, VisualCreativeError, AdPublicationAssetError):
         return False
-    except OSError:
-        return False
-    except ValueError:
-        return False
-    except VisualCreativeError:
-        return False
-    except AdPublicationAssetError:
-        return False
-    await state.update_data(creative_job_id="")
-    await state.set_state(GoalFirstAutopilotState.customizing)
-    await control._callback_message(event).answer_photo(
-        FSInputFile(path),
-        caption="✅ Картинка готова и уже привязана к рекламному черновику ClientPlatform.",
+    await state.update_data(
+        creative_job_id="",
+        creative_generation_kind=visual_kind,
     )
+    await state.set_state(GoalFirstAutopilotState.customizing)
+    if visual_kind == "video":
+        await control._callback_message(event).answer_video(
+            FSInputFile(path),
+            caption="✅ Видео готово и уже привязано к рекламному черновику ClientPlatform.",
+        )
+        follow_up = "В Яндекс вручную его загружать не нужно."
+    else:
+        await control._callback_message(event).answer_photo(
+            FSInputFile(path),
+            caption="✅ Картинка готова и уже привязана к рекламному черновику ClientPlatform.",
+        )
+        follow_up = "В Яндекс вручную её загружать не нужно."
     await control._callback_message(event).answer(
-        "В Яндекс вручную её загружать не нужно.",
+        follow_up,
         reply_markup=_custom_keyboard(str(data["business_token"])),
     )
     return True
+
+
+async def _finish_generated_image(
+    event: CallbackQuery,
+    state: FSMContext,
+    *,
+    data: dict,
+    result: GoalStudioPublicationResult | None = None,
+    job: object | None = None,
+) -> bool:
+    """Compatibility wrapper for the image-only Creative Studio variant path."""
+
+    return await _finish_generated_visual(
+        event,
+        state,
+        data=data,
+        kind="image",
+        result=result,
+        job=job,
+    )
+
 
 async def _generate_studio_variant(
     callback: CallbackQuery,
@@ -819,19 +897,38 @@ async def generate_selected_studio_image(callback: CallbackQuery, state: FSMCont
     )
 
 
-@router.callback_query(F.data.startswith("cpo:gen:"))
-async def generate_custom_image(callback: CallbackQuery, state: FSMContext) -> None:
-    """Preserve the original one-image flow while Creative Studio remains opt-in."""
-
-    business_token = str(callback.data).split(":", 2)[2]
+async def _generate_custom_visual(
+    callback: CallbackQuery,
+    state: FSMContext,
+    *,
+    business_token: str,
+    kind: str,
+) -> None:
+    visual_kind = "video" if str(kind or "").strip().lower() == "video" else "image"
     data = await state.get_data()
     if not _state_matches(data, business_token):
         await callback.answer("Этот черновик уже устарел", show_alert=True)
         return
-    await callback.answer("Создаю картинку…")
+    object_noun = "видео" if visual_kind == "video" else "картинку"
+    subject_noun = "Видео" if visual_kind == "video" else "Картинка"
+    without_noun = "видео" if visual_kind == "video" else "картинки"
+    await callback.answer(f"Создаю {object_noun}…")
     try:
         business_id = str(data["business_id"])
         publication_job_id = str(data["job_id"])
+        country_code = os.getenv("VISUAL_DEPLOYMENT_COUNTRY", "")
+        ready = await asyncio.to_thread(
+            visual_generation_ready,
+            kind=visual_kind,
+            country_code=country_code,
+        )
+        if not ready:
+            await control._callback_message(callback).answer(
+                visual_provider_unavailable_message(visual_kind),
+                reply_markup=_custom_keyboard(business_token),
+            )
+            await state.set_state(GoalFirstAutopilotState.customizing)
+            return
         copy_digest = hashlib.sha256(
             (
                 str(data.get("creative_title") or "")
@@ -840,43 +937,84 @@ async def generate_custom_image(callback: CallbackQuery, state: FSMContext) -> N
             ).encode("utf-8")
         ).hexdigest()
         idempotency_key = "clientplatform:" + hashlib.sha256(
-            f"{business_id}|{publication_job_id}|image|{copy_digest}".encode("utf-8")
+            f"{business_id}|{publication_job_id}|{visual_kind}|{copy_digest}".encode("utf-8")
         ).hexdigest()
         job = await asyncio.to_thread(
             create_ad_visual,
             title=str(data.get("creative_title") or ""),
             body=str(data.get("creative_body") or ""),
-            kind="image",
+            kind=visual_kind,
             scope_id=business_id,
             idempotency_key=idempotency_key,
-            country_code=os.getenv("VISUAL_DEPLOYMENT_COUNTRY", ""),
+            country_code=country_code,
             wait_seconds=20,
         )
     except (KeyError, ValueError, VisualCreativeError):
         await control._callback_message(callback).answer(
-            "Не удалось создать картинку. Повторная платная генерация автоматически не запускается.",
+            "Не удалось проверить или запустить генератор. "
+            "Повторная платная генерация автоматически не запускается.",
             reply_markup=_custom_keyboard(business_token),
         )
         await state.set_state(GoalFirstAutopilotState.customizing)
         return
-    if await _finish_generated_image(callback, state, job=job, data=data):
+    if await _finish_generated_visual(
+        callback,
+        state,
+        job=job,
+        data=data,
+        kind=visual_kind,
+    ):
+        return
+    if str(getattr(job, "status", "") or "").strip().lower() == "failed":
+        await state.update_data(creative_job_id="", creative_generation_kind=visual_kind)
+        await state.set_state(GoalFirstAutopilotState.customizing)
+        await control._callback_message(callback).answer(
+            visual_failure_message(job),
+            reply_markup=_custom_keyboard(business_token),
+        )
         return
     job_id = str(getattr(job, "job_id", "") or getattr(job, "id", "") or "")
     if not job_id:
         await state.set_state(GoalFirstAutopilotState.customizing)
         await control._callback_message(callback).answer(
-            "Генератор не вернул результат. Можно продолжить без картинки.",
+            f"Генератор не вернул результат. Можно продолжить без {without_noun}.",
             reply_markup=_custom_keyboard(business_token),
         )
         return
-    await state.update_data(creative_job_id=job_id)
+    await state.update_data(
+        creative_job_id=job_id,
+        creative_generation_kind=visual_kind,
+    )
     await state.set_state(GoalFirstAutopilotState.generation_pending)
     await control._callback_message(callback).answer(
-        "⏳ Картинка ещё создаётся. Ничего загружать заново не нужно.",
+        f"⏳ {subject_noun} ещё создаётся. Ничего загружать заново не нужно.",
         reply_markup=control._keyboard(
             [[("🔄 Проверить готовность", f"cpo:gencheck:{business_token}")]]
         ),
     )
+
+
+@router.callback_query(F.data.startswith("cpo:gen:"))
+async def generate_custom_image(callback: CallbackQuery, state: FSMContext) -> None:
+    business_token = str(callback.data).split(":", 2)[2]
+    await _generate_custom_visual(
+        callback,
+        state,
+        business_token=business_token,
+        kind="image",
+    )
+
+
+@router.callback_query(F.data.startswith("cpo:genvideo:"))
+async def generate_custom_video(callback: CallbackQuery, state: FSMContext) -> None:
+    business_token = str(callback.data).split(":", 2)[2]
+    await _generate_custom_visual(
+        callback,
+        state,
+        business_token=business_token,
+        kind="video",
+    )
+
 
 async def _check_studio_generated_image(
     callback: CallbackQuery,
@@ -929,6 +1067,8 @@ async def _check_studio_generated_image(
 
 @router.callback_query(F.data.startswith("cpo:gencheck:"))
 async def check_generated_image(callback: CallbackQuery, state: FSMContext) -> None:
+    """Poll the canonical generated visual job; old callback name stays stable."""
+
     business_token = str(callback.data).split(":", 2)[2]
     data = await state.get_data()
     if not _state_matches(data, business_token):
@@ -942,6 +1082,14 @@ async def check_generated_image(callback: CallbackQuery, state: FSMContext) -> N
             data=data,
         )
         return
+    visual_kind = (
+        "video"
+        if str(data.get("creative_generation_kind") or "").strip().lower() == "video"
+        else "image"
+    )
+    check_noun = "видео" if visual_kind == "video" else "картинку"
+    own_noun = "своё видео" if visual_kind == "video" else "свою картинку"
+    pronoun = "него" if visual_kind == "video" else "неё"
     try:
         job = await asyncio.to_thread(
             poll_ad_visual,
@@ -949,10 +1097,16 @@ async def check_generated_image(callback: CallbackQuery, state: FSMContext) -> N
             scope_id=str(data["business_id"]),
         )
     except (KeyError, VisualCreativeError):
-        await callback.answer("Пока не удалось проверить картинку", show_alert=True)
+        await callback.answer(f"Пока не удалось проверить {check_noun}", show_alert=True)
         return
     await callback.answer()
-    if await _finish_generated_image(callback, state, job=job, data=data):
+    if await _finish_generated_visual(
+        callback,
+        state,
+        job=job,
+        data=data,
+        kind=visual_kind,
+    ):
         return
     if str(getattr(job, "status", "") or "") in {"queued", "running"}:
         await control._callback_message(callback).answer(
@@ -962,10 +1116,11 @@ async def check_generated_image(callback: CallbackQuery, state: FSMContext) -> N
             ),
         )
         return
-    await state.update_data(creative_job_id="")
+    await state.update_data(creative_job_id="", creative_generation_kind=visual_kind)
     await state.set_state(GoalFirstAutopilotState.customizing)
     await control._callback_message(callback).answer(
-        "Генерация не удалась. Можно загрузить свою картинку или продолжить без неё.",
+        visual_failure_message(job)
+        + f"\n\nМожно загрузить {own_noun} или продолжить без {pronoun}.",
         reply_markup=_custom_keyboard(business_token),
     )
 
