@@ -820,7 +820,11 @@ async def choose_calendar_month(callback: CallbackQuery, state: FSMContext) -> N
     except (IndexError, ValueError):
         await callback.answer("Этот месяц недоступен", show_alert=True)
         return
-    await state.update_data(event_picker_month=month_key(year, month))
+    selected_month = month_key(year, month)
+    if str(data.get("event_picker_month") or "") == selected_month:
+        await callback.answer()
+        return
+    await state.update_data(event_picker_month=selected_month)
     await callback.answer()
     await control._callback_message(callback).edit_reply_markup(
         reply_markup=_calendar_keyboard(
