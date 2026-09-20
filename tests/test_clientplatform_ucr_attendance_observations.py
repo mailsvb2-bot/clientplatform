@@ -65,7 +65,7 @@ class UcrAttendanceObservationTests(unittest.TestCase):
         attendance = parse_ucr_participant_attendance(
             {
                 "attendance": {
-                    "externalUserId": "raw-must-not-propagate",
+                    "externalUserId": _REQUEST["externalUserId"],
                     "firstJoinAtUnixMs": "1789912800000",
                     "lastLeaveAtUnixMs": "1789915320000",
                     "firstMediaReadyAtUnixMs": "1789912815000",
@@ -107,7 +107,7 @@ class UcrAttendanceObservationTests(unittest.TestCase):
         attendance = parse_ucr_participant_attendance(
             {
                 "attendance": {
-                    "externalUserId": "sergey@example.invalid",
+                    "externalUserId": _REQUEST["externalUserId"],
                     "firstJoinAtUnixMs": "1789912800000",
                     "lastLeaveAtUnixMs": "1789915320000",
                     "firstMediaReadyAtUnixMs": "1789912815000",
@@ -191,6 +191,7 @@ class UcrAttendanceObservationTests(unittest.TestCase):
             attendance=attendance,
             observation_key="ucr:live:attendance",
             canonical_request=_REQUEST,
+            current_head=None,
         )
         assert observation is not None
         self.assertIn("итоговая длительность ещё может измениться", observation.limitations[0])
@@ -214,6 +215,7 @@ class UcrAttendanceObservationTests(unittest.TestCase):
                 attendance=attendance,
                 observation_key="ucr:zero:attendance",
                 canonical_request=_REQUEST,
+                current_head=None,
             )
         )
 
