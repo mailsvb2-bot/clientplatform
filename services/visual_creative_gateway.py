@@ -538,6 +538,38 @@ def download_render_asset(
         raise VisualCreativeGatewayError("visual_gateway_render_materialization_failed") from exc
     return target
 
+def configured_visual_providers(
+    kind: str,
+    *,
+    country_code: str = "",
+) -> tuple[str, ...]:
+    """Read provider readiness through the authenticated gateway boundary.
+
+    The response exposes only provider names and never provider credentials.
+    This lets owner-facing flows fail before paid consent when deployment
+    configuration cannot actually generate the requested media kind.
+    """
+
+    visual_kind = str(kind or "").strip().lower()
+    if visual_kind not in {"image", "video"}:
+        raise ValueError("visual kind must be image or video")
+    query = urllib.parse.urlencode({"country_code": str(country_code or "").strip()})
+    value = _json("GET", f"/v1/providers?{query}")
+    if not bool(value.get("enabled")):
+        return ()
+    raw = value.get(f"configured_{visual_kind}")
+    if not isinstance(raw, (list, tuple)):
+        raise VisualCreativeGatewayError("visual_gateway_invalid_provider_snapshot")
+    result: list[str] = []
+    for item in raw:
+        name = str(item or "").strip().lower()
+        if not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", name):
+            raise VisualCreativeGatewayError("visual_gateway_invalid_provider_snapshot")
+        if name not in result:
+            result.append(name)
+    return tuple(result)
+
+
 def gateway_snapshot() -> dict[str, Any]:
     base = str(os.getenv("VISUAL_GATEWAY_URL", "") or "").strip()
     parsed = urllib.parse.urlsplit(base) if base else None
@@ -564,6 +596,7 @@ __all__ = [
     "VisualRenderAsset",
     "VisualRenderPack",
     "download_render_asset",
+    "configured_visual_providers",
     "download_visual",
     "gateway_snapshot",
     "poll_visual",

@@ -35,6 +35,7 @@ from clientplatform.application.visual_creatives import (
     create_ad_visual,
     materialize_ad_visual,
     poll_ad_visual,
+    visual_generation_ready,
 )
 from clientplatform.domain.ad_connections import (
     AdConnectionError,
@@ -45,6 +46,10 @@ from clientplatform.domain.ad_connections import (
 from clientplatform.domain.bookings import BookingSlotStatus
 from clientplatform.domain.promotions import PromotionChannel, PromotionError
 from clientplatform.integrations.yandex_direct import YandexDirectError
+from clientplatform.presentation.visual_generation import (
+    visual_failure_message,
+    visual_provider_unavailable_message,
+)
 
 from . import clientplatform_control as control
 from . import clientplatform_simple_experience as simple
@@ -559,6 +564,18 @@ async def _render_ad_visual(
     try:
         business_id = str(data["business_id"])
         publication_job_id = str(data["job_id"])
+        country_code = os.getenv("VISUAL_DEPLOYMENT_COUNTRY", "")
+        ready = await asyncio.to_thread(
+            visual_generation_ready,
+            kind=kind,
+            country_code=country_code,
+        )
+        if not ready:
+            await callback.answer(
+                visual_provider_unavailable_message(kind),
+                show_alert=True,
+            )
+            return
         idempotency_key = "clientplatform:" + hashlib.sha256(
             f"{business_id}|{publication_job_id}|{kind}".encode("utf-8")
         ).hexdigest()
@@ -569,7 +586,7 @@ async def _render_ad_visual(
             kind=kind,
             scope_id=business_id,
             idempotency_key=idempotency_key,
-            country_code=os.getenv("VISUAL_DEPLOYMENT_COUNTRY", ""),
+            country_code=country_code,
             wait_seconds=_visual_wait_seconds(),
         )
     except KeyError:
@@ -582,7 +599,11 @@ async def _render_ad_visual(
         await callback.answer("Не удалось подготовить визуал", show_alert=True)
         return
     except VisualCreativeError:
-        await callback.answer("Не удалось подготовить визуал", show_alert=True)
+        await callback.answer(
+            "Не удалось проверить или запустить генератор. "
+            "Повторный платный запрос автоматически не запускается.",
+            show_alert=True,
+        )
         return
 
     await callback.answer()
@@ -630,7 +651,8 @@ async def _render_ad_visual(
         return
     await state.update_data(creative_job_id="")
     await target.answer(
-        "Не удалось создать визуал. Текстовый рекламный черновик уже готов — "
+        visual_failure_message(job)
+        + "\n\nТекстовый рекламный черновик уже готов — "
         "можно повторить попытку позже или продолжить без визуала."
     )
 
@@ -710,8 +732,8 @@ async def refresh_ad_visual(callback: CallbackQuery, state: FSMContext) -> None:
     else:
         await state.update_data(creative_job_id="")
         await target.answer(
-            "Генерация визуала завершилась ошибкой; текстовый рекламный черновик "
-            "сохранён."
+            visual_failure_message(job)
+            + "\n\nТекстовый рекламный черновик сохранён."
         )
 
 

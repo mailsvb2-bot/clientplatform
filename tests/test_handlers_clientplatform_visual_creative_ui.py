@@ -64,6 +64,17 @@ def target_message() -> SimpleNamespace:
 
 
 class ClientPlatformVisualCreativeUiTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self.visual_ready = patch.object(
+            ui,
+            "visual_generation_ready",
+            return_value=True,
+        )
+        self.visual_ready.start()
+
+    def tearDown(self) -> None:
+        self.visual_ready.stop()
+
     def test_visual_wait_seconds_is_bounded(self) -> None:
         with patch.dict(os.environ, {"VISUAL_TELEGRAM_WAIT_SECONDS": "bad"}):
             self.assertEqual(ui._visual_wait_seconds(), 20)
@@ -144,10 +155,27 @@ class ClientPlatformVisualCreativeUiTests(unittest.IsolatedAsyncioTestCase):
         ):
             await ui._render_ad_visual(cb, st, kind="image")
         cb.answer.assert_awaited_once_with(
-            "Не удалось подготовить визуал",
+            "Не удалось проверить или запустить генератор. "
+            "Повторный платный запрос автоматически не запускается.",
             show_alert=True,
         )
         st.clear.assert_not_awaited()
+
+    async def test_unavailable_provider_stops_before_paid_ad_visual_call(self) -> None:
+        cb = callback("cpa:creative:video")
+        st = state(base_state())
+        with (
+            patch.object(ui, "visual_generation_ready", return_value=False),
+            patch.object(ui, "create_ad_visual") as create,
+            patch.object(ui.asyncio, "to_thread", new=immediate_to_thread),
+        ):
+            await ui._render_ad_visual(cb, st, kind="video")
+
+        create.assert_not_called()
+        cb.answer.assert_awaited_once()
+        self.assertTrue(cb.answer.await_args.kwargs["show_alert"])
+        self.assertIn("не подключён рабочий генератор", cb.answer.await_args.args[0])
+        self.assertIn("Платный запрос не запускался", cb.answer.await_args.args[0])
 
     async def test_unexpected_runtime_error_is_not_silenced(self) -> None:
         cb = callback()

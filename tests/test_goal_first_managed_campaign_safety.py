@@ -384,12 +384,22 @@ class GoalFirstInteractionSafetyTests(unittest.TestCase):
 
         allowed = fake._state_local_callback_allowed
         self.assertTrue(allowed("GoalFirstAutopilotState:ready", "cpo:launch:business-1"))
+        self.assertTrue(allowed("GoalFirstAutopilotState:ready", "cpo:genask:business-1"))
+        self.assertTrue(
+            allowed("GoalFirstAutopilotState:ready", "cpo:genvideoask:business-1")
+        )
         self.assertFalse(allowed("GoalFirstAutopilotState:ready", "cpo:gen:business-1"))
         self.assertTrue(
             allowed("GoalFirstAutopilotState:customizing", "cpo:custom-image:business-1")
         )
         self.assertTrue(
             allowed("GoalFirstAutopilotState:confirming_generation", "cpo:gen:business-1")
+        )
+        self.assertTrue(
+            allowed(
+                "GoalFirstAutopilotState:confirming_generation",
+                "cpo:genvideo:business-1",
+            )
         )
         self.assertTrue(
             allowed("GoalFirstAutopilotState:generation_pending", "cpo:gencheck:business-1")
@@ -406,6 +416,8 @@ class GoalFirstInteractionSafetyTests(unittest.TestCase):
 
         self.assertIn("GoalFirstAutopilotState:", fake._SENSITIVE_STATE_PREFIXES)
         self.assertIn("cpo:launch:", fake._ONE_SHOT_PREFIXES)
+        self.assertIn("cpo:genvideo:", fake._ONE_SHOT_PREFIXES)
+        self.assertIn("cpo:genvideoask:", fake._REPEATABLE_NAVIGATION_PREFIXES)
         self.assertIn("cpo:gencheck:", fake._REPEATABLE_NAVIGATION_PREFIXES)
 
     def test_install_is_idempotent(self):

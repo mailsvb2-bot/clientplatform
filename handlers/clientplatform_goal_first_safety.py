@@ -187,6 +187,7 @@ def install_goal_first_safety(safety: ModuleType) -> None:
         safety,
         "_ONE_SHOT_PREFIXES",
         "cpo:gen:",
+        "cpo:genvideo:",
         "cpo:launch:",
         "cpo:launch-confirm:",
         "cpo:custom-clear:",
@@ -200,6 +201,7 @@ def install_goal_first_safety(safety: ModuleType) -> None:
         "cpo:custom-video:",
         "cpo:custom-done:",
         "cpo:genask:",
+        "cpo:genvideoask:",
         "cpo:gencheck:",
     )
 
@@ -214,7 +216,9 @@ def install_goal_first_safety(safety: ModuleType) -> None:
 
     def state_local_callback_allowed(current_state: str, callback_data: str) -> bool:
         if current_state.startswith("GoalFirstAutopilotState:ready"):
-            return callback_data.startswith(("cpo:custom:", "cpo:launch:"))
+            return callback_data.startswith(
+                ("cpo:custom:", "cpo:genask:", "cpo:genvideoask:", "cpo:launch:")
+            )
         if current_state.startswith("GoalFirstAutopilotState:customizing"):
             return callback_data.startswith(
                 (
@@ -225,12 +229,15 @@ def install_goal_first_safety(safety: ModuleType) -> None:
                     "cpo:custom-clear:",
                     "cpo:custom-done:",
                     "cpo:genask:",
+                    "cpo:genvideoask:",
                     "cpo:ads:",
                     "cpo:launch:",
                 )
             )
         if current_state.startswith("GoalFirstAutopilotState:confirming_generation"):
-            return callback_data.startswith(("cpo:gen:", "cpo:custom:"))
+            return callback_data.startswith(
+                ("cpo:gen:", "cpo:genvideo:", "cpo:custom:")
+            )
         if current_state.startswith("GoalFirstAutopilotState:generation_pending"):
             return callback_data.startswith("cpo:gencheck:")
         if current_state.startswith("GoalFirstAutopilotState:confirming_launch"):
