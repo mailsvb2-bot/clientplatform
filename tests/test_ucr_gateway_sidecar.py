@@ -11,6 +11,7 @@ from ucr_gateway_sidecar.server import (
     SidecarConfig,
     UCR_INTEGRATION_SERVICE,
     UCR_PINNED_REVISION,
+    UCR_UNIVERSAL_CONFERENCE_SERVICE,
     _canonical_error_to_gateway_error,
     load_config,
 )
@@ -139,6 +140,54 @@ class SidecarTests(unittest.IsolatedAsyncioTestCase):
                 "service": UCR_INTEGRATION_SERVICE,
                 "method": "RegisterDevice",
                 "request": {"device": {}},
+            }
+        ).encode()
+        status, payload = await service.rpc(headers=headers(), body=body)
+        self.assertEqual(status, 422)
+        self.assertEqual(payload["error"], "ucr_rpc_method_not_allowed")
+        self.assertEqual(backend.calls, [])
+
+    async def test_universal_attendance_read_forwards_exactly_without_idempotency(self) -> None:
+        backend = FakeBackend()
+        service = GatewayService(config=config(), backend=backend)
+        request = {
+            "scope": {"tenantId": {"value": "tenant-a"}},
+            "conferenceId": {"value": "conference-a"},
+            "integrationId": {"value": "integration-a"},
+            "externalUserId": "YWxpY2U=",
+        }
+        body = json.dumps(
+            {
+                "version": 1,
+                "service": UCR_UNIVERSAL_CONFERENCE_SERVICE,
+                "method": "GetParticipantAttendance",
+                "request": request,
+            }
+        ).encode()
+        status, payload = await service.rpc(headers=headers(), body=body)
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["service"], UCR_UNIVERSAL_CONFERENCE_SERVICE)
+        self.assertEqual(payload["method"], "GetParticipantAttendance")
+        self.assertEqual(backend.calls[0]["request"], request)
+        self.assertIsNone(backend.calls[0]["idempotency_key"])
+
+        status, payload = await service.rpc(
+            headers=headers(**{"Idempotency-Key": "attendance:0001"}),
+            body=body,
+        )
+        self.assertEqual(status, 422)
+        self.assertEqual(payload["error"], "ucr_gateway_read_idempotency_forbidden")
+        self.assertEqual(len(backend.calls), 1)
+
+    async def test_unreviewed_universal_conference_mutation_is_rejected(self) -> None:
+        backend = FakeBackend()
+        service = GatewayService(config=config(), backend=backend)
+        body = json.dumps(
+            {
+                "version": 1,
+                "service": UCR_UNIVERSAL_CONFERENCE_SERVICE,
+                "method": "CreateConference",
+                "request": {"conference": {"externalReference": "event-a"}},
             }
         ).encode()
         status, payload = await service.rpc(headers=headers(), body=body)
