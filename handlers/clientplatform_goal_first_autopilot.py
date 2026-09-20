@@ -45,6 +45,7 @@ from clientplatform.application.visual_creatives import (
     create_ad_visual,
     materialize_ad_visual,
     poll_ad_visual,
+    visual_generation_ready,
 )
 from clientplatform.domain.ad_connections import AdConnectionError
 from clientplatform.domain.ad_publication_assets import (
@@ -55,6 +56,10 @@ from clientplatform.domain.ad_spend import AdSpendError
 from clientplatform.domain.promotions import PromotionChannel, PromotionError
 from clientplatform.domain.tenancy import TenantPermissionDenied
 from clientplatform.integrations.yandex_direct import YandexDirectError
+from clientplatform.presentation.visual_generation import (
+    visual_failure_message,
+    visual_provider_unavailable_message,
+)
 
 from . import clientplatform_control as control
 from . import clientplatform_one_click_experience as one_click
@@ -832,6 +837,19 @@ async def generate_custom_image(callback: CallbackQuery, state: FSMContext) -> N
     try:
         business_id = str(data["business_id"])
         publication_job_id = str(data["job_id"])
+        country_code = os.getenv("VISUAL_DEPLOYMENT_COUNTRY", "")
+        ready = await asyncio.to_thread(
+            visual_generation_ready,
+            kind="image",
+            country_code=country_code,
+        )
+        if not ready:
+            await control._callback_message(callback).answer(
+                visual_provider_unavailable_message("image"),
+                reply_markup=_custom_keyboard(business_token),
+            )
+            await state.set_state(GoalFirstAutopilotState.customizing)
+            return
         copy_digest = hashlib.sha256(
             (
                 str(data.get("creative_title") or "")
@@ -849,17 +867,26 @@ async def generate_custom_image(callback: CallbackQuery, state: FSMContext) -> N
             kind="image",
             scope_id=business_id,
             idempotency_key=idempotency_key,
-            country_code=os.getenv("VISUAL_DEPLOYMENT_COUNTRY", ""),
+            country_code=country_code,
             wait_seconds=20,
         )
     except (KeyError, ValueError, VisualCreativeError):
         await control._callback_message(callback).answer(
-            "Не удалось создать картинку. Повторная платная генерация автоматически не запускается.",
+            "Не удалось проверить или запустить генератор. "
+            "Повторная платная генерация автоматически не запускается.",
             reply_markup=_custom_keyboard(business_token),
         )
         await state.set_state(GoalFirstAutopilotState.customizing)
         return
     if await _finish_generated_image(callback, state, job=job, data=data):
+        return
+    if str(getattr(job, "status", "") or "").strip().lower() == "failed":
+        await state.update_data(creative_job_id="")
+        await state.set_state(GoalFirstAutopilotState.customizing)
+        await control._callback_message(callback).answer(
+            visual_failure_message(job),
+            reply_markup=_custom_keyboard(business_token),
+        )
         return
     job_id = str(getattr(job, "job_id", "") or getattr(job, "id", "") or "")
     if not job_id:
@@ -965,7 +992,8 @@ async def check_generated_image(callback: CallbackQuery, state: FSMContext) -> N
     await state.update_data(creative_job_id="")
     await state.set_state(GoalFirstAutopilotState.customizing)
     await control._callback_message(callback).answer(
-        "Генерация не удалась. Можно загрузить свою картинку или продолжить без неё.",
+        visual_failure_message(job)
+        + "\n\nМожно загрузить свою картинку или продолжить без неё.",
         reply_markup=_custom_keyboard(business_token),
     )
 
