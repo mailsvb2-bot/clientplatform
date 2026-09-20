@@ -19,6 +19,7 @@ from clientplatform.application.native_member_interactions import (
 )
 from clientplatform.domain.connections import ConnectionPlatform, DispatchStatus
 from clientplatform.domain.customer_interactions import CustomerInteractionMessage
+from clientplatform.domain.customers import CustomerPlatform
 from clientplatform.domain.messenger_channels import MessengerIngressRoute
 from clientplatform.domain.tenancy import PlatformRole, TenantContext
 from clientplatform.infrastructure import DispatchOutboxRepository
@@ -55,6 +56,48 @@ def _actor(route: MessengerIngressRoute, user_id: int = 101) -> TenantContext:
         membership_id=str(uuid4()),
         role=PlatformRole.OWNER,
     )
+
+
+class NativeCustomerCardPrivacyTests(unittest.TestCase):
+    def test_customer_card_hides_internal_external_product_binding_identity(self) -> None:
+        route = _route(ConnectionPlatform.VK)
+        actor = _actor(route)
+        record = SimpleNamespace(
+            customer=SimpleNamespace(
+                display_name="Анна",
+                status=SimpleNamespace(value="active"),
+                created_at="2026-09-20T10:00:00+00:00",
+            ),
+            identities=(
+                SimpleNamespace(
+                    platform=CustomerPlatform.INTERNAL,
+                    username=None,
+                    display_name=None,
+                    external_subject="extp:connector-uuid:opaque-fingerprint",
+                ),
+                SimpleNamespace(
+                    platform=CustomerPlatform.PHONE,
+                    username=None,
+                    display_name=None,
+                    external_subject="79991234567",
+                ),
+            ),
+        )
+        with (
+            patch.object(native_member_ui, "get_customer", return_value=record),
+            patch.object(native_member_ui, "get_customer_timeline", return_value=object()),
+            patch.object(
+                native_member_ui,
+                "format_customer_timeline_lines",
+                return_value=("• 20.09.2026 · Клиент добавлен",),
+            ),
+        ):
+            message = native_member_ui._customer_message(actor, str(uuid4()))
+
+        self.assertIn("Телефон: 79991234567", message.text)
+        self.assertNotIn("extp:", message.text)
+        self.assertNotIn("opaque-fingerprint", message.text)
+        self.assertNotIn("ClientPlatform:", message.text)
 
 
 class NativeOwnerInputSurfaceTests(unittest.TestCase):
