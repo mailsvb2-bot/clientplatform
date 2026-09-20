@@ -11,7 +11,13 @@ from clientplatform.application.events import (
     cancel_public_registration_by_token_in_transaction,
 )
 from clientplatform.infrastructure.event_repository import EventNotFound
-from clientplatform.runtime import public_events as public_events_runtime
+
+try:
+    from clientplatform.runtime import public_events as public_events_runtime
+except ModuleNotFoundError as exc:
+    if exc.name != "aiohttp":
+        raise
+    public_events_runtime = None
 
 
 class _Cursor:
@@ -109,6 +115,7 @@ class ParticipantCancellationApplicationTests(unittest.TestCase):
         revoke.assert_not_called()
 
 
+@unittest.skipIf(public_events_runtime is None, "aiohttp is not installed")
 class ParticipantSelfServiceSurfaceTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.registration = SimpleNamespace(
