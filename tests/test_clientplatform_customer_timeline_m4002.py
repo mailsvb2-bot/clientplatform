@@ -202,11 +202,7 @@ class ClientPlatformCustomerTimelineM4002Tests(unittest.TestCase):
             currency="RUB",
         )
 
-        timeline = get_customer_timeline(
-            actor=actor,
-            customer_id=customer.id,
-            now=observed_at + timedelta(minutes=30),
-        )
+        timeline = get_customer_timeline(actor=actor, customer_id=customer.id)
         kinds = [entry.kind for entry in timeline.entries]
         assert kinds[-5:] == [
             "acquisition:first_touch",
@@ -275,7 +271,11 @@ class ClientPlatformCustomerTimelineM4002Tests(unittest.TestCase):
                 received_at=_BASE + timedelta(minutes=4),
             )
 
-        timeline = get_customer_timeline(actor=actor, customer_id=customer.id)
+        timeline = get_customer_timeline(
+            actor=actor,
+            customer_id=customer.id,
+            now=observed_at + timedelta(minutes=30),
+        )
         observation = next(
             entry
             for entry in timeline.entries
