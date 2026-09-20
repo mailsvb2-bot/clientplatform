@@ -397,18 +397,25 @@ async def receive_booking_start_with_quick_duration(
     message: Message,
     state: FSMContext,
 ) -> None:
+    """Keep date/time selection button-only even for typed legacy input."""
+
     data = await state.get_data()
     business_id = str(data.get("business_id") or "")
     if not business_id:
         await state.clear()
         await message.answer("Не удалось продолжить настройку. Откройте кабинет через /start.")
         return
-    await state.update_data(booking_start=str(message.text or ""))
-    await state.set_state(control.ClientPlatformControlState.booking_duration)
-    prefix = "Новое время принято." if data.get("replacing_slot_id") else "Дата и время приняты."
-    await message.answer(
-        f"{prefix} Выберите длительность кнопкой.",
-        reply_markup=_duration_keyboard(business_id),
+    timezone_name = str(data.get("booking_picker_timezone") or "").strip()
+    if not timezone_name:
+        actor = await control._actor(int(message.from_user.id), business_id)
+        profile = await asyncio.to_thread(get_business_profile, actor=actor)
+        timezone_name = profile.timezone
+    await send_booking_date_picker(
+        message,
+        state,
+        business_id=business_id,
+        timezone_name=timezone_name,
+        heading="Дата и время выбираются кнопками.",
     )
 
 
