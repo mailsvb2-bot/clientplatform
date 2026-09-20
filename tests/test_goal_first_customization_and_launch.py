@@ -197,6 +197,7 @@ class GoalFirstCustomizationAndLaunchTests(unittest.IsolatedAsyncioTestCase):
         cb = callback("cpo:gen:business-token", out)
         generated = SimpleNamespace(status="running", asset_ready=False, job_id="visual-1")
         with (
+            patch.object(goal, "visual_generation_ready", return_value=True),
             patch.object(goal, "create_ad_visual", return_value=generated) as create,
             patch.object(goal, "_finish_generated_image", new=AsyncMock(return_value=False)),
             patch.object(goal.control, "_callback_message", return_value=out),
@@ -208,6 +209,23 @@ class GoalFirstCustomizationAndLaunchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state.data["creative_job_id"], "visual-1")
         self.assertEqual(state.state, goal.GoalFirstAutopilotState.generation_pending)
         self.assertIn("Ничего загружать заново не нужно", out.answer.await_args.args[0])
+
+    async def test_generated_image_stops_before_paid_call_when_provider_is_unavailable(self) -> None:
+        state = FakeState(base_data())
+        out = target()
+        cb = callback("cpo:gen:business-token", out)
+        with (
+            patch.object(goal, "visual_generation_ready", return_value=False),
+            patch.object(goal, "create_ad_visual") as create,
+            patch.object(goal.control, "_callback_message", return_value=out),
+            patch.object(goal.asyncio, "to_thread", new=direct),
+        ):
+            await goal.generate_custom_image(cb, state)
+
+        create.assert_not_called()
+        self.assertEqual(state.state, goal.GoalFirstAutopilotState.customizing)
+        self.assertIn("не подключён рабочий генератор", out.answer.await_args.args[0])
+        self.assertIn("Платный запрос не запускался", out.answer.await_args.args[0])
 
     async def test_generated_image_success_is_persisted_as_ad_asset(self) -> None:
         state = FakeState(base_data())
