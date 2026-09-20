@@ -11,21 +11,27 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from clientplatform.application.external_products import (
+    bind_external_product_customer,
     ingest_external_product_webhook,
     parse_external_product_event,
     verify_and_activate_external_product_connector,
     verify_external_product_signature,
 )
 from clientplatform.domain.attribution import AcquisitionSource
+from clientplatform.domain.customers import CustomerNotFound
 from clientplatform.domain.external_products import (
+    ExternalObservationQuality,
     ExternalProductAcquisition,
     ExternalProductEvent,
     ExternalProductEventType,
     ExternalProductInvariantViolation,
+    ExternalProductObservation,
     ExternalProductSignatureError,
+    external_customer_fingerprint,
 )
 from clientplatform.domain.outcomes import OutcomeMoney
 from clientplatform.infrastructure.attribution_repository import AttributionRepository
+from clientplatform.infrastructure.customer_repository import CustomerRepository
 from clientplatform.infrastructure.external_product_repository import ExternalProductRepository
 from clientplatform.infrastructure.tenancy_repository import TenancyRepository
 from services.db.schema import (
@@ -98,6 +104,31 @@ class ExternalProductFixture:
 
     def close(self) -> None:
         self.conn.close()
+
+
+class _HideFirstIdentityLookup:
+    """Deterministically interleave explicit binding into the auto-create race."""
+
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._conn = conn
+        self._hidden = False
+
+    def execute(self, sql: str, params: tuple[object, ...] = ()):
+        normalized = " ".join(sql.split())
+        if (
+            not self._hidden
+            and "FROM customer_identities ci JOIN customers c" in normalized
+            and "ci.platform='internal'" in normalized
+        ):
+            self._hidden = True
+
+            class _EmptyCursor:
+                @staticmethod
+                def fetchone():
+                    return None
+
+            return _EmptyCursor()
+        return self._conn.execute(sql, params)
 
 
 class ClientPlatformExternalProductConnectorTests(unittest.TestCase):
@@ -237,6 +268,217 @@ class ClientPlatformExternalProductConnectorTests(unittest.TestCase):
             (self.fx.actor.business_id,),
         ).fetchone()[0]
         self.assertEqual(count, 0)
+
+    def test_structured_observation_parser_preserves_provenance_without_generic_confidence(self) -> None:
+        payload = {
+            "version": 1,
+            "event_id": "obs-webinar-42",
+            "type": "evidence",
+            "occurred_at": self.now.isoformat(),
+            "customer_ref": "external-attendee-42",
+            "observation": {
+                "kind": "webinar.attended",
+                "label": "Участие в вебинаре подтверждено",
+                "observed_at": (self.now + timedelta(seconds=2)).isoformat(),
+                "provenance_ref": "attendance-receipt-42",
+                "quality": "source_verified",
+                "limitations": ["Платформа не подтверждает просмотр каждой минуты."],
+            },
+        }
+        event = parse_external_product_event(
+            json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        )
+        self.assertIsNotNone(event.observation)
+        assert event.observation is not None
+        self.assertEqual(event.observation.kind, "webinar.attended")
+        self.assertEqual(
+            event.observation.quality,
+            ExternalObservationQuality.SOURCE_VERIFIED,
+        )
+        self.assertEqual(event.observation.provenance_ref, "attendance-receipt-42")
+        self.assertFalse(hasattr(event.observation, "confidence"))
+
+    def test_observation_is_evidence_only_and_cannot_be_attached_to_commercial_outcome(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError,
+            "only allowed for evidence",
+        ):
+            ExternalProductEvent(
+                external_event_id="lead-with-observation",
+                event_type=ExternalProductEventType.LEAD_CREATED,
+                occurred_at=self.now,
+                customer_ref="customer-42",
+                observation=ExternalProductObservation(
+                    kind="webinar.attended",
+                    label="Участие подтверждено",
+                    observed_at=self.now,
+                    provenance_ref="proof-42",
+                ),
+            )
+
+    def test_explicit_binding_routes_observation_to_existing_customer_without_storing_raw_ref(self) -> None:
+        customer = CustomerRepository(self.fx.conn).create_customer(
+            actor=self.fx.actor,
+            display_name="Анна",
+            now=self.now.isoformat(),
+        )
+        self.fx.conn.commit()
+        with patch(
+            "clientplatform.application.external_products.get_db",
+            side_effect=lambda: _db_context(self.fx.conn),
+        ):
+            bound_customer_id = bind_external_product_customer(
+                actor=self.fx.actor,
+                connector_id=self.fx.connector.id,
+                customer_id=customer.id,
+                customer_ref="lms-user-42@example.invalid",
+            )
+        self.assertEqual(bound_customer_id, customer.id)
+
+        event = ExternalProductEvent(
+            external_event_id="observation-42",
+            event_type=ExternalProductEventType.EVIDENCE,
+            occurred_at=self.now,
+            customer_ref="lms-user-42@example.invalid",
+            observation=ExternalProductObservation(
+                kind="webinar.attended",
+                label="Участие в вебинаре подтверждено",
+                observed_at=self.now + timedelta(seconds=2),
+                provenance_ref="attendance-receipt-42",
+                quality=ExternalObservationQuality.SOURCE_VERIFIED,
+                limitations=("Нет данных о внимании участника.",),
+            ),
+        )
+        receipt = self.fx.repo.ingest_event(
+            connector=self.fx.connector,
+            event=event,
+            payload_fingerprint="9" * 64,
+            received_at=self.now + timedelta(seconds=3),
+        )
+        self.assertEqual(receipt.customer_id, customer.id)
+        customers = self.fx.conn.execute(
+            "SELECT COUNT(*) FROM customers WHERE business_id=?",
+            (self.fx.actor.business_id,),
+        ).fetchone()[0]
+        self.assertEqual(customers, 1)
+        identity_subject = self.fx.conn.execute(
+            """
+            SELECT external_subject
+            FROM customer_identities
+            WHERE business_id=? AND customer_id=? AND platform='internal'
+            """,
+            (self.fx.actor.business_id, customer.id),
+        ).fetchone()["external_subject"]
+        self.assertNotIn("lms-user-42@example.invalid", identity_subject)
+        stored = self.fx.conn.execute(
+            """
+            SELECT metadata_json
+            FROM external_product_event_receipts
+            WHERE business_id=? AND id=?
+            """,
+            (self.fx.actor.business_id, receipt.id),
+        ).fetchone()
+        metadata = json.loads(stored["metadata_json"])
+        self.assertEqual(
+            metadata["external_observation_provenance_ref"],
+            "attendance-receipt-42",
+        )
+        self.assertEqual(
+            metadata["external_observation_quality"],
+            "source_verified",
+        )
+        self.assertNotIn("lms-user-42@example.invalid", stored["metadata_json"])
+        outcome_count = self.fx.conn.execute(
+            "SELECT COUNT(*) FROM business_outcome_events WHERE business_id=?",
+            (self.fx.actor.business_id,),
+        ).fetchone()[0]
+        self.assertEqual(outcome_count, 0)
+
+    def test_auto_create_race_reuses_explicit_binding_and_removes_losing_candidate(self) -> None:
+        intended = CustomerRepository(self.fx.conn).create_customer(
+            actor=self.fx.actor,
+            display_name="Уже известный клиент",
+            now=self.now.isoformat(),
+        )
+        self.fx.repo.bind_customer_ref(
+            actor=self.fx.actor,
+            connector_id=self.fx.connector.id,
+            customer_id=intended.id,
+            customer_ref="race-subject",
+            now=self.now,
+        )
+        self.fx.conn.commit()
+
+        fingerprint = external_customer_fingerprint(
+            connector_id=self.fx.connector.id,
+            customer_ref="race-subject",
+        )
+        racing_repo = ExternalProductRepository(_HideFirstIdentityLookup(self.fx.conn))
+        resolved = racing_repo._ensure_customer(
+            connector=self.fx.connector,
+            customer_fingerprint=fingerprint,
+            now=self.now + timedelta(seconds=1),
+        )
+
+        self.assertEqual(resolved, intended.id)
+        rows = self.fx.conn.execute(
+            "SELECT id FROM customers WHERE business_id=? ORDER BY id",
+            (self.fx.actor.business_id,),
+        ).fetchall()
+        self.assertEqual([row["id"] for row in rows], [intended.id])
+
+    def test_explicit_binding_rejects_foreign_customer_and_existing_other_binding(self) -> None:
+        tenancy = TenancyRepository(self.fx.conn)
+        other_access = tenancy.create_business(owner_user_id=9292, name="Other business")
+        other_actor = tenancy.resolve_context(
+            user_id=9292,
+            business_id=other_access.business.id,
+        )
+        other_customer = CustomerRepository(self.fx.conn).create_customer(
+            actor=other_actor,
+            display_name="Чужой клиент",
+            now=self.now.isoformat(),
+        )
+        local_customer = CustomerRepository(self.fx.conn).create_customer(
+            actor=self.fx.actor,
+            display_name="Локальный клиент",
+            now=self.now.isoformat(),
+        )
+        self.fx.conn.commit()
+
+        with self.assertRaises(CustomerNotFound):
+            self.fx.repo.bind_customer_ref(
+                actor=self.fx.actor,
+                connector_id=self.fx.connector.id,
+                customer_id=other_customer.id,
+                customer_ref="shared-ref",
+                now=self.now,
+            )
+
+        first = self.fx.repo.bind_customer_ref(
+            actor=self.fx.actor,
+            connector_id=self.fx.connector.id,
+            customer_id=local_customer.id,
+            customer_ref="bound-ref",
+            now=self.now,
+        )
+        self.assertEqual(first, local_customer.id)
+        second_local = CustomerRepository(self.fx.conn).create_customer(
+            actor=self.fx.actor,
+            display_name="Другой локальный клиент",
+            now=self.now.isoformat(),
+        )
+        with self.assertRaisesRegex(
+            ExternalProductInvariantViolation,
+            "already bound",
+        ):
+            self.fx.repo.bind_customer_ref(
+                actor=self.fx.actor,
+                connector_id=self.fx.connector.id,
+                customer_id=second_local.id,
+                customer_ref="bound-ref",
+                now=self.now,
+            )
 
     def test_customer_linked_event_requires_customer_ref(self) -> None:
         with self.assertRaisesRegex(ValueError, "requires customer_ref"):

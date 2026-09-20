@@ -13,7 +13,9 @@ from clientplatform.domain.external_products import (
     ExternalProductConnector,
     ExternalProductEvent,
     ExternalProductEventType,
+    ExternalObservationQuality,
     ExternalProductInvariantViolation,
+    ExternalProductObservation,
     ExternalProductReceipt,
     ExternalProductSignatureError,
 )
@@ -45,6 +47,7 @@ _ALLOWED_EVENT_KEYS = frozenset(
         "amount_minor",
         "currency",
         "acquisition",
+        "observation",
         "metadata",
     }
 )
@@ -91,6 +94,28 @@ def verify_and_activate_external_product_connector(
                 "external product webhook secret must contain at least 32 bytes"
             )
         return repository.activate_connector(actor=actor, connector_id=connector.id)
+
+
+def bind_external_product_customer(
+    *,
+    actor: TenantContext,
+    connector_id: str,
+    customer_id: str,
+    customer_ref: str,
+) -> str:
+    """Explicitly bind one connector subject to an existing canonical Customer.
+
+    This is a server-side consumer binding. The public webhook still cannot submit
+    customer_id, business_id or mutate an existing CRM identity by itself.
+    """
+
+    with get_db() as conn:
+        return ExternalProductRepository(conn).bind_customer_ref(
+            actor=actor,
+            connector_id=connector_id,
+            customer_id=customer_id,
+            customer_ref=customer_ref,
+        )
 
 
 def disable_external_product_connector(
@@ -158,6 +183,7 @@ def parse_external_product_event(body: bytes) -> ExternalProductEvent:
     event_type = ExternalProductEventType(str(payload.get("type") or "").strip())
     money = _parse_money(payload, event_type=event_type)
     acquisition = _parse_acquisition(payload.get("acquisition"))
+    observation = _parse_observation(payload.get("observation"))
     metadata = payload.get("metadata") or {}
     if not isinstance(metadata, dict):
         raise ValueError("external product metadata must be an object")
@@ -180,6 +206,7 @@ def parse_external_product_event(body: bytes) -> ExternalProductEvent:
         ),
         money=money,
         acquisition=acquisition,
+        observation=observation,
         metadata=metadata,
     )
 
@@ -281,6 +308,40 @@ def _parse_occurred_at(value: Any) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
+def _parse_observation(value: Any) -> ExternalProductObservation | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("external product observation must be an object")
+    allowed = {
+        "kind",
+        "label",
+        "observed_at",
+        "provenance_ref",
+        "quality",
+        "limitations",
+    }
+    if set(value) - allowed:
+        raise ValueError("external product observation contains unsupported fields")
+    limitations = value.get("limitations") or []
+    if not isinstance(limitations, list) or any(
+        not isinstance(item, str) for item in limitations
+    ):
+        raise ValueError("external product observation limitations must be strings")
+    return ExternalProductObservation(
+        kind=str(value.get("kind") or ""),
+        label=str(value.get("label") or ""),
+        observed_at=_parse_occurred_at(value.get("observed_at")),
+        provenance_ref=str(value.get("provenance_ref") or ""),
+        quality=ExternalObservationQuality(
+            str(value.get("quality") or ExternalObservationQuality.SOURCE_ASSERTED.value)
+            .strip()
+            .lower()
+        ),
+        limitations=tuple(limitations),
+    )
+
+
 def _parse_money(
     payload: dict[str, Any],
     *,
@@ -315,6 +376,7 @@ def _parse_acquisition(value: Any) -> ExternalProductAcquisition | None:
 
 __all__ = [
     "authenticate_external_product_webhook",
+    "bind_external_product_customer",
     "disable_external_product_connector",
     "ingest_authenticated_external_product_event",
     "ingest_external_product_webhook",

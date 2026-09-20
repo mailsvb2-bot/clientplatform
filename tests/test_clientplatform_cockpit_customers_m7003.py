@@ -141,6 +141,47 @@ class CockpitCustomersM7003Tests(unittest.TestCase):
         self.assertNotIn("79991234567", rendered)
         self.assertNotIn("private.person@example.com", rendered)
 
+    def test_detail_exposes_external_observation_context_without_raw_subject(self) -> None:
+        record = CustomerRecord(customer=_customer(), identities=())
+        timeline = CustomerTimeline(
+            business_id=_BUSINESS,
+            customer_id=_CUSTOMER,
+            entries=(
+                CustomerTimelineEntry(
+                    kind="external_observation:webinar.attended",
+                    occurred_at=datetime(2026, 9, 6, 12, 0, tzinfo=timezone.utc),
+                    source_type="external_product_receipt",
+                    source_id="receipt-42",
+                    title="Участие в вебинаре подтверждено",
+                    detail=(
+                        "Источник: Вебинарная платформа · проверено источником · "
+                        "наблюдалось 06.09.2026 12:01 UTC"
+                    ),
+                    evidence_source="Вебинарная платформа",
+                    evidence_quality="проверено источником",
+                    observed_at=datetime(2026, 9, 6, 12, 1, tzinfo=timezone.utc),
+                    limitations=("Нет данных о внимании во время просмотра.",),
+                ),
+            ),
+        )
+        detail = cockpit_customers.build_cockpit_customer_detail(
+            actor=_actor(),
+            customer_id=_CUSTOMER,
+            record_loader=lambda **_: record,
+            timeline_loader=lambda **_: timeline,
+            action_loader=lambda **_: (),
+        )
+
+        item = detail.as_dict()["timeline"][0]
+        self.assertEqual(item["evidence_source"], "Вебинарная платформа")
+        self.assertEqual(item["evidence_quality"], "проверено источником")
+        self.assertEqual(
+            item["limitations"],
+            ("Нет данных о внимании во время просмотра.",),
+        )
+        self.assertEqual(item["observed_at"], "2026-09-06T12:01:00+00:00")
+        self.assertNotIn("customer_ref", repr(detail.as_dict()))
+
     def test_optional_timeline_or_action_failure_does_not_invent_data(self) -> None:
         record = CustomerRecord(customer=_customer(), identities=())
 

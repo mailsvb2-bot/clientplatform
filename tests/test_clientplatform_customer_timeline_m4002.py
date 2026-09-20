@@ -23,6 +23,12 @@ from clientplatform.application.tenancy import (
     resolve_tenant_context,
 )
 from clientplatform.domain.customers import CustomerNotFound
+from clientplatform.domain.external_products import (
+    ExternalObservationQuality,
+    ExternalProductEvent,
+    ExternalProductEventType,
+    ExternalProductObservation,
+)
 from clientplatform.domain.outcomes import (
     BusinessOutcomeEvent,
     OutcomeMoney,
@@ -31,6 +37,7 @@ from clientplatform.domain.outcomes import (
 )
 from clientplatform.domain.sales import ContactBasis, SalesLeadStage
 from clientplatform.domain.tenancy import PlatformRole, TenantPermissionDenied
+from clientplatform.infrastructure.external_product_repository import ExternalProductRepository
 from clientplatform.infrastructure.outcome_repository import OutcomeRepository
 from clientplatform.infrastructure.sales_repository import SalesRepository
 from services.db import get_db
@@ -210,6 +217,84 @@ class ClientPlatformCustomerTimelineM4002Tests(unittest.TestCase):
             entry.occurred_at for entry in timeline.entries
         )
 
+
+    def test_timeline_projects_structured_external_observation_with_provenance_context(self) -> None:
+        actor, customer = _business(880010, "timeline-observation")
+        observed_at = _BASE + timedelta(minutes=2)
+        with get_db() as conn:
+            repository = ExternalProductRepository(conn)
+            pending = repository.create_connector(
+                actor=actor,
+                product_key="webinar_source",
+                display_name="Вебинарная платформа",
+                webhook_secret_reference=(
+                    "secret://env/CLIENTPLATFORM_SECRET_WEBINAR_SOURCE"
+                ),
+                now=_BASE,
+            )
+            connector = repository.activate_connector(
+                actor=actor,
+                connector_id=pending.id,
+                now=_BASE,
+            )
+            repository.bind_customer_ref(
+                actor=actor,
+                connector_id=connector.id,
+                customer_id=customer.id,
+                customer_ref="external-attendee-10",
+                now=_BASE + timedelta(minutes=1),
+            )
+            receipt = repository.ingest_event(
+                connector=connector,
+                event=ExternalProductEvent(
+                    external_event_id="attendance-10",
+                    event_type=ExternalProductEventType.EVIDENCE,
+                    occurred_at=_BASE + timedelta(minutes=3),
+                    customer_ref="external-attendee-10",
+                    observation=ExternalProductObservation(
+                        kind="webinar.attended",
+                        label="Участие в вебинаре подтверждено",
+                        observed_at=observed_at,
+                        provenance_ref="attendance-proof-10",
+                        quality=ExternalObservationQuality.SOURCE_VERIFIED,
+                        limitations=(
+                            "Нет данных о внимании во время просмотра.",
+                            "Нет поминутного подтверждения активности.",
+                            "Источник не измеряет понимание материала.",
+                        ),
+                    ),
+                ),
+                payload_fingerprint="8" * 64,
+                received_at=_BASE + timedelta(minutes=4),
+            )
+
+        timeline = get_customer_timeline(actor=actor, customer_id=customer.id)
+        observation = next(
+            entry
+            for entry in timeline.entries
+            if entry.kind == "external_observation:webinar.attended"
+        )
+        self.assertEqual(observation.source_type, "external_product_receipt")
+        self.assertEqual(observation.source_id, receipt.id)
+        self.assertEqual(observation.title, "Участие в вебинаре подтверждено")
+        self.assertEqual(observation.evidence_source, "Вебинарная платформа")
+        self.assertEqual(observation.evidence_quality, "проверено источником")
+        self.assertEqual(observation.observed_at, observed_at)
+        self.assertEqual(observation.occurred_at, observed_at)
+        self.assertEqual(
+            observation.limitations,
+            (
+                "Нет данных о внимании во время просмотра.",
+                "Нет поминутного подтверждения активности.",
+                "Источник не измеряет понимание материала.",
+            ),
+        )
+        self.assertIn("Источник: Вебинарная платформа", observation.detail or "")
+        self.assertIn("проверено источником", observation.detail or "")
+        self.assertIn("Нет данных о внимании во время просмотра.", observation.detail or "")
+        self.assertIn("Нет поминутного подтверждения активности.", observation.detail or "")
+        self.assertIn("Источник не измеряет понимание материала.", observation.detail or "")
+        self.assertNotIn("external-attendee-10", repr(timeline))
 
     def test_refund_is_a_distinct_money_fact_and_replay_does_not_duplicate_projection(self) -> None:
         actor, customer = _business(880002, "timeline-refund")

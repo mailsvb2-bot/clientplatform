@@ -16,6 +16,8 @@ from clientplatform.domain.tenancy import normalize_uuid
 
 _PRODUCT_KEY_RE = re.compile(r"[a-z][a-z0-9_-]{1,63}")
 _EVENT_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:@/+-]{0,159}")
+_OBSERVATION_KIND_RE = re.compile(r"[a-z][a-z0-9._-]{1,63}")
+_EXTERNAL_OBSERVATION_SCHEMA = "2026-09-20.v1"
 _RESERVED_METADATA_KEYS = frozenset(
     {
         "external_product_connector_id",
@@ -24,6 +26,13 @@ _RESERVED_METADATA_KEYS = frozenset(
         "acquisition_source",
         "acquisition_source_key",
         "payment_outcome_event_id",
+        "external_observation_schema",
+        "external_observation_kind",
+        "external_observation_label",
+        "external_observation_observed_at",
+        "external_observation_provenance_ref",
+        "external_observation_quality",
+        "external_observation_limitations",
     }
 )
 
@@ -58,6 +67,75 @@ class ExternalProductEventType(StrEnum):
     LEAD_QUALIFIED = "lead_qualified"
     ORDER_PAID = "order_paid"
     REFUND_RECORDED = "refund_recorded"
+
+
+class ExternalObservationQuality(StrEnum):
+    """Meaning of an observation without pretending it is a probability."""
+
+    SOURCE_ASSERTED = "source_asserted"
+    SOURCE_VERIFIED = "source_verified"
+    DERIVED = "derived"
+
+
+@dataclass(frozen=True, slots=True)
+class ExternalProductObservation:
+    """A bounded, provenance-bearing observation supplied by a trusted connector.
+
+    This is evidence for ClientPlatform to display or evaluate. It is never an
+    instruction to mutate CustomerIdentity or perform customer communication.
+    """
+
+    kind: str
+    label: str
+    observed_at: datetime
+    provenance_ref: str
+    quality: ExternalObservationQuality = ExternalObservationQuality.SOURCE_ASSERTED
+    limitations: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        kind = str(self.kind or "").strip().lower()
+        if not _OBSERVATION_KIND_RE.fullmatch(kind):
+            raise ValueError("external observation kind must be a stable lowercase identifier")
+        label = _normalize_bounded_text(self.label, field_name="observation label", limit=160)
+        provenance_ref = _normalize_bounded_text(
+            self.provenance_ref,
+            field_name="observation provenance_ref",
+            limit=300,
+        )
+        observed_at = self.observed_at
+        if observed_at.tzinfo is None:
+            raise ValueError("external observation observed_at must be timezone-aware")
+        quality = self.quality
+        if not isinstance(quality, ExternalObservationQuality):
+            quality = ExternalObservationQuality(str(quality).strip().lower())
+        raw_limitations = tuple(self.limitations or ())
+        if len(raw_limitations) > 8:
+            raise ValueError("external observation supports at most 8 limitations")
+        limitations = tuple(
+            _normalize_bounded_text(
+                item,
+                field_name="observation limitation",
+                limit=200,
+            )
+            for item in raw_limitations
+        )
+        object.__setattr__(self, "kind", kind)
+        object.__setattr__(self, "label", label)
+        object.__setattr__(self, "provenance_ref", provenance_ref)
+        object.__setattr__(self, "observed_at", observed_at)
+        object.__setattr__(self, "quality", quality)
+        object.__setattr__(self, "limitations", limitations)
+
+    def canonical_metadata(self) -> dict[str, Any]:
+        return {
+            "external_observation_schema": _EXTERNAL_OBSERVATION_SCHEMA,
+            "external_observation_kind": self.kind,
+            "external_observation_label": self.label,
+            "external_observation_observed_at": self.observed_at.isoformat(),
+            "external_observation_provenance_ref": self.provenance_ref,
+            "external_observation_quality": self.quality.value,
+            "external_observation_limitations": list(self.limitations),
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,6 +198,7 @@ class ExternalProductEvent:
     related_event_id: str | None = None
     money: OutcomeMoney | None = None
     acquisition: ExternalProductAcquisition | None = None
+    observation: ExternalProductObservation | None = None
     metadata: Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
@@ -141,6 +220,11 @@ class ExternalProductEvent:
             else normalize_external_event_id(self.related_event_id)
         )
         metadata = normalize_external_metadata(self.metadata or {})
+        observation = self.observation
+        if observation is not None and not isinstance(observation, ExternalProductObservation):
+            raise TypeError("external product observation must be ExternalProductObservation")
+        if observation is not None and event_type != ExternalProductEventType.EVIDENCE:
+            raise ValueError("external observation is only allowed for evidence events")
         if event_type != ExternalProductEventType.EVIDENCE and customer_ref is None:
             raise ValueError(f"{event_type.value} requires customer_ref")
         if event_type in {
@@ -163,6 +247,7 @@ class ExternalProductEvent:
         object.__setattr__(self, "customer_ref", customer_ref)
         object.__setattr__(self, "subject_ref", subject_ref)
         object.__setattr__(self, "related_event_id", related_event_id)
+        object.__setattr__(self, "observation", observation)
         object.__setattr__(self, "metadata", metadata)
 
 
@@ -179,6 +264,15 @@ class ExternalProductReceipt:
     outcome_event_id: str | None
     occurred_at: str
     received_at: str
+
+
+def _normalize_bounded_text(value: object, *, field_name: str, limit: int) -> str:
+    normalized = " ".join(str(value or "").replace("\x00", " ").split())
+    if not normalized or len(normalized) > limit:
+        raise ValueError(f"{field_name} must be 1..{limit} characters")
+    if any(ord(char) < 32 or ord(char) == 127 for char in normalized):
+        raise ValueError(f"{field_name} contains control characters")
+    return normalized
 
 
 def normalize_external_product_key(value: str) -> str:
@@ -226,6 +320,15 @@ def external_customer_fingerprint(*, connector_id: str, customer_ref: str) -> st
     connector = normalize_uuid(connector_id, field_name="connector_id")
     customer = normalize_external_customer_ref(customer_ref)
     return hashlib.sha256(f"{connector}\x00{customer}".encode("utf-8")).hexdigest()
+
+
+def external_customer_identity_subject(*, connector_id: str, customer_ref: str) -> str:
+    fingerprint = external_customer_fingerprint(
+        connector_id=connector_id,
+        customer_ref=customer_ref,
+    )
+    connector = normalize_uuid(connector_id, field_name="connector_id")
+    return f"extp:{connector}:{fingerprint}"
 
 
 def _safe_json_value(value: Any, *, depth: int = 0) -> Any:
@@ -278,6 +381,7 @@ def normalize_external_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:
 
 
 __all__ = [
+    "ExternalObservationQuality",
     "ExternalProductAcquisition",
     "ExternalProductConnector",
     "ExternalProductConnectorStatus",
@@ -286,9 +390,11 @@ __all__ = [
     "ExternalProductEventType",
     "ExternalProductInvariantViolation",
     "ExternalProductNotFound",
+    "ExternalProductObservation",
     "ExternalProductReceipt",
     "ExternalProductSignatureError",
     "external_customer_fingerprint",
+    "external_customer_identity_subject",
     "normalize_external_customer_ref",
     "normalize_external_event_id",
     "normalize_external_metadata",
