@@ -432,7 +432,7 @@ def handle_native_event_wizard_text(
         )
         if not plan.drafts:
             return CustomerInteractionMessage(
-                text="📨 Сообщение отключён для этого вебинара.",
+                text="📨 Сообщения до вебинара отключены.",
                 rows=(_back_row(),),
             )
         return _warmup_preview(
@@ -938,7 +938,7 @@ def handle_native_event_wizard_action(
         )
         if not plan.drafts:
             return CustomerInteractionMessage(
-                text="📨 Сообщение отключён для этого вебинара.",
+                text="📨 Сообщения до вебинара отключены.",
                 rows=(_back_row(),),
             )
         return _warmup_preview(
