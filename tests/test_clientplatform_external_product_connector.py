@@ -105,6 +105,31 @@ class ExternalProductFixture:
         self.conn.close()
 
 
+class _HideFirstIdentityLookup:
+    """Deterministically interleave explicit binding into the auto-create race."""
+
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._conn = conn
+        self._hidden = False
+
+    def execute(self, sql: str, params: tuple[object, ...] = ()):
+        normalized = " ".join(sql.split())
+        if (
+            not self._hidden
+            and "FROM customer_identities ci JOIN customers c" in normalized
+            and "ci.platform='internal'" in normalized
+        ):
+            self._hidden = True
+
+            class _EmptyCursor:
+                @staticmethod
+                def fetchone():
+                    return None
+
+            return _EmptyCursor()
+        return self._conn.execute(sql, params)
+
+
 class ClientPlatformExternalProductConnectorTests(unittest.TestCase):
     def setUp(self) -> None:
         self.fx = ExternalProductFixture()
@@ -367,6 +392,42 @@ class ClientPlatformExternalProductConnectorTests(unittest.TestCase):
             (self.fx.actor.business_id,),
         ).fetchone()[0]
         self.assertEqual(outcome_count, 0)
+
+    def test_auto_create_race_reuses_explicit_binding_and_removes_losing_candidate(self) -> None:
+        intended = CustomerRepository(self.fx.conn).create_customer(
+            actor=self.fx.actor,
+            display_name="Уже известный клиент",
+            now=self.now.isoformat(),
+        )
+        self.fx.repo.bind_customer_ref(
+            actor=self.fx.actor,
+            connector_id=self.fx.connector.id,
+            customer_id=intended.id,
+            customer_ref="race-subject",
+            now=self.now,
+        )
+        self.fx.conn.commit()
+
+        fingerprint = __import__(
+            "clientplatform.domain.external_products",
+            fromlist=["external_customer_fingerprint"],
+        ).external_customer_fingerprint(
+            connector_id=self.fx.connector.id,
+            customer_ref="race-subject",
+        )
+        racing_repo = ExternalProductRepository(_HideFirstIdentityLookup(self.fx.conn))
+        resolved = racing_repo._ensure_customer(
+            connector=self.fx.connector,
+            customer_fingerprint=fingerprint,
+            now=self.now + timedelta(seconds=1),
+        )
+
+        self.assertEqual(resolved, intended.id)
+        rows = self.fx.conn.execute(
+            "SELECT id FROM customers WHERE business_id=? ORDER BY id",
+            (self.fx.actor.business_id,),
+        ).fetchall()
+        self.assertEqual([row["id"] for row in rows], [intended.id])
 
     def test_explicit_binding_rejects_foreign_customer_and_existing_other_binding(self) -> None:
         tenancy = TenancyRepository(self.fx.conn)
