@@ -453,7 +453,7 @@ class ExternalProductRepository:
             user_id=actor.user_id,
             business_id=actor.business_id,
         )
-        current.assert_can_manage_customer_records()
+        current.assert_can_manage_business()
         normalized_customer_id = normalize_uuid(customer_id, field_name="customer_id")
         normalized_receipt_id = normalize_uuid(receipt_id, field_name="receipt_id")
         normalized_feedback = (
@@ -557,20 +557,15 @@ class ExternalProductRepository:
             else normalize_uuid(connector_id, field_name="connector_id")
         )
         timestamp = _iso(now or _utc_now())
-        connector_clause = "" if normalized_connector is None else " AND r.connector_id=?"
-        params: list[Any] = [current.business_id]
-        if normalized_connector is not None:
-            params.append(normalized_connector)
-        params.append(timestamp)
         row = self._conn.execute(
-            f"""
+            """
             WITH heads AS (
                 SELECT r.id,r.observation_state,r.observation_fresh_until
                 FROM external_product_event_receipts r
                 WHERE r.business_id=?
                   AND r.status='accepted'
                   AND r.observation_key IS NOT NULL
-                  {connector_clause}
+                  AND (? IS NULL OR r.connector_id=?)
                   AND NOT EXISTS (
                     SELECT 1
                     FROM external_product_event_receipts newer
@@ -601,7 +596,13 @@ class ExternalProductRepository:
             LEFT JOIN external_product_observation_feedback f
               ON f.business_id=? AND f.receipt_id=h.id
             """,
-            tuple(params + [current.business_id]),
+            (
+                current.business_id,
+                normalized_connector,
+                normalized_connector,
+                timestamp,
+                current.business_id,
+            ),
         ).fetchone()
         values = [0 if _value(row, name, pos) is None else int(_value(row, name, pos)) for pos, name in enumerate((
             "current_observations",
