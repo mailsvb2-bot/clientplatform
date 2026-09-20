@@ -4,7 +4,7 @@ import hashlib
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
 
 from clientplatform.domain.external_products import (
@@ -80,8 +80,8 @@ def _optional_unix_ms(value: object, *, field_name: str) -> datetime | None:
         return None
     parsed = _uint(value, field_name=field_name, maximum=_MAX_UNIX_MS)
     try:
-        return datetime.fromtimestamp(parsed / 1000, tz=timezone.utc)
-    except (OverflowError, OSError, ValueError) as exc:
+        return datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(milliseconds=parsed)
+    except (OverflowError, ValueError) as exc:
         raise ValueError(f"UCR attendance {field_name} is invalid") from exc
 
 
@@ -110,7 +110,7 @@ def parse_ucr_participant_attendance(
     if unknown:
         raise ValueError("UCR attendance response contains unsupported fields")
 
-    connected = attendance.get("connected")
+    connected = attendance.get("connected", False)
     if not isinstance(connected, bool):
         raise ValueError("UCR attendance connected must be boolean")
 
