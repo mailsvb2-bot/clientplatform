@@ -432,7 +432,7 @@ class ClientPlatformExternalProductConnectorTests(unittest.TestCase):
                     quality=ExternalObservationQuality.SOURCE_VERIFIED,
                 ),
             ),
-            payload_fingerprint="a1" * 32,
+            payload_fingerprint="11" * 32,
             received_at=self.now,
         )
         self.assertEqual(first.observation_revision, 1)
@@ -459,7 +459,7 @@ class ClientPlatformExternalProductConnectorTests(unittest.TestCase):
                         supersedes_external_event_id="obs-r1",
                     ),
                 ),
-                payload_fingerprint="a2" * 32,
+                payload_fingerprint="22" * 32,
                 received_at=self.now + timedelta(minutes=1),
             )
 
@@ -483,7 +483,7 @@ class ClientPlatformExternalProductConnectorTests(unittest.TestCase):
                     limitations=("Источник исправил исходный факт.",),
                 ),
             ),
-            payload_fingerprint="a3" * 32,
+            payload_fingerprint="33" * 32,
             received_at=self.now + timedelta(minutes=2),
         )
         self.assertEqual(retracted.observation_revision, 2)
@@ -509,7 +509,7 @@ class ClientPlatformExternalProductConnectorTests(unittest.TestCase):
                     quality=ExternalObservationQuality.SOURCE_VERIFIED,
                 ),
             ),
-            payload_fingerprint="a4" * 32,
+            payload_fingerprint="44" * 32,
             received_at=self.now + timedelta(minutes=3),
         )
         self.assertEqual(restored.observation_revision, 3)
@@ -542,7 +542,7 @@ class ClientPlatformExternalProductConnectorTests(unittest.TestCase):
                         supersedes_external_event_id="obs-r3",
                     ),
                 ),
-                payload_fingerprint="a5" * 32,
+                payload_fingerprint="55" * 32,
                 received_at=self.now + timedelta(minutes=4),
             )
 
