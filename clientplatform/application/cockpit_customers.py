@@ -80,6 +80,10 @@ class CockpitCustomerTimelineItem:
     evidence_source: str | None = None
     evidence_quality: str | None = None
     observed_at: str | None = None
+    evidence_revision: int | None = None
+    evidence_state: str | None = None
+    evidence_freshness: str | None = None
+    fresh_until: str | None = None
     limitations: tuple[str, ...] = ()
 
 
@@ -139,6 +143,8 @@ def _display_name(record: CustomerRecord) -> str:
 def _safe_contact(identity: CustomerIdentity) -> CockpitCustomerContact | None:
     if identity.status != CustomerIdentityStatus.ACTIVE:
         return None
+    if identity.platform == CustomerPlatform.INTERNAL:
+        return None
     label = _PLATFORM_LABELS[identity.platform]
     if identity.username:
         display = identity.username
@@ -179,6 +185,10 @@ def _timeline_items(timeline: CustomerTimeline) -> tuple[CockpitCustomerTimeline
             evidence_source=item.evidence_source,
             evidence_quality=item.evidence_quality,
             observed_at=None if item.observed_at is None else item.observed_at.isoformat(),
+            evidence_revision=item.evidence_revision,
+            evidence_state=item.evidence_state,
+            evidence_freshness=item.evidence_freshness,
+            fresh_until=None if item.fresh_until is None else item.fresh_until.isoformat(),
             limitations=item.limitations,
         )
         for item in timeline.entries
