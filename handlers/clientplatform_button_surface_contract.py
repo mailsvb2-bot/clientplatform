@@ -214,6 +214,8 @@ def install_button_surface_contract(safety: ModuleType) -> None:
         "cpo:offer:",
         "cpo:newtime:",
         "cpo:slot:",
+        "cpo:connection:",
+        "cpo:region:",
         "cpev:new:",
     )
 
