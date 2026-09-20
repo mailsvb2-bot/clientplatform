@@ -35,11 +35,13 @@ from clientplatform.application.visual_creatives import (
     create_business_image_from_frozen_payload,
     create_business_visual_from_frozen_payload,
     freeze_business_image_payload,
+    freeze_business_video_payload,
     frozen_business_visual_binding,
     frozen_business_visual_kind,
     materialize_ad_visual,
     normalize_business_image_request,
     poll_ad_visual,
+    visual_generation_ready,
 )
 from clientplatform.domain.creative_generation import (
     CreativeGenerationReceipt,
@@ -49,6 +51,10 @@ from clientplatform.domain.event_content import EventContentStage
 from clientplatform.domain.programs import ContentKind
 from clientplatform.domain.tenancy import TenantPermissionDenied
 from clientplatform.presentation import owner_navigation as nav
+from clientplatform.presentation.visual_generation import (
+    visual_failure_message,
+    visual_provider_unavailable_message,
+)
 
 from . import clientplatform_control as control
 
@@ -97,9 +103,27 @@ def _menu_rows(token: str, active: CreativeGenerationReceipt | None = None):
         } else "check"
         rows.append([(label, _receipt_callback(action, token, active))])
         if active.status == CreativeGenerationReceiptStatus.PREPARED:
-            rows.append([("✏️ Изменить описание", f"cpc:new:{token}")])
+            active_kind = _receipt_kind(active)
+            edit_callback = (
+                f"cpc:video:{token}"
+                if active_kind == "video"
+                else f"cpc:new:{token}"
+            )
+            alternate_label = (
+                "✨ Вместо этого картинка"
+                if active_kind == "video"
+                else "🎬 Вместо этого видео"
+            )
+            alternate_callback = (
+                f"cpc:new:{token}"
+                if active_kind == "video"
+                else f"cpc:video:{token}"
+            )
+            rows.append([("✏️ Изменить описание", edit_callback)])
+            rows.append([(alternate_label, alternate_callback)])
     else:
         rows.append([("✨ Создать картинку", f"cpc:new:{token}")])
+        rows.append([("🎬 Создать видео", f"cpc:video:{token}")])
     rows.extend(
         [
             [("🚀 Картинка для рекламы", f"cpo:start:{token}")],
@@ -113,7 +137,8 @@ def _menu_rows(token: str, active: CreativeGenerationReceipt | None = None):
 def _result_rows(token: str):
     return control._keyboard(
         [
-            [("✨ Создать ещё", f"cpc:new:{token}")],
+            [("✨ Создать ещё картинку", f"cpc:new:{token}")],
+            [("🎬 Создать видео", f"cpc:video:{token}")],
             [("🚀 Перейти к рекламе", f"cpo:start:{token}")],
             [("🏠 Главная", f"cpj:home:{token}")],
         ]
@@ -164,7 +189,8 @@ async def send_creative_studio_menu(
     if active is None:
         body = (
             "🎨 Картинки и видео\n\n"
-            "Опишите картинку обычными словами. ClientPlatform использует уже "
+            "Выберите, что хотите создать — картинку или короткое видео. "
+            "Опишите результат обычными словами: ClientPlatform использует уже "
             "подключённый генератор и сохранённый фирменный стиль бизнеса."
         )
     elif active.status == CreativeGenerationReceiptStatus.PREPARED:
@@ -208,8 +234,12 @@ async def open_creative_studio(callback: CallbackQuery, state: FSMContext) -> No
     )
 
 
-@router.callback_query(F.data.startswith("cpc:new:"))
-async def ask_creative_prompt(callback: CallbackQuery, state: FSMContext) -> None:
+async def _ask_creative_prompt(
+    callback: CallbackQuery,
+    state: FSMContext,
+    *,
+    kind: str,
+) -> None:
     token = str(callback.data).split(":", 2)[2]
     try:
         actor = await _actor_for_callback(callback, token)
@@ -227,14 +257,34 @@ async def ask_creative_prompt(callback: CallbackQuery, state: FSMContext) -> Non
         {
             "creative_business_id": actor.business_id,
             "creative_business_token": token,
+            "creative_kind": kind,
         }
     )
     await callback.answer()
-    await control._callback_message(callback).answer(
-        "Какую картинку создать?\n\n"
-        "Напишите обычными словами, например: «спокойная реалистичная фотография "
-        "кабинета психолога, светлая, без текста»."
-    )
+    target = control._callback_message(callback)
+    if kind == "video":
+        await target.answer(
+            "Какое видео создать?\n\n"
+            "Опишите короткий ролик обычными словами, например: "
+            "«спокойное вертикальное видео уютного кабинета психолога, "
+            "мягкое движение камеры, естественный свет, без текста»."
+        )
+    else:
+        await target.answer(
+            "Какую картинку создать?\n\n"
+            "Напишите обычными словами, например: «спокойная реалистичная фотография "
+            "кабинета психолога, светлая, без текста»."
+        )
+
+
+@router.callback_query(F.data.startswith("cpc:new:"))
+async def ask_creative_prompt(callback: CallbackQuery, state: FSMContext) -> None:
+    await _ask_creative_prompt(callback, state, kind="image")
+
+
+@router.callback_query(F.data.startswith("cpc:video:"))
+async def ask_creative_video_prompt(callback: CallbackQuery, state: FSMContext) -> None:
+    await _ask_creative_prompt(callback, state, kind="video")
 
 
 @router.message(ClientPlatformCreativeStudioState.waiting_prompt)
@@ -243,6 +293,9 @@ async def receive_creative_prompt(message: Message, state: FSMContext) -> None:
     try:
         business_id = str(data["creative_business_id"])
         token = str(data["creative_business_token"])
+        kind = str(data.get("creative_kind") or "image").strip().lower()
+        if kind not in {"image", "video"}:
+            raise ValueError("unsupported creative kind")
         actor = await control._actor(control._user_id(message), business_id)
         actor.assert_can_manage_promotions()
         prompt = normalize_business_image_request(str(message.text or ""))
@@ -254,15 +307,28 @@ async def receive_creative_prompt(message: Message, state: FSMContext) -> None:
         return
     except (TypeError, ValueError, TenantPermissionDenied):
         await message.answer(
-            "Опишите картинку одним сообщением до 1500 символов. "
+            "Опишите картинку или видео одним сообщением до 1500 символов. "
             "Технический промпт составлять не нужно."
         )
         return
     try:
+        country_code = os.getenv("VISUAL_DEPLOYMENT_COUNTRY", "")
+        ready = await asyncio.to_thread(
+            visual_generation_ready,
+            kind=kind,
+            country_code=country_code,
+        )
+        if not ready:
+            await message.answer(visual_provider_unavailable_message(kind))
+            return
         brand = await asyncio.to_thread(load_goal_visual_brand, actor=actor)
         brand_context = brand.prompt_context()
-        country_code = os.getenv("VISUAL_DEPLOYMENT_COUNTRY", "")
-        provider_payload_json = freeze_business_image_payload(
+        freezer = (
+            freeze_business_video_payload
+            if kind == "video"
+            else freeze_business_image_payload
+        )
+        provider_payload_json = freezer(
             request=prompt,
             brand_context=brand_context,
             country_code=country_code,
@@ -275,6 +341,12 @@ async def receive_creative_prompt(message: Message, state: FSMContext) -> None:
             country_code=country_code,
             provider_payload_json=provider_payload_json,
         )
+    except VisualCreativeError:
+        await message.answer(
+            "Не удалось проверить доступность генератора. Платный запрос не запускался. "
+            "Попробуйте ещё раз после восстановления шлюза генерации."
+        )
+        return
     except (OSError, ValueError):
         await message.answer("Не удалось безопасно подготовить генерацию. Попробуйте позже.")
         return
@@ -286,6 +358,12 @@ async def receive_creative_prompt(message: Message, state: FSMContext) -> None:
             reply_markup=_menu_rows(token, receipt),
         )
         return
+    noun = "видео" if _receipt_kind(receipt) == "video" else "картинку"
+    edit_callback = (
+        f"cpc:video:{token}"
+        if _receipt_kind(receipt) == "video"
+        else f"cpc:new:{token}"
+    )
     await message.answer(
         "✨ Всё готово к генерации\n\n"
         f"Задача: {receipt.request_text}\n\n"
@@ -294,8 +372,8 @@ async def receive_creative_prompt(message: Message, state: FSMContext) -> None:
         "этот же запрос, а не создаст новый платный job.",
         reply_markup=control._keyboard(
             [
-                [("✅ Создать 1 картинку", _receipt_callback("generate", token, receipt))],
-                [("✏️ Изменить описание", f"cpc:new:{token}")],
+                [(f"✅ Создать 1 {noun}", _receipt_callback("generate", token, receipt))],
+                [("✏️ Изменить описание", edit_callback)],
                 [("⬅️ Не создавать", f"cpc:open:{token}")],
             ]
         ),
@@ -535,7 +613,7 @@ async def _continue_generation(
         return
     if current.status == CreativeGenerationReceiptStatus.FAILED:
         await control._callback_message(callback).answer(
-            "Генерация завершилась ошибкой. Можно создать новый запрос.",
+            visual_failure_message(job),
             reply_markup=_result_rows(token),
         )
         return
@@ -732,7 +810,7 @@ def install_creative_studio_visibility(one_click: ModuleType) -> None:
                 else:
                     rows[publication_index].insert(0, creative_button)
             help_line = (
-                f"• создать изображение для поста или рекламы → «{nav.CREATIVES.label}»"
+                f"• создать картинку или видео для поста/рекламы → «{nav.CREATIVES.label}»"
             )
             if help_line not in help_lines:
                 help_lines.insert(0, help_line)
@@ -752,12 +830,19 @@ def install_creative_studio_safety(safety: ModuleType) -> None:
     if bool(getattr(safety, "_creative_studio_safety_installed", False)):
         return
     _extend_tuple(safety, "_CLIENTPLATFORM_CALLBACK_PREFIXES", "cpc:")
-    _extend_tuple(safety, "_STATE_ESCAPE_PREFIXES", "cpc:open:", "cpc:new:")
+    _extend_tuple(
+        safety,
+        "_STATE_ESCAPE_PREFIXES",
+        "cpc:open:",
+        "cpc:new:",
+        "cpc:video:",
+    )
     _extend_tuple(
         safety,
         "_REPEATABLE_NAVIGATION_PREFIXES",
         "cpc:open:",
         "cpc:new:",
+        "cpc:video:",
         "cpc:check:",
     )
     _extend_tuple(
@@ -775,7 +860,9 @@ def install_creative_studio_safety(safety: ModuleType) -> None:
 
     def callback_can_escape_state(current_state: str, callback_data: str) -> bool:
         if current_state.startswith("ClientPlatformCreativeStudioState:"):
-            if callback_data.startswith(("cpc:open:", "cpc:new:", "cpj:home:")):
+            if callback_data.startswith(
+                ("cpc:open:", "cpc:new:", "cpc:video:", "cpj:home:")
+            ):
                 return True
         return original_escape(current_state, callback_data)
 

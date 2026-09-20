@@ -40,7 +40,7 @@ YANDEX_API_KEY=...
 # or YANDEX_ART_IAM_TOKEN=...
 ```
 
-RU image routing defaults to `yandexart,gigachat,selfhosted`; RU video routing defaults to `selfhosted`. International provider routes remain opt-in/operator-configured.
+RU image routing defaults to `yandexart,gigachat,selfhosted`; RU video routing defaults to `yandexart_motion,selfhosted`. The `yandexart_motion` adapter reuses the YandexART keyframe provider and renders the resulting short MP4 with ffmpeg inside the provider-gateway image. International provider routes remain opt-in/operator-configured.
 
 ## API
 

@@ -9,7 +9,9 @@ class CreativeSafetySourceContractTests(unittest.TestCase):
     def test_creative_handler_has_explicit_paid_confirmation_and_single_shot_prefix(self) -> None:
         source = Path("handlers/clientplatform_creative_studio.py").read_text(encoding="utf-8")
         ast.parse(source)
-        self.assertIn("✅ Создать 1 картинку", source)
+        self.assertIn("✅ Создать 1 ", source)
+        self.assertIn("🎬 Создать видео", source)
+        self.assertIn('"cpc:video:"', source)
         self.assertIn('"cpc:generate:"', source)
         self.assertIn('"_ONE_SHOT_PREFIXES"', source)
         self.assertIn('"cpc:generate:"', source)
