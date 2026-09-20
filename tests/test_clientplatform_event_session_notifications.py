@@ -167,3 +167,68 @@ def test_rescheduled_reminder_gets_schedule_revision_idempotency_key() -> None:
     params = conn.calls[0][1]
     assert str(params[10]).endswith(":schedule:0123456789abcdef")
 
+def test_schedule_edit_rebuilds_future_reminders_and_cancels_old_queue() -> None:
+    event = _event()
+    registration = _registration(event)
+    sessions = (_session(event, 1), _session(event, 2))
+    target = EventDeliveryTarget(
+        platform="telegram",
+        connection_id=str(uuid4()),
+        recipient_kind="external_subject",
+        customer_identity_id=None,
+        external_subject="123456",
+    )
+    conn = _OutboxConnection()
+    repository = type(
+        "Repository",
+        (),
+        {
+            "get": lambda self, **_kwargs: event,
+            "list_registrations": lambda self, **_kwargs: [registration],
+        },
+    )()
+    session_repository = type(
+        "SessionRepository",
+        (),
+        {"list_for_event_record": lambda self, **_kwargs: sessions},
+    )()
+
+    with (
+        patch.object(event_notifications, "EventRepository", return_value=repository),
+        patch.object(
+            event_notifications,
+            "EventSessionRepository",
+            return_value=session_repository,
+        ),
+        patch.object(
+            event_notifications,
+            "resolve_event_organizational_targets",
+            return_value=(target,),
+        ),
+        patch.object(event_notifications, "_materialize", return_value=True) as materialize,
+    ):
+        queued = event_notifications.reschedule_event_notifications_in_transaction(
+            conn,
+            actor=object(),
+            event_id=event.id,
+            now=NOW,
+        )
+
+    assert queued == 6
+    assert len(conn.calls) == 1
+    assert "last_error='event_schedule_changed'" in conn.calls[0][0]
+    assert materialize.call_count == 6
+    revisions = {
+        call.kwargs["schedule_revision"]
+        for call in materialize.call_args_list
+    }
+    assert len(revisions) == 1
+    revision = next(iter(revisions))
+    assert len(revision) == 16
+    assert all(char in "0123456789abcdef" for char in revision)
+    assert {call.kwargs["kind"] for call in materialize.call_args_list} == {
+        "24h",
+        "3h",
+        "15m",
+    }
+
