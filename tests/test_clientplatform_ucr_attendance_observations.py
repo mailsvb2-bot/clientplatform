@@ -65,6 +65,20 @@ class UcrAttendanceObservationTests(unittest.TestCase):
             datetime.fromtimestamp(1789915320, tz=timezone.utc),
         )
 
+    def test_omitted_connected_uses_protobuf_default_false(self) -> None:
+        attendance = parse_ucr_participant_attendance(
+            {
+                "attendance": {
+                    "firstJoinAtUnixMs": "1789912800000",
+                    "lastLeaveAtUnixMs": "1789912860000",
+                    "totalConnectedSeconds": "60",
+                    "joinCount": 1,
+                }
+            }
+        )
+        self.assertFalse(attendance.connected)
+        self.assertEqual(attendance.current_connected_seconds, 0)
+
     def test_verified_attendance_becomes_safe_provenance_observation_without_raw_identity(self) -> None:
         attendance = parse_ucr_participant_attendance(
             {
