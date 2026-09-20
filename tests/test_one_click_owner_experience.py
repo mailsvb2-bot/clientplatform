@@ -247,14 +247,7 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
                 new=AsyncMock(return_value=[offering()]),
             ),
         ):
-            await one_click._start_slot_ad(
-                cb,
-                FakeState(),
-                actor=tenant_actor(),
-                business_id="business-1",
-                token="business-1",
-                slot=slot(),
-            )
+            await one_click.get_clients_one_click(cb, FakeState())
         self.assertIn("Что именно Вы хотите рекламировать", out.answer.await_args.args[0])
         button = out.answer.await_args.kwargs["reply_markup"].inline_keyboard[0][0]
         self.assertEqual(button.text, "🧰 Консультация")
