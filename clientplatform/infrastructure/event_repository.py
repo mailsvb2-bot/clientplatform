@@ -343,7 +343,10 @@ class EventRepository:
         ).fetchone()
         if row is None:
             raise RuntimeError("event registration upsert did not persist a row")
-        return _registration_from_row(row), created
+        registration = _registration_from_row(row)
+        if registration.status == "cancelled":
+            raise EventStateConflict("registration was previously cancelled")
+        return registration, created
 
     def get_registration_by_token(self, *, token: str) -> EventRegistration:
         capability = str(token or "").strip()
@@ -471,6 +474,52 @@ class EventRepository:
             "WHERE business_id=? AND event_id=? ORDER BY registered_at,id LIMIT ?",  # nosec B608
             (current.business_id, event, limit),
         ).fetchall()
+        return [_registration_from_row(row) for row in rows]
+
+    def list_active_registrations_page(
+        self,
+        *,
+        actor: TenantContext,
+        event_id: str,
+        limit: int = 500,
+        after_registered_at: str | None = None,
+        after_id: str | None = None,
+    ) -> list[EventRegistration]:
+        """Cursor-page active registrations without cancelled rows consuming the limit."""
+
+        current = self._actor(actor, manage=False)
+        event = normalize_uuid(event_id, field_name="event_id")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 1000:
+            raise ValueError("limit must be an integer between 1 and 1000")
+        if (after_registered_at is None) != (after_id is None):
+            raise ValueError("registration cursor requires both timestamp and id")
+        if after_registered_at is None:
+            rows = self._conn.execute(
+                f"SELECT {_REGISTRATION_COLUMNS} FROM clientplatform_event_registrations "
+                "WHERE business_id=? AND event_id=? AND status='registered' "
+                "ORDER BY registered_at,id LIMIT ?",  # nosec B608
+                (current.business_id, event, limit),
+            ).fetchall()
+        else:
+            cursor_time = normalize_utc(
+                str(after_registered_at),
+                field_name="after_registered_at",
+            ).isoformat()
+            cursor_id = normalize_uuid(str(after_id), field_name="after_registration_id")
+            rows = self._conn.execute(
+                f"SELECT {_REGISTRATION_COLUMNS} FROM clientplatform_event_registrations "
+                "WHERE business_id=? AND event_id=? AND status='registered' "
+                "AND (registered_at>? OR (registered_at=? AND id>?)) "
+                "ORDER BY registered_at,id LIMIT ?",  # nosec B608
+                (
+                    current.business_id,
+                    event,
+                    cursor_time,
+                    cursor_time,
+                    cursor_id,
+                    limit,
+                ),
+            ).fetchall()
         return [_registration_from_row(row) for row in rows]
 
 
