@@ -575,7 +575,28 @@ class ExternalProductRepository:
             raise RuntimeError("external product customer identity was not persisted")
         if str(_value(row, "status", 1)) != "active":
             raise ExternalProductInvariantViolation("external product customer is archived")
-        return str(_value(row, "customer_id", 0))
+        resolved_customer_id = str(_value(row, "customer_id", 0))
+        if resolved_customer_id != customer_id:
+            # Explicit binding may win the unique identity race after the initial
+            # lookup but before this auto-create path inserts its identity. In that
+            # case the deterministic candidate has never been published as the
+            # canonical owner of the identity and must not remain as an empty CRM
+            # duplicate. The NOT EXISTS guard keeps cleanup fail-closed if anything
+            # else has already attached to that candidate.
+            self._conn.execute(
+                """
+                DELETE FROM customers
+                WHERE id=? AND business_id=?
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM customer_identities ci
+                    WHERE ci.business_id=customers.business_id
+                      AND ci.customer_id=customers.id
+                  )
+                """,
+                (customer_id, connector.business_id),
+            )
+        return resolved_customer_id
 
     def _receipt_by_external_id(
         self,
