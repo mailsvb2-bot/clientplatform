@@ -279,7 +279,7 @@ def build_cockpit_customer_detail(
     record = record_loader(actor=actor, customer_id=customer_id)
     limitations: list[str] = []
     try:
-        actor.assert_can_manage_customer_records()
+        actor.assert_can_manage_business()
         feedback_allowed = True
     except TenantPermissionDenied:
         feedback_allowed = False
