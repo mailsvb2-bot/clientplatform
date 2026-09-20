@@ -362,6 +362,7 @@ async def _finish_schedule_edit(message: Message, state: FSMContext) -> None:
             actor=actor,
             event_id=event_id,
             sessions=tuple(specs),
+            reschedule_notifications=True,
         )
     except (KeyError, TypeError, ValueError, RuntimeError):
         await message.answer(
