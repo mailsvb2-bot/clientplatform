@@ -364,7 +364,13 @@ async def _finish_schedule_edit(message: Message, state: FSMContext) -> None:
             sessions=tuple(specs),
             reschedule_notifications=True,
         )
-    except (KeyError, TypeError, ValueError, RuntimeError):
+    except (KeyError, TypeError, ValueError):
+        await message.answer(
+            "Не удалось сохранить новое расписание. Проверьте, что все даты будущие и не пересекаются.",
+            reply_markup=_cancel_keyboard(business_id),
+        )
+        return
+    except RuntimeError:
         await message.answer(
             "Не удалось сохранить новое расписание. Проверьте, что все даты будущие и не пересекаются.",
             reply_markup=_cancel_keyboard(business_id),
@@ -699,7 +705,10 @@ async def start_schedule_edit(callback: CallbackQuery, state: FSMContext) -> Non
         )
         if not sessions:
             raise ValueError("event sessions are unavailable")
-    except (TenantPermissionDenied, LookupError, ValueError, RuntimeError):
+    except (TenantPermissionDenied, LookupError, ValueError):
+        await callback.answer("Не удалось открыть расписание этого вебинара", show_alert=True)
+        return
+    except RuntimeError:
         await callback.answer("Не удалось открыть расписание этого вебинара", show_alert=True)
         return
     existing = [
