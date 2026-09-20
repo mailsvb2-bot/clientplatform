@@ -77,6 +77,10 @@ class CockpitCustomerTimelineItem:
     title: str
     detail: str | None
     money: str | None
+    evidence_source: str | None = None
+    evidence_quality: str | None = None
+    observed_at: str | None = None
+    limitations: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,6 +176,10 @@ def _timeline_items(timeline: CustomerTimeline) -> tuple[CockpitCustomerTimeline
             title=item.title,
             detail=item.detail,
             money=_money_text(item.amount_minor, item.currency),
+            evidence_source=item.evidence_source,
+            evidence_quality=item.evidence_quality,
+            observed_at=None if item.observed_at is None else item.observed_at.isoformat(),
+            limitations=item.limitations,
         )
         for item in timeline.entries
     )
