@@ -71,16 +71,18 @@ class WebinarLifecycleBranchGapTests(unittest.IsolatedAsyncioTestCase):
         valid = AsyncMock()
         valid.get_data.return_value = {"event_business_id": BUSINESS_ID}
         valid_msg = message("3")
-        with patch.object(lifecycle, "_timezone_keyboard", return_value="tz"):
+        with patch.object(lifecycle, "_topics_keyboard", return_value="topics"):
             await lifecycle.receive_days(valid_msg, valid)
         valid.update_data.assert_awaited_once_with(
             event_days=3,
             event_sessions=[],
             event_session_index=1,
+            event_topics=[],
         )
         valid.set_state.assert_awaited_once_with(
-            lifecycle.ClientPlatformEventLifecycleState.waiting_timezone
+            lifecycle.ClientPlatformEventLifecycleState.waiting_topics_choice
         )
+        self.assertIn("название темы", valid_msg.answer.await_args.args[0])
 
     async def test_receive_timezone_covers_missing_cancel_and_valid(self) -> None:
         missing = AsyncMock()
