@@ -55,7 +55,11 @@ def base_data():
 
 
 def target():
-    return SimpleNamespace(answer=AsyncMock(), answer_photo=AsyncMock())
+    return SimpleNamespace(
+        answer=AsyncMock(),
+        answer_photo=AsyncMock(),
+        answer_video=AsyncMock(),
+    )
 
 
 def callback(data: str, out=None):
@@ -191,6 +195,24 @@ class GoalFirstCustomizationAndLaunchTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("✅ Создать 1 картинку", labels)
         self.assertIn("платную квоту", out.answer.await_args.args[0])
 
+    async def test_generated_video_requires_explicit_confirmation(self) -> None:
+        state = FakeState(base_data())
+        out = target()
+        cb = callback("cpo:genvideoask:business-token", out)
+        with patch.object(goal.control, "_callback_message", return_value=out):
+            await goal.ask_generated_video_confirmation(cb, state)
+
+        self.assertEqual(state.state, goal.GoalFirstAutopilotState.confirming_generation)
+        self.assertEqual(state.data["creative_generation_kind"], "video")
+        labels = [
+            button.text
+            for row in out.answer.await_args.kwargs["reply_markup"].inline_keyboard
+            for button in row
+        ]
+        self.assertIn("✅ Создать 1 видео", labels)
+        self.assertIn("платную квоту", out.answer.await_args.args[0])
+
+
     async def test_generated_image_uses_copy_sensitive_idempotency_and_waits_without_duplicate(self) -> None:
         state = FakeState(base_data())
         out = target()
@@ -209,6 +231,39 @@ class GoalFirstCustomizationAndLaunchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state.data["creative_job_id"], "visual-1")
         self.assertEqual(state.state, goal.GoalFirstAutopilotState.generation_pending)
         self.assertIn("Ничего загружать заново не нужно", out.answer.await_args.args[0])
+
+    async def test_generated_video_uses_kind_sensitive_idempotency_and_waits_without_duplicate(self) -> None:
+        state = FakeState(base_data())
+        out = target()
+        cb = callback("cpo:genvideo:business-token", out)
+        generated = SimpleNamespace(
+            status="running",
+            asset_ready=False,
+            job_id="visual-video-1",
+        )
+        with (
+            patch.object(goal, "visual_generation_ready", return_value=True),
+            patch.object(goal, "create_ad_visual", return_value=generated) as create,
+            patch.object(
+                goal,
+                "_finish_generated_visual",
+                new=AsyncMock(return_value=False),
+            ),
+            patch.object(goal.control, "_callback_message", return_value=out),
+            patch.object(goal.asyncio, "to_thread", new=direct),
+        ):
+            await goal.generate_custom_video(cb, state)
+
+        create.assert_called_once()
+        self.assertEqual(create.call_args.kwargs["kind"], "video")
+        self.assertTrue(
+            create.call_args.kwargs["idempotency_key"].startswith("clientplatform:")
+        )
+        self.assertEqual(state.data["creative_job_id"], "visual-video-1")
+        self.assertEqual(state.data["creative_generation_kind"], "video")
+        self.assertEqual(state.state, goal.GoalFirstAutopilotState.generation_pending)
+        self.assertIn("Видео ещё создаётся", out.answer.await_args.args[0])
+
 
     async def test_generated_image_stops_before_paid_call_when_provider_is_unavailable(self) -> None:
         state = FakeState(base_data())
@@ -246,6 +301,47 @@ class GoalFirstCustomizationAndLaunchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state.state, goal.GoalFirstAutopilotState.customizing)
         self.assertEqual(state.data["creative_job_id"], "")
         out.answer_photo.assert_awaited_once()
+
+    async def test_generated_video_success_is_persisted_as_ad_asset(self) -> None:
+        state = FakeState(base_data())
+        state.data["creative_job_id"] = "visual-video-1"
+        state.data["creative_generation_kind"] = "video"
+        out = target()
+        cb = callback("cpo:gencheck:business-token", out)
+        generated = SimpleNamespace(
+            status="succeeded",
+            asset_ready=True,
+            kind="video",
+            mime_type="video/mp4",
+        )
+        attach = Mock()
+        with (
+            patch.object(goal, "poll_ad_visual", return_value=generated),
+            patch.object(
+                goal,
+                "materialize_ad_visual",
+                return_value=Path("/tmp/generated.mp4"),
+            ),
+            patch.object(Path, "read_bytes", return_value=b"video"),
+            patch.object(goal.control, "_actor", new=AsyncMock(return_value="actor")),
+            patch.object(goal, "attach_video_bytes", new=attach),
+            patch.object(goal.control, "_callback_message", return_value=out),
+            patch.object(goal.asyncio, "to_thread", new=direct),
+        ):
+            await goal.check_generated_image(cb, state)
+
+        attach.assert_called_once()
+        self.assertEqual(attach.call_args.kwargs["payload"], b"video")
+        self.assertEqual(attach.call_args.kwargs["content_type"], "video/mp4")
+        self.assertEqual(
+            attach.call_args.kwargs["duration_seconds"],
+            goal._GENERATED_VIDEO_DURATION_SECONDS,
+        )
+        self.assertEqual(state.state, goal.GoalFirstAutopilotState.customizing)
+        self.assertEqual(state.data["creative_job_id"], "")
+        self.assertEqual(state.data["creative_generation_kind"], "video")
+        out.answer_video.assert_awaited_once()
+
 
     async def test_launch_click_is_final_spend_confirmation_when_preview_is_unchanged(self) -> None:
         state = FakeState(base_data())
