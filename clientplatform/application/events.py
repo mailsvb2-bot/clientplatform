@@ -290,6 +290,57 @@ def register_public_attendee_in_transaction(
     )
 
 
+def cancel_public_registration_by_token_in_transaction(
+    conn: Any,
+    *,
+    token: str,
+    now: datetime | None = None,
+) -> EventRegistration:
+    repository = EventRepository(conn)
+    registration = repository.get_registration_by_token(token=token)
+    timestamp = normalize_utc(
+        now or datetime.now(timezone.utc),
+        field_name="now",
+    ).replace(microsecond=0)
+    cursor = conn.execute(
+        """
+        UPDATE clientplatform_event_registrations
+        SET status='cancelled'
+        WHERE id=? AND business_id=? AND event_id=? AND status='registered'
+        """,
+        (registration.id, registration.business_id, registration.event_id),
+    )
+    if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+        raise EventUnavailable("registration is no longer active")
+
+    conn.execute(
+        """
+        UPDATE provider_dispatch_outbox
+        SET status='cancelled',updated_at=?,locked_at=NULL,lock_token=NULL,
+            last_error='event_registration_cancelled'
+        WHERE business_id=? AND source_kind='event_message' AND source_id=?
+          AND status IN ('pending','retry')
+        """,
+        (timestamp.isoformat(), registration.business_id, registration.id),
+    )
+
+    from clientplatform.application.event_commercial_consent import (
+        revoke_event_commercial_consent_by_registration_token_in_transaction,
+    )
+
+    revoke_event_commercial_consent_by_registration_token_in_transaction(
+        conn,
+        token=token,
+        now=timestamp,
+    )
+    return registration
+
+
+def cancel_public_registration_by_token(*, token: str) -> EventRegistration:
+    with get_db() as conn:
+        return cancel_public_registration_by_token_in_transaction(conn, token=token)
+
+
 def register_public_attendee(**kwargs: Any) -> PublicRegistrationResult:
     with get_db() as conn:
         return register_public_attendee_in_transaction(conn, **kwargs)
@@ -305,6 +356,8 @@ __all__ = [
     "EventUnavailable",
     "PublicRegistrationResult",
     "cancel_event",
+    "cancel_public_registration_by_token",
+    "cancel_public_registration_by_token_in_transaction",
     "create_event",
     "create_event_in_transaction",
     "get_public_event",
