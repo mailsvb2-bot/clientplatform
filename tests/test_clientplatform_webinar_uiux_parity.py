@@ -163,6 +163,33 @@ def test_shared_event_action_labels_fit_native_transport_limit_without_truncatio
             assert native_ui._button(action.label, "cpm:events").label == action.label
 
 
+def test_native_hub_ignores_telegram_only_schedule_edit_without_fallback() -> None:
+    actor = _actor()
+    base = _snapshot()
+    item = SimpleNamespace(
+        **{
+            **vars(base.items[0]),
+            "status": "published",
+            "join_ready": True,
+        }
+    )
+    snapshot = SimpleNamespace(**{**vars(base), "items": (item,)})
+    with (
+        patch.object(native_ui, "_business_name", return_value="Бизнес"),
+        patch.object(native_ui, "resolve_events_snapshot", return_value=snapshot),
+    ):
+        rendered = native_ui._events_message(actor)
+
+    assert "Раздел открыт, но статистику сейчас не удалось загрузить" not in rendered.text
+    commands = _commands(rendered)
+    assert ("🎥 Создать вебинар", "cpm:event-new") in commands
+    assert (
+        "🗓 Контент-план · Вебинар",
+        "cpm:event-content:33333333-3333-4333-8333-333333333333",
+    ) in commands
+    assert not any("Изменить расписание" in label for label, _ in commands)
+
+
 def test_vk_and_max_event_hub_render_identically_before_transport() -> None:
     actor = _actor()
     snapshot = _snapshot()
