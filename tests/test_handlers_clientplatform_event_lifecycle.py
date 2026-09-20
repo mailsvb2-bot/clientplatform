@@ -437,6 +437,138 @@ class EventLifecycleHandlerTests(unittest.IsolatedAsyncioTestCase):
 
         finish.assert_awaited_once_with(message, state)
 
+    async def test_finish_schedule_edit_rejects_missing_existing_metadata(self) -> None:
+        message = _message("")
+        state = AsyncMock()
+        state.get_data.return_value = {
+            "event_business_id": BUSINESS_ID,
+            "edit_event_id": EVENT_ID,
+            "event_timezone": "Europe/Moscow",
+            "event_sessions": [
+                {
+                    "position": 1,
+                    "starts_at": "2026-10-20T16:00:00+00:00",
+                    "ends_at": "2026-10-20T18:00:00+00:00",
+                    "local_label": "20.10.2026 19:00–21:00",
+                    "join_url": None,
+                }
+            ],
+            "edit_existing_sessions": [],
+        }
+        with (
+            patch.object(lifecycle.control, "_actor", new=AsyncMock(return_value=object())),
+            patch.object(lifecycle, "_cancel_keyboard", return_value="cancel"),
+        ):
+            await lifecycle._finish_schedule_edit(message, state)
+
+        state.clear.assert_not_awaited()
+        self.assertIn("Не удалось сохранить новое расписание", message.answer.await_args.args[0])
+
+    async def test_finish_schedule_edit_reports_runtime_failure(self) -> None:
+        message = _message("")
+        state = AsyncMock()
+        state.get_data.return_value = {
+            "event_business_id": BUSINESS_ID,
+            "edit_event_id": EVENT_ID,
+            "event_timezone": "Europe/Moscow",
+            "event_sessions": [
+                {
+                    "position": 1,
+                    "starts_at": "2026-10-20T16:00:00+00:00",
+                    "ends_at": "2026-10-20T18:00:00+00:00",
+                    "local_label": "20.10.2026 19:00–21:00",
+                    "join_url": "https://zoom.us/j/123",
+                }
+            ],
+            "edit_existing_sessions": [
+                {
+                    "position": 1,
+                    "join_url": "https://zoom.us/j/123",
+                    "provider_key": "zoom",
+                    "provider_label": "Zoom",
+                }
+            ],
+        }
+        with (
+            patch.object(lifecycle.control, "_actor", new=AsyncMock(return_value=object())),
+            patch.object(
+                lifecycle,
+                "configure_event_sessions",
+                side_effect=RuntimeError("database unavailable"),
+            ),
+            patch.object(lifecycle, "_cancel_keyboard", return_value="cancel"),
+        ):
+            await lifecycle._finish_schedule_edit(message, state)
+
+        state.clear.assert_not_awaited()
+        self.assertIn("Не удалось сохранить новое расписание", message.answer.await_args.args[0])
+
+    async def test_start_schedule_edit_rejects_malformed_callback(self) -> None:
+        callback = SimpleNamespace(
+            data="cpev:edit:broken",
+            from_user=SimpleNamespace(id=101),
+            answer=AsyncMock(),
+        )
+        state = AsyncMock()
+
+        await lifecycle.start_schedule_edit(callback, state)
+
+        callback.answer.assert_awaited_once_with("Кнопка устарела", show_alert=True)
+        state.clear.assert_not_awaited()
+
+    async def test_start_schedule_edit_rejects_empty_session_set(self) -> None:
+        callback = SimpleNamespace(
+            data=f"cpev:edit:{TOKEN}:{TOKEN}",
+            from_user=SimpleNamespace(id=101),
+            answer=AsyncMock(),
+        )
+        state = AsyncMock()
+        actor = MagicMock(unsafe=True)
+        window = SimpleNamespace(timezone_name="Europe/Moscow")
+        with (
+            patch.object(lifecycle.control, "_token_uuid", side_effect=[EVENT_ID, BUSINESS_ID]),
+            patch.object(lifecycle.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(lifecycle, "list_event_sessions", return_value=()),
+            patch.object(lifecycle, "get_event_warmup_window", return_value=window),
+        ):
+            await lifecycle.start_schedule_edit(callback, state)
+
+        callback.answer.assert_awaited_once_with(
+            "Не удалось открыть расписание этого вебинара",
+            show_alert=True,
+        )
+        state.clear.assert_not_awaited()
+
+    async def test_start_schedule_edit_reports_runtime_failure(self) -> None:
+        callback = SimpleNamespace(
+            data=f"cpev:edit:{TOKEN}:{TOKEN}",
+            from_user=SimpleNamespace(id=101),
+            answer=AsyncMock(),
+        )
+        state = AsyncMock()
+        actor = MagicMock(unsafe=True)
+        with (
+            patch.object(lifecycle.control, "_token_uuid", side_effect=[EVENT_ID, BUSINESS_ID]),
+            patch.object(lifecycle.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(
+                lifecycle,
+                "list_event_sessions",
+                side_effect=RuntimeError("database unavailable"),
+            ),
+            patch.object(
+                lifecycle,
+                "get_event_warmup_window",
+                return_value=SimpleNamespace(timezone_name="Europe/Moscow"),
+            ),
+        ):
+            await lifecycle.start_schedule_edit(callback, state)
+
+        callback.answer.assert_awaited_once_with(
+            "Не удалось открыть расписание этого вебинара",
+            show_alert=True,
+        )
+        state.clear.assert_not_awaited()
+
     async def test_finish_schedule_edit_preserves_join_targets(self) -> None:
         message = _message("")
         state = AsyncMock()
