@@ -155,6 +155,28 @@ class _InterleaveOnObservationLock:
         return self._conn.execute(sql, params)
 
 
+class _InterleaveOnFeedbackLock:
+    """Commit a deterministic newer revision before feedback acquires its row lock."""
+
+    def __init__(self, conn: sqlite3.Connection, callback) -> None:
+        self._conn = conn
+        self._callback = callback
+        self._triggered = False
+
+    def execute(self, sql: str, params: tuple[object, ...] = ()):
+        normalized = " ".join(sql.split())
+        if (
+            not self._triggered
+            and normalized.startswith(
+                "UPDATE external_product_connectors SET updated_at=updated_at"
+            )
+            and "status='active'" not in normalized
+        ):
+            self._triggered = True
+            self._callback()
+        return self._conn.execute(sql, params)
+
+
 class ClientPlatformExternalProductConnectorTests(unittest.TestCase):
     def setUp(self) -> None:
         self.fx = ExternalProductFixture()
@@ -1172,6 +1194,80 @@ class ClientPlatformExternalProductConnectorTests(unittest.TestCase):
             (self.fx.actor.business_id, second.id),
         ).fetchone()[0]
         self.assertEqual(count, 1)
+
+    def test_feedback_lock_rechecks_head_after_concurrent_revision(self) -> None:
+        customer = CustomerRepository(self.fx.conn).create_customer(
+            actor=self.fx.actor,
+            display_name="Race feedback customer",
+            now=self.now.isoformat(),
+        )
+        self.fx.repo.bind_customer_ref(
+            actor=self.fx.actor,
+            connector_id=self.fx.connector.id,
+            customer_id=customer.id,
+            customer_ref="feedback-race-subject",
+            now=self.now,
+        )
+        first = self.fx.repo.ingest_event(
+            connector=self.fx.connector,
+            event=ExternalProductEvent(
+                external_event_id="feedback-race-r1",
+                event_type=ExternalProductEventType.EVIDENCE,
+                occurred_at=self.now,
+                customer_ref="feedback-race-subject",
+                observation=ExternalProductObservation(
+                    observation_key="webinar:feedback-race:attendance",
+                    kind="webinar.attended",
+                    label="Участие подтверждено",
+                    observed_at=self.now,
+                    provenance_ref="feedback-race-proof-r1",
+                ),
+            ),
+            payload_fingerprint="b5" * 32,
+            received_at=self.now,
+        )
+
+        def insert_new_head() -> None:
+            ExternalProductRepository(self.fx.conn).ingest_event(
+                connector=self.fx.connector,
+                event=ExternalProductEvent(
+                    external_event_id="feedback-race-r2",
+                    event_type=ExternalProductEventType.EVIDENCE,
+                    occurred_at=self.now + timedelta(minutes=1),
+                    customer_ref="feedback-race-subject",
+                    observation=ExternalProductObservation(
+                        observation_key="webinar:feedback-race:attendance",
+                        kind="webinar.attended",
+                        label="Участие подтверждено повторно",
+                        observed_at=self.now + timedelta(minutes=1),
+                        provenance_ref="feedback-race-proof-r2",
+                        revision=2,
+                        supersedes_external_event_id="feedback-race-r1",
+                    ),
+                ),
+                payload_fingerprint="b6" * 32,
+                received_at=self.now + timedelta(minutes=1),
+            )
+
+        racing = ExternalProductRepository(
+            _InterleaveOnFeedbackLock(self.fx.conn, insert_new_head)
+        )
+        with self.assertRaises(ExternalProductNotFound):
+            racing.record_observation_feedback(
+                actor=self.fx.actor,
+                customer_id=customer.id,
+                receipt_id=first.id,
+                feedback=ExternalObservationFeedback.USEFUL,
+                now=self.now + timedelta(minutes=2),
+            )
+        count = self.fx.conn.execute(
+            """
+            SELECT COUNT(*) FROM external_product_observation_feedback
+            WHERE business_id=?
+            """,
+            (self.fx.actor.business_id,),
+        ).fetchone()[0]
+        self.assertEqual(count, 0)
 
     def test_wrong_customer_feedback_does_not_rebind_identity(self) -> None:
         customer = CustomerRepository(self.fx.conn).create_customer(
