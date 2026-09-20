@@ -27,6 +27,7 @@ from clientplatform.domain.external_products import (
     ExternalProductInvariantViolation,
     ExternalProductObservation,
     ExternalProductSignatureError,
+    external_customer_fingerprint,
 )
 from clientplatform.domain.outcomes import OutcomeMoney
 from clientplatform.infrastructure.attribution_repository import AttributionRepository
@@ -408,10 +409,7 @@ class ClientPlatformExternalProductConnectorTests(unittest.TestCase):
         )
         self.fx.conn.commit()
 
-        fingerprint = __import__(
-            "clientplatform.domain.external_products",
-            fromlist=["external_customer_fingerprint"],
-        ).external_customer_fingerprint(
+        fingerprint = external_customer_fingerprint(
             connector_id=self.fx.connector.id,
             customer_ref="race-subject",
         )
