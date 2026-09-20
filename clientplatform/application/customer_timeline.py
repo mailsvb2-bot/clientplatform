@@ -37,6 +37,7 @@ class CustomerTimelineEntry:
     evidence_state: str | None = None
     evidence_freshness: str | None = None
     fresh_until: datetime | None = None
+    evidence_feedback: str | None = None
     limitations: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
@@ -223,6 +224,10 @@ def _external_observation_entry(
         if fresh_value is None
         else _parse_timestamp(fresh_value, field="external observation fresh_until")
     )
+    feedback_value = _value(row, "observation_feedback", 9)
+    feedback = None if feedback_value is None else str(feedback_value)
+    if feedback not in {None, "useful", "incorrect", "wrong_customer"}:
+        feedback = None
     if state == "retracted":
         freshness = "отозвано источником"
     elif fresh_until is None:
@@ -255,6 +260,7 @@ def _external_observation_entry(
         evidence_state=state,
         evidence_freshness=freshness,
         fresh_until=fresh_until,
+        evidence_feedback=feedback,
         limitations=limitations,
     )
 
@@ -436,10 +442,13 @@ def get_customer_timeline(
             """
             SELECT r.id,r.external_event_id,r.occurred_at,r.received_at,
                    r.metadata_json,c.display_name AS connector_name,
-                   r.observation_revision,r.observation_state,r.observation_fresh_until
+                   r.observation_revision,r.observation_state,r.observation_fresh_until,
+                   f.feedback AS observation_feedback
             FROM external_product_event_receipts r
             JOIN external_product_connectors c
               ON c.id=r.connector_id AND c.business_id=r.business_id
+            LEFT JOIN external_product_observation_feedback f
+              ON f.business_id=r.business_id AND f.receipt_id=r.id
             WHERE r.business_id=? AND r.customer_id=?
               AND r.event_type='evidence' AND r.status='accepted'
               AND (
