@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-import hashlib
 from typing import Any
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -258,7 +257,7 @@ def reschedule_event_notifications_in_transaction(
         for row in repository.list_registrations(actor=actor, event_id=event.id, limit=5000)
         if row.status == "registered"
     )
-    revision = hashlib.sha256(event.updated_at.isoformat().encode("utf-8")).hexdigest()[:16]
+    revision = uuid4().hex[:16]
     queued = 0
     offsets = (
         ("24h", timedelta(hours=24)),
