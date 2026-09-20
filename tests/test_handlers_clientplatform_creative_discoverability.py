@@ -429,7 +429,7 @@ class CreativeDiscoverabilityTests(unittest.IsolatedAsyncioTestCase):
         )
         for code, expected in cases:
             with self.subTest(code=code):
-                text = creative._visual_failure_text(
+                text = creative.visual_failure_message(
                     SimpleNamespace(error_code=code)
                 )
                 self.assertIn(expected, text)
