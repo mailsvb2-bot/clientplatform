@@ -242,6 +242,15 @@ def test_admin_token_first_menu_is_recognized_as_repeatable_navigation() -> None
     )
 
 
+def test_webinar_schedule_edit_enters_from_ordinary_state_but_not_sensitive_state() -> None:
+    data = "cpev:edit:event-token:business-token"
+    ordinary = "ClientPlatformControlState:activity_description"
+    assert not _is_repeatable_navigation(data)
+    assert not _callback_conflicts_with_state(ordinary, data)
+    assert _callback_should_clear_state(ordinary, data)
+    assert _callback_conflicts_with_state("ManagedBotSetupState:username", data)
+
+
 def test_webinar_calendar_callbacks_are_repeatable_and_never_hit_duplicate_toast() -> None:
     for data in (
         "cpev:noop",
