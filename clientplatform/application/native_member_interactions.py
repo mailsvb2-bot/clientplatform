@@ -1277,6 +1277,7 @@ _NATIVE_PARENT_COMMANDS: dict[str, str] = {
     "event-wizard": "cpm:events",
     "event-wizard-title-text": "cpm:events",
     "event-wizard-count-text": "cpm:events",
+    "event-wizard-topics-text": "cpm:events",
     "event-wizard-timezone-text": "cpm:events",
     "event-wizard-window-text": "cpm:events",
     "event-wizard-room-text": "cpm:events",
@@ -1467,8 +1468,8 @@ def _with_parent_navigation(
         "event-settings", "event-content", "event-content-followups",
         "event-followup-edit", "event-followup-reset", "event-followup-edit-text",
         "event-followups", "event-segment", "event-channel", "event-new", "event-wizard", "event-wizard-title-text",
-        "event-wizard-count-text", "event-wizard-timezone-text",
-        "event-wizard-window-text", "event-wizard-room-text",
+        "event-wizard-count-text", "event-wizard-topics-text",
+        "event-wizard-timezone-text", "event-wizard-window-text", "event-wizard-room-text",
         "event-wizard-warmup-text", "event-we-text",
         "event-warmup-days-text", "event-create-text", "event-announce", "event-join", "event-join-text",
     } or (
@@ -5620,6 +5621,7 @@ def _render(
         if parsed.action in {
             "event-wizard-title-text",
             "event-wizard-count-text",
+            "event-wizard-topics-text",
             "event-wizard-timezone-text",
             "event-wizard-window-text",
             "event-wizard-room-text",
