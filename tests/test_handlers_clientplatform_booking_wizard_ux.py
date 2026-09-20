@@ -118,6 +118,29 @@ async def test_typed_replacement_date_keeps_replacement_context_and_calendar() -
 
 
 @pytest.mark.asyncio
+async def test_typed_duration_is_rejected_back_to_button_choices() -> None:
+    business_id = str(uuid4())
+    message = FakeMessage("75")
+    state = FakeState(
+        {
+            "business_id": business_id,
+            "offering_id": str(uuid4()),
+            "booking_start": "10.08.2026 15:00",
+        }
+    )
+
+    await wizard.reject_typed_booking_duration(message, state)
+
+    assert state.data["booking_start"] == "10.08.2026 15:00"
+    text, markup = message.answers[-1]
+    assert "выбирается кнопкой" in text
+    labels = _labels(markup)
+    assert "1 ч 15 мин" in labels
+    assert "2 часа" in labels
+    assert "✖️ Отмена" in labels
+
+
+@pytest.mark.asyncio
 async def test_quick_duration_reuses_canonical_booking_completion() -> None:
     business_id = str(uuid4())
     token = wizard.control._uuid_token(business_id)
