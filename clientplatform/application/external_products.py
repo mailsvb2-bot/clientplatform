@@ -14,6 +14,7 @@ from clientplatform.domain.external_products import (
     ExternalProductEvent,
     ExternalProductEventType,
     ExternalObservationQuality,
+    ExternalObservationState,
     ExternalProductInvariantViolation,
     ExternalProductObservation,
     ExternalProductReceipt,
@@ -314,10 +315,15 @@ def _parse_observation(value: Any) -> ExternalProductObservation | None:
     if not isinstance(value, dict):
         raise ValueError("external product observation must be an object")
     allowed = {
+        "observation_key",
         "kind",
         "label",
         "observed_at",
         "provenance_ref",
+        "revision",
+        "state",
+        "supersedes_external_event_id",
+        "fresh_until",
         "quality",
         "limitations",
     }
@@ -328,11 +334,32 @@ def _parse_observation(value: Any) -> ExternalProductObservation | None:
         not isinstance(item, str) for item in limitations
     ):
         raise ValueError("external product observation limitations must be strings")
+    fresh_until = (
+        None
+        if value.get("fresh_until") is None
+        else _parse_occurred_at(value.get("fresh_until"))
+    )
+    revision = value.get("revision", 1)
+    if isinstance(revision, bool) or not isinstance(revision, int):
+        raise ValueError("external product observation revision must be an integer")
     return ExternalProductObservation(
+        observation_key=str(value.get("observation_key") or ""),
         kind=str(value.get("kind") or ""),
         label=str(value.get("label") or ""),
         observed_at=_parse_occurred_at(value.get("observed_at")),
         provenance_ref=str(value.get("provenance_ref") or ""),
+        revision=revision,
+        state=ExternalObservationState(
+            str(value.get("state") or ExternalObservationState.ACTIVE.value)
+            .strip()
+            .lower()
+        ),
+        supersedes_external_event_id=(
+            None
+            if value.get("supersedes_external_event_id") is None
+            else str(value.get("supersedes_external_event_id") or "")
+        ),
+        fresh_until=fresh_until,
         quality=ExternalObservationQuality(
             str(value.get("quality") or ExternalObservationQuality.SOURCE_ASSERTED.value)
             .strip()
