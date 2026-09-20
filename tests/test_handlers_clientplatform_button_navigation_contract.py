@@ -373,7 +373,6 @@ def test_native_webinar_wizard_buttons_escape_only_ordinary_stale_fsm() -> None:
 def test_owner_group_navigation_escapes_stale_ordinary_wizards() -> None:
     state_name = "ClientPlatformControlState:activity_description"
     for data in (
-        "cpo:start:business",
         "cpo:more:business",
         "cpo:clients:business",
         "cpo:content:business",
@@ -387,7 +386,11 @@ def test_owner_group_navigation_escapes_stale_ordinary_wizards() -> None:
 
 
 def test_service_ad_selection_callbacks_are_guarded_and_step_local() -> None:
-    assert _is_repeatable_navigation("cpo:start:business")
+    start = "cpo:start:business"
+    ordinary = "ClientPlatformControlState:activity_description"
+    assert not _is_repeatable_navigation(start)
+    assert not _callback_conflicts_with_state(ordinary, start)
+    assert _callback_should_clear_state(ordinary, start)
     for data in (
         "cpo:offer:business:offering",
         "cpo:newtime:business:offering",
