@@ -13,4 +13,14 @@ def test_fresh_deploy_does_not_recreate_retired_payment_schema():
     assert "payments_decision_attribution_v1" not in applied
     assert "payments" not in tables
     assert "clientplatform_business_payment_outcomes_v1" in applied
+    assert "clientplatform_external_observation_lifecycle_v1" in applied
     assert "business_payments" in tables
+    with db() as conn:
+        columns = {
+            row[1]
+            for row in conn.execute(
+                "PRAGMA table_info(external_product_event_receipts)"
+            ).fetchall()
+        }
+    assert "observation_revision" in columns
+    assert "observation_state" in columns
