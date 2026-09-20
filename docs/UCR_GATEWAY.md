@@ -2,7 +2,7 @@
 
 Status: owner-directed integration boundary for `mailsvb2-bot/Universal-Communication-Runtime`.
 
-Pinned UCR revision: `8097b41e69634c944c225f7071e80b991d4ddc02`.
+Pinned UCR revision: `22d598e057769d59fe0aa47e169cf2eb904abb18`.
 
 ## Why this boundary exists
 
@@ -31,7 +31,7 @@ Every successful response includes the exact pinned revision:
 ```json
 {
   "ok": true,
-  "ucr_revision": "8097b41e69634c944c225f7071e80b991d4ddc02"
+  "ucr_revision": "22d598e057769d59fe0aa47e169cf2eb904abb18"
 }
 ```
 
@@ -71,7 +71,7 @@ A successful RPC response must echo the exact service and method and provide a J
 ```json
 {
   "ok": true,
-  "ucr_revision": "8097b41e69634c944c225f7071e80b991d4ddc02",
+  "ucr_revision": "22d598e057769d59fe0aa47e169cf2eb904abb18",
   "service": "ucr.v1.IntegrationService",
   "method": "CreateConversation",
   "result": {
@@ -115,6 +115,15 @@ Mutating operations:
 Read operation:
 
 - `GetCall`
+
+### `ucr.v1.UniversalConferenceService`
+
+This pin exposes only the two reviewed read-only methods needed for the first UIII attendance consumer slice:
+
+- `GetParticipantAttendance`
+- `GetCapabilities`
+
+Conference creation, participant mutation, runtime preparation and join-grant mutation remain outside the ClientPlatform gateway in this slice. The adapter does not infer or synthesize those operations.
 
 `StartCall` receives the canonical UCR request supplied by the caller. ClientPlatform does not turn a short `(tenant, conversation, participants)` tuple into a fabricated `CallSession` because UCR owns the exact call model and its required authority/revision fields.
 
