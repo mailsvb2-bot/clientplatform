@@ -121,11 +121,16 @@ class EventLifecycleRuntimeCoverageTests(unittest.IsolatedAsyncioTestCase):
             ) as create,
             patch.object(lifecycle, "_public_base_url", return_value="https://clientplatform.example.test"),
             patch.object(lifecycle, "get_event_warmup_window", return_value=window),
-            patch.object(lifecycle, "get_event_warmup_plan", return_value=warmup),
+            patch.object(lifecycle, "save_event_warmup_plan", return_value=warmup),
             patch.object(lifecycle, "set_event_content_mode") as set_mode,
         ):
             await lifecycle.receive_title(_message("Три дня практики"), state)
             await lifecycle.receive_days(_message("3"), state)
+            self.assertEqual(state.current, lifecycle.ClientPlatformEventLifecycleState.waiting_topics_choice)
+            await lifecycle.receive_event_topics(
+                _message("Диагностика\nПрактика\nПлан действий"),
+                state,
+            )
             self.assertEqual(state.current, lifecycle.ClientPlatformEventLifecycleState.waiting_timezone)
             await lifecycle.receive_timezone(_message("Москва"), state)
             self.assertEqual(state.data["event_timezone"], "Europe/Moscow")
@@ -158,7 +163,7 @@ class EventLifecycleRuntimeCoverageTests(unittest.IsolatedAsyncioTestCase):
                 (EventContentStage.POST_EVENT, EventContentMode.TEXT),
             ],
         )
-        self.assertIn("Прогрев: 2 дн. — Текст + картинка", final.answer.await_args_list[0].args[0])
+        self.assertIn("Сообщения до вебинара: 2 дн. — Текст + картинка", final.answer.await_args_list[0].args[0])
         self.assertEqual(final.answer.await_count, 3)
 
     async def test_one_day_keeps_room_later_and_zero_warmup(self) -> None:
@@ -194,7 +199,7 @@ class EventLifecycleRuntimeCoverageTests(unittest.IsolatedAsyncioTestCase):
             patch.object(lifecycle, "create_and_publish_online_event", return_value=created) as create,
             patch.object(lifecycle, "_public_base_url", return_value="https://clientplatform.example.test"),
             patch.object(lifecycle, "get_event_warmup_window", return_value=window),
-            patch.object(lifecycle, "get_event_warmup_plan", return_value=plan),
+            patch.object(lifecycle, "save_event_warmup_plan", return_value=plan),
             patch.object(lifecycle, "set_event_content_mode") as set_mode,
         ):
             time_message = _message("25.09.2026 19:00-21:00")
