@@ -388,6 +388,7 @@ class EventLifecycleHandlerTests(unittest.IsolatedAsyncioTestCase):
         ):
             await lifecycle._finish_schedule_edit(message, state)
 
+        self.assertTrue(configure.call_args.kwargs["reschedule_notifications"])
         spec = configure.call_args.kwargs["sessions"][0]
         self.assertEqual(spec.join_url, "https://zoom.us/j/123")
         self.assertEqual(spec.provider_key, "zoom")
