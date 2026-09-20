@@ -137,6 +137,38 @@
     }
   };
 
+  const submitObservationFeedback = async (customerId, receiptId, feedback, button) => {
+    const snapshot = captureContext();
+    setBusy(true);
+    if (button) button.disabled = true;
+    try {
+      await post('/clientplatform/cockpit/customers/observation-feedback', {
+        customer_id: customerId,
+        receipt_id: receiptId,
+        feedback,
+      }, snapshot.businessId);
+      assertCurrent(snapshot);
+      if (tg && tg.HapticFeedback && typeof tg.HapticFeedback.notificationOccurred === 'function') {
+        tg.HapticFeedback.notificationOccurred('success');
+      }
+      await loadDetail(customerId);
+    } catch (error) {
+      if (contextChanged(error)) return;
+      text(
+        limitations,
+        error && error.message === 'observation_changed'
+          ? 'Наблюдение уже обновилось. Карточка будет загружена заново.'
+          : error && error.message === 'observation_feedback_denied'
+            ? 'Для Вашей роли оценка внешних наблюдений недоступна.'
+            : 'Не удалось сохранить оценку наблюдения. Обновите карточку и попробуйте ещё раз.',
+      );
+      if (error && error.message === 'observation_changed') void loadDetail(customerId);
+    } finally {
+      if (button) button.disabled = false;
+      if (controller().isBusinessContextCurrent(snapshot)) setBusy(false);
+    }
+  };
+
   const renderDetail = (payload) => {
     contacts.replaceChildren();
     timeline.replaceChildren();
@@ -190,6 +222,45 @@
       const parts = [dateText(item.occurred_at), item.detail, item.money].filter(Boolean);
       text(meta, parts.join(' · '));
       card.append(label, meta);
+      if (item.observation_receipt_id) {
+        const feedbackNames = {
+          useful: 'полезно',
+          incorrect: 'неверно',
+          wrong_customer: 'не тот клиент',
+        };
+        const feedbackMeta = document.createElement('small');
+        text(
+          feedbackMeta,
+          item.evidence_feedback
+            ? `Ваша оценка: ${feedbackNames[item.evidence_feedback] || item.evidence_feedback}`
+            : 'Помогает ли это наблюдение?',
+        );
+        card.appendChild(feedbackMeta);
+        if (item.feedback_allowed) {
+          const feedbackRow = document.createElement('div');
+          feedbackRow.className = 'customer-feedback-actions';
+          for (const option of [
+            ['Полезно', 'useful'],
+            ['Неверно', 'incorrect'],
+            ['Не тот клиент', 'wrong_customer'],
+          ]) {
+            const feedbackButton = document.createElement('button');
+            feedbackButton.type = 'button';
+            text(feedbackButton, option[0]);
+            feedbackButton.disabled = item.evidence_feedback === option[1];
+            feedbackButton.addEventListener('click', () => {
+              void submitObservationFeedback(
+                payload.customer_id,
+                item.observation_receipt_id,
+                option[1],
+                feedbackButton,
+              );
+            });
+            feedbackRow.appendChild(feedbackButton);
+          }
+          card.appendChild(feedbackRow);
+        }
+      }
       timeline.appendChild(card);
     }
     if (!(payload.timeline || []).length) {

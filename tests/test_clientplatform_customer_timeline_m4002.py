@@ -24,6 +24,7 @@ from clientplatform.application.tenancy import (
 )
 from clientplatform.domain.customers import CustomerNotFound
 from clientplatform.domain.external_products import (
+    ExternalObservationFeedback,
     ExternalObservationQuality,
     ExternalObservationState,
     ExternalProductEvent,
@@ -270,6 +271,13 @@ class ClientPlatformCustomerTimelineM4002Tests(unittest.TestCase):
                 payload_fingerprint="8" * 64,
                 received_at=_BASE + timedelta(minutes=4),
             )
+            repository.record_observation_feedback(
+                actor=actor,
+                customer_id=customer.id,
+                receipt_id=receipt.id,
+                feedback=ExternalObservationFeedback.USEFUL,
+                now=_BASE + timedelta(minutes=5),
+            )
 
         timeline = get_customer_timeline(
             actor=actor,
@@ -290,6 +298,7 @@ class ClientPlatformCustomerTimelineM4002Tests(unittest.TestCase):
         self.assertEqual(observation.occurred_at, observed_at)
         self.assertEqual(observation.evidence_revision, 1)
         self.assertEqual(observation.evidence_state, "active")
+        self.assertEqual(observation.evidence_feedback, "useful")
         self.assertIn("актуально до", observation.evidence_freshness or "")
         self.assertEqual(
             observation.limitations,

@@ -11,6 +11,7 @@ from clientplatform.application.customer_timeline import (
     get_customer_timeline,
 )
 from clientplatform.application.customers import get_customer, search_customers
+from clientplatform.application.external_products import record_external_observation_feedback
 from clientplatform.application.growth_cockpit import GrowthAction, get_customer_work_actions
 from clientplatform.application.tenancy import resolve_tenant_context
 from clientplatform.domain.customers import (
@@ -84,6 +85,9 @@ class CockpitCustomerTimelineItem:
     evidence_state: str | None = None
     evidence_freshness: str | None = None
     fresh_until: str | None = None
+    observation_receipt_id: str | None = None
+    evidence_feedback: str | None = None
+    feedback_allowed: bool = False
     limitations: tuple[str, ...] = ()
 
 
@@ -179,7 +183,11 @@ def _money_text(amount_minor: int | None, currency: str | None) -> str | None:
     return f"{rendered.replace(',', ' ').replace('.', ',')} {currency}"
 
 
-def _timeline_items(timeline: CustomerTimeline) -> tuple[CockpitCustomerTimelineItem, ...]:
+def _timeline_items(
+    timeline: CustomerTimeline,
+    *,
+    feedback_allowed: bool,
+) -> tuple[CockpitCustomerTimelineItem, ...]:
     return tuple(
         CockpitCustomerTimelineItem(
             occurred_at=item.occurred_at.isoformat(),
@@ -193,6 +201,13 @@ def _timeline_items(timeline: CustomerTimeline) -> tuple[CockpitCustomerTimeline
             evidence_state=item.evidence_state,
             evidence_freshness=item.evidence_freshness,
             fresh_until=None if item.fresh_until is None else item.fresh_until.isoformat(),
+            observation_receipt_id=(
+                item.source_id if item.source_type == "external_product_receipt" else None
+            ),
+            evidence_feedback=item.evidence_feedback,
+            feedback_allowed=(
+                feedback_allowed and item.source_type == "external_product_receipt"
+            ),
             limitations=item.limitations,
         )
         for item in timeline.entries
@@ -263,6 +278,11 @@ def build_cockpit_customer_detail(
         raise ValueError("timeline_limit must be an integer between 1 and 50")
     record = record_loader(actor=actor, customer_id=customer_id)
     limitations: list[str] = []
+    try:
+        actor.assert_can_manage_business()
+        feedback_allowed = True
+    except TenantPermissionDenied:
+        feedback_allowed = False
     timeline_items: tuple[CockpitCustomerTimelineItem, ...] = ()
     try:
         timeline = timeline_loader(
@@ -270,7 +290,7 @@ def build_cockpit_customer_detail(
             customer_id=record.customer.id,
             limit=timeline_limit,
         )
-        timeline_items = _timeline_items(timeline)
+        timeline_items = _timeline_items(timeline, feedback_allowed=feedback_allowed)
     except (TenantAccessDenied, TenantPermissionDenied):
         raise
     except OSError:
@@ -403,6 +423,27 @@ def resolve_cockpit_customer_detail(
     )
 
 
+def record_cockpit_observation_feedback(
+    *,
+    telegram_user_id: int,
+    customer_id: str,
+    receipt_id: str,
+    feedback: str,
+    requested_business_id: str | None = None,
+) -> str:
+    actor = _resolve_actor(
+        telegram_user_id=telegram_user_id,
+        requested_business_id=requested_business_id,
+    )
+    record = record_external_observation_feedback(
+        actor=actor,
+        customer_id=customer_id,
+        receipt_id=receipt_id,
+        feedback=feedback,
+    )
+    return record.feedback.value
+
+
 def resolve_cockpit_customer_action_route(
     *,
     telegram_user_id: int,
@@ -433,6 +474,7 @@ __all__ = [
     "build_cockpit_customer_action_route",
     "build_cockpit_customer_detail",
     "build_cockpit_customer_page",
+    "record_cockpit_observation_feedback",
     "resolve_cockpit_customer_action_route",
     "resolve_cockpit_customer_detail",
     "resolve_cockpit_customer_page",

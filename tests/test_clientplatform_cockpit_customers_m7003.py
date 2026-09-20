@@ -178,6 +178,7 @@ class CockpitCustomersM7003Tests(unittest.TestCase):
                     evidence_state="active",
                     evidence_freshness="актуально до 06.09.2026 14:00 UTC",
                     fresh_until=datetime(2026, 9, 6, 14, 0, tzinfo=timezone.utc),
+                    evidence_feedback="useful",
                     limitations=("Нет данных о внимании во время просмотра.",),
                 ),
             ),
@@ -202,7 +203,39 @@ class CockpitCustomersM7003Tests(unittest.TestCase):
         self.assertEqual(item["evidence_state"], "active")
         self.assertIn("актуально до", item["evidence_freshness"])
         self.assertEqual(item["fresh_until"], "2026-09-06T14:00:00+00:00")
+        self.assertEqual(item["observation_receipt_id"], "receipt-42")
+        self.assertEqual(item["evidence_feedback"], "useful")
+        self.assertTrue(item["feedback_allowed"])
         self.assertNotIn("customer_ref", repr(detail.as_dict()))
+
+    def test_support_can_view_observation_but_cannot_submit_feedback(self) -> None:
+        record = CustomerRecord(customer=_customer(), identities=())
+        timeline = CustomerTimeline(
+            business_id=_BUSINESS,
+            customer_id=_CUSTOMER,
+            entries=(
+                CustomerTimelineEntry(
+                    kind="external_observation:webinar.attended",
+                    occurred_at=datetime(2026, 9, 6, 12, 0, tzinfo=timezone.utc),
+                    source_type="external_product_receipt",
+                    source_id="receipt-support",
+                    title="Участие подтверждено",
+                    detail="Источник: Вебинарная платформа",
+                    evidence_source="Вебинарная платформа",
+                    evidence_state="active",
+                ),
+            ),
+        )
+        detail = cockpit_customers.build_cockpit_customer_detail(
+            actor=_actor(PlatformRole.SUPPORT),
+            customer_id=_CUSTOMER,
+            record_loader=lambda **_: record,
+            timeline_loader=lambda **_: timeline,
+            action_loader=lambda **_: (),
+        )
+        item = detail.as_dict()["timeline"][0]
+        self.assertEqual(item["observation_receipt_id"], "receipt-support")
+        self.assertFalse(item["feedback_allowed"])
 
     def test_optional_timeline_or_action_failure_does_not_invent_data(self) -> None:
         record = CustomerRecord(customer=_customer(), identities=())
@@ -236,6 +269,7 @@ class CockpitCustomersM7003Tests(unittest.TestCase):
         self.assertIn("/clientplatform/cockpit/customers", script)
         self.assertIn("/clientplatform/cockpit/customers/detail", script)
         self.assertIn("/clientplatform/cockpit/customers/action-open", script)
+        self.assertIn("/clientplatform/cockpit/customers/observation-feedback", script)
         self.assertIn("await post('/clientplatform/cockpit/customers/action-open'", script)
         self.assertIn("tg.close()", script)
         self.assertNotIn("openTelegramLink", script)
@@ -248,6 +282,8 @@ class CockpitCustomersM7003Tests(unittest.TestCase):
         self.assertNotIn("innerHTML", script)
         self.assertNotIn("/approve", script)
         self.assertNotIn("/send", script)
+        self.assertNotIn("customer_ref", script)
+        self.assertNotIn("external_subject", script)
         refresh_handler = script.split("refresh.addEventListener", 1)[1].split(
             "searchForm.addEventListener", 1
         )[0]
