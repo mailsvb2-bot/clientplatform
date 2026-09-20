@@ -88,6 +88,14 @@ class ExternalObservationQuality(StrEnum):
     DERIVED = "derived"
 
 
+class ExternalObservationFeedback(StrEnum):
+    """Owner feedback for value proof; never an identity mutation command."""
+
+    USEFUL = "useful"
+    INCORRECT = "incorrect"
+    WRONG_CUSTOMER = "wrong_customer"
+
+
 @dataclass(frozen=True, slots=True)
 class ExternalProductObservation:
     """A bounded, provenance-bearing observation supplied by a trusted connector.
@@ -310,6 +318,33 @@ class ExternalProductEvent:
 
 
 @dataclass(frozen=True, slots=True)
+class ExternalObservationFeedbackRecord:
+    id: str
+    business_id: str
+    receipt_id: str
+    customer_id: str
+    feedback: ExternalObservationFeedback
+    actor_member_id: str
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class ExternalObservationValueSnapshot:
+    business_id: str
+    connector_id: str | None
+    current_observations: int
+    active_observations: int
+    retracted_observations: int
+    stale_active_observations: int
+    unknown_freshness_observations: int
+    feedback_total: int
+    useful_feedback: int
+    incorrect_feedback: int
+    wrong_customer_feedback: int
+
+
+@dataclass(frozen=True, slots=True)
 class ExternalProductReceipt:
     id: str
     business_id: str
@@ -444,8 +479,11 @@ def normalize_external_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:
 
 
 __all__ = [
+    "ExternalObservationFeedback",
+    "ExternalObservationFeedbackRecord",
     "ExternalObservationQuality",
     "ExternalObservationState",
+    "ExternalObservationValueSnapshot",
     "ExternalProductAcquisition",
     "ExternalProductConnector",
     "ExternalProductConnectorStatus",
