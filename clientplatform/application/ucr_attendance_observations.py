@@ -130,12 +130,14 @@ def parse_ucr_participant_attendance(
     attendance = result.get("attendance")
     if not isinstance(attendance, Mapping):
         raise ValueError("UCR attendance response is missing attendance")
+    raw_echoed = attendance.get("externalUserId")
+    echoed = (
+        None
+        if raw_echoed is None
+        else _proto_bytes(raw_echoed, field_name="externalUserId")
+    )
     if expected_external_user_id is not None:
-        echoed = _proto_bytes(
-            attendance.get("externalUserId"),
-            field_name="externalUserId",
-        )
-        if not hmac.compare_digest(echoed, expected_external_user_id):
+        if echoed is None or not hmac.compare_digest(echoed, expected_external_user_id):
             raise ValueError("UCR attendance participant does not match request")
 
     allowed = {
