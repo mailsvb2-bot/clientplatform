@@ -305,6 +305,32 @@ def test_booking_date_picker_can_jump_many_months_ahead() -> None:
 
 
 @pytest.mark.asyncio
+async def test_same_booking_calendar_month_is_a_noop() -> None:
+    business_id = str(uuid4())
+    token = wizard.control._uuid_token(business_id)
+    message = FakeMessage()
+    message.edit_reply_markup = AsyncMock()
+    state = FakeState(
+        {
+            "business_id": business_id,
+            "offering_id": str(uuid4()),
+            "booking_picker_min_date": "2026-09-20",
+            "booking_picker_month": "202610",
+        }
+    )
+    callback = FakeCallback(f"cpj:wizmonth:{token}:202610", message)
+    with (
+        patch.object(wizard.control, "_actor", new=AsyncMock(return_value=object())),
+        patch.object(wizard.control, "_callback_message", return_value=message),
+    ):
+        await wizard.choose_booking_month(callback, state)
+
+    assert callback.answers[-1] == (None, False)
+    message.edit_reply_markup.assert_not_awaited()
+    assert state.data["booking_picker_month"] == "202610"
+
+
+@pytest.mark.asyncio
 async def test_date_page_navigation_rerenders_and_rejects_out_of_range_offset() -> None:
     business_id = str(uuid4())
     token = wizard.control._uuid_token(business_id)
