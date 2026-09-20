@@ -61,22 +61,27 @@ def _labels(markup) -> list[str]:
 
 
 @pytest.mark.asyncio
-async def test_booking_start_offers_common_durations_and_escape_routes() -> None:
+async def test_typed_booking_start_is_rejected_back_to_calendar() -> None:
     business_id = str(uuid4())
     message = FakeMessage("10.08.2026 15:00")
-    state = FakeState({"business_id": business_id, "offering_id": str(uuid4())})
+    state = FakeState(
+        {
+            "business_id": business_id,
+            "offering_id": str(uuid4()),
+            "booking_picker_timezone": "Europe/Moscow",
+        }
+    )
 
-    await wizard.receive_booking_start_with_quick_duration(message, state)
+    with patch.object(wizard, "local_today", return_value=date(2026, 8, 1)):
+        await wizard.receive_booking_start_with_quick_duration(message, state)
 
-    assert state.data["booking_start"] == "10.08.2026 15:00"
-    assert state.states[-1] == wizard.control.ClientPlatformControlState.booking_duration
+    assert "booking_start" not in state.data
+    assert state.states[-1] == wizard.control.ClientPlatformControlState.booking_start
     text, markup = message.answers[-1]
-    assert "одного нажатия" in text
+    assert "Дата и время выбираются кнопками" in text
     labels = _labels(markup)
-    assert labels[:4] == ["15 мин", "30 мин", "45 мин", "1 час"]
-    assert "Другая длительность" not in labels
-    assert "⬅️ Изменить дату и время" in labels
-    assert "✖️ Отмена" in labels
+    assert "Август 2026" in labels
+    assert "Пн" in labels and "Вс" in labels
 
 
 @pytest.mark.asyncio
@@ -91,20 +96,25 @@ async def test_booking_start_without_business_fails_closed() -> None:
 
 
 @pytest.mark.asyncio
-async def test_replacement_booking_start_uses_replacement_copy() -> None:
+async def test_typed_replacement_date_keeps_replacement_context_and_calendar() -> None:
     business_id = str(uuid4())
+    replacing_slot_id = str(uuid4())
     message = FakeMessage("10.08.2026 16:00")
     state = FakeState(
         {
             "business_id": business_id,
             "offering_id": str(uuid4()),
-            "replacing_slot_id": str(uuid4()),
+            "replacing_slot_id": replacing_slot_id,
+            "booking_picker_timezone": "Europe/Moscow",
         }
     )
 
-    await wizard.receive_booking_start_with_quick_duration(message, state)
+    with patch.object(wizard, "local_today", return_value=date(2026, 8, 1)):
+        await wizard.receive_booking_start_with_quick_duration(message, state)
 
-    assert message.answers[-1][0].startswith("Новое время принято.")
+    assert state.data["replacing_slot_id"] == replacing_slot_id
+    assert "booking_start" not in state.data
+    assert "Дата и время выбираются кнопками" in message.answers[-1][0]
 
 
 @pytest.mark.asyncio
