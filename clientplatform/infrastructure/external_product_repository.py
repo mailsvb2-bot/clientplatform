@@ -7,6 +7,7 @@ from typing import Any
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from clientplatform.domain.connections import normalize_credential_reference
+from clientplatform.domain.customers import CustomerIdentityConflict, CustomerPlatform
 from clientplatform.domain.external_products import (
     ExternalProductConnector,
     ExternalProductConnectorStatus,
@@ -16,6 +17,7 @@ from clientplatform.domain.external_products import (
     ExternalProductNotFound,
     ExternalProductReceipt,
     external_customer_fingerprint,
+    external_customer_identity_subject,
     normalize_external_product_key,
     normalize_external_product_name,
 )
@@ -26,6 +28,7 @@ from clientplatform.domain.outcomes import (
 )
 from clientplatform.domain.tenancy import TenantContext, normalize_uuid
 from clientplatform.infrastructure.attribution_repository import AttributionRepository
+from clientplatform.infrastructure.customer_repository import CustomerRepository
 from clientplatform.infrastructure.outcome_repository import OutcomeRepository
 from clientplatform.infrastructure.revenue_attribution_repository import (
     RevenueAttributionRepository,
@@ -276,8 +279,11 @@ class ExternalProductRepository:
             received_at=received,
         )
         receipt_id = str(uuid4())
+        receipt_metadata = dict(event.metadata or {})
+        if event.observation is not None:
+            receipt_metadata.update(event.observation.canonical_metadata())
         metadata_json = json.dumps(
-            dict(event.metadata or {}),
+            receipt_metadata,
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
@@ -326,6 +332,51 @@ class ExternalProductRepository:
             (_iso(received), _iso(received), active.id, active.business_id),
         )
         return receipt
+
+    def bind_customer_ref(
+        self,
+        *,
+        actor: TenantContext,
+        connector_id: str,
+        customer_id: str,
+        customer_ref: str,
+        now: datetime | None = None,
+    ) -> str:
+        """Explicitly bind a connector-scoped opaque subject to an existing Customer.
+
+        The raw external reference is only used to derive the same one-way internal
+        identity subject used by ingress. Existing bindings are never silently moved
+        between customers; a conflict fails closed instead of merging CRM records.
+        """
+
+        current = self._tenancy.resolve_context(
+            user_id=actor.user_id,
+            business_id=actor.business_id,
+        )
+        current.assert_can_manage_customer_records()
+        connector = self.get_connector(actor=current, connector_id=connector_id)
+        if connector.status == ExternalProductConnectorStatus.REVOKED:
+            raise ExternalProductInvariantViolation(
+                "revoked connector cannot bind external customers"
+            )
+        identity_subject = external_customer_identity_subject(
+            connector_id=connector.id,
+            customer_ref=customer_ref,
+        )
+        timestamp = _iso(now or _utc_now())
+        try:
+            identity = CustomerRepository(self._conn).attach_identity(
+                actor=current,
+                customer_id=customer_id,
+                platform=CustomerPlatform.INTERNAL,
+                external_subject=identity_subject,
+                now=timestamp,
+            )
+        except CustomerIdentityConflict as exc:
+            raise ExternalProductInvariantViolation(
+                "external customer reference is already bound to another customer"
+            ) from exc
+        return identity.customer_id
 
     def _append_outcome(
         self,
