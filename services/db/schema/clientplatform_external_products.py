@@ -107,3 +107,36 @@ def ensure(c: sqlite3.Connection) -> None:
         )
         """
     )
+
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS external_product_observation_feedback(
+            id TEXT PRIMARY KEY,
+            business_id TEXT NOT NULL,
+            receipt_id TEXT NOT NULL,
+            customer_id TEXT NOT NULL,
+            feedback TEXT NOT NULL,
+            actor_member_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(id, business_id),
+            UNIQUE(business_id, receipt_id),
+            FOREIGN KEY(receipt_id, business_id)
+                REFERENCES external_product_event_receipts(id, business_id)
+                ON DELETE CASCADE,
+            FOREIGN KEY(customer_id, business_id)
+                REFERENCES customers(id, business_id),
+            FOREIGN KEY(actor_member_id, business_id)
+                REFERENCES business_members(id, business_id),
+            CHECK(feedback IN ('useful','incorrect','wrong_customer'))
+        )
+        """
+    )
+    c.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_external_observation_feedback_customer
+        ON external_product_observation_feedback(
+            business_id, customer_id, updated_at, receipt_id
+        )
+        """
+    )
