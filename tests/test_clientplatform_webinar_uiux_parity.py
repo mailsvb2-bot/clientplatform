@@ -89,6 +89,23 @@ def test_event_hub_semantics_are_single_source_for_all_messengers() -> None:
     assert "✅ VK" in settings_labels
 
 
+def test_published_webinar_exposes_schedule_edit_action() -> None:
+    base = _snapshot()
+    item = SimpleNamespace(
+        **{
+            **vars(base.items[0]),
+            "status": "published",
+            "join_ready": True,
+        }
+    )
+    snapshot = SimpleNamespace(**{**vars(base), "items": (item,)})
+    actions = event_hub_actions(snapshot)
+    edit = [action for action in actions if action.kind == "edit"]
+    assert len(edit) == 1
+    assert edit[0].key == item.id
+    assert edit[0].label.startswith("🕒 Изменить расписание")
+
+
 def test_progressive_disclosure_preserves_full_webinar_automation_power() -> None:
     snapshot = _snapshot()
     hub = event_hub_actions(snapshot)
