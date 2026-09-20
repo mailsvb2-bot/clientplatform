@@ -157,7 +157,7 @@ async def test_quick_duration_rejects_unknown_preset() -> None:
 
 
 @pytest.mark.asyncio
-async def test_custom_duration_keeps_manual_fallback_and_visible_exit() -> None:
+async def test_legacy_custom_duration_redirects_to_button_choices() -> None:
     business_id = str(uuid4())
     token = wizard.control._uuid_token(business_id)
     message = FakeMessage()
@@ -176,9 +176,12 @@ async def test_custom_duration_keeps_manual_fallback_and_visible_exit() -> None:
         await wizard.choose_custom_duration(callback, state)
 
     text, markup = message.answers[-1]
-    assert "Напишите длительность" in text
-    assert "⬅️ Изменить дату и время" in _labels(markup)
-    assert "✖️ Отмена" in _labels(markup)
+    assert "Выберите длительность" in text
+    labels = _labels(markup)
+    assert "1 час" in labels
+    assert "2 часа" in labels
+    assert "⬅️ Изменить дату и время" in labels
+    assert "✖️ Отмена" in labels
     assert state.cleared == 0
 
 
@@ -411,7 +414,7 @@ async def test_invalid_date_and_time_callbacks_fail_closed() -> None:
 
 
 @pytest.mark.asyncio
-async def test_manual_datetime_fallback_and_duration_proxy_answer() -> None:
+async def test_legacy_manual_datetime_redirects_to_calendar_and_duration_proxy_answer() -> None:
     business_id = str(uuid4())
     token = wizard.control._uuid_token(business_id)
     message = FakeMessage()
@@ -419,6 +422,7 @@ async def test_manual_datetime_fallback_and_duration_proxy_answer() -> None:
         {
             "business_id": business_id,
             "offering_id": str(uuid4()),
+            "booking_picker_timezone": "Europe/Moscow",
         }
     )
     callback = FakeCallback(f"cpj:wizmanual:{token}", message)
@@ -430,8 +434,10 @@ async def test_manual_datetime_fallback_and_duration_proxy_answer() -> None:
 
     assert state.states[-1] == wizard.control.ClientPlatformControlState.booking_start
     text, markup = message.answers[-1]
-    assert "Напишите дату и время" in text
-    assert "✖️ Отмена" in _labels(markup)
+    assert "Выберите дату и время кнопками" in text
+    labels = _labels(markup)
+    assert "Пн" in labels and "Вс" in labels
+    assert "✖️ Отмена" in labels
 
     proxy = wizard._DurationMessageProxy(
         message,
