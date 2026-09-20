@@ -251,18 +251,36 @@ class ExternalProductRepository:
         if received.tzinfo is None:
             raise ValueError("received_at must be timezone-aware")
         if event.observation is not None:
-            # Serialize observation transitions per connector. On Postgres the
-            # no-op UPDATE acquires a row lock; on SQLite it participates in the
-            # current write transaction. This prevents two concurrent revisions
-            # from branching from the same head.
-            self._conn.execute(
+            # Serialize observation transitions per connector. The conditional
+            # update both acquires the row lock and revalidates the tenant
+            # off-switch at the same boundary: a disable committed before this
+            # lock must prevent the observation from being accepted.
+            cursor = self._conn.execute(
                 """
                 UPDATE external_product_connectors
                 SET updated_at=updated_at
-                WHERE id=? AND business_id=?
+                WHERE id=? AND business_id=? AND status='active'
                 """,
                 (active.id, active.business_id),
             )
+            if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+                raise ExternalProductNotFound("external product connector is not active")
+
+            # A concurrent retry may have inserted the exact event while this
+            # transaction waited for the connector lock. Preserve the bridge's
+            # idempotency contract by repeating the durable event-id check after
+            # acquiring the lock and before validating the revision transition.
+            locked_existing = self._receipt_by_external_id(
+                business_id=active.business_id,
+                connector_id=active.id,
+                external_event_id=event.external_event_id,
+            )
+            if locked_existing is not None:
+                if locked_existing.payload_fingerprint != fingerprint:
+                    raise ExternalProductInvariantViolation(
+                        "external event id was reused with a different payload"
+                    )
+                return locked_existing
         customer_fingerprint: str | None = None
         customer_id: str | None = None
         if event.customer_ref is not None:
