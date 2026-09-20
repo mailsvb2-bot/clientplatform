@@ -94,6 +94,36 @@ class EventLifecycleHandlerTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("По какому времени", message.answer.await_args.args[0])
 
+    async def test_common_topic_choice_rejects_stale_wizard(self) -> None:
+        message = _message("")
+        callback = SimpleNamespace(
+            data="cpev:topics:no",
+            from_user=SimpleNamespace(id=101),
+            answer=AsyncMock(),
+            message=message,
+        )
+        state = AsyncMock()
+        state.get_data.return_value = {"event_business_id": ""}
+
+        await lifecycle.choose_common_event_topic(callback, state)
+
+        callback.answer.assert_awaited_once()
+        self.assertTrue(callback.answer.await_args.kwargs["show_alert"])
+
+    async def test_topic_entry_without_active_wizard_fails_closed(self) -> None:
+        message = _message("Первая тема")
+        state = AsyncMock()
+        state.get_data.return_value = {
+            "event_business_id": "",
+            "event_days": 0,
+        }
+
+        await lifecycle.receive_event_topics(message, state)
+
+        state.clear.assert_awaited_once()
+        self.assertIn("Откройте вебинары заново", message.answer.await_args.args[0])
+
+
     async def test_named_topics_choice_rejects_stale_wizard(self) -> None:
         message = _message("")
         callback = SimpleNamespace(
