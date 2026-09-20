@@ -257,7 +257,11 @@ class ClientPlatformCustomerTimelineM4002Tests(unittest.TestCase):
                         observed_at=observed_at,
                         provenance_ref="attendance-proof-10",
                         quality=ExternalObservationQuality.SOURCE_VERIFIED,
-                        limitations=("Нет данных о внимании во время просмотра.",),
+                        limitations=(
+                            "Нет данных о внимании во время просмотра.",
+                            "Нет поминутного подтверждения активности.",
+                            "Источник не измеряет понимание материала.",
+                        ),
                     ),
                 ),
                 payload_fingerprint="8" * 64,
@@ -276,12 +280,20 @@ class ClientPlatformCustomerTimelineM4002Tests(unittest.TestCase):
         self.assertEqual(observation.evidence_source, "Вебинарная платформа")
         self.assertEqual(observation.evidence_quality, "проверено источником")
         self.assertEqual(observation.observed_at, observed_at)
+        self.assertEqual(observation.occurred_at, observed_at)
         self.assertEqual(
             observation.limitations,
-            ("Нет данных о внимании во время просмотра.",),
+            (
+                "Нет данных о внимании во время просмотра.",
+                "Нет поминутного подтверждения активности.",
+                "Источник не измеряет понимание материала.",
+            ),
         )
         self.assertIn("Источник: Вебинарная платформа", observation.detail or "")
         self.assertIn("проверено источником", observation.detail or "")
+        self.assertIn("Нет данных о внимании во время просмотра.", observation.detail or "")
+        self.assertIn("Нет поминутного подтверждения активности.", observation.detail or "")
+        self.assertIn("Источник не измеряет понимание материала.", observation.detail or "")
         self.assertNotIn("external-attendee-10", repr(timeline))
 
     def test_refund_is_a_distinct_money_fact_and_replay_does_not_duplicate_projection(self) -> None:
