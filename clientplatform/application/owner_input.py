@@ -147,6 +147,26 @@ def resolve_owner_input(session: OwnerInputSession, value: object) -> OwnerInput
             if not compact.isdigit() or not 1 <= int(compact) <= 31:
                 raise ValueError("event session count is invalid")
             return OwnerInputResolution("event-wizard-count-text", (compact,))
+        if step == "topics":
+            lines = [
+                " ".join(line.split()).strip()
+                for line in raw_text.splitlines()
+                if line.strip()
+            ]
+            try:
+                expected = int(str(session.context.get("count") or "0"))
+            except ValueError as exc:
+                raise ValueError("event topic count is invalid") from exc
+            if (
+                expected < 1
+                or len(lines) != expected
+                or any(len(line) > 180 for line in lines)
+            ):
+                raise ValueError("event day topics are invalid")
+            return OwnerInputResolution(
+                "event-wizard-topics-text",
+                ("\n".join(lines),),
+            )
         if step == "timezone":
             if not compact or len(compact) > 80:
                 raise ValueError("event timezone is invalid")
