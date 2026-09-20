@@ -9,6 +9,7 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 from clientplatform.domain.connections import normalize_credential_reference
 from clientplatform.domain.customers import CustomerIdentityConflict, CustomerPlatform
 from clientplatform.domain.external_products import (
+    ExternalObservationState,
     ExternalProductConnector,
     ExternalProductConnectorStatus,
     ExternalProductEvent,
@@ -249,6 +250,19 @@ class ExternalProductRepository:
         received = received_at or _utc_now()
         if received.tzinfo is None:
             raise ValueError("received_at must be timezone-aware")
+        if event.observation is not None:
+            # Serialize observation transitions per connector. On Postgres the
+            # no-op UPDATE acquires a row lock; on SQLite it participates in the
+            # current write transaction. This prevents two concurrent revisions
+            # from branching from the same head.
+            self._conn.execute(
+                """
+                UPDATE external_product_connectors
+                SET updated_at=updated_at
+                WHERE id=? AND business_id=?
+                """,
+                (active.id, active.business_id),
+            )
         customer_fingerprint: str | None = None
         customer_id: str | None = None
         if event.customer_ref is not None:
@@ -260,6 +274,16 @@ class ExternalProductRepository:
                 connector=active,
                 customer_fingerprint=customer_fingerprint,
                 now=received,
+            )
+        if event.observation is not None:
+            if customer_id is None:
+                raise ExternalProductInvariantViolation(
+                    "structured external observation requires a resolved customer"
+                )
+            self._validate_observation_transition(
+                connector=active,
+                event=event,
+                customer_id=customer_id,
             )
         if event.acquisition is not None and customer_id is not None:
             AttributionRepository(self._conn).capture_external_product_touch(
@@ -293,8 +317,10 @@ class ExternalProductRepository:
             INSERT INTO external_product_event_receipts(
                 id,business_id,connector_id,external_event_id,event_type,
                 customer_id,customer_fingerprint,payload_fingerprint,outcome_event_id,
-                occurred_at,received_at,metadata_json,status
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'accepted')
+                occurred_at,received_at,metadata_json,
+                observation_key,observation_revision,observation_state,
+                observation_supersedes_event_id,observation_fresh_until,status
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'accepted')
             ON CONFLICT(business_id,connector_id,external_event_id) DO NOTHING
             """,
             (
@@ -310,6 +336,19 @@ class ExternalProductRepository:
                 _iso(event.occurred_at),
                 _iso(received),
                 metadata_json,
+                None if event.observation is None else event.observation.observation_key,
+                None if event.observation is None else event.observation.revision,
+                None if event.observation is None else event.observation.state.value,
+                (
+                    None
+                    if event.observation is None
+                    else event.observation.supersedes_external_event_id
+                ),
+                (
+                    None
+                    if event.observation is None or event.observation.fresh_until is None
+                    else _iso(event.observation.fresh_until)
+                ),
             ),
         )
         receipt = self._receipt_by_external_id(
@@ -377,6 +416,53 @@ class ExternalProductRepository:
                 "external customer reference is already bound to another customer"
             ) from exc
         return identity.customer_id
+
+    def _validate_observation_transition(
+        self,
+        *,
+        connector: ExternalProductConnector,
+        event: ExternalProductEvent,
+        customer_id: str,
+    ) -> None:
+        observation = event.observation
+        if observation is None:
+            return
+        head = self._conn.execute(
+            """
+            SELECT external_event_id,observation_revision,observation_state
+            FROM external_product_event_receipts
+            WHERE business_id=? AND connector_id=? AND customer_id=?
+              AND observation_key=? AND status='accepted'
+            ORDER BY observation_revision DESC,received_at DESC,external_event_id DESC
+            LIMIT 1
+            """,
+            (
+                connector.business_id,
+                connector.id,
+                customer_id,
+                observation.observation_key,
+            ),
+        ).fetchone()
+        if observation.revision == 1:
+            if head is not None:
+                raise ExternalProductInvariantViolation(
+                    "external observation revision must continue the current head"
+                )
+            return
+        if head is None:
+            raise ExternalProductInvariantViolation(
+                "external observation revision has no previous head"
+            )
+        head_event_id = str(_value(head, "external_event_id", 0))
+        head_revision = int(_value(head, "observation_revision", 1))
+        if head_revision != observation.revision - 1:
+            raise ExternalProductInvariantViolation(
+                "external observation revision is not the next exact revision"
+            )
+        if head_event_id != observation.supersedes_external_event_id:
+            raise ExternalProductInvariantViolation(
+                "external observation supersedes a stale or different head"
+            )
 
     def _append_outcome(
         self,
@@ -609,7 +695,9 @@ class ExternalProductRepository:
             """
             SELECT id,business_id,connector_id,external_event_id,event_type,
                    customer_id,customer_fingerprint,payload_fingerprint,
-                   outcome_event_id,occurred_at,received_at
+                   outcome_event_id,occurred_at,received_at,
+                   observation_key,observation_revision,observation_state,
+                   observation_supersedes_event_id,observation_fresh_until
             FROM external_product_event_receipts
             WHERE business_id=? AND connector_id=? AND external_event_id=?
             LIMIT 1
@@ -639,6 +727,31 @@ class ExternalProductRepository:
             outcome_event_id=None if outcome_id is None else str(outcome_id),
             occurred_at=str(_value(row, "occurred_at", 9)),
             received_at=str(_value(row, "received_at", 10)),
+            observation_key=(
+                None
+                if _value(row, "observation_key", 11) is None
+                else str(_value(row, "observation_key", 11))
+            ),
+            observation_revision=(
+                None
+                if _value(row, "observation_revision", 12) is None
+                else int(_value(row, "observation_revision", 12))
+            ),
+            observation_state=(
+                None
+                if _value(row, "observation_state", 13) is None
+                else ExternalObservationState(str(_value(row, "observation_state", 13)))
+            ),
+            observation_supersedes_external_event_id=(
+                None
+                if _value(row, "observation_supersedes_event_id", 14) is None
+                else str(_value(row, "observation_supersedes_event_id", 14))
+            ),
+            observation_fresh_until=(
+                None
+                if _value(row, "observation_fresh_until", 15) is None
+                else str(_value(row, "observation_fresh_until", 15))
+            ),
         )
 
     def _get_connector_by_id(self, connector_id: str) -> ExternalProductConnector:
