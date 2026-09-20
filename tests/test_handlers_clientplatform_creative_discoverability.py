@@ -392,6 +392,49 @@ class CreativeDiscoverabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Платный запрос не запускался", target.answer.await_args.args[0])
 
 
+    async def test_receive_prompt_reports_preflight_transport_failure_without_receipt(self) -> None:
+        target = outbound()
+        target.text = "calm office"
+        state = FakeState(
+            {"creative_business_id": _BUSINESS, "creative_business_token": _TOKEN}
+        )
+        with (
+            patch.object(creative.asyncio, "to_thread", new=direct),
+            patch.object(creative.control, "_actor", new=AsyncMock(return_value=actor())),
+            patch.object(creative.control, "_user_id", return_value=101),
+            patch.object(
+                creative,
+                "visual_generation_ready",
+                side_effect=creative.VisualCreativeError("preflight"),
+            ),
+            patch.object(creative, "prepare_creative_generation") as prepare,
+        ):
+            await creative.receive_creative_prompt(target, state)
+
+        prepare.assert_not_called()
+        self.assertIn("Платный запрос не запускался", target.answer.await_args.args[0])
+        self.assertIn("восстановления шлюза", target.answer.await_args.args[0])
+
+    def test_visual_failure_copy_distinguishes_safe_failure_classes(self) -> None:
+        cases = (
+            ("no_visual_provider_available", "нет подключённого рабочего генератора"),
+            ("visual_creative_disabled", "нет подключённого рабочего генератора"),
+            ("visual_provider_submit_http_401", "отклонил авторизацию"),
+            ("visual_provider_submit_http_403", "отклонил авторизацию"),
+            ("visual_gateway_quota_rejected", "по лимиту"),
+            ("visual_provider_submit_timeout", "сетевой ошибки"),
+            ("visual_provider_submit_transport", "сетевой ошибки"),
+            ("provider_error", "безопасный код ошибки"),
+            ("", "завершилась ошибкой"),
+        )
+        for code, expected in cases:
+            with self.subTest(code=code):
+                text = creative._visual_failure_text(
+                    SimpleNamespace(error_code=code)
+                )
+                self.assertIn(expected, text)
+
+
     async def test_receive_prompt_confirms_paid_call_and_preserves_existing_request(self) -> None:
         target = outbound()
         target.text = " calm   office "
