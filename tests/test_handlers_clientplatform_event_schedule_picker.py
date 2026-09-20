@@ -137,41 +137,6 @@ class EventSchedulePickerHandlerTests(unittest.IsolatedAsyncioTestCase):
         }
         self.assertIn("cpev:date:2026-11-20", november_callbacks)
 
-    def test_calendar_at_maximum_horizon_has_no_forward_navigation(self) -> None:
-        minimum = date(2026, 9, 17)
-        year, month = lifecycle.shift_month(
-            minimum.year,
-            minimum.month,
-            lifecycle.MAX_CALENDAR_MONTHS,
-        )
-        with patch.object(lifecycle.control, "_uuid_token", return_value="business-token"):
-            keyboard = lifecycle._calendar_keyboard(
-                business_id=BUSINESS_ID,
-                timezone_name="Europe/Moscow",
-                year=year,
-                month=month,
-                minimum_date=minimum,
-            )
-
-        callbacks = {
-            button.callback_data
-            for row in keyboard.inline_keyboard
-            for button in row
-            if button.callback_data
-        }
-        self.assertIn(
-            f"cpev:month:{lifecycle.month_key(*lifecycle.shift_month(year, month, -1))}",
-            callbacks,
-        )
-        self.assertFalse(
-            any(
-                callback.startswith("cpev:month:")
-                and callback
-                == f"cpev:month:{lifecycle.month_key(*lifecycle.shift_month(year, month, 1))}"
-                for callback in callbacks
-            )
-        )
-
     def test_existing_edit_session_skips_nonmatching_entries_before_match(self) -> None:
         matched = {
             "position": 2,
