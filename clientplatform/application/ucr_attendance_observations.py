@@ -261,6 +261,7 @@ def _provenance_ref(
         raise ValueError("UCR attendance request is invalid")
     return "ucr-attendance:" + hashlib.sha256(canonical).hexdigest()
 
+
 def _observed_at(attendance: UcrParticipantAttendance) -> datetime:
     timestamps = tuple(
         value
