@@ -44,6 +44,7 @@ _RECENT_ACTION_LIMIT = 4096
 _CONTROL_COMMAND_LOCK_WAIT_SECONDS = 0.25
 _CONTROL_COMMANDS = frozenset({"/start", "/admin", "/mybot", "/cancel"})
 _OWNER_NAVIGATION_PREFIXES = (
+    "cpo:start:",
     "cpo:more:",
     "cpo:clients:",
     "cpo:content:",
@@ -69,6 +70,7 @@ _CLIENTPLATFORM_CALLBACK_PREFIXES = (
     "cpp:",
     "cpy:",
     "cpsp:",
+    "cpo:",
     *_OWNER_NAVIGATION_PREFIXES,
 )
 
@@ -220,6 +222,11 @@ _ONE_SHOT_PREFIXES = (
     "cpa:back:",
     "cps:rename:",
     "cps:cancel:",
+    "cpo:offer:",
+    "cpo:newtime:",
+    "cpo:slot:",
+    "cpo:connection:",
+    "cpo:region:",
 )
 
 
@@ -338,6 +345,10 @@ def _state_local_callback_allowed(current_state: str, callback_data: str) -> boo
         return callback_data.startswith(("cp:dadd:", "cp:dpub:", "cp:darc:"))
     if current_state.startswith("AdSpendConsentState:confirming_consent"):
         return callback_data.startswith("cpsp:confirm:")
+    if current_state.startswith("OneClickOwnerState:selecting_connection"):
+        return callback_data.startswith("cpo:connection:")
+    if current_state.startswith("OneClickOwnerState:waiting_region"):
+        return callback_data.startswith("cpo:region:")
     if current_state.startswith("ClientPlatformAdminOpsState:"):
         return callback_data.startswith("cpao:return-")
     return False
