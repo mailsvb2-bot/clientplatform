@@ -909,8 +909,10 @@ async def _generate_custom_visual(
     if not _state_matches(data, business_token):
         await callback.answer("Этот черновик уже устарел", show_alert=True)
         return
-    noun = "видео" if visual_kind == "video" else "картинку"
-    await callback.answer(f"Создаю {noun}…")
+    object_noun = "видео" if visual_kind == "video" else "картинку"
+    subject_noun = "Видео" if visual_kind == "video" else "Картинка"
+    without_noun = "видео" if visual_kind == "video" else "картинки"
+    await callback.answer(f"Создаю {object_noun}…")
     try:
         business_id = str(data["business_id"])
         publication_job_id = str(data["job_id"])
@@ -975,7 +977,7 @@ async def _generate_custom_visual(
     if not job_id:
         await state.set_state(GoalFirstAutopilotState.customizing)
         await control._callback_message(callback).answer(
-            f"Генератор не вернул результат. Можно продолжить без {noun}.",
+            f"Генератор не вернул результат. Можно продолжить без {without_noun}.",
             reply_markup=_custom_keyboard(business_token),
         )
         return
@@ -985,7 +987,7 @@ async def _generate_custom_visual(
     )
     await state.set_state(GoalFirstAutopilotState.generation_pending)
     await control._callback_message(callback).answer(
-        f"⏳ {noun.capitalize()} ещё создаётся. Ничего загружать заново не нужно.",
+        f"⏳ {subject_noun} ещё создаётся. Ничего загружать заново не нужно.",
         reply_markup=control._keyboard(
             [[("🔄 Проверить готовность", f"cpo:gencheck:{business_token}")]]
         ),
@@ -1085,7 +1087,9 @@ async def check_generated_image(callback: CallbackQuery, state: FSMContext) -> N
         if str(data.get("creative_generation_kind") or "").strip().lower() == "video"
         else "image"
     )
-    noun = "видео" if visual_kind == "video" else "картинку"
+    check_noun = "видео" if visual_kind == "video" else "картинку"
+    own_noun = "своё видео" if visual_kind == "video" else "свою картинку"
+    pronoun = "него" if visual_kind == "video" else "неё"
     try:
         job = await asyncio.to_thread(
             poll_ad_visual,
@@ -1093,7 +1097,7 @@ async def check_generated_image(callback: CallbackQuery, state: FSMContext) -> N
             scope_id=str(data["business_id"]),
         )
     except (KeyError, VisualCreativeError):
-        await callback.answer(f"Пока не удалось проверить {noun}", show_alert=True)
+        await callback.answer(f"Пока не удалось проверить {check_noun}", show_alert=True)
         return
     await callback.answer()
     if await _finish_generated_visual(
@@ -1116,7 +1120,7 @@ async def check_generated_image(callback: CallbackQuery, state: FSMContext) -> N
     await state.set_state(GoalFirstAutopilotState.customizing)
     await control._callback_message(callback).answer(
         visual_failure_message(job)
-        + f"\n\nМожно загрузить своё {noun} или продолжить без него.",
+        + f"\n\nМожно загрузить {own_noun} или продолжить без {pronoun}.",
         reply_markup=_custom_keyboard(business_token),
     )
 
