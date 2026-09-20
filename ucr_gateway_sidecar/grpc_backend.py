@@ -14,6 +14,8 @@ from .contract import (
     SERVICE_CREDENTIAL_SECRET_METADATA_KEY,
     UCR_CALL_SERVICE,
     UCR_INTEGRATION_SERVICE,
+    UCR_UNIVERSAL_CONFERENCE_SERVICE,
+    UNIVERSAL_CONFERENCE_REQUEST_TYPES,
     GatewayUpstreamError,
     canonical_error_to_gateway_error,
 )
@@ -44,6 +46,12 @@ class GrpcUcrBackend:
             integration_pb2_grpc = importlib.import_module("ucr.v1.integration_pb2_grpc")
             call_pb2 = importlib.import_module("ucr.v1.call_pb2")
             call_pb2_grpc = importlib.import_module("ucr.v1.call_pb2_grpc")
+            universal_conference_pb2 = importlib.import_module(
+                "ucr.v1.universal_conference_pb2"
+            )
+            universal_conference_pb2_grpc = importlib.import_module(
+                "ucr.v1.universal_conference_pb2_grpc"
+            )
         except ModuleNotFoundError as exc:
             raise GatewayConfigurationError(
                 "generated pinned UCR gRPC bindings are unavailable"
@@ -53,6 +61,7 @@ class GrpcUcrBackend:
         self._json_format = json_format
         self._integration_pb2 = integration_pb2
         self._call_pb2 = call_pb2
+        self._universal_conference_pb2 = universal_conference_pb2
         if config.grpc_tls_enabled:
             root_certificates = None
             if config.grpc_root_ca_file:
@@ -66,6 +75,9 @@ class GrpcUcrBackend:
         self._channel = channel
         self._integration_stub = integration_pb2_grpc.IntegrationServiceStub(channel)
         self._call_stub = call_pb2_grpc.CallServiceStub(channel)
+        self._universal_conference_stub = (
+            universal_conference_pb2_grpc.UniversalConferenceServiceStub(channel)
+        )
         self._metadata = (
             (SERVICE_CREDENTIAL_ID_METADATA_KEY, config.service_credential_id),
             (SERVICE_CREDENTIAL_SECRET_METADATA_KEY, config.service_credential_secret),
@@ -96,6 +108,10 @@ class GrpcUcrBackend:
             request_type_name = CALL_REQUEST_TYPES.get(method)
             pb2_module = self._call_pb2
             stub = self._call_stub
+        elif service == UCR_UNIVERSAL_CONFERENCE_SERVICE:
+            request_type_name = UNIVERSAL_CONFERENCE_REQUEST_TYPES.get(method)
+            pb2_module = self._universal_conference_pb2
+            stub = self._universal_conference_stub
         else:
             raise GatewayUpstreamError(422, "ucr_rpc_service_not_allowed")
         if request_type_name is None:
