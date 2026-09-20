@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -222,6 +223,62 @@ def _duration_message(start_time: str) -> CustomerInteractionMessage:
     )
 
 
+def _timezone_message() -> CustomerInteractionMessage:
+    return CustomerInteractionMessage(
+        text="По какому времени идут эфиры?",
+        rows=(
+            (_button("🕒 Москва", "cpm:event-wizard:timezone:moscow"),),
+            (_button("🌍 Другое время", "cpm:event-wizard:timezone:other"),),
+            _back_row(),
+        ),
+    )
+
+
+def _topics_choice_message(count: int) -> CustomerInteractionMessage:
+    noun = "дня" if count in {2, 3, 4} else "дней"
+    return CustomerInteractionMessage(
+        text=(
+            f"У каждого из {count} {noun} есть своё название темы?\n\n"
+            "Если да — ClientPlatform попросит названия и будет использовать их "
+            "в сообщениях до вебинара."
+        ),
+        rows=(
+            (
+                _button("Да, есть темы", "cpm:event-wizard:topics:yes"),
+                _button("Нет, тема общая", "cpm:event-wizard:topics:no"),
+            ),
+            _back_row(),
+        ),
+    )
+
+
+def _event_topics(context: dict[str, str]) -> tuple[str, ...]:
+    raw = str(context.get("topics_json") or "").strip()
+    if not raw:
+        return ()
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError("invalid event topic context") from exc
+    if not isinstance(value, list):
+        raise ValueError("invalid event topic context")
+    topics = tuple(" ".join(str(item).split()).strip() for item in value)
+    if any(not topic or len(topic) > 180 for topic in topics):
+        raise ValueError("invalid event topic context")
+    return topics
+
+
+def _event_description(context: dict[str, str]) -> str:
+    topics = _event_topics(context)
+    if not topics:
+        return ""
+    return "Программа по дням:\n" + "\n".join(
+        f"День {index}: {topic}"
+        for index, topic in enumerate(topics, start=1)
+    )
+
+
+
 def _venue_message() -> CustomerInteractionMessage:
     rows: list[tuple[CustomerInteractionButton, ...]] = []
     for index in range(0, len(WEBINAR_VENUES), 2):
@@ -414,6 +471,31 @@ def handle_native_event_wizard_text(
             surface=surface,
         )
 
+    if action == "event-wizard-topics-text":
+        count = int(context.get("count") or "0")
+        topics = [
+            " ".join(line.split()).strip()
+            for line in str(args[0] if args else "").splitlines()
+            if line.strip()
+        ]
+        if count < 1 or len(topics) != count or any(len(topic) > 180 for topic in topics):
+            _save(actor, platform=platform, surface=surface, context=context)
+            return CustomerInteractionMessage(
+                text=(
+                    f"Нужно ровно {count} названий тем — каждое с новой строки "
+                    "и не длиннее 180 символов."
+                ),
+                rows=(_back_row(),),
+            )
+        context.update(
+            {
+                "step": "timezone",
+                "topics_json": json.dumps(topics, ensure_ascii=False),
+            }
+        )
+        _save(actor, platform=platform, surface=surface, context=context)
+        return _timezone_message()
+
     if action == "event-wizard-timezone-text":
         try:
             timezone_name = normalize_event_timezone(args[0])
@@ -489,16 +571,16 @@ def _accept_count(
             text="Введите число дней от 1 до 31.",
             rows=(_back_row(),),
         )
-    context.update({"step": "timezone", "count": str(count), "position": "1"})
-    _save(actor, platform=platform, surface=surface, context=context)
-    return CustomerInteractionMessage(
-        text="По какому времени идут эфиры?",
-        rows=(
-            (_button("🕒 Москва", "cpm:event-wizard:timezone:moscow"),),
-            (_button("🌍 Другое время", "cpm:event-wizard:timezone:other"),),
-            _back_row(),
-        ),
+    context.update(
+        {
+            "step": "topics_choice",
+            "count": str(count),
+            "position": "1",
+            "topics_json": "",
+        }
     )
+    _save(actor, platform=platform, surface=surface, context=context)
+    return _topics_choice_message(count)
 
 
 def _accept_room(
@@ -553,6 +635,7 @@ def _accept_room(
             request=MultiSessionOnlineEventCreateRequest(
                 title=context["title"],
                 timezone_name=context["timezone"],
+                description=_event_description(context),
                 sessions=(session,),
             ),
         )
@@ -900,6 +983,24 @@ def handle_native_event_wizard_action(
             raw_count=args[1],
             platform=platform,
             surface=surface,
+        )
+
+    if action == "topics":
+        if len(args) != 2 or args[1] not in {"yes", "no"}:
+            raise ValueError("invalid topics action")
+        if args[1] == "no":
+            context.update({"step": "timezone", "topics_json": ""})
+            _save(actor, platform=platform, surface=surface, context=context)
+            return _timezone_message()
+        context["step"] = "topics"
+        _save(actor, platform=platform, surface=surface, context=context)
+        count = int(context.get("count") or "0")
+        return CustomerInteractionMessage(
+            text=(
+                f"Пришлите {count} названий тем — каждое с новой строки.\n\n"
+                "Например:\nПервая тема\nВторая тема\nТретья тема"
+            ),
+            rows=(_back_row(),),
         )
 
     if action == "timezone":
