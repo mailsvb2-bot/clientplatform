@@ -118,6 +118,28 @@ async def test_typed_replacement_date_keeps_replacement_context_and_calendar() -
 
 
 @pytest.mark.asyncio
+async def test_typed_booking_start_without_business_fails_closed() -> None:
+    message = FakeMessage("10.08.2026 15:00")
+    state = FakeState({})
+
+    await wizard.receive_booking_start_with_quick_duration(message, state)
+
+    assert state.cleared == 1
+    assert "Не удалось продолжить настройку" in message.answers[-1][0]
+
+
+@pytest.mark.asyncio
+async def test_typed_duration_without_business_fails_closed() -> None:
+    message = FakeMessage("75")
+    state = FakeState({})
+
+    await wizard.reject_typed_booking_duration(message, state)
+
+    assert state.cleared == 1
+    assert "Не удалось продолжить настройку" in message.answers[-1][0]
+
+
+@pytest.mark.asyncio
 async def test_typed_duration_is_rejected_back_to_button_choices() -> None:
     business_id = str(uuid4())
     message = FakeMessage("75")
