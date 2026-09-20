@@ -5,6 +5,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 from clientplatform.application import event_notifications
+from clientplatform.application.event_delivery_targets import EventDeliveryTarget
 from clientplatform.domain.event_sessions import EventSession
 from clientplatform.domain.events import Event, EventRegistration
 
@@ -118,3 +119,51 @@ def test_second_day_24h_reminder_shows_second_day_local_time() -> None:
     assert "День 2 из 2" in body
     assert "26.09.2026 19:00" in body
     assert "25.09.2026 19:00" not in body
+
+class _InsertCursor:
+    rowcount = 1
+
+
+class _OutboxConnection:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, tuple[object, ...]]] = []
+
+    def execute(self, sql: str, params: tuple[object, ...] = ()) -> _InsertCursor:
+        self.calls.append((" ".join(sql.split()), params))
+        return _InsertCursor()
+
+
+def test_rescheduled_reminder_gets_schedule_revision_idempotency_key() -> None:
+    event = _event()
+    registration = _registration(event)
+    session = _session(event, 1)
+    target = EventDeliveryTarget(
+        platform="telegram",
+        connection_id=str(uuid4()),
+        recipient_kind="external_subject",
+        customer_identity_id=None,
+        external_subject="123456",
+    )
+    conn = _OutboxConnection()
+
+    with patch.object(
+        event_notifications,
+        "_public_base_url",
+        return_value="https://clientplatform.example.test",
+    ):
+        created = event_notifications._materialize(
+            conn,
+            event=event,
+            registration=registration,
+            target=target,
+            kind="24h",
+            scheduled_at=session.starts_at - timedelta(hours=24),
+            session=session,
+            schedule_revision="0123456789abcdef",
+        )
+
+    assert created
+    assert len(conn.calls) == 1
+    params = conn.calls[0][1]
+    assert str(params[10]).endswith(":schedule:0123456789abcdef")
+
