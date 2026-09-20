@@ -1116,7 +1116,7 @@ class ClientPlatformExternalProductConnectorTests(unittest.TestCase):
                     provenance_ref="feedback-proof-r1",
                 ),
             ),
-            payload_fingerprint="a1" * 32,
+            payload_fingerprint="b1" * 32,
             received_at=self.now,
         )
         second = self.fx.repo.ingest_event(
@@ -1136,7 +1136,7 @@ class ClientPlatformExternalProductConnectorTests(unittest.TestCase):
                     supersedes_external_event_id="feedback-r1",
                 ),
             ),
-            payload_fingerprint="a2" * 32,
+            payload_fingerprint="b2" * 32,
             received_at=self.now + timedelta(minutes=1),
         )
         with self.assertRaises(ExternalProductNotFound):
@@ -1201,7 +1201,7 @@ class ClientPlatformExternalProductConnectorTests(unittest.TestCase):
                     provenance_ref="wrong-customer-proof",
                 ),
             ),
-            payload_fingerprint="a3" * 32,
+            payload_fingerprint="b3" * 32,
             received_at=self.now,
         )
         before = self.fx.conn.execute(
@@ -1258,7 +1258,7 @@ class ClientPlatformExternalProductConnectorTests(unittest.TestCase):
                     fresh_until=self.now + timedelta(hours=1),
                 ),
             ),
-            payload_fingerprint="a4" * 32,
+            payload_fingerprint="b4" * 32,
             received_at=self.now,
         )
         self.fx.repo.record_observation_feedback(
