@@ -2213,6 +2213,11 @@ def _events_message(actor: TenantContext) -> CustomerInteractionMessage:
         )
         rows: list[tuple[CustomerInteractionButton, ...]] = []
         for action in event_hub_actions(snapshot):
+            # Schedule editing currently reuses the Telegram calendar/FSM owner
+            # surface. Keep VK/MAX on their existing supported webinar actions
+            # instead of collapsing the whole hub into projection fallback.
+            if action.kind == "edit":
+                continue
             rows.append((_button(action.label, _event_action_command(action)),))
         rows.append(_back_row())
         return CustomerInteractionMessage(text=event_hub_text(snapshot), rows=tuple(rows))

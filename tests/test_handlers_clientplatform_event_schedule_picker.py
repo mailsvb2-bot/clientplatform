@@ -137,6 +137,23 @@ class EventSchedulePickerHandlerTests(unittest.IsolatedAsyncioTestCase):
         }
         self.assertIn("cpev:date:2026-11-20", november_callbacks)
 
+    def test_existing_edit_session_skips_nonmatching_entries_before_match(self) -> None:
+        matched = {
+            "position": 2,
+            "join_url": "https://zoom.us/j/222",
+            "provider_key": "zoom",
+            "provider_label": "Zoom",
+        }
+        data = {
+            "edit_existing_sessions": [
+                "stale",
+                {"position": 1, "join_url": "https://zoom.us/j/111"},
+                matched,
+            ]
+        }
+
+        self.assertIs(lifecycle._existing_edit_session(data, 2), matched)
+
     def test_room_keyboard_opens_selected_external_service_but_not_other(self) -> None:
         with patch.object(lifecycle.control, "_uuid_token", return_value="business-token"):
             telemost = lifecycle._session_url_keyboard(

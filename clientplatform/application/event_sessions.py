@@ -107,6 +107,7 @@ def configure_event_sessions_in_transaction(
     event_id: str,
     sessions: tuple[EventSessionSpec, ...] | list[EventSessionSpec],
     now: datetime | None = None,
+    reschedule_notifications: bool = False,
 ) -> tuple[EventSession, ...]:
     specs = tuple(sessions)
     if not specs:
@@ -139,12 +140,27 @@ def configure_event_sessions_in_transaction(
                 updated_at=current,
             )
         )
-    return EventSessionRepository(conn).replace_for_event(
+    updated = EventSessionRepository(conn).replace_for_event(
         actor=actor,
         event_id=event.id,
         sessions=materialized,
         now=current,
     )
+    if reschedule_notifications:
+        # Existing registrations may already have 24h/3h/15m reminders in the
+        # dispatch outbox. Reschedule those in the same transaction so the owner
+        # cannot move the webinar while participants retain stale reminder times.
+        from clientplatform.application.event_notifications import (
+            reschedule_event_notifications_in_transaction,
+        )
+
+        reschedule_event_notifications_in_transaction(
+            conn,
+            actor=actor,
+            event_id=event.id,
+            now=current,
+        )
+    return updated
 
 
 def configure_event_sessions(
@@ -153,6 +169,7 @@ def configure_event_sessions(
     event_id: str,
     sessions: tuple[EventSessionSpec, ...] | list[EventSessionSpec],
     now: datetime | None = None,
+    reschedule_notifications: bool = False,
 ) -> tuple[EventSession, ...]:
     with get_db() as conn:
         return configure_event_sessions_in_transaction(
@@ -161,6 +178,7 @@ def configure_event_sessions(
             event_id=event_id,
             sessions=sessions,
             now=now,
+            reschedule_notifications=reschedule_notifications,
         )
 
 

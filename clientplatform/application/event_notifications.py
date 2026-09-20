@@ -13,6 +13,7 @@ from clientplatform.application.event_delivery_targets import (
 from clientplatform.domain.email_outbound import EmailPayload
 from clientplatform.domain.event_sessions import EventSession
 from clientplatform.domain.events import Event, EventRegistration, normalize_utc
+from clientplatform.domain.tenancy import TenantContext
 from clientplatform.infrastructure.event_repository import EventRepository
 from clientplatform.infrastructure.event_session_repository import EventSessionRepository
 
@@ -98,6 +99,7 @@ def _materialize(
     scheduled_at: datetime,
     session: EventSession | None = None,
     session_count: int = 1,
+    schedule_revision: str | None = None,
 ) -> bool:
     subject, body = _render(
         kind=kind,
@@ -132,6 +134,12 @@ def _materialize(
                 f"message:org:v4:session:{session.position}:{kind}:{target.platform}"
             )
         )
+    if schedule_revision:
+        revision = str(schedule_revision).strip().lower()
+        if not revision or any(ch not in "0123456789abcdef" for ch in revision):
+            raise ValueError("schedule revision must be lowercase hexadecimal")
+        idempotency_key = f"{idempotency_key}:schedule:{revision}"
+
     cursor = conn.execute(
         """
         INSERT INTO provider_dispatch_outbox(
@@ -231,6 +239,138 @@ def enqueue_event_notifications(
     )
 
 
+def reschedule_event_notifications_in_transaction(
+    conn: Any,
+    *,
+    actor: TenantContext,
+    event_id: str,
+    now: datetime | None = None,
+) -> int:
+    """Replace only unsent session reminders after an owner changes event timing."""
+
+    current = normalize_utc(now or datetime.now(timezone.utc), field_name="now")
+    repository = EventRepository(conn)
+    event = repository.get(actor=actor, event_id=event_id)
+    sessions = EventSessionRepository(conn).list_for_event_record(event=event)
+    revision = uuid4().hex[:16]
+    queued = 0
+    offsets = (
+        ("24h", timedelta(hours=24)),
+        ("3h", timedelta(hours=3)),
+        ("15m", timedelta(minutes=15)),
+    )
+    cursor_registered_at: str | None = None
+    cursor_id: str | None = None
+    while True:
+        registrations = repository.list_active_registrations_page(
+            actor=actor,
+            event_id=event.id,
+            limit=500,
+            after_registered_at=cursor_registered_at,
+            after_id=cursor_id,
+        )
+        if not registrations:
+            break
+        for registration in registrations:
+            confirmation_rows = conn.execute(
+                """
+                SELECT DISTINCT platform
+                FROM provider_dispatch_outbox
+                WHERE business_id=? AND source_kind='event_message' AND source_id=?
+                  AND (
+                      status IN ('pending','retry')
+                      OR (
+                          status='sending'
+                          AND COALESCE(last_error,'')
+                              NOT LIKE '%provider_call_started_non_idempotent%'
+                      )
+                  )
+                  AND (
+                      idempotency_key LIKE '%:message:registration_confirmed:%'
+                      OR idempotency_key LIKE '%:message:org:v3:registration_confirmed:%'
+                  )
+                """,
+                (event.business_id, registration.id),
+            ).fetchall()
+            confirmation_platforms = {
+                str(row["platform"] if hasattr(row, "keys") else row[0])
+                for row in confirmation_rows
+            }
+            conn.execute(
+                """
+                UPDATE provider_dispatch_outbox
+                SET status='cancelled',updated_at=?,locked_at=NULL,lock_token=NULL,
+                    last_error='event_schedule_changed'
+                WHERE business_id=? AND source_kind='event_message' AND source_id=?
+                  AND (
+                      status IN ('pending','retry')
+                      OR (
+                          status='sending'
+                          AND COALESCE(last_error,'')
+                              NOT LIKE '%provider_call_started_non_idempotent%'
+                      )
+                  )
+                  AND (
+                      idempotency_key LIKE '%:message:registration_confirmed:%'
+                      OR idempotency_key LIKE '%:message:org:v3:registration_confirmed:%'
+                      OR idempotency_key LIKE '%:message:24h:%'
+                      OR idempotency_key LIKE '%:message:3h:%'
+                      OR idempotency_key LIKE '%:message:15m:%'
+                      OR idempotency_key LIKE '%:message:session:%'
+                      OR idempotency_key LIKE '%:message:org:v3:24h:%'
+                      OR idempotency_key LIKE '%:message:org:v3:3h:%'
+                      OR idempotency_key LIKE '%:message:org:v3:15m:%'
+                      OR idempotency_key LIKE '%:message:org:v4:session:%'
+                  )
+                """,
+                (current.isoformat(), event.business_id, registration.id),
+            )
+            targets = resolve_event_organizational_targets(
+                conn,
+                event=event,
+                registration=registration,
+            )
+            for target in targets:
+                if target.platform in confirmation_platforms:
+                    queued += int(
+                        _materialize(
+                            conn,
+                            event=event,
+                            registration=registration,
+                            target=target,
+                            kind="registration_confirmed",
+                            scheduled_at=current,
+                            schedule_revision=revision,
+                        )
+                    )
+            session_count = len(sessions)
+            for session in sessions:
+                for kind, offset in offsets:
+                    run_at = session.starts_at - offset
+                    if run_at <= current:
+                        continue
+                    for target in targets:
+                        queued += int(
+                            _materialize(
+                                conn,
+                                event=event,
+                                registration=registration,
+                                target=target,
+                                kind=kind,
+                                scheduled_at=run_at,
+                                session=session,
+                                session_count=session_count,
+                                schedule_revision=revision,
+                            )
+                        )
+        last = registrations[-1]
+        cursor_registered_at = last.registered_at.isoformat()
+        cursor_id = last.id
+        if len(registrations) < 500:
+            break
+    return queued
+
+
 def reconcile_future_event_notifications_for_customer(
     conn: Any,
     *,
@@ -283,4 +423,5 @@ __all__ = [
     "EventNotificationPlan",
     "enqueue_event_notifications",
     "reconcile_future_event_notifications_for_customer",
+    "reschedule_event_notifications_in_transaction",
 ]

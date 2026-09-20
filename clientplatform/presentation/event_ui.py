@@ -112,6 +112,14 @@ def event_hub_actions(snapshot: object) -> tuple[EventHubAction, ...]:
                 key=str(item.id),
             )
         )
+        if str(getattr(item, "status", "") or "") in {"draft", "published"}:
+            actions.append(
+                EventHubAction(
+                    "edit",
+                    f"🕒 Изменить расписание · {str(item.title)[:13]}",
+                    key=str(item.id),
+                )
+            )
     if items and getattr(items[0], "id", None):
         actions.append(
             EventHubAction(

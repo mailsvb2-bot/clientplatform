@@ -17,7 +17,12 @@ from clientplatform.application.event_owner_flow import (
     create_and_publish_multisession_online_event,
     create_and_publish_online_event,
 )
-from clientplatform.application.event_sessions import get_event_warmup_window
+from clientplatform.application.event_sessions import (
+    EventSessionSpec,
+    configure_event_sessions,
+    get_event_warmup_window,
+    list_event_sessions,
+)
 from clientplatform.application.event_warmups import save_event_warmup_plan
 from clientplatform.application.event_wizard import (
     MAX_EVENT_SESSIONS,
@@ -318,6 +323,115 @@ def _configured_sessions(data: dict[str, object]) -> tuple[EventWizardSession, .
     return tuple(_session_from_payload(item) for item in raw)
 
 
+def _existing_edit_session(data: dict[str, object], position: int) -> dict[str, object]:
+    raw = data.get("edit_existing_sessions") or []
+    if not isinstance(raw, list):
+        raise ValueError("invalid existing session collection")
+    for item in raw:
+        if isinstance(item, dict) and int(item.get("position") or 0) == position:
+            return item
+    raise ValueError("existing event session is unavailable")
+
+
+async def _finish_schedule_edit(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    business_id = str(data.get("event_business_id") or "")
+    event_id = str(data.get("edit_event_id") or "")
+    timezone_name = str(data.get("event_timezone") or "")
+    sessions = _configured_sessions(data)
+    if not business_id or not event_id or not timezone_name or not sessions:
+        await state.clear()
+        await message.answer("Не удалось сохранить расписание. Откройте вебинары заново.")
+        return
+    actor = await control._actor(int(message.from_user.id), business_id)
+    try:
+        specs = []
+        for session in sessions:
+            existing = _existing_edit_session(data, session.position)
+            specs.append(
+                EventSessionSpec(
+                    starts_at=session.starts_at,
+                    ends_at=session.ends_at,
+                    join_url=str(existing.get("join_url") or "").strip() or None,
+                    provider_key=str(existing.get("provider_key") or "").strip() or None,
+                    provider_label=str(existing.get("provider_label") or "").strip() or None,
+                )
+            )
+        updated = await asyncio.to_thread(
+            configure_event_sessions,
+            actor=actor,
+            event_id=event_id,
+            sessions=tuple(specs),
+            reschedule_notifications=True,
+        )
+    except (KeyError, TypeError, ValueError):
+        await message.answer(
+            "Не удалось сохранить новое расписание. Проверьте, что все даты будущие и не пересекаются.",
+            reply_markup=_cancel_keyboard(business_id),
+        )
+        return
+    except RuntimeError:
+        await message.answer(
+            "Не удалось сохранить новое расписание. Проверьте, что все даты будущие и не пересекаются.",
+            reply_markup=_cancel_keyboard(business_id),
+        )
+        return
+    await state.clear()
+    lines = "\n".join(
+        f"День {session.position}: "
+        + session.starts_at.astimezone(ZoneInfo(timezone_name)).strftime("%d.%m.%Y %H:%M")
+        for session in updated
+    )
+    event_token = control._uuid_token(event_id)
+    business_token = control._uuid_token(business_id)
+    await message.answer(
+        "✅ Расписание вебинара обновлено.\n\n" + lines,
+        reply_markup=control._keyboard(
+            [
+                [("🗓 Контент-план", f"cpev:content:{event_token}:{business_token}")],
+                [(BACK_TO_EVENTS_LABEL, f"cpev:home:{business_token}")],
+            ]
+        ),
+    )
+
+
+async def _store_edited_session_and_continue(
+    message: Message,
+    state: FSMContext,
+    session: EventWizardSession,
+) -> None:
+    data = await state.get_data()
+    business_id = str(data.get("event_business_id") or "")
+    timezone_name = str(data.get("event_timezone") or "")
+    total = int(data.get("event_days") or 0)
+    position = int(data.get("event_session_index") or 0)
+    existing = _existing_edit_session(data, position)
+    configured = _configured_sessions(data)
+    completed = EventWizardSession(
+        position=session.position,
+        starts_at=session.starts_at,
+        ends_at=session.ends_at,
+        local_label=session.local_label,
+        join_url=str(existing.get("join_url") or "").strip() or None,
+    )
+    payloads = [_session_payload(item, join_url=item.join_url) for item in configured]
+    payloads.append(_session_payload(completed, join_url=completed.join_url))
+    await state.update_data(event_sessions=payloads)
+    if position < total:
+        next_position = position + 1
+        await state.update_data(event_session_index=next_position, pending_session={})
+        await _prompt_session_date(
+            message,
+            state,
+            business_id=business_id,
+            position=next_position,
+            total=total,
+            timezone_name=timezone_name,
+        )
+        return
+    await _finish_schedule_edit(message, state)
+
+
 def _mode_prompt(stage_label: str) -> str:
     return (
         f"Как оформить {stage_label}?\n\n"
@@ -571,6 +685,59 @@ async def start_multisession_event_wizard(callback: CallbackQuery, state: FSMCon
     await control._callback_message(callback).answer(
         "🎥 Создаём вебинар\n\nКак называется мероприятие?",
         reply_markup=_cancel_keyboard(business_id),
+    )
+
+
+@router.callback_query(F.data.startswith("cpev:edit:"))
+async def start_schedule_edit(callback: CallbackQuery, state: FSMContext) -> None:
+    parts = str(callback.data or "").split(":", 3)
+    if len(parts) != 4:
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    event_id = control._token_uuid(parts[2])
+    business_id = control._token_uuid(parts[3])
+    actor = await control._actor(int(callback.from_user.id), business_id)
+    try:
+        actor.assert_can_manage_business()
+        sessions, window = await asyncio.gather(
+            asyncio.to_thread(list_event_sessions, actor=actor, event_id=event_id),
+            asyncio.to_thread(get_event_warmup_window, actor=actor, event_id=event_id),
+        )
+        if not sessions:
+            raise ValueError("event sessions are unavailable")
+    except (TenantPermissionDenied, LookupError, ValueError):
+        await callback.answer("Не удалось открыть расписание этого вебинара", show_alert=True)
+        return
+    except RuntimeError:
+        await callback.answer("Не удалось открыть расписание этого вебинара", show_alert=True)
+        return
+    existing = [
+        {
+            "position": session.position,
+            "join_url": session.join_url,
+            "provider_key": session.provider_key,
+            "provider_label": session.provider_label,
+        }
+        for session in sessions
+    ]
+    await state.clear()
+    await state.update_data(
+        event_business_id=business_id,
+        edit_event_id=event_id,
+        event_days=len(sessions),
+        event_timezone=window.timezone_name,
+        event_sessions=[],
+        event_session_index=1,
+        edit_existing_sessions=existing,
+    )
+    await callback.answer()
+    await _prompt_session_date(
+        control._callback_message(callback),
+        state,
+        business_id=business_id,
+        position=1,
+        total=len(sessions),
+        timezone_name=window.timezone_name,
     )
 
 
@@ -935,6 +1102,14 @@ async def choose_session_duration(callback: CallbackQuery, state: FSMContext) ->
     except (KeyError, TypeError, ValueError):
         await callback.answer("Не удалось собрать время эфира. Выберите дату заново.", show_alert=True)
         return
+    if str(data.get("edit_event_id") or ""):
+        await callback.answer()
+        await _store_edited_session_and_continue(
+            control._callback_message(callback),
+            state,
+            session,
+        )
+        return
     await state.update_data(
         pending_session={
             "position": session.position,
@@ -1004,6 +1179,9 @@ async def receive_session_time(message: Message, state: FSMContext) -> None:
             "Не удалось понять интервал. Напишите дату, начало и окончание, например: 25.09.2026 19:00-21:00. Следующий эфир не должен пересекаться с предыдущим.",
             reply_markup=_cancel_keyboard(business_id),
         )
+        return
+    if str(data.get("edit_event_id") or ""):
+        await _store_edited_session_and_continue(message, state, session)
         return
     await state.update_data(
         pending_session={

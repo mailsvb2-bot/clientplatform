@@ -299,5 +299,324 @@ class EventLifecycleHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertLess(lifecycle_pos, legacy_pos)
 
 
+    async def test_start_schedule_edit_reuses_existing_session_metadata(self) -> None:
+        callback = SimpleNamespace(
+            data=f"cpev:edit:{TOKEN}:{TOKEN}",
+            from_user=SimpleNamespace(id=101),
+            answer=AsyncMock(),
+        )
+        state = AsyncMock()
+        actor = MagicMock(unsafe=True)
+        message = _message("")
+        sessions = (
+            SimpleNamespace(
+                position=1,
+                join_url="https://zoom.us/j/123",
+                provider_key="zoom",
+                provider_label="Zoom",
+            ),
+            SimpleNamespace(
+                position=2,
+                join_url="https://webinar.ru/demo",
+                provider_key="webinar_ru",
+                provider_label="Webinar.ru",
+            ),
+        )
+        window = SimpleNamespace(timezone_name="Europe/Moscow")
+        with (
+            patch.object(lifecycle.control, "_token_uuid", side_effect=[EVENT_ID, BUSINESS_ID]),
+            patch.object(lifecycle.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(lifecycle.control, "_callback_message", return_value=message),
+            patch.object(lifecycle, "list_event_sessions", return_value=sessions),
+            patch.object(lifecycle, "get_event_warmup_window", return_value=window),
+            patch.object(lifecycle, "_prompt_session_date", new=AsyncMock()) as prompt,
+        ):
+            await lifecycle.start_schedule_edit(callback, state)
+
+        actor.assert_can_manage_business.assert_called_once_with()
+        state.clear.assert_awaited_once_with()
+        payload = state.update_data.await_args.kwargs
+        self.assertEqual(payload["edit_event_id"], EVENT_ID)
+        self.assertEqual(payload["event_days"], 2)
+        self.assertEqual(payload["edit_existing_sessions"][0]["join_url"], "https://zoom.us/j/123")
+        prompt.assert_awaited_once_with(
+            message,
+            state,
+            business_id=BUSINESS_ID,
+            position=1,
+            total=2,
+            timezone_name="Europe/Moscow",
+        )
+
+    async def test_schedule_edit_advances_to_next_day_without_reasking_room(self) -> None:
+        message = _message("")
+        state = AsyncMock()
+        state.get_data.return_value = {
+            "event_business_id": BUSINESS_ID,
+            "edit_event_id": EVENT_ID,
+            "event_timezone": "Europe/Moscow",
+            "event_days": 2,
+            "event_session_index": 1,
+            "event_sessions": [],
+            "edit_existing_sessions": [
+                {
+                    "position": 1,
+                    "join_url": "https://zoom.us/j/123",
+                    "provider_key": "zoom",
+                    "provider_label": "Zoom",
+                },
+                {
+                    "position": 2,
+                    "join_url": "https://webinar.ru/day2",
+                    "provider_key": "webinar_ru",
+                    "provider_label": "Webinar.ru",
+                },
+            ],
+        }
+        session = lifecycle.EventWizardSession(
+            position=1,
+            starts_at=datetime(2026, 10, 20, 16, 0, tzinfo=timezone.utc),
+            ends_at=datetime(2026, 10, 20, 18, 0, tzinfo=timezone.utc),
+            local_label="20.10.2026 19:00–21:00",
+            join_url=None,
+        )
+        with patch.object(
+            lifecycle,
+            "_prompt_session_date",
+            new=AsyncMock(),
+        ) as prompt:
+            await lifecycle._store_edited_session_and_continue(message, state, session)
+
+        first_update = state.update_data.await_args_list[0].kwargs["event_sessions"][0]
+        self.assertEqual(first_update["join_url"], "https://zoom.us/j/123")
+        self.assertEqual(
+            state.update_data.await_args_list[1].kwargs["event_session_index"],
+            2,
+        )
+        prompt.assert_awaited_once_with(
+            message,
+            state,
+            business_id=BUSINESS_ID,
+            position=2,
+            total=2,
+            timezone_name="Europe/Moscow",
+        )
+
+    async def test_schedule_edit_last_day_finishes_without_room_prompt(self) -> None:
+        message = _message("")
+        state = AsyncMock()
+        state.get_data.return_value = {
+            "event_business_id": BUSINESS_ID,
+            "edit_event_id": EVENT_ID,
+            "event_timezone": "Europe/Moscow",
+            "event_days": 1,
+            "event_session_index": 1,
+            "event_sessions": [],
+            "edit_existing_sessions": [
+                {
+                    "position": 1,
+                    "join_url": "https://zoom.us/j/123",
+                    "provider_key": "zoom",
+                    "provider_label": "Zoom",
+                }
+            ],
+        }
+        session = lifecycle.EventWizardSession(
+            position=1,
+            starts_at=datetime(2026, 10, 20, 16, 0, tzinfo=timezone.utc),
+            ends_at=datetime(2026, 10, 20, 18, 0, tzinfo=timezone.utc),
+            local_label="20.10.2026 19:00–21:00",
+            join_url=None,
+        )
+        with patch.object(
+            lifecycle,
+            "_finish_schedule_edit",
+            new=AsyncMock(),
+        ) as finish:
+            await lifecycle._store_edited_session_and_continue(message, state, session)
+
+        finish.assert_awaited_once_with(message, state)
+
+    async def test_finish_schedule_edit_rejects_missing_existing_metadata(self) -> None:
+        message = _message("")
+        state = AsyncMock()
+        state.get_data.return_value = {
+            "event_business_id": BUSINESS_ID,
+            "edit_event_id": EVENT_ID,
+            "event_timezone": "Europe/Moscow",
+            "event_sessions": [
+                {
+                    "position": 1,
+                    "starts_at": "2026-10-20T16:00:00+00:00",
+                    "ends_at": "2026-10-20T18:00:00+00:00",
+                    "local_label": "20.10.2026 19:00–21:00",
+                    "join_url": None,
+                }
+            ],
+            "edit_existing_sessions": [],
+        }
+        with (
+            patch.object(lifecycle.control, "_actor", new=AsyncMock(return_value=object())),
+            patch.object(lifecycle, "_cancel_keyboard", return_value="cancel"),
+        ):
+            await lifecycle._finish_schedule_edit(message, state)
+
+        state.clear.assert_not_awaited()
+        self.assertIn("Не удалось сохранить новое расписание", message.answer.await_args.args[0])
+
+    async def test_finish_schedule_edit_reports_runtime_failure(self) -> None:
+        message = _message("")
+        state = AsyncMock()
+        state.get_data.return_value = {
+            "event_business_id": BUSINESS_ID,
+            "edit_event_id": EVENT_ID,
+            "event_timezone": "Europe/Moscow",
+            "event_sessions": [
+                {
+                    "position": 1,
+                    "starts_at": "2026-10-20T16:00:00+00:00",
+                    "ends_at": "2026-10-20T18:00:00+00:00",
+                    "local_label": "20.10.2026 19:00–21:00",
+                    "join_url": "https://zoom.us/j/123",
+                }
+            ],
+            "edit_existing_sessions": [
+                {
+                    "position": 1,
+                    "join_url": "https://zoom.us/j/123",
+                    "provider_key": "zoom",
+                    "provider_label": "Zoom",
+                }
+            ],
+        }
+        with (
+            patch.object(lifecycle.control, "_actor", new=AsyncMock(return_value=object())),
+            patch.object(
+                lifecycle,
+                "configure_event_sessions",
+                side_effect=RuntimeError("database unavailable"),
+            ),
+            patch.object(lifecycle, "_cancel_keyboard", return_value="cancel"),
+        ):
+            await lifecycle._finish_schedule_edit(message, state)
+
+        state.clear.assert_not_awaited()
+        self.assertIn("Не удалось сохранить новое расписание", message.answer.await_args.args[0])
+
+    async def test_start_schedule_edit_rejects_malformed_callback(self) -> None:
+        callback = SimpleNamespace(
+            data="cpev:edit:broken",
+            from_user=SimpleNamespace(id=101),
+            answer=AsyncMock(),
+        )
+        state = AsyncMock()
+
+        await lifecycle.start_schedule_edit(callback, state)
+
+        callback.answer.assert_awaited_once_with("Кнопка устарела", show_alert=True)
+        state.clear.assert_not_awaited()
+
+    async def test_start_schedule_edit_rejects_empty_session_set(self) -> None:
+        callback = SimpleNamespace(
+            data=f"cpev:edit:{TOKEN}:{TOKEN}",
+            from_user=SimpleNamespace(id=101),
+            answer=AsyncMock(),
+        )
+        state = AsyncMock()
+        actor = MagicMock(unsafe=True)
+        window = SimpleNamespace(timezone_name="Europe/Moscow")
+        with (
+            patch.object(lifecycle.control, "_token_uuid", side_effect=[EVENT_ID, BUSINESS_ID]),
+            patch.object(lifecycle.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(lifecycle, "list_event_sessions", return_value=()),
+            patch.object(lifecycle, "get_event_warmup_window", return_value=window),
+        ):
+            await lifecycle.start_schedule_edit(callback, state)
+
+        callback.answer.assert_awaited_once_with(
+            "Не удалось открыть расписание этого вебинара",
+            show_alert=True,
+        )
+        state.clear.assert_not_awaited()
+
+    async def test_start_schedule_edit_reports_runtime_failure(self) -> None:
+        callback = SimpleNamespace(
+            data=f"cpev:edit:{TOKEN}:{TOKEN}",
+            from_user=SimpleNamespace(id=101),
+            answer=AsyncMock(),
+        )
+        state = AsyncMock()
+        actor = MagicMock(unsafe=True)
+        with (
+            patch.object(lifecycle.control, "_token_uuid", side_effect=[EVENT_ID, BUSINESS_ID]),
+            patch.object(lifecycle.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(
+                lifecycle,
+                "list_event_sessions",
+                side_effect=RuntimeError("database unavailable"),
+            ),
+            patch.object(
+                lifecycle,
+                "get_event_warmup_window",
+                return_value=SimpleNamespace(timezone_name="Europe/Moscow"),
+            ),
+        ):
+            await lifecycle.start_schedule_edit(callback, state)
+
+        callback.answer.assert_awaited_once_with(
+            "Не удалось открыть расписание этого вебинара",
+            show_alert=True,
+        )
+        state.clear.assert_not_awaited()
+
+    async def test_finish_schedule_edit_preserves_join_targets(self) -> None:
+        message = _message("")
+        state = AsyncMock()
+        state.get_data.return_value = {
+            "event_business_id": BUSINESS_ID,
+            "edit_event_id": EVENT_ID,
+            "event_timezone": "Europe/Moscow",
+            "event_sessions": [
+                {
+                    "position": 1,
+                    "starts_at": "2026-10-20T16:00:00+00:00",
+                    "ends_at": "2026-10-20T18:00:00+00:00",
+                    "local_label": "20.10.2026 19:00–21:00",
+                    "join_url": "https://zoom.us/j/123",
+                }
+            ],
+            "edit_existing_sessions": [
+                {
+                    "position": 1,
+                    "join_url": "https://zoom.us/j/123",
+                    "provider_key": "zoom",
+                    "provider_label": "Zoom",
+                }
+            ],
+        }
+        actor = MagicMock(unsafe=True)
+        updated = (
+            SimpleNamespace(
+                position=1,
+                starts_at=datetime(2026, 10, 20, 16, 0, tzinfo=timezone.utc),
+            ),
+        )
+        with (
+            patch.object(lifecycle.control, "_actor", new=AsyncMock(return_value=actor)),
+            patch.object(lifecycle, "configure_event_sessions", return_value=updated) as configure,
+            patch.object(lifecycle.control, "_uuid_token", side_effect=["event-token", "business-token"]),
+            patch.object(lifecycle.control, "_keyboard", return_value="keyboard"),
+        ):
+            await lifecycle._finish_schedule_edit(message, state)
+
+        self.assertTrue(configure.call_args.kwargs["reschedule_notifications"])
+        spec = configure.call_args.kwargs["sessions"][0]
+        self.assertEqual(spec.join_url, "https://zoom.us/j/123")
+        self.assertEqual(spec.provider_key, "zoom")
+        self.assertEqual(spec.provider_label, "Zoom")
+        state.clear.assert_awaited_once_with()
+        self.assertIn("Расписание вебинара обновлено", message.answer.await_args.args[0])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -16,7 +16,11 @@ from clientplatform.application.events import (
     publish_event_in_transaction,
     register_public_attendee_in_transaction,
 )
-from clientplatform.infrastructure.event_repository import EventNotFound, EventRepository
+from clientplatform.infrastructure.event_repository import (
+    EventNotFound,
+    EventRepository,
+    EventStateConflict,
+)
 from clientplatform.infrastructure.tenancy_repository import TenancyRepository
 from services.db.schema import create_or_update_tables
 
@@ -128,6 +132,82 @@ def test_registration_is_idempotent_and_queues_canonical_email_dispatches() -> N
     assert {row["platform"] for row in rows} == {"email"}
     assert len({row["idempotency_key"] for row in rows}) == len(rows)
     assert not any(":message:after:" in row["idempotency_key"] for row in rows)
+    conn.close()
+
+
+def test_active_registration_pagination_does_not_spend_limit_on_cancelled_rows() -> None:
+    conn = _setup_conn()
+    actor = _owner(conn, 101, "Практика А")
+    event = _published(conn, actor, starts_in_hours=30)
+    repo = EventRepository(conn)
+    first, _ = repo.register_public(
+        event=event,
+        name="Первый",
+        email="first@example.test",
+        phone=None,
+        source=None,
+        campaign_ref=None,
+        consent_version=event.consent_version,
+        now=datetime(2026, 9, 20, 8, 0, tzinfo=timezone.utc),
+    )
+    second, _ = repo.register_public(
+        event=event,
+        name="Второй",
+        email="second@example.test",
+        phone=None,
+        source=None,
+        campaign_ref=None,
+        consent_version=event.consent_version,
+        now=datetime(2026, 9, 20, 8, 1, tzinfo=timezone.utc),
+    )
+    conn.execute(
+        "UPDATE clientplatform_event_registrations SET status='cancelled' WHERE id=?",
+        (first.id,),
+    )
+
+    page = repo.list_active_registrations_page(
+        actor=actor,
+        event_id=event.id,
+        limit=1,
+    )
+
+    assert [item.id for item in page] == [second.id]
+    conn.close()
+
+
+def test_cancelled_registration_is_not_reported_as_confirmed_on_repeat() -> None:
+    conn = _setup_conn()
+    actor = _owner(conn, 101, "Практика А")
+    event = _published(conn, actor, starts_in_hours=30)
+    repo = EventRepository(conn)
+    registration, created = repo.register_public(
+        event=event,
+        name="Иван",
+        email="ivan@example.test",
+        phone=None,
+        source=None,
+        campaign_ref=None,
+        consent_version=event.consent_version,
+    )
+    assert created
+    conn.execute(
+        "UPDATE clientplatform_event_registrations SET status='cancelled' WHERE id=?",
+        (registration.id,),
+    )
+
+    with unittest.TestCase().assertRaisesRegex(
+        EventStateConflict,
+        "previously cancelled",
+    ):
+        repo.register_public(
+            event=event,
+            name="Иван",
+            email="ivan@example.test",
+            phone=None,
+            source=None,
+            campaign_ref=None,
+            consent_version=event.consent_version,
+        )
     conn.close()
 
 
