@@ -768,7 +768,9 @@ async def _finish_generated_visual(
                 path=path,
                 source=AdPublicationAssetSource.GENERATED,
             )
-    except (KeyError, OSError, ValueError, VisualCreativeError, AdPublicationAssetError):
+    except (KeyError, OSError, ValueError):
+        return False
+    except (VisualCreativeError, AdPublicationAssetError):
         return False
     await state.update_data(
         creative_job_id="",
