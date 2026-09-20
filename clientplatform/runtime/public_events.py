@@ -4,6 +4,7 @@ import asyncio
 import logging
 from html import escape
 from urllib.parse import quote
+from zoneinfo import ZoneInfo
 from aiohttp import web
 
 from config.settings import settings
@@ -24,6 +25,7 @@ from clientplatform.application.event_registration_channels import (
 from clientplatform.application.event_sessions import select_event_session_for_join
 from clientplatform.application.events import (
     EventUnavailable,
+    cancel_public_registration_by_token_in_transaction,
     get_public_event,
     register_public_attendee_in_transaction,
 )
@@ -405,9 +407,124 @@ async def public_event_register(request: web.Request) -> web.Response:
             "Ссылка одноразовая и действует ограниченное время.</p>"
             + links
         )
+    manage_token = str(getattr(result.registration, "token", "") or "").strip()
+    manage_note = ""
+    if manage_token:
+        manage_path = f"/e/manage/{quote(manage_token, safe='')}"
+        manage_note = (
+            "<p><a class='channel-link' href='"
+            + escape(manage_path, quote=True)
+            + "'>Моя регистрация и расписание</a></p>"
+        )
     return _page(
         "Готово",
-        f"<h1>Регистрация {state}</h1>{note}{reminder_opt_in}{marketing_note}",
+        f"<h1>Регистрация {state}</h1>{note}{reminder_opt_in}{marketing_note}{manage_note}",
+    )
+
+
+def _registration_surface(token: str):
+    with get_db_ro() as conn:
+        repository = EventRepository(conn)
+        registration = repository.get_registration_by_token(token=token)
+        row = conn.execute(
+            "SELECT public_slug FROM clientplatform_events "
+            "WHERE id=? AND business_id=? AND status='published' LIMIT 1",
+            (registration.event_id, registration.business_id),
+        ).fetchone()
+        if row is None:
+            raise EventNotFound("event not found")
+        public_slug = str(row["public_slug"] if hasattr(row, "keys") else row[0])
+        event = repository.get_public_owner_event(public_slug=public_slug)
+        sessions = EventSessionRepository(conn).list_for_event_record(event=event)
+        verified_rows = conn.execute(
+            """
+            SELECT platform
+            FROM clientplatform_event_registration_channels
+            WHERE business_id=? AND event_id=? AND registration_id=?
+            ORDER BY platform
+            """,
+            (registration.business_id, registration.event_id, registration.id),
+        ).fetchall()
+        verified = tuple(
+            str(item["platform"] if hasattr(item, "keys") else item[0])
+            for item in verified_rows
+        )
+        return registration, event, sessions, verified
+
+
+def _manage_body(
+    token: str,
+    registration,
+    event,
+    sessions,
+    verified: tuple[str, ...],
+) -> str:
+    labels = {"telegram": "Telegram", "vk": "ВКонтакте", "max": "MAX"}
+    schedule = "".join(
+        "<li>"
+        + escape(
+            f"День {session.position}: "
+            + session.starts_at.astimezone(ZoneInfo(event.timezone_name)).strftime(
+                "%d.%m.%Y %H:%M"
+            )
+        )
+        + f" — <a href='/e/join/{quote(token, safe='')}/{session.position}'>Войти</a></li>"
+        for session in sessions
+    )
+    if not schedule:
+        schedule = "<li>Расписание появится здесь после настройки организатором.</li>"
+    channels = (
+        ", ".join(labels.get(item, item) for item in verified)
+        if verified
+        else "мессенджеры пока не подтверждены"
+    )
+    cancel_path = f"/e/manage/{quote(token, safe='')}/cancel"
+    return (
+        f"<h1>{escape(event.title)}</h1>"
+        f"<p>{escape(registration.name)}, это Ваша персональная страница регистрации.</p>"
+        f"<h2>Расписание</h2><ul>{schedule}</ul>"
+        f"<p><b>Подтверждённые мессенджеры:</b> {escape(channels)}</p>"
+        f"<form method=post action='{escape(cancel_path, quote=True)}'>"
+        "<button type=submit>Отменить мою регистрацию</button></form>"
+        "<p>После отмены будущие организационные и рекламные сообщения "
+        "по этому вебинару будут остановлены.</p>"
+    )
+
+
+async def public_event_manage(request: web.Request) -> web.Response:
+    token = str(request.match_info.get("token") or "").strip()
+    try:
+        registration, event, sessions, verified = await asyncio.to_thread(
+            _registration_surface,
+            token,
+        )
+    except EventNotFound:
+        return _page(
+            "Ссылка недействительна",
+            "<h1>Регистрация не найдена</h1>",
+            status=404,
+        )
+    return _page(
+        "Моя регистрация",
+        _manage_body(token, registration, event, sessions, verified),
+    )
+
+
+async def public_event_cancel_registration(request: web.Request) -> web.Response:
+    token = str(request.match_info.get("token") or "").strip()
+    try:
+        with get_db() as conn:
+            cancel_public_registration_by_token_in_transaction(conn, token=token)
+    except (EventNotFound, EventUnavailable, ValueError):
+        return _page(
+            "Ссылка недействительна",
+            "<h1>Регистрация уже недоступна</h1>",
+            status=404,
+        )
+    return _page(
+        "Регистрация отменена",
+        "<h1>Регистрация отменена</h1>"
+        "<p>Будущие организационные и рекламные сообщения по этому вебинару остановлены.</p>",
     )
 
 
@@ -518,6 +635,8 @@ async def public_event_offer(request: web.Request) -> web.Response:
 def register_public_event_routes(app: web.Application) -> None:
     app.router.add_get("/e/{slug}", public_event_landing)
     app.router.add_post("/e/{slug}/register", public_event_register)
+    app.router.add_get("/e/manage/{token}", public_event_manage)
+    app.router.add_post("/e/manage/{token}/cancel", public_event_cancel_registration)
     app.router.add_get(
         "/e/marketing/unsubscribe/{token}", public_event_marketing_unsubscribe
     )
@@ -533,7 +652,9 @@ def register_public_event_routes(app: web.Application) -> None:
 __all__ = [
     "EVENT_REGISTRATION_MAX_BODY_BYTES",
     "SECURITY_HEADERS",
+    "public_event_cancel_registration",
     "public_event_join",
+    "public_event_manage",
     "public_event_landing",
     "public_event_marketing_unsubscribe",
     "public_event_marketing_unsubscribe_confirm",
