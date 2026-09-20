@@ -698,7 +698,7 @@ async def start_schedule_edit(callback: CallbackQuery, state: FSMContext) -> Non
         )
         if not sessions:
             raise ValueError("event sessions are unavailable")
-    except (TenantPermissionDenied, ValueError, RuntimeError):
+    except (TenantPermissionDenied, LookupError, ValueError, RuntimeError):
         await callback.answer("Не удалось открыть расписание этого вебинара", show_alert=True)
         return
     existing = [
