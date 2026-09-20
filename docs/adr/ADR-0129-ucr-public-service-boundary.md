@@ -28,20 +28,21 @@
    - `CreateCommunicationIntent`;
    - `GetCommunicationIntent`.
 4. Для звонков разрешены только публичные методы `ucr.v1.CallService`: `StartCall`, `GetCall`, `SignalCall`.
-5. ClientPlatform не публикует synthetic UCR operations для Device/Group/membership, пока соответствующего публичного UCR RPC нет в exact pinned revision.
-6. `StartCall` и другие UCR RPC получают canonical request, подготовленный вызывающим application boundary; gateway не достраивает отсутствующие UCR fields и не создаёт новую call state machine.
-7. Все mutating gateway RPC требуют business-operation idempotency key на ClientPlatform boundary. Это дополнительная retry-защита и не заменяет canonical UCR IDs/dedup/conflict semantics.
-8. Read RPC не используют mutation idempotency header; попытка смешать семантики fail-closed.
-9. Успешный gateway response обязан вернуть exact pinned UCR revision, exact service/method echo и object `result`. Mismatch fail-closed.
-10. UCR module остаётся optional и disabled by default. Он не импортируется из общего `clientplatform.runtime` package init и не становится обязательной зависимостью для dependency-light architecture checks.
-11. Provider credentials, ClientPlatform billing secrets и unrelated customer/profile data не копируются в UCR только ради routing. Передаётся только data, необходимая конкретному canonical UCR RPC.
-12. UCR acknowledgement не превращается автоматически в provider delivery/read/media/business outcome evidence. Каждый такой факт принадлежит своему canonical owner.
+5. После reviewed pin-upgrade на `22d598e057769d59fe0aa47e169cf2eb904abb18` дополнительно разрешены только read-only методы `ucr.v1.UniversalConferenceService`: `GetParticipantAttendance` и `GetCapabilities`. Остальные Universal Conference mutations остаются закрыты.
+6. ClientPlatform не публикует synthetic UCR operations для Device/Group/membership, пока соответствующего публичного UCR RPC нет в exact pinned revision.
+7. `StartCall` и другие UCR RPC получают canonical request, подготовленный вызывающим application boundary; gateway не достраивает отсутствующие UCR fields и не создаёт новую call state machine.
+8. Все mutating gateway RPC требуют business-operation idempotency key на ClientPlatform boundary. Это дополнительная retry-защита и не заменяет canonical UCR IDs/dedup/conflict semantics.
+9. Read RPC не используют mutation idempotency header; попытка смешать семантики fail-closed.
+10. Успешный gateway response обязан вернуть exact pinned UCR revision, exact service/method echo и object `result`. Mismatch fail-closed.
+11. UCR module остаётся optional и disabled by default. Он не импортируется из общего `clientplatform.runtime` package init и не становится обязательной зависимостью для dependency-light architecture checks.
+12. Provider credentials, ClientPlatform billing secrets и unrelated customer/profile data не копируются в UCR только ради routing. Передаётся только data, необходимая конкретному canonical UCR RPC.
+13. UCR acknowledgement не превращается автоматически в provider delivery/read/media/business outcome evidence. Каждый такой факт принадлежит своему canonical owner.
 
 ## Revision pin
 
 Текущий boundary закреплён на UCR SHA:
 
-`8097b41e69634c944c225f7071e80b991d4ddc02`
+`22d598e057769d59fe0aa47e169cf2eb904abb18`
 
 Использовать `main`, branch name или moving tag запрещено. Upgrade требует exact SHA, protobuf/API diff review, ClientPlatform regression tests и green protected PR.
 
