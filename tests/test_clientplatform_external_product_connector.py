@@ -20,6 +20,7 @@ from clientplatform.application.external_products import (
 from clientplatform.domain.attribution import AcquisitionSource
 from clientplatform.domain.customers import CustomerNotFound
 from clientplatform.domain.external_products import (
+    ExternalObservationFeedback,
     ExternalObservationQuality,
     ExternalObservationState,
     ExternalProductAcquisition,
@@ -1085,6 +1086,202 @@ class ClientPlatformExternalProductConnectorTests(unittest.TestCase):
             (self.fx.actor.business_id,),
         ).fetchone()[0]
         self.assertEqual(stored, 1)
+
+
+    def test_observation_feedback_applies_only_to_current_head_and_is_updatable(self) -> None:
+        customer = CustomerRepository(self.fx.conn).create_customer(
+            actor=self.fx.actor,
+            display_name="Feedback customer",
+            now=self.now.isoformat(),
+        )
+        self.fx.repo.bind_customer_ref(
+            actor=self.fx.actor,
+            connector_id=self.fx.connector.id,
+            customer_id=customer.id,
+            customer_ref="feedback-subject",
+            now=self.now,
+        )
+        first = self.fx.repo.ingest_event(
+            connector=self.fx.connector,
+            event=ExternalProductEvent(
+                external_event_id="feedback-r1",
+                event_type=ExternalProductEventType.EVIDENCE,
+                occurred_at=self.now,
+                customer_ref="feedback-subject",
+                observation=ExternalProductObservation(
+                    observation_key="webinar:feedback:attendance",
+                    kind="webinar.attended",
+                    label="Участие подтверждено",
+                    observed_at=self.now,
+                    provenance_ref="feedback-proof-r1",
+                ),
+            ),
+            payload_fingerprint="a1" * 32,
+            received_at=self.now,
+        )
+        second = self.fx.repo.ingest_event(
+            connector=self.fx.connector,
+            event=ExternalProductEvent(
+                external_event_id="feedback-r2",
+                event_type=ExternalProductEventType.EVIDENCE,
+                occurred_at=self.now + timedelta(minutes=1),
+                customer_ref="feedback-subject",
+                observation=ExternalProductObservation(
+                    observation_key="webinar:feedback:attendance",
+                    kind="webinar.attended",
+                    label="Участие подтверждено повторной проверкой",
+                    observed_at=self.now + timedelta(minutes=1),
+                    provenance_ref="feedback-proof-r2",
+                    revision=2,
+                    supersedes_external_event_id="feedback-r1",
+                ),
+            ),
+            payload_fingerprint="a2" * 32,
+            received_at=self.now + timedelta(minutes=1),
+        )
+        with self.assertRaises(ExternalProductNotFound):
+            self.fx.repo.record_observation_feedback(
+                actor=self.fx.actor,
+                customer_id=customer.id,
+                receipt_id=first.id,
+                feedback=ExternalObservationFeedback.USEFUL,
+                now=self.now + timedelta(minutes=2),
+            )
+        saved = self.fx.repo.record_observation_feedback(
+            actor=self.fx.actor,
+            customer_id=customer.id,
+            receipt_id=second.id,
+            feedback=ExternalObservationFeedback.USEFUL,
+            now=self.now + timedelta(minutes=2),
+        )
+        self.assertEqual(saved.feedback, ExternalObservationFeedback.USEFUL)
+        updated = self.fx.repo.record_observation_feedback(
+            actor=self.fx.actor,
+            customer_id=customer.id,
+            receipt_id=second.id,
+            feedback=ExternalObservationFeedback.INCORRECT,
+            now=self.now + timedelta(minutes=3),
+        )
+        self.assertEqual(updated.id, saved.id)
+        self.assertEqual(updated.feedback, ExternalObservationFeedback.INCORRECT)
+        count = self.fx.conn.execute(
+            """
+            SELECT COUNT(*) FROM external_product_observation_feedback
+            WHERE business_id=? AND receipt_id=?
+            """,
+            (self.fx.actor.business_id, second.id),
+        ).fetchone()[0]
+        self.assertEqual(count, 1)
+
+    def test_wrong_customer_feedback_does_not_rebind_identity(self) -> None:
+        customer = CustomerRepository(self.fx.conn).create_customer(
+            actor=self.fx.actor,
+            display_name="Bound customer",
+            now=self.now.isoformat(),
+        )
+        self.fx.repo.bind_customer_ref(
+            actor=self.fx.actor,
+            connector_id=self.fx.connector.id,
+            customer_id=customer.id,
+            customer_ref="wrong-customer-subject",
+            now=self.now,
+        )
+        receipt = self.fx.repo.ingest_event(
+            connector=self.fx.connector,
+            event=ExternalProductEvent(
+                external_event_id="wrong-customer-feedback",
+                event_type=ExternalProductEventType.EVIDENCE,
+                occurred_at=self.now,
+                customer_ref="wrong-customer-subject",
+                observation=ExternalProductObservation(
+                    observation_key="lms:wrong-customer:lesson",
+                    kind="lms.lesson_completed",
+                    label="Урок завершён",
+                    observed_at=self.now,
+                    provenance_ref="wrong-customer-proof",
+                ),
+            ),
+            payload_fingerprint="a3" * 32,
+            received_at=self.now,
+        )
+        before = self.fx.conn.execute(
+            """
+            SELECT customer_id FROM customer_identities
+            WHERE business_id=? AND platform='internal' AND status='active'
+            """,
+            (self.fx.actor.business_id,),
+        ).fetchone()["customer_id"]
+        saved = self.fx.repo.record_observation_feedback(
+            actor=self.fx.actor,
+            customer_id=customer.id,
+            receipt_id=receipt.id,
+            feedback=ExternalObservationFeedback.WRONG_CUSTOMER,
+            now=self.now + timedelta(minutes=1),
+        )
+        after = self.fx.conn.execute(
+            """
+            SELECT customer_id FROM customer_identities
+            WHERE business_id=? AND platform='internal' AND status='active'
+            """,
+            (self.fx.actor.business_id,),
+        ).fetchone()["customer_id"]
+        self.assertEqual(saved.feedback, ExternalObservationFeedback.WRONG_CUSTOMER)
+        self.assertEqual(before, customer.id)
+        self.assertEqual(after, customer.id)
+
+    def test_observation_value_snapshot_counts_current_heads_and_feedback(self) -> None:
+        customer = CustomerRepository(self.fx.conn).create_customer(
+            actor=self.fx.actor,
+            display_name="Metrics customer",
+            now=self.now.isoformat(),
+        )
+        self.fx.repo.bind_customer_ref(
+            actor=self.fx.actor,
+            connector_id=self.fx.connector.id,
+            customer_id=customer.id,
+            customer_ref="metrics-subject",
+            now=self.now,
+        )
+        receipt = self.fx.repo.ingest_event(
+            connector=self.fx.connector,
+            event=ExternalProductEvent(
+                external_event_id="metrics-r1",
+                event_type=ExternalProductEventType.EVIDENCE,
+                occurred_at=self.now,
+                customer_ref="metrics-subject",
+                observation=ExternalProductObservation(
+                    observation_key="webinar:metrics:attendance",
+                    kind="webinar.attended",
+                    label="Участие подтверждено",
+                    observed_at=self.now,
+                    provenance_ref="metrics-proof",
+                    fresh_until=self.now + timedelta(hours=1),
+                ),
+            ),
+            payload_fingerprint="a4" * 32,
+            received_at=self.now,
+        )
+        self.fx.repo.record_observation_feedback(
+            actor=self.fx.actor,
+            customer_id=customer.id,
+            receipt_id=receipt.id,
+            feedback=ExternalObservationFeedback.USEFUL,
+            now=self.now + timedelta(minutes=1),
+        )
+        snapshot = self.fx.repo.observation_value_snapshot(
+            actor=self.fx.actor,
+            connector_id=self.fx.connector.id,
+            now=self.now + timedelta(hours=2),
+        )
+        self.assertEqual(snapshot.current_observations, 1)
+        self.assertEqual(snapshot.active_observations, 1)
+        self.assertEqual(snapshot.retracted_observations, 0)
+        self.assertEqual(snapshot.stale_active_observations, 1)
+        self.assertEqual(snapshot.unknown_freshness_observations, 0)
+        self.assertEqual(snapshot.feedback_total, 1)
+        self.assertEqual(snapshot.useful_feedback, 1)
+        self.assertEqual(snapshot.incorrect_feedback, 0)
+        self.assertEqual(snapshot.wrong_customer_feedback, 0)
 
 
 class ClientPlatformExternalProductHttpTests(unittest.IsolatedAsyncioTestCase):
