@@ -71,6 +71,7 @@ def slot(*, slot_id="slot-1", start="2026-08-20T09:00:00+00:00"):
             status=BookingSlotStatus.OPEN,
             starts_at=start,
             offering_id="offering-1",
+            duration_minutes=60,
         ),
         offering_title="Консультация",
         local_start="20.08.2026 12:00",
