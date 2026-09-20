@@ -36,23 +36,31 @@ Phase 42, Phase 43, Phase 44 Supply Chain и Phase 45 Production Hardening.
 5. Подтверждённое участие может быть преобразовано в
    `ExternalProductObservation(kind="ucr.conference_attendance")` с
    `SOURCE_VERIFIED` quality.
-6. Observation provenance содержит только SHA-256 fingerprint canonical request.
-   Raw `externalUserId` не переносится в label, provenance или observation metadata.
-7. Source timestamp берётся только из UCR attendance projection
+6. Перед созданием `SOURCE_VERIFIED` observation adapter сравнивает echoed
+   `attendance.externalUserId` с participant bytes из exact canonical request.
+   Mismatch fail-closed, поэтому attendance другого участника нельзя приписать Customer.
+7. Observation provenance содержит только SHA-256 fingerprint canonical request и
+   нормализованных attendance facts. Raw `externalUserId` не переносится в label,
+   provenance или observation metadata.
+8. Source timestamp берётся только из UCR attendance projection
    (`firstJoinAtUnixMs`, `firstMediaReadyAtUnixMs`, `lastLeaveAtUnixMs`).
    Adapter не подставляет локальный `now` как якобы source-observed time.
-8. Нулевое attendance остаётся отдельным подтверждённым нулём в read model, но не
+9. Нулевое attendance остаётся отдельным подтверждённым нулём в read model, но не
    превращается автоматически в observation «не пришёл». Это не позволяет смешать
    «0», «не наблюдалось» и «нет данных».
-9. Live attendance помечается limitation: итоговая длительность может измениться.
+10. Live attendance помечается limitation: итоговая длительность может измениться.
    Отсутствие media-ready evidence также показывается как limitation, а не
    интерпретируется как проблема участника.
-10. UCR unavailable/rejected/malformed response fail-closed и не создаёт фиктивный
+11. UCR unavailable/rejected/malformed response fail-closed и не создаёт фиктивный
     observation.
-11. Этот slice не пишет attendance автоматически в Customer/CRM, не меняет
+12. Этот slice не пишет attendance автоматически в Customer/CRM, не меняет
     CustomerIdentity, Sales stage, Next Best Action, AI prompt, follow-up, consent или
     AutomationPolicy.
-12. Existing Telegram/VK/MAX/email/SMS/web-chat остаются независимыми; UCR gateway
+13. Каждая новая attendance snapshot для уже существующего observation key получает
+    exact next revision и supersedes текущий external event. Caller обязан передать
+    canonical current head; устаревший head затем дополнительно fail-closed проверяется
+    существующим ExternalProductRepository при persistence.
+14. Existing Telegram/VK/MAX/email/SMS/web-chat остаются независимыми; UCR gateway
     по-прежнему disabled by default.
 
 ## Почему это UIII, а не второй communication brain
