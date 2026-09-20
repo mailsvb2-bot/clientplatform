@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 
-def test_canonical_booking_prompts_advertise_short_date_input() -> None:
+def test_legacy_first_result_keeps_short_date_copy_but_booking_wizard_is_button_only() -> None:
     first_result = Path("handlers/clientplatform_first_result.py").read_text(
         encoding="utf-8"
     )
@@ -13,5 +13,8 @@ def test_canonical_booking_prompts_advertise_short_date_input() -> None:
 
     assert "10.08 15:00" in first_result
     assert "10.08.27 15:00" in first_result
-    assert "15.08 18:30" in wizard
-    assert "15.08.27 18:30" in wizard
+
+    assert "Дата и время выбираются кнопками." in wizard
+    assert "Длительность выбирается кнопкой." in wizard
+    assert "15.08 18:30" not in wizard
+    assert "15.08.27 18:30" not in wizard
