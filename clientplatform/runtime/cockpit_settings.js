@@ -13,6 +13,9 @@
   const save = document.getElementById("settings-save");
   const meta = document.getElementById("settings-meta");
   const message = document.getElementById("settings-message");
+  const danger = document.getElementById("settings-danger");
+  const archive = document.getElementById("settings-archive");
+  const archiveMessage = document.getElementById("settings-archive-message");
   const tg = window.Telegram && window.Telegram.WebApp;
   const initData = tg && typeof tg.initData === "string" ? tg.initData : "";
 
@@ -46,6 +49,7 @@
     view.classList.toggle("busy", Boolean(busy));
     refresh.disabled = Boolean(busy);
     save.disabled = Boolean(busy);
+    archive.disabled = Boolean(busy);
     view.setAttribute("aria-busy", busy ? "true" : "false");
   };
 
@@ -85,6 +89,8 @@
     text(meta, `${payload.business_name} · основные настройки бизнеса`);
     text(message, "Изменения сохраняются в тех же данных, которыми пользуются записи, продажи и автоматизация.");
     text(timezoneHelp, "Выберите город — ClientPlatform сохранит нужный часовой пояс автоматически.");
+    danger.hidden = !Boolean(payload.can_archive_business);
+    text(archiveMessage, "");
   };
 
   const show = () => {
@@ -131,6 +137,42 @@
     } finally { if (controller().isBusinessContextCurrent(snapshot)) setBusy(false); }
   });
 
+  const confirmArchive = (businessName) => new Promise((resolve) => {
+    const prompt = `Удалить бизнес «${businessName}»? Он исчезнет из активного списка. История оплат, результатов и служебный аудит сохранятся.`;
+    if (tg && typeof tg.showConfirm === "function") {
+      tg.showConfirm(prompt, (confirmed) => resolve(Boolean(confirmed)));
+      return;
+    }
+    resolve(window.confirm(prompt));
+  });
+
+  archive.addEventListener("click", async () => {
+    const snapshot = captureContext();
+    const businessName = String(name.value || "").trim() || "этот бизнес";
+    if (!(await confirmArchive(businessName))) return;
+    setBusy(true); text(archiveMessage, "Удаляем бизнес из активной работы…");
+    try {
+      const payload = await post("/clientplatform/cockpit/settings/archive", {
+        confirmation_business_id: snapshot.businessId,
+      }, snapshot.businessId);
+      assertCurrent(snapshot, payload);
+      text(archiveMessage, `Бизнес «${payload.business_name || businessName}» удалён. История сохранена.`);
+      if (tg && tg.HapticFeedback && typeof tg.HapticFeedback.notificationOccurred === "function") {
+        tg.HapticFeedback.notificationOccurred("success");
+      }
+      window.location.reload();
+    } catch (error) {
+      if (contextChanged(error)) return;
+      text(archiveMessage, error && error.message === "settings_archive_denied"
+        ? "Удалить бизнес может только владелец."
+        : error && error.message === "invalid_settings_archive_request"
+          ? "Контекст бизнеса изменился. Обновите кабинет и повторите."
+          : "Не удалось удалить бизнес. Данные не были изменены.");
+    } finally {
+      if (controller().isBusinessContextCurrent(snapshot)) setBusy(false);
+    }
+  });
+
   refresh.addEventListener("click", () => { void load(); });
   more.addEventListener("click", () => {
     const api = controller();
@@ -138,7 +180,7 @@
   });
 
   window.addEventListener("clientplatform:business-context-changing", () => {
-    name.value = ""; description.value = ""; timezone.replaceChildren(); text(meta, ""); text(message, "");
+    name.value = ""; description.value = ""; timezone.replaceChildren(); danger.hidden = true; text(meta, ""); text(message, ""); text(archiveMessage, "");
   });
 
   window.ClientPlatformSettings = Object.freeze({
