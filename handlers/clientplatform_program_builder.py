@@ -195,12 +195,14 @@ def _callback_program_ids(callback: CallbackQuery) -> tuple[str, str]:
 async def open_programs(callback: CallbackQuery, state: FSMContext) -> None:
     _, _, business_token, _connector_key = str(callback.data).split(":", 3)
     business_id = control._token_uuid(business_token)
+    # Acknowledge navigation before repository I/O so Telegram does not keep
+    # showing a spinner while the program list is loaded.
+    await callback.answer()
+    await state.clear()
     actor = await control._actor(int(callback.from_user.id), business_id)
     programs = await asyncio.to_thread(list_programs, actor=actor)
     drafts = [item for item in programs if item.status == ProgramStatus.DRAFT]
     active = [item for item in programs if item.status == ProgramStatus.ACTIVE]
-    await state.clear()
-    await callback.answer()
     await control._callback_message(callback).answer(
         f"Программы\n\n{_program_lines(programs)}",
         reply_markup=_programs_keyboard(
@@ -302,7 +304,12 @@ async def begin_program(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     if not directions:
         await state.set_state(ClientPlatformProgramBuilderState.program_title)
-        await control._callback_message(callback).answer("Напишите название программы.")
+        await control._callback_message(callback).answer(
+            "Напишите название программы.",
+            reply_markup=control._keyboard(
+                [[("⬅️ К программам", f"cp:cap:{business_token}:programs")]]
+            ),
+        )
         return
     rows = [
         [
@@ -333,7 +340,12 @@ async def choose_program_direction(callback: CallbackQuery, state: FSMContext) -
     await state.update_data(business_id=business_id, direction_id=direction_id)
     await state.set_state(ClientPlatformProgramBuilderState.program_title)
     await callback.answer()
-    await control._callback_message(callback).answer("Напишите название программы.")
+    await control._callback_message(callback).answer(
+            "Напишите название программы.",
+            reply_markup=control._keyboard(
+                [[("⬅️ К программам", f"cp:cap:{business_token}:programs")]]
+            ),
+        )
 
 
 @router.callback_query(F.data.startswith("cp:progdirnone:"))
@@ -347,7 +359,12 @@ async def choose_program_without_direction(
     await state.update_data(business_id=business_id, direction_id=None)
     await state.set_state(ClientPlatformProgramBuilderState.program_title)
     await callback.answer()
-    await control._callback_message(callback).answer("Напишите название программы.")
+    await control._callback_message(callback).answer(
+            "Напишите название программы.",
+            reply_markup=control._keyboard(
+                [[("⬅️ К программам", f"cp:cap:{business_token}:programs")]]
+            ),
+        )
 
 
 @router.message(ClientPlatformProgramBuilderState.program_title)
@@ -378,13 +395,22 @@ async def capture_program_title(message: Message, state: FSMContext) -> None:
     await state.set_state(ClientPlatformProgramBuilderState.lesson_title)
     await message.answer(
         "Черновик создан и будет сохраняться автоматически. "
-        "Как называется первый урок?"
+        "Как называется первый урок?",
+        reply_markup=control._keyboard(
+            [[
+                (
+                    "Сохранить и продолжить позже",
+                    _program_callback("dopen", business_id, program.id),
+                )
+            ]]
+        ),
     )
 
 
 @router.message(ClientPlatformProgramBuilderState.lesson_title)
 async def capture_lesson_title(message: Message, state: FSMContext) -> None:
-    if _session_ids(await state.get_data()) is None:
+    session = _session_ids(await state.get_data())
+    if session is None:
         await state.clear()
         await message.answer("Конструктор был закрыт. Откройте раздел программ заново.")
         return
@@ -393,11 +419,20 @@ async def capture_lesson_title(message: Message, state: FSMContext) -> None:
     except ValueError:
         await message.answer("Название урока должно содержать от 1 до 200 символов.")
         return
+    business_id, program_id = session
     await state.update_data(lesson_title=title)
     await state.set_state(ClientPlatformProgramBuilderState.lesson_content)
     await message.answer(
         "Отправьте материал урока: текст, аудио, голосовое сообщение, видео, "
-        "изображение или документ."
+        "изображение или документ.",
+        reply_markup=control._keyboard(
+            [[
+                (
+                    "Сохранить и продолжить позже",
+                    _program_callback("dopen", business_id, program_id),
+                )
+            ]]
+        ),
     )
 
 
