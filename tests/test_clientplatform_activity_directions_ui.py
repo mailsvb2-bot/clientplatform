@@ -169,6 +169,73 @@ class ActivityDirectionsUiTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("часть организации, а не отдельная организация", text)
             self.assertNotIn("образователь", text.lower())
 
+    async def test_active_direction_can_be_renamed_without_losing_identity(self) -> None:
+        assert directions_ui is not None
+        business_id = str(uuid4())
+        direction_id = str(uuid4())
+        actor = SimpleNamespace(assert_can_manage_business=lambda: None)
+        current = SimpleNamespace(
+            id=direction_id,
+            business_id=business_id,
+            title="Старое название",
+            description="Старое описание",
+            status=ActivityDirectionStatus.ACTIVE,
+        )
+
+        async def fake_actor(_user_id: int, selected_business_id: str):
+            self.assertEqual(selected_business_id, business_id)
+            return actor
+
+        def update_direction(**kwargs: Any):
+            self.assertEqual(kwargs["direction_id"], direction_id)
+            current.title = kwargs["title"]
+            current.description = kwargs["description"]
+            return current
+
+        with (
+            patch.object(directions_ui.control, "_actor", fake_actor),
+            patch.object(
+                directions_ui,
+                "get_activity_direction",
+                lambda **_kwargs: current,
+            ),
+            patch.object(
+                directions_ui,
+                "update_activity_direction",
+                update_direction,
+            ),
+            patch.object(
+                directions_ui,
+                "list_activity_directions",
+                lambda **_kwargs: [current],
+            ),
+        ):
+            business_token = directions_ui.control._uuid_token(business_id)
+            direction_token = directions_ui.control._uuid_token(direction_id)
+            state = FakeState()
+            callback = FakeCallback(
+                f"cp:diredit:{business_token}:{direction_token}"
+            )
+            await directions_ui.begin_edit_direction(callback, state)
+            self.assertEqual(
+                state.states[-1],
+                directions_ui.ClientPlatformActivityDirectionState.edit_title,
+            )
+
+            await directions_ui.capture_edit_direction_title(
+                FakeMessage("Новое название"),
+                state,
+            )
+            description = FakeMessage("Новое описание направления")
+            await directions_ui.capture_edit_direction_description(
+                description,
+                state,
+            )
+            self.assertEqual(current.id, direction_id)
+            self.assertEqual(current.title, "Новое название")
+            self.assertEqual(current.description, "Новое описание направления")
+            self.assertIn("связи и история сохранены", description.answers[-2][0])
+
     async def test_archiving_direction_preserves_links_and_can_restore(self) -> None:
         assert directions_ui is not None
         business_id = str(uuid4())
@@ -226,6 +293,8 @@ class ActivityDirectionsUiTests(unittest.IsolatedAsyncioTestCase):
             f"cp:dirarc:{directions_ui.control._uuid_token(business_id)}:"
             f"{directions_ui.control._uuid_token(direction_id)}",
             f"cp:dirrestore:{directions_ui.control._uuid_token(business_id)}:"
+            f"{directions_ui.control._uuid_token(direction_id)}",
+            f"cp:diredit:{directions_ui.control._uuid_token(business_id)}:"
             f"{directions_ui.control._uuid_token(direction_id)}",
         )
         self.assertTrue(all(len(value.encode("utf-8")) <= 64 for value in values))
