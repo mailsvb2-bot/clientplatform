@@ -341,11 +341,11 @@ async def choose_program_direction(callback: CallbackQuery, state: FSMContext) -
     await state.set_state(ClientPlatformProgramBuilderState.program_title)
     await callback.answer()
     await control._callback_message(callback).answer(
-            "Напишите название программы.",
-            reply_markup=control._keyboard(
-                [[("⬅️ К программам", f"cp:cap:{business_token}:programs")]]
-            ),
-        )
+        "Напишите название программы.",
+        reply_markup=control._keyboard(
+            [[("⬅️ К программам", f"cp:cap:{business_token}:programs")]]
+        ),
+    )
 
 
 @router.callback_query(F.data.startswith("cp:progdirnone:"))
@@ -360,11 +360,11 @@ async def choose_program_without_direction(
     await state.set_state(ClientPlatformProgramBuilderState.program_title)
     await callback.answer()
     await control._callback_message(callback).answer(
-            "Напишите название программы.",
-            reply_markup=control._keyboard(
-                [[("⬅️ К программам", f"cp:cap:{business_token}:programs")]]
-            ),
-        )
+        "Напишите название программы.",
+        reply_markup=control._keyboard(
+            [[("⬅️ К программам", f"cp:cap:{business_token}:programs")]]
+        ),
+    )
 
 
 @router.message(ClientPlatformProgramBuilderState.program_title)
