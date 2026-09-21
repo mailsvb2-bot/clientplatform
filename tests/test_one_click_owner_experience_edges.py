@@ -558,6 +558,8 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Подключить мессенджеры", text)
         self.assertNotIn("Сотрудники и доступы", text)
         self.assertNotIn("Технические проверки", text)
+        self.assertNotIn("Изменить направление", text)
+        self.assertNotIn("Удалить бизнес", text)
 
     def test_settings_menu_hides_privileged_rows_by_role(self):
         def labels(role: PlatformRole) -> list[str]:
@@ -571,9 +573,11 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
             labels(PlatformRole.OWNER),
             [
                 "💬 Подключить мессенджеры",
+                "✏️ Изменить направление",
                 "🧩 Бизнес и возможности",
                 "👤 Сотрудники и доступы",
                 "🛠 Технические проверки",
+                "🗑 Удалить бизнес",
                 "⬅️ Назад",
             ],
         )
