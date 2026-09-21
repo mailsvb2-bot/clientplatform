@@ -55,12 +55,12 @@ class WebinarLifecycleBranchGapTests(unittest.IsolatedAsyncioTestCase):
         state.set_state.assert_awaited_once_with(lifecycle.ClientPlatformEventLifecycleState.waiting_title)
         self.assertIn("Как называется", reply.answer.await_args.args[0])
 
-    async def test_open_webinar_live_room_rejects_stale_callback(self) -> None:
+    async def test_open_webinar_room_rejects_stale_callback(self) -> None:
         cb = callback("cpev:conduct:broken")
         await lifecycle.open_webinar_live_room(cb)
         cb.answer.assert_awaited_once_with("Кнопка устарела", show_alert=True)
 
-    async def test_open_webinar_live_room_requires_ready_link(self) -> None:
+    async def test_open_webinar_room_requires_ready_link(self) -> None:
         cb = callback("cpev:conduct:event-token:business-token")
         actor = object()
         live = SimpleNamespace(
@@ -97,7 +97,7 @@ class WebinarLifecycleBranchGapTests(unittest.IsolatedAsyncioTestCase):
             show_alert=True,
         )
 
-    async def test_open_webinar_live_room_renders_single_and_multiday_rooms(self) -> None:
+    async def test_open_webinar_room_renders_single_and_multiday_rooms(self) -> None:
         actor = object()
         single = SimpleNamespace(
             title="Один эфир",
@@ -187,7 +187,7 @@ class WebinarLifecycleBranchGapTests(unittest.IsolatedAsyncioTestCase):
                     )
                     self.assertIn("День 2: 26.09.2026 19:00", rendered_text)
 
-    async def test_open_webinar_live_room_fails_closed_for_resolution_errors(self) -> None:
+    async def test_open_webinar_room_fails_closed_for_resolution_errors(self) -> None:
         actor = object()
         for error in (
             lifecycle.TenantPermissionDenied("denied"),
