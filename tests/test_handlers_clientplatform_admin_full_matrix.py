@@ -576,7 +576,7 @@ async def test_autopilot_screen_renders_owner_action_approval_controls(
     [
         ("autopilot", "🤖 Автоматизация"),
         ("publications", "📣 Публикации"),
-        ("funnel", "📚 Прохождение программ"),
+        ("funnel", "📚 Прохождение материалов"),
         ("money", "💰 Выручка и платящие клиенты"),
         ("payments", "💰 Оплаты"),
         ("segments", "👥 Группы клиентов"),
