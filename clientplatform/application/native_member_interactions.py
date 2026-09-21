@@ -2703,6 +2703,83 @@ def _event_announcement_message(
     )
 
 
+def _event_direction_message(
+    actor: TenantContext,
+    page: int = 0,
+) -> CustomerInteractionMessage:
+    actor.assert_can_manage_business()
+    directions = list_activity_directions(actor=actor)
+    if not directions:
+        return _stale_message()
+    page = max(0, int(page))
+    start = page * _DIRECTION_PAGE_SIZE
+    if start >= len(directions) and page:
+        return _stale_message()
+    shown = directions[start : start + _DIRECTION_PAGE_SIZE]
+    rows: list[tuple[CustomerInteractionButton, ...]] = [
+        (_button(f"🧭 {item.title[:34]}", f"cpm:event-new-dir:{item.id}"),)
+        for item in shown
+    ]
+    rows.append((_button("Без направления", "cpm:event-new-dir:none"),))
+    pagination: list[CustomerInteractionButton] = []
+    if page:
+        pagination.append(_button("⬅️ Назад", f"cpm:event-new-dirs:{page - 1}"))
+    if start + _DIRECTION_PAGE_SIZE < len(directions):
+        pagination.append(_button("Вперёд ➡️", f"cpm:event-new-dirs:{page + 1}"))
+    if pagination:
+        rows.append(tuple(pagination))
+    rows.append((_button(BACK_TO_EVENTS_LABEL, "cpm:events"),))
+    rows.append(_back_row())
+    return CustomerInteractionMessage(
+        text=(
+            "🎥 Создаём вебинар\n\n"
+            "К какому направлению деятельности относится мероприятие? "
+            "Выберите направление или «Без направления»."
+        ),
+        rows=tuple(rows),
+    )
+
+
+def _event_new_entry_message(
+    actor: TenantContext,
+    *,
+    current_platform: ConnectionPlatform,
+    input_surface: str,
+) -> CustomerInteractionMessage:
+    actor.assert_can_manage_business()
+    directions = list_activity_directions(actor=actor)
+    if directions:
+        return _event_direction_message(actor, 0)
+    return begin_native_event_wizard(
+        actor,
+        platform=current_platform,
+        surface=input_surface,
+        direction_id=None,
+    )
+
+
+def _event_new_direction_result(
+    actor: TenantContext,
+    direction_reference: str,
+    *,
+    current_platform: ConnectionPlatform,
+    input_surface: str,
+) -> CustomerInteractionMessage:
+    actor.assert_can_manage_business()
+    direction_id: str | None = None
+    if direction_reference != "none":
+        direction = get_activity_direction(actor=actor, direction_id=direction_reference)
+        if direction.status != ActivityDirectionStatus.ACTIVE:
+            return _stale_message()
+        direction_id = direction.id
+    return begin_native_event_wizard(
+        actor,
+        platform=current_platform,
+        surface=input_surface,
+        direction_id=direction_id,
+    )
+
+
 def _event_new_message(
     actor: TenantContext,
     *,
