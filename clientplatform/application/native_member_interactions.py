@@ -2237,6 +2237,8 @@ def _events_message(actor: TenantContext) -> CustomerInteractionMessage:
 def _event_conduct_message(
     actor: TenantContext,
     event_id: str,
+    *,
+    page: int = 0,
 ) -> CustomerInteractionMessage:
     live = resolve_event_live_snapshot(actor=actor, event_id=event_id)
     ready = tuple(
@@ -2252,19 +2254,35 @@ def _event_conduct_message(
             ),
             rows=((_button(BACK_TO_EVENTS_LABEL, "cpm:events"),), _back_row()),
         )
-    lines = [f"▶️ {live.title}", "", "Эфиры:"]
-    for session in ready:
-        provider = str(session.provider_label or session.provider_key or "площадка")
-        lines.extend(
-            [
-                f"День {session.position} · {session.local_start} · {provider}",
-                str(session.join_url),
-            ]
+    if isinstance(page, bool) or not isinstance(page, int) or page < 0 or page >= len(ready):
+        return _stale_message()
+
+    session = ready[page]
+    provider = str(session.provider_label or session.provider_key or "площадка")
+    lines = [
+        f"▶️ {live.title}",
+        "",
+        f"День {session.position} · {session.local_start} · {provider}",
+        str(session.join_url),
+        "",
+        "Откройте ссылку выше — это сохранённая комната вебинара.",
+    ]
+    rows: list[tuple[CustomerInteractionButton, ...]] = []
+    page_row: list[CustomerInteractionButton] = []
+    if page > 0:
+        page_row.append(
+            _button("⬅️ Предыдущий день", f"cpm:event-conduct:{event_id}:{page - 1}")
         )
-    lines.extend(["", "Откройте нужную ссылку выше — это сохранённая комната вебинара."])
+    if page + 1 < len(ready):
+        page_row.append(
+            _button("Следующий день ➡️", f"cpm:event-conduct:{event_id}:{page + 1}")
+        )
+    if page_row:
+        rows.append(tuple(page_row))
+    rows.extend(((_button(BACK_TO_EVENTS_LABEL, "cpm:events"),), _back_row()))
     return CustomerInteractionMessage(
         text="\n".join(lines),
-        rows=((_button(BACK_TO_EVENTS_LABEL, "cpm:events"),), _back_row()),
+        rows=tuple(rows),
     )
 
 
@@ -5594,9 +5612,15 @@ def _render(
         if parsed.action == "events":
             return _events_message(actor)
         if parsed.action == "event-conduct":
-            if len(parsed.args) != 1:
+            if len(parsed.args) not in {1, 2}:
                 return _stale_message()
-            return _event_conduct_message(actor, parsed.args[0])
+            page = 0
+            if len(parsed.args) == 2:
+                try:
+                    page = int(parsed.args[1])
+                except (TypeError, ValueError):
+                    return _stale_message()
+            return _event_conduct_message(actor, parsed.args[0], page=page)
         if parsed.action == "event-settings":
             return _event_settings_message(actor)
         if parsed.action == "event-content":
