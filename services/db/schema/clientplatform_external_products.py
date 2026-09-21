@@ -14,6 +14,7 @@ def ensure(c: sqlite3.Connection) -> None:
             product_key TEXT NOT NULL,
             display_name TEXT NOT NULL,
             webhook_secret_reference TEXT NOT NULL,
+            ingress_mode TEXT NOT NULL DEFAULT 'signed_webhook',
             status TEXT NOT NULL DEFAULT 'pending',
             created_by_member_id TEXT NOT NULL,
             created_at TEXT NOT NULL,
@@ -36,6 +37,7 @@ def ensure(c: sqlite3.Connection) -> None:
                 OR substr(webhook_secret_reference, 1, 6)='kms://'
                 OR substr(webhook_secret_reference, 1, 8)='vault://'
             ),
+            CHECK(ingress_mode IN ('signed_webhook','trusted_pull')),
             CHECK(status IN ('pending','active','attention','disabled','revoked'))
         )
         """

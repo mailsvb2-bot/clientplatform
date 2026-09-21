@@ -67,6 +67,11 @@ class ExternalProductConnectorStatus(StrEnum):
     REVOKED = "revoked"
 
 
+class ExternalProductIngressMode(StrEnum):
+    SIGNED_WEBHOOK = "signed_webhook"
+    TRUSTED_PULL = "trusted_pull"
+
+
 class ExternalProductEventType(StrEnum):
     EVIDENCE = "evidence"
     LEAD_CREATED = "lead_created"
@@ -117,9 +122,7 @@ class ExternalProductObservation:
     limitations: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        observation_key = str(self.observation_key or "").strip()
-        if not _OBSERVATION_KEY_RE.fullmatch(observation_key):
-            raise ValueError("external observation key has an unsupported format")
+        observation_key = normalize_external_observation_key(self.observation_key)
         kind = str(self.kind or "").strip().lower()
         if not _OBSERVATION_KIND_RE.fullmatch(kind):
             raise ValueError("external observation kind must be a stable lowercase identifier")
@@ -219,6 +222,7 @@ class ExternalProductConnector:
     last_event_at: str | None = None
     last_error_at: str | None = None
     last_error_code: str | None = None
+    ingress_mode: ExternalProductIngressMode = ExternalProductIngressMode.SIGNED_WEBHOOK
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "id", normalize_uuid(self.id, field_name="connector_id"))
@@ -234,6 +238,10 @@ class ExternalProductConnector:
         )
         object.__setattr__(self, "product_key", normalize_external_product_key(self.product_key))
         object.__setattr__(self, "display_name", normalize_external_product_name(self.display_name))
+        ingress_mode = self.ingress_mode
+        if not isinstance(ingress_mode, ExternalProductIngressMode):
+            ingress_mode = ExternalProductIngressMode(str(ingress_mode).strip().lower())
+        object.__setattr__(self, "ingress_mode", ingress_mode)
 
 
 @dataclass(frozen=True, slots=True)
@@ -362,6 +370,7 @@ class ExternalProductReceipt:
     observation_state: ExternalObservationState | None = None
     observation_supersedes_external_event_id: str | None = None
     observation_fresh_until: str | None = None
+    observation_provenance_ref: str | None = None
 
 
 def _normalize_bounded_text(value: object, *, field_name: str, limit: int) -> str:
@@ -370,6 +379,13 @@ def _normalize_bounded_text(value: object, *, field_name: str, limit: int) -> st
         raise ValueError(f"{field_name} must be 1..{limit} characters")
     if any(ord(char) < 32 or ord(char) == 127 for char in normalized):
         raise ValueError(f"{field_name} contains control characters")
+    return normalized
+
+
+def normalize_external_observation_key(value: object) -> str:
+    normalized = str(value or "").strip()
+    if not _OBSERVATION_KEY_RE.fullmatch(normalized):
+        raise ValueError("external observation key has an unsupported format")
     return normalized
 
 
@@ -487,6 +503,7 @@ __all__ = [
     "ExternalProductAcquisition",
     "ExternalProductConnector",
     "ExternalProductConnectorStatus",
+    "ExternalProductIngressMode",
     "ExternalProductError",
     "ExternalProductEvent",
     "ExternalProductEventType",
@@ -499,6 +516,7 @@ __all__ = [
     "external_customer_identity_subject",
     "normalize_external_customer_ref",
     "normalize_external_event_id",
+    "normalize_external_observation_key",
     "normalize_external_metadata",
     "normalize_external_product_key",
     "normalize_external_product_name",
