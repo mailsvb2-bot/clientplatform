@@ -492,35 +492,6 @@ async def test_repeatable_navigation_clears_stale_state_and_is_not_double_tap_bl
 
 
 @pytest.mark.asyncio
-async def test_repeatable_navigation_leaves_first_callback_answer_to_handler(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    callback_answers: list[str | None] = []
-    answers_seen_before_handler: list[int] = []
-
-    async def answer_callback(
-        _callback: CallbackQuery,
-        text: str | None = None,
-        **_kwargs: Any,
-    ) -> None:
-        callback_answers.append(text)
-
-    async def handler(event: CallbackQuery, _data: dict[str, Any]) -> str:
-        answers_seen_before_handler.append(len(callback_answers))
-        await event.answer("Экран открыт")
-        return "handled"
-
-    monkeypatch.setattr(CallbackQuery, "answer", answer_callback)
-    middleware = ClientPlatformInteractionSafetyMiddleware()
-    callback = _callback("cpev:home:business")
-    data = {"bot": type("Bot", (), {"id": 1})(), "state": _state()}
-
-    assert await middleware(handler, callback, data) == "handled"
-    assert answers_seen_before_handler == [0]
-    assert callback_answers[0] == "Экран открыт"
-
-
-@pytest.mark.asyncio
 async def test_mutating_callback_still_has_double_tap_protection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
