@@ -571,7 +571,8 @@ async def test_custom_finish_and_edit_activity(monkeypatch: pytest.MonkeyPatch) 
     await handlers.edit_activity(edit, edit_state)
     assert edit_state.states[-1] == handlers.ClientPlatformControlState.activity_description
     assert edit_state.data == {"business_id": business_id, "editing_activity": True}
-    assert "новое направление" in edit.message.answers[-1][0]
+    assert "Изменить описание организации" in edit.message.answers[-1][0]
+    assert "Направления деятельности" in edit.message.answers[-1][0]
 
 
 @pytest.mark.asyncio
