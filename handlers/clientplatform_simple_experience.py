@@ -120,7 +120,7 @@ def _simple_keyboard(
     callbacks = {
         "customers": f"cp:clients:{token}",
         "booking": f"cps:booking:{token}",
-        "events": f"cpev:new:{token}",
+        "events": f"cpev:home:{token}",
         "programs": f"cps:programs:{token}",
         "acquire": f"cpo:start:{token}",
         "sales": f"cps:s:{token}",
