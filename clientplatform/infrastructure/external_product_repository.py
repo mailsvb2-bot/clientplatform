@@ -15,6 +15,7 @@ from clientplatform.domain.external_products import (
     ExternalObservationValueSnapshot,
     ExternalProductConnector,
     ExternalProductConnectorStatus,
+    ExternalProductIngressMode,
     ExternalProductEvent,
     ExternalProductEventType,
     ExternalProductInvariantViolation,
@@ -22,6 +23,7 @@ from clientplatform.domain.external_products import (
     ExternalProductReceipt,
     external_customer_fingerprint,
     external_customer_identity_subject,
+    normalize_external_observation_key,
     normalize_external_product_key,
     normalize_external_product_name,
 )
@@ -62,6 +64,7 @@ def _connector_from_row(row: Any) -> ExternalProductConnector:
         display_name=str(_value(row, "display_name", 3)),
         webhook_secret_reference=str(_value(row, "webhook_secret_reference", 4)),
         status=ExternalProductConnectorStatus(str(_value(row, "status", 5))),
+        ingress_mode=ExternalProductIngressMode(str(_value(row, "ingress_mode", 15))),
         created_by_member_id=str(_value(row, "created_by_member_id", 6)),
         created_at=str(_value(row, "created_at", 7)),
         updated_at=str(_value(row, "updated_at", 8)),
@@ -82,7 +85,7 @@ def _optional(row: Any, key: str, position: int) -> str | None:
 _CONNECTOR_SELECT = """
 SELECT id,business_id,product_key,display_name,webhook_secret_reference,status,
        created_by_member_id,created_at,updated_at,activated_at,disabled_at,
-       revoked_at,last_event_at,last_error_at,last_error_code
+       revoked_at,last_event_at,last_error_at,last_error_code,ingress_mode
 FROM external_product_connectors
 """.strip()
 
@@ -101,6 +104,7 @@ class ExternalProductRepository:
         product_key: str,
         display_name: str,
         webhook_secret_reference: str,
+        ingress_mode: ExternalProductIngressMode | str = ExternalProductIngressMode.SIGNED_WEBHOOK,
         now: datetime | None = None,
     ) -> ExternalProductConnector:
         current = self._tenancy.resolve_context(
@@ -111,6 +115,11 @@ class ExternalProductRepository:
         key = normalize_external_product_key(product_key)
         name = normalize_external_product_name(display_name)
         secret_ref = normalize_credential_reference(webhook_secret_reference)
+        mode = (
+            ingress_mode
+            if isinstance(ingress_mode, ExternalProductIngressMode)
+            else ExternalProductIngressMode(str(ingress_mode).strip().lower())
+        )
         if not secret_ref.startswith("secret://env/CLIENTPLATFORM_SECRET_"):
             raise ExternalProductInvariantViolation(
                 "external product webhook secret must use the ClientPlatform env namespace"
@@ -121,9 +130,9 @@ class ExternalProductRepository:
             """
             INSERT INTO external_product_connectors(
                 id,business_id,product_key,display_name,webhook_secret_reference,
-                status,created_by_member_id,created_at,updated_at,activated_at,
+                ingress_mode,status,created_by_member_id,created_at,updated_at,activated_at,
                 disabled_at,revoked_at,last_event_at,last_error_at,last_error_code
-            ) VALUES(?,?,?,?,?,'pending',?,?,?,NULL,NULL,NULL,NULL,NULL,NULL)
+            ) VALUES(?,?,?,?,?,?,'pending',?,?,?,NULL,NULL,NULL,NULL,NULL,NULL)
             ON CONFLICT(business_id,product_key) DO NOTHING
             """,
             (
@@ -132,6 +141,7 @@ class ExternalProductRepository:
                 key,
                 name,
                 secret_ref,
+                mode.value,
                 current.membership_id,
                 timestamp,
                 timestamp,
@@ -169,7 +179,97 @@ class ExternalProductRepository:
         connector = self._get_connector_by_id(connector_id)
         if connector.status != ExternalProductConnectorStatus.ACTIVE:
             raise ExternalProductNotFound("external product connector is not active")
+        if connector.ingress_mode != ExternalProductIngressMode.SIGNED_WEBHOOK:
+            raise ExternalProductNotFound("external product connector does not accept webhooks")
         return connector
+
+    def get_active_trusted_pull(
+        self,
+        *,
+        actor: TenantContext,
+        connector_id: str,
+    ) -> ExternalProductConnector:
+        current = self._tenancy.resolve_context(
+            user_id=actor.user_id,
+            business_id=actor.business_id,
+        )
+        current.assert_can_manage_business()
+        connector = self._get_connector_by_id(connector_id)
+        current.assert_business(connector.business_id)
+        if connector.status != ExternalProductConnectorStatus.ACTIVE:
+            raise ExternalProductNotFound("external product connector is not active")
+        if connector.ingress_mode != ExternalProductIngressMode.TRUSTED_PULL:
+            raise ExternalProductNotFound("external product connector is not a trusted pull source")
+        return connector
+
+    def resolve_bound_customer_ref(
+        self,
+        *,
+        actor: TenantContext,
+        connector_id: str,
+        customer_ref: str,
+    ) -> str:
+        current = self._tenancy.resolve_context(
+            user_id=actor.user_id,
+            business_id=actor.business_id,
+        )
+        current.assert_can_manage_business()
+        connector = self._get_connector_by_id(connector_id)
+        current.assert_business(connector.business_id)
+        identity_subject = external_customer_identity_subject(
+            connector_id=connector.id,
+            customer_ref=customer_ref,
+        )
+        row = self._conn.execute(
+            """
+            SELECT ci.customer_id,c.status
+            FROM customer_identities ci
+            JOIN customers c ON c.id=ci.customer_id AND c.business_id=ci.business_id
+            WHERE ci.business_id=? AND ci.platform='internal'
+              AND ci.external_subject=? AND ci.status='active'
+            LIMIT 1
+            """,
+            (current.business_id, identity_subject),
+        ).fetchone()
+        if row is None or str(_value(row, "status", 1)) != "active":
+            raise ExternalProductNotFound("external customer reference is not explicitly bound")
+        return str(_value(row, "customer_id", 0))
+
+    def current_observation_head(
+        self,
+        *,
+        actor: TenantContext,
+        connector_id: str,
+        customer_id: str,
+        observation_key: str,
+    ) -> ExternalProductReceipt | None:
+        current = self._tenancy.resolve_context(
+            user_id=actor.user_id,
+            business_id=actor.business_id,
+        )
+        current.assert_can_view_customer_records()
+        connector = self._get_connector_by_id(connector_id)
+        current.assert_business(connector.business_id)
+        customer = normalize_uuid(customer_id, field_name="customer_id")
+        key = normalize_external_observation_key(observation_key)
+        row = self._conn.execute(
+            """
+            SELECT external_event_id
+            FROM external_product_event_receipts
+            WHERE business_id=? AND connector_id=? AND customer_id=?
+              AND observation_key=? AND status='accepted'
+            ORDER BY observation_revision DESC,received_at DESC,external_event_id DESC
+            LIMIT 1
+            """,
+            (current.business_id, connector.id, customer, key),
+        ).fetchone()
+        if row is None:
+            return None
+        return self._receipt_by_external_id(
+            business_id=current.business_id,
+            connector_id=connector.id,
+            external_event_id=str(_value(row, "external_event_id", 0)),
+        )
 
     def activate_connector(
         self,
@@ -235,6 +335,45 @@ class ExternalProductRepository:
         active = self.get_active_for_ingress(connector_id=connector.id)
         if active.business_id != connector.business_id:
             raise ExternalProductInvariantViolation("connector business changed during ingress")
+        return self._ingest_active_event(
+            active=active,
+            event=event,
+            payload_fingerprint=payload_fingerprint,
+            received_at=received_at,
+            expected_customer_id=None,
+        )
+
+    def ingest_trusted_pull_event(
+        self,
+        *,
+        actor: TenantContext,
+        connector_id: str,
+        event: ExternalProductEvent,
+        payload_fingerprint: str,
+        expected_customer_id: str,
+        received_at: datetime | None = None,
+    ) -> ExternalProductReceipt:
+        active = self.get_active_trusted_pull(actor=actor, connector_id=connector_id)
+        return self._ingest_active_event(
+            active=active,
+            event=event,
+            payload_fingerprint=payload_fingerprint,
+            received_at=received_at,
+            expected_customer_id=normalize_uuid(
+                expected_customer_id,
+                field_name="customer_id",
+            ),
+        )
+
+    def _ingest_active_event(
+        self,
+        *,
+        active: ExternalProductConnector,
+        event: ExternalProductEvent,
+        payload_fingerprint: str,
+        received_at: datetime | None,
+        expected_customer_id: str | None,
+    ) -> ExternalProductReceipt:
         fingerprint = str(payload_fingerprint or "").strip().lower()
         if len(fingerprint) != 64 or any(ch not in "0123456789abcdef" for ch in fingerprint):
             raise ValueError("payload_fingerprint must be a SHA-256 hex digest")
@@ -291,11 +430,38 @@ class ExternalProductRepository:
                 connector_id=active.id,
                 customer_ref=event.customer_ref,
             )
-            customer_id = self._ensure_customer(
-                connector=active,
-                customer_fingerprint=customer_fingerprint,
-                now=received,
-            )
+            if expected_customer_id is None:
+                customer_id = self._ensure_customer(
+                    connector=active,
+                    customer_fingerprint=customer_fingerprint,
+                    now=received,
+                )
+            else:
+                identity_subject = external_customer_identity_subject(
+                    connector_id=active.id,
+                    customer_ref=event.customer_ref,
+                )
+                binding = self._conn.execute(
+                    """
+                    SELECT ci.customer_id,c.status
+                    FROM customer_identities ci
+                    JOIN customers c
+                      ON c.id=ci.customer_id AND c.business_id=ci.business_id
+                    WHERE ci.business_id=? AND ci.platform='internal'
+                      AND ci.external_subject=? AND ci.status='active'
+                    LIMIT 1
+                    """,
+                    (active.business_id, identity_subject),
+                ).fetchone()
+                if (
+                    binding is None
+                    or str(_value(binding, "status", 1)) != "active"
+                    or str(_value(binding, "customer_id", 0)) != expected_customer_id
+                ):
+                    raise ExternalProductInvariantViolation(
+                        "trusted pull customer binding changed before persistence"
+                    )
+                customer_id = expected_customer_id
         if event.observation is not None:
             if customer_id is None:
                 raise ExternalProductInvariantViolation(
@@ -947,7 +1113,8 @@ class ExternalProductRepository:
                    customer_id,customer_fingerprint,payload_fingerprint,
                    outcome_event_id,occurred_at,received_at,
                    observation_key,observation_revision,observation_state,
-                   observation_supersedes_event_id,observation_fresh_until
+                   observation_supersedes_event_id,observation_fresh_until,
+                   metadata_json
             FROM external_product_event_receipts
             WHERE business_id=? AND connector_id=? AND external_event_id=?
             LIMIT 1
@@ -957,6 +1124,16 @@ class ExternalProductRepository:
         if row is None:
             return None
         outcome_id = _value(row, "outcome_event_id", 8)
+        raw_metadata = _value(row, "metadata_json", 16)
+        try:
+            metadata = json.loads(str(raw_metadata or "{}"))
+        except (TypeError, ValueError):
+            metadata = {}
+        provenance = (
+            str(metadata.get("external_observation_provenance_ref") or "").strip()
+            if isinstance(metadata, dict)
+            else ""
+        )
         return ExternalProductReceipt(
             id=str(_value(row, "id", 0)),
             business_id=str(_value(row, "business_id", 1)),
@@ -1002,6 +1179,7 @@ class ExternalProductRepository:
                 if _value(row, "observation_fresh_until", 15) is None
                 else str(_value(row, "observation_fresh_until", 15))
             ),
+            observation_provenance_ref=provenance or None,
         )
 
     def _get_connector_by_id(self, connector_id: str) -> ExternalProductConnector:
