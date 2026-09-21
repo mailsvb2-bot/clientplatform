@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
+from datetime import datetime
 import sqlite3
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -90,6 +91,67 @@ def test_event_creation_rejects_reused_request_id_for_different_payload() -> Non
                 join_url="https://stage.example/room", offer_url=None,
                 description="", enable_email_notifications=True,
             )
+
+
+def test_webinar_room_projection_uses_durable_session_rooms_and_business_timezone() -> None:
+    actor = _actor()
+    event = SimpleNamespace(
+        id="33333333-3333-4333-8333-333333333333",
+        title="Вебинар",
+        status="published",
+    )
+    sessions = (
+        SimpleNamespace(
+            position=1,
+            starts_at=datetime.fromisoformat("2026-09-15T16:00:00+00:00"),
+            provider_key="zoom",
+            provider_label="Zoom",
+            join_url="https://zoom.example/room",
+            join_is_ready=True,
+        ),
+        SimpleNamespace(
+            position=2,
+            starts_at=datetime.fromisoformat("2026-09-16T16:00:00+00:00"),
+            provider_key="external",
+            provider_label="Webinar.ru",
+            join_url="https://webinar.example/room",
+            join_is_ready=True,
+        ),
+    )
+
+    class EventRepo:
+        def __init__(self, _conn):
+            pass
+
+        def get(self, *, actor, event_id):
+            assert actor.business_id == _BUSINESS
+            assert event_id == event.id
+            return event
+
+    class SessionRepo:
+        def __init__(self, _conn):
+            pass
+
+        def list_for_event_record(self, *, event):
+            return sessions
+
+    with (
+        patch.object(cockpit_events, "get_business_profile", return_value=SimpleNamespace(timezone="Europe/Moscow")),
+        patch.object(cockpit_events, "get_db_ro", return_value=nullcontext(object())),
+        patch.object(cockpit_events, "EventRepository", EventRepo),
+        patch.object(cockpit_events, "EventSessionRepository", SessionRepo),
+    ):
+        live = cockpit_events.resolve_event_live_snapshot(actor=actor, event_id=event.id)
+
+    assert live.title == "Вебинар"
+    assert [item.local_start for item in live.sessions] == [
+        "15.09.2026 19:00",
+        "16.09.2026 19:00",
+    ]
+    assert [item.join_url for item in live.sessions] == [
+        "https://zoom.example/room",
+        "https://webinar.example/room",
+    ]
 
 
 def test_event_tables_have_explicit_privacy_dispositions() -> None:

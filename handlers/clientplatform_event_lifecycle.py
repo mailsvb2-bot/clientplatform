@@ -10,6 +10,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from clientplatform.application.event_content_plans import set_event_content_mode
+from clientplatform.application.cockpit_events import resolve_event_live_snapshot
 from clientplatform.application.event_owner_flow import (
     MultiSessionOnlineEventCreateRequest,
     OnlineEventCreateRequest,
@@ -685,6 +686,73 @@ async def start_multisession_event_wizard(callback: CallbackQuery, state: FSMCon
     await control._callback_message(callback).answer(
         "🎥 Создаём вебинар\n\nКак называется мероприятие?",
         reply_markup=_cancel_keyboard(business_id),
+    )
+
+
+@router.callback_query(F.data.startswith("cpev:conduct:"))
+async def open_webinar_live_room(callback: CallbackQuery) -> None:
+    parts = str(callback.data or "").split(":", 3)
+    if len(parts) != 4:
+        await callback.answer("Кнопка устарела", show_alert=True)
+        return
+    event_id = control._token_uuid(parts[2])
+    business_id = control._token_uuid(parts[3])
+    actor = await control._actor(int(callback.from_user.id), business_id)
+    try:
+        live = await asyncio.to_thread(
+            resolve_event_live_snapshot,
+            actor=actor,
+            event_id=event_id,
+        )
+    except TenantPermissionDenied:
+        await callback.answer("Не удалось открыть эфир этого вебинара", show_alert=True)
+        return
+    except LookupError:
+        await callback.answer("Не удалось открыть эфир этого вебинара", show_alert=True)
+        return
+    except ValueError:
+        await callback.answer("Не удалось открыть эфир этого вебинара", show_alert=True)
+        return
+    except RuntimeError:
+        await callback.answer("Не удалось открыть эфир этого вебинара", show_alert=True)
+        return
+    ready = tuple(
+        session
+        for session in live.sessions
+        if session.join_ready and session.join_url
+    )
+    if not ready:
+        await callback.answer("Сначала добавьте ссылку на эфир", show_alert=True)
+        return
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=(
+                    f"▶️ Открыть день {session.position}"
+                    if len(ready) > 1
+                    else "▶️ Открыть эфир"
+                ),
+                url=session.join_url,
+            )
+        ]
+        for session in ready
+    ]
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text=BACK_TO_EVENTS_LABEL,
+                callback_data=f"cpev:home:{control._uuid_token(business_id)}",
+            )
+        ]
+    )
+    await callback.answer()
+    schedule = "\n".join(
+        f"День {session.position}: {session.local_start}"
+        for session in ready
+    )
+    await control._callback_message(callback).answer(
+        f"▶️ {live.title}\n\n{schedule}\n\nВыберите нужный эфир:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
     )
 
 

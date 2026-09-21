@@ -172,6 +172,28 @@ def install_store(
 
 
 @pytest.mark.asyncio
+async def test_legacy_program_button_delegates_to_single_canonical_builder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    business_id = str(uuid4())
+    callback = FakeCallback(
+        f"cp:progadd:{builder.control._uuid_token(business_id)}"
+    )
+    state = FakeState()
+    calls: list[tuple[Any, Any]] = []
+
+    async def canonical_begin(received_callback: Any, received_state: Any) -> None:
+        calls.append((received_callback, received_state))
+
+    monkeypatch.setattr(builder, "begin_program", canonical_begin)
+    await builder.control.start_program(callback, state)
+
+    assert calls == [(callback, state)]
+    assert state.states == []
+    assert state.data == {}
+
+
+@pytest.mark.asyncio
 async def test_persistent_journey_resumes_after_fsm_restart(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

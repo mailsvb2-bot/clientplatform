@@ -104,6 +104,76 @@ def test_published_webinar_exposes_schedule_edit_action() -> None:
     assert len(edit) == 1
     assert edit[0].key == item.id
     assert edit[0].label.startswith("🕒 Изменить расписание")
+    conduct = [action for action in actions if action.kind == "conduct"]
+    assert len(conduct) == 1
+    assert conduct[0].key == item.id
+    assert conduct[0].label.startswith("▶️ Провести вебинар")
+
+
+def test_conduct_action_prefers_nearest_upcoming_webinar() -> None:
+    base = _snapshot()
+    far = SimpleNamespace(
+        **{
+            **vars(base.items[0]),
+            "id": "33333333-3333-4333-8333-333333333334",
+            "title": "Дальний",
+            "status": "published",
+            "join_ready": True,
+            "starts_at": "2099-10-20T18:00:00+00:00",
+        }
+    )
+    near = SimpleNamespace(
+        **{
+            **vars(base.items[0]),
+            "id": "33333333-3333-4333-8333-333333333335",
+            "title": "Ближайший",
+            "status": "published",
+            "join_ready": True,
+            "starts_at": "2099-09-20T18:00:00+00:00",
+        }
+    )
+    snapshot = SimpleNamespace(**{**vars(base), "items": (far, near)})
+    conduct = [action for action in event_hub_actions(snapshot) if action.kind == "conduct"]
+    assert len(conduct) == 1
+    assert conduct[0].key == near.id
+    assert "Ближайший" in conduct[0].label
+
+
+def test_native_conduct_webinar_paginates_long_room_urls() -> None:
+    actor = _actor()
+    long_url = "https://example.invalid/" + ("x" * 2000)
+    live = SimpleNamespace(
+        title="Вебинар",
+        sessions=tuple(
+            SimpleNamespace(
+                position=index,
+                local_start=f"{index:02d}.10.2099 19:00",
+                provider_key="external",
+                provider_label="Площадка",
+                join_url=f"{long_url}{index}",
+                join_ready=True,
+            )
+            for index in range(1, 32)
+        ),
+    )
+    with patch.object(native_ui, "resolve_event_live_snapshot", return_value=live):
+        first = native_ui._event_conduct_message(
+            actor,
+            "33333333-3333-4333-8333-333333333333",
+        )
+        second = native_ui._event_conduct_message(
+            actor,
+            "33333333-3333-4333-8333-333333333333",
+            page=1,
+        )
+    assert len(first.text) <= 3500
+    assert "День 1" in first.text
+    assert "День 2" not in first.text
+    assert any(command.endswith(":1") for _, command in _commands(first))
+    assert len(second.text) <= 3500
+    assert "День 2" in second.text
+    assert any(command.endswith(":0") for _, command in _commands(second))
+    assert any(command.endswith(":2") for _, command in _commands(second))
 
 
 def test_progressive_disclosure_preserves_full_webinar_automation_power() -> None:
@@ -188,6 +258,10 @@ def test_native_hub_ignores_telegram_only_schedule_edit_without_fallback() -> No
         "cpm:event-content:33333333-3333-4333-8333-333333333333",
     ) in commands
     assert not any("Изменить расписание" in label for label, _ in commands)
+    assert (
+        "▶️ Провести вебинар · Вебинар",
+        "cpm:event-conduct:33333333-3333-4333-8333-333333333333",
+    ) in commands
 
 
 def test_vk_and_max_event_hub_render_identically_before_transport() -> None:
@@ -209,6 +283,50 @@ def test_vk_and_max_event_hub_render_identically_before_transport() -> None:
     ) in commands
     assert ("⚙️ Автосообщения", "cpm:event-settings") in commands
     assert (BACK_TO_GROWTH_LABEL, "cpm:growth") in commands
+
+
+def test_vk_and_max_conduct_webinar_uses_canonical_live_session_links() -> None:
+    actor = _actor()
+    live = SimpleNamespace(
+        title="Вебинар",
+        sessions=(
+            SimpleNamespace(
+                position=1,
+                local_start="15.09.2026 19:00",
+                provider_key="zoom",
+                provider_label="Zoom",
+                join_url="https://zoom.example/room",
+                join_ready=True,
+            ),
+            SimpleNamespace(
+                position=2,
+                local_start="16.09.2026 19:00",
+                provider_key="external",
+                provider_label="Webinar.ru",
+                join_url="https://webinar.example/room",
+                join_ready=True,
+            ),
+        ),
+    )
+    with patch.object(native_ui, "resolve_event_live_snapshot", return_value=live):
+        first = native_ui._event_conduct_message(
+            actor,
+            "33333333-3333-4333-8333-333333333333",
+        )
+        second = native_ui._event_conduct_message(
+            actor,
+            "33333333-3333-4333-8333-333333333333",
+            page=1,
+        )
+    assert "https://zoom.example/room" in first.text
+    assert "https://webinar.example/room" not in first.text
+    assert "День 1 · 15.09.2026 19:00 · Zoom" in first.text
+    assert any(command.endswith(":1") for _, command in _commands(first))
+
+    assert "https://webinar.example/room" in second.text
+    assert "День 2 · 16.09.2026 19:00 · Webinar.ru" in second.text
+    assert any(command.endswith(":0") for _, command in _commands(second))
+    assert (BACK_TO_EVENTS_LABEL, "cpm:events") in _commands(second)
 
 
 def test_event_settings_and_mutations_return_to_webinar_hub() -> None:

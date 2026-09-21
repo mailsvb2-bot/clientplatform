@@ -84,6 +84,7 @@ _STATE_ESCAPE_PREFIXES = (
     "cp:client:",
     "cp:cprograms:",
     "cp:cprog:",
+    "cp:progadd:",
     "cp:drafts:",
     "cp:dopen:",
     "cps:programs:",

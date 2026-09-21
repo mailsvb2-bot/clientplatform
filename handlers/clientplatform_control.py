@@ -1038,11 +1038,12 @@ async def book_client_slot(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("cp:progadd:"))
 async def start_program(callback: CallbackQuery, state: FSMContext) -> None:
-    business_id = _token_uuid(str(callback.data).split(":", 2)[2])
-    await state.set_state(ClientPlatformControlState.program_title)
-    await state.update_data(business_id=business_id)
-    await callback.answer()
-    await _callback_message(callback).answer("Напишите название программы.")
+    # Compatibility entry only. New journeys must use the single durable
+    # multi-lesson builder; legacy FSM handlers below remain solely so an
+    # in-flight pre-deploy conversation can finish without losing user input.
+    from handlers import clientplatform_program_builder as canonical_program_builder
+
+    await canonical_program_builder.begin_program(callback, state)
 
 
 @router.message(ClientPlatformControlState.program_title)

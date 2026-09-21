@@ -6,6 +6,7 @@ from decimal import Decimal
 import hashlib
 import json
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from clientplatform.application.activity import get_business_profile
 from clientplatform.application.cockpit import resolve_cockpit_context
@@ -28,6 +29,7 @@ from clientplatform.domain.events import validate_external_https_url
 from clientplatform.domain.money import settlement_currency_minor_unit_exponent
 from clientplatform.domain.tenancy import PlatformRole, TenantAccessDenied, TenantContext, TenantPermissionDenied
 from clientplatform.infrastructure.event_repository import EventRepository
+from clientplatform.infrastructure.event_session_repository import EventSessionRepository
 from config.settings import settings
 from services.db import get_db_ro
 from services.db.core import atomic_db
@@ -70,6 +72,30 @@ class CockpitEventItem:
     commercial_consents: int
     revenue: tuple[CockpitEventRevenue, ...]
     acquisition: tuple[CockpitEventAcquisition, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class CockpitEventLiveSession:
+    position: int
+    local_start: str
+    provider_key: str
+    provider_label: str | None
+    join_url: str | None
+    join_ready: bool
+
+
+@dataclass(frozen=True, slots=True)
+class CockpitEventLiveSnapshot:
+    schema_version: str
+    business_id: str
+    event_id: str
+    title: str
+    status: str
+    timezone_name: str
+    sessions: tuple[CockpitEventLiveSession, ...]
+
+    def as_dict(self) -> dict[str, object]:
+        return asdict(self)
 
 
 @dataclass(frozen=True, slots=True)
@@ -260,6 +286,53 @@ def resolve_cockpit_events(
         limit=limit,
     )
 
+
+def resolve_event_live_snapshot(
+    *,
+    actor: TenantContext,
+    event_id: str,
+) -> CockpitEventLiveSnapshot:
+    """Return the owner's exact room links for every scheduled webinar session."""
+
+    actor.assert_can_manage_business()
+    profile = get_business_profile(actor=actor)
+    with get_db_ro() as conn:
+        event = EventRepository(conn).get(actor=actor, event_id=event_id)
+        sessions = EventSessionRepository(conn).list_for_event_record(event=event)
+    return CockpitEventLiveSnapshot(
+        schema_version=_SCHEMA_VERSION,
+        business_id=actor.business_id,
+        event_id=event.id,
+        title=event.title,
+        status=event.status,
+        timezone_name=profile.timezone,
+        sessions=tuple(
+            CockpitEventLiveSession(
+                position=session.position,
+                local_start=session.starts_at.astimezone(ZoneInfo(profile.timezone)).strftime("%d.%m.%Y %H:%M"),
+                provider_key=session.provider_key,
+                provider_label=session.provider_label,
+                join_url=session.join_url,
+                join_ready=session.join_is_ready,
+            )
+            for session in sessions
+        ),
+    )
+
+
+def resolve_cockpit_event_live(
+    *,
+    telegram_user_id: int,
+    requested_business_id: str | None,
+    event_id: str,
+) -> CockpitEventLiveSnapshot:
+    actor, _ = _resolve_actor(
+        telegram_user_id=telegram_user_id,
+        requested_business_id=requested_business_id,
+    )
+    return resolve_event_live_snapshot(actor=actor, event_id=event_id)
+
+
 def _request_hash(*, request: OnlineEventCreateRequest) -> str:
     canonical = {
         "description": request.description,
@@ -377,10 +450,14 @@ def cancel_cockpit_event(
 __all__ = [
     "CockpitEventAcquisition",
     "CockpitEventItem",
+    "CockpitEventLiveSession",
+    "CockpitEventLiveSnapshot",
     "CockpitEventRevenue",
     "CockpitEventsSnapshot",
     "cancel_cockpit_event",
     "create_cockpit_event",
+    "resolve_cockpit_event_live",
     "resolve_cockpit_events",
+    "resolve_event_live_snapshot",
     "resolve_events_snapshot",
 ]

@@ -42,7 +42,7 @@ from clientplatform.application.admin_ops import (
 )
 from clientplatform.application.bookings import create_booking_slot, list_booking_slots
 from clientplatform.application.cockpit import cockpit_navigation
-from clientplatform.application.cockpit_events import resolve_events_snapshot
+from clientplatform.application.cockpit_events import resolve_event_live_snapshot, resolve_events_snapshot
 from clientplatform.application.event_announcements import draft_event_announcement_template
 from clientplatform.application.event_content_plans import get_event_content_plan
 from clientplatform.application.event_followups import (
@@ -784,6 +784,7 @@ def parse_native_member_interaction(value: object) -> ParsedMemberInteraction:
             "event-wizard",
             "event-create-text",
             "event-announce",
+            "event-conduct",
             "event-join",
             "event-join-text",
             "work-more",
@@ -1287,6 +1288,7 @@ _NATIVE_PARENT_COMMANDS: dict[str, str] = {
     "event-warmup-days-text": "cpm:events",
     "event-create-text": "cpm:events",
     "event-announce": "cpm:events",
+    "event-conduct": "cpm:events",
     "event-join": "cpm:events",
     "event-join-text": "cpm:events",
     "acquire": "cpm:growth",
@@ -1472,7 +1474,7 @@ def _with_parent_navigation(
         "event-wizard-count-text", "event-wizard-topics-text",
         "event-wizard-timezone-text", "event-wizard-window-text", "event-wizard-room-text",
         "event-wizard-warmup-text", "event-we-text",
-        "event-warmup-days-text", "event-create-text", "event-announce", "event-join", "event-join-text",
+        "event-warmup-days-text", "event-create-text", "event-announce", "event-conduct", "event-join", "event-join-text",
     } or (
         parsed.action in {"owner-input-invalid", "owner-input-cancelled"}
         and parsed.args
@@ -2171,6 +2173,8 @@ def _event_action_command(action: EventHubAction) -> str:
         return "cpm:event-new"
     if action.kind == "join" and action.key is not None:
         return f"cpm:event-join:{action.key}"
+    if action.kind == "conduct" and action.key is not None:
+        return f"cpm:event-conduct:{action.key}"
     if action.kind == "content" and action.key is not None:
         return f"cpm:event-content:{action.key}"
     if action.kind == "announce" and action.key is not None:
@@ -2228,6 +2232,58 @@ def _events_message(actor: TenantContext) -> CustomerInteractionMessage:
             extra={"business_id": actor.business_id, "member_user_id": actor.user_id},
         )
         return _event_projection_fallback(actor)
+
+
+def _event_conduct_message(
+    actor: TenantContext,
+    event_id: str,
+    *,
+    page: int = 0,
+) -> CustomerInteractionMessage:
+    live = resolve_event_live_snapshot(actor=actor, event_id=event_id)
+    ready = tuple(
+        session
+        for session in live.sessions
+        if session.join_ready and session.join_url
+    )
+    if not ready:
+        return CustomerInteractionMessage(
+            text=(
+                f"▶️ {live.title}\n\n"
+                "Ссылка на эфир пока не добавлена. Сначала откройте вебинар и добавьте площадку."
+            ),
+            rows=((_button(BACK_TO_EVENTS_LABEL, "cpm:events"),), _back_row()),
+        )
+    if isinstance(page, bool) or not isinstance(page, int) or page < 0 or page >= len(ready):
+        return _stale_message()
+
+    session = ready[page]
+    provider = str(session.provider_label or session.provider_key or "площадка")
+    lines = [
+        f"▶️ {live.title}",
+        "",
+        f"День {session.position} · {session.local_start} · {provider}",
+        str(session.join_url),
+        "",
+        "Откройте ссылку выше — это сохранённая комната вебинара.",
+    ]
+    rows: list[tuple[CustomerInteractionButton, ...]] = []
+    page_row: list[CustomerInteractionButton] = []
+    if page > 0:
+        page_row.append(
+            _button("⬅️ Предыдущий день", f"cpm:event-conduct:{event_id}:{page - 1}")
+        )
+    if page + 1 < len(ready):
+        page_row.append(
+            _button("Следующий день ➡️", f"cpm:event-conduct:{event_id}:{page + 1}")
+        )
+    if page_row:
+        rows.append(tuple(page_row))
+    rows.extend(((_button(BACK_TO_EVENTS_LABEL, "cpm:events"),), _back_row()))
+    return CustomerInteractionMessage(
+        text="\n".join(lines),
+        rows=tuple(rows),
+    )
 
 
 def _event_content_message(
@@ -5555,6 +5611,16 @@ def _render(
             return _growth_lifecycle_message(actor)
         if parsed.action == "events":
             return _events_message(actor)
+        if parsed.action == "event-conduct":
+            if len(parsed.args) not in {1, 2}:
+                return _stale_message()
+            page = 0
+            if len(parsed.args) == 2:
+                try:
+                    page = int(parsed.args[1])
+                except (TypeError, ValueError):
+                    return _stale_message()
+            return _event_conduct_message(actor, parsed.args[0], page=page)
         if parsed.action == "event-settings":
             return _event_settings_message(actor)
         if parsed.action == "event-content":
