@@ -869,9 +869,11 @@ def _settings_rows(token: str, actor) -> tuple[list[list[tuple[str, str]]], list
     if actor.role in _SETTINGS_MESSENGER_ROLES:
         rows.append([(nav.MESSENGERS.label, f"cpa:{token}:messengers")])
         help_lines.append(f"• подключить или проверить Telegram, ВКонтакте или MAX → «{nav.MESSENGERS.label}»")
-    rows.append([("🧩 Бизнес и возможности", f"cps:advanced:{token}")])
-    help_lines.append("• посмотреть услуги и возможности бизнеса → «🧩 Бизнес и возможности»")
+    rows.append([("🧩 Организация и возможности", f"cps:advanced:{token}")])
+    help_lines.append("• посмотреть форматы работы и возможности организации → «🧩 Организация и возможности»")
     if actor.role in _SETTINGS_SYSTEM_ROLES:
+        rows.append([(nav.DIRECTIONS.label, f"cp:dirs:{token}")])
+        help_lines.append(f"• {nav.DIRECTIONS.need} → «{nav.DIRECTIONS.label}»")
         rows.append([(nav.ACTIVITY.label, f"cp:editact:{token}")])
         help_lines.append(f"• {nav.ACTIVITY.need} → «{nav.ACTIVITY.label}»")
     if actor.role == PlatformRole.OWNER:
@@ -890,7 +892,7 @@ async def _send_settings_tools(message: ClientPlatformMessageTarget, *, token: s
     rows, help_lines = _settings_rows(token, actor)
     body = "\n".join(help_lines) or "Для Вашей роли здесь сейчас нет доступных настроек."
     await message.answer(
-        "⚙️ Настройки бизнеса\n\nЕсли Вам нужно:\n" + body,
+        "⚙️ Настройки организации\n\nЕсли Вам нужно:\n" + body,
         reply_markup=control._keyboard(rows),
     )
 
