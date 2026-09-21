@@ -512,8 +512,13 @@ async def test_custom_finish_and_edit_activity(monkeypatch: pytest.MonkeyPatch) 
     business_id = str(uuid4())
     token = handlers._uuid_token(business_id)
 
+    actor = SimpleNamespace(
+        role=PlatformRole.OWNER,
+        assert_can_manage_business=lambda: None,
+    )
+
     async def fake_actor(_uid: int, _bid: str) -> object:
-        return object()
+        return actor
 
     monkeypatch.setattr(handlers, "_actor", fake_actor)
     enabled: list[dict[str, Any]] = []
@@ -558,7 +563,70 @@ async def test_custom_finish_and_edit_activity(monkeypatch: pytest.MonkeyPatch) 
     await handlers.edit_activity(edit, edit_state)
     assert edit_state.states[-1] == handlers.ClientPlatformControlState.activity_description
     assert edit_state.data == {"business_id": business_id, "editing_activity": True}
-    assert "новое описание" in edit.message.answers[-1][0]
+    assert "новое направление" in edit.message.answers[-1][0]
+
+
+@pytest.mark.asyncio
+async def test_business_retirement_is_owner_only_and_returns_to_active_businesses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    business_id = str(uuid4())
+    other_business_id = str(uuid4())
+    token = handlers._uuid_token(business_id)
+    owner = SimpleNamespace(role=PlatformRole.OWNER)
+    administrator = SimpleNamespace(role=PlatformRole.ADMINISTRATOR)
+
+    async def owner_actor(_uid: int, _bid: str) -> object:
+        return owner
+
+    monkeypatch.setattr(handlers, "_actor", owner_actor)
+    monkeypatch.setattr(
+        handlers,
+        "list_accessible_businesses",
+        lambda **_kwargs: [business_access(business_id, "Тестовый сантехник")],
+    )
+    confirm = FakeCallback(f"cp:retire:{token}")
+    confirm_state = FakeState({"dirty": True})
+    await handlers.confirm_business_retirement(confirm, confirm_state)
+    assert confirm_state.clear_count == 1
+    assert "Тестовый сантехник" in confirm.message.answers[-1][0]
+    confirm_buttons = [
+        button.text
+        for row in confirm.message.answers[-1][1]["reply_markup"].inline_keyboard
+        for button in row
+    ]
+    assert confirm_buttons == ["✅ Да, удалить бизнес", "Отмена"]
+
+    archived = SimpleNamespace(name="Тестовый сантехник")
+    archive_calls: list[object] = []
+    monkeypatch.setattr(
+        handlers,
+        "archive_business",
+        lambda **kwargs: archive_calls.append(kwargs["actor"]) or archived,
+    )
+    monkeypatch.setattr(
+        handlers,
+        "list_accessible_businesses",
+        lambda **_kwargs: [business_access(other_business_id, "Основной бизнес")],
+    )
+    retired = FakeCallback(f"cp:retireok:{token}")
+    await handlers.retire_business(retired, FakeState())
+    assert archive_calls == [owner]
+    assert "удалён из активной работы" in retired.message.answers[-1][0]
+    assert "Основной бизнес" in [
+        button.text
+        for row in retired.message.answers[-1][1]["reply_markup"].inline_keyboard
+        for button in row
+    ]
+
+    async def admin_actor(_uid: int, _bid: str) -> object:
+        return administrator
+
+    monkeypatch.setattr(handlers, "_actor", admin_actor)
+    denied = FakeCallback(f"cp:retire:{token}")
+    await handlers.confirm_business_retirement(denied, FakeState())
+    assert denied.answers[-1][1]["show_alert"] is True
+    assert "только владелец" in denied.answers[-1][0][0]
 
 
 @pytest.mark.asyncio
