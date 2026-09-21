@@ -511,9 +511,11 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
             await labels_for(one_click.open_settings_tools, "cpo:settings:business-1"),
             [
                 "💬 Подключить мессенджеры",
+                "✏️ Изменить направление",
                 "🧩 Бизнес и возможности",
                 "👤 Сотрудники и доступы",
                 "🛠 Технические проверки",
+                "🗑 Удалить бизнес",
                 "⬅️ Назад",
             ],
         )
@@ -579,6 +581,7 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
             labels(PlatformRole.ADMINISTRATOR),
             [
                 "💬 Подключить мессенджеры",
+                "✏️ Изменить направление",
                 "🧩 Бизнес и возможности",
                 "🛠 Технические проверки",
                 "⬅️ Назад",
