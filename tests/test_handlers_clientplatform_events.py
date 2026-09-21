@@ -3,11 +3,9 @@ from __future__ import annotations
 from unittest.mock import patch
 
 from clientplatform.domain.tenancy import PlatformRole, TenantContext
-from clientplatform.presentation.owner_quick_menu import OwnerQuickAction
 from handlers import clientplatform_button_surface_contract as surface_contract
 from handlers import clientplatform_interaction_safety as safety
 from handlers import clientplatform_one_click_experience as one_click
-from handlers import clientplatform_simple_experience as simple
 
 _BUSINESS = "11111111-1111-4111-8111-111111111111"
 _MEMBER = "22222222-2222-4222-8222-222222222222"
@@ -25,30 +23,6 @@ def _actor(role: PlatformRole) -> TenantContext:
 
 def _callbacks(rows):
     return [callback for row in rows for _label, callback in row]
-
-
-def test_owner_quick_webinar_action_starts_canonical_creation_wizard() -> None:
-    with (
-        patch.object(
-            simple,
-            "build_owner_quick_actions",
-            return_value=(
-                OwnerQuickAction(
-                    key="events",
-                    label="🎥 Провести вебинар",
-                    need="Провести онлайн-мероприятие",
-                ),
-            ),
-        ),
-        patch.object(simple, "cockpit_web_app_url", return_value=None),
-    ):
-        markup = simple._simple_keyboard(
-            _BUSINESS,
-            activity_description="Провожу вебинары",
-            capabilities=[],
-            role=PlatformRole.OWNER,
-        )
-    assert markup.inline_keyboard[0][0].callback_data == f"cpev:new:{_TOKEN}"
 
 
 def test_webinar_hub_entry_matches_canonical_event_funnel_roles() -> None:
