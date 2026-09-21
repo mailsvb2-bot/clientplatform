@@ -63,6 +63,38 @@ def test_vk_and_max_render_the_same_direction_workspace() -> None:
     assert "cpm:activity-edit-help" in _commands(vk)
 
 
+def test_cross_channel_direction_read_refreshes_from_one_canonical_state() -> None:
+    actor = _actor()
+    before = _direction()
+    after = SimpleNamespace(**{**vars(before), "title": "B2B после изменения"})
+
+    with (
+        patch.object(ui, "resolve_tenant_context", return_value=actor),
+        patch.object(
+            ui,
+            "list_activity_directions",
+            side_effect=[[before], [after]],
+        ) as read_directions,
+    ):
+        telegram_equivalent_read = ui.render_native_member_interaction(
+            actor=actor,
+            raw_text="cpm:directions:0",
+            interaction_key="first-channel",
+            current_platform=ConnectionPlatform.VK,
+        )
+        other_channel_read = ui.render_native_member_interaction(
+            actor=actor,
+            raw_text="cpm:directions:0",
+            interaction_key="second-channel",
+            current_platform=ConnectionPlatform.MAX,
+        )
+
+    assert before.title in telegram_equivalent_read.text
+    assert after.title in other_channel_read.text
+    assert before.title not in other_channel_read.text
+    assert read_directions.call_count == 2
+
+
 def test_native_direction_crud_delegates_to_canonical_application_operations() -> None:
     actor = _actor()
     direction = _direction()
