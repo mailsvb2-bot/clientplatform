@@ -61,6 +61,7 @@ from clientplatform.application.cockpit_sales_management import (
     unassign_cockpit_sales_lead,
 )
 from clientplatform.application.cockpit_settings import (
+    archive_cockpit_business,
     resolve_cockpit_settings,
     update_cockpit_settings,
 )
@@ -233,6 +234,12 @@ _HTML = """<!doctype html>
 <label for="settings-timezone">Часовой пояс</label><select id="settings-timezone" required></select><p id="settings-timezone-help" class="field-help">Выберите город — техническое название часового пояса ClientPlatform сохранит сам.</p>
 <button id="settings-save" class="primary-cta" type="submit">Сохранить настройки</button>
 </form><p id="settings-message" class="muted"></p>
+<details id="settings-danger" class="disclosure settings-danger" hidden>
+<summary>Удалить бизнес</summary>
+<p class="muted">Используйте это для тестового или больше не нужного бизнеса. Он исчезнет из активного списка. История оплат, результатов и служебный аудит сохранятся.</p>
+<button id="settings-archive" class="secondary settings-danger-action" type="button">Удалить бизнес</button>
+<p id="settings-archive-message" class="muted"></p>
+</details>
 </section>
 <section id="explanation" class="explanation" hidden><button id="close-explanation" class="secondary" type="button">Ко всем возможностям</button><h2 id="explanation-title"></h2><p id="explanation-summary"></p><p id="explanation-when"></p><p id="explanation-reason"></p></section>
 </main>
@@ -1468,6 +1475,42 @@ async def cockpit_settings_update(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, **snapshot.as_dict()}, headers=_base_headers())
 
 
+async def cockpit_settings_archive(request: web.Request) -> web.Response:
+    scope = await _verified_payload_scope(request)
+    if isinstance(scope, web.Response):
+        return scope
+    user_id, requested_business, payload = scope
+    confirmation_business_id = payload.get("confirmation_business_id")
+    if not isinstance(confirmation_business_id, str):
+        return _error(400, "invalid_settings_archive_request")
+    try:
+        business = await asyncio.to_thread(
+            archive_cockpit_business,
+            telegram_user_id=user_id,
+            requested_business_id=requested_business,
+            confirmation_business_id=confirmation_business_id,
+        )
+    except TenantAccessDenied:
+        return _error(403, "business_access_denied")
+    except TenantPermissionDenied:
+        return _error(403, "settings_archive_denied")
+    except ValueError:
+        return _error(400, "invalid_settings_archive_request")
+    except OSError:
+        return _error(503, "settings_unavailable")
+    except RuntimeError:
+        return _error(503, "settings_unavailable")
+    return web.json_response(
+        {
+            "ok": True,
+            "archived": True,
+            "business_id": business.id,
+            "business_name": business.name,
+        },
+        headers=_base_headers(),
+    )
+
+
 async def cockpit_services(request: web.Request) -> web.Response:
     scope = await _verified_scope(request)
     if isinstance(scope, web.Response):
@@ -2111,6 +2154,7 @@ def register_cockpit_routes(
     app.router.add_post(f"{_COCKPIT_PREFIX}/connections/setup", cockpit_connection_setup)
     app.router.add_post(f"{_COCKPIT_PREFIX}/settings", cockpit_settings)
     app.router.add_post(f"{_COCKPIT_PREFIX}/settings/update", cockpit_settings_update)
+    app.router.add_post(f"{_COCKPIT_PREFIX}/settings/archive", cockpit_settings_archive)
     app.router.add_post(f"{_COCKPIT_PREFIX}/automation", cockpit_automation)
     app.router.add_post(f"{_COCKPIT_PREFIX}/automation/autopilot", cockpit_automation_autopilot)
     app.router.add_post(f"{_COCKPIT_PREFIX}/automation/decision", cockpit_automation_decision)
@@ -2172,6 +2216,7 @@ __all__ = [
     "cockpit_sales_reopen",
     "cockpit_sales_stage",
     "cockpit_settings",
+    "cockpit_settings_archive",
     "cockpit_settings_script",
     "cockpit_settings_update",
     "cockpit_customer_action_open",
