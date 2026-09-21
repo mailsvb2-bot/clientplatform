@@ -232,7 +232,7 @@ async def open_activity_direction(callback: CallbackQuery, state: FSMContext) ->
         f"🧭 {direction.title}\n\n"
         f"{direction.description}\n\n"
         "Связано с направлением:\n"
-        f"• материалов и программ: {counts['program']}\n"
+        f"• материалов: {counts['program']}\n"
         f"• услуг и предложений: {counts['offering']}\n"
         f"• событий: {counts['event']}\n\n"
         "Направление — это часть организации, а не отдельная организация.",
