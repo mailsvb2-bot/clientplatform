@@ -279,6 +279,42 @@ class ActivityDirectionRepositoryTests(unittest.TestCase):
                 subject_id=foreign_program.id,
             )
 
+    def test_list_binds_archive_filter_as_real_boolean(self) -> None:
+        class BoolGuardConnection:
+            def __init__(self, inner):
+                self.inner = inner
+
+            def execute(self, sql, params=()):
+                if "(? OR status='active')" in sql:
+                    self_outer.assertIs(type(params[1]), bool)
+                return self.inner.execute(sql, params)
+
+        self_outer = self
+        original = self.repo._conn
+        self.repo._conn = BoolGuardConnection(self.conn)
+        try:
+            self.repo.list(actor=self.owner_a, include_archived=False)
+            self.repo.list(actor=self.owner_a, include_archived=True)
+        finally:
+            self.repo._conn = original
+
+    def test_update_advances_revision_even_when_supplied_time_matches_previous_revision(self) -> None:
+        timestamp = "2026-09-21T12:01:00+00:00"
+        direction = self.repo.create(
+            actor=self.owner_a,
+            title="Конкурентное направление",
+            description="Исходное описание.",
+            now=timestamp,
+        )
+        updated = self.repo.update(
+            actor=self.owner_a,
+            direction_id=direction.id,
+            title=direction.title,
+            description="Новое описание.",
+            now=timestamp,
+        )
+        self.assertNotEqual(updated.updated_at, direction.updated_at)
+
     def test_archived_direction_rejects_new_binding(self) -> None:
         direction = self.repo.create(
             actor=self.owner_a,
