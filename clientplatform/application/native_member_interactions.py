@@ -5520,16 +5520,8 @@ def _offering_new_help(actor: TenantContext) -> CustomerInteractionMessage:
     )
 
 
-def _offering_new_for_message(
-    actor: TenantContext,
-    connector_key: str,
-    *,
-    current_platform: ConnectionPlatform,
-    input_surface: str = "official",
-) -> CustomerInteractionMessage:
-    if actor.role not in _PROGRAM_MANAGEMENT_ROLES:
-        return _permission_message()
-    capability = next(
+def _offering_capability(actor: TenantContext, connector_key: str):
+    return next(
         (
             item
             for item in list_business_capabilities(actor=actor)
@@ -5539,20 +5531,116 @@ def _offering_new_for_message(
         ),
         None,
     )
+
+
+def _offering_direction_message(
+    actor: TenantContext,
+    connector_key: str,
+    page: int = 0,
+) -> CustomerInteractionMessage:
+    if actor.role not in _PROGRAM_MANAGEMENT_ROLES:
+        return _permission_message()
+    capability = _offering_capability(actor, connector_key)
     if capability is None:
         return _stale_message()
+    directions = list_activity_directions(actor=actor)
+    if not directions:
+        return _stale_message()
+    page = max(0, int(page))
+    start = page * _DIRECTION_PAGE_SIZE
+    if start >= len(directions) and page:
+        return _stale_message()
+    shown = directions[start : start + _DIRECTION_PAGE_SIZE]
+    rows: list[tuple[CustomerInteractionButton, ...]] = [
+        (
+            _button(
+                f"🧭 {item.title[:34]}",
+                f"cpm:offering-new-dir:{connector_key}:{item.id}",
+            ),
+        )
+        for item in shown
+    ]
+    rows.append(
+        (_button("Без направления", f"cpm:offering-new-dir:{connector_key}:none"),)
+    )
+    pagination: list[CustomerInteractionButton] = []
+    if page:
+        pagination.append(
+            _button("⬅️ Назад", f"cpm:offering-new-dirs:{connector_key}:{page - 1}")
+        )
+    if start + _DIRECTION_PAGE_SIZE < len(directions):
+        pagination.append(
+            _button("Вперёд ➡️", f"cpm:offering-new-dirs:{connector_key}:{page + 1}")
+        )
+    if pagination:
+        rows.append(tuple(pagination))
+    rows.append((_button("🧪 К предложениям", "cpm:offers"),))
+    rows.append(_back_row())
+    return CustomerInteractionMessage(
+        text=(
+            f"🧰 Новая услуга · {capability.title}\n\n"
+            "К какому направлению деятельности относится эта услуга? "
+            "Выберите направление или «Без направления»."
+        ),
+        rows=tuple(rows),
+    )
+
+
+def _offering_input_message(
+    actor: TenantContext,
+    connector_key: str,
+    *,
+    current_platform: ConnectionPlatform,
+    input_surface: str,
+    direction_id: str | None,
+) -> CustomerInteractionMessage:
+    if actor.role not in _PROGRAM_MANAGEMENT_ROLES:
+        return _permission_message()
+    capability = _offering_capability(actor, connector_key)
+    if capability is None:
+        return _stale_message()
+    context: dict[str, object] = {"connector_key": connector_key}
+    if direction_id:
+        direction = get_activity_direction(actor=actor, direction_id=direction_id)
+        if direction.status != ActivityDirectionStatus.ACTIVE:
+            return _stale_message()
+        context["direction_id"] = direction.id
     return _begin_owner_input_message(
         actor,
         platform=current_platform,
         surface=input_surface,
         action="offering",
-        context={"connector_key": connector_key},
+        context=context,
         text=(
             f"🧰 Новая услуга · {capability.title}\n\n"
             "Напишите одним сообщением:\nНазвание | Короткое описание\n\n"
             "Например: Диагностика | Проверка автомобиля перед покупкой."
         ),
         rows=((_button(nav.OFFERS.label, "cpm:offers"),), _back_row()),
+    )
+
+
+def _offering_new_for_message(
+    actor: TenantContext,
+    connector_key: str,
+    *,
+    current_platform: ConnectionPlatform,
+    input_surface: str = "official",
+) -> CustomerInteractionMessage:
+    if actor.role not in _PROGRAM_MANAGEMENT_ROLES:
+        return _permission_message()
+    capability = _offering_capability(actor, connector_key)
+    if capability is None:
+        return _stale_message()
+    directions = list_activity_directions(actor=actor)
+    if directions:
+        return _offering_direction_message(actor, connector_key, 0)
+    return _offering_input_message(
+        actor,
+        connector_key,
+        current_platform=current_platform,
+        input_surface=input_surface,
+        direction_id=None,
     )
 
 
@@ -5563,17 +5651,11 @@ def _offering_new_result(
     description: str,
     *,
     interaction_key: str,
+    direction_id: str | None = None,
 ) -> CustomerInteractionMessage:
     if actor.role not in _PROGRAM_MANAGEMENT_ROLES:
         return _permission_message()
-    capability = next(
-        (
-            item
-            for item in list_business_capabilities(actor=actor)
-            if item.status == CapabilityStatus.ACTIVE and item.connector_key == connector_key
-        ),
-        None,
-    )
+    capability = _offering_capability(actor, connector_key)
     if capability is None:
         return _stale_message()
     offering = create_business_offering(
@@ -5582,11 +5664,13 @@ def _offering_new_result(
         title=title,
         description=description,
         idempotency_key=f"{interaction_key}:offering-create",
+        direction_id=direction_id,
     )
     return CustomerInteractionMessage(
         text=f"✅ Предложение «{offering.title}» создано.",
         rows=((_button("🧪 Предложения", "cpm:offers"),), _back_row()),
     )
+
 
 _RETIRE_PAGE_SIZE = 6
 
