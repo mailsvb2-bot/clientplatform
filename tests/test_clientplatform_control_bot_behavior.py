@@ -567,6 +567,32 @@ async def test_custom_finish_and_edit_activity(monkeypatch: pytest.MonkeyPatch) 
 
 
 @pytest.mark.asyncio
+async def test_edit_activity_forged_callback_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    business_id = str(uuid4())
+    token = handlers._uuid_token(business_id)
+
+    class ReadOnlyActor:
+        role = PlatformRole.MARKETER
+
+        def assert_can_manage_business(self) -> None:
+            raise handlers.TenantPermissionDenied("denied")
+
+    async def fake_actor(_uid: int, _bid: str) -> object:
+        return ReadOnlyActor()
+
+    monkeypatch.setattr(handlers, "_actor", fake_actor)
+    state = FakeState()
+    callback = FakeCallback(f"cp:editact:{token}")
+    await handlers.edit_activity(callback, state)
+    assert state.states == []
+    assert state.data == {}
+    assert callback.answers[-1][1]["show_alert"] is True
+    assert "владелец или администратор" in callback.answers[-1][0][0]
+
+
+@pytest.mark.asyncio
 async def test_business_retirement_is_owner_only_and_returns_to_active_businesses(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
