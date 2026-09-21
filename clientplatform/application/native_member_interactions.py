@@ -1167,7 +1167,7 @@ def _personalized_menu_message(actor: TenantContext) -> CustomerInteractionMessa
     commands = {
         "customers": "cpm:customers",
         "booking": "cpm:bookings",
-        "events": "cpm:event-new",
+        "events": "cpm:events",
         "programs": "cpm:programs",
         "acquire": "cpm:acquire",
         "sales": "cpm:sales",
