@@ -103,6 +103,58 @@ class CockpitConnectionsSettingsM7005Tests(unittest.TestCase):
         self.assertEqual(snapshot.business_name, "Практика")
         self.assertEqual(snapshot.activity_description, "Психологическая практика")
         self.assertEqual(snapshot.timezone_name, "Europe/Moscow")
+        self.assertTrue(snapshot.can_archive_business)
+
+        administrator = _actor(PlatformRole.ADMINISTRATOR)
+        with (
+            patch.object(cockpit_settings, "resolve_tenant_context", return_value=administrator),
+            patch.object(
+                cockpit_settings,
+                "get_business_profile",
+                return_value=SimpleNamespace(activity_description="Практика", timezone="Europe/Moscow"),
+            ),
+        ):
+            admin_snapshot = cockpit_settings.build_cockpit_settings(
+                actor=administrator,
+                business_name="Практика",
+            )
+        self.assertFalse(admin_snapshot.can_archive_business)
+
+    def test_business_archive_requires_owner_and_exact_current_business(self) -> None:
+        owner = _actor()
+        archived = SimpleNamespace(id=_BUSINESS, name="Тестовый сантехник")
+        with (
+            patch.object(cockpit_settings, "_resolve_actor", return_value=(owner, "Тестовый сантехник")),
+            patch.object(cockpit_settings, "archive_business", return_value=archived) as archive,
+        ):
+            result = cockpit_settings.archive_cockpit_business(
+                telegram_user_id=101,
+                requested_business_id=_BUSINESS,
+                confirmation_business_id=_BUSINESS,
+            )
+        self.assertIs(result, archived)
+        archive.assert_called_once_with(actor=owner)
+
+        with patch.object(cockpit_settings, "_resolve_actor", return_value=(owner, "Тестовый сантехник")):
+            with self.assertRaisesRegex(ValueError, "does not match"):
+                cockpit_settings.archive_cockpit_business(
+                    telegram_user_id=101,
+                    requested_business_id=_BUSINESS,
+                    confirmation_business_id="22222222-2222-4222-8222-222222222222",
+                )
+
+        administrator = _actor(PlatformRole.ADMINISTRATOR)
+        with patch.object(
+            cockpit_settings,
+            "_resolve_actor",
+            return_value=(administrator, "Тестовый сантехник"),
+        ):
+            with self.assertRaises(TenantPermissionDenied):
+                cockpit_settings.archive_cockpit_business(
+                    telegram_user_id=101,
+                    requested_business_id=_BUSINESS,
+                    confirmation_business_id=_BUSINESS,
+                )
 
     def test_setup_issue_reuses_canonical_capability_and_single_use_owner(self) -> None:
         actor = _actor()
@@ -208,6 +260,7 @@ class CockpitConnectionsSettingsM7005Tests(unittest.TestCase):
         self.assertIn("'connections','settings'", transport)
         self.assertIn('/clientplatform/cockpit/connections', connections)
         self.assertIn('/clientplatform/cockpit/settings/update', settings)
+        self.assertIn('/clientplatform/cockpit/settings/archive', settings)
         self.assertIn('syncBusinessName', transport)
         self.assertIn("option.dataset.businessRole = String(business.role || '')", transport)
         self.assertIn("current.dataset.businessRole", transport)
