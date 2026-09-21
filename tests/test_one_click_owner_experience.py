@@ -647,7 +647,7 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
             for label, callback_data in row
         }
         self.assertEqual(
-            owner_buttons["✏️ Изменить направление"],
+            owner_buttons["✏️ Описание организации"],
             "cp:editact:business-1",
         )
         self.assertEqual(
@@ -661,7 +661,7 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
             tenant_actor(PlatformRole.ADMINISTRATOR),
         )
         admin_labels = [label for row in admin_rows for label, _ in row]
-        self.assertIn("✏️ Изменить направление", admin_labels)
+        self.assertIn("✏️ Описание организации", admin_labels)
         self.assertNotIn("🗑 Удалить организацию", admin_labels)
 
     async def test_more_menu_hides_advanced_actions_from_home(self) -> None:
