@@ -141,6 +141,7 @@ _HTML = """<!doctype html>
 <section id="home-view" class="workspace-view home-view" aria-live="polite" hidden>
 <div class="view-toolbar"><button id="home-back" class="secondary" type="button">Все возможности</button><button id="home-refresh" class="secondary" type="button">Обновить</button></div>
 <div class="home-heading"><p class="eyebrow">Главный экран</p><h2>Сегодня</h2><p id="home-meta"></p></div>
+<section id="home-shortcuts-block" class="home-block" hidden><p class="eyebrow">Быстрый старт</p><h3>Что хотите сделать?</h3><div id="home-shortcuts"></div></section>
 <section id="home-primary-block" class="home-block primary-block" hidden><p class="eyebrow">Главное действие</p><h3>Что сделать сейчас</h3><div id="home-primary-action"></div></section>
 <div id="home-metrics" class="metrics"></div><div id="home-money" class="money"></div>
 <section id="home-attention-block" class="home-block"><h3>Требует внимания</h3><div id="home-attention"></div></section>
@@ -286,6 +287,8 @@ _JS = r"""(() => {
   const homeBack = document.getElementById('home-back');
   const homeRefresh = document.getElementById('home-refresh');
   const homeMeta = document.getElementById('home-meta');
+  const homeShortcutsBlock = document.getElementById('home-shortcuts-block');
+  const homeShortcuts = document.getElementById('home-shortcuts');
   const homeMetrics = document.getElementById('home-metrics');
   const homeMoney = document.getElementById('home-money');
   const homePrimaryBlock = document.getElementById('home-primary-block');
@@ -353,8 +356,8 @@ _JS = r"""(() => {
     navigationShell.hidden = true; home.hidden = true; customers.hidden = true; calendar.hidden = true; sales.hidden = true; services.hidden = true; moneyView.hidden = true; growth.hidden = true; events.hidden = true; analytics.hidden = true; automation.hidden = true; connections.hidden = true; settingsView.hidden = true; explanation.hidden = true;
   };
   const resetHomeContent = () => {
-    homeMetrics.replaceChildren(); homeMoney.replaceChildren(); homePrimaryAction.replaceChildren(); homeAttention.replaceChildren(); homeActions.replaceChildren();
-    homePrimaryBlock.hidden = true; homeAttentionBlock.hidden = true; homeActionsBlock.hidden = true;
+    homeShortcuts.replaceChildren(); homeMetrics.replaceChildren(); homeMoney.replaceChildren(); homePrimaryAction.replaceChildren(); homeAttention.replaceChildren(); homeActions.replaceChildren();
+    homeShortcutsBlock.hidden = true; homePrimaryBlock.hidden = true; homeAttentionBlock.hidden = true; homeActionsBlock.hidden = true;
     text(homeMeta, ''); text(homeEmpty, ''); text(homeLimitations, '');
   };
   const beginBusinessContextChange = () => {
@@ -414,8 +417,23 @@ _JS = r"""(() => {
     button.append(label, detail); button.addEventListener('click', () => { if (target) showItem(target, button); }); container.appendChild(button);
   };
 
+  const renderHomeShortcuts = () => {
+    const preferredIds = ['customers','calendar','events','content','growth','analytics'];
+    const items = preferredIds.map((id) => navigationItems.find((entry) => entry.id === id)).filter((item) => item && item.status === 'available');
+    homeShortcuts.replaceChildren();
+    for (const item of items) {
+      const button = document.createElement('button'); button.type = 'button'; button.className = 'action-card';
+      const label = document.createElement('span'); const detail = document.createElement('small');
+      text(label, item.title);
+      text(detail, nativeSections.has(item.id) ? item.summary : `${item.summary} Продолжение откроется в чате с ClientPlatform.`);
+      button.append(label, detail); button.addEventListener('click', () => showItem(item, button)); homeShortcuts.appendChild(button);
+    }
+    homeShortcutsBlock.hidden = !items.length;
+  };
+
   const renderHome = (payload) => {
     lastHomePayload = payload;
+    renderHomeShortcuts();
     homeMetrics.replaceChildren(); homeMoney.replaceChildren(); homePrimaryAction.replaceChildren(); homeAttention.replaceChildren(); homeActions.replaceChildren();
     text(homeMeta, `${payload.business_name} · данные на сегодня`);
     const actions = payload.actions || [];
@@ -452,7 +470,7 @@ _JS = r"""(() => {
     if (isContextChangedError(error)) return;
     setHomeBusy(false);
     if (error && ['expired_init_data','business_access_denied','access_denied'].includes(error.message)) { fail(error); return; }
-    homeMetrics.replaceChildren(); homeMoney.replaceChildren(); homePrimaryAction.replaceChildren(); homeAttention.replaceChildren(); homeActions.replaceChildren(); homePrimaryBlock.hidden = true; homeAttentionBlock.hidden = true; homeActionsBlock.hidden = true;
+    homeShortcuts.replaceChildren(); homeMetrics.replaceChildren(); homeMoney.replaceChildren(); homePrimaryAction.replaceChildren(); homeAttention.replaceChildren(); homeActions.replaceChildren(); homeShortcutsBlock.hidden = true; homePrimaryBlock.hidden = true; homeAttentionBlock.hidden = true; homeActionsBlock.hidden = true;
     text(homeMeta, 'Не удалось обновить сводку'); text(homeEmpty, 'Сводка временно недоступна. Нажмите «Обновить» или откройте другой раздел.'); text(homeLimitations, 'Ваши данные и права доступа не менялись.'); showHomeView();
   };
   const closeAfterDelivery = () => {

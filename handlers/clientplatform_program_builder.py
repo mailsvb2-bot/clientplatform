@@ -302,7 +302,12 @@ async def begin_program(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     if not directions:
         await state.set_state(ClientPlatformProgramBuilderState.program_title)
-        await control._callback_message(callback).answer("Напишите название программы.")
+        await control._callback_message(callback).answer(
+            "Напишите название программы.",
+            reply_markup=control._keyboard(
+                [[("⬅️ К программам", f"cp:cap:{business_token}:programs")]]
+            ),
+        )
         return
     rows = [
         [
@@ -333,7 +338,12 @@ async def choose_program_direction(callback: CallbackQuery, state: FSMContext) -
     await state.update_data(business_id=business_id, direction_id=direction_id)
     await state.set_state(ClientPlatformProgramBuilderState.program_title)
     await callback.answer()
-    await control._callback_message(callback).answer("Напишите название программы.")
+    await control._callback_message(callback).answer(
+        "Напишите название программы.",
+        reply_markup=control._keyboard(
+            [[("⬅️ К программам", f"cp:cap:{business_token}:programs")]]
+        ),
+    )
 
 
 @router.callback_query(F.data.startswith("cp:progdirnone:"))
@@ -347,7 +357,12 @@ async def choose_program_without_direction(
     await state.update_data(business_id=business_id, direction_id=None)
     await state.set_state(ClientPlatformProgramBuilderState.program_title)
     await callback.answer()
-    await control._callback_message(callback).answer("Напишите название программы.")
+    await control._callback_message(callback).answer(
+        "Напишите название программы.",
+        reply_markup=control._keyboard(
+            [[("⬅️ К программам", f"cp:cap:{business_token}:programs")]]
+        ),
+    )
 
 
 @router.message(ClientPlatformProgramBuilderState.program_title)
@@ -378,13 +393,22 @@ async def capture_program_title(message: Message, state: FSMContext) -> None:
     await state.set_state(ClientPlatformProgramBuilderState.lesson_title)
     await message.answer(
         "Черновик создан и будет сохраняться автоматически. "
-        "Как называется первый урок?"
+        "Как называется первый урок?",
+        reply_markup=control._keyboard(
+            [[
+                (
+                    "Сохранить и продолжить позже",
+                    _program_callback("dopen", business_id, program.id),
+                )
+            ]]
+        ),
     )
 
 
 @router.message(ClientPlatformProgramBuilderState.lesson_title)
 async def capture_lesson_title(message: Message, state: FSMContext) -> None:
-    if _session_ids(await state.get_data()) is None:
+    session = _session_ids(await state.get_data())
+    if session is None:
         await state.clear()
         await message.answer("Конструктор был закрыт. Откройте раздел программ заново.")
         return
@@ -474,7 +498,17 @@ async def add_lesson(callback: CallbackQuery, state: FSMContext) -> None:
     await state.update_data(business_id=business_id, program_id=program_id)
     await state.set_state(ClientPlatformProgramBuilderState.lesson_title)
     await callback.answer()
-    await control._callback_message(callback).answer("Как называется следующий урок?")
+    await control._callback_message(callback).answer(
+        "Как называется следующий урок?",
+        reply_markup=control._keyboard(
+            [[
+                (
+                    "Сохранить и продолжить позже",
+                    _program_callback("dopen", business_id, program_id),
+                )
+            ]]
+        ),
+    )
 
 
 @router.callback_query(F.data.startswith("cp:dpub:"))

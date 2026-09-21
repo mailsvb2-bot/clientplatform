@@ -10,6 +10,7 @@ import pytest
 from clientplatform.domain.programs import ContentKind, ProgramStatus
 
 builder = importlib.import_module("handlers.clientplatform_program_builder")
+importlib.import_module("handlers.clientplatform_program_lesson_editor_composition")
 
 
 class FakeUser:
@@ -220,8 +221,21 @@ async def test_persistent_journey_resumes_after_fsm_restart(
     program_id = state.data["program_id"]
     assert store.records[program_id].program.status == ProgramStatus.DRAFT
     assert "сохраняться автоматически" in title.answers[-1][0]
+    save_after_title = [
+        (button.text, button.callback_data)
+        for row in title.answers[-1][1]["reply_markup"].inline_keyboard
+        for button in row
+    ]
+    assert save_after_title == [
+        (
+            "Сохранить и продолжить позже",
+            builder._program_callback("dopen", business_id, program_id),
+        )
+    ]
 
-    await builder.capture_lesson_title(FakeMessage(text="Введение"), state)
+    lesson_title = FakeMessage(text="Введение")
+    await builder.capture_lesson_title(lesson_title, state)
+    assert "reply_markup" not in lesson_title.answers[-1][1]
     first = FakeMessage(text="Первый текст")
     await builder.capture_lesson_content(first, state)
     assert [item.title for item in store.records[program_id].lessons] == ["Введение"]
@@ -244,10 +258,21 @@ async def test_persistent_journey_resumes_after_fsm_restart(
     assert restarted.data == {"business_id": business_id, "program_id": program_id}
     assert "Уроков сохранено: 1" in opened.message.answers[-1][0]
 
-    await builder.add_lesson(
-        FakeCallback(builder._program_callback("dadd", business_id, program_id)),
-        restarted,
+    add_next = FakeCallback(
+        builder._program_callback("dadd", business_id, program_id)
     )
+    await builder.add_lesson(add_next, restarted)
+    save_before_next_title = [
+        (button.text, button.callback_data)
+        for row in add_next.message.answers[-1][1]["reply_markup"].inline_keyboard
+        for button in row
+    ]
+    assert save_before_next_title == [
+        (
+            "Сохранить и продолжить позже",
+            builder._program_callback("dopen", business_id, program_id),
+        )
+    ]
     await builder.capture_lesson_title(FakeMessage(text="Практика"), restarted)
     second = FakeMessage(text=None)
     second.audio = SimpleNamespace(file_id="telegram-audio-id")

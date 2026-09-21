@@ -144,6 +144,8 @@ class CockpitPrimaryWorkspaceHttpM7004Tests(unittest.IsolatedAsyncioTestCase):
         try:
             shell_response = await client.get("/clientplatform/cockpit")
             shell = await shell_response.text()
+            app_response = await client.get("/clientplatform/cockpit/app.js")
+            app_script = await app_response.text()
             calendar_response = await client.get("/clientplatform/cockpit/calendar.js")
             calendar_script = await calendar_response.text()
             sales_response = await client.get("/clientplatform/cockpit/sales.js")
@@ -151,9 +153,14 @@ class CockpitPrimaryWorkspaceHttpM7004Tests(unittest.IsolatedAsyncioTestCase):
         finally:
             await client.close()
         self.assertEqual(shell_response.status, 200)
+        self.assertEqual(app_response.status, 200)
         self.assertEqual(calendar_response.status, 200)
         self.assertEqual(sales_response.status, 200)
         self.assertIn('id="primary-nav"', shell)
+        self.assertIn('id="home-shortcuts-block"', shell)
+        self.assertIn("Быстрый старт", shell)
+        self.assertIn("Что хотите сделать?", shell)
+        self.assertIn("const renderHomeShortcuts = () =>", app_script)
         self.assertIn("Что сделать сейчас", shell)
         self.assertIn("/clientplatform/cockpit/calendar", calendar_script)
         self.assertIn("/clientplatform/cockpit/sales", sales_script)
