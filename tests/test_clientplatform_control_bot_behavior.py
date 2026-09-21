@@ -648,7 +648,7 @@ async def test_business_archive_prompt_is_owner_only_stale_safe_and_explicit(
     stale = FakeCallback(f"cps:archive-prompt:{token}")
     await safety.confirm_business_archive(stale, FakeState())
     assert stale.answers[-1][1]["show_alert"] is True
-    assert "уже недоступен" in callback_answer_text(stale)
+    assert "Организация уже недоступна" in callback_answer_text(stale)
 
 
 @pytest.mark.asyncio
