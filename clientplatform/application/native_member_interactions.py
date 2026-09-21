@@ -3114,43 +3114,43 @@ def _experiment_apply_message(
 def _manage_message(actor: TenantContext) -> CustomerInteractionMessage:
     if actor.role not in _CONNECTION_ROLES:
         return _permission_message()
-    items = [nav.MESSENGERS, nav.READINESS, nav.FORMATS]
+    items = [nav.ACTIVITY, nav.MESSENGERS, nav.FORMATS]
     rows: list[tuple[CustomerInteractionButton, ...]] = [
+        (_button(nav.ACTIVITY.label, "cpm:activity-edit-help"),),
         (_button(nav.MESSENGERS.label, "cpm:messengers"),),
-        (_button(nav.READINESS.label, "cpm:release"),),
         (_button(nav.FORMATS.label, "cpm:formats"),),
-        (_button("✏️ Изменить направление", "cpm:activity-edit-help"),),
     ]
-    if actor.role in _OWNER_ROLES:
-        rows.append((_button(nav.TARIFF.label, "cpm:tariff"),))
-        items.append(nav.TARIFF)
+    if actor.role == PlatformRole.OWNER:
+        rows.append((_button(nav.DELETE_BUSINESS.label, "cpm:business-retire"),))
+        items.append(nav.DELETE_BUSINESS)
     rows.append((_button(nav.SETTINGS_MORE.label, "cpm:manage-more"),))
     items.append(nav.SETTINGS_MORE)
-    if actor.role == PlatformRole.OWNER:
-        rows.append((_button("🗑 Удалить бизнес", "cpm:business-retire"),))
     rows.append(_back_row())
     return CustomerInteractionMessage(
         text="⚙️ Настроить бизнес\n\n" + nav.choice_help(*items),
         rows=tuple(rows),
     )
 
+
 def _manage_more_message(actor: TenantContext) -> CustomerInteractionMessage:
     if actor.role not in _CONNECTION_ROLES:
         return _permission_message()
-    items = (nav.RECENT, nav.SYSTEM)
+    items = [nav.RECENT, nav.SYSTEM, nav.READINESS]
     rows: list[tuple[CustomerInteractionButton, ...]] = [
         (_button(nav.RECENT.label, "cpm:recent"),),
         (_button(nav.SYSTEM.label, "cpm:system"),),
+        (_button(nav.READINESS.label, "cpm:release"),),
     ]
-    text = "🛠 Состояние и история\n\nОбычно сюда заходить не нужно.\n\n" + nav.choice_help(*items)
-    if actor.role == PlatformRole.OWNER:
-        text += (
-            "\n\nЕсли Вам нужно удалить этот бизнес из активной работы → "
-            "«🗑 Удалить бизнес». История оплат и аудита при этом сохраняется."
-        )
-        rows.append((_button("🗑 Удалить бизнес", "cpm:business-retire"),))
+    if actor.role in _OWNER_ROLES:
+        rows.append((_button(nav.TARIFF.label, "cpm:tariff"),))
+        items.append(nav.TARIFF)
     rows.extend(((_button(nav.SETTINGS.label, "cpm:manage"),), _back_row()))
-    return CustomerInteractionMessage(text=text, rows=tuple(rows))
+    return CustomerInteractionMessage(
+        text="🛠 Состояние и история\n\nОбычно сюда заходить не нужно.\n\n"
+        + nav.choice_help(*items),
+        rows=tuple(rows),
+    )
+
 
 def _team_message(actor: TenantContext) -> CustomerInteractionMessage:
     if actor.role not in _OWNER_ROLES:
