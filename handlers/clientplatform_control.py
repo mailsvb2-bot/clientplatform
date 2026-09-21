@@ -79,7 +79,7 @@ from clientplatform.domain.booking_calendar import (
 )
 from clientplatform.domain.bookings import BookingError, BookingSlotStatus, BookingSlotView
 from clientplatform.domain.programs import ContentKind, ProgramError
-from clientplatform.domain.tenancy import TenancyError
+from clientplatform.domain.tenancy import PlatformRole, TenantPermissionDenied, TenancyError
 from clientplatform.runtime.cockpit_links import cockpit_web_app_url
 from clientplatform.runtime.control_bot import control_bot_enabled
 from config.settings import settings
@@ -674,6 +674,15 @@ async def finish_profile(callback: CallbackQuery, state: FSMContext) -> None:
 @router.callback_query(F.data.startswith("cp:editact:"))
 async def edit_activity(callback: CallbackQuery, state: FSMContext) -> None:
     business_id = _token_uuid(str(callback.data).split(":", 2)[2])
+    actor = await _actor(_callback_actor_user_id(callback), business_id)
+    try:
+        actor.assert_can_manage_business()
+    except TenantPermissionDenied:
+        await callback.answer(
+            "Изменить направление может владелец или администратор.",
+            show_alert=True,
+        )
+        return
     await state.set_state(ClientPlatformControlState.activity_description)
     await state.update_data(business_id=business_id, editing_activity=True)
     await callback.answer()
@@ -689,7 +698,7 @@ async def confirm_business_retirement(callback: CallbackQuery, state: FSMContext
     business_id = _token_uuid(str(callback.data).split(":", 2)[2])
     user_id = _callback_actor_user_id(callback)
     actor = await _actor(user_id, business_id)
-    if actor.role.value != "owner":
+    if actor.role != PlatformRole.OWNER:
         await callback.answer("Удалить бизнес может только владелец.", show_alert=True)
         return
     accesses = await asyncio.to_thread(list_accessible_businesses, user_id=user_id)
@@ -719,7 +728,7 @@ async def retire_business(callback: CallbackQuery, state: FSMContext) -> None:
     business_id = _token_uuid(str(callback.data).split(":", 2)[2])
     user_id = _callback_actor_user_id(callback)
     actor = await _actor(user_id, business_id)
-    if actor.role.value != "owner":
+    if actor.role != PlatformRole.OWNER:
         await callback.answer("Удалить бизнес может только владелец.", show_alert=True)
         return
     business = await asyncio.to_thread(archive_business, actor=actor)
