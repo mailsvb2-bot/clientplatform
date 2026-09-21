@@ -471,6 +471,36 @@ class NativeFullParityMutationTests(unittest.TestCase):
         revoke.assert_called_once_with(actor=actor, user_id=202)
         self.assertIn("отозван", revoked.text)
 
+    def test_business_settings_surface_direction_edit_and_owner_only_delete(self) -> None:
+        owner = _actor(PlatformRole.OWNER)
+        owner_message = ui._manage_message(owner)
+        self.assertIn("cpm:activity-edit-help", _commands(owner_message))
+        self.assertIn("cpm:business-retire", _commands(owner_message))
+        self.assertIn("Изменить направление", owner_message.text)
+        self.assertIn("Удалить бизнес", owner_message.text)
+
+        administrator = _actor(PlatformRole.ADMINISTRATOR)
+        admin_message = ui._manage_message(administrator)
+        self.assertIn("cpm:activity-edit-help", _commands(admin_message))
+        self.assertNotIn("cpm:business-retire", _commands(admin_message))
+
+    def test_business_retire_requires_confirmation_and_uses_canonical_archive(self) -> None:
+        actor = _actor(PlatformRole.OWNER)
+        with patch.object(ui, "_business_name", return_value="Тестовый сантехник"):
+            confirmation = ui._business_retire_confirm(actor)
+        self.assertIn("Тестовый сантехник", confirmation.text)
+        self.assertIn("cpm:business-retire-ok", _commands(confirmation))
+        self.assertIn("cpm:manage", _commands(confirmation))
+
+        archived = SimpleNamespace(name="Тестовый сантехник")
+        with patch.object(ui, "archive_business", return_value=archived) as archive:
+            result = ui._business_retire_result(actor)
+        archive.assert_called_once_with(actor=actor)
+        self.assertIn("удалён из активной работы", result.text)
+
+        denied = ui._business_retire_confirm(_actor(PlatformRole.ADMINISTRATOR))
+        self.assertIn("недоступен", denied.text.casefold())
+
     def test_activity_edit_preserves_timezone_and_respects_business_management_roles(self) -> None:
         actor = _actor(PlatformRole.ADMINISTRATOR)
         current = SimpleNamespace(activity_description="Старое", timezone="Europe/Moscow")
