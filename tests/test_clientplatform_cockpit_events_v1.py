@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
+from datetime import datetime
 import sqlite3
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -102,7 +103,7 @@ def test_live_webinar_projection_uses_durable_session_rooms_and_business_timezon
     sessions = (
         SimpleNamespace(
             position=1,
-            starts_at=__import__("datetime").datetime.fromisoformat("2026-09-15T16:00:00+00:00"),
+            starts_at=datetime.fromisoformat("2026-09-15T16:00:00+00:00"),
             provider_key="zoom",
             provider_label="Zoom",
             join_url="https://zoom.example/room",
@@ -110,7 +111,7 @@ def test_live_webinar_projection_uses_durable_session_rooms_and_business_timezon
         ),
         SimpleNamespace(
             position=2,
-            starts_at=__import__("datetime").datetime.fromisoformat("2026-09-16T16:00:00+00:00"),
+            starts_at=datetime.fromisoformat("2026-09-16T16:00:00+00:00"),
             provider_key="external",
             provider_label="Webinar.ru",
             join_url="https://webinar.example/room",
