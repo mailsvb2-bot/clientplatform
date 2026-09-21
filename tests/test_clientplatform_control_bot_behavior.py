@@ -16,6 +16,7 @@ from clientplatform.domain.programs import ContentKind
 from clientplatform.domain.tenancy import PlatformRole
 from handlers import clientplatform_control as handlers
 from handlers import clientplatform_goal_dashboard as goal_dashboard
+from handlers import clientplatform_interaction_safety as safety
 from handlers import clientplatform_program_builder as program_builder
 
 
@@ -78,6 +79,13 @@ class FakeCallback:
 
     async def answer(self, *args: Any, **kwargs: Any) -> None:
         self.answers.append((args, kwargs))
+
+
+def callback_answer_text(callback: FakeCallback) -> str:
+    args, kwargs = callback.answers[-1]
+    if args:
+        return str(args[0])
+    return str(kwargs.get("text") or "")
 
 
 class FakeState:
@@ -512,8 +520,13 @@ async def test_custom_finish_and_edit_activity(monkeypatch: pytest.MonkeyPatch) 
     business_id = str(uuid4())
     token = handlers._uuid_token(business_id)
 
+    actor = SimpleNamespace(
+        role=PlatformRole.OWNER,
+        assert_can_manage_business=lambda: None,
+    )
+
     async def fake_actor(_uid: int, _bid: str) -> object:
-        return object()
+        return actor
 
     monkeypatch.setattr(handlers, "_actor", fake_actor)
     enabled: list[dict[str, Any]] = []
@@ -558,7 +571,178 @@ async def test_custom_finish_and_edit_activity(monkeypatch: pytest.MonkeyPatch) 
     await handlers.edit_activity(edit, edit_state)
     assert edit_state.states[-1] == handlers.ClientPlatformControlState.activity_description
     assert edit_state.data == {"business_id": business_id, "editing_activity": True}
-    assert "новое описание" in edit.message.answers[-1][0]
+    assert "новое направление" in edit.message.answers[-1][0]
+
+
+@pytest.mark.asyncio
+async def test_edit_activity_forged_callback_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    business_id = str(uuid4())
+    token = handlers._uuid_token(business_id)
+
+    class ReadOnlyActor:
+        def assert_can_manage_business(self) -> None:
+            raise handlers.TenantPermissionDenied("denied")
+
+    async def fake_actor(_uid: int, _bid: str) -> object:
+        return ReadOnlyActor()
+
+    monkeypatch.setattr(handlers, "_actor", fake_actor)
+    state = FakeState()
+    callback = FakeCallback(f"cp:editact:{token}")
+    await handlers.edit_activity(callback, state)
+
+    assert state.states == []
+    assert state.data == {}
+    assert callback.answers[-1][1]["show_alert"] is True
+    assert "владелец или администратор" in callback.answers[-1][0][0]
+
+
+@pytest.mark.asyncio
+async def test_business_archive_prompt_is_owner_only_stale_safe_and_explicit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    business_id = str(uuid4())
+    token = handlers._uuid_token(business_id)
+    owner = SimpleNamespace(role=PlatformRole.OWNER)
+    admin = SimpleNamespace(role=PlatformRole.ADMINISTRATOR)
+
+    async def owner_actor(_uid: int, _bid: str) -> object:
+        return owner
+
+    monkeypatch.setattr(safety.control, "_actor", owner_actor)
+    monkeypatch.setattr(
+        safety,
+        "list_accessible_businesses",
+        lambda **_kwargs: [business_access(business_id, "Сантехник")],
+    )
+    state = FakeState({"dirty": True})
+    callback = FakeCallback(f"cps:archive-prompt:{token}")
+    await safety.confirm_business_archive(callback, state)
+
+    assert state.clear_count == 1
+    assert "Удалить бизнес «Сантехник»?" in callback.message.answers[-1][0]
+    buttons = [
+        (button.text, button.callback_data)
+        for row in callback.message.answers[-1][1]["reply_markup"].inline_keyboard
+        for button in row
+    ]
+    assert buttons == [
+        ("🗑 Да, удалить бизнес", f"cps:archive-confirm:{token}"),
+        ("Отмена", f"cps:archive-cancel:{token}"),
+    ]
+    assert "cps:archive-cancel:" in safety._ONE_SHOT_PREFIXES
+
+    async def admin_actor(_uid: int, _bid: str) -> object:
+        return admin
+
+    monkeypatch.setattr(safety.control, "_actor", admin_actor)
+    denied = FakeCallback(f"cps:archive-prompt:{token}")
+    await safety.confirm_business_archive(denied, FakeState())
+    assert denied.answers[-1][1]["show_alert"] is True
+    assert "только владелец" in callback_answer_text(denied)
+
+    monkeypatch.setattr(safety.control, "_actor", owner_actor)
+    monkeypatch.setattr(safety, "list_accessible_businesses", lambda **_kwargs: [])
+    stale = FakeCallback(f"cps:archive-prompt:{token}")
+    await safety.confirm_business_archive(stale, FakeState())
+    assert stale.answers[-1][1]["show_alert"] is True
+    assert "уже недоступен" in callback_answer_text(stale)
+
+
+@pytest.mark.asyncio
+async def test_business_archive_confirmation_fails_closed_and_routes_remaining(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    business_id = str(uuid4())
+    token = handlers._uuid_token(business_id)
+    owner = SimpleNamespace(role=PlatformRole.OWNER)
+    admin = SimpleNamespace(role=PlatformRole.ADMINISTRATOR)
+
+    async def admin_actor(_uid: int, _bid: str) -> object:
+        return admin
+
+    monkeypatch.setattr(safety.control, "_actor", admin_actor)
+    denied = FakeCallback(f"cps:archive-confirm:{token}")
+    await safety.archive_business_from_settings(denied, FakeState())
+    assert denied.answers[-1][1]["show_alert"] is True
+    assert "только владелец" in callback_answer_text(denied)
+
+    async def owner_actor(_uid: int, _bid: str) -> object:
+        return owner
+
+    monkeypatch.setattr(safety.control, "_actor", owner_actor)
+    monkeypatch.setattr(
+        safety,
+        "archive_business",
+        lambda **_kwargs: (_ for _ in ()).throw(handlers.TenancyError("stale")),
+    )
+    failed = FakeCallback(f"cps:archive-confirm:{token}")
+    await safety.archive_business_from_settings(failed, FakeState())
+    assert failed.answers[-1][1]["show_alert"] is True
+    assert "Не удалось удалить бизнес" in callback_answer_text(failed)
+
+    archived = SimpleNamespace(name="Сантехник")
+    monkeypatch.setattr(safety, "archive_business", lambda **_kwargs: archived)
+
+    monkeypatch.setattr(safety, "list_accessible_businesses", lambda **_kwargs: [])
+    none_left = FakeCallback(f"cps:archive-confirm:{token}")
+    await safety.archive_business_from_settings(none_left, FakeState())
+    assert "История сохранена" in none_left.message.answers[0][0]
+    create_buttons = [
+        button.text
+        for row in none_left.message.answers[-1][1]["reply_markup"].inline_keyboard
+        for button in row
+    ]
+    assert create_buttons == ["➕ Создать бизнес"]
+
+    other_id = str(uuid4())
+    remaining = [business_access(other_id, "Основной бизнес")]
+    monkeypatch.setattr(safety, "list_accessible_businesses", lambda **_kwargs: remaining)
+    resume_calls: list[str] = []
+
+    async def resume(_message: Any, **kwargs: Any) -> None:
+        resume_calls.append(str(kwargs["business_id"]))
+
+    monkeypatch.setattr(safety.control, "_resume_business", resume)
+    one_left = FakeCallback(f"cps:archive-confirm:{token}")
+    await safety.archive_business_from_settings(one_left, FakeState())
+    assert resume_calls == [other_id]
+
+    many = [business_access(str(uuid4()), "A"), business_access(str(uuid4()), "B")]
+    monkeypatch.setattr(safety, "list_accessible_businesses", lambda **_kwargs: many)
+    monkeypatch.setattr(
+        safety.control,
+        "_business_choice_keyboard",
+        lambda _items: "business-choice",
+    )
+    multiple_left = FakeCallback(f"cps:archive-confirm:{token}")
+    await safety.archive_business_from_settings(multiple_left, FakeState())
+    assert "Выберите бизнес" in multiple_left.message.answers[-1][0]
+    assert multiple_left.message.answers[-1][1]["reply_markup"] == "business-choice"
+
+
+@pytest.mark.asyncio
+async def test_business_archive_cancel_is_one_shot_and_returns_to_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    business_id = str(uuid4())
+    token = handlers._uuid_token(business_id)
+    callback = FakeCallback(f"cps:archive-cancel:{token}")
+    state = FakeState({"dirty": True})
+
+    await safety.cancel_business_archive(callback, state)
+
+    assert state.clear_count == 1
+    assert callback_answer_text(callback) == "Удаление отменено"
+    assert callback.message.answers[-1][0] == "Удаление бизнеса отменено."
+    button = callback.message.answers[-1][1]["reply_markup"].inline_keyboard[0][0]
+    assert button.text == "⚙️ Настройки бизнеса"
+    assert button.callback_data == f"cpo:settings:{token}"
+    assert "cps:archive-cancel:" in safety._ONE_SHOT_PREFIXES
+
+
 
 
 @pytest.mark.asyncio

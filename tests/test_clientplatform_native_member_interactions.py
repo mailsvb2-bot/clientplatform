@@ -819,6 +819,45 @@ class NativeMemberIngressTests(unittest.IsolatedAsyncioTestCase):
         complete.assert_called_once()
 
 
+class NativeBusinessSettingsParityTests(unittest.TestCase):
+    def test_vk_and_max_settings_expose_same_direction_and_delete_actions(self) -> None:
+        for platform in (ConnectionPlatform.VK, ConnectionPlatform.MAX):
+            with self.subTest(platform=platform.value):
+                actor = _actor(_route(platform))
+                message = native_member_ui._manage_message(actor)
+                labels = [button.label for row in message.rows for button in row]
+                commands = [button.command for row in message.rows for button in row]
+                self.assertIn("✏️ Изменить направление", labels)
+                self.assertIn("🗑 Удалить бизнес", labels)
+                self.assertIn("cpm:activity-edit-help", commands)
+                self.assertIn("cpm:business-retire", commands)
+
+    def test_admin_can_edit_direction_but_cannot_delete_business(self) -> None:
+        actor = replace(_actor(_route(ConnectionPlatform.VK)), role=PlatformRole.ADMINISTRATOR)
+        message = native_member_ui._manage_message(actor)
+        labels = [button.label for row in message.rows for button in row]
+        self.assertIn("✏️ Изменить направление", labels)
+        self.assertNotIn("🗑 Удалить бизнес", labels)
+
+    def test_business_delete_confirmation_is_explicit_and_preserves_history(self) -> None:
+        actor = _actor(_route(ConnectionPlatform.MAX))
+        with patch.object(native_member_ui, "_business_name", return_value="Сантехник"):
+            message = native_member_ui._business_retire_confirm(actor)
+        labels = [button.label for row in message.rows for button in row]
+        self.assertIn("Удалить бизнес «Сантехник»?", message.text)
+        self.assertIn("Оплаты, результаты и аудит не удаляются", message.text)
+        self.assertIn("🗑 Да, удалить бизнес", labels)
+
+    def test_business_delete_uses_canonical_archive_owner(self) -> None:
+        actor = _actor(_route(ConnectionPlatform.VK))
+        archived = SimpleNamespace(name="Сантехник")
+        with patch.object(native_member_ui, "archive_business", return_value=archived) as archive:
+            message = native_member_ui._business_retire_result(actor)
+        archive.assert_called_once_with(actor=actor)
+        self.assertIn("удалён из активных", message.text)
+        self.assertIn("История сохранена", message.text)
+
+
 class NativeEventHubParityTests(unittest.TestCase):
     @staticmethod
     def _snapshot(*, can_manage: bool = True, can_enable: bool = True):

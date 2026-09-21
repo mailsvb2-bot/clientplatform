@@ -78,7 +78,7 @@ from clientplatform.domain.booking_calendar import (
 )
 from clientplatform.domain.bookings import BookingError, BookingSlotStatus, BookingSlotView
 from clientplatform.domain.programs import ContentKind, ProgramError
-from clientplatform.domain.tenancy import TenancyError
+from clientplatform.domain.tenancy import TenantPermissionDenied, TenancyError
 from clientplatform.runtime.cockpit_links import cockpit_web_app_url
 from clientplatform.runtime.control_bot import control_bot_enabled
 from config.settings import settings
@@ -308,7 +308,7 @@ def _dashboard_keyboard(business_id: str, capabilities: list[object]) -> InlineK
     rows.extend(
         [
             [("Клиенты", f"cp:clients:{token}"), ("Результаты", f"cp:results:{token}")],
-            [("Изменить деятельность", f"cp:editact:{token}")],
+            [("✏️ Изменить направление", f"cp:editact:{token}")],
         ]
     )
     markup = _keyboard(rows)
@@ -525,7 +525,7 @@ async def receive_activity_description(message: Message, state: FSMContext) -> N
     )
     if editing_activity:
         await state.clear()
-        await message.answer("Описание деятельности обновлено.")
+        await message.answer("Описание деятельности обновлено. Новое направление сохранено.")
         await _send_dashboard(message, user_id=_user_id(message), business_id=business_id)
         return
 
@@ -673,10 +673,23 @@ async def finish_profile(callback: CallbackQuery, state: FSMContext) -> None:
 @router.callback_query(F.data.startswith("cp:editact:"))
 async def edit_activity(callback: CallbackQuery, state: FSMContext) -> None:
     business_id = _token_uuid(str(callback.data).split(":", 2)[2])
+    actor = await _actor(_callback_actor_user_id(callback), business_id)
+    try:
+        actor.assert_can_manage_business()
+    except TenantPermissionDenied:
+        await callback.answer(
+            "Изменить направление может владелец или администратор.",
+            show_alert=True,
+        )
+        return
     await state.set_state(ClientPlatformControlState.activity_description)
     await state.update_data(business_id=business_id, editing_activity=True)
     await callback.answer()
-    await _callback_message(callback).answer("Напишите новое описание Вашей деятельности.")
+    await _callback_message(callback).answer(
+        "✏️ Изменить направление деятельности\n\n"
+        "Сейчас это описание помогает ClientPlatform понимать, чем занимается бизнес. "
+        "Напишите новое направление или описание своими словами."
+    )
 
 
 @router.callback_query(F.data.startswith("cp:cap:"))

@@ -639,6 +639,31 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Яндекс · one", labels)
         self.assertIn("Яндекс · two", labels)
 
+    def test_settings_exposes_direction_edit_and_owner_business_removal(self) -> None:
+        owner_rows, owner_help = one_click._settings_rows("business-1", tenant_actor())
+        owner_buttons = {
+            label: callback_data
+            for row in owner_rows
+            for label, callback_data in row
+        }
+        self.assertEqual(
+            owner_buttons["✏️ Изменить направление"],
+            "cp:editact:business-1",
+        )
+        self.assertEqual(
+            owner_buttons["🗑 Удалить бизнес"],
+            "cps:archive-prompt:business-1",
+        )
+        self.assertTrue(any("убрать тестовый" in line for line in owner_help))
+
+        admin_rows, _ = one_click._settings_rows(
+            "business-1",
+            tenant_actor(PlatformRole.ADMINISTRATOR),
+        )
+        admin_labels = [label for row in admin_rows for label, _ in row]
+        self.assertIn("✏️ Изменить направление", admin_labels)
+        self.assertNotIn("🗑 Удалить бизнес", admin_labels)
+
     async def test_more_menu_hides_advanced_actions_from_home(self) -> None:
         out = outbound_message()
         cb = callback("cpo:more:business-1", out)
