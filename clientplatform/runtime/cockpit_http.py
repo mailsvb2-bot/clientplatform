@@ -20,6 +20,10 @@ from clientplatform.application.cockpit_home import (
     CockpitHomeUnavailable,
     resolve_cockpit_home,
 )
+from clientplatform.application.cockpit_events import (
+    resolve_cockpit_event_live,
+    resolve_cockpit_events,
+)
 from clientplatform.application.cockpit_services import (
     archive_cockpit_service,
     create_cockpit_service,
@@ -96,6 +100,7 @@ _COCKPIT_ACTION_SENDER_APP_KEY = web.AppKey("clientplatform_cockpit_action_sende
 _CUSTOMERS_SCRIPT = Path(__file__).with_name("cockpit_customers.js")
 _CALENDAR_SCRIPT = Path(__file__).with_name("cockpit_calendar.js")
 _SALES_SCRIPT = Path(__file__).with_name("cockpit_sales.js")
+_EVENTS_SCRIPT = Path(__file__).with_name("cockpit_events.js")
 _CONNECTIONS_SCRIPT = Path(__file__).with_name("cockpit_connections.js")
 _SETTINGS_SCRIPT = Path(__file__).with_name("cockpit_settings.js")
 _AUTOMATION_SCRIPT = Path(__file__).with_name("cockpit_automation.js")
@@ -122,6 +127,7 @@ _HTML = """<!doctype html>
 <script defer src="/clientplatform/cockpit/customers.js"></script>
 <script defer src="/clientplatform/cockpit/calendar.js"></script>
 <script defer src="/clientplatform/cockpit/sales.js"></script>
+<script defer src="/clientplatform/cockpit/events.js"></script>
 <script defer src="/clientplatform/cockpit/connections.js"></script>
 <script defer src="/clientplatform/cockpit/settings.js"></script>
 <script defer src="/clientplatform/cockpit/automation.js"></script>
@@ -193,6 +199,11 @@ _HTML = """<!doctype html>
 <div class="home-heading"><p class="eyebrow">Привлечение</p><h2>Новые клиенты и реклама</h2><p id="growth-meta"></p></div><button id="growth-creative" class="primary-cta section-primary-action" type="button" hidden>🎨 Создать картинку</button><div class="period-switch" aria-label="Период показателей"><button type="button" data-growth-period="7" aria-pressed="false">7 дней</button><button type="button" data-growth-period="30" aria-pressed="false">30 дней</button></div>
 <div id="growth-metrics" class="metrics"></div><section class="home-block"><h3>Что сработало</h3><div id="growth-sources"></div></section><section class="home-block"><h3>Реклама</h3><div id="growth-advertising"></div></section><section class="home-block"><h3>Что делать дальше</h3><div id="growth-actions"></div></section><p id="growth-limitations" class="muted"></p>
 <button id="growth-advanced" class="secondary workspace-advanced" type="button">Продолжить продвижение в Telegram</button>
+</section>
+<section id="events-view" class="workspace-view" aria-live="polite" hidden>
+<div class="view-toolbar"><button id="events-more" class="secondary" type="button">Все возможности</button><button id="events-refresh" class="secondary" type="button">Обновить</button></div>
+<div class="home-heading"><p class="eyebrow">Вебинары</p><h2>Эфиры и результаты</h2><p id="events-meta"></p></div>
+<div id="events-list"></div><p id="events-empty" class="muted"></p><p id="events-limitations" class="muted"></p>
 </section>
 <section id="analytics-view" class="workspace-view" aria-live="polite" hidden>
 <div class="view-toolbar"><button id="analytics-more" class="secondary" type="button">Все возможности</button><button id="analytics-refresh" class="secondary" type="button">Обновить</button></div>
@@ -267,6 +278,7 @@ _JS = r"""(() => {
   const services = document.getElementById('services-view');
   const moneyView = document.getElementById('money-view');
   const growth = document.getElementById('growth-view');
+  const events = document.getElementById('events-view');
   const analytics = document.getElementById('analytics-view');
   const connections = document.getElementById('connections-view');
   const settingsView = document.getElementById('settings-view');
@@ -287,7 +299,7 @@ _JS = r"""(() => {
   const initData = tg && typeof tg.initData === 'string' ? tg.initData : '';
   const roleNames = {owner:'Владелец',administrator:'Администратор',manager:'Менеджер',marketer:'Маркетолог',analyst:'Аналитик',content_manager:'Контент-менеджер',support:'Поддержка',customer:'Клиент'};
   const periodNames = {'7d':'7 дней','30d':'30 дней','today':'сегодня'};
-  const nativeSections = new Set(['home','customers','calendar','sales','services','money','growth','analytics','automation','connections','settings']);
+  const nativeSections = new Set(['home','customers','calendar','sales','services','money','growth','events','analytics','automation','connections','settings']);
   const navigationGroups = Object.freeze([
     {title:'Работа с клиентами', hint:'Ежедневные задачи: клиенты, записи и продажи.', ids:['home','customers','calendar','sales']},
     {title:'Услуги и деньги', hint:'Что Вы продаёте, оплаты и фактический результат.', ids:['services','money','analytics']},
@@ -338,7 +350,7 @@ _JS = r"""(() => {
     text(current, roleLabel ? `${normalized} · ${roleLabel}` : normalized);
   };
   const hideViews = () => {
-    navigationShell.hidden = true; home.hidden = true; customers.hidden = true; calendar.hidden = true; sales.hidden = true; services.hidden = true; moneyView.hidden = true; growth.hidden = true; analytics.hidden = true; automation.hidden = true; connections.hidden = true; settingsView.hidden = true; explanation.hidden = true;
+    navigationShell.hidden = true; home.hidden = true; customers.hidden = true; calendar.hidden = true; sales.hidden = true; services.hidden = true; moneyView.hidden = true; growth.hidden = true; events.hidden = true; analytics.hidden = true; automation.hidden = true; connections.hidden = true; settingsView.hidden = true; explanation.hidden = true;
   };
   const resetHomeContent = () => {
     homeMetrics.replaceChildren(); homeMoney.replaceChildren(); homePrimaryAction.replaceChildren(); homeAttention.replaceChildren(); homeActions.replaceChildren();
@@ -366,6 +378,7 @@ _JS = r"""(() => {
   const enterServices = () => { currentView = 'services'; hideViews(); services.hidden = false; setPrimaryActive('more'); syncBackButton(); };
   const enterMoney = () => { currentView = 'money'; hideViews(); moneyView.hidden = false; setPrimaryActive('more'); syncBackButton(); };
   const enterGrowth = () => { currentView = 'growth'; hideViews(); growth.hidden = false; setPrimaryActive('more'); syncBackButton(); };
+  const enterEvents = () => { currentView = 'events'; hideViews(); events.hidden = false; setPrimaryActive('more'); syncBackButton(); };
   const enterAnalytics = () => { currentView = 'analytics'; hideViews(); analytics.hidden = false; setPrimaryActive('more'); syncBackButton(); };
   const enterAutomation = () => { currentView = 'automation'; hideViews(); automation.hidden = false; setPrimaryActive('more'); syncBackButton(); };
   const enterConnections = () => { currentView = 'connections'; hideViews(); connections.hidden = false; setPrimaryActive('more'); syncBackButton(); };
@@ -487,6 +500,7 @@ _JS = r"""(() => {
       if (window.ClientPlatformBusinessWorkspace && item.id === 'services') { window.ClientPlatformBusinessWorkspace.openServices(); return; }
       if (window.ClientPlatformBusinessWorkspace && item.id === 'money') { window.ClientPlatformBusinessWorkspace.openMoney(); return; }
       if (window.ClientPlatformBusinessWorkspace && item.id === 'growth') { window.ClientPlatformBusinessWorkspace.openGrowth(); return; }
+      if (item.id === 'events' && window.ClientPlatformEvents) { window.ClientPlatformEvents.open(); return; }
       if (window.ClientPlatformBusinessWorkspace && item.id === 'analytics') { window.ClientPlatformBusinessWorkspace.openAnalytics(); return; }
       if (item.id === 'automation' && window.ClientPlatformAutomation) { window.ClientPlatformAutomation.open(); return; }
       if (item.id === 'connections' && window.ClientPlatformConnections) { window.ClientPlatformConnections.open(); return; }
@@ -496,7 +510,7 @@ _JS = r"""(() => {
     showExplanation(item);
   };
 
-  window.ClientPlatformCockpitNavigation = Object.freeze({showNavigation, showHome, enterCustomers, enterCalendar, enterSales, enterServices, enterMoney, enterGrowth, enterAnalytics, enterAutomation, enterConnections, enterSettings, openCanonicalSection, syncBusinessName, captureBusinessContext, assertBusinessContextCurrent, isBusinessContextCurrent, isContextChangedError, focusRegion, hasAvailableSection});
+  window.ClientPlatformCockpitNavigation = Object.freeze({showNavigation, showHome, enterCustomers, enterCalendar, enterSales, enterServices, enterMoney, enterGrowth, enterEvents, enterAnalytics, enterAutomation, enterConnections, enterSettings, openCanonicalSection, syncBusinessName, captureBusinessContext, assertBusinessContextCurrent, isBusinessContextCurrent, isContextChangedError, focusRegion, hasAvailableSection});
 
   const appendNavigationCard = (item, container) => {
     const state = screenStatus(item); const button = document.createElement('button'); button.type = 'button'; button.className = `card ${state}`;
@@ -565,6 +579,7 @@ _JS = r"""(() => {
     if (currentView === 'calendar' && window.ClientPlatformCalendar) { window.ClientPlatformCalendar.back(); return; }
     if (currentView === 'sales' && window.ClientPlatformSales) { window.ClientPlatformSales.back(); return; }
     if (['services','money','growth','analytics'].includes(currentView) && window.ClientPlatformBusinessWorkspace) { window.ClientPlatformBusinessWorkspace.back(); return; }
+    if (currentView === 'events' && window.ClientPlatformEvents) { window.ClientPlatformEvents.back(); return; }
     if (currentView === 'automation' && window.ClientPlatformAutomation) { window.ClientPlatformAutomation.back(); return; }
     if (currentView === 'connections' && window.ClientPlatformConnections) { window.ClientPlatformConnections.back(); return; }
     if (currentView === 'settings' && window.ClientPlatformSettings) { window.ClientPlatformSettings.back(); return; }
@@ -631,6 +646,15 @@ async def cockpit_calendar_script(_request: web.Request) -> web.Response:
 async def cockpit_sales_script(_request: web.Request) -> web.Response:
     return web.Response(
         text=_SALES_SCRIPT.read_text(encoding="utf-8"),
+        content_type="application/javascript",
+        charset="utf-8",
+        headers=_base_headers(),
+    )
+
+
+async def cockpit_events_script(_request: web.Request) -> web.Response:
+    return web.Response(
+        text=_EVENTS_SCRIPT.read_text(encoding="utf-8"),
         content_type="application/javascript",
         charset="utf-8",
         headers=_base_headers(),
@@ -800,6 +824,57 @@ async def cockpit_home(request: web.Request) -> web.Response:
     except CockpitHomeUnavailable:
         return _error(503, "home_unavailable")
     return web.json_response({"ok": True, **home.as_dict()}, headers=_base_headers())
+
+
+async def cockpit_events(request: web.Request) -> web.Response:
+    scope = await _verified_payload_scope(request)
+    if isinstance(scope, web.Response):
+        return scope
+    user_id, requested_business, payload = scope
+    try:
+        snapshot = await asyncio.to_thread(
+            resolve_cockpit_events,
+            telegram_user_id=user_id,
+            requested_business_id=requested_business,
+            limit=payload.get("limit", 30),
+        )
+    except TenantAccessDenied:
+        return _error(403, "business_access_denied")
+    except TenantPermissionDenied:
+        return _error(403, "events_access_denied")
+    except ValueError:
+        return _error(400, "invalid_events_request")
+    except (OSError, RuntimeError):
+        return _error(503, "events_unavailable")
+    return web.json_response({"ok": True, **snapshot.as_dict()}, headers=_base_headers())
+
+
+async def cockpit_event_live(request: web.Request) -> web.Response:
+    scope = await _verified_payload_scope(request)
+    if isinstance(scope, web.Response):
+        return scope
+    user_id, requested_business, payload = scope
+    event_id = payload.get("event_id")
+    if not isinstance(event_id, str) or not event_id.strip():
+        return _error(400, "event_id_required")
+    try:
+        live = await asyncio.to_thread(
+            resolve_cockpit_event_live,
+            telegram_user_id=user_id,
+            requested_business_id=requested_business,
+            event_id=event_id,
+        )
+    except TenantAccessDenied:
+        return _error(403, "business_access_denied")
+    except TenantPermissionDenied:
+        return _error(403, "event_manage_denied")
+    except LookupError:
+        return _error(404, "event_not_found")
+    except ValueError:
+        return _error(400, "invalid_event_request")
+    except (OSError, RuntimeError):
+        return _error(503, "events_unavailable")
+    return web.json_response({"ok": True, **live.as_dict()}, headers=_base_headers())
 
 
 async def cockpit_calendar(request: web.Request) -> web.Response:
@@ -2007,12 +2082,15 @@ def register_cockpit_routes(
     app.router.add_get(f"{_COCKPIT_PREFIX}/customers.js", cockpit_customers_script)
     app.router.add_get(f"{_COCKPIT_PREFIX}/calendar.js", cockpit_calendar_script)
     app.router.add_get(f"{_COCKPIT_PREFIX}/sales.js", cockpit_sales_script)
+    app.router.add_get(f"{_COCKPIT_PREFIX}/events.js", cockpit_events_script)
     app.router.add_get(f"{_COCKPIT_PREFIX}/connections.js", cockpit_connections_script)
     app.router.add_get(f"{_COCKPIT_PREFIX}/settings.js", cockpit_settings_script)
     app.router.add_get(f"{_COCKPIT_PREFIX}/automation.js", cockpit_automation_script)
     app.router.add_get(f"{_COCKPIT_PREFIX}/business-workspace.js", cockpit_business_workspace_script)
     app.router.add_post(f"{_COCKPIT_PREFIX}/context", cockpit_context)
     app.router.add_post(f"{_COCKPIT_PREFIX}/home", cockpit_home)
+    app.router.add_post(f"{_COCKPIT_PREFIX}/events", cockpit_events)
+    app.router.add_post(f"{_COCKPIT_PREFIX}/events/live", cockpit_event_live)
     app.router.add_post(f"{_COCKPIT_PREFIX}/calendar", cockpit_calendar)
     app.router.add_post(f"{_COCKPIT_PREFIX}/calendar/manage", cockpit_calendar_management)
     app.router.add_post(f"{_COCKPIT_PREFIX}/calendar/create", cockpit_calendar_create)
@@ -2070,6 +2148,9 @@ __all__ = [
     "cockpit_connections",
     "cockpit_connections_script",
     "cockpit_context",
+    "cockpit_event_live",
+    "cockpit_events",
+    "cockpit_events_script",
     "cockpit_calendar",
     "cockpit_calendar_cancel",
     "cockpit_calendar_create",
