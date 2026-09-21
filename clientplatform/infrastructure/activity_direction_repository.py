@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -21,7 +21,15 @@ from clientplatform.infrastructure.tenancy_repository import TenancyRepository
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds")
+
+
+def _next_revision(previous: str, *, now: str | None = None) -> str:
+    candidate = str(now or _utc_now())
+    if candidate != previous:
+        return candidate
+    parsed = datetime.fromisoformat(previous)
+    return (parsed + timedelta(microseconds=1)).isoformat(timespec="microseconds")
 
 
 def _value(row: Any, key: str, position: int) -> Any:
@@ -166,7 +174,7 @@ class ActivityDirectionRepository:
             ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END,
                      created_at,id
             """,
-            (current.business_id, 1 if include_archived else 0),
+            (current.business_id, bool(include_archived)),
         ).fetchall()
         return [_direction_from_row(row) for row in rows]
 
@@ -192,7 +200,7 @@ class ActivityDirectionRepository:
             and normalized_description == direction.description
         ):
             return direction
-        timestamp = str(now or _utc_now())
+        timestamp = _next_revision(direction.updated_at, now=now)
         try:
             cursor = self._conn.execute(
                 """
@@ -230,7 +238,7 @@ class ActivityDirectionRepository:
         direction = self.get(actor=current, direction_id=direction_id)
         if direction.status == ActivityDirectionStatus.ARCHIVED:
             return direction
-        timestamp = str(now or _utc_now())
+        timestamp = _next_revision(direction.updated_at, now=now)
         cursor = self._conn.execute(
             """
             UPDATE clientplatform_activity_directions
@@ -265,7 +273,7 @@ class ActivityDirectionRepository:
         direction = self.get(actor=current, direction_id=direction_id)
         if direction.status == ActivityDirectionStatus.ACTIVE:
             return direction
-        timestamp = str(now or _utc_now())
+        timestamp = _next_revision(direction.updated_at, now=now)
         try:
             cursor = self._conn.execute(
                 """
