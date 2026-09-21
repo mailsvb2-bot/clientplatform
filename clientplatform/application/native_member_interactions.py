@@ -3175,12 +3175,248 @@ def _experiment_apply_message(
     )
 
 
+_DIRECTION_PAGE_SIZE = 5
+
+
+def _directions_message(
+    actor: TenantContext,
+    page: int = 0,
+    *,
+    archived: bool = False,
+) -> CustomerInteractionMessage:
+    actor.assert_can_manage_business()
+    all_directions = list_activity_directions(actor=actor, include_archived=True)
+    wanted_status = (
+        ActivityDirectionStatus.ARCHIVED if archived else ActivityDirectionStatus.ACTIVE
+    )
+    directions = [item for item in all_directions if item.status == wanted_status]
+    page = max(0, int(page))
+    start = page * _DIRECTION_PAGE_SIZE
+    if start >= len(directions) and page:
+        return _stale_message()
+    shown = directions[start : start + _DIRECTION_PAGE_SIZE]
+    rows: list[tuple[CustomerInteractionButton, ...]] = [
+        (
+            _button(
+                f"{'📦' if archived else '🧭'} {item.title[:34]}",
+                f"cpm:direction:{item.id}",
+            ),
+        )
+        for item in shown
+    ]
+    if not archived:
+        rows.append((_button("➕ Добавить направление", "cpm:direction-new"),))
+        if any(item.status == ActivityDirectionStatus.ARCHIVED for item in all_directions):
+            rows.append((_button("📦 Архив направлений", "cpm:directions-archived:0"),))
+    else:
+        rows.append((_button("🧭 Активные направления", "cpm:directions:0"),))
+    pagination: list[CustomerInteractionButton] = []
+    if page:
+        pagination.append(
+            _button(
+                "⬅️ Назад",
+                f"cpm:{'directions-archived' if archived else 'directions'}:{page - 1}",
+            )
+        )
+    if start + _DIRECTION_PAGE_SIZE < len(directions):
+        pagination.append(
+            _button(
+                "Вперёд ➡️",
+                f"cpm:{'directions-archived' if archived else 'directions'}:{page + 1}",
+            )
+        )
+    if pagination:
+        rows.append(tuple(pagination))
+    rows.append(_back_row())
+    title = "📦 Архив направлений" if archived else "🧭 Направления деятельности"
+    empty = (
+        "Архив пуст."
+        if archived
+        else "Направлений пока нет. Можно работать без них или добавить первое."
+    )
+    return CustomerInteractionMessage(
+        text=(
+            f"{title}\n\n"
+            "Все каналы ClientPlatform используют один и тот же список для этой организации. "
+            "Изменения, сделанные здесь, будут видны в Telegram, ВКонтакте и MAX.\n\n"
+            + ("\n".join(f"• {item.title}" for item in shown) if shown else empty)
+        ),
+        rows=tuple(rows),
+    )
+
+
+def _direction_message(actor: TenantContext, direction_id: str) -> CustomerInteractionMessage:
+    actor.assert_can_manage_business()
+    direction = get_activity_direction(actor=actor, direction_id=direction_id)
+    bindings = list_activity_direction_bindings(
+        actor=actor,
+        direction_id=direction.id,
+    )
+    counts = {"program": 0, "offering": 0, "event": 0}
+    for binding in bindings:
+        key = str(binding.subject_kind.value)
+        if key in counts:
+            counts[key] += 1
+    active = direction.status == ActivityDirectionStatus.ACTIVE
+    rows: list[tuple[CustomerInteractionButton, ...]] = []
+    if active:
+        rows.extend(
+            [
+                (_button("✏️ Изменить", f"cpm:direction-edit:{direction.id}"),),
+                (_button("🗑 Убрать из активных", f"cpm:direction-archive:{direction.id}"),),
+            ]
+        )
+        rows.append((_button("🧭 К направлениям", "cpm:directions:0"),))
+    else:
+        rows.append((_button("↩️ Вернуть в работу", f"cpm:direction-restore:{direction.id}"),))
+        rows.append((_button("📦 К архиву", "cpm:directions-archived:0"),))
+    rows.append(_back_row())
+    return CustomerInteractionMessage(
+        text=(
+            f"🧭 {direction.title}\n\n"
+            f"{direction.description}\n\n"
+            f"Материалы и программы: {counts['program']}\n"
+            f"Услуги и предложения: {counts['offering']}\n"
+            f"События и вебинары: {counts['event']}\n\n"
+            f"Статус: {'в работе' if active else 'в архиве'}."
+        ),
+        rows=tuple(rows),
+    )
+
+
+def _direction_new_message(
+    actor: TenantContext,
+    *,
+    current_platform: ConnectionPlatform,
+    input_surface: str,
+) -> CustomerInteractionMessage:
+    actor.assert_can_manage_business()
+    return _begin_owner_input_message(
+        actor,
+        platform=current_platform,
+        surface=input_surface,
+        action="activity_direction_create",
+        text=(
+            "➕ Новое направление деятельности\n\n"
+            "Напишите одним сообщением:\nНазвание | Короткое описание\n\n"
+            "Например: Корпоративные клиенты | Услуги и материалы для организаций."
+        ),
+        rows=((_button("🧭 К направлениям", "cpm:directions:0"),), _back_row()),
+    )
+
+
+def _direction_create_result(
+    actor: TenantContext,
+    title: str,
+    description: str,
+) -> CustomerInteractionMessage:
+    actor.assert_can_manage_business()
+    direction = create_activity_direction(
+        actor=actor,
+        title=title,
+        description=description,
+    )
+    return CustomerInteractionMessage(
+        text=f"✅ Направление «{direction.title}» создано.",
+        rows=(
+            (_button("🧭 Открыть направление", f"cpm:direction:{direction.id}"),),
+            (_button("🧭 Все направления", "cpm:directions:0"),),
+            _back_row(),
+        ),
+    )
+
+
+def _direction_edit_message(
+    actor: TenantContext,
+    direction_id: str,
+    *,
+    current_platform: ConnectionPlatform,
+    input_surface: str,
+) -> CustomerInteractionMessage:
+    actor.assert_can_manage_business()
+    direction = get_activity_direction(actor=actor, direction_id=direction_id)
+    if direction.status != ActivityDirectionStatus.ACTIVE:
+        return _stale_message()
+    return _begin_owner_input_message(
+        actor,
+        platform=current_platform,
+        surface=input_surface,
+        action="activity_direction_edit",
+        context={"direction_id": direction.id},
+        text=(
+            f"✏️ Изменить направление\n\n"
+            f"Сейчас: «{direction.title}» — {direction.description}\n\n"
+            "Напишите одним сообщением:\nНовое название | Новое описание"
+        ),
+        rows=((_button("🧭 К направлению", f"cpm:direction:{direction.id}"),), _back_row()),
+    )
+
+
+def _direction_edit_result(
+    actor: TenantContext,
+    direction_id: str,
+    title: str,
+    description: str,
+) -> CustomerInteractionMessage:
+    actor.assert_can_manage_business()
+    direction = update_activity_direction(
+        actor=actor,
+        direction_id=direction_id,
+        title=title,
+        description=description,
+    )
+    return CustomerInteractionMessage(
+        text=f"✅ Направление «{direction.title}» обновлено.",
+        rows=(
+            (_button("🧭 Открыть", f"cpm:direction:{direction.id}"),),
+            (_button("🧭 Все направления", "cpm:directions:0"),),
+            _back_row(),
+        ),
+    )
+
+
+def _direction_archive_result(
+    actor: TenantContext,
+    direction_id: str,
+) -> CustomerInteractionMessage:
+    actor.assert_can_manage_business()
+    direction = archive_activity_direction(actor=actor, direction_id=direction_id)
+    return CustomerInteractionMessage(
+        text=(
+            f"✅ Направление «{direction.title}» убрано из активной работы. "
+            "Связанные данные не удалены; направление можно восстановить."
+        ),
+        rows=(
+            (_button("📦 Архив направлений", "cpm:directions-archived:0"),),
+            (_button("🧭 Активные направления", "cpm:directions:0"),),
+            _back_row(),
+        ),
+    )
+
+
+def _direction_restore_result(
+    actor: TenantContext,
+    direction_id: str,
+) -> CustomerInteractionMessage:
+    actor.assert_can_manage_business()
+    direction = restore_activity_direction(actor=actor, direction_id=direction_id)
+    return CustomerInteractionMessage(
+        text=f"✅ Направление «{direction.title}» снова активно.",
+        rows=(
+            (_button("🧭 Открыть", f"cpm:direction:{direction.id}"),),
+            (_button("🧭 Все направления", "cpm:directions:0"),),
+            _back_row(),
+        ),
+    )
+
+
 def _manage_message(actor: TenantContext) -> CustomerInteractionMessage:
     if actor.role not in _CONNECTION_ROLES:
         return _permission_message()
     items = [nav.ACTIVITY, nav.MESSENGERS, nav.FORMATS]
     rows: list[tuple[CustomerInteractionButton, ...]] = [
         (_button(nav.ACTIVITY.label, "cpm:activity-edit-help"),),
+        (_button("🧭 Направления деятельности", "cpm:directions:0"),),
         (_button(nav.MESSENGERS.label, "cpm:messengers"),),
         (_button(nav.FORMATS.label, "cpm:formats"),),
     ]
@@ -3191,7 +3427,11 @@ def _manage_message(actor: TenantContext) -> CustomerInteractionMessage:
     items.append(nav.SETTINGS_MORE)
     rows.append(_back_row())
     return CustomerInteractionMessage(
-        text="⚙️ Настроить бизнес\n\n" + nav.choice_help(*items),
+        text=(
+            "⚙️ Настроить бизнес\n\n"
+            + nav.choice_help(*items)
+            + "\n\n🧭 «Направления деятельности» — разделить одну организацию на несколько направлений без создания отдельных бизнесов."
+        ),
         rows=tuple(rows),
     )
 
