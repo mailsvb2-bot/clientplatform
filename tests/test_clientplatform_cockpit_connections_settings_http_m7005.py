@@ -116,6 +116,7 @@ class CockpitConnectionsSettingsHttpM7005Tests(unittest.IsolatedAsyncioTestCase)
             business_name="Новая практика",
             activity_description="Консультации",
             timezone_name="Europe/Moscow",
+            can_archive_business=True,
         )
         calls: list[dict[str, object]] = []
 
@@ -152,6 +153,53 @@ class CockpitConnectionsSettingsHttpM7005Tests(unittest.IsolatedAsyncioTestCase)
             }],
         )
 
+    async def test_settings_archive_reauthenticates_and_requires_exact_business_confirmation(self) -> None:
+        principal = TelegramWebAppPrincipal(user_id=303, auth_date=1, query_id=None)
+        archived = SimpleNamespace(id=_BUSINESS, name="Тестовый сантехник")
+        calls: list[dict[str, object]] = []
+
+        def archive(**kwargs: object):
+            calls.append(dict(kwargs))
+            return archived
+
+        with (
+            patch.object(cockpit_http.settings, "BOT_TOKEN", _TOKEN),
+            patch.object(cockpit_http, "verify_telegram_webapp_init_data", return_value=principal),
+            patch.object(cockpit_http, "archive_cockpit_business", side_effect=archive),
+        ):
+            status, payload, _headers = await self._post(
+                "/clientplatform/cockpit/settings/archive",
+                {
+                    "init_data": "verified",
+                    "business_id": _BUSINESS,
+                    "confirmation_business_id": _BUSINESS,
+                },
+            )
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["archived"])
+        self.assertEqual(payload["business_name"], "Тестовый сантехник")
+        self.assertEqual(
+            calls,
+            [{
+                "telegram_user_id": 303,
+                "requested_business_id": _BUSINESS,
+                "confirmation_business_id": _BUSINESS,
+            }],
+        )
+
+        with (
+            patch.object(cockpit_http.settings, "BOT_TOKEN", _TOKEN),
+            patch.object(cockpit_http, "verify_telegram_webapp_init_data", return_value=principal),
+            patch.object(cockpit_http, "archive_cockpit_business") as archive_call,
+        ):
+            status, payload, _headers = await self._post(
+                "/clientplatform/cockpit/settings/archive",
+                {"init_data": "verified", "business_id": _BUSINESS},
+            )
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["error"], "invalid_settings_archive_request")
+        archive_call.assert_not_called()
+
     async def test_permission_change_fails_closed_for_native_management(self) -> None:
         principal = TelegramWebAppPrincipal(user_id=101, auth_date=1, query_id=None)
         with (
@@ -186,6 +234,8 @@ class CockpitConnectionsSettingsHttpM7005Tests(unittest.IsolatedAsyncioTestCase)
         self.assertIn('id="settings-view"', shell)
         self.assertIn("/clientplatform/cockpit/connections/setup", connections_script)
         self.assertIn("/clientplatform/cockpit/settings/update", settings_script)
+        self.assertIn("/clientplatform/cockpit/settings/archive", settings_script)
+        self.assertIn('id="settings-archive"', shell)
         self.assertNotIn("localStorage", connections_script + settings_script)
         self.assertNotIn("innerHTML", connections_script + settings_script)
 
