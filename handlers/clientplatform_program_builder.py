@@ -9,6 +9,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
+from clientplatform.application.activity_directions import list_activity_directions
 from clientplatform.application.programs import (
     add_program_lesson,
     archive_program_draft,
@@ -294,9 +295,56 @@ async def open_draft(callback: CallbackQuery, state: FSMContext) -> None:
 async def begin_program(callback: CallbackQuery, state: FSMContext) -> None:
     business_token = str(callback.data or "").removeprefix("cp:progadd:")
     business_id = control._token_uuid(business_token)
-    await control._actor(int(callback.from_user.id), business_id)
+    actor = await control._actor(int(callback.from_user.id), business_id)
+    directions = await asyncio.to_thread(list_activity_directions, actor=actor)
     await state.clear()
     await state.update_data(business_id=business_id)
+    await callback.answer()
+    if not directions:
+        await state.set_state(ClientPlatformProgramBuilderState.program_title)
+        await control._callback_message(callback).answer("Напишите название программы.")
+        return
+    rows = [
+        [
+            (
+                direction.title[:42],
+                f"cp:progdir:{business_token}:{control._uuid_token(direction.id)}",
+            )
+        ]
+        for direction in directions
+    ]
+    rows.append([("Без направления", f"cp:progdirnone:{business_token}")])
+    await control._callback_message(callback).answer(
+        "К какому направлению деятельности относится этот материал или программа?",
+        reply_markup=control._keyboard(rows),
+    )
+
+
+@router.callback_query(F.data.startswith("cp:progdir:"))
+async def choose_program_direction(callback: CallbackQuery, state: FSMContext) -> None:
+    _, _, business_token, direction_token = str(callback.data).split(":", 3)
+    business_id = control._token_uuid(business_token)
+    direction_id = control._token_uuid(direction_token)
+    actor = await control._actor(int(callback.from_user.id), business_id)
+    directions = await asyncio.to_thread(list_activity_directions, actor=actor)
+    if direction_id not in {item.id for item in directions}:
+        await callback.answer("Направление больше недоступно.", show_alert=True)
+        return
+    await state.update_data(business_id=business_id, direction_id=direction_id)
+    await state.set_state(ClientPlatformProgramBuilderState.program_title)
+    await callback.answer()
+    await control._callback_message(callback).answer("Напишите название программы.")
+
+
+@router.callback_query(F.data.startswith("cp:progdirnone:"))
+async def choose_program_without_direction(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    business_token = str(callback.data).split(":", 2)[2]
+    business_id = control._token_uuid(business_token)
+    await control._actor(int(callback.from_user.id), business_id)
+    await state.update_data(business_id=business_id, direction_id=None)
     await state.set_state(ClientPlatformProgramBuilderState.program_title)
     await callback.answer()
     await control._callback_message(callback).answer("Напишите название программы.")
@@ -316,7 +364,16 @@ async def capture_program_title(message: Message, state: FSMContext) -> None:
         await message.answer("Название программы должно содержать от 1 до 200 символов.")
         return
     actor = await control._actor(int(message.from_user.id), business_id)
-    program = await asyncio.to_thread(create_program, actor=actor, title=title)
+    program = await asyncio.to_thread(
+        create_program,
+        actor=actor,
+        title=title,
+        direction_id=(
+            str(data.get("direction_id"))
+            if data.get("direction_id")
+            else None
+        ),
+    )
     await state.update_data(program_id=program.id)
     await state.set_state(ClientPlatformProgramBuilderState.lesson_title)
     await message.answer(
