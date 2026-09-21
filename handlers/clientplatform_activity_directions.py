@@ -16,7 +16,10 @@ from clientplatform.application.activity_directions import (
     list_activity_directions,
     restore_activity_direction,
 )
-from clientplatform.domain.activity_directions import ActivityDirectionStatus
+from clientplatform.domain.activity_directions import (
+    ActivityDirectionInvariantViolation,
+    ActivityDirectionStatus,
+)
 
 control = importlib.import_module(".clientplatform_control", __package__)
 
@@ -166,9 +169,7 @@ async def capture_activity_direction_description(
             title=title,
             description=description,
         )
-    except Exception as exc:
-        if "title already exists" not in str(exc):
-            raise
+    except ActivityDirectionInvariantViolation:
         await message.answer(
             "Направление с таким названием уже есть. Укажите другое название."
         )
