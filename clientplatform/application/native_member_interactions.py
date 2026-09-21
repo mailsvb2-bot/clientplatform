@@ -6214,10 +6214,21 @@ def _render(
                 actor, parsed.args[0], current_platform=current_platform
             )
         if parsed.action == "event-new":
-            return begin_native_event_wizard(
+            return _event_new_entry_message(
                 actor,
-                platform=current_platform,
-                surface=input_surface,
+                current_platform=current_platform,
+                input_surface=input_surface,
+            )
+        if parsed.action == "event-new-dirs":
+            return _event_direction_message(actor, _page_number(parsed.args))
+        if parsed.action == "event-new-dir":
+            if len(parsed.args) != 1:
+                return _stale_message()
+            return _event_new_direction_result(
+                actor,
+                parsed.args[0],
+                current_platform=current_platform,
+                input_surface=input_surface,
             )
         if parsed.action == "event-wizard":
             return handle_native_event_wizard_action(
@@ -6281,6 +6292,54 @@ def _render(
             )
         if parsed.action == "manage":
             return _manage_message(actor)
+        if parsed.action == "directions":
+            return _directions_message(actor, _page_number(parsed.args))
+        if parsed.action == "directions-archived":
+            return _directions_message(
+                actor,
+                _page_number(parsed.args),
+                archived=True,
+            )
+        if parsed.action == "direction":
+            if len(parsed.args) != 1:
+                return _stale_message()
+            return _direction_message(actor, parsed.args[0])
+        if parsed.action == "direction-new":
+            return _direction_new_message(
+                actor,
+                current_platform=current_platform,
+                input_surface=input_surface,
+            )
+        if parsed.action == "direction-create-text":
+            if len(parsed.args) != 2:
+                return _stale_message()
+            return _direction_create_result(actor, parsed.args[0], parsed.args[1])
+        if parsed.action == "direction-edit":
+            if len(parsed.args) != 1:
+                return _stale_message()
+            return _direction_edit_message(
+                actor,
+                parsed.args[0],
+                current_platform=current_platform,
+                input_surface=input_surface,
+            )
+        if parsed.action == "direction-edit-text":
+            if len(parsed.args) != 3:
+                return _stale_message()
+            return _direction_edit_result(
+                actor,
+                parsed.args[0],
+                parsed.args[1],
+                parsed.args[2],
+            )
+        if parsed.action == "direction-archive":
+            if len(parsed.args) != 1:
+                return _stale_message()
+            return _direction_archive_result(actor, parsed.args[0])
+        if parsed.action == "direction-restore":
+            if len(parsed.args) != 1:
+                return _stale_message()
+            return _direction_restore_result(actor, parsed.args[0])
         if parsed.action == "manage-more":
             return _manage_more_message(actor)
         if parsed.action == "business-retire":
@@ -6331,11 +6390,25 @@ def _render(
             return _program_create_help(
                 actor, current_platform=current_platform, input_surface=input_surface
             )
-        if parsed.action == "program-create-text":
+        if parsed.action == "program-create-dirs":
+            return _program_direction_message(actor, _page_number(parsed.args))
+        if parsed.action == "program-create-dir":
             if len(parsed.args) != 1:
                 return _stale_message()
+            return _program_title_input(
+                actor,
+                current_platform=current_platform,
+                input_surface=input_surface,
+                direction_id=None if parsed.args[0] == "none" else parsed.args[0],
+            )
+        if parsed.action == "program-create-text":
+            if len(parsed.args) not in {1, 2}:
+                return _stale_message()
             return _program_create_result(
-                actor, parsed.args[0], interaction_key=setup_key
+                actor,
+                parsed.args[0],
+                interaction_key=setup_key,
+                direction_id=parsed.args[1] if len(parsed.args) == 2 else None,
             )
         if parsed.action == "program-lesson":
             if len(parsed.args) != 1:
@@ -6394,8 +6467,26 @@ def _render(
                 current_platform=current_platform,
                 input_surface=input_surface,
             )
+        if parsed.action == "offering-new-dirs":
+            if len(parsed.args) != 2 or not parsed.args[1].isdigit():
+                return _stale_message()
+            return _offering_direction_message(
+                actor,
+                parsed.args[0],
+                int(parsed.args[1]),
+            )
+        if parsed.action == "offering-new-dir":
+            if len(parsed.args) != 2:
+                return _stale_message()
+            return _offering_input_message(
+                actor,
+                parsed.args[0],
+                current_platform=current_platform,
+                input_surface=input_surface,
+                direction_id=None if parsed.args[1] == "none" else parsed.args[1],
+            )
         if parsed.action == "offering-new-text":
-            if len(parsed.args) != 3:
+            if len(parsed.args) not in {3, 4}:
                 return _stale_message()
             return _offering_new_result(
                 actor,
@@ -6403,6 +6494,7 @@ def _render(
                 parsed.args[1],
                 parsed.args[2],
                 interaction_key=setup_key,
+                direction_id=parsed.args[3] if len(parsed.args) == 4 else None,
             )
         if parsed.action == "offering-retire-list":
             return _offering_retire_list_message(actor, _page_number(parsed.args))
@@ -6685,7 +6777,7 @@ def _render(
             )
     except TenantPermissionDenied:
         return _permission_message()
-    except (ActivityError, ProgramError, SalesError):
+    except (ActivityError, ActivityDirectionError, ProgramError, SalesError):
         return _stale_message()
     except ValueError:
         return _stale_message()
