@@ -869,8 +869,9 @@ def _settings_rows(token: str, actor) -> tuple[list[list[tuple[str, str]]], list
     if actor.role in _SETTINGS_MESSENGER_ROLES:
         rows.append([(nav.MESSENGERS.label, f"cpa:{token}:messengers")])
         help_lines.append(f"• подключить или проверить Telegram, ВКонтакте или MAX → «{nav.MESSENGERS.label}»")
-    rows.append([(nav.ACTIVITY.label, f"cp:editact:{token}")])
-    help_lines.append(f"• {nav.ACTIVITY.need} → «{nav.ACTIVITY.label}»")
+    if _allowed(actor, actor.assert_can_manage_business):
+        rows.append([(nav.ACTIVITY.label, f"cp:editact:{token}")])
+        help_lines.append(f"• {nav.ACTIVITY.need} → «{nav.ACTIVITY.label}»")
     rows.append([("🧩 Бизнес и возможности", f"cps:advanced:{token}")])
     help_lines.append("• посмотреть услуги и возможности бизнеса → «🧩 Бизнес и возможности»")
     if actor.role in _SETTINGS_TEAM_ROLES:
