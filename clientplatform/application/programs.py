@@ -9,6 +9,7 @@ from clientplatform.domain.programs import (
     ProgramRecord,
 )
 from clientplatform.domain.tenancy import TenantContext
+from clientplatform.infrastructure.activity_direction_repository import ActivityDirectionRepository
 from clientplatform.infrastructure.delivery_repository import DeliveryRepository
 from clientplatform.infrastructure.program_draft_repository import ProgramDraftRepository
 from clientplatform.infrastructure.program_repository import ProgramRepository
@@ -20,13 +21,22 @@ def create_program(
     actor: TenantContext,
     title: str,
     idempotency_key: str | None = None,
+    direction_id: str | None = None,
 ) -> Program:
     with get_db() as conn:
-        return ProgramRepository(conn).create_program(
+        program = ProgramRepository(conn).create_program(
             actor=actor,
             title=title,
             idempotency_key=idempotency_key,
         )
+        if direction_id is not None:
+            ActivityDirectionRepository(conn).bind_subject(
+                actor=actor,
+                direction_id=direction_id,
+                subject_kind="program",
+                subject_id=program.id,
+            )
+        return program
 
 
 def add_program_lesson(
