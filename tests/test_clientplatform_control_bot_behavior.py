@@ -16,6 +16,7 @@ from clientplatform.domain.programs import ContentKind
 from clientplatform.domain.tenancy import PlatformRole
 from handlers import clientplatform_control as handlers
 from handlers import clientplatform_goal_dashboard as goal_dashboard
+from handlers import clientplatform_program_builder as program_builder
 
 
 class FakeUser:
@@ -656,15 +657,24 @@ async def test_offering_and_program_creation_flows(monkeypatch: pytest.MonkeyPat
     program_state = FakeState()
     start = FakeCallback(f"cp:progadd:{business_token}")
     await handlers.start_program(start, program_state)
-    assert program_state.states[-1] == handlers.ClientPlatformControlState.program_title
+    assert program_state.states[-1] == program_builder.ClientPlatformProgramBuilderState.program_title
     assert program_state.data["business_id"] == business_id
 
-    await handlers.receive_program_title(FakeMessage(text="Спокойный сон"), program_state)
-    assert program_state.data["program_title"] == "Спокойный сон"
-    assert program_state.states[-1] == handlers.ClientPlatformControlState.lesson_title
-    await handlers.receive_lesson_title(FakeMessage(text="Первое аудио"), program_state)
-    assert program_state.data["lesson_title"] == "Первое аудио"
-    assert program_state.states[-1] == handlers.ClientPlatformControlState.lesson_content
+    # A conversation that started before the canonical durable builder rollout
+    # is still allowed to finish through the legacy FSM handlers.
+    legacy_program_state = FakeState({"business_id": business_id})
+    await handlers.receive_program_title(
+        FakeMessage(text="Спокойный сон"),
+        legacy_program_state,
+    )
+    assert legacy_program_state.data["program_title"] == "Спокойный сон"
+    assert legacy_program_state.states[-1] == handlers.ClientPlatformControlState.lesson_title
+    await handlers.receive_lesson_title(
+        FakeMessage(text="Первое аудио"),
+        legacy_program_state,
+    )
+    assert legacy_program_state.data["lesson_title"] == "Первое аудио"
+    assert legacy_program_state.states[-1] == handlers.ClientPlatformControlState.lesson_content
 
     monkeypatch.setattr(
         handlers,
