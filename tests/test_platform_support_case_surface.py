@@ -135,8 +135,8 @@ class PlatformSupportCaseSurfaceTests(unittest.IsolatedAsyncioTestCase):
                 await entry.clientplatform_support_case_command(multi)
             with patch.object(entry, "_telegram_support_actor", return_value=(actor, [object()])):
                 await entry.clientplatform_support_case_command(usage)
-        self.assertIn("Сначала подключите бизнес", no_business.answer.await_args.args[0])
-        self.assertIn("несколько бизнесов", multi.answer.await_args.args[0])
+        self.assertIn("Сначала подключите организацию", no_business.answer.await_args.args[0])
+        self.assertIn("несколько организаций", multi.answer.await_args.args[0])
         self.assertIn("Формат", usage.answer.await_args.args[0])
 
     async def test_tenant_support_list_empty_and_populated(self) -> None:
