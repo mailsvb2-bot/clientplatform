@@ -869,8 +869,8 @@ def _settings_rows(token: str, actor) -> tuple[list[list[tuple[str, str]]], list
     if actor.role in _SETTINGS_MESSENGER_ROLES:
         rows.append([(nav.MESSENGERS.label, f"cpa:{token}:messengers")])
         help_lines.append(f"• подключить или проверить Telegram, ВКонтакте или MAX → «{nav.MESSENGERS.label}»")
-    rows.append([("✏️ Изменить направление", f"cp:editact:{token}")])
-    help_lines.append("• исправить тестовое или устаревшее описание деятельности → «✏️ Изменить направление»")
+    rows.append([(nav.ACTIVITY.label, f"cp:editact:{token}")])
+    help_lines.append(f"• {nav.ACTIVITY.need} → «{nav.ACTIVITY.label}»")
     rows.append([("🧩 Бизнес и возможности", f"cps:advanced:{token}")])
     help_lines.append("• посмотреть услуги и возможности бизнеса → «🧩 Бизнес и возможности»")
     if actor.role in _SETTINGS_TEAM_ROLES:
@@ -880,8 +880,8 @@ def _settings_rows(token: str, actor) -> tuple[list[list[tuple[str, str]]], list
         rows.append([("🛠 Технические проверки", f"cpa:{token}:menu-system")])
         help_lines.append("• проверить техническое состояние → «🛠 Технические проверки»")
     if actor.role == PlatformRole.OWNER:
-        rows.append([("🗑 Удалить бизнес", f"cp:retire:{token}")])
-        help_lines.append("• убрать тестовый или больше не нужный бизнес → «🗑 Удалить бизнес»")
+        rows.append([(nav.DELETE_BUSINESS.label, f"cp:retire:{token}")])
+        help_lines.append(f"• {nav.DELETE_BUSINESS.need} → «{nav.DELETE_BUSINESS.label}»")
     rows.append([(nav.BACK.label, f"cpo:more:{token}")])
     return rows, help_lines
 
