@@ -81,6 +81,13 @@ class FakeCallback:
         self.answers.append((args, kwargs))
 
 
+def callback_answer_text(callback: FakeCallback) -> str:
+    args, kwargs = callback.answers[-1]
+    if args:
+        return str(args[0])
+    return str(kwargs.get("text") or "")
+
+
 class FakeState:
     def __init__(self, data: dict[str, Any] | None = None) -> None:
         self.data = dict(data or {})
@@ -634,14 +641,14 @@ async def test_business_archive_prompt_is_owner_only_stale_safe_and_explicit(
     denied = FakeCallback(f"cps:archive-prompt:{token}")
     await safety.confirm_business_archive(denied, FakeState())
     assert denied.answers[-1][1]["show_alert"] is True
-    assert "только владелец" in denied.answers[-1][0][0]
+    assert "только владелец" in callback_answer_text(denied)
 
     monkeypatch.setattr(safety.control, "_actor", owner_actor)
     monkeypatch.setattr(safety, "list_accessible_businesses", lambda **_kwargs: [])
     stale = FakeCallback(f"cps:archive-prompt:{token}")
     await safety.confirm_business_archive(stale, FakeState())
     assert stale.answers[-1][1]["show_alert"] is True
-    assert "уже недоступен" in stale.answers[-1][0][0]
+    assert "уже недоступен" in callback_answer_text(stale)
 
 
 @pytest.mark.asyncio
@@ -660,7 +667,7 @@ async def test_business_archive_confirmation_fails_closed_and_routes_remaining(
     denied = FakeCallback(f"cps:archive-confirm:{token}")
     await safety.archive_business_from_settings(denied, FakeState())
     assert denied.answers[-1][1]["show_alert"] is True
-    assert "только владелец" in denied.answers[-1][0][0]
+    assert "только владелец" in callback_answer_text(denied)
 
     async def owner_actor(_uid: int, _bid: str) -> object:
         return owner
@@ -674,7 +681,7 @@ async def test_business_archive_confirmation_fails_closed_and_routes_remaining(
     failed = FakeCallback(f"cps:archive-confirm:{token}")
     await safety.archive_business_from_settings(failed, FakeState())
     assert failed.answers[-1][1]["show_alert"] is True
-    assert "Не удалось удалить бизнес" in failed.answers[-1][0][0]
+    assert "Не удалось удалить бизнес" in callback_answer_text(failed)
 
     archived = SimpleNamespace(name="Сантехник")
     monkeypatch.setattr(safety, "archive_business", lambda **_kwargs: archived)
@@ -728,7 +735,7 @@ async def test_business_archive_cancel_is_one_shot_and_returns_to_settings(
     await safety.cancel_business_archive(callback, state)
 
     assert state.clear_count == 1
-    assert callback.answers[-1][0][0] == "Удаление отменено"
+    assert callback_answer_text(callback) == "Удаление отменено"
     assert callback.message.answers[-1][0] == "Удаление бизнеса отменено."
     button = callback.message.answers[-1][1]["reply_markup"].inline_keyboard[0][0]
     assert button.text == "⚙️ Настройки бизнеса"
