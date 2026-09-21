@@ -687,9 +687,10 @@ async def edit_activity(callback: CallbackQuery, state: FSMContext) -> None:
     await state.update_data(business_id=business_id, editing_activity=True)
     await callback.answer()
     await _callback_message(callback).answer(
-        "✏️ Изменить направление деятельности\n\n"
-        "Сейчас это описание помогает ClientPlatform понимать, чем занимается организация. "
-        "Напишите новое направление или описание своими словами."
+        "✏️ Изменить описание организации\n\n"
+        "Это общее описание помогает ClientPlatform понимать, чем занимается организация. "
+        "Напишите новое описание своими словами. Отдельные направления работы "
+        "настраиваются в разделе «Направления деятельности»."
     )
 
 
