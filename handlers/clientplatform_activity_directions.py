@@ -15,6 +15,7 @@ from clientplatform.application.activity_directions import (
     list_activity_direction_bindings,
     list_activity_directions,
     restore_activity_direction,
+    update_activity_direction,
 )
 from clientplatform.domain.activity_directions import (
     ActivityDirectionInvariantViolation,
@@ -31,6 +32,8 @@ router.callback_query.filter(control.ClientPlatformControlEnabled())
 class ClientPlatformActivityDirectionState(StatesGroup):
     title = State()
     description = State()
+    edit_title = State()
+    edit_description = State()
 
 
 def _open_callback(business_id: str, direction_id: str) -> str:
@@ -213,6 +216,14 @@ async def open_activity_direction(callback: CallbackQuery, state: FSMContext) ->
         rows.append(
             [
                 (
+                    "✏️ Изменить",
+                    f"cp:diredit:{business_token}:{direction_token}",
+                )
+            ]
+        )
+        rows.append(
+            [
+                (
                     "📦 Убрать в архив",
                     f"cp:dirarc:{business_token}:{direction_token}",
                 )
@@ -237,6 +248,104 @@ async def open_activity_direction(callback: CallbackQuery, state: FSMContext) ->
         f"• событий: {counts['event']}\n\n"
         "Направление — это часть организации, а не отдельная организация.",
         reply_markup=control._keyboard(rows),
+    )
+
+
+@router.callback_query(F.data.startswith("cp:diredit:"))
+async def begin_edit_direction(callback: CallbackQuery, state: FSMContext) -> None:
+    _, _, business_token, direction_token = str(callback.data).split(":", 3)
+    business_id = control._token_uuid(business_token)
+    direction_id = control._token_uuid(direction_token)
+    actor = await control._actor(int(callback.from_user.id), business_id)
+    direction = await asyncio.to_thread(
+        get_activity_direction,
+        actor=actor,
+        direction_id=direction_id,
+    )
+    if direction.status != ActivityDirectionStatus.ACTIVE:
+        await callback.answer(
+            "Сначала верните направление в работу.",
+            show_alert=True,
+        )
+        return
+    await state.clear()
+    await state.update_data(
+        activity_direction_business_id=business_id,
+        activity_direction_id=direction_id,
+        activity_direction_original_description=direction.description,
+    )
+    await state.set_state(ClientPlatformActivityDirectionState.edit_title)
+    await callback.answer()
+    await control._callback_message(callback).answer(
+        f"Текущее название: «{direction.title}».\n\n"
+        "Напишите новое название направления."
+    )
+
+
+@router.message(ClientPlatformActivityDirectionState.edit_title)
+async def capture_edit_direction_title(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    business_id = str(data.get("activity_direction_business_id") or "").strip()
+    direction_id = str(data.get("activity_direction_id") or "").strip()
+    title = " ".join(str(message.text or "").split()).strip()
+    if not business_id or not direction_id:
+        await state.clear()
+        await message.answer(
+            "Редактирование было закрыто. Откройте «Направления деятельности» заново."
+        )
+        return
+    if not title or len(title) > 160:
+        await message.answer("Название должно содержать от 1 до 160 символов.")
+        return
+    await state.update_data(activity_direction_edit_title=title)
+    await state.set_state(ClientPlatformActivityDirectionState.edit_description)
+    await message.answer(
+        "Теперь напишите новое описание направления."
+    )
+
+
+@router.message(ClientPlatformActivityDirectionState.edit_description)
+async def capture_edit_direction_description(
+    message: Message,
+    state: FSMContext,
+) -> None:
+    data = await state.get_data()
+    business_id = str(data.get("activity_direction_business_id") or "").strip()
+    direction_id = str(data.get("activity_direction_id") or "").strip()
+    title = str(data.get("activity_direction_edit_title") or "").strip()
+    description = " ".join(str(message.text or "").split()).strip()
+    if not business_id or not direction_id or not title:
+        await state.clear()
+        await message.answer(
+            "Редактирование было закрыто. Откройте «Направления деятельности» заново."
+        )
+        return
+    if not description or len(description) > 2000:
+        await message.answer("Описание должно содержать от 1 до 2000 символов.")
+        return
+    actor = await control._actor(control._user_id(message), business_id)
+    try:
+        direction = await asyncio.to_thread(
+            update_activity_direction,
+            actor=actor,
+            direction_id=direction_id,
+            title=title,
+            description=description,
+        )
+    except ActivityDirectionInvariantViolation:
+        await message.answer(
+            "Не удалось сохранить изменения. Проверьте название и попробуйте ещё раз."
+        )
+        return
+    await state.clear()
+    await message.answer(
+        f"✅ Направление «{direction.title}» обновлено. "
+        "Все существующие связи и история сохранены."
+    )
+    await _render_directions(
+        message,
+        user_id=control._user_id(message),
+        business_id=business_id,
     )
 
 
