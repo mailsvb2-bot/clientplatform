@@ -195,14 +195,12 @@ def _callback_program_ids(callback: CallbackQuery) -> tuple[str, str]:
 async def open_programs(callback: CallbackQuery, state: FSMContext) -> None:
     _, _, business_token, _connector_key = str(callback.data).split(":", 3)
     business_id = control._token_uuid(business_token)
-    # Acknowledge navigation before repository I/O so Telegram does not keep
-    # showing a spinner while the program list is loaded.
-    await callback.answer()
-    await state.clear()
     actor = await control._actor(int(callback.from_user.id), business_id)
     programs = await asyncio.to_thread(list_programs, actor=actor)
     drafts = [item for item in programs if item.status == ProgramStatus.DRAFT]
     active = [item for item in programs if item.status == ProgramStatus.ACTIVE]
+    await state.clear()
+    await callback.answer()
     await control._callback_message(callback).answer(
         f"Программы\n\n{_program_lines(programs)}",
         reply_markup=_programs_keyboard(
