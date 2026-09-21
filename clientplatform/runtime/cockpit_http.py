@@ -844,7 +844,9 @@ async def cockpit_events(request: web.Request) -> web.Response:
         return _error(403, "events_access_denied")
     except ValueError:
         return _error(400, "invalid_events_request")
-    except (OSError, RuntimeError):
+    except OSError:
+        return _error(503, "events_unavailable")
+    except RuntimeError:
         return _error(503, "events_unavailable")
     return web.json_response({"ok": True, **snapshot.as_dict()}, headers=_base_headers())
 
@@ -872,7 +874,9 @@ async def cockpit_event_live(request: web.Request) -> web.Response:
         return _error(404, "event_not_found")
     except ValueError:
         return _error(400, "invalid_event_request")
-    except (OSError, RuntimeError):
+    except OSError:
+        return _error(503, "events_unavailable")
+    except RuntimeError:
         return _error(503, "events_unavailable")
     return web.json_response({"ok": True, **live.as_dict()}, headers=_base_headers())
 
