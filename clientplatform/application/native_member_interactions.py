@@ -3768,7 +3768,7 @@ def _activity_edit_help(
         text=(
             "✏️ Изменить направление деятельности\n\n"
             f"Сейчас написано:\n{profile.activity_description}\n\n"
-            "Напишите новое направление или описание обычным сообщением."
+            "Напишите новое направление или описание обычным сообщением — без команды «деятельность»."
         ),
         rows=((_button(nav.SETTINGS.label, "cpm:manage"),), _back_row()),
     )
@@ -3784,7 +3784,7 @@ def _activity_edit_result(actor: TenantContext, description: str) -> CustomerInt
         timezone_name=profile.timezone,
     )
     return CustomerInteractionMessage(
-        text=f"✅ Направление деятельности обновлено: {updated.activity_description}",
+        text=f"✅ Описание деятельности обновлено: {updated.activity_description}",
         rows=((_button(nav.SETTINGS.label, "cpm:manage"),), _back_row()),
     )
 
