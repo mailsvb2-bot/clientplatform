@@ -284,6 +284,203 @@ class ActivityDirectionsUiTests(unittest.IsolatedAsyncioTestCase):
             await directions_ui.restore_direction(restored, FakeState())
             self.assertIn("снова активно", restored.message.answers[-1][0])
 
+    async def test_archived_navigation_binding_counts_and_validation_guards(self) -> None:
+        assert directions_ui is not None
+        business_id = str(uuid4())
+        direction_id = str(uuid4())
+        business_token = directions_ui.control._uuid_token(business_id)
+        direction_token = directions_ui.control._uuid_token(direction_id)
+        actor = SimpleNamespace(assert_can_manage_business=lambda: None)
+        archived = SimpleNamespace(
+            id=direction_id,
+            business_id=business_id,
+            title="Архивное направление",
+            description="Историческое описание",
+            status=ActivityDirectionStatus.ARCHIVED,
+        )
+
+        async def fake_actor(_user_id: int, selected_business_id: str):
+            self.assertEqual(selected_business_id, business_id)
+            return actor
+
+        def list_directions(**kwargs: Any) -> list[Any]:
+            return [archived]
+
+        with (
+            patch.object(directions_ui.control, "_actor", fake_actor),
+            patch.object(directions_ui, "list_activity_directions", list_directions),
+            patch.object(directions_ui, "get_activity_direction", lambda **_kwargs: archived),
+            patch.object(
+                directions_ui,
+                "list_activity_direction_bindings",
+                lambda **_kwargs: [
+                    SimpleNamespace(subject_kind=SimpleNamespace(value="program")),
+                    SimpleNamespace(subject_kind=SimpleNamespace(value="offering")),
+                    SimpleNamespace(subject_kind=SimpleNamespace(value="event")),
+                ],
+            ),
+        ):
+            active_callback = FakeCallback(f"cp:dirs:{business_token}")
+            active_state = FakeState({"old": True})
+            await directions_ui.open_activity_directions(active_callback, active_state)
+            self.assertEqual(active_state.clear_count, 1)
+
+            archived_callback = FakeCallback(f"cp:dirarch:{business_token}")
+            archived_state = FakeState({"old": True})
+            await directions_ui.open_archived_activity_directions(
+                archived_callback,
+                archived_state,
+            )
+            labels = [
+                button.text
+                for row in archived_callback.message.answers[-1][1]["reply_markup"].inline_keyboard
+                for button in row
+            ]
+            self.assertIn("Скрыть архив", labels)
+            self.assertTrue(any(label.startswith("📦 ") for label in labels))
+
+            opened = FakeCallback(f"cp:diropen:{business_token}:{direction_token}")
+            await directions_ui.open_activity_direction(opened, FakeState())
+            body = opened.message.answers[-1][0]
+            self.assertIn("материалов: 1", body)
+            self.assertIn("услуг и предложений: 1", body)
+            self.assertIn("событий: 1", body)
+            open_labels = [
+                button.text
+                for row in opened.message.answers[-1][1]["reply_markup"].inline_keyboard
+                for button in row
+            ]
+            self.assertIn("♻️ Вернуть в работу", open_labels)
+
+            edit = FakeCallback(f"cp:diredit:{business_token}:{direction_token}")
+            edit_state = FakeState()
+            await directions_ui.begin_edit_direction(edit, edit_state)
+            self.assertEqual(edit_state.states, [])
+            self.assertTrue(edit.answers[-1][1]["show_alert"])
+
+        bad_title = FakeMessage("   ")
+        await directions_ui.capture_activity_direction_title(bad_title, FakeState())
+        self.assertIn("от 1 до 160", bad_title.answers[-1][0])
+
+        missing_create = FakeMessage("Описание")
+        missing_create_state = FakeState()
+        await directions_ui.capture_activity_direction_description(
+            missing_create,
+            missing_create_state,
+        )
+        self.assertEqual(missing_create_state.clear_count, 1)
+        self.assertIn("создание направления", missing_create.answers[-1][0].lower())
+
+        bad_description = FakeMessage("   ")
+        bad_description_state = FakeState(
+            {
+                "activity_direction_business_id": business_id,
+                "activity_direction_title": "Название",
+            }
+        )
+        await directions_ui.capture_activity_direction_description(
+            bad_description,
+            bad_description_state,
+        )
+        self.assertIn("от 1 до 2000", bad_description.answers[-1][0])
+
+        duplicate_state = FakeState(
+            {
+                "activity_direction_business_id": business_id,
+                "activity_direction_title": "Дубликат",
+            }
+        )
+        duplicate = FakeMessage("Описание")
+        with (
+            patch.object(directions_ui.control, "_actor", fake_actor),
+            patch.object(
+                directions_ui,
+                "create_activity_direction",
+                side_effect=directions_ui.ActivityDirectionInvariantViolation("duplicate"),
+            ),
+        ):
+            await directions_ui.capture_activity_direction_description(
+                duplicate,
+                duplicate_state,
+            )
+        self.assertIn("уже есть", duplicate.answers[-1][0])
+
+    async def test_direction_edit_validation_guards_and_conflict(self) -> None:
+        assert directions_ui is not None
+        business_id = str(uuid4())
+        direction_id = str(uuid4())
+        actor = SimpleNamespace(assert_can_manage_business=lambda: None)
+
+        async def fake_actor(_user_id: int, selected_business_id: str):
+            self.assertEqual(selected_business_id, business_id)
+            return actor
+
+        missing_title = FakeMessage("Новое имя")
+        missing_title_state = FakeState()
+        await directions_ui.capture_edit_direction_title(
+            missing_title,
+            missing_title_state,
+        )
+        self.assertEqual(missing_title_state.clear_count, 1)
+        self.assertIn("редактирование было закрыто", missing_title.answers[-1][0].lower())
+
+        invalid_title = FakeMessage("   ")
+        invalid_title_state = FakeState(
+            {
+                "activity_direction_business_id": business_id,
+                "activity_direction_id": direction_id,
+            }
+        )
+        await directions_ui.capture_edit_direction_title(
+            invalid_title,
+            invalid_title_state,
+        )
+        self.assertIn("от 1 до 160", invalid_title.answers[-1][0])
+
+        missing_description = FakeMessage("Описание")
+        missing_description_state = FakeState()
+        await directions_ui.capture_edit_direction_description(
+            missing_description,
+            missing_description_state,
+        )
+        self.assertEqual(missing_description_state.clear_count, 1)
+
+        invalid_description = FakeMessage("   ")
+        invalid_description_state = FakeState(
+            {
+                "activity_direction_business_id": business_id,
+                "activity_direction_id": direction_id,
+                "activity_direction_edit_title": "Новое имя",
+            }
+        )
+        await directions_ui.capture_edit_direction_description(
+            invalid_description,
+            invalid_description_state,
+        )
+        self.assertIn("от 1 до 2000", invalid_description.answers[-1][0])
+
+        conflict = FakeMessage("Новое описание")
+        conflict_state = FakeState(
+            {
+                "activity_direction_business_id": business_id,
+                "activity_direction_id": direction_id,
+                "activity_direction_edit_title": "Новое имя",
+            }
+        )
+        with (
+            patch.object(directions_ui.control, "_actor", fake_actor),
+            patch.object(
+                directions_ui,
+                "update_activity_direction",
+                side_effect=directions_ui.ActivityDirectionInvariantViolation("conflict"),
+            ),
+        ):
+            await directions_ui.capture_edit_direction_description(
+                conflict,
+                conflict_state,
+            )
+        self.assertIn("Не удалось сохранить изменения", conflict.answers[-1][0])
+
     def test_direction_callbacks_fit_telegram_limit(self) -> None:
         assert directions_ui is not None
         business_id = str(uuid4())
