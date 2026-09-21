@@ -60,6 +60,7 @@ from clientplatform.application.progress import (
     list_customer_programs,
 )
 from clientplatform.application.tenancy import (
+    archive_business,
     create_business,
     list_accessible_businesses,
     resolve_tenant_context,
@@ -525,7 +526,7 @@ async def receive_activity_description(message: Message, state: FSMContext) -> N
     )
     if editing_activity:
         await state.clear()
-        await message.answer("Описание деятельности обновлено.")
+        await message.answer("Направление деятельности обновлено.")
         await _send_dashboard(message, user_id=_user_id(message), business_id=business_id)
         return
 
@@ -676,7 +677,68 @@ async def edit_activity(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(ClientPlatformControlState.activity_description)
     await state.update_data(business_id=business_id, editing_activity=True)
     await callback.answer()
-    await _callback_message(callback).answer("Напишите новое описание Вашей деятельности.")
+    await _callback_message(callback).answer(
+        "✏️ Изменить направление деятельности\n\n"
+        "Сейчас это описание помогает ClientPlatform понимать, чем занимается бизнес. "
+        "Напишите новое направление или описание своими словами."
+    )
+
+
+@router.callback_query(F.data.startswith("cp:retire:"))
+async def confirm_business_retirement(callback: CallbackQuery, state: FSMContext) -> None:
+    business_id = _token_uuid(str(callback.data).split(":", 2)[2])
+    user_id = _callback_actor_user_id(callback)
+    actor = await _actor(user_id, business_id)
+    if actor.role.value != "owner":
+        await callback.answer("Удалить бизнес может только владелец.", show_alert=True)
+        return
+    accesses = await asyncio.to_thread(list_accessible_businesses, user_id=user_id)
+    access = next((item for item in accesses if item.business.id == business_id), None)
+    if access is None:
+        await callback.answer("Бизнес уже недоступен.", show_alert=True)
+        return
+    token = _uuid_token(business_id)
+    await state.clear()
+    await callback.answer()
+    await _callback_message(callback).answer(
+        f"🗑 Удалить бизнес «{access.business.name}»?\n\n"
+        "Он исчезнет из активных бизнесов и больше не будет выбран в ClientPlatform. "
+        "История оплат, результатов и служебный аудит сохранятся. "
+        "Это нужно, чтобы финансовая и операционная история не повреждалась.",
+        reply_markup=_keyboard(
+            [
+                [("✅ Да, удалить бизнес", f"cp:retireok:{token}")],
+                [("Отмена", f"cpo:settings:{token}")],
+            ]
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("cp:retireok:"))
+async def retire_business(callback: CallbackQuery, state: FSMContext) -> None:
+    business_id = _token_uuid(str(callback.data).split(":", 2)[2])
+    user_id = _callback_actor_user_id(callback)
+    actor = await _actor(user_id, business_id)
+    if actor.role.value != "owner":
+        await callback.answer("Удалить бизнес может только владелец.", show_alert=True)
+        return
+    business = await asyncio.to_thread(archive_business, actor=actor)
+    await state.clear()
+    await callback.answer("Бизнес удалён")
+    remaining = await asyncio.to_thread(list_accessible_businesses, user_id=user_id)
+    message = _callback_message(callback)
+    if remaining:
+        await message.answer(
+            f"✅ Бизнес «{business.name}» удалён из активной работы.\n\n"
+            "История сохранена. Выберите бизнес, с которым хотите продолжить:",
+            reply_markup=_business_choice_keyboard(remaining),
+        )
+        return
+    await message.answer(
+        f"✅ Бизнес «{business.name}» удалён из активной работы.\n\n"
+        "История сохранена. Сейчас у Вас нет активных бизнесов.",
+        reply_markup=_keyboard([[("➕ Создать новый бизнес", "cps:start")]]),
+    )
 
 
 @router.callback_query(F.data.startswith("cp:cap:"))
