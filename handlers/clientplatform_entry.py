@@ -72,7 +72,7 @@ def _entry_keyboard():
     return control._keyboard(
         [
             [("Мои организации", "cp:entry:businesses")],
-            [("Мои специалисты и программы", "cp:entry:clients")],
+            [("Мои специалисты и материалы", "cp:entry:clients")],
         ]
     )
 
