@@ -72,6 +72,19 @@ class ActivityDirectionRepository:
             current.assert_can_manage_business()
         return current
 
+    @staticmethod
+    def _assert_can_bind_subject(
+        actor: TenantContext,
+        subject_kind: DirectionSubjectKind,
+    ) -> None:
+        if subject_kind in {
+            DirectionSubjectKind.PROGRAM,
+            DirectionSubjectKind.OFFERING,
+        }:
+            actor.assert_can_manage_programs()
+            return
+        actor.assert_can_manage_business()
+
     def create(
         self,
         *,
@@ -312,13 +325,14 @@ class ActivityDirectionRepository:
         subject_id: str,
         now: str | None = None,
     ) -> ActivityDirectionBinding:
-        current = self._current(actor, manage=True)
+        current = self._current(actor, manage=False)
+        kind = normalize_direction_subject_kind(subject_kind)
+        self._assert_can_bind_subject(current, kind)
         direction = self.get(actor=current, direction_id=direction_id)
         if direction.status != ActivityDirectionStatus.ACTIVE:
             raise ActivityDirectionInvariantViolation(
                 "cannot bind work to an archived activity direction"
             )
-        kind = normalize_direction_subject_kind(subject_kind)
         normalized_subject_id = normalize_uuid(subject_id, field_name="subject_id")
         self._assert_subject(
             business_id=current.business_id,
@@ -359,8 +373,9 @@ class ActivityDirectionRepository:
         subject_kind: DirectionSubjectKind | str,
         subject_id: str,
     ) -> bool:
-        current = self._current(actor, manage=True)
+        current = self._current(actor, manage=False)
         kind = normalize_direction_subject_kind(subject_kind)
+        self._assert_can_bind_subject(current, kind)
         normalized_subject_id = normalize_uuid(subject_id, field_name="subject_id")
         cursor = self._conn.execute(
             """
