@@ -36,7 +36,6 @@ class OnlineEventCreateRequest:
     enable_email_notifications: bool = True
     notification_connection_id: str | None = None
     direction_id: str | None = None
-    direction_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,6 +57,7 @@ class MultiSessionOnlineEventCreateRequest:
     kind: str = "webinar"
     enable_email_notifications: bool = True
     notification_connection_id: str | None = None
+    direction_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
