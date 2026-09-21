@@ -25,8 +25,8 @@ class ClientPlatformDualRoleEntryContractTests(unittest.TestCase):
         self.assertIn("list_accessible_businesses", source)
         self.assertIn("list_customer_businesses", source)
         self.assertIn("if accesses and links:", source)
-        self.assertIn("Мои бизнесы", source)
-        self.assertIn("Мои специалисты и программы", source)
+        self.assertIn("Мои организации", source)
+        self.assertIn("Мои специалисты и материалы", source)
 
     def test_role_callbacks_recheck_live_access(self) -> None:
         source = Path("handlers/clientplatform_entry.py").read_text(encoding="utf-8")
