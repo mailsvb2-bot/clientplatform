@@ -205,6 +205,7 @@ class CockpitEventsBridgeTests(unittest.IsolatedAsyncioTestCase):
         business_token = "ERERERERQRGBEREREREREQ"
         actions = (
             SimpleNamespace(kind="join", label="🔗 Добавить ссылку", key=event_id),
+            SimpleNamespace(kind="conduct", label="▶️ Провести вебинар", key=event_id),
             SimpleNamespace(kind="announce", label="✨ Сделать анонс", key=event_id),
         )
 
@@ -225,6 +226,7 @@ class CockpitEventsBridgeTests(unittest.IsolatedAsyncioTestCase):
         rows = target.answer.await_args.kwargs["reply_markup"]
         flattened = [button for row in rows for button in row]
         self.assertIn(("🔗 Добавить ссылку", f"cpev:join:{event_token}:{business_token}"), flattened)
+        self.assertIn(("▶️ Провести вебинар", f"cpev:conduct:{event_token}:{business_token}"), flattened)
         self.assertIn(("✨ Сделать анонс", f"cpev:announce:{event_token}:{business_token}"), flattened)
 
 
