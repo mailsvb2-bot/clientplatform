@@ -200,6 +200,7 @@ def test_keyboard_builders_and_content_detection(monkeypatch: pytest.MonkeyPatch
     assert "Services" not in flat
     assert "Клиенты" in flat
     assert "Результаты" in flat
+    assert "✏️ Описание организации" in flat
     assert "🏠 Открыть кабинет" in flat
     cockpit_button = next(
         button
@@ -360,7 +361,7 @@ async def test_start_invite_new_multi_and_single_business(monkeypatch: pytest.Mo
     multi_state = FakeState({"old": 1})
     await handlers.clientplatform_start(multiple, multi_state)
     assert multi_state.clear_count == 1
-    assert "Выберите бизнес" in multiple.answers[-1][0]
+    assert "Выберите организацию" in multiple.answers[-1][0]
     assert len(multiple.answers[-1][1]["reply_markup"].inline_keyboard) == 2
 
     one = [business_access(business_id)]
@@ -452,7 +453,7 @@ async def test_business_and_activity_input_paths(monkeypatch: pytest.MonkeyPatch
     edit_state = FakeState({"business_id": business_id, "editing_activity": True})
     await handlers.receive_activity_description(editing, edit_state)
     assert structured[-1]["reset_confirmation"] is False
-    assert "Описание деятельности обновлено" in editing.answers[-1][0]
+    assert "Описание организации обновлено" in editing.answers[-1][0]
     assert dashboard_calls == [business_id]
 
 
@@ -571,7 +572,8 @@ async def test_custom_finish_and_edit_activity(monkeypatch: pytest.MonkeyPatch) 
     await handlers.edit_activity(edit, edit_state)
     assert edit_state.states[-1] == handlers.ClientPlatformControlState.activity_description
     assert edit_state.data == {"business_id": business_id, "editing_activity": True}
-    assert "новое направление" in edit.message.answers[-1][0]
+    assert "Изменить описание организации" in edit.message.answers[-1][0]
+    assert "Направления деятельности" in edit.message.answers[-1][0]
 
 
 @pytest.mark.asyncio
@@ -596,6 +598,7 @@ async def test_edit_activity_forged_callback_fails_closed(
     assert state.states == []
     assert state.data == {}
     assert callback.answers[-1][1]["show_alert"] is True
+    assert "описание организации" in callback.answers[-1][0][0].lower()
     assert "владелец или администратор" in callback.answers[-1][0][0]
 
 
@@ -622,14 +625,14 @@ async def test_business_archive_prompt_is_owner_only_stale_safe_and_explicit(
     await safety.confirm_business_archive(callback, state)
 
     assert state.clear_count == 1
-    assert "Удалить бизнес «Сантехник»?" in callback.message.answers[-1][0]
+    assert "Удалить организацию «Сантехник»?" in callback.message.answers[-1][0]
     buttons = [
         (button.text, button.callback_data)
         for row in callback.message.answers[-1][1]["reply_markup"].inline_keyboard
         for button in row
     ]
     assert buttons == [
-        ("🗑 Да, удалить бизнес", f"cps:archive-confirm:{token}"),
+        ("🗑 Да, удалить организацию", f"cps:archive-confirm:{token}"),
         ("Отмена", f"cps:archive-cancel:{token}"),
     ]
     assert "cps:archive-cancel:" in safety._ONE_SHOT_PREFIXES
@@ -648,7 +651,7 @@ async def test_business_archive_prompt_is_owner_only_stale_safe_and_explicit(
     stale = FakeCallback(f"cps:archive-prompt:{token}")
     await safety.confirm_business_archive(stale, FakeState())
     assert stale.answers[-1][1]["show_alert"] is True
-    assert "уже недоступен" in callback_answer_text(stale)
+    assert "Организация уже недоступна" in callback_answer_text(stale)
 
 
 @pytest.mark.asyncio
@@ -681,7 +684,7 @@ async def test_business_archive_confirmation_fails_closed_and_routes_remaining(
     failed = FakeCallback(f"cps:archive-confirm:{token}")
     await safety.archive_business_from_settings(failed, FakeState())
     assert failed.answers[-1][1]["show_alert"] is True
-    assert "Не удалось удалить бизнес" in callback_answer_text(failed)
+    assert "Не удалось удалить организацию" in callback_answer_text(failed)
 
     archived = SimpleNamespace(name="Сантехник")
     monkeypatch.setattr(safety, "archive_business", lambda **_kwargs: archived)
@@ -695,7 +698,7 @@ async def test_business_archive_confirmation_fails_closed_and_routes_remaining(
         for row in none_left.message.answers[-1][1]["reply_markup"].inline_keyboard
         for button in row
     ]
-    assert create_buttons == ["➕ Создать бизнес"]
+    assert create_buttons == ["➕ Создать организацию"]
 
     other_id = str(uuid4())
     remaining = [business_access(other_id, "Основной бизнес")]
@@ -719,7 +722,7 @@ async def test_business_archive_confirmation_fails_closed_and_routes_remaining(
     )
     multiple_left = FakeCallback(f"cps:archive-confirm:{token}")
     await safety.archive_business_from_settings(multiple_left, FakeState())
-    assert "Выберите бизнес" in multiple_left.message.answers[-1][0]
+    assert "Выберите организацию" in multiple_left.message.answers[-1][0]
     assert multiple_left.message.answers[-1][1]["reply_markup"] == "business-choice"
 
 
@@ -736,9 +739,9 @@ async def test_business_archive_cancel_is_one_shot_and_returns_to_settings(
 
     assert state.clear_count == 1
     assert callback_answer_text(callback) == "Удаление отменено"
-    assert callback.message.answers[-1][0] == "Удаление бизнеса отменено."
+    assert callback.message.answers[-1][0] == "Удаление организации отменено."
     button = callback.message.answers[-1][1]["reply_markup"].inline_keyboard[0][0]
-    assert button.text == "⚙️ Настройки бизнеса"
+    assert button.text == "⚙️ Настройки организации"
     assert button.callback_data == f"cpo:settings:{token}"
     assert "cps:archive-cancel:" in safety._ONE_SHOT_PREFIXES
 
@@ -800,6 +803,13 @@ async def test_offering_and_program_creation_flows(monkeypatch: pytest.MonkeyPat
     business_token = handlers._uuid_token(business_id)
     capability_token = handlers._uuid_token(capability_id)
 
+    async def fake_actor(_uid: int, _bid: str) -> object:
+        return object()
+
+    monkeypatch.setattr(handlers, "_actor", fake_actor)
+    monkeypatch.setattr(handlers, "list_activity_directions", lambda **_kwargs: [])
+    monkeypatch.setattr(program_builder, "list_activity_directions", lambda **_kwargs: [])
+
     state = FakeState()
     callback = FakeCallback(f"cp:offeradd:{business_token}:{capability_token}")
     await handlers.start_offering(callback, state)
@@ -810,11 +820,6 @@ async def test_offering_and_program_creation_flows(monkeypatch: pytest.MonkeyPat
     await handlers.receive_offering_title(FakeMessage(text="Первая консультация"), title_state)
     assert title_state.data["offering_title"] == "Первая консультация"
     assert title_state.states[-1] == handlers.ClientPlatformControlState.offering_description
-
-    async def fake_actor(_uid: int, _bid: str) -> object:
-        return object()
-
-    monkeypatch.setattr(handlers, "_actor", fake_actor)
     monkeypatch.setattr(
         handlers,
         "create_business_offering",
@@ -876,6 +881,99 @@ async def test_offering_and_program_creation_flows(monkeypatch: pytest.MonkeyPat
     await handlers.receive_lesson_content(content, content_state)
     assert "создана и готова" in content.answers[-1][0]
     assert dashboard_calls[-1] == business_id
+
+
+@pytest.mark.asyncio
+async def test_offering_direction_selection_handles_active_none_and_stale_callbacks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    business_id = str(uuid4())
+    capability_id = str(uuid4())
+    direction_id = str(uuid4())
+    business_token = handlers._uuid_token(business_id)
+    capability_token = handlers._uuid_token(capability_id)
+    direction_token = handlers._uuid_token(direction_id)
+    actor = object()
+
+    async def fake_actor(_uid: int, selected_business_id: str) -> object:
+        assert selected_business_id == business_id
+        return actor
+
+    monkeypatch.setattr(handlers, "_actor", fake_actor)
+    monkeypatch.setattr(
+        handlers,
+        "list_activity_directions",
+        lambda **_kwargs: [
+            SimpleNamespace(id=direction_id, title="Корпоративные клиенты")
+        ],
+    )
+
+    start_state = FakeState()
+    start = FakeCallback(f"cp:offeradd:{business_token}:{capability_token}")
+    await handlers.start_offering(start, start_state)
+    assert start_state.data == {
+        "business_id": business_id,
+        "capability_id": capability_id,
+    }
+    assert start_state.states == []
+    start_buttons = [
+        button.text
+        for row in start.message.answers[-1][1]["reply_markup"].inline_keyboard
+        for button in row
+    ]
+    assert "Корпоративные клиенты" in start_buttons
+    assert "Без направления" in start_buttons
+
+    selected_state = FakeState(
+        {"business_id": business_id, "capability_id": capability_id}
+    )
+    selected = FakeCallback(
+        f"cp:offdir:{business_token}:{direction_token}"
+    )
+    await handlers.choose_offering_direction(selected, selected_state)
+    assert selected_state.data["direction_id"] == direction_id
+    assert (
+        selected_state.states[-1]
+        == handlers.ClientPlatformControlState.offering_title
+    )
+    assert "Как называется" in selected.message.answers[-1][0]
+
+    stale = FakeCallback(f"cp:offdir:{business_token}:{direction_token}")
+    await handlers.choose_offering_direction(stale, FakeState())
+    assert stale.answers[-1][1]["show_alert"] is True
+    assert "устарела" in callback_answer_text(stale).lower()
+
+    monkeypatch.setattr(handlers, "list_activity_directions", lambda **_kwargs: [])
+    unavailable_state = FakeState(
+        {"business_id": business_id, "capability_id": capability_id}
+    )
+    unavailable = FakeCallback(
+        f"cp:offdir:{business_token}:{direction_token}"
+    )
+    await handlers.choose_offering_direction(unavailable, unavailable_state)
+    assert unavailable.answers[-1][1]["show_alert"] is True
+    assert "недоступно" in callback_answer_text(unavailable).lower()
+
+    without_state = FakeState(
+        {"business_id": business_id, "capability_id": capability_id}
+    )
+    without = FakeCallback(f"cp:offdirnone:{business_token}")
+    await handlers.choose_offering_without_direction(without, without_state)
+    assert "direction_id" in without_state.data
+    assert without_state.data["direction_id"] is None
+    assert (
+        without_state.states[-1]
+        == handlers.ClientPlatformControlState.offering_title
+    )
+    assert "Как называется" in without.message.answers[-1][0]
+
+    stale_without = FakeCallback(f"cp:offdirnone:{business_token}")
+    await handlers.choose_offering_without_direction(
+        stale_without,
+        FakeState(),
+    )
+    assert stale_without.answers[-1][1]["show_alert"] is True
+    assert "устарела" in callback_answer_text(stale_without).lower()
 
 
 @pytest.mark.asyncio

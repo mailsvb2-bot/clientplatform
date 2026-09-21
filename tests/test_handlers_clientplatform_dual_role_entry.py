@@ -111,7 +111,7 @@ class ClientPlatformDualRoleEntryTests(unittest.IsolatedAsyncioTestCase):
         text, kwargs = message.answers[-1]
         self.assertIn("два рабочих пространства", text)
         labels = [button.text for row in kwargs["reply_markup"].inline_keyboard for button in row]
-        self.assertEqual(labels, ["Мои бизнесы", "Мои специалисты и программы"])
+        self.assertEqual(labels, ["Мои организации", "Мои специалисты и материалы"])
 
     async def test_role_choice_callbacks_recheck_live_access(self) -> None:
         business = access("Практика")
@@ -166,7 +166,7 @@ class ClientPlatformDualRoleEntryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(new_state.states, [])
         self.assertIn("цифровой помощник", new_message.answers[-1][0])
         button = new_message.answers[-1][1]["reply_markup"].inline_keyboard[0][0]
-        self.assertEqual(button.text, "🚀 Запустить мой бизнес")
+        self.assertEqual(button.text, "🚀 Подключить организацию")
         self.assertEqual(button.callback_data, "cps:start")
 
     async def test_owner_only_paths_preserve_single_and_multiple_business_behavior(self) -> None:
@@ -180,7 +180,7 @@ class ClientPlatformDualRoleEntryTests(unittest.IsolatedAsyncioTestCase):
             multiple_state = FakeState()
             await entry.clientplatform_entry_start(multiple_message, multiple_state)
         self.assertEqual(multiple_state.clear_count, 1)
-        self.assertIn("Выберите бизнес", multiple_message.answers[-1][0])
+        self.assertIn("Выберите организацию", multiple_message.answers[-1][0])
 
         resumed: list[str] = []
 
@@ -226,7 +226,7 @@ class ClientPlatformDualRoleEntryTests(unittest.IsolatedAsyncioTestCase):
             await entry.open_business_workspace(business_callback, FakeState())
             await entry.open_customer_workspace(client_callback, FakeState())
 
-        self.assertIn("Активных бизнесов", business_callback.message.answers[-1][0])
+        self.assertIn("Активных организаций", business_callback.message.answers[-1][0])
         self.assertIn("Активных подключений", client_callback.message.answers[-1][0])
 
     async def test_entry_error_delegates_to_existing_fail_closed_handler(self) -> None:

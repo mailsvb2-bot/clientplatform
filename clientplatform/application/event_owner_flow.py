@@ -35,6 +35,7 @@ class OnlineEventCreateRequest:
     provider_label: str | None = None
     enable_email_notifications: bool = True
     notification_connection_id: str | None = None
+    direction_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +57,7 @@ class MultiSessionOnlineEventCreateRequest:
     kind: str = "webinar"
     enable_email_notifications: bool = True
     notification_connection_id: str | None = None
+    direction_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,6 +160,7 @@ def create_and_publish_online_event_in_transaction(
         provider_key=provider_key,
         provider_label=request.provider_label,
         notification_connection_id=notification_connection_id,
+        direction_id=request.direction_id,
     )
     event = publish_event_in_transaction(
         conn,
@@ -212,6 +215,7 @@ def create_multisession_online_event_draft_in_transaction(
         provider_key=first_provider_key,
         provider_label=first.provider_label,
         notification_connection_id=notification_connection_id,
+        direction_id=request.direction_id,
     )
     configured = configure_event_sessions_in_transaction(
         conn,

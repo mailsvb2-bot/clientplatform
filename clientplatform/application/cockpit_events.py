@@ -336,6 +336,7 @@ def resolve_cockpit_event_live(
 def _request_hash(*, request: OnlineEventCreateRequest) -> str:
     canonical = {
         "description": request.description,
+        "direction_id": request.direction_id,
         "enable_email_notifications": bool(request.enable_email_notifications),
         "ends_at": None if request.ends_at is None else request.ends_at.isoformat(),
         "join_url": request.join_url,

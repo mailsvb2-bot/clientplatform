@@ -80,6 +80,15 @@ def _load_clientplatform_modules() -> tuple[ModuleType, ModuleType]:
     globals()["clientplatform_simple_experience"] = simple_experience
     simple_experience.install_simple_experience(control)
 
+    activity_directions = importlib.import_module(
+        ".clientplatform_activity_directions",
+        __name__,
+    )
+    globals()["clientplatform_activity_directions"] = activity_directions
+    if not bool(getattr(simple_experience, "_activity_directions_composed", False)):
+        simple_experience.router.include_router(activity_directions.router)
+        simple_experience._activity_directions_composed = True
+
     sales = importlib.import_module(".clientplatform_sales", __name__)
     sales_install = importlib.import_module(".clientplatform_sales_install", __name__)
     globals()["clientplatform_sales"] = sales
@@ -341,6 +350,9 @@ def __getattr__(name: str) -> ModuleType:
     if name == "clientplatform_yandex_analytics":
         _load_clientplatform_modules()
         return globals()["clientplatform_yandex_analytics"]
+    if name == "clientplatform_activity_directions":
+        _load_clientplatform_modules()
+        return globals()["clientplatform_activity_directions"]
     if name == "clientplatform_ad_connections":
         _load_clientplatform_modules()
         return globals()["clientplatform_ad_connections"]
@@ -377,6 +389,7 @@ def __getattr__(name: str) -> ModuleType:
 __all__ = [
     "clientplatform_ad_connections",
     "clientplatform_ad_disconnect",
+    "clientplatform_activity_directions",
     "clientplatform_ad_spend",
     "clientplatform_admin_extension",
     "clientplatform_bot_lifecycle",

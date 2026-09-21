@@ -511,9 +511,10 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
             await labels_for(one_click.open_settings_tools, "cpo:settings:business-1"),
             [
                 "💬 Подключить мессенджеры",
-                "🧩 Бизнес и возможности",
-                "✏️ Изменить направление",
-                "🗑 Удалить бизнес",
+                "🧩 Организация и возможности",
+                "🧭 Направления деятельности",
+                "✏️ Описание организации",
+                "🗑 Удалить организацию",
                 "👤 Сотрудники и доступы",
                 "🛠 Технические проверки",
                 "⬅️ Назад",
@@ -532,15 +533,15 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(one_click, "cockpit_web_app_url", return_value=None):
             self.assertEqual(
                 labels(PlatformRole.MARKETER),
-                ["🎨 Создать картинку", "📈 Продвижение и контент", "⚙️ Настройки бизнеса", "⬅️ Назад"],
+                ["🎨 Создать картинку", "📈 Продвижение и контент", "⚙️ Настройки организации", "⬅️ Назад"],
             )
             self.assertEqual(
                 labels(PlatformRole.SUPPORT),
-                ["👥 Клиенты и продажи", "📅 Услуги и запись", "⚙️ Настройки бизнеса", "⬅️ Назад"],
+                ["👥 Клиенты и продажи", "📅 Услуги и запись", "⚙️ Настройки организации", "⬅️ Назад"],
             )
             self.assertEqual(
                 labels(PlatformRole.ANALYST),
-                ["⚙️ Настройки бизнеса", "⬅️ Назад"],
+                ["⚙️ Настройки организации", "⬅️ Назад"],
             )
 
     async def test_settings_help_mentions_only_buttons_visible_for_role(self):
@@ -553,8 +554,8 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
             for row in target.answer.await_args.kwargs["reply_markup"].inline_keyboard
             for button in row
         ]
-        self.assertEqual(labels, ["🧩 Бизнес и возможности", "⬅️ Назад"])
-        self.assertIn("Бизнес и возможности", text)
+        self.assertEqual(labels, ["🧩 Организация и возможности", "⬅️ Назад"])
+        self.assertIn("Организация и возможности", text)
         self.assertNotIn("Подключить мессенджеры", text)
         self.assertNotIn("Сотрудники и доступы", text)
         self.assertNotIn("Технические проверки", text)
@@ -571,9 +572,10 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
             labels(PlatformRole.OWNER),
             [
                 "💬 Подключить мессенджеры",
-                "🧩 Бизнес и возможности",
-                "✏️ Изменить направление",
-                "🗑 Удалить бизнес",
+                "🧩 Организация и возможности",
+                "🧭 Направления деятельности",
+                "✏️ Описание организации",
+                "🗑 Удалить организацию",
                 "👤 Сотрудники и доступы",
                 "🛠 Технические проверки",
                 "⬅️ Назад",
@@ -583,19 +585,20 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
             labels(PlatformRole.ADMINISTRATOR),
             [
                 "💬 Подключить мессенджеры",
-                "🧩 Бизнес и возможности",
-                "✏️ Изменить направление",
+                "🧩 Организация и возможности",
+                "🧭 Направления деятельности",
+                "✏️ Описание организации",
                 "🛠 Технические проверки",
                 "⬅️ Назад",
             ],
         )
         self.assertEqual(
             labels(PlatformRole.MANAGER),
-            ["💬 Подключить мессенджеры", "🧩 Бизнес и возможности", "⬅️ Назад"],
+            ["💬 Подключить мессенджеры", "🧩 Организация и возможности", "⬅️ Назад"],
         )
         self.assertEqual(
             labels(PlatformRole.MARKETER),
-            ["🧩 Бизнес и возможности", "⬅️ Назад"],
+            ["🧩 Организация и возможности", "⬅️ Назад"],
         )
 
 
@@ -613,7 +616,7 @@ class OneClickEdgeCoverageTests(unittest.IsolatedAsyncioTestCase):
             "automation": "🤖 Открыть автоматизацию",
             "connections": "💬 Подключить мессенджеры",
             "team": "👤 Сотрудники и доступы",
-            "settings": "🧩 Бизнес и возможности",
+            "settings": "🧩 Организация и возможности",
         }
         with (
             patch.object(one_click.control, "_actor", new=AsyncMock(return_value=actor)),

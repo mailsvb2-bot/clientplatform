@@ -14,6 +14,7 @@ from aiogram.types import (
     WebAppInfo,
 )
 
+from clientplatform.application.activity_directions import list_activity_directions
 from clientplatform.application.activity import (
     claim_customer_invite,
     complete_business_profile,
@@ -308,7 +309,7 @@ def _dashboard_keyboard(business_id: str, capabilities: list[object]) -> InlineK
     rows.extend(
         [
             [("Клиенты", f"cp:clients:{token}"), ("Результаты", f"cp:results:{token}")],
-            [("✏️ Изменить направление", f"cp:editact:{token}")],
+            [("✏️ Описание организации", f"cp:editact:{token}")],
         ]
     )
     markup = _keyboard(rows)
@@ -381,7 +382,7 @@ async def _send_client_portal(message: Message, *, links: list[object]) -> None:
         )
         return
     await message.answer(
-        "Выберите специалиста или бизнес:",
+        "Выберите специалиста или организацию:",
         reply_markup=_client_business_keyboard(links),
     )
 
@@ -476,7 +477,7 @@ async def clientplatform_start(message: Message, state: FSMContext) -> None:
     if len(accesses) > 1:
         await state.clear()
         await message.answer(
-            "Выберите бизнес, с которым хотите работать:",
+            "Выберите организацию, с которой хотите работать:",
             reply_markup=_business_choice_keyboard(accesses),
         )
         return
@@ -525,7 +526,7 @@ async def receive_activity_description(message: Message, state: FSMContext) -> N
     )
     if editing_activity:
         await state.clear()
-        await message.answer("Описание деятельности обновлено. Новое направление сохранено.")
+        await message.answer("Описание организации обновлено.")
         await _send_dashboard(message, user_id=_user_id(message), business_id=business_id)
         return
 
@@ -654,7 +655,7 @@ async def finish_profile(callback: CallbackQuery, state: FSMContext) -> None:
     if profile.status == BusinessProfileStatus.DRAFT:
         structured = await asyncio.to_thread(get_business_profile_details, actor=actor)
         if not structured.confirmed:
-            await callback.answer("Сначала подтвердите данные о бизнесе.", show_alert=True)
+            await callback.answer("Сначала подтвердите данные об организации.", show_alert=True)
             return
     try:
         await asyncio.to_thread(complete_business_profile, actor=actor)
@@ -678,7 +679,7 @@ async def edit_activity(callback: CallbackQuery, state: FSMContext) -> None:
         actor.assert_can_manage_business()
     except TenantPermissionDenied:
         await callback.answer(
-            "Изменить направление может владелец или администратор.",
+            "Изменить описание организации может владелец или администратор.",
             show_alert=True,
         )
         return
@@ -686,9 +687,10 @@ async def edit_activity(callback: CallbackQuery, state: FSMContext) -> None:
     await state.update_data(business_id=business_id, editing_activity=True)
     await callback.answer()
     await _callback_message(callback).answer(
-        "✏️ Изменить направление деятельности\n\n"
-        "Сейчас это описание помогает ClientPlatform понимать, чем занимается бизнес. "
-        "Напишите новое направление или описание своими словами."
+        "✏️ Изменить описание организации\n\n"
+        "Это общее описание помогает ClientPlatform понимать, чем занимается организация. "
+        "Напишите новое описание своими словами. Отдельные направления работы "
+        "настраиваются в разделе «Направления деятельности»."
     )
 
 
@@ -751,13 +753,77 @@ async def open_capability(callback: CallbackQuery, state: FSMContext) -> None:
 @router.callback_query(F.data.startswith("cp:offeradd:"))
 async def start_offering(callback: CallbackQuery, state: FSMContext) -> None:
     _, _, business_token, capability_token = str(callback.data).split(":", 3)
-    await state.set_state(ClientPlatformControlState.offering_title)
+    business_id = _token_uuid(business_token)
+    actor = await _actor(int(callback.from_user.id), business_id)
+    directions = await asyncio.to_thread(list_activity_directions, actor=actor)
+    await state.clear()
     await state.update_data(
-        business_id=_token_uuid(business_token),
+        business_id=business_id,
         capability_id=_token_uuid(capability_token),
     )
     await callback.answer()
-    await _callback_message(callback).answer("Как называется консультация, услуга или предложение?")
+    if not directions:
+        await state.set_state(ClientPlatformControlState.offering_title)
+        await _callback_message(callback).answer(
+            "Как называется консультация, услуга или предложение?"
+        )
+        return
+    rows = [
+        [
+            (
+                direction.title[:42],
+                f"cp:offdir:{business_token}:{_uuid_token(direction.id)}",
+            )
+        ]
+        for direction in directions
+    ]
+    rows.append([("Без направления", f"cp:offdirnone:{business_token}")])
+    await _callback_message(callback).answer(
+        "К какому направлению деятельности относится это предложение?",
+        reply_markup=_keyboard(rows),
+    )
+
+
+@router.callback_query(F.data.startswith("cp:offdir:"))
+async def choose_offering_direction(callback: CallbackQuery, state: FSMContext) -> None:
+    _, _, business_token, direction_token = str(callback.data).split(":", 3)
+    business_id = _token_uuid(business_token)
+    data = await state.get_data()
+    if str(data.get("business_id") or "") != business_id or not data.get("capability_id"):
+        await callback.answer("Кнопка устарела. Начните добавление заново.", show_alert=True)
+        return
+    actor = await _actor(int(callback.from_user.id), business_id)
+    directions = await asyncio.to_thread(list_activity_directions, actor=actor)
+    direction_id = _token_uuid(direction_token)
+    if direction_id not in {item.id for item in directions}:
+        await callback.answer("Направление больше недоступно.", show_alert=True)
+        return
+    await state.update_data(direction_id=direction_id)
+    await state.set_state(ClientPlatformControlState.offering_title)
+    await callback.answer()
+    await _callback_message(callback).answer(
+        "Как называется консультация, услуга или предложение?"
+    )
+
+
+@router.callback_query(F.data.startswith("cp:offdirnone:"))
+async def choose_offering_without_direction(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    business_token = str(callback.data).split(":", 2)[2]
+    business_id = _token_uuid(business_token)
+    data = await state.get_data()
+    if str(data.get("business_id") or "") != business_id or not data.get("capability_id"):
+        await callback.answer("Кнопка устарела. Начните добавление заново.", show_alert=True)
+        return
+    await _actor(int(callback.from_user.id), business_id)
+    await state.update_data(direction_id=None)
+    await state.set_state(ClientPlatformControlState.offering_title)
+    await callback.answer()
+    await _callback_message(callback).answer(
+        "Как называется консультация, услуга или предложение?"
+    )
 
 
 @router.message(ClientPlatformControlState.offering_title)
@@ -778,6 +844,11 @@ async def receive_offering_description(message: Message, state: FSMContext) -> N
         capability_id=str(data["capability_id"]),
         title=str(data["offering_title"]),
         description=str(message.text or ""),
+        direction_id=(
+            str(data.get("direction_id"))
+            if data.get("direction_id")
+            else None
+        ),
     )
     await state.clear()
     await message.answer(f"Добавлено: {offering.title}")
@@ -794,7 +865,7 @@ async def start_booking_slot(callback: CallbackQuery, state: FSMContext) -> None
     )
     await callback.answer()
     await _callback_message(callback).answer(
-        "Напишите дату и время по местному времени бизнеса в формате "
+        "Напишите дату и время по местному времени организации в формате "
         "ДД.ММ.ГГГГ ЧЧ:ММ. Например: 31.07.2026 15:00"
     )
 
@@ -1014,7 +1085,7 @@ async def book_client_slot(callback: CallbackQuery) -> None:
     await message.answer(
         f"✅ Вы записаны: {claim.slot.offering_title} — {claim.slot.local_start}, "
         f"{claim.slot.slot.duration_minutes} мин.\n"
-        f"Бизнес: {claim.slot.business_name}.\n\n"
+        f"Организация: {claim.slot.business_name}.\n\n"
         "Я также пришлю напоминания в Telegram. Ниже можно одним нажатием "
         "добавить встречу в календарь телефона."
     )

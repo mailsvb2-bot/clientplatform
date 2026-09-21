@@ -869,9 +869,11 @@ def _settings_rows(token: str, actor) -> tuple[list[list[tuple[str, str]]], list
     if actor.role in _SETTINGS_MESSENGER_ROLES:
         rows.append([(nav.MESSENGERS.label, f"cpa:{token}:messengers")])
         help_lines.append(f"• подключить или проверить Telegram, ВКонтакте или MAX → «{nav.MESSENGERS.label}»")
-    rows.append([("🧩 Бизнес и возможности", f"cps:advanced:{token}")])
-    help_lines.append("• посмотреть услуги и возможности бизнеса → «🧩 Бизнес и возможности»")
+    rows.append([("🧩 Организация и возможности", f"cps:advanced:{token}")])
+    help_lines.append("• посмотреть форматы работы и возможности организации → «🧩 Организация и возможности»")
     if actor.role in _SETTINGS_SYSTEM_ROLES:
+        rows.append([(nav.DIRECTIONS.label, f"cp:dirs:{token}")])
+        help_lines.append(f"• {nav.DIRECTIONS.need} → «{nav.DIRECTIONS.label}»")
         rows.append([(nav.ACTIVITY.label, f"cp:editact:{token}")])
         help_lines.append(f"• {nav.ACTIVITY.need} → «{nav.ACTIVITY.label}»")
     if actor.role == PlatformRole.OWNER:
@@ -890,7 +892,7 @@ async def _send_settings_tools(message: ClientPlatformMessageTarget, *, token: s
     rows, help_lines = _settings_rows(token, actor)
     body = "\n".join(help_lines) or "Для Вашей роли здесь сейчас нет доступных настроек."
     await message.answer(
-        "⚙️ Настройки бизнеса\n\nЕсли Вам нужно:\n" + body,
+        "⚙️ Настройки организации\n\nЕсли Вам нужно:\n" + body,
         reply_markup=control._keyboard(rows),
     )
 
@@ -928,7 +930,7 @@ async def open_more(callback: CallbackQuery) -> None:
     actor = await control._actor(int(callback.from_user.id), control._token_uuid(token))
     await control._callback_message(callback).answer(
         "🏠 Кабинет ClientPlatform\n\n"
-        "Откройте кабинет, чтобы увидеть главное по бизнесу в одном месте. "
+        "Откройте кабинет, чтобы увидеть главное по организации в одном месте. "
         "Ниже показаны только те быстрые действия, которые доступны Вашей роли.",
         reply_markup=_more_keyboard(token, actor),
     )
@@ -977,7 +979,7 @@ async def send_one_click_section(
     if normalized == "calendar":
         actor.assert_can_view_customer_records()
         await message.answer(
-            "📅 Календарь и записи\n\nОткройте актуальные записи бизнеса.",
+            "📅 Календарь и записи\n\nОткройте актуальные записи организации.",
             reply_markup=control._keyboard(
                 [[("📅 Записи клиентов", f"cpj:bookings:{token}")], [(nav.HOME.label, f"cpj:home:{token}")]]
             ),
@@ -1044,7 +1046,7 @@ async def send_one_click_section(
     if normalized == "connections":
         actor.assert_can_manage_business()
         await message.answer(
-            "💬 Подключения\n\nПодключите или проверьте клиентские мессенджеры бизнеса.",
+            "💬 Подключения\n\nПодключите или проверьте клиентские мессенджеры организации.",
             reply_markup=control._keyboard(
                 [[(nav.MESSENGERS.label, f"cpa:{token}:messengers")], [(nav.HOME.label, f"cpj:home:{token}")]]
             ),

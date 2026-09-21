@@ -158,6 +158,7 @@ def install_store(
         return actor
 
     monkeypatch.setattr(builder.control, "_actor", fake_actor)
+    monkeypatch.setattr(builder, "list_activity_directions", lambda **_kwargs: [])
     for name in (
         "create_program",
         "add_program_lesson",
@@ -263,6 +264,43 @@ async def test_persistent_journey_resumes_after_fsm_restart(
     assert "Уроков: 2" in published.message.answers[-1][0]
     publish_call = next(kwargs for name, kwargs in store.calls if name == "publish")
     assert publish_call["actor"] is actor
+
+
+@pytest.mark.asyncio
+async def test_new_program_can_be_scoped_to_activity_direction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    business_id = str(uuid4())
+    business_token = builder.control._uuid_token(business_id)
+    store, _actor = install_store(monkeypatch, business_id=business_id)
+    direction_id = str(uuid4())
+    direction = SimpleNamespace(id=direction_id, title="Корпоративное направление")
+    monkeypatch.setattr(
+        builder,
+        "list_activity_directions",
+        lambda **_kwargs: [direction],
+    )
+
+    state = FakeState()
+    callback = FakeCallback(f"cp:progadd:{business_token}")
+    await builder.begin_program(callback, state)
+    labels = [
+        button.text
+        for row in callback.message.answers[-1][1]["reply_markup"].inline_keyboard
+        for button in row
+    ]
+    assert labels == ["Корпоративное направление", "Без направления"]
+    assert state.states == []
+
+    choose = FakeCallback(
+        f"cp:progdir:{business_token}:{builder.control._uuid_token(direction_id)}"
+    )
+    await builder.choose_program_direction(choose, state)
+    assert state.data["direction_id"] == direction_id
+
+    await builder.capture_program_title(FakeMessage(text="Рабочий материал"), state)
+    create_call = next(kwargs for name, kwargs in store.calls if name == "create")
+    assert create_call["direction_id"] == direction_id
 
 
 @pytest.mark.asyncio

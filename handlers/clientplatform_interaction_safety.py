@@ -87,6 +87,9 @@ _STATE_ESCAPE_PREFIXES = (
     "cp:progadd:",
     "cp:drafts:",
     "cp:dopen:",
+    "cp:dirs:",
+    "cp:dirarch:",
+    "cp:diropen:",
     "cps:programs:",
     "cps:booking:",
     "cps:advanced:",
@@ -145,6 +148,9 @@ _REPEATABLE_NAVIGATION_PREFIXES = (
     "cp:cprog:",
     "cp:drafts:",
     "cp:dopen:",
+    "cp:dirs:",
+    "cp:dirarch:",
+    "cp:diropen:",
     "cps:programs:",
     "cps:booking:",
     "cps:advanced:",
@@ -206,6 +212,13 @@ _ONE_SHOT_PREFIXES = (
     "cp:book:",
     "cp:progadd:",
     "cp:offeradd:",
+    "cp:diradd:",
+    "cp:dirarc:",
+    "cp:dirrestore:",
+    "cp:progdir:",
+    "cp:progdirnone:",
+    "cp:offdir:",
+    "cp:offdirnone:",
     "cp:slotadd:",
     "cp:deliver:",
     "cp:sendp:",
@@ -622,13 +635,13 @@ async def _send_business_name_prompt(
         safety_repair_name=repair,
     )
     prefix = (
-        "Ранее команда Telegram ошибочно сохранилась как название бизнеса.\n\n"
+        "Ранее команда Telegram ошибочно сохранилась как название организации.\n\n"
         if repair
         else ""
     )
     await message.answer(
         prefix
-        + "Напишите нормальное название Вашего дела, проекта или практики. "
+        + "Напишите нормальное название организации, проекта или практики. "
         "Команды, начинающиеся с /, названием не считаются.",
         reply_markup=_rename_keyboard(business_id),
     )
@@ -668,14 +681,14 @@ async def confirm_business_archive(callback: CallbackQuery, state: FSMContext) -
     except control.TenancyError:
         await _answer_callback(
             callback,
-            "Бизнес уже недоступен. Обновите экран.",
+            "Организация уже недоступна. Обновите экран.",
             show_alert=True,
         )
         return
     if getattr(actor.role, "value", actor.role) != "owner":
         await _answer_callback(
             callback,
-            "Удалить бизнес может только владелец.",
+            "Удалить организацию может только владелец.",
             show_alert=True,
         )
         return
@@ -694,7 +707,7 @@ async def confirm_business_archive(callback: CallbackQuery, state: FSMContext) -
     if access is None:
         await _answer_callback(
             callback,
-            "Бизнес уже недоступен. Обновите экран.",
+            "Организация уже недоступна. Обновите экран.",
             show_alert=True,
         )
         return
@@ -702,12 +715,12 @@ async def confirm_business_archive(callback: CallbackQuery, state: FSMContext) -
     await _answer_callback(callback)
     token = control._uuid_token(business_id)
     await control._callback_message(callback).answer(
-        f"Удалить бизнес «{access.business.name}»?\n\n"
-        "Он исчезнет из списка активных бизнесов. История клиентов, оплат, "
+        f"Удалить организацию «{access.business.name}»?\n\n"
+        "Она исчезнет из списка активных организаций. История клиентов, оплат, "
         "сообщений и действий сохранится. Незабранные приглашения будут отозваны.",
         reply_markup=control._keyboard(
             [
-                [("🗑 Да, удалить бизнес", f"cps:archive-confirm:{token}")],
+                [("🗑 Да, удалить организацию", f"cps:archive-confirm:{token}")],
                 [("Отмена", f"cps:archive-cancel:{token}")],
             ]
         ),
@@ -721,9 +734,9 @@ async def cancel_business_archive(callback: CallbackQuery, state: FSMContext) ->
     await state.clear()
     await _answer_callback(callback, "Удаление отменено")
     await control._callback_message(callback).answer(
-        "Удаление бизнеса отменено.",
+        "Удаление организации отменено.",
         reply_markup=control._keyboard(
-            [[("⚙️ Настройки бизнеса", f"cpo:settings:{token}")]]
+            [[("⚙️ Настройки организации", f"cpo:settings:{token}")]]
         ),
     )
 
@@ -737,7 +750,7 @@ async def archive_business_from_settings(callback: CallbackQuery, state: FSMCont
         if getattr(actor.role, "value", actor.role) != "owner":
             await _answer_callback(
                 callback,
-                "Удалить бизнес может только владелец.",
+                "Удалить организацию может только владелец.",
                 show_alert=True,
             )
             return
@@ -745,26 +758,26 @@ async def archive_business_from_settings(callback: CallbackQuery, state: FSMCont
     except control.TenancyError:
         await _answer_callback(
             callback,
-            "Не удалось удалить бизнес. Обновите экран и попробуйте снова.",
+            "Не удалось удалить организацию. Обновите экран и попробуйте снова.",
             show_alert=True,
         )
         return
 
     await state.clear()
-    await _answer_callback(callback, "Бизнес удалён")
+    await _answer_callback(callback, "Организация удалена")
     message = control._callback_message(callback)
     remaining = await asyncio.to_thread(
         list_accessible_businesses,
         user_id=user_id,
     )
     await message.answer(
-        f"Бизнес «{business.name}» удалён из активных. История сохранена."
+        f"Организация «{business.name}» удалена из активных. История сохранена."
     )
     if not remaining:
         await message.answer(
-            "Активных бизнесов больше нет. Можно создать новый.",
+            "Активных организаций больше нет. Можно создать новую.",
             reply_markup=control._keyboard(
-                [[("➕ Создать бизнес", "cps:start")]]
+                [[("➕ Создать организацию", "cps:start")]]
             ),
         )
         return
@@ -777,7 +790,7 @@ async def archive_business_from_settings(callback: CallbackQuery, state: FSMCont
         )
         return
     await message.answer(
-        "Выберите бизнес, с которым хотите работать:",
+        "Выберите организацию, с которой хотите работать:",
         reply_markup=control._business_choice_keyboard(remaining),
     )
 

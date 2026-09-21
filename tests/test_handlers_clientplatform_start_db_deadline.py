@@ -158,7 +158,7 @@ async def test_cpo_start_is_owner_intent_even_when_customer_links_exist(
     assert "управляющий вход" in text
     keyboard = kwargs["reply_markup"]
     button = keyboard.inline_keyboard[0][0]
-    assert button.text == "Подключить мой бизнес"
+    assert button.text == "Подключить организацию"
     assert button.callback_data == "business"
 
 
@@ -296,4 +296,4 @@ async def test_owner_business_button_starts_business_name_state(
     assert state.cleared == 1
     assert state.states == [entry.control.ClientPlatformControlState.business_name]
     assert len(message.answers) == 1
-    assert "Как называется Ваше дело" in message.answers[0][0]
+    assert "Как называется Ваша организация" in message.answers[0][0]

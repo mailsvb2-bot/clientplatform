@@ -168,6 +168,7 @@ class EventHandlerRuntimeTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 events, "get_business_profile", return_value=SimpleNamespace(timezone="Europe/Moscow")
             ),
+            patch.object(events, "list_activity_directions", return_value=[]),
             patch.object(events.control, "_callback_message", return_value=reply),
             patch.object(events, "_cancel_keyboard", return_value="cancel"),
         ):
