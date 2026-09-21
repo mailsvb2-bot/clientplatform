@@ -3252,7 +3252,7 @@ def _experiment_apply_message(
     )
 
 
-_DIRECTION_PAGE_SIZE = 5
+_DIRECTION_PAGE_SIZE = 4
 
 
 def _directions_message(
@@ -3282,6 +3282,7 @@ def _directions_message(
         for item in shown
     ]
     if not archived:
+        rows.append((_button("✏️ Описание организации", "cpm:activity-edit-help"),))
         rows.append((_button("➕ Добавить направление", "cpm:direction-new"),))
         if any(item.status == ActivityDirectionStatus.ARCHIVED for item in all_directions):
             rows.append((_button("📦 Архив направлений", "cpm:directions-archived:0"),))
@@ -3490,9 +3491,8 @@ def _direction_restore_result(
 def _manage_message(actor: TenantContext) -> CustomerInteractionMessage:
     if actor.role not in _CONNECTION_ROLES:
         return _permission_message()
-    items = [nav.ACTIVITY, nav.MESSENGERS, nav.FORMATS]
+    items = [nav.MESSENGERS, nav.FORMATS]
     rows: list[tuple[CustomerInteractionButton, ...]] = [
-        (_button(nav.ACTIVITY.label, "cpm:activity-edit-help"),),
         (_button("🧭 Направления деятельности", "cpm:directions:0"),),
         (_button(nav.MESSENGERS.label, "cpm:messengers"),),
         (_button(nav.FORMATS.label, "cpm:formats"),),
@@ -3507,7 +3507,7 @@ def _manage_message(actor: TenantContext) -> CustomerInteractionMessage:
         text=(
             "⚙️ Настроить бизнес\n\n"
             + nav.choice_help(*items)
-            + "\n\n🧭 «Направления деятельности» — разделить одну организацию на несколько направлений без создания отдельных бизнесов."
+            + "\n• изменить описание организации или управлять её направлениями → «🧭 Направления деятельности»"
         ),
         rows=tuple(rows),
     )
@@ -5346,12 +5346,19 @@ def _program_create_result(
 ) -> CustomerInteractionMessage:
     if actor.role not in _PROGRAM_MANAGEMENT_ROLES:
         return _permission_message()
-    program = create_program(
-        actor=actor,
-        title=title,
-        idempotency_key=f"{interaction_key}:program-create",
-        direction_id=direction_id,
-    )
+    if direction_id is None:
+        program = create_program(
+            actor=actor,
+            title=title,
+            idempotency_key=f"{interaction_key}:program-create",
+        )
+    else:
+        program = create_program(
+            actor=actor,
+            title=title,
+            idempotency_key=f"{interaction_key}:program-create",
+            direction_id=direction_id,
+        )
     code = str(program.id)[:8]
     return CustomerInteractionMessage(
         text=(
@@ -5735,14 +5742,23 @@ def _offering_new_result(
     capability = _offering_capability(actor, connector_key)
     if capability is None:
         return _stale_message()
-    offering = create_business_offering(
-        actor=actor,
-        capability_id=capability.id,
-        title=title,
-        description=description,
-        idempotency_key=f"{interaction_key}:offering-create",
-        direction_id=direction_id,
-    )
+    if direction_id is None:
+        offering = create_business_offering(
+            actor=actor,
+            capability_id=capability.id,
+            title=title,
+            description=description,
+            idempotency_key=f"{interaction_key}:offering-create",
+        )
+    else:
+        offering = create_business_offering(
+            actor=actor,
+            capability_id=capability.id,
+            title=title,
+            description=description,
+            idempotency_key=f"{interaction_key}:offering-create",
+            direction_id=direction_id,
+        )
     return CustomerInteractionMessage(
         text=f"✅ Предложение «{offering.title}» создано.",
         rows=((_button("🧪 Предложения", "cpm:offers"),), _back_row()),
