@@ -102,6 +102,35 @@ class ActivityDirectionRepositoryTests(unittest.TestCase):
                 description="Менеджер не меняет структуру организации.",
             )
 
+    def test_content_manager_can_place_program_in_existing_direction(self) -> None:
+        direction = self.repo.create(
+            actor=self.owner_a,
+            title="Контентное направление",
+            description="Структуру создал владелец.",
+        )
+        tenancy = TenancyRepository(self.conn)
+        tenancy.grant_member(
+            actor=self.owner_a,
+            user_id=61003,
+            role="content_manager",
+        )
+        content_manager = tenancy.resolve_context(
+            user_id=61003,
+            business_id=self.owner_a.business_id,
+        )
+        program = ProgramRepository(self.conn).create_program(
+            actor=content_manager,
+            title="Материал направления",
+        )
+        binding = self.repo.bind_subject(
+            actor=content_manager,
+            direction_id=direction.id,
+            subject_kind="program",
+            subject_id=program.id,
+        )
+        self.assertEqual(binding.direction_id, direction.id)
+        self.assertEqual(binding.subject_id, program.id)
+
     def test_archive_preserves_history_and_restore_returns_same_direction(self) -> None:
         direction = self.repo.create(
             actor=self.owner_a,
