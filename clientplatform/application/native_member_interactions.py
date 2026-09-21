@@ -6793,7 +6793,9 @@ def _render(
             )
     except TenantPermissionDenied:
         return _permission_message()
-    except (ActivityError, ActivityDirectionError, ProgramError, SalesError):
+    except ActivityDirectionError:
+        return _stale_message()
+    except (ActivityError, ProgramError, SalesError):
         return _stale_message()
     except ValueError:
         return _stale_message()
