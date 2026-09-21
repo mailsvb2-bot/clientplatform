@@ -19,6 +19,15 @@ from clientplatform.application.activity import (
     save_business_profile,
     list_business_offerings,
 )
+from clientplatform.application.activity_directions import (
+    archive_activity_direction,
+    create_activity_direction,
+    get_activity_direction,
+    list_activity_direction_bindings,
+    list_activity_directions,
+    restore_activity_direction,
+    update_activity_direction,
+)
 from clientplatform.application.ad_spend_consent import list_ad_spend_authorizations
 from clientplatform.application.ad_spend_operations import (
     ad_spend_mutations_enabled,
@@ -150,6 +159,10 @@ from clientplatform.domain.activity import (
     CapabilityStatus,
     OfferingStatus,
     resolve_activity_connector,
+)
+from clientplatform.domain.activity_directions import (
+    ActivityDirectionError,
+    ActivityDirectionStatus,
 )
 from clientplatform.domain.automation_policy import AutomationPolicyError
 from clientplatform.domain.ad_spend import AdSpendAuthorizationStatus, AdSpendError
@@ -309,6 +322,8 @@ _ALIASES = {
     "клиенты": "customers",
     "записи": "bookings",
     "программы": "programs",
+    "направления": "directions",
+    "направления деятельности": "directions",
     "мессенджеры": "messengers",
     "обращения": "sales",
     "продажи": "sales",
@@ -355,6 +370,16 @@ TELEGRAM_NATIVE_ACTION_EQUIVALENTS: dict[str, tuple[str, ...]] = {
     "segments": ("segments",),
     "offers": ("offers",),
     "copy": ("copy", "activity-edit-help", "activity-edit-text"),
+    "directions": (
+        "directions",
+        "direction",
+        "direction-new",
+        "direction-create-text",
+        "direction-edit",
+        "direction-edit-text",
+        "direction-archive",
+        "direction-restore",
+    ),
     "prices": ("prices",),
     "price-set": ("price-set", "price-set-text"),
     "promotion": ("acquire",),
@@ -781,6 +806,8 @@ def parse_native_member_interaction(value: object) -> ParsedMemberInteraction:
             "event-segment",
             "event-channel",
             "event-new",
+            "event-new-dirs",
+            "event-new-dir",
             "event-wizard",
             "event-create-text",
             "event-announce",
@@ -878,7 +905,18 @@ def parse_native_member_interaction(value: object) -> ParsedMemberInteraction:
             "price-set-text",
             "activity-edit-help",
             "activity-edit-text",
+            "directions",
+            "directions-archived",
+            "direction",
+            "direction-new",
+            "direction-create-text",
+            "direction-edit",
+            "direction-edit-text",
+            "direction-archive",
+            "direction-restore",
             "program-create",
+            "program-create-dirs",
+            "program-create-dir",
             "program-create-text",
             "program-lesson",
             "program-lesson-kind",
@@ -889,6 +927,8 @@ def parse_native_member_interaction(value: object) -> ParsedMemberInteraction:
             "program-deliver-text",
             "offering-new",
             "offering-new-for",
+            "offering-new-dirs",
+            "offering-new-dir",
             "offering-new-text",
             "offering-retire-list",
             "offering-retire",
@@ -1011,6 +1051,8 @@ def _pending_owner_input(
 def _owner_input_invalid_message(action: str) -> CustomerInteractionMessage:
     guidance = {
         "activity_description": "Напишите новое описание обычным сообщением.",
+        "activity_direction_create": "Напишите: Название | Короткое описание направления.",
+        "activity_direction_edit": "Напишите: Новое название | Новое описание направления.",
         "program_title": "Напишите только название материала или программы.",
         "program_lesson": "Напишите: Название | Материал.",
         "publication_draft": "Напишите: Заголовок | Текст публикации.",
@@ -1276,6 +1318,8 @@ _NATIVE_PARENT_COMMANDS: dict[str, str] = {
     "event-segment": "cpm:events",
     "event-channel": "cpm:events",
     "event-new": "cpm:events",
+    "event-new-dirs": "cpm:events",
+    "event-new-dir": "cpm:events",
     "event-wizard": "cpm:events",
     "event-wizard-title-text": "cpm:events",
     "event-wizard-count-text": "cpm:events",
@@ -1306,6 +1350,15 @@ _NATIVE_PARENT_COMMANDS: dict[str, str] = {
     "retention": "cpm:growth-lifecycle",
     "invites": "cpm:growth-lifecycle",
     "manage": "cpm:menu-all",
+    "directions": "cpm:manage",
+    "directions-archived": "cpm:directions:0",
+    "direction": "cpm:directions:0",
+    "direction-new": "cpm:directions:0",
+    "direction-create-text": "cpm:directions:0",
+    "direction-edit": "cpm:directions:0",
+    "direction-edit-text": "cpm:directions:0",
+    "direction-archive": "cpm:directions:0",
+    "direction-restore": "cpm:directions-archived:0",
     "manage-more": "cpm:manage",
     "release": "cpm:manage",
     "formats": "cpm:manage",
@@ -1326,10 +1379,15 @@ _NATIVE_PARENT_COMMANDS: dict[str, str] = {
     "payment-new": "cpm:payments",
     "price-set": "cpm:prices",
     "offering-new": "cpm:offers",
+    "offering-new-for": "cpm:offers",
+    "offering-new-dirs": "cpm:offers",
+    "offering-new-dir": "cpm:offers",
     "offering-retire-list": "cpm:offers",
     "publication-retire-list": "cpm:publications",
     "business-retire": "cpm:manage-more",
     "program-create": "cpm:programs:0",
+    "program-create-dirs": "cpm:programs:0",
+    "program-create-dir": "cpm:programs:0",
     "owner-input-invalid": "cpm:menu",
     "owner-input-cancelled": "cpm:menu",
 }
@@ -1343,6 +1401,12 @@ def _native_parent_command(parsed: ParsedMemberInteraction) -> str | None:
     if action in {"owner-input-invalid", "owner-input-cancelled"} and args:
         if args[0] in {"online_event", "event_warmup_text", "event_followup_text", "event_warmup_days"}:
             return "cpm:events"
+        if args[0] in {"activity_direction_create", "activity_direction_edit"}:
+            return "cpm:directions:0"
+        if args[0] == "program_title":
+            return "cpm:programs:0"
+        if args[0] == "offering":
+            return "cpm:offers"
     if action == "customer":
         return "cpm:customers:0"
     if action == "booking-open-for":
