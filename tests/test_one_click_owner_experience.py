@@ -654,7 +654,7 @@ class OneClickOwnerExperienceTests(unittest.IsolatedAsyncioTestCase):
             owner_buttons["🗑 Удалить организацию"],
             "cps:archive-prompt:business-1",
         )
-        self.assertTrue(any("убрать тестовый" in line for line in owner_help))
+        self.assertTrue(any("убрать тестовую" in line for line in owner_help))
 
         admin_rows, _ = one_click._settings_rows(
             "business-1",
