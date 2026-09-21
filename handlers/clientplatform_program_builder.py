@@ -315,7 +315,7 @@ async def begin_program(callback: CallbackQuery, state: FSMContext) -> None:
     ]
     rows.append([("Без направления", f"cp:progdirnone:{business_token}")])
     await control._callback_message(callback).answer(
-        "К какому направлению деятельности относится этот материал или программа?",
+        "К какому направлению деятельности относятся эти материалы?",
         reply_markup=control._keyboard(rows),
     )
 
