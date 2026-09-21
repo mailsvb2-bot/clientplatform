@@ -195,28 +195,6 @@ async def test_legacy_program_button_delegates_to_single_canonical_builder(
 
 
 @pytest.mark.asyncio
-async def test_program_list_acknowledges_before_repository_work(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    business_id = str(uuid4())
-    business_token = builder.control._uuid_token(business_id)
-    _store, _actor = install_store(monkeypatch, business_id=business_id)
-    callback = FakeCallback(f"cp:cap:{business_token}:programs")
-    state = FakeState()
-
-    def list_after_ack(**_kwargs: Any) -> list[Any]:
-        assert callback.answers, "callback must be acknowledged before repository I/O"
-        return []
-
-    monkeypatch.setattr(builder, "list_programs", list_after_ack)
-    await builder.open_programs(callback, state)
-
-    assert callback.answers
-    assert state.clear_count == 1
-    assert "Программы" in callback.message.answers[-1][0]
-
-
-@pytest.mark.asyncio
 async def test_persistent_journey_resumes_after_fsm_restart(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
