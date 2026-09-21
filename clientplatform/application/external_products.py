@@ -14,6 +14,7 @@ from clientplatform.domain.external_products import (
     ExternalObservationValueSnapshot,
     ExternalProductAcquisition,
     ExternalProductConnector,
+    ExternalProductIngressMode,
     ExternalProductEvent,
     ExternalProductEventType,
     ExternalObservationQuality,
@@ -63,6 +64,7 @@ def provision_external_product_connector(
     product_key: str,
     display_name: str,
     webhook_secret_reference: str,
+    ingress_mode: ExternalProductIngressMode | str = ExternalProductIngressMode.SIGNED_WEBHOOK,
 ) -> ExternalProductConnector:
     """Create a pending connector containing only a secret-manager reference."""
 
@@ -72,6 +74,7 @@ def provision_external_product_connector(
             product_key=product_key,
             display_name=display_name,
             webhook_secret_reference=webhook_secret_reference,
+            ingress_mode=ingress_mode,
         )
 
 
