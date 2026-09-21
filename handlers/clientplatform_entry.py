@@ -322,8 +322,8 @@ async def clientplatform_owner_business_start(
     await state.set_state(control.ClientPlatformControlState.business_name)
     await callback.answer()
     await control._callback_message(callback).answer(
-        "Как называется Ваше дело, проект или практика?\n\n"
-        "Например: «Практика Анны», «Автосервис Мотор» или «Школа английского»."
+        "Как называется Ваша организация, проект или практика?\n\n"
+        "Например: «Практика Анны», «Автосервис Мотор» или «Студия Север»."
     )
 
 
