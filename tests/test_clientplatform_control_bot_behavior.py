@@ -884,6 +884,99 @@ async def test_offering_and_program_creation_flows(monkeypatch: pytest.MonkeyPat
 
 
 @pytest.mark.asyncio
+async def test_offering_direction_selection_handles_active_none_and_stale_callbacks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    business_id = str(uuid4())
+    capability_id = str(uuid4())
+    direction_id = str(uuid4())
+    business_token = handlers._uuid_token(business_id)
+    capability_token = handlers._uuid_token(capability_id)
+    direction_token = handlers._uuid_token(direction_id)
+    actor = object()
+
+    async def fake_actor(_uid: int, selected_business_id: str) -> object:
+        assert selected_business_id == business_id
+        return actor
+
+    monkeypatch.setattr(handlers, "_actor", fake_actor)
+    monkeypatch.setattr(
+        handlers,
+        "list_activity_directions",
+        lambda **_kwargs: [
+            SimpleNamespace(id=direction_id, title="Корпоративные клиенты")
+        ],
+    )
+
+    start_state = FakeState()
+    start = FakeCallback(f"cp:offeradd:{business_token}:{capability_token}")
+    await handlers.start_offering(start, start_state)
+    assert start_state.data == {
+        "business_id": business_id,
+        "capability_id": capability_id,
+    }
+    assert start_state.states == []
+    start_buttons = [
+        button.text
+        for row in start.message.answers[-1][1]["reply_markup"].inline_keyboard
+        for button in row
+    ]
+    assert "Корпоративные клиенты" in start_buttons
+    assert "Без направления" in start_buttons
+
+    selected_state = FakeState(
+        {"business_id": business_id, "capability_id": capability_id}
+    )
+    selected = FakeCallback(
+        f"cp:offdir:{business_token}:{direction_token}"
+    )
+    await handlers.choose_offering_direction(selected, selected_state)
+    assert selected_state.data["direction_id"] == direction_id
+    assert (
+        selected_state.states[-1]
+        == handlers.ClientPlatformControlState.offering_title
+    )
+    assert "Как называется" in selected.message.answers[-1][0]
+
+    stale = FakeCallback(f"cp:offdir:{business_token}:{direction_token}")
+    await handlers.choose_offering_direction(stale, FakeState())
+    assert stale.answers[-1][1]["show_alert"] is True
+    assert "устарела" in callback_answer_text(stale).lower()
+
+    monkeypatch.setattr(handlers, "list_activity_directions", lambda **_kwargs: [])
+    unavailable_state = FakeState(
+        {"business_id": business_id, "capability_id": capability_id}
+    )
+    unavailable = FakeCallback(
+        f"cp:offdir:{business_token}:{direction_token}"
+    )
+    await handlers.choose_offering_direction(unavailable, unavailable_state)
+    assert unavailable.answers[-1][1]["show_alert"] is True
+    assert "недоступно" in callback_answer_text(unavailable).lower()
+
+    without_state = FakeState(
+        {"business_id": business_id, "capability_id": capability_id}
+    )
+    without = FakeCallback(f"cp:offdirnone:{business_token}")
+    await handlers.choose_offering_without_direction(without, without_state)
+    assert "direction_id" in without_state.data
+    assert without_state.data["direction_id"] is None
+    assert (
+        without_state.states[-1]
+        == handlers.ClientPlatformControlState.offering_title
+    )
+    assert "Как называется" in without.message.answers[-1][0]
+
+    stale_without = FakeCallback(f"cp:offdirnone:{business_token}")
+    await handlers.choose_offering_without_direction(
+        stale_without,
+        FakeState(),
+    )
+    assert stale_without.answers[-1][1]["show_alert"] is True
+    assert "устарела" in callback_answer_text(stale_without).lower()
+
+
+@pytest.mark.asyncio
 async def test_clients_invites_and_delivery_selection(monkeypatch: pytest.MonkeyPatch) -> None:
     business_id = str(uuid4())
     business_token = handlers._uuid_token(business_id)
