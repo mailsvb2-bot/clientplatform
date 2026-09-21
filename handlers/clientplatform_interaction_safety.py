@@ -553,29 +553,21 @@ class ClientPlatformInteractionSafetyMiddleware(BaseMiddleware):
                     )
                     return None
 
-                # Read-only/repeatable navigation gets an immediate spinner ack.
-                # Mutating or validated actions intentionally do not: their
-                # handler owns the first answer so a semantic toast/alert cannot
-                # be consumed by a preceding blank answerCallbackQuery call.
-                eager_ack = repeatable_navigation
-                if eager_ack:
-                    await _answer_callback(event)
-
+                # The handler owns the first callback answer for every ClientPlatform
+                # action, including repeatable navigation. Eagerly answering here can
+                # consume a semantic toast/alert or make the handler perform a second,
+                # unguarded answerCallbackQuery call. The guarded blank ack in finally
+                # closes the spinner only when the handler did not answer.
                 async with lock:
                     current_state = (
                         await state.get_state() if isinstance(state, FSMContext) else None
                     )
                     if _callback_conflicts_with_state(current_state, callback_data):
-                        if eager_ack and isinstance(event.message, Message):
-                            await event.message.answer(
-                                "Сначала завершите текущий шаг или отправьте /cancel."
-                            )
-                        else:
-                            await _answer_callback(
-                                event,
-                                "Сначала завершите текущий шаг или отправьте /cancel.",
-                                show_alert=True,
-                            )
+                        await _answer_callback(
+                            event,
+                            "Сначала завершите текущий шаг или отправьте /cancel.",
+                            show_alert=True,
+                        )
                         return None
                     if (
                         isinstance(state, FSMContext)
@@ -585,12 +577,11 @@ class ClientPlatformInteractionSafetyMiddleware(BaseMiddleware):
                     try:
                         result = await handler(event, data)
                     finally:
-                        if not eager_ack:
-                            # If the handler already sent a semantic answer this
-                            # becomes a harmless expired/duplicate blank ack and
-                            # _answer_callback intentionally swallows Telegram's
-                            # API error. If it did not, this closes the spinner.
-                            await _answer_callback(event)
+                        # If the handler already answered, Telegram may reject this
+                        # duplicate blank ack; _answer_callback intentionally swallows
+                        # that API error. Crucially, the handler's semantic answer is
+                        # always allowed to be the first one.
+                        await _answer_callback(event)
                     if callback_data.startswith(_ONE_SHOT_PREFIXES):
                         await _remove_source_keyboard(event)
                     return result
