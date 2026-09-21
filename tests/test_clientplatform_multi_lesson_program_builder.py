@@ -10,6 +10,7 @@ import pytest
 from clientplatform.domain.programs import ContentKind, ProgramStatus
 
 builder = importlib.import_module("handlers.clientplatform_program_builder")
+importlib.import_module("handlers.clientplatform_program_lesson_editor_composition")
 
 
 class FakeUser:
