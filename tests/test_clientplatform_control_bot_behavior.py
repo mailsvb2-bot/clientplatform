@@ -800,6 +800,13 @@ async def test_offering_and_program_creation_flows(monkeypatch: pytest.MonkeyPat
     business_token = handlers._uuid_token(business_id)
     capability_token = handlers._uuid_token(capability_id)
 
+    async def fake_actor(_uid: int, _bid: str) -> object:
+        return object()
+
+    monkeypatch.setattr(handlers, "_actor", fake_actor)
+    monkeypatch.setattr(handlers, "list_activity_directions", lambda **_kwargs: [])
+    monkeypatch.setattr(program_builder, "list_activity_directions", lambda **_kwargs: [])
+
     state = FakeState()
     callback = FakeCallback(f"cp:offeradd:{business_token}:{capability_token}")
     await handlers.start_offering(callback, state)
@@ -810,11 +817,6 @@ async def test_offering_and_program_creation_flows(monkeypatch: pytest.MonkeyPat
     await handlers.receive_offering_title(FakeMessage(text="Первая консультация"), title_state)
     assert title_state.data["offering_title"] == "Первая консультация"
     assert title_state.states[-1] == handlers.ClientPlatformControlState.offering_description
-
-    async def fake_actor(_uid: int, _bid: str) -> object:
-        return object()
-
-    monkeypatch.setattr(handlers, "_actor", fake_actor)
     monkeypatch.setattr(
         handlers,
         "create_business_offering",
