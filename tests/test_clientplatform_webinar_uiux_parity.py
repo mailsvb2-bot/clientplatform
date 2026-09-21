@@ -104,6 +104,10 @@ def test_published_webinar_exposes_schedule_edit_action() -> None:
     assert len(edit) == 1
     assert edit[0].key == item.id
     assert edit[0].label.startswith("🕒 Изменить расписание")
+    conduct = [action for action in actions if action.kind == "conduct"]
+    assert len(conduct) == 1
+    assert conduct[0].key == item.id
+    assert conduct[0].label.startswith("▶️ Провести вебинар")
 
 
 def test_progressive_disclosure_preserves_full_webinar_automation_power() -> None:
@@ -188,6 +192,10 @@ def test_native_hub_ignores_telegram_only_schedule_edit_without_fallback() -> No
         "cpm:event-content:33333333-3333-4333-8333-333333333333",
     ) in commands
     assert not any("Изменить расписание" in label for label, _ in commands)
+    assert (
+        "▶️ Провести вебинар · Вебинар",
+        "cpm:event-conduct:33333333-3333-4333-8333-333333333333",
+    ) in commands
 
 
 def test_vk_and_max_event_hub_render_identically_before_transport() -> None:
@@ -209,6 +217,41 @@ def test_vk_and_max_event_hub_render_identically_before_transport() -> None:
     ) in commands
     assert ("⚙️ Автосообщения", "cpm:event-settings") in commands
     assert (BACK_TO_GROWTH_LABEL, "cpm:growth") in commands
+
+
+def test_vk_and_max_conduct_webinar_uses_canonical_live_session_links() -> None:
+    actor = _actor()
+    live = SimpleNamespace(
+        title="Вебинар",
+        sessions=(
+            SimpleNamespace(
+                position=1,
+                local_start="15.09.2026 19:00",
+                provider_key="zoom",
+                provider_label="Zoom",
+                join_url="https://zoom.example/room",
+                join_ready=True,
+            ),
+            SimpleNamespace(
+                position=2,
+                local_start="16.09.2026 19:00",
+                provider_key="external",
+                provider_label="Webinar.ru",
+                join_url="https://webinar.example/room",
+                join_ready=True,
+            ),
+        ),
+    )
+    with patch.object(native_ui, "resolve_event_live_snapshot", return_value=live):
+        rendered = native_ui._event_conduct_message(
+            actor,
+            "33333333-3333-4333-8333-333333333333",
+        )
+    assert "https://zoom.example/room" in rendered.text
+    assert "https://webinar.example/room" in rendered.text
+    assert "День 1 · 15.09.2026 19:00 · Zoom" in rendered.text
+    assert "День 2 · 16.09.2026 19:00 · Webinar.ru" in rendered.text
+    assert (BACK_TO_EVENTS_LABEL, "cpm:events") in _commands(rendered)
 
 
 def test_event_settings_and_mutations_return_to_webinar_hub() -> None:
