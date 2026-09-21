@@ -827,16 +827,26 @@ class NativeBusinessSettingsParityTests(unittest.TestCase):
                 message = native_member_ui._manage_message(actor)
                 labels = [button.label for row in message.rows for button in row]
                 commands = [button.command for row in message.rows for button in row]
-                self.assertIn("✏️ Описание организации", labels)
+                self.assertIn("🧭 Направления деятельности", labels)
                 self.assertIn("🗑 Удалить организацию", labels)
-                self.assertIn("cpm:activity-edit-help", commands)
+                self.assertIn("cpm:directions:0", commands)
                 self.assertIn("cpm:business-retire", commands)
+                with patch.object(
+                    native_member_ui,
+                    "list_activity_directions",
+                    return_value=[],
+                ):
+                    directions = native_member_ui._directions_message(actor)
+                direction_labels = [
+                    button.label for row in directions.rows for button in row
+                ]
+                self.assertIn("✏️ Описание организации", direction_labels)
 
     def test_admin_can_edit_direction_but_cannot_delete_business(self) -> None:
         actor = replace(_actor(_route(ConnectionPlatform.VK)), role=PlatformRole.ADMINISTRATOR)
         message = native_member_ui._manage_message(actor)
         labels = [button.label for row in message.rows for button in row]
-        self.assertIn("✏️ Описание организации", labels)
+        self.assertIn("🧭 Направления деятельности", labels)
         self.assertNotIn("🗑 Удалить организацию", labels)
 
     def test_business_delete_confirmation_is_explicit_and_preserves_history(self) -> None:
