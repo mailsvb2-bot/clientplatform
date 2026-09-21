@@ -825,7 +825,7 @@ class NativeBusinessSettingsParityTests(unittest.TestCase):
             with self.subTest(platform=platform.value):
                 actor = _actor(_route(platform))
                 message = native_member_ui._manage_message(actor)
-                labels = [button.text for row in message.rows for button in row]
+                labels = [button.label for row in message.rows for button in row]
                 commands = [button.command for row in message.rows for button in row]
                 self.assertIn("✏️ Изменить направление", labels)
                 self.assertIn("🗑 Удалить бизнес", labels)
@@ -835,7 +835,7 @@ class NativeBusinessSettingsParityTests(unittest.TestCase):
     def test_admin_can_edit_direction_but_cannot_delete_business(self) -> None:
         actor = replace(_actor(_route(ConnectionPlatform.VK)), role=PlatformRole.ADMINISTRATOR)
         message = native_member_ui._manage_message(actor)
-        labels = [button.text for row in message.rows for button in row]
+        labels = [button.label for row in message.rows for button in row]
         self.assertIn("✏️ Изменить направление", labels)
         self.assertNotIn("🗑 Удалить бизнес", labels)
 
@@ -843,7 +843,7 @@ class NativeBusinessSettingsParityTests(unittest.TestCase):
         actor = _actor(_route(ConnectionPlatform.MAX))
         with patch.object(native_member_ui, "_business_name", return_value="Сантехник"):
             message = native_member_ui._business_retire_confirm(actor)
-        labels = [button.text for row in message.rows for button in row]
+        labels = [button.label for row in message.rows for button in row]
         self.assertIn("Удалить бизнес «Сантехник»?", message.text)
         self.assertIn("Оплаты, результаты и аудит не удаляются", message.text)
         self.assertIn("🗑 Да, удалить бизнес", labels)
