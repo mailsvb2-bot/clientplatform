@@ -3119,12 +3119,15 @@ def _manage_message(actor: TenantContext) -> CustomerInteractionMessage:
         (_button(nav.MESSENGERS.label, "cpm:messengers"),),
         (_button(nav.READINESS.label, "cpm:release"),),
         (_button(nav.FORMATS.label, "cpm:formats"),),
+        (_button("✏️ Изменить направление", "cpm:activity-edit-help"),),
     ]
     if actor.role in _OWNER_ROLES:
         rows.append((_button(nav.TARIFF.label, "cpm:tariff"),))
         items.append(nav.TARIFF)
     rows.append((_button(nav.SETTINGS_MORE.label, "cpm:manage-more"),))
     items.append(nav.SETTINGS_MORE)
+    if actor.role == PlatformRole.OWNER:
+        rows.append((_button("🗑 Удалить бизнес", "cpm:business-retire"),))
     rows.append(_back_row())
     return CustomerInteractionMessage(
         text="⚙️ Настроить бизнес\n\n" + nav.choice_help(*items),
@@ -3142,10 +3145,10 @@ def _manage_more_message(actor: TenantContext) -> CustomerInteractionMessage:
     text = "🛠 Состояние и история\n\nОбычно сюда заходить не нужно.\n\n" + nav.choice_help(*items)
     if actor.role == PlatformRole.OWNER:
         text += (
-            "\n\nЕсли Вам нужно убрать этот бизнес из активной работы → "
-            "«🗑 Убрать этот бизнес». История оплат и аудита при этом не удаляется."
+            "\n\nЕсли Вам нужно удалить этот бизнес из активной работы → "
+            "«🗑 Удалить бизнес». История оплат и аудита при этом сохраняется."
         )
-        rows.append((_button("🗑 Убрать этот бизнес", "cpm:business-retire"),))
+        rows.append((_button("🗑 Удалить бизнес", "cpm:business-retire"),))
     rows.extend(((_button(nav.SETTINGS.label, "cpm:manage"),), _back_row()))
     return CustomerInteractionMessage(text=text, rows=tuple(rows))
 
@@ -3768,9 +3771,9 @@ def _activity_edit_help(
         surface=input_surface,
         action="activity_description",
         text=(
-            "✏️ Изменить описание бизнеса\n\n"
+            "✏️ Изменить направление\n\n"
             f"Сейчас написано:\n{profile.activity_description}\n\n"
-            "Напишите новое описание обычным сообщением — без команды «деятельность»."
+            "Напишите новое направление или описание деятельности обычным сообщением."
         ),
         rows=((_button(nav.COPY.label, "cpm:copy"),), _back_row()),
     )
@@ -3786,7 +3789,7 @@ def _activity_edit_result(actor: TenantContext, description: str) -> CustomerInt
         timezone_name=profile.timezone,
     )
     return CustomerInteractionMessage(
-        text=f"✅ Описание деятельности обновлено: {updated.activity_description}",
+        text=f"✅ Направление обновлено: {updated.activity_description}",
         rows=((_button("✍️ Тексты", "cpm:copy"),), _back_row()),
     )
 
@@ -4134,7 +4137,7 @@ def _growth_report_message(actor: TenantContext, action: str) -> CustomerInterac
         if action == "copy":
             copy_rows: list[tuple[CustomerInteractionButton, ...]] = []
             if actor.role in _CONNECTION_ROLES:
-                copy_rows.append((_button("✏️ Изменить деятельность", "cpm:activity-edit-help"),))
+                copy_rows.append((_button("✏️ Изменить направление", "cpm:activity-edit-help"),))
             if actor.role in _CONTENT_ROLES:
                 copy_rows.append((_button("➕ Создать публикацию", "cpm:publication-new"),))
             copy_rows.extend(((_button("📈 Рост", "cpm:growth"),), _back_row()))
@@ -5383,12 +5386,12 @@ def _business_retire_confirm(actor: TenantContext) -> CustomerInteractionMessage
     business_name = _business_name(actor)
     return CustomerInteractionMessage(
         text=(
-            f"🗑 Убрать бизнес «{business_name}» из ClientPlatform?\n\n"
+            f"🗑 Удалить бизнес «{business_name}»?\n\n"
             "Он исчезнет из активной навигации. Оплаты, результаты и аудит не удаляются. "
             "После этого можно подключить другой бизнес. Это действие требует подтверждения."
         ),
         rows=(
-            (_button("✅ Да, убрать бизнес", "cpm:business-retire-ok"),),
+            (_button("🗑 Да, удалить бизнес", "cpm:business-retire-ok"),),
             (_button("Отмена", "cpm:manage-more"),),
         ),
     )
@@ -5400,7 +5403,7 @@ def _business_retire_result(actor: TenantContext) -> CustomerInteractionMessage:
     business = archive_business(actor=actor)
     return CustomerInteractionMessage(
         text=(
-            f"✅ Бизнес «{business.name}» убран из активной работы.\n\n"
+            f"✅ Бизнес «{business.name}» удалён из активных.\n\n"
             "История сохранена. Отправьте «start» или снова откройте ClientPlatform — "
             "появится вход для подключения другого бизнеса."
         ),
