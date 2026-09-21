@@ -76,7 +76,7 @@ def _managed_bot_auto_enabled() -> bool:
 
 def welcome_keyboard():
     return control._keyboard(
-        [[("🚀 Запустить мой бизнес", "cps:start")]]
+        [[("🚀 Подключить организацию", "cps:start")]]
     )
 
 
@@ -239,7 +239,7 @@ async def send_advanced_dashboard(
         ]
     )
     await message.answer(
-        f"🧩 Бизнес и возможности · {access.business.name}\n\n"
+        f"🧩 Организация и возможности · {access.business.name}\n\n"
         f"Чем Вы занимаетесь:\n{profile.activity_description}\n\n"
         f"Каналы:\n{messenger_lines}"
         f"{advertising_lines}\n\n"
