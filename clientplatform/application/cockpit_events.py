@@ -6,6 +6,7 @@ from decimal import Decimal
 import hashlib
 import json
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from clientplatform.application.activity import get_business_profile
 from clientplatform.application.cockpit import resolve_cockpit_context
@@ -308,7 +309,7 @@ def resolve_event_live_snapshot(
         sessions=tuple(
             CockpitEventLiveSession(
                 position=session.position,
-                local_start=session.starts_at.astimezone(profile.zone).strftime("%d.%m.%Y %H:%M"),
+                local_start=session.starts_at.astimezone(ZoneInfo(profile.timezone)).strftime("%d.%m.%Y %H:%M"),
                 provider_key=session.provider_key,
                 provider_label=session.provider_label,
                 join_url=session.join_url,
