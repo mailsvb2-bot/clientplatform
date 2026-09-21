@@ -213,10 +213,10 @@ class ExternalProductConnector:
     display_name: str
     webhook_secret_reference: str
     status: ExternalProductConnectorStatus
-    ingress_mode: ExternalProductIngressMode
     created_by_member_id: str
     created_at: str
     updated_at: str
+    ingress_mode: ExternalProductIngressMode = ExternalProductIngressMode.SIGNED_WEBHOOK
     activated_at: str | None = None
     disabled_at: str | None = None
     revoked_at: str | None = None
