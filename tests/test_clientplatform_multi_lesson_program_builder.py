@@ -195,6 +195,28 @@ async def test_legacy_program_button_delegates_to_single_canonical_builder(
 
 
 @pytest.mark.asyncio
+async def test_program_list_acknowledges_before_repository_work(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    business_id = str(uuid4())
+    business_token = builder.control._uuid_token(business_id)
+    _store, _actor = install_store(monkeypatch, business_id=business_id)
+    callback = FakeCallback(f"cp:cap:{business_token}:programs")
+    state = FakeState()
+
+    def list_after_ack(**_kwargs: Any) -> list[Any]:
+        assert callback.answers, "callback must be acknowledged before repository I/O"
+        return []
+
+    monkeypatch.setattr(builder, "list_programs", list_after_ack)
+    await builder.open_programs(callback, state)
+
+    assert callback.answers
+    assert state.clear_count == 1
+    assert "Программы" in callback.message.answers[-1][0]
+
+
+@pytest.mark.asyncio
 async def test_persistent_journey_resumes_after_fsm_restart(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -220,8 +242,31 @@ async def test_persistent_journey_resumes_after_fsm_restart(
     program_id = state.data["program_id"]
     assert store.records[program_id].program.status == ProgramStatus.DRAFT
     assert "сохраняться автоматически" in title.answers[-1][0]
+    save_after_title = [
+        (button.text, button.callback_data)
+        for row in title.answers[-1][1]["reply_markup"].inline_keyboard
+        for button in row
+    ]
+    assert save_after_title == [
+        (
+            "Сохранить и продолжить позже",
+            builder._program_callback("dopen", business_id, program_id),
+        )
+    ]
 
-    await builder.capture_lesson_title(FakeMessage(text="Введение"), state)
+    lesson_title = FakeMessage(text="Введение")
+    await builder.capture_lesson_title(lesson_title, state)
+    save_after_lesson_title = [
+        (button.text, button.callback_data)
+        for row in lesson_title.answers[-1][1]["reply_markup"].inline_keyboard
+        for button in row
+    ]
+    assert save_after_lesson_title == [
+        (
+            "Сохранить и продолжить позже",
+            builder._program_callback("dopen", business_id, program_id),
+        )
+    ]
     first = FakeMessage(text="Первый текст")
     await builder.capture_lesson_content(first, state)
     assert [item.title for item in store.records[program_id].lessons] == ["Введение"]
