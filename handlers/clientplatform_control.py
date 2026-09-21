@@ -382,7 +382,7 @@ async def _send_client_portal(message: Message, *, links: list[object]) -> None:
         )
         return
     await message.answer(
-        "Выберите специалиста или бизнес:",
+        "Выберите специалиста или организацию:",
         reply_markup=_client_business_keyboard(links),
     )
 
@@ -477,7 +477,7 @@ async def clientplatform_start(message: Message, state: FSMContext) -> None:
     if len(accesses) > 1:
         await state.clear()
         await message.answer(
-            "Выберите бизнес, с которым хотите работать:",
+            "Выберите организацию, с которой хотите работать:",
             reply_markup=_business_choice_keyboard(accesses),
         )
         return
@@ -655,7 +655,7 @@ async def finish_profile(callback: CallbackQuery, state: FSMContext) -> None:
     if profile.status == BusinessProfileStatus.DRAFT:
         structured = await asyncio.to_thread(get_business_profile_details, actor=actor)
         if not structured.confirmed:
-            await callback.answer("Сначала подтвердите данные о бизнесе.", show_alert=True)
+            await callback.answer("Сначала подтвердите данные об организации.", show_alert=True)
             return
     try:
         await asyncio.to_thread(complete_business_profile, actor=actor)
@@ -688,7 +688,7 @@ async def edit_activity(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     await _callback_message(callback).answer(
         "✏️ Изменить направление деятельности\n\n"
-        "Сейчас это описание помогает ClientPlatform понимать, чем занимается бизнес. "
+        "Сейчас это описание помогает ClientPlatform понимать, чем занимается организация. "
         "Напишите новое направление или описание своими словами."
     )
 
@@ -864,7 +864,7 @@ async def start_booking_slot(callback: CallbackQuery, state: FSMContext) -> None
     )
     await callback.answer()
     await _callback_message(callback).answer(
-        "Напишите дату и время по местному времени бизнеса в формате "
+        "Напишите дату и время по местному времени организации в формате "
         "ДД.ММ.ГГГГ ЧЧ:ММ. Например: 31.07.2026 15:00"
     )
 
@@ -1084,7 +1084,7 @@ async def book_client_slot(callback: CallbackQuery) -> None:
     await message.answer(
         f"✅ Вы записаны: {claim.slot.offering_title} — {claim.slot.local_start}, "
         f"{claim.slot.slot.duration_minutes} мин.\n"
-        f"Бизнес: {claim.slot.business_name}.\n\n"
+        f"Организация: {claim.slot.business_name}.\n\n"
         "Я также пришлю напоминания в Telegram. Ниже можно одним нажатием "
         "добавить встречу в календарь телефона."
     )
