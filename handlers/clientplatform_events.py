@@ -12,6 +12,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from clientplatform.application.activity import get_business_profile
+from clientplatform.application.activity_directions import list_activity_directions
 from clientplatform.application.cockpit_events import resolve_cockpit_events
 from clientplatform.application.event_announcements import draft_event_announcement
 from clientplatform.application.event_content_plans import (
@@ -1228,10 +1229,76 @@ async def start_event_wizard(callback: CallbackQuery, state: FSMContext) -> None
     except TenantPermissionDenied:
         await callback.answer("Создавать мероприятия может владелец или администратор", show_alert=True)
         return
+    profile, directions = await asyncio.gather(
+        asyncio.to_thread(get_business_profile, actor=actor),
+        asyncio.to_thread(list_activity_directions, actor=actor),
+    )
+    await state.clear()
+    await state.update_data(event_business_id=business_id)
+    await callback.answer()
+    if directions:
+        rows = [
+            [
+                (
+                    direction.title[:42],
+                    f"cpev:dir:{token}:{control._uuid_token(direction.id)}",
+                )
+            ]
+            for direction in directions
+        ]
+        rows.append([("Без направления", f"cpev:dirnone:{token}")])
+        rows.append([("Отмена", f"cpev:home:{token}")])
+        await control._callback_message(callback).answer(
+            "К какому направлению деятельности относится это событие?",
+            reply_markup=control._keyboard(rows),
+        )
+        return
+    await state.set_state(ClientPlatformEventState.waiting_details)
+    await control._callback_message(callback).answer(
+        event_creation_prompt(profile.timezone),
+        reply_markup=_cancel_keyboard(business_id),
+    )
+
+
+@router.callback_query(F.data.startswith("cpev:dir:"))
+async def choose_event_direction(callback: CallbackQuery, state: FSMContext) -> None:
+    _, _, business_token, direction_token = str(callback.data).split(":", 3)
+    business_id = control._token_uuid(business_token)
+    direction_id = control._token_uuid(direction_token)
+    actor = await control._actor(int(callback.from_user.id), business_id)
+    directions = await asyncio.to_thread(list_activity_directions, actor=actor)
+    if direction_id not in {item.id for item in directions}:
+        await callback.answer("Направление больше недоступно.", show_alert=True)
+        return
     profile = await asyncio.to_thread(get_business_profile, actor=actor)
     await state.clear()
+    await state.update_data(
+        event_business_id=business_id,
+        event_direction_id=direction_id,
+    )
     await state.set_state(ClientPlatformEventState.waiting_details)
-    await state.update_data(event_business_id=business_id)
+    await callback.answer()
+    await control._callback_message(callback).answer(
+        event_creation_prompt(profile.timezone),
+        reply_markup=_cancel_keyboard(business_id),
+    )
+
+
+@router.callback_query(F.data.startswith("cpev:dirnone:"))
+async def choose_event_without_direction(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    business_token = str(callback.data).split(":", 2)[2]
+    business_id = control._token_uuid(business_token)
+    actor = await control._actor(int(callback.from_user.id), business_id)
+    profile = await asyncio.to_thread(get_business_profile, actor=actor)
+    await state.clear()
+    await state.update_data(
+        event_business_id=business_id,
+        event_direction_id=None,
+    )
+    await state.set_state(ClientPlatformEventState.waiting_details)
     await callback.answer()
     await control._callback_message(callback).answer(
         event_creation_prompt(profile.timezone),
@@ -1299,6 +1366,11 @@ async def receive_event_details(message: Message, state: FSMContext) -> None:
                 timezone_name=profile.timezone,
                 join_url=join_url,
                 offer_url=offer_url,
+                direction_id=(
+                    str(data.get("event_direction_id"))
+                    if data.get("event_direction_id")
+                    else None
+                ),
             ),
         )
         registration_url = created.registration_url(_public_base_url())
@@ -1389,6 +1461,11 @@ async def receive_event_time(message: Message, state: FSMContext) -> None:
                 timezone_name=profile.timezone,
                 join_url=None,
                 offer_url=None,
+                direction_id=(
+                    str(data.get("event_direction_id"))
+                    if data.get("event_direction_id")
+                    else None
+                ),
             ),
         )
         registration_url = created.registration_url(_public_base_url())
