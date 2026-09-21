@@ -309,15 +309,24 @@ def test_vk_and_max_conduct_webinar_uses_canonical_live_session_links() -> None:
         ),
     )
     with patch.object(native_ui, "resolve_event_live_snapshot", return_value=live):
-        rendered = native_ui._event_conduct_message(
+        first = native_ui._event_conduct_message(
             actor,
             "33333333-3333-4333-8333-333333333333",
         )
-    assert "https://zoom.example/room" in rendered.text
-    assert "https://webinar.example/room" in rendered.text
-    assert "День 1 · 15.09.2026 19:00 · Zoom" in rendered.text
-    assert "День 2 · 16.09.2026 19:00 · Webinar.ru" in rendered.text
-    assert (BACK_TO_EVENTS_LABEL, "cpm:events") in _commands(rendered)
+        second = native_ui._event_conduct_message(
+            actor,
+            "33333333-3333-4333-8333-333333333333",
+            page=1,
+        )
+    assert "https://zoom.example/room" in first.text
+    assert "https://webinar.example/room" not in first.text
+    assert "День 1 · 15.09.2026 19:00 · Zoom" in first.text
+    assert any(command.endswith(":1") for _, command in _commands(first))
+
+    assert "https://webinar.example/room" in second.text
+    assert "День 2 · 16.09.2026 19:00 · Webinar.ru" in second.text
+    assert any(command.endswith(":0") for _, command in _commands(second))
+    assert (BACK_TO_EVENTS_LABEL, "cpm:events") in _commands(second)
 
 
 def test_event_settings_and_mutations_return_to_webinar_hub() -> None:
