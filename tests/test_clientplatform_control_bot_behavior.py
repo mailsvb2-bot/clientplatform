@@ -360,7 +360,7 @@ async def test_start_invite_new_multi_and_single_business(monkeypatch: pytest.Mo
     multi_state = FakeState({"old": 1})
     await handlers.clientplatform_start(multiple, multi_state)
     assert multi_state.clear_count == 1
-    assert "Выберите бизнес" in multiple.answers[-1][0]
+    assert "Выберите организацию" in multiple.answers[-1][0]
     assert len(multiple.answers[-1][1]["reply_markup"].inline_keyboard) == 2
 
     one = [business_access(business_id)]
@@ -622,14 +622,14 @@ async def test_business_archive_prompt_is_owner_only_stale_safe_and_explicit(
     await safety.confirm_business_archive(callback, state)
 
     assert state.clear_count == 1
-    assert "Удалить бизнес «Сантехник»?" in callback.message.answers[-1][0]
+    assert "Удалить организацию «Сантехник»?" in callback.message.answers[-1][0]
     buttons = [
         (button.text, button.callback_data)
         for row in callback.message.answers[-1][1]["reply_markup"].inline_keyboard
         for button in row
     ]
     assert buttons == [
-        ("🗑 Да, удалить бизнес", f"cps:archive-confirm:{token}"),
+        ("🗑 Да, удалить организацию", f"cps:archive-confirm:{token}"),
         ("Отмена", f"cps:archive-cancel:{token}"),
     ]
     assert "cps:archive-cancel:" in safety._ONE_SHOT_PREFIXES
@@ -681,7 +681,7 @@ async def test_business_archive_confirmation_fails_closed_and_routes_remaining(
     failed = FakeCallback(f"cps:archive-confirm:{token}")
     await safety.archive_business_from_settings(failed, FakeState())
     assert failed.answers[-1][1]["show_alert"] is True
-    assert "Не удалось удалить бизнес" in callback_answer_text(failed)
+    assert "Не удалось удалить организацию" in callback_answer_text(failed)
 
     archived = SimpleNamespace(name="Сантехник")
     monkeypatch.setattr(safety, "archive_business", lambda **_kwargs: archived)
@@ -695,7 +695,7 @@ async def test_business_archive_confirmation_fails_closed_and_routes_remaining(
         for row in none_left.message.answers[-1][1]["reply_markup"].inline_keyboard
         for button in row
     ]
-    assert create_buttons == ["➕ Создать бизнес"]
+    assert create_buttons == ["➕ Создать организацию"]
 
     other_id = str(uuid4())
     remaining = [business_access(other_id, "Основной бизнес")]
@@ -719,7 +719,7 @@ async def test_business_archive_confirmation_fails_closed_and_routes_remaining(
     )
     multiple_left = FakeCallback(f"cps:archive-confirm:{token}")
     await safety.archive_business_from_settings(multiple_left, FakeState())
-    assert "Выберите бизнес" in multiple_left.message.answers[-1][0]
+    assert "Выберите организацию" in multiple_left.message.answers[-1][0]
     assert multiple_left.message.answers[-1][1]["reply_markup"] == "business-choice"
 
 
@@ -736,9 +736,9 @@ async def test_business_archive_cancel_is_one_shot_and_returns_to_settings(
 
     assert state.clear_count == 1
     assert callback_answer_text(callback) == "Удаление отменено"
-    assert callback.message.answers[-1][0] == "Удаление бизнеса отменено."
+    assert callback.message.answers[-1][0] == "Удаление организации отменено."
     button = callback.message.answers[-1][1]["reply_markup"].inline_keyboard[0][0]
-    assert button.text == "⚙️ Настройки бизнеса"
+    assert button.text == "⚙️ Настройки организации"
     assert button.callback_data == f"cpo:settings:{token}"
     assert "cps:archive-cancel:" in safety._ONE_SHOT_PREFIXES
 
