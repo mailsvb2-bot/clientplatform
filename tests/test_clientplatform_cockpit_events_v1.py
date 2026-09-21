@@ -93,7 +93,7 @@ def test_event_creation_rejects_reused_request_id_for_different_payload() -> Non
             )
 
 
-def test_live_webinar_projection_uses_durable_session_rooms_and_business_timezone() -> None:
+def test_webinar_room_projection_uses_durable_session_rooms_and_business_timezone() -> None:
     actor = _actor()
     event = SimpleNamespace(
         id="33333333-3333-4333-8333-333333333333",
