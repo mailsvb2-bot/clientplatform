@@ -417,20 +417,11 @@ async def capture_lesson_title(message: Message, state: FSMContext) -> None:
     except ValueError:
         await message.answer("Название урока должно содержать от 1 до 200 символов.")
         return
-    business_id, program_id = session
     await state.update_data(lesson_title=title)
     await state.set_state(ClientPlatformProgramBuilderState.lesson_content)
     await message.answer(
         "Отправьте материал урока: текст, аудио, голосовое сообщение, видео, "
-        "изображение или документ.",
-        reply_markup=control._keyboard(
-            [[
-                (
-                    "Сохранить и продолжить позже",
-                    _program_callback("dopen", business_id, program_id),
-                )
-            ]]
-        ),
+        "изображение или документ."
     )
 
 
@@ -507,7 +498,17 @@ async def add_lesson(callback: CallbackQuery, state: FSMContext) -> None:
     await state.update_data(business_id=business_id, program_id=program_id)
     await state.set_state(ClientPlatformProgramBuilderState.lesson_title)
     await callback.answer()
-    await control._callback_message(callback).answer("Как называется следующий урок?")
+    await control._callback_message(callback).answer(
+        "Как называется следующий урок?",
+        reply_markup=control._keyboard(
+            [[
+                (
+                    "Сохранить и продолжить позже",
+                    _program_callback("dopen", business_id, program_id),
+                )
+            ]]
+        ),
+    )
 
 
 @router.callback_query(F.data.startswith("cp:dpub:"))
