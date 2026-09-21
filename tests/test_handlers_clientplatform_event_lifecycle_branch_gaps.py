@@ -55,6 +55,171 @@ class WebinarLifecycleBranchGapTests(unittest.IsolatedAsyncioTestCase):
         state.set_state.assert_awaited_once_with(lifecycle.ClientPlatformEventLifecycleState.waiting_title)
         self.assertIn("Как называется", reply.answer.await_args.args[0])
 
+    async def test_open_webinar_live_room_rejects_stale_callback(self) -> None:
+        cb = callback("cpev:conduct:broken")
+        await lifecycle.open_webinar_live_room(cb)
+        cb.answer.assert_awaited_once_with("Кнопка устарела", show_alert=True)
+
+    async def test_open_webinar_live_room_requires_ready_link(self) -> None:
+        cb = callback("cpev:conduct:event-token:business-token")
+        actor = object()
+        live = SimpleNamespace(
+            title="Вебинар",
+            sessions=(
+                SimpleNamespace(
+                    position=1,
+                    local_start="25.09.2026 19:00",
+                    join_ready=False,
+                    join_url=None,
+                ),
+            ),
+        )
+        with (
+            patch.object(
+                lifecycle.control,
+                "_token_uuid",
+                side_effect=(EVENT_ID, BUSINESS_ID),
+            ),
+            patch.object(
+                lifecycle.control,
+                "_actor",
+                new=AsyncMock(return_value=actor),
+            ),
+            patch.object(
+                lifecycle.asyncio,
+                "to_thread",
+                new=AsyncMock(return_value=live),
+            ),
+        ):
+            await lifecycle.open_webinar_live_room(cb)
+        cb.answer.assert_awaited_once_with(
+            "Сначала добавьте ссылку на эфир",
+            show_alert=True,
+        )
+
+    async def test_open_webinar_live_room_renders_single_and_multiday_rooms(self) -> None:
+        actor = object()
+        single = SimpleNamespace(
+            title="Один эфир",
+            sessions=(
+                SimpleNamespace(
+                    position=1,
+                    local_start="25.09.2026 19:00",
+                    join_ready=True,
+                    join_url="https://room.example.test/one",
+                ),
+            ),
+        )
+        multi = SimpleNamespace(
+            title="Два эфира",
+            sessions=(
+                SimpleNamespace(
+                    position=1,
+                    local_start="25.09.2026 19:00",
+                    join_ready=True,
+                    join_url="https://room.example.test/one",
+                ),
+                SimpleNamespace(
+                    position=2,
+                    local_start="26.09.2026 19:00",
+                    join_ready=True,
+                    join_url="https://room.example.test/two",
+                ),
+            ),
+        )
+        for live, expected_label in (
+            (single, "▶️ Открыть эфир"),
+            (multi, "▶️ Открыть день 1"),
+        ):
+            with self.subTest(title=live.title):
+                cb = callback("cpev:conduct:event-token:business-token")
+                reply = message()
+                with (
+                    patch.object(
+                        lifecycle.control,
+                        "_token_uuid",
+                        side_effect=(EVENT_ID, BUSINESS_ID),
+                    ),
+                    patch.object(
+                        lifecycle.control,
+                        "_uuid_token",
+                        return_value="business-token",
+                    ),
+                    patch.object(
+                        lifecycle.control,
+                        "_actor",
+                        new=AsyncMock(return_value=actor),
+                    ),
+                    patch.object(
+                        lifecycle.asyncio,
+                        "to_thread",
+                        new=AsyncMock(return_value=live),
+                    ),
+                    patch.object(
+                        lifecycle.control,
+                        "_callback_message",
+                        return_value=reply,
+                    ),
+                ):
+                    await lifecycle.open_webinar_live_room(cb)
+
+                cb.answer.assert_awaited_once_with()
+                rendered_text = reply.answer.await_args.args[0]
+                markup = reply.answer.await_args.kwargs["reply_markup"]
+                self.assertIn(live.title, rendered_text)
+                self.assertIn("День 1: 25.09.2026 19:00", rendered_text)
+                self.assertEqual(
+                    markup.inline_keyboard[0][0].text,
+                    expected_label,
+                )
+                self.assertEqual(
+                    markup.inline_keyboard[0][0].url,
+                    "https://room.example.test/one",
+                )
+                self.assertEqual(
+                    markup.inline_keyboard[-1][0].text,
+                    lifecycle.BACK_TO_EVENTS_LABEL,
+                )
+                if len(live.sessions) > 1:
+                    self.assertEqual(
+                        markup.inline_keyboard[1][0].text,
+                        "▶️ Открыть день 2",
+                    )
+                    self.assertIn("День 2: 26.09.2026 19:00", rendered_text)
+
+    async def test_open_webinar_live_room_fails_closed_for_resolution_errors(self) -> None:
+        actor = object()
+        for error in (
+            lifecycle.TenantPermissionDenied("denied"),
+            LookupError("missing"),
+            ValueError("invalid"),
+            RuntimeError("unavailable"),
+        ):
+            with self.subTest(error=type(error).__name__):
+                cb = callback("cpev:conduct:event-token:business-token")
+                with (
+                    patch.object(
+                        lifecycle.control,
+                        "_token_uuid",
+                        side_effect=(EVENT_ID, BUSINESS_ID),
+                    ),
+                    patch.object(
+                        lifecycle.control,
+                        "_actor",
+                        new=AsyncMock(return_value=actor),
+                    ),
+                    patch.object(
+                        lifecycle.asyncio,
+                        "to_thread",
+                        new=AsyncMock(side_effect=error),
+                    ),
+                ):
+                    await lifecycle.open_webinar_live_room(cb)
+                cb.answer.assert_awaited_once_with(
+                    "Не удалось открыть эфир этого вебинара",
+                    show_alert=True,
+                )
+
     async def test_receive_days_covers_missing_cancel_and_valid(self) -> None:
         missing = AsyncMock()
         missing.get_data.return_value = {}
