@@ -526,7 +526,7 @@ async def receive_activity_description(message: Message, state: FSMContext) -> N
     )
     if editing_activity:
         await state.clear()
-        await message.answer("Направление деятельности обновлено.")
+        await message.answer("Описание деятельности обновлено. Новое направление сохранено.")
         await _send_dashboard(message, user_id=_user_id(message), business_id=business_id)
         return
 
