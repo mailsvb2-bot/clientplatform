@@ -872,11 +872,11 @@ def _settings_rows(token: str, actor) -> tuple[list[list[tuple[str, str]]], list
     rows.append([("🧩 Бизнес и возможности", f"cps:advanced:{token}")])
     help_lines.append("• посмотреть услуги и возможности бизнеса → «🧩 Бизнес и возможности»")
     if actor.role in _SETTINGS_SYSTEM_ROLES:
-        rows.append([("✏️ Изменить направление", f"cp:editact:{token}")])
-        help_lines.append("• изменить, чем занимается этот бизнес → «✏️ Изменить направление»")
+        rows.append([(nav.ACTIVITY.label, f"cp:editact:{token}")])
+        help_lines.append(f"• {nav.ACTIVITY.need} → «{nav.ACTIVITY.label}»")
     if actor.role == PlatformRole.OWNER:
-        rows.append([("🗑 Удалить бизнес", f"cps:archive-prompt:{token}")])
-        help_lines.append("• убрать тестовый или больше не нужный бизнес → «🗑 Удалить бизнес»")
+        rows.append([(nav.DELETE_BUSINESS.label, f"cps:archive-prompt:{token}")])
+        help_lines.append(f"• {nav.DELETE_BUSINESS.need} → «{nav.DELETE_BUSINESS.label}»")
     if actor.role in _SETTINGS_TEAM_ROLES:
         rows.append([("👤 Сотрудники и доступы", f"cpa:{token}:menu-team")])
         help_lines.append("• добавить сотрудника или изменить доступ → «👤 Сотрудники и доступы»")
