@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from clientplatform.domain.event_followup import (
     EVENT_FOLLOWUP_CHANNELS,
@@ -102,16 +103,34 @@ def event_hub_actions(snapshot: object) -> tuple[EventHubAction, ...]:
                 )
             )
             break
-    live_item = next(
-        (
-            item
-            for item in items
-            if getattr(item, "id", None)
-            and bool(getattr(item, "join_ready", False))
-            and str(getattr(item, "status", "") or "") == "published"
-        ),
-        None,
+    live_items = tuple(
+        item
+        for item in items
+        if getattr(item, "id", None)
+        and bool(getattr(item, "join_ready", False))
+        and str(getattr(item, "status", "") or "") == "published"
     )
+    live_item = None
+    if live_items:
+        now = datetime.now(timezone.utc)
+        dated: list[tuple[datetime, object]] = []
+        undated: list[object] = []
+        for item in live_items:
+            raw_start = str(getattr(item, "starts_at", "") or "").strip()
+            try:
+                start = datetime.fromisoformat(raw_start)
+                if start.tzinfo is None:
+                    start = start.replace(tzinfo=timezone.utc)
+                dated.append((start.astimezone(timezone.utc), item))
+            except ValueError:
+                undated.append(item)
+        upcoming = tuple((start, item) for start, item in dated if start >= now)
+        if upcoming:
+            live_item = min(upcoming, key=lambda pair: pair[0])[1]
+        elif dated:
+            live_item = max(dated, key=lambda pair: pair[0])[1]
+        elif undated:
+            live_item = undated[0]
     if live_item is not None:
         actions.append(
             EventHubAction(
