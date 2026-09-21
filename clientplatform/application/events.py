@@ -24,6 +24,7 @@ from clientplatform.domain.events import (
     validate_external_https_url,
 )
 from clientplatform.domain.tenancy import TenantContext
+from clientplatform.infrastructure.activity_direction_repository import ActivityDirectionRepository
 from clientplatform.infrastructure.event_repository import (
     EventRepository,
     EventStateConflict,
@@ -60,6 +61,7 @@ def create_event_in_transaction(
     description: str = "",
     ends_at: datetime | None = None,
     notification_connection_id: str | None = None,
+    direction_id: str | None = None,
     now: datetime | None = None,
 ) -> Event:
     repository = EventRepository(conn)
@@ -99,7 +101,15 @@ def create_event_in_transaction(
         created_at=timestamp,
         updated_at=timestamp,
     )
-    return repository.insert(actor=current, event=event)
+    created = repository.insert(actor=current, event=event)
+    if direction_id is not None:
+        ActivityDirectionRepository(conn).bind_subject(
+            actor=current,
+            direction_id=direction_id,
+            subject_kind="event",
+            subject_id=created.id,
+        )
+    return created
 
 
 def create_event(**kwargs: Any) -> Event:
