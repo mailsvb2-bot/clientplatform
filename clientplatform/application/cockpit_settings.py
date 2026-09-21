@@ -5,7 +5,13 @@ from dataclasses import asdict, dataclass
 from clientplatform.application.activity import get_business_profile, save_business_profile
 from clientplatform.application.cockpit import resolve_cockpit_context
 from clientplatform.application.tenancy import archive_business, rename_business, resolve_tenant_context
-from clientplatform.domain.tenancy import Business, PlatformRole, TenantAccessDenied, TenantContext
+from clientplatform.domain.tenancy import (
+    Business,
+    PlatformRole,
+    TenantAccessDenied,
+    TenantContext,
+    TenantPermissionDenied,
+)
 from services.db import atomic_db
 
 _SCHEMA_VERSION = "2026-09-06.v1"
@@ -100,7 +106,7 @@ def archive_cockpit_business(
         requested_business_id=requested_business_id,
     )
     if actor.role != PlatformRole.OWNER:
-        actor.assert_can_manage_members(PlatformRole.OWNER)
+        raise TenantPermissionDenied("only the business owner can archive a business")
     if str(confirmation_business_id or "").strip() != actor.business_id:
         raise ValueError("business archive confirmation does not match current business")
     return archive_business(actor=actor)
