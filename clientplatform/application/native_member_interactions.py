@@ -3114,16 +3114,13 @@ def _experiment_apply_message(
 def _manage_message(actor: TenantContext) -> CustomerInteractionMessage:
     if actor.role not in _CONNECTION_ROLES:
         return _permission_message()
-    items = [nav.ACTIVITY, nav.MESSENGERS, nav.READINESS, nav.FORMATS]
+    items = [nav.ACTIVITY, nav.MESSENGERS, nav.FORMATS]
     rows: list[tuple[CustomerInteractionButton, ...]] = [
         (_button(nav.ACTIVITY.label, "cpm:activity-edit-help"),),
         (_button(nav.MESSENGERS.label, "cpm:messengers"),),
-        (_button(nav.READINESS.label, "cpm:release"),),
         (_button(nav.FORMATS.label, "cpm:formats"),),
     ]
     if actor.role in _OWNER_ROLES:
-        rows.append((_button(nav.TARIFF.label, "cpm:tariff"),))
-        items.append(nav.TARIFF)
         rows.append((_button(nav.DELETE_BUSINESS.label, "cpm:business-retire"),))
         items.append(nav.DELETE_BUSINESS)
     rows.append((_button(nav.SETTINGS_MORE.label, "cpm:manage-more"),))
@@ -3138,11 +3135,15 @@ def _manage_message(actor: TenantContext) -> CustomerInteractionMessage:
 def _manage_more_message(actor: TenantContext) -> CustomerInteractionMessage:
     if actor.role not in _CONNECTION_ROLES:
         return _permission_message()
-    items = (nav.RECENT, nav.SYSTEM)
+    items = [nav.RECENT, nav.SYSTEM, nav.READINESS]
     rows: list[tuple[CustomerInteractionButton, ...]] = [
         (_button(nav.RECENT.label, "cpm:recent"),),
         (_button(nav.SYSTEM.label, "cpm:system"),),
+        (_button(nav.READINESS.label, "cpm:release"),),
     ]
+    if actor.role in _OWNER_ROLES:
+        rows.append((_button(nav.TARIFF.label, "cpm:tariff"),))
+        items.append(nav.TARIFF)
     text = "🛠 Состояние и история\n\nОбычно сюда заходить не нужно.\n\n" + nav.choice_help(*items)
     rows.extend(((_button(nav.SETTINGS.label, "cpm:manage"),), _back_row()))
     return CustomerInteractionMessage(text=text, rows=tuple(rows))
@@ -5383,7 +5384,7 @@ def _business_retire_confirm(actor: TenantContext) -> CustomerInteractionMessage
         text=(
             f"🗑 Удалить бизнес «{business_name}»?\n\n"
             "Он исчезнет из активных бизнесов и больше не будет выбран в ClientPlatform. "
-            "История оплат, результатов и служебный аудит сохранятся."
+            "Оплаты, результаты и аудит не удаляются. История сохраняется."
         ),
         rows=(
             (_button("✅ Да, удалить бизнес", "cpm:business-retire-ok"),),
