@@ -308,7 +308,7 @@ def _dashboard_keyboard(business_id: str, capabilities: list[object]) -> InlineK
     rows.extend(
         [
             [("Клиенты", f"cp:clients:{token}"), ("Результаты", f"cp:results:{token}")],
-            [("Изменить деятельность", f"cp:editact:{token}")],
+            [("✏️ Изменить направление", f"cp:editact:{token}")],
         ]
     )
     markup = _keyboard(rows)
