@@ -223,6 +223,7 @@ _ONE_SHOT_PREFIXES = (
     "cps:cancel:",
     "cps:archive-prompt:",
     "cps:archive-confirm:",
+    "cps:archive-cancel:",
 )
 
 
@@ -707,8 +708,22 @@ async def confirm_business_archive(callback: CallbackQuery, state: FSMContext) -
         reply_markup=control._keyboard(
             [
                 [("🗑 Да, удалить бизнес", f"cps:archive-confirm:{token}")],
-                [("Отмена", f"cpo:settings:{token}")],
+                [("Отмена", f"cps:archive-cancel:{token}")],
             ]
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("cps:archive-cancel:"))
+async def cancel_business_archive(callback: CallbackQuery, state: FSMContext) -> None:
+    business_id = control._token_uuid(str(callback.data).split(":", 2)[2])
+    token = control._uuid_token(business_id)
+    await state.clear()
+    await _answer_callback(callback, "Удаление отменено")
+    await control._callback_message(callback).answer(
+        "Удаление бизнеса отменено.",
+        reply_markup=control._keyboard(
+            [[("⚙️ Настройки бизнеса", f"cpo:settings:{token}")]]
         ),
     )
 
