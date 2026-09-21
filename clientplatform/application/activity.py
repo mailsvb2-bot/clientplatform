@@ -16,6 +16,7 @@ from clientplatform.domain.offering_process import BusinessOfferingProcess
 from clientplatform.domain.customers import CustomerPlatform, normalize_identity_subject
 from clientplatform.domain.tenancy import TenantContext
 from clientplatform.infrastructure.offering_process_repository import OfferingProcessRepository
+from clientplatform.infrastructure.activity_direction_repository import ActivityDirectionRepository
 from clientplatform.infrastructure.postgres_safe_activity_repository import ActivityRepository
 from services.accounts.identity import resolve_account_for_identity
 from services.db import get_db, get_db_ro
@@ -171,6 +172,7 @@ def create_business_offering(
     title: str,
     description: str,
     idempotency_key: str | None = None,
+    direction_id: str | None = None,
     now: str | None = None,
 ) -> BusinessOffering:
     with get_db() as conn:
@@ -189,6 +191,13 @@ def create_business_offering(
                 created_by_member_id=offering.created_by_member_id,
                 now=now,
             )
+            if direction_id is not None:
+                ActivityDirectionRepository(conn).bind_subject(
+                    actor=actor,
+                    direction_id=direction_id,
+                    subject_kind="offering",
+                    subject_id=offering.id,
+                )
         return offering
 
 
