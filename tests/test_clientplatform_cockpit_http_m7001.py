@@ -222,6 +222,77 @@ class CockpitHttpM7001Tests(unittest.IsolatedAsyncioTestCase):
             "no-store, max-age=0",
         )
 
+    async def test_cockpit_webinar_endpoints_keep_events_inside_miniapp(self) -> None:
+        principal = TelegramWebAppPrincipal(user_id=101, auth_date=1, query_id=None)
+
+        class Snapshot:
+            def __init__(self, payload):
+                self.payload = payload
+
+            def as_dict(self):
+                return dict(self.payload)
+
+        events_snapshot = Snapshot({
+            "business_id": _BUSINESS_A,
+            "business_name": "Практика",
+            "timezone_name": "Europe/Moscow",
+            "items": [{"id": "33333333-3333-4333-8333-333333333333", "title": "Вебинар"}],
+            "limitations": [],
+        })
+        live_snapshot = Snapshot({
+            "business_id": _BUSINESS_A,
+            "event_id": "33333333-3333-4333-8333-333333333333",
+            "title": "Вебинар",
+            "sessions": [{
+                "position": 1,
+                "local_start": "15.09.2026 19:00",
+                "join_url": "https://stage.example/room",
+                "join_ready": True,
+            }],
+        })
+        with (
+            patch.object(cockpit_http.settings, "BOT_TOKEN", _TOKEN),
+            patch.object(cockpit_http, "verify_telegram_webapp_init_data", return_value=principal),
+            patch.object(cockpit_http, "resolve_cockpit_events", return_value=events_snapshot) as resolve_events,
+            patch.object(cockpit_http, "resolve_cockpit_event_live", return_value=live_snapshot) as resolve_live,
+        ):
+            app = web.Application()
+            cockpit_http.register_cockpit_routes(app)
+            client = TestClient(TestServer(app))
+            await client.start_server()
+            try:
+                events_response = await client.post(
+                    "/clientplatform/cockpit/events",
+                    json={"init_data": "verified-by-test", "business_id": _BUSINESS_A, "limit": 30},
+                )
+                live_response = await client.post(
+                    "/clientplatform/cockpit/events/live",
+                    json={
+                        "init_data": "verified-by-test",
+                        "business_id": _BUSINESS_A,
+                        "event_id": "33333333-3333-4333-8333-333333333333",
+                    },
+                )
+                events_payload = await events_response.json()
+                live_payload = await live_response.json()
+            finally:
+                await client.close()
+
+        self.assertEqual(events_response.status, 200)
+        self.assertEqual(events_payload["items"][0]["title"], "Вебинар")
+        self.assertEqual(live_response.status, 200)
+        self.assertEqual(live_payload["sessions"][0]["join_url"], "https://stage.example/room")
+        resolve_events.assert_called_once_with(
+            telegram_user_id=101,
+            requested_business_id=_BUSINESS_A,
+            limit=30,
+        )
+        resolve_live.assert_called_once_with(
+            telegram_user_id=101,
+            requested_business_id=_BUSINESS_A,
+            event_id="33333333-3333-4333-8333-333333333333",
+        )
+
     async def test_cockpit_section_open_revalidates_and_delivers_through_canonical_bot_ui(self) -> None:
         principal = TelegramWebAppPrincipal(user_id=101, auth_date=1, query_id=None)
         navigation = (
