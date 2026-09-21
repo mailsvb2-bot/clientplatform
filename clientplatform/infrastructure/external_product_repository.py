@@ -158,6 +158,10 @@ class ExternalProductRepository:
             raise ExternalProductInvariantViolation(
                 "product_key already belongs to a connector with another secret reference"
             )
+        if connector.ingress_mode != mode:
+            raise ExternalProductInvariantViolation(
+                "product_key already belongs to a connector with another ingress mode"
+            )
         return connector
 
     def get_connector(
