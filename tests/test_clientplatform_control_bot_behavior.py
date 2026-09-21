@@ -200,6 +200,7 @@ def test_keyboard_builders_and_content_detection(monkeypatch: pytest.MonkeyPatch
     assert "Services" not in flat
     assert "Клиенты" in flat
     assert "Результаты" in flat
+    assert "✏️ Описание организации" in flat
     assert "🏠 Открыть кабинет" in flat
     cockpit_button = next(
         button
@@ -452,7 +453,7 @@ async def test_business_and_activity_input_paths(monkeypatch: pytest.MonkeyPatch
     edit_state = FakeState({"business_id": business_id, "editing_activity": True})
     await handlers.receive_activity_description(editing, edit_state)
     assert structured[-1]["reset_confirmation"] is False
-    assert "Описание деятельности обновлено" in editing.answers[-1][0]
+    assert "Описание организации обновлено" in editing.answers[-1][0]
     assert dashboard_calls == [business_id]
 
 
@@ -597,6 +598,7 @@ async def test_edit_activity_forged_callback_fails_closed(
     assert state.states == []
     assert state.data == {}
     assert callback.answers[-1][1]["show_alert"] is True
+    assert "описание организации" in callback.answers[-1][0][0].lower()
     assert "владелец или администратор" in callback.answers[-1][0][0]
 
 
