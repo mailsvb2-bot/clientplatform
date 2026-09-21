@@ -84,7 +84,7 @@ class CapabilityParityUiTests(unittest.IsolatedAsyncioTestCase):
             await simple.send_advanced_dashboard(message, user_id=7, business_id="business-1")
 
         text, kwargs = message.answers[-1]
-        self.assertIn("🧩 Бизнес и возможности", text)
+        self.assertIn("🧩 Организация и возможности", text)
         self.assertIn("Telegram — ✅ работает", text)
         self.assertIn("ВКонтакте — ⏸ сейчас недоступно", text)
         self.assertIn("MAX — ⏸ подключено, но сейчас выключено", text)
