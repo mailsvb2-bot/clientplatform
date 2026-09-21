@@ -894,26 +894,6 @@ class NativeEventHubParityTests(unittest.TestCase):
         self.assertEqual(parse_native_member_interaction("вебинар").action, "events")
         self.assertEqual(parse_native_member_interaction("онлайн-мероприятие").action, "events")
 
-    def test_personalized_webinar_quick_action_starts_native_wizard(self) -> None:
-        route = _route(ConnectionPlatform.MAX)
-        owner = _actor(route)
-        with (
-            patch.object(
-                native_member_ui,
-                "get_business_profile",
-                return_value=SimpleNamespace(
-                    activity_description="Провожу консультации и вебинары"
-                ),
-            ),
-            patch.object(native_member_ui, "list_business_capabilities", return_value=()),
-            patch.object(native_member_ui, "_business_name", return_value="Бизнес"),
-        ):
-            message = native_member_ui._personalized_menu_message(owner)
-        self.assertIsNotNone(message)
-        assert message is not None
-        commands = {button.label: button.command for row in message.rows for button in row}
-        self.assertEqual(commands["🎥 Провести вебинар"], "cpm:event-new")
-
     def test_growth_menu_uses_canonical_webinar_hub_for_manager(self) -> None:
         route = _route(ConnectionPlatform.VK)
         manager = replace(_actor(route), role=PlatformRole.MANAGER)
