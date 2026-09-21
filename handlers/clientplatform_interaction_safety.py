@@ -23,7 +23,7 @@ from aiogram.types import (
     TelegramObject,
 )
 
-from clientplatform.application.tenancy import rename_business
+from clientplatform.application.tenancy import archive_business, rename_business
 from clientplatform.domain.activity import BusinessProfileStatus, CapabilityStatus
 
 control = importlib.import_module(".clientplatform_control", __package__)
@@ -221,6 +221,8 @@ _ONE_SHOT_PREFIXES = (
     "cpa:back:",
     "cps:rename:",
     "cps:cancel:",
+    "cps:archive-prompt:",
+    "cps:archive-confirm:",
 )
 
 
@@ -653,6 +655,89 @@ async def cancel_business_rename(callback: CallbackQuery, state: FSMContext) -> 
         control._callback_message(callback),
         user_id=int(callback.from_user.id),
         business_id=business_id,
+    )
+
+
+@router.callback_query(F.data.startswith("cps:archive-prompt:"))
+async def confirm_business_archive(callback: CallbackQuery, state: FSMContext) -> None:
+    business_id = control._token_uuid(str(callback.data).split(":", 2)[2])
+    actor = await control._actor(int(callback.from_user.id), business_id)
+    accesses = await asyncio.to_thread(
+        list_accessible_businesses,
+        user_id=int(callback.from_user.id),
+    )
+    access = next(
+        item
+        for item in accesses
+        if str(item.business.id) == str(business_id)
+    )
+    actor.assert_can_manage_business()
+    if getattr(actor.role, "value", actor.role) != "owner":
+        await _answer_callback(
+            callback,
+            "Удалить бизнес может только владелец.",
+            show_alert=True,
+        )
+        return
+    await state.clear()
+    await _answer_callback(callback)
+    token = control._uuid_token(business_id)
+    await control._callback_message(callback).answer(
+        f"Удалить бизнес «{access.business.name}»?\n\n"
+        "Он исчезнет из списка активных бизнесов. История клиентов, оплат, "
+        "сообщений и действий сохранится. Незабранные приглашения будут отозваны.",
+        reply_markup=control._keyboard(
+            [
+                [("🗑 Да, удалить бизнес", f"cps:archive-confirm:{token}")],
+                [("Отмена", f"cpo:settings:{token}")],
+            ]
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("cps:archive-confirm:"))
+async def archive_business_from_settings(callback: CallbackQuery, state: FSMContext) -> None:
+    business_id = control._token_uuid(str(callback.data).split(":", 2)[2])
+    actor = await control._actor(int(callback.from_user.id), business_id)
+    try:
+        business = await asyncio.to_thread(archive_business, actor=actor)
+    except control.TenancyError:
+        await _answer_callback(
+            callback,
+            "Не удалось удалить бизнес. Обновите экран и попробуйте снова.",
+            show_alert=True,
+        )
+        return
+
+    await state.clear()
+    await _answer_callback(callback, "Бизнес удалён")
+    message = control._callback_message(callback)
+    remaining = await asyncio.to_thread(
+        list_accessible_businesses,
+        user_id=int(callback.from_user.id),
+    )
+    await message.answer(
+        f"Бизнес «{business.name}» удалён из активных. История сохранена."
+    )
+    if not remaining:
+        await message.answer(
+            "Активных бизнесов больше нет. Можно создать новый.",
+            reply_markup=control._keyboard(
+                [[("➕ Создать бизнес", "cps:start")]]
+            ),
+        )
+        return
+    if len(remaining) == 1:
+        await control._resume_business(
+            message,
+            user_id=int(callback.from_user.id),
+            business_id=remaining[0].business.id,
+            state=state,
+        )
+        return
+    await message.answer(
+        "Выберите бизнес, с которым хотите работать:",
+        reply_markup=control._business_choice_keyboard(remaining),
     )
 
 
