@@ -930,7 +930,7 @@ async def open_more(callback: CallbackQuery) -> None:
     actor = await control._actor(int(callback.from_user.id), control._token_uuid(token))
     await control._callback_message(callback).answer(
         "🏠 Кабинет ClientPlatform\n\n"
-        "Откройте кабинет, чтобы увидеть главное по бизнесу в одном месте. "
+        "Откройте кабинет, чтобы увидеть главное по организации в одном месте. "
         "Ниже показаны только те быстрые действия, которые доступны Вашей роли.",
         reply_markup=_more_keyboard(token, actor),
     )
@@ -979,7 +979,7 @@ async def send_one_click_section(
     if normalized == "calendar":
         actor.assert_can_view_customer_records()
         await message.answer(
-            "📅 Календарь и записи\n\nОткройте актуальные записи бизнеса.",
+            "📅 Календарь и записи\n\nОткройте актуальные записи организации.",
             reply_markup=control._keyboard(
                 [[("📅 Записи клиентов", f"cpj:bookings:{token}")], [(nav.HOME.label, f"cpj:home:{token}")]]
             ),
@@ -1046,7 +1046,7 @@ async def send_one_click_section(
     if normalized == "connections":
         actor.assert_can_manage_business()
         await message.answer(
-            "💬 Подключения\n\nПодключите или проверьте клиентские мессенджеры бизнеса.",
+            "💬 Подключения\n\nПодключите или проверьте клиентские мессенджеры организации.",
             reply_markup=control._keyboard(
                 [[(nav.MESSENGERS.label, f"cpa:{token}:messengers")], [(nav.HOME.label, f"cpj:home:{token}")]]
             ),
