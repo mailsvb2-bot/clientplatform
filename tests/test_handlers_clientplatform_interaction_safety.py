@@ -137,6 +137,18 @@ def test_cross_flow_callbacks_are_rejected_while_text_answer_is_pending() -> Non
     assert _callback_conflicts_with_state(None, "cp:clients:business") is False
 
 
+def test_program_creation_escapes_only_ordinary_stale_fsm_state() -> None:
+    callback = "cp:progadd:business"
+    ordinary_state = "ClientPlatformControlState:activity_description"
+    sensitive_state = "ManagedBotSetupState:username"
+
+    assert _callback_conflicts_with_state(ordinary_state, callback) is False
+    assert _callback_should_clear_state(ordinary_state, callback) is True
+
+    assert _callback_conflicts_with_state(sensitive_state, callback) is True
+    assert _callback_should_clear_state(sensitive_state, callback) is False
+
+
 def test_webinar_wizard_callbacks_escape_only_ordinary_stale_fsm_state() -> None:
     callback = "cpm:event-wizard:timezone:moscow"
     ordinary_state = "ClientPlatformControlState:activity_description"
