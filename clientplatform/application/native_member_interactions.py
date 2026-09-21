@@ -5173,19 +5173,65 @@ def _program_reference(programs: list[Any], reference: str) -> str:
     return resolved
 
 
-def _program_create_help(
+def _program_direction_message(
     actor: TenantContext,
-    *,
-    current_platform: ConnectionPlatform,
-    input_surface: str = "official",
+    page: int = 0,
 ) -> CustomerInteractionMessage:
     if actor.role not in _PROGRAM_MANAGEMENT_ROLES:
         return _permission_message()
+    directions = list_activity_directions(actor=actor)
+    if not directions:
+        return _stale_message()
+    page = max(0, int(page))
+    start = page * _DIRECTION_PAGE_SIZE
+    if start >= len(directions) and page:
+        return _stale_message()
+    shown = directions[start : start + _DIRECTION_PAGE_SIZE]
+    rows: list[tuple[CustomerInteractionButton, ...]] = [
+        (_button(f"🧭 {item.title[:34]}", f"cpm:program-create-dir:{item.id}"),)
+        for item in shown
+    ]
+    rows.append((_button("Без направления", "cpm:program-create-dir:none"),))
+    pagination: list[CustomerInteractionButton] = []
+    if page:
+        pagination.append(_button("⬅️ Назад", f"cpm:program-create-dirs:{page - 1}"))
+    if start + _DIRECTION_PAGE_SIZE < len(directions):
+        pagination.append(_button("Вперёд ➡️", f"cpm:program-create-dirs:{page + 1}"))
+    if pagination:
+        rows.append(tuple(pagination))
+    rows.append((_button("📚 К программам", "cpm:programs:0"),))
+    rows.append(_back_row())
+    return CustomerInteractionMessage(
+        text=(
+            "➕ Новый материал или программа\n\n"
+            "К какому направлению деятельности относится этот материал? "
+            "Выберите направление или «Без направления»."
+        ),
+        rows=tuple(rows),
+    )
+
+
+def _program_title_input(
+    actor: TenantContext,
+    *,
+    current_platform: ConnectionPlatform,
+    input_surface: str,
+    direction_id: str | None,
+) -> CustomerInteractionMessage:
+    if actor.role not in _PROGRAM_MANAGEMENT_ROLES:
+        return _permission_message()
+    context: dict[str, object] = {}
+    if direction_id:
+        direction = get_activity_direction(actor=actor, direction_id=direction_id)
+        if direction.status != ActivityDirectionStatus.ACTIVE:
+            return _stale_message()
+        context["direction_id"] = direction.id
     return _begin_owner_input_message(
         actor,
         platform=current_platform,
         surface=input_surface,
         action="program_title",
+        context=context,
         text=(
             "➕ Новый материал или программа\n\n"
             "Напишите только название. Например: «Первый урок для новых клиентов».\n\n"
@@ -5195,11 +5241,31 @@ def _program_create_help(
     )
 
 
+def _program_create_help(
+    actor: TenantContext,
+    *,
+    current_platform: ConnectionPlatform,
+    input_surface: str = "official",
+) -> CustomerInteractionMessage:
+    if actor.role not in _PROGRAM_MANAGEMENT_ROLES:
+        return _permission_message()
+    directions = list_activity_directions(actor=actor)
+    if directions:
+        return _program_direction_message(actor, 0)
+    return _program_title_input(
+        actor,
+        current_platform=current_platform,
+        input_surface=input_surface,
+        direction_id=None,
+    )
+
+
 def _program_create_result(
     actor: TenantContext,
     title: str,
     *,
     interaction_key: str,
+    direction_id: str | None = None,
 ) -> CustomerInteractionMessage:
     if actor.role not in _PROGRAM_MANAGEMENT_ROLES:
         return _permission_message()
@@ -5207,6 +5273,7 @@ def _program_create_result(
         actor=actor,
         title=title,
         idempotency_key=f"{interaction_key}:program-create",
+        direction_id=direction_id,
     )
     code = str(program.id)[:8]
     return CustomerInteractionMessage(
